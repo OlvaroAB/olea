@@ -419,3 +419,99 @@ describe('recordSoloGradeAndReview — [D-281] the independent correctness verdi
     expect(record.supportLevelShown).toBe('independent');
   });
 });
+
+// Scenario: features/F5-explain-it-back.md — "F2.16 / [D-228]" —
+// "the rating and the grade are untouched" (DF-20 scenario 8, ol-0r92.123).
+describe('recordSoloGradeAndReview — answerEdits (ol-0r92.123, [D-228 / SIG-3])', () => {
+  it('the rating, durationMs and explainBackGrade are identical whether or not answerEdits is captured', async () => {
+    const deps = {
+      grading: wiringWithSoloReply(),
+      vault: memoryVault(),
+      deviceId: 'device-a',
+      now: () => new Date('2026-08-31T09:05:00Z'),
+    };
+    const withoutEdits = await recordSoloGradeAndReview(deps, {
+      instrumentId: 'explain-back:heap:1',
+      attemptId: 'attempt-no-edits',
+      subjectConceptId: 'concept-heap',
+      context: CONTEXT,
+      answer: 'A heap is a complete binary tree obeying the heap property.',
+      durationMs: 41_500,
+    });
+    const withEdits = await recordSoloGradeAndReview(deps, {
+      instrumentId: 'explain-back:heap:1',
+      attemptId: 'attempt-with-edits',
+      subjectConceptId: 'concept-heap',
+      context: CONTEXT,
+      answer: 'A heap is a complete binary tree obeying the heap property.',
+      durationMs: 41_500,
+      answerEdits: { firstEditMs: 12_000, editBursts: 3 },
+    });
+
+    if (!withoutEdits || !withEdits) throw new Error('expected both attempts to write a record');
+    expect(withEdits.result.record.rating).toBe(withoutEdits.result.record.rating);
+    expect(withEdits.result.record.rating).toBeNull();
+    expect(withEdits.result.record.durationMs).toBe(withoutEdits.result.record.durationMs);
+    expect(withEdits.result.record.explainBackGrade?.soloLevel).toBe(
+      withoutEdits.result.record.explainBackGrade?.soloLevel,
+    );
+    expect(withEdits.result.record.conceptIds).toEqual(withoutEdits.result.record.conceptIds);
+  });
+
+  it('omits answerEdits from the persisted record when the caller supplies none — true absence, never a fabricated zero', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:05:00Z') },
+      {
+        instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.answerEdits).toBeUndefined();
+  });
+
+  /**
+   * **This is the gap `ol-0r92.123`'s own close evidence discloses, written
+   * down as a failing expectation rather than deleted or weakened** — this
+   * repo's own `it.fails` convention (`packages/core/src/retrieval/engine
+   * .spec.ts`'s precedent). This test is green while `answerEdits` is
+   * accepted by `RecordSoloGradeAndReviewParams` but dropped before the
+   * persisted write, and goes RED the moment a follow-up bead widens
+   * `GradedExplainBackReviewSubject`/`composeGradedExplainBackReviewRecord`
+   * (`../../../core/src/study-session/explain-back-grade-write.ts`, outside
+   * `ol-0r92.123`'s own `owns`) to actually forward it — at which point the
+   * `.fails` comes off and the assertion stands as an ordinary test. It
+   * cannot be forgotten, because it fails when the gap is closed.
+   */
+  it.fails('SHOULD carry answerEdits on the persisted record when captured — ol-0r92.123: it does not yet (needs explain-back-grade-write.ts, out of owns)', async () => {
+    const vault = memoryVault();
+    const wiring = wiringWithSoloReply();
+
+    const outcome = await recordSoloGradeAndReview(
+      {
+        grading: wiring,
+        vault,
+        deviceId: 'device-a',
+        now: () => new Date('2026-08-31T09:05:00Z'),
+      },
+      {
+        instrumentId: 'explain-back:heap:1',
+        attemptId: 'attempt-for-1',
+        subjectConceptId: 'concept-heap',
+        context: CONTEXT,
+        answer: 'A heap is a complete binary tree obeying the heap property.',
+        answerEdits: { firstEditMs: 12_000, editBursts: 3 },
+      },
+    );
+
+    if (!outcome) throw new Error('expected a written review-log record');
+    expect(outcome.result.record.answerEdits).toEqual({ firstEditMs: 12_000, editBursts: 3 });
+  });
+});
