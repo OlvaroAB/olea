@@ -8,9 +8,11 @@
  * complements).
  */
 import type { ConceptRecord, VaultSource } from 'olea-core';
+import { DEFAULT_PAPER_PURPOSE } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildAssessmentsForCourse,
+  buildBlueprintInputForCourse,
   buildHeldSourceForConcept,
   buildScopeConceptsForCourse,
 } from '../../src/paper/assemble.js';
@@ -129,6 +131,16 @@ describe('buildScopeConceptsForCourse', () => {
     const concepts = [concept({ key: 'k1', name: 'In course', definition: 'text' })];
     const scope = await buildScopeConceptsForCourse(vault, concepts, 'COURSEA');
     expect(scope[0]?.masteryScore).toBeNull();
+  });
+});
+
+describe('buildBlueprintInputForCourse', () => {
+  it('declares the purpose explicitly as DEFAULT_PAPER_PURPOSE (ol-egov.141.6.17) — no clause names a choice surface, so the caller states the default rather than leaving it to buildPaperBlueprint', async () => {
+    const vault = fakeVault({});
+    const concepts = [concept({ key: 'k1', name: 'In course', definition: 'text' })];
+    const input = await buildBlueprintInputForCourse(vault, concepts, [], 'COURSEA', '2026-09-25');
+    expect(input.purpose).toBe(DEFAULT_PAPER_PURPOSE);
+    expect(input.purpose).toBe('assessment-simulation');
   });
 });
 

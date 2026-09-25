@@ -8,6 +8,7 @@ import {
   EMPHASIS_WEIGHT_BOOST_DECLARED,
   extentSlotCountTarget,
   flattenDemandReadings,
+  focusedPracticeWeight,
   isEligibleConcept,
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
@@ -157,14 +158,17 @@ describe('buildPaperBlueprint', () => {
   });
 
   describe('[D-258] — slot-cap-excluded concepts named as empty slots', () => {
-    // 6 eligible concepts, slot cap 4 (extent 'shorter' with no recovered structure), alpha 0.25
-    // so weight = 0.25*coverageScore + 0.75*masteryScore. Ranked descending:
-    //   holdA (held, mastery 0.9) -> 0.925   \
-    //   holdB (held, mastery 0.7) -> 0.775    | inside the cap (4 slots)
-    //   noHeld (NO held source, mastery 0.9) -> 0.675
+    // 6 eligible concepts, slot cap 4 (extent 'shorter' with no recovered structure), alpha 0.25.
+    // Focused practice favours WEAKNESS (ol-egov.141.6.17): weight = 0.25*coverageScore +
+    // 0.75*(1 - masteryScore), so a LOW masteryScore (a demonstrated weakness) ranks higher.
+    // Ranked descending:
+    //   holdA (held, mastery 0.1 — weak) -> 0.925   \
+    //   holdB (held, mastery 0.3 — weak) -> 0.775    | inside the cap (4 slots)
+    //   noHeld (NO held source, mastery 0.1 — weak) -> 0.675
     //   holdC (held, mastery 0.5) -> 0.625   /
-    //   holdD (held, mastery 0.3) -> 0.475   \ rank-excluded — each still HAS a held source,
-    //   holdE (held, mastery 0.1) -> 0.325   / proving rank-excluded is distinct from no-held-source
+    //   holdD (held, mastery 0.7 — strong) -> 0.475   \ rank-excluded — each still HAS a held
+    //   holdE (held, mastery 0.9 — strong) -> 0.325   / source, proving rank-excluded is distinct
+    //                                                    from no-held-source
     const heldSources = [{ kind: 'notes', sourceId: 's', chunks: ['x'] }] as const;
     const rankExcludedInput = {
       ...baseInput,
@@ -175,12 +179,12 @@ describe('buildPaperBlueprint', () => {
       alpha: 0.25 as const,
       steering: { extent: 'shorter' as const },
       concepts: [
-        concept({ conceptKey: 'holdA', heldSources: [...heldSources], masteryScore: 0.9 }),
-        concept({ conceptKey: 'holdB', heldSources: [...heldSources], masteryScore: 0.7 }),
-        concept({ conceptKey: 'noHeld', heldSources: [], masteryScore: 0.9 }),
+        concept({ conceptKey: 'holdA', heldSources: [...heldSources], masteryScore: 0.1 }),
+        concept({ conceptKey: 'holdB', heldSources: [...heldSources], masteryScore: 0.3 }),
+        concept({ conceptKey: 'noHeld', heldSources: [], masteryScore: 0.1 }),
         concept({ conceptKey: 'holdC', heldSources: [...heldSources], masteryScore: 0.5 }),
-        concept({ conceptKey: 'holdD', heldSources: [...heldSources], masteryScore: 0.3 }),
-        concept({ conceptKey: 'holdE', heldSources: [...heldSources], masteryScore: 0.1 }),
+        concept({ conceptKey: 'holdD', heldSources: [...heldSources], masteryScore: 0.7 }),
+        concept({ conceptKey: 'holdE', heldSources: [...heldSources], masteryScore: 0.9 }),
       ],
     };
 
@@ -361,16 +365,32 @@ describe('purpose [D-277]', () => {
       expect(wB.masteryFallback).toBe(true); // never merely down-weighted — never read at all
     });
 
-    it('focused practice reads masteryScore in the existing coverage/mastery blend, unmodified', () => {
+    it('focused practice reads masteryScore favouring WEAKNESS (ol-egov.141.6.17) — a demonstrably weak concept outranks a well-mastered one at equal coverage', () => {
+      // Regression: the pre-fix code called the unmodified `conceptWeight` here, whose blend
+      // gives a HIGHER weight to a HIGHER masteryScore (weight = alpha*coverage +
+      // (1-alpha)*mastery). At alpha 0.5 that put the well-mastered concept (0.9) at weight
+      // 0.95 and the demonstrably weak one (0.1) at weight 0.55 — `wHigh.weight > wLow.weight`,
+      // exactly backwards for "evidence gaps and demonstrated weakness" (D-277 ruling (i)). The
+      // failing assertion this test would have made against that code:
+      //   expect(conceptWeight(high, 0.5).weight).toBeLessThan(conceptWeight(low, 0.5).weight)
+      //   // conceptWeight(high).weight === 0.95, conceptWeight(low).weight === 0.55 — FAILS.
+      const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+      const wellMastered = concept({ conceptKey: 'a', heldSources, masteryScore: 0.9 });
+      const demonstrablyWeak = concept({ conceptKey: 'b', heldSources, masteryScore: 0.1 });
+      const wHigh = slotWeightForPurpose(wellMastered, 0.5, 'focused-practice');
+      const wLow = slotWeightForPurpose(demonstrablyWeak, 0.5, 'focused-practice');
+      expect(wHigh).toEqual(focusedPracticeWeight(wellMastered, 0.5));
+      expect(wLow).toEqual(focusedPracticeWeight(demonstrablyWeak, 0.5));
+      expect(wLow.weight).toBeGreaterThan(wHigh.weight); // weaker concept ranks higher
+      expect(wHigh.weight).not.toBe(wLow.weight); // a real reading makes a real difference
+      expect(wHigh.masteryFallback).toBe(false);
+    });
+
+    it('conceptWeight itself is unchanged — the general coverage/mastery blend still favours higher mastery, and stays the public paperConceptWeight export', () => {
       const heldSources = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
       const high = concept({ conceptKey: 'a', heldSources, masteryScore: 0.9 });
       const low = concept({ conceptKey: 'b', heldSources, masteryScore: 0.1 });
-      const wHigh = slotWeightForPurpose(high, 0.5, 'focused-practice');
-      const wLow = slotWeightForPurpose(low, 0.5, 'focused-practice');
-      expect(wHigh).toEqual(conceptWeight(high, 0.5));
-      expect(wLow).toEqual(conceptWeight(low, 0.5));
-      expect(wHigh.weight).not.toBe(wLow.weight); // a real reading makes a real difference
-      expect(wHigh.masteryFallback).toBe(false);
+      expect(conceptWeight(high, 0.5).weight).toBeGreaterThan(conceptWeight(low, 0.5).weight);
     });
 
     it('never turns thin evidence into a weakness claim: a null masteryScore never scores as though a real, low reading had been read', () => {
@@ -380,10 +400,11 @@ describe('purpose [D-277]', () => {
       const wNoEvidence = slotWeightForPurpose(noEvidence, 0.5, 'focused-practice');
       const wWeak = slotWeightForPurpose(demonstrablyWeak, 0.5, 'focused-practice');
       // Thin evidence falls back to the undiscounted coverage-only weight (masteryFallback: true)
-      // — never the low figure a genuine weak reading produces (0.5*1 + 0.5*0.1 = 0.55).
+      // — never the high figure a genuine weak reading produces under the weakness-favouring
+      // blend (0.5*1 + 0.5*(1-0.1) = 0.95).
       expect(wNoEvidence.masteryFallback).toBe(true);
       expect(wNoEvidence.weight).toBe(1);
-      expect(wWeak.weight).toBe(0.55);
+      expect(wWeak.weight).toBe(0.95);
       expect(wNoEvidence.weight).not.toBe(wWeak.weight);
     });
   });
@@ -448,18 +469,24 @@ describe('purpose [D-277]', () => {
     });
 
     describe('purpose alone decides which held-source concept fills a capped slot', () => {
-      // Three held-source concepts, cap 2 (one sitting, itemCount 2). masteryScore is
-      // deliberately UNCORRELATED with alphabetical order, so assessment-simulation's
-      // coverage-only/alphabetical-tiebreak selection and focused-practice's mastery-blend
-      // selection provably differ rather than coinciding by accident.
+      // Three held-source concepts, cap 2 (one sitting, itemCount 2). Alphabetical name order
+      // (Aardvark < Mango < Zebra) is deliberately the OPPOSITE of mastery order (Aardvark best
+      // mastered, Zebra weakest), so assessment-simulation's coverage-only/alphabetical-tiebreak
+      // selection and focused-practice's weakness-favouring selection (ol-egov.141.6.17) provably
+      // differ rather than coinciding by accident.
       const scopeInput = {
         ...baseInput,
         alpha: 0.25 as const,
         structure: sittingOf(2),
         concepts: [
-          concept({ conceptKey: 'weak', conceptName: 'Aardvark', heldSources, masteryScore: 0.1 }),
-          concept({ conceptKey: 'mid', conceptName: 'Mango', heldSources, masteryScore: 0.5 }),
-          concept({ conceptKey: 'strong', conceptName: 'Zebra', heldSources, masteryScore: 0.9 }),
+          concept({
+            conceptKey: 'aardvark',
+            conceptName: 'Aardvark',
+            heldSources,
+            masteryScore: 0.9,
+          }),
+          concept({ conceptKey: 'mango', conceptName: 'Mango', heldSources, masteryScore: 0.5 }),
+          concept({ conceptKey: 'zebra', conceptName: 'Zebra', heldSources, masteryScore: 0.1 }),
         ],
       };
 
@@ -469,16 +496,18 @@ describe('purpose [D-277]', () => {
 
       it('assessment simulation ties all three at coverage-only weight and fills the cap alphabetically, ignoring masteryScore', () => {
         const blueprint = buildFor('assessment-simulation');
-        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['mid', 'weak']);
-        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['strong']);
+        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['aardvark', 'mango']);
+        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['zebra']);
         expect(blueprint.emptySlots[0]?.reasonCode).toBe('rank-excluded');
       });
 
-      it('focused practice ranks by the coverage/mastery blend and fills the cap by masteryScore', () => {
+      it('focused practice ranks by the weakness-favouring blend and fills the cap with the weaker concepts (ol-egov.141.6.17)', () => {
         const blueprint = buildFor('focused-practice');
-        // alpha 0.25: weight = 0.25*1 + 0.75*masteryScore -> weak 0.325, mid 0.625, strong 0.925.
-        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['mid', 'strong']);
-        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['weak']);
+        // alpha 0.25: weight = 0.25*1 + 0.75*(1-masteryScore) -> aardvark (mastery 0.9) 0.325,
+        // mango (0.5) 0.625, zebra (0.1, weakest) 0.925 — the demonstrably weak concept ranks
+        // first, and the well-mastered one is excluded.
+        expect(blueprint.slots.map((s) => s.conceptKey).sort()).toEqual(['mango', 'zebra']);
+        expect(blueprint.emptySlots.map((s) => s.conceptKey)).toEqual(['aardvark']);
       });
 
       it('the two purposes disagree on which concept is excluded — direct, decisive proof that purpose governs selection', () => {

@@ -18,6 +18,12 @@
  * (`DEFAULT_PAPER_PURPOSE` when omitted) but the returned blueprint always states one — see that
  * constant's doc for why the default is a safe, presently-inert no-op.
  *
+ * **Focused practice's weight favours weakness (ol-egov.141.6.17).** `slotWeightForPurpose` reads
+ * `focusedPracticeWeight` for `'focused-practice'`, not the general `conceptWeight` — a LOW
+ * `masteryScore` ranks HIGHER, matching ruling (i)'s "evidence gaps and demonstrated weakness."
+ * `conceptWeight` itself is unchanged (public API, mirrors the harness tier's own direction); see
+ * both functions' own docs.
+ *
  * **What this function does NOT do.** It never calls a generator — see `./paper-items.ts` for
  * turning a blueprint's slots into generated items. It never reads a sealed judge-reference
  * sitting — `structure` is the CALLER's responsibility to have already excluded one (this
@@ -145,13 +151,50 @@ export interface PaperConceptWeight {
   readonly masteryFallback: boolean;
 }
 
-/** Composite slot weight at weighting `alpha` — mirrors the harness tier's `conceptWeight` exactly (mastery-absent falls back to coverage alone, flagged `masteryFallback`). */
+/**
+ * Composite slot weight at weighting `alpha` — mirrors the harness tier's `conceptWeight` exactly
+ * (mastery-absent falls back to coverage alone, flagged `masteryFallback`). Higher
+ * `masteryScore` yields a HIGHER weight here — this is a general coverage/readiness blend, kept
+ * unchanged and still exported as public API (`../index.ts`'s `paperConceptWeight`) precisely
+ * because it mirrors that harness formula's own direction. **It is not the weight
+ * `slotWeightForPurpose` reads for focused practice** — favouring already-strong concepts is
+ * backwards for "evidence gaps and demonstrated weakness" (`[D-277]` ruling (i)); see
+ * `focusedPracticeWeight`, below, for the purpose-specific complement that inverts the mastery
+ * term instead of changing this function's own direction (ol-egov.141.6.17).
+ */
 export function conceptWeight(concept: PaperScopeConcept, alpha: number): PaperConceptWeight {
   const coverageScore = conceptCoverageScore(concept);
   if (concept.masteryScore === null) {
     return { weight: coverageScore, coverageScore, masteryScore: null, masteryFallback: true };
   }
   const weight = alpha * coverageScore + (1 - alpha) * concept.masteryScore;
+  return { weight, coverageScore, masteryScore: concept.masteryScore, masteryFallback: false };
+}
+
+/**
+ * Composite slot weight for FOCUSED PRACTICE (`[D-277]` ruling (i), ol-egov.141.6.17) — favours
+ * WEAKER concepts: `weight = alpha * coverageScore + (1 - alpha) * (1 - masteryScore)`, so a LOW
+ * `masteryScore` (a demonstrated weakness) yields a HIGHER weight, the direction ruling (i)'s own
+ * words ("evidence gaps and demonstrated weakness") call for. `conceptWeight` (above) is a
+ * separate, general coverage/mastery blend that favours HIGHER mastery instead — kept unchanged
+ * because it mirrors the harness tier's own `conceptWeight` exactly and is exported as public API
+ * (`paperConceptWeight`); this function is the purpose-specific complement, read only by
+ * `slotWeightForPurpose` for `'focused-practice'`.
+ *
+ * Mastery-absent falls back to coverage alone exactly as `conceptWeight` does
+ * (`masteryFallback: true`) — ruling (i)'s third "never does": a concept with no real mastery
+ * evidence is never scored as though a real, LOW reading had been read (never a fabricated
+ * weakness claim from thin evidence).
+ */
+export function focusedPracticeWeight(
+  concept: PaperScopeConcept,
+  alpha: number,
+): PaperConceptWeight {
+  const coverageScore = conceptCoverageScore(concept);
+  if (concept.masteryScore === null) {
+    return { weight: coverageScore, coverageScore, masteryScore: null, masteryFallback: true };
+  }
+  const weight = alpha * coverageScore + (1 - alpha) * (1 - concept.masteryScore);
   return { weight, coverageScore, masteryScore: concept.masteryScore, masteryFallback: false };
 }
 
@@ -179,8 +222,12 @@ export const DEFAULT_PAPER_PURPOSE: PaperPurpose = 'assessment-simulation';
  * and NEVER `concept.masteryScore`, mirroring `conceptWeight`'s own "mastery absent" fallback
  * shape exactly (`masteryFallback: true`) regardless of whether a real mastery reading exists for
  * this concept — the weakness signal is not merely down-weighted for this purpose, it is never
- * read at all. `'focused-practice'` is the unmodified `conceptWeight` blend, the only purpose that
- * reads `masteryScore` — "evidence gaps and demonstrated weakness," ruling (i)'s own words.
+ * read at all. `'focused-practice'` reads `focusedPracticeWeight` — the only purpose that reads
+ * `masteryScore`, and it reads it favouring WEAKER concepts (a low `masteryScore` ranks higher),
+ * "evidence gaps and demonstrated weakness," ruling (i)'s own words. **Was the unmodified,
+ * mastery-favours-mastery `conceptWeight` blend until ol-egov.141.6.17 found that backwards for
+ * this purpose** — selecting what she already knows best is the opposite of focused practice on
+ * her weakness; see `focusedPracticeWeight`'s own doc.
  *
  * Deliberately the ONLY thing purpose changes inside `buildPaperBlueprint`: eligibility
  * (`isEligibleConcept`), held-source grounding (`no-held-source`) and demand routing
@@ -197,7 +244,7 @@ export function slotWeightForPurpose(
     const coverageScore = conceptCoverageScore(concept);
     return { weight: coverageScore, coverageScore, masteryScore: null, masteryFallback: true };
   }
-  return conceptWeight(concept, alpha);
+  return focusedPracticeWeight(concept, alpha);
 }
 
 /**

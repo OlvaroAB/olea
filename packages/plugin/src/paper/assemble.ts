@@ -67,6 +67,7 @@
 import {
   type BuildPaperBlueprintInput,
   type ConceptRecord,
+  DEFAULT_PAPER_PURPOSE,
   formatClassOf,
   type PaperAssessment,
   type PaperHeldSource,
@@ -155,7 +156,23 @@ export function buildAssessmentsForCourse(
   return out;
 }
 
-/** Assembles the whole `buildPaperBlueprint` input for one course from real, already-walked data — see the module doc for what is real and what is a named, filed gap. */
+/**
+ * Assembles the whole `buildPaperBlueprint` input for one course from real, already-walked data
+ * — see the module doc for what is real and what is a named, filed gap.
+ *
+ * **`purpose` (ol-egov.141.6.17, `[D-277]` ruling (i)).** Passed explicitly as
+ * `DEFAULT_PAPER_PURPOSE` (`'assessment-simulation'`) rather than left for `buildPaperBlueprint`
+ * to default silently. Checked against F4.11 as amended and against `[D-277]` itself before
+ * writing this: neither names how she would choose a purpose — F4.11's own "what she can invoke"
+ * and "what she may steer" paragraphs name exactly one affordance (request a paper for the
+ * course) and exactly two steering dials (emphasis, extent), with no third dial for purpose, and
+ * ruling (i) explicitly places "a student-visible affordance to CHOOSE a purpose" out of the
+ * blueprint module's scope without granting it to any other surface either
+ * (`paper-types.ts`'s `PaperPurpose` doc). There is therefore no cited clause to build a choice
+ * surface from — see this repo's proposed-decision note (ol-egov.141.6.17's report) rather than
+ * inventing one here. `'assessment-simulation'` is also, independent of that gap, the one purpose
+ * this caller's own `masteryScore: null` degradation (module doc) makes a true no-op either way.
+ */
 export async function buildBlueprintInputForCourse(
   vault: VaultSource,
   concepts: readonly ConceptRecord[],
@@ -173,6 +190,7 @@ export async function buildBlueprintInputForCourse(
     concepts: await buildScopeConceptsForCourse(vault, concepts, course),
     assessments: buildAssessmentsForCourse(assessmentRecords, course),
     structure: null,
+    purpose: DEFAULT_PAPER_PURPOSE,
     alpha: PRACTICE_PAPER_ALPHA_DECLARED,
     formatClassOf,
   };
