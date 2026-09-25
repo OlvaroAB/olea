@@ -13,13 +13,13 @@
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ReviewLogRecord } from 'olea-contracts';
+import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import { FolderSource } from '../vault/folder-source.js';
-import { composeOracleRanking } from './compose.js';
+import { composeOracleRanking, resolveTiebreakEligibleConcepts } from './compose.js';
 
 /**
  * A `Scheduler` whose recall probability is looked up per instrument id —
@@ -502,5 +502,235 @@ describe('composeOracleRanking — ol-5y40: a casing slip in her topic value mus
     const edge = result.edges.edges.find((e) => e.conceptName === 'Widget Theory');
     expect(edge?.conceptKey).toBe(testcWidget.key);
     expect(edge?.conceptKey).not.toBe(otherWidget.key);
+  });
+});
+
+describe("resolveTiebreakEligibleConcepts — C5.10 ruling 1's producer (`[D-265]`, `ol-egov.141.62`)", () => {
+  // Self-contained review records — this describe block never touches the
+  // vault, because `resolveTiebreakEligibleConcepts` is pure over the review
+  // log alone (the AND of `../review-log/tiebreak.js` and
+  // `../routing/instrument-eligibility.js`, both already unit-tested on
+  // their own terms). Proving the resulting `tiebreakEligible` set actually
+  // REORDERS `rankOracle`'s output needs two concepts tied to the last
+  // decimal of `priorityScore`, which is `../oracle/rank.spec.ts`'s own
+  // mechanism to prove (`ol-egov.141.52`'s tests already do); engineering an
+  // exact tie through real vault evidence here would mostly re-test that
+  // module for no added confidence in this bead's own logic.
+  function disagreeingReviews(conceptId: string, instrumentId: string): ReviewLogRecord[] {
+    return [
+      review(conceptId, {
+        eventId: `${instrumentId}-1`,
+        instrumentId,
+        timestamp: '2026-08-08T09:00:00-04:00',
+        rating: 'good',
+        supportLevelShown: 'independent',
+      }),
+      review(conceptId, {
+        eventId: `${instrumentId}-2`,
+        instrumentId,
+        timestamp: '2026-08-12T09:00:00-04:00',
+        rating: 'again',
+        supportLevelShown: 'independent',
+      }),
+    ];
+  }
+
+  it('is empty with no `resolveSourceVersion` — the same reachability gap `../review-log/tiebreak.js` documents', () => {
+    const reviewLog = disagreeingReviews('widget-theory', 'qa:widget-theory:1');
+    expect(resolveTiebreakEligibleConcepts(reviewLog, '2026-08-15', undefined).size).toBe(0);
+  });
+
+  it('flags a concept only when BOTH halves hold: comparable-observation disagreement AND a different eligible ordinary instrument', () => {
+    const reviewLog = [
+      ...disagreeingReviews('widget-theory', 'qa:widget-theory:1'),
+      // The "different eligible ordinary instrument" the clause requires.
+      review('widget-theory', {
+        eventId: 'cloze-widget-1',
+        instrumentId: 'cloze:widget-theory:1',
+        instrumentType: 'cloze',
+        timestamp: '2026-08-05T09:00:00-04:00',
+        rating: 'good',
+      }),
+    ];
+
+    const eligible = resolveTiebreakEligibleConcepts(reviewLog, '2026-08-15', () => 'rev-1');
+    expect(eligible.has('widget-theory')).toBe(true);
+  });
+
+  it('does not flag a concept with disagreement but no OTHER eligible ordinary instrument', () => {
+    // Same disagreeing pair as above, but no second instrument at all on
+    // the concept — `hasDifferentEligibleOrdinaryInstrument` has nothing
+    // else to offer.
+    const reviewLog = disagreeingReviews('widget-theory', 'qa:widget-theory:1');
+    const eligible = resolveTiebreakEligibleConcepts(reviewLog, '2026-08-15', () => 'rev-1');
+    expect(eligible.has('widget-theory')).toBe(false);
+  });
+
+  it('does not flag a concept with an eligible other instrument but no disagreement (a tidy record)', () => {
+    const reviewLog = [
+      review('widget-theory', {
+        eventId: 'qa-widget-1',
+        instrumentId: 'qa:widget-theory:1',
+        timestamp: '2026-08-08T09:00:00-04:00',
+        rating: 'good',
+        supportLevelShown: 'independent',
+      }),
+      review('widget-theory', {
+        eventId: 'qa-widget-2',
+        instrumentId: 'qa:widget-theory:1',
+        timestamp: '2026-08-12T09:00:00-04:00',
+        rating: 'good', // agrees — tidy
+        supportLevelShown: 'independent',
+      }),
+      review('widget-theory', {
+        eventId: 'cloze-widget-1',
+        instrumentId: 'cloze:widget-theory:1',
+        instrumentType: 'cloze',
+        timestamp: '2026-08-05T09:00:00-04:00',
+        rating: 'good',
+      }),
+    ];
+
+    const eligible = resolveTiebreakEligibleConcepts(reviewLog, '2026-08-15', () => 'rev-1');
+    expect(eligible.has('widget-theory')).toBe(false);
+  });
+
+  it('excludes the disagreeing instrument itself from counting as the "different" one — a suspended sole other instrument does not qualify either', () => {
+    const reviewLog: ReviewLogEntry[] = [
+      ...disagreeingReviews('widget-theory', 'qa:widget-theory:1'),
+      review('widget-theory', {
+        eventId: 'cloze-widget-1',
+        instrumentId: 'cloze:widget-theory:1',
+        instrumentType: 'cloze',
+        timestamp: '2026-08-05T09:00:00-04:00',
+        rating: 'good',
+      }),
+      {
+        schemaVersion: 5,
+        kind: 'suspend',
+        eventId: 'suspend-cloze-1',
+        timestamp: '2026-08-06T09:00:00-04:00',
+        instrumentId: 'cloze:widget-theory:1',
+        conceptIds: ['widget-theory'],
+      },
+    ];
+
+    const eligible = resolveTiebreakEligibleConcepts(reviewLog, '2026-08-15', () => 'rev-1');
+    expect(eligible.has('widget-theory')).toBe(false);
+  });
+});
+
+describe('composeOracleRanking — threading `resolveTiebreakSourceVersion` (C5.10 ruling 1, `[D-265]`)', () => {
+  let root: string;
+  let source: FolderSource;
+  let concepts: readonly ConceptRecord[];
+  let widgetKey: string;
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-oracle-compose-tiebreak-'));
+    source = new FolderSource(root);
+    await write(
+      '05 Zettelkasten/Widget theory.md',
+      '---\ntopic: Widget theory\n---\n\n# Widget theory\n',
+    );
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n',
+    );
+
+    concepts = await extractConcepts(source, {});
+    const widget = concepts.find((c) => c.name === 'Widget theory');
+    if (widget === undefined) throw new Error('expected "Widget theory" to extract');
+    widgetKey = widget.key;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('accepts `resolveTiebreakSourceVersion` without changing the single-concept ranking (no tie is possible with only one concept) or throwing', async () => {
+    const reviewLog: ReviewLogRecord[] = [
+      review(widgetKey, {
+        eventId: 'r1',
+        timestamp: '2026-08-08T09:00:00-04:00',
+        rating: 'good',
+        supportLevelShown: 'independent',
+      }),
+      review(widgetKey, {
+        eventId: 'r2',
+        timestamp: '2026-08-12T09:00:00-04:00',
+        rating: 'again',
+        supportLevelShown: 'independent',
+      }),
+    ];
+
+    const withoutResolver = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog,
+      asOf: '2026-08-15',
+      concepts,
+    });
+    const withResolver = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog,
+      asOf: '2026-08-15',
+      concepts,
+      resolveTiebreakSourceVersion: () => 'rev-1',
+    });
+
+    const findEntry = (result: typeof withResolver) => {
+      const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+      if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+      const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+      if (entry === undefined) throw new Error('expected Widget theory to be ranked');
+      return entry;
+    };
+
+    // A single ranked concept has no tie to break either way — this proves
+    // the new field threads through `buildConceptAssessmentEdges`'s options
+    // cleanly (never leaking into `edgeOptions`) and never perturbs the
+    // ordinary blend, not that the tiebreak fired (it cannot, with one
+    // concept).
+    expect(findEntry(withResolver).priorityScore).toBe(findEntry(withoutResolver).priorityScore);
+    expect(findEntry(withResolver).rank).toBe(1);
   });
 });

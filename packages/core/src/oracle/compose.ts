@@ -96,6 +96,8 @@ import type {
 } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import { computeAllConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
+import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
+import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
 import type { Scheduler } from '../scheduler/types.js';
 import type { VaultSource } from '../vault/types.js';
 import { rankOracle } from './rank.js';
@@ -168,6 +170,21 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * `UNUSED_VITALITY_HOLDING_CUT`'s doc, below).
    */
   readonly retrievability?: ComposeRetrievabilityInput;
+  /**
+   * C5.10 ruling 1's tiebreak producer (`[D-265]`, `ol-egov.141.62`) —
+   * threaded straight to `../review-log/tiebreak.js`'s
+   * `findComparableObservationDisagreements`, which needs it to confirm two
+   * observations were read against the SAME revision of an instrument's
+   * source material (one of the clause's four required comparability
+   * facts). **Omit — as every caller does today** — to have this
+   * composition find NO tiebreak-eligible concepts; see that module's doc
+   * for why omission is the honest default rather than a loosened check.
+   * Nothing in `review-log/`, `routing/` or `ingestion/materiality/`
+   * produces a per-review source-version stamp yet, so this field exists
+   * for the day one does, the same "structurally correct, never-a-gate
+   * place for it" reasoning `retrievability` above already documents.
+   */
+  readonly resolveTiebreakSourceVersion?: (instrumentId: string) => string | undefined;
   readonly options?: RankOracleOptions;
 }
 
@@ -266,7 +283,15 @@ function resolveCaseInsensitiveConceptKeys(
 export async function composeOracleRanking(
   input: ComposeOracleRankingInput,
 ): Promise<ComposeOracleRankingResult> {
-  const { vault, reviewLog, asOf, options, retrievability, ...edgeOptions } = input;
+  const {
+    vault,
+    reviewLog,
+    asOf,
+    options,
+    retrievability,
+    resolveTiebreakSourceVersion,
+    ...edgeOptions
+  } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
   // `ol-5y40`: repairs the case-mismatched fallback `buildConceptAssessmentEdges`
   // leaves behind before anything downstream (the mastery join below,
@@ -280,6 +305,11 @@ export async function composeOracleRanking(
   const conceptKeys = [...new Set(edges.edges.map((edge) => edge.conceptKey))].sort();
   const mastery = computeAllConceptMastery(reviewLog, conceptKeys);
   const retrievabilityScores = resolveRetrievabilityScores(reviewLog, conceptKeys, retrievability);
+  const tiebreakEligible = resolveTiebreakEligibleConcepts(
+    reviewLog,
+    asOf,
+    resolveTiebreakSourceVersion,
+  );
 
   const ranking = rankOracle({
     evidence: {
@@ -290,10 +320,55 @@ export async function composeOracleRanking(
     mastery,
     asOf,
     ...(retrievabilityScores !== undefined ? { retrievability: retrievabilityScores } : {}),
+    ...(tiebreakEligible.size > 0 ? { tiebreakEligible } : {}),
     ...(options !== undefined ? { options } : {}),
   });
 
   return { ranking, edges, mastery };
+}
+
+/**
+ * C5.10 ruling 1's tiebreak (`[D-265]`) — folds `../review-log/tiebreak.js`'s
+ * comparable-observation-disagreement reading together with
+ * `../routing/instrument-eligibility.js`'s "a different eligible ordinary
+ * instrument exists" check into the one opaque flag `rankOracle`'s
+ * `RankOracleTiebreakInput.tiebreakEligible` reads. Neither producer decides
+ * the other's half: a concept qualifies only when BOTH agree, exactly as
+ * the clause's own "disagree ... but only where a different eligible
+ * ordinary instrument ... exists to resolve it" reads.
+ *
+ * Exported so `compose.spec.ts` can exercise it directly against a
+ * caller-supplied `resolveSourceVersion` — the vault-fixture-based
+ * `composeOracleRanking` suite would otherwise need to engineer an exact
+ * `priorityScore` tie before this could be observed at all, and the
+ * producer half is worth proving live on its own terms (the same
+ * "demonstrated, not merely inert" standard `ol-egov.141.52`'s own tests
+ * hold `rank.ts`'s mechanism to).
+ */
+export function resolveTiebreakEligibleConcepts(
+  reviewLog: readonly ReviewLogEntry[],
+  asOf: string,
+  resolveSourceVersion: ((instrumentId: string) => string | undefined) | undefined,
+): ReadonlySet<string> {
+  const disagreements = findComparableObservationDisagreements({
+    entries: reviewLog,
+    asOf,
+    ...(resolveSourceVersion !== undefined ? { resolveSourceVersion } : {}),
+  });
+
+  const eligible = new Set<string>();
+  for (const [conceptKey, disagreement] of disagreements) {
+    if (
+      hasDifferentEligibleOrdinaryInstrument(
+        reviewLog,
+        conceptKey,
+        disagreement.disagreeingInstrumentIds,
+      )
+    ) {
+      eligible.add(conceptKey);
+    }
+  }
+  return eligible;
 }
 
 /**
