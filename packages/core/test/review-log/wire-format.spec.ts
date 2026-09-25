@@ -127,12 +127,15 @@ describe('review-log wire format', () => {
             // an instrument, the same reason `succession`/the
             // retrospective-offer trio are excluded above.
             | { kind: 'source-registered' }
+            // ol-egov.141.89.6.37: a non-attempt names concepts, never an instrument.
+            | { kind: 'non-attempt' }
           > =>
             r.kind !== 'succession' &&
             r.kind !== 'retrospective-offered' &&
             r.kind !== 'retrospective-opened' &&
             r.kind !== 'retrospective-dismissed' &&
-            r.kind !== 'source-registered',
+            r.kind !== 'source-registered' &&
+            r.kind !== 'non-attempt',
         )
         .map((r) => r.instrumentId),
     ).toEqual(['inst-1', 'inst-2']);
@@ -253,12 +256,15 @@ describe('review-log wire format — current schema version and suspension event
             // an instrument, the same reason `succession`/the
             // retrospective-offer trio are excluded above.
             | { kind: 'source-registered' }
+            // ol-egov.141.89.6.37: a non-attempt names concepts, never an instrument.
+            | { kind: 'non-attempt' }
           > =>
             r.kind !== 'succession' &&
             r.kind !== 'retrospective-offered' &&
             r.kind !== 'retrospective-opened' &&
             r.kind !== 'retrospective-dismissed' &&
-            r.kind !== 'source-registered',
+            r.kind !== 'source-registered' &&
+            r.kind !== 'non-attempt',
         )
         .map((r) => r.instrumentId),
     ).toEqual(['inst-1', 'inst-2']);

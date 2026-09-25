@@ -1463,6 +1463,77 @@ export const explainBackOfferLogRecordV5 = z
 export type ExplainBackOfferLogRecordV5 = z.infer<typeof explainBackOfferLogRecordV5>;
 
 /**
+ * One explain-back **non-attempt** (`[D-273]`, F5.7; D7.1's non-attempt
+ * paragraph): a prompt she opened that produced no explanation. Additive to
+ * the v5 discriminated union exactly the way `explainBackOfferLogRecordV5`
+ * was — no `schemaVersion` bump, because nothing about the shape the union
+ * already carries changes; a new literal `kind` value is what additive means
+ * here.
+ *
+ * **What is recorded is what D7.1 names, and nothing else:** that the prompt
+ * was opened and this offer produced no explanation, which of the four
+ * triggers the offer behind it was made under, and which concepts it
+ * concerned. `trigger` reuses `explainBackOfferTrigger` rather than
+ * redeclaring it — the same four routes, so the per-offer counting reads the
+ * offer record and this one on one key.
+ *
+ * **One kind for both exits, and the record does not say which one she took
+ * (`[D-306]`).** A named skip and a prompt closed without an answer are the
+ * same event, so there is one `kind` literal, not a two-literal enum, and no
+ * `exit`, `manner` or reason field exists at all. That is the deliberate
+ * contrast with `explainBackDeclineManner`, which does tell `dismissed` from
+ * `not-taken` for an offer that was never opened.
+ *
+ * **Beside the offer record, not inside it** (D7.1): a decline is an offer
+ * never opened, and this is a prompt opened and left — hence its own kind
+ * rather than a third `explainBackOfferEventKind` literal.
+ *
+ * **No grade, because nothing was graded** (D7.1, `[D-273]`): no `rating`,
+ * no `explainBackGrade`, no `contentRef` — a skip sends no answer, so there
+ * is no answer to point at. **An answer the declared local check flagged is
+ * never written as this kind** (`[D-304]`): it is graded and recorded as the
+ * review it is.
+ *
+ * **Read by nothing that reports what she knows** (F5.7, knowledge model R7
+ * and M5): no fold, growth stage or vitality reading reads it, and the
+ * misconception matcher never sees it. Its one reader is the per-offer
+ * counting, by trigger and by concept, and that count is never shown to her
+ * (`[D-305]`). `'non-attempt'` is internal vocabulary (vocabulary registry
+ * §19) and is never printed; the word she sees for the action is *skip*,
+ * which is not the literal here because the record does not say she took it.
+ *
+ * **Not carried, because D7.1's paragraph does not name them:**
+ * `instrumentId`/`instrumentType`, `selectionContext`, and a pointer to the
+ * offer event behind the prompt (the `answers` a decline carries). Each could
+ * land later as an optional field without a version bump; none is added
+ * ahead of a ruling, because a field on records already on disk cannot be
+ * taken back.
+ *
+ * **No content, per D-005.** Opaque concept ids and one enum.
+ */
+export const nonAttemptLogRecordV5 = z.object({
+  schemaVersion: z.literal(5),
+  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+  kind: z.literal('non-attempt'),
+  /** Stable unique id; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /**
+   * ISO-8601 with offset, the moment the prompt was left (the skip taken or
+   * the prompt closed). The offset matters: "when did she leave it" is local.
+   */
+  timestamp: z.string().datetime({ offset: true }),
+  /**
+   * Every concept the prompt concerned. Non-empty for the same reason
+   * `explainBackOfferLogRecordV5.conceptIds` is: a record naming no concept
+   * is invisible to every later question, including the per-concept count.
+   */
+  conceptIds: z.array(z.string().min(1)).min(1),
+  /** The trigger the offer behind this prompt was made under (D7.1). */
+  trigger: explainBackOfferTrigger,
+});
+export type NonAttemptLogRecordV5 = z.infer<typeof nonAttemptLogRecordV5>;
+
+/**
  * A wrong MCQ pick's distractor provenance, carried INLINE on
  * `misconceptionObservedLogRecordV5` (`[D-202]`, `ol-egov.92`; `ol-0r92.44`)
  * — field-for-field the same shape `quiz.generate.v1`'s distractor schema
@@ -1635,6 +1706,7 @@ export const reviewLogEntryV5 = z.discriminatedUnion('kind', [
   disputeLogRecordV5,
   retrospectiveOfferLogRecordV5,
   explainBackOfferLogRecordV5,
+  nonAttemptLogRecordV5,
   misconceptionObservedLogRecordV5,
   sourceRegisteredLogRecordV5,
 ]);
@@ -1661,6 +1733,8 @@ export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV5;
 export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV5>;
 export const explainBackOfferLogRecord = explainBackOfferLogRecordV5;
 export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV5>;
+export const nonAttemptLogRecord = nonAttemptLogRecordV5;
+export type NonAttemptLogRecord = z.infer<typeof nonAttemptLogRecordV5>;
 export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV5;
 export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV5>;
 export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV5;

@@ -42,6 +42,7 @@ import {
   type ReviewLogEntry,
   type ReviewLogRecord,
   retrospectiveOfferLogRecord,
+  reviewLogEntry,
   reviewLogRecord,
   type SourceRegisteredLogRecord,
   type SuccessionLogRecord,
@@ -223,6 +224,32 @@ export type SourceRegisteredLogRecordInput = Omit<
 export interface AppendSourceRegisteredLogResult {
   /** The full, validated record actually written (schemaVersion and eventId included). */
   readonly record: SourceRegisteredLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
+/**
+ * The contracts `nonAttemptLogRecordV5` shape (`[D-273]`, F5.7), read off the
+ * current union rather than imported by name — the same record, narrowed on
+ * its own `kind` literal.
+ */
+type NonAttemptLogRecord = Extract<ReviewLogEntry, { readonly kind: 'non-attempt' }>;
+
+/**
+ * Every non-attempt field the caller supplies (`[D-273]`, `[D-306]`); the
+ * writer stamps the rest. `kind` is stamped, not asked for — there is one
+ * non-attempt kind whichever way she left the prompt (`[D-306]`), so the
+ * caller has no choice to make and no field through which to say which exit
+ * she took.
+ */
+export type NonAttemptLogRecordInput = Omit<
+  NonAttemptLogRecord,
+  'schemaVersion' | 'eventId' | 'kind'
+>;
+
+export interface AppendNonAttemptLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: NonAttemptLogRecord;
   /** The vault path it was appended to. */
   readonly path: VaultPath;
 }
@@ -728,6 +755,68 @@ export async function appendSourceRegisteredRecord(
     );
   }
   const record = parsed.data;
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **non-attempt** event — an
+ * explain-back prompt she opened that produced no explanation (`[D-273]`,
+ * F5.7, D7.1).
+ *
+ * The tenth sibling of `appendReviewLogRecord` and the rest, sharing the same
+ * append path and the same durability discipline. `kind` is stamped, not
+ * asked for: a named skip and a prompt closed without an answer are one event
+ * kind, and the record does not say which exit she took (`[D-306]`).
+ *
+ * **What calling this does not do.** It sends no answer, asks for no verdict
+ * and writes no grade — a skip grades nothing (`[D-273]`). It is never the
+ * route for an answer the declared local check flagged: that answer is graded
+ * and recorded as the review it is (`[D-304]`). Nothing that reports what she
+ * knows reads the record this writes (F5.7, knowledge model R7 and M5); its
+ * one reader is the per-offer counting, never shown to her (`[D-305]`).
+ *
+ * **Validated against the current union `reviewLogEntry`**, the exact schema
+ * `./parse.ts` reads a v5 line back with, then narrowed on its `kind` literal:
+ * a record this writer accepts is by construction one the reader returns as a
+ * non-attempt, never an `invalidLines` entry.
+ *
+ * **Reachability.** No production caller yet: the explain-back modal's named
+ * skip and its close handler are the callers `ol-0r92.104` wires
+ * (`packages/plugin/src/explain-back/modal.ts`), which this record's absence
+ * was blocking.
+ */
+export async function appendNonAttemptRecord(
+  vault: VaultSource,
+  input: NonAttemptLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendNonAttemptLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'non-attempt',
+    eventId: generateEventId(),
+    ...input,
+  };
+
+  const parsed = reviewLogEntry.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendNonAttemptRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  if (record.kind !== 'non-attempt') {
+    // Reachable only if a caller forced a `kind` in through a cast (the input
+    // type omits it): these same fields with `kind: 'explain-back-offered'`
+    // are a valid offer record, which the union alone would accept. Refused
+    // before any byte is written, like every other validation failure here.
+    throw new Error(
+      `appendNonAttemptRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not a non-attempt`,
+    );
+  }
   const path = await appendEntryLine(vault, record, options.deviceId);
 
   return { record, path };

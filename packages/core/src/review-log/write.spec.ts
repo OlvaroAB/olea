@@ -2,6 +2,7 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { computeConceptMastery, conceptIdsInLog } from '../mastery/rollup.js';
 import { FolderSource } from '../vault/folder-source.js';
 import { mergeReviewLogRecords } from './merge.js';
 import { parseReviewLog } from './parse.js';
@@ -11,6 +12,7 @@ import { latestVerdictByInstrument, reviewLogVerdicts } from './verdicts.js';
 import {
   appendExplainBackOfferRecord,
   appendMisconceptionObservedRecord,
+  appendNonAttemptRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSourceRegisteredRecord,
@@ -19,6 +21,7 @@ import {
   appendVerdictRecord,
   type ExplainBackOfferLogRecordInput,
   type MisconceptionObservedLogRecordInput,
+  type NonAttemptLogRecordInput,
   type RetrospectiveOfferLogRecordInput,
   type ReviewLogRecordInput,
   type SourceRegisteredLogRecordInput,
@@ -1302,5 +1305,247 @@ describe('appendMisconceptionObservedRecord ([D-202], ol-egov.92)', () => {
       'misconception-observed',
       'misconception-observed',
     ]);
+  });
+});
+
+// `[D-273]` (F5.7), `[D-306]`: an explain-back prompt she opened that produced
+// no explanation — a named skip, or the prompt closed without an answer, one
+// event kind either way. D7.1's fields only: trigger, concepts, no grade.
+describe('appendNonAttemptRecord ([D-273], [D-306])', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-non-attempt-log-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function nonAttemptInput(
+    overrides: Partial<NonAttemptLogRecordInput> = {},
+  ): NonAttemptLogRecordInput {
+    return {
+      timestamp: '2026-09-25T10:15:00-04:00',
+      conceptIds: ['concept-a'],
+      trigger: 'repeated-failure',
+      ...overrides,
+    };
+  }
+
+  it('appends a non-attempt event into the same C5.2 daily file every other kind lives in', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendNonAttemptRecord(source, nonAttemptInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'non-attempt-1',
+    });
+
+    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.kind).toBe('non-attempt');
+    expect(result.record.eventId).toBe('non-attempt-1');
+    expect(result.record.conceptIds).toEqual(['concept-a']);
+    expect(result.record.trigger).toBe('repeated-failure');
+    expect(result.path).toBe(reviewLogPath('2026-09-25', 'desktop'));
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    expect(raw).toBe(`${JSON.stringify(result.record)}\n`);
+  });
+
+  it('the written line carries exactly D7.1’s fields — no grade, no answer, and nothing saying which exit she took', async () => {
+    const source = new FolderSource(tempRoot);
+    // A caller that forced extra keys in through a cast: none of them may
+    // reach her vault. The input type admits none of them.
+    const forced = {
+      ...nonAttemptInput(),
+      rating: null,
+      explainBackGrade: { soloLevel: 'prestructural' },
+      contentRef: 'content-1',
+      exit: 'closed',
+      manner: 'dismissed',
+      answers: 'offer-1',
+    } as unknown as NonAttemptLogRecordInput;
+    const result = await appendNonAttemptRecord(source, forced, {
+      deviceId: 'desktop',
+      generateEventId: () => 'non-attempt-1',
+    });
+
+    const raw = await readFile(join(tempRoot, result.path), 'utf8');
+    const line = JSON.parse(raw.trimEnd()) as Record<string, unknown>;
+    expect(Object.keys(line).sort()).toEqual(
+      ['schemaVersion', 'kind', 'eventId', 'timestamp', 'conceptIds', 'trigger'].sort(),
+    );
+  });
+
+  it('accepts every one of the four triggers the offer record carries', async () => {
+    const source = new FolderSource(tempRoot);
+    const triggers = [
+      'repeated-failure',
+      'strong-recall-proposal',
+      'on-demand',
+      'scheduling-observation',
+    ] as const;
+    for (const trigger of triggers) {
+      const result = await appendNonAttemptRecord(source, nonAttemptInput({ trigger }), {
+        deviceId: 'desktop',
+      });
+      expect(result.record.trigger).toBe(trigger);
+    }
+    const raw = await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'desktop')), 'utf8');
+    const parsed = parseReviewLog(raw);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual([
+      'non-attempt',
+      'non-attempt',
+      'non-attempt',
+      'non-attempt',
+    ]);
+  });
+
+  it('interleaves with an offer and a review in the one file, parses back as a current-shape entry, and no earlier line is rewritten', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(source, baseInput({ timestamp: '2026-09-25T10:00:00-04:00' }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'r1',
+    });
+    await appendExplainBackOfferRecord(
+      source,
+      {
+        kind: 'explain-back-offered',
+        timestamp: '2026-09-25T10:01:00-04:00',
+        conceptIds: ['concept-a'],
+        trigger: 'repeated-failure',
+      },
+      { deviceId: 'desktop', generateEventId: () => 'offer-1' },
+    );
+    const before = await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'desktop')), 'utf8');
+    const nonAttempt = await appendNonAttemptRecord(source, nonAttemptInput(), {
+      deviceId: 'desktop',
+      generateEventId: () => 'non-attempt-1',
+    });
+    const after = await readFile(join(tempRoot, nonAttempt.path), 'utf8');
+
+    expect(after.startsWith(before)).toBe(true);
+    const parsed = parseReviewLog(after);
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.disputes).toEqual([]);
+    expect(parsed.records.map((r) => r.kind)).toEqual([
+      'review',
+      'explain-back-offered',
+      'non-attempt',
+    ]);
+  });
+
+  it('is read by nothing that reports what she knows: the stage fold and the concept set are unchanged by it (F5.7, R7)', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendReviewLogRecord(
+      source,
+      baseInput({ timestamp: '2026-09-25T10:00:00-04:00', conceptIds: ['concept-a'] }),
+      { deviceId: 'desktop', generateEventId: () => 'r1' },
+    );
+    const without = parseReviewLog(
+      await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'desktop')), 'utf8'),
+    ).records;
+    // One non-attempt on the reviewed concept, and one on a concept she has
+    // never answered anything about.
+    await appendNonAttemptRecord(source, nonAttemptInput({ conceptIds: ['concept-a'] }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'non-attempt-1',
+    });
+    await appendNonAttemptRecord(source, nonAttemptInput({ conceptIds: ['concept-z'] }), {
+      deviceId: 'desktop',
+      generateEventId: () => 'non-attempt-2',
+    });
+    const withNonAttempts = parseReviewLog(
+      await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'desktop')), 'utf8'),
+    ).records;
+    expect(withNonAttempts).toHaveLength(without.length + 2);
+
+    expect(computeConceptMastery(withNonAttempts, 'concept-a')).toEqual(
+      computeConceptMastery(without, 'concept-a'),
+    );
+    expect(computeConceptMastery(withNonAttempts, 'concept-z')).toEqual(
+      computeConceptMastery(without, 'concept-z'),
+    );
+    expect(conceptIdsInLog(withNonAttempts)).toEqual(conceptIdsInLog(without));
+  });
+
+  it('validates before writing: an empty conceptIds never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendNonAttemptRecord(source, nonAttemptInput({ conceptIds: [] }), { deviceId: 'desktop' }),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-25', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: a missing or unknown trigger never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    const { trigger: _drop, ...withoutTrigger } = nonAttemptInput();
+    await expect(
+      appendNonAttemptRecord(source, withoutTrigger as NonAttemptLogRecordInput, {
+        deviceId: 'desktop',
+      }),
+    ).rejects.toThrow(/schema validation/);
+    await expect(
+      appendNonAttemptRecord(
+        source,
+        // @ts-expect-error deliberately outside the four triggers for this test
+        nonAttemptInput({ trigger: 'skip' }),
+        { deviceId: 'desktop' },
+      ),
+    ).rejects.toThrow(/schema validation/);
+    expect(await source.exists(reviewLogPath('2026-09-25', 'desktop'))).toBe(false);
+  });
+
+  it('validates before writing: a `kind` forced in through a cast never reaches the vault', async () => {
+    const source = new FolderSource(tempRoot);
+    // `explain-back-offered` is the case the post-parse `kind` guard exists
+    // for: these same fields make a valid offer record, so the union alone
+    // would accept it and write an offer where a non-attempt was meant.
+    for (const kind of ['skip', 'explain-back-declined', 'explain-back-offered']) {
+      const forced = { ...nonAttemptInput(), kind } as unknown as NonAttemptLogRecordInput;
+      await expect(appendNonAttemptRecord(source, forced, { deviceId: 'desktop' })).rejects.toThrow(
+        /schema validation/,
+      );
+    }
+    expect(await source.exists(reviewLogPath('2026-09-25', 'desktop'))).toBe(false);
+  });
+
+  it('uses crypto.randomUUID() by default when no generator is supplied', async () => {
+    const source = new FolderSource(tempRoot);
+    const result = await appendNonAttemptRecord(source, nonAttemptInput(), {
+      deviceId: 'desktop',
+    });
+    expect(result.record.eventId).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+    );
+  });
+
+  it('rejects an invalid device id before writing', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendNonAttemptRecord(source, nonAttemptInput(), { deviceId: 'has/slash' }),
+    ).rejects.toThrow();
+  });
+
+  it('a second device converges on the same non-attempt history — merge-by-eventId, no bespoke sync', async () => {
+    const source = new FolderSource(tempRoot);
+    await appendNonAttemptRecord(source, nonAttemptInput(), {
+      deviceId: 'device-a',
+      generateEventId: () => 'non-attempt-a',
+    });
+    await appendNonAttemptRecord(source, nonAttemptInput({ trigger: 'on-demand' }), {
+      deviceId: 'device-b',
+      generateEventId: () => 'non-attempt-b',
+    });
+
+    const rawA = await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'device-a')), 'utf8');
+    const rawB = await readFile(join(tempRoot, reviewLogPath('2026-09-25', 'device-b')), 'utf8');
+    const merged = mergeReviewLogRecords(
+      parseReviewLog(rawA).records,
+      parseReviewLog(rawB).records,
+    );
+
+    expect(merged.duplicateEventIds).toEqual([]);
+    expect(merged.records.map((r) => r.kind)).toEqual(['non-attempt', 'non-attempt']);
   });
 });
