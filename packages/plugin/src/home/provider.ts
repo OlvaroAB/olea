@@ -64,13 +64,16 @@
  * whole Home read (identical reasoning to that same call site).
  */
 
-import type { ReviewLogEntry, StudyPlanEnvelope } from 'olea-contracts';
+import type { ReviewLogEntry, StudyPlanAllocationEntry, StudyPlanEnvelope } from 'olea-contracts';
 import type {
+  ConceptRecord,
   ConceptRelation,
   GroveCourseModel,
+  RankOracleOptions,
   Scheduler,
   VaultPath,
   VaultSource,
+  WindowDeficitEntry,
 } from 'olea-core';
 import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
 import { createLocalGroveProvider } from '../grove/provider.js';
@@ -136,6 +139,35 @@ export interface CreateLocalHomeProviderDeps {
    * interim shares.
    */
   readonly plan?: () => StudyPlanEnvelope | null;
+  /**
+   * `[D-243]` (`ol-egov.132.7` [SESS-8.7]): `[D-092]`'s session-denominated
+   * fairness window, passed straight through to
+   * `../session-builder/provider.ts`'s own `windowDeficit` — the identical
+   * `main.ts`-owned derivation (`windowDeficitFromReviewLog`) the Start-path
+   * session-builder leaf is wired with, so Home's headline session and the
+   * session Start composes cannot disagree about how far behind a course is
+   * (`ol-egov.141.89.10.20`, filed against F6.4's "rendered once" case C12,
+   * `docs/dev/intelligence-build/pln.md` §5). Omitted reads exactly as
+   * `../session-builder/provider.ts`'s own doc for this field already
+   * documents: no window reading at all, the same days-since-last-seen
+   * substitute `study-session/compose.ts` falls back to.
+   */
+  readonly windowDeficit?: (input: {
+    readonly entries: readonly ReviewLogEntry[];
+    readonly concepts: readonly ConceptRecord[];
+    readonly allocation: readonly StudyPlanAllocationEntry[] | undefined;
+  }) => ReadonlyMap<string, WindowDeficitEntry> | undefined;
+  /**
+   * `[D-110]` (`ol-v7r5.3`), threaded through for the same reason
+   * {@link windowDeficit} is (`ol-egov.141.89.10.20`): passed straight
+   * through to `../session-builder/provider.ts`'s own `readRankWeights` —
+   * the same delivered rank-weights read the Start-path session-builder leaf
+   * already supplies (`main.ts`'s `this.rankWeights?.readRankWeights`).
+   * Omitted, or resolving `undefined`, reads exactly as that field's own doc
+   * already documents: `rank.ts`'s declared fallback constants apply, F7.8's
+   * degrade-not-half-work posture, nothing surfaced to her as an error.
+   */
+  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
   /**
    * `ol-ppa9` (F1.4/`[D-213]`): the first-read readout, for every course
    * folder ticked so far this session — see `./view.ts`'s own module doc for
@@ -317,6 +349,15 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
     scheduler: deps.scheduler,
     ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
     ...(deps.plan !== undefined ? { plan: deps.plan } : {}),
+    // `ol-egov.141.89.10.20`: Home's headline session must be wired with the
+    // same `[D-092]` window reading and the same delivered rank weights the
+    // Start-path session-builder leaf gets (`main.ts`'s `VIEW_TYPE_OLEA_
+    // SESSION` registration), so Home and Start compose the identical
+    // session for the same underlying state (`[D-243]`'s "rendered once").
+    // See `CreateLocalHomeProviderDeps.windowDeficit`/`.readRankWeights`'s
+    // own docs for why an absent dep degrades exactly as before this bead.
+    ...(deps.windowDeficit !== undefined ? { windowDeficit: deps.windowDeficit } : {}),
+    ...(deps.readRankWeights !== undefined ? { readRankWeights: deps.readRankWeights } : {}),
   });
   const groveProvider = createLocalGroveProvider({
     vault: deps.vault,

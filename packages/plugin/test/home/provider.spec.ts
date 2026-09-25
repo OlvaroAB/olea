@@ -23,6 +23,7 @@ import type { HomeViewState } from '../../src/home/view.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
+import { createLocalSessionBuilderProvider } from '../../src/session-builder/provider.js';
 import type { SessionBuilderState } from '../../src/session-builder/view.js';
 import { memoryVault } from '../review/memory-vault.js';
 
@@ -356,6 +357,118 @@ describe('createLocalHomeProvider — F4.6 steering inputs reach the headline se
     const narrow = sessionModel(await home.load({ budgetMinutes: 5 }));
 
     expect(narrow.model.items.length).toBeLessThan(wide.model.items.length);
+  });
+});
+
+// `ol-egov.141.89.10.20` (bug, `[D-243]`): `createLocalHomeProvider` used to
+// build its own `createLocalSessionBuilderProvider` without `windowDeficit`
+// or `readRankWeights` — the two inputs `main.ts`'s Start-path session-builder
+// leaf (`VIEW_TYPE_OLEA_SESSION`) always supplied. F6.4 requires Home and
+// Start to be "rendered once" with the same composition (case C12,
+// `docs/dev/intelligence-build/pln.md` §5); with different inputs the two
+// surfaces could disagree about the same underlying state. This suite proves
+// the wiring, not the derivations themselves (`readRankWeights`'s blend
+// arithmetic is `test/session-builder/provider.spec.ts`'s own acceptance
+// criteria, `windowDeficit`'s C5.5 clustering is that same suite's "C5.5
+// clustering feeds the D-092 window deficit" describe) — the point here is
+// that `createLocalHomeProvider`'s deps reach the SAME
+// `createLocalSessionBuilderProvider` call Start uses, with the SAME values.
+describe('createLocalHomeProvider — Home composes with the same windowDeficit and readRankWeights Start uses (ol-egov.141.89.10.20, [D-243])', () => {
+  function widgetItem(session: SessionBuilderState & { kind: 'model' }) {
+    const item = session.model.items.find((candidate) => candidate.course === 'TESTC101');
+    if (item === undefined) throw new Error('expected a TESTC101 item in the session model');
+    return item;
+  }
+
+  it("readRankWeights reaches Home's headline session and produces the byte-identical gapScore createLocalSessionBuilderProvider produces for the same deps ([D-110], ol-v7r5.3)", async () => {
+    const vault = twoCourseVault();
+    const host = hostWithBasePath(BASE_PATH);
+    // `[FOCUS-5]`: unsteered and with no allocation or review history, both
+    // providers' single-course default falls to course id, so TESTC101 is
+    // the course each composes — same fixture and reasoning as the F4.6
+    // steering suite above.
+    const readRankWeights = async () => ({
+      masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+    });
+
+    const homeState = await createLocalHomeProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+      readRankWeights,
+    }).load(DEFAULT_REQUEST);
+    const startState = await createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+      readRankWeights,
+    }).load(DEFAULT_REQUEST);
+    if (startState.kind !== 'model') throw new Error('expected a session model (Start)');
+
+    const homeItem = widgetItem(sessionModel(homeState));
+    const startItem = widgetItem(startState);
+    expect(homeItem.gapScore).toBe(startItem.gapScore);
+
+    // Not a false-positive parity between two providers that both silently
+    // ignored `readRankWeights`: the delivered weight (0.2) actually moves
+    // the number away from the declared fallback (1), the same assertion
+    // `test/session-builder/provider.spec.ts`'s own suite makes for Start.
+    const fallbackItem = widgetItem(
+      sessionModel(await provider(vault, host).load(DEFAULT_REQUEST)),
+    );
+    expect(homeItem.gapScore).toBeCloseTo(fallbackItem.gapScore * 0.2, 10);
+    expect(homeItem.gapScore).not.toBeCloseTo(fallbackItem.gapScore, 5);
+  });
+
+  it("windowDeficit is threaded through to Home's own session-builder composition with the real entries/concepts/allocation shape Start's derivation gets ([D-092], [SESS-13])", async () => {
+    const vault = twoCourseVault();
+    const host = hostWithBasePath(BASE_PATH);
+    const plan = planFixtureWithAllocation([
+      allocationEntry('TESTC101', 0.5),
+      allocationEntry('TESTC202', 0.5),
+    ]);
+    const seen: {
+      readonly entries: readonly unknown[];
+      readonly concepts: readonly unknown[];
+      readonly allocation: readonly unknown[] | undefined;
+    }[] = [];
+
+    await createLocalHomeProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+      plan: () => plan,
+      windowDeficit: (input) => {
+        seen.push(input);
+        return undefined;
+      },
+    }).load(DEFAULT_REQUEST);
+
+    // Called exactly once (Home's `load()` composes one session, same
+    // "read on every call" posture as Start's own leaf) and handed the real
+    // review-log entries, the real concept walk and the real cached
+    // allocation this bead's fix threads through — never an empty stub.
+    expect(seen).toHaveLength(1);
+    const input = seen[0];
+    if (input === undefined) throw new Error('expected windowDeficit to have been called');
+    expect(Array.isArray(input.entries)).toBe(true);
+    expect(Array.isArray(input.concepts)).toBe(true);
+    expect(input.concepts.length).toBeGreaterThan(0);
+    expect(input.allocation).toEqual(plan.body.allocation);
+  });
+
+  it('with neither dep supplied, Home still composes — the pre-bead default, byte-identical (regression guard)', async () => {
+    const state = await provider(twoCourseVault(), hostWithBasePath(BASE_PATH)).load(
+      DEFAULT_REQUEST,
+    );
+    const item = widgetItem(sessionModel(state));
+    expect(item.gapScore).toBeGreaterThan(0);
   });
 });
 
