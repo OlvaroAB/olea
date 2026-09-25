@@ -724,6 +724,8 @@ function fixtureComposedSession(
     courseShares: new Map(),
     forcedCourses: [],
     obligationClasses: new Map(),
+    citationRecheckQueued: new Set(),
+    citationRevalidationPending: new Set(),
     // `[SESS-11]` (`ol-egov.132.12`): this suite never composes anything for
     // containment to drop — an empty, honest default, not a claim about the
     // filter's real behaviour.

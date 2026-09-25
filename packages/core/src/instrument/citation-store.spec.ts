@@ -6,6 +6,7 @@ import { FolderSource } from '../vault/folder-source.js';
 import {
   CITATION_STORE_FOLDER,
   citationStorePath,
+  classifyCitationFreshness,
   isCitationRecord,
   readInstrumentCitation,
   writeInstrumentCitation,
@@ -106,7 +107,15 @@ describe('citation-store', () => {
       string,
       unknown
     >;
-    const allowedKeys = new Set(['instrumentId', 'sourcePath', 'page', 'section', 'schemaVersion']);
+    const allowedKeys = new Set([
+      'instrumentId',
+      'sourcePath',
+      'page',
+      'section',
+      'schemaVersion',
+      'passageDigest',
+      'sourceRevision',
+    ]);
     for (const key of Object.keys(raw)) {
       expect(allowedKeys.has(key)).toBe(true);
     }
@@ -130,5 +139,75 @@ describe('citation-store', () => {
     ).toBe(false);
     expect(isCitationRecord(null)).toBe(false);
     expect(isCitationRecord('nope')).toBe(false);
+  });
+
+  // [D-292] (ol-egov.141.89.2.7, closed): passageDigest/sourceRevision written at creation;
+  // older (schema-version-1) records have neither. ol-2zfj.154's own acceptance criteria.
+  it('[D-292] writes and reads passageDigest/sourceRevision when the caller supplies them', async () => {
+    const vault = new FolderSource(tempRoot);
+    await writeInstrumentCitation(vault, 'mcq-digest', {
+      sourcePath: 'Sources/Lecture 3.pdf',
+      page: 4,
+      passageDigest: 'digest-abc',
+      sourceRevision: 'revision-1',
+    });
+
+    const found = await readInstrumentCitation(vault, 'mcq-digest');
+    expect(found).toEqual({
+      sourcePath: 'Sources/Lecture 3.pdf',
+      page: 4,
+      passageDigest: 'digest-abc',
+      sourceRevision: 'revision-1',
+    });
+  });
+
+  it('isCitationRecord rejects a non-empty-string-typed passageDigest or sourceRevision', () => {
+    expect(
+      isCitationRecord({
+        instrumentId: 'x',
+        sourcePath: 'a.pdf',
+        schemaVersion: 2,
+        passageDigest: 7,
+      }),
+    ).toBe(false);
+    expect(
+      isCitationRecord({
+        instrumentId: 'x',
+        sourcePath: 'a.pdf',
+        schemaVersion: 2,
+        sourceRevision: '',
+      }),
+    ).toBe(false);
+    expect(
+      isCitationRecord({
+        instrumentId: 'x',
+        sourcePath: 'a.pdf',
+        schemaVersion: 2,
+        passageDigest: 'd',
+        sourceRevision: 'r',
+      }),
+    ).toBe(true);
+  });
+
+  describe('[D-292] classifyCitationFreshness — the three states', () => {
+    it('fresh: an observed digest matching the recorded passageDigest', () => {
+      const citation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      expect(classifyCitationFreshness(citation, 'digest-abc')).toBe('fresh');
+    });
+
+    it('stale: an observed digest that does not match the recorded passageDigest', () => {
+      const citation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      expect(classifyCitationFreshness(citation, 'digest-changed')).toBe('stale');
+    });
+
+    it('unknown: a legacy (schema-version-1) citation with no passageDigest at all', () => {
+      const citation = { sourcePath: 'Sources/A.pdf' };
+      expect(classifyCitationFreshness(citation, 'digest-abc')).toBe('unknown');
+    });
+
+    it('unknown: a passageDigest is recorded but the caller has no current observation', () => {
+      const citation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      expect(classifyCitationFreshness(citation, undefined)).toBe('unknown');
+    });
   });
 });

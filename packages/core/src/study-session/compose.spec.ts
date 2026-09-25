@@ -1266,6 +1266,130 @@ describe('composeSessionRows', () => {
 });
 
 // ---------------------------------------------------------------------------
+// [D-292] citation freshness (`ol-2zfj.154`) — read here, actioned only where ruled.
+// One test per state: fresh, stale, unknown. [D-351] (open) governs whether/how a
+// stale citation withholds an instrument, so `stale` is read (reported) but never
+// excludes — see compose.ts's module doc, "Citation freshness" section.
+// ---------------------------------------------------------------------------
+
+describe('composeSessionRows: [D-292] citation freshness', () => {
+  function threeConceptFixture() {
+    const theRows = rows([
+      { conceptName: 'FreshConcept', gapScore: 5 },
+      { conceptName: 'StaleConcept', gapScore: 5 },
+      { conceptName: 'UnknownConcept', gapScore: 5 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([
+      qa('fresh-1', ['FreshConcept']),
+      qa('stale-1', ['StaleConcept']),
+      qa('unknown-1', ['UnknownConcept']),
+    ]);
+    return { theRows, instruments };
+  }
+
+  it('fresh: an instrument whose citationFreshness reads fresh is served, queued for neither', () => {
+    const { theRows, instruments } = threeConceptFixture();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: new Map([
+        ['fresh-1', 'fresh'],
+        ['stale-1', 'stale'],
+        ['unknown-1', 'unknown'],
+      ]),
+    });
+
+    expect(result.orderedRows.map((r) => r.conceptName).sort()).toEqual([
+      'FreshConcept',
+      'StaleConcept',
+      'UnknownConcept',
+    ]);
+    expect(result.citationRecheckQueued.has('fresh-1')).toBe(false);
+    expect(result.citationRevalidationPending.has('fresh-1')).toBe(false);
+  });
+
+  it('stale: read and reported, but NOT withheld — [D-351] (open) governs withholding, so today\'s serving behaviour is kept', () => {
+    const { theRows, instruments } = threeConceptFixture();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: new Map([
+        ['fresh-1', 'fresh'],
+        ['stale-1', 'stale'],
+        ['unknown-1', 'unknown'],
+      ]),
+    });
+
+    // Still composed — nothing here withholds it (this bead's own scope: build only
+    // what [D-292] rules and [D-351] has already gated the withholding action).
+    expect(result.orderedRows.some((r) => r.conceptName === 'StaleConcept')).toBe(true);
+    expect(result.citationRevalidationPending.has('stale-1')).toBe(true);
+    expect(result.citationRecheckQueued.has('stale-1')).toBe(false);
+  });
+
+  it('unknown: read and actioned — served, with a re-check queued (explicit "unknown" entry)', () => {
+    const { theRows, instruments } = threeConceptFixture();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: new Map([
+        ['fresh-1', 'fresh'],
+        ['stale-1', 'stale'],
+        ['unknown-1', 'unknown'],
+      ]),
+    });
+
+    expect(result.orderedRows.some((r) => r.conceptName === 'UnknownConcept')).toBe(true);
+    expect(result.citationRecheckQueued.has('unknown-1')).toBe(true);
+    expect(result.citationRevalidationPending.has('unknown-1')).toBe(false);
+  });
+
+  it('unknown is also the default: an omitted citationFreshness map, or an instrument missing from it, both queue a re-check rather than reading as fresh', () => {
+    const { theRows, instruments } = threeConceptFixture();
+
+    // No `citationFreshness` supplied at all.
+    const omitted = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+    });
+    expect(omitted.citationRecheckQueued.has('fresh-1')).toBe(true);
+    expect(omitted.citationRecheckQueued.has('stale-1')).toBe(true);
+    expect(omitted.citationRecheckQueued.has('unknown-1')).toBe(true);
+    expect(omitted.citationRevalidationPending.size).toBe(0);
+
+    // A map that names only one of the three instruments.
+    const partial = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: replay({}),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 3600,
+      citationFreshness: new Map([['fresh-1', 'fresh']]),
+    });
+    expect(partial.citationRecheckQueued.has('fresh-1')).toBe(false);
+    expect(partial.citationRecheckQueued.has('stale-1')).toBe(true);
+    expect(partial.citationRecheckQueued.has('unknown-1')).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // buildComposedStudySession — the whole layer, and F6.6's equality-of-rule
 // health check (component register 3.8; [D-113] item 5)
 // ---------------------------------------------------------------------------
@@ -1500,6 +1624,11 @@ describe('buildComposedStudySession', () => {
     // concept map is a structural field, not a rendered sentence.
     expect(Object.keys(composed).sort()).toEqual(
       [
+        // `[D-292]` (`ol-2zfj.154`): both instrument-id sets, not prose either
+        // — the same "structural field, not a rendered sentence" reasoning
+        // `obligationClasses` gets above.
+        'citationRecheckQueued',
+        'citationRevalidationPending',
         'containmentDropped',
         'courseShares',
         // Present because this test pins `focusPolicy: 'every-course'`

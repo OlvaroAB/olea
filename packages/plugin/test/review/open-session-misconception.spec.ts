@@ -144,6 +144,8 @@ async function sessionInputFor(
     courseShares: new Map(),
     forcedCourses: [],
     obligationClasses: new Map(),
+    citationRecheckQueued: new Set(),
+    citationRevalidationPending: new Set(),
   });
   return {
     vault,

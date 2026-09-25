@@ -38,6 +38,8 @@ function fakeComposedStudySession(
     courseShares: new Map(),
     forcedCourses: [],
     obligationClasses: new Map(),
+    citationRecheckQueued: new Set(),
+    citationRevalidationPending: new Set(),
     ...overrides,
   };
 }

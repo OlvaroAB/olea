@@ -285,6 +285,33 @@
  * (`session-builder/provider.ts`) is deliberately left to a follow-up
  * (`ol-4pue`'s notes name it), not guessed at here.
  *
+ * ## Citation freshness (`[D-292]`, `ol-2zfj.154`) — read here, actioned only where ruled
+ *
+ * `../instrument/citation-store.js`'s `[D-292]` fields let a caller classify an instrument's
+ * passage citation as `'fresh'`, `'stale'` or `'unknown'` ({@link CitationFreshnessState},
+ * `classifyCitationFreshness`). This module stays pure (see "INV-1 / §7.1" below), so it never
+ * computes that classification itself — {@link ComposeSessionRowsInput.citationFreshness} is a
+ * caller-resolved map, keyed by `instrumentId`, the same "optional and safe to omit" shape every
+ * other caller-resolved signal on this input already has. An omitted map, or an instrument
+ * missing from it, both read as `'unknown'` — never as fresh; this bead's own evidence names
+ * exactly that silent-fresh gap (review-response.md section 1 row 10) as the defect being closed.
+ *
+ * **`'unknown'` is read AND actioned**: an unknown-freshness instrument is still composed
+ * (never withheld — nothing here has grounds to treat "no observation yet" as "broken"), and its
+ * id is surfaced on {@link ComposeSessionRowsResult.citationRecheckQueued} — `ol-2zfj.154`'s own
+ * "serve with a re-check queued."
+ *
+ * **`'stale'` is read but NOT yet actioned.** `ol-2zfj.154`'s text asks for "revalidate before
+ * serving," which means withholding a stale instrument until it is rechecked — but `[D-351]`
+ * (`ol-egov.141.89.5.12`, open at the time this landed) is the decision that rules WHERE the
+ * pending-revalidation fact persists and, with it, how/where a stale citation withholds an
+ * instrument (`[D-343]`). Building a withholding mechanism ahead of that ruling would be
+ * deciding a Class C persisted-fact question this module has no standing to decide. So a stale
+ * instrument is composed exactly as a fresh one is today — today's serving behaviour, unchanged
+ * — and its id is only surfaced on {@link ComposeSessionRowsResult.citationRevalidationPending}
+ * for a future caller to act on once `[D-351]` rules. Treat that absence of filtering as a stop,
+ * never as this module's own ruling.
+ *
  * ## INV-1 / §7.1
  *
  * Pure. No `obsidian`, no vault I/O, no clock (`asOf` is an argument),
@@ -297,6 +324,7 @@ import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import type { ConceptRelation } from '../concept/relation.js';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
+import type { CitationFreshnessState } from '../instrument/citation-store.js';
 import type { OracleMasteryState } from '../oracle/types.js';
 import type { SchedulerState } from '../scheduler/types.js';
 import { containerConceptKeysToDrop } from '../session/containment.js';
@@ -1498,6 +1526,19 @@ export interface ComposeSessionRowsInput {
    * `rows` itself rather than taking a second `ConceptRecord[]` input.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * `[D-292]`'s citation freshness, keyed by `instrumentId` — see the module doc's "Citation
+   * freshness" section for the full account of what is read here vs. actioned. **Optional, and
+   * safe to omit entirely**: an omitted map, or an instrument missing from it, both read as
+   * `'unknown'`, never `'fresh'` — this module never treats "no signal" as "no problem" for a
+   * citation the way it does for {@link arrivalDays}/{@link relatedConceptKeys} above, because
+   * `'unknown'` is itself one of `[D-292]`'s three ruled states, not a degraded fallback outside
+   * them. No production caller resolves this map yet — the same "ready for the signal the day a
+   * caller supplies it" posture {@link relatedConceptKeys} states above; resolving it (a
+   * `CitationRecord` per instrument, plus a current passage observation to compare against) is
+   * left to a follow-up, across this lane's file-ownership boundary.
+   */
+  readonly citationFreshness?: ReadonlyMap<string, CitationFreshnessState>;
 }
 
 export interface ComposeSessionRowsResult {
@@ -1561,6 +1602,23 @@ export interface ComposeSessionRowsResult {
   readonly focusBranch?: FocusBranch;
   /** Item 5's ratified sentence fragment for {@link focusBranch} — see {@link FOCUS_BRANCH_SENTENCE}. `undefined` exactly when {@link focusBranch} is. */
   readonly focusReason?: string;
+  /**
+   * `[D-292]`'s `'unknown'` citation state, ACTIONED — see the module doc's "Citation freshness"
+   * section. Instrument ids, among the instruments backing {@link orderedRows}' own concepts,
+   * whose {@link ComposeSessionRowsInput.citationFreshness} reads `'unknown'` (an omitted map,
+   * or an instrument missing from it, both count). The instrument IS in `orderedRows` — this is
+   * the re-check signal a caller enqueues alongside serving it (`ol-2zfj.154`'s "serve with a
+   * re-check queued"), never a reason to withhold it.
+   */
+  readonly citationRecheckQueued: ReadonlySet<string>;
+  /**
+   * `[D-292]`'s `'stale'` citation state, read but NOT yet actioned — `[D-351]` (open when this
+   * landed) governs whether/how a stale instrument is withheld; see the module doc's "Citation
+   * freshness" section and {@link ComposeSessionRowsInput.citationFreshness}'s doc. Instrument
+   * ids, among the instruments backing {@link orderedRows}' own concepts, whose freshness reads
+   * `'stale'`. Reported for visibility only: nothing in this module excludes them today.
+   */
+  readonly citationRevalidationPending: ReadonlySet<string>;
 }
 
 /**
@@ -1739,6 +1797,22 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     orderedBlocks.map((c) => [c.row.conceptKey, c.klass]),
   );
 
+  // `[D-292]` citation freshness — see the module doc's "Citation freshness" section for what is
+  // read here vs. actioned. Walked over the CHOSEN set's own instruments only (the same
+  // `orderedBlocks` scope `obligationClasses` above uses), never the full candidate pool.
+  const citationRecheckQueued = new Set<string>();
+  const citationRevalidationPending = new Set<string>();
+  for (const c of orderedBlocks) {
+    for (const record of instruments.instrumentsFor(c.row.conceptKey)) {
+      const state = input.citationFreshness?.get(record.instrumentId) ?? 'unknown';
+      if (state === 'unknown') citationRecheckQueued.add(record.instrumentId);
+      // `'stale'` is read here (the loop reaches every chosen instrument's own state) but not
+      // acted on beyond this report — see the module doc for why `[D-351]` (open) gates any
+      // withholding.
+      else if (state === 'stale') citationRevalidationPending.add(record.instrumentId);
+    }
+  }
+
   return {
     orderedRows,
     overflow,
@@ -1747,6 +1821,8 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     obligationClasses,
     courseSeconds: budgets,
     containmentDropped: containment.dropped,
+    citationRecheckQueued,
+    citationRevalidationPending,
     // `[FOCUS-3]`'s echo discipline, unchanged by `[FOCUS-5]`'s default flip:
     // the `focusPolicy` field is echoed only when the caller explicitly
     // supplied one (even `'every-course'` explicitly), never synthesised
@@ -1804,6 +1880,8 @@ export interface BuildComposedStudySessionInput
   readonly windowDeficit?: ReadonlyMap<string, WindowDeficitEntry>;
   /** C7.9 (`[SESS-11]`) — see `ComposeSessionRowsInput.relations`, passed straight through. */
   readonly relations?: readonly ConceptRelation[];
+  /** `[D-292]` (`ol-2zfj.154`) — see `ComposeSessionRowsInput.citationFreshness`, passed straight through. */
+  readonly citationFreshness?: ReadonlyMap<string, CitationFreshnessState>;
 }
 
 /**
@@ -1864,6 +1942,10 @@ export interface ComposedStudySession {
   readonly focusBranch?: FocusBranch;
   /** See `ComposeSessionRowsResult.focusReason`. */
   readonly focusReason?: string;
+  /** See `ComposeSessionRowsResult.citationRecheckQueued`. */
+  readonly citationRecheckQueued: ReadonlySet<string>;
+  /** See `ComposeSessionRowsResult.citationRevalidationPending`. */
+  readonly citationRevalidationPending: ReadonlySet<string>;
 }
 
 /**
@@ -1925,6 +2007,9 @@ export function buildComposedStudySession(
     ...(input.focusPolicy !== undefined ? { focusPolicy: input.focusPolicy } : {}),
     ...(input.windowDeficit !== undefined ? { windowDeficit: input.windowDeficit } : {}),
     ...(input.relations !== undefined ? { relations: input.relations } : {}),
+    ...(input.citationFreshness !== undefined
+      ? { citationFreshness: input.citationFreshness }
+      : {}),
   });
 
   const model = buildStudySession({
@@ -1954,6 +2039,8 @@ export function buildComposedStudySession(
     courseShares: composed.courseShares,
     forcedCourses: composed.forcedCourses,
     obligationClasses: composed.obligationClasses,
+    citationRecheckQueued: composed.citationRecheckQueued,
+    citationRevalidationPending: composed.citationRevalidationPending,
     ...(composed.containmentDropped !== undefined
       ? { containmentDropped: composed.containmentDropped }
       : {}),

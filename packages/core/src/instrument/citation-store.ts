@@ -71,8 +71,18 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/concepts/` and `.olea/content/`. */
 export const CITATION_STORE_FOLDER: VaultPath = '.olea/citations';
 
-/** Bumped only on a breaking change to the record shape. */
-export const CITATION_RECORD_SCHEMA_VERSION = 1;
+/**
+ * Bumped only on a breaking change to the record shape. `2` since `[D-292]`
+ * (`ol-egov.141.89.2.7`, closed): a record written from here on carries
+ * `passageDigest`/`sourceRevision` (still each independently optional — see
+ * those fields' own doc); a `1`-vintage record on disk never had them and is
+ * never rewritten to add them (write-once, unchanged). Nothing here reads
+ * this constant to decide freshness — {@link classifyCitationFreshness} reads
+ * `passageDigest`'s presence directly, which is the same fact this version
+ * bump records, so a corrupt or hand-edited `schemaVersion` on an old file
+ * can never desync the two.
+ */
+export const CITATION_RECORD_SCHEMA_VERSION = 2;
 
 /**
  * A generated instrument's passage citation, at `[D-181]`'s grain — `sourcePath` plus optional
@@ -81,11 +91,36 @@ export const CITATION_RECORD_SCHEMA_VERSION = 1;
  * `SourceLocation.section`'s own "absent means this source has no such structure, not that the
  * lookup failed" convention — never fabricated when the generation pipeline's own citation lacked
  * one.
+ *
+ * `[D-292]` (`ol-egov.141.89.2.7`, closed) adds two more fields, both written once, at the same
+ * moment as everything else here — never patched onto an existing record (write-once, unchanged):
+ * `passageDigest` and `sourceRevision`. Both independently optional, the same "absent means
+ * unavailable, never fabricated" convention `page`/`section` already use — a `1`-vintage record
+ * predating `[D-292]` has neither, and {@link classifyCitationFreshness} reads that absence as
+ * `'unknown'`, never as fresh (this bead's own evidence, `ol-2zfj.154`: "a never-tracked instrument
+ * is silently baselined against its current state, i.e. treated as fresh" — review-response.md
+ * section 1 row 10).
  */
 export interface InstrumentCitation {
   readonly sourcePath: VaultPath;
   readonly page?: number;
   readonly section?: string;
+  /**
+   * `[D-292]`: a digest of the cited passage's own text, taken at the moment the instrument was
+   * drafted — the value {@link classifyCitationFreshness} compares a later observation against.
+   * This module never computes it (no vault I/O, no passage text cached here — see the module
+   * doc's "THE GRAIN IS DELIBERATELY SMALLER THAN `SourceLocation`" section); the caller that
+   * already holds the drafted passage text at generation time is the one that can honestly mint
+   * this value. Absent on every record written before `[D-292]` landed.
+   */
+  readonly passageDigest?: string;
+  /**
+   * `[D-292]`: the source's own content-hash revision the citation was drafted against
+   * ("materialisation already checks the source's content hash" — the decision's own text).
+   * Distinct from `passageDigest`: this identifies the whole source file's state, that one the
+   * exact cited passage's text. Absent on every record written before `[D-292]` landed.
+   */
+  readonly sourceRevision?: string;
 }
 
 /** One citation record under `.olea/citations/` — `InstrumentCitation` plus its key and schema version. */
@@ -106,6 +141,10 @@ export function isCitationRecord(value: unknown): value is CitationRecord {
   if (!isNonEmptyString(v.sourcePath)) return false;
   if (v.page !== undefined && typeof v.page !== 'number') return false;
   if (v.section !== undefined && !isNonEmptyString(v.section)) return false;
+  // `[D-292]`: each independently optional, same "absent is fine, wrong-typed is not" rule
+  // `page`/`section` already get — a `1`-vintage record simply lacks them.
+  if (v.passageDigest !== undefined && !isNonEmptyString(v.passageDigest)) return false;
+  if (v.sourceRevision !== undefined && !isNonEmptyString(v.sourceRevision)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
   return true;
 }
@@ -131,7 +170,39 @@ function toCitation(record: CitationRecord): InstrumentCitation {
     sourcePath: record.sourcePath,
     ...(record.page !== undefined ? { page: record.page } : {}),
     ...(record.section !== undefined ? { section: record.section } : {}),
+    ...(record.passageDigest !== undefined ? { passageDigest: record.passageDigest } : {}),
+    ...(record.sourceRevision !== undefined ? { sourceRevision: record.sourceRevision } : {}),
   };
+}
+
+/**
+ * `[D-292]`'s three read states for one citation's freshness (`ol-2zfj.154`'s own acceptance
+ * criteria): `'fresh'` when an observed passage digest matches what was recorded at creation,
+ * `'stale'` when it does not, and `'unknown'` for a `1`-vintage record with no `passageDigest`
+ * to compare, OR when the caller has no current observation to compare against. Never a fourth,
+ * silent "treat as fresh" outcome — the exact gap this bead's own evidence names (review-
+ * response.md section 1 row 10).
+ */
+export type CitationFreshnessState = 'fresh' | 'stale' | 'unknown';
+
+/**
+ * Classify one citation's freshness — pure, no vault I/O (this module never reads the vault
+ * itself; see the module doc). `currentPassageDigest` is the caller's own fresh observation of
+ * the same passage, in the same digest space `passageDigest` was minted in; this function only
+ * compares, it never computes one.
+ *
+ * `'unknown'` is a genuine third answer, not "assume fresh" wearing a different name: a legacy
+ * record (no `passageDigest`) and a record the caller could not get a current observation for
+ * both read `'unknown'`, and `../study-session/compose.js`'s consumer treats both identically
+ * ("serve with a re-check queued") — see that module's `citationFreshness` doc.
+ */
+export function classifyCitationFreshness(
+  citation: InstrumentCitation,
+  currentPassageDigest: string | undefined,
+): CitationFreshnessState {
+  if (citation.passageDigest === undefined) return 'unknown';
+  if (currentPassageDigest === undefined) return 'unknown';
+  return citation.passageDigest === currentPassageDigest ? 'fresh' : 'stale';
 }
 
 /**
