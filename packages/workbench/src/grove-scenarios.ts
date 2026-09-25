@@ -90,6 +90,8 @@ function modelFor(stateId: string): GroveCourseModel {
         denominatorCount: 2,
         denominatorSourcePaths: [OBJECTIVES_SOURCE_PATH, PAST_PAPER_SOURCE_PATH],
         pastPaperSourcePaths: [PAST_PAPER_SOURCE_PATH],
+        readCompleteness: 'unknown',
+        pendingSections: [],
       },
     };
   }

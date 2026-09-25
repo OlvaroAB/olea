@@ -51,6 +51,7 @@ const EVIDENCE: ConceptMasteryEvidence = {
   successfulScoredDays: 0,
   deepestSoloLevel: null,
   depthGateCleared: false,
+  topStageQualified: false,
 };
 
 function mastery(conceptId: string, state: ConceptMasteryResult['state']): ConceptMasteryResult {

@@ -49,6 +49,7 @@ function mastery(
       successfulScoredDays: 3,
       deepestSoloLevel: null,
       depthGateCleared: false,
+      topStageQualified: false,
     },
   };
 }

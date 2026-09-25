@@ -58,6 +58,7 @@ function mastery(scoredEventCount: number): ConceptMasteryResult {
       successfulScoredDays: scoredEventCount > 0 ? 1 : 0,
       deepestSoloLevel: null,
       depthGateCleared: false,
+      topStageQualified: false,
     },
   };
 }

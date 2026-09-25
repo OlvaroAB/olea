@@ -24,7 +24,14 @@ function declared(
     cells: [],
     materialGaps: [],
     volunteers: [],
-    summary: { builtCount, denominatorCount, denominatorSourcePaths, pastPaperSourcePaths: [] },
+    summary: {
+      builtCount,
+      denominatorCount,
+      denominatorSourcePaths,
+      pastPaperSourcePaths: [],
+      readCompleteness: 'unknown',
+      pendingSections: [],
+    },
   };
 }
 

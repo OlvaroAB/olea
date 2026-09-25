@@ -103,6 +103,7 @@ function masteryResult(conceptId: string, state: MasteryState): ConceptMasteryRe
       recognitionOnly: false,
       successfulScoredDays: state === 'seed' ? 0 : 3,
       deepestSoloLevel: state === 'tree' ? 'relational' : null,
+      topStageQualified: false,
       depthGateCleared: state === 'tree',
     },
   };

@@ -27,6 +27,7 @@ function evidence(overrides: Partial<ConceptMasteryEvidence> = {}): ConceptMaste
     successfulScoredDays: STRONG_DAYS,
     deepestSoloLevel: null,
     depthGateCleared: false,
+    topStageQualified: false,
     ...overrides,
   };
 }

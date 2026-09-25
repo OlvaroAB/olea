@@ -50,6 +50,7 @@ function entry(overrides: Partial<RegistryConceptEntry> = {}): RegistryConceptEn
         successfulScoredDays: 0,
         deepestSoloLevel: null,
         depthGateCleared: false,
+        topStageQualified: false,
       },
     },
     vitality: { value: 'early', weakest: null, instrumentsRead: 0 },
