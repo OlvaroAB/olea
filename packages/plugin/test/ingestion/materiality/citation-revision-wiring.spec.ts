@@ -304,6 +304,47 @@ describe('CitationRevisionTrigger.tick', () => {
     expect(stored.get(MCQ_ID)?.sourcePath).toBe(NOTE_PATH);
   });
 
+  it('defect 5 (ol-egov.141.89.5.7): a formatting-only change to the cited passage exits free, no judge call and no invalidation', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn() };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    // Reformat the material around the MCQ block — heading level, bold
+    // emphasis — the words she wrote do not change at all.
+    const reformatted = [
+      '---',
+      `topic: [${CONCEPT_TOPIC}]`,
+      'course: GEO101',
+      '---',
+      '',
+      '### What resists weathering?',
+      '',
+      `**${PARAGRAPH_A}**`,
+      '',
+      mcqBlock(MCQ_ID),
+      '',
+    ].join('\n');
+    await vault.write(NOTE_PATH, reformatted);
+
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(report.formattingOnly).toBe(1);
+    expect(report.revised).toBe(0);
+    expect(report.refreshed).toBe(0);
+    expect(judge.judge).not.toHaveBeenCalled();
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+
+    // Baseline advanced to the new raw text — a further identical pass
+    // reports nothing further.
+    const third = await trigger.tick(vault, actions());
+    expect(third.formattingOnly).toBe(0);
+    expect(judge.judge).not.toHaveBeenCalled();
+  });
+
   it('heals a stranded citation silently when its old material reappears verbatim elsewhere', async () => {
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn() };

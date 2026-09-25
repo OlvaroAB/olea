@@ -79,6 +79,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { canonicalizeForMateriality } from './canonical.js';
 import type { CitationAnchorRecord, CitationHashStore } from './citation-hash-store.js';
 import { stripInstrumentSpans } from './citation-material.js';
 import type { MaterialityJudge } from './types.js';
@@ -103,6 +104,14 @@ export interface CitationRevisionTickReport {
   readonly stranded: number;
   readonly judgeUnavailable: number;
   readonly newlyBaselined: number;
+  /**
+   * Defect 5 (`ol-egov.141.89.5.7`): a passage whose raw text changed but
+   * whose canonicalised text did not — a reformat, never a content change —
+   * exited free, the same "exact-equivalence exits apply at the citation
+   * grain too" row 1.4's file-level trigger already gives (chg.md sec 2).
+   * Never a judge call, never a dependant invalidation.
+   */
+  readonly formattingOnly: number;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -166,6 +175,7 @@ interface MutableTickReport {
   stranded: number;
   judgeUnavailable: number;
   newlyBaselined: number;
+  formattingOnly: number;
 }
 
 export class CitationRevisionTrigger {
@@ -188,6 +198,7 @@ export class CitationRevisionTrigger {
       stranded: 0,
       judgeUnavailable: 0,
       newlyBaselined: 0,
+      formattingOnly: 0,
     };
 
     const enumeration = await enumerateVaultInstruments(vault);
@@ -237,6 +248,35 @@ export class CitationRevisionTrigger {
         }
       } catch (error) {
         console.error('Olea: citation-revision tick could not read a tracked note', error);
+        continue;
+      }
+
+      // Defect 5 (`ol-egov.141.89.5.7`): the exact-equivalence exits row
+      // 1.4's file-level trigger already has (raw hash equal, canonical hash
+      // equal) apply at the citation grain too — chg.md sec 2's target names
+      // both explicitly, and `[D-093]`'s "no distance gate, similarity score
+      // or edit-size heuristic" forbids only a THRESHOLD-based skip, never an
+      // equality check (this file's own `[D-093]` doc, above). Checked here,
+      // before `evaluateCitedPassageRevision` (whose own 'unchanged' arm only
+      // ever compares raw hashes — `packages/core/src/concept/revision/
+      // material-change.ts`, not this lane's `owns`), so a pure reformat of
+      // the cited passage never reaches the judge.
+      if (
+        currentRecord !== undefined &&
+        current.kind === 'found-at-anchor' &&
+        current.text !== previous.text &&
+        canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text)
+      ) {
+        report.formattingOnly += 1;
+        try {
+          await this.deps.store.save(instrumentId, {
+            sourcePath: citedPassagePath(currentRecord),
+            text: current.text,
+            conceptIds: currentRecord.conceptIds,
+          });
+        } catch (error) {
+          console.error('Olea: citation-revision formatting-only refresh write failed', error);
+        }
         continue;
       }
 

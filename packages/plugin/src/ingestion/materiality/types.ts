@@ -88,12 +88,21 @@ export interface MaterialityJudge {
  * What `evaluateMaterialityGate` decides before any judge call — see
  * `trigger.ts`. Every branch except `'call-judge'` means the judge is never
  * invoked for this evaluation.
+ *
+ * `'no-groundable-content'` (ol-egov.141.89.5.7, defect 4): a first sighting
+ * — `previous === null` — whose canonicalised text is empty. A first
+ * sighting otherwise always clears every free gate (there is nothing to
+ * diff against, and row 1.4 exists to notice new material), but an empty
+ * new note carries nothing to notice; treated the same as `'unchanged'` by
+ * both row 1.4 consumers (never read as a material change), never the same
+ * as `'call-judge'`/`'judge-unavailable'`.
  */
 export type MaterialityGateOutcome =
   | { readonly kind: 'unchanged' }
   | { readonly kind: 'formatting-only' }
   | { readonly kind: 'debounced'; readonly resumeNotBefore: number }
   | { readonly kind: 'below-floor' }
+  | { readonly kind: 'no-groundable-content' }
   | { readonly kind: 'call-judge' };
 
 /**

@@ -370,4 +370,52 @@ describe('MaterialityTrigger.evaluate', () => {
     expect(result.kind).toBe('verdict');
     expect(judge.judge).toHaveBeenCalledOnce();
   });
+
+  describe('defect 4 (ol-egov.141.89.5.7): an empty new note does not count as new material', () => {
+    it("reports 'no-groundable-content', never 'judge-unavailable', for a brand new empty note", async () => {
+      const store = new FakeStore();
+      const judge: MaterialityJudge = { judge: vi.fn() };
+      const trigger = new MaterialityTrigger({ store, clock: fakeClock(0), judge });
+
+      // A genuinely new path — the store has never seen it — with no text
+      // (an empty note just created), and so no previousText to hand either.
+      const result = await trigger.evaluate(PATH, '');
+
+      expect(result).toEqual({ kind: 'no-groundable-content' });
+      expect(judge.judge).not.toHaveBeenCalled();
+    });
+
+    it('a later real edit to that same path is judged as an ordinary change, not another first sighting', async () => {
+      const store = new FakeStore();
+      const judge: MaterialityJudge = { judge: vi.fn(async () => ({ material: true })) };
+      const clock = steppedClock(0);
+      const trigger = new MaterialityTrigger({ store, clock, judge });
+
+      await trigger.evaluate(PATH, '');
+      clock.set(DEFAULT_MATERIALITY_CONSTANTS.debounceMs + 1);
+      const result = await trigger.evaluate(
+        PATH,
+        'Basalt weathers quickly in humid climates.',
+        '',
+      );
+
+      expect(result.kind).toBe('verdict');
+      expect(judge.judge).toHaveBeenCalledWith({
+        path: PATH,
+        previousText: '',
+        currentText: 'Basalt weathers quickly in humid climates.',
+      });
+    });
+
+    it('a first sighting with real, non-empty content is unaffected — still calls the judge', async () => {
+      const store = new FakeStore();
+      const judge: MaterialityJudge = { judge: vi.fn(async () => ({ material: true })) };
+      const trigger = new MaterialityTrigger({ store, clock: fakeClock(0), judge });
+
+      const result = await trigger.evaluate(PATH, 'Basalt weathers quickly.', '');
+
+      expect(result.kind).toBe('verdict');
+      expect(judge.judge).toHaveBeenCalledOnce();
+    });
+  });
 });

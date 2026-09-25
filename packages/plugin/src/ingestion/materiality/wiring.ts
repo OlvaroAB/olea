@@ -66,6 +66,7 @@ import type {
   MaterialityHashes,
   MaterialityHashStore,
   MaterialityJudge,
+  MaterialityJudgeVerdict,
   MaterialityVerdictEvent,
 } from './types.js';
 
@@ -126,6 +127,35 @@ export class MaterialityTrigger {
    */
   private readonly pendingSmallEdit = new Map<string, PendingBelowFloorEdit>();
   /**
+   * Same shape as `pendingSmallEdit`, tracking a path whose most recent save
+   * came back `'debounced'` rather than `'below-floor'` (`ol-egov.141.89.5.7`,
+   * defect 1). Kept as a SEPARATE map, not a shared "kind" flag, because the
+   * two have different drain timings (`constants.debounceMs` here,
+   * `constants.pendingDrainMs` for `pendingSmallEdit`) — but a path's history
+   * can cross from one into the other (a below-floor edit followed by a
+   * debounced one, or the reverse), so every place that SETS either map
+   * first reads and clears the OTHER, carrying its cached baseline forward
+   * rather than letting two independent pending entries for the same path
+   * ever coexist (which would risk two judge calls, and calling the second
+   * with a baseline that is itself only a pending, undecided save).
+   */
+  private readonly pendingDebounced = new Map<string, PendingBelowFloorEdit>();
+  /**
+   * The text of the last revision this trigger actually processed (a
+   * committed verdict, or a `'formatting-only'` exit) for a path, seeded
+   * from the first `previousText` this instance ever sees for it.
+   * `ol-egov.141.89.5.7`, defect 2: a judge call must compare against the
+   * last revision it actually judged, not against whatever `previousText`
+   * the caller happens to pass on THIS call — which is only "the text
+   * before this particular save" and can be stale once an earlier edit was
+   * deferred (below-floor/debounced) or an earlier judge call for this path
+   * is still in flight when a newer save arrives. Session-scoped only, the
+   * same posture `previous-text.ts`'s own tracker takes for the same reason:
+   * a restart loses it, and the next real change is handled by the existing
+   * `[D-311]`/legacy-record machinery instead, never a guess.
+   */
+  private readonly lastProcessedText = new Map<string, string>();
+  /**
    * Per-path counter bumped on every judge call this instance starts.
    * `[DOS-C3]`: guards the "stale response" race — if a second `evaluate()`
    * call for the same path starts (and will persist its own, newer,
@@ -156,6 +186,16 @@ export class MaterialityTrigger {
     previousText?: string,
   ): Promise<MaterialityEvaluationResult> {
     const now = this.deps.clock.now();
+    // Defect 2 (ol-egov.141.89.5.7): seed the "last processed" baseline from
+    // the FIRST `previousText` this instance ever sees for `path` — the only
+    // trustworthy baseline available without a fresh vault read. Never
+    // reseeded once set: a later call's OWN `previousText` argument is only
+    // "the text before THIS save," and must never overwrite a baseline this
+    // trigger has not yet actually processed (a pending defer, or a judge
+    // call still in flight for an earlier revision of this path).
+    if (previousText !== undefined && !this.lastProcessedText.has(path)) {
+      this.lastProcessedText.set(path, previousText);
+    }
     const current = await computeMaterialityHashes(currentText);
     const record = await this.deps.store.load(path);
     const canonicalLength = canonicalizeForMateriality(currentText).length;
@@ -178,6 +218,7 @@ export class MaterialityTrigger {
       lastChangedAt: record?.lastChangedAt ?? null,
       now,
       constants: this.constants,
+      currentCanonicalLength: canonicalLength,
     });
 
     if (outcome.kind === 'unchanged') return outcome;
@@ -224,34 +265,101 @@ export class MaterialityTrigger {
         // [DOS-C3]: a second sub-floor edit on this path since the last real
         // decision. The floor already deferred once — it must not defer
         // forever, so this recurrence escalates to the judge regardless of
-        // this edit's own (possibly zero) length delta.
-        this.pendingSmallEdit.delete(path);
+        // this edit's own (possibly zero) length delta. Leave the entry in
+        // place — the unified 'call-judge' handling below reads its cached
+        // baseline before clearing it.
         outcome = { kind: 'call-judge' };
       } else {
-        // [DOS-3]: cache this edit's own text too, when there is any, so a
-        // NON-recurring below-floor edit can still be drained later (see
-        // `drainDuePendingEdits`) rather than only ever escalated by a
-        // second edit that may never come.
+        // [DOS-3] / defect 1 (ol-egov.141.89.5.7): carry forward any
+        // baseline already established by a preceding, still-undecided
+        // DEBOUNCED save on this path (a below-floor edit can follow a
+        // debounced one in the same burst), so the eventual judge call
+        // still compares against the TRUE last-processed text, never an
+        // intervening, not-yet-decided one.
+        const baseline =
+          this.pendingDebounced.get(path)?.texts?.previousText ??
+          this.lastProcessedText.get(path) ??
+          previousText;
+        this.pendingDebounced.delete(path);
         this.pendingSmallEdit.set(path, {
           since: now,
-          texts: previousText === undefined ? undefined : { currentText, previousText },
+          texts:
+            previousText === undefined || baseline === undefined
+              ? undefined
+              : { currentText, previousText: baseline },
         });
       }
     }
 
-    if (outcome.kind === 'formatting-only' || outcome.kind === 'debounced') {
-      // Neither outcome produced a decision — record the raw/canonical
-      // change so the store's `unchanged`/`formatting-only` checks compare
-      // against the freshest content next time, but keep `lastVerdictAt`
-      // untouched: no verdict was produced.
+    if (outcome.kind === 'debounced') {
+      // Carry forward any baseline already pending on this path (a debounced
+      // save can follow a below-floor one, or another debounced one, in the
+      // same burst) before it is overwritten below.
+      const baseline =
+        this.pendingDebounced.get(path)?.texts?.previousText ??
+        this.pendingSmallEdit.get(path)?.texts?.previousText ??
+        this.lastProcessedText.get(path) ??
+        previousText;
+      this.pendingSmallEdit.delete(path);
+      this.pendingDebounced.set(path, {
+        since: now,
+        texts:
+          previousText === undefined || baseline === undefined
+            ? undefined
+            : { currentText, previousText: baseline },
+      });
+      // Defect 1 (ol-egov.141.89.5.7): a save inside the debounce window
+      // must NOT replace the stored comparison point — only `lastChangedAt`
+      // advances (extending the quiet-period clock so the window keeps
+      // resetting while she keeps typing); `hashes`/`canonicalLength` stay
+      // at the last real baseline, so a later save's delta is still
+      // measured against it, never against this undecided intermediate
+      // save. Without this, a burst of debounced autosaves silently moves
+      // the baseline forward with no judgment ever produced, and nothing
+      // re-checks once the window finally closes — the `pendingDebounced`
+      // entry above, drained by `drainDuePendingEdits`, is that re-check.
+      await this.deps.store.save({
+        path,
+        hashes: record?.hashes ?? current,
+        canonicalLength: record?.canonicalLength ?? canonicalLength,
+        lastChangedAt: now,
+        lastVerdictAt: record?.lastVerdictAt ?? null,
+        revision: persistedRevision,
+      });
+      return outcome;
+    }
+
+    if (outcome.kind === 'formatting-only') {
+      // A genuine free exit: canonical content matches the stored baseline,
+      // so nothing is left pending on this path, and THIS raw text becomes
+      // the fresher comparison point (defect 2, ol-egov.141.89.5.7) for
+      // whatever real change comes next.
       await this.deps.store.save({
         path,
         hashes: current,
         canonicalLength,
         lastChangedAt: now,
         lastVerdictAt: record?.lastVerdictAt ?? null,
-        // [D-311]: neither outcome dispatched a judge call, so the revision
-        // this path is guarded at is unchanged.
+        // [D-311]: no judge call dispatched, so the revision is unchanged.
+        revision: persistedRevision,
+      });
+      this.pendingSmallEdit.delete(path);
+      this.pendingDebounced.delete(path);
+      this.lastProcessedText.set(path, currentText);
+      return outcome;
+    }
+
+    if (outcome.kind === 'no-groundable-content') {
+      // Defect 4 (ol-egov.141.89.5.7): an empty new note — record the
+      // baseline (zero-length canonical content) so a LATER real edit is
+      // measured as an ordinary change against it, rather than being read
+      // as another first sighting.
+      await this.deps.store.save({
+        path,
+        hashes: current,
+        canonicalLength,
+        lastChangedAt: now,
+        lastVerdictAt: record?.lastVerdictAt ?? null,
         revision: persistedRevision,
       });
       return outcome;
@@ -281,14 +389,25 @@ export class MaterialityTrigger {
     }
 
     // outcome.kind === 'call-judge'
+    // Defect 2 (ol-egov.141.89.5.7): compare against the last revision this
+    // trigger actually processed — a pending below-floor/debounced defer's
+    // own cached baseline (recurrence escalation reads it here, before it is
+    // cleared), or the running `lastProcessedText` cache — never against
+    // `previousText` alone, which is only "the previous SAVE" and can be
+    // stale once an edit was deferred, or an earlier judge call for this
+    // path is still in flight when a newer save arrives.
+    const carriedBaseline =
+      this.pendingSmallEdit.get(path)?.texts?.previousText ??
+      this.pendingDebounced.get(path)?.texts?.previousText;
     this.pendingSmallEdit.delete(path);
+    this.pendingDebounced.delete(path);
     if (this.deps.judge === null || previousText === undefined) {
       return { kind: 'judge-unavailable' };
     }
     return this.dispatchJudgeAndCommit({
       path,
       currentText,
-      previousText,
+      previousText: carriedBaseline ?? this.lastProcessedText.get(path) ?? previousText,
       persistedRevision,
       canonicalLength,
       current,
@@ -351,6 +470,35 @@ export class MaterialityTrigger {
       });
       if (result.kind === 'verdict') verdicts.push(result.verdict);
     }
+    // Defect 1 (ol-egov.141.89.5.7): the debounced-save counterpart of the
+    // drain above. Quiet threshold is `constants.debounceMs` here, not
+    // `pendingDrainMs` — a debounced save's own outcome already means "wait
+    // out the debounce window," so once that same window has elapsed with
+    // nothing else touching the path, the accumulated edit (against the
+    // TRUE baseline `pending.texts.previousText` cached at defer time, never
+    // the intervening save) is owed a judgment. Without this, a burst of
+    // debounced autosaves that ends the session (she closes the note and
+    // never returns) sits in `pendingDebounced` forever.
+    for (const [path, pending] of [...this.pendingDebounced]) {
+      if (now - pending.since < this.constants.debounceMs) continue;
+      if (pending.texts === undefined || this.deps.judge === null) continue;
+      this.pendingDebounced.delete(path);
+      const record = await this.deps.store.load(path);
+      const persistedRevision = record?.revision ?? 0;
+      const current = await computeMaterialityHashes(pending.texts.currentText);
+      const canonicalLength = canonicalizeForMateriality(pending.texts.currentText).length;
+      const result = await this.dispatchJudgeAndCommit({
+        path,
+        currentText: pending.texts.currentText,
+        previousText: pending.texts.previousText,
+        persistedRevision,
+        canonicalLength,
+        current,
+        lastChangedAt: pending.since,
+        now,
+      });
+      if (result.kind === 'verdict') verdicts.push(result.verdict);
+    }
     return verdicts;
   }
 
@@ -389,7 +537,28 @@ export class MaterialityTrigger {
     // same still-running `MaterialityTrigger` instance.
     const inMemoryRevision = (this.revisions.get(path) ?? 0) + 1;
     this.revisions.set(path, inMemoryRevision);
-    const judged = await this.deps.judge.judge({ path, previousText, currentText });
+    let judged: MaterialityJudgeVerdict;
+    try {
+      judged = await this.deps.judge.judge({ path, previousText, currentText });
+    } catch (error) {
+      // Defect 3 (ol-egov.141.89.5.7): an operational failure of the judge
+      // call must never be silently dropped. Before this guard, a throw here
+      // propagated straight out of `evaluate`/`drainDuePendingEdits` — past
+      // `main.ts`'s own try/catch (`evaluateMaterialityChange`), which logs
+      // and swallows it, so NEITHER of row 1.4's consumers ever ran and the
+      // change was invalidated nowhere. `'judge-unavailable'` is already
+      // read as "changed" by both consumers (`observedMaterialChange`,
+      // `main.ts`) and by `citation-revision-wiring.ts`'s own arm — the same
+      // "grey out, never half-work, never a guess at a verdict" contract an
+      // unconfigured judge already gets, extended to one that answered and
+      // failed. No store write: the same delta is retried once the judge
+      // answers (or a later real edit supersedes it).
+      console.error(
+        'Olea: materiality judge call failed; treated as unavailable, never a verdict',
+        error,
+      );
+      return { kind: 'judge-unavailable' };
+    }
     if (this.revisions.get(path) !== inMemoryRevision) {
       // A newer dispatch for this path started while this judge call was in
       // flight, and will persist its own (newer) baseline. This response is
@@ -420,6 +589,9 @@ export class MaterialityTrigger {
       lastVerdictAt: now,
       revision: persistedRevision + 1,
     });
+    // Defect 2 (ol-egov.141.89.5.7): this text is now the baseline every
+    // later call on this path should chain from, whatever the verdict was.
+    this.lastProcessedText.set(path, currentText);
     const verdict: MaterialityVerdictEvent = {
       path,
       at: now,

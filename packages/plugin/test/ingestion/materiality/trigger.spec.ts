@@ -125,4 +125,57 @@ describe('evaluateMaterialityGate — the free stage of register row 1.4', () =>
     });
     expect(outcome.kind).toBe('debounced');
   });
+
+  describe('defect 4 (ol-egov.141.89.5.7): an empty new note does not count as new material', () => {
+    it("'no-groundable-content' for a first sighting whose canonicalised text is empty", () => {
+      const outcome = evaluateMaterialityGate({
+        previous: null,
+        current: HASH_A,
+        canonicalCharDelta: Number.POSITIVE_INFINITY,
+        lastChangedAt: null,
+        now: NOW,
+        constants: CONSTANTS,
+        currentCanonicalLength: 0,
+      });
+      expect(outcome).toEqual({ kind: 'no-groundable-content' });
+    });
+
+    it("still 'call-judge' for a first sighting with real content — only emptiness changes the route", () => {
+      const outcome = evaluateMaterialityGate({
+        previous: null,
+        current: HASH_A,
+        canonicalCharDelta: Number.POSITIVE_INFINITY,
+        lastChangedAt: null,
+        now: NOW,
+        constants: CONSTANTS,
+        currentCanonicalLength: 12,
+      });
+      expect(outcome).toEqual({ kind: 'call-judge' });
+    });
+
+    it('omitting currentCanonicalLength never triggers the empty-note exit — existing callers keep their behaviour', () => {
+      const outcome = evaluateMaterialityGate({
+        previous: null,
+        current: HASH_A,
+        canonicalCharDelta: Number.POSITIVE_INFINITY,
+        lastChangedAt: null,
+        now: NOW,
+        constants: CONSTANTS,
+      });
+      expect(outcome).toEqual({ kind: 'call-judge' });
+    });
+
+    it('an EXISTING note edited down to empty is an ordinary change, not the empty-new-note exit (previous !== null)', () => {
+      const outcome = evaluateMaterialityGate({
+        previous: HASH_A,
+        current: HASH_B,
+        canonicalCharDelta: CONSTANTS.minEditChars * 5,
+        lastChangedAt: NOW - CONSTANTS.debounceMs - 1,
+        now: NOW,
+        constants: CONSTANTS,
+        currentCanonicalLength: 0,
+      });
+      expect(outcome).toEqual({ kind: 'call-judge' });
+    });
+  });
 });

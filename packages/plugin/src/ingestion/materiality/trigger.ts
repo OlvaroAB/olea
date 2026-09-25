@@ -74,12 +74,24 @@ export interface EvaluateMaterialityGateInput {
   readonly lastChangedAt: number | null;
   readonly now: number;
   readonly constants: MaterialityConstants;
+  /**
+   * Canonicalised length of `current`'s own text, when the caller has the
+   * text to compute it from (`wiring.ts` always does). Optional and used for
+   * exactly one thing: telling "a genuinely empty first sighting" apart from
+   * "an enormous one" (`ol-egov.141.89.5.7`, defect 4) — `canonicalCharDelta`
+   * cannot do this alone, since it is `Number.POSITIVE_INFINITY` for both
+   * when `previous` is `null`. Omitted (or non-zero), this check never
+   * fires, so an existing caller that only has hashes keeps today's
+   * behaviour unchanged.
+   */
+  readonly currentCanonicalLength?: number | undefined;
 }
 
 export function evaluateMaterialityGate(
   input: EvaluateMaterialityGateInput,
 ): MaterialityGateOutcome {
-  const { previous, current, canonicalCharDelta, lastChangedAt, now, constants } = input;
+  const { previous, current, canonicalCharDelta, lastChangedAt, now, constants, currentCanonicalLength } =
+    input;
 
   if (previous !== null && previous.rawHash === current.rawHash) {
     return { kind: 'unchanged' };
@@ -95,6 +107,15 @@ export function evaluateMaterialityGate(
   }
   if (previous !== null && canonicalCharDelta < constants.minEditChars) {
     return { kind: 'below-floor' };
+  }
+  // Defect 4 (ol-egov.141.89.5.7): a first sighting always clears every gate
+  // above (there is nothing to diff against) -- but an empty new note has no
+  // groundable content for row 1.4 to notice in the first place. Scoped to
+  // `previous === null`: an EXISTING note edited down to empty still reaches
+  // the judge as an ordinary content change (deletion of substantive content
+  // is its own, already-covered failure class, chg.md sec 4).
+  if (previous === null && currentCanonicalLength === 0) {
+    return { kind: 'no-groundable-content' };
   }
   return { kind: 'call-judge' };
 }
