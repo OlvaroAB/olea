@@ -100,6 +100,7 @@
 
 import { z } from 'zod';
 import { contracts } from './registry.js';
+import { soloLevel } from './review-log.js';
 import { studyPlanAllocationEntry, studyPlanCourse } from './study-plan.js';
 import { responseStamp } from './worker.js';
 
@@ -549,6 +550,71 @@ export const rankWeightsEnvelope = artifactEnvelope(
 export type RankWeightsEnvelope = z.infer<typeof rankWeightsEnvelope>;
 
 /**
+ * **3.1 — the growth-stage depth gate.** `[D-352]` (`ol-egov.141.89.9.24`,
+ * David 2026-09-25): the SOLO level a graded explain-back must reach to
+ * clear the depth gate into `tree` (component register row 3.1; R7) ships
+ * to the client as its own delivered-parameters package, kept separate
+ * from the study plan and mirroring 3.3's ranking-weights precedent
+ * immediately above (`[D-110]`) rather than riding on `studyPlanBody`.
+ * `ol-3ux7.3` (`[BND-5]`) already ruled the cut stays service-side, not
+ * because the comparison itself must run on the Worker, but because the
+ * cut is exactly the kind of number that may later be fitted against real
+ * data, at which point its derivation is private (`[D-069]`) — the same
+ * shape `[D-110]` gives 3.3.
+ *
+ * **The hand-in seam this feeds.** `packages/core/src/mastery/rollup.ts`'s
+ * `MasteryRollupOptions.depthGate` already accepts a delivered value
+ * field-by-field, exactly as `RankOracleOptions` does for 3.3, falling back
+ * to that module's own `DEPTH_GATE_SOLO_LEVEL` (`'relational'`,
+ * `rollup.ts:224`) when nothing is delivered. This package is what will put
+ * a real, delivered value into that seam — wiring the fetch/provider is
+ * separate work (see this bead's report); **nothing changes for her until a
+ * delivered value actually ships** (component register row 3.1, criterion
+ * 5) — the declared fallback stays exactly as correct as it is today.
+ *
+ * **Operating, not governing — the same argument 3.3 makes immediately
+ * above, applied to a threshold rather than a weight set.** A stale depth
+ * gate shifts *which stage a concept displays as* (the boundary between
+ * `sapling` and `tree`), never a false claim fabricated from nothing: the
+ * SOLO verdict it is compared against is still the deepest level she has
+ * actually demonstrated, computed fresh from her own graded explain-backs
+ * every time — only the cut it is measured against might be a step old.
+ * Same class as 1.6, 2.5 and 3.3, so this uses the same `OPERATING_*` pair
+ * rather than the study plan's `GOVERNING_*` pair.
+ */
+export const depthGateBody = z.object({
+  /**
+   * The SOLO level a graded explain-back must reach to clear the gate into
+   * `tree`. Mirrors `packages/core/src/mastery/rollup.ts`'s
+   * `DEPTH_GATE_SOLO_LEVEL` field-for-field — the one-field body this
+   * component register row needs, matching `rankWeightsBody`'s
+   * field-for-field mapping onto `RankOracleOptions` immediately above.
+   */
+  depthGate: soloLevel,
+});
+export type DepthGateBody = z.infer<typeof depthGateBody>;
+
+export const DEPTH_GATE_KIND = 'depth-gate';
+export const DEPTH_GATE_BODY_VERSION = 1;
+export const DEPTH_GATE_CONTRACT_ID = 'depth-gate-envelope.v1';
+
+/**
+ * The Worker route that serves this artifact — same shape argument as
+ * `RANK_WEIGHTS_ENDPOINT_PATH` immediately above: `depth-gate` names no
+ * request-specific variable, nothing about it varies per call, so it does
+ * not fit `POST /v1/task`'s generative-envelope shape and is served by its
+ * own `GET`, mirroring `/v1/rank-weights`.
+ */
+export const DEPTH_GATE_ENDPOINT_PATH = '/v1/depth-gate';
+
+export const depthGateEnvelope = artifactEnvelope(
+  DEPTH_GATE_KIND,
+  DEPTH_GATE_BODY_VERSION,
+  depthGateBody,
+);
+export type DepthGateEnvelope = z.infer<typeof depthGateEnvelope>;
+
+/**
  * **The study plan, expressed against the shared envelope** — the surface the
  * envelope was generalised *from*.
  *
@@ -670,6 +736,12 @@ contracts.register({
   schema: rankWeightsEnvelope,
   description:
     'Delivered ranking-weights policy (register 3.3, [D-110]) in the versioned-artifact envelope',
+});
+contracts.register({
+  id: DEPTH_GATE_CONTRACT_ID,
+  schema: depthGateEnvelope,
+  description:
+    'Delivered growth-stage depth-gate threshold (register 3.1, [D-352]) in the versioned-artifact envelope',
 });
 contracts.register({
   id: STUDY_PLAN_ENVELOPE_CONTRACT_ID,
