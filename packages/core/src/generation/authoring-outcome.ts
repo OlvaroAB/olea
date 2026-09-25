@@ -47,10 +47,18 @@
  * `GroundingRefusalReason`'s own documented distinction (`groundedContext.ts`):
  * `'judge-unavailable'` and `'composite-check-unavailable'` are the two
  * reasons that module's own doc states as "we could not check just now,"
- * never "her notes don't cover this" — every other reason in the union is a
- * checked, negative verdict. This module reads that distinction rather than
- * re-deciding it: the transient two map to `unavailable`, everything else to
- * `insufficient-evidence`.
+ * never "her notes don't cover this". `'no-hits'` joins them for a different
+ * reason, not a transient one: it means retrieval returned nothing at all, so
+ * no model was ever asked — `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules an
+ * empty evidence package an operational outcome, never a verdict about her
+ * material, and `docs/dev/intelligence-build/pipelines/pra.json`'s evidence
+ * step spells this out for this exact chain: "an empty package ... is never a
+ * verdict ... it is unavailable here, to be retried, not read as a fact about
+ * her notes." Every other reason in the union is a checked, negative verdict.
+ * This module reads that distinction rather than re-deciding it: the three
+ * operational reasons map to `unavailable`, everything else to
+ * `insufficient-evidence` (`ol-egov.141.89.2.12` fixed `'no-hits'` reading as
+ * a checked verdict here).
  */
 
 import type { GroundingRefusalReason } from '../retrieval/groundedContext.js';
@@ -80,13 +88,17 @@ export type AuthoringOutcome =
   | { readonly status: 'unavailable'; readonly retryable: true };
 
 /**
- * `GroundingRefusalReason`'s own "we could not check" subset — see the
- * module doc. Every other member of the union is a checked, negative
- * verdict and classifies as `insufficient-evidence`.
+ * `GroundingRefusalReason`'s own non-verdict subset — see the module doc.
+ * `'judge-unavailable'` and `'composite-check-unavailable'` are "we could not
+ * check just now"; `'no-hits'` is "there was nothing to check" (`[D-289]`
+ * point 2: an empty package is never a verdict). Every other member of the
+ * union is a checked, negative verdict and classifies as
+ * `insufficient-evidence`.
  */
-const TRANSIENT_REFUSAL_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
+const OPERATIONAL_REFUSAL_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
   'judge-unavailable',
   'composite-check-unavailable',
+  'no-hits',
 ]);
 
 /**
@@ -100,7 +112,7 @@ export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOu
     case 'budget-exhausted':
       return { status: 'deferred', reason: 'budget' };
     case 'refused':
-      return TRANSIENT_REFUSAL_REASONS.has(attempt.reason)
+      return OPERATIONAL_REFUSAL_REASONS.has(attempt.reason)
         ? { status: 'unavailable', retryable: true }
         : { status: 'insufficient-evidence' };
     case 'draft-error':

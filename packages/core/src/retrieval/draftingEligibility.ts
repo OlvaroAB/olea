@@ -13,10 +13,15 @@
  *
  * **The mapping, verbatim from the spec:** `sufficient` → `{author: true}`;
  * `partial` and `insufficient` → `not-enough-in-notes`; `conflicting` →
- * `notes-disagree`; `unavailable` and `could-not-decide` → `could-not-check`;
+ * `notes-disagree`; `unavailable`, `could-not-decide` and
  * `insufficient-evidence` (the package was empty before any model ran) →
- * `not-enough-in-notes`, the same refusal a thin-but-present package gets —
- * both read to her as "there wasn't enough in your notes for this."
+ * `could-not-check`. `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules an empty
+ * package an operational outcome, grouped with `unavailable` and
+ * `could-not-decide`, and never a verdict about her material — so it may
+ * not read to her as "there wasn't enough in your notes for this," the
+ * thin-but-present package's message; it reads as "Olea could not check
+ * right now" instead (`ol-egov.141.89.2.12` fixed this arm reading it as the
+ * former).
  */
 
 import type { AssessSupportOutcome } from './groundedContext.js';
@@ -41,10 +46,8 @@ export function draftingEligibility(outcome: AssessSupportOutcome): DraftingElig
     }
   }
 
-  if (outcome.status === 'insufficient-evidence') {
-    return { author: false, refusal: 'not-enough-in-notes' };
-  }
-
-  // outcome.status is 'unavailable' | 'could-not-decide'.
+  // outcome.status is 'insufficient-evidence' | 'unavailable' | 'could-not-decide':
+  // all three are operational outcomes, never a verdict about her notes (`[D-289]`
+  // point 2) — `insufficient-evidence` is the empty-package case (see module doc).
   return { author: false, refusal: 'could-not-check' };
 }

@@ -27,7 +27,6 @@ describe('classifyAuthoringOutcome — routing and budget deferral', () => {
 
 describe('classifyAuthoringOutcome — refusal, checked-and-found-nothing vs could-not-check', () => {
   const CHECKED_REASONS: readonly GroundingRefusalReason[] = [
-    'no-hits',
     'below-relevance-threshold',
     'below-composite-threshold',
     'below-band',
@@ -42,12 +41,12 @@ describe('classifyAuthoringOutcome — refusal, checked-and-found-nothing vs cou
     });
   }
 
-  const TRANSIENT_REASONS: readonly GroundingRefusalReason[] = [
+  const OPERATIONAL_REASONS: readonly GroundingRefusalReason[] = [
     'judge-unavailable',
     'composite-check-unavailable',
   ];
 
-  for (const reason of TRANSIENT_REASONS) {
+  for (const reason of OPERATIONAL_REASONS) {
     it(`maps a transient "could not check" refusal (${reason}) to unavailable/retryable`, () => {
       expect(classifyAuthoringOutcome({ kind: 'refused', reason })).toEqual({
         status: 'unavailable',
@@ -55,6 +54,19 @@ describe('classifyAuthoringOutcome — refusal, checked-and-found-nothing vs cou
       });
     });
   }
+
+  // [D-289] point 2 (`ol-egov.141.89.1.6`) and pra.json's evidence step: an
+  // empty evidence package is an operational outcome, never a verdict about
+  // her notes, even though `no-hits` is not "transient" in the same sense as
+  // a judge or composite-check outage — there was nothing to decide from, so
+  // no model was ever asked. `ol-egov.141.89.2.12` is the bug this regression
+  // test guards: `no-hits` used to land in the checked-verdict bucket above.
+  it('maps no-hits (an empty package) to unavailable/retryable, never a checked verdict (D-289)', () => {
+    expect(classifyAuthoringOutcome({ kind: 'refused', reason: 'no-hits' })).toEqual({
+      status: 'unavailable',
+      retryable: true,
+    });
+  });
 });
 
 describe('classifyAuthoringOutcome — transient generation failure', () => {

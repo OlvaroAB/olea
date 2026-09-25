@@ -809,12 +809,19 @@ export type AssessSupportVerdict = 'sufficient' | 'partial' | 'insufficient' | '
  *   pre-existing binary fields every wrapped judge already produces, kept
  *   so this is additive rather than a breaking rename. `missing` is present
  *   only when the provider can name what a `partial` verdict is missing.
- * - `insufficient-evidence` — the provider looked and found the evidence did
- *   not settle the question (distinct from `could-not-decide`: this is a
- *   fact about the material, that one is a fact about the judge's own
- *   confidence). No provider wired today produces this; it exists so a
- *   three-way judge (Jev's `unknown` is close but not identical) has
- *   somewhere to land it without a contract change.
+ * - `insufficient-evidence` — there was nothing to decide from: the package
+ *   was empty before any model ran, so no sufficiency question was ever
+ *   asked. `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules this an
+ *   *operational* outcome, grouped with `unavailable` and `could-not-decide`,
+ *   and never a verdict about her material — it is not "the provider looked
+ *   and found the evidence wanting," which would itself be the `insufficient`
+ *   verdict under `assessed`. (An earlier version of this comment described
+ *   it the other way around — a checked, negative fact about the material —
+ *   which conflicted with the D-289 reading every consumer needs;
+ *   `ol-egov.141.89.2.12` is the bug that reading caused, in two callers.)
+ *   No provider wired today produces this; it exists so a three-way judge
+ *   (Jev's `unknown` is close but not identical) has somewhere to land the
+ *   empty-package case without a contract change.
  * - `unavailable` — the provider could not be reached, timed out, or
  *   returned something unusable. Same fail-closed posture as
  *   `judge-unavailable` above.

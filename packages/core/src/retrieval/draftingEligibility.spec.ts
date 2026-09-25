@@ -34,10 +34,17 @@ describe('draftingEligibility (`[ILB-EVD-4]`, evd.md §3)', () => {
     });
   });
 
-  it('refuses not-enough-in-notes on insufficient-evidence (an empty package, before any model ran)', () => {
+  // [D-289] point 2 (`ol-egov.141.89.1.6`): an empty evidence package is an
+  // operational outcome grouped with `unavailable`/`could-not-decide` and is
+  // never a verdict about her notes. `ol-egov.141.89.2.12` is the bug this
+  // regression test guards: this arm used to read `insufficient-evidence` as
+  // "not enough in her notes", the same message a genuinely thin-but-present
+  // package gets, which is exactly the fact-about-her-notes claim D-289
+  // forbids for an operational outcome.
+  it('refuses could-not-check on insufficient-evidence (an empty package, not a claim about her notes)', () => {
     expect(draftingEligibility({ status: 'insufficient-evidence' })).toEqual({
       author: false,
-      refusal: 'not-enough-in-notes',
+      refusal: 'could-not-check',
     });
   });
 
