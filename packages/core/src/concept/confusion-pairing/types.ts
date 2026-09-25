@@ -28,6 +28,20 @@
  * the legitimate path from that count to a real edge, via a verdict call.
  * It also holds no state and does no I/O: same inputs, same output.
  *
+ * **The legacy read path (`ol-2zfj.155`).** The interim identity-space caveat below stops short
+ * of naming how a caller-side migration to `[D-088]`'s opaque key should be read once it starts
+ * happening gradually (some records stamped under the old, name-keyed scheme, some under the
+ * new one, in the same batch; nothing forces an atomic cutover). Trying both schemes without
+ * telling them apart risks the specific failure `components-group1.md:1842` (private
+ * `olea-service` repo) names: a legacy name-keyed record read as if it had always used the
+ * opaque key is a semantic migration, not a lookup. This reader classifies every id it resolves
+ * (`../../misconception/types.js`'s `classifyMisconceptionConceptIdScheme`) before choosing a
+ * lookup space: `'legacy-name'` resolves through the name/alias index this file has always used;
+ * `'opaque-key'` resolves through `ConfusionPairingConcept.key` instead, when a caller supplies
+ * one. Either miss is reported, split by scheme
+ * (`ConfusionPairingResult.legacyUnresolvedRecords`/`.opaqueKeyUnresolvedRecords`), never merged
+ * into one undifferentiated bucket and never silently reinterpreted as the other scheme.
+ *
  * **No persistence, no student surface.** Nothing here is a Class C
  * concern: both inputs are already-computed, in-memory, transient-batch
  * shapes (the same "posted and forgotten" posture the corpus stage itself
@@ -72,6 +86,17 @@ export interface ConfusionPairingConcept {
   readonly name: string;
   /** Every other wording seen for this concept, verbatim — matches `../corpus-relations/types.js`'s `CorpusConcept.aliases`. */
   readonly aliases: readonly string[];
+  /**
+   * `[D-088]`'s opaque concept key, when the caller has one (`ol-bo48`'s `mintOpaqueConceptKey`
+   * output, or the sidecar it persists). `null`/`undefined` while a caller has not wired the key
+   * store through to this reader yet — today's only production caller does not
+   * (`packages/plugin/src/main.ts`'s `corroborateConfusionPairings` call site passes
+   * `name`/`aliases` alone). Optional, not required: widening this field must never force every
+   * existing construction site to change (see this module's top doc, "the legacy read path").
+   * This reader's own edge join still keys on `name`, unchanged — `key` is consulted only to
+   * resolve an `'opaque-key'`-scheme `MisconceptionRecord` id back to a concept.
+   */
+  readonly key?: string | null;
 }
 
 /**
@@ -115,12 +140,29 @@ export interface ConfusionPairingResult {
    */
   readonly unmatchedMisconceptionPairs: number;
   /**
-   * Of `evidenceBearingRecords`, how many failed name/alias resolution on
-   * EITHER endpoint (`conceptId` or `confusedWithConceptId` not found among
-   * any concept's name/aliases). See this module's top doc — the identity-
-   * space caveat this count exists to make checkable.
+   * Of `evidenceBearingRecords`, how many failed resolution on EITHER endpoint (`conceptId` or
+   * `confusedWithConceptId` not found in the lookup space its own scheme selects — see this
+   * module's top doc, "the legacy read path"). Always
+   * `legacyUnresolvedRecords + opaqueKeyUnresolvedRecords`.
    */
   readonly unresolvedRecords: number;
+  /**
+   * Of `unresolvedRecords`, how many had at least one endpoint classified `'legacy-name'`
+   * (`../../misconception/types.js`'s `classifyMisconceptionConceptIdScheme`) that found no
+   * match in the name/alias index — an unmappable legacy record, the case this bead's read path
+   * exists to make explicit rather than lump into a single undifferentiated count. Optional only
+   * so a hand-built `ConfusionPairingResult` fixture predating this field still type-checks
+   * (`corroborateConfusionPairs` itself always sets it); a real result always carries a number.
+   */
+  readonly legacyUnresolvedRecords?: number;
+  /**
+   * Of `unresolvedRecords`, the remainder: both endpoints classified `'opaque-key'` but at least
+   * one found no match in any concept's `key` — expected until a caller wires the key store
+   * through to `ConfusionPairingConcept.key`, and distinguished from `legacyUnresolvedRecords`
+   * so that eventual wiring is verifiable rather than indistinguishable from ordinary legacy
+   * misses. Optional for the same fixture-compatibility reason as `legacyUnresolvedRecords`.
+   */
+  readonly opaqueKeyUnresolvedRecords?: number;
   /** `MisconceptionRecord`s handed in with a non-null `confusedWithConceptId` — the denominator `unresolvedRecords` is checked against. */
   readonly evidenceBearingRecords: number;
 }

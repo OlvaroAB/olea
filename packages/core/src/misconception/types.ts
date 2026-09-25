@@ -35,12 +35,42 @@
  * `store.fitness.spec.ts` are the M4 tests the bead card asks for.
  */
 
+import { OPAQUE_CONCEPT_KEY_PREFIX } from '../concept/concept-key.js';
 import type { VaultPath } from '../vault/types.js';
 
 /** Where in her material a statement or correction is grounded (mirrors `RetrievalChunk`'s citation shape, `../retrieval/types.js`). */
 export interface SourceCitation {
   readonly path: VaultPath;
   readonly blockIndex: number;
+}
+
+/**
+ * Which identity scheme a `MisconceptionRecord.conceptId`/`.confusedWithConceptId` value was
+ * stamped under (`ol-2zfj.155`, `[D-088]`, C7.11). Every production writer today
+ * (`./accepted-grading-observation.js`'s `resolveConceptId` seam) stamps a caller-chosen string
+ * whose scheme is not otherwise recorded on the record itself — a future caller switching that
+ * seam to `../concept/concept-key.js`'s opaque mint must not have its output silently reread as
+ * if it had always been the older, name-keyed scheme, or vice versa. `'legacy-name'` is that
+ * older scheme: a plain concept name/alias, or `../concept/concept-key.js`'s
+ * `provisionalConceptKey` non-persisted stand-in — no misconception record has ever persisted
+ * the latter, but it is still not the opaque scheme, so it classifies the same way.
+ * `'opaque-key'` is `../concept/concept-key.js`'s `mintOpaqueConceptKey` output shape, the only
+ * scheme `[D-088]`'s conservation property covers.
+ */
+export type MisconceptionConceptIdScheme = 'legacy-name' | 'opaque-key';
+
+/**
+ * Classifies one `conceptId`/`confusedWithConceptId` value by its literal shape — a pure
+ * string-prefix test, no I/O, no lookup. `` `${OPAQUE_CONCEPT_KEY_PREFIX}:...` `` is the only
+ * shape `mintOpaqueConceptKey` ever produces, so that prefix is the sole `'opaque-key'` case;
+ * every other value (a plain name, an alias, or a stray `provisionalConceptKey` stand-in) reads
+ * as `'legacy-name'`, the pre-migration scheme every production writer uses today. A reader
+ * resolving a record's identity (e.g. `../concept/confusion-pairing/corroborate.js`) calls this
+ * first and picks its lookup path by the result, rather than trying one lookup space and
+ * silently treating a miss as "no such concept."
+ */
+export function classifyMisconceptionConceptIdScheme(id: string): MisconceptionConceptIdScheme {
+  return id.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`) ? 'opaque-key' : 'legacy-name';
 }
 
 /** §4.1's three-state lifecycle. Framing for each is centralised in `./framing.js` (M3) — never inlined at a call site. */
@@ -126,7 +156,9 @@ export type MisconceptionEvent = MisconceptionObservedEvent | MisconceptionResol
  */
 export interface MisconceptionRecord {
   readonly id: string;
+  /** `classifyMisconceptionConceptIdScheme`, above, tells a reader which identity scheme this value was stamped under — never assume from context. */
   readonly conceptId: string;
+  /** Same identity-scheme caveat as `conceptId`, above; `null` still means "no confusion evidenced," not "unresolved." */
   readonly confusedWithConceptId: string | null;
   /** The most recent occurrence's wording — see `./project.js`'s doc on why the record tracks the latest phrasing while `occurrenceCount` preserves the full history. */
   readonly statement: string;
