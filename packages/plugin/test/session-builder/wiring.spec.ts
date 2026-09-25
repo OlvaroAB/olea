@@ -184,7 +184,24 @@ describe('the session builder reads what only a real vault has', () => {
     expect(provider).toMatch(/assessments:\s*edges\.assessmentsRead\.records/);
   });
 
-  it('indexes real enumerated instruments rather than a fixture list', () => {
-    expect(provider).toMatch(/instruments:\s*buildConceptInstrumentIndex\(enumeration\.records\)/);
+  // `ol-egov.141.89.10.31`: `ol-egov.141.89.10.30` made this composer index
+  // only non-suspended records — `nonSuspendedRecords`, folded once from the
+  // same whole-log `entries` this call already holds, feeds both
+  // `buildConceptInstrumentIndex` call sites below (`provider.ts`'s own doc
+  // on `suspended`/`nonSuspendedRecords`). The point of this test is still
+  // that real enumeration data reaches the index rather than a fixture list,
+  // so this asserts the relationship — `nonSuspendedRecords` is *derived
+  // from* `enumeration.records`, and both index calls consume that derived
+  // value — rather than pinning either literal alone, which would pass for a
+  // filter that silently dropped or fabricated records.
+  it('indexes real enumerated instruments, filtered to non-suspended, rather than a fixture list', () => {
+    expect(provider).toMatch(
+      /const nonSuspendedRecords = enumeration\.records\.filter\(\s*\(record\) => !suspended\.has\(record\.instrumentId\),?\s*\);/,
+    );
+    const indexCalls = provider.match(/buildConceptInstrumentIndex\(nonSuspendedRecords\)/g) ?? [];
+    expect(indexCalls.length).toBe(2);
+    // Never called directly over the unfiltered enumeration any more — that
+    // would let a suspended instrument straight back into the index.
+    expect(provider).not.toMatch(/buildConceptInstrumentIndex\(enumeration\.records\)/);
   });
 });
