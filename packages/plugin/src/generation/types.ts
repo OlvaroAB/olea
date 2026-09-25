@@ -19,6 +19,7 @@
  */
 
 import type { InstrumentCitation } from 'olea-core';
+import type { InstrumentType } from 'olea-contracts';
 
 /**
  * `[D-195]` (`ol-0r92.40`): a grounded distractor's provenance — the wrong
@@ -67,6 +68,23 @@ export interface DraftQuestion {
    * itself), without forcing a persisted-schema decision to land first.
    */
   readonly distractorGrounding?: readonly (DraftDistractorGrounding | null)[];
+}
+
+/**
+ * `ol-0r92.88`: the drafted content of a `'qa'`-instrument-typed
+ * `DraftRecord` — mirrors `createQaCard`'s own `front`/`back` pair
+ * (`olea-core`'s `packages/core/src/instrument/card-format.ts`), the shape a
+ * hand-authored Q&A card already carries, so a card materializer built
+ * against this shape can reuse the same vault-write vocabulary. Sibling to
+ * `DraftQuestion` above: `DraftRecord.question` carries an `'mcq'` draft's
+ * content, `DraftRecord.card` carries a `'qa'` draft's — the two are
+ * mutually exclusive, selected by `DraftRecord.instrumentType` (see that
+ * field's own doc). No `'cloze'` or `'explain-back'` counterpart exists yet;
+ * nothing in this pipeline drafts either shape.
+ */
+export interface DraftCardContent {
+  readonly front: string;
+  readonly back: string;
 }
 
 /**
@@ -139,7 +157,34 @@ export interface DraftRecord {
   readonly sourceContentHash?: string;
   /** ISO-8601 with offset — when the pipeline drafted this. */
   readonly createdAt: string;
-  readonly question: DraftQuestion;
+  /**
+   * `ol-0r92.88`: which vault-instrument shape this draft resolves into on
+   * accept, and which `DRAFT_MATERIALIZERS`-registered materializer
+   * (`accept.ts`) `DraftAcceptPort.accept` dispatches to. `undefined` means
+   * `'mcq'` — every draft cached before this field existed, and every draft
+   * `pipeline.ts`'s `quiz.generate.v1` sweep still produces today, is MCQ-
+   * shaped and carries no explicit value; this keeps every existing producer
+   * (`pipeline.ts`, `revision-job-runner.ts`, `review/heading-offer.ts`)
+   * unchanged. Only `'mcq'` (reads `question` below) and `'qa'` (reads
+   * `card` below) are meaningful today — nothing drafts `'cloze'` or
+   * `'explain-back'` content, and `accept.ts` refuses, rather than guesses,
+   * for a value with no registered materializer.
+   */
+  readonly instrumentType?: InstrumentType;
+  /**
+   * The drafted `'mcq'` content — required when `instrumentType` is
+   * `'mcq'`/`undefined`, absent (never both) when it is `'qa'`. See
+   * `card` below for the sibling field.
+   */
+  readonly question?: DraftQuestion;
+  /**
+   * The drafted `'qa'` content (`ol-0r92.88`) — required when
+   * `instrumentType` is `'qa'`, absent (never both) when it is
+   * `'mcq'`/`undefined`. See `DraftCardContent`'s own doc for why this
+   * mirrors `createQaCard`'s `front`/`back` rather than `DraftQuestion`'s
+   * shape.
+   */
+  readonly card?: DraftCardContent;
   readonly provenance: DraftProvenance;
   /**
    * Set the first time this draft is served in review (the "new" badge shows
@@ -190,30 +235,54 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   if (typeof v.sourcePath !== 'string') return false;
   if (typeof v.createdAt !== 'string') return false;
   if (typeof v.firstServedAt !== 'string' && v.firstServedAt !== null) return false;
-  const q = v.question as Record<string, unknown> | undefined;
+  // `ol-0r92.88`: `undefined` reads as `'mcq'` (every draft cached before this field existed) —
+  // see `DraftRecord.instrumentType`'s own doc. Only `'mcq'` and `'qa'` have a content shape below
+  // to validate against; a value outside the four canonical kinds is rejected outright, and
+  // `'cloze'`/`'explain-back'` (real kinds, no drafted content shape yet) fall through to the
+  // `'mcq'` branch's `question` check below and fail it — nothing drafts either today, so there is
+  // no shape to accept for them.
   if (
-    typeof q !== 'object' ||
-    q === null ||
-    typeof q.stem !== 'string' ||
-    typeof q.correctAnswer !== 'string' ||
-    !Array.isArray(q.distractors) ||
-    !q.distractors.every((d) => typeof d === 'string') ||
-    typeof q.feedback !== 'string'
+    v.instrumentType !== undefined &&
+    v.instrumentType !== 'mcq' &&
+    v.instrumentType !== 'qa' &&
+    v.instrumentType !== 'cloze' &&
+    v.instrumentType !== 'explain-back'
   ) {
     return false;
   }
-  // `[D-195]`'s optional per-distractor grounding (`DraftDistractorGrounding`) — absent entirely
-  // for a draft cached before this bead, or for one built from the pre-`[D-195]` bare-string
-  // generation shape. When present, each entry is either `null` or a fully-populated grounding
-  // object; nothing partial is accepted, matching the "no believer behind it" defect F2.15
-  // forbids typed rather than left to prose.
-  if (q.distractorGrounding !== undefined) {
-    if (!Array.isArray(q.distractorGrounding)) return false;
-    for (const entry of q.distractorGrounding) {
-      if (entry === null) continue;
-      if (typeof entry !== 'object') return false;
-      const g = entry as Record<string, unknown>;
-      if (typeof g.believes !== 'string' || typeof g.source_says !== 'string') return false;
+  if (v.instrumentType === 'qa') {
+    const c = v.card as Record<string, unknown> | undefined;
+    if (typeof c !== 'object' || c === null || typeof c.front !== 'string' || typeof c.back !== 'string') {
+      return false;
+    }
+    if (v.question !== undefined) return false; // mutually exclusive with `question` — see the field's own doc
+  } else {
+    const q = v.question as Record<string, unknown> | undefined;
+    if (
+      typeof q !== 'object' ||
+      q === null ||
+      typeof q.stem !== 'string' ||
+      typeof q.correctAnswer !== 'string' ||
+      !Array.isArray(q.distractors) ||
+      !q.distractors.every((d) => typeof d === 'string') ||
+      typeof q.feedback !== 'string'
+    ) {
+      return false;
+    }
+    if (v.card !== undefined) return false; // mutually exclusive with `card` — see the field's own doc
+    // `[D-195]`'s optional per-distractor grounding (`DraftDistractorGrounding`) — absent entirely
+    // for a draft cached before this bead, or for one built from the pre-`[D-195]` bare-string
+    // generation shape. When present, each entry is either `null` or a fully-populated grounding
+    // object; nothing partial is accepted, matching the "no believer behind it" defect F2.15
+    // forbids typed rather than left to prose.
+    if (q.distractorGrounding !== undefined) {
+      if (!Array.isArray(q.distractorGrounding)) return false;
+      for (const entry of q.distractorGrounding) {
+        if (entry === null) continue;
+        if (typeof entry !== 'object') return false;
+        const g = entry as Record<string, unknown>;
+        if (typeof g.believes !== 'string' || typeof g.source_says !== 'string') return false;
+      }
     }
   }
   const p = v.provenance as Record<string, unknown> | undefined;

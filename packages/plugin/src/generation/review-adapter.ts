@@ -32,7 +32,7 @@
 import type { RandomSource } from 'olea-core';
 import { mathRandomSource, presentMcq } from 'olea-core';
 import type { McqItem, McqOption, ReviewQueueItem, SelectionContextV4 } from '../review/types.js';
-import type { DraftRecord } from './types.js';
+import type { DraftQuestion, DraftRecord } from './types.js';
 
 /** Matches `review/queue-adapter.ts`'s own `OPTION_IDS` convention (the letters `keymap.ts` binds). */
 const OPTION_IDS = 'abcdefghij';
@@ -45,12 +45,30 @@ export function basenameWithoutExtension(path: string): string {
   return dot <= 0 ? file : file.slice(0, dot);
 }
 
+/**
+ * `ol-0r92.88`: `DraftRecord.question` is optional now that a `'qa'`-kind
+ * draft carries `card` instead (`types.ts`) — no such draft reaches this
+ * module in production today (no card-drafting pipeline exists yet, so
+ * every `'pending'` record the review queue renders is still MCQ-shaped),
+ * but this throws a named error rather than a bare `undefined` crash if one
+ * ever does, before an MCQ-only renderer like this one is ready for it.
+ */
+function requireMcqQuestion(record: DraftRecord): DraftQuestion {
+  if (record.question === undefined) {
+    throw new Error(
+      `toDraftReviewQueueItem: draft ${record.draftId} has no MCQ question (instrumentType '${record.instrumentType ?? 'mcq'}')`,
+    );
+  }
+  return record.question;
+}
+
 function presentDraftOptions(record: DraftRecord, random: RandomSource): readonly McqOption[] {
+  const question = requireMcqQuestion(record);
   const presentation = presentMcq(
     {
-      stem: record.question.stem,
-      answer: record.question.correctAnswer,
-      distractors: record.question.distractors,
+      stem: question.stem,
+      answer: question.correctAnswer,
+      distractors: question.distractors,
     },
     random,
   );
@@ -66,6 +84,7 @@ export function toDraftReviewQueueItem(
   record: DraftRecord,
   random: RandomSource = mathRandomSource,
 ): ReviewQueueItem {
+  const question = requireMcqQuestion(record);
   const instrument: McqItem = {
     instrumentId: record.draftId,
     draftId: record.draftId,
@@ -75,9 +94,9 @@ export function toDraftReviewQueueItem(
     sourcePath: record.sourcePath,
     blockId: null,
     type: 'mcq',
-    stem: record.question.stem,
+    stem: question.stem,
     options: presentDraftOptions(record, random),
-    feedback: record.question.feedback,
+    feedback: question.feedback,
   };
 
   const selectionContext: SelectionContextV4 = {

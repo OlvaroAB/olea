@@ -48,7 +48,7 @@ import type { DraftAcceptPort } from './accept.js';
 import { type SourceMarkerOrigin, sourceMarkerOrigin } from './bulk-review-copy.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { basenameWithoutExtension } from './review-adapter.js';
-import type { DraftRecord } from './types.js';
+import type { DraftQuestion, DraftRecord } from './types.js';
 
 /**
  * The slice of `review/ports.ts`'s `EditPort` this controller actually
@@ -147,8 +147,19 @@ export interface BulkReviewAcceptRemainderResult {
 export function buildBulkReviewGroups(
   records: readonly DraftRecord[],
 ): readonly BulkReviewGroupViewModel[] {
-  const pending = records.filter((r) => r.status === 'pending');
-  const bySourcePath = new Map<string, DraftRecord[]>();
+  // `ol-0r92.88`: this view model is MCQ-shaped (`stem`/`correctAnswer`/
+  // `distractors` below) and has no card renderer — a `'qa'`-kind pending
+  // record (none exist in production yet; no card-drafting pipeline is
+  // wired) is excluded here rather than crashing the whole triage list over
+  // one item it cannot render, matching this function's own "filters
+  // defensively" posture for `status`. The type predicate narrows `question`
+  // from optional to present for every item kept, so the `.map` below reads
+  // it without a repeated guard.
+  const pending = records.filter(
+    (r): r is DraftRecord & { readonly question: DraftQuestion } =>
+      r.status === 'pending' && r.question !== undefined,
+  );
+  const bySourcePath = new Map<string, (DraftRecord & { readonly question: DraftQuestion })[]>();
   for (const record of pending) {
     const list = bySourcePath.get(record.sourcePath) ?? [];
     list.push(record);
