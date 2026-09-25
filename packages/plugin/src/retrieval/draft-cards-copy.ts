@@ -1,13 +1,20 @@
 /**
- * `draft-cards-copy.ts` — the strings and the response-shaping logic for the
- * card-drafting outcome (`draft-cards-controller.ts`'s `runDraftCards`),
- * kept obsidian-free (same split `settings-tab.ts`'s module doc documents
- * for `degradation-statement.ts` and the `*-field-copy.ts` files) so the
- * part that could actually be wrong — the copy, and how a raw Worker
- * envelope turns into something a caller can render — is unit-testable
- * under plain Vitest. See `draft-cards-controller.ts`'s module doc for the
- * sanctioned callers (F4.5): the student-invoked draft command and modal
- * this file originally served were withdrawn.
+ * `draft-cards-copy.ts` — the strings and the response-shaping logic for a
+ * card-drafting outcome, kept obsidian-free (same split `settings-tab.ts`'s
+ * module doc documents for `degradation-statement.ts` and the
+ * `*-field-copy.ts` files) so the part that could actually be wrong — the
+ * copy, and how a raw Worker envelope turns into something a caller can
+ * render — is unit-testable under plain Vitest.
+ *
+ * `runDraftCards` (`draft-cards-controller.ts`), the withdrawn modal's
+ * controller, was removed as dead code (`ol-0r92.117`; no production caller
+ * ever existed for it — the modal it served was withdrawn under F4.5). This
+ * module's own exports outlived it: `describeRefusal` is production-live via
+ * `generation/pipeline.ts`'s automatic sweep and `review/heading-offer.ts`,
+ * and `parseDraftedResponse` is exercised by its own tests. A future
+ * card-drafting step (`ol-0r92.116`) drafts a different, front/back card
+ * shape and would not reuse `DraftedQuestionView`/`ParsedDraftResponse`
+ * as-is, but may still want `describeRefusal`'s refusal-copy mapping.
  *
  * **The refusal copy is the load-bearing part of this file.** `ol-riwn` /
  * `[D-089]` rule that an "I could not check" refusal must never read as "your
