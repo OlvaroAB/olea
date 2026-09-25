@@ -2221,7 +2221,7 @@ export type {
   SupportLevelHistory,
   SupportLevelHistoryOptions,
 } from './support-level/history.js';
-export { buildSupportLevelHistory } from './support-level/history.js';
+export { buildSupportLevelHistory, NO_LADDER_SUPPORT_LEVEL } from './support-level/history.js';
 // Support-level ladder (register row 3.9, `ol-ry2k`, `[D-094]`) — session-boundary
 // transitions only; self-assessment adjusts the offer, never the persisted level.
 export {
