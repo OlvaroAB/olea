@@ -173,10 +173,15 @@ export function isoWithLocalOffset(date: Date): string {
  * session — not the shorter streak window, which is a display concern with no
  * bearing on what mastery this event should carry.
  */
-export function createVaultReviewLogPort(vault: VaultSource, deviceId: string): ReviewLogPort {
+export function createVaultReviewLogPort(
+  vault: VaultSource,
+  deviceId: string,
+  /** `ol-3ux7.64.9` [WBX-8]: the plugin's clock seam. Defaults to the real wall clock. */
+  clockNow: () => Date = () => new Date(),
+): ReviewLogPort {
   return {
     async recordReview(input) {
-      const now = new Date();
+      const now = clockNow();
       const conceptIds = input.instrument.conceptIds;
 
       // Read to completion BEFORE the append below — see this function's doc.
@@ -300,14 +305,19 @@ export interface SuspendPort {
  * `createVaultReviewLogPort` copies it: the frozen record's inferred type is a
  * mutable `string[]` and callers hand this a `readonly` one.
  */
-export function createVaultSuspendPort(vault: VaultSource, deviceId: string): SuspendPort {
+export function createVaultSuspendPort(
+  vault: VaultSource,
+  deviceId: string,
+  /** `ol-3ux7.64.9` [WBX-8]: the plugin's clock seam. Defaults to the real wall clock. */
+  now: () => Date = () => new Date(),
+): SuspendPort {
   return {
     async suspend(instrumentId, conceptIds) {
       await appendSuspendRecord(
         vault,
         {
           kind: 'suspend',
-          timestamp: isoWithLocalOffset(new Date()),
+          timestamp: isoWithLocalOffset(now()),
           instrumentId,
           conceptIds: [...conceptIds],
         },
@@ -369,6 +379,8 @@ export interface ExplainBackOfferLogPort {
 export function createVaultExplainBackOfferLogPort(
   vault: VaultSource,
   deviceId: string,
+  /** `ol-3ux7.64.9` [WBX-8]: the plugin's clock seam. Defaults to the real wall clock. */
+  now: () => Date = () => new Date(),
 ): ExplainBackOfferLogPort {
   function report(error: unknown): void {
     console.error('Olea: could not record explain-back offer', error);
@@ -381,7 +393,7 @@ export function createVaultExplainBackOfferLogPort(
         vault,
         {
           kind: 'explain-back-offered',
-          timestamp: isoWithLocalOffset(new Date()),
+          timestamp: isoWithLocalOffset(now()),
           conceptIds: [...input.conceptIds],
           trigger: input.trigger,
           ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),
@@ -395,7 +407,7 @@ export function createVaultExplainBackOfferLogPort(
         vault,
         {
           kind: 'explain-back-declined',
-          timestamp: isoWithLocalOffset(new Date()),
+          timestamp: isoWithLocalOffset(now()),
           conceptIds: [...input.conceptIds],
           trigger: input.trigger,
           ...(input.instrumentId !== undefined ? { instrumentId: input.instrumentId } : {}),

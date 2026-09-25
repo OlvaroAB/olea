@@ -78,12 +78,23 @@ function makeProvider(
   vault: ReturnType<typeof fixtureVault>,
   settingsHost: FakeDataHost,
   editPort: FakeEditPort,
+  /**
+   * `ol-3ux7.64.9` [WBX-8]: defaults to the suite's frozen `NOW`, unchanged
+   * for every existing case. A test that fires two suspend/unsuspend writes
+   * in sequence (withdraw then restore) needs an ADVANCING clock instead —
+   * `suspendedInstrumentIds` (`olea-core`'s `review-log/suspension.ts`)
+   * breaks a same-instant tie by `eventId`, deliberately order-independent
+   * for real multi-device sync, but two real button clicks always land on
+   * different milliseconds, so a frozen clock is the unrealistic case here,
+   * not a production behaviour this bead changed.
+   */
+  now: () => Date = () => NOW,
 ) {
   return createLocalRegistryProvider({
     vault,
     deviceId: DEVICE,
     settingsHost,
-    now: () => NOW,
+    now,
     editPort,
   });
 }
@@ -344,7 +355,14 @@ describe('createLocalRegistryProvider — withdraw/restore concept (F8.5)', () =
 describe('createLocalRegistryProvider — withdraw/restore instrument (F8.5)', () => {
   it('withdraws and restores an instrument through the review log, never deleting it from the mix', async () => {
     const host = new FakeDataHost();
-    const provider = makeProvider(fixtureVault(), host, new FakeEditPort());
+    // Advancing clock (see `makeProvider`'s own doc): withdraw and restore
+    // each need a strictly later instant than the one before it, the same
+    // as two real, sequential clicks would always produce.
+    let tickMs = NOW.getTime();
+    const provider = makeProvider(fixtureVault(), host, new FakeEditPort(), () => {
+      tickMs += 1;
+      return new Date(tickMs);
+    });
     const before = await modelFrom(await provider.load());
     const instrument = before.concepts[0]?.instruments[0];
     if (instrument === undefined) throw new Error('missing instrument');

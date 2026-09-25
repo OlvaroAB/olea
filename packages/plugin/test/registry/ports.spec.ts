@@ -127,6 +127,31 @@ describe('createVaultPruneInstrumentPort', () => {
     const record = JSON.parse((await vault.read(logPath)).trim());
     expect(record.conceptIds).toEqual(['concept-a', 'concept-b']);
   });
+
+  it('an injected clock (ol-3ux7.64.9 [WBX-8]) stamps the record, taking priority over real time', async () => {
+    const vault = memoryVault();
+    const stubbedNow = new Date('2032-05-04T00:00:00.000Z');
+    const port = createVaultPruneInstrumentPort(vault, DEVICE, () => stubbedNow);
+
+    await port.prune({
+      instrumentId: INSTRUMENT_ID,
+      instrumentType: 'qa',
+      conceptIds: ['concept-a'],
+      notePath: 'Notes/one.md',
+      noteTitle: 'one',
+      blockId: null,
+      heading: null,
+      sourceLocations: [],
+      explainBackHistory: [],
+      pruned: false,
+    });
+
+    const [logPath] = vault.writes;
+    if (logPath === undefined) throw new Error('expected a write');
+    const record = JSON.parse((await vault.read(logPath)).trim());
+    expect(record.timestamp.slice(0, 4)).toBe('2032');
+    expect(new Date(record.timestamp).getTime()).toBe(stubbedNow.getTime());
+  });
 });
 
 // Scenarios: olea-service/features/F8-concepts-scope.md — "Accepting a note offer rebinds the

@@ -13,9 +13,11 @@ import type { VaultSource } from 'olea-core';
 import { calendarDayFromLocalDate, parseReviewLog, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  createVaultExplainBackOfferLogPort,
   createVaultNoteExistsPort,
   createVaultReviewLogPort,
   createVaultSuspendPort,
+  isoWithLocalOffset,
 } from '../../src/review/ports.js';
 import type { ReviewInstrument } from '../../src/review/types.js';
 import { memoryVault } from './memory-vault.js';
@@ -162,6 +164,118 @@ describe('createVaultSuspendPort', () => {
     );
     expect(suspensions.map((r) => r.instrumentId)).toEqual(['inst-1', 'inst-2']);
     expect(new Set(suspensions.map((r) => r.eventId)).size).toBe(2);
+  });
+});
+
+describe('the plugin clock seam reaches every event-writing port (ol-3ux7.64.9 [WBX-8])', () => {
+  // `main.ts`'s `this.now` (a bound function reading `this.clock` live) is
+  // now the third argument every one of these three ports takes — grouped
+  // here rather than one test per port, since the thing worth proving is the
+  // SAME for all three: a stubbed clock reaches the written record's own
+  // timestamp, and the calendar day the record's log path encodes moves with
+  // it, not just the field's raw string.
+  const DEVICE = 'ports-spec-clock-device';
+  const STUBBED_NOW = new Date('2031-03-17T09:30:00.000Z');
+  const stubClock = () => STUBBED_NOW;
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-clock-1',
+    conceptIds: ['concept-clock'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'qa',
+    question: 'What is it?',
+    answer: 'It is this.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['qa'],
+    planVersion: null,
+  };
+
+  it('createVaultReviewLogPort stamps the stubbed instant, and the log path itself moves to that calendar day', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE, stubClock);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+    });
+
+    const logPath = reviewLogPath(calendarDayFromLocalDate(STUBBED_NOW), DEVICE);
+    const parsed = parseReviewLog(vault.contentOf(logPath) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(record.timestamp).toBe(isoWithLocalOffset(STUBBED_NOW));
+  });
+
+  it('createVaultSuspendPort stamps the stubbed instant', async () => {
+    const vault = memoryVault();
+    const port = createVaultSuspendPort(vault, DEVICE, stubClock);
+
+    await port.suspend('inst-clock-1', ['concept-clock']);
+
+    const logPath = reviewLogPath(calendarDayFromLocalDate(STUBBED_NOW), DEVICE);
+    const parsed = parseReviewLog(vault.contentOf(logPath) ?? '');
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('suspend');
+    if (record?.kind !== 'suspend') return;
+    expect(record.timestamp).toBe(isoWithLocalOffset(STUBBED_NOW));
+  });
+
+  it('createVaultExplainBackOfferLogPort stamps the stubbed instant on both the offer and the decline', async () => {
+    const vault = memoryVault();
+    const port = createVaultExplainBackOfferLogPort(vault, DEVICE, stubClock);
+
+    const offerId = port.recordOffered({
+      conceptIds: ['concept-clock'],
+      trigger: 'repeated-failure',
+    });
+    // Fire-and-forget (`ports.ts`'s own doc): let the offer's write actually
+    // land — both calls append to the SAME log path, so firing the decline
+    // before the offer's read-modify-write completes would race it.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    port.recordDeclined({
+      conceptIds: ['concept-clock'],
+      trigger: 'repeated-failure',
+      answers: offerId,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const logPath = reviewLogPath(calendarDayFromLocalDate(STUBBED_NOW), DEVICE);
+    const parsed = parseReviewLog(vault.contentOf(logPath) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const timestamps = parsed.records
+      .filter((r): r is Extract<typeof r, { timestamp: string }> => 'timestamp' in r)
+      .map((r) => r.timestamp);
+    expect(timestamps).toEqual([isoWithLocalOffset(STUBBED_NOW), isoWithLocalOffset(STUBBED_NOW)]);
+  });
+
+  it('omitted, every port still defaults to the real wall clock — unchanged from before this bead', async () => {
+    const vault = memoryVault();
+    const before = Date.now();
+    await createVaultSuspendPort(vault, DEVICE).suspend('inst-real-1', ['concept-real']);
+    const after = Date.now();
+
+    const today = calendarDayFromLocalDate(new Date());
+    const parsed = parseReviewLog(vault.contentOf(reviewLogPath(today, DEVICE)) ?? '');
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('suspend');
+    if (record?.kind !== 'suspend') return;
+    const writtenMs = Date.parse(record.timestamp);
+    expect(writtenMs).toBeGreaterThanOrEqual(before);
+    expect(writtenMs).toBeLessThanOrEqual(after + 1000);
   });
 });
 

@@ -671,6 +671,7 @@ export function createLocalRegistryProvider(
   const pruneInstrumentPort: PruneInstrumentPort = createVaultPruneInstrumentPort(
     deps.vault,
     deps.deviceId,
+    deps.now,
   );
   const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const scheduler = deps.scheduler ?? createFsrsScheduler();

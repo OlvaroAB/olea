@@ -63,6 +63,12 @@ export interface RenderPrivacySectionDeps {
   readonly vault: VaultSource;
   readonly dataHost: ObsidianDataHost;
   readonly deviceId: string;
+  /**
+   * `ol-3ux7.64.9` [WBX-8]: the plugin's one clock seam (`main.ts`'s
+   * `this.now`), threaded through `settings-tab.ts`. Omitted defaults to
+   * the real wall clock — unchanged from before this bead.
+   */
+  readonly now?: () => Date;
 }
 
 function exportFileName(now: Date): string {
@@ -74,6 +80,7 @@ export function renderPrivacySection(
   containerEl: HTMLElement,
   deps: RenderPrivacySectionDeps,
 ): void {
+  const readNow = deps.now ?? (() => new Date());
   new Setting(containerEl).setName(PRIVACY_SECTION_HEADING).setHeading();
   containerEl.createEl('p', { text: PRIVACY_SECTION_INTRO, cls: 'olea-privacy-intro' });
 
@@ -85,11 +92,12 @@ export function renderPrivacySection(
         void (async () => {
           button.setDisabled(true);
           try {
-            const now = new Date();
+            const now = readNow();
             const bundle = await buildPrivacyExportBundle({
               vault: deps.vault,
               deviceId: deps.deviceId,
               today: calendarDayFromLocalDate(now),
+              now: () => now.toISOString(),
             });
             const path = exportFileName(now);
             await deps.vault.write(path, `${JSON.stringify(bundle, null, 2)}\n`);
@@ -127,7 +135,7 @@ export function renderPrivacySection(
               dataHost: deps.dataHost,
               vault: deps.vault,
               deviceId: deps.deviceId,
-              today: calendarDayFromLocalDate(new Date()),
+              today: calendarDayFromLocalDate(readNow()),
               workerConfig,
               httpRequest: obsidianDeleteHttpRequest,
             });

@@ -121,15 +121,18 @@ describe('the Today panel refreshes after a review session closes — ol-h3wy', 
 
 describe('every port the session needs is the real one', () => {
   it.each([
-    ['reviewLog', /reviewLog:\s*createVaultReviewLogPort\(vault, deviceId\)/],
-    ['suspendPort', /suspendPort:\s*createVaultSuspendPort\(vault, deviceId\)/],
+    ['reviewLog', /reviewLog:\s*createVaultReviewLogPort\(vault, deviceId, this\.now\)/],
+    ['suspendPort', /suspendPort:\s*createVaultSuspendPort\(vault, deviceId, this\.now\)/],
     [
       'explainBackOfferLog',
-      /explainBackOfferLog:\s*createVaultExplainBackOfferLogPort\(vault, deviceId\)/,
+      /explainBackOfferLog:\s*createVaultExplainBackOfferLogPort\(vault, deviceId, this\.now\)/,
     ],
     ['editPort', /editPort:\s*createObsidianEditPort\(this\.app\)/],
     ['noteExists', /noteExists:\s*createVaultNoteExistsPort\(vault\)/],
-    ['clock', /clock:\s*systemClock/],
+    // `ol-3ux7.64.9` [WBX-8]: `{ now: this.now }`, not the `systemClock`
+    // singleton by reference — see `main.ts`'s own comment on this line for
+    // why a bare `this.clock` would freeze today's clock into this port.
+    ['clock', /clock:\s*\{\s*now:\s*this\.now\s*\}/],
   ])('%s is wired to its real implementation', (_name, pattern) => {
     expect(main).toMatch(pattern);
   });
@@ -244,7 +247,7 @@ describe('the settings tab reaches a real Worker transport (ol-k57j)', () => {
 
   it('constructs the setting tab with itself as the data host and the real transport factory', () => {
     expect(main).toMatch(
-      /new OleaSettingTab\(\s*this\.app,\s*this,\s*this,\s*createRecordingTransport,\s*\{ vault, deviceId \},\s*headingOfferSetting,?\s*\)/,
+      /new OleaSettingTab\(\s*this\.app,\s*this,\s*this,\s*createRecordingTransport,\s*\{ vault, deviceId, now: this\.now \},\s*headingOfferSetting,?\s*\)/,
     );
   });
 
@@ -350,7 +353,7 @@ describe('the SOLO review-log write has a real production caller (ol-38kp)', () 
 
   it('exposes a production entry point that reaches recordSoloGradeAndReview through the composed grading wiring, guarded on this.grading', () => {
     expect(main).toMatch(
-      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| undefined> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*\(\) => new Date\(\),\s*\},\s*params,\s*\);/,
+      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| undefined> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*this\.now,\s*\},\s*params,\s*\);/,
     );
   });
 
@@ -386,7 +389,7 @@ describe('the explain-back judge digest has a real production caller (ol-2zfj.75
 
   it('exposes a production entry point that loads a real digest off a fresh misconception-store read', () => {
     expect(main).toMatch(
-      /async buildExplainBackMisconceptionDigestFor\(\s*conceptIds:\s*readonly string\[\],\s*\):\s*Promise<GradeExplainBackInput\['misconceptionDigest'\]> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*const store = createVaultMisconceptionStore\(\{ vault, deviceId, now: \(\) => new Date\(\) \}\);\s*const records = \(await store\.load\(\)\) \?\? \[\];\s*return buildMisconceptionDigest\(records, \{ conceptIds: \[\.\.\.conceptIds\] \}\);/,
+      /async buildExplainBackMisconceptionDigestFor\(\s*conceptIds:\s*readonly string\[\],\s*\):\s*Promise<GradeExplainBackInput\['misconceptionDigest'\]> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*const store = createVaultMisconceptionStore\(\{ vault, deviceId, now: this\.now \}\);\s*const records = \(await store\.load\(\)\) \?\? \[\];\s*return buildMisconceptionDigest\(records, \{ conceptIds: \[\.\.\.conceptIds\] \}\);/,
     );
   });
 
@@ -858,7 +861,7 @@ describe('the materiality trigger is actually constructed and fed (ol-2zfj.15)',
 
   it('builds the materiality wiring through the tested composer, against the real data host, with the transport-backed judge (ol-2zfj.18)', () => {
     expect(main).toMatch(
-      /this\.materiality\s*=\s*buildMaterialityWiring\(\{\s*dataHost:\s*this,\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*Date\.now\(\)\s*\},\s*judge:\s*this\.buildMaterialityJudge\(\),/,
+      /this\.materiality\s*=\s*buildMaterialityWiring\(\{\s*dataHost:\s*this,\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*this\.now\(\)\.getTime\(\)\s*\},\s*judge:\s*this\.buildMaterialityJudge\(\),/,
     );
   });
 
@@ -934,7 +937,7 @@ describe('C7.9 containment relations reach both session-composition call sites (
     // `relations`, because the legacy path it would have fed is unreachable
     // in production once both of the other two fields are always supplied.
     expect(main).toMatch(
-      /instruments:\s*createVaultInstrumentSource\(\{\s*vault,\s*scheduler,\s*deviceId,\s*now:\s*\(\)\s*=>\s*new Date\(\),[\s\S]*?studySessionHolder:\s*this\.studySessionHolder,\s*composeDefaultStudySession:\s*\(\)\s*=>\s*this\.composeDefaultStudySession\(\),\s*\}\),/,
+      /instruments:\s*createVaultInstrumentSource\(\{\s*vault,\s*scheduler,\s*deviceId,\s*now:\s*this\.now,[\s\S]*?studySessionHolder:\s*this\.studySessionHolder,\s*composeDefaultStudySession:\s*\(\)\s*=>\s*this\.composeDefaultStudySession\(\),\s*\}\),/,
     );
   });
 
@@ -1142,7 +1145,7 @@ describe('C7.8 course detection has a real trigger and a real host (ol-0r92.7)',
 
   it('assembles recognitions for the proposal’s own course code before opening the modal', () => {
     expect(main).toMatch(
-      /const recognitions = await readCourseSetupRecognitions\(\s*next\.code,\s*\{\s*vault,\s*deviceId,\s*today:\s*localToday\(new Date\(\)\),\s*\}\s*\);/,
+      /const recognitions = await readCourseSetupRecognitions\(\s*next\.code,\s*\{\s*vault,\s*deviceId,\s*today:\s*localToday\(this\.now\(\)\),\s*\}\s*\);/,
     );
   });
 
@@ -1186,7 +1189,7 @@ describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is
 
   it('builds the watch against the real engine buildIngestionRunner returned, registered for teardown', () => {
     expect(main).toMatch(
-      /this\.register\(\s*buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer:\s*this\.ingestion\.engine,\s*watch:\s*\(handler\)\s*=>\s*vault\.watch\(handler\),\s*\}\),\s*\);/,
+      /this\.register\(\s*buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer:\s*this\.ingestion\.engine,\s*watch:\s*\(handler\)\s*=>\s*vault\.watch\(handler\),\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*this\.now\(\)\.getTime\(\)\s*\},\s*\}\),\s*\);/,
     );
   });
 
@@ -1477,7 +1480,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   it('main.ts:988 — the gap view’s createLocalGapProvider receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `createLocalGapProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?buildSession:`,
+        `createLocalGapProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*${spread},[\\s\\S]{0,400}?buildSession:`,
       ),
     );
   });
@@ -1485,7 +1488,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   it('main.ts:1019 — the session builder view’s createLocalSessionBuilderProvider receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `createLocalSessionBuilderProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?openExplainBack:`,
+        `createLocalSessionBuilderProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*${spread},[\\s\\S]{0,400}?openExplainBack:`,
       ),
     );
   });
@@ -1501,7 +1504,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     // way, reach the Home construction site too.
     expect(main).toMatch(
       new RegExp(
-        `createLocalHomeProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*scheduler,\\s*relations:\\s*\\(\\) => this\\.servedRelationEdges\\(\\),[\\s\\S]{0,300}?plan:\\s*\\(\\) => this\\.review\\?\\.plan \\?\\? null,[\\s\\S]{0,300}?${spread},\\s*windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),[\\s\\S]{0,200}?firstRead:`,
+        `createLocalHomeProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*scheduler,\\s*relations:\\s*\\(\\) => this\\.servedRelationEdges\\(\\),[\\s\\S]{0,300}?plan:\\s*\\(\\) => this\\.review\\?\\.plan \\?\\? null,[\\s\\S]{0,300}?${spread},\\s*windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),[\\s\\S]{0,200}?firstRead:`,
       ),
     );
   });
@@ -1509,7 +1512,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   it('main.ts:1225 — the registry view’s createLocalRegistryProvider receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `createLocalRegistryProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*\\(\\) => new Date\\(\\),\\s*${spread},[\\s\\S]{0,400}?editPort:`,
+        `createLocalRegistryProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*${spread},[\\s\\S]{0,400}?editPort:`,
       ),
     );
   });
@@ -1682,13 +1685,13 @@ describe('[D-167] the study-plan refresh now has a between-sessions trigger too,
 
   it('seeds a lastCheckedDay state right after the onload refresh, from the real localToday/Date pair', () => {
     expect(main).toMatch(
-      /void this\.refreshCachedStudyPlan\(vault, deviceId, studyPlanStore\);[\s\S]{0,300}?const studyPlanRefreshState = \{ lastCheckedDay: localToday\(new Date\(\)\) \};/,
+      /void this\.refreshCachedStudyPlan\(vault, deviceId, studyPlanStore\);[\s\S]{0,300}?const studyPlanRefreshState = \{ lastCheckedDay: localToday\(this\.now\(\)\) \};/,
     );
   });
 
   it('the ingestion-tick interval evaluates studyPlanRefreshDue on every poll, alongside the other ticked work', () => {
     expect(main).toMatch(
-      /void this\.drainPendingMaterialityEdits\(\);[\s\S]{0,300}?const studyPlanRefreshCheckedAt = new Date\(\);\s*if \(studyPlanRefreshDue\(studyPlanRefreshState\.lastCheckedDay, studyPlanRefreshCheckedAt\)\) \{/,
+      /void this\.drainPendingMaterialityEdits\(\);[\s\S]{0,300}?const studyPlanRefreshCheckedAt = this\.now\(\);\s*if \(studyPlanRefreshDue\(studyPlanRefreshState\.lastCheckedDay, studyPlanRefreshCheckedAt\)\) \{/,
     );
   });
 
@@ -1716,7 +1719,7 @@ describe('ol-egov.141.89.10.55: a failed Worker call now reaches the usage log t
 
   it('createRecordingTransport now passes a second, failed-call recorder to createObsidianWorkerTransport', () => {
     expect(main).toMatch(
-      /createObsidianWorkerTransport\(\s*config,\s*\(entry\) => \{\s*void usageLogStore\.record\(\{ \.\.\.entry, recordedAt: new Date\(\)\.toISOString\(\) \}\);\s*\},\s*\(entry\) => \{\s*void usageLogStore\.record\(buildFailedUsageLogEntry\(entry, new Date\(\)\.toISOString\(\)\)\);\s*\},\s*\);/,
+      /createObsidianWorkerTransport\(\s*config,\s*\(entry\) => \{\s*void usageLogStore\.record\(\{ \.\.\.entry, recordedAt: this\.now\(\)\.toISOString\(\) \}\);\s*\},\s*\(entry\) => \{\s*void usageLogStore\.record\(buildFailedUsageLogEntry\(entry, this\.now\(\)\.toISOString\(\)\)\);\s*\},\s*\);/,
     );
   });
 

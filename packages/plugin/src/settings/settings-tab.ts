@@ -114,8 +114,18 @@ export class OleaSettingTab extends PluginSettingTab {
     dataHost: ObsidianDataHost,
     /** Injected rather than imported directly, so this file never has to import `obsidian`'s `requestUrl` itself — `main.ts` supplies the real `createObsidianWorkerTransport`. */
     private readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport,
-    /** F7.4's export/delete section (`ol-p6t01`) — vault + device id, minted after the tab would otherwise be constructed, so `main.ts` supplies them here. */
-    private readonly privacy: { readonly vault: VaultSource; readonly deviceId: string },
+    /**
+     * F7.4's export/delete section (`ol-p6t01`) — vault + device id, minted
+     * after the tab would otherwise be constructed, so `main.ts` supplies
+     * them here. `now` (`ol-3ux7.64.9` [WBX-8]) is the plugin's clock seam,
+     * threaded to `renderPrivacySection` — omitted there defaults to the
+     * real wall clock.
+     */
+    private readonly privacy: {
+      readonly vault: VaultSource;
+      readonly deviceId: string;
+      readonly now?: () => Date;
+    },
     /**
      * F2.10's toggle (`ol-0r92.29`): the same mutable object `main.ts`
      * seeds from `ObsidianHeadingOfferSettingStore.load()` at startup and
@@ -189,6 +199,7 @@ export class OleaSettingTab extends PluginSettingTab {
       vault: this.privacy.vault,
       dataHost: this.dataHost,
       deviceId: this.privacy.deviceId,
+      ...(this.privacy.now !== undefined ? { now: this.privacy.now } : {}),
     });
 
     // F7.5's in-app feedback path (`ol-p6t02`) — pairs with the "Olea: Copy

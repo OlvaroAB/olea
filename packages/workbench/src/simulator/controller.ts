@@ -14,7 +14,24 @@
  * panel once, right after mount, so the pane never starts blank — the same
  * first screen the old single-view mount always gave. Day-advance, jump and
  * reset all do a full `onunload`/`onload` remount (`unmount()` then a fresh
- * `mountPlugin` call), matching what a real Obsidian host does on reload.
+ * `mountPlugin` call), matching what a real Obsidian host does on reload —
+ * `remountPane`'s own doc says why this is still needed even though
+ * `ol-3ux7.64.9` [WBX-8] below no longer needs it for the clock itself.
+ *
+ * **The clock (`ol-3ux7.64.9` [WBX-8]).** Earlier than this bead, moving the
+ * simulated day meant installing a page-level `Date` proxy
+ * (`SimulatorClock.install`, now retired) before the plugin bundle
+ * evaluated, because nothing in `packages/plugin/src/main.ts` took an
+ * injected clock. That bead threaded one through: `OleaPlugin` now exposes
+ * `setClock(clock: Clock): void`, and `remountPane` passes `clock: { now:
+ * () => this.clock.now() }` into `mountPlugin`'s own deps
+ * (`obsidian-shim/mount-plugin.ts`), which applies it BEFORE `onload()`
+ * runs — no global ever shifts, and only THIS controller's own
+ * `SimulatorClock` (`./clock.ts`) needs to move. A first attempt set the
+ * clock AFTER `mountPlugin` returned (i.e. after `onload()` had already
+ * run); `onload()`'s own fire-and-forget cold-start work reads `now()` on
+ * its own schedule, which that ordering left reading real wall time for —
+ * see `mountPlugin`'s own doc for why the seam moved earlier.
  *
  * **The plugin class is imported directly from `packages/plugin/src/main.js`,
  * not through `../plugin-bridge.ts`.** That file's own doc carves out exactly
@@ -43,15 +60,17 @@
  * **The transport bridge (`ol-3ux7.64.7` [WBX-6]).** `OleaPlugin.onload()`
  * builds its own `WorkerHttpTransport` internally (`main.ts:492-495`,
  * `createRecordingTransport`) with no injection seam, and neither
- * `MountPluginDeps` (`obsidian-shim/mount-plugin.ts`, WBX-2's file) nor
- * `packages/plugin/src/main.ts` (no WBX bead owns it) is on this lane's owns
- * list — so `createSimulatorTransport` (`../transport/index.ts`, WBX-4)
- * cannot be handed to the plugin directly the way that factory's own module
- * doc suggests. Instead, {@link installTransportBridge} does for `fetch`
- * exactly what `SimulatorClock.install` (`./clock.ts`) already does for
- * `Date`: a page-level override, installed once at `create()` and restored
- * in {@link SimulatorController.dispose}, so every real seam this class was
- * told to leave alone stays untouched. Every plugin HTTP call is a `POST` to
+ * `MountPluginDeps` (`obsidian-shim/mount-plugin.ts`, WBX-2's file) is on
+ * this lane's owns list for a construction-time seam — so
+ * `createSimulatorTransport` (`../transport/index.ts`, WBX-4) cannot be
+ * handed to the plugin directly the way that factory's own module doc
+ * suggests. Instead, {@link installTransportBridge} does for `fetch` what a
+ * page-level `Date` override used to do for the clock before
+ * `ol-3ux7.64.9` [WBX-8] threaded one through `OleaPlugin` instead: a
+ * page-level override, installed once at `create()` and restored in
+ * {@link SimulatorController.dispose}, because `fetch` (unlike the clock)
+ * has no `setClock`-shaped seam on the plugin to call instead. Every plugin
+ * HTTP call is a `POST` to
  * `<baseUrl>/v1/task` (`worker/transport.ts`'s `buildTaskUrl`,
  * `olea-contracts`' `TASK_ENDPOINT_PATH`) with `JSON.stringify(request)` as
  * the body — so the bridge does not need to guess a `WorkerTaskRequest`'s
@@ -1297,7 +1316,6 @@ export class SimulatorController {
     private store: SimulatorStore,
     private vault: PersistentVaultSource,
     private clock: SimulatorClock,
-    private readonly uninstallClock: () => void,
     private pluginDataHost: ObsidianDataHost,
     private deviceId: string,
     private readonly transport: SimulatorTransport,
@@ -1395,15 +1413,17 @@ export class SimulatorController {
     // `seedPersonaHistoryIfNeeded`'s own doc.
     await seedPersonaHistoryIfNeeded(worldLoad.descriptor, vault, store, fetchFn, worldBase);
     const clock = await createSimulatorClock(store, worldAsOf);
-    const uninstallClock = clock.install();
     const pluginDataHost = createPluginDataHost(store);
     const deviceId = await ensureDeviceId(pluginDataHost);
     await seedSimulatorWorkerConfig(pluginDataHost);
     await seedSimulatorStudyPlanConfig(pluginDataHost, vault);
     // WBX-19 (`ol-3ux7.64.19` follow-up): a populated bulk-review state —
     // see `draft-seed.ts`'s own doc for why this writes directly into the
-    // vault's `.olea/drafts/` rather than through a new mechanism.
-    await seedSimulatorDrafts(vault);
+    // vault's `.olea/drafts/` rather than through a new mechanism. `clock.now`
+    // (`ol-3ux7.64.9` [WBX-8]): no page-level `Date` override installed any
+    // more, so a seeded draft's `createdAt` needs the simulated instant
+    // named explicitly.
+    await seedSimulatorDrafts(vault, clock.now);
     const transportMode = options.transport ?? 'replay';
     // WBX-27: one fault axis, shared by the transport bridge built here and
     // every `remountPane()`'s shim vault wrapper (see `SimulatorFaultAxis`'s
@@ -1423,7 +1443,6 @@ export class SimulatorController {
       store,
       vault,
       clock,
-      uninstallClock,
       pluginDataHost,
       deviceId,
       transportMode,
@@ -1461,12 +1480,15 @@ export class SimulatorController {
   }
 
   /**
-   * Uninstalls the page-level `Date` override and unmounts whatever is
-   * currently mounted (the whole plugin, or the degraded fallback view) —
-   * **must** be called when navigating away from `#/simulator`, or the clock
-   * override keeps shifting every OTHER surface's `WORKBENCH_NOW`-fixed
-   * clock too. `main.ts` calls this from `render()`'s preamble whenever the
-   * next route is not `'simulator'`.
+   * Unmounts whatever is currently mounted (the whole plugin, or the
+   * degraded fallback view) — **must** be called when navigating away from
+   * `#/simulator`. `main.ts` calls this from `render()`'s preamble whenever
+   * the next route is not `'simulator'`.
+   *
+   * `ol-3ux7.64.9` [WBX-8]: no page-level `Date` override to uninstall any
+   * more — the injected clock lives on the mounted `OleaPlugin` instance
+   * itself (`remountPane`'s `setClock` call), which `closeCurrent`'s
+   * `unmount()` discards along with everything else the mount built.
    *
    * This controller's mounts are never routed through `main.ts`'s own
    * generic `mounted`/`onClose`/`unloadComponent` lifecycle (a whole-plugin
@@ -1475,7 +1497,6 @@ export class SimulatorController {
    * the degraded path, so there is exactly one owner and no double-close.
    */
   async dispose(): Promise<void> {
-    this.uninstallClock();
     this.uninstallTransportBridge();
     this.courseSetupSeenBridge.dispose();
     await this.closeCurrent();
@@ -1529,6 +1550,17 @@ export class SimulatorController {
    * clock (`advanceOneDay`, `jumpToDate`, `reset`) or writes through the
    * vault (`rateNextDue`), matching what a real Obsidian host does on
    * reload: a full teardown and re-`onload()`, not a partial refresh.
+   *
+   * **Not needed for the clock itself any more** (`ol-3ux7.64.9` [WBX-8]):
+   * the `clock` passed into `mountPlugin` below reaches every `this.now()`
+   * read on the CURRENTLY mounted instance without a remount, since it
+   * reads `this.clock` live on every call. This method still remounts on
+   * every clock move because
+   * `rateNextDue`/`reset` already need the same full teardown for the vault
+   * write, and the views this class mounts compute their state once, at
+   * open time, rather than re-rendering on a poll — a remount is what makes
+   * an already-open Today/Home/etc. pane re-read the log and the clock it
+   * just moved, the same reason a real Obsidian reload would.
    */
   private async remountPane(): Promise<void> {
     await this.closeCurrent();
@@ -1551,9 +1583,26 @@ export class SimulatorController {
 
     const missing = missingWholePluginGlobals();
     if (missing.length === 0) {
+      // `ol-3ux7.64.9` [WBX-8]: `clock` reaches the plugin's own seam BEFORE
+      // `onload()` runs (`mountPlugin`'s own doc, `obsidian-shim/mount-
+      // plugin.ts`) — not a page-level `Date` override any more (`clock.ts`'s
+      // own doc: its `install()`/`installSimulatorDateOverride` are
+      // retired). `{ now: () => this.clock.now() }`, not `this.clock`
+      // directly: this object is built fresh on every mount, but wrapping
+      // the METHOD keeps every later read live off whatever `this.clock`'s
+      // offset currently is, the same "wrap, don't snapshot" reasoning
+      // `main.ts`'s own `clock: { now: this.now }` comment gives. Setting
+      // this BEFORE `onload()` (rather than after `mountPlugin` returns) is
+      // load-bearing: `onload()`'s own fire-and-forget cold-start work
+      // (course-setup detection) reads `now()` during `onload()` or on a
+      // microtask shortly after, well before `mountPlugin` resolves — a
+      // post-mount `setClock` left that window reading real wall time,
+      // which on a simulated day let a genuinely-new-looking course-setup
+      // proposal reopen and block `[data-sim-advance]` (found in review).
       const mounted = await mountPlugin(OleaPlugin, {
         vault: toShimVaultSource(this.vault, this.faultAxis),
         pluginData: this.pluginDataHost,
+        clock: { now: () => this.clock.now() },
       });
       this.mountedPlugin = mounted;
       this.elements.main.appendChild(mounted.hostEl);
@@ -1987,7 +2036,7 @@ export class SimulatorController {
     await seedSimulatorStudyPlanConfig(this.pluginDataHost, this.vault);
     // `resetAll` builds a fresh vault overlay above — reseed the same
     // populated bulk-review state (see `create()`'s own comment).
-    await seedSimulatorDrafts(this.vault);
+    await seedSimulatorDrafts(this.vault, this.clock.now);
     this.setNotice('Reset to the fixture snapshot.');
     await this.remountPane();
   }

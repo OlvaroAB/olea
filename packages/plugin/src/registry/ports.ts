@@ -64,13 +64,15 @@ export interface PruneInstrumentPort {
 export function createVaultPruneInstrumentPort(
   vault: VaultSource,
   deviceId: string,
+  /** `ol-3ux7.64.9` [WBX-8]: the plugin's clock seam. Defaults to the real wall clock. */
+  now: () => Date = () => new Date(),
 ): PruneInstrumentPort {
   async function write(kind: 'suspend' | 'unsuspend', instrument: RegistryInstrumentSummary) {
     await appendSuspendRecord(
       vault,
       {
         kind,
-        timestamp: isoWithLocalOffset(new Date()),
+        timestamp: isoWithLocalOffset(now()),
         instrumentId: instrument.instrumentId,
         conceptIds: [...instrument.conceptIds],
       },

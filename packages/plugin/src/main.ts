@@ -221,6 +221,7 @@ import {
   type ReviewSessionPorts,
 } from './review/open-session.js';
 import {
+  type Clock,
   createVaultExplainBackOfferLogPort,
   createVaultNoteExistsPort,
   createVaultReviewLogPort,
@@ -356,6 +357,35 @@ export default class OleaPlugin extends Plugin {
     loadData: () => super.loadData(),
     saveData: (data) => super.saveData(data),
   });
+  /**
+   * `ol-3ux7.64.9` [WBX-8] (`docs/dev/simulator-design.md` §3): the one clock
+   * seam this plugin owns. Every wall-clock read in this file goes through
+   * {@link now} rather than a bare `new Date()`/`Date.now()`, so a host that
+   * needs a different instant (the workbench simulator's day-advance) can
+   * supply one without touching a page-level global. Defaults to
+   * `systemClock` (`review/ports.ts`) — real time, unchanged production
+   * behaviour until a caller opts in via {@link setClock}.
+   */
+  private clock: Clock = systemClock;
+  /**
+   * Bound once so it can be passed BY REFERENCE into a deps object (`now:
+   * this.now`) instead of wrapped in a fresh arrow every call site — the
+   * function itself never goes stale: it reads `this.clock` at CALL time,
+   * so a `setClock` after this reference was handed out still takes effect
+   * on the next read, with no re-wiring needed.
+   */
+  private readonly now = (): Date => this.clock.now();
+  /**
+   * The workbench simulator's injection door (`ol-3ux7.64.9` [WBX-8]):
+   * `SimulatorController` calls this right after mounting, before any view
+   * opens, so every `this.now()` read from then on reports the simulated
+   * instant instead of real wall time — no page-level `Date` override
+   * required. Production never calls this; the default `systemClock` above
+   * is what real Obsidian sees.
+   */
+  setClock(clock: Clock): void {
+    this.clock = clock;
+  }
   private ingestion: IngestionWiring | null = null;
   /**
    * `[D-152]` (F3.3, `ol-0r92.21`): the manual process-now timing override —
@@ -457,7 +487,7 @@ export default class OleaPlugin extends Plugin {
   private readonly gateStagePersistence = new GateStagePersistence<
     Readonly<Record<GateStage, number>>
   >({
-    now: () => new Date().toISOString(),
+    now: () => this.now().toISOString(),
     getCounts: () => this.gateStageRecorder.summary().counts,
     save: (counts, now) => this.gateStageStore.save(counts, now),
     onSaved: (now) => {
@@ -806,10 +836,10 @@ export default class OleaPlugin extends Plugin {
       createObsidianWorkerTransport(
         config,
         (entry) => {
-          void usageLogStore.record({ ...entry, recordedAt: new Date().toISOString() });
+          void usageLogStore.record({ ...entry, recordedAt: this.now().toISOString() });
         },
         (entry) => {
-          void usageLogStore.record(buildFailedUsageLogEntry(entry, new Date().toISOString()));
+          void usageLogStore.record(buildFailedUsageLogEntry(entry, this.now().toISOString()));
         },
       );
 
@@ -850,7 +880,7 @@ export default class OleaPlugin extends Plugin {
         this,
         this,
         createRecordingTransport,
-        { vault, deviceId },
+        { vault, deviceId, now: this.now },
         headingOfferSetting,
       ),
     );
@@ -862,7 +892,7 @@ export default class OleaPlugin extends Plugin {
     // `refreshCachedStudyPlan`'s job, kicked off below and never blocking
     // `onload`.
     const studyPlanStore = new ObsidianStudyPlanStore(this);
-    const cachedPlan = (await loadCachedStudyPlan(studyPlanStore, new Date())).plan;
+    const cachedPlan = (await loadCachedStudyPlan(studyPlanStore, this.now())).plan;
 
     // `ol-p3t07a`: built here, before `this.review`, so `this.review.ports`
     // below can wire the real `DraftAcceptPort` rather than a placeholder.
@@ -876,7 +906,7 @@ export default class OleaPlugin extends Plugin {
     // where re-reading `this.generation` inside a lazily-invoked
     // `registerView` callback would need a redundant null check for
     // something that is, in fact, built unconditionally right here.
-    const generationWiring = buildGenerationWiring({ vault, deviceId });
+    const generationWiring = buildGenerationWiring({ vault, deviceId, now: this.now });
     this.generation = generationWiring;
 
     // F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
@@ -888,6 +918,7 @@ export default class OleaPlugin extends Plugin {
     this.headingOffer = createHeadingOfferPort({
       cache: generationWiring.cache,
       draftDeps: () => this.draftQuizCardsDeps(),
+      now: this.now,
     });
     // `ol-i19f`: the surface-wiring layer over the port above — reads
     // `vault` (already in scope) and `this.conceptRecords` fresh on every
@@ -914,23 +945,28 @@ export default class OleaPlugin extends Plugin {
         // The authoritative D7.1 write path (INV-4): logging exists before the
         // feature that produces the data, which is what makes the data
         // recoverable at all.
-        reviewLog: createVaultReviewLogPort(vault, deviceId),
+        reviewLog: createVaultReviewLogPort(vault, deviceId, this.now),
         // F2.6's durable half (D-020, `ol-xvmx`): every suspend now reaches
         // the log through the same append discipline as a review, so the set
         // survives past this session instead of a `Notice` being the only
         // trace it ever happened.
-        suspendPort: createVaultSuspendPort(vault, deviceId),
+        suspendPort: createVaultSuspendPort(vault, deviceId, this.now),
         // F2.12's offer/decline write (`ol-0r92.28`, `ol-nqtz`): without this
         // the banner's `recordExplainBackOfferShown`/`recordExplainBackOfferDeclined`
         // calls have nothing to write through, and the offer renders but
         // leaves no trace.
-        explainBackOfferLog: createVaultExplainBackOfferLogPort(vault, deviceId),
+        explainBackOfferLog: createVaultExplainBackOfferLogPort(vault, deviceId, this.now),
         editPort: createObsidianEditPort(this.app),
         // Note the absence of an `App` here: `createVaultNoteExistsPort` asks
         // the `VaultSource` (`ol-t5lj`), which is why the workbench can mount
         // this whole path against a shim that knows nothing about vaults.
         noteExists: createVaultNoteExistsPort(vault),
-        clock: systemClock,
+        // `{ now: this.now }`, not `this.clock` directly: this object is
+        // built once, here, but `setClock` (workbench simulator only) can
+        // reassign `this.clock` afterward — wrapping the bound `this.now`
+        // keeps every future read live instead of freezing today's clock
+        // reference into this port for the rest of the session.
+        clock: { now: this.now },
         // F3.3/`[D-097]`'s accept-at-first-presentation seam (`ol-p3t07a`,
         // `ol-mfn0`): resolves a cached, unreviewed draft the moment she
         // answers, edits, or rejects it.
@@ -941,7 +977,7 @@ export default class OleaPlugin extends Plugin {
         // carries. Absent means the gesture is not drawn at all — never
         // drawn and inert.
         gradeContestPort: createVaultGradeContestPort(vault, deviceId, () =>
-          isoWithLocalOffset(new Date()),
+          isoWithLocalOffset(this.now()),
         ),
       },
     };
@@ -963,7 +999,7 @@ export default class OleaPlugin extends Plugin {
     // covers "now" — the `registerInterval` tick below re-evaluates this
     // cheap, in-memory predicate on every poll, and only re-runs
     // `refreshCachedStudyPlan` once the local day actually advances.
-    const studyPlanRefreshState = { lastCheckedDay: localToday(new Date()) };
+    const studyPlanRefreshState = { lastCheckedDay: localToday(this.now()) };
 
     this.registerView(VIEW_TYPE_OLEA_REVIEW, (leaf) => {
       // `ol-v7r5.35` (`[D-193]`): ONE frozen queue per opened review tab —
@@ -971,7 +1007,7 @@ export default class OleaPlugin extends Plugin {
       // never on `this`, which is shared across every open tab. Same "per
       // surface, not per call" scope `session-builder/provider.ts` already
       // gives its own sitting inside this identical `registerView` pattern.
-      const reviewSessionOpener = createReviewSessionOpener({ now: () => new Date() });
+      const reviewSessionOpener = createReviewSessionOpener({ now: this.now });
       return new ReviewView(
         leaf,
         () => this.composeReviewSession(reviewSessionOpener),
@@ -1176,7 +1212,7 @@ export default class OleaPlugin extends Plugin {
               vault,
               scheduler,
               deviceId,
-              now: () => new Date(),
+              now: this.now,
               // `[SESS-8.5]` (`ol-egov.132.5`, one-assembly-path.md §3a/§3c):
               // the same holder and on-demand port Start and the review tab
               // use, so Today's due count reads "the list she is working"
@@ -1188,7 +1224,7 @@ export default class OleaPlugin extends Plugin {
               studySessionHolder: this.studySessionHolder,
               composeDefaultStudySession: () => this.composeDefaultStudySession(),
             }),
-            now: () => new Date(),
+            now: this.now,
             // F6.2/F6.5 (`ol-lohq`, `ol-p6t04`): the trends source feeds the
             // Today panel's insights. Absent path means "not configured",
             // which `createVaultTrendsSource` already reads as "no weights"
@@ -1199,7 +1235,7 @@ export default class OleaPlugin extends Plugin {
               // F6.5(b) (ol-v7r5.38): floor shares come from the cached plan
               // artifact, never recomputed client-side.
               studyPlanStore,
-              now: () => new Date(),
+              now: this.now,
               // F6.2 (ol-95vv.6): her rename overlay for the tending line's
               // concept names; the cache is refreshed by the overrides store
               // subscription above, so this read is current per load.
@@ -1208,7 +1244,7 @@ export default class OleaPlugin extends Plugin {
             // F6.2's cross-course scope reading (`ol-4qvc`): one grove model
             // per running course, placed side by side — counts never summed
             // or ranked (F8.3/C5.7).
-            scope: createVaultScopeSource({ vault, deviceId, now: () => new Date() }),
+            scope: createVaultScopeSource({ vault, deviceId, now: this.now }),
             // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
             // unconditionally in `onload`, same as `materiality` itself, so
             // this is absent only before `onload` has run — never in a
@@ -1249,9 +1285,9 @@ export default class OleaPlugin extends Plugin {
             }
             return byCourse;
           },
-          today: () => localToday(new Date()),
-          now: () => isoWithLocalOffset(new Date()),
-          readHistory: () => readReviewHistory(vault, deviceId, { today: localToday(new Date()) }),
+          today: () => localToday(this.now()),
+          now: () => isoWithLocalOffset(this.now()),
+          readHistory: () => readReviewHistory(vault, deviceId, { today: localToday(this.now()) }),
         }),
         // F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`) — same
         // `this.termWindowStore !== null` guard `rhythm` above uses: the
@@ -1283,7 +1319,7 @@ export default class OleaPlugin extends Plugin {
             vault,
             deviceId,
             settingsHost: this,
-            now: () => new Date(),
+            now: this.now,
             // `exactOptionalPropertyTypes`: omit the key entirely rather than
             // assign `undefined` to it when the Worker isn't configured
             // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
@@ -1320,6 +1356,7 @@ export default class OleaPlugin extends Plugin {
       dataHost: this,
       createTransport: createObsidianWorkerTransport,
       settingsStore: new ObsidianStudyPlanSettingsStore(this),
+      now: this.now,
     });
     this.registerView(VIEW_TYPE_OLEA_PAPER, (leaf) => new PaperView(leaf, practicePaper));
 
@@ -1337,7 +1374,7 @@ export default class OleaPlugin extends Plugin {
             vault,
             deviceId,
             settingsHost: this,
-            now: () => new Date(),
+            now: this.now,
             // `exactOptionalPropertyTypes`: omit the key entirely rather than
             // assign `undefined` to it when the Worker isn't configured
             // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
@@ -1421,9 +1458,9 @@ export default class OleaPlugin extends Plugin {
       const provider = createLocalRetrospectiveProvider({
         vault,
         deviceId,
-        offerStore: createRetrospectiveOfferEventLog({ vault, deviceId, now: () => new Date() }),
+        offerStore: createRetrospectiveOfferEventLog({ vault, deviceId, now: this.now }),
         settingsHost: this,
-        now: () => new Date(),
+        now: this.now,
       });
       return new RetrospectiveView(leaf, {
         load: async () => {
@@ -1464,7 +1501,7 @@ export default class OleaPlugin extends Plugin {
         vault,
         deviceId,
         settingsHost: this,
-        now: () => new Date(),
+        now: this.now,
         scheduler,
         relations: () => this.servedRelationEdges(),
         // `ol-egov.132.1` [SESS-8.1] (A2.5, C5.6): passed straight through
@@ -1524,7 +1561,7 @@ export default class OleaPlugin extends Plugin {
         vault,
         deviceId,
         settingsHost: this,
-        now: () => new Date(),
+        now: this.now,
         // `ol-kghd` (C7.9): the same served relation fold `session-builder/
         // provider.ts` and `composeReviewSession` already read — a thunk so
         // a later ingestion tick's fresh batch reaches a grove built after
@@ -1560,7 +1597,7 @@ export default class OleaPlugin extends Plugin {
             vault,
             deviceId,
             settingsHost: this,
-            now: () => new Date(),
+            now: this.now,
             // `exactOptionalPropertyTypes`: omit the key entirely rather than
             // assign `undefined` to it when the Worker isn't configured
             // (F7.8) — same pattern `refreshCachedStudyPlan` below uses for
@@ -1621,6 +1658,7 @@ export default class OleaPlugin extends Plugin {
       revision: {
         cache: generationWiring.cache,
         draftDeps: () => this.draftQuizCardsDeps(),
+        now: this.now,
       },
       // `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]:
       // outcomes.extract.v1's production trigger — a registered objectives/past-paper document's
@@ -1697,7 +1735,7 @@ export default class OleaPlugin extends Plugin {
     wireDocumentSourceRegistration(this, {
       vault,
       deviceId,
-      now: () => new Date(),
+      now: this.now,
       onRegistered: () => {
         void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_GROVE);
       },
@@ -1714,6 +1752,7 @@ export default class OleaPlugin extends Plugin {
         vault,
         enqueuer: this.ingestion.engine,
         watch: (handler) => vault.watch(handler),
+        clock: { now: () => this.now().getTime() },
       }),
     );
 
@@ -1785,6 +1824,7 @@ export default class OleaPlugin extends Plugin {
     this.rankWeights = await buildRankWeightsWiring({
       dataHost: this,
       httpGet: obsidianRankWeightsGet,
+      now: this.now,
     });
 
     // Component 3.5's plan-policy fetch (`[D-167]`, `ol-v7r5.25`), hooked
@@ -1813,7 +1853,7 @@ export default class OleaPlugin extends Plugin {
     // gates (hash/debounce/floor) run for real either way.
     this.materiality = buildMaterialityWiring({
       dataHost: this,
-      clock: { now: () => Date.now() },
+      clock: { now: () => this.now().getTime() },
       judge: this.buildMaterialityJudge(),
     });
     this.materialityPreviousText = createInMemoryPreviousTextTracker();
@@ -1826,7 +1866,7 @@ export default class OleaPlugin extends Plugin {
     // via TS method bivariance (`adaptMaterialityJudgeAsRevisionJudge`).
     this.citationRevision = buildCitationRevisionWiring({
       store: new ObsidianCitationHashStore(this),
-      clock: { now: () => Date.now() },
+      clock: { now: () => this.now().getTime() },
       judge: adaptMaterialityJudgeAsRevisionJudge(this.buildMaterialityJudge()),
     });
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
@@ -1926,7 +1966,7 @@ export default class OleaPlugin extends Plugin {
         // runs, and the remote calls its own fingerprint gate may make, only
         // happen when this returns `true` — about once per local calendar
         // day of continuous use, matching `[D-167]`'s own "about daily".
-        const studyPlanRefreshCheckedAt = new Date();
+        const studyPlanRefreshCheckedAt = this.now();
         if (studyPlanRefreshDue(studyPlanRefreshState.lastCheckedDay, studyPlanRefreshCheckedAt)) {
           studyPlanRefreshState.lastCheckedDay = localToday(studyPlanRefreshCheckedAt);
           void this.refreshCachedStudyPlan(vault, deviceId, studyPlanStore);
@@ -1996,7 +2036,7 @@ export default class OleaPlugin extends Plugin {
   private async drainPendingMaterialityEdits(): Promise<void> {
     if (this.materiality === null) return;
     try {
-      await this.materiality.drainDuePendingEdits(Date.now());
+      await this.materiality.drainDuePendingEdits(this.now().getTime());
     } catch (error) {
       console.error('Olea: materiality pending-edit drain failed', error);
     }
@@ -2056,7 +2096,7 @@ export default class OleaPlugin extends Plugin {
       const courses = notePathCourses(path, fm === null ? [] : readList(fm, 'course').items);
       if (courses.length === 0) return;
 
-      const today = calendarDayFromLocalDate(new Date());
+      const today = calendarDayFromLocalDate(this.now());
       for (const course of courses) {
         await this.materialArrivals.recordArrival(course, today);
       }
@@ -2206,7 +2246,7 @@ export default class OleaPlugin extends Plugin {
     const recognitions = await readCourseSetupRecognitions(next.code, {
       vault,
       deviceId,
-      today: localToday(new Date()),
+      today: localToday(this.now()),
     });
 
     new CourseSetupModal(this.app, {
@@ -2398,7 +2438,7 @@ export default class OleaPlugin extends Plugin {
       const misconceptionStore = createVaultMisconceptionStore({
         vault,
         deviceId,
-        now: () => new Date(),
+        now: this.now,
       });
       const records = await misconceptionStore.load();
       const embeddingCache = this.retrieval?.embeddingCache;
@@ -2523,7 +2563,7 @@ export default class OleaPlugin extends Plugin {
     try {
       const vault = new ObsidianSource(this.app);
       const deviceId = await ensureDeviceId(this);
-      const suspendPort = createVaultSuspendPort(vault, deviceId);
+      const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
       await this.citationRevision.tick(vault, {
         enqueue: (input) =>
           this.ingestion === null
@@ -2650,7 +2690,7 @@ export default class OleaPlugin extends Plugin {
             onJudgeRequest: (record: JudgeRequestRecord) => {
               const capture = this.judgeCaseCapture;
               if (capture === null) return;
-              if (!capture.observe(record, new Date().toISOString())) return;
+              if (!capture.observe(record, this.now().toISOString())) return;
               const snapshot = capture.snapshot();
               if (snapshot !== null) void this.judgeCaseCaptureStore.save(snapshot).catch(() => {});
             },
@@ -2677,7 +2717,7 @@ export default class OleaPlugin extends Plugin {
   }
 
   stopJudgeCaseCapture(): void {
-    this.judgeCaseCapture?.stop(new Date().toISOString());
+    this.judgeCaseCapture?.stop(this.now().toISOString());
   }
 
   async clearJudgeCaseCapture(): Promise<void> {
@@ -2788,7 +2828,7 @@ export default class OleaPlugin extends Plugin {
     if (!isStudyPlanConfigured(assignmentsConfig)) return () => undefined;
     const assessments = (await readAssessments(vault, assignmentsConfig.assignmentsBasePath))
       .records;
-    return buildFormatMatch({ vault, assessments, now: () => new Date() });
+    return buildFormatMatch({ vault, assessments, now: this.now });
   }
 
   /**
@@ -2818,7 +2858,7 @@ export default class OleaPlugin extends Plugin {
       vault,
       deviceId,
       settingsHost: this,
-      now: () => new Date(),
+      now: this.now,
       // `[DOS-C4-a]` / `ol-feza`: the same store this refresh reads/writes
       // the cached plan through doubles as `sittingsSinceFloorMet`'s floor-
       // share source — the previous cached plan's own allocation, read
@@ -2834,7 +2874,7 @@ export default class OleaPlugin extends Plugin {
         ? { readPlanPolicy: this.planPolicy.readPlanPolicy }
         : {}),
     });
-    const result = await refreshStudyPlan({ store, provider, now: () => new Date() });
+    const result = await refreshStudyPlan({ store, provider, now: this.now });
     if (this.review !== null) this.review.plan = result.plan;
     void this.refreshGapViews();
   }
@@ -3021,7 +3061,7 @@ export default class OleaPlugin extends Plugin {
   private async composeDefaultStudySession(): Promise<ComposedStudySession | null> {
     const wiring = this.review;
     if (wiring === null) return null;
-    const now = new Date();
+    const now = this.now();
     const result = await composeStudySessionForRequest(
       {
         vault: wiring.vault,
@@ -3122,7 +3162,7 @@ export default class OleaPlugin extends Plugin {
   ): Promise<ComposedStudySession | null> {
     const wiring = this.review;
     if (wiring === null) return null;
-    const now = new Date();
+    const now = this.now();
     const courseOrTopic = frozenCourseOrTopicFilter(previous.dominantCourse);
     const result = await composeStudySessionForRequest(
       {
@@ -3201,7 +3241,7 @@ export default class OleaPlugin extends Plugin {
    * not passed — see its own doc.
    */
   private async enterStudySessionHolderForStart(): Promise<void> {
-    const now = new Date();
+    const now = this.now();
     const sitting = this.studySessionHolder.getSitting();
     if (sitting.status === 'active') {
       const wiring = this.review;
@@ -3613,7 +3653,7 @@ export default class OleaPlugin extends Plugin {
   }): Promise<AcceptExplainBackGradingWithObservationContext> {
     const vault = new ObsidianSource(this.app);
     const deviceId = await ensureDeviceId(this);
-    const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
+    const store = createVaultMisconceptionStore({ vault, deviceId, now: this.now });
     const records = (await store.load()) ?? [];
     const sourceRevisionStale = await hasExplainBackSourceFingerprintChanged(
       vault,
@@ -3629,7 +3669,7 @@ export default class OleaPlugin extends Plugin {
         originReviewEventId: null,
         sourceBlocks: params.sourceBlocks,
         records,
-        now: () => new Date(),
+        now: this.now,
         sourceRevisionStale,
       }),
       subjectConceptId: params.subjectConceptId,
@@ -3668,7 +3708,7 @@ export default class OleaPlugin extends Plugin {
         grading: this.grading,
         vault: new ObsidianSource(this.app),
         deviceId: await ensureDeviceId(this),
-        now: () => new Date(),
+        now: this.now,
       },
       params,
     );
@@ -3689,7 +3729,7 @@ export default class OleaPlugin extends Plugin {
   ): Promise<GradeExplainBackInput['misconceptionDigest']> {
     const vault = new ObsidianSource(this.app);
     const deviceId = await ensureDeviceId(this);
-    const store = createVaultMisconceptionStore({ vault, deviceId, now: () => new Date() });
+    const store = createVaultMisconceptionStore({ vault, deviceId, now: this.now });
     const records = (await store.load()) ?? [];
     return buildMisconceptionDigest(records, { conceptIds: [...conceptIds] });
   }
@@ -3830,6 +3870,7 @@ export default class OleaPlugin extends Plugin {
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,
         getMasteryState: this.explainBackMasteryStateReader(),
+        now: this.now,
         ...(nonAttemptTrigger !== undefined
           ? {
               recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>

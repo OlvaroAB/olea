@@ -52,6 +52,14 @@ export interface GenerationWiringDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
   readonly coursesFolder?: string;
+  /**
+   * `ol-3ux7.64.9` [WBX-8]: threaded straight into {@link createDraftAcceptPort}
+   * and every {@link runGenerationSweep} call, so the plugin's one clock seam
+   * (`main.ts`'s `this.now`) reaches this module too — omitted defaults to
+   * each of those two functions' own `deps.now ?? (() => new Date())`,
+   * unchanged from before this bead.
+   */
+  readonly now?: () => Date;
 }
 
 export interface GenerationWiring {
@@ -90,7 +98,12 @@ function listConceptsForCourseFactory(
 export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWiring {
   const coursesFolder = deps.coursesFolder ?? DEFAULT_COURSES_FOLDER;
   const cache = createVaultDraftCacheStore(deps.vault);
-  const acceptPort = createDraftAcceptPort({ vault: deps.vault, cache, deviceId: deps.deviceId });
+  const acceptPort = createDraftAcceptPort({
+    vault: deps.vault,
+    cache,
+    deviceId: deps.deviceId,
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+  });
   const listConceptsForCourse = listConceptsForCourseFactory(deps.vault, coursesFolder);
 
   return {
@@ -107,6 +120,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
         coursesFolder,
         ...(routing !== undefined ? { routing } : {}),
         ...(formatMatch !== undefined ? { formatMatch } : {}),
+        ...(deps.now !== undefined ? { now: deps.now } : {}),
       });
     },
   };

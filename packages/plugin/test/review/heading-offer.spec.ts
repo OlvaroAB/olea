@@ -137,6 +137,9 @@ describe('accept — F2.10/[D-170]: creates the draft through the real per-conce
       expect(record?.courseCode).toBe('COGS214');
       expect(record?.sourcePath).toBe(NOTE_PATH);
       expect(record?.instrumentId).toBeUndefined();
+      // `ol-3ux7.64.9` [WBX-8]: `setUp`'s injected `now: () => NOW` reaches
+      // the cached record's own timestamp, not just real wall time.
+      expect(record?.createdAt).toBe(NOW.toISOString());
     }
 
     const pending = await cache.listPending();

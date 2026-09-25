@@ -123,6 +123,12 @@ export interface IngestionWiringDeps {
   readonly revision?: {
     readonly cache: DraftCacheStore;
     readonly draftDeps: () => DraftQuizCardsDeps | null;
+    /**
+     * `ol-3ux7.64.9` [WBX-8]: forwarded to `createRevisionAwareJobRunner`'s
+     * `RevisionJobRunnerDeps.now` — the drafted successor's `createdAt`.
+     * Omitted defaults to that module's own `deps.now ?? (() => new Date())`.
+     */
+    readonly now?: () => Date;
   };
   /**
    * Best-effort notification that a drained job accumulated `units` into the
@@ -496,6 +502,7 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
         cache: deps.revision.cache,
         draftDeps: deps.revision.draftDeps,
         fallback: runner,
+        ...(deps.revision.now !== undefined ? { now: deps.revision.now } : {}),
       })
     : runner;
   // `deps.generation`'s execution half: recognises a drained `'generation'`

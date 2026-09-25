@@ -24,6 +24,16 @@ export type PluginConstructor<P extends Plugin> = new (
   dataStore: PluginDataStore,
 ) => P;
 
+/**
+ * `ol-3ux7.64.9` [WBX-8]: the shape `OleaPlugin.setClock` takes
+ * (`packages/plugin/src/main.ts`'s own `Clock`, `review/ports.ts`) —
+ * declared locally, structurally, rather than imported, so this file keeps
+ * its own module doc's promise ("never imports `packages/plugin`").
+ */
+export interface MountPluginClock {
+  now(): Date;
+}
+
 export interface MountPluginDeps {
   /** §3's persisted `VaultSource`, or `MemoryVaultSource`/any other implementation — omitted mounts over an empty vault (`./vault-shim.ts`'s `createEmptyVaultSource`). */
   readonly vault?: ShimVaultSource;
@@ -31,6 +41,18 @@ export interface MountPluginDeps {
   readonly pluginData?: PluginDataStore;
   /** Defaults to the real `packages/plugin/manifest.json` (`./vault-shim.ts`'s `DEFAULT_MANIFEST`) — override only for a test that needs a different id/version. */
   readonly manifest?: PluginManifest;
+  /**
+   * `ol-3ux7.64.9` [WBX-8]: applied to the constructed plugin BEFORE
+   * `onload()` runs, via a duck-typed `setClock` call (never a hard
+   * dependency on `packages/plugin` — a plugin class with no `setClock`
+   * simply never receives one, unchanged from before this field existed).
+   * This is the one synchronous window `course-setup-bridge.ts`'s own
+   * module doc used to say did not exist ("by the time `mountPlugin`
+   * resolves back to `controller.ts`, the cold-start scan has already run")
+   * — it exists now because the clock can be set before `onload` is even
+   * called, not after `mountPlugin` returns.
+   */
+  readonly clock?: MountPluginClock;
 }
 
 export interface MountedPlugin<P extends Plugin> {
@@ -68,6 +90,22 @@ export async function mountPlugin<P extends Plugin>(
   const manifest = deps.manifest ?? DEFAULT_MANIFEST;
   const dataStore = deps.pluginData ?? createInMemoryPluginDataStore();
   const plugin = new PluginClass(app, manifest, dataStore);
+
+  // `ol-3ux7.64.9` [WBX-8]: applied BEFORE `onload()`, not after `mountPlugin`
+  // returns — `onload()`'s own fire-and-forget cold-start work (course-setup
+  // detection, the cached-plan freshness check) can run its `now()` reads
+  // during `onload()` itself or on a microtask shortly after, and both must
+  // see the injected clock, not real wall time. Duck-typed (`in` + a call
+  // guard), never a hard dependency on `packages/plugin`: a plugin class
+  // with no `setClock` is simply left alone, unchanged from before this
+  // field existed.
+  if (
+    deps.clock !== undefined &&
+    'setClock' in plugin &&
+    typeof (plugin as { setClock?: unknown }).setClock === 'function'
+  ) {
+    (plugin as unknown as { setClock(clock: MountPluginClock): void }).setClock(deps.clock);
+  }
 
   await plugin.onload?.();
 
