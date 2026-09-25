@@ -1,6 +1,7 @@
 // Scenarios: ../../../../olea-service/features/F4-oracle.md, "C5.8 — one
 // composed-session holder replaces the per-surface freeze" —
 // @auto:plugin/session/holder.spec
+import { STUDY_PLAN_BODY_VERSION, type StudyPlanEnvelope } from 'olea-contracts';
 import type { ComposedStudySession, DurationModelBasis, StudySessionModel } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createStudySessionHolder } from '../../src/session/holder.js';
@@ -154,5 +155,83 @@ describe('createStudySessionHolder', () => {
     expect(sitting.status).toBe('active');
     if (sitting.status !== 'active') throw new Error('unreachable');
     expect(sitting.items).toBe(session);
+  });
+});
+
+/** A structurally valid, content-free `StudyPlanEnvelope` — the holder never reads inside it, only holds it by reference, so only `policyVersion` needs to differ between fixtures. */
+function fakePlan(policyVersion: string): StudyPlanEnvelope {
+  return {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion,
+    computedAt: '2026-09-07T09:00:00-04:00',
+    freshForSeconds: 3600,
+    governsForSeconds: 86_400,
+    body: { asOf: '2026-09-07', courses: [] },
+  };
+}
+
+// Scenarios: ../../../../olea-service/features/F2-review.md, "C5.8 — the
+// session holds still" — @auto:plugin/session/holder.spec
+describe("resolveCompositionPlan — C5.8/[D-193]'s freeze extended to the plan a sitting is joined against (ol-egov.141.89.10.45)", () => {
+  it('enter with a plan captures it; later candidates are ignored for the rest of that sitting', () => {
+    const holder = createStudySessionHolder();
+    const captured = fakePlan('sp1-captured');
+    holder.enter(NOW, fakeComposedStudySession(), captured);
+
+    expect(holder.resolveCompositionPlan(fakePlan('sp1-live-later'))).toBe(captured);
+    expect(holder.resolveCompositionPlan(null)).toBe(captured);
+  });
+
+  it('enter with plan omitted (e.g. a caller outside this package, like main.ts Start) leaves nothing captured; the first later call captures lazily and freezes', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedStudySession());
+
+    const firstRead = fakePlan('sp1-first-read');
+    expect(holder.resolveCompositionPlan(firstRead)).toBe(firstRead);
+    // A later candidate — the live plan having since refreshed — is ignored.
+    expect(holder.resolveCompositionPlan(fakePlan('sp1-refreshed'))).toBe(firstRead);
+  });
+
+  it('enter with plan explicitly null captures the honest "no plan" reading, never falls back to a later candidate', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedStudySession(), null);
+
+    expect(holder.resolveCompositionPlan(fakePlan('sp1-live'))).toBeNull();
+  });
+
+  it('growActiveSitting (the [SESS-8.6] outrun path) leaves the captured plan untouched', () => {
+    const holder = createStudySessionHolder();
+    const captured = fakePlan('sp1-captured');
+    holder.enter(NOW, fakeComposedStudySession(), captured);
+
+    holder.growActiveSitting(NOW, fakeComposedStudySession({ forcedCourses: ['course-a'] }));
+
+    expect(holder.resolveCompositionPlan(fakePlan('sp1-live'))).toBe(captured);
+    const sitting = holder.getSitting();
+    expect(sitting.status).toBe('active');
+    if (sitting.status !== 'active') throw new Error('unreachable');
+    expect(sitting.items.forcedCourses).toEqual(['course-a']);
+  });
+
+  it('a fresh enter() resets a previously captured plan — a new sitting captures its own', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedStudySession(), fakePlan('sp1-first-sitting'));
+
+    holder.enter(LATER, fakeComposedStudySession());
+
+    const secondSitting = fakePlan('sp1-second-sitting');
+    expect(holder.resolveCompositionPlan(secondSitting)).toBe(secondSitting);
+  });
+
+  it('exit() clears the captured plan, so the next sitting starts uncaptured', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedStudySession(), fakePlan('sp1-first-sitting'));
+    holder.exit();
+
+    holder.enter(LATER, fakeComposedStudySession());
+    const nextSitting = fakePlan('sp1-next-sitting');
+    expect(holder.resolveCompositionPlan(nextSitting)).toBe(nextSitting);
   });
 });

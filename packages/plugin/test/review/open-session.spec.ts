@@ -988,6 +988,184 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
   });
 });
 
+// `[D-072]` clause 5: production caller `open-session.ts:445` (`courseId`)
+// and `:397-449` (`compositionPlan`).
+describe("ol-egov.141.89.10.45 — the plan join reads only the composed session's own course (C5.7)", () => {
+  /** Ranks the SAME concept in two courses at different strengths — the exact shape C5.7 forbids comparing. */
+  const CROSS_COURSE_PLAN: StudyPlanEnvelope = {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion: 'sp1-test-cross000001',
+    computedAt: '2026-08-10T09:00:00-04:00',
+    freshForSeconds: 3600,
+    governsForSeconds: 86_400,
+    body: {
+      asOf: '2026-08-10',
+      courses: [
+        {
+          course: 'TEST101',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 10,
+              examProximityDays: 3,
+              reasoning: "TEST101's own reading",
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+        {
+          course: 'OTHER202',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 99,
+              examProximityDays: 1,
+              reasoning: "a different course's much stronger reading of the same concept",
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("a concept the plan ranks in two courses is stamped from the session's own course, never the other course's stronger entry and never left unranked", async () => {
+    const vault = studyVault();
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const holder = createStudySessionHolder();
+    const composed = await composedSessionFixture(vault, ids);
+    holder.enter(NOW, { ...composed, courseShares: new Map([['TEST101', 1]]) });
+
+    const outcome = await open(vault, fixedClock(), CROSS_COURSE_PLAN, { holder });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    const beta = outcome.scheduledQueue.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Beta')),
+    );
+    expect(beta).toBeDefined();
+    // TEST101's entry (rank 1, examProximityDays 3) — never OTHER202's
+    // stronger one (examProximityDays 1), and never unranked (which the
+    // pre-`ol-egov.141.89.10.18`/`.45` behaviour would have left it, since
+    // the plan ranks this concept in more than one course).
+    expect(beta?.selectionContext.yieldRank).toBe(1);
+    expect(beta?.selectionContext.examProximity).toBe(3);
+    expect(beta?.selectionContext.planVersion).toBe(CROSS_COURSE_PLAN.policyVersion);
+  });
+});
+
+describe('ol-egov.141.89.10.45 — a resumed sitting stamps against its composing plan, not the live one (C5.8, [D-193])', () => {
+  /** Ranks Beta; `FIRST_PLAN`/`SECOND_PLAN` differ only in `policyVersion` and strength, so a stamp names unambiguously which one it came from. */
+  const FIRST_PLAN: StudyPlanEnvelope = {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion: 'sp1-test-first0000001',
+    computedAt: '2026-08-10T09:00:00-04:00',
+    freshForSeconds: 3600,
+    governsForSeconds: 86_400,
+    body: {
+      asOf: '2026-08-10',
+      courses: [
+        {
+          course: 'TEST101',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 10,
+              examProximityDays: 3,
+              reasoning: 'the plan in force when she opened',
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+  const SECOND_PLAN: StudyPlanEnvelope = {
+    ...FIRST_PLAN,
+    policyVersion: 'sp1-test-second000002',
+    body: {
+      asOf: '2026-08-11',
+      courses: [
+        {
+          course: 'TEST101',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 99,
+              examProximityDays: 30,
+              reasoning: 'a fresher plan published while the sitting is still held open',
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  it('a fresh entry captures the plan in force; a later resume ignores what the live plan has since become', async () => {
+    const vault = studyVault();
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const holder = createStudySessionHolder();
+    expect(holder.getSitting().status).toBe('idle');
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> =>
+      composedSessionFixture(vault, ids);
+
+    const openWith = (plan: StudyPlanEnvelope | null) =>
+      openReviewSession({
+        vault,
+        scheduler: createFsrsScheduler(),
+        deviceId: DEVICE,
+        ports: ports(vault).ports,
+        random: fixedRandom,
+        probeDays: 30,
+        studySessionHolder: holder,
+        composeDefaultStudySession,
+        plan,
+      });
+
+    // A fresh sitting: the holder is idle, so this is the entry the bead
+    // means — the plan captured here is `FIRST_PLAN`, beside the session.
+    const first = await openWith(FIRST_PLAN);
+    if (!first.ok) throw new Error('expected a composed session');
+    expect(holder.getSitting().status).toBe('active');
+    const firstBeta = first.scheduledQueue.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Beta')),
+    );
+    expect(firstBeta?.selectionContext.planVersion).toBe(FIRST_PLAN.policyVersion);
+    expect(firstBeta?.selectionContext.yieldRank).toBe(1);
+    expect(firstBeta?.selectionContext.examProximity).toBe(3);
+
+    // The live plan refreshes in place — the same `wiring.plan` mutation
+    // `main.ts`'s `refreshCachedStudyPlan` performs — but the holder still
+    // holds the SAME sitting `first` opened (no `extendDefaultStudySession`,
+    // so this resumes it verbatim rather than composing again).
+    const second = await openWith(SECOND_PLAN);
+    if (!second.ok) throw new Error('expected a composed session');
+    const secondBeta = second.scheduledQueue.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Beta')),
+    );
+
+    // A plain resume: stamped against the plan captured at entry
+    // (`FIRST_PLAN`), never `SECOND_PLAN`, even though that is what `plan`
+    // carries on this call — the bug `ol-egov.141.89.10.18` reported and
+    // this bead fixes.
+    expect(secondBeta?.selectionContext.planVersion).toBe(FIRST_PLAN.policyVersion);
+    expect(secondBeta?.selectionContext.yieldRank).toBe(1);
+    expect(secondBeta?.selectionContext.examProximity).toBe(3);
+  });
+});
+
 describe('nextDueLabel — the empty screen names the next item, in whole local days', () => {
   it('is null when nothing is scheduled at all', () => {
     expect(nextDueLabel(NOW, null)).toBeNull();

@@ -77,6 +77,22 @@
  * composed-rows entry produces the identical shape (rows' own order, an
  * explicit `(null, null, null)` selection context) through the same path
  * Phase B does, rather than a second branch that could drift from it.
+ *
+ * **Which course, and which plan (`ol-egov.141.89.10.45`, C5.7, C5.8/`[D-193]`).**
+ * `courseId` is always {@link ComposedStudySession.courseShares}'s one key
+ * (F2.18/C5.6: the composer is always exactly one course) — so a concept the
+ * plan also ranks in one of her OTHER courses is still read here, against
+ * this course's own entry, never left unranked for want of it. `plan` is
+ * never simply `input.plan`: a fresh sitting captures it (via {@link
+ * StudySessionHolder.enter}'s `plan` argument) at the instant it is entered,
+ * and every later read of that same sitting — a plain resume, or an
+ * `[SESS-8.6]` outrun extension — reads that captured value back (via
+ * {@link StudySessionHolder.resolveCompositionPlan}), never whatever
+ * `input.plan` this call happens to carry. A queue that stamped a held
+ * item's `yieldRank`/`planWeight`/`examProximity` against a plan that
+ * refreshed since she opened would be silently disagreeing with the
+ * interval preview it showed her minutes earlier over the SAME item — the
+ * identical reasoning this module's own `now` doc gives for one clock.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
@@ -394,6 +410,17 @@ export async function openReviewSession(
     // one".
     const sitting = input.studySessionHolder.getSitting();
     let composedSession: ComposedStudySession;
+    // C5.8/`[D-193]` (`ol-egov.141.89.10.45`): the plan this open joins
+    // against, decided by the SAME branch below that decides whether this is
+    // a fresh sitting or a resume — a fresh entry captures whatever `plan`
+    // this call carries (the plan in force right now); every later read of
+    // that sitting (a plain resume, or an outrun extension, which keeps the
+    // same sitting) reads the FROZEN value `studySessionHolder` already
+    // captured instead, never this call's own `plan` — see
+    // `StudySessionHolder.resolveCompositionPlan`'s doc for the one
+    // lazy-capture exception (a sitting entered elsewhere with no plan yet,
+    // e.g. `main.ts`'s `enterStudySessionHolderForStart`).
+    let compositionPlan: StudyPlanEnvelope | null;
     if (sitting.status === 'active') {
       // `[SESS-8.6]`: outrunning the target (`frozenQueueMode === 'extend'`,
       // the "Keep going" path) is the one case an active sitting's own items
@@ -411,11 +438,14 @@ export async function openReviewSession(
         // still marks when she opened THIS sitting, the same discipline
         // `queue-adapter.ts`'s own `FrozenReviewQueue.extend` states for the
         // identical reason (C5.8's idle threshold measures from when she
-        // opened, not when the list was last topped up).
-        input.studySessionHolder.enter(sitting.enteredAt, composedSession);
+        // opened, not when the list was last topped up). `growActiveSitting`,
+        // unlike `enter`, leaves the captured composition plan untouched —
+        // an outrun grows the SAME sitting under the same plan's shares.
+        input.studySessionHolder.growActiveSitting(sitting.enteredAt, composedSession);
       } else {
         composedSession = sitting.items;
       }
+      compositionPlan = input.studySessionHolder.resolveCompositionPlan(input.plan ?? null);
     } else {
       const fresh = await input.composeDefaultStudySession();
       if (fresh === null) {
@@ -424,7 +454,9 @@ export async function openReviewSession(
         );
       }
       composedSession = fresh;
-      input.studySessionHolder.enter(now, composedSession);
+      compositionPlan = input.plan ?? null;
+      // Captured beside the sitting, at the instant it begins.
+      input.studySessionHolder.enter(now, composedSession, compositionPlan);
     }
 
     // `[SESS-8.4]`/`[SESS-8.3]`: the composer's own ordered rows, translated
@@ -442,9 +474,16 @@ export async function openReviewSession(
       candidates: composed.candidates,
       now,
     });
+    // C5.7 (`ol-egov.141.89.10.18`, `ol-egov.141.89.10.45`): the study-session
+    // composer is always exactly one course (F2.18/C5.6) —
+    // `courseShares`'s one key — so a concept the plan also ranks in another
+    // of her courses is still read correctly here, against THIS course's
+    // entry alone, rather than left unranked for want of a courseId.
+    const courseId = composedSession.courseShares.keys().next().value ?? null;
     const executed = executeStudyPlanOverComposedRows({
       items: queueItems,
-      plan: input.plan ?? null,
+      plan: compositionPlan,
+      courseId,
     });
 
     // `[D-220]`'s read side (`ol-yfyi`): one vault read per `mcq` instrument
