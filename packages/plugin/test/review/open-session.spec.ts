@@ -1040,7 +1040,16 @@ describe("ol-egov.141.89.10.45 — the plan join reads only the composed session
     const ids = await defaultComposedSessionInstrumentIds(vault);
     const holder = createStudySessionHolder();
     const composed = await composedSessionFixture(vault, ids);
-    holder.enter(NOW, { ...composed, courseShares: new Map([['TEST101', 1]]) });
+    // `courseShares` no longer pins `courseId` at all (`ol-egov.141.89.10.54`
+    // fixed the production code to read `dominantCourse` instead — see that
+    // suite below) — kept here anyway since a real composition always
+    // populates both together, and this override is otherwise harmless;
+    // `dominantCourse` is what now does the pinning.
+    holder.enter(NOW, {
+      ...composed,
+      courseShares: new Map([['TEST101', 1]]),
+      dominantCourse: 'TEST101',
+    });
 
     const outcome = await open(vault, fixedClock(), CROSS_COURSE_PLAN, { holder });
     if (!outcome.ok) throw new Error('expected a composed session');
@@ -1056,6 +1065,95 @@ describe("ol-egov.141.89.10.45 — the plan join reads only the composed session
     expect(beta?.selectionContext.yieldRank).toBe(1);
     expect(beta?.selectionContext.examProximity).toBe(3);
     expect(beta?.selectionContext.planVersion).toBe(CROSS_COURSE_PLAN.policyVersion);
+  });
+});
+
+// `[D-072]` clause 5: production caller `open-session.ts:482` (`courseId`).
+describe("ol-egov.141.89.10.54 — courseId reads the composed session's own dominant course, not the first course-share key (C5.7)", () => {
+  /**
+   * Ranks the SAME concept in two courses at different strengths, exactly
+   * like the `.45` suite above — but here `TEST101` (the session's own
+   * course) is deliberately NOT the plan's first-listed course, so a
+   * courseId reader that (wrongly) favoured list/iteration position would
+   * fail the same way a `courseShares.keys().next().value` reader would.
+   */
+  const DOMINANT_COURSE_PLAN: StudyPlanEnvelope = {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: STUDY_PLAN_BODY_VERSION,
+    policyVersion: 'sp1-test-dominant0001',
+    computedAt: '2026-08-10T09:00:00-04:00',
+    freshForSeconds: 3600,
+    governsForSeconds: 86_400,
+    body: {
+      asOf: '2026-08-10',
+      courses: [
+        {
+          course: 'TEST101',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 1,
+              weight: 10,
+              examProximityDays: 3,
+              reasoning: "the session's own course",
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+        {
+          course: 'ZOTHER909',
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: unboundKey('Beta'),
+              rank: 2,
+              weight: 99,
+              examProximityDays: 1,
+              reasoning: 'a wider candidate-pool course the session is not about',
+              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  it("a multi-course candidate pool whose first share key is not the session's course still stamps from the session's own course", async () => {
+    const vault = studyVault();
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const holder = createStudySessionHolder();
+    const composed = await composedSessionFixture(vault, ids);
+    // `courseShares` carries a zero entry for every candidate course
+    // whenever nothing narrowed the rows first (`ol-egov.141.89.10.15`'s
+    // report) — reproduced here with `ZOTHER909` inserted FIRST, a course
+    // the session is not about, and `TEST101` (the session's real,
+    // `dominantCourse`-selected course) second. The pre-fix code read
+    // `courseShares.keys().next().value`, i.e. `ZOTHER909` — this is the
+    // exact shape that broke.
+    holder.enter(NOW, {
+      ...composed,
+      courseShares: new Map([
+        ['ZOTHER909', 0],
+        ['TEST101', 5],
+      ]),
+      dominantCourse: 'TEST101',
+    });
+
+    const outcome = await open(vault, fixedClock(), DOMINANT_COURSE_PLAN, { holder });
+    if (!outcome.ok) throw new Error('expected a composed session');
+
+    const beta = outcome.scheduledQueue.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Beta')),
+    );
+    expect(beta).toBeDefined();
+    // TEST101's entry (rank 1, examProximityDays 3) — never ZOTHER909's
+    // stronger-weighted one (rank 2, examProximityDays 1), which the
+    // first-course-share-key bug would have read instead.
+    expect(beta?.selectionContext.yieldRank).toBe(1);
+    expect(beta?.selectionContext.examProximity).toBe(3);
+    expect(beta?.selectionContext.planVersion).toBe(DOMINANT_COURSE_PLAN.policyVersion);
   });
 });
 

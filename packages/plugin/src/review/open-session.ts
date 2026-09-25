@@ -474,12 +474,23 @@ export async function openReviewSession(
       candidates: composed.candidates,
       now,
     });
-    // C5.7 (`ol-egov.141.89.10.18`, `ol-egov.141.89.10.45`): the study-session
-    // composer is always exactly one course (F2.18/C5.6) —
-    // `courseShares`'s one key — so a concept the plan also ranks in another
-    // of her courses is still read correctly here, against THIS course's
-    // entry alone, rather than left unranked for want of a courseId.
-    const courseId = composedSession.courseShares.keys().next().value ?? null;
+    // C5.7 (`ol-egov.141.89.10.18`, `ol-egov.141.89.10.45`, fixed by
+    // `ol-egov.141.89.10.54`): NOT `courseShares.keys().next().value` —
+    // `courseShares` carries a zero entry for every course in the wider
+    // candidate pool whenever nothing narrowed the rows first, so its FIRST
+    // key can name a course the session is not about (the exact defect
+    // `.45` introduced; found by `.15`; see
+    // `test/review/open-session.spec.ts`'s "the session's own dominant
+    // course, not the first course-share key" suite). `dominantCourse`
+    // (`ComposedStudySession.dominantCourse`, `study-session/compose.ts`) is
+    // the unambiguous signal instead — the same field the outrun-extend fix
+    // (`extend-outrun-course-filter.ts`) already reads for the identical
+    // reason. Optional only in the degenerate case `focusPolicy ===
+    // 'every-course'` ran (never this package's own callers) or no course
+    // was eligible at all; `undefined` there degrades to `null`, the same
+    // "no course named" honest-unranked posture `execute.ts`'s `resolveIndex`
+    // already takes when more than one course claims a concept.
+    const courseId = composedSession.dominantCourse ?? null;
     const executed = executeStudyPlanOverComposedRows({
       items: queueItems,
       plan: compositionPlan,
