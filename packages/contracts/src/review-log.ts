@@ -719,9 +719,13 @@ export type SupportLevel = z.infer<typeof supportLevel>;
  * below by `refineExplainBackGradeInstrumentType`); absent everywhere else,
  * the same "true absence, not a placeholder" discipline `masteryAtTime`
  * established at v4 — nothing writes this for a declined or abandoned
- * explain-back attempt, and nothing should default it. **Nothing writes it
- * yet**: the grading pipeline has no production caller (`ol-drfy`); MAT-5
- * (`ol-95vv.2`) is the intended producer.
+ * explain-back attempt, and nothing should default it. **A production
+ * writer exists**: `recordGradedExplainBackReview`
+ * (`packages/core/src/study-session/explain-back-grade-write.ts`,
+ * `ol-95vv.3`) composes and appends this field, reached in production
+ * through `ExplainBackModal`'s accept flow (`ol-cqz8`) via `main.ts`'s
+ * `recordExplainBackSoloGradeAndReview` (`ol-38kp`) — all closed since
+ * 2026-09-01.
  */
 export const explainBackGrade = z.object({
   /** The SOLO level this response reached. Never a number, never averaged — GLOSSARY rule 3. */
@@ -1042,7 +1046,7 @@ export const reviewLogRecordV5 = z
      * the design draft's literal schema.
      */
     supportLevelShown: supportLevel.optional(),
-    /** Present only for graded explain-back reviews. Nothing writes it yet (`ol-drfy`). */
+    /** Present only for graded explain-back reviews. Written in production by `recordGradedExplainBackReview` (`ol-95vv.3`), reached via `ExplainBackModal`'s accept flow (`ol-cqz8`, `ol-38kp`) — see this field's own doc above for the chain. */
     explainBackGrade: explainBackGrade.optional(),
     /**
      * Present only when this review — of ANY instrument kind, `[D-185]` —

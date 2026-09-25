@@ -35,12 +35,16 @@
  * failure) — and `renderAcceptedPhase` renders `explainBackDepthHeading`
  * when one comes back, never a placeholder when it does not. The return
  * type is widened rather than changed (`SoloLevel | void`) so `main.ts`'s
- * existing `Promise<void>`-returning wrapper (outside this bead's `owns`)
- * keeps satisfying the interface unmodified; that wrapper does not yet
- * forward the level `solo-review.ts`'s own `recordSoloGradeAndReview`
- * computes internally (via `acceptSoloGrading`) but never returns — closing
- * that is a small, disclosed follow-up in two files this bead does not own
- * (`solo-review.ts`, `main.ts`), not a gap in this render path itself.
+ * wrapper (outside this bead's `owns`) keeps satisfying the interface. That
+ * wrapper now DOES forward the level (`ol-38kp`/`ol-iti2`, `[D-217]`):
+ * `solo-review.ts`'s own `recordSoloGradeAndReview` resolves a
+ * `RecordSoloGradeAndReviewOutcome` (`{ result, soloLevel }`), and `main.ts`'s
+ * `recordExplainBackSoloGradeAndReview` returns `outcome?.soloLevel` from it.
+ * This view's own `acceptGrading` below already relies on that forwarding:
+ * it awaits `this.deps.recordSoloGradeAndReview` and assigns the returned
+ * `depthOutcome` to `soloLevel` (`if (depthOutcome) soloLevel = depthOutcome;`)
+ * — there is no remaining gap between the underlying grade and what
+ * `renderAcceptedPhase` renders.
  *
  * `ol-yj0k` UPDATE: `durationMs` on that same review-log write is now real,
  * not a hardcoded `null` — this view is the only place that can observe

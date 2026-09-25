@@ -510,12 +510,14 @@ export interface AcceptExplainBackGradingWithObservationContext {
    * comparing `explain-back/observation.ts`'s
    * `hasExplainBackSourceRevisionChanged` against a fresh retrieval just
    * before accept. Omitted or `false` means "no signal to the contrary,"
-   * never a claim of confirmed freshness — no current production caller
-   * supplies this yet (see `acceptExplainBackGradingWithObservation`'s own
-   * doc, "STILL NO LIVE STALENESS SIGNAL", for the named follow-up). When
-   * `true`, the accept step below rejects rather than recording anything —
-   * see that function's doc for why this is a reject, not a best-effort
-   * degrade like the embedder failure path.
+   * never a claim of confirmed freshness. `ol-gavc` (closed 2026-09-21) gave
+   * this field its first live producer — `main.ts`'s
+   * `buildExplainBackObservationContextFor` now re-retrieves the source
+   * blocks fresh and passes `hasExplainBackSourceRevisionChanged` through
+   * (see `acceptExplainBackGradingWithObservation`'s own doc for the
+   * reachability detail). When `true`, the accept step below rejects rather
+   * than recording anything — see that function's doc for why this is a
+   * reject, not a best-effort degrade like the embedder failure path.
    */
   readonly sourceRevisionStale?: boolean;
   /**
@@ -685,15 +687,16 @@ function buildResolutionEvidenceForAcceptedGrading(
  * grounding guarantee, not just M1's matching, is what would be violated by
  * accepting anyway.
  *
- * **STILL NO LIVE STALENESS SIGNAL.** No current production caller sets
- * `sourceRevisionStale` — `main.ts`'s `buildExplainBackObservationContextFor`
- * (`~main.ts:2694`, outside this bead's `owns`) would need to re-retrieve the
- * prompt's source blocks and pass
- * `hasExplainBackSourceRevisionChanged(prompt.sourceBlocks, freshBlocks)`
- * (`../explain-back/observation.js`) through. Until that lands, this
- * function's honest behaviour is unchanged from before this update: absent a
- * caller-reported signal, a stale source is not detected, only rejectable
- * once detected.
+ * **`sourceRevisionStale` NOW HAS A LIVE PRODUCER (`ol-gavc`, closed
+ * 2026-09-21).** `main.ts`'s `buildExplainBackObservationContextFor`
+ * (outside this bead's `owns`) re-retrieves the prompt's source blocks via
+ * `composeExplainBackSourceBlocks` and passes
+ * `hasExplainBackSourceRevisionChanged(params.sourceBlocks, freshSourceBlocks)`
+ * (`../explain-back/observation.js`) through as `sourceRevisionStale`. This
+ * function's behaviour is otherwise unchanged from before that update:
+ * absent a caller-reported signal, a stale source is not detected, only
+ * rejectable once detected — that caller now reports one on every
+ * production accept.
  */
 export async function acceptExplainBackGradingWithObservation(
   wiring: GradingWiring,
