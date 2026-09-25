@@ -457,13 +457,12 @@ export function buildGradingSourceMaterial(input: GradingRetrievalInput): Gradin
  *   §8 test 5 (strip-invariance) holds as a contract test: stripping every `schedulingObservation`
  *   from a log must never change a scoring output, for a log built from any mix of instrument
  *   kinds.
- * - **The persisted field (`packages/contracts/src/review-log.ts`'s `schedulingObservation`) still
- *   gates its own presence to `instrumentType === 'explain-back'`** (`refineExplainBackGradeInstrumentType`).
- *   That gate has not moved yet — widening the FROZEN persisted schema is its own Class C change
- *   (persisted-schema edits stop for a decision, this file's own CLAUDE.md), named here rather than
- *   made silently, and is the actual remaining blocker before a non-explain-back producer can
- *   persist an observation end to end. This module and its producer are ready for that day: nothing
- *   here assumes explain-back, so the schema widening is the only remaining step.
+ * - **The persisted field (`packages/contracts/src/review-log.ts`'s `schedulingObservation`) is no
+ *   longer gated to explain-back**: `[D-185]` (`ol-egov.72`) and `ol-0r92.41` lifted that refinement,
+ *   so any instrument kind may carry it. The remaining blocker is upstream of this module: nothing
+ *   computes `neighbourUseDemonstrated` for an MCQ, Q&A or cloze review, because those items are
+ *   not authored with a neighbour concept as context (`ol-egov.141.89.42`'s finding). Only
+ *   explain-back's own grading produces the fact today.
  */
 export interface SchedulingObservation {
   /** The concept her demonstrated use was evidence about — never the subject being scored. */
