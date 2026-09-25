@@ -814,6 +814,80 @@ describe('buildSupportLevelHistoryLookup — folds raw review-log entries into r
       { failureShape: 'none', hintUptake: false },
     ]);
   });
+
+  // att.md item 9 / [D-094] / C5.4: "[D-094] counts whole sessions and C5.4
+  // defines a session as a cluster of reviews" — the fold must count SESSIONS,
+  // never individual reviews, or two clean answers minutes apart recede
+  // support twice as fast as the ruling allows.
+  it('two reviews inside one sitting fold into a single session outcome, not two ([D-094], C5.4)', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+      reviewLogEntry({
+        eventId: 'e2',
+        // 10 minutes later — well inside C5.4's 45-minute clustering gap, so
+        // this is the SAME sitting as `e1`, not a second one.
+        timestamp: '2026-08-18T09:10:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('a sitting with both a clean and a failing review folds to the failing shape (att.md §2.6: escalate on any failure in the session)', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+      reviewLogEntry({
+        eventId: 'e2',
+        timestamp: '2026-08-18T09:05:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+
+  it('two sittings 45+ minutes apart still fold into two separate outcomes', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+      reviewLogEntry({
+        eventId: 'e2',
+        // 46 minutes later — just past the clustering gap, so this is a new sitting.
+        timestamp: '2026-08-18T09:46:00+00:00',
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
 });
 
 describe('supportLevel threads through both adapters ([SUPP-3])', () => {
@@ -1067,5 +1141,49 @@ describe('createFrozenReviewQueue — C5.8’s freeze, held across calls', () =>
     const reopened = queue.open(laterState);
 
     expect(reopened.map((i) => i.instrument.type)).toContain('mcq');
+  });
+
+  // att.md item 9 / [D-186]: "an extension's levels are those fixed when the
+  // session was composed, never re-read from the session in progress."
+  describe('an extension’s support levels are fixed at composition ([D-186])', () => {
+    function oneNoteVault(): VaultSource {
+      return memoryVault({ 'Notes/qa.md': QA_NOTE });
+    }
+
+    it('a newly-appended item’s support level reads the history frozen at open, never a fresh read fed to extend', async () => {
+      const opening = await buildExecuted(oneNoteVault());
+      // The cloze note's concept (Beta) is not due until this vault grows —
+      // this is the item `extend` appends mid-sitting.
+      const more = await buildExecuted(twoNoteVault());
+      const clozeRecord = [...more.recordsById.values()].find((r) => r.instrumentType === 'cloze');
+      if (clozeRecord === undefined) throw new Error('expected a cloze record');
+      const conceptId = clozeRecord.conceptIds[0];
+      if (conceptId === undefined) throw new Error('expected the cloze record to name a concept');
+
+      // At composition time, nothing has reviewed the cloze's concept yet —
+      // [D-094]'s cold start is 'prompted'.
+      const historyAtComposition = buildSupportLevelHistoryLookup([]);
+      // Between composition and the extension she reviews, in THIS still-open
+      // sitting, and misses — a fresh read of "the log as it now stands"
+      // would raise the level. [D-186] says the extension must not see this.
+      const historyAtExtension = buildSupportLevelHistoryLookup([
+        reviewLogEntry({
+          eventId: 'live-miss',
+          timestamp: '2026-08-20T11:58:00+00:00',
+          instrumentType: 'qa',
+          rating: 'again',
+          conceptIds: [conceptId],
+        }),
+      ]);
+
+      const queue = createFrozenReviewQueue({ now: () => NOW });
+      queue.open({ ...opening, supportHistory: historyAtComposition });
+      const extended = queue.extend({ ...more, supportHistory: historyAtExtension });
+
+      const cloze = extended.find((i) => i.instrument.type === 'cloze');
+      // Fixed at composition: still the cold-start 'prompted', never the
+      // 'guided' a fresh fold of `historyAtExtension` would produce.
+      expect(cloze?.instrument.supportLevel).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
+    });
   });
 });

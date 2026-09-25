@@ -119,6 +119,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   ComposedQueue,
   DistractorProvenance,
+  FailureShape,
   GradedReviewEvidence,
   McqInstrumentRecord,
   PlannedQueueItem,
@@ -135,6 +136,7 @@ import type {
 } from 'olea-core';
 import {
   chooseSupportLevel,
+  clusterReviewSessions,
   decideRebuild,
   deriveFailureShape,
   enterSitting,
@@ -175,14 +177,47 @@ function supportLadderTierFor(instrumentType: SchedulableInstrumentType): Suppor
 }
 
 /**
+ * `[D-094]`'s two escalation-triggering shapes rank equally, above a minor
+ * slip, which ranks above a clean pass — the ordering `att.md` §2.6's fold
+ * needs when one session holds more than one review of the same concept at
+ * the same tier: *"outcome = escalate on any blank or wrong-concept failure
+ * in the session; clean only when every answer was clean with no hint
+ * taken."* `deriveFailureShape` never returns `'blank'` or `'minor-slip'`
+ * for a `qa`/`cloze` review (see its own module doc: only `'none'`/
+ * `'wrong-concept'` are reachable from a recall rating), so this queue's own
+ * fold only ever needs the two-way case today — but the ranking is written
+ * generally rather than assuming that stays true.
+ */
+const FAILURE_SHAPE_SEVERITY: Readonly<Record<FailureShape, number>> = {
+  none: 0,
+  'minor-slip': 1,
+  blank: 2,
+  'wrong-concept': 2,
+};
+
+/** The worse (more support-triggering) of two failure shapes, per {@link FAILURE_SHAPE_SEVERITY}. */
+function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
+  return FAILURE_SHAPE_SEVERITY[b] > FAILURE_SHAPE_SEVERITY[a] ? b : a;
+}
+
+/**
  * Build a `SupportLevelHistoryLookup` from raw review-log entries — this
  * queue's equivalent of what `session-builder/provider.ts` demonstrates for
- * the F4.6 preview path. Folds every past `qa`/`cloze` review's outcome
- * (`deriveFailureShape`) into every concept it names, at the `'recall'` tier,
- * in the order `entries` is given — `session/history.ts` documents that as
- * `(timestamp, eventId)` order, oldest first, which is exactly the ordering
- * `chooseSupportLevel`'s fold requires (see its own module doc's "ordering
- * rule").
+ * the F4.6 preview path.
+ *
+ * **One outcome per SESSION, never per review** (`att.md` item 9; `[D-094]`
+ * counts whole sessions, C5.4 defines a session as `clusterReviewSessions`'
+ * maximal cluster of reviews separated by less than the declared 45-minute
+ * gap). Entries are clustered exactly as C5.5's own rule requires — sorted
+ * to the ruled total order internally, so this needs no pre-sorted input —
+ * and every past `qa`/`cloze` review's outcome (`deriveFailureShape`) inside
+ * one session is folded, per concept it names at the `'recall'` tier, into
+ * the single worst shape that session showed ({@link worseFailureShape}):
+ * two clean answers minutes apart are one clean session, not two, and a
+ * clean answer alongside a miss in the same sitting is one failing session,
+ * not a clean one that happens to sit next to a failing one. Sessions are
+ * emitted oldest first, matching `chooseSupportLevel`'s fold requirement
+ * (see its own module doc's "ordering rule").
  *
  * `mcq` and `explain-back` review-kind entries are skipped: an `mcq` review
  * has no ladder tier to attribute (see {@link supportLadderTierFor}), and this
@@ -200,26 +235,33 @@ export function buildSupportLevelHistoryLookup(
   entries: readonly ReviewLogEntry[],
 ): SupportLevelHistoryLookup {
   const byKey = new Map<string, SessionSupportOutcome[]>();
-  for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
-    if (entry.instrumentType !== 'qa' && entry.instrumentType !== 'cloze') continue;
-    if (entry.rating === null) continue;
 
-    const evidence: GradedReviewEvidence = {
-      instrumentType: entry.instrumentType,
-      rating: entry.rating,
-    };
-    const outcome: SessionSupportOutcome = {
-      failureShape: deriveFailureShape(evidence),
-      hintUptake: false,
-    };
-    for (const conceptId of entry.conceptIds) {
+  for (const session of clusterReviewSessions(entries)) {
+    const shapeByConceptId = new Map<string, FailureShape>();
+    for (const review of session.reviews) {
+      if (review.instrumentType !== 'qa' && review.instrumentType !== 'cloze') continue;
+      if (review.rating === null) continue;
+
+      const evidence: GradedReviewEvidence = {
+        instrumentType: review.instrumentType,
+        rating: review.rating,
+      };
+      const shape = deriveFailureShape(evidence);
+      for (const conceptId of review.conceptIds) {
+        const existing = shapeByConceptId.get(conceptId);
+        shapeByConceptId.set(conceptId, existing === undefined ? shape : worseFailureShape(existing, shape));
+      }
+    }
+
+    for (const [conceptId, failureShape] of shapeByConceptId) {
       const key = `${conceptId}:recall`;
+      const outcome: SessionSupportOutcome = { failureShape, hintUptake: false };
       const bucket = byKey.get(key);
       if (bucket === undefined) byKey.set(key, [outcome]);
       else bucket.push(outcome);
     }
   }
+
   return {
     outcomesFor(conceptId, tier) {
       return byKey.get(`${conceptId}:${tier}`) ?? [];
@@ -614,12 +656,57 @@ export interface FrozenReviewQueue {
 }
 
 /**
+ * Row 3.9's chooser inputs, captured at the instant a sitting is COMPOSED
+ * (`open`'s fresh-compose path, or `extend`'s when it finds no sitting open)
+ * and reused for the lifetime of that sitting — never refreshed from a later
+ * call's `input`. See {@link withFrozenSupport} for why.
+ */
+interface FrozenSupportInputs {
+  readonly supportHistory?: SupportLevelHistoryLookup;
+  readonly supportSelfAssessment?: SelfAssessmentFeeling;
+}
+
+function captureFrozenSupport(input: AdaptExecutedReviewQueueInput): FrozenSupportInputs {
+  return {
+    ...(input.supportHistory !== undefined ? { supportHistory: input.supportHistory } : {}),
+    ...(input.supportSelfAssessment !== undefined
+      ? { supportSelfAssessment: input.supportSelfAssessment }
+      : {}),
+  };
+}
+
+/**
+ * `[D-186]`: *"the level shown on every review in a session is folded from
+ * sessions that closed before this one was composed ... and never reads the
+ * session in progress."* `extend` (below) still composes its CANDIDATE list
+ * fresh every call — that is C5.5's "outran the target" contract, and it is
+ * correct: due-ness, dedupe and ordering all change legitimately mid-sitting.
+ * What must NOT change is row 3.9's decision for any one concept × tier
+ * cell, because a fresh `supportHistory`/`supportSelfAssessment` handed to
+ * `extend` reflects "the log as it now stands" — which, mid-sitting,
+ * includes this very sitting's own reviews (`att.md` item 9). Substituting
+ * the frozen support inputs here, in place of whatever `extend`'s own caller
+ * fed it, is what keeps an appended item's level the one fixed when the
+ * sitting was composed rather than one re-derived from the sitting in
+ * progress.
+ */
+function withFrozenSupport(
+  input: AdaptExecutedReviewQueueInput,
+  frozen: FrozenSupportInputs,
+): AdaptExecutedReviewQueueInput {
+  const { supportHistory: _liveSupportHistory, supportSelfAssessment: _liveSupportSelfAssessment, ...rest } =
+    input;
+  return { ...rest, ...frozen };
+}
+
+/**
  * C5.8's freeze, made real: one `SittingState<readonly ReviewQueueItem[]>`
  * per instance, driven by `rebuild-controller.ts`'s own `decideRebuild` —
  * see this section's module doc for why this exists and what each verb does.
  */
 export function createFrozenReviewQueue(deps: FrozenReviewQueueDeps): FrozenReviewQueue {
   let sitting: SittingState<readonly ReviewQueueItem[]> = IDLE_SITTING;
+  let frozenSupport: FrozenSupportInputs = {};
 
   function open(input: OpenFrozenReviewQueueInput): readonly ReviewQueueItem[] {
     const now = deps.now();
@@ -650,6 +737,7 @@ export function createFrozenReviewQueue(deps: FrozenReviewQueueDeps): FrozenRevi
       sitting = exitSitting();
     }
 
+    frozenSupport = captureFrozenSupport(input);
     const items = adaptExecutedReviewQueue(input);
     sitting = enterSitting(now, items);
     return items;
@@ -657,12 +745,20 @@ export function createFrozenReviewQueue(deps: FrozenReviewQueueDeps): FrozenRevi
 
   function extend(input: AdaptExecutedReviewQueueInput): readonly ReviewQueueItem[] {
     const now = deps.now();
-    const candidates = adaptExecutedReviewQueue(input);
 
     if (sitting.status !== 'active') {
+      // Nothing composed yet this sitting — this call IS the composition
+      // instant, so its own support inputs are what gets frozen (`open`'s
+      // fresh-compose path, mirrored).
+      frozenSupport = captureFrozenSupport(input);
+      const candidates = adaptExecutedReviewQueue(input);
       sitting = enterSitting(now, candidates);
       return candidates;
     }
+
+    // `[D-186]`: a live sitting's own support decisions are already fixed —
+    // see `withFrozenSupport`'s doc. Only the candidate LIST is fresh.
+    const candidates = adaptExecutedReviewQueue(withFrozenSupport(input, frozenSupport));
 
     const known = new Set(sitting.items.map((item) => item.instrument.instrumentId));
     const additions = candidates.filter((item) => !known.has(item.instrument.instrumentId));
