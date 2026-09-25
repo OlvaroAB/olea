@@ -502,8 +502,10 @@ describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
     vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
     const transport = fakeTransport(() =>
       visionOkResponse({
-        readable: true,
+        outcome: 'complete',
         extractedText: 'Figure 3: the rock cycle',
+        figureDescription: null,
+        coverage: null,
         unreadableReason: null,
       }),
     );
@@ -526,7 +528,7 @@ describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
 
     expect(tick).toEqual({ kind: 'ran', contentHash: 'vision-configured', outcome: 'done' });
     expect(transport.calls).toHaveLength(1);
-    expect(transport.calls[0]?.taskId).toBe('vision.extract.v1');
+    expect(transport.calls[0]?.taskId).toBe('vision.extract.v2');
 
     const units = sink.forSource('Slides/diagram.png');
     expect(units).toHaveLength(1);
