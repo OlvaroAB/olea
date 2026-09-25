@@ -504,17 +504,21 @@ export interface AcceptExplainBackGradingWithObservationContext {
   /**
    * `ol-0r92.89`: true when the source material this grading was checked
    * against has changed since the grading request went out — e.g. a caller
-   * comparing `explain-back/observation.ts`'s
-   * `hasExplainBackSourceRevisionChanged` against a fresh retrieval just
-   * before accept. Omitted or `false` means "no signal to the contrary,"
-   * never a claim of confirmed freshness. `ol-gavc` (closed 2026-09-21) gave
-   * this field its first live producer — `main.ts`'s
-   * `buildExplainBackObservationContextFor` now re-retrieves the source
-   * blocks fresh and passes `hasExplainBackSourceRevisionChanged` through
-   * (see `acceptExplainBackGradingWithObservation`'s own doc for the
-   * reachability detail). When `true`, the accept step below rejects rather
-   * than recording anything — see that function's doc for why this is a
-   * reject, not a best-effort degrade like the embedder failure path.
+   * comparing each graded block's own current passage against the fingerprint
+   * recorded at grading time, just before accept. Omitted or `false` means
+   * "no signal to the contrary," never a claim of confirmed freshness.
+   * `ol-gavc` (closed 2026-09-21) gave this field its first live producer;
+   * `ol-egov.141.89.6.39` replaced that producer's re-retrieval comparison
+   * (which could read a merely re-ranked, unchanged block as stale) with a
+   * direct per-block fingerprint check — `main.ts`'s
+   * `buildExplainBackObservationContextFor` now reads each graded block's own
+   * `{path, blockIndex}` and compares a content fingerprint against the
+   * current passage, via `hasExplainBackSourceFingerprintChanged`
+   * (`explain-back/source-fingerprint-staleness.ts`); no retrieval runs in
+   * this path at all (see `acceptExplainBackGradingWithObservation`'s own doc
+   * for the reachability detail). When `true`, the accept step below rejects
+   * rather than recording anything — see that function's doc for why this is
+   * a reject, not a best-effort degrade like the embedder failure path.
    */
   readonly sourceRevisionStale?: boolean;
   /**
@@ -685,14 +689,20 @@ function buildResolutionEvidenceForAcceptedGrading(
  * accepting anyway.
  *
  * **`sourceRevisionStale` NOW HAS A LIVE PRODUCER (`ol-gavc`, closed
- * 2026-09-21).** `main.ts`'s `buildExplainBackObservationContextFor`
- * (outside this bead's `owns`) re-retrieves the prompt's source blocks via
- * `composeExplainBackSourceBlocks` and passes
- * `hasExplainBackSourceRevisionChanged(params.sourceBlocks, freshSourceBlocks)`
- * (`../explain-back/observation.js`) through as `sourceRevisionStale`. This
- * function's behaviour is otherwise unchanged from before that update:
- * absent a caller-reported signal, a stale source is not detected, only
- * rejectable once detected — that caller now reports one on every
+ * 2026-09-21; its comparison replaced by `ol-egov.141.89.6.39`, closed
+ * 2026-09-25).** `main.ts`'s `buildExplainBackObservationContextFor`
+ * (outside this bead's `owns`) no longer re-retrieves anything: it reads each
+ * graded block's own current passage directly by `{path, blockIndex}` and
+ * compares a content fingerprint against the one recorded at grading time,
+ * via `hasExplainBackSourceFingerprintChanged`
+ * (`../explain-back/source-fingerprint-staleness.js`) — passed through as
+ * `sourceRevisionStale`. `ol-gavc`'s original producer compared the graded
+ * block set against a fresh retrieval's set instead, which could read a
+ * merely re-ranked but otherwise-unchanged block as stale; the direct
+ * fingerprint check does not, because no retrieval runs in this path at all.
+ * This function's behaviour is otherwise unchanged from before either
+ * update: absent a caller-reported signal, a stale source is not detected,
+ * only rejectable once detected — that caller now reports one on every
  * production accept.
  */
 export async function acceptExplainBackGradingWithObservation(
