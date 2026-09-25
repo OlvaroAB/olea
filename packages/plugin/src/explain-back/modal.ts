@@ -86,6 +86,7 @@ import {
   type GradingRelationContext,
   type GroundedGrading,
   type PendingExplainBackGrading,
+  type Provenance,
   type ResolvedRelationEdge,
   resolveGradingRelationContext,
 } from 'olea-core';
@@ -191,6 +192,31 @@ export interface ExplainBackModalDeps {
    * pre-existing concept-only path exactly as it was.
    */
   readonly resolveCausesPartner?: (subjectConceptId: string) => ConceptRelation | undefined;
+  /**
+   * `ol-egov.141.89.6.36`: the "targeted vault-read port" `resolveGradingSourceBlocks`'s
+   * own doc (below) previously named as missing — turns ONE endpoint of a
+   * live causes edge's own `introducingPassages` (a `Provenance`: a source
+   * path plus a `SourceLocation`, never text) into a citable
+   * `ExplainBackSourceBlock`, the SAME shape and citation-id convention
+   * `deps.retrieveSourceBlocks` already produces
+   * (`explain-back/request.ts`'s `retrieveExplainBackSourceBlocks`:
+   * `${path}#${blockIndex}#${index}`) so the grader can cite it exactly like
+   * any other source block. Resolves `null` — never throws — when the
+   * passage cannot be read as it stood at fold time: the note or block was
+   * deleted, moved past the location the edge recorded, or is otherwise
+   * stale; `resolveGradingSourceBlocks` below reads a `null` result as
+   * "this endpoint contributes nothing," the same silent-degrade posture
+   * every other optional dep on this interface takes. Optional and absent
+   * by default, same posture as `resolveCausesPartner`: an omitted dep
+   * keeps the pre-existing behaviour (the edge's own passages never enter
+   * `sourceBlocks`) exactly as it was before this field existed. `main.ts`
+   * does not wire a real implementation yet — a small, disclosed follow-up
+   * in a file this bead does not own, the same posture `getMasteryState`'s
+   * own doc states for its own not-yet-wired port.
+   */
+  readonly resolveIntroducingPassage?: (
+    provenance: Provenance,
+  ) => Promise<ExplainBackSourceBlock | null>;
   readonly buildObservationContext: (params: {
     readonly subjectConceptId: string | null;
     readonly originInstrumentId: string;
@@ -398,26 +424,72 @@ export interface ExplainBackModalDeps {
  * so this is consistent with every other consumer of that field, not a new
  * convention.
  *
- * **The edge's own introducing-passage text is not resolved here.**
- * `ConceptRelation.introducingPassages` is a `Provenance` (a source path
- * plus a location) on each endpoint, never a `SourceBlockRef` (no `text`
- * field) — turning one into cited passage text needs a targeted vault read
- * this view has no port for. `evidence: 'current'` is asserted directly
- * rather than left for `resolveRelationProvenance` to re-derive, because
- * `deps.resolveCausesPartner` (main.ts's wrapper around
+ * **The edge's own introducing passages, resolved the same way the
+ * neighbour's are (`ol-egov.141.89.6.36`).** `ConceptRelation
+ * .introducingPassages` names a `Provenance` (a source path plus a
+ * location, never text) per endpoint — `resolveEdgeIntroducingPassages`
+ * below turns each into a citable `ExplainBackSourceBlock` through
+ * `deps.resolveIntroducingPassage`, the targeted vault-read port this
+ * file's earlier revision had no port for. `evidence: 'current'` is still
+ * asserted directly rather than left for `resolveRelationProvenance` to
+ * re-derive, because `deps.resolveCausesPartner` (main.ts's wrapper around
  * `resolveExplainBackRelationEdge`) already applies rel.md Default 4's
  * freshness gate before ever returning an edge — one reaching this function
- * is, by construction, already current. With no introducing passages and no
- * linking note, `resolveRelationProvenance` degrades this to
- * `{kind: 'no-edge'}` (F5.2a's own third, "written nowhere" case) — which
- * still includes the neighbour's defining passages in `sourceBlocks`
- * (`buildGradingSourceMaterial`'s `'no-edge'` branch), the one observable
- * effect a real 'causes' edge has here today. Resolving the edge's own
- * provenance text for the richer `'edge-provenance'` case is a disclosed
- * follow-up, not silently absorbed.
+ * is, by construction, already current. **No SEPARATE freshness check runs
+ * on the passage text itself**: `deps.resolveIntroducingPassage` is the one
+ * place that can discover the passage no longer reads as it did at fold
+ * time (the note or block moved or was deleted since), and it signals that
+ * by resolving `null` for that endpoint — see its own doc. A `null` or
+ * absent port, or a `Provenance` neither endpoint can resolve, degrades
+ * exactly as before this bead: `resolveRelationProvenance` sees an empty
+ * `introducingPassages` array and falls through to `{kind: 'no-edge'}`
+ * (F5.2a's own third, "written nowhere" case), which still includes the
+ * neighbour's defining passages in `sourceBlocks`
+ * (`buildGradingSourceMaterial`'s `'no-edge'` branch) — the no-port
+ * behaviour this function already had.
+ *
+ * **Deduplicated against blocks already present, and bounded only by the
+ * edge's own shape.** `ConceptRelation.introducingPassages` carries exactly
+ * two `Provenance` values (`from`, `to`) — never a retrieved list — so
+ * `resolveEdgeIntroducingPassages` naturally resolves at most two blocks
+ * per call; no size cap exists anywhere in this pipeline for the assembled
+ * `sourceBlocks`/`omissionDenominator` to apply on top of that (checked:
+ * `explainBackJudge.ts`'s `z.array(sourceBlockRef)` request schema has no
+ * `.max()`; `gradingPipeline.ts` and `mastery/gradingInputContract.ts`
+ * apply none either; the nearest relative, retrieval's own
+ * `DEFAULT_TOP_K = 8` in `packages/core/src/retrieval/groundedContext.ts:275`,
+ * bounds each `retrieveSourceBlocks` CALL's hit count, not the composed
+ * result this function assembles from already-resolved passages — a
+ * different budget for a different step). A candidate already present in
+ * `sourceBlocks` or `neighbourBlocks` (by `blockId`) is skipped, so a
+ * passage that happens to be the same block already retrieved for the
+ * subject or neighbour is never sent twice.
  */
+async function resolveEdgeIntroducingPassages(
+  deps: Pick<ExplainBackModalDeps, 'resolveIntroducingPassage'>,
+  edge: ConceptRelation,
+  alreadyPresentBlockIds: ReadonlySet<string>,
+): Promise<readonly ExplainBackSourceBlock[]> {
+  if (!deps.resolveIntroducingPassage) return [];
+  const seen = new Set(alreadyPresentBlockIds);
+  const resolved: ExplainBackSourceBlock[] = [];
+  for (const provenance of [edge.introducingPassages.from, edge.introducingPassages.to]) {
+    // Stale or missing — the port itself decided this passage no longer
+    // reads as it did at fold time; adds nothing (see the dep's own doc).
+    const block = await deps.resolveIntroducingPassage(provenance);
+    if (block === null) continue;
+    if (seen.has(block.block.blockId)) continue;
+    seen.add(block.block.blockId);
+    resolved.push(block);
+  }
+  return resolved;
+}
+
 export async function resolveGradingSourceBlocks(
-  deps: Pick<ExplainBackModalDeps, 'retrieveSourceBlocks' | 'resolveCausesPartner'>,
+  deps: Pick<
+    ExplainBackModalDeps,
+    'retrieveSourceBlocks' | 'resolveCausesPartner' | 'resolveIntroducingPassage'
+  >,
   subjectConceptId: string | null,
   sourceBlocks: readonly ExplainBackSourceBlock[],
 ): Promise<readonly ExplainBackSourceBlock[]> {
@@ -428,12 +500,21 @@ export async function resolveGradingSourceBlocks(
     | { readonly neighbourConceptId: string; readonly edge: ResolvedRelationEdge }
     | undefined;
   let neighbourBlocks: readonly ExplainBackSourceBlock[] = [];
+  let introducingBlocks: readonly ExplainBackSourceBlock[] = [];
   if (edge !== undefined && subjectConceptId !== null) {
     const neighbourConceptId = edge.from === subjectConceptId ? edge.to : edge.from;
     neighbourBlocks = await deps.retrieveSourceBlocks(neighbourConceptId);
+    const alreadyPresentBlockIds = new Set(
+      [...sourceBlocks, ...neighbourBlocks].map((entry) => entry.block.blockId),
+    );
+    introducingBlocks = await resolveEdgeIntroducingPassages(deps, edge, alreadyPresentBlockIds);
     named = {
       neighbourConceptId,
-      edge: { evidence: 'current', provenance: edge.provenance, introducingPassages: [] },
+      edge: {
+        evidence: 'current',
+        provenance: edge.provenance,
+        introducingPassages: introducingBlocks.map((entry) => entry.block),
+      },
     };
   }
 
@@ -459,7 +540,9 @@ export async function resolveGradingSourceBlocks(
   });
 
   const lookup = new Map<string, ExplainBackSourceBlock>();
-  for (const entry of [...sourceBlocks, ...neighbourBlocks]) lookup.set(entry.block.blockId, entry);
+  for (const entry of [...sourceBlocks, ...neighbourBlocks, ...introducingBlocks]) {
+    lookup.set(entry.block.blockId, entry);
+  }
   return material.sourceBlocks.flatMap((block) => {
     const entry = lookup.get(block.blockId);
     return entry ? [entry] : [];
