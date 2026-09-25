@@ -33,9 +33,11 @@
  *
  * **What did not change:** the course-naming rule (`ol-7j54` / ARC-1,
  * `../insights/index.ts`'s module doc), the never-fires-in-the-negative
- * shape, the "a course with a floor and no time is included at zero, never
- * dropped" honesty property, and the sufficiency floor on sample size
- * (`MIN_TIMED_REVIEWS`). Only the meaning of the *other* share changed.
+ * shape, and the "a course with a floor and no time is included at zero,
+ * never dropped" honesty property. The sufficiency floor on sample size
+ * (`MIN_TIMED_REVIEWS`) is unchanged in *value*, but its population moved —
+ * see "The sufficiency gate reads the whole log", below
+ * (`ol-egov.141.89.11.7`).
  *
  * ## This one is validated, and that was not a given
  *
@@ -171,6 +173,52 @@
  * assert against `SHORTFALL_RATIO_K` instead is filed as a follow-up
  * (`ol-1ojq` [DOS-C4-b]) rather than done here.
  *
+ * ## The sufficiency gate reads the whole log (`ol-egov.141.89.11.7`)
+ *
+ * **Bug, found and fixed.** `1fd420e` (`ol-v7r5.63` / `[DOS-C4]`) correctly
+ * put `timeShare` and `floorShare` on the same sittings window for
+ * commensurability, above — but as a side effect of routing the module's one
+ * counting loop through `windowedReviewsOf`, `MIN_TIMED_REVIEWS` started
+ * being checked against `weightedReviewCount` taken over that SAME narrow
+ * window (for two courses, `2 + WINDOW_SLACK_SESSIONS(2) = 4` sittings) —
+ * despite that commit's own comment on the constant saying it was
+ * "unchanged by the window-accounting re-spec". At realistic sitting sizes
+ * (a real, or this repo's own synthetic, sitting averages one to two timed
+ * reviews) four sittings essentially never reach 40, so the insight read
+ * `not-enough-history` almost unconditionally, in production too, no matter
+ * how much history existed beyond the window — more history could not
+ * rescue it, because history outside the window was structurally invisible
+ * to the gate. Reproduction: `./effort.spec.ts`'s "the sufficiency gate
+ * reads the whole log" describe block.
+ *
+ * The fix does not touch commensurability, which is a property of the GAP
+ * comparison (`floorShare - timeShare`, both windowed) and is unaffected by
+ * how wide a population merely counts evidence. `weightedReviewCount` and
+ * `timedReviewCount` (`allReviewsOf`, below) are now counted over the WHOLE
+ * clustered log — restoring the pre-`1fd420e` population (the loop used to
+ * read `input.entries` directly, whatever calendar width a caller supplied,
+ * up to the whole log) — while `timeShare` itself stays read over the narrow
+ * D-092 window exactly as `1fd420e` specified. This is the same split
+ * `study-session/window.ts`'s `computeWindowDeficit` already makes between
+ * its windowed `deficit` and its whole-history `sessionsSinceLastServed`.
+ * **Class B**, same posture `1fd420e`'s own SHORTFALL_RATIO_K pin took: a
+ * bug fix restoring a constant's stated intent, not a new threshold or a
+ * contract change.
+ *
+ * **Second pass, same bead: `MIN_WINDOWED_TIMED_REVIEWS`.** Widening the
+ * log-wide gate alone is a Class C change on its own, by David's own
+ * direction: the log-wide gate had been acting as the module's ONLY sample-
+ * size protection, accidentally, at the window's own (much smaller)
+ * granularity — remove it without replacement and the windowed `timeShare`
+ * comparison is free to fire on sampling noise from as few as a handful of
+ * windowed reviews (measured: `trends-healthy`, a balanced persona, false-
+ * fired `observed`; the `lopsided-effort` persona's neutralised twin false-
+ * fired on 19 of 40 seeds; three no-imbalance personas false-fired on 51 of
+ * 120). `MIN_WINDOWED_TIMED_REVIEWS` restores that protection as its own
+ * declared, named, separately-overridable floor — see its own doc for why
+ * its default reproduces `HEAD` exactly, and `EffortDetectionOptions` for
+ * how a sweep varies it without touching the declared value.
+ *
  * Below this many timed reviews across the courses with a known floor share,
  * a split between them is noise and the detector declines.
  *
@@ -281,10 +329,45 @@ export const SHORTFALL_RATIO_K = 0.5;
  * Below this many timed reviews across the courses with a known floor share,
  * a split between them is noise and the detector declines.
  *
- * **A count, not a duration** — see the module doc for the full argument;
- * unchanged by the window-accounting re-spec.
+ * **A count, not a duration** — see the module doc for the full argument.
+ * The VALUE is unchanged by the window-accounting re-spec (`ol-v7r5.63` /
+ * `[DOS-C4]`); the POPULATION it is checked against is not — see the module
+ * doc's "The sufficiency gate reads the whole log" (`ol-egov.141.89.11.7`):
+ * counted over the whole clustered log, never the narrow D-092 window
+ * `timeShare` itself reads.
  */
 export const MIN_TIMED_REVIEWS = 40;
+
+/**
+ * A SEPARATE, declared floor on how many weighted reviews fall INSIDE the
+ * D-092 sittings window itself (`ol-egov.141.89.11.7`, second pass).
+ * `MIN_TIMED_REVIEWS` above answers "is there enough history, log-wide, to
+ * trust a share estimate at all" — it says nothing about how much of that
+ * history the window (`windowedReviewsOf`) actually holds, and `timeShare`
+ * is read only from inside that window. Before this pass, that WAS the gate
+ * this module effectively had, as an accident of `1fd420e` routing the one
+ * counting loop through the window — this constant makes that same
+ * protection explicit, declared, and separately overridable rather than an
+ * unnamed side effect of a population bug.
+ *
+ * **The default, `40`, is deliberately TODAY'S (HEAD) behaviour, not a
+ * considered value.** At `40` this floor is, at realistic sitting
+ * granularity, essentially unreachable inside a 4-sitting window (two
+ * courses: `windowWidthSessions(2)`) — a real sitting is small (median
+ * 1.6–2.35 weighted reviews/sitting, measured directly on the workbench's
+ * own `steady-reviewer`/`lopsided-effort` personas over 90 days: 62
+ * sittings/146 reviews and 54 sittings/86 reviews respectively, with only
+ * 4–7 reviews inside the last 4 sittings). So at the default, this module's
+ * behaviour on every current workbench and core fixture is BYTE-IDENTICAL
+ * to `HEAD` before this bead's first pass — including
+ * `packages/workbench/test/trends-scenarios.spec.ts`'s seven originally
+ * failing effort cases, which stay failing at this default, on purpose.
+ * Lowering it is a Class C threshold call this module does not make; see
+ * this bead's report ("Proposed decisions") for the sweep and the
+ * recommendation. `EffortDetectionOptions.minWindowedTimedReviews` is the
+ * override sweeps and tests use to see the other side of it.
+ */
+export const MIN_WINDOWED_TIMED_REVIEWS = 40;
 
 /** The minimum a comparison needs to exist at all. */
 export const MIN_COURSES_WITH_FLOOR_SHARE = 2;
@@ -326,10 +409,32 @@ export interface EffortMeasured {
   /** The course carrying `widestGap`, or `null` when no gap is positive. */
   readonly widestGapCourse: string | null;
   readonly totalTimeMs: number;
-  /** Reviews that contributed time to any course. Reviews with a `null` duration contribute none. */
+  /**
+   * Reviews that contributed time to any course, across the WHOLE clustered
+   * log (`ol-egov.141.89.11.7`) — the sufficiency population, not the
+   * (narrower) population `totalTimeMs`/`courses[].timeMs` are actually
+   * summed over, below. Reviews with a `null` duration contribute none.
+   */
   readonly timedReviewCount: number;
-  /** Of those, the ones on a course with a known floor share — the sample size behind the split. */
+  /**
+   * Of those, the ones on a course with a known floor share — the sample
+   * size behind the sufficiency check (`MIN_TIMED_REVIEWS`), log-wide. NOT
+   * the sample size behind the share itself, which reads only the narrower
+   * D-092 sittings window `timeShare` is denominated in; a passed
+   * sufficiency check says there is enough history to trust a share in
+   * principle, not that the current window holds much of it.
+   */
   readonly weightedReviewCount: number;
+  /**
+   * The same "on a course with a known floor share" count as
+   * `weightedReviewCount`, but counted ONLY within the D-092 sittings
+   * window `timeShare` itself is read over (`ol-egov.141.89.11.7`, second
+   * pass) — the sample size the SHARE actually rests on, checked against
+   * `MIN_WINDOWED_TIMED_REVIEWS`. Can be far smaller than
+   * `weightedReviewCount`: passing the log-wide sufficiency check does not
+   * mean the window holds much of that history.
+   */
+  readonly windowedWeightedReviewCount: number;
   /**
    * Courses that appear in her review history but have no known floor share
    * from the plan, so are in neither total. Surfaced so a caller can say what
@@ -347,18 +452,32 @@ export interface EffortInput {
 }
 
 /**
- * The reviews `timeShare` is actually computed over: the local
- * `[SESS-13]`/`[D-091]` sitting clustering, narrowed to the most recent
- * `windowWidthSessions(coursesWithFloorShare)` sittings — the same window
- * width formula (`runningCourses + slack`) `[D-092]`'s own service-side
- * floor-share window is denominated in (`ol-v7r5.63` / `[DOS-C4]`; see the
- * module doc's "What it compares" section). `entries` may arrive
- * pre-windowed at a wider calendar cut (production windows at
+ * `ol-egov.141.89.11.7` (second pass). Same posture
+ * `ClusterReviewSessionsOptions.gapSeconds` already takes: an override for
+ * sweeps and tests ONLY — production reads the declared constant.
+ */
+export interface EffortDetectionOptions {
+  /** Override {@link MIN_WINDOWED_TIMED_REVIEWS}. Sweeps and tests only. */
+  readonly minWindowedTimedReviews?: number;
+}
+
+/**
+ * The reviews `timeShare` (the share itself) is actually computed over: the
+ * local `[SESS-13]`/`[D-091]` sitting clustering, narrowed to the most
+ * recent `windowWidthSessions(coursesWithFloorShare)` sittings — the same
+ * window width formula (`runningCourses + slack`) `[D-092]`'s own
+ * service-side floor-share window is denominated in (`ol-v7r5.63` /
+ * `[DOS-C4]`; see the module doc's "What it compares" section). `entries`
+ * may arrive pre-windowed at a wider calendar cut (production windows at
  * `DEFAULT_STREAK_WINDOW_DAYS`) — that is harmless, since this function only
  * ever narrows further. A caller passing a calendar window NARROWER than
  * this true sittings window would silently truncate sittings the window is
  * owed, which is a contract on the caller this function cannot itself
  * detect or repair.
+ *
+ * **Not the population `MIN_TIMED_REVIEWS` is checked against** — see
+ * `allReviewsOf`, below, and the module doc's "The sufficiency gate reads
+ * the whole log" section (`ol-egov.141.89.11.7`).
  */
 function windowedReviewsOf(
   entries: readonly ReviewLogEntry[],
@@ -370,12 +489,49 @@ function windowedReviewsOf(
   return windowed.flatMap((sitting) => sitting.reviews);
 }
 
+/**
+ * The reviews the sufficiency gate (`MIN_TIMED_REVIEWS`) is counted over:
+ * every clustered review in the log, never narrowed to the D-092 sittings
+ * window `windowedReviewsOf` applies to `timeShare` (`ol-egov.141.89.11.7`,
+ * discovered from `ol-egov.141.89.11.6`). Sample size is a fact about how
+ * much evidence exists at all to trust a share estimate — a question about
+ * the whole log — not about how much of it fell inside the narrow window a
+ * share happens to be read over; `study-session/window.ts`'s own
+ * `sessionsSinceLastServed` (`computeWindowDeficit`) takes the identical
+ * posture, reading its whole supplied history while `deficit` itself stays
+ * windowed, for the same reason.
+ *
+ * Still clustered (`clusterReviewSessions`), not `entries` raw — clustering
+ * also drops non-review records and entries with an unparseable timestamp,
+ * the same tolerance the windowed reading gets, so a record uncounted by one
+ * is uncounted by the other for the same reason, never a different one.
+ */
+function allReviewsOf(entries: readonly ReviewLogEntry[]): readonly ReviewLogRecord[] {
+  return clusterReviewSessions(entries).flatMap((sitting) => sitting.reviews);
+}
+
+/** The floor-share-eligible courses a review's concepts touch — shared by both the sufficiency count and the windowed time attribution, so what counts as "on a course with a known floor share" cannot silently drift between them. */
+function coursesForRecord(
+  record: ReviewLogRecord,
+  coursesOfConcept: ReadonlyMap<string, readonly string[]>,
+): ReadonlySet<string> {
+  const courses = new Set<string>();
+  for (const conceptId of record.conceptIds) {
+    for (const course of coursesOfConcept.get(conceptId) ?? []) courses.add(course);
+  }
+  return courses;
+}
+
 function abstain(reason: string): EffortInsight {
   return { id: 'effort-balance', status: 'not-enough-history', measured: null, reason };
 }
 
 /** Pure. Reads no clock and no vault. */
-export function detectEffortImbalance(input: EffortInput): EffortInsight {
+export function detectEffortImbalance(
+  input: EffortInput,
+  options: EffortDetectionOptions = {},
+): EffortInsight {
+  const minWindowedTimedReviews = options.minWindowedTimedReviews ?? MIN_WINDOWED_TIMED_REVIEWS;
   const floorShareByCourse = new Map<string, number>();
   for (const entry of input.floorShares) {
     const { course, floorShare } = entry;
@@ -393,20 +549,51 @@ export function detectEffortImbalance(input: EffortInput): EffortInsight {
   const coursesOfConcept = new Map<string, readonly string[]>();
   for (const concept of input.concepts) coursesOfConcept.set(concept.conceptId, concept.courses);
 
-  const timeByCourse = new Map<string, number>();
-  const seenCourses = new Set<string>();
+  // Sufficiency, over the WHOLE log (`ol-egov.141.89.11.7`): is there enough
+  // history at all to trust a share estimate? See `allReviewsOf`'s doc —
+  // this population is deliberately wider than the one `timeShare` itself
+  // reads, below.
   let timedReviewCount = 0;
   let weightedReviewCount = 0;
+  for (const record of allReviewsOf(input.entries)) {
+    if (record.durationMs === null) continue;
+    const courses = coursesForRecord(record, coursesOfConcept);
+    if (courses.size === 0) continue;
+    timedReviewCount += 1;
+    // Counted once per record, however many floor-share courses it touches.
+    let countsTowardWeighted = false;
+    for (const course of courses) {
+      if (floorShareByCourse.has(course)) countsTowardWeighted = true;
+    }
+    if (countsTowardWeighted) weightedReviewCount += 1;
+  }
+
+  if (weightedReviewCount < MIN_TIMED_REVIEWS) {
+    return abstain(
+      `fewer than ${MIN_TIMED_REVIEWS} timed reviews on a course with a known floor share`,
+    );
+  }
+
+  // The share itself, windowed to the D-092 sittings window `floorShare` is
+  // denominated in (see the module doc's "What it compares" section) — a
+  // narrower, and possibly empty, population than the one the sufficiency
+  // check above just cleared. That is by design: passing the sufficiency
+  // gate says there is enough history to trust a share in principle, not
+  // that the current window itself holds much of it — a course can still be
+  // reported at `timeShare` zero within the window, which is exactly the
+  // "included at zero, never dropped" honesty property below.
+  const timeByCourse = new Map<string, number>();
+  const seenCourses = new Set<string>();
+  let windowedWeightedReviewCount = 0;
   for (const record of windowedReviewsOf(input.entries, floorShareByCourse.size)) {
     if (record.durationMs === null) continue;
     // Set semantics: two of a record's concepts sharing a course must not
     // attribute that record's time to it twice.
-    const courses = new Set<string>();
-    for (const conceptId of record.conceptIds) {
-      for (const course of coursesOfConcept.get(conceptId) ?? []) courses.add(course);
-    }
+    const courses = coursesForRecord(record, coursesOfConcept);
     if (courses.size === 0) continue;
-    timedReviewCount += 1;
+    // Mirrors `weightedReviewCount`'s own definition above, exactly, but
+    // over the windowed population — counted once per record, however many
+    // floor-share courses it touches.
     let countsTowardWeighted = false;
     for (const course of courses) {
       seenCourses.add(course);
@@ -414,13 +601,21 @@ export function detectEffortImbalance(input: EffortInput): EffortInsight {
       countsTowardWeighted = true;
       timeByCourse.set(course, (timeByCourse.get(course) ?? 0) + record.durationMs);
     }
-    // Counted once per record, however many floor-share courses it touches:
-    // this is the sample size behind the split, not another attribution.
-    if (countsTowardWeighted) weightedReviewCount += 1;
+    if (countsTowardWeighted) windowedWeightedReviewCount += 1;
+  }
+
+  // The windowed-sample floor (`ol-egov.141.89.11.7`, second pass): the
+  // log-wide sufficiency check above says nothing about how much of that
+  // history actually falls inside the window `timeShare` is read over — see
+  // `MIN_WINDOWED_TIMED_REVIEWS`'s own doc.
+  if (windowedWeightedReviewCount < minWindowedTimedReviews) {
+    return abstain(
+      `fewer than ${minWindowedTimedReviews} timed reviews within the D-092 window on a course with a known floor share`,
+    );
   }
 
   const totalTimeMs = [...timeByCourse.values()].reduce((sum, ms) => sum + ms, 0);
-  if (weightedReviewCount < MIN_TIMED_REVIEWS || totalTimeMs <= 0) {
+  if (totalTimeMs <= 0) {
     return abstain(
       `fewer than ${MIN_TIMED_REVIEWS} timed reviews on a course with a known floor share`,
     );
@@ -449,6 +644,7 @@ export function detectEffortImbalance(input: EffortInput): EffortInsight {
     totalTimeMs,
     timedReviewCount,
     weightedReviewCount,
+    windowedWeightedReviewCount,
     coursesWithoutFloorShare,
   };
 

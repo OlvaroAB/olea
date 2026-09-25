@@ -69,6 +69,40 @@ function minutes(conceptId: string, n: number, from: number): ReviewLogEntry[] {
   return Array.from({ length: n }, (_, i) => review([conceptId], from + i, MINUTE));
 }
 
+const DAY = 24 * 60 * 60 * 1000;
+
+/**
+ * `sittingCount` REAL sittings of `reviewsPerSitting` reviews each, one
+ * calendar day apart (well over `SESSION_CLUSTERING_GAP_SECONDS`, so each is
+ * its own sitting), oldest first — unlike `minutes()` above, whose reviews
+ * all share one default `timestamp` and so always collapse into a single
+ * sitting regardless of count. That collapse is why this module's own
+ * fixtures never exercised more than one sitting at a time and never caught
+ * `ol-egov.141.89.11.7` (discovered from `ol-egov.141.89.11.6`): the
+ * sufficiency gate (`MIN_TIMED_REVIEWS`) being checked against the narrow
+ * D-092 sittings window instead of the whole log. See that describe block,
+ * below.
+ */
+function sittings(
+  conceptId: string,
+  sittingCount: number,
+  reviewsPerSitting: number,
+  startMs: number,
+): ReviewLogEntry[] {
+  const out: ReviewLogEntry[] = [];
+  let index = 0;
+  for (let s = 0; s < sittingCount; s += 1) {
+    const sittingStart = startMs + s * DAY;
+    for (let r = 0; r < reviewsPerSitting; r += 1) {
+      out.push(
+        review([conceptId], index, MINUTE, new Date(sittingStart + r * MINUTE).toISOString()),
+      );
+      index += 1;
+    }
+  }
+  return out;
+}
+
 describe('detectEffortImbalance — abstention is not a negative result', () => {
   it('declines when fewer than two courses have a known floor share', () => {
     const result = detectEffortImbalance({
@@ -487,5 +521,142 @@ describe('detectEffortImbalance — the shortfall-ratio fix (ol-v7r5.63 / [DOS-C
     const b = result.measured?.courses.find((c) => c.course === 'B');
     expect(a?.timeMs).toBe(20 * MINUTE);
     expect(b?.timeMs).toBe(20 * MINUTE);
+  });
+});
+
+/**
+ * `ol-egov.141.89.11.7` (discovered from `ol-egov.141.89.11.6`, a workbench
+ * bug): the sufficiency gate (`MIN_TIMED_REVIEWS`) was being checked against
+ * `weightedReviewCount` counted over the same narrow D-092 sittings window
+ * `timeShare` reads (`windowedReviewsOf`, `./effort.ts`), as an unintended
+ * side effect of `1fd420e` (`ol-v7r5.63` / `[DOS-C4]`) routing the module's
+ * one counting loop through that window — despite that very commit's own
+ * comment on the constant saying it was "unchanged by the window-accounting
+ * re-spec". For two courses that window is only
+ * `2 + WINDOW_SLACK_SESSIONS(2) = 4` sittings, and a real (or this repo's own
+ * synthetic) sitting averages one to two timed reviews — so four sittings
+ * essentially never reach 40, and the insight read `not-enough-history`
+ * almost unconditionally, in production too, no matter how much real history
+ * existed beyond the window.
+ *
+ * First pass: `MIN_TIMED_REVIEWS` now reads `weightedReviewCount` over the
+ * WHOLE clustered log (`allReviewsOf`) while `timeShare` itself stays
+ * windowed exactly as `1fd420e` specified — the same split
+ * `study-session/window.ts`'s `computeWindowDeficit` already makes between
+ * its windowed `deficit` and its whole-history `sessionsSinceLastServed`.
+ * Folded in here from the originally separate core-level reproduction
+ * (`effort-window-sufficiency-mismatch.ol-egov.141.89.11.6.spec.ts`) so this
+ * detector's regression coverage has one home, per this bead's brief. This
+ * describe block is also this module's multi-sitting fixture coverage: every
+ * other describe block above uses `minutes()`, whose reviews all share one
+ * default timestamp and so always collapse into a single sitting regardless
+ * of count — which is exactly why this bug went uncaught (see `sittings()`'s
+ * own doc, above).
+ *
+ * Second pass (coordinator direction, same bead): widening `MIN_TIMED_REVIEWS`
+ * alone is a Class C change on its own — it had been the module's ONLY
+ * sample-size protection at the WINDOW's own granularity, by accident, and
+ * removing it bare lets `timeShare` fire on sampling noise from a handful of
+ * windowed reviews (measured on the workbench personas: a balanced persona
+ * false-fired, a neutralised twin false-fired on 19/40 seeds, three
+ * no-imbalance personas false-fired on 51/120). `MIN_WINDOWED_TIMED_REVIEWS`
+ * restores that protection explicitly, defaulting to exactly `HEAD`'s
+ * behaviour (see its own doc) with an `EffortDetectionOptions` override for
+ * sweeps.
+ */
+describe('detectEffortImbalance — the sufficiency gate reads the whole log (ol-egov.141.89.11.7)', () => {
+  it('at the windowed floor\'s default (40, "HEAD" behaviour), a textbook total-neglect imbalance still abstains', () => {
+    const bEntries = sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z'));
+    // Sanity: not a thin fixture log-wide. 50 weighted reviews on B alone,
+    // well clear of MIN_TIMED_REVIEWS(40) — but only the last 4 sittings (8
+    // reviews) fall inside the D-092 window, well under
+    // MIN_WINDOWED_TIMED_REVIEWS's default (40) too.
+    expect(bEntries.length).toBe(50);
+
+    const result = detectEffortImbalance({
+      entries: bEntries, // course A: nothing, ever.
+      concepts: CONCEPTS,
+      floorShares: EVEN_FLOORS,
+    });
+
+    // The log-wide fix (first pass) alone must not change production
+    // behaviour — David's direction. At the declared default this reads
+    // exactly as it does at HEAD: not-enough-history.
+    expect(result.status).toBe('not-enough-history');
+    expect(result.measured).toBeNull();
+  });
+
+  it('more history log-wide does not rescue it at the default windowed floor either — both stuck at not-enough-history', () => {
+    // Same generator, 100 sittings instead of 25 (200 weighted reviews in the
+    // full log, all still on B). The log-wide gate clears identically either
+    // way, but the WINDOWED floor (default 40) still abstains both, because
+    // only the last 4 sittings ever feed timeShare regardless of how much
+    // history exists beyond the window.
+    const b25 = detectEffortImbalance({
+      entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
+      concepts: CONCEPTS,
+      floorShares: EVEN_FLOORS,
+    });
+    const b100 = detectEffortImbalance({
+      entries: sittings('stat-1', 100, 2, Date.parse('2026-10-17T18:00:00Z')),
+      concepts: CONCEPTS,
+      floorShares: EVEN_FLOORS,
+    });
+    expect(b25.status).toBe(b100.status);
+    expect(b25.status).toBe('not-enough-history');
+  });
+
+  it('overriding the windowed floor low makes detection possible — MIN_WINDOWED_TIMED_REVIEWS is the lever, not MIN_TIMED_REVIEWS', () => {
+    // Same textbook fixture as above (25 sittings, 8 windowed reviews). With
+    // the windowed floor overridden below 8 (test-only, per
+    // EffortDetectionOptions), the log-wide fix is finally visible: the
+    // finding fires. This is the "low floor" side of the sweep this bead's
+    // report tables.
+    const result = detectEffortImbalance(
+      {
+        entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
+        concepts: CONCEPTS,
+        floorShares: EVEN_FLOORS,
+      },
+      { minWindowedTimedReviews: 4 },
+    );
+    expect(result.status).toBe('observed');
+    expect(result.measured).not.toBeNull();
+    expect(result.measured?.widestGapCourse).toBe('BIOL204');
+  });
+
+  it('the log-wide gate still binds on its own, independent of the windowed floor', () => {
+    // 20 sittings of 2 gives 40; drop the very last review to land at
+    // exactly 39 weighted reviews log-wide — one short, even with the
+    // windowed floor overridden down to 1 (so it is definitely not what is
+    // abstaining here).
+    const result = detectEffortImbalance(
+      {
+        entries: sittings('stat-1', 20, 2, Date.parse('2026-10-17T18:00:00Z')).slice(0, 39),
+        concepts: CONCEPTS,
+        floorShares: EVEN_FLOORS,
+      },
+      { minWindowedTimedReviews: 1 },
+    );
+    expect(result.status).toBe('not-enough-history');
+    expect(result.measured).toBeNull();
+    expect(result.reason).toContain('40 timed reviews on a course with a known floor share');
+  });
+
+  it('the log-wide sufficiency count and the windowed sample are genuinely different populations', () => {
+    // 25 real sittings on B (50 weighted reviews log-wide) but only the most
+    // recent 4 sittings (8 reviews) actually feed timeShare/totalTimeMs — the
+    // windowed floor overridden low enough to see both numbers at once.
+    const result = detectEffortImbalance(
+      {
+        entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
+        concepts: CONCEPTS,
+        floorShares: EVEN_FLOORS,
+      },
+      { minWindowedTimedReviews: 4 },
+    );
+    expect(result.measured?.weightedReviewCount).toBe(50);
+    expect(result.measured?.windowedWeightedReviewCount).toBe(8);
+    expect(result.measured?.totalTimeMs).toBe(8 * MINUTE);
   });
 });
