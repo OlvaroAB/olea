@@ -190,6 +190,155 @@ describe('notes the walk has nothing to say about, and notes it has to complain 
   });
 });
 
+describe('[D-334] M4/M5 — the closed deterministic withholding checks', () => {
+  it('a corrupted MCQ block (a Unicode replacement character) is withheld, not offered as a record', async () => {
+    const vault = memoryVault({
+      'Notes/corrupted.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: which one is it�?',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidMcqBlocks).toHaveLength(1);
+    expect(found.invalidMcqBlocks[0]?.block.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('an MCQ fence that never closes before the note ends is withheld the same way', async () => {
+    const vault = memoryVault({
+      'Notes/dangling.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: which one is it?',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidMcqBlocks).toHaveLength(1);
+    expect(found.invalidMcqBlocks[0]?.block.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('a Q&A card with corrupted text is withheld with reason corrupted-or-unterminated', async () => {
+    const vault = memoryVault({
+      'Notes/corrupted-card.md': [FRONTMATTER('[Alpha]'), 'question one::an � answer', ''].join(
+        '\n',
+      ),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidCardBlocks).toHaveLength(1);
+    expect(found.invalidCardBlocks[0]?.block.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('a cloze delimiter that never closes is reported in its own list, and produces no candidate', async () => {
+    const vault = memoryVault({
+      'Notes/dangling-cloze.md': [
+        FRONTMATTER('[Alpha]'),
+        'the ==first term is never closed',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidClozeBlocks).toHaveLength(1);
+    expect(found.invalidClozeBlocks[0]?.notePath).toBe('Notes/dangling-cloze.md');
+    expect(found.invalidClozeBlocks[0]?.block.reason).toBe('unterminated-delimiter');
+  });
+
+  it('M5: an MCQ embedding an asset that resolves nowhere in the vault is withheld', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: What does this diagram show? ![[missing.png]]',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidMcqBlocks).toHaveLength(1);
+    expect(found.invalidMcqBlocks[0]?.block.reason).toBe('unresolved-asset');
+    expect(found.invalidMcqBlocks[0]?.block.detail).toContain('missing.png');
+  });
+
+  it('M5: the same embed resolves fine, and is not withheld, once the asset exists anywhere in the vault', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: What does this diagram show? ![[present.png]]',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+      'Attachments/present.png': 'stand-in for a binary asset',
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records.map((r) => r.instrumentType)).toEqual(['mcq']);
+    expect(found.invalidMcqBlocks).toEqual([]);
+  });
+
+  it('M5: a Q&A card embedding a missing asset is withheld with reason unresolved-asset', async () => {
+    const vault = memoryVault({
+      'Notes/card.md': [FRONTMATTER('[Alpha]'), 'front ![[missing.png]]::the back', ''].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toEqual([]);
+    expect(found.invalidCardBlocks).toHaveLength(1);
+    expect(found.invalidCardBlocks[0]?.block.reason).toBe('unresolved-asset');
+  });
+
+  it("M5 is scoped to MCQ and Q&A only — an unresolved embed elsewhere on a cloze's line does not withhold it", async () => {
+    const vault = memoryVault({
+      'Notes/cloze.md': [
+        FRONTMATTER('[Alpha]'),
+        'the ==first== term, with an unrelated ![[missing.png]] on the same line',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records.map((r) => r.instrumentType)).toEqual(['cloze']);
+    expect(found.invalidMcqBlocks).toEqual([]);
+    expect(found.invalidCardBlocks).toEqual([]);
+  });
+
+  it('M5 is deliberately lenient toward ambiguity: two files sharing a basename in different folders still counts as resolved', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: What does this show? ![[shared.png]]',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+      'Attachments/a/shared.png': 'stand-in a',
+      'Attachments/b/shared.png': 'stand-in b',
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records.map((r) => r.instrumentType)).toEqual(['mcq']);
+    expect(found.invalidMcqBlocks).toEqual([]);
+  });
+});
+
 describe('the concept binding follows her `topic:` property', () => {
   it('binds a bare topic and a wikilink-shaped topic to the same concept', async () => {
     // `[D-248]`: both notes sit under a course folder, and the wikilink-shaped

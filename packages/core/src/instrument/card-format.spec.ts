@@ -220,6 +220,69 @@ describe('parseCards — cloze', () => {
   });
 });
 
+describe('[D-334] M4 — corrupted card text (a Unicode replacement character)', () => {
+  it('a single-line card with a replacement character is corrupted, not silently accepted', () => {
+    const source = 'question one::an answer with a � in it\n';
+    const { cards, invalid } = parseCardsWithInvalid(source);
+    expect(cards).toHaveLength(0);
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]?.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('a reversed single-line card is checked the same way', () => {
+    const source = 'a corrupted � front:::answer one\n';
+    const { invalid } = parseCardsWithInvalid(source);
+    expect(invalid[0]?.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('a multi-line card is checked ahead of its own emptiness check', () => {
+    const source = 'question one\n?\nan answer with a � in it\n';
+    const { cards, invalid } = parseCardsWithInvalid(source);
+    expect(cards).toHaveLength(0);
+    expect(invalid).toHaveLength(1);
+    expect(invalid[0]?.reason).toBe('corrupted-or-unterminated');
+  });
+
+  it('an uncorrupted card is unaffected — no false report', () => {
+    const { cards, invalid } = parseCardsWithInvalid('question one::answer one\n');
+    expect(invalid).toHaveLength(0);
+    expect(cards).toHaveLength(1);
+  });
+});
+
+describe('[D-334] cloze invalid-block detection — "at minimum a declared-but-unterminated case"', () => {
+  it('an opened "==" with no closing "==" before the line ends is reported, not silently dropped', () => {
+    const source = 'the ==first term is never closed\n';
+    expect(parseCards(source)).toHaveLength(0); // unchanged: still not a cloze
+
+    const { cards, invalidCloze } = parseCardsWithInvalid(source);
+    expect(cards).toHaveLength(0);
+    expect(invalidCloze).toHaveLength(1);
+    expect(invalidCloze[0]?.reason).toBe('unterminated-delimiter');
+    expect(source.slice(invalidCloze[0]?.span.start, invalidCloze[0]?.span.end)).toBe(
+      invalidCloze[0]?.raw,
+    );
+  });
+
+  it('an opened "{{" with no closing "}}" before the line ends is reported the same way', () => {
+    const source = 'a {{blanked span that never closes\n';
+    const { invalidCloze } = parseCardsWithInvalid(source);
+    expect(invalidCloze).toHaveLength(1);
+    expect(invalidCloze[0]?.reason).toBe('unterminated-delimiter');
+  });
+
+  it('a genuinely empty deletion ("====", "{{}}") is unchanged: still not a cloze, and still not reported as invalid', () => {
+    expect(parseCardsWithInvalid('a ==== span\n').invalidCloze).toHaveLength(0);
+    expect(parseCardsWithInvalid('a {{}} span\n').invalidCloze).toHaveLength(0);
+  });
+
+  it('a complete cloze pair is unaffected — no false unterminated report', () => {
+    const { cards, invalidCloze } = parseCardsWithInvalid('the ==first== deletion\n');
+    expect(cloze(cards)).toHaveLength(1);
+    expect(invalidCloze).toHaveLength(0);
+  });
+});
+
 describe("parseCards — another plugin's scheduling data", () => {
   it('is reported as foreign, and kept out of the answer text', () => {
     const cards = qa(parseCards('question one::answer one <!--SR:!2026-09-01,12,250-->\n'));

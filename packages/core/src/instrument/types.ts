@@ -95,12 +95,30 @@ export interface ClozeCardInstrument extends VaultInstrumentCommon {
 
 export type CardInstrument = QaCardInstrument | ClozeCardInstrument;
 
-/** Why a block that carried a Q&A separator did not become a card. */
-export type CardInvalidReason = 'missing-front' | 'missing-back';
+/**
+ * Why a block that carried a Q&A separator did not become a card.
+ *
+ * `[D-334]` (`ol-v7r5.90`) added the last two: `corrupted-or-unterminated` is
+ * M4 (the text contains a Unicode replacement character — for Q&A there is
+ * no fence to leave open the way an MCQ's can, so this reason's Q&A half is
+ * "corrupted" only); `unresolved-asset` is M5 (an embedded asset the card
+ * renders does not resolve to a file anywhere in the vault). Both are
+ * detected outside `card-format.ts` where card-format.ts's own detection
+ * cannot reach: the corrupted-text check runs here, in `matchSingleLine` and
+ * `multiLineCard`, over text this module already has; the asset check needs
+ * the vault listing this module never receives, so it runs in
+ * `../session/enumerate.ts`, which already reads every note and every path.
+ */
+export type CardInvalidReason =
+  | 'missing-front'
+  | 'missing-back'
+  | 'corrupted-or-unterminated'
+  | 'unresolved-asset';
 
 /**
  * A block that carried a Q&A separator (`::`, `:::`, `?`, `??`) and did not
- * parse into a card because its front or back came out blank.
+ * parse into a card because its front or back came out blank, its text was
+ * corrupted, or an asset it embeds does not resolve (`[D-334]`).
  *
  * Reported, never dropped — the same pattern as `InvalidMcqBlock` below,
  * named separately because a Q&A card's declaration (a reserved separator
@@ -110,15 +128,41 @@ export type CardInvalidReason = 'missing-front' | 'missing-back';
  * was never attempted: she wrote it, she expects to see it, and nothing
  * tells her why she does not.
  *
- * Cloze failures are **not** covered by this type: the parser only
- * recognises a *complete* `==…==`/`{{…}}` pair, so an unterminated cloze
- * attempt never declares itself the way a Q&A separator does — deciding what
- * counts as a declared-but-broken cloze is `M4` in brief 82's still-open
- * ruling (`ol-v7r5.67`), and is not invented here.
+ * Cloze failures are **not** covered by this type, and never were: the
+ * parser only recognises a *complete* `==…==`/`{{…}}` pair on one line, so a
+ * declared-but-broken cloze (an opener with no matching closer before the
+ * line ends) is a different signal again. `[D-334]` gave cloze its own
+ * mirror instead of stretching this one — see `ClozeInvalidReason` and
+ * `InvalidClozeBlock` below.
  */
 export interface InvalidCardBlock {
   readonly reason: CardInvalidReason;
   /** Human-readable specifics — which separator, which side came out blank. */
+  readonly detail: string;
+  readonly raw: string;
+  readonly span: SourceSpan;
+}
+
+/**
+ * Why a cloze deletion that started to declare itself did not become one
+ * (`[D-334]`, `ol-v7r5.90`). `unterminated-delimiter` is the "at minimum"
+ * case the ruling names: an opening `==` or `{{` with no matching closer
+ * before the line ends — the cloze equivalent of M4's "unterminated block",
+ * since a cloze has no fence to leave open, only a delimiter pair that can
+ * fail to close.
+ */
+export type ClozeInvalidReason = 'unterminated-delimiter';
+
+/**
+ * A line that opened a cloze delimiter (`==` or `{{`) and never closed it,
+ * with the location so a caller can point at it — mirroring
+ * `InvalidMcqBlock`/`InvalidCardBlock` for the same reason those two mirror
+ * each other: a cloze she started typing and mistyped should be as visible
+ * as a broken MCQ or Q&A card, not silently absent from every list.
+ */
+export interface InvalidClozeBlock {
+  readonly reason: ClozeInvalidReason;
+  /** Human-readable specifics — which delimiter, and that it never closed. */
   readonly detail: string;
   readonly raw: string;
   readonly span: SourceSpan;
@@ -230,7 +274,20 @@ export interface McqInstrument {
   readonly terminator: '\n' | '\r\n';
 }
 
-/** Why a block that announced itself as an MCQ is not one. */
+/**
+ * Why a block that announced itself as an MCQ is not one.
+ *
+ * `[D-334]` (`ol-v7r5.90`) added the last two: `corrupted-or-unterminated` is
+ * M4 (the block's text carries a Unicode replacement character, or the fence
+ * never closed — `mcq-format.ts`'s `parseBlock` checks both, ahead of every
+ * field-level check, since a corrupted or dangling fence makes the field
+ * reads themselves unreliable); `unresolved-asset` is M5 (an embedded asset
+ * the stem, answer, a distractor or the feedback renders does not resolve to
+ * a file anywhere in the vault). M5 cannot be checked in this module — it has
+ * no vault — so it runs in `../session/enumerate.ts`, which already reads
+ * every note and every path; a block only fails this way after it has
+ * otherwise parsed cleanly.
+ */
 export type McqInvalidReason =
   | 'missing-stem'
   | 'missing-answer'
@@ -238,7 +295,9 @@ export type McqInvalidReason =
   | 'insufficient-distractors'
   | 'duplicate-option'
   | 'empty-value'
-  | 'unknown-field';
+  | 'unknown-field'
+  | 'corrupted-or-unterminated'
+  | 'unresolved-asset';
 
 /**
  * A block that opened with the MCQ fence and did not parse.

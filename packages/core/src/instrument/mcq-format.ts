@@ -101,6 +101,35 @@ function invalid(block: CodeBlock, reason: McqInvalidReason, detail: string): In
   };
 }
 
+/** A Unicode replacement character — M4's "corrupted text" half (`[D-334]`). */
+const REPLACEMENT_CHAR = '\uFFFD';
+
+/**
+ * M4's "unterminated block" half (`[D-334]`): whether `block.raw` ends in an
+ * actual closing fence for `block.fence` — same character, at least as long,
+ * no info string, on a line of its own — rather than having run to end of
+ * file. Mirrors `../block/parse.ts`'s own `isFenceClose` test (private
+ * there), because a block that never closed is exactly the case that parser
+ * already names in its own comment ("An unterminated fence runs to end of
+ * file") without anything downstream having checked for it until now.
+ */
+function isBlockTerminated(block: CodeBlock): boolean {
+  const raw = block.raw;
+  let end = raw.length;
+  if (raw.endsWith('\r\n')) end -= 2;
+  else if (raw.endsWith('\n')) end -= 1;
+  const lineStart = raw.lastIndexOf('\n', end - 1) + 1;
+  // The opening fence line has no line before it (lineStart 0) — a block with
+  // no separate closing line at all (fence runs straight to EOF with nothing
+  // after it) is unterminated by construction.
+  if (lineStart === 0) return false;
+  const lastLine = raw.slice(lineStart, end);
+  const m = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/.exec(lastLine);
+  if (!m) return false;
+  const run = m[1] ?? '';
+  return run[0] === block.fence[0] && run.length >= block.fence.length;
+}
+
 /** The block's body lines: everything between the two fence lines, terminators stripped. */
 function bodyLines(block: CodeBlock): string[] {
   const lines = block.raw
@@ -119,6 +148,24 @@ function bodyLines(block: CodeBlock): string[] {
 }
 
 function parseBlock(block: CodeBlock): McqInstrument | InvalidMcqBlock {
+  // M4 (`[D-334]`), checked ahead of every field-level check: corrupted text
+  // or a fence that never closed both make the field reads below unreliable,
+  // so neither is worth diagnosing as a field problem once either is true.
+  if (block.raw.includes(REPLACEMENT_CHAR)) {
+    return invalid(
+      block,
+      'corrupted-or-unterminated',
+      'block text contains a Unicode replacement character (U+FFFD), indicating corrupted content',
+    );
+  }
+  if (!isBlockTerminated(block)) {
+    return invalid(
+      block,
+      'corrupted-or-unterminated',
+      `the ${MCQ_FENCE_INFO} fence was never closed before the note ended`,
+    );
+  }
+
   const fields: FieldLine[] = [];
   for (const line of bodyLines(block)) {
     if (line.trim() === '') continue;

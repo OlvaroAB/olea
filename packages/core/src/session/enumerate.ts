@@ -128,13 +128,19 @@ import { parseCardsWithInvalid } from '../instrument/card-format.js';
 import { type InstrumentCitation, readInstrumentCitation } from '../instrument/citation-store.js';
 import { readClozeId } from '../instrument/cloze-identity.js';
 import { parseMcqBlocks } from '../instrument/mcq-format.js';
-import type { CardInstrument, McqInstrument, SourceSpan } from '../instrument/types.js';
+import type {
+  CardInstrument,
+  McqInstrument,
+  QaCardInstrument,
+  SourceSpan,
+} from '../instrument/types.js';
 import { OLEA_UID_KEY } from '../uid/stamp.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { InstrumentIdSource } from './instrument-id.js';
 import { provisionalInstrumentId } from './instrument-id.js';
 import type {
   InvalidCardReport,
+  InvalidClozeReport,
   InvalidMcqReport,
   UnboundInstrumentReport,
   VaultInstrumentEnumeration,
@@ -193,8 +199,10 @@ function instrumentsOf(source: string): {
   readonly instruments: readonly ParsedInstrument[];
   readonly invalidMcq: ReturnType<typeof parseMcqBlocks>['invalid'];
   readonly invalidCards: ReturnType<typeof parseCardsWithInvalid>['invalid'];
+  /** `[D-334]` (`ol-v7r5.90`): a cloze delimiter she opened and never closed. */
+  readonly invalidCloze: ReturnType<typeof parseCardsWithInvalid>['invalidCloze'];
 } {
-  const { cards, invalid: invalidCards } = parseCardsWithInvalid(source);
+  const { cards, invalid: invalidCards, invalidCloze } = parseCardsWithInvalid(source);
   const mcqs = parseMcqBlocks(source);
 
   const instruments: ParsedInstrument[] = [
@@ -218,7 +226,7 @@ function instrumentsOf(source: string): {
     ),
   ].sort((a, b) => a.span.start - b.span.start);
 
-  return { instruments, invalidMcq: mcqs.invalid, invalidCards };
+  return { instruments, invalidMcq: mcqs.invalid, invalidCards, invalidCloze };
 }
 
 /**
@@ -272,6 +280,95 @@ function citationToSourceProvenance(citation: InstrumentCitation): Provenance | 
   };
 }
 
+// ---- M5: an embedded asset that does not resolve (`[D-334]`, ol-v7r5.90) --
+//
+// MCQ and Q&A only (cloze is out of this ruling's M5 scope; its own gap is
+// `invalidCloze` above). This cannot live in `mcq-format.ts`/`card-format.ts`
+// — neither has vault access — so it runs here, the one place that already
+// reads every note and can list every path.
+
+/**
+ * Matches `![[target]]`, `![[target#heading]]`, `![[target|alias]]` (and the
+ * combination), capturing only `target` — the same embed shape
+ * `../extract/embeds.ts` recognises for source ingestion, reproduced here
+ * (rather than imported) because that module's own resolver is private and
+ * this walk needs a different question answered: not "which C3.1 ingestion
+ * format is this" but "does this MCQ/Q&A text's own embedded asset exist
+ * anywhere in the vault". Constructed fresh per call rather than kept as a
+ * module-level global-flag regex, so no caller has to reason about
+ * `lastIndex` state carrying across calls.
+ */
+function embedTargetsIn(text: string): readonly string[] {
+  const re = /!\[\[([^\]|#]+)(?:#[^\]|]*)?(?:\|[^\]]*)?\]\]/g;
+  const targets: string[] = [];
+  for (const m of text.matchAll(re)) {
+    const target = (m[1] ?? '').trim();
+    if (target !== '') targets.push(target);
+  }
+  return targets;
+}
+
+function basenameOf(path: VaultPath): string {
+  const slash = path.lastIndexOf('/');
+  return slash === -1 ? path : path.slice(slash + 1);
+}
+
+/**
+ * Whether `target` (an embed's raw wikilink text) resolves to some file this
+ * listing currently knows about — an exact vault-relative path first, then
+ * any file anywhere in the vault sharing its basename, mirroring
+ * `../extract/embeds.ts`'s own resolution rule for the same reason that
+ * module gives: an exact vault-relative path wins outright, and a bare
+ * filename is the common case her notes actually use.
+ *
+ * **Deliberately lenient toward ambiguity, and toward "listed but not yet
+ * downloaded":** any candidate at all — even more than one, even in the
+ * wrong folder — counts as resolved. M5 asks this check to distinguish a
+ * genuinely missing asset from one only temporarily unavailable through
+ * vault syncing or offline access, and a file listing cannot see *why* a
+ * name is absent, only that it currently is — a cloud-sync placeholder
+ * typically has a directory entry before its bytes finish downloading, so a
+ * name present in `allPaths` is never genuinely missing regardless of
+ * whether its content has actually arrived on this device yet. The honest
+ * answer available from a listing alone is one-directional: presence proves
+ * "not missing"; only the *absence* of every candidate — not the exact path,
+ * not any file sharing the basename — is treated as the defect, which is the
+ * same "not-found" test `embeds.ts` already applies to source ingestion.
+ * What this cannot see, and does not claim to: a device that is itself
+ * offline or mid-sync may have a listing that is momentarily incomplete
+ * relative to another device's — the same honest limit `embeds.ts`'s own
+ * header names for its `'ambiguous'` case.
+ */
+function embedResolves(target: string, allPaths: readonly VaultPath[]): boolean {
+  const trimmed = target.trim();
+  if (trimmed.includes('/') && allPaths.includes(trimmed)) return true;
+  const base = basenameOf(trimmed);
+  return allPaths.some((p) => basenameOf(p) === base);
+}
+
+/** The first embed target across `texts` that does not resolve, or `null` when every one does (or there are none). */
+function firstUnresolvedEmbed(
+  texts: readonly string[],
+  allPaths: readonly VaultPath[],
+): string | null {
+  for (const text of texts) {
+    for (const target of embedTargetsIn(text)) {
+      if (!embedResolves(target, allPaths)) return target;
+    }
+  }
+  return null;
+}
+
+/** Every text field an MCQ block renders to her — anywhere one of these embeds an asset, M5 applies. */
+function mcqAssetTexts(mcq: McqInstrument): readonly string[] {
+  return [mcq.stem, mcq.answer, ...mcq.distractors, mcq.feedback ?? ''];
+}
+
+/** Every text field a Q&A card renders to her. Cloze is not called here — M5 is scoped to MCQ and Q&A only. */
+function qaAssetTexts(card: QaCardInstrument): readonly string[] {
+  return [card.front, card.back];
+}
+
 /**
  * Every schedulable instrument in the vault, bound to its concept and courses.
  *
@@ -304,16 +401,28 @@ export async function enumerateVaultInstruments(
     ...(options.under !== undefined ? { under: options.under } : {}),
     extensions: ['md'],
   });
+  // M5's own listing (`[D-334]`): unfiltered and unscoped by `under`, because
+  // an embedded asset can live anywhere in the vault regardless of where this
+  // walk was asked to look for notes — the same whole-vault default
+  // `../extract/embeds.ts`'s `discoverEmbeddedSources` uses when it is not
+  // handed a narrower `knownPaths`.
+  const allPaths = await vault.list();
 
   const records: VaultInstrumentRecord[] = [];
   const invalidMcqBlocks: InvalidMcqReport[] = [];
   const invalidCardBlocks: InvalidCardReport[] = [];
+  const invalidClozeBlocks: InvalidClozeReport[] = [];
   const unbound: UnboundInstrumentReport[] = [];
 
   for (const notePath of paths) {
     if (excluded.has(notePath)) continue;
     const source = await vault.read(notePath);
-    const { instruments, invalidMcq, invalidCards } = instrumentsOf(source);
+    const {
+      instruments: parsedInstruments,
+      invalidMcq,
+      invalidCards,
+      invalidCloze,
+    } = instrumentsOf(source);
 
     for (const block of invalidMcq) {
       invalidMcqBlocks.push({ notePath, block });
@@ -321,6 +430,50 @@ export async function enumerateVaultInstruments(
     for (const block of invalidCards) {
       invalidCardBlocks.push({ notePath, block });
     }
+    for (const block of invalidCloze) {
+      invalidClozeBlocks.push({ notePath, block });
+    }
+
+    // M5 (`[D-334]`), MCQ and Q&A only: a block that otherwise parsed cleanly
+    // is withheld here, the same way a format-level failure already is
+    // above, when a text field it renders embeds an asset that resolves to
+    // no file anywhere in the vault. Filtered out before the rest of this
+    // walk (ordinal counting, id derivation, concept binding) ever sees it —
+    // exactly as a format-invalid block already never reaches `instruments`
+    // at all — so a withheld instrument never consumes an ordinal slot a
+    // sibling would otherwise get.
+    const instruments = parsedInstruments.filter((instrument) => {
+      if (instrument.mcq !== undefined) {
+        const unresolved = firstUnresolvedEmbed(mcqAssetTexts(instrument.mcq), allPaths);
+        if (unresolved === null) return true;
+        invalidMcqBlocks.push({
+          notePath,
+          block: {
+            reason: 'unresolved-asset',
+            detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
+            raw: instrument.mcq.raw,
+            span: instrument.mcq.span,
+          },
+        });
+        return false;
+      }
+      if (instrument.card !== undefined && instrument.card.type === 'qa') {
+        const unresolved = firstUnresolvedEmbed(qaAssetTexts(instrument.card), allPaths);
+        if (unresolved === null) return true;
+        invalidCardBlocks.push({
+          notePath,
+          block: {
+            reason: 'unresolved-asset',
+            detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
+            raw: instrument.card.raw,
+            span: instrument.card.span,
+          },
+        });
+        return false;
+      }
+      return true;
+    });
+
     if (instruments.length === 0) continue;
 
     // The note's concepts, ordered by her own `topic:` order. `noteConcepts` is
@@ -457,5 +610,12 @@ export async function enumerateVaultInstruments(
     }
   }
 
-  return { records, invalidMcqBlocks, invalidCardBlocks, unbound, concepts };
+  return {
+    records,
+    invalidMcqBlocks,
+    invalidCardBlocks,
+    invalidClozeBlocks,
+    unbound,
+    concepts,
+  };
 }

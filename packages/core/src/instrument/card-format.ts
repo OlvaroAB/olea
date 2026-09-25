@@ -77,6 +77,7 @@ import type {
   ClozeCardInstrument,
   ClozeDelimiter,
   InvalidCardBlock,
+  InvalidClozeBlock,
   QaCardInstrument,
   QaCardStyle,
   SourceSpan,
@@ -187,12 +188,28 @@ type SingleLineMatch =
   | { readonly kind: 'invalid'; readonly reason: CardInvalidReason; readonly detail: string }
   | { readonly kind: 'none' };
 
+/** A Unicode replacement character — M4's "corrupted text" half (`[D-334]`); a Q&A card has no fence to leave open, so this is the whole of M4 for this format. */
+const REPLACEMENT_CHAR = '\uFFFD';
+
+function hasCorruptedText(...values: readonly string[]): boolean {
+  return values.some((value) => value.includes(REPLACEMENT_CHAR));
+}
+
 /** Splits on the reversed separator first — `:::` contains `::`, so order is the whole correctness argument. */
 function matchSingleLine(text: string): SingleLineMatch {
   const reversed = text.indexOf(SINGLE_LINE_REVERSED_SEPARATOR);
   if (reversed > 0) {
     const front = text.slice(0, reversed).trim();
     const back = text.slice(reversed + SINGLE_LINE_REVERSED_SEPARATOR.length).trim();
+    // M4 (`[D-334]`), checked ahead of the emptiness check below: corrupted
+    // text makes "is this side blank" itself an unreliable question.
+    if (hasCorruptedText(front, back)) {
+      return {
+        kind: 'invalid',
+        reason: 'corrupted-or-unterminated',
+        detail: `"${SINGLE_LINE_REVERSED_SEPARATOR}" card text contains a Unicode replacement character (U+FFFD), indicating corrupted content`,
+      };
+    }
     if (front !== '' && back !== '') {
       return { kind: 'match', style: 'single-line-reversed', front, back };
     }
@@ -206,6 +223,13 @@ function matchSingleLine(text: string): SingleLineMatch {
   if (plain > 0) {
     const front = text.slice(0, plain).trim();
     const back = text.slice(plain + SINGLE_LINE_SEPARATOR.length).trim();
+    if (hasCorruptedText(front, back)) {
+      return {
+        kind: 'invalid',
+        reason: 'corrupted-or-unterminated',
+        detail: `"${SINGLE_LINE_SEPARATOR}" card text contains a Unicode replacement character (U+FFFD), indicating corrupted content`,
+      };
+    }
     if (front !== '' && back !== '') {
       return { kind: 'match', style: 'single-line', front, back };
     }
@@ -218,7 +242,59 @@ function matchSingleLine(text: string): SingleLineMatch {
   return { kind: 'none' };
 }
 
-function clozesOnLine(line: LineSlice, stripped: StrippedLine): ClozeCardInstrument[] {
+/** What one walk of `clozesOnLine` (below) found on one line. */
+interface ClozeLineResult {
+  readonly cards: readonly ClozeCardInstrument[];
+  /** `[D-334]` (`ol-v7r5.90`): a delimiter she opened on this line and never closed. */
+  readonly invalid: readonly InvalidClozeBlock[];
+}
+
+/** Counts non-overlapping occurrences of `token` in `text` — the whole test `unterminatedClozeDetail` below needs. */
+function countOccurrences(text: string, token: string): number {
+  let count = 0;
+  let idx = text.indexOf(token);
+  while (idx !== -1) {
+    count++;
+    idx = text.indexOf(token, idx + token.length);
+  }
+  return count;
+}
+
+/**
+ * `[D-334]`'s cloze mirror of MCQ's "unterminated block" (M4): whether
+ * `text` still declares an unterminated cloze for `delimiter`, given that the
+ * complete-pair regex above already found nothing for it.
+ *
+ * `==` is self-symmetric (the same string opens and closes), so an odd count
+ * of `==` tokens means one of them has no partner. `{{`/`}}` are not, so an
+ * excess of openers over closers means the same thing. Either way, a
+ * genuinely empty-but-complete deletion (`====`, `{{}}`) has equal, even
+ * counts and is deliberately **not** flagged: that is the
+ * existing, intentional "not a cloze" case (`parseCards('a ==== span')`
+ * already returns no instrument and no diagnostic for it), not a new error
+ * this bead invents.
+ *
+ * **What this does not catch**, because the complete-pair check above
+ * already claimed the line: a line mixing one complete pair and one dangling
+ * opener of the *same* delimiter (`==first== and ==second`) is reported only
+ * as the complete pair, the dangling opener silently ignored — the "at
+ * minimum a declared-but-unterminated case" the ruling asks for, not a
+ * promise to catch every mix on a line that also has a valid deletion.
+ */
+function unterminatedClozeDetail(delimiter: ClozeDelimiter, text: string): string | null {
+  if (delimiter === '==') {
+    return countOccurrences(text, '==') % 2 === 1
+      ? '"==" opened a cloze deletion with no closing "==" before the line ended'
+      : null;
+  }
+  const opens = countOccurrences(text, '{{');
+  const closes = countOccurrences(text, '}}');
+  return opens > closes
+    ? '"{{" opened a cloze deletion with no closing "}}" before the line ended'
+    : null;
+}
+
+function clozesOnLine(line: LineSlice, stripped: StrippedLine): ClozeLineResult {
   for (const { delimiter, re } of CLOZE_PATTERNS) {
     re.lastIndex = 0;
     const found: { start: number; end: number; inner: string }[] = [];
@@ -226,41 +302,57 @@ function clozesOnLine(line: LineSlice, stripped: StrippedLine): ClozeCardInstrum
       if (m.index === undefined || m[1] === undefined) continue;
       found.push({ start: m.index, end: m.index + m[0].length, inner: m[1] });
     }
-    if (found.length === 0) continue;
-
-    // One instrument per deletion. The other deletions on the line are shown
-    // as ordinary text (that is how the plugin renders them), so their
-    // delimiters are dropped from `before`/`after` but their words are kept.
-    return found.map((target) => {
-      let before = '';
-      let after = '';
-      let cursor = 0;
-      for (const other of found) {
-        const segment = stripped.text.slice(cursor, other.start);
-        if (other.start < target.start) {
-          before += segment + other.inner;
-        } else if (other.start === target.start) {
-          before += segment;
-        } else {
-          after += segment + other.inner;
+    if (found.length > 0) {
+      // One instrument per deletion. The other deletions on the line are shown
+      // as ordinary text (that is how the plugin renders them), so their
+      // delimiters are dropped from `before`/`after` but their words are kept.
+      const cards = found.map((target) => {
+        let before = '';
+        let after = '';
+        let cursor = 0;
+        for (const other of found) {
+          const segment = stripped.text.slice(cursor, other.start);
+          if (other.start < target.start) {
+            before += segment + other.inner;
+          } else if (other.start === target.start) {
+            before += segment;
+          } else {
+            after += segment + other.inner;
+          }
+          cursor = other.end;
         }
-        cursor = other.end;
-      }
-      after += stripped.text.slice(cursor);
+        after += stripped.text.slice(cursor);
+        return {
+          type: 'cloze',
+          delimiter,
+          before,
+          clozeText: target.inner,
+          after,
+          raw: line.text,
+          span: { start: line.start, end: line.textEnd },
+          blockId: stripped.blockId,
+          foreignScheduling: stripped.foreignScheduling,
+        } satisfies ClozeCardInstrument;
+      });
+      return { cards, invalid: [] };
+    }
+
+    const detail = unterminatedClozeDetail(delimiter, stripped.text);
+    if (detail !== null) {
       return {
-        type: 'cloze',
-        delimiter,
-        before,
-        clozeText: target.inner,
-        after,
-        raw: line.text,
-        span: { start: line.start, end: line.textEnd },
-        blockId: stripped.blockId,
-        foreignScheduling: stripped.foreignScheduling,
-      } satisfies ClozeCardInstrument;
-    });
+        cards: [],
+        invalid: [
+          {
+            reason: 'unterminated-delimiter',
+            detail,
+            raw: line.text,
+            span: { start: line.start, end: line.textEnd },
+          },
+        ],
+      };
+    }
   }
-  return [];
+  return { cards: [], invalid: [] };
 }
 
 /** ol-v7r5.72: same three-way shape as `SingleLineMatch`, for the same reason. */
@@ -329,6 +421,15 @@ function multiLineCard(block: Block, lines: readonly LineSlice[]): MultiLineMatc
     .map((l) => l.text)
     .join('\n')
     .trim();
+  // M4 (`[D-334]`), checked ahead of the emptiness check below, same as the
+  // single-line forms above.
+  if (hasCorruptedText(front, back)) {
+    return {
+      kind: 'invalid',
+      reason: 'corrupted-or-unterminated',
+      detail: `multi-line separator "${separatorText}" card text contains a Unicode replacement character (U+FFFD), indicating corrupted content`,
+    };
+  }
   if (front === '' || back === '') {
     return {
       kind: 'invalid',
@@ -358,12 +459,16 @@ export interface CardParseResult {
   readonly cards: readonly CardInstrument[];
   /** ol-v7r5.72: a block that declared itself a card (a separator matched) and did not parse. */
   readonly invalid: readonly InvalidCardBlock[];
+  /** `[D-334]` (`ol-v7r5.90`): a line that opened a cloze delimiter and never closed it. */
+  readonly invalidCloze: readonly InvalidClozeBlock[];
 }
 
 /**
  * Every Q&A and cloze card in a note, in source order — plus, additively,
  * every block that declared itself a card (matched a `::`/`:::`/`?`/`??`
- * separator) and did not parse because its front or back came out blank.
+ * separator, or a `==`/`{{` cloze opener) and did not parse: its front or
+ * back came out blank, its text was corrupted, or a cloze delimiter never
+ * closed (`[D-334]`).
  *
  * Precedence on one line is Q&A over cloze: a line carrying `::` is a Q&A card
  * whose answer may happen to contain highlights, not a cloze card that happens
@@ -371,14 +476,15 @@ export interface CardParseResult {
  * that does not turn every highlighted answer into a second instrument.
  *
  * `parseCards` (below) is `parseCardsWithInvalid(source).cards` — same walk,
- * same `cards` output, `invalid` just discarded — so existing callers see no
- * behaviour change (`ol-v7r5.72`'s card-format.spec.ts pins the two producing
- * identical `cards` across every fixture note).
+ * same `cards` output, `invalid`/`invalidCloze` just discarded — so existing
+ * callers see no behaviour change (`ol-v7r5.72`'s card-format.spec.ts pins the
+ * two producing identical `cards` across every fixture note).
  */
 export function parseCardsWithInvalid(source: string): CardParseResult {
   const doc = parseDocument(source);
   const cards: CardInstrument[] = [];
   const invalid: InvalidCardBlock[] = [];
+  const invalidCloze: InvalidClozeBlock[] = [];
 
   for (const block of doc.blocks) {
     if (block.kind === 'paragraph') {
@@ -404,6 +510,7 @@ export function parseCardsWithInvalid(source: string): CardParseResult {
         const found = cardsOnLine(line);
         cards.push(...found.cards);
         invalid.push(...found.invalid);
+        invalidCloze.push(...found.invalidCloze);
       }
       continue;
     }
@@ -422,11 +529,12 @@ export function parseCardsWithInvalid(source: string): CardParseResult {
         const found = cardsOnLine(itemLine);
         cards.push(...found.cards);
         invalid.push(...found.invalid);
+        invalidCloze.push(...found.invalidCloze);
       }
     }
   }
 
-  return { cards, invalid };
+  return { cards, invalid, invalidCloze };
 }
 
 /** Every Q&A and cloze card in a note, in source order. See `parseCardsWithInvalid` for the full walk. */
@@ -436,7 +544,7 @@ export function parseCards(source: string): readonly CardInstrument[] {
 
 function cardsOnLine(line: LineSlice): CardParseResult {
   const stripped = stripLine(line.text);
-  if (stripped.text === '') return { cards: [], invalid: [] };
+  if (stripped.text === '') return { cards: [], invalid: [], invalidCloze: [] };
 
   const single = matchSingleLine(stripped.text);
   if (single.kind === 'match') {
@@ -455,6 +563,7 @@ function cardsOnLine(line: LineSlice): CardParseResult {
         },
       ],
       invalid: [],
+      invalidCloze: [],
     };
   }
 
@@ -473,7 +582,8 @@ function cardsOnLine(line: LineSlice): CardParseResult {
   // Falls through to cloze even when the single-line attempt was invalid,
   // exactly as when it returned `null`: a `::` with nothing on one side does
   // not stop the rest of the (stripped) line from being checked for a cloze.
-  return { cards: clozesOnLine(line, stripped), invalid };
+  const clozeResult = clozesOnLine(line, stripped);
+  return { cards: clozeResult.cards, invalid, invalidCloze: clozeResult.invalid };
 }
 
 // ---- the create path ------------------------------------------------------

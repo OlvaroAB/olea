@@ -180,6 +180,39 @@ describe('parseMcqBlocks — what is not a valid MCQ', () => {
     expect(source.slice(invalid[0]?.span.start, invalid[0]?.span.end)).toBe(invalid[0]?.raw);
     expect(invalid[0]?.span.start).toBeGreaterThan(instruments[0]?.span.end ?? 0);
   });
+
+  describe('[D-334] M4 — corrupted text or an unterminated fence', () => {
+    it('a block whose text carries a Unicode replacement character is corrupted, checked ahead of every other field check', () => {
+      const source = block([
+        'stem: which one is it�?',
+        'answer: the right one',
+        ...POOL.map((d) => `distractor: ${d}`),
+      ]);
+      const { instruments, invalid } = parseMcqBlocks(source);
+      expect(instruments).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('corrupted-or-unterminated');
+      expect(invalid[0]?.detail).toContain('replacement character');
+    });
+
+    it('a fence that never closes before the note ends is unterminated, not read as a run of valid fields', () => {
+      // No closing ``` line at all — `../block/parse.ts` runs the fence to EOF
+      // (its own documented behaviour), and until this bead nothing checked
+      // for that: the fields still looked well-formed.
+      const source = `${[`\`\`\`${MCQ_FENCE_INFO}`, ...validLines].join('\n')}\n`;
+      const { instruments, invalid } = parseMcqBlocks(source);
+      expect(instruments).toHaveLength(0);
+      expect(invalid).toHaveLength(1);
+      expect(invalid[0]?.reason).toBe('corrupted-or-unterminated');
+      expect(invalid[0]?.detail).toContain('never closed');
+    });
+
+    it('a properly closed block is unaffected — no false unterminated report', () => {
+      const { instruments, invalid } = parseMcqBlocks(block(validLines));
+      expect(invalid).toHaveLength(0);
+      expect(instruments).toHaveLength(1);
+    });
+  });
 });
 
 describe('serializeMcq — the canonical form', () => {

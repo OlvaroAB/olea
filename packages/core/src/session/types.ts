@@ -30,6 +30,7 @@ import type { SchedulableInstrumentType } from '../instrument/rating.js';
 import type {
   ClozeCardInstrument,
   InvalidCardBlock,
+  InvalidClozeBlock,
   InvalidMcqBlock,
   McqInstrument,
   QaCardInstrument,
@@ -154,6 +155,20 @@ export interface InvalidCardReport {
   readonly block: InvalidCardBlock;
 }
 
+/**
+ * A line that opened a cloze delimiter and did not become a cloze card, with
+ * the note it is in.
+ *
+ * `[D-334]` (`ol-v7r5.90`): mirrors `InvalidMcqReport`/`InvalidCardReport` for
+ * the same reason those two mirror each other — a cloze she started typing
+ * and mistyped must be as visible as a broken MCQ or Q&A card, not silently
+ * absent from every list `enumerateVaultInstruments` returns.
+ */
+export interface InvalidClozeReport {
+  readonly notePath: VaultPath;
+  readonly block: InvalidClozeBlock;
+}
+
 /** Everything one walk of the vault found. */
 export interface VaultInstrumentEnumeration {
   /** Every schedulable, concept-bound instrument, in vault order then source order. */
@@ -161,6 +176,8 @@ export interface VaultInstrumentEnumeration {
   readonly invalidMcqBlocks: readonly InvalidMcqReport[];
   /** `ol-v7r5.72`: the Q&A-card counterpart of `invalidMcqBlocks`, added so a consumer can read both. */
   readonly invalidCardBlocks: readonly InvalidCardReport[];
+  /** `[D-334]` (`ol-v7r5.90`): the cloze counterpart of the two lists above. */
+  readonly invalidClozeBlocks: readonly InvalidClozeReport[];
   readonly unbound: readonly UnboundInstrumentReport[];
   /**
    * `extractConcepts`'s own result for this walk, passed through — the walk
