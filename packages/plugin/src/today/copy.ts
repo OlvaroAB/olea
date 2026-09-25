@@ -565,11 +565,21 @@ export function effortInsightLine(course: CourseEffort): EffortInsightLine {
  * What the trends half actually read, stated rather than implied.
  *
  * `ol-1n1v`'s rule: a claim whose truth depends on having read everything is a
- * bet. The panel reads a trailing window of the review log, so it says so, and
- * every number above it is scoped by this line rather than by an assumption.
+ * bet. **This used to say so by naming a trailing window** (`the last 120
+ * days`) — but since `ol-egov.141.89.9.15` the `entries` that feed
+ * `buildInsights` are her whole review log, not a windowed slice
+ * (`plugin/src/today/data-source.ts`'s `readReviewHistory` doc:
+ * `DEFAULT_STREAK_WINDOW_DAYS` now bounds only `computeStreak`'s own walk).
+ * Neither F6.5 nor F6.8 nor the vocabulary registry names a numeric window
+ * for these detectors — `docs/dev/intelligence-build/vew.md`'s chain-spec
+ * trace (item 6, section 2.3: "the span is the whole log, as today, and the
+ * footer states the span actually read") is what fixes the direction: keep
+ * reading the whole log, and have this line say that instead of a day count
+ * nothing computes over any more. Taking no argument is deliberate — there is
+ * no window left to parameterise this by.
  */
-export function insightsScopeSentence(windowDays: number): string {
-  return `Counted over the last ${windowDays} days of review history.`;
+export function insightsScopeSentence(): string {
+  return 'Counted over the whole review history.';
 }
 
 /**
@@ -942,7 +952,7 @@ export function allTodayStrings(): readonly string[] {
     // this function has.
     earlyPullSentence(0.38) ?? '',
     effortShareClause(0.57, 0.14),
-    insightsScopeSentence(120),
+    insightsScopeSentence(),
     // --- F6.9, the rhythm reading ---
     rhythmQuietClause(21),
     rhythmQuietClause(30),

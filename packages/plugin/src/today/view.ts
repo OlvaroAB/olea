@@ -627,7 +627,7 @@ export class TodayView extends ItemView {
     }
     section.createDiv({
       cls: 'olea-today-insight-scope',
-      text: insightsScopeSentence(vm.windowDays),
+      text: insightsScopeSentence(),
     });
   }
 

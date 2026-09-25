@@ -224,7 +224,7 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
     spacingRateSentence(41.8, 2.9, 7),
     earlyPullSentence(0.38) ?? '',
     effortShareClause(0.57, 0.14),
-    insightsScopeSentence(120),
+    insightsScopeSentence(),
   ];
 
   it('uses F2.11’s four words and coins no fifth', () => {
@@ -318,8 +318,14 @@ describe('the trends half is information and consequence, never verdict (F6.2, F
     expect(clause).not.toContain('43%');
   });
 
-  it('states the window it read rather than implying it read everything (ol-1n1v)', () => {
-    expect(insightsScopeSentence(120)).toBe('Counted over the last 120 days of review history.');
+  it('states the whole log it read rather than implying it read everything (ol-1n1v)', () => {
+    expect(insightsScopeSentence()).toBe('Counted over the whole review history.');
+  });
+
+  it('does not name a day-bounded window (regression, ol-egov.141.89.11.9): entries feeding buildInsights is the whole log since ol-egov.141.89.9.15, not the DEFAULT_STREAK_WINDOW_DAYS the panel used to echo here', () => {
+    const sentence = insightsScopeSentence();
+    expect(sentence).not.toMatch(/\d/);
+    expect(sentence.toLowerCase()).toContain('whole');
   });
 
   it('the too-early line is neither a negative result nor an instruction', () => {
