@@ -5,15 +5,24 @@
  * and `biome.json`'s `noRestrictedImports` override for `packages/core` and
  * `packages/contracts`.
  *
- * This class cannot be unit-tested itself without a real Obsidian host — it
- * imports `obsidian` as a runtime value (`TFile`), which has no resolvable
- * entry point under vitest outside a real Obsidian install — and is
- * exercised manually against a real vault, plus indirectly by
- * `FolderSource`'s tests exercising the shared `VaultSource` contract this
- * class also implements. `listUnder` below delegates its whole algorithm to
+ * This class imports `obsidian` as a runtime value (`TFile`, for `watch`),
+ * which has no entry point outside a real Obsidian install, so vitest can
+ * load it only with that module mocked:
+ * `obsidian-source-hidden-paths.spec.ts` does, driving the class over fake
+ * hosts. What a real host's index and adapter actually do is still checked
+ * by hand against a real vault; `FolderSource`'s tests cover the shared
+ * `VaultSource` contract this class also implements. `listUnder` below
+ * delegates its whole algorithm to
  * `./dot-folder-walk.js`, an `obsidian`-free module against a narrow
  * structural adapter type, precisely so that one capability IS unit-testable
- * — see `dot-folder-walk.spec.ts` (`ol-2zfj.44`).
+ * — see `dot-folder-walk.spec.ts` (`ol-2zfj.44`). `read`, `readBinary`,
+ * `write`, `exists` and `firstSeen` delegate the same way to
+ * `./hidden-path-fallback.js` (`ol-egov.141.89.10.57`): the vault index is
+ * asked first and anything it resolves goes through the vault API exactly as
+ * before; only a hidden (dot-segment) path it does not resolve falls back to
+ * the raw adapter, so every `.olea/` store works whether or not a real host's
+ * index knows dot paths. That module's doc states the rule;
+ * `hidden-path-fallback.spec.ts` runs it against both host shapes.
  */
 
 import { type App, TFile, type Vault } from 'obsidian';
@@ -26,6 +35,13 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { listUnderViaAdapter } from './dot-folder-walk.js';
+import {
+  readVaultBinary,
+  readVaultText,
+  vaultFileExists,
+  vaultFileFirstSeen,
+  writeVaultText,
+} from './hidden-path-fallback.js';
 
 export class ObsidianSource implements VaultSource {
   private readonly vault: Vault;
@@ -34,15 +50,10 @@ export class ObsidianSource implements VaultSource {
     this.vault = app.vault;
   }
 
-  private getFile(path: VaultPath): TFile {
+  private assertVaultPath(path: VaultPath): void {
     if (!isVaultPath(path)) {
       throw new Error(`ObsidianSource: not a valid vault path: ${JSON.stringify(path)}`);
     }
-    const file = this.vault.getFileByPath(path);
-    if (file === null) {
-      throw new Error(`ObsidianSource: no such file: ${path}`);
-    }
-    return file;
   }
 
   async list(options: ListOptions = {}): Promise<readonly VaultPath[]> {
@@ -71,55 +82,31 @@ export class ObsidianSource implements VaultSource {
   }
 
   async read(path: VaultPath): Promise<string> {
-    const file = this.getFile(path);
+    this.assertVaultPath(path);
     // `vault.read`, not `vault.cachedRead`: this result feeds the
     // read-modify-write round trip (INV-2), and `cachedRead` is documented as
     // "use this if you only want to display the content to the user" — it
     // may serve a stale in-memory cache. `read` always goes to disk, which is
-    // the only source of truth a round-trip can be checked against.
-    return this.vault.read(file);
+    // the only source of truth a round-trip can be checked against. The
+    // hidden-path fallback keeps that: `adapter.read` also goes to disk.
+    return readVaultText(this.vault, path);
   }
 
   async readBinary(path: VaultPath): Promise<Uint8Array> {
-    const file = this.getFile(path);
-    const buffer = await this.vault.readBinary(file);
-    return new Uint8Array(buffer);
+    this.assertVaultPath(path);
+    return new Uint8Array(await readVaultBinary(this.vault, path));
   }
 
   async write(path: VaultPath, content: string): Promise<void> {
     if (!isVaultPath(path)) {
       throw new Error(`ObsidianSource.write: not a valid vault path: ${JSON.stringify(path)}`);
     }
-    const existing = this.vault.getFileByPath(path);
-    if (existing !== null) {
-      await this.vault.modify(existing, content);
-      return;
-    }
-    await this.ensureParentFolder(path);
-    await this.vault.create(path, content);
-  }
-
-  private async ensureParentFolder(path: VaultPath): Promise<void> {
-    const segments = path.split('/');
-    segments.pop(); // drop the file name, keep folder segments only
-    let ancestor = '';
-    for (const segment of segments) {
-      ancestor = ancestor === '' ? segment : `${ancestor}/${segment}`;
-      if (this.vault.getFolderByPath(ancestor) !== null) continue;
-      try {
-        await this.vault.createFolder(ancestor);
-      } catch {
-        // Lost a race with another writer creating the same folder
-        // concurrently — fine, as long as it exists now.
-        if (this.vault.getFolderByPath(ancestor) === null)
-          throw new Error(`ObsidianSource: could not create folder: ${ancestor}`);
-      }
-    }
+    await writeVaultText(this.vault, path, content);
   }
 
   async exists(path: VaultPath): Promise<boolean> {
     if (!isVaultPath(path)) return false;
-    return this.vault.getFileByPath(path) !== null;
+    return vaultFileExists(this.vault, path);
   }
 
   /**
@@ -152,12 +139,13 @@ export class ObsidianSource implements VaultSource {
    * a raw filesystem birthtime (Obsidian sets it itself and keeps it across
    * the moves/renames a raw fs stat would not survive). `null` for a path
    * that does not resolve to a file — no exception, matching the interface
-   * doc's "absence is a first-class outcome," same as `exists`.
+   * doc's "absence is a first-class outcome," same as `exists`. A hidden path
+   * the index does not know reads the raw adapter's stat ctime instead
+   * (`ol-egov.141.89.10.57`).
    */
   async firstSeen(path: VaultPath): Promise<number | null> {
     if (!isVaultPath(path)) return null;
-    const file = this.vault.getFileByPath(path);
-    return file === null ? null : file.stat.ctime;
+    return vaultFileFirstSeen(this.vault, path);
   }
 
   /**

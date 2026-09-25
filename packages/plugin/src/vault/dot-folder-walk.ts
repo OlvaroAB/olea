@@ -2,9 +2,9 @@
  * `listUnderViaAdapter` (`ol-2zfj.44`) — the pure walk `ObsidianSource.listUnder`
  * runs over Obsidian's raw `vault.adapter` surface, factored out into its own
  * `obsidian`-free module so it can be unit-tested with a fake.
- * `obsidian-source.ts` cannot itself be imported under vitest (no runtime
- * `obsidian` package to resolve outside a real Obsidian host — see that
- * file's own module doc), so the algorithm lives here against a narrow
+ * `obsidian-source.ts` cannot be imported under vitest without mocking the
+ * `obsidian` module (no runtime package outside a real Obsidian host — see
+ * that file's own module doc), so the algorithm lives here against a narrow
  * structural type (`DotFolderAdapter`) shaped exactly like the two
  * `DataAdapter` methods it needs, and `ObsidianSource` is a thin caller.
  */
