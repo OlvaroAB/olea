@@ -19,13 +19,16 @@
 
 import type { VaultSource } from 'olea-core';
 import {
+  attachConceptToOutcome,
   buildPaperBlueprint,
   type ConceptRecord,
   createPaper,
+  enumerateVaultInstruments,
   fillPaperBlueprintSlots,
   type PaperCompositionAccount,
   type PaperItemGenerationPort,
   type PaperRecord,
+  resolveOutcome,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { buildBlueprintInputForCourse } from '../../src/paper/assemble.js';
@@ -114,6 +117,64 @@ describe('createLocalPracticePaperProvider — load()', () => {
     const state = await provider.load('COURSEA');
     expect(state).toMatchObject({ kind: 'locked', nearestAssessmentDue: '2026-12-01' });
     if (state.kind === 'locked') expect(state.daysUntilNearest).toBeGreaterThan(0);
+  });
+});
+
+describe('createLocalPracticePaperProvider — real Outcome coverage (ol-2zfj.172, F4.11 ruling 4a)', () => {
+  const CONCEPT_NOTE = '05 Zettelkasten/Widget theory.md';
+
+  function vaultWithOneConcept(extraFiles: Record<string, string> = {}): VaultSource {
+    return fakeVault({
+      [CONCEPT_NOTE]: '# Widget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: COURSEA',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      ...extraFiles,
+    });
+  }
+
+  async function courseConceptKey(vault: VaultSource, course: string): Promise<string> {
+    const enumeration = await enumerateVaultInstruments(vault);
+    const record = enumeration.concepts.find((c) => c.courses.includes(course));
+    if (record === undefined) throw new Error('fixture note did not yield a concept — check it');
+    return record.key;
+  }
+
+  it('reads a nonzero outcomeCoverageShare and fires the coverage leg, far from any assessment, once a real Outcome attaches the course’s concept', async () => {
+    const vault = vaultWithOneConcept({
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-12-01'),
+    });
+
+    const conceptKey = await courseConceptKey(vault, 'COURSEA');
+    const outcome = await resolveOutcome(vault, {
+      courses: ['COURSEA'],
+      source: { path: CONCEPT_NOTE, blockIndex: 0 },
+      label: 'Cellular respiration',
+      provenance: { promptVersion: 'v1', modelVersion: 'model-a' },
+    });
+    await attachConceptToOutcome(vault, outcome.id, conceptKey);
+
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+    const state = await provider.load('COURSEA');
+    // Assessment is far outside the ratified proximity window, so this can only be
+    // 'unlocked-not-pulled' via the coverage leg — the leg the pre-wiring policy zero could
+    // never reach (unlock.ts's own module doc, pre-`ol-2zfj.172`).
+    expect(state.kind).toBe('unlocked-not-pulled');
+  });
+
+  it('stays locked far from an assessment when no Outcome attaches any concept — unchanged from before this wiring', async () => {
+    const vault = vaultWithOneConcept({
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-12-01'),
+    });
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+    const state = await provider.load('COURSEA');
+    expect(state.kind).toBe('locked');
   });
 });
 

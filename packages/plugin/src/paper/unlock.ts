@@ -4,38 +4,32 @@
  * proximity/coverage numbers, already composed there — this module supplies only the two real
  * inputs that seam needs).
  *
- * **`coverage` is a policy zero, never a measured one.** F4.11's material-coverage leg reads
- * `OutcomeConceptCoverage.outcomeCoverageShare` — real Outcome-based scope coverage, which has no
- * production reader anywhere in this plugin (see `assemble.ts`'s module doc for the same gap,
- * confirmed by search). Passing an honest `0` rather than a fabricated share means this composition
- * can only ever unlock through the proximity leg (an unpassed assessment inside the ratified
- * window) — never through coverage — until a real Outcome-coverage reader exists. This is the
- * SAFE direction to degrade in: ruling 4a's own text says "far from it, material coverage is the
- * gate," and a policy zero can never fire that gate wrongly — it can only under-unlock, which
- * `docs/dev/paper-blueprint-design.md`'s own §3.1 already names as the correct default direction
- * for an unripe input ("An unruled gate should under-unlock rather than over-unlock").
+ * **`coverage` is now a real measured share, wired 2026-09-25 (`ol-2zfj.172`).** F4.11's
+ * material-coverage leg reads `OutcomeConceptCoverage.outcomeCoverageShare`
+ * (`olea-core`'s `outcomeConceptCoverage`, `outcome/reconcile-coverage.ts`) — the course's active
+ * `OutcomeRecord`s (`listOutcomeRecords`) reconciled against its concept-key registry. The caller
+ * (`provider.ts`'s `loadCourseState`) now reads both real and passes the result here; this
+ * function itself does no vault I/O and performs no join of its own (mirrors
+ * `PaperUnlockInput.coverage`'s own doc). **A course with no active Outcomes attached is
+ * unchanged from before this wiring**: `outcomeConceptCoverage` returns `outcomeCoverageShare: 0`
+ * whenever `activeOutcomes.length === 0` (its own division-by-zero guard), the exact value the
+ * previous `ZERO_OUTCOME_COVERAGE` policy stub always supplied — so the coverage leg still cannot
+ * fire for such a course, honestly, not by a fabricated share. Ruling 4a's own text ("far from it,
+ * material coverage is the gate") is the leg this unblocks: before this wiring the leg was
+ * structurally unreachable for every course, Outcomes or not.
  */
 
-import type { PaperAssessment, PaperUnlockResult } from 'olea-core';
+import type { OutcomeConceptCoverage, PaperAssessment, PaperUnlockResult } from 'olea-core';
 import { evaluatePaperUnlockRatified } from '../oracle/paper-unlock-wiring.js';
-
-/** `OutcomeConceptCoverage`'s full shape, all zeros — see the module doc for why this is a policy value, never a measured one. */
-const ZERO_OUTCOME_COVERAGE = Object.freeze({
-  outcomeCount: 0,
-  attachedOutcomeCount: 0,
-  outcomeCoverageShare: 0,
-  conceptCount: 0,
-  attachedConceptCount: 0,
-  conceptCoverageShare: 0,
-});
 
 export function evaluatePracticePaperUnlockForCourse(
   asOf: string,
   assessments: readonly PaperAssessment[],
+  coverage: OutcomeConceptCoverage,
 ): PaperUnlockResult {
   return evaluatePaperUnlockRatified({
     asOf,
     assessments,
-    coverage: ZERO_OUTCOME_COVERAGE,
+    coverage,
   });
 }

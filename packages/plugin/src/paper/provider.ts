@@ -9,10 +9,11 @@
  * **What this composes, and on what basis** — see `assemble.ts` and `unlock.ts`'s own module docs
  * for exactly which of F4.11's four blueprint inputs are read from real, already-wired production
  * data today (course-scoped `ConceptRecord`s via `enumerateVaultInstruments`, real assignments via
- * `readAssessments`) and which are honestly degraded because no production reader exists yet
- * anywhere in this repo (taughtSignal, mastery, Outcome coverage, past-paper structure/demand
- * recovery). Composing those three real readers is a separate, multi-bead effort this bead's own
- * `owns` (`packages/plugin/src/paper/`) does not cover.
+ * `readAssessments`, and, since `ol-2zfj.172`, real Outcome coverage and Outcome labels via
+ * `listOutcomeRecords`/`outcomeConceptCoverage`) and which are still honestly degraded because no
+ * production reader exists yet anywhere in this repo (taughtSignal, mastery, past-paper
+ * structure/demand recovery). Composing those remaining readers is a separate, multi-bead effort
+ * this bead's own `owns` (`packages/plugin/src/paper/`) does not cover.
  */
 
 import {
@@ -20,6 +21,8 @@ import {
   createPaper,
   enumerateVaultInstruments,
   fillPaperBlueprintSlots,
+  listOutcomeRecords,
+  outcomeConceptCoverage,
   type PaperEmptySlot,
   type PaperGroundingLabel,
   type PaperItemGenerationPort,
@@ -85,7 +88,11 @@ function isoToday(now: Date): string {
   return now.toISOString().slice(0, 10);
 }
 
-/** Reads real assignments-table records for `course` and evaluates the unlock rule against them (`unlock.ts`). */
+/**
+ * Reads real assignments-table records for `course`, real Outcome coverage (`ol-2zfj.172`) and
+ * evaluates the unlock rule against them (`unlock.ts`). No cache — recomputed on every call, same
+ * as `requestPaper` (module doc).
+ */
 async function loadCourseState(
   deps: CreateLocalPracticePaperProviderDeps,
   course: string,
@@ -93,15 +100,28 @@ async function loadCourseState(
   const config = await deps.settingsStore.load();
   if (!isStudyPlanConfigured(config)) return { kind: 'assignments-not-configured' };
 
-  const { records } = await readAssessments(deps.vault, config.assignmentsBasePath);
+  const [{ records }, enumeration, outcomeRecords] = await Promise.all([
+    readAssessments(deps.vault, config.assignmentsBasePath),
+    enumerateVaultInstruments(deps.vault),
+    listOutcomeRecords(deps.vault),
+  ]);
   const courseAssessments = records.filter((record) => record.course === course);
   const asOf = isoToday(deps.now());
+
+  const courseConceptKeys = enumeration.concepts
+    .filter((concept) => concept.courses.includes(course))
+    .map((concept) => concept.key);
+  const courseOutcomes = outcomeRecords
+    .map((entry) => entry.record)
+    .filter((record) => record.courses.includes(course));
+  const coverage = outcomeConceptCoverage(courseOutcomes, courseConceptKeys);
 
   const unlock = evaluatePracticePaperUnlockForCourse(
     asOf,
     courseAssessments
       .filter((record) => record.type !== undefined && record.due !== undefined)
       .map((record) => ({ type: record.type as string, due: record.due as string })),
+    coverage,
   );
 
   if (unlock.nearestAssessment === null) return { kind: 'no-assessment-ahead', course };
@@ -178,9 +198,10 @@ export function createLocalPracticePaperProvider(
 
       const config = await deps.settingsStore.load();
       const asOf = isoToday(deps.now());
-      const [{ records }, enumeration] = await Promise.all([
+      const [{ records }, enumeration, outcomeRecords] = await Promise.all([
         readAssessments(deps.vault, config.assignmentsBasePath),
         enumerateVaultInstruments(deps.vault),
+        listOutcomeRecords(deps.vault),
       ]);
 
       const input = await buildBlueprintInputForCourse(
@@ -189,6 +210,7 @@ export function createLocalPracticePaperProvider(
         records,
         course,
         asOf,
+        outcomeRecords.map((entry) => entry.record),
       );
       const blueprint = buildPaperBlueprint(input);
       const filled = await fillPaperBlueprintSlots(blueprint, port);

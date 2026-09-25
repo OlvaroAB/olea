@@ -15,7 +15,8 @@
  * `findings/H4-past-paper-question-structure.md` found only 10 of 42 real papers support. This
  * bead's own scope is the command/view surface (`ol-egov.141.6.1`'s `owns`:
  * `packages/plugin/src/paper/`), not those three readers, so each is degraded HONESTLY rather
- * than invented — named below, not silently absorbed:
+ * than invented — named below, not silently absorbed. **`outcomes` is no longer one of these
+ * gaps** (wired 2026-09-25, `ol-2zfj.172` — see its own bullet below).
  *
  * - **taughtSignal.** Every `ConceptRecord` this function is given already required a real
  *   note evidencing it (`courses`/`sourcePaths`/`definition` — `enumerateVaultInstruments`'s own
@@ -42,10 +43,16 @@
  *   `conceptWeight` already falls back to coverage alone when this is `null`
  *   (`masteryFallback: true`), so `alpha` (`PRACTICE_PAPER_ALPHA_DECLARED` below) has no live
  *   effect on ranking today — restated honestly rather than silently ignored.
- * - **outcomes.** Omitted (`undefined`) — `BuildPaperBlueprintInput.outcomes` is documented as
- *   optional for exactly this caller ("omit when the caller has none resolved yet — emphasis then
- *   only matches concept names"). `OutcomeRecord` reading has no call site anywhere under
- *   `packages/plugin/src` either (confirmed above).
+ * - **outcomes (wired 2026-09-25, `ol-2zfj.172`, F4.11 ruling 3).** `buildScopeConceptsForCourse`
+ *   and `buildBlueprintInputForCourse` now both take the course's active `OutcomeRecord`s
+ *   (read by the caller via `listOutcomeRecords`, the same real reader `unlock.ts`'s coverage leg
+ *   now uses) and restate them as `PaperScopeOutcome[]` for the `outcomes` field, and set each
+ *   in-scope concept's `outcomeId` from the outcome→concept containment edge
+ *   (`OutcomeRecord.conceptKeys`) when one attaches it. `buildPaperBlueprint`'s `matchesEmphasis`
+ *   then matches a steering emphasis string against an Outcome's own label, not only the
+ *   concept's name (`paper-blueprint.ts`'s own doc). Omitting the parameter (or passing `[]`,
+ *   the default) reproduces the old degraded behaviour exactly — no concept gets an `outcomeId`,
+ *   `outcomes` is empty, and emphasis matches concept names only, same as before this wiring.
  * - **structure (past-paper structure/composition, `[D-262]`'s demand reading).** Always `null`
  *   — no `recoverStructure`-equivalent production reader exists in either package. `null` is the
  *   type's own legal "nothing was recoverable" state
@@ -59,9 +66,11 @@
  *   composition gets until a structure-recovery reader is wired; a follow-on bead is the honest
  *   next step, not a fix owed by this one.
  *
- * **Coverage share for the unlock rule** is the same story, one level up
- * (`unlock.ts`'s own module doc): `outcomeCoverageShare` reads `0` — a policy zero, never a
- * measured one — because Outcome-based coverage has no reader here either.
+ * **Coverage share for the unlock rule** is also wired now, one level up (`unlock.ts`'s own
+ * module doc, `ol-2zfj.172`): `provider.ts`'s `loadCourseState` reads the same
+ * `listOutcomeRecords`/concept-key registry this module reads and computes a real
+ * `outcomeConceptCoverage` for `evaluatePracticePaperUnlockForCourse`, replacing the old policy
+ * zero.
  */
 
 import {
@@ -69,9 +78,11 @@ import {
   type ConceptRecord,
   DEFAULT_PAPER_PURPOSE,
   formatClassOf,
+  type OutcomeRecord,
   type PaperAssessment,
   type PaperHeldSource,
   type PaperScopeConcept,
+  type PaperScopeOutcome,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -114,28 +125,79 @@ export async function buildHeldSourceForConcept(
 }
 
 /**
+ * Active, course-attached `OutcomeRecord`s narrowed to this course, and the concept-key →
+ * outcome-id map their `conceptKeys` containment edge implies (first-attaching outcome wins on a
+ * duplicate — the schema does not forbid two outcomes naming the same concept key, and ruling 3's
+ * emphasis match only needs ONE parent to test a label against).
+ */
+function activeCourseOutcomes(
+  outcomes: readonly OutcomeRecord[],
+  course: string,
+): readonly OutcomeRecord[] {
+  return outcomes.filter(
+    (outcome) => outcome.status === 'active' && outcome.courses.includes(course),
+  );
+}
+
+function outcomeIdByConceptKey(
+  courseOutcomes: readonly OutcomeRecord[],
+): ReadonlyMap<string, string> {
+  const map = new Map<string, string>();
+  for (const outcome of courseOutcomes) {
+    for (const key of outcome.conceptKeys) {
+      if (!map.has(key)) map.set(key, outcome.id);
+    }
+  }
+  return map;
+}
+
+/**
  * `PaperScopeConcept[]` for one course, from real `ConceptRecord`s already walked by
  * `enumerateVaultInstruments` (no second vault walk, no Worker call). See the module doc for the
- * `taughtSignal`/`heldSources`/`masteryScore` degradations this applies.
+ * `taughtSignal`/`heldSources`/`masteryScore` degradations this applies, and for `outcomes`
+ * (`ol-2zfj.172`, F4.11 ruling 3): each in-course concept whose key is contained by one of the
+ * course's active Outcomes gets that Outcome's id on `outcomeId`, so `buildPaperBlueprint`'s
+ * emphasis match can test the Outcome's own label, not only the concept's name.
  */
 export async function buildScopeConceptsForCourse(
   vault: VaultSource,
   concepts: readonly ConceptRecord[],
   course: string,
+  outcomes: readonly OutcomeRecord[] = [],
 ): Promise<readonly PaperScopeConcept[]> {
   const inCourse = concepts.filter((concept) => concept.courses.includes(course));
+  const outcomeIdForKey = outcomeIdByConceptKey(activeCourseOutcomes(outcomes, course));
   const out: PaperScopeConcept[] = [];
   for (const concept of inCourse) {
     const held = await buildHeldSourceForConcept(vault, concept);
+    const outcomeId = outcomeIdForKey.get(concept.key);
     out.push({
       conceptKey: concept.key,
       conceptName: concept.name,
+      ...(outcomeId === undefined ? {} : { outcomeId }),
       taughtSignal: 'yes',
       heldSources: held === undefined ? [] : [held],
       masteryScore: null,
     });
   }
   return out;
+}
+
+/**
+ * `PaperScopeOutcome[]` for one course — the field grain `buildPaperBlueprint`'s emphasis match
+ * needs (F4.11 ruling 3), restated from the course's active `OutcomeRecord`s. `[]` when the
+ * course has none, which reproduces the pre-`ol-2zfj.172` degraded behaviour exactly (emphasis
+ * then matches concept names only — see `buildPaperBlueprintInput`'s own use of this).
+ */
+export function buildScopeOutcomesForCourse(
+  outcomes: readonly OutcomeRecord[],
+  course: string,
+): readonly PaperScopeOutcome[] {
+  return activeCourseOutcomes(outcomes, course).map((outcome) => ({
+    outcomeId: outcome.id,
+    label: outcome.label,
+    conceptKeys: outcome.conceptKeys,
+  }));
 }
 
 /** `PaperAssessment[]` for one course, from `readAssessments`'s real report — `course`/`type`/`due` all present (records missing any are dropped, never guessed). */
@@ -183,11 +245,13 @@ export async function buildBlueprintInputForCourse(
   }[],
   course: string,
   asOf: string,
+  outcomes: readonly OutcomeRecord[] = [],
 ): Promise<BuildPaperBlueprintInput> {
   return {
     course,
     asOf,
-    concepts: await buildScopeConceptsForCourse(vault, concepts, course),
+    concepts: await buildScopeConceptsForCourse(vault, concepts, course, outcomes),
+    outcomes: buildScopeOutcomesForCourse(outcomes, course),
     assessments: buildAssessmentsForCourse(assessmentRecords, course),
     structure: null,
     purpose: DEFAULT_PAPER_PURPOSE,
