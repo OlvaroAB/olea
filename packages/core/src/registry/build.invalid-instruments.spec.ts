@@ -1,16 +1,25 @@
 // Scenario: olea-service/features/F5-explain-it-back.md — "F5.8 — what the
-// top growth stage claims, and the evidence that qualifies it [D-281]" —
-// item 4, instrument validity, at the ONE production caller this file owns:
-// `buildRegistryModel` (ol-vrlp, [DOS-C5b]).
+// top growth stage claims, and the evidence that qualifies it [D-281]" — at
+// the ONE production caller this file owns: `buildRegistryModel`.
+//
+// `[D-338]` (ruled 2026-09-25, `olea-service`'s `ol-egov.141.89.9.7`): the
+// displayed stage is corrected only on PROVEN-invalid evidence; forgetting
+// and a source merely acquiring a new revision never retract it, and
+// (item 2 of the interim fix, `olea-service`'s `ol-egov.141.89.9.14`) neither
+// does her own suspension or withdrawal. `ol-vrlp`'s `[D-281]` item 4 wiring
+// read the registry's `suspendedInstrumentIds` (F8.5's withdrawn-instrument
+// projection) straight into the mastery fold's `invalidInstrumentIds` — but
+// a plain `suspend` record cannot say WHY (the citation-revision tick, her
+// own withdrawal, and a confirmed defect all write the identical event, per
+// `docs/dev/intelligence-build/att.md` items 1 and 2 in `olea-service`), so
+// that wiring retracted an earned top stage on a revision or a withdrawal,
+// which `[D-338]` forbids. This file proves the reversal: suspension alone
+// (whatever wrote it) no longer touches the fold, while a `verdict: 'rejected'`
+// record — already unambiguous, no reason field needed — still does.
 //
 // `../mastery/rollup.spec.ts` already proves `computeConceptMastery` itself
-// honours `MasteryRollupOptions.invalidInstrumentIds` (`@auto:MAT-C5-
-// instrument-validity`). This file proves the WIRING: that `buildRegistryModel`
-// derives that option from the registry's own withdrawn-instrument projection
-// (`suspendedInstrumentIds`, F8.5) rather than leaving the fold's default
-// (nothing invalidated) in place — the gap `ol-vrlp` records, where a
-// withdrawn instrument's attempt kept qualifying a concept for `tree` because
-// no caller passed the set at all.
+// honours `MasteryRollupOptions.invalidInstrumentIds`
+// (`@auto:MAT-C5-instrument-validity`); this file proves the WIRING only.
 //
 // Concept/instrument identifiers below are structural placeholders
 // ("concept-a", "qa:concept-a:1", "COURSE-A"), never fixture vocabulary — INV-3.
@@ -97,11 +106,45 @@ function qualifyingExplainBack(overrides: Partial<ExplainBackGrade> = {}): Revie
   };
 }
 
+/**
+ * The one `suspend` shape the log has — written identically by the
+ * citation-revision tick, her own withdrawal in the registry, and (until
+ * `[D-345]` rules a reason field) a confirmed defect. `[D-338]`'s interim
+ * fix reads none of them as proof of invalidity.
+ */
+function suspendRecord(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
+  return {
+    schemaVersion: 3,
+    kind: 'suspend',
+    eventId: 'suspend-1',
+    timestamp: '2026-01-25T09:00:00-04:00',
+    instrumentId: 'qa:concept-a:1',
+    conceptIds: ['concept-a'],
+    ...overrides,
+  } as ReviewLogEntry;
+}
+
+/** A `'rejected'` verdict — a real refusal, unlike a mere suspend, and proven invalid without waiting on a reason field. */
+function rejectedVerdict(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
+  return {
+    schemaVersion: 5,
+    kind: 'verdict',
+    eventId: 'verdict-1',
+    timestamp: '2026-01-26T09:00:00-04:00',
+    instrumentId: 'qa:concept-a:1',
+    instrumentType: 'qa',
+    conceptIds: ['concept-a'],
+    verdict: 'rejected',
+    artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    ...overrides,
+  } as ReviewLogEntry;
+}
+
 const scheduler = createFsrsScheduler();
 const now = new Date('2026-02-01T12:00:00Z');
 const HOLDING_CUT = 0.8;
 
-function buildFor(entries: readonly ReviewLogEntry[], suspended: ReadonlySet<string>) {
+function buildFor(entries: readonly ReviewLogEntry[], suspended: ReadonlySet<string> = new Set()) {
   return buildRegistryModel({
     concepts: [concept()],
     instrumentRecords: [qaInstrument()],
@@ -114,24 +157,25 @@ function buildFor(entries: readonly ReviewLogEntry[], suspended: ReadonlySet<str
   });
 }
 
-describe('buildRegistryModel — [D-281] item 4 reaches the fold (ol-vrlp)', () => {
+describe('buildRegistryModel — [D-338]: suspension alone never retracts the top stage', () => {
   it('a qualifying attempt on an instrument still in good standing reaches `tree`', () => {
-    const model = buildFor([qualifyingExplainBack()], new Set());
+    const model = buildFor([qualifyingExplainBack()]);
     expect(model.concepts[0]?.mastery.state).toBe('tree');
   });
 
-  it('the SAME attempt, once its instrument is withdrawn (F8.5), no longer qualifies the top stage', () => {
-    const withdrawn = buildFor([qualifyingExplainBack()], new Set(['qa:concept-a:1']));
-    expect(withdrawn.concepts[0]?.mastery.state).not.toBe('tree');
-    expect(withdrawn.concepts[0]?.mastery.state).toBe('sprout');
-    // The instrument summary itself reads `pruned` from the very same set —
-    // proof this is the registry's own current-standing projection, not a
-    // second, independently-tracked notion of "withdrawn".
-    expect(withdrawn.concepts[0]?.instruments[0]?.pruned).toBe(true);
+  it('the SAME attempt, once its instrument is suspended — as the citation-revision tick writes, or as her own withdrawal writes; the log cannot tell the two apart — KEEPS the top stage', () => {
+    const suspended = new Set(['qa:concept-a:1']);
+    const model = buildFor([qualifyingExplainBack(), suspendRecord()], suspended);
+    expect(model.concepts[0]?.mastery.state).toBe('tree');
+    // The instrument summary itself still reads `pruned` from the registry's
+    // own withdrawn-instrument projection — display and the fold are
+    // deliberately decoupled now, not the same read.
+    expect(model.concepts[0]?.instruments[0]?.pruned).toBe(true);
   });
 
-  it('unsuspending (F8.5 is reversible) lets the same historical attempt qualify again — nothing about the past attempt itself changed', () => {
-    const restored = buildFor([qualifyingExplainBack()], new Set());
-    expect(restored.concepts[0]?.mastery.state).toBe('tree');
+  it('the SAME attempt, once its instrument carries a `rejected` verdict — a real refusal, not a mere suspend — no longer qualifies the top stage', () => {
+    const model = buildFor([qualifyingExplainBack(), rejectedVerdict()]);
+    expect(model.concepts[0]?.mastery.state).not.toBe('tree');
+    expect(model.concepts[0]?.mastery.state).toBe('sprout');
   });
 });

@@ -117,6 +117,7 @@ import {
   extractTier3Evidence,
   type GroveCourseModel,
   HOLDING_CUT,
+  latestVerdictByInstrument,
   loadCachedStudyPlan,
   parseReviewLog,
   REVIEW_LOG_FOLDER,
@@ -128,7 +129,6 @@ import {
   reviewLogPath,
   type Scheduler,
   type StudyPlanStore,
-  suspendedInstrumentIds,
   type TermWindow,
   type TodayPanelInput,
   type TodayViewModel,
@@ -848,6 +848,34 @@ function instrumentCountsByNotePath(
 }
 
 /**
+ * `[D-338]` interim fix (`ol-egov.141.89.9.14`), partly reversing `ol-vrlp`'s
+ * `[D-281]` item 4 wiring here: `computeAllConceptMastery`'s
+ * `invalidInstrumentIds` must name instruments PROVEN invalid, and a plain
+ * `suspend`/`unsuspend` record cannot say why — the citation-revision tick,
+ * her own withdrawal (F8.5) and a confirmed defect all write the identical
+ * event, with no reason field until `docs/dev/intelligence-build/att.md`
+ * section 7 proposal 1 (`olea-service`) lands one. `[D-338]` items 2 and 4
+ * rule that neither a revision nor her own choice may retract an earned
+ * stage, so `suspendedInstrumentIds` must NOT reach this fold — that was the
+ * retraction bug.
+ *
+ * A `verdict` record is a different, already-unambiguous signal:
+ * `olea-core`'s `../review-log/verdicts.ts` doc calls `rejected` "a real
+ * refusal", never a mere pause, so an instrument whose LATEST verdict is
+ * `rejected` still proves itself invalid today. A corrective re-grade
+ * (`explainBackGrade.revisionOf`) is already read unconditionally inside
+ * `olea-core`'s mastery fold and needs no entry here. Matches
+ * `../registry/build.ts` (olea-core)'s own `provenInvalidInstrumentIds`.
+ */
+function provenInvalidInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+  const invalid = new Set<string>();
+  for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
+    if (verdict.verdict === 'rejected') invalid.add(instrumentId);
+  }
+  return invalid;
+}
+
+/**
  * The real scope source: one `buildGroveModel` call per running course, the
  * same per-course computation the grove screen runs — this module computes
  * no scope of its own, matching `olea-core`'s own `gap/scope-overview.ts`
@@ -899,15 +927,13 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
           enumeration.concepts,
           instrumentCountsByNotePath(enumeration.records),
         );
-        // `[D-281]` item 4 (`ol-vrlp`): this reading's own fold, so it must
-        // supply the instrument's CURRENT standing itself — `suspendedInstrumentIds`
-        // is F8.5's withdrawn set, the same projection `../registry/build.ts`
-        // (olea-core) reads for its own registry fold, derived fresh from
-        // this read's own `entries` rather than cached on any review record.
+        // `[D-338]` interim fix (`ol-egov.141.89.9.14`): see
+        // `provenInvalidInstrumentIds`'s own doc, above, for why this no
+        // longer reads `suspendedInstrumentIds`.
         const mastery = computeAllConceptMastery(
           entries,
           enumeration.concepts.map((concept) => concept.key),
-          { invalidInstrumentIds: [...suspendedInstrumentIds(entries)] },
+          { invalidInstrumentIds: [...provenInvalidInstrumentIds(entries)] },
         );
 
         // Every course a concept or a registered source names — a course

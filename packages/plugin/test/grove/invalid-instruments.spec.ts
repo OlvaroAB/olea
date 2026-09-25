@@ -1,24 +1,22 @@
 /**
- * `createVaultScopeSource`'s own mastery fold — `[D-338]` interim fix
- * (`olea-service`'s `ol-egov.141.89.9.14`), partly reversing `ol-vrlp`'s
- * `[D-281]` item 4 wiring here.
+ * `createLocalGroveProvider`'s own mastery reading — `[D-338]` interim fix
+ * (`olea-service`'s `ol-egov.141.89.9.14`).
  *
- * `ol-vrlp` made this call site pass `suspendedInstrumentIds(entries)` as
- * `MasteryRollupOptions.invalidInstrumentIds` — but a plain `suspend` record
- * cannot say WHY (the citation-revision tick, her own withdrawal, and a
- * confirmed defect all write the identical event,
- * `docs/dev/intelligence-build/att.md` items 1 and 2 in `olea-service`), and
- * `[D-338]` (ruled 2026-09-25) rules that neither a revision nor her own
- * choice may retract an earned top stage. This file proves the reversal, end
- * to end through THIS module's own fold, over a real vault walk plus a real
- * review-log read: suspension alone (however it was written) no longer
- * retracts, while an explicit `verdict: 'rejected'` record — a real refusal,
- * not a mere pause — still does.
+ * The grove's per-concept `state` is read straight off `buildRegistryModel`
+ * (`../../src/grove/provider.ts`'s own module doc: "this module computes
+ * nothing new about mastery"), so `packages/core/src/registry/
+ * build.invalid-instruments.spec.ts`'s fix — `buildRegistryModel` no longer
+ * reads `suspendedInstrumentIds` into the mastery fold's
+ * `invalidInstrumentIds` — reaches the grove for free. This file proves that
+ * end to end, through the real provider, over a real vault walk: suspension
+ * alone (however it was written — the citation-revision tick, or her own
+ * withdrawal; the log cannot tell the two apart, `docs/dev/intelligence-
+ * build/att.md` item 2 in `olea-service`) no longer takes back a top-stage
+ * cell, while a `verdict: 'rejected'` record — a real refusal — still does.
  *
- * Fixture shape matches `data-source.spec.ts`'s own `createVaultScopeSource`
- * suite (`fixtureVaultWithRegisteredSource`-style: a registered objectives
- * doc plus one concept note) — every course code and concept name below is
- * invented (INV-3).
+ * Fixture shape matches `provider.spec.ts`'s own `fixtureVaultWithRegistered
+ * Source` (a registered objectives doc plus one concept note); every course
+ * code and concept name below is invented (INV-3).
  */
 import {
   appendReviewLogRecord,
@@ -27,11 +25,25 @@ import {
   enumerateVaultInstruments,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { createVaultScopeSource } from '../../src/today/data-source.js';
+import { createLocalGroveProvider } from '../../src/grove/provider.js';
+import type { GroveCourseSection, GroveViewState } from '../../src/grove/view.js';
+import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
 const NOW = new Date('2026-09-01T09:00:00Z');
+
+class FakeDataHost implements ObsidianDataHost {
+  blob: unknown = null;
+
+  async loadData(): Promise<unknown> {
+    return this.blob;
+  }
+
+  async saveData(data: unknown): Promise<void> {
+    this.blob = data;
+  }
+}
 
 function fixtureVault() {
   return memoryVault({
@@ -57,13 +69,22 @@ function fixtureVault() {
 }
 
 async function conceptACell(vault: ReturnType<typeof fixtureVault>) {
-  const source = createVaultScopeSource({ vault, deviceId: DEVICE, now: () => NOW });
-  const models = await source.listCourseGroveModels();
-  const course = (models ?? []).find((model) => model.course === 'TESTC101');
-  if (course === undefined || course.status !== 'declared') {
-    throw new Error(`expected TESTC101 declared, got ${course?.status}`);
+  const provider = createLocalGroveProvider({
+    vault,
+    deviceId: DEVICE,
+    settingsHost: new FakeDataHost(),
+    now: () => NOW,
+  });
+  const state: GroveViewState = await provider.load();
+  if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+  const section: GroveCourseSection | undefined = state.courses.find(
+    (c) => c.course === 'TESTC101',
+  );
+  if (section === undefined) throw new Error('missing TESTC101 section');
+  if (section.model.status !== 'declared') {
+    throw new Error(`expected TESTC101 declared, got ${section.model.status}`);
   }
-  const cell = course.cells.find((c) => c.conceptName === 'Concept A');
+  const cell = section.model.cells.find((c) => c.conceptName === 'Concept A');
   if (cell === undefined) throw new Error('missing Concept A cell');
   return cell;
 }
@@ -107,8 +128,8 @@ async function seedQualifyingAttempt(vault: ReturnType<typeof fixtureVault>) {
   return { instrumentId: instrument.instrumentId, conceptIds };
 }
 
-describe('createVaultScopeSource — [D-338]: suspension alone never retracts the top stage', () => {
-  it('a qualifying explain-back attempt reaches `tree`, and suspending the instrument it rode afterwards — as the citation-revision tick writes, or as her own withdrawal writes; the log cannot tell the two apart (att.md item 2) — KEEPS `tree`', async () => {
+describe('createLocalGroveProvider — [D-338]: suspension alone never retracts the top stage', () => {
+  it('a qualifying explain-back attempt reads `tree`, and suspending the instrument it rode afterwards — as the citation-revision tick writes, or as her own withdrawal writes — KEEPS `tree`', async () => {
     const vault = fixtureVault();
     const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
 
@@ -130,7 +151,7 @@ describe('createVaultScopeSource — [D-338]: suspension alone never retracts th
     expect(afterSuspend.state).toBe('tree');
   });
 
-  it('the SAME attempt, once its instrument carries a `rejected` verdict — a real refusal, not a mere suspend — no longer qualifies the top stage', async () => {
+  it('the SAME attempt, once its instrument carries a `rejected` verdict — a real refusal, not a mere suspend — no longer reads the top stage', async () => {
     const vault = fixtureVault();
     const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
 

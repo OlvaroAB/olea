@@ -85,6 +85,7 @@
  * using this fact for.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import { noteOfferEligible } from '../concept/note-offer.js';
 import type { Provenance } from '../extract/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
@@ -99,6 +100,7 @@ import {
   type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
 } from '../review-log/explain-back-history.js';
+import { latestVerdictByInstrument } from '../review-log/verdicts.js';
 import { aliasesFor, isConceptPruned, resolvedDisplayName } from './overrides.js';
 import type {
   BuildRegistryModelInput,
@@ -420,6 +422,34 @@ function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): numbe
 }
 
 /**
+ * `[D-338]` interim fix (`ol-egov.141.89.9.14`), partly reversing `ol-vrlp`'s
+ * `[D-281]` item 4 wiring: `../mastery/rollup.ts`'s `invalidInstrumentIds`
+ * must name instruments **proven** invalid, and a plain `suspend`/`unsuspend`
+ * record cannot say why — the citation-revision tick, her own withdrawal
+ * (F8.5) and a confirmed defect all write the identical event, with no
+ * reason field until proposal 1 (`docs/dev/intelligence-build/att.md`
+ * section 7, `olea-service`) lands one. `[D-338]` items 2 and 4 rule that
+ * neither a revision nor her own choice may retract an earned stage, so
+ * `suspendedInstrumentIds` (F8.5's withdrawn-instrument projection, still
+ * read above for the `pruned` display) must NOT reach this fold as
+ * `invalidInstrumentIds` — that was the retraction bug.
+ *
+ * A `verdict` record is a different, already-unambiguous signal:
+ * `../review-log/verdicts.ts`'s own doc calls `rejected` "a real refusal",
+ * never a mere pause, so an instrument whose LATEST verdict is `rejected`
+ * proves itself invalid today, with no reason field needed. A corrective
+ * re-grade (`explainBackGrade.revisionOf`) is already read unconditionally
+ * inside `../mastery/rollup.ts` itself and needs no entry here.
+ */
+function provenInvalidInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+  const invalid = new Set<string>();
+  for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
+    if (verdict.verdict === 'rejected') invalid.add(instrumentId);
+  }
+  return invalid;
+}
+
+/**
  * Builds the whole registry model — pure, synchronous, and (per this
  * module's doc) not itself responsible for reading the vault or the log.
  *
@@ -460,15 +490,13 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const conceptIds = concepts.map((c) => c.key);
   const idsForRollup = new Set([...conceptIds, ...conceptIdsInLog(input.entries)]);
 
-  // `[D-281]` item 4 (`ol-vrlp`): the fold's `invalidInstrumentIds` is not
-  // derived by the fold itself (see `../mastery/rollup.ts`'s own doc on why),
-  // so this, the registry's own build, is one of the two production callers
-  // that must supply the instrument's CURRENT standing. `suspendedInstrumentIds`
-  // is exactly F8.5's withdrawn set — the same projection this module already
-  // reads to mark an instrument summary `pruned` above — so a withdrawn
-  // instrument's attempt can no longer qualify a concept for `tree`.
+  // `[D-338]` interim fix (`ol-egov.141.89.9.14`): `invalidInstrumentIds`
+  // must be PROVEN invalid, never merely suspended — see
+  // `provenInvalidInstrumentIds`'s own doc for why `ol-vrlp`'s
+  // `suspendedInstrumentIds` wiring here was the retraction bug D-338 rules
+  // against, and what still counts without it.
   const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup], {
-    invalidInstrumentIds: [...input.suspendedInstrumentIds],
+    invalidInstrumentIds: [...provenInvalidInstrumentIds(input.entries)],
   });
   const vitalityByConcept = readAllConceptVitality(
     input.entries,
