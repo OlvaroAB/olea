@@ -143,11 +143,9 @@ export const PLUGIN_SURFACE_STATES = [
 export const GROVE_STATES = ['grove-no-source', 'grove-declared'] as const;
 
 // F6.10/D-243's Home dashboard (`ol-ppxj.49`) — see `home-scenarios.ts` for the source of
-// truth. Deliberately absent from `discoverMatrix`/`drift-guard.spec.ts`: this list's own nav
-// entries in `public/index.html` are plain, hand-written anchors (`ol-ppxj.49`'s own module
-// doc — main.ts's per-state button loop is outside this bead's owns), never
-// `[data-wb-home-state-link]` elements a generic discovery pass could read, so a drift check
-// against them would just assert this file's own hardcoded copy of itself.
+// truth. `main.ts`'s per-state button loop (`ol-ppxj.50`) now builds this list's nav entries
+// the same way as every sibling above, real `[data-wb-home-state-link]` elements included, so
+// `discoverMatrix`/`drift-guard.spec.ts` covers Home like every other surface below.
 export const HOME_STATES = [
   'home-composed',
   'home-empty',
@@ -339,6 +337,7 @@ export interface DiscoveredMatrix {
   readonly registryStates: readonly string[];
   readonly pluginSurfaceStates: readonly string[];
   readonly groveStates: readonly string[];
+  readonly homeStates: readonly string[];
   readonly variableSets: readonly string[];
 }
 
@@ -388,6 +387,9 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
   const groveStates = await page
     .locator('[data-wb-grove-state-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-grove-state-link') ?? ''));
+  const homeStates = await page
+    .locator('[data-wb-home-state-link]')
+    .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-home-state-link') ?? ''));
   const variableSets = await page
     .locator('[data-wb-set-link]')
     .evaluateAll((els) => els.map((el) => el.getAttribute('data-wb-set-link') ?? ''));
@@ -406,6 +408,7 @@ export async function discoverMatrix(page: Page): Promise<DiscoveredMatrix> {
     registryStates,
     pluginSurfaceStates,
     groveStates,
+    homeStates,
     variableSets,
   };
 }

@@ -8,30 +8,21 @@
  * the same discipline `grove-scenarios.ts` already documents for its own
  * pane.
  *
- * **What this file does NOT assert, and why.** `main.ts`'s own `mountHome`
- * (`ol-qq61`) rebuilds its own `HomeViewDeps.load` closure on every refresh
- * by re-running `buildHomeScenario` and then reconstructing the dashboard
- * state BY HAND with `courses: []` hardcoded and no `avoidanceQuestion` key
- * at all (`main.ts` around its own `mountHome`, the object literal
- * `{ kind: 'dashboard', session: ..., courses: [] }`) — a leftover from
- * before this bead, when `home-scenarios.ts` genuinely never produced
- * anything else (that mounter's own doc comment: "`courses` stays empty on
- * every state here"). `main.ts` is outside this bead's `owns` (a heavily
- * contested shared file — see `ol-ppxj.49`'s own report), so the course
- * strip and the avoidance question `home-scenarios.ts` now computes for
- * `home-session-unavailable`/`home-empty` (see that file's own module doc)
- * do NOT yet reach this workbench's live DOM, even though
- * `test/home-scenarios.spec.ts` already proves the data itself is correct.
- * Filed as a follow-up naming `mountHome`'s exact lines; this file asserts
- * only what the live app actually renders today; a golden is still taken of
- * each state's real, current pixels (including the empty course panel this
- * gap leaves), so a future fix to `mountHome` will visibly change these
- * goldens rather than silently landing unverified.
+ * `main.ts`'s own `mountHome` (`ol-qq61`, fixed by `ol-ppxj.50`) now passes
+ * `reloaded.state.courses` and `reloaded.state.avoidanceQuestion` through
+ * unchanged on every refresh instead of rebuilding the dashboard state by
+ * hand with `courses: []` and no `avoidanceQuestion` key — so the course
+ * strip and avoidance question `home-scenarios.ts` computes for
+ * `home-session-unavailable`/`home-empty` do reach this workbench's live
+ * DOM, and their goldens below cover it. `home-composed` still shows
+ * neither: that is `home-scenarios.ts`'s own fixture choice
+ * (`avoidanceQuestion: undefined`, `courses: []`), not a mount gap — see
+ * that file's own module doc.
  */
 import { expect, test } from '@playwright/test';
 import { frame, gotoState, hostFrameElement } from './helpers.js';
 
-test('home-composed: the composed session renders inline, with Start and no course strip yet (main.ts gap, see module doc)', async ({
+test('home-composed: the composed session renders inline, with Start and no course strip (home-scenarios.ts fixture choice, see module doc)', async ({
   page,
 }) => {
   await gotoState(page, 'home', 'home-composed', 'obsidian-dark');

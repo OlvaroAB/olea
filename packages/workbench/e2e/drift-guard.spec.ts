@@ -15,6 +15,7 @@ import {
   EXPLAIN_STATES,
   GENERATE_STATES,
   GROVE_STATES,
+  HOME_STATES,
   ORACLE_STATES,
   PLUGIN_SURFACE_STATES,
   REGISTRY_STATES,
@@ -28,7 +29,7 @@ import {
   VARIABLE_SETS,
 } from './helpers.js';
 
-test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/bulk-review/registry/plugin-surface/grove/variable-set lists match the live app', async ({
+test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/session/trends/rhythm/bulk-review/registry/plugin-surface/grove/home/variable-set lists match the live app', async ({
   page,
 }) => {
   await page.goto('/');
@@ -89,6 +90,9 @@ test('the hardcoded review/today/oracle/retrieve/generate/timeline/explain/sessi
   ).toEqual(new Set(PLUGIN_SURFACE_STATES));
   expect(new Set(live.groveStates), 'grove states — see grove-scenarios.ts GROVE_STATES').toEqual(
     new Set(GROVE_STATES),
+  );
+  expect(new Set(live.homeStates), 'home states — see home-scenarios.ts HOME_STATES').toEqual(
+    new Set(HOME_STATES),
   );
   expect(new Set(live.variableSets), 'variable sets — see themes/index.ts VARIABLE_SETS').toEqual(
     new Set(VARIABLE_SETS),
