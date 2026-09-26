@@ -233,6 +233,20 @@ export interface JobRunnerView {
   readonly label: string;
   readonly payload: unknown;
   readonly attempts: number;
+  /**
+   * `[D-333]`/`[D-341]` (`ol-3ux7.103`): USD remaining in this job's
+   * workflow-level spend allowance at the moment this attempt is about to
+   * run, when `EngineDeps.workflowAllowance` is configured (`engine.ts`).
+   * `undefined` — the same "omitted, never `0` standing in for unknown"
+   * convention `RemainingAllowanceField` uses (`olea-contracts`' `tasks.ts`)
+   * — means no allowance is in force for this job, which is every existing
+   * `JobRunner` implementation's situation today: this field is purely
+   * additive, and a runner that ignores it is unaffected. A real `JobRunner`
+   * that reads it can carry it onto the `WorkerTaskRequest` it builds
+   * (`packages/core/src/retrieval/workerProvider.ts`'s same-named field) so
+   * the Worker call it makes bounds its own retries against what remains.
+   */
+  readonly workflowAllowanceRemainingUsd?: number;
 }
 
 /**

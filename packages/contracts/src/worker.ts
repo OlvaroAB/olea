@@ -42,6 +42,7 @@
  */
 
 import { z } from 'zod';
+import { isValidRemainingAllowanceUsd } from './tasks.js';
 
 /**
  * The current contract version, stamped by the client on every request.
@@ -84,6 +85,22 @@ export const requestEnvelope = z.object({
   taskId,
   /** Transient context. Never persisted server-side (D-005, plan §7.1). */
   payload: z.unknown(),
+  /**
+   * `[D-333]`/`[D-341]` (`ol-3ux7.103`): the optional whole-workflow spend
+   * allowance courtesy field — see `tasks.ts`'s `RemainingAllowanceField` for
+   * what it names and why absent means today's behaviour exactly. Validated
+   * by `isValidRemainingAllowanceUsd` through `z.preprocess`, not `.refine`:
+   * that function's own doc is explicit that an invalid raw value (a string,
+   * `NaN`, `Infinity`, a negative number) reads as the field being absent,
+   * never as a reason to reject the whole request — this is a courtesy field
+   * a sender may omit, not one a malformed value should ever 400 over. The
+   * preprocessing step folds an invalid value to `undefined` before the inner
+   * schema ever sees it, so parsing this field can never itself throw.
+   */
+  remainingAllowanceUsd: z.preprocess(
+    (value) => (isValidRemainingAllowanceUsd(value) ? value : undefined),
+    z.number().nonnegative().optional(),
+  ),
 });
 export type RequestEnvelope = z.infer<typeof requestEnvelope>;
 

@@ -228,8 +228,10 @@ export {
 export {
   ALL_TASK_IDS,
   isKnownTaskId,
+  isValidRemainingAllowanceUsd,
   type KnownTaskId,
   knownTaskId,
+  type RemainingAllowanceField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
 } from './tasks.js';

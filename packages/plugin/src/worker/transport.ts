@@ -82,40 +82,6 @@ export function buildTaskUrl(baseUrl: string): string {
 }
 
 /**
- * `WorkerTaskRequest` plus the optional `[D-333]`/`[D-341]` remaining-
- * allowance courtesy field — the same field and doc `olea-contracts`'
- * `tasks.ts` declares as `RemainingAllowanceField` (`ol-3ux7.103`). Spelled
- * out locally rather than imported: `olea-contracts`' package barrel
- * (`packages/contracts/src/index.ts`) does not yet re-export that type, and
- * that barrel is outside this bead's owned paths — see this bead's report
- * for the one export line it still needs, after which this local type can
- * be replaced with an import.
- *
- * A structural intersection, not a widened `WorkerTaskRequest` itself — that
- * interface lives in `olea-core`'s `retrieval/workerProvider.ts`, also
- * outside this bead's owned paths (report has the exact lines it needs
- * too). Every existing caller already satisfies this type (the field is
- * optional), so this is purely additive: nothing that constructs a plain
- * `WorkerTaskRequest` today needs to change.
- *
- * `JSON.stringify` in `sendWorkerTask` below serialises whatever this object
- * actually carries at runtime, extra field included — so a caller that sets
- * `remainingAllowanceUsd` on the object it passes to `send` already reaches
- * the wire with zero further change to this file. What is NOT yet built
- * (flagged, this bead's report): nothing upstream of this file — core's
- * `JobRunner` callers, `wiring.ts` — populates the field on a real production
- * call yet.
- */
-export type WorkerTaskRequestWithAllowance = WorkerTaskRequest & {
-  /**
-   * USD remaining in the calling workflow's shared allowance. `undefined`
-   * (the field omitted entirely, never `0` standing in for "unknown") means
-   * no allowance is in force for this call — today's behaviour exactly.
-   */
-  readonly remainingAllowanceUsd?: number;
-};
-
-/**
  * The protocol itself, factored out of the class below so it can be called
  * directly in tests without constructing an object first. POSTs `request` as
  * the frozen envelope, with the configured bearer token, and returns the
@@ -126,7 +92,7 @@ export type WorkerTaskRequestWithAllowance = WorkerTaskRequest & {
 export async function sendWorkerTask(
   httpRequest: HttpRequestFn,
   config: WorkerConfig,
-  request: WorkerTaskRequestWithAllowance,
+  request: WorkerTaskRequest,
 ): Promise<unknown> {
   let response: HttpResponseLike;
   try {
@@ -240,7 +206,7 @@ export class WorkerHttpTransport implements WorkerTaskTransport {
     }) => void,
   ) {}
 
-  async send(request: WorkerTaskRequestWithAllowance): Promise<unknown> {
+  async send(request: WorkerTaskRequest): Promise<unknown> {
     // Scoped to this call only (a fresh local per invocation, never shared
     // state on `this`) — see `onCallFailed`'s doc above for what it feeds.
     const startedAt = Date.now();

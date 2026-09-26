@@ -58,6 +58,17 @@ export interface WorkerTaskRequest {
   readonly taskId: string;
   /** Transient context. Never persisted server-side (D-005, plan §7.1). */
   readonly payload: unknown;
+  /**
+   * `[D-333]`/`[D-341]` (`ol-3ux7.103`): the optional whole-workflow spend
+   * allowance courtesy field, mirroring `olea-contracts`' `requestEnvelope`
+   * and `RemainingAllowanceField` on the same terms — see that package's
+   * `tasks.ts` for what it names and why. `undefined` (the field omitted
+   * entirely, never `0` standing in for "unknown") means no allowance is in
+   * force for this call, which is every existing caller's behaviour: this
+   * field is purely additive and optional, so nothing that already
+   * constructs a `WorkerTaskRequest` needs to change.
+   */
+  readonly remainingAllowanceUsd?: number;
 }
 
 /**

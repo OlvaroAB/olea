@@ -587,14 +587,13 @@ export class IngestionQueueEngine {
     await this.persist(); // persist-before-await — see the module doc.
 
     // [D-333] "each call carries what remains": `workflowAllowanceRemainingUsd`
-    // rides along as an ADDITIVE extra field on the object handed to
-    // `this.runner` — not a `JobRunnerView` change (that type lives in
-    // `types.ts`, outside this bead's owned paths; see this bead's report for
-    // the one-field addition it still needs). `JobRunner`'s declared parameter
-    // type is exactly `JobRunnerView`, so passing this wider object needs no
-    // cast: TypeScript accepts a value with EXTRA fields wherever the
-    // narrower type is expected. A production `JobRunner` that does not yet
-    // read this field (every one today) is completely unaffected.
+    // rides along on the object handed to `this.runner` as `JobRunnerView`'s
+    // own optional field of the same name (`types.ts`), added by this same
+    // bead (`ol-3ux7.103`) so a real `JobRunner` can declare it structurally
+    // rather than reading an untyped extra key. A production `JobRunner` that
+    // does not yet read this field (every one today) is completely
+    // unaffected — the field is optional and omitted whenever no allowance
+    // is configured.
     const outcome = await this.runner({
       contentHash: inFlight.contentHash,
       label: inFlight.label,

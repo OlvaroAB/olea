@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   CONTRACT_VERSION,
   isSupportedContractVersion,
+  requestEnvelope,
   requestTelemetry,
   responseStamp,
   SUPPORTED_CONTRACT_VERSIONS,
@@ -80,6 +81,43 @@ describe('responseStamp grows usage ([D-123])', () => {
       result: { anything: 'per-task, unvalidated at this layer' },
     });
     expect(parsed.stamp.usage.costUsd).toBeCloseTo(0.000_123_45);
+  });
+});
+
+// [D-333]/[D-341] client wire half (ol-3ux7.103): requestEnvelope grows the
+// optional remainingAllowanceUsd courtesy field.
+describe('requestEnvelope carries the optional remainingAllowanceUsd ([D-333]/[D-341])', () => {
+  const base = {
+    contractVersion: CONTRACT_VERSION,
+    taskId: 'cards.generate.v1',
+    payload: { anything: 'per-task' },
+  };
+
+  it('parses a request without the field exactly as before — the field is absent, not zero', () => {
+    const parsed = requestEnvelope.parse(base);
+    expect(parsed).not.toHaveProperty('remainingAllowanceUsd');
+    expect(parsed.remainingAllowanceUsd).toBeUndefined();
+  });
+
+  it('carries a valid value through unchanged', () => {
+    expect(
+      requestEnvelope.parse({ ...base, remainingAllowanceUsd: 0.42 }).remainingAllowanceUsd,
+    ).toBe(0.42);
+    expect(requestEnvelope.parse({ ...base, remainingAllowanceUsd: 0 }).remainingAllowanceUsd).toBe(
+      0,
+    );
+  });
+
+  it('folds an invalid value to absent rather than 400ing — a courtesy field, never malformed', () => {
+    expect(
+      requestEnvelope.parse({ ...base, remainingAllowanceUsd: -1 }).remainingAllowanceUsd,
+    ).toBeUndefined();
+    expect(
+      requestEnvelope.parse({ ...base, remainingAllowanceUsd: Number.NaN }).remainingAllowanceUsd,
+    ).toBeUndefined();
+    expect(
+      requestEnvelope.parse({ ...base, remainingAllowanceUsd: '1.5' }).remainingAllowanceUsd,
+    ).toBeUndefined();
   });
 });
 
