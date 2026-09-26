@@ -373,7 +373,7 @@ export interface ClassifyDeclaredConceptInput {
    * supplies `processingPassId` still advances the streak once. Ignored
    * entirely when `processingPassId` itself is omitted.
    */
-  readonly priorProcessingPassId?: ProcessingPassToken;
+  readonly priorProcessingPassId?: ProcessingPassToken | undefined;
   /** F8.2's taught-signal steps two through five (`[D-247]`) — see `TaughtSignalEvidence` and the module doc's "taught-signal chain" section. Absent means none of those steps have been checked yet; `hasMaterial` (step one) still applies on its own. */
   readonly taughtSignal?: TaughtSignalEvidence;
   /**
