@@ -118,8 +118,16 @@ export function enqueueTriggeredGenerationCall(
 // automatically when material lands."
 // ---------------------------------------------------------------------------
 
-/** Every distinct course code among `units` — the note or source path each landed unit resolves to, read the same way `pipeline.ts`'s `embeddingNotePaths`/`standaloneSourcePaths` do. */
-function courseCodesForLandedUnits(
+/**
+ * Every distinct course code among `units` — the note or source path each
+ * landed unit resolves to, read the same way `pipeline.ts`'s
+ * `embeddingNotePaths`/`standaloneSourcePaths` do. Exported so
+ * `further-generation-triggers.ts` (GEN-3.5, `ol-2zfj.136`) can scope its
+ * own further-call trigger sweep to the same courses this file's own
+ * primary-call sweep just touched, rather than re-deriving the same read a
+ * second way.
+ */
+export function courseCodesForLandedUnits(
   units: readonly ExtractedUnit[],
   coursesFolder: string,
 ): readonly string[] {

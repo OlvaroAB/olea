@@ -119,6 +119,7 @@ import {
   type QueueStore,
   reconcileOutcomeConcepts,
   resolveOutcome,
+  type StudyPlanStore,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -133,6 +134,10 @@ import {
   ObsidianWorkerConfigStore,
 } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
+import {
+  enqueueFurtherGenerationCallsForLandedUnits,
+  type FurtherGenerationTriggerDeps,
+} from './further-generation-triggers.js';
 import {
   buildGenerationArrivalDeps,
   createGenerationAwareJobRunner,
@@ -261,6 +266,25 @@ export interface IngestionWiringDeps {
      * order governs — byte-identical to before this option existed.
      */
     readonly priority?: (payload: GenerationJobPayload) => GenerationPrioritySignal | null;
+    /**
+     * `ol-2zfj.136` [GEN-3.5] / `[D-238]`/`[D-269]`: when present, ALSO wires
+     * D-238's three named further-call generation triggers (top-band,
+     * format-ask, deck-served-out-or-lapsed — `repeatedRejectionTrigger`
+     * stays inactive per D-269) to real state — see
+     * `further-generation-triggers.ts`'s own module doc. Composed alongside
+     * `deps.generation`'s arrival half, on the SAME landed-unit seam, scoped
+     * to the same courses. Omitted (every caller before this bead, and
+     * `main.ts`'s actual call today, which supplies no `deps.generation` at
+     * all — `ol-2zfj.135`'s own close evidence, held for D-261) leaves this
+     * additional sweep byte-identically absent: no further-call trigger is
+     * ever evaluated.
+     */
+    readonly furtherCallTriggers?: {
+      /** A2.5's cached plan (`plan/cache.ts#loadCachedStudyPlan`) — the top-band signal's source. */
+      readonly studyPlanStore: StudyPlanStore;
+      /** Injected for determinism under test; production passes `() => new Date()`. */
+      readonly now?: () => Date;
+    };
   };
   /**
    * `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]: when
@@ -343,15 +367,20 @@ function withUnitsLandedHook(
 
 /**
  * Runs `inner` unchanged, then best-effort enqueues D-238's primary-kind
- * generation calls for the landed units — `deps.generation`'s arrival half.
- * Wraps whatever sink this function is given (`sink` alone, or `sink` already
- * wrapped by `withUnitsLandedHook`), so `deps.onUnitsLanded` and
- * `deps.generation` compose independently of each other. Never fails the
- * ingestion job it rode in on, same posture as `withUnitsLandedHook`.
+ * generation calls for the landed units — `deps.generation`'s arrival half —
+ * and, when `furtherCallTriggerDeps` is supplied (`deps.generation
+ * .furtherCallTriggers`, `ol-2zfj.136` [GEN-3.5]), ALSO sweeps the same
+ * landed courses for the three named further-call triggers real state
+ * currently fires (`further-generation-triggers.ts`). Wraps whatever sink
+ * this function is given (`sink` alone, or `sink` already wrapped by
+ * `withUnitsLandedHook`), so `deps.onUnitsLanded` and `deps.generation`
+ * compose independently of each other. Never fails the ingestion job it rode
+ * in on, same posture as `withUnitsLandedHook`.
  */
 function withGenerationEnqueueHook(
   inner: ExtractedUnitSink,
   generationArrivalDeps: GenerationArrivalDeps,
+  furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined,
 ): ExtractedUnitSink {
   return {
     async receive(units) {
@@ -360,6 +389,16 @@ function withGenerationEnqueueHook(
         await enqueuePrimaryGenerationCallsForLandedUnits(units, generationArrivalDeps);
       } catch (error) {
         console.error('Olea: generation-enqueue hook failed (ingestion unaffected)', error);
+      }
+      if (furtherCallTriggerDeps !== undefined) {
+        try {
+          await enqueueFurtherGenerationCallsForLandedUnits(units, furtherCallTriggerDeps);
+        } catch (error) {
+          console.error(
+            'Olea: further-generation-trigger hook failed (ingestion unaffected)',
+            error,
+          );
+        }
       }
     },
   };
@@ -642,7 +681,33 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
       },
       deps.vault,
     );
-    runnerSink = withGenerationEnqueueHook(runnerSink, generationArrivalDeps);
+    // `ol-2zfj.136` [GEN-3.5]: `deps.generation.furtherCallTriggers`'s own
+    // composition — reuses `generationArrivalDeps.listConceptsForCourse`
+    // (already resolved above, real-vault-walk by default) rather than
+    // re-deriving it a second way.
+    const furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined = deps.generation
+      .furtherCallTriggers
+      ? {
+          vault: deps.vault,
+          studyPlanStore: deps.generation.furtherCallTriggers.studyPlanStore,
+          enqueuer,
+          listConceptsForCourse: generationArrivalDeps.listConceptsForCourse,
+          ...(deps.generation.formatMatchFor
+            ? { formatMatchFor: deps.generation.formatMatchFor }
+            : {}),
+          ...(deps.generation.coursesFolder
+            ? { coursesFolder: deps.generation.coursesFolder }
+            : {}),
+          ...(deps.generation.furtherCallTriggers.now
+            ? { now: deps.generation.furtherCallTriggers.now }
+            : {}),
+        }
+      : undefined;
+    runnerSink = withGenerationEnqueueHook(
+      runnerSink,
+      generationArrivalDeps,
+      furtherCallTriggerDeps,
+    );
   }
   const visionRunner = deps.vision
     ? await buildVisionRunner(deps.vision, deps.vault, runnerSink)
