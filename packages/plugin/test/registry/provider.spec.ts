@@ -1598,4 +1598,133 @@ describe('createLocalRegistryProvider — withheld items ([D-334])', () => {
     });
     expect(opened).toEqual([{ sourcePath: 'Notes/broken.md' }]);
   });
+
+  // Scenario: olea-service/features/F2-review.md — "F2.23 / [D-334] — Edit it
+  // opens her note, and Olea writes nothing into it", the "writes nothing"
+  // half. `memoryVault` (`../review/memory-vault.ts`) records every path it
+  // actually writes, so this is a real assertion over the fake's own ledger,
+  // not a re-statement of `provider.ts`'s implementation — `editWithheldItem`
+  // delegates to `openSourceLocationPort.open` alone (see that method's own
+  // doc, INV-6) and this proves nothing else in that call path reaches
+  // `vault.write`, for her note or for any other path. `load()` itself is
+  // known to write `[D-357]`'s permanent-key stamps under `.olea/concepts/`
+  // (Olea's own dot-folder, never her note) — this isolates the write count
+  // to exactly what `editWithheldItem` itself adds, which the clause is
+  // about, rather than re-litigating `load()`'s unrelated, already-tested
+  // stamping.
+  it('editWithheldItem writes nothing into the vault — not her note, not any other path', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      'Notes/broken.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    });
+    const openSourceLocationPort: OpenSourceLocationPort = { open: async () => undefined };
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      openSourceLocationPort,
+    });
+
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const item = state.withheldInstruments[0];
+    if (item === undefined) throw new Error('missing withheld item');
+
+    const writesBeforeEdit = vault.writes.length;
+    await provider.editWithheldItem(item);
+    expect(vault.writes.length).toBe(writesBeforeEdit);
+  });
+
+  // Scenario: same as above, the "withholding clears on its own, read-time,
+  // the next time the registry loads, once the block parses cleanly" half
+  // (knowledge model R11). This exercises the reload path with no call to
+  // `editWithheldItem` at all — the clause is about `load()`'s own read-time
+  // behaviour once the bytes in her vault change, by whatever means (her own
+  // hand, via the note `editWithheldItem` just opened, or otherwise); there
+  // is no separate "resolve"/"un-withhold" action anywhere in this provider.
+  it('the withholding clears on its own at the next load, once the block parses cleanly — no explicit resolve action exists', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      'Notes/broken.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    });
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+
+    const before = await provider.load();
+    if (before.kind !== 'model') throw new Error(`expected a model, got ${before.kind}`);
+    expect(before.withheldInstruments).toEqual([
+      { notePath: 'Notes/broken.md', kind: 'mcq', reason: 'insufficient-distractors' },
+    ]);
+    const brokenBefore = before.model.concepts.find((c) => c.displayName === 'Concept A');
+    expect(brokenBefore?.instruments).toHaveLength(1);
+
+    // She fixes the block herself, directly in her note — a second
+    // distractor clears F2.15's floor (`[D-195]`, `MIN_DISTRACTOR_POOL` is
+    // two). Written straight through `vault.write`, exactly as her own edit
+    // in Obsidian would land, never through any Olea write path.
+    await vault.write(
+      'Notes/broken.md',
+      [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+    );
+
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    expect(after.withheldInstruments).toEqual([]);
+    const brokenAfter = after.model.concepts.find((c) => c.displayName === 'Concept A');
+    expect(brokenAfter?.instruments).toHaveLength(2);
+  });
 });
