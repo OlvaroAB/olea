@@ -16,11 +16,19 @@ import {
   GOVERNING_GOVERNS_FOR_SECONDS,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
-import { createFsrsScheduler, extractConcepts, reviewLogPath } from 'olea-core';
+import {
+  createFsrsScheduler,
+  enumerateVaultInstruments,
+  extractConcepts,
+  reviewLogPath,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { sessionCompositionSentence } from '../../src/home/copy.js';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
+// `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): the same store
+// `test/session-builder/citation-pending-revalidation-resolver.spec.ts` drives directly.
+import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
@@ -470,6 +478,92 @@ describe('createLocalHomeProvider — Home composes with the same windowDeficit 
     );
     const item = widgetItem(sessionModel(state));
     expect(item.gapScore).toBeGreaterThan(0);
+  });
+});
+
+describe("createLocalHomeProvider — threads citationHashStore into its own session-builder composition, so Home's preview withholds a pending instrument too ([D-351]/[D-330], ol-egov.141.89.5.19 follow-up)", () => {
+  // Same single-instrument fixture `test/session-builder/citation-pending-
+  // revalidation-resolver.spec.ts` uses for its own end-to-end proof — a
+  // course with exactly one cited concept/instrument, so "withheld" and
+  // "the concept's only instrument is gone" are the same observation.
+  const CITATION_BASE_FILES: Readonly<Record<string, string>> = {
+    '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+    'Notes/one.md': [
+      '---',
+      'topic: [Widget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    '03 Research/TESTC101 Past Paper 2023.md': [
+      '---',
+      'role: past-paper',
+      'course: TESTC101',
+      '---',
+      '',
+      '# TESTC101 Past Paper — 2023',
+      '',
+      '## Question 1 (10 marks)',
+      '',
+      'Explain the core mechanism behind Widget theory and why it matters.',
+      '',
+    ].join('\n'),
+    '02 Assignments/Quiz 1.md':
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-15\nstatus: upcoming\n---\n\n# Quiz 1\n',
+  };
+
+  async function widgetInstrumentId(): Promise<string> {
+    const enumeration = await enumerateVaultInstruments(fixtureVault(CITATION_BASE_FILES));
+    const record = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
+    if (record === undefined) throw new Error('expected an instrument on Notes/one.md');
+    return record.instrumentId;
+  }
+
+  it("[D-330] withholds an instrument the store reports as currently pending, including from Home's own headline session — unchanged when no citationHashStore is supplied (unknown never withholds on its own)", async () => {
+    const instrumentId = await widgetInstrumentId();
+    const host = hostWithBasePath(BASE_PATH);
+
+    const withoutStore = await createLocalHomeProvider({
+      vault: fixtureVault(CITATION_BASE_FILES),
+      deviceId: DEVICE,
+      settingsHost: host,
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+    }).load(DEFAULT_REQUEST);
+    expect(
+      sessionModel(withoutStore).model.items.some((item) => item.conceptName === 'Widget theory'),
+    ).toBe(true);
+
+    const citationHashStore = new ObsidianCitationHashStore(new FakeDataHost());
+    await citationHashStore.save(instrumentId, {
+      sourcePath: 'Notes/one.md',
+      text: 'the widget theory material as last observed',
+      conceptIds: [],
+    });
+    await citationHashStore.setPendingRevalidation(instrumentId, 'hash-current', Date.now());
+
+    const withStore = await createLocalHomeProvider({
+      vault: fixtureVault(CITATION_BASE_FILES),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+      citationHashStore,
+    }).load(DEFAULT_REQUEST);
+
+    // [D-330]: withheld from Home's own composed model entirely — "Widget
+    // theory"'s only instrument is the withheld one, so nothing takes its
+    // place. This is the exact gap `home/provider.ts`'s own
+    // `CreateLocalHomeProviderDeps.citationHashStore` doc names: before this
+    // bead, Home had no `citationHashStore` dep at all, so this instrument
+    // stayed present in Home's preview even though the session builder
+    // (`createLocalSessionBuilderProvider`, proven in `test/session-builder/
+    // citation-pending-revalidation-resolver.spec.ts`) already withheld it.
+    expect(
+      sessionModel(withStore).model.items.some((item) => item.conceptName === 'Widget theory'),
+    ).toBe(false);
   });
 });
 

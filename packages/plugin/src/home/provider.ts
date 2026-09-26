@@ -78,6 +78,9 @@ import type {
 import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
+// `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded straight through to
+// `../session-builder/provider.ts`'s own `citationHashStore` — see this file's `CreateLocalHomeProviderDeps.citationHashStore` doc.
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import type { RetrospectiveOfferCard } from '../retrospective/offer-card.js';
@@ -168,6 +171,19 @@ export interface CreateLocalHomeProviderDeps {
    * degrade-not-half-work posture, nothing surfaced to her as an error.
    */
   readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  /**
+   * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded through
+   * for the same reason {@link windowDeficit}/{@link readRankWeights} are —
+   * `main.ts`'s own `this.citationHashStore`, the SAME store the Start-path
+   * session-builder leaf already supplies to `../session-builder/
+   * provider.ts`'s own `citationHashStore` (that field's own doc). Without
+   * it Home's preview does not withhold a pending instrument though the
+   * session builder does — the exact gap this field closes. Omitted reads
+   * exactly as that field's own doc already documents: no pending-
+   * revalidation read at all, `[D-330]`'s "unknown never withholds on its
+   * own", unchanged from before this bead.
+   */
+  readonly citationHashStore?: CitationHashStore;
   /**
    * `ol-ppa9` (F1.4/`[D-213]`): the first-read readout, for every course
    * folder ticked so far this session — see `./view.ts`'s own module doc for
@@ -358,6 +374,9 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
     // own docs for why an absent dep degrades exactly as before this bead.
     ...(deps.windowDeficit !== undefined ? { windowDeficit: deps.windowDeficit } : {}),
     ...(deps.readRankWeights !== undefined ? { readRankWeights: deps.readRankWeights } : {}),
+    // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): see
+    // `CreateLocalHomeProviderDeps.citationHashStore`'s own doc.
+    ...(deps.citationHashStore !== undefined ? { citationHashStore: deps.citationHashStore } : {}),
   });
   const groveProvider = createLocalGroveProvider({
     vault: deps.vault,

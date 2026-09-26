@@ -74,10 +74,7 @@
  * "'unknown' is a genuine third answer, not 'assume fresh' wearing a different name" contract.
  */
 
-import {
-  classifyCitationFreshness,
-  type InstrumentCitation,
-} from './citation-store.js';
+import { classifyCitationFreshness, type InstrumentCitation } from './citation-store.js';
 
 /**
  * The three-and-one states a consumer reads for one citation's current validity.
@@ -154,7 +151,7 @@ export function citationValidityStatus(
 ): CitationValidityResult {
   const { currentPassageDigest, pendingRevalidation } = evidence;
 
-  if (pendingRevalidation !== undefined && pendingRevalidation.isPending) {
+  if (pendingRevalidation?.isPending) {
     if (pendingRevalidation.sourceRevision === undefined) {
       // `ol-egov.141.89.5.19`: store-scoped evidence, already resolved per instrument against a
       // store that enforces [D-351]'s own revision scoping internally — see the module doc's

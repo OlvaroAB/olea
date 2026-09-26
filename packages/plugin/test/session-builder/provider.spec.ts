@@ -48,6 +48,9 @@ import {
   reviewLogPath,
 } from 'olea-core';
 import { beforeAll, describe, expect, it } from 'vitest';
+// `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6: the same store
+// `test/session-builder/citation-pending-revalidation-resolver.spec.ts` drives directly.
+import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
@@ -883,6 +886,90 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
       throw new Error(`expected a fresh 'model' state, got ${second.kind}`);
     expect(second.staleReasonLine).toBeDefined();
     expect(second.staleReasonLine).toMatch(/came due/);
+  });
+
+  // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6: the
+  // per-leaf sitting held here (`sitting`, `frozenScope`, `frozenSnapshot`)
+  // gets the SAME citation-revision staleness check `session/holder.ts`'s
+  // `materialChangedInScopeSinceFreeze` gives the shared holder — see this
+  // file's own `load()`, which ORs `hasCitationRevisionChangedInScope` into
+  // `materialArrivedInScope`. Nothing else in scope moves in this test (no
+  // due-date crossing, no material arrival): a `citationHashStore` is the
+  // ONLY signal that can end this sitting, so a real rebuild here proves the
+  // wiring, not a coincidence from one of the other two facts.
+  it('[ILB-CHG-4]: a citation newly known to be pending revalidation, past the idle threshold, ends this sitting too — not just itemsDueInScope/materialArrivedInScope’s other signals', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    // [D-264] ruling 1 (this describe block's own note above):
+    // `scheduler.retrievability()` is only queried for an instrument with an
+    // eligible (independent-support) success — used here purely as a
+    // "a real rebuild ran" counter, the same technique the two tests above
+    // in this describe block use.
+    const vault = vaultWithReviewLog([
+      reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
+    ]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+    const citationHashStore = new ObsidianCitationHashStore(new FakeDataHost());
+    await citationHashStore.save(instrumentId, {
+      sourcePath: 'Notes/one.md',
+      text: 'the widget theory material as last observed',
+      conceptIds: [],
+    });
+    let now = NOW;
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => now,
+      scheduler,
+      citationHashStore,
+    });
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls();
+    if (first.kind !== 'model') throw new Error(`expected a session model, got ${first.kind}`);
+    expect(first.model.items.some((item) => item.conceptName === 'Widget theory')).toBe(true);
+
+    // Past the idle threshold, a new edit raises [D-351] pending revalidation
+    // for this exact instrument — nothing else about the frozen scope moved.
+    now = new Date(NOW.getTime() + 61 * 60_000);
+    await citationHashStore.setPendingRevalidation(instrumentId, 'hash-current', now.getTime());
+
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls()).toBeGreaterThan(callsAfterFirst); // a real rebuild ran
+    expect(second).not.toBe(first);
+    if (second.kind !== 'model')
+      throw new Error(`expected a fresh 'model' state, got ${second.kind}`);
+    expect(second.staleReasonLine).toBeDefined();
+    // Withheld from the fresh composition too — [D-330]'s own filter, wired
+    // the same way `citation-pending-revalidation-resolver.spec.ts` proves it
+    // end to end through `composeStudySessionForRequest`.
+    expect(second.model.items.some((item) => item.conceptName === 'Widget theory')).toBe(false);
+  });
+
+  it('[ILB-CHG-4]: with no citationHashStore supplied, a genuinely unchanged sitting still holds past the idle threshold — unknown never withholds, and never fabricates staleness either', async () => {
+    const { conceptKey, instrumentId } = await widgetIdentity();
+    const vault = vaultWithReviewLog([reviewRecord(conceptKey, instrumentId)]);
+    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+    let now = NOW;
+
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => now,
+      scheduler,
+    });
+
+    const first = await provider.load({ budgetMinutes: 60 });
+    const callsAfterFirst = calls();
+
+    now = new Date(NOW.getTime() + 61 * 60_000);
+    const second = await provider.load({ budgetMinutes: 60 });
+
+    expect(calls()).toBe(callsAfterFirst);
+    expect(second).toBe(first);
   });
 });
 

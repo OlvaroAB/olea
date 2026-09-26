@@ -232,6 +232,7 @@ import type {
   ReplayResult,
   Scheduler,
   SittingScopeSnapshot,
+  SittingStalenessInput,
   SittingStalenessReason,
   SittingState,
   VaultPath,
@@ -269,6 +270,11 @@ import {
   reviewLogPath,
   suspendedInstrumentIds,
 } from 'olea-core';
+// `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6 — imported directly from the
+// module's own path, never through `concept/revision/index.ts` (another lane's file this round)
+// or the `olea-core` package barrel it feeds: see `session/holder.ts`'s own import comment, which
+// takes the identical stance for the identical reason.
+import { hasCitationRevisionChangedInScope } from '../../../core/src/concept/revision/session-staleness.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
 // see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
 // resolver from `resolveCitationFreshness` above, never a shared one.
@@ -580,6 +586,40 @@ export interface FrozenScopeConcept {
   readonly masteryState: OracleMasteryState;
   readonly lastRetrievalDay: CalendarDay | null;
   readonly recallDueDay: CalendarDay | null;
+  /**
+   * `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6: every
+   * instrument this concept contributed to the candidate set at freeze time
+   * (`conceptInstrumentIndex.instrumentsFor(conceptKey)`'s own ids) — kept so
+   * a later re-check of THIS frozen scope's own citation pending-
+   * revalidation state ({@link instrumentIdsInScope} below) never needs a
+   * second vault enumeration. Optional, defaulting to none, so every
+   * PRE-EXISTING `FrozenScopeConcept` literal elsewhere (`test/session/
+   * shared-sitting-staleness.spec.ts`, `test/session-builder/scope-
+   * snapshot.spec.ts`, both outside this bead's owned paths) keeps
+   * typechecking unchanged — additive, and not read by `isDueClass`/
+   * `buildScopeSnapshotAt`'s existing two facts, so neither one's own
+   * computation moves.
+   */
+  readonly instrumentIds?: readonly string[];
+}
+
+/**
+ * `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6: every
+ * instrument id named anywhere in a {@link FrozenSittingScope} — the same
+ * dedupe-by-`Set` shape `citationCandidateInstrumentIds` above already uses
+ * for the identical "every concept this call considered" universe, so a
+ * later re-check of a held sitting's own citation pending-revalidation state
+ * ({@link resolveCitationPendingRevalidation}) reads exactly the instruments
+ * that were candidates for it, never a wider or narrower set a second
+ * enumeration might disagree about. A concept with no `instrumentIds`
+ * recorded (see that field's own doc) simply contributes none.
+ */
+export function instrumentIdsInScope(scope: FrozenSittingScope): readonly string[] {
+  const ids = new Set<string>();
+  for (const concept of scope.concepts) {
+    for (const instrumentId of concept.instrumentIds ?? []) ids.add(instrumentId);
+  }
+  return [...ids];
 }
 
 /**
@@ -886,7 +926,10 @@ export async function resolveCitationPendingRevalidation(
     instrumentIds.map(async (instrumentId) => {
       const pending = anchors.get(instrumentId)?.pendingRevalidation;
       if (pending === undefined) return;
-      const isCurrent = await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash);
+      const isCurrent = await store.isPendingRevalidationCurrent(
+        instrumentId,
+        pending.sinceContentHash,
+      );
       if (isCurrent) result.add(instrumentId);
     }),
   );
@@ -1067,6 +1110,12 @@ export async function composeStudySessionForRequest(
         conceptKey: row.conceptKey,
         notePaths: row.notePaths,
         masteryState: row.masteryState,
+        // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`): every instrument this concept
+        // contributed to the candidate set — see `FrozenScopeConcept.
+        // instrumentIds`'s own doc.
+        instrumentIds: [...conceptInstrumentIndex.instrumentsFor(row.conceptKey)].map(
+          (record) => record.instrumentId,
+        ),
         ...obligationSignalsForConcept(row.conceptKey, conceptInstrumentIndex, replay),
       }),
     ),
@@ -1226,11 +1275,20 @@ export function createLocalSessionBuilderProvider(
   // `undefined` exactly when `sitting.status === 'idle'`.
   let frozenScope: FrozenSittingScope | undefined;
   let frozenSnapshot: SittingScopeSnapshot | undefined;
+  // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6: the
+  // citation pending-revalidation set this sitting was frozen with — the
+  // held-sitting equivalent of `session/holder.ts`'s own `sitting.items.
+  // citationRevalidationPending`, which THIS closure's `sitting` (a plain
+  // `SittingState<SessionBuilderState>`, not a `ComposedStudySession`) has
+  // no field to carry. `undefined` exactly when `frozenScope` is.
+  let frozenCitationRevalidation: ReadonlySet<string> | undefined;
   // `buildFresh` has no return-type reason to know about `frozenScope` — it
   // stashes the scope it built here, and `load()` (the only caller) decides
   // whether to keep it, exactly the same shape `staleReasons` above already
   // uses to cross the `buildFresh` call without widening its signature.
   let pendingFrozenScope: FrozenSittingScope | undefined;
+  /** See `frozenCitationRevalidation`'s own doc — the `pendingFrozenScope`-shaped carrier for it. */
+  let pendingFrozenCitationRevalidation: ReadonlySet<string> | undefined;
 
   /**
    * The full, expensive composition — unchanged from before `ol-e228` except
@@ -1246,10 +1304,18 @@ export function createLocalSessionBuilderProvider(
     now: Date,
   ): Promise<SessionBuilderState> {
     pendingFrozenScope = undefined;
+    pendingFrozenCitationRevalidation = undefined;
     try {
       const result = await composeStudySessionForRequest(deps, request, now);
       if (result === null) return { kind: 'unavailable' };
       pendingFrozenScope = result.frozenScope;
+      // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`): `result.composed.full` is always
+      // a real `ComposedStudySession` (`ComposedReentrySession.full`'s own
+      // doc — "same shape... for the equality-of-rule health check", present
+      // whether or not this is a re-entry), so its `citationRevalidationPending`
+      // is available here even on the `isReentry` branch below, which only
+      // narrows what gets RETURNED, not what this closure stashes.
+      pendingFrozenCitationRevalidation = result.composed.full.citationRevalidationPending;
       const { composed, courseOrTopicOptions } = result;
 
       // F6.6: a re-entry composition returns the narrower, count-free
@@ -1317,21 +1383,47 @@ export function createLocalSessionBuilderProvider(
         // reads `staleness` before the threshold), so no work is wasted on
         // an idempotent re-render that is nowhere near going stale.
         const elapsedMs = now.getTime() - sitting.enteredAt.getTime();
-        const staleness =
-          elapsedMs >= DEFAULT_SITTING_IDLE_THRESHOLD_MS && frozenScope !== undefined
-            ? diffSittingScopeSnapshots(
-                frozenSnapshot ?? EMPTY_SITTING_SCOPE_SNAPSHOT,
-                await buildScopeSnapshotAt(
-                  frozenScope,
-                  localToday(now),
-                  deps.vault.firstSeen?.bind(deps.vault),
-                ),
-              )
-            : {
-                itemsDueInScope: false,
-                materialArrivedInScope: false,
-                assessmentProximityBandCrossedInScope: false,
-              };
+        let staleness: SittingStalenessInput;
+        if (elapsedMs >= DEFAULT_SITTING_IDLE_THRESHOLD_MS && frozenScope !== undefined) {
+          const snapshotStaleness = diffSittingScopeSnapshots(
+            frozenSnapshot ?? EMPTY_SITTING_SCOPE_SNAPSHOT,
+            await buildScopeSnapshotAt(
+              frozenScope,
+              localToday(now),
+              deps.vault.firstSeen?.bind(deps.vault),
+            ),
+          );
+          // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row
+          // 3.6: OR the citation-revision staleness fact into the SAME
+          // `materialArrivedInScope` flag `decideRebuild` already reads —
+          // `[D-162]`'s whole-scope freeze contract treats "a citation newly
+          // known to have changed" as one more kind of material arrival,
+          // never a fourth, independent trigger a caller would have to
+          // learn to check separately. See `concept/revision/session-
+          // staleness.ts`'s own doc for why only the "newly pending since
+          // freeze" direction counts, never a resolved-out-of-pending one.
+          const citationChangedInScope =
+            deps.citationHashStore !== undefined
+              ? hasCitationRevisionChangedInScope(
+                  frozenCitationRevalidation ?? new Set(),
+                  await resolveCitationPendingRevalidation(
+                    deps.citationHashStore,
+                    instrumentIdsInScope(frozenScope),
+                  ),
+                )
+              : false;
+          staleness = {
+            ...snapshotStaleness,
+            materialArrivedInScope:
+              snapshotStaleness.materialArrivedInScope || citationChangedInScope,
+          };
+        } else {
+          staleness = {
+            itemsDueInScope: false,
+            materialArrivedInScope: false,
+            assessmentProximityBandCrossedInScope: false,
+          };
+        }
         const decision = decideRebuild(sitting, {
           now,
           // `decideRebuild` never reads `trigger` while `state.status ===
@@ -1370,12 +1462,17 @@ export function createLocalSessionBuilderProvider(
         sitting = exitSitting();
         frozenScope = undefined;
         frozenSnapshot = undefined;
+        frozenCitationRevalidation = undefined;
       } else {
         sitting = enterSitting(now, resultWithReason);
         // `ol-v7r5.26`: the new sitting's own freeze snapshot, taken at the
         // exact instant it was entered — `pendingFrozenScope` is always set
         // by `buildFresh` whenever it did not return `'unavailable'`.
         frozenScope = pendingFrozenScope;
+        // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`): the new sitting's own frozen
+        // citation pending-revalidation set — see `frozenCitationRevalidation`'s
+        // own doc.
+        frozenCitationRevalidation = pendingFrozenCitationRevalidation;
         frozenSnapshot =
           frozenScope !== undefined
             ? await buildScopeSnapshotAt(
@@ -1392,6 +1489,7 @@ export function createLocalSessionBuilderProvider(
       sitting = exitSitting();
       frozenScope = undefined;
       frozenSnapshot = undefined;
+      frozenCitationRevalidation = undefined;
     },
     // F4.6 / F6.4, `[D-163]`: forwarded, never called, from `deps.openExplainBack`
     // — see this file's own `CreateLocalSessionBuilderProviderDeps.openExplainBack` doc.

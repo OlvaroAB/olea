@@ -150,6 +150,12 @@ import {
   type MaterialityTrigger,
 } from './ingestion/materiality/wiring.js';
 import { WorkerMaterialityJudge } from './ingestion/materiality/workerJudge.js';
+// `[ILB-PER-4]` §8 item 2 (`ol-egov.141.89.8.4` slice 4): the GET-shaped
+// `VisionRouteHttpGet` adapter over Obsidian's real `requestUrl` — see
+// `IngestionWiringDeps.visionRoute`'s own doc (`ingestion/wiring.ts`) for why
+// this is a GET rather than a `WorkerTaskTransport`, the same
+// `obsidianRankWeightsGet`/`obsidianDepthGateGet` shape below.
+import { obsidianVisionRouteGet } from './ingestion/obsidian-vision-route-transport.js';
 import {
   buildAuthoredNoteUnit,
   createProcessNowAction,
@@ -247,6 +253,8 @@ import {
   composeStudySessionForRequest,
   createLocalSessionBuilderProvider,
   type FrozenSittingScope,
+  instrumentIdsInScope,
+  resolveCitationPendingRevalidation,
 } from './session-builder/provider.js';
 import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
 import {
@@ -1647,6 +1655,15 @@ export default class OleaPlugin extends Plugin {
           ? { readRankWeights: this.rankWeights.readRankWeights }
           : {}),
         windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
+        // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the same store the
+        // `VIEW_TYPE_OLEA_SESSION` registration above threads through to
+        // `createLocalSessionBuilderProvider` — Home's own headline session
+        // wraps that same provider (`home/provider.ts`'s own module doc) and
+        // must withhold a pending instrument too, or Home and Start could
+        // show two different readings of the same underlying state
+        // (`[D-243]`'s "rendered once"). Same `exactOptionalPropertyTypes`
+        // ternary as every other optional dep on this call.
+        ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
         // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
         // ingestion tick's fresh queue state and a later course-setup
         // confirmation both reach a Home leaf built before either happened —
@@ -1817,6 +1834,15 @@ export default class OleaPlugin extends Plugin {
       vision: {
         dataHost: this,
         createTransport: createRecordingTransport,
+      },
+      // `[ILB-PER-4]` §8 item 2 (`ol-egov.141.89.8.4` slice 4): component
+      // 1.6's delivered vision-routing threshold — see
+      // `IngestionWiringDeps.visionRoute`'s own doc (`ingestion/wiring.ts`)
+      // for why this is a GET (`httpGet`) rather than a `WorkerTaskTransport`
+      // like `vision` immediately above.
+      visionRoute: {
+        dataHost: this,
+        httpGet: obsidianVisionRouteGet,
       },
     });
 
@@ -3530,6 +3556,27 @@ export default class OleaPlugin extends Plugin {
         now,
         wiring === null ? undefined : wiring.vault.firstSeen?.bind(wiring.vault),
       );
+      // `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6's
+      // staleness fact: the live pending-revalidation set for every
+      // instrument in the held sitting's own frozen scope, read from the
+      // SAME `CitationHashStore` `session-builder/provider.ts`'s own
+      // `resolveCitationPendingRevalidation` reads (`this.citationHashStore`
+      // — see that field's own doc) — never a second store. `[D-162]`'s
+      // whole-scope granularity is kept (the check runs over the whole
+      // frozen scope, never one item), and `[D-330]` still does the actual
+      // withholding on the next compose; this only tells the holder whether
+      // the SITTING it is holding should be treated as stale (`session/
+      // holder.ts`'s `materialChangedInScopeSinceFreeze`, `[D-330]`'s "never
+      // substitute an item mid-session").
+      const currentPendingRevalidation =
+        this.citationHashStore !== null && this.sharedSittingFrozenScope !== undefined
+          ? await resolveCitationPendingRevalidation(
+              this.citationHashStore,
+              instrumentIdsInScope(this.sharedSittingFrozenScope),
+            )
+          : new Set<string>();
+      const citationRevisionChangedInScope =
+        this.studySessionHolder.materialChangedInScopeSinceFreeze(currentPendingRevalidation);
       const decision = this.studySessionHolder.decide({
         now,
         trigger: {
@@ -3538,7 +3585,12 @@ export default class OleaPlugin extends Plugin {
           materialLandedSinceLastRebuild: false,
           assessmentDatePassedSinceLastRebuild: false,
         },
-        staleness,
+        // OR'd into the same `materialArrivedInScope` flag `decideRebuild`
+        // already reads — see `session-builder/provider.ts`'s own `load()`,
+        // which takes the identical stance for its own per-leaf sitting.
+        staleness: citationRevisionChangedInScope
+          ? { ...staleness, materialArrivedInScope: true }
+          : staleness,
       });
       if (decision.action === 'hold') return;
       // `[D-162]`: the sitting ENDS — never a recompose of the unreviewed

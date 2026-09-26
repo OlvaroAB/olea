@@ -1271,8 +1271,11 @@ describe('the standalone-image vision runner reaches production (ol-15f8 / ol-ua
   // `createTransport`) terms as every other Worker-backed port in `onload`.
 
   it('supplies vision.dataHost and vision.createTransport to the real buildIngestionRunner call', () => {
+    // `ol-egov.141.89.8.4` slice 4 added a `visionRoute` field after this one
+    // (its own describe block below pins it), so the gap to the closing
+    // `});` is no longer immediate.
     expect(main).toMatch(
-      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?vision:\s*\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,\s*\},\s*\}\);/,
+      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?vision:\s*\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,\s*\},[\s\S]{0,300}?\}\);/,
     );
   });
 
@@ -1281,6 +1284,36 @@ describe('the standalone-image vision runner reaches production (ol-15f8 / ol-ua
     expect(match).not.toBeNull();
     expect(match?.[0]).toContain('vision:');
     expect(match?.[0]).toContain('revision:');
+  });
+});
+
+describe("component 1.6's delivered vision-routing threshold has a real production caller (ol-egov.141.89.8.4 slice 4, [ILB-PER-4] §8 item 2)", () => {
+  // `ol-egov.141.89.8.4` slice 4 composed `IngestionWiringDeps.visionRoute`
+  // and `vision-route-wiring.ts#buildVisionRouteWiring` and unit-tested them
+  // against fakes (`test/ingestion/vision-route-wiring.spec.ts`), but left
+  // `main.ts`'s own `buildIngestionRunner` call omitting the field — the same
+  // "wired and tested but not reachable" gap the standalone-image vision
+  // runner's own describe block above once had. This is the source-level
+  // proof the real call now supplies it, on the same F7.8 (`dataHost`/
+  // `httpGet`) terms as `obsidianRankWeightsGet`/`obsidianDepthGateGet`.
+
+  it('supplies visionRoute.dataHost and visionRoute.httpGet to the real buildIngestionRunner call', () => {
+    expect(main).toMatch(
+      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?visionRoute:\s*\{\s*dataHost:\s*this,\s*httpGet:\s*obsidianVisionRouteGet,\s*\},\s*\}\);/,
+    );
+  });
+
+  it('imports the real HTTP GET adapter, not a stub', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*obsidianVisionRouteGet\s*\}\s*from\s*'\.\/ingestion\/obsidian-vision-route-transport\.js'/,
+    );
+  });
+
+  it('the visionRoute field is inside the same buildIngestionRunner call, not a second unrelated object literal', () => {
+    const match = main.match(/this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?\}\);/);
+    expect(match).not.toBeNull();
+    expect(match?.[0]).toContain('vision:');
+    expect(match?.[0]).toContain('visionRoute:');
   });
 });
 
@@ -1576,9 +1609,13 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     // with what `VIEW_TYPE_OLEA_SESSION` (Start) composes for the same
     // underlying state. This asserts the same two inputs, wired the same
     // way, reach the Home construction site too.
+    // `ol-egov.141.89.5.19` (remainder) added a `citationHashStore` spread
+    // between `windowDeficit` and `firstRead` (its own describe block below
+    // pins it) — the gap widened from `{0,200}?` to `{0,700}?` to still
+    // match past that new spread and its comment.
     expect(main).toMatch(
       new RegExp(
-        `createLocalHomeProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*scheduler,\\s*relations:\\s*\\(\\) => this\\.servedRelationEdges\\(\\),[\\s\\S]{0,300}?plan:\\s*\\(\\) => this\\.review\\?\\.plan \\?\\? null,[\\s\\S]{0,300}?${spread},\\s*windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),[\\s\\S]{0,200}?firstRead:`,
+        `createLocalHomeProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*scheduler,\\s*relations:\\s*\\(\\) => this\\.servedRelationEdges\\(\\),[\\s\\S]{0,300}?plan:\\s*\\(\\) => this\\.review\\?\\.plan \\?\\? null,[\\s\\S]{0,300}?${spread},\\s*windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),[\\s\\S]{0,700}?firstRead:`,
       ),
     );
   });
@@ -1682,9 +1719,24 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
     );
   });
 
-  it('all three direct-compose call sites receive it — exactly three occurrences', () => {
+  // `ol-egov.141.89.5.19` remainder: a fourth site — Home's own construction,
+  // which wraps `createLocalSessionBuilderProvider` internally
+  // (`home/provider.ts`) rather than calling it directly, so it is not one
+  // of the "three direct-compose call sites" the test above counts. Without
+  // this, Home's preview did not withhold a pending instrument though the
+  // session builder did — the exact gap `home/provider.ts`'s
+  // `CreateLocalHomeProviderDeps.citationHashStore` doc names.
+  it("the Home view's createLocalHomeProvider construction site receives it too", () => {
+    expect(main).toMatch(
+      new RegExp(
+        `windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${citationSpread},\\s*[\\s\\S]{0,300}?firstRead: \\(\\) => this\\.firstReadFolderViewsFor\\(this\\.tickedCourseFolders\\),\\s*\\}\\);`,
+      ),
+    );
+  });
+
+  it('all four compose call sites (three direct, one via Home) receive it — exactly four occurrences', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(3);
+    expect(occurrences.length).toBe(4);
   });
 });
 
@@ -1804,6 +1856,46 @@ describe('ol-egov.141.89.10.14 (bug, fixed): the shared session holder now compu
   it('the staleness object is no longer a literal all-false constant', () => {
     expect(main).not.toMatch(
       /staleness:\s*\{\s*itemsDueInScope:\s*false,\s*materialArrivedInScope:\s*false,\s*assessmentProximityBandCrossedInScope:\s*false,\s*\},/,
+    );
+  });
+});
+
+describe('[ILB-CHG-4] (ol-egov.141.89.5.4), component register row 3.6: the shared holder also treats a newly-pending citation as staleness', () => {
+  // FIXED: `ol-egov.141.89.10.14` wired `itemsDueInScope`/`materialArrivedInScope`/
+  // `assessmentProximityBandCrossedInScope` to real facts (the describe block
+  // above), but that diff never read this chain's own [D-351] pending-
+  // revalidation records, so a citation newly known to have changed since the
+  // sitting was frozen held the sitting open regardless. `main.ts` cannot be
+  // imported under Vitest (this file's own module doc); the real diffing
+  // logic (`hasCitationRevisionChangedInScope`) is unit-tested directly in
+  // `packages/core/src/concept/revision/session-staleness.spec.ts`, and
+  // `session/holder.ts`'s own `materialChangedInScopeSinceFreeze` (which this
+  // wiring calls) is unit-tested in `test/session/holder.spec.ts` — both
+  // outside this bead's owned paths, read only. This is the source-level
+  // wiring pin confirming `enterStudySessionHolderForStart` actually resolves
+  // the live pending set (from the SAME `CitationHashStore` `session-builder/
+  // provider.ts`'s own resolver reads) and ORs the result into `staleness`
+  // before the existing `decide()` call — never a second, independent
+  // trigger, and never a substitution of one item mid-session ([D-330]).
+
+  it('imports resolveCitationPendingRevalidation and instrumentIdsInScope from session-builder/provider.js', () => {
+    expect(main).toMatch(
+      /import \{\s*buildScopeSnapshotAt,\s*composeStudySessionForRequest,\s*createLocalSessionBuilderProvider,\s*type FrozenSittingScope,\s*instrumentIdsInScope,\s*resolveCitationPendingRevalidation,\s*\} from '\.\/session-builder\/provider\.js';/,
+    );
+  });
+
+  it('computes the live pending-revalidation set from this.citationHashStore over the held sitting’s own frozen scope, omitting the key shape (never a second store) when either is absent', () => {
+    expect(main).toMatch(
+      /const currentPendingRevalidation =\s*this\.citationHashStore !== null && this\.sharedSittingFrozenScope !== undefined\s*\? await resolveCitationPendingRevalidation\(\s*this\.citationHashStore,\s*instrumentIdsInScope\(this\.sharedSittingFrozenScope\),\s*\)\s*: new Set<string>\(\);/,
+    );
+  });
+
+  it('calls the holder’s own materialChangedInScopeSinceFreeze with that live set, then ORs the result into materialArrivedInScope before decide()', () => {
+    expect(main).toMatch(
+      /const citationRevisionChangedInScope =\s*this\.studySessionHolder\.materialChangedInScopeSinceFreeze\(currentPendingRevalidation\);/,
+    );
+    expect(main).toMatch(
+      /staleness: citationRevisionChangedInScope\s*\? \{ \.\.\.staleness, materialArrivedInScope: true \}\s*: staleness,\s*\}\);/,
     );
   });
 });
