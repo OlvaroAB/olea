@@ -11,7 +11,7 @@
  */
 
 import { watch as fsWatch } from 'node:fs';
-import { mkdir, readdir, readFile, stat, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, readdir, readFile, rmdir, stat, unlink, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, resolve, sep } from 'node:path';
 import {
   isVaultPath,
@@ -194,6 +194,22 @@ export class FolderSource implements VaultSource {
   async delete(path: VaultPath): Promise<void> {
     try {
       await unlink(this.toAbsolute(path));
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
+      throw err;
+    }
+  }
+
+  /**
+   * `VaultSource.removeEmptyFolder` (`ol-egov.141.8.9`). `node:fs.rmdir`
+   * without `{ recursive: true }` already refuses a non-empty directory
+   * (rejects with `ENOTEMPTY`) and never touches its contents, which is
+   * exactly the interface's contract — nothing extra to enforce here. A
+   * no-op, never a throw, when the folder is already gone.
+   */
+  async removeEmptyFolder(path: VaultPath): Promise<void> {
+    try {
+      await rmdir(this.toAbsolute(path));
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return;
       throw err;

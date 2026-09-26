@@ -138,6 +138,33 @@ export interface VaultSource {
    * implementation note on why `mtime` is never used as a substitute here.
    */
   firstSeen?(path: VaultPath): Promise<number | null>;
+
+  /**
+   * Remove one folder — never recursively, and only when it is already
+   * empty. A host MUST refuse (throw or reject) when the folder still holds
+   * any file or subfolder; callers rely on that refusal to detect "not
+   * actually empty" without listing the folder themselves first. A no-op,
+   * never a throw, when the folder does not exist (same posture as
+   * `delete`).
+   *
+   * Found by `ol-egov.141.8.7`: `VaultSource` could remove files under
+   * `.olea/` but never the folders those files left behind, so a full
+   * delete emptied every store but left the directory tree standing
+   * (`ol-egov.141.8.9`). This is the primitive that closes that gap —
+   * `packages/plugin/src/privacy/full-delete.ts` is the one caller, removing
+   * emptied `.olea/` folders deepest-first after its residue sweep.
+   *
+   * **Optional by design, same reasoning as `delete` and `firstSeen`
+   * above**: a required method would force every `VaultSource`
+   * implementation across the workspace — several outside any one bead's
+   * ownership, most of them read-only test fakes — to grow one overnight.
+   * A host without this method simply cannot clean up empty folders; a
+   * caller that needs the cleanup checks `vault.removeEmptyFolder ===
+   * undefined` and treats it as "not supported here", never as a failure to
+   * report. `FolderSource` and `ObsidianSource` — the two real hosts — both
+   * implement it.
+   */
+  removeEmptyFolder?(path: VaultPath): Promise<void>;
 }
 
 /** Shared validity rule for the `VaultPath` contract above. */

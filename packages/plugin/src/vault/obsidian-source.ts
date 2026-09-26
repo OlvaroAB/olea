@@ -133,6 +133,23 @@ export class ObsidianSource implements VaultSource {
   }
 
   /**
+   * `VaultSource.removeEmptyFolder` (`ol-egov.141.8.9`). Goes straight to
+   * `this.vault.adapter.rmdir` (the same raw adapter `delete()` and
+   * `listUnder()` above already use), passing `recursive: false` — Obsidian's
+   * own non-recursive form, documented as requiring the folder to already be
+   * empty; a non-empty folder rejects, which this method never catches, so
+   * the refusal reaches the caller unchanged. A no-op, never a throw, when
+   * the folder is already gone.
+   */
+  async removeEmptyFolder(path: VaultPath): Promise<void> {
+    if (!isVaultPath(path)) {
+      throw new Error(`ObsidianSource: not a valid vault path: ${JSON.stringify(path)}`);
+    }
+    if (!(await this.vault.adapter.exists(path))) return;
+    await this.vault.adapter.rmdir(path, false);
+  }
+
+  /**
    * ARRIVE-1 (`ol-4pue`): `VaultSource.firstSeen`, over `TFile.stat.ctime` —
    * Obsidian's own record of when it first saw the file (epoch ms), which is
    * the best "arrival" signal this host exposes and is not the same thing as

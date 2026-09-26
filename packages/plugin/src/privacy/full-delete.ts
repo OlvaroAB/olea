@@ -17,6 +17,18 @@
  * 3. `deleteRemainingOleaLayer` (`ol-egov.141.8.7`) — whatever is still under
  *    `.olea/` after 1 and 2: a draft the draft index never named (the purge
  *    finds drafts only through that index), or a file written between steps.
+ * 3a. `removeEmptiedOleaFolders` (`ol-egov.141.8.9`, found by `ol-egov.141.8.7`):
+ *    every file removed in 1-3 leaves its folder behind — `VaultSource` could
+ *    delete files but had no way to remove a directory — so a full delete
+ *    emptied `.olea/`'s stores without ever taking the (now-empty) tree down.
+ *    Removes every folder that emptying could have affected, deepest first,
+ *    then `.olea/` itself, using the new optional `VaultSource.removeEmptyFolder`
+ *    primitive. Skipped entirely on a host without that primitive (nothing
+ *    attempted, nothing reported as unremovable — a host limitation, not a
+ *    failure). A folder still holding something this host could not discover
+ *    is refused by the primitive itself and reported in
+ *    `unremovableOleaFolders`, never thrown — the same "report, don't throw"
+ *    posture `remainingOleaPaths` already takes for files.
  * 4. A last discovery pass, reported as `remainingOleaPaths`: `[]` is the
  *    state in which the delete can truthfully say Olea's `.olea/` layer is
  *    gone, as far as this host can list it (`discoverOleaLayerPaths`).
@@ -51,7 +63,12 @@ import type { CalendarDay, VaultPath, VaultSource } from 'olea-core';
 import { resetDeviceId } from '../device/device-id.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { type CachePurgeResult, purgeCache } from './cache-purge.js';
-import { discoverOleaLayerPaths } from './log-discovery.js';
+import {
+  discoverOleaLayerPaths,
+  isOleaLayerPath,
+  OLEA_LAYER_FOLDERS,
+  OLEA_LAYER_ROOT,
+} from './log-discovery.js';
 import {
   deleteServerConfigRecord,
   type ServerConfigDeleteOutcome,
@@ -68,6 +85,18 @@ export interface FullDeleteResult {
   readonly vaultArtifacts: VaultArtifactDeleteResult;
   /** Step 3: what was still under `.olea/` after the purge and the artifact removal, now removed. */
   readonly residualOleaPaths: readonly VaultPath[];
+  /**
+   * Step 3a: every folder under `.olea/` (including `.olea/` itself) removed because emptying it
+   * left nothing behind. `[]` on a host with no `VaultSource.removeEmptyFolder` primitive — not a
+   * failure, see the module doc.
+   */
+  readonly removedOleaFolders: readonly VaultPath[];
+  /**
+   * Step 3a: a folder this host's primitive refused because it still held something the delete's
+   * discovery could not find (or could not remove) — reported, never thrown, beside
+   * `remainingOleaPaths`. `[]` in the ordinary case.
+   */
+  readonly unremovableOleaFolders: readonly VaultPath[];
   /** Step 4: anything a fresh discovery still finds under `.olea/` after every vault step. `[]` when the layer is gone. */
   readonly remainingOleaPaths: readonly VaultPath[];
   /** `{ outcome: 'not-configured' }` when `workerConfig` has no base URL or token — see the module doc. */
@@ -91,6 +120,55 @@ function isConfigured(config: WorkerConfig): boolean {
   return config.baseUrl.trim().length > 0 && config.token.trim().length > 0;
 }
 
+/** Every ancestor folder of `path` that sits strictly inside `.olea/`, nearest first. */
+function oleaAncestorsOf(path: VaultPath): VaultPath[] {
+  const ancestors: VaultPath[] = [];
+  let dir = path.slice(0, path.lastIndexOf('/'));
+  while (isOleaLayerPath(dir)) {
+    ancestors.push(dir);
+    dir = dir.slice(0, dir.lastIndexOf('/'));
+  }
+  return ancestors;
+}
+
+/**
+ * `ol-egov.141.8.9`: removes every folder under `.olea/` that emptying (steps 1-3) could have
+ * left behind, deepest first, then `.olea/` itself. Never a folder outside `.olea/` — every
+ * candidate is either a registered `OLEA_LAYER_FOLDERS` entry, an ancestor of a path this run
+ * actually removed (both checked again with `isOleaLayerPath`), or the root constant itself.
+ *
+ * Skipped entirely when `vault.removeEmptyFolder` is not implemented: a host limitation, not a
+ * failure, so nothing is reported as unremovable in that case (see the module doc).
+ */
+async function removeEmptiedOleaFolders(
+  vault: VaultSource,
+  removedPaths: readonly VaultPath[],
+): Promise<{ readonly removed: readonly VaultPath[]; readonly unremovable: readonly VaultPath[] }> {
+  if (vault.removeEmptyFolder === undefined) return { removed: [], unremovable: [] };
+
+  const candidates = new Set<VaultPath>();
+  for (const { folder } of OLEA_LAYER_FOLDERS) candidates.add(folder);
+  for (const path of removedPaths)
+    for (const ancestor of oleaAncestorsOf(path)) candidates.add(ancestor);
+
+  const deepestFirst = [...candidates]
+    .filter((folder) => isOleaLayerPath(folder))
+    .sort((a, b) => b.split('/').length - a.split('/').length);
+  const ordered: VaultPath[] = [...deepestFirst, OLEA_LAYER_ROOT];
+
+  const removed: VaultPath[] = [];
+  const unremovable: VaultPath[] = [];
+  for (const folder of ordered) {
+    try {
+      await vault.removeEmptyFolder(folder);
+      removed.push(folder);
+    } catch {
+      unremovable.push(folder);
+    }
+  }
+  return { removed, unremovable };
+}
+
 export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDeleteResult> {
   const cache = await purgeCache({
     dataHost: deps.dataHost,
@@ -105,6 +183,17 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
   };
   const vaultArtifacts = await deleteVaultArtifacts(layerDeps);
   const residualOleaPaths = await deleteRemainingOleaLayer(layerDeps);
+
+  const allRemovedPaths = [
+    ...cache.deletedDraftPaths,
+    ...vaultArtifacts.deletedReviewLogPaths,
+    ...vaultArtifacts.deletedMisconceptionLogPaths,
+    ...vaultArtifacts.deletedRecordPaths,
+    ...residualOleaPaths,
+  ];
+  const { removed: removedOleaFolders, unremovable: unremovableOleaFolders } =
+    await removeEmptiedOleaFolders(deps.vault, allRemovedPaths);
+
   const remainingOleaPaths = await discoverOleaLayerPaths(deps.vault, layerDeps);
 
   const serverConfig = isConfigured(deps.workerConfig)
@@ -117,6 +206,8 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
     cache,
     vaultArtifacts,
     residualOleaPaths,
+    removedOleaFolders,
+    unremovableOleaFolders,
     remainingOleaPaths,
     serverConfig,
     newDeviceId,
