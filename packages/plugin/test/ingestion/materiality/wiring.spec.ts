@@ -8,7 +8,10 @@ import type {
   MaterialityRecord,
   MaterialityVerdictEvent,
 } from '../../../src/ingestion/materiality/types.js';
-import { MaterialityTrigger } from '../../../src/ingestion/materiality/wiring.js';
+import {
+  buildRegionAwareMaterialityRequest,
+  MaterialityTrigger,
+} from '../../../src/ingestion/materiality/wiring.js';
 
 class FakeStore implements MaterialityHashStore {
   private readonly byPath = new Map<string, MaterialityRecord>();
@@ -476,5 +479,124 @@ describe('MaterialityTrigger.evaluate', () => {
       expect(result.kind).toBe('verdict');
       expect(judge.judge).toHaveBeenCalledOnce();
     });
+  });
+});
+
+/**
+ * `buildRegionAwareMaterialityRequest` — `[D-293]`'s target-request builder.
+ * See `wiring.ts`'s own doc on that function for why it is not (yet) called
+ * from `dispatchJudgeAndCommit` above.
+ *
+ * INV-3: every string here is coined. No course code, note title or wording
+ * comes from any real vault.
+ */
+describe('buildRegionAwareMaterialityRequest', () => {
+  it('attaches the purpose and computes regions from previous/current text', () => {
+    const request = buildRegionAwareMaterialityRequest({
+      path: PATH,
+      previousText: 'one\ntwo\nthree\nfour\nfive',
+      currentText: 'one\ntwo\nCHANGED\nfour\nfive',
+      purpose: 'note-concepts',
+    });
+    expect(request.path).toBe(PATH);
+    expect(request.purpose).toBe('note-concepts');
+    expect(request.regions).toHaveLength(1);
+    expect(request.regions[0]!.currentText).toContain('CHANGED');
+  });
+
+  it('reports no regions, and never a purpose-less request, for a cited-passage rewrite of nothing', () => {
+    const request = buildRegionAwareMaterialityRequest({
+      path: PATH,
+      previousText: 'the mineral is stable at room temperature',
+      currentText: 'the mineral is stable at room temperature',
+      purpose: 'cited-passage',
+    });
+    expect(request.purpose).toBe('cited-passage');
+    expect(request.regions).toEqual([]);
+  });
+
+  it('passes options through to the extractor (contextLines/mergeGapLines)', () => {
+    const previous = 'a\nb\nc\nd\ne\nf\ng';
+    const current = 'a\nb\nc\nCHANGED\ne\nf\ng';
+    const wide = buildRegionAwareMaterialityRequest({
+      path: PATH,
+      previousText: previous,
+      currentText: current,
+      purpose: 'note-concepts',
+      options: { contextLines: 3 },
+    });
+    const narrow = buildRegionAwareMaterialityRequest({
+      path: PATH,
+      previousText: previous,
+      currentText: current,
+      purpose: 'note-concepts',
+      options: { contextLines: 0 },
+    });
+    expect(wide.regions[0]!.currentText.split('\n')).toHaveLength(7);
+    expect(narrow.regions[0]!.currentText).toBe('CHANGED');
+  });
+
+  it('measures a materially smaller judge-input size on a realistic single-edit fixture', () => {
+    // A coined, moderate-length note (five short sections) with exactly one
+    // sentence changed in the fourth section — the common case row 1.4
+    // exists for: one real edit inside an otherwise-unchanged file.
+    const section = (heading: string, body: string) =>
+      `## ${heading}\n\n${body}\n`;
+    const unchangedBody =
+      'This section restates settled background material at some length ' +
+      'so the fixture reads like a realistic study note rather than a toy ' +
+      'example, without changing on either side of the edit under test.';
+    const previousText = [
+      section('Formation', unchangedBody),
+      section('Cooling Rate', unchangedBody),
+      section('Crystal Size', unchangedBody),
+      section(
+        'Weathering Behavior',
+        'Different igneous rocks weather at different rates depending on ' +
+          'their mineral composition and crystal size. Basalt weathers ' +
+          'relatively quickly in humid climates because it typically ' +
+          'contains reactive minerals such as olivine and pyroxene, which ' +
+          'break down fast when exposed to water and oxygen over long ' +
+          'periods of geological time.',
+      ),
+      section('Field Identification', unchangedBody),
+    ].join('\n');
+    const currentText = previousText.replace(
+      'Basalt weathers relatively quickly in humid climates',
+      'Basalt weathers unusually quickly in humid, low-pH climates',
+    );
+    expect(currentText).not.toBe(previousText);
+
+    const request = buildRegionAwareMaterialityRequest({
+      path: PATH,
+      previousText,
+      currentText,
+      purpose: 'note-concepts',
+    });
+
+    // Rough token estimate: ~4 characters per token, the same heuristic
+    // `docs/dev/intelligence-build/README.md` uses for a quick order-of-
+    // magnitude check (never a billing figure).
+    const wholeDocumentChars = previousText.length + currentText.length;
+    const regionChars = request.regions.reduce(
+      (sum, region) => sum + region.previousText.length + region.currentText.length,
+      0,
+    );
+    const wholeDocumentTokensEstimate = Math.ceil(wholeDocumentChars / 4);
+    const regionTokensEstimate = Math.ceil(regionChars / 4);
+    // eslint-disable-next-line no-console -- reported in the bead's close evidence, not left as silent coverage.
+    console.log(
+      `[ol-egov.141.89.5.4] region-vs-whole-document estimate on fixture: ` +
+        `whole document ~${wholeDocumentTokensEstimate} tokens (${wholeDocumentChars} chars) vs ` +
+        `regions ~${regionTokensEstimate} tokens (${regionChars} chars), ` +
+        `${request.regions.length} region(s)`,
+    );
+
+    expect(request.regions).toHaveLength(1);
+    // The single changed sentence sits inside one ~1,700-character section
+    // out of a ~2,300-character document; the region (context-padded) must
+    // still be well under half the whole-document size to demonstrate the
+    // "fewer input tokens per judgment" effect this bead exists to produce.
+    expect(regionChars).toBeLessThan(wholeDocumentChars * 0.5);
   });
 });

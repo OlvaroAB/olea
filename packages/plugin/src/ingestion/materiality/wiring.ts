@@ -55,8 +55,12 @@
  */
 
 import {
+  type ChangedRegion,
+  type ChangedRegionOptions,
+  type ChangedRegionPurpose,
   type Clock,
   decisionFromRevisionJudge,
+  extractChangedRegions,
   type MaterialityDecision,
   type ModelStamp,
 } from 'olea-core';
@@ -787,6 +791,70 @@ export class MaterialityTrigger {
     }
     return { kind: 'verdict', verdict, decision };
   }
+}
+
+/**
+ * `[D-293]`'s decision-input shape: the changed regions of a revision, with
+ * surrounding context (`olea-core`'s `extractChangedRegions`, this
+ * function's own module — `changed-region.ts` — carries the full
+ * "why not two whole documents" argument), plus which dependant is asking
+ * (`purpose`).
+ */
+export interface RegionAwareMaterialityRequest {
+  readonly path: string;
+  readonly purpose: ChangedRegionPurpose;
+  readonly regions: readonly ChangedRegion[];
+}
+
+export interface BuildRegionAwareMaterialityRequestInput {
+  readonly path: string;
+  readonly previousText: string;
+  readonly currentText: string;
+  /** Which dependant is asking — a note's concepts (the file-level trigger), or an instrument's own cited passage (`citation-revision-wiring.ts`). */
+  readonly purpose: ChangedRegionPurpose;
+  readonly options?: ChangedRegionOptions | undefined;
+}
+
+/**
+ * Builds `[D-293]`'s target request shape — changed regions with context,
+ * plus the asking dependant's purpose — from a revision's previous and
+ * current text. Pure; never calls a judge, never reads a store.
+ *
+ * **Not called from `dispatchJudgeAndCommit` above, and not yet the live
+ * judge request.** `dispatchJudgeAndCommit` still sends
+ * `this.deps.judge.judge({ path, previousText, currentText })` — the
+ * INCUMBENT whole-document shape `MaterialityJudgeInput` (`./types.ts`)
+ * declares — because switching the live call is `[ILB-CHG-5]`'s job, not
+ * this bead's (`[ILB-CHG-4]`): `[D-293]`'s own close reason reads "approved
+ * as proposed on this bead, with the wiring still waiting on the chain's
+ * benchmark report (the benchmark-and-wire bead runs the benchmark before
+ * it wires anything)," and `docs/dev/intelligence-build/chg.md` §7 names
+ * `[ILB-CHG-5]` as the bead that gates on it; §8's own build scope is "the
+ * changed-region extractor with context (core)... Then the harness runner"
+ * — pure logic first, the switch after the benchmark. It would also need a
+ * new `materiality.judge` task version (`olea-service`'s
+ * `prompts/materiality.judge/VERSION` is `1.0.0`, a whole-document
+ * contract), which this bead has no standing to bump unprompted.
+ *
+ * This function exists so that benchmark has something concrete to score:
+ * `chg.md` §8's "prepare renders the incumbent request and the target
+ * request" — this is the target-request half, for `scripts/harness/ilb-chg/`
+ * (a different lane's owns) to call once it runs. See this bead's close
+ * notes for the before/after token-count estimate measured against a
+ * fixture.
+ */
+export function buildRegionAwareMaterialityRequest(
+  input: BuildRegionAwareMaterialityRequestInput,
+): RegionAwareMaterialityRequest {
+  return {
+    path: input.path,
+    purpose: input.purpose,
+    regions: extractChangedRegions({
+      previousText: input.previousText,
+      currentText: input.currentText,
+      options: input.options,
+    }),
+  };
 }
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this module needs — same narrow-port pattern every store in this plugin uses. */

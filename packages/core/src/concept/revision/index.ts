@@ -11,6 +11,13 @@
  * production caller — the named D-072 reachability gap.
  */
 
+export type {
+  ChangedRegion,
+  ChangedRegionOptions,
+  ChangedRegionPurpose,
+  ExtractChangedRegionsInput,
+} from './changed-region.js';
+export { extractChangedRegions } from './changed-region.js';
 export type { InstrumentRevisionJobPayload } from './enqueue.js';
 export { buildSuccessorRevisionEnqueueInput } from './enqueue.js';
 export { checkItemValidation, evaluateItemValidationTrigger } from './item-validation.js';
