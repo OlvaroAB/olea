@@ -93,6 +93,21 @@
  * refreshed since she opened would be silently disagreeing with the
  * interval preview it showed her minutes earlier over the SAME item — the
  * identical reasoning this module's own `now` doc gives for one clock.
+ *
+ * ## C5.3 / `[D-090]`: a duplicated item id's losing copy is withheld (`ol-v7r5.88`)
+ *
+ * When one item id is found in more than one note, `olea-core`'s
+ * `resolveInstrumentDuplications` runs over the kept enumeration: the copy
+ * the walk keeps is the one she is served, the losing copy never reaches her
+ * queue, and each losing note gets a confirmation entry, persisted by
+ * `./duplication-confirmation-store.ts` in its own dot folder (`[D-380]`),
+ * never in the automatic processing queue and never in her notes. The
+ * withholding is computed from the live collision on every open, whatever a
+ * stored record's status says — "one scheduling history is never fed by two
+ * physical items" holds while the entry waits and after she answers. Nothing
+ * here asks her anything: no clause defines an affordance to confirm or
+ * decline, so this stops at the record. A failed write of that record never
+ * costs her the review; the next open writes it.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
@@ -108,6 +123,7 @@ import type {
   Scheduler,
   SittingScopeSnapshot,
   SittingStalenessInput,
+  StudySessionItem,
   VaultInstrumentRecord,
   VaultPath,
   VaultSource,
@@ -122,6 +138,7 @@ import {
   readDistractorProvenance,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
+  resolveInstrumentDuplications,
   reviewLogPath,
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
@@ -133,6 +150,10 @@ import { createVaultMisconceptionStore } from '../misconception/store.js';
 import type { StudySessionHolder } from '../session/holder.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
+import {
+  type DuplicationConfirmationEntryInput,
+  proposeDuplicationConfirmations,
+} from './duplication-confirmation-store.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
 import {
@@ -416,6 +437,26 @@ export async function openReviewSession(
       ...(input.assessments !== undefined ? { assessments: input.assessments } : {}),
     });
 
+    // C5.3 / `[D-090]` (`ol-v7r5.88`): withhold every duplicated id's losing
+    // copy, off the SAME kept enumeration, and record each losing note's
+    // confirmation entry (`[D-380]`) — see the module doc. Pure, then one
+    // store call that reads and writes nothing in the ordinary, duplicate-free
+    // case.
+    const duplication = resolveInstrumentDuplications({
+      records: composed.instruments.records,
+      duplicateInstrumentIds: composed.duplicateInstrumentIds,
+      candidates: composed.candidates,
+      now: now.getTime(),
+    });
+    await recordDuplicationConfirmations(
+      input.vault,
+      composed.instruments.records,
+      duplication.confirmationQueueEntries,
+    );
+    const duplicatedInstrumentIds = new Set(
+      composed.duplicateInstrumentIds.map((duplicate) => duplicate.instrumentId),
+    );
+
     // `[SESS-8.4]` (design note §3a/§3c): she gets the ONE composition, not
     // a private selection step. Reads the held sitting when active; composes
     // once through the port when idle and enters the result before reading
@@ -480,11 +521,13 @@ export async function openReviewSession(
     // A held item whose instrument left the enumeration since composition
     // (her note was deleted) is dropped, not thrown on, and reported in
     // droppedMissingRecordInstrumentIds (ol-egov.141.89.10.24); nothing reads
-    // that report yet, like core's duplicateInstrumentIds.
+    // that report yet. A duplicated id's rows are cut to one before the join
+    // (`withholdLosingCopies`), and the join reads the resolution's candidates,
+    // which carry at most one per duplicated id (C5.3, `ol-v7r5.88`).
     const { items: queueItems } = queueItemsFromComposedSession({
-      items: composedSession.model.items,
-      recordsById: composed.recordsById,
-      candidates: composed.candidates,
+      items: withholdLosingCopies(composedSession.model.items, duplicatedInstrumentIds),
+      recordsById: duplication.recordsById,
+      candidates: duplication.candidates,
       now,
     });
     // C5.7 (`ol-egov.141.89.10.18`, `ol-egov.141.89.10.45`, fixed by
@@ -681,6 +724,55 @@ export async function openReviewSession(
     };
   } catch (error) {
     return { ok: false, error };
+  }
+}
+
+/**
+ * C5.3 / `[D-090]` (`ol-v7r5.88`): at most one of the composition's rows per
+ * duplicated id — the first, in the composer's own order, the same "keep the
+ * first instance" rule `resolveInstrumentDuplications` applies to candidates.
+ * Every surviving row is joined against the KEPT record (`recordsById`), so
+ * she is served the kept copy whichever copy's note path the row carried; a
+ * second row for the same id would be the losing copy reaching her queue — two
+ * presentations feeding one scheduling history. Rows for every other id pass
+ * through untouched and in order.
+ */
+function withholdLosingCopies(
+  items: readonly StudySessionItem[],
+  duplicatedInstrumentIds: ReadonlySet<string>,
+): readonly StudySessionItem[] {
+  if (duplicatedInstrumentIds.size === 0) return items;
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (!duplicatedInstrumentIds.has(item.instrumentId)) return true;
+    if (seen.has(item.instrumentId)) return false;
+    seen.add(item.instrumentId);
+    return true;
+  });
+}
+
+/**
+ * `[D-380]` (`ol-v7r5.88`): persists this open's confirmation entries through
+ * `./duplication-confirmation-store.ts`, with each copy's `olea-uid` read off
+ * the SAME enumeration (never stamped). Best-effort by design: the
+ * withholding above does not depend on the record, the store is idempotent,
+ * and the next open writes what this one could not — so a failed write must
+ * never turn into a review that will not open. Nothing is logged (D-005: the
+ * error carries note paths).
+ */
+async function recordDuplicationConfirmations(
+  vault: VaultSource,
+  records: readonly VaultInstrumentRecord[],
+  entries: readonly DuplicationConfirmationEntryInput[],
+): Promise<void> {
+  if (entries.length === 0) return;
+  const noteUidByPath = new Map(records.map((record) => [record.notePath, record.noteUid]));
+  try {
+    await proposeDuplicationConfirmations(vault, entries, {
+      noteUidOf: (notePath) => noteUidByPath.get(notePath) ?? null,
+    });
+  } catch {
+    // See the doc above: the record is retried on the next open.
   }
 }
 

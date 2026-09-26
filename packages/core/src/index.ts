@@ -874,6 +874,18 @@ export {
   readDistractorProvenance,
   writeDistractorProvenance,
 } from './instrument/distractor-provenance-store.js';
+// C5.3 / `[D-090]`'s duplication rule, pure half (`ol-v7r5.84`): the losing copy of a duplicated
+// item id is withheld and gets a confirmation entry. Caller: `review/open-session.ts` (plugin repo),
+// which persists the entries in `review/duplication-confirmation-store.ts` (`[D-380]`, `ol-v7r5.88`).
+export type {
+  DuplicationCollision,
+  DuplicationConfirmationQueueEntry,
+  DuplicationConfirmationReason,
+  DuplicationConfirmationStatus,
+  ResolveInstrumentDuplicationsInput,
+  ResolveInstrumentDuplicationsResult,
+} from './instrument/duplication.js';
+export { resolveInstrumentDuplications } from './instrument/duplication.js';
 export type {
   InsertMcqInput,
   InsertMcqResult,
