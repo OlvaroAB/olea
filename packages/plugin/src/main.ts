@@ -156,6 +156,12 @@ import { WorkerMaterialityJudge } from './ingestion/materiality/workerJudge.js';
 // this is a GET rather than a `WorkerTaskTransport`, the same
 // `obsidianRankWeightsGet`/`obsidianDepthGateGet` shape below.
 import { obsidianVisionRouteGet } from './ingestion/obsidian-vision-route-transport.js';
+// `[D-324]`, resolving `ol-9cle`: the real `PageRenderPort` adapter over
+// Obsidian's own `loadPdfJs` and a DOM `canvas` — see `page-renderer.ts`'s
+// own module doc, which named this composition as the one line still needed
+// at this file's `buildIngestionRunner` call (part 2 of
+// `ol-egov.141.89.8.4`'s report).
+import { createObsidianPageRenderer } from './ingestion/page-renderer.js';
 import {
   buildAuthoredNoteUnit,
   createProcessNowAction,
@@ -1880,6 +1886,15 @@ export default class OleaPlugin extends Plugin {
         dataHost: this,
         createTransport: createRecordingTransport,
       },
+      // `[D-324]`, resolving `ol-9cle`: composes the real `PageRenderPort`
+      // into the `'vision-page'` runner's PDF branch
+      // (`vision-page-runner.ts`'s `renderAndLandPdfPage`) — see
+      // `IngestionWiringDeps.pageRenderer`'s own doc (`ingestion/wiring.ts`)
+      // for why this is the true production composition root. Before this
+      // line, every real `main.ts` call left `pageRenderer` unset, so a
+      // `'pdf'` `'vision-page'` job kept the pre-existing honest "no page
+      // renderer wired" gap even after the renderer itself was built.
+      pageRenderer: createObsidianPageRenderer(),
       // `[ILB-PER-4]` §8 item 2 (`ol-egov.141.89.8.4` slice 4): component
       // 1.6's delivered vision-routing threshold — see
       // `IngestionWiringDeps.visionRoute`'s own doc (`ingestion/wiring.ts`)

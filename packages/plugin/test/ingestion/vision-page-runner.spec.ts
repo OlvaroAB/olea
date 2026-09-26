@@ -1038,6 +1038,11 @@ describe('createWorkerVisionPageRunner — [D-326] onManifestEntry: producer pro
       modelIdentity: '@cf/meta/llama-4-scout-17b-16e-instruct',
       imageDigest: expect.any(String),
     });
+    // Core's `UnitReadingState` (`ol-egov.141.89.8.4` part 3's swap) makes
+    // `provenance` optional on every kind — this runner always supplies it
+    // for an image reading, but the type no longer says so, hence this
+    // narrowing before the field access below.
+    if (!entry.readingState.provenance) return expect.unreachable();
     expect(entry.readingState.provenance.imageDigest).toMatch(/^[0-9a-f]{64}$/); // hex SHA-256
   });
 
@@ -1105,6 +1110,82 @@ describe('createWorkerVisionPageRunner — [D-326] onManifestEntry: producer pro
     });
   });
 
+  it("maps a wire unreadableReason outside core's closed three-value enum to the safe declared default, and counts it via onUnknownUnreadableReason, never passing the out-of-catalogue string through (part 3, ol-egov.141.89.8.4)", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/blank.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      // Not one of core's three closed `UnitUnreadableReason` values
+      // (`blank-page`/`not-legible`/`no-text-on-page`) — a wire/service
+      // drift this client cannot rule out but must never trust blindly.
+      unreadableReason: 'corrupted-scan',
+    }));
+    let unknownReasonCount = 0;
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+      onUnknownUnreadableReason: () => {
+        unknownReasonCount += 1;
+      },
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/blank.png', format: 'image', page: 1 },
+      }),
+    );
+
+    const entry = manifest.entries[0];
+    expect(entry?.readingState).toEqual({
+      kind: 'unreadable',
+      reason: 'not-legible',
+      provenance: expect.objectContaining({ task: 'vision.extract.v2' }),
+    });
+    expect(unknownReasonCount).toBe(1);
+  });
+
+  it('never counts a null unreadableReason as unknown (the pre-existing, honest "no reason named" case)', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/blank.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const manifest = new RecordingManifestSink();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: null,
+    }));
+    let unknownReasonCount = 0;
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onManifestEntry: manifest.handler,
+      onUnknownUnreadableReason: () => {
+        unknownReasonCount += 1;
+      },
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/blank.png', format: 'image', page: 1 },
+      }),
+    );
+
+    const entry = manifest.entries[0];
+    if (entry?.readingState.kind !== 'unreadable') return expect.unreachable();
+    expect(entry.readingState.reason).toBe('not-legible');
+    expect(unknownReasonCount).toBe(0);
+  });
+
   it('falls back to a labelled placeholder when the port answers with no modelId/promptVersion', async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
@@ -1122,6 +1203,9 @@ describe('createWorkerVisionPageRunner — [D-326] onManifestEntry: producer pro
 
     const entry = manifest.entries[0];
     if (entry?.readingState.kind !== 'read') return expect.unreachable();
+    // See the "builds a read entry" test above for why this narrowing is
+    // now needed: core's `UnitReadingState` makes `provenance` optional.
+    if (!entry.readingState.provenance) return expect.unreachable();
     expect(entry.readingState.provenance.modelIdentity).toContain('unreported');
     expect(entry.readingState.provenance.promptVersion).toContain('unreported');
   });

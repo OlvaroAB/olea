@@ -2285,3 +2285,22 @@ describe('[D-360]: the enqueue-on-dispute helper is real and reuses enqueueConte
     );
   });
 });
+
+describe('[ILB-PER-4] part 3 (ol-egov.141.89.8.4): the PDF page renderer is composed at the buildIngestionRunner call, not merely built', () => {
+  // `page-renderer.ts`'s own module doc names this composition as the one
+  // line still needed at "the true production composition root (`main.ts`'s
+  // `buildIngestionRunner` call)" — part 2's report named it precisely.
+  // Without this, `vision-page-runner.ts`'s PDF branch (`renderAndLandPdfPage`)
+  // is reachable and tested but never actually invoked in production: a
+  // real `'pdf'` `'vision-page'` job still falls into the "no page renderer
+  // wired" honest gap despite the renderer (`ol-9cle`) existing.
+  it('imports createObsidianPageRenderer from ingestion/page-renderer.js', () => {
+    expect(main).toMatch(
+      /import \{ createObsidianPageRenderer \} from '\.\/ingestion\/page-renderer\.js';/,
+    );
+  });
+
+  it("passes pageRenderer: createObsidianPageRenderer() into the buildIngestionRunner call, closing [D-324]'s remaining production-caller gap (ol-9cle)", () => {
+    expect(main).toMatch(/pageRenderer: createObsidianPageRenderer\(\),/);
+  });
+});

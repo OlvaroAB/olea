@@ -64,11 +64,14 @@
  * constant. `readAndLandPage` (below) turns every reading — `'complete'`,
  * `'partial'` and `'unreadable'` alike — into a manifest-entry value (this
  * bead exported `packages/core/src/ingestion/unit-manifest/types.ts`'s
- * shape from `olea-core`; `UnitProducerProvenance` is now imported directly
- * and `VisionUnitReadingState`/`VisionUnitManifestEntry` stay local,
- * deliberately narrower mirrors — see `VisionUnitReadingState`'s own doc for
- * why) carrying that provenance plus a digest of the image bytes sent, and
- * hands it to `deps.onManifestEntry` when one is supplied.
+ * shape from `olea-core`; `UnitProducerProvenance`, and — since this bead's
+ * part 3 added the wire-vs-enum validation that made it safe
+ * (`normalizeUnreadableReason`, below) — `UnitReadingState`/
+ * `UnitManifestEntry` too, are now imported directly, with
+ * `VisionUnitReadingState`/`VisionUnitManifestEntry` kept only as aliases —
+ * see `VisionUnitReadingState`'s own doc for why) carrying that provenance
+ * plus a digest of the image bytes sent, and hands it to
+ * `deps.onManifestEntry` when one is supplied.
  * **Persisting that entry anywhere durable is deliberately NOT done here** —
  * `UnitManifest` has no store yet (a stored-shape call this bead does not
  * make unilaterally); `onManifestEntry` is the seam a later wiring bead
@@ -194,7 +197,10 @@ import type {
   JobRunner,
   JobRunnerView,
   JobRunOutcome,
+  UnitManifestEntry,
   UnitProducerProvenance,
+  UnitReadingState,
+  UnitUnreadableReason,
   VaultPath,
   VaultSource,
   WorkerTaskTransport,
@@ -461,65 +467,38 @@ function readVisionResult(body: unknown): VisionPageExtractResult {
 export type VisionUnitProducerProvenance = UnitProducerProvenance;
 
 /**
- * Deliberately still a local, narrower mirror of core's `UnitReadingState`
- * union, NOT swapped for the exported type even though this bead also
- * exported it (see `VisionUnitProducerProvenance`'s doc just above for the
- * case where a swap WAS clean). Two reasons the swap does not apply here:
- *
- * 1. This runner only ever reaches three of `UnitReadingState`'s six kinds
- *    (`'read'`/`'partial'`/`'unreadable'` — never `'pending'`/`'unavailable'`/
- *    `'failed'`, which belong to the job-runner's `JobRunOutcome` side, not a
- *    settled reading); narrowing to those three here is deliberate, not an
- *    oversight to fix.
- * 2. `'unreadable'`'s `reason` is core's closed `UnitUnreadableReason`
- *    enum (`'blank-page'`/`'not-legible'`/`'no-text-on-page'`) — the SAME
- *    three values the Worker's own schema enforces
- *    (`olea-service/src/tasks/visionExtract.ts`'s `VISION_UNREADABLE_REASONS`),
- *    but this file reads `result.unreadableReason` off the wire as a plain,
- *    unvalidated `string | null` (`readNullableString`, above) — it checks
- *    "is a string", never "is one of the three catalogue values". Widening
- *    this field's type to the closed enum without adding that check would
- *    let an out-of-catalogue string the Worker should never send, but this
- *    file cannot actually rule out, type-check as if it were closed — an
- *    unsafe swap, not a clean one. Reported as a follow-up rather than made
- *    unilaterally (see this bead's report).
+ * Now core's real `UnitReadingState` union, not a local mirror — part 3 of
+ * this bead (`ol-egov.141.89.8.4`) resolved the one reason the earlier swap
+ * (`VisionUnitProducerProvenance`, above) did not extend here: `'unreadable'`
+ * .reason is core's closed `UnitUnreadableReason` enum
+ * (`'blank-page'`/`'not-legible'`/`'no-text-on-page'`), and this file used
+ * to read `result.unreadableReason` off the wire as an unvalidated
+ * `string | null` and pass it straight through — an out-of-catalogue string
+ * the Worker should never send but this file could not actually rule out.
+ * `normalizeUnreadableReason` (below) is that missing check: a value outside
+ * the three catalogue entries now maps to the same safe declared default
+ * `null` already used, and is counted via `deps.onUnknownUnreadableReason`,
+ * never passed through. With that guard in place, the type this runner
+ * builds is honestly core's own — this alias exists only so nothing
+ * downstream that already spells `VisionUnitReadingState` needs to change
+ * (same reasoning `VisionUnitProducerProvenance`'s doc gives). This runner
+ * still only ever reaches three of the six `UnitReadingState` kinds
+ * (`'read'`/`'partial'`/`'unreadable'` — never `'pending'`/`'unavailable'`/
+ * `'failed'`, which belong to the job-runner's `JobRunOutcome` side, not a
+ * settled reading); a TypeScript union assignment accepts that narrower
+ * shape without complaint, so no further narrowing is declared here.
  */
-export type VisionUnitReadingState =
-  | {
-      readonly kind: 'read';
-      readonly method: 'image';
-      readonly provenance: VisionUnitProducerProvenance;
-    }
-  | {
-      readonly kind: 'partial';
-      readonly method: 'image';
-      readonly coverage: string;
-      readonly provenance: VisionUnitProducerProvenance;
-    }
-  | {
-      readonly kind: 'unreadable';
-      readonly reason: string;
-      readonly provenance: VisionUnitProducerProvenance;
-    };
+export type VisionUnitReadingState = UnitReadingState;
 
 /**
- * A local, narrower mirror of core's exported `UnitManifestEntry` for the
- * same reason `VisionUnitReadingState`'s own doc gives (its `readingState`
- * field is this narrower union, not core's full one). Always
+ * Now core's real `UnitManifestEntry`, for the same reason
+ * `VisionUnitReadingState`'s own doc gives. Always
  * `conceptExtractionState: 'not-started'`: this file only ever produces a
  * freshly-read entry, never one concept extraction has already run over —
- * still a valid `UnitManifestEntry` structurally, since `'not-started'` is
- * one of `ConceptExtractionState`'s two members, but kept as its own named
- * type here so `deps.onManifestEntry`'s signature says exactly what this
- * file can actually produce.
+ * kept as its own named alias here so `deps.onManifestEntry`'s signature
+ * keeps reading `VisionUnitManifestEntry`.
  */
-export interface VisionUnitManifestEntry {
-  readonly unitId: string;
-  readonly sourcePath: VaultPath;
-  readonly page: number;
-  readonly readingState: VisionUnitReadingState;
-  readonly conceptExtractionState: 'not-started';
-}
+export type VisionUnitManifestEntry = UnitManifestEntry;
 
 /** The declared placeholder used when a `VisionPageExtractPort` (a test double, never the real `WorkerVisionPageExtractor`) answers without a `modelId`/`promptVersion` — see `VisionPageExtractResult`'s own doc. Honestly labelled rather than silently substituting an empty string a reader might mistake for real data. */
 const UNREPORTED_PROVENANCE_FIELD = 'unreported (extractor did not supply it)';
@@ -581,6 +560,52 @@ export interface WorkerVisionPageRunnerDeps {
    * this bead's report for what still needs building.
    */
   readonly onManifestEntry?: (entry: VisionUnitManifestEntry) => void;
+  /**
+   * Called with no argument, once per reading, whenever the wire's own
+   * `unreadableReason` was a non-null string outside core's closed
+   * three-value `UnitUnreadableReason` enum — see
+   * `normalizeUnreadableReason`'s own doc for why that case exists and what
+   * it maps to instead. **Absent by default: this file counts nothing
+   * itself** (D-005 — no logging), same "a host that wants one supplies
+   * one" posture `onManifestEntry` already takes.
+   */
+  readonly onUnknownUnreadableReason?: () => void;
+}
+
+/**
+ * Core's `UnitUnreadableReason` is type-only and carries no runtime value to
+ * check membership against, so its three closed values are mirrored here as
+ * a plain array — the one place this file validates against them.
+ */
+const UNIT_UNREADABLE_REASONS: readonly UnitUnreadableReason[] = [
+  'blank-page',
+  'not-legible',
+  'no-text-on-page',
+];
+
+/**
+ * Validates the wire's own `unreadableReason` against core's closed
+ * three-value `UnitUnreadableReason` enum before it becomes a
+ * `UnitReadingState`'s `reason` field (`ol-egov.141.89.8.4` part 3,
+ * resolving the gap `VisionUnitReadingState`'s own doc named). `null` (the
+ * pre-existing, honest "the model/guard named no reason" case) is not
+ * treated as unknown — it already maps to the same declared default and is
+ * not counted. A non-null string outside the three catalogue values — a
+ * wire/service drift this client cannot rule out but must never trust
+ * blindly — maps to that SAME safe default and is counted via
+ * `deps.onUnknownUnreadableReason`, but is never itself passed through as
+ * though it were one of the three a manifest consumer switches on.
+ */
+function normalizeUnreadableReason(
+  wireReason: string | null,
+  deps: WorkerVisionPageRunnerDeps,
+): UnitUnreadableReason {
+  if (wireReason === null) return 'not-legible';
+  if ((UNIT_UNREADABLE_REASONS as readonly string[]).includes(wireReason)) {
+    return wireReason as UnitUnreadableReason;
+  }
+  deps.onUnknownUnreadableReason?.();
+  return 'not-legible';
 }
 
 /**
@@ -674,7 +699,11 @@ async function emitManifestEntry(
 
   const readingState: VisionUnitReadingState =
     result.outcome === 'unreadable'
-      ? { kind: 'unreadable', reason: result.unreadableReason ?? 'not-legible', provenance }
+      ? {
+          kind: 'unreadable',
+          reason: normalizeUnreadableReason(result.unreadableReason, deps),
+          provenance,
+        }
       : result.outcome === 'partial'
         ? {
             kind: 'partial',
