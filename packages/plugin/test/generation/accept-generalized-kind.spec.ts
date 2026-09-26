@@ -182,11 +182,36 @@ describe('createDraftAcceptPort — generalized dispatch (ol-0r92.88)', () => {
   });
 
   it('accept throws a named, defined error for a draft kind with no registered materializer — never a silent mis-write', async () => {
-    const { cache, port } = setUp(undefined); // no 'qa' entry, and no override of the 'mcq' default
-    await cache.put(baseCardRecord());
+    // `ol-0r92.116`: `'qa'` now has a real default materializer (see this
+    // module's own doc), so this test moved to `'cloze'` — a real
+    // `InstrumentType` nothing registers a materializer for yet — to keep
+    // proving the SAME "unregistered kind refuses, never guesses" property
+    // this test has always been about.
+    const { cache, port } = setUp(undefined); // no override of the 'mcq'/'qa' defaults
+    // Built directly rather than through `baseCardRecord` (its defaults
+    // carry `card`, mutually exclusive with `question` per `isDraftRecord`
+    // (`types.ts`) for a non-`'qa'` kind): `isDraftRecord` requires a
+    // `question`-shaped body for any non-`'qa'` `instrumentType`, `'cloze'`
+    // included, or the cache's own read-back validation would silently
+    // drop the record before `accept()` ever got to dispatch. Nothing ever
+    // reads `question`'s content here — dispatch on the unregistered
+    // `instrumentType` throws before any materializer would look at it.
+    await cache.put({
+      draftId: 'draft-card-1',
+      status: 'pending',
+      courseCode: 'COGS214',
+      conceptName: 'Working memory',
+      conceptIds: ['concept-key-1'],
+      sourcePath: NOTE_PATH,
+      createdAt: '2026-08-25T09:00:00-07:00',
+      instrumentType: 'cloze',
+      question: { stem: 's', correctAnswer: 'a', distractors: ['b', 'c', 'd', 'e'], feedback: 'f' },
+      provenance: { taskId: 'cloze.generate.v1', promptVersion: '1.0.0', modelId: 'test-model' },
+      firstServedAt: null,
+    });
 
     await expect(port.accept('draft-card-1', 'accepted')).rejects.toThrow(
-      /no materializer registered for draft draft-card-1's instrumentType 'qa'/,
+      /no materializer registered for draft draft-card-1's instrumentType 'cloze'/,
     );
 
     // Refused before any bookkeeping — the record is untouched, still pending,

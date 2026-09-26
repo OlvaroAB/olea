@@ -24,7 +24,7 @@
  */
 
 import { TASK_IDS } from 'olea-contracts';
-import type { DraftDistractorGrounding, DraftProvenance, DraftQuestion } from './types.js';
+import type { DraftCardContent, DraftDistractorGrounding, DraftProvenance, DraftQuestion } from './types.js';
 
 /**
  * A distractor as `quiz.generate.v1` v2.0.0 emits it (`[D-195]`) — `{ text,
@@ -148,6 +148,71 @@ export function extractDraftedProvenance(response: unknown): DraftProvenance | n
   if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
   return {
     taskId: TASK_IDS.QUIZ_GENERATE,
+    promptVersion: s.promptVersion,
+    modelId: s.modelId,
+  };
+}
+
+// ---- `cards.generate.v1` (ol-0r92.116, [D-353]'s drafting half) -----------
+//
+// The card-shaped siblings of the two functions above, for
+// `draft-cards.ts`'s raw `DraftCardsResult.response`. Same envelope walk
+// (`ok`/`stamp`/`result`), same "never guess, never validate against the
+// private schema" posture — see `extractDraftedQuestions`'s own doc for the
+// reasoning, reproduced here rather than shared because the two response
+// shapes (`questions[]` vs `cards[]`) do not otherwise overlap.
+
+function parseCard(value: unknown): DraftCardContent | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const record = value as Record<string, unknown>;
+  const { front, back, subject } = record;
+  if (typeof front !== 'string' || front.length === 0) return null;
+  if (typeof back !== 'string' || back.length === 0) return null;
+  // `[D-185]`/C5.11: `cardsGenerateRequest`'s `subject` is required and
+  // non-empty on the wire — checked here so a malformed card (the scoring
+  // concept missing) is rejected the same "do not guess" way an empty
+  // stem/answer would be, even though `DraftCardContent` (`types.ts`) has no
+  // field to carry it into yet: nothing downstream reads a per-card subject
+  // today (a card-drafting caller already knows which concept it asked for
+  // — the same reason `DraftQuestion` carries no such field for MCQ), so
+  // this validates the wire contract without inventing a field with no
+  // reader.
+  if (typeof subject !== 'string' || subject.length === 0) return null;
+  return { front, back };
+}
+
+/** `null` when the response's `result.cards` cannot be read as `DraftCardContent[]` — see `extractDraftedQuestions`'s own doc for the identical caller contract. */
+export function extractDraftedCards(response: unknown): readonly DraftCardContent[] | null {
+  if (typeof response !== 'object' || response === null) return null;
+  const envelope = response as Record<string, unknown>;
+  if (envelope.ok !== true) return null;
+
+  const result = envelope.result;
+  if (typeof result !== 'object' || result === null) return null;
+  const cardsRaw = (result as Record<string, unknown>).cards;
+  if (!Array.isArray(cardsRaw)) return null;
+
+  const cards: DraftCardContent[] = [];
+  for (const raw of cardsRaw) {
+    const card = parseCard(raw);
+    if (card === null) return null;
+    cards.push(card);
+  }
+  return cards;
+}
+
+/** `cards.generate.v1`'s provenance triple — see `extractDraftedProvenance`'s own doc for the identical envelope walk. */
+export function extractDraftedCardsProvenance(response: unknown): DraftProvenance | null {
+  if (typeof response !== 'object' || response === null) return null;
+  const envelope = response as Record<string, unknown>;
+  if (envelope.ok !== true) return null;
+  const stamp = envelope.stamp;
+  if (typeof stamp !== 'object' || stamp === null) return null;
+  const s = stamp as Record<string, unknown>;
+  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
+  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
+  return {
+    taskId: TASK_IDS.CARDS_GENERATE,
     promptVersion: s.promptVersion,
     modelId: s.modelId,
   };

@@ -58,18 +58,22 @@
  * record, not its content, so it needs only the resolved `instrumentType`
  * threaded through rather than the module-level constant.
  *
- * **What this bead does NOT add: a real `'qa'` materializer.** No client
- * pipeline drafts card-shaped content yet (nothing produces a `DraftRecord`
- * with `instrumentType: 'qa'`), and `olea-core`'s only Q&A vault-writer,
- * `createQaCard`, requires an `anchorBlockIndex` — C1.4 anchoring, which
- * `materialize-mcq.ts`'s own module doc already establishes is a
- * hand-authoring concept a *generated*, unanchored item cannot supply.
- * Writing a production `'qa'` materializer needs either a new, unanchored
- * `olea-core` write primitive (out of this package) or a ruling on how a
- * generated card is represented in the vault absent an anchor — neither
- * exists. `DRAFT_MATERIALIZERS` below registers only `'mcq'`; this file's
- * own tests exercise the `'qa'` dispatch path with an injected test double,
- * proving the port's generalized logic (not a real card write) works.
+ * **`ol-0r92.116`: a real `'qa'` materializer, per `[D-353]`.** `[D-353]`
+ * (David, ruled on `ol-0r92.115`) settled how a generated, unanchored card
+ * is written: a new, dedicated write path mirroring the MCQ one, never
+ * `createQaCard` (which requires `anchorBlockIndex` — C1.4 anchoring, a
+ * hand-authoring concept a generated item cannot supply) and never a second
+ * persisted card shape. `materialize-card.ts`'s `materializeAcceptedCardDraft`
+ * is that path — see its own module doc for the identity-derivation argument
+ * (`provisionalInstrumentId`, the same exported function `enumerate.ts`
+ * calls on every vault walk) and the retry-orphan fix it mirrors from
+ * `materialize-mcq.ts`. `DRAFT_MATERIALIZERS` below now registers `'qa'`
+ * alongside `'mcq'`; `accept-generalized-kind.spec.ts` (`ol-0r92.88`) still
+ * exercises the port's dispatch/idempotency/stale-input logic with an
+ * INJECTED test-double `'qa'` materializer (via
+ * `DraftAcceptPortDeps.materializers`, which overrides this module's
+ * default), so those tests are unaffected by this default now being real —
+ * `materialize-card.spec.ts` is what tests the real one.
  */
 
 import type { InstrumentType } from 'olea-contracts';
@@ -77,6 +81,7 @@ import type { VaultSource } from 'olea-core';
 import { appendVerdictRecord } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
 import type { DraftCacheStore } from './cache-store.js';
+import { materializeAcceptedCardDraft } from './materialize-card.js';
 import { materializeAcceptedDraft, StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftRecord } from './types.js';
 
@@ -156,15 +161,44 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
 };
 
 /**
+ * `ol-0r92.116` / `[D-353]`: the real `'qa'` (card) materializer. Reads
+ * `record.card` (required for a `'qa'`-kind record — see `types.ts`'s doc)
+ * and forwards every optional field `materializeAcceptedCardDraft` accepts
+ * — same shape `materializeMcqDraft` above forwards for `'mcq'`, minus the
+ * fields that have no card equivalent yet (`[D-133]` succession, `[D-220]`
+ * distractor provenance — see `materialize-card.ts`'s own module doc for
+ * why neither applies to a card today).
+ */
+const materializeQaCardDraft: DraftMaterializeFn = (vault, record, _deps) => {
+  if (record.card === undefined) {
+    throw new Error(
+      `createDraftAcceptPort: draft ${record.draftId} has instrumentType 'qa' but no card`,
+    );
+  }
+  return materializeAcceptedCardDraft(vault, {
+    sourcePath: record.sourcePath,
+    card: record.card,
+    // `ol-0r92.116`: same "the id is per draft" argument
+    // `materializeMcqDraft` states above, applied to a card's block id
+    // instead of an MCQ's `id:` field — see `materialize-card.ts`'s
+    // "THE RETRY-ORPHAN ARGUMENT" section.
+    draftId: record.draftId,
+    ...(record.sourceCitation !== undefined ? { sourceCitation: record.sourceCitation } : {}),
+    ...(record.sourceContentHash !== undefined
+      ? { expectedSourceContentHash: record.sourceContentHash }
+      : {}),
+  });
+};
+
+/**
  * The materializer registered per `DraftRecord.instrumentType`, consulted
- * by `accept()` below. Only `'mcq'` has a production entry today — see this
- * module's doc's "generalized past a hard-coded MCQ instrument type"
- * section for why `'qa'` does not yet. `DraftAcceptPortDeps.materializers`
- * merges over this, key by key, so a caller (a future card pipeline, or a
- * test) can add or override an entry without this module changing.
+ * by `accept()` below. `DraftAcceptPortDeps.materializers` merges over this,
+ * key by key, so a caller (or a test) can add or override an entry without
+ * this module changing.
  */
 const DRAFT_MATERIALIZERS: Partial<Record<InstrumentType, DraftMaterializeFn>> = {
   mcq: materializeMcqDraft,
+  qa: materializeQaCardDraft,
 };
 
 export interface DraftAcceptPort {
