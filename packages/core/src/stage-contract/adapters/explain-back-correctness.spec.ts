@@ -19,7 +19,7 @@ import {
   type PendingExplainBackGrading,
 } from '../../grading/gradingPipeline.js';
 import { createWorkerJudgeCaller } from '../../grading/workerJudgeCaller.js';
-import { decisionEnvelopeProblems } from '../decision.js';
+import { decisionEnvelopeProblems, decisionWord } from '../decision.js';
 import type { StageSeamContext } from '../provenance.js';
 import {
   decisionFromExplainBackGrading,
@@ -42,14 +42,22 @@ const input: GradeExplainBackInput = {
   misconceptionDigest: [],
 };
 
-function wire(verdict: ExplainBackGradingWireResponse['verdict']): ExplainBackGradingWireResponse {
+function wire(
+  verdict: Extract<ExplainBackGradingWireResponse, { outcome: 'graded' }>['verdict'],
+): ExplainBackGradingWireResponse {
   return {
+    outcome: 'graded',
     verdict,
     feedback: 'Coined feedback.',
     missedPoints: [],
     citedIssues: [{ kind: 'omission', description: 'coined', sourceBlockIds: ['b1', 'ghost'] }],
     misconceptionCandidates: [],
   };
+}
+
+/** `[D-321]` / `ol-0r92.130` round 2: the model ran and declined to grade. */
+function unableToAssessWire(reason = 'coined, no genuine attempt'): ExplainBackGradingWireResponse {
+  return { outcome: 'unable-to-assess', reason };
 }
 
 function caller(response: ExplainBackGradingWireResponse): JudgeCaller {
@@ -162,12 +170,59 @@ describe('decisionFromExplainBackGrading', () => {
     });
   });
 
+  // -------------------------------------------------------------------------
+  // `[D-321]` / `ol-0r92.130` round 2 — the unable-to-assess outcome
+  // -------------------------------------------------------------------------
+
+  it('reads a fulfilled unable-to-assess grading as undecided, basis abstained — never a verdict, never nothing-to-decide-from', async () => {
+    const settled = await settle(() =>
+      gradeExplainBack(input, caller(unableToAssessWire('coined, blank answer'))),
+    );
+    expect(settled.status).toBe('fulfilled');
+    const decision = decisionFromExplainBackGrading(settled, context);
+    expect(decision).toEqual({
+      kind: 'undecided',
+      basis: 'abstained',
+      provenance: {
+        producer: {
+          kind: 'model',
+          seat: 'candidate',
+          taskId: 'explain-back.judge.v1',
+          stamp: { promptVersion: 'judge-prompt-1', modelId: 'judge-model' },
+        },
+        evidenceDigests: ['context-digest-1'],
+      },
+    });
+    // Distinct from the empty-reference-answer / grounding-refused case:
+    // never 'nothing-to-decide-from' — the model DID run.
+    if (decision.kind === 'undecided') expect(decision.basis).not.toBe('nothing-to-decide-from');
+  });
+
+  it('never surfaces .verdict for the unable-to-assess mapping — it is undecided, not a verdict', async () => {
+    const settled = await settle(() => gradeExplainBack(input, caller(unableToAssessWire())));
+    const decision = decisionFromExplainBackGrading(settled, context);
+    expect(decision.kind).not.toBe('verdict');
+    expect(decision).not.toHaveProperty('verdict');
+  });
+
+  it("the vocabulary's own undecided word is the step's real term, not the generic default", () => {
+    expect(EXPLAIN_BACK_CORRECTNESS_VOCABULARY.undecided).toBe('unable-to-assess');
+    expect(
+      decisionWord(EXPLAIN_BACK_CORRECTNESS_VOCABULARY, {
+        kind: 'undecided',
+        basis: 'abstained',
+        provenance: { producer: { kind: 'code', rule: 'x' }, evidenceDigests: [] },
+      }),
+    ).toBe('unable-to-assess');
+  });
+
   it('produces a well-formed envelope for every seam value', async () => {
     const settledValues = [
       await settle(() => gradeExplainBack(input, caller(wire('partial')))),
       await settle(() =>
         gradeExplainBack({ ...input, referenceAnswer: '' }, caller(wire('correct'))),
       ),
+      await settle(() => gradeExplainBack(input, caller(unableToAssessWire()))),
       { status: 'rejected', reason: new Error('x') } as const,
     ];
     for (const settled of settledValues) {

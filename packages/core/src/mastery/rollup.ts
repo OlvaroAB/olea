@@ -214,12 +214,19 @@ function soloRank(level: SoloLevel): number {
  * constant is the fallback the fold applies when no plan is cached (the
  * cold start).
  *
- * **Not wired today.** Nothing delivers a value through `depthGate` yet —
- * `packages/contracts/src/study-plan.ts`'s `studyPlanArtifact` carries no
- * field for it, and `artifact-envelope.ts` defines no delivered-parameter
- * kind for component 3.1 the way `rankWeightsBody` does for 3.3. Adding
- * either is a contract change and Class C
- * (`docs/dev/intelligence-build/att.md` item 12, `ol-egov.141.89.9.18`).
+ * **Now wired (`[D-352]`, `ol-egov.141.89.9.54`/`.55`) — `ol-0r92.130`
+ * refreshes this paragraph, which used to say "not wired today".** A real
+ * value reaches `depthGate` in production: `packages/contracts/src/
+ * artifact-envelope.ts`'s `DEPTH_GATE_KIND`/`depthGateEnvelope` deliver it
+ * as its own artifact kind (`GET /v1/depth-gate`, not a `studyPlanArtifact`
+ * field — component 3.1 needed no `study-plan.ts` change after all), read
+ * by `packages/plugin/src/depth-gate/depth-gate-provider.ts`'s
+ * `fetchDepthGateOptions` and wired into this fold from `main.ts`. Every
+ * failure mode (offline, an unconfigured Worker, an unreadable/expired
+ * envelope, an unknown version) still collapses to `undefined` — never a
+ * throw, never an improvised value — so `depthGate` absent and falling back
+ * to this module's own `DEPTH_GATE_SOLO_LEVEL` stays a live, correct path
+ * (F7.8), not a placeholder for a delivery that never happened.
  */
 export const DEPTH_GATE_SOLO_LEVEL: SoloLevel = 'relational';
 

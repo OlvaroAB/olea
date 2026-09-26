@@ -3,9 +3,11 @@ import type { MisconceptionDigestEntry } from '../misconception/digest.js';
 import {
   acceptExplainBackGrading,
   discardExplainBackGrading,
+  type ExplainBackGradingWireGraded,
   type ExplainBackGradingWireResponse,
   type ExplainBackJudgeWireRequest,
   type GradeExplainBackInput,
+  type GroundedGrading,
   gradeExplainBack,
   groundCitations,
   type SourceBlockRef,
@@ -34,9 +36,10 @@ function baseInput(overrides: Partial<GradeExplainBackInput> = {}): GradeExplain
 }
 
 function wireResponse(
-  overrides: Partial<ExplainBackGradingWireResponse> = {},
-): ExplainBackGradingWireResponse {
+  overrides: Partial<ExplainBackGradingWireGraded> = {},
+): ExplainBackGradingWireGraded {
   return {
+    outcome: 'graded',
     verdict: 'partial',
     feedback: 'Close, but you have not distinguished Y from W.',
     missedPoints: ['the distinction between Y and W'],
@@ -214,6 +217,7 @@ describe('gradeExplainBack — the pipeline (pre-check, model call, grounding)',
       }),
     );
     const result = await gradeExplainBack(baseInput(), callJudge);
+    if (result.grading.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(result.grading.citedIssues).toEqual([
       { kind: 'omission', description: 'never mentions W', sourceBlockIds: ['blk-2'] },
     ]);
@@ -272,6 +276,9 @@ describe('acceptExplainBackGrading / discardExplainBackGrading — INV-6', () =>
     const pending = await gradeExplainBack(baseInput(), callJudge);
     const accepted = acceptExplainBackGrading(pending);
     expect(accepted.status).toBe('accepted');
+    // Narrowed first — `pending.grading` is `GroundedGrading` (a union): this
+    // is the exact narrowing `[D-321]` forces on every consumer.
+    if (pending.grading.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(accepted.citedIssues).toEqual(pending.grading.citedIssues);
     expect(accepted.verdict).toBe(pending.grading.verdict);
   });
@@ -296,6 +303,7 @@ describe('acceptExplainBackGrading / discardExplainBackGrading — INV-6', () =>
         sourceTokenCount: 1,
       },
       grading: {
+        outcome: 'graded' as const,
         verdict: 'incorrect' as const,
         feedback: 'x',
         missedPoints: [],
@@ -307,6 +315,102 @@ describe('acceptExplainBackGrading / discardExplainBackGrading — INV-6', () =>
       },
     };
     expect(() => acceptExplainBackGrading(tampered)).toThrow(/ungrounded issue/);
+  });
+
+  // -------------------------------------------------------------------------
+  // `[D-321]` / `ol-0r92.130` — the unable-to-assess outcome
+  // -------------------------------------------------------------------------
+
+  it('D-321 GUARD: refuses to accept an unable-to-assess pending grading, by name, not a bare TypeError', () => {
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        ngramSize: 3,
+        answerTokenCount: 0,
+        sourceTokenCount: 1,
+      },
+      grading: { outcome: 'unable-to-assess' as const, reason: 'blank answer' },
+    };
+    // Without the guard, accessing `.citedIssues` on this shape would throw a
+    // bare TypeError instead — this pins the NAMED guard (D-321's own
+    // message), not just any throw.
+    expect(() => acceptExplainBackGrading(pending)).toThrow(/unable-to-assess/);
+  });
+
+  it('discardExplainBackGrading also accepts an unable-to-assess pending grading — it never reads .grading at all', () => {
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        ngramSize: 3,
+        answerTokenCount: 0,
+        sourceTokenCount: 1,
+      },
+      grading: { outcome: 'unable-to-assess' as const, reason: 'off-topic' },
+    };
+    expect(discardExplainBackGrading(pending)).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-321]` / `ol-0r92.130` — the unable-to-assess outcome, end to end
+// ---------------------------------------------------------------------------
+
+function unableToAssessWireResponse(reason = 'blank answer'): ExplainBackGradingWireResponse {
+  return { outcome: 'unable-to-assess', reason };
+}
+
+describe('groundCitations — passes the unable-to-assess branch through unchanged', () => {
+  it('never coerces it into the graded shape and carries the reason through', () => {
+    const grounded = groundCitations(unableToAssessWireResponse('pure gibberish'), SOURCE_BLOCKS);
+    expect(grounded).toEqual({ outcome: 'unable-to-assess', reason: 'pure gibberish' });
+  });
+});
+
+describe('gradeExplainBack — end to end, an unable-to-assess model response', () => {
+  it('the pipeline still measures overlap (record-only) but never grounds or grades', async () => {
+    const callJudge = vi.fn().mockResolvedValue(unableToAssessWireResponse('no genuine attempt'));
+    const pending = await gradeExplainBack(baseInput(), callJudge);
+    expect(pending.grading).toEqual({ outcome: 'unable-to-assess', reason: 'no genuine attempt' });
+    // Record-only measurement still runs — [D-138] never gated the model
+    // call, and this outcome doesn't change that.
+    expect(pending.overlap).toBeDefined();
+  });
+
+  it('TYPE-LEVEL: a consumer of GroundedGrading cannot read .verdict without narrowing outcome first', async () => {
+    const callJudge = vi.fn().mockResolvedValue(wireResponse());
+    const pending = await gradeExplainBack(baseInput(), callJudge);
+    const grading: GroundedGrading = pending.grading;
+    // @ts-expect-error — `verdict` does not exist on the unable-to-assess
+    // member of the union; TS forces the `outcome === 'graded'` check below
+    // before this field is reachable. This is the compile-time guarantee
+    // `[D-321]`'s acceptance criterion asks for.
+    const _unchecked: string = grading.verdict;
+    if (grading.outcome === 'graded') {
+      expect(grading.verdict).toBe('partial');
+    } else {
+      throw new Error('expected a graded outcome for this fixture');
+    }
+  });
+});
+
+describe('summarizeGradingForTelemetry — unable-to-assess never logs a verdict or content', () => {
+  it('carries outcome and containment only — no verdict, no citation counts, no reason text', async () => {
+    const sentinel = 'SENTINEL-UNABLE-TO-ASSESS-DO-NOT-LOG-9f2c';
+    const callJudge = vi.fn().mockResolvedValue(unableToAssessWireResponse(sentinel));
+    const pending = await gradeExplainBack(baseInput(), callJudge);
+    const summary = summarizeGradingForTelemetry(pending);
+    const serialised = JSON.stringify(summary);
+    expect(serialised).not.toContain(sentinel);
+    expect(summary).toEqual({
+      outcome: 'unable-to-assess',
+      containment: pending.overlap.containment,
+    });
   });
 });
 
@@ -346,6 +450,7 @@ describe('summarizeGradingForTelemetry — never logs content', () => {
         'droppedCitationCount',
         'droppedMisconceptionCount',
         'misconceptionCandidateCount',
+        'outcome',
         'verdict',
       ].sort(),
     );

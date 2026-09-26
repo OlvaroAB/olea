@@ -95,6 +95,7 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     const result = await callJudge(baseWireInput);
 
     expect(result).toEqual({
+      outcome: 'graded',
       verdict: 'partial',
       feedback: 'Close, but you missed the shape invariant.',
       missedPoints: ['shape invariant'],
@@ -121,6 +122,7 @@ describe('createWorkerJudgeCaller — reading the response', () => {
 
     const result = await callJudge(baseWireInput);
 
+    if (result.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(result.citedIssues).toEqual([]);
     expect(result.misconceptionCandidates).toEqual([]);
   });
@@ -152,6 +154,7 @@ describe('createWorkerJudgeCaller — reading the response', () => {
 
     const result = await callJudge(baseWireInput);
 
+    if (result.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(result.misconceptionCandidates[0]?.confusedWith).toBe('binary search tree');
     expect('confusedWith' in (result.misconceptionCandidates[1] ?? {})).toBe(false);
   });
@@ -184,6 +187,69 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     const callJudge = createWorkerJudgeCaller({ transport });
 
     await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
+  // -------------------------------------------------------------------------
+  // `[D-321]` / `ol-0r92.130` round 2 — outcome: 'unable-to-assess'
+  // -------------------------------------------------------------------------
+
+  it('parses outcome unable-to-assess, checked BEFORE the graded fields, carrying the stamp through', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'unable-to-assess', reason: 'blank answer' }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+
+    expect(result).toEqual({
+      outcome: 'unable-to-assess',
+      reason: 'blank answer',
+      stamp: { promptVersion: '1.2.0', modelId: 'test-model' },
+    });
+  });
+
+  it('never falls through to the verdict/feedback checks for outcome unable-to-assess — a response with neither would otherwise throw', async () => {
+    // Proves the outcome check runs FIRST: this response has no verdict and
+    // no feedback at all, which would throw "unrecognised verdict" if the
+    // graded checks ran unconditionally.
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'unable-to-assess', reason: 'entirely off-topic' }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    await expect(callJudge(baseWireInput)).resolves.toMatchObject({
+      outcome: 'unable-to-assess',
+      reason: 'entirely off-topic',
+    });
+  });
+
+  it('MALFORMED: throws WorkerJudgeError on outcome unable-to-assess with no reason text — never fabricates one', async () => {
+    const transport = new RecordingTransport(() => okResponse({ outcome: 'unable-to-assess' }));
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+    await expect(callJudge(baseWireInput)).rejects.toMatchObject({
+      message: expect.stringContaining('unable-to-assess'),
+    });
+  });
+
+  it('MALFORMED: throws WorkerJudgeError on outcome unable-to-assess with an empty-string reason', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'unable-to-assess', reason: '' }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
+  it('an old Worker response with no outcome field at all still falls through to the graded checks unchanged', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ verdict: 'correct', feedback: 'Good.', missedPoints: [] }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+    expect(result.outcome).toBe('graded');
   });
 
   it('reads the D7.3 prompt/model stamp off the response body (ol-egov.141.89.38)', async () => {
@@ -223,6 +289,7 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     // sourceBlockIds absent on the entry itself defaults to [] (readStringArray),
     // which groundCitations (downstream) would then drop — proved end to end below.
     const result = await callJudge(baseWireInput);
+    if (result.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(result.citedIssues[0]?.sourceBlockIds).toEqual([]);
   });
 });
@@ -252,6 +319,7 @@ describe("createWorkerJudgeCaller — end to end through gradeExplainBack (groun
       callJudge,
     );
 
+    if (pending.grading.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(pending.grading.citedIssues).toHaveLength(1);
     expect(pending.grading.droppedCitationCount).toBe(0);
   });
@@ -284,6 +352,7 @@ describe("createWorkerJudgeCaller — end to end through gradeExplainBack (groun
       callJudge,
     );
 
+    if (pending.grading.outcome !== 'graded') throw new Error('expected a graded outcome');
     expect(pending.grading.citedIssues).toHaveLength(0);
     expect(pending.grading.droppedCitationCount).toBe(1);
   });

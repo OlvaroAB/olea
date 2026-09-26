@@ -125,6 +125,7 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
+  EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
   explainBackDepthHeading,
 } from './copy.js';
 import { isConfirmedFirstFullDepth } from './first-full-depth.js';
@@ -1416,6 +1417,19 @@ export class ExplainBackModal extends Modal {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
 
+    // `[D-321]` / `ol-0r92.130`: pass one could not tell whether this was a
+    // genuine attempt at all — a defined non-verdict (`GroundedGrading`'s
+    // `outcome: 'unable-to-assess'` branch), never a wrong-answer grade.
+    // Handled BEFORE any of the graded-only fields below are touched: TS
+    // itself would refuse a read of `grading.feedback`/`.missedPoints`/etc.
+    // here without this narrowing, since `grading` is `GroundedGrading` (a
+    // union) — this early return is what the type forces, not an optional
+    // style choice.
+    if (grading.outcome === 'unable-to-assess') {
+      this.renderUnableToAssessPhase(root, prompt, answer, pending);
+      return;
+    }
+
     // `[D-217]`: no heading here. The correctness verdict this phase used to
     // print as a heading ("This holds up." etc.) is rejected wording — the
     // registry vocabulary the ruling replaces it with is the five-level SOLO
@@ -1450,6 +1464,66 @@ export class ExplainBackModal extends Modal {
       'click',
       () => void this.acceptGrading(prompt, answer, pending, durationMs, attemptId, answerEdits),
     );
+    const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
+    discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
+  }
+
+  /**
+   * `[D-321]` / `ol-0r92.130`: the unable-to-assess outcome's own render —
+   * reached only from `renderGradedPhase`'s early return above, on
+   * `pending.grading.outcome === 'unable-to-assess'`.
+   *
+   * **No grade shown, ever.** No feedback sentence, no missed-points/cited-
+   * issues region, no misconception heading, and — the acceptance
+   * criterion's own words — never a verdict badge: this phase never had one
+   * even for a graded outcome (`[D-217]` removed it), and there is
+   * additionally nothing here that could be dressed up as one.
+   *
+   * **No Accept button — the ONE action is `EXPLAIN_BACK_DISCARD_LABEL`
+   * ("Try again"), the SAME action and the SAME `discardGrading` call the
+   * graded phase's Discard button uses.** This is what makes the outcome
+   * "recoverable... for the session" (D-321's close evidence) without
+   * inventing a second control or a new phase: `discardExplainBackGrading`
+   * (`olea-core`) returns `null` unconditionally, for either outcome, so
+   * nothing is written by taking it, and she is returned to a fresh
+   * `'answering'` phase for another attempt at THIS question.
+   *
+   * **Structurally, nothing downstream ever runs**: `acceptGrading` /
+   * `computeAcceptGrading` — the one path to
+   * `deps.acceptWithObservation`/`acceptExplainBackGrading`, and therefore
+   * to the misconception observation and mastery/review-log write chain —
+   * is wired ONLY to the Accept button `renderGradedPhase`'s graded branch
+   * creates. This method creates no such button, so that whole chain is
+   * simply unreachable from here — not merely uncalled by convention. Even
+   * if it somehow were reached, `acceptExplainBackGrading` (`gradingPipeline
+   * .ts`) itself refuses an unable-to-assess `pending.grading` by throwing,
+   * as a second, defensive layer.
+   *
+   * **Nothing is written to her log**: no `appendReviewLogRecord` call, no
+   * new event kind — `[D-321]` decision 4's own ruling (option (a)) — is
+   * introduced anywhere on this path.
+   *
+   * **Grader uncertainty alone never refers the instrument to validation**:
+   * this method reads no referral flag off `pending` (the wire shape
+   * carries none — see `gradingPipeline.ts`'s
+   * `ExplainBackGradingWireUnableToAssess` doc) and calls no validation-
+   * referral affordance; there is none on this surface to call.
+   *
+   * `EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE` is placeholder copy — see that
+   * export's own doc (`./copy.ts`) for why, and this bead's report for the
+   * full list of strings it adds.
+   */
+  private renderUnableToAssessPhase(
+    root: HTMLElement,
+    prompt: ResolvedPrompt,
+    answer: string,
+    pending: PendingExplainBackGrading,
+  ): void {
+    root.createEl('p', {
+      cls: 'olea-explain-back-feedback',
+      text: EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
+    });
+    const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
   }
@@ -1491,7 +1565,14 @@ export class ExplainBackModal extends Modal {
   private renderGradedRegions(
     root: HTMLElement,
     prompt: ResolvedPrompt,
-    grading: GroundedGrading,
+    // Narrowed to the graded branch — `olea-core` exports `GroundedGrading`
+    // as the union (see the module header's `ol-0r92.130` note); this method
+    // is only ever called from `renderGradedPhase`'s graded branch (after its
+    // `outcome === 'unable-to-assess'` early return), so `Extract` names
+    // that narrowed shape without needing a new named export from
+    // `packages/core/src/index.ts` (outside this bead's `owns`) for a type
+    // this file alone needs to spell out.
+    grading: Extract<GroundedGrading, { outcome: 'graded' }>,
   ): void {
     const lookup = sourceBlockPathLookup(prompt.sourceBlocks);
     const omissionItems: ExplainBackRegionItem[] = [

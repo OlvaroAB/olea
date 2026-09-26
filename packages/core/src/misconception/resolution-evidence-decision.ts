@@ -26,12 +26,17 @@
  *   `'partial'` verdict is exactly the case M2's "not merely" guards
  *   against — she engaged the concept but did not demonstrate correct
  *   understanding of it — and `'incorrect'` obviously does not. The fourth
- *   literal, `'unable-to-assess'`, does not exist in production yet
- *   (`../grading/gradingPipeline.js`'s `verdict` today is `'correct' |
- *   'partial' | 'incorrect'`) but is included here because
- *   `docs/dev/intelligence-build/xbk.md`'s target shape
- *   (`ol-0r92.105`) adds it to pass one's outcome union; this stays correct
- *   once that lands without another edit here.
+ *   literal, `'unable-to-assess'` — **now landed** (`ol-0r92.130`, `[D-321]`):
+ *   `../grading/gradingPipeline.js`'s `AcceptedExplainBackGrading.verdict` is
+ *   still exactly `'correct' | 'partial' | 'incorrect'`, never widened,
+ *   because `acceptExplainBackGrading` refuses to accept an unable-to-assess
+ *   grading in the first place (a caller must route that outcome its own
+ *   way before ever reaching accept). So the check below still needed no
+ *   edit — no caller can construct an `ExplainBackResolutionCandidate` with
+ *   `verdict: 'unable-to-assess'` from a real accepted grading — but the
+ *   prediction this paragraph made when the shape was still hypothetical
+ *   ("this stays correct once that lands") is now a confirmed fact, not a
+ *   forecast.
  * - **Recall.** A Q&A/cloze rating is self-graded, not a correctness flag
  *   (`../instrument/rating.js`'s `CardReviewOutcome` doc: "she is the judge
  *   of whether she produced the answer"), so "demonstrates correct

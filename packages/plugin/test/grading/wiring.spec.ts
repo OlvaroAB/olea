@@ -57,7 +57,12 @@ function fakeTransport(
   reply: (request: WorkerTaskRequest) => unknown = () => ({
     ok: true,
     stamp: { contractVersion: 1, promptVersion: '1.2.0', modelId: 'test-model' },
-    result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+    result: {
+      outcome: 'graded',
+      verdict: 'correct',
+      feedback: 'Well explained.',
+      missedPoints: [],
+    },
   }),
 ) {
   const calls: WorkerTaskRequest[] = [];
@@ -122,7 +127,8 @@ describe('buildGradingWiring — a configured Worker builds a real, usable Judge
     const result = await wiring.judgeCaller?.(baseInput);
     expect(transport.calls).toHaveLength(1);
     expect(transport.calls[0]?.taskId).toBe('explain-back.judge.v1');
-    expect(result?.verdict).toBe('correct');
+    if (result?.outcome !== 'graded') throw new Error('expected a graded outcome');
+    expect(result.verdict).toBe('correct');
   });
 });
 
@@ -156,7 +162,8 @@ describe('gradeExplainBackAttempt', () => {
 
     expect(transport.calls).toHaveLength(1);
     expect(result?.status).toBe('pending-review');
-    expect(result?.grading.verdict).toBe('correct');
+    if (result?.grading.outcome !== 'graded') throw new Error('expected a graded outcome');
+    expect(result.grading.verdict).toBe('correct');
   });
 
   it('refuses rather than confabulates on an empty referenceAnswer, and never calls the Worker (INV-5)', async () => {
@@ -392,7 +399,12 @@ describe('gradeExplainBackAttemptDecision — the correctness pipeline read thro
     const transport = fakeTransport(() => ({
       ok: true,
       stamp: { contractVersion: 1, promptVersion: '1.2.0', modelId: 'test-model' },
-      result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+      result: {
+        outcome: 'graded',
+        verdict: 'correct',
+        feedback: 'Well explained.',
+        missedPoints: [],
+      },
     }));
     const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
 
@@ -418,7 +430,12 @@ describe('gradeExplainBackAttemptDecision — the correctness pipeline read thro
     const transport = fakeTransport(() => ({
       ok: true,
       // no `stamp` at all
-      result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+      result: {
+        outcome: 'graded',
+        verdict: 'correct',
+        feedback: 'Well explained.',
+        missedPoints: [],
+      },
     }));
     const wiring = await buildGradingWiring({ dataHost: host, createTransport: () => transport });
 
@@ -567,7 +584,12 @@ function fakeMultiTaskTransport(vectorByText: ReadonlyMap<string, readonly numbe
       return {
         ok: true,
         stamp: { contractVersion: 1, promptVersion: '1.2.0', modelId: 'test-model' },
-        result: { verdict: 'correct', feedback: 'Well explained.', missedPoints: [] },
+        result: {
+          outcome: 'graded',
+          verdict: 'correct',
+          feedback: 'Well explained.',
+          missedPoints: [],
+        },
       };
     },
   };
@@ -658,6 +680,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
         sourceTokenCount: 0,
       },
       grading: {
+        outcome: 'graded' as const,
         verdict: 'partial' as const,
         feedback: 'Close, but check the heap property.',
         missedPoints: [],
@@ -706,6 +729,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
         sourceTokenCount: 0,
       },
       grading: {
+        outcome: 'graded' as const,
         verdict: 'partial' as const,
         feedback: 'Close, but check the heap property.',
         missedPoints: [],
@@ -758,6 +782,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
         sourceTokenCount: 0,
       },
       grading: {
+        outcome: 'graded' as const,
         verdict: 'partial' as const,
         feedback: 'Close, but check the heap property.',
         missedPoints: [],
@@ -828,6 +853,7 @@ describe('acceptExplainBackGradingWithObservation', () => {
         sourceTokenCount: 0,
       },
       grading: {
+        outcome: 'graded' as const,
         verdict: 'partial' as const,
         feedback: 'Close, but check the heap property.',
         missedPoints: [],
@@ -916,6 +942,7 @@ function pendingWithOneMisconception() {
       sourceTokenCount: 0,
     },
     grading: {
+      outcome: 'graded' as const,
       verdict: 'partial' as const,
       feedback: 'Close, but check the heap property.',
       missedPoints: [],
@@ -1209,6 +1236,7 @@ function pendingForVerdict(
       sourceTokenCount: 0,
     },
     grading: {
+      outcome: 'graded' as const,
       verdict,
       feedback: 'Feedback text.',
       missedPoints: [],

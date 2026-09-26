@@ -124,6 +124,51 @@
  * never `feedback`, never a `missedPoints`/`citedIssues`/misconception
  * string. `gradingPipeline.spec.ts` asserts this by serialising the summary
  * and checking a content sentinel never appears in it.
+ *
+ * ===========================================================================
+ * `ol-0r92.130` / `[D-321]` / `[D-320]`: THE WIRE RESPONSE IS NOW A
+ * DISCRIMINATED UNION, MIRRORING THE SERVICE'S COORDINATED MIGRATION
+ * ===========================================================================
+ * `olea-service/src/tasks/explainBackJudge.ts`'s `explainBackJudgeResponse`
+ * (`ol-0r92.105`) is now `z.discriminatedUnion('outcome', [...])`: a
+ * `{ outcome: 'graded', verdict, feedback, missedPoints, citedIssues,
+ * misconceptionCandidates }` branch, byte-identical to the pre-migration
+ * flat shape, or `{ outcome: 'unable-to-assess', reason }` when pass one
+ * cannot tell whether she made a genuine attempt at all. `[D-321]` rules
+ * that outcome must produce **no scored learning evidence** — no
+ * misconception observation, no mastery update, no scored review-log entry
+ * — while staying recoverable for the session.
+ *
+ * `ExplainBackGradingWireResponse` and `GroundedGrading` below are now the
+ * SAME shape of union, for the SAME reason the service task's module doc
+ * gives: an additive flag beside a still-compulsory `verdict` would let an
+ * old consumer read `.verdict` and silently misgrade. Making `outcome` the
+ * discriminant instead means a consumer cannot read `.verdict`/`.feedback`/
+ * etc. off `PendingExplainBackGrading.grading` without first narrowing on
+ * `outcome === 'graded'` — the type system forces the migration, the same
+ * remedy for the same gap.
+ *
+ * **`AcceptedExplainBackGrading` deliberately stays a FLAT, graded-only
+ * type — it is NOT widened into a union.** `acceptExplainBackGrading` below
+ * refuses (throws) when handed a `pending.grading.outcome ===
+ * 'unable-to-assess'` — a caller bug, the same "defensive, not redundant"
+ * posture it already takes for an ungrounded citation — so nothing ever
+ * constructs an `AcceptedExplainBackGrading` for an unassessable attempt in
+ * the first place. This is what makes D-321's "misconception and mastery
+ * never run off it" true *structurally*, with zero changes needed to every
+ * downstream consumer that only ever receives an `AcceptedExplainBackGrading`
+ * (`packages/plugin/src/grading/wiring.ts`'s
+ * `acceptExplainBackGradingWithObservation`, `packages/core/src/misconception/`,
+ * `packages/core/src/mastery/`): they are simply never called with this
+ * outcome, because the one function that could feed them refuses first.
+ *
+ * `[D-320]` (the depth-gate/growth-stage change, unrelated field): where no
+ * depth reading exists, a caller omits the depth score rather than
+ * defaulting it, and distinguishes "unavailable/pending" from "deliberately
+ * not performed" — see `packages/core/src/mastery/rollup.ts` and
+ * `packages/plugin/src/depth-gate/` for where that already lives; nothing
+ * in THIS file computes or stores a depth score, so D-320 constrains this
+ * file only by NOT inventing one here either.
  */
 
 import type { MisconceptionDigestEntry } from '../misconception/digest.js';
@@ -161,14 +206,43 @@ export interface MisconceptionCandidate {
   readonly correctionSourceBlockIds: readonly string[];
 }
 
-/** The response shape exactly as `explain-back.judge.v1` returns it, before grounding. */
-export interface ExplainBackGradingWireResponse {
+/**
+ * The graded branch of the response, exactly as `explain-back.judge.v1`
+ * returns it, before grounding — byte-identical in its fields to the
+ * pre-`[D-321]` flat response, plus the `outcome` discriminant. Mirrors
+ * `explainBackJudge.ts`'s `explainBackJudgeGradedOutcome` schema.
+ */
+export interface ExplainBackGradingWireGraded {
+  readonly outcome: 'graded';
   readonly verdict: 'correct' | 'partial' | 'incorrect';
   readonly feedback: string;
   readonly missedPoints: readonly string[];
   readonly citedIssues: readonly CitedIssue[];
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
 }
+
+/**
+ * `[D-321]`'s unable-to-assess branch: pass one could not tell whether she
+ * made a genuine attempt at all. `reason` is free text explaining why —
+ * never a referral flag or a defective-question signal (see
+ * `explainBackJudge.ts`'s identical shape and the same binding
+ * clarification: grader uncertainty alone is never a reason to refer the
+ * instrument to item validation).
+ */
+export interface ExplainBackGradingWireUnableToAssess {
+  readonly outcome: 'unable-to-assess';
+  readonly reason: string;
+}
+
+/**
+ * The response shape exactly as `explain-back.judge.v1` returns it, before
+ * grounding — a discriminated union on `outcome` (see the module header's
+ * `ol-0r92.130` / `[D-321]` section for why this is a union, not an
+ * additive field).
+ */
+export type ExplainBackGradingWireResponse =
+  | ExplainBackGradingWireGraded
+  | ExplainBackGradingWireUnableToAssess;
 
 /**
  * The `explain-back.judge.v1` request exactly as the Worker's zod schema
@@ -234,8 +308,16 @@ export class UnusableGradingInputError extends Error {
 // Grounding — the anti-confabulation layer for citedIssues / misconceptionCandidates
 // ---------------------------------------------------------------------------
 
-/** `groundCitations`'s output: the wire response with every citation verified real. */
-export interface GroundedGrading {
+/**
+ * `groundCitations`'s output for the graded branch: the wire response with
+ * every citation verified real. Exported separately from `GroundedGrading`
+ * (the union) so a caller that has already narrowed on `outcome === 'graded'`
+ * — `packages/plugin/src/explain-back/modal.ts`'s `renderGradedRegions`, in
+ * particular — can name the narrowed shape directly rather than re-narrowing
+ * a union parameter.
+ */
+export interface GroundedGradingGraded {
+  readonly outcome: 'graded';
   readonly verdict: 'correct' | 'partial' | 'incorrect';
   readonly feedback: string;
   readonly missedPoints: readonly string[];
@@ -250,6 +332,29 @@ export interface GroundedGrading {
 }
 
 /**
+ * `[D-321]`'s unable-to-assess branch, post-grounding — passed through
+ * unchanged from the wire response (see `groundCitations` below): there is
+ * nothing in it for the grounding step to check, mirroring
+ * `explainBackJudge.ts`'s `groundExplainBackCitations` doing the identical
+ * pass-through service-side.
+ */
+export interface GroundedGradingUnableToAssess {
+  readonly outcome: 'unable-to-assess';
+  readonly reason: string;
+}
+
+/**
+ * `groundCitations`'s output: a discriminated union on `outcome` — see the
+ * module header's `ol-0r92.130` / `[D-321]` section for why. A consumer that
+ * reads `.verdict`/`.feedback`/etc. off a `GroundedGrading` without first
+ * checking `outcome === 'graded'` fails typecheck, which is the whole point:
+ * it is what forces every consumer of `PendingExplainBackGrading.grading`
+ * (`modal.ts`'s `renderGradedPhase`, in particular) to handle the
+ * unable-to-assess case rather than silently misreading it as a grade.
+ */
+export type GroundedGrading = GroundedGradingGraded | GroundedGradingUnableToAssess;
+
+/**
  * Filters every citation in `response` down to ids that are actually in
  * `sourceBlocks`, dropping an entry entirely if none of its ids survive.
  * Pure, synchronous, no I/O — the same discipline `restatementOverlap.ts`
@@ -259,11 +364,39 @@ export interface GroundedGrading {
  * instruction it can be talked out of (the exact argument `ol-nvdk`'s
  * header makes for the restatement pre-check, applied to a different
  * failure mode on the same task).
+ *
+ * `[D-321]`: an `outcome: 'unable-to-assess'` response carries no citations
+ * at all — it passes through unchanged (still the same discriminant), never
+ * coerced into the graded shape's measurements.
+ *
+ * **Overloaded on the input's own narrowness, round 2 (`ol-0r92.130`).** A
+ * caller that already holds a statically-graded `ExplainBackGradingWireGraded`
+ * (every hand-built test fixture in this file's own spec, in particular) gets
+ * back a statically-graded `GroundedGradingGraded` — no `outcome` narrowing
+ * needed to read `.citedIssues`/`.droppedCitationCount`/etc., because the
+ * input already proved which branch this is. A caller holding the general
+ * `ExplainBackGradingWireResponse` union (`gradeExplainBack` below, receiving
+ * a real, not-yet-known Worker response) still gets back the general
+ * `GroundedGrading` union, and still has to narrow — this overload changes
+ * nothing about what `gradeExplainBack` produces or what its own callers
+ * must do; it only sharpens the type for a caller who already knew more.
  */
+export function groundCitations(
+  response: ExplainBackGradingWireGraded,
+  sourceBlocks: readonly SourceBlockRef[],
+): GroundedGradingGraded;
+export function groundCitations(
+  response: ExplainBackGradingWireResponse,
+  sourceBlocks: readonly SourceBlockRef[],
+): GroundedGrading;
 export function groundCitations(
   response: ExplainBackGradingWireResponse,
   sourceBlocks: readonly SourceBlockRef[],
 ): GroundedGrading {
+  if (response.outcome === 'unable-to-assess') {
+    return { outcome: 'unable-to-assess', reason: response.reason };
+  }
+
   const knownIds = new Set(sourceBlocks.map((block) => block.blockId));
 
   let droppedCitationCount = 0;
@@ -289,6 +422,7 @@ export function groundCitations(
   }
 
   return {
+    outcome: 'graded',
     verdict: response.verdict,
     feedback: response.feedback,
     missedPoints: response.missedPoints,
@@ -392,10 +526,29 @@ export interface AcceptedExplainBackGrading {
  * `acceptGeneratedMcq` gives for re-checking `feedback` at its own boundary.
  * Throwing here is a bug in a caller (nothing this module produces can fail
  * this check), not a possible outcome of grading real input.
+ *
+ * **`[D-321]`: refuses (throws) rather than accepting a `pending.grading`
+ * whose `outcome` is `'unable-to-assess'`.** `AcceptedExplainBackGrading`
+ * deliberately stays flat and graded-only — see the module header's
+ * `ol-0r92.130` section for why — so there is no `verdict` this function
+ * could honestly report for an unassessable attempt. A caller must check
+ * `pending.grading.outcome` BEFORE calling this function (`modal.ts`'s
+ * `renderGradedPhase` only ever reaches the Accept button, and therefore
+ * this function, on the graded branch); reaching this guard is a caller bug,
+ * the same posture the two checks below already take for an ungrounded
+ * citation.
  */
 export function acceptExplainBackGrading(
   pending: PendingExplainBackGrading,
 ): AcceptedExplainBackGrading {
+  if (pending.grading.outcome === 'unable-to-assess') {
+    throw new Error(
+      'acceptExplainBackGrading: pending.grading is unable-to-assess — there is no verdict to ' +
+        'accept (D-321); a caller must check pending.grading.outcome and route this outcome its ' +
+        'own way (no accept, no misconception observation, no mastery update, no review-log write) ' +
+        'rather than calling this function',
+    );
+  }
   for (const issue of pending.grading.citedIssues) {
     if (issue.sourceBlockIds.length === 0) {
       throw new Error(
@@ -434,20 +587,31 @@ export function discardExplainBackGrading(_pending: PendingExplainBackGrading): 
 // Telemetry — counts and a verdict only, never content
 // ---------------------------------------------------------------------------
 
-export interface GradingTelemetrySummary {
-  readonly verdict: 'correct' | 'partial' | 'incorrect';
-  readonly containment: number;
-  readonly citedIssueCount: number;
-  readonly misconceptionCandidateCount: number;
-  readonly droppedCitationCount: number;
-  readonly droppedMisconceptionCount: number;
-}
+export type GradingTelemetrySummary =
+  | {
+      readonly outcome: 'graded';
+      readonly verdict: 'correct' | 'partial' | 'incorrect';
+      readonly containment: number;
+      readonly citedIssueCount: number;
+      readonly misconceptionCandidateCount: number;
+      readonly droppedCitationCount: number;
+      readonly droppedMisconceptionCount: number;
+    }
+  | {
+      /** `[D-321]`: no verdict, no citation counts — there is nothing graded to count. */
+      readonly outcome: 'unable-to-assess';
+      readonly containment: number;
+    };
 
 /** See "never log content" in the module header. */
 export function summarizeGradingForTelemetry(
   pending: PendingExplainBackGrading,
 ): GradingTelemetrySummary {
+  if (pending.grading.outcome === 'unable-to-assess') {
+    return { outcome: 'unable-to-assess', containment: pending.overlap.containment };
+  }
   return {
+    outcome: 'graded',
     verdict: pending.grading.verdict,
     containment: pending.overlap.containment,
     citedIssueCount: pending.grading.citedIssues.length,

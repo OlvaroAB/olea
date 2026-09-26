@@ -62,6 +62,28 @@
  * stamped type, for whichever composition site builds a `StageSeamContext`
  * (`../stage-contract/provenance.ts`) next. `stamp` is `null` exactly when
  * the response carried no usable stamp — never invented to fill the field.
+ *
+ * ===========================================================================
+ * `ol-0r92.130` round 2 / `[D-321]`: `readGrading` NOW BRANCHES ON `outcome`
+ * ===========================================================================
+ * `explainBackJudge.ts` (service)'s response is a `z.discriminatedUnion
+ * ('outcome', ...)`, and `ExplainBackGradingWireResponse` (`gradingPipeline
+ * .ts`) mirrors it as a real TS union — see that module's header. This is
+ * the ONE place the Worker's raw JSON first becomes that typed value, so it
+ * is the one place that has to read `result.outcome` before assuming the
+ * graded shape. `result.outcome === 'unable-to-assess'` is checked FIRST,
+ * requiring a non-empty `reason` string (the wire schema's own `.min(1)`,
+ * mirrored here the same way every other required string field already is)
+ * and returning `{ outcome: 'unable-to-assess', reason, stamp }` — no
+ * `verdict`, no `feedback`, nothing graded-shaped, and crucially no
+ * fall-through into the `verdict`/`feedback` checks below, which would
+ * otherwise throw "no feedback text" on a response that was never meant to
+ * carry any. Anything else keeps the pre-existing graded-shape validation
+ * unchanged (a response with NO `outcome` field at all — an old Worker,
+ * still on the pre-`[D-321]` flat shape — falls through to the graded
+ * checks exactly as before, so this is additive for that case: the union
+ * only tightens what happens for a NEW response shape, it does not narrow
+ * what already validated).
  */
 
 import type { WorkerTaskTransport } from '../retrieval/workerProvider.js';
@@ -191,6 +213,20 @@ function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
   }
   const r = result as Record<string, unknown>;
 
+  // `[D-321]`: checked FIRST, before any graded-shape field is read — see
+  // the module doc's "readGrading NOW BRANCHES ON outcome" section. Missing
+  // `outcome` (an old Worker still on the pre-D-321 flat shape) falls
+  // through to the graded checks below unchanged.
+  if (r.outcome === 'unable-to-assess') {
+    const reason = r.reason;
+    if (typeof reason !== 'string' || reason.length === 0) {
+      throw new WorkerJudgeError(
+        'WorkerJudgeCaller: the Worker returned outcome unable-to-assess with no reason text.',
+      );
+    }
+    return { outcome: 'unable-to-assess', reason, stamp: readStamp(response) };
+  }
+
   const verdict = r.verdict;
   if (typeof verdict !== 'string' || !VERDICTS.has(verdict)) {
     throw new WorkerJudgeError(
@@ -203,7 +239,8 @@ function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
   }
 
   return {
-    verdict: verdict as ExplainBackGradingWireResponse['verdict'],
+    outcome: 'graded',
+    verdict: verdict as Extract<ExplainBackGradingWireResponse, { outcome: 'graded' }>['verdict'],
     feedback,
     missedPoints: readStringArray(r.missedPoints, 'missedPoints'),
     citedIssues: readCitedIssues(r.citedIssues),

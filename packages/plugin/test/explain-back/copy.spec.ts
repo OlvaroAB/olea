@@ -15,6 +15,7 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
+  EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
   explainBackDepthHeading,
 } from '../../src/explain-back/copy.js';
 import { explainBackDepthPhrase } from '../../src/registry/copy.js';
@@ -34,6 +35,7 @@ const STATIC_STRINGS: readonly string[] = [
   EXPLAIN_BACK_DISCARD_LABEL,
   EXPLAIN_BACK_SESSION_ENTRY_LABEL,
   EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
+  EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
 ];
 
 /** The five SOLO levels, in R9/registry order (`[D-117]`, `../../src/registry/copy.ts`). */

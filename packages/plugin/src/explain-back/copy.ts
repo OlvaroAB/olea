@@ -58,6 +58,24 @@ export const EXPLAIN_BACK_ACCEPT_LABEL = 'Keep this';
 export const EXPLAIN_BACK_DISCARD_LABEL = 'Try again';
 
 /**
+ * `[D-321]` / `ol-0r92.130`: pass one could not tell whether this was a
+ * genuine attempt at all — a defined non-verdict (`GroundedGrading`'s
+ * `outcome: 'unable-to-assess'` branch, `olea-core`), never a wrong-answer
+ * grade. `./modal.ts`'s `renderGradedPhase` shows this instead of any
+ * feedback/missed-points/cited-issues detail and renders no Accept button —
+ * `EXPLAIN_BACK_DISCARD_LABEL` ("Try again") is the one action, and it
+ * writes nothing (see that method's own doc).
+ *
+ * **PLACEHOLDER COPY — no ruled string exists for this outcome.** Neither
+ * the vocabulary registry nor F5 (`features/F5-explain-it-back.md`,
+ * `docs/Olea_alpha_functional_scope.md`) names wording for it yet; this is a
+ * plain, voice-charter-plausible sentence, not a ratified one — flagged in
+ * this bead's report for the same reason `copy.spec.ts` sweeps this file.
+ */
+export const EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE =
+  "Olea couldn't tell whether this was a real attempt at an answer, so nothing was graded.";
+
+/**
  * `[D-171]`'s one-step affordance, worded for this surface: F8.4 asks every
  * instrument-rendering surface for a single pointer to that instrument's
  * registry entry, never a printed source path, heading or page here. One
