@@ -370,6 +370,53 @@ function qaAssetTexts(card: QaCardInstrument): readonly string[] {
 }
 
 /**
+ * The ordinal an M5-withheld instrument would get were its embedded asset to
+ * resolve — computed from the same rule `ol-8ae9`'s module doc states for a
+ * real occupant: 1-based position among every occupant of the same anchor,
+ * in source order.
+ *
+ * `validSiblings` is the note's already-filtered valid list. The withheld
+ * instrument itself is never in it, and neither is any OTHER withheld
+ * sibling under the same heading — that is the whole point of "a withheld
+ * instrument never consumes an ordinal slot a sibling would otherwise get"
+ * above. So this recomputes exactly the ordinal the real loop below would
+ * assign this ONE instrument were it inserted at its true source position
+ * among `validSiblings`, without touching the shared `headingOrdinals`/
+ * `blockOrdinals` counters that loop uses — which is what keeps every
+ * OTHER (valid) instrument's id exactly what it is today. It proves the
+ * property `enumerate.spec.ts` pins: the same block, valid or M5-invalid,
+ * derives the same id. It says nothing about a withheld block's siblings,
+ * whose own numbers are free to depend on whether this one is ever fixed —
+ * that dependency is pre-existing and position-based, not introduced here.
+ */
+function wouldBeOrdinal(
+  instrument: ParsedInstrument,
+  validSiblings: readonly ParsedInstrument[],
+  headings: readonly HeadingBlock[],
+): number {
+  if (instrument.blockId !== null) {
+    // Mirrors `blockOrdinals` below: a block id is unique by construction, so
+    // this is always 1 in practice — no other instrument, valid or withheld,
+    // can share it.
+    const priorSameBlock = validSiblings.filter(
+      (sibling) =>
+        sibling.blockId === instrument.blockId && sibling.span.start < instrument.span.start,
+    ).length;
+    return priorSameBlock + 1;
+  }
+  // Mirrors `headingOrdinals` below: every occupant of the heading counts,
+  // block-id-anchored or not, so this instrument's slot is one past every
+  // valid occupant that source-precedes it under the same heading.
+  const heading = headingAbove(headings, instrument.span.start);
+  const priorOccupants = validSiblings.filter(
+    (sibling) =>
+      headingAbove(headings, sibling.span.start) === heading &&
+      sibling.span.start < instrument.span.start,
+  ).length;
+  return priorOccupants + 1;
+}
+
+/**
  * Every schedulable instrument in the vault, bound to its concept and courses.
  *
  * Vault order (`VaultSource.list` is sorted) then source order within a note,
@@ -434,6 +481,17 @@ export async function enumerateVaultInstruments(
       invalidClozeBlocks.push({ notePath, block });
     }
 
+    // Moved up from where every other per-note fact used to be computed
+    // (right before the ordinal loop below): the M5 pass just below needs
+    // `headings` (for `headingAbove`/`wouldBeOrdinal`) and `noteUid` (for
+    // `deriveId`) to name a withheld instrument's own would-be id, and it
+    // runs before the concept-binding early-`continue`s that used to gate
+    // this computation. Pure functions of `source`/`notePath`; moving them
+    // earlier changes nothing about their result, only when it runs.
+    const doc = parseDocument(source);
+    const headings = doc.blocks.filter((block): block is HeadingBlock => block.kind === 'heading');
+    const noteUid = uidOf(source);
+
     // M5 (`[D-334]`), MCQ and Q&A only: a block that otherwise parsed cleanly
     // is withheld here, the same way a format-level failure already is
     // above, when a text field it renders embeds an asset that resolves to
@@ -441,38 +499,88 @@ export async function enumerateVaultInstruments(
     // walk (ordinal counting, id derivation, concept binding) ever sees it —
     // exactly as a format-invalid block already never reaches `instruments`
     // at all — so a withheld instrument never consumes an ordinal slot a
-    // sibling would otherwise get.
-    const instruments = parsedInstruments.filter((instrument) => {
+    // sibling would otherwise get, and never changes a valid sibling's id.
+    //
+    // Split into two passes (rather than one `.filter()`, as before): the
+    // first decides which instruments survive; the second names the ones
+    // that did not, deriving each one's `instrumentId` from `instruments`
+    // (the just-decided survivor list) via `wouldBeOrdinal` — `[D-323]`'s
+    // instrument-standing check (`ol-egov.141.89.6.4`) needs this id to name
+    // *which* instrument went suspect for "safety information unavailable"
+    // once it has already been graded. The id derived here is provably the
+    // same one the block would get were its asset to resolve
+    // (`enumerate.spec.ts`'s "valid vs M5-invalid" pair): `instruments`
+    // itself, and every valid instrument's own id computed from it below,
+    // are completely unchanged by this — the withheld instrument is never
+    // added to `instruments`, only read alongside it to compute a number
+    // nothing else consumes.
+    const instruments: ParsedInstrument[] = [];
+    const withheldMcq: { readonly instrument: ParsedInstrument; readonly unresolved: string }[] =
+      [];
+    const withheldCard: { readonly instrument: ParsedInstrument; readonly unresolved: string }[] =
+      [];
+    for (const instrument of parsedInstruments) {
       if (instrument.mcq !== undefined) {
         const unresolved = firstUnresolvedEmbed(mcqAssetTexts(instrument.mcq), allPaths);
-        if (unresolved === null) return true;
-        invalidMcqBlocks.push({
-          notePath,
-          block: {
-            reason: 'unresolved-asset',
-            detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
-            raw: instrument.mcq.raw,
-            span: instrument.mcq.span,
-          },
-        });
-        return false;
+        if (unresolved === null) instruments.push(instrument);
+        else withheldMcq.push({ instrument, unresolved });
+        continue;
       }
       if (instrument.card !== undefined && instrument.card.type === 'qa') {
         const unresolved = firstUnresolvedEmbed(qaAssetTexts(instrument.card), allPaths);
-        if (unresolved === null) return true;
-        invalidCardBlocks.push({
-          notePath,
-          block: {
-            reason: 'unresolved-asset',
-            detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
-            raw: instrument.card.raw,
-            span: instrument.card.span,
-          },
-        });
-        return false;
+        if (unresolved === null) instruments.push(instrument);
+        else withheldCard.push({ instrument, unresolved });
+        continue;
       }
-      return true;
-    });
+      instruments.push(instrument);
+    }
+
+    for (const { instrument, unresolved } of withheldMcq) {
+      const mcq = instrument.mcq;
+      if (mcq === undefined) continue; // narrows for TS; always defined for an mcq entry
+      invalidMcqBlocks.push({
+        notePath,
+        block: {
+          reason: 'unresolved-asset',
+          detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
+          raw: mcq.raw,
+          span: mcq.span,
+        },
+        instrumentId: deriveId({
+          noteUid,
+          notePath,
+          blockId: instrument.blockId,
+          heading: headingAbove(headings, instrument.span.start),
+          ordinal: wouldBeOrdinal(instrument, instruments, headings),
+          explicitId: instrument.explicitId,
+          instrumentType: instrument.type,
+          stampedClozeId: null,
+        }),
+      });
+    }
+    for (const { instrument, unresolved } of withheldCard) {
+      const card = instrument.card;
+      if (card === undefined) continue; // narrows for TS; always defined for a qa-card entry
+      invalidCardBlocks.push({
+        notePath,
+        block: {
+          reason: 'unresolved-asset',
+          detail: `embedded asset ${JSON.stringify(unresolved)} does not resolve to any file in the vault`,
+          raw: card.raw,
+          span: card.span,
+        },
+        instrumentId: deriveId({
+          noteUid,
+          notePath,
+          blockId: instrument.blockId,
+          heading: headingAbove(headings, instrument.span.start),
+          ordinal: wouldBeOrdinal(instrument, instruments, headings),
+          explicitId: instrument.explicitId,
+          instrumentType: instrument.type,
+          stampedClozeId: null,
+        }),
+      });
+    }
 
     if (instruments.length === 0) continue;
 
@@ -503,9 +611,8 @@ export async function enumerateVaultInstruments(
       continue;
     }
 
-    const doc = parseDocument(source);
-    const headings = doc.blocks.filter((block): block is HeadingBlock => block.kind === 'heading');
-    const noteUid = uidOf(source);
+    // `doc`/`headings`/`noteUid` are now computed earlier, before the M5
+    // pass above — see that block's comment for why.
     const title = noteTitle(notePath);
     // `.key`, not `.name` — the coordinated flip (`ol-63e1`, `[D-088]`/
     // `[D-109]`). Every reader that joins review-log `conceptIds` moved in the

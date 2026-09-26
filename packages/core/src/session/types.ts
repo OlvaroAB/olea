@@ -123,6 +123,24 @@ export type VaultInstrumentRecord =
 export interface InvalidMcqReport {
   readonly notePath: VaultPath;
   readonly block: InvalidMcqBlock;
+  /**
+   * `[D-323]`'s standing check (`ol-egov.141.89.6.4`) needs to name *which*
+   * instrument an M5 defect (`block.reason === 'unresolved-asset'`) belongs
+   * to, for one that already reached grading before its embed stopped
+   * resolving. Present only when this walk actually has the identity fields
+   * `instrument-id.ts`'s rule needs to derive one — today that is exactly the
+   * M5 case: the block had already parsed into a real MCQ (blockId/
+   * explicitId known) before the vault-wide asset check withheld it. Absent
+   * for every other `McqInvalidReason` (M1-M4): those are refused inside
+   * `mcq-format.ts`, which has no vault access and reports no blockId/
+   * explicitId for a block that failed to parse — this walk has nothing to
+   * derive an id from, so it reports nothing rather than guessing one from
+   * `raw`/`span` alone. Deriving this never changes which block is valid,
+   * never makes an invalid block servable, and yields the exact id the same
+   * block would get were its asset to resolve (`enumerate.spec.ts`'s "valid
+   * vs M5-invalid" pair pins this).
+   */
+  readonly instrumentId?: string;
 }
 
 /**
@@ -153,6 +171,12 @@ export interface UnboundInstrumentReport {
 export interface InvalidCardReport {
   readonly notePath: VaultPath;
   readonly block: InvalidCardBlock;
+  /**
+   * The Q&A counterpart of `InvalidMcqReport.instrumentId` — same reason,
+   * same M5-only scope (mirrors that field; see its doc for the M1-M4
+   * underivable case, which applies here identically).
+   */
+  readonly instrumentId?: string;
 }
 
 /**

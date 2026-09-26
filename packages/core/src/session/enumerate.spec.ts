@@ -339,6 +339,121 @@ describe('[D-334] M4/M5 — the closed deterministic withholding checks', () => 
   });
 });
 
+// Scenarios: features/F2-review.md — `[D-323]`'s instrument-standing check
+// (`ol-egov.141.89.6.4`) needs to name *which* instrument went suspect for
+// "safety information unavailable" (M5). Before this, `enumerate.ts` dropped
+// an M5-withheld block before any id was derived for it, so nothing
+// downstream could ever name it. These pin the property a caller needs: the
+// id it reports for a withheld block is the SAME id the identical block gets
+// once its asset resolves — never a different, invented one.
+describe('[D-323]/ol-egov.141.89.6.4: an M5-withheld block carries the id it would get if valid', () => {
+  it('an MCQ withheld for an unresolved asset gets the same id the same block gets once the asset resolves', async () => {
+    const noteWith = (asset: string) =>
+      [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        `stem: What does this diagram show? ![[${asset}]]`,
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n');
+
+    const invalid = await enumerateVaultInstruments(
+      memoryVault({ 'Notes/one.md': noteWith('missing.png') }),
+    );
+    expect(invalid.records).toEqual([]);
+    const withheldId = invalid.invalidMcqBlocks[0]?.instrumentId;
+    expect(withheldId).toBeDefined();
+
+    const valid = await enumerateVaultInstruments(
+      memoryVault({
+        'Notes/one.md': noteWith('present.png'),
+        'Attachments/present.png': 'stand-in for a binary asset',
+      }),
+    );
+    expect(valid.invalidMcqBlocks).toEqual([]);
+    expect(valid.records[0]?.instrumentId).toBe(withheldId);
+  });
+
+  it('a Q&A card withheld for an unresolved asset gets the same id the same block gets once the asset resolves', async () => {
+    const noteWith = (asset: string) =>
+      [FRONTMATTER('[Alpha]'), `front ![[${asset}]]::the back`, ''].join('\n');
+
+    const invalid = await enumerateVaultInstruments(
+      memoryVault({ 'Notes/card.md': noteWith('missing.png') }),
+    );
+    expect(invalid.records).toEqual([]);
+    const withheldId = invalid.invalidCardBlocks[0]?.instrumentId;
+    expect(withheldId).toBeDefined();
+
+    const valid = await enumerateVaultInstruments(
+      memoryVault({
+        'Notes/card.md': noteWith('present.png'),
+        'Attachments/present.png': 'stand-in for a binary asset',
+      }),
+    );
+    expect(valid.invalidCardBlocks).toEqual([]);
+    expect(valid.records[0]?.instrumentId).toBe(withheldId);
+  });
+
+  it('a withheld instrument’s own ordinal counts only its VALID heading-siblings — matching what it gets once fixed even beside another still-withheld one', async () => {
+    const noteWith = (secondAsset: string) =>
+      [
+        FRONTMATTER('[Alpha]'),
+        '## Shared heading',
+        '',
+        'First front::First back',
+        '',
+        `Second front ![[${secondAsset}]]::Second back`,
+        '',
+      ].join('\n');
+
+    const invalid = await enumerateVaultInstruments(
+      memoryVault({ 'Notes/one.md': noteWith('missing.png') }),
+    );
+    // The first card is valid and completely unaffected by its withheld sibling.
+    expect(invalid.records.map((r) => r.instrumentType)).toEqual(['qa']);
+    const withheldReport = invalid.invalidCardBlocks.find((r) => r.block.raw.startsWith('Second'));
+    const withheldId = withheldReport?.instrumentId;
+    expect(withheldId).toBeDefined();
+    // Position 2 under the shared heading, not 1 — it counts itself, only
+    // never a sibling that is (still) also withheld.
+    expect(withheldId?.endsWith(':2')).toBe(true);
+
+    const valid = await enumerateVaultInstruments(
+      memoryVault({
+        'Notes/one.md': noteWith('present.png'),
+        'Attachments/present.png': 'stand-in for a binary asset',
+      }),
+    );
+    expect(valid.invalidCardBlocks).toEqual([]);
+    const second = valid.records.find(
+      (r) => r.instrumentType === 'qa' && r.card.raw.startsWith('Second'),
+    );
+    expect(second?.instrumentId).toBe(withheldId);
+  });
+
+  it('an M1-M4 invalid block carries no instrumentId — the format parser refuses it before blockId/explicitId are ever known', async () => {
+    const vault = memoryVault({
+      'Notes/broken.md': [
+        FRONTMATTER('[Alpha]'),
+        '```olea-mcq',
+        'stem: Too few options?',
+        'answer: yes',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.invalidMcqBlocks[0]?.block.reason).toBe('insufficient-distractors');
+    expect(found.invalidMcqBlocks[0]?.instrumentId).toBeUndefined();
+    expect('instrumentId' in (found.invalidMcqBlocks[0] ?? {})).toBe(false);
+  });
+});
+
 describe('the concept binding follows her `topic:` property', () => {
   it('binds a bare topic and a wikilink-shaped topic to the same concept', async () => {
     // `[D-248]`: both notes sit under a course folder, and the wikilink-shaped
