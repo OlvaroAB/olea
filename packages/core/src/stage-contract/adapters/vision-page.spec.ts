@@ -32,6 +32,12 @@ const context: VisionPageSeamContext = {
   evidenceDigests: ['page-image-digest-1'],
 };
 
+/** A result with no wire stamp at all: the fields are absent, not set to undefined (exactOptionalPropertyTypes). */
+function unstamped(): VisionPageExtractResultShape {
+  const { modelId: _modelId, promptVersion: _promptVersion, ...rest } = result({});
+  return rest;
+}
+
 function result(partial: Partial<VisionPageExtractResultShape>): VisionPageExtractResultShape {
   return {
     outcome: 'complete',
@@ -98,7 +104,7 @@ describe('writingFromVisionPageExtract — the producer half', () => {
 
   it('a test double answering with no wire stamp (modelId/promptVersion absent) carries a null stamp, never an invented one', () => {
     const outcome = writingFromVisionPageExtract(
-      result({ modelId: undefined, promptVersion: undefined }),
+      unstamped(),
       context,
     );
     expect(outcome.kind).toBe('written');
@@ -151,7 +157,7 @@ describe('the consumer half — every outcome this adapter can produce satisfies
       result({ outcome: 'partial', coverage: 'top half' }),
       result({ outcome: 'unreadable', extractedText: '', unreadableReason: 'blank-page' }),
       result({ extractedText: '', figureDescription: 'a diagram' }),
-      result({ modelId: undefined, promptVersion: undefined }),
+      unstamped(),
     ];
     for (const r of results) {
       const outcome = writingFromVisionPageExtract(r, context);
