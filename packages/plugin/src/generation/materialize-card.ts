@@ -123,25 +123,91 @@
  *
  * ## The `[ol-0r92.87]` stale-input guard and the `[D-181]` citation sidecar
  *
- * Both reproduced verbatim from `materialize-mcq.ts` — same
- * `StaleSourceRevisionError` class (imported from that module, not
+ * The stale-input guard is reproduced verbatim from `materialize-mcq.ts` —
+ * same `StaleSourceRevisionError` class (imported from that module, not
  * redefined, so `accept.ts`'s single `catch` clause keeps working for
  * either kind without change), same "refuse before anything is written"
- * ordering, same "sidecar write is skipped, never fabricated, when the
- * pipeline had nothing to record, and guarded by `vault.exists` so a retry
- * never re-throws into a write a prior attempt already made" posture. There
- * is no distractor-provenance sidecar here — cards have no distractors
- * (`[D-220]` is MCQ-only) — and no `[D-133]` succession handling: nothing
- * drafts a card REVISION yet, so `predecessorInstrumentId` has no producer
- * to forward from (`DraftRecord`'s own field stays `undefined` for every
- * card draft today, same as it would for any caller with nothing to
- * supply).
+ * ordering. There is no distractor-provenance sidecar here — cards have no
+ * distractors (`[D-220]` is MCQ-only).
+ *
+ * **The citation sidecar is now ALWAYS written for a generated card
+ * (`ol-v7r5.68`, Class B) — never skipped, even when `input.sourceCitation`
+ * is `undefined`.** Before this bead, an absent `sourceCitation` meant no
+ * sidecar at all, which made a generated card materialized with no citation
+ * byte-for-byte indistinguishable from a hand-authored one to any reader of
+ * `.olea/citations/` — including `citation-revision-wiring.ts`'s
+ * `isTrackedForRevision`, whose `[D-366]` exemption is decided by exactly
+ * that signal (`sourceProvenance` absent ⇒ "self-contained, treat as
+ * learner-authored"). `pipeline.ts`'s own doc on `sourceCitation` settles
+ * whether a GENERATED card can legitimately have none: the field is
+ * `undefined` "only if no unit actually matches, which SHOULD NOT HAPPEN
+ * given how `notePaths`/`sourcePaths` were built from `units`" — i.e. a
+ * defensive guard against a corpus state the pipeline does not expect,
+ * never a designed, legitimate outcome. Every card this pipeline caches was
+ * grounded against retrieved material before the generative call ever ran
+ * (`draft-cards.ts`'s own "refused retrieval never reaches the generative
+ * transport" load-bearing line) — so a real, generated card always has a
+ * real passage to cite; `undefined` reaching this far is the pipeline's
+ * defensive fallback firing, not a legitimate "no source" fact.
+ *
+ * So: when `input.sourceCitation` is supplied, it is written verbatim, same
+ * as before. When it is `undefined`, this now writes a SELF-REFERENTIAL
+ * citation — `{ sourcePath: input.sourcePath }`, the card's own note — never
+ * fabricating a `page`/`section` it does not have. This is still true and
+ * never invented: the card's material, whatever it is, is at minimum
+ * located in its own note, which is exactly what a self-referential citation
+ * asserts and nothing more. The practical effect is narrow and precise:
+ * `citedPassagePath` (`citation-revision-wiring.ts`) reads `sourcePath ===
+ * notePath` as "no separate dependency" either way, so `[D-366]`'s tracking
+ * decision for THIS card is unchanged by this write — what changes is that
+ * `readInstrumentCitation` no longer returns `undefined` for a generated
+ * card, so a future reader that needs "is this instrument known-generated"
+ * (as distinct from "does its citation name a separate note") now has a real
+ * signal to read instead of an indistinguishable absence. Both remain exempt
+ * from `[D-366]` tracking under the current rule; only the sidecar's own
+ * presence changes for a new generated card. **Existing sidecars are never
+ * rewritten** — this only changes what a NEW `materializeAcceptedCardDraft`
+ * call persists; write-once (`citation-store.ts`'s own discipline) already
+ * forbids touching one that exists.
+ *
+ * ## `[D-133]`-style succession, restated for a card's own limits
+ *
+ * `[D-366]`'s ruling widened passage-change suspension to Q&A/cloze, and
+ * `revision-job-runner.ts` now drafts a same-kind `'qa'` successor for a
+ * `'qa'` predecessor (see that file's module doc). This module accepts
+ * `input.predecessorInstrumentId` the same way `materialize-mcq.ts` does,
+ * and — after the card is written — appends the SAME `succession`
+ * review-log record (`buildSuccessionEvent`/`appendSuccessionRecord`,
+ * `olea-core`, reused unmodified) naming both ids: the link between a Q&A
+ * predecessor and its successor is real in the review log the moment this
+ * runs, exactly as it is for MCQ.
+ *
+ * **What this module does NOT do, and cannot, within its own `owns`: stamp
+ * an in-block `predecessor:` field onto the successor card.** MCQ's block is
+ * Olea's own fenced-code format (`olea-mcq`), free to carry an arbitrary
+ * machine field once `mcq-format.ts` recognises it. A Q&A card's format is
+ * NOT Olea's own — `card-format.ts`'s own module doc: it targets the
+ * `st3v3nmw/obsidian-spaced-repetition` plugin's plain-text dialect (C5.3,
+ * "SR-plugin-readable") so her cards stay readable and editable by that
+ * plugin too. There is no metadata-field mechanism in that format at all —
+ * adding a `predecessor: <id>` line to a card would either corrupt the
+ * card's own front/back text or require inventing a NEW field convention
+ * for a format designed to match an external plugin's defaults, which is a
+ * card-format decision (touching `packages/core/src/instrument/
+ * card-format.ts`, outside this bead's `owns`, and arguably Class C — a
+ * persisted-format change with SR-plugin-compatibility consequences,
+ * C5.3). This module reports the gap rather than closes it: the successor
+ * link lives in the review log and the cache's `predecessorInstrumentId`
+ * today, not in the card's own bytes — see this bead's hand-back notes for
+ * the proposed decision.
  */
 
 import {
+  appendSuccessionRecord,
   applyDocumentEdits,
-  type DocumentEdit,
+  buildSuccessionEvent,
   citationStorePath,
+  type DocumentEdit,
   hashText,
   type InstrumentCitation,
   MULTI_LINE_SEPARATOR,
@@ -156,6 +222,7 @@ import {
   type VaultSource,
   writeInstrumentCitation,
 } from 'olea-core';
+import { isoWithLocalOffset } from '../review/ports.js';
 import { StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
 
@@ -175,7 +242,12 @@ export interface MaterializeAcceptedCardDraftInput {
   /**
    * `[D-181]`/`ol-2zfj.52`: the passage this draft was generated from — see
    * `materialize-mcq.ts`'s `MaterializeAcceptedDraftInput.sourceCitation`
-   * for the identical field. `undefined` skips the sidecar write entirely.
+   * for the identical field. **`undefined` no longer skips the sidecar
+   * write** (`ol-v7r5.68`, Class B) — see the module doc's own section: a
+   * self-referential citation (`sourcePath` = this card's own note) is
+   * written instead, since a generated card reaching this function with no
+   * citation is the pipeline's defensive fallback, never a legitimate
+   * "no source" case.
    */
   readonly sourceCitation?: InstrumentCitation;
   /**
@@ -183,10 +255,35 @@ export interface MaterializeAcceptedCardDraftInput {
    * field. `undefined` skips the check entirely.
    */
   readonly expectedSourceContentHash?: string;
+  /**
+   * `[D-366]`: the id of the instrument this successor supersedes, when this
+   * draft was materializing a Q&A revision's successor rather than an
+   * ordinary new card (`revision-job-runner.ts`'s `'qa'` branch — see that
+   * file's module doc). `undefined` for every ordinary F3.3 sweep draft.
+   * See the module doc's "`[D-133]`-style succession" section for exactly
+   * what this does and does not do: the succession review-log record is
+   * appended, but no in-block `predecessor:` field is stamped (no format
+   * mechanism exists for one — a card is not Olea's own block format).
+   */
+  readonly predecessorInstrumentId?: string;
 }
 
 export interface MaterializeAcceptedCardDraftResult {
   readonly instrumentId: string;
+}
+
+/**
+ * Only consulted when `predecessorInstrumentId` is supplied — mirrors
+ * `materialize-mcq.ts`'s `MaterializeAcceptedDraftDeps` exactly, restated
+ * here rather than imported since that module has no shared deps type to
+ * import (each materializer owns its own deps shape).
+ */
+export interface MaterializeAcceptedCardDraftDeps {
+  readonly deviceId?: string;
+  /** Injectable clock for the succession event's timestamp; defaults to the real one. */
+  readonly now?: () => Date;
+  /** Injectable for deterministic tests; defaults to `crypto.randomUUID()`, same as `appendSuccessionRecord` itself. */
+  readonly generateEventId?: () => string;
 }
 
 /** `enumerate.ts`'s private `uidOf`, reproduced from only public `olea-core` exports — see the module doc's "THE IDENTITY DERIVATION" section, step 1. */
@@ -230,6 +327,7 @@ async function deriveCardBlockId(input: {
 export async function materializeAcceptedCardDraft(
   vault: VaultSource,
   input: MaterializeAcceptedCardDraftInput,
+  deps: MaterializeAcceptedCardDraftDeps = {},
 ): Promise<MaterializeAcceptedCardDraftResult> {
   const source = await vault.read(input.sourcePath);
 
@@ -246,6 +344,16 @@ export async function materializeAcceptedCardDraft(
 
   if (input.card.front.trim() === '' || input.card.back.trim() === '') {
     throw new Error('materializeAcceptedCardDraft: a card needs both a front and a back');
+  }
+
+  // `[D-366]`: the succession record cannot be filed without a deviceId
+  // (the review-log's C5.2 daily-file path is keyed on it, same as every
+  // other append) — checked before anything is written, mirroring
+  // `materialize-mcq.ts`'s identical guard for the identical reason.
+  if (input.predecessorInstrumentId !== undefined && deps.deviceId === undefined) {
+    throw new Error(
+      'materializeAcceptedCardDraft: deps.deviceId is required when predecessorInstrumentId is supplied (the succession record needs it for its C5.2 daily-file path)',
+    );
   }
 
   const doc = parseDocument(source);
@@ -298,9 +406,12 @@ export async function materializeAcceptedCardDraft(
   });
 
   // `[D-181]`: the sidecar, never text written into her notes — see
-  // `materialize-mcq.ts`'s identical section. Skipped, not fabricated, when
-  // the pipeline had no citation to record, and guarded so a retry that
-  // reached this write on a prior attempt does not re-throw into it.
+  // `materialize-mcq.ts`'s identical section, and this module's own doc's
+  // "citation sidecar is now ALWAYS written" section for why a generated
+  // card's `undefined` `sourceCitation` (`ol-v7r5.68`, Class B) now falls
+  // back to a self-referential one rather than skipping the write. Guarded
+  // by `vault.exists` either way, so a retry that reached this write on a
+  // prior attempt does not re-throw into it.
   const noteUid = noteUidOf(source);
   // `[D-353]`'s identity derivation — see the module doc's "THE IDENTITY
   // DERIVATION" section: the SAME exported `provisionalInstrumentId` a later
@@ -316,13 +427,40 @@ export async function materializeAcceptedCardDraft(
     instrumentType: 'qa',
   });
 
-  if (input.sourceCitation !== undefined) {
-    if (!(await vault.exists(citationStorePath(instrumentId)))) {
-      await writeInstrumentCitation(vault, instrumentId, input.sourceCitation);
-    }
+  // `ol-v7r5.68`, Class B (see the module doc): never `undefined` any more.
+  // A real generated card always has SOME source it can honestly name — at
+  // minimum its own note — and `page`/`section` are never guessed, only
+  // omitted, exactly as `writeInstrumentCitation`'s own field-by-field
+  // "absent means unavailable" convention already requires.
+  const citation: InstrumentCitation = input.sourceCitation ?? { sourcePath: input.sourcePath };
+  if (!(await vault.exists(citationStorePath(instrumentId)))) {
+    await writeInstrumentCitation(vault, instrumentId, citation);
   }
 
   await vault.write(input.sourcePath, stamped.content);
+
+  if (input.predecessorInstrumentId !== undefined) {
+    // `[D-366]`: the succession event, reused unmodified from `olea-core` —
+    // see the module doc's "`[D-133]`-style succession" section for exactly
+    // what this does and does not link. `deps.deviceId` is already checked
+    // non-`undefined` above.
+    const now = deps.now ?? (() => new Date());
+    const event = buildSuccessionEvent(input.predecessorInstrumentId, instrumentId, {
+      now: () => now().getTime(),
+    });
+    await appendSuccessionRecord(
+      vault,
+      {
+        timestamp: isoWithLocalOffset(new Date(event.at)),
+        predecessorInstrumentId: event.predecessorInstrumentId,
+        successorInstrumentId: event.successorInstrumentId,
+      },
+      {
+        deviceId: deps.deviceId as string,
+        ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+      },
+    );
+  }
 
   return { instrumentId };
 }

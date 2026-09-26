@@ -102,6 +102,24 @@ export const CITATION_RECORD_SCHEMA_VERSION = 2;
  * section 1 row 10).
  */
 export interface InstrumentCitation {
+  /**
+   * The cited source's own path. **May equal the instrument's own home
+   * note** — a self-referential citation, written by
+   * `packages/plugin/src/generation/materialize-card.ts`'s
+   * `materializeAcceptedCardDraft` for a generated card whose pipeline had
+   * no separately-citable unit to record (`ol-v7r5.68`, Class B; see that
+   * module's own doc for why a generated card should never legitimately
+   * reach that point with no source at all). This is a real, honest claim —
+   * "at minimum, this card's material lives in its own note" — never a
+   * guessed `page`/`section`, and this module draws no distinction between
+   * a self-referential and a separate-source citation: it exists so a
+   * generated instrument's sidecar is never simply ABSENT the way a
+   * hand-authored one's always is, which is the one signal
+   * `citation-revision-wiring.ts`'s `citedPassagePath`/`isTrackedForRevision`
+   * ([D-366]) reads to decide tracking (a citation naming the instrument's
+   * own note is read there exactly like no citation at all — this field's
+   * mere presence, not its value, is what changes).
+   */
   readonly sourcePath: VaultPath;
   readonly page?: number;
   readonly section?: string;

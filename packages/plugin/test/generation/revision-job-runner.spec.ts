@@ -1,6 +1,6 @@
 /**
  * `createRevisionAwareJobRunner` / `runInstrumentRevisionJob` tests
- * (`[D-133]`, `ol-2zfj.39`).
+ * (`[D-133]`, `ol-2zfj.39`; `[D-366]`, `ol-v7r5.68`).
  *
  * Proves: a recognised `'instrument-revision'` payload resolves the
  * predecessor's concept/course binding from a real vault walk (never a
@@ -11,10 +11,19 @@
  * not a failure" outcomes (refused, unparseable/empty, Worker not
  * configured) and that an unrecognised payload falls through to the
  * supplied fallback runner untouched.
+ *
+ * The `[D-366]` describe block below proves the same-kind-successor dispatch
+ * this bead adds: a `'qa'` predecessor drafts through `draftCardForConcept`
+ * (`cards.generate.v1`) and caches a `'qa'`-kind `DraftRecord` (never the
+ * `'mcq'` path), and a `'cloze'` predecessor produces no draft at all —
+ * there is no `cloze.generate.v1` task to draft through — without that being
+ * treated as a job failure.
  */
 
+import { enumerateVaultInstruments } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
+import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
 import {
   createRevisionAwareJobRunner,
   isInstrumentRevisionJobPayload,
@@ -253,5 +262,146 @@ describe('createRevisionAwareJobRunner', () => {
 
     expect(outcome).toBe(fallbackOutcome);
     expect(fallback).toHaveBeenCalledWith(job);
+  });
+});
+
+// `[D-366]` (`ol-v7r5.68`) — see this file's module doc.
+describe('runInstrumentRevisionJob: same-kind successor', () => {
+  const QA_NOTE_PATH = 'Courses/GEO101/Week 4.md';
+  const QA_NOTE = [
+    '---',
+    'topic: [Sediment layering]',
+    'course: GEO101',
+    '---',
+    '',
+    'What preserves the storm record?',
+    '?',
+    'Hummocky stratification',
+    '',
+  ].join('\n');
+
+  const CLOZE_NOTE_PATH = 'Courses/GEO101/Week 5.md';
+  const CLOZE_NOTE = [
+    '---',
+    'topic: [Sediment layering]',
+    'course: GEO101',
+    '---',
+    '',
+    'The ==hummocky stratification== preserves the storm record.',
+    '',
+  ].join('\n');
+
+  async function predecessorIdIn(vault: MemoryVaultSource, notePath: string): Promise<string> {
+    const { records } = await enumerateVaultInstruments(vault);
+    const record = records.find((r) => r.notePath === notePath);
+    if (record === undefined) {
+      throw new Error(`test fixture error: no instrument enumerated in ${notePath}`);
+    }
+    return record.instrumentId;
+  }
+
+  const draftedCardsResponse = (front: string): DraftCardsResult => ({
+    status: 'drafted',
+    request: { courseCode: 'GEO101', conceptName: front, sourceChunks: ['chunk'] },
+    response: {
+      ok: true,
+      stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'test-model' },
+      result: { cards: [{ front, back: 'Chunking', subject: 'Sediment layering' }] },
+    },
+  });
+
+  it("a 'qa' predecessor drafts through draftCardForConcept and caches a 'qa'-kind DraftRecord naming it", async () => {
+    const vault = new MemoryVaultSource({ [QA_NOTE_PATH]: QA_NOTE });
+    const predecessorId = await predecessorIdIn(vault, QA_NOTE_PATH);
+    const cache = createVaultDraftCacheStore(vault);
+    const draftForConcept = vi.fn(async () => {
+      throw new Error('the mcq drafting seam must never be called for a qa predecessor');
+    });
+    const draftCardForConcept = vi.fn(async () => draftedCardsResponse('Sediment layering'));
+
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftForConcept,
+        draftCardForConcept,
+        generateDraftId: () => 'draft-qa-successor-1',
+      },
+      {
+        kind: 'instrument-revision',
+        predecessorInstrumentId: predecessorId,
+        newPassageText: 'the updated passage text',
+      },
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(draftForConcept).not.toHaveBeenCalled();
+    expect(draftCardForConcept).toHaveBeenCalledWith(expect.anything(), {
+      courseCode: 'GEO101',
+      conceptName: 'Sediment layering',
+    });
+
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      draftId: 'draft-qa-successor-1',
+      status: 'pending',
+      instrumentType: 'qa',
+      card: { front: 'Sediment layering', back: 'Chunking' },
+      predecessorInstrumentId: predecessorId,
+    });
+    expect(pending[0]?.question).toBeUndefined();
+  });
+
+  it("a 'qa' predecessor: a grounded refusal caches nothing and is not a job failure", async () => {
+    const vault = new MemoryVaultSource({ [QA_NOTE_PATH]: QA_NOTE });
+    const predecessorId = await predecessorIdIn(vault, QA_NOTE_PATH);
+    const cache = createVaultDraftCacheStore(vault);
+
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftCardForConcept: async () => ({ status: 'refused', reason: 'no-hits' }) as const,
+      },
+      {
+        kind: 'instrument-revision',
+        predecessorInstrumentId: predecessorId,
+        newPassageText: 'text',
+      },
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(await cache.listPending()).toEqual([]);
+  });
+
+  it("a 'cloze' predecessor produces no draft at all — no cloze.generate.v1 task exists — but the job still succeeds", async () => {
+    const vault = new MemoryVaultSource({ [CLOZE_NOTE_PATH]: CLOZE_NOTE });
+    const predecessorId = await predecessorIdIn(vault, CLOZE_NOTE_PATH);
+    const cache = createVaultDraftCacheStore(vault);
+    const draftForConcept = vi.fn();
+    const draftCardForConcept = vi.fn();
+
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftForConcept,
+        draftCardForConcept,
+      },
+      {
+        kind: 'instrument-revision',
+        predecessorInstrumentId: predecessorId,
+        newPassageText: 'text',
+      },
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(draftForConcept).not.toHaveBeenCalled();
+    expect(draftCardForConcept).not.toHaveBeenCalled();
+    expect(await cache.listPending()).toEqual([]);
   });
 });

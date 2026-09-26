@@ -72,6 +72,61 @@
  * what remains, distinct from this composition step). Corrected 2026-09-25,
  * `ol-egov.141.89.15` — this paragraph previously described the
  * substitution above as left for a later lane; it had already landed.
+ *
+ * ## `[D-366]` — SAME-KIND SUCCESSOR, NOT ALWAYS MCQ (`ol-v7r5.68`)
+ *
+ * Before this bead, `resolveRevisionTarget` resolved the predecessor's
+ * concept/course binding but never its `instrumentType`, so every drafted
+ * successor went through `draftForConcept`
+ * (`draftQuizCardsForConcept`/`quiz.generate.v1`) regardless of what kind of
+ * instrument the predecessor actually was —
+ * `citation-revision-wiring.ts`'s own module doc named this gap explicitly
+ * ("`revision-job-runner.ts` drafts every successor through
+ * `draftQuizCardsForConcept` regardless of the predecessor's original
+ * `instrumentType`"), the moment `[D-366]` widened suspension tracking to
+ * Q&A and cloze.
+ *
+ * `resolveRevisionTarget` now also returns `record.instrumentType`, and
+ * `runInstrumentRevisionJob` drafts a SAME-KIND successor:
+ *
+ *   - `'mcq'` predecessor → `draftForConcept` (`quiz.generate.v1`), unchanged
+ *     from before this bead — every question comes back as an `'mcq'`-kind
+ *     `DraftRecord` (`question`, no `instrumentType` — matching every prior
+ *     caller's "undefined means mcq" convention, `types.ts`'s own doc).
+ *   - `'qa'` predecessor → `draftCardForConcept` (`./draft-cards.js`'s
+ *     `draftCardsForConcept`, `cards.generate.v1`) instead — every card comes
+ *     back as a `'qa'`-kind `DraftRecord` (`card`, `instrumentType: 'qa'`),
+ *     the same shape `accept.ts`'s `materializeQaCardDraft` already
+ *     dispatches on. Structurally the identical grounding-gate/refusal/
+ *     transport-failure control flow as the `'mcq'` branch — see
+ *     `draft-cards.ts`'s own doc for why it mirrors `draft-quiz-cards.ts`
+ *     line for line.
+ *   - `'cloze'` predecessor → **no draft is produced.** There is no
+ *     `cloze.generate.v1` task, no `DraftClozeContent` shape on `DraftRecord`
+ *     (`types.ts`'s own doc: "no `'cloze'`… counterpart exists yet; nothing
+ *     in this pipeline drafts either shape"), and no cloze materializer
+ *     registered in `accept.ts`'s `DRAFT_MATERIALIZERS`. Fabricating a draft
+ *     with no real generative task behind it would be exactly the guess this
+ *     codebase's "never guess, omit rather than fabricate" convention
+ *     forbids, so this job succeeds with nothing cached — the same "not
+ *     content-bearing, not an error" posture the unparseable/empty branch
+ *     below already uses. A `'revised'` outcome for a self-contained cloze
+ *     predecessor still suspends it (`citation-revision-wiring.ts`'s
+ *     `actions.suspend`, unaffected by this file); it simply gets no
+ *     successor until a real `cloze.generate.v1` task exists (a follow-up
+ *     this bead reports rather than builds — a new generative task touches
+ *     `prompts/`, `packages/contracts` and `olea-service`, all outside this
+ *     bead's `owns`).
+ *
+ * Every branch still forwards `predecessorInstrumentId: payload.
+ * predecessorInstrumentId` onto the cached `DraftRecord` exactly as before —
+ * that field is instrument-type-agnostic (`types.ts`'s own doc) and is what
+ * `accept.ts` forwards on to whichever materializer resolves the kind.
+ * **The successor LINK is therefore real for `'qa'` today at the cache/
+ * review-log layer** (`materialize-card.ts`'s own module doc: the succession
+ * event, `DraftRecord.predecessorInstrumentId`) even though a card has no
+ * in-block `predecessor:` field the way an MCQ does — see that file's module
+ * doc for exactly why, and for the Class C gap that remains.
  */
 
 import {
@@ -80,6 +135,7 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -90,8 +146,15 @@ import type {
 } from '../retrieval/draft-quiz-cards.js';
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
-import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
-import type { DraftRecord } from './types.js';
+import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
+import { draftCardsForConcept } from './draft-cards.js';
+import {
+  extractDraftedCards,
+  extractDraftedCardsProvenance,
+  extractDraftedProvenance,
+  extractDraftedQuestions,
+} from './response.js';
+import type { DraftCardContent, DraftProvenance, DraftQuestion, DraftRecord } from './types.js';
 
 /** Narrows `PersistedJob.payload` (`unknown` by contract) to the one shape this runner understands. Mirrors `createExtractionJobRunner`'s own `isExtractionJobPayload` guard, one payload family over. */
 export function isInstrumentRevisionJobPayload(
@@ -123,11 +186,25 @@ export interface RevisionJobRunnerDeps {
    * state, not a fact about the job.
    */
   readonly draftDeps: () => DraftQuizCardsDeps | null;
-  /** Injected so tests can fake grounded/refused outcomes without a real Worker — same seam `pipeline.ts`'s `deps.draftForConcept` uses. Defaults to the real `draftQuizCardsForConcept`. */
+  /** Injected so tests can fake grounded/refused outcomes without a real Worker — same seam `pipeline.ts`'s `deps.draftForConcept` uses. Defaults to the real `draftQuizCardsForConcept`. Used only for an `'mcq'` predecessor — see the module doc's `[D-366]` section. */
   readonly draftForConcept?: (
     deps: DraftQuizCardsDeps,
     request: DraftQuizCardsRequest,
   ) => Promise<DraftQuizCardsResult>;
+  /**
+   * `[D-366]`: the same seam as `draftForConcept` above, for a `'qa'`
+   * predecessor — see the module doc's section. Defaults to the real
+   * `draftCardsForConcept`. `DraftQuizCardsDeps` (what `draftDeps()` above
+   * returns) already satisfies `DraftCardsDeps` structurally — both mirror
+   * `retrieve`/`transport`/`classifyPassage`/`onStage`/`onJudgeRequest`
+   * field-for-field (`draft-cards.ts`'s own doc) — so this runner passes the
+   * SAME resolved `draftDeps` value to whichever drafting function the
+   * predecessor's kind selects, never a second deps shape to assemble.
+   */
+  readonly draftCardForConcept?: (
+    deps: DraftCardsDeps,
+    request: DraftCardsRequest,
+  ) => Promise<DraftCardsResult>;
   readonly generateDraftId?: () => string;
   readonly now?: () => Date;
 }
@@ -137,6 +214,8 @@ interface RevisionTarget {
   readonly conceptName: string;
   readonly conceptKey: string;
   readonly sourcePath: VaultPath;
+  /** `[D-366]`: which kind of successor to draft — see the module doc's section. */
+  readonly instrumentType: VaultInstrumentRecord['instrumentType'];
 }
 
 /**
@@ -168,16 +247,123 @@ async function resolveRevisionTarget(
   const concept = concepts.find((c) => c.key === conceptKey);
   if (concept === undefined) return null;
 
-  return { courseCode, conceptName: concept.name, conceptKey, sourcePath: record.notePath };
+  return {
+    courseCode,
+    conceptName: concept.name,
+    conceptKey,
+    sourcePath: record.notePath,
+    instrumentType: record.instrumentType,
+  };
+}
+
+/** One "nothing to cache" reason, shared by both drafting branches below — see their own doc. */
+type SuccessorDraftOutcome<TContent> =
+  | { readonly kind: 'thrown' }
+  | { readonly kind: 'nothing-to-cache' }
+  | {
+      readonly kind: 'drafted';
+      readonly contents: readonly TContent[];
+      readonly provenance: DraftProvenance;
+    };
+
+/**
+ * Drafts an `'mcq'`-kind successor via `quiz.generate.v1` — the pre-`[D-366]`
+ * behaviour, unchanged, factored out so `runInstrumentRevisionJob` can pick
+ * between this and {@link draftQaSuccessor} by the predecessor's own kind.
+ */
+async function draftMcqSuccessor(
+  draftDeps: DraftQuizCardsDeps,
+  draftForConcept: (
+    deps: DraftQuizCardsDeps,
+    request: DraftQuizCardsRequest,
+  ) => Promise<DraftQuizCardsResult>,
+  target: RevisionTarget,
+): Promise<SuccessorDraftOutcome<DraftQuestion>> {
+  let result: DraftQuizCardsResult;
+  try {
+    result = await draftForConcept(draftDeps, {
+      courseCode: target.courseCode,
+      conceptName: target.conceptName,
+    });
+  } catch {
+    // A generative call failing outright (network, malformed transport
+    // response) — retryable, same posture `pipeline.ts`'s per-concept catch
+    // uses and `createExtractionJobRunner`'s own catch-all.
+    return { kind: 'thrown' };
+  }
+
+  if (result.status === 'refused') {
+    // A grounded refusal is not an error (F4.5's grounded-by-construction
+    // argument, `pipeline.ts`'s own doc) — nothing to cache, and the job
+    // succeeded at doing exactly what it was asked: check whether a
+    // successor could be grounded right now. `[D-093]`'s revision-detection
+    // caller (unbuilt — see the module doc) owns deciding whether a refused
+    // successor needs a different signal back to her; this runner only owns
+    // not pretending a refusal is a transport failure.
+    return { kind: 'nothing-to-cache' };
+  }
+
+  const questions = extractDraftedQuestions(result.response);
+  const provenance = extractDraftedProvenance(result.response);
+  if (questions === null || provenance === null || questions.length === 0) {
+    // Unparseable or empty — nothing content-bearing to cache. Not an error:
+    // the ingestion queue marks this job `done`, and a future edit to the
+    // same instrument would enqueue its own fresh `instrument-revision` job
+    // (a new content hash) rather than this one being retried.
+    return { kind: 'nothing-to-cache' };
+  }
+
+  return { kind: 'drafted', contents: questions, provenance };
+}
+
+/**
+ * `[D-366]`: the same shape as {@link draftMcqSuccessor}, drafting a
+ * `'qa'`-kind successor via `cards.generate.v1` instead — see the module
+ * doc's section for why this exists and why cloze has no equivalent.
+ */
+async function draftQaSuccessor(
+  draftDeps: DraftCardsDeps,
+  draftCardForConcept: (
+    deps: DraftCardsDeps,
+    request: DraftCardsRequest,
+  ) => Promise<DraftCardsResult>,
+  target: RevisionTarget,
+): Promise<SuccessorDraftOutcome<DraftCardContent>> {
+  let result: DraftCardsResult;
+  try {
+    result = await draftCardForConcept(draftDeps, {
+      courseCode: target.courseCode,
+      conceptName: target.conceptName,
+    });
+  } catch {
+    return { kind: 'thrown' };
+  }
+
+  if (result.status === 'refused') {
+    return { kind: 'nothing-to-cache' };
+  }
+
+  const cards = extractDraftedCards(result.response);
+  const provenance = extractDraftedCardsProvenance(result.response);
+  if (cards === null || provenance === null || cards.length === 0) {
+    return { kind: 'nothing-to-cache' };
+  }
+
+  return { kind: 'drafted', contents: cards, provenance };
 }
 
 /**
  * Drafts a successor for one drained `'instrument-revision'` job and caches
  * it as a `DraftRecord` carrying `predecessorInstrumentId` — the piece
- * `accept.ts` forwards to `materializeAcceptedDraft` once she resolves it.
- * Exported directly (not only through `createRevisionAwareJobRunner`) so a
- * test can exercise the drafting logic without going through `JobRunnerView`
- * plumbing.
+ * `accept.ts` forwards to `materializeAcceptedDraft`/
+ * `materializeAcceptedCardDraft` once she resolves it. Exported directly
+ * (not only through `createRevisionAwareJobRunner`) so a test can exercise
+ * the drafting logic without going through `JobRunnerView` plumbing.
+ *
+ * `[D-366]`: dispatches to {@link draftMcqSuccessor} or {@link
+ * draftQaSuccessor} by `target.instrumentType` — see the module doc's
+ * section. A `'cloze'` predecessor (or any kind neither function handles)
+ * produces no draft at all, for the same "never guess" reason named there.
  */
 export async function runInstrumentRevisionJob(
   deps: RevisionJobRunnerDeps,
@@ -201,62 +387,78 @@ export async function runInstrumentRevisionJob(
     };
   }
 
-  const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
   const generateDraftId = deps.generateDraftId ?? defaultGenerateDraftId;
   const now = deps.now ?? (() => new Date());
 
-  let result: DraftQuizCardsResult;
-  try {
-    result = await draftForConcept(draftDeps, {
-      courseCode: target.courseCode,
-      conceptName: target.conceptName,
-    });
-  } catch {
-    // A generative call failing outright (network, malformed transport
-    // response) — retryable, same posture `pipeline.ts`'s per-concept catch
-    // uses and `createExtractionJobRunner`'s own catch-all.
-    return { ok: false, retryable: true };
-  }
+  if (target.instrumentType === 'qa') {
+    // Held behind the spend decision (`[D-261]`): a Q&A successor is drafted
+    // only when a caller supplies `draftCardForConcept` explicitly. No
+    // production composition does, so a suspended Q&A card enqueues its
+    // revision job but makes no `cards.generate.v1` call until spend is
+    // authorised and the composition root opts in (`draftCardsForConcept` is
+    // the intended supplier then).
+    const draftCardForConcept = deps.draftCardForConcept;
+    if (draftCardForConcept === undefined) return { ok: true };
+    const drafted = await draftQaSuccessor(draftDeps, draftCardForConcept, target);
+    if (drafted.kind === 'thrown') return { ok: false, retryable: true };
+    if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
-  if (result.status === 'refused') {
-    // A grounded refusal is not an error (F4.5's grounded-by-construction
-    // argument, `pipeline.ts`'s own doc) — nothing to cache, and the job
-    // succeeded at doing exactly what it was asked: check whether a
-    // successor could be grounded right now. `[D-093]`'s revision-detection
-    // caller (unbuilt — see the module doc) owns deciding whether a refused
-    // successor needs a different signal back to her; this runner only owns
-    // not pretending a refusal is a transport failure.
+    const createdAt = now().toISOString();
+    for (const card of drafted.contents) {
+      const record: DraftRecord = {
+        draftId: generateDraftId(),
+        status: 'pending',
+        courseCode: target.courseCode,
+        conceptName: target.conceptName,
+        conceptIds: [target.conceptKey],
+        sourcePath: target.sourcePath,
+        createdAt,
+        card,
+        provenance: drafted.provenance,
+        firstServedAt: null,
+        predecessorInstrumentId: payload.predecessorInstrumentId,
+        // `[D-366]`: written explicitly, never left to the `undefined` ⇒
+        // `'mcq'` default (`types.ts`'s own doc) — this call site now
+        // legitimately produces either kind, so leaving it implicit would
+        // be a guess about which default applies, not a fact already known.
+        instrumentType: 'qa',
+      };
+      await deps.cache.put(record);
+    }
     return { ok: true };
   }
 
-  const questions = extractDraftedQuestions(result.response);
-  const provenance = extractDraftedProvenance(result.response);
-  if (questions === null || provenance === null || questions.length === 0) {
-    // Unparseable or empty — nothing content-bearing to cache. Not an error:
-    // the ingestion queue marks this job `done`, and a future edit to the
-    // same instrument would enqueue its own fresh `instrument-revision` job
-    // (a new content hash) rather than this one being retried.
+  if (target.instrumentType === 'mcq') {
+    const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
+    const drafted = await draftMcqSuccessor(draftDeps, draftForConcept, target);
+    if (drafted.kind === 'thrown') return { ok: false, retryable: true };
+    if (drafted.kind === 'nothing-to-cache') return { ok: true };
+
+    const createdAt = now().toISOString();
+    for (const question of drafted.contents) {
+      const record: DraftRecord = {
+        draftId: generateDraftId(),
+        status: 'pending',
+        courseCode: target.courseCode,
+        conceptName: target.conceptName,
+        conceptIds: [target.conceptKey],
+        sourcePath: target.sourcePath,
+        createdAt,
+        question,
+        provenance: drafted.provenance,
+        firstServedAt: null,
+        predecessorInstrumentId: payload.predecessorInstrumentId,
+      };
+      await deps.cache.put(record);
+    }
     return { ok: true };
   }
 
-  const createdAt = now().toISOString();
-  for (const question of questions) {
-    const record: DraftRecord = {
-      draftId: generateDraftId(),
-      status: 'pending',
-      courseCode: target.courseCode,
-      conceptName: target.conceptName,
-      conceptIds: [target.conceptKey],
-      sourcePath: target.sourcePath,
-      createdAt,
-      question,
-      provenance,
-      firstServedAt: null,
-      predecessorInstrumentId: payload.predecessorInstrumentId,
-    };
-    await deps.cache.put(record);
-  }
-
+  // `[D-366]`: `'cloze'` — no generative task, no `DraftRecord` content
+  // shape, no registered materializer (see the module doc's section).
+  // Succeeds with nothing cached rather than fabricate a draft; the
+  // predecessor's own suspension (handled entirely by
+  // `citation-revision-wiring.ts`, outside this file) is unaffected.
   return { ok: true };
 }
 
