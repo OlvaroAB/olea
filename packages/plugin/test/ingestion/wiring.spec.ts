@@ -16,6 +16,7 @@
  * for what stays unproven and the `@manual` scenario in
  * `features/C3-ingestion.md`.
  */
+import { OPERATING_FRESH_FOR_SECONDS, OPERATING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
 import type {
   ExtractedUnit,
   GenerationJobPayload,
@@ -34,6 +35,7 @@ import type {
 } from 'olea-core';
 import { resolveConceptKey } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import type { VisionRouteHttpGet } from '../../src/ingestion/vision-route-provider.js';
 import {
   buildFirstReadFolderViews,
   buildIngestionRunner,
@@ -535,6 +537,141 @@ describe('buildIngestionRunner — deps.vision (ol-15f8)', () => {
     expect(units).toHaveLength(1);
     expect(units[0]?.text).toBe('Figure 3: the rock cycle');
     expect(units[0]?.provenance.location.page).toBe(1);
+  });
+});
+
+// `[ILB-PER-4]` §8 item 2: `deps.visionRoute`'s composition — the delivered
+// vision-routing threshold, resolved once and forwarded as
+// `createExtractionJobRunner`'s `options`. Reuses `FakeDataHost`/
+// `configuredHost` from `deps.vision` immediately above.
+
+function visionRouteBodyEnvelope(minTextLayerChars: number) {
+  return {
+    envelopeVersion: 1,
+    kind: 'vision-route',
+    bodyVersion: 1,
+    policyVersion: 'vr1-test0123456789',
+    computedAt: '2026-09-26T09:00:00.000Z',
+    freshForSeconds: OPERATING_FRESH_FOR_SECONDS,
+    governsForSeconds: OPERATING_GOVERNS_FOR_SECONDS,
+    body: { minTextLayerChars },
+  };
+}
+
+describe('buildIngestionRunner — deps.visionRoute ([ILB-PER-4])', () => {
+  // A page thin enough to still be "genuine text" (comfortably above
+  // D-022's default 10-char seed) but short enough that a served threshold
+  // well above its own length pushes it to vision — same page-length
+  // reasoning `threshold.ts`'s own module doc gives for its title-slide
+  // example.
+  const THIN_PAGE_TEXT = 'GEOL204 Week 2 - Deposition';
+
+  it("omitted (the default, and today's real main.ts call): D-022's seed threshold governs unchanged — this page stays on the text layer, no vision-page follow-on", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Lectures/thin.pdf', buildOnePagePdf(THIN_PAGE_TEXT));
+    const queueStore = new MemoryQueueStore();
+    const { engine, sink } = await buildIngestionRunner({
+      vault,
+      queueStore,
+      capability: CAN_DRAIN,
+    });
+
+    await engine.enqueue({
+      contentHash: 'visionroute-omitted',
+      label: 'thin page, default threshold',
+      payload: { kind: 'source', sourcePath: 'Lectures/thin.pdf', format: 'pdf' },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'visionroute-omitted', outcome: 'done' });
+    expect(sink.forSource('Lectures/thin.pdf')).toHaveLength(1);
+    // No vision-page follow-on was enqueued — draining again finds nothing.
+    expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+  });
+
+  it('supplied but the Worker is not configured yet (F7.8): degrades to the same default-threshold behaviour as omitted', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Lectures/thin.pdf', buildOnePagePdf(THIN_PAGE_TEXT));
+    const httpGet: VisionRouteHttpGet = async () => ({
+      status: 200,
+      text: JSON.stringify(visionRouteBodyEnvelope(1000)),
+    });
+    const { engine, sink } = await buildIngestionRunner({
+      vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      visionRoute: { dataHost: new FakeDataHost(), httpGet }, // never configured
+    });
+
+    await engine.enqueue({
+      contentHash: 'visionroute-unconfigured',
+      label: 'thin page, unconfigured Worker',
+      payload: { kind: 'source', sourcePath: 'Lectures/thin.pdf', format: 'pdf' },
+    });
+    const tick = await engine.tick();
+
+    expect(tick).toEqual({ kind: 'ran', contentHash: 'visionroute-unconfigured', outcome: 'done' });
+    expect(sink.forSource('Lectures/thin.pdf')).toHaveLength(1);
+    expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+  });
+
+  it("supplied and configured: the delivered (not default) threshold actually governs routing — a served threshold above this page's length escalates it to vision", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Lectures/thin.pdf', buildOnePagePdf(THIN_PAGE_TEXT));
+    const queueStore = new MemoryQueueStore();
+    const httpGet: VisionRouteHttpGet = async () => ({
+      status: 200,
+      // Well above THIN_PAGE_TEXT's own length (28 chars) and far above
+      // D-022's default seed (10) — proves the SERVED number is what
+      // `routePage` compares against, not the baked-in default.
+      text: JSON.stringify(visionRouteBodyEnvelope(1000)),
+    });
+    const { engine, sink } = await buildIngestionRunner({
+      vault,
+      queueStore,
+      capability: CAN_DRAIN,
+      visionRoute: {
+        dataHost: configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 't' }),
+        httpGet,
+      },
+    });
+    // `routePage` returns 'vision', not 'text-layer', below the threshold —
+    // pure vision, so no text-layer unit lands for this page (unlike D-324's
+    // image-cue 'both' route, a separate mechanism this threshold does not
+    // touch).
+
+    await engine.enqueue({
+      contentHash: 'visionroute-configured',
+      label: 'thin page, served threshold of 1000',
+      payload: { kind: 'source', sourcePath: 'Lectures/thin.pdf', format: 'pdf' },
+    });
+    const sourceTick = await engine.tick();
+
+    // The source job itself still succeeds — a page routed to vision is
+    // enqueued as its own follow-on job, never a source-job failure (see
+    // `extraction-runner.ts`'s `runSourceJob`/`extractResolvedSource`).
+    expect(sourceTick).toEqual({
+      kind: 'ran',
+      contentHash: 'visionroute-configured',
+      outcome: 'done',
+    });
+    // Pure `'vision'`, not `'text-layer'` or `'both'`: no unit lands for
+    // this page — the served threshold moved it off the text layer
+    // entirely, not merely alongside it.
+    expect(sink.forSource('Lectures/thin.pdf')).toHaveLength(0);
+
+    // The follow-on `vision-page` job DF-21 enqueues fails with the same
+    // "no visionRunner wired yet" this file's `deps.vision` block pins —
+    // reached only because this page was routed to vision at all, which
+    // happens only under the served threshold (1000), never the default
+    // (10) THIN_PAGE_TEXT's own 28 characters would otherwise clear.
+    const visionTick = await engine.tick();
+    expect(visionTick).toMatchObject({ kind: 'ran', outcome: 'failed' });
+    const failedReason = await failedReasonFor(
+      queueStore,
+      (visionTick as { contentHash: string }).contentHash,
+    );
+    expect(failedReason).toContain('no visionRunner wired yet');
   });
 });
 

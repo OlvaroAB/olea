@@ -18,18 +18,11 @@
  * production, the same relationship `rank-weights-provider.ts` has to
  * `packages/core/src/oracle/rank.ts`'s `resolveOptions`.
  *
- * **`VISION_ROUTE_ENDPOINT_PATH` is defined LOCALLY below, not imported
- * from `olea-contracts`.** `packages/contracts/src/artifact-envelope.ts`
- * already exports `RANK_WEIGHTS_ENDPOINT_PATH` and `DEPTH_GATE_ENDPOINT_PATH`
- * beside their own envelope shapes, but no equivalent constant for
- * `vision-route` — and that file is outside this bead's file ownership (see
- * the lane brief: only `packages/core/src/extract/`,
- * `packages/core/src/ingestion/extraction-runner.ts`, this file, and specs).
- * Filed as a follow-up to move this string into `artifact-envelope.ts`
- * alongside its two siblings once that file's ownership allows it; until
- * then this local constant is the correct value for the route the
- * orchestrator still owes `src/index.ts` (see that report) — `GET
- * /v1/vision-route`, mirroring `GET /v1/rank-weights`
+ * **`VISION_ROUTE_ENDPOINT_PATH` now lives in `packages/contracts/src/
+ * artifact-envelope.ts`, imported below** — beside `RANK_WEIGHTS_ENDPOINT_PATH`
+ * and `DEPTH_GATE_ENDPOINT_PATH`, closing the follow-up an earlier revision
+ * of this file's module doc named. The route it names, `GET
+ * /v1/vision-route`, mirrors `GET /v1/rank-weights`
  * (`olea-service/src/index.ts` around line 135) and `GET /v1/depth-gate`.
  *
  * **Every failure mode returns `undefined`, never a throw** — same posture,
@@ -43,6 +36,7 @@
 import {
   envelopeFreshness,
   readArtifactEnvelope,
+  VISION_ROUTE_ENDPOINT_PATH,
   VISION_ROUTE_KIND,
   type VisionRouteBody,
   visionRouteEnvelope,
@@ -50,11 +44,10 @@ import {
 import type { ExtractOptions } from 'olea-core';
 import type { HttpResponseLike, WorkerConfig } from '../worker/transport.js';
 
-/**
- * The frozen `GET /v1/vision-route` path — see the module doc's note on why
- * this is declared here rather than imported from `olea-contracts`.
- */
-export const VISION_ROUTE_ENDPOINT_PATH = '/v1/vision-route';
+// Re-exported so an existing caller of this module's own
+// `VISION_ROUTE_ENDPOINT_PATH` (this file used to declare it locally) does
+// not need to change its import path.
+export { VISION_ROUTE_ENDPOINT_PATH };
 
 /**
  * The HTTP primitive this module needs, injected on the same terms

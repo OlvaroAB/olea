@@ -152,6 +152,8 @@ import {
 } from './outcomes-extract-adapter.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
 import { createWorkerVisionPageRunner, WorkerVisionPageExtractor } from './vision-page-runner.js';
+import type { VisionRouteHttpGet } from './vision-route-provider.js';
+import { buildVisionRouteWiring } from './vision-route-wiring.js';
 
 export interface IngestionWiringDeps {
   readonly vault: VaultSource;
@@ -199,6 +201,27 @@ export interface IngestionWiringDeps {
   readonly vision?: {
     readonly dataHost: ObsidianDataHost;
     readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+  };
+  /**
+   * `[ILB-PER-4]` §8 item 2: component 1.6's delivered vision-routing
+   * threshold, resolved once here (via `vision-route-wiring.ts#
+   * buildVisionRouteWiring`) and threaded into `createExtractionJobRunner`'s
+   * `options` below — see `buildIngestionRunner`'s own doc for why this,
+   * unlike `deps.vision` immediately above, is a GET (`httpGet`) rather than
+   * a `WorkerTaskTransport`. Omitted (every caller before this bead) leaves
+   * `createExtractionJobRunner` unconfigured, exactly as before this field
+   * existed: `routePage`'s own `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD` (D-022)
+   * applies. F7.8 also governs every failure INSIDE this once-resolved
+   * config: no Worker configured, a transport failure, an undecodable
+   * envelope, or an expired artifact all degrade to that same declared
+   * default — see `vision-route-provider.ts#fetchVisionRouteOptions`'s own
+   * doc for the full list.
+   */
+  readonly visionRoute?: {
+    readonly dataHost: ObsidianDataHost;
+    readonly httpGet: VisionRouteHttpGet;
+    /** Injected for determinism under test; production passes `() => new Date()`. */
+    readonly now?: () => Date;
   };
   /**
    * `ol-2zfj.63` [GEN-3.1] / `[D-238]`: when present, wires D-238's client
@@ -624,11 +647,25 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
   const visionRunner = deps.vision
     ? await buildVisionRunner(deps.vision, deps.vault, runnerSink)
     : undefined;
+  // `[ILB-PER-4]` §8 item 2: the delivered vision-routing threshold,
+  // resolved at most once here (never per extraction call) and forwarded
+  // verbatim as `ExtractOptions` — see `IngestionWiringDeps.visionRoute`'s
+  // own doc for why once, here, is the right cadence, and
+  // `fetchVisionRouteOptions` for the full list of failures this already
+  // degrades on. Omitted `deps.visionRoute` or any failure inside it leaves
+  // `extractOptions` `undefined`, so `createExtractionJobRunner` below is
+  // unconfigured exactly as it was before this bead — `routePage`'s own
+  // `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD` (D-022) applies.
+  const visionRouteWiring = deps.visionRoute
+    ? await buildVisionRouteWiring(deps.visionRoute)
+    : undefined;
+  const extractOptions = await visionRouteWiring?.readVisionRouteOptions?.();
   const runner = createExtractionJobRunner({
     vault: deps.vault,
     enqueuer,
     sink: runnerSink,
     ...(visionRunner ? { visionRunner } : {}),
+    ...(extractOptions ? { options: extractOptions } : {}),
   });
   const composedRunner = deps.revision
     ? createRevisionAwareJobRunner({

@@ -458,6 +458,21 @@ export type VisionRouteBody = z.infer<typeof visionRouteBody>;
 export const VISION_ROUTE_KIND = 'vision-route';
 export const VISION_ROUTE_BODY_VERSION = 1;
 export const VISION_ROUTE_CONTRACT_ID = 'vision-route-envelope.v1';
+
+/**
+ * The Worker route that serves this artifact — same shape argument as
+ * `RANK_WEIGHTS_ENDPOINT_PATH`/`DEPTH_GATE_ENDPOINT_PATH` below: `vision-route`
+ * names no request-specific variable, nothing about it varies per call, so
+ * it does not fit `POST /v1/task`'s generative-envelope shape and is served
+ * by its own `GET`, mirroring `/v1/rank-weights` and `/v1/depth-gate`.
+ * `[ILB-PER-4]`'s own close evidence names this bead's production caller
+ * (`GET /v1/vision-route` in `olea-service/src/index.ts`) — before this
+ * constant landed here, `packages/plugin/src/ingestion/
+ * vision-route-provider.ts` declared the same string locally, per that
+ * file's own module doc.
+ */
+export const VISION_ROUTE_ENDPOINT_PATH = '/v1/vision-route';
+
 export const visionRouteEnvelope = artifactEnvelope(
   VISION_ROUTE_KIND,
   VISION_ROUTE_BODY_VERSION,

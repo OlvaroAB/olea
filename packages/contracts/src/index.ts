@@ -61,6 +61,7 @@ export {
   studyPlanEnvelope,
   VISION_ROUTE_BODY_VERSION,
   VISION_ROUTE_CONTRACT_ID,
+  VISION_ROUTE_ENDPOINT_PATH,
   VISION_ROUTE_KIND,
   type VisionRouteBody,
   type VisionRouteEnvelope,
