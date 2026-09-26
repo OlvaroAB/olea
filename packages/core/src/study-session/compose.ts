@@ -224,6 +224,28 @@
  * `arrivalDays`), which is outside this module's boundary; filed as a
  * follow-up rather than guessed at here (see the bead for its id).
  *
+ * ## F2.19 — a fifth, restored signal: direct prerequisite, strictly inside the tie band
+ * (`[ILB-PLN-B1]`, `ol-egov.141.89.10.6`, `[D-296]`)
+ *
+ * `[SESS-8.6]` retired `composeQueue` and, with it, the only production read of a `prerequisite`
+ * edge for queue ordering; this composer never read one. `[D-296]` — ruled 2026-09-23, once the
+ * relations chain's targets were fixed — restores it here, option (b): "a tie-break in the live
+ * composer's ordering," never a gate. It runs LAST, after the relatedness/cohort/assessment-scope
+ * blend above has already ordered the band ({@link withinBlockOrder}'s `orderByPrerequisite` pass):
+ * a row with a direct prerequisite also present in the SAME exact-`overdueDays` band sorts after
+ * it, stably, so a row the blend above already placed keeps its place unless a prerequisite edge
+ * says otherwise. **Direct edges only** ({@link prerequisiteConceptKeysFromEdges} does no
+ * transitive closure), **never a gate** (nothing is dropped; an item with no confirmed prerequisite
+ * or an unresolved one stays exactly as eligible as before), **never crosses a band**
+ * (urgency, `overdue-first`, stays unoverridable), and **a cycle inside one band keeps that band's
+ * ordinary order** (`orderByPrerequisite`'s documented cycle fallback). Reads through the SAME
+ * `relations` field {@link applyContainmentCoPresence} already reads for `part-of` — see that
+ * field's doc and {@link prerequisiteConceptKeysFromEdges}'s for why this is also where
+ * `docs/dev/intelligence-build/rel.md` §3 Default 4's per-endpoint freshness gate is honoured: this
+ * module never reads a second, ungated relations source for `prerequisite`. No-op, provably,
+ * whenever `relations` carries no `prerequisite` edge — the same no-op guarantee this section's
+ * other three signals already have.
+ *
  * ## Overflow is not a student-visible surface (C5.9, F6.7)
  *
  * {@link ComposeSessionRowsResult.overflow} is a count per obligation class
@@ -383,6 +405,7 @@
  */
 
 import type { StudyPlanAllocationEntry } from 'olea-contracts';
+import { orderByPrerequisite } from '../concept/prerequisite-order.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
@@ -972,6 +995,24 @@ function dominantGroupingSignal(
  * `[D-265]`/`[INTERV-6]` residual-tie audit), so with no
  * relatedness/assessment-context/arrival signal this is `overdueFirst`
  * unchanged.
+ *
+ * **`[ILB-PLN-B1]` (`ol-egov.141.89.10.6`, `[D-296]`): a direct-prerequisite pass runs last,
+ * inside this SAME band, never across one.** `orderByPrerequisite` (`concept/prerequisite-order.ts`)
+ * takes the band in whatever order F2.19's score just gave it and moves an entry only when
+ * `prerequisiteConceptKeys` names a prerequisite of it also present in the band — a stable Kahn
+ * pass, so a row with no prerequisite edge in this band never moves relative to its neighbours,
+ * and an empty or undefined map is a byte-for-byte no-op (the same no-op guarantee
+ * `relatedConceptKeys`/`assessmentContext`/`arrivalDays` already have). **Never a gate**: this only
+ * reorders the band `withinBlockOrder` was already going to return in full; nothing is dropped, and
+ * nothing here can move a row to a different `overdueDays` band, so urgency stays unoverridable
+ * exactly as the module doc's F2.19 section requires. **A cycle inside one band is left in its
+ * incoming (F2.19-scored) order** — `orderByPrerequisite`'s own documented fallback — which is
+ * this band's "ordinary order" absent the prerequisite signal, matching `[D-296]`'s reading that a
+ * false or contradictory edge set costs order, never membership or credit. Composition-time only:
+ * this runs inside `composeSessionRows`/`buildComposedStudySession`, never on an already-frozen
+ * session's held item list, so it cannot reshuffle a held session (`[D-193]`) — `extendComposedStudySession`
+ * only appends more of the same course under the same shares (see that function's doc) and never
+ * re-runs this ordering over what she already has.
  */
 function withinBlockOrder(
   bucket: readonly ClassifiedRow[],
@@ -979,6 +1020,7 @@ function withinBlockOrder(
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
   arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   asOf: CalendarDay,
+  prerequisiteConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
 ): readonly ClassifiedRow[] {
   const sorted = [...bucket].sort(overdueFirst);
   const result: ClassifiedRow[] = [];
@@ -1010,7 +1052,14 @@ function withinBlockOrder(
       ),
     }));
     scored.sort((a, b) => (a.score !== b.score ? b.score - a.score : overdueFirst(a.c, b.c)));
-    result.push(...scored.map((s) => s.c));
+    // `[ILB-PLN-B1]`: direct-prerequisite tie-break, strictly inside this band — see this
+    // function's doc.
+    const ordered = orderByPrerequisite(
+      scored.map((s) => s.c),
+      (c) => c.row.conceptKey,
+      prerequisiteConceptKeys,
+    );
+    result.push(...ordered);
     i = j;
   }
   return result;
@@ -1100,7 +1149,8 @@ function courseBudgetsFor(
  * concepts within a block kept in `overdue-first` order, refined by F2.19's
  * within-tie-band grouping (see {@link withinBlockOrder} and the module
  * doc) when `relatedConceptKeys`/`assessmentContext`/`arrivalDays` are
- * supplied.
+ * supplied, and by `[ILB-PLN-B1]`'s direct-prerequisite tie-break when
+ * `prerequisiteConceptKeys` is.
  */
 function blockByCoursePresentation(
   chosen: readonly ClassifiedRow[],
@@ -1108,13 +1158,21 @@ function blockByCoursePresentation(
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
   arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   asOf: CalendarDay,
+  prerequisiteConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
 ): readonly ClassifiedRow[] {
   const byCourse = groupByCourse(chosen);
   const ordered = new Map<string, readonly ClassifiedRow[]>();
   for (const [course, bucket] of byCourse) {
     ordered.set(
       course,
-      withinBlockOrder(bucket, relatedConceptKeys, assessmentContext, arrivalDays, asOf),
+      withinBlockOrder(
+        bucket,
+        relatedConceptKeys,
+        assessmentContext,
+        arrivalDays,
+        asOf,
+        prerequisiteConceptKeys,
+      ),
     );
   }
   const blocks = [...ordered.entries()].sort((a, b) => {
@@ -1513,6 +1571,12 @@ function composeFocusedSelection(
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
   arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
   windowDeficit: ReadonlyMap<string, WindowDeficitEntry> | undefined,
+  // `[ILB-PLN-B1]`: threaded through for the SAME reason relatedConceptKeys/assessmentContext/
+  // arrivalDays already are — `withinBlockOrder`'s band order here can affect which groups
+  // `fillWholeGroups` below fits under budget, not only final presentation, so the tie-band
+  // preference must be live at selection time too, never only at `blockByCoursePresentation`'s
+  // later pass over the already-chosen set.
+  prerequisiteConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
 ): FocusedSelectionResult | undefined {
   const urgencyByCourse = urgencyByCourseFrom(allocation);
   // `[FOCUS-3b]`: the real window projection, when supplied, REPLACES the
@@ -1541,6 +1605,7 @@ function composeFocusedSelection(
     assessmentContext,
     arrivalDays,
     asOf,
+    prerequisiteConceptKeys,
   );
   const dominantGroups = groupConceptRows(orderedDominant, relatedConceptKeys);
   const { chosen: dominantChosen, spent: dominantSpent } = fillWholeGroups(
@@ -1632,6 +1697,54 @@ function applyContainmentCoPresence(
   const dropped: GapRow[] = [];
   for (const row of rows) (drop.has(row.conceptKey) ? dropped : kept).push(row);
   return { kept, dropped };
+}
+
+/**
+ * F2.19's restored fourth tie-band signal — `[ILB-PLN-B1]` (`ol-egov.141.89.10.6`), ruled by
+ * `[D-296]` option (b): "re-wire prerequisite: as a tie-break in the live composer's ordering."
+ * `[SESS-8.6]` retired `composeQueue` and with it the only production read of a `prerequisite`
+ * edge for ordering; this resolves `edges` back into {@link orderByPrerequisite}'s adjacency shape
+ * (dependent `conceptKey` -> the set of `conceptKey`s that should be solid first) so
+ * {@link withinBlockOrder} can apply it.
+ *
+ * **Same edge-walk discipline as {@link applyContainmentCoPresence}'s `part-of` read, filtered to
+ * `prerequisite` instead** — the identical `keyOfName` map (built once, from `nameToKeyFromRows`,
+ * over the whole candidate pool, never a second `ConceptRecord[]` lookup this module does not
+ * carry), the identical "an unresolved endpoint drops the whole edge, never guessed at" posture,
+ * and the identical self-relation guard. This mirrors `concept/prerequisite-order.ts`'s own
+ * `resolvePrerequisiteConceptKeys` rather than importing it, because that function asks for a
+ * `ConceptRecord[]` and this module resolves names to keys from `GapRow[]` instead — the same
+ * reason `nameToKeyFromRows`'s doc gives for not reusing `session/containment.ts`'s
+ * `ConceptRecord[]`-keyed `nameToKey`.
+ *
+ * **Direct prerequisites only** (`[D-296]`'s reading, `[D-265]`'s F2.12 ruling read across):
+ * `edges` is expected to be `input.relations` verbatim, the composer's one relations input, never a
+ * second, wider or transitively-closed set — this function does no traversal of its own, so an
+ * edge list that is already direct-only in, is direct-only out.
+ *
+ * **Freshness is the caller's gate, not this function's** (`docs/dev/intelligence-build/rel.md`
+ * §3 Default 4, `ol-egov.141.89.4.11`): `edges` must already be `servedRelations(set)`'s output (or
+ * `main.ts`'s `servedRelationEdges()`, the production fold over it) — the one path that withholds a
+ * stale or unverified proposition — never a raw per-proposition cache read. This function has no
+ * `RelationEvidenceState` to check; it trusts `edges` the exact way {@link applyContainmentCoPresence}
+ * already does for the same field, and reads through no other path to `concept/relation-cache.ts`.
+ */
+function prerequisiteConceptKeysFromEdges(
+  edges: readonly ConceptRelation[],
+  keyOfName: ReadonlyMap<string, string>,
+): ReadonlyMap<string, ReadonlySet<string>> {
+  const adjacency = new Map<string, Set<string>>();
+  for (const edge of edges) {
+    if (edge.type !== 'prerequisite') continue;
+    const fromKey = keyOfName.get(edge.from);
+    const toKey = keyOfName.get(edge.to);
+    if (fromKey === undefined || toKey === undefined) continue;
+    if (fromKey === toKey) continue; // a self-prerequisite cannot order anything; defensive
+    const existing = adjacency.get(toKey);
+    if (existing === undefined) adjacency.set(toKey, new Set([fromKey]));
+    else existing.add(fromKey);
+  }
+  return adjacency;
 }
 
 export interface ComposeSessionRowsInput {
@@ -1754,6 +1867,13 @@ export interface ComposeSessionRowsInput {
    * for `composeQueue`'s candidate pool. See the doc above
    * {@link nameToKeyFromRows} for why this module resolves names to keys from
    * `rows` itself rather than taking a second `ConceptRecord[]` input.
+   *
+   * **Also `[ILB-PLN-B1]`'s (`ol-egov.141.89.10.6`, `[D-296]`) one source of `prerequisite`
+   * edges** for the restored tie-band ordering signal — see the module doc's "a fifth, restored
+   * signal" section and {@link prerequisiteConceptKeysFromEdges}. Same field, same expectation:
+   * this must already be a served, freshness-gated edge set (`concept/relation.ts`'s
+   * `servedRelations`, or `main.ts`'s `servedRelationEdges()`), never a raw per-proposition cache
+   * read — this module has no `RelationEvidenceState` to check that itself.
    */
   readonly relations?: readonly ConceptRelation[];
   /**
@@ -1945,6 +2065,15 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   // own ordering (containment before `composeQueue`'s `filter`).
   const containment = applyContainmentCoPresence(allRows, input.relations ?? []);
 
+  // `[ILB-PLN-B1]` (`[D-296]`): the SAME `input.relations` field, resolved to `prerequisite`
+  // edges only — see `prerequisiteConceptKeysFromEdges`'s doc for why this reuses that one
+  // already-gated field rather than a second input, and why direct-only/freshness both follow
+  // from that reuse rather than needing separate enforcement here.
+  const prerequisiteConceptKeys = prerequisiteConceptKeysFromEdges(
+    input.relations ?? [],
+    nameToKeyFromRows(allRows),
+  );
+
   // [STEER-1]: the course-or-topic input, applied before any allocation
   // work so shares/forced-courses/obligation classes are all computed over
   // exactly the scope she asked about — see the field docs above.
@@ -2006,6 +2135,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
           assessmentContext,
           arrivalDays,
           windowDeficit,
+          prerequisiteConceptKeys,
         );
 
   let shares: ReadonlyMap<string, number>;
@@ -2075,6 +2205,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     assessmentContext,
     arrivalDays,
     asOf,
+    prerequisiteConceptKeys,
   );
   const orderedRows = orderedBlocks.map((c) => c.row);
   const overflow = buildOverflow(classified, chosenKeys);
