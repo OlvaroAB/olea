@@ -53,20 +53,28 @@
  * fewer, the same direction `vision-painted-share-sweep.mjs`'s own
  * over-approximations lean and the direction D-324's own ruling calls safe.
  *
- * ## What `areaShare` already reflects, and what it doesn't
+ * ## What `areaShare` reflects, including an image nested in a Form XObject
  *
- * `pdf.ts` computes `areaShare` only for an image `Do`'d directly from a
- * page's own top-level content stream (recursion depth 0) — never one
- * reached through a Form XObject. `pdf.ts`'s own CTM tracking is
- * *level-relative* inside a form (see that file's `walkContentTokens` doc),
- * so a form-nested image's true page-space area is not something this parser
- * can currently derive without inventing an absolute-CTM composition it does
- * not otherwise need. Rather than guess, such an image simply contributes no
- * paint record at all — the same "layout cannot be inspected" case §7's own
- * onFail clause names, which routes on text yield alone. This is a **known,
- * documented under-count**, never an over-count: a figure wrapped in a Form
- * XObject (common for soft-masked or transparency-grouped images) is missed
- * by this cue today, filed as a follow-up rather than guessed at here.
+ * `pdf.ts` computes `areaShare` for an image `Do`'d anywhere this walk
+ * reaches — a page's own top-level content stream, or any depth of Form
+ * XObject nested inside it (`ol-egov.141.89.8.27`, resolving what used to be
+ * a documented top-level-only under-count here). `pdf.ts`'s own CTM tracking
+ * stays *level-relative* inside a form for the ol-hpqn dedup key (see that
+ * file's `walkContentTokens` doc), but a form-nested image's area is answered
+ * by a separate, explicitly-threaded `ancestorCtm` chain: each `Do` that
+ * recurses into a form composes that form's own `/Matrix` onto the absolute
+ * CTM in force where the `Do` sits, so an image at any nesting depth gets the
+ * same true page-space area a top-level one always did — no guessing, and the
+ * same ancestor-path cycle guard and `MAX_FORM_XOBJECT_DEPTH` that already
+ * bound text recursion bound this one too, since it is the same recursion. A
+ * form this parser cannot resolve at all (a malformed or undecodable stream,
+ * a dangling reference) is skipped exactly as it always was for text — no
+ * paint record for whatever image it might have carried, never a throw.
+ * `objectNum` stays each image's PDF object number regardless of how many
+ * forms deep it is reached through, so the recurrence rule below (identity by
+ * stream, not by placement) and the per-placement counting a form drawn
+ * several times needs both apply to a nested image exactly as they always
+ * applied to a top-level one.
  *
  * Likewise, when a page's own `/MediaBox`/`/CropBox` cannot be resolved (an
  * indirect reference this parser's minimal dictionary reader does not
@@ -86,7 +94,7 @@ import type { PageExtraction } from './types.js';
  */
 export const FIGURE_CUE_MIN_SHARE = 0.05;
 
-/** One image painted directly on a page's own top-level content stream (never inside a Form XObject — see the module doc). */
+/** One image painted on a page, at any nesting depth inside a Form XObject (see the module doc). */
 export interface PageImagePaint {
   /** The PDF indirect object number of the Image XObject — this cue's identity key for recurrence (see the module doc). */
   readonly objectNum: number;

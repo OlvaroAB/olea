@@ -111,8 +111,31 @@
  * *deletes* real text (an MCQ answer key repeating "A B C D" once per
  * question, each at its own position, must never be folded), which is a far
  * worse failure than the inflation being fixed. See `walkContentTokens`'s own
- * doc for why level-relative translation is enough without composing the
- * whole ancestor CTM chain.
+ * doc for why level-relative translation is enough for this dedup key without
+ * composing the whole ancestor CTM chain — a separate question from whether
+ * an image's *area* needs that composition, which it does (see the next
+ * paragraph and `figure-cue.ts`).
+ *
+ * **On an image nested inside a Form XObject, and why the dedup key above
+ * did not have to change to measure it** (`ol-egov.141.89.8.27`, resolving
+ * a limitation `figure-cue.ts`, D-324 used to document). The ol-hpqn dedup
+ * key stays level-relative on purpose — it is answering "is this the SAME
+ * `Do` call as one already walked from this exact content stream?", which a
+ * level-local translation answers correctly on its own (see the paragraph
+ * above). Measuring a form-nested image's true page-space *area*, in
+ * contrast, is a different question that a level-local CTM cannot answer by
+ * itself: it needs the full chain of `cm` concatenations and Form `/Matrix`
+ * entries from the page down to wherever the image's own `Do` sits.
+ * `walkContentTokens` now carries that chain explicitly, as an `ancestorCtm`
+ * parameter threaded alongside (never merged into) the level-relative `ctm`
+ * the dedup key still reads — composed, at each `Do` that recurses into a
+ * form, from the resolved form's own `/Matrix` (`formMatrix`) and the
+ * absolute CTM at that `Do`. Every guard already in place for text — the
+ * ancestor-path cycle guard and `MAX_FORM_XOBJECT_DEPTH` — applies to this
+ * recursion unchanged, since it is the same recursion; a malformed or
+ * unresolvable form is skipped exactly as `resolveFormXObject` always
+ * skipped it for text, contributing no image-paint record rather than
+ * throwing.
  *
  * Objects are still found by scanning for `N G obj` rather than by reading
  * an xref table, which is what makes this parser *more* tolerant of a
@@ -956,14 +979,17 @@ interface ContentWalk {
    */
   sawXObjectPaint: boolean;
   /**
-   * Every Image XObject painted directly on THIS page's own top-level
-   * content stream (`figure-cue.ts`, D-324) — never one reached through a
-   * Form XObject; see that module's doc for why a form-nested image is
-   * deliberately not recorded here rather than measured with a CTM this
-   * walker does not otherwise compose absolutely. `rawArea` is the CTM's
-   * linear determinant in page user-space points² — `getPageContent`
-   * divides it by the page's own area to produce `figure-cue.ts`'s
-   * `areaShare`, so this walker itself never needs to know the page's size.
+   * Every Image XObject painted anywhere this walk reaches — the page's own
+   * top-level content stream, or any depth of Form XObject nested inside it
+   * (`figure-cue.ts`, D-324; `ol-egov.141.89.8.27` lifted the earlier
+   * top-level-only limitation the same way ol-v460 lifted the unwalked-forms
+   * one for text). `rawArea` is the *absolute*, page-user-space CTM's linear
+   * determinant in points² — the level-local `cm` chain composed with every
+   * ancestor form's own `/Matrix` and the CTM in force where each `Do`
+   * invoked it (see `walkContentTokens`'s `Do` case and `formMatrix`) — so
+   * `getPageContent` can divide it by the page's own area to produce
+   * `figure-cue.ts`'s `areaShare` without needing to know anything about how
+   * deep the image was nested.
    */
   imagePaints: { objectNum: number; rawArea: number }[];
 }
@@ -1078,11 +1104,12 @@ function walkContentTokens(
     readonly resourcesText: string | undefined;
     /**
      * The PAGE's own Image-subtype `/XObject` resources, name to object
-     * number (`figure-cue.ts`, D-324) — supplied only by `getPageContent`'s
-     * top-level call, never threaded into a nested `resolveFormXObject`
-     * call, because the `Do` case below only ever consults this at
-     * recursion depth 0. See `resourcesXObjectImagesFromText`'s doc for why
-     * a form-nested image is out of scope for this cue.
+     * number (`figure-cue.ts`, D-324) — the top-level entry point's map,
+     * read by `run`'s own `imagesMap` parameter at depth 0. A form's own
+     * images (`resolveFormXObject`'s `images` field) are threaded into the
+     * recursive `run` call directly, at the point of `Do`, rather than
+     * through this outer field — see the `Do` case below
+     * (`ol-egov.141.89.8.27`).
      */
     readonly images?: ReadonlyMap<string, number>;
   },
@@ -1109,6 +1136,19 @@ function walkContentTokens(
     fontMap: ReadonlyMap<string, FontDecoder>,
     formsMap: ReadonlyMap<string, number>,
     resourcesText: string | undefined,
+    imagesMap: ReadonlyMap<string, number>,
+    /**
+     * The ABSOLUTE, page-user-space CTM in force where THIS level's content
+     * begins (identity at the page's own top level; a form's own `/Matrix`
+     * composed onto the absolute CTM at the `Do` that invoked it, at every
+     * deeper level — see the `Do` case below and `formMatrix`). Used only to
+     * give an image `Do`'d at this level its true absolute area
+     * (`figure-cue.ts`, D-324, `ol-egov.141.89.8.27`); it plays no part in
+     * `ctm` below, which stays level-relative for the ol-hpqn dedup key
+     * exactly as before — the two matrices answer different questions and
+     * this function keeps them apart on purpose.
+     */
+    ancestorCtm: Mat,
     depth: number,
   ): void => {
     let lastString = '';
@@ -1277,31 +1317,30 @@ function walkContentTokens(
           walk.sawTextOperator = true;
           showTjArray(walk, lastArrayItems, gapThousandths, font);
           break;
-        case 'Do':
+        case 'Do': {
           walk.sawXObjectPaint = true;
-          // Image paint (`figure-cue.ts`, D-324) — page-level only (depth
-          // 0): this walker's CTM is level-relative inside a form (see the
-          // function doc's "level-relative" paragraph and
-          // `resourcesXObjectImagesFromText`'s doc), so it cannot honestly
-          // give a form-nested image's absolute page-space area — such an
-          // image simply contributes no paint record, the same
-          // "layout cannot be inspected" degrade this module uses
-          // throughout rather than guessing. `rawArea` is the CTM's
-          // linear-part determinant: the unit square an Image XObject
-          // always occupies in its own coordinate space maps, under the
-          // CTM, to a parallelogram of exactly this area — independent of
-          // the CTM's translation, which is why no absolute page position
-          // is needed here, only the level-0 CTM already tracked for
-          // `cm`/`Do` above.
-          if (depth === 0 && formCtx?.images) {
-            const imageObjectNum = formCtx.images.get(lastName);
-            if (imageObjectNum !== undefined) {
-              const [a, b, c, d] = ctm;
-              walk.imagePaints.push({
-                objectNum: imageObjectNum,
-                rawArea: Math.abs(a * d - b * c),
-              });
-            }
+          // Image paint (`figure-cue.ts`, D-324; `ol-egov.141.89.8.27`
+          // lifted the earlier top-level-only limitation). `absoluteCtm`
+          // composes this level's own `cm` chain (`ctm`, level-relative)
+          // with `ancestorCtm` — the absolute CTM this level's content
+          // *began* with, identity at the page's own top level and a form's
+          // own `/Matrix` composed onto its invoking `Do`'s absolute CTM at
+          // every deeper level (see the recursive call below and
+          // `formMatrix`) — so an image at ANY nesting depth gets its true,
+          // absolute page-space area. `rawArea` is that composed matrix's
+          // linear-part determinant: the unit square an Image XObject always
+          // occupies in its own coordinate space maps, under the CTM, to a
+          // parallelogram of exactly this area — independent of the CTM's
+          // translation, which is why no absolute page position is needed,
+          // only the linear part of `absoluteCtm`.
+          const absoluteCtm = multiplyMat(ctm, ancestorCtm);
+          const imageObjectNum = imagesMap.get(lastName);
+          if (imageObjectNum !== undefined) {
+            const [a, b, c, d] = absoluteCtm;
+            walk.imagePaints.push({
+              objectNum: imageObjectNum,
+              rawArea: Math.abs(a * d - b * c),
+            });
           }
           // Recurse into the named resource IF it is a Form XObject this
           // level's resources know about (ol-v460). Every guard below is a
@@ -1312,7 +1351,9 @@ function walkContentTokens(
           // below), or a form whose stream/resources would not resolve all
           // leave `Do` exactly the no-op it was before this fix — the page
           // still carries `sawXObjectPaint`, so `getPageContent` still
-          // reports the honest `'unreadable'` rather than a false `'absent'`.
+          // reports the honest `'unreadable'` rather than a false `'absent'`,
+          // and (D-324) contributes no paint record for whatever image it
+          // might have carried, never a guessed one.
           if (formCtx !== undefined && depth < MAX_FORM_XOBJECT_DEPTH) {
             const targetNum = formsMap.get(lastName);
             if (targetNum !== undefined && !formPath.has(targetNum)) {
@@ -1327,7 +1368,9 @@ function walkContentTokens(
               // never folded, however similar its resulting text turns out
               // to be — that side of the guard is what keeps a legitimately
               // repeated element (an MCQ answer key repeating "A B C D" per
-              // question, each at its own position) from losing any copy.
+              // question, each at its own position) from losing any copy,
+              // and (D-324) is what lets a form drawn several times count
+              // its image's area once per genuinely distinct placement.
               const positionKey = `${targetNum}@${roundedCoord(ctm[4])},${roundedCoord(ctm[5])}`;
               if (!paintedFormPositions.has(positionKey)) {
                 const resolved = resolveFormXObject(
@@ -1344,6 +1387,8 @@ function walkContentTokens(
                     resolved.fonts,
                     resolved.forms,
                     resolved.resourcesText,
+                    resolved.images,
+                    multiplyMat(resolved.matrix, absoluteCtm),
                     depth + 1,
                   );
                   formPath.delete(targetNum);
@@ -1352,6 +1397,7 @@ function walkContentTokens(
             }
           }
           break;
+        }
         default:
           break;
       }
@@ -1359,7 +1405,15 @@ function walkContentTokens(
     }
   };
 
-  run(tokens, fonts, formCtx?.forms ?? new Map(), formCtx?.resourcesText, 0);
+  run(
+    tokens,
+    fonts,
+    formCtx?.forms ?? new Map(),
+    formCtx?.resourcesText,
+    formCtx?.images ?? new Map(),
+    IDENTITY_MAT,
+    0,
+  );
   walk.text = walk.text.trim();
   return walk;
 }
@@ -1568,12 +1622,12 @@ function resourcesXObjectFormsFromText(
  * resource name in one `/XObject` dictionary names exactly one object, so a
  * name never appears in both this map and `resourcesXObjectFormsFromText`'s.
  *
- * Deliberately page-level only: `walkContentTokens`'s `Do` handler only
- * consults this at recursion depth 0 (see that function's doc and the `Do`
- * case below) — a Form XObject's own nested `/XObject` dictionary is never
- * resolved through this function, for the same level-relative-CTM reason
- * `figure-cue.ts`'s module doc gives for not measuring a form-nested image's
- * area at all.
+ * Called once per level (the page itself, and once per resolved Form
+ * XObject — see `resolveFormXObject`'s `images` field): each level's `Do`
+ * handler resolves an Image name against *that level's own* map, exactly the
+ * same resource-scope rule `resourcesFontsFromText`'s doc states for fonts
+ * (`ol-egov.141.89.8.27`, resolving the under-count `figure-cue.ts` used to
+ * document here).
  */
 function resourcesXObjectImagesFromText(
   resourcesText: string,
@@ -1619,11 +1673,44 @@ interface ResolvedFormXObject {
   /** This form's own Form-subtype `/XObject` resources, for a `Do` painted *inside* it. */
   readonly forms: ReadonlyMap<string, number>;
   /**
+   * This form's own Image-subtype `/XObject` resources, name to object number
+   * (`figure-cue.ts`, D-324, `ol-egov.141.89.8.27`) — a `Do` painted *inside*
+   * this form that names an Image resolves against this map, the same way a
+   * page's own `images` map resolves one painted directly on the page.
+   */
+  readonly images: ReadonlyMap<string, number>;
+  /**
    * This form's *effective* `/Resources` dictionary text — its own if it
    * declared one, otherwise whatever it inherited — carried forward so a form
    * nested inside *this one* can fall back to it in turn.
    */
   readonly resourcesText: string | undefined;
+  /** This form's own `/Matrix`, identity when absent — see `formMatrix`. */
+  readonly matrix: Mat;
+}
+
+/**
+ * A Form XObject's own `/Matrix` (spec 8.10.2): the six-number transform from
+ * the form's own coordinate space into the space of whatever painted it — the
+ * missing half of composing a form-nested image's true page-space area
+ * (`figure-cue.ts`, D-324, `ol-egov.141.89.8.27`). Composed with the CTM in
+ * force at the `Do` that invoked the form (see `walkContentTokens`'s `Do`
+ * case), it gives the absolute CTM a form's OWN content stream begins with,
+ * which an image `Do`'d anywhere inside — however many forms deep — can in
+ * turn compose with its own `cm`s to get its true absolute area.
+ *
+ * Defaults to the identity matrix whenever `/Matrix` is absent (the ordinary
+ * case: most forms declare none and mean "no additional transform"),
+ * malformed, or an indirect reference this parser's minimal dictionary reader
+ * does not follow (`dictNumberArray`'s doc) — never a throw, matching every
+ * other degrade in this module. A form this cannot resolve at all never
+ * reaches this function in the first place (see `resolveFormXObject`'s own
+ * skip-not-throw guards).
+ */
+function formMatrix(dictText: string): Mat {
+  const m = dictNumberArray(dictText, 'Matrix');
+  if (m === undefined || m.length !== 6) return IDENTITY_MAT;
+  return m as unknown as Mat;
 }
 
 /**
@@ -1679,7 +1766,12 @@ function resolveFormXObject(
       resourcesText === undefined
         ? new Map<string, number>()
         : resourcesXObjectFormsFromText(resourcesText, objects),
+    images:
+      resourcesText === undefined
+        ? new Map<string, number>()
+        : resourcesXObjectImagesFromText(resourcesText, objects),
     resourcesText,
+    matrix: formMatrix(rec.dictText),
   };
 }
 
@@ -1697,8 +1789,9 @@ interface PageContent {
    */
   readonly textLayerReached: boolean;
   /**
-   * Every non-form-nested image this page paints, as a share of the page's
-   * own area (`figure-cue.ts`, D-324) — `undefined` when the page's own
+   * Every image this page paints, at any nesting depth inside Form XObjects
+   * (`figure-cue.ts`, D-324; `ol-egov.141.89.8.27`), as a share of the page's
+   * own area — `undefined` when the page's own
    * `/MediaBox`/`/CropBox` could not be resolved, meaning this page's
    * layout cannot be inspected for the figure cue at all (see `pageBox`'s
    * doc). Never `undefined` merely because no image was painted — that case

@@ -1644,11 +1644,21 @@ describe('pdfExtractor — the figure cue (D-324)', () => {
     expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
   });
 
-  it('an image reached only through a Form XObject is not measured — documented under-count, never a false positive', async () => {
+  it('an image reached through a Form XObject is measured, composing the form transform with the CTM at its Do (ol-egov.141.89.8.27)', async () => {
     // The image is painted at a large scale, but from INSIDE a Form
-    // XObject the page itself Do's — depth 1, not depth 0. `figure-cue.ts`'s
-    // own doc names this as a known limitation rather than something to
-    // guess at: it must not silently upgrade the route.
+    // XObject the page itself Do's — depth 1, not depth 0.
+    //
+    // FAILING-FIRST EVIDENCE (this exact fixture, pre-fix): before
+    // ol-egov.141.89.8.27, `walkContentTokens`'s image-paint capture only
+    // ever ran `if (depth === 0 && formCtx?.images)`, so a page whose figure
+    // sits one `Do` inside a form contributed NO paint record at all —
+    // this fixture's page painted a 13.5% figure (8100 of 60000 page-area
+    // points², comfortably over the declared 5% D-324 trigger) and still
+    // measured a share of nothing, staying on `'text-layer'`. That was this
+    // test's assertion until this fix: `expect(result.pages[0]?.route).toBe
+    // ('text-layer')` — the exact "falls below the trigger it actually
+    // meets" defect the bead names. `git show HEAD:.../pdf.spec.ts` before
+    // this change is that failing-first state.
     const formBody = 'q 90 0 0 90 0 0 cm /Im1 Do Q';
     const objects =
       '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
@@ -1666,8 +1676,120 @@ describe('pdfExtractor — the figure cue (D-324)', () => {
       `%PDF-1.4\n${objects}trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
     );
     const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    // 90x90 cm inside the form, composed with the page's identity cm at the
+    // form's own Do and the form's own (absent, so identity) /Matrix: 8100
+    // of the page's 60000 points², 13.5% — over the 5% floor.
+    expect(result.pages[0]?.route).toBe('both');
+    expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+  });
+
+  it("composes an image nested TWO Form XObjects deep — the page cm, the outer form's own /Matrix, AND the inner form all feed one measurement (nested-twice)", async () => {
+    // 30 (page cm) x 2 (FmA's own /Matrix) x 1 (FmB and the image Do, no
+    // extra transform at either) = a composed scale of 60, whose CTM
+    // determinant is 60^2 = 3600 of the page's 60000 points^2 — 6%, just
+    // over the 5% floor. Composing only ONE of the two transforms (the
+    // page's cm alone gives 30^2 = 900, 1.5%; FmA's /Matrix alone against no
+    // outer scale gives 2^2 = 4, well under 1%) would stay under the floor,
+    // so this pins that both the page-level cm AND the outer form's own
+    // /Matrix feed the same measurement, through the inner form as well.
+    const bodyA = '/FmB Do';
+    const bodyB = '/Im1 Do';
+    const bytes = buildFormGraphPdf(
+      '<< /Font << /F1 3 0 R >> /XObject << /FmA 6 0 R >> >>',
+      `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(LONG_TEXT)}) Tj ET q 30 0 0 30 0 0 cm /FmA Do Q`,
+      [
+        simpleFontObj(3),
+        `6 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] /Matrix [2 0 0 2 0 0] ` +
+          `/Resources << /XObject << /FmB 10 0 R >> >> /Length ${bodyA.length} >>\nstream\n${bodyA}\nendstream\nendobj\n`,
+        `10 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] ` +
+          `/Resources << /XObject << /Im1 11 0 R >> >> /Length ${bodyB.length} >>\nstream\n${bodyB}\nendstream\nendobj\n`,
+        '11 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n',
+      ],
+    );
+    const result = await pdfExtractor.extract({ path: 'nested-twice.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('both');
+    expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+  });
+
+  it('the SAME form drawn at two DIFFERENT placements on one page measures each placement on its own terms, never reusing the first', async () => {
+    // The first Do scales the shared form (and its inner image) to 20x20 —
+    // 400 of 60000 points^2, 0.67%, below the floor on its own. The second
+    // Do, at a different translation (so ol-hpqn's true-duplicate guard does
+    // not fold it), scales the SAME form to 90x90 — 8100 of 60000, 13.5%,
+    // over the floor. If the second placement's area were ever computed
+    // from a cached first-placement CTM (or the recursion only ever
+    // recomposed once), the page would wrongly stay on 'text-layer'.
+    const bodyForm = '/Im1 Do';
+    const bytes = buildFormGraphPdf(
+      '<< /Font << /F1 3 0 R >> /XObject << /FmShared 10 0 R >> >>',
+      `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(LONG_TEXT)}) Tj ET ` +
+        'q 20 0 0 20 10 10 cm /FmShared Do Q q 90 0 0 90 50 50 cm /FmShared Do Q',
+      [
+        simpleFontObj(3),
+        `10 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] ` +
+          `/Resources << /XObject << /Im1 11 0 R >> >> /Length ${bodyForm.length} >>\nstream\n${bodyForm}\nendstream\nendobj\n`,
+        '11 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n',
+      ],
+    );
+    const result = await pdfExtractor.extract({ path: 'two-placements.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('both');
+  });
+
+  it('a malformed nested form is skipped, never thrown, and contributes no paint record', async () => {
+    // The same undecodable-stream shape ol-v460's own tests use for text
+    // (`buildFormGraphPdf`'s "garbage" fixtures above): a form this parser
+    // cannot decode at all. Its own image-drawing content (if any) is never
+    // reached, and resolveFormXObject's usual skip-not-throw discipline
+    // applies here exactly as it always did for text: the real page content
+    // still extracts, and the extraction never throws.
+    const garbage = 'this is not deflate data and will never inflate';
+    const bytes = buildFormGraphPdf(
+      '<< /Font << /F1 3 0 R >> /XObject << /FmBad 6 0 R >> >>',
+      `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(LONG_TEXT)}) Tj ET q 90 0 0 90 0 0 cm /FmBad Do Q`,
+      [
+        simpleFontObj(3),
+        `6 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] /Filter /FlateDecode /Length ${garbage.length} >>\nstream\n${garbage}\nendstream\nendobj\n`,
+      ],
+    );
+    // The call itself must not throw — if it did, this `await` would reject
+    // and fail the test before any assertion below ran.
+    const result = await pdfExtractor.extract({ path: 'malformed-form.pdf', bytes });
     expect(result.pages[0]?.route).toBe('text-layer');
     expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+    expect(result.outcome).toBe('extracted');
+  });
+
+  it('the same image reached through a form placed on every page is recurring, and never triggers the cue — the majority rule applied to a nested image (identity by stream, not by placement)', async () => {
+    // Mirrors the top-level "a recurring image never triggers the cue" test
+    // above, but the image is reached through the SAME shared Form XObject
+    // on every page rather than Do'd directly — `findRecurringImages` keys
+    // on the image's own PDF object number regardless of how many forms deep
+    // it was reached through, so this must read exactly the same as the
+    // top-level case.
+    const pageBody = (text: string) =>
+      `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(text)}) Tj ET q 90 0 0 90 0 0 cm /FmShared Do Q`;
+    const resources = '<< /Font << /F1 3 0 R >> /XObject << /FmShared 10 0 R >> >>';
+    const formBody = '/Im1 Do';
+    const body1 = pageBody('First page of real content here');
+    const body2 = pageBody('Second page of real content here');
+    const body3 = pageBody('Third page of real content here');
+    const objects =
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+      '2 0 obj\n<< /Type /Pages /Kids [4 0 R 5 0 R 6 0 R] /Count 3 >>\nendobj\n' +
+      '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+      `4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 7 0 R /Resources ${resources} >>\nendobj\n` +
+      `5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 8 0 R /Resources ${resources} >>\nendobj\n` +
+      `6 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 9 0 R /Resources ${resources} >>\nendobj\n` +
+      `7 0 obj\n<< /Length ${body1.length} >>\nstream\n${body1}\nendstream\nendobj\n` +
+      `8 0 obj\n<< /Length ${body2.length} >>\nstream\n${body2}\nendstream\nendobj\n` +
+      `9 0 obj\n<< /Length ${body3.length} >>\nstream\n${body3}\nendstream\nendobj\n` +
+      `10 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] /Resources << /XObject << /Im1 11 0 R >> >> /Length ${formBody.length} >>\nstream\n${formBody}\nendstream\nendobj\n` +
+      '11 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n';
+    const bytes = latin1ToBytes(
+      `%PDF-1.4\n${objects}trailer\n<< /Size 12 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+    );
+    const result = await pdfExtractor.extract({ path: 'recurring-nested.pdf', bytes });
+    expect(result.pages.map((p) => p.route)).toEqual(['text-layer', 'text-layer', 'text-layer']);
   });
 
   it('a furniture page is never upgraded — figure-cue runs after furniture, on pages that already have nothing to add to', async () => {
