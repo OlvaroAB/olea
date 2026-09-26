@@ -422,34 +422,47 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     expect(result.measured?.widestGapCourse).toBe('Quorbin');
   });
 
-  it('fires on 3 of the 120 seeds across the three personas with no imbalance planted', () => {
-    // steady-reviewer, instrument-skipper and lapsed-returner, one seed each,
-    // at gaps of 0.20-0.24. The deck is introduced in `vocabulary.js` order
-    // (one course's instruments first), so FSRS pulls the two courses' review
-    // counts apart by luck alone, and on a 24-instrument deck that noise is
-    // occasionally a fifth of the split. Asserted as a number so it cannot grow
-    // unnoticed.
+  it('fires on 0 of the 120 seeds across the three personas with no imbalance planted, under the ruled sufficiency floor', () => {
+    // steady-reviewer, instrument-skipper and lapsed-returner, at their own,
+    // undisturbed behaviour (no override). This is the one of the seven
+    // originally-failing effort cases this repo's history (`ol-wyqk`) left
+    // red on purpose, pending `D-365`.
     //
-    // STILL FAILING (`ol-wyqk`, reports 0 of 3, not planted-history-fixable):
-    // this is the one of the seven originally-failing effort cases this bead's
-    // report leaves red, on purpose. `EFFORT_SUFFICIENCY_DENSITY` is
-    // deliberately NOT applied here — this claim is about incidental RNG noise
-    // at these personas' own, undisturbed behaviour, and juicing density to
-    // clear the D-092 window's sufficiency floor would measure a different,
-    // unvalidated number instead of "3", not fix this one. Worse, it would be
-    // measuring nothing at all for instrument-skipper regardless: swept to
-    // defaultSuccess 0.001 (essentially never succeeds — already well past any
-    // defensible fixture value), her worst-case windowed count over forty
-    // seeds is 33, still short of `MIN_WINDOWED_TIMED_REVIEWS` (40) — her own
-    // `cardTakeRateWhenMcqAvailable` filter removes most candidates before the
-    // daily cap regardless of success rate, so no `defaultSuccess` clears this
-    // floor for her. A real fix needs either the window widened or the floor
-    // lowered (`D-365`, open) — a product-source change this bead's `owns`
-    // does not reach. See this bead's report, section 2, for the full sweep.
+    // The underlying incidental-RNG-noise claim this test was written to
+    // measure ("the deck is introduced in `vocabulary.js` order — one
+    // course's instruments first — so FSRS pulls the two courses' review
+    // counts apart by luck alone, occasionally a fifth of the split on a
+    // 24-instrument deck") once measured 3 of 120 at gaps of 0.20-0.24 — but
+    // that measurement was taken with the sufficiency gate not yet counting
+    // correctly. `D-365` (closed, `ol-egov.141.89.11.8`; ruled: keep the
+    // current, higher nudge threshold — the measured trade-off curve does
+    // not justify lowering the floor or widening this one nudge's window)
+    // means `MIN_WINDOWED_TIMED_REVIEWS` (40) stays exactly where it was.
+    // Under that ruled floor, all three personas' own windowed timed-review
+    // counts by day 90 (4, 7 and 31; evidence on `ol-egov.141.89.11.8`) sit
+    // below 40, so `detectEffortImbalance` reports `not-enough-history` for
+    // every one of the 120 seeds, never `observed` — the detector abstains
+    // before the RNG-noise question is ever asked, rather than answering it
+    // "no". 0 is the honest measured count at the ruled configuration, not
+    // a claim that the underlying noise stopped existing.
+    //
+    // D-365's own text is explicit that this silence must not be
+    // over-read: "the near-total silence of this nudge must never be read
+    // or reported... as evidence that her study effort is actually
+    // balanced across courses." This assertion is that same caution
+    // encoded as a test — 0 pins the CURRENT abstention rate, not a claim
+    // that these personas carry no noise, and asserted exactly so any rise
+    // (the floor lowered or the window widened without a new ruling) fails
+    // this test loudly rather than drifting unnoticed.
+    //
+    // Revisit condition (D-365's follow-up): reassess `MIN_WINDOWED_
+    // TIMED_REVIEWS` once a full term of her real sitting data exists, and
+    // re-run this sweep — including the original 3-of-120 RNG-noise
+    // measurement above the sufficiency floor — on that data.
     const stray =
       firingCounts('steady-reviewer', false).effort +
       firingCounts('instrument-skipper', false).effort +
       firingCounts('lapsed-returner', false).effort;
-    expect(stray).toBe(3);
+    expect(stray).toBe(0);
   });
 });
