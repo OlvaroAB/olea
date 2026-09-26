@@ -123,4 +123,16 @@ export interface AssessmentReadReport {
    * letting it read as "no assignments".
    */
   readonly configErrors: readonly string[];
+  /**
+   * Which reader actually produced `records` (F1.2, `./resolve.ts`'s
+   * `resolveAssessments`) — `'base'` for a readable Assignments Base,
+   * `'manual'` for the hand-entry fallback (`./manual.ts`). Optional, and
+   * never set by `./read.ts`'s own `readAssessments`, so every existing
+   * `AssessmentReadReport` literal in this workspace (including a caller's
+   * own thrown-error fallback, e.g. `packages/plugin/src/retrospective/
+   * provider.ts`'s `safeReadAssessments`) stays valid unchanged. A caller
+   * that only reads `records` needs never look at this field — see
+   * `resolveAssessments`'s own module doc.
+   */
+  readonly source?: 'base' | 'manual';
 }

@@ -75,6 +75,7 @@ import {
   type HeadingOfferSettingSnapshot,
   ObsidianHeadingOfferSettingStore,
 } from './heading-offer-setting.js';
+import { renderManualAssessmentSection } from './manual-assessment-entry.js';
 import {
   REPORT_ISSUE_BUTTON_LABEL,
   REPORT_ISSUE_URL,
@@ -166,6 +167,13 @@ export class OleaSettingTab extends PluginSettingTab {
     // every field renders independently of the other's load completing.
     void this.renderStudyPlanFields(containerEl);
 
+    // F1.2's fallback (`ol-egov.141.8.10`): shown only while the Assignments
+    // Base above cannot be read. Its own async load of the persisted path,
+    // deliberately not shared with `renderStudyPlanFields` above — see
+    // `manual-assessment-entry.ts`'s module doc for why the visibility check
+    // runs once per pane open rather than reactively on every keystroke.
+    void this.renderManualAssessmentFields(containerEl);
+
     // F7.2's term-dates ask (`[D-147]`, `ol-0r92.6`): a calendar fact, not a
     // study preference — its own heading, distinct from "Study plan" above,
     // per the amended clause's own framing.
@@ -228,6 +236,21 @@ export class OleaSettingTab extends PluginSettingTab {
           void this.studyPlanConfigStore.save({ version: 1, assignmentsBasePath });
         });
       });
+  }
+
+  /**
+   * F1.2's manual entry surface (`ol-egov.141.8.10`) — see
+   * `manual-assessment-entry.ts`'s module doc for the render/re-render
+   * contract. `this.privacy.vault` is the same `VaultSource` the F7.4
+   * export/delete section below already uses; no separate vault reference
+   * is minted for this section.
+   */
+  private async renderManualAssessmentFields(containerEl: HTMLElement): Promise<void> {
+    const config = await this.studyPlanConfigStore.load();
+    await renderManualAssessmentSection(containerEl, {
+      vault: this.privacy.vault,
+      basePath: config.assignmentsBasePath,
+    });
   }
 
   /**

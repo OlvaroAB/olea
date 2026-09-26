@@ -60,6 +60,7 @@ import {
   isValidDeviceId,
   isVaultPath,
   listFolder,
+  MANUAL_ASSESSMENT_STORE_FOLDER,
   MISCONCEPTION_LOG_FOLDER,
   misconceptionLogPath,
   OUTCOME_CONCEPT_NEAR_MATCH_FOLDER,
@@ -114,6 +115,7 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   { folder: PAPER_STORE_FOLDER, role: 'record' },
   { folder: DUPLICATION_CONFIRMATION_FOLDER, role: 'record' },
   { folder: RETROSPECTIVE_NOTES_FOLDER, role: 'record' },
+  { folder: MANUAL_ASSESSMENT_STORE_FOLDER, role: 'record' },
 ];
 
 /**

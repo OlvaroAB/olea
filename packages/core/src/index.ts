@@ -42,6 +42,26 @@ export type {
   ColumnMapping,
 } from './assessment/types.js';
 export { REQUIRED_ASSESSMENT_FIELDS } from './assessment/types.js';
+export type {
+  AddManualAssessmentOptions,
+  ManualAssessmentEntryInput,
+  ManualAssessmentIdNonceSource,
+  ManualAssessmentRecord,
+} from './assessment/manual.js';
+export {
+  addManualAssessmentEntry,
+  isManualAssessmentRecord,
+  listManualAssessmentRecords,
+  MANUAL_ASSESSMENT_ID_PREFIX,
+  MANUAL_ASSESSMENT_RECORD_SCHEMA_VERSION,
+  MANUAL_ASSESSMENT_STORE_FOLDER,
+  manualAssessmentRecordPath,
+  manualAssessmentRecordToAssessmentRecord,
+  mintManualAssessmentId,
+  readManualAssessments,
+  removeManualAssessmentEntry,
+} from './assessment/manual.js';
+export { hasReadableAssessmentsBase, resolveAssessments } from './assessment/resolve.js';
 // The byte path, body side (INV-2). Every write into a note goes through this;
 // see block/edit.ts for why it rejects rather than performs a straddling edit.
 export type { AppliedSpan, DocumentEdit, DocumentEditResult } from './block/edit.js';
