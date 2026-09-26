@@ -105,11 +105,27 @@ export interface EvidenceQuestionCitation {
 
 /**
  * Which registered evidence an edge's `confidence` and citations were
- * computed from (`[D-226]` ruling 2). The two bases are never mixed — an
- * edge is one or the other, never a blend — which is what makes "each basis
- * is stated for what it is" checkable rather than a wording promise.
+ * computed from (`[D-226]` ruling 2, widened by `[D-247]`). The bases are
+ * never mixed — an edge is one or the other, never a blend — which is what
+ * makes "each basis is stated for what it is" checkable rather than a
+ * wording promise.
+ *
+ * **`'assessment-brief'` (`[D-247]`, `ol-egov.142.2`) is the third basis
+ * functional scope F4.2 names** — "what this term's own assignment or test
+ * says it covers" (F1.7's per-assessment `scope`, `../assessment/types.js`'s
+ * `AssessmentRecord.scope`), admitted on its own confidence basis exactly as
+ * objectives are, never folded into either other denominator. **Confidence
+ * is always `1` for this basis** — unlike the other two bases, which
+ * measure a FREQUENCY across a course's registered sources, an assessment
+ * brief is her own stated coverage for THIS one assessment: there is
+ * exactly one possible source (the assessment note itself), so "found" and
+ * "confident" collapse to the same fact rather than one being an aggregate
+ * of the other. See `build.ts`'s `briefEntriesForAssessment` for the exact
+ * rule. Mirrors (but does not import — the two repos share no types across
+ * `[D-069]`'s boundary) the service's `oracleEvidenceBasis`
+ * (`olea-service/src/tasks/oracleRank.ts`).
  */
-export type ConceptEvidenceBasis = 'past-paper' | 'objectives';
+export type ConceptEvidenceBasis = 'past-paper' | 'objectives' | 'assessment-brief';
 
 /**
  * One objectives-document mention of a concept — the `basis: 'objectives'`
@@ -125,6 +141,33 @@ export interface EvidenceObjectivesCitation {
   readonly provenance: Provenance;
   /** See `ConceptCitation.duplicateSourcePaths` (`ol-n0yc`) — present only when the citing objectives document is filed at more than one path. */
   readonly duplicateSourcePaths?: readonly VaultPath[];
+}
+
+/**
+ * One `basis: 'assessment-brief'` citation (`[D-247]`) — the assessment note
+ * itself, since her stated coverage for an assessment lives on that
+ * assessment's own record (`../assessment/types.js`'s
+ * `AssessmentRecord.scope`, F1.7) rather than on a separately-registered
+ * `Source`. `sourcePath` is always that assessment's own {@link
+ * ConceptAssessmentEdge.assessmentPath} — a brief citation never points at
+ * another assessment. No `duplicateSourcePaths`: unlike a registered
+ * `Source`, an `AssessmentRecord` carries no content-hash de-duplication
+ * (`ol-n0yc`'s system does not reach `resolveAssessments`), so this module
+ * has no de-duplicated identity to report here.
+ *
+ * `provenance.location` is always `{ page: 1 }`, never a `charRange` — the
+ * same "absent means this location's grain is the page... never a
+ * fabricated range" convention `../extract/types.js`'s `SourceLocation` doc
+ * states. `build.ts` resolves `AssessmentRecord.scope` to plain text only
+ * (`../assessment/scope.js`'s `extractStatedScope` returns a joined string,
+ * not a block with its own character offsets), so a `charRange` here would
+ * have to be invented rather than read; `page: 1` alone is the honest grain
+ * this module can actually cite, the same convention markdown past-paper
+ * provenance uses for a whole logical page (`../source/segment-past-paper.js`).
+ */
+export interface EvidenceBriefCitation {
+  readonly sourcePath: VaultPath;
+  readonly provenance: Provenance;
 }
 
 /**
@@ -206,6 +249,15 @@ export interface ConceptAssessmentEdge {
    * clothes" misrepresentation `[D-226]` forbids.
    */
   readonly objectivesCitations?: readonly EvidenceObjectivesCitation[];
+  /**
+   * `[D-247]`: this edge's real evidence when {@link basis} is
+   * `'assessment-brief'` — absent (never an empty array) for either other
+   * basis, the same "never fabricated" discipline {@link objectivesCitations}
+   * already follows one basis over. Always exactly one entry, naming this
+   * edge's own {@link assessmentPath} — see {@link EvidenceBriefCitation}'s
+   * doc for why a brief citation can never point anywhere else.
+   */
+  readonly briefCitations?: readonly EvidenceBriefCitation[];
 }
 
 export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3EvidenceOptions {
@@ -223,6 +275,14 @@ export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3Evidence
    * — this module does no extraction of its own, it only reads the mapping.
    */
   readonly concepts: readonly ConceptRecord[];
+  /**
+   * `[D-247]`: include `'assessment-brief'` edges. Off unless a caller opts in:
+   * a brief edge enters the ranking's contribution at its confidence, so
+   * turning it on changes what every ranking caller orders, and the weight a
+   * brief mention carries against past-paper evidence is not yet ruled
+   * (`[D-399]`). No production caller sets it.
+   */
+  readonly includeAssessmentBriefBasis?: boolean;
 }
 
 export interface BuildConceptAssessmentEdgesResult {

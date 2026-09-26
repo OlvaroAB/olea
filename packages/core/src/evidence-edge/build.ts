@@ -18,6 +18,7 @@ import type {
   BuildConceptAssessmentEdgesResult,
   ConceptAssessmentEdge,
   ConceptEvidenceBasis,
+  EvidenceBriefCitation,
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from './types.js';
@@ -154,6 +155,100 @@ function toEvidenceObjectivesCitation(citation: ConceptCitation): EvidenceObject
       ? { duplicateSourcePaths: citation.duplicateSourcePaths }
       : {}),
   };
+}
+
+/**
+ * One course-scoped evidence entry, of ANY basis, before it is attached to a
+ * specific assessment path — course-level for `'past-paper'`/`'objectives'`
+ * (one set, reused across every assessment in the course, per the module
+ * doc's stated coarse-graining), assessment-scoped for `'assessment-brief'`
+ * (`[D-247]`, see {@link briefEntriesForAssessment} for why that basis is
+ * never pooled the same way). Module-scope rather than local to {@link
+ * buildConceptAssessmentEdges} so {@link briefEntriesForAssessment} can
+ * return it without a forward reference into that function's body.
+ */
+interface CourseEvidenceEntry {
+  readonly conceptName: string;
+  readonly basis: ConceptEvidenceBasis;
+  readonly citations: readonly EvidenceQuestionCitation[];
+  readonly objectivesCitations: readonly EvidenceObjectivesCitation[];
+  /** `[D-247]`: present only on a `basis: 'assessment-brief'` entry — see {@link briefEntriesForAssessment}. */
+  readonly briefCitations?: readonly EvidenceBriefCitation[];
+  readonly confidence: number;
+  readonly citationCount: number;
+  readonly sourceCount: number;
+}
+
+/** Escapes every regex metacharacter so a concept name can be dropped into a `RegExp` literally — mirrors `../tier3-evidence/build.js`'s own `escapeRegExp`, kept local rather than imported (that module is not this bead's to touch) since the rule itself is one line and needs no shared state. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * Every one of `conceptNames` that occurs verbatim (case-insensitive,
+ * word-bounded) in `text` — `[D-247]`'s "what this term's own assignment or
+ * test says it covers", applied to the SAME no-fuzzy-matching rule
+ * `../tier3-evidence/build.js`'s `findMentionedTerms` already uses for
+ * past-paper and objectives text (R1/R2: no stemming, a plural or inflected
+ * form genuinely misses). Matched against `options.concepts`' own names —
+ * the vault's actual registered vocabulary, never a wider candidate list —
+ * so a hit here is never an invented or inferred mention.
+ */
+function findMentionedConceptNames(
+  text: string,
+  conceptNames: readonly string[],
+): readonly string[] {
+  const hits: string[] = [];
+  for (const name of conceptNames) {
+    if (name === '') continue;
+    const pattern = new RegExp(`\\b${escapeRegExp(name)}\\b`, 'iu');
+    if (pattern.test(text)) hits.push(name);
+  }
+  return hits;
+}
+
+/**
+ * `[D-247]`'s `'assessment-brief'`-basis entries for ONE assessment —
+ * deliberately NOT pooled across the course the way {@link
+ * pastPaperEntries}/{@link objectivesEntries} are. A past paper or an
+ * objectives document is course-wide evidence; an assessment's own stated
+ * `scope` is not — it is a fact about THAT assessment alone (F4.2's own
+ * copy example is "the brief for THIS assignment names it", never "a brief
+ * somewhere in this course"). So a concept named in assignment 1's brief
+ * never produces an edge on assignment 2's `assessmentPath`, even when both
+ * share a course — the opposite of how past-paper/objectives evidence is
+ * deliberately broadcast to every assessment in `build.ts`'s main loop.
+ *
+ * **Confidence is always `1`.** There is exactly one possible source for
+ * this basis on this assessment (the assessment's own note) — "she stated
+ * it" is not a frequency to be measured against a denominator of other
+ * sources, unlike past-paper/objectives confidence (`computeConfidence`).
+ * Never invented: `record.scope` is `undefined` unless `../assessment/
+ * read.js` already resolved a real stated value (frontmatter or body
+ * prose) for this exact note — see `./types.js`'s `ConceptEvidenceBasis`
+ * doc.
+ */
+function briefEntriesForAssessment(
+  record: AssessmentRecord,
+  conceptNames: readonly string[],
+): CourseEvidenceEntry[] {
+  if (record.scope === undefined) return [];
+  const mentioned = findMentionedConceptNames(record.scope, conceptNames);
+  if (mentioned.length === 0) return [];
+  const briefCitation: EvidenceBriefCitation = {
+    sourcePath: record.path,
+    provenance: { sourcePath: record.path, location: { page: 1 } },
+  };
+  return mentioned.map((conceptName) => ({
+    conceptName,
+    basis: 'assessment-brief',
+    citations: [],
+    objectivesCitations: [],
+    briefCitations: [briefCitation],
+    confidence: 1,
+    citationCount: 1,
+    sourceCount: 1,
+  }));
 }
 
 /**
@@ -302,16 +397,8 @@ export async function buildConceptAssessmentEdges(
   // per-assessment evidence, per the module doc's stated coarse-graining.
   // A course can carry entries of BOTH bases for the same concept
   // (`[D-226]` ruling 2's "each basis is stated for what it is") — they are
-  // never merged into one entry.
-  interface CourseEvidenceEntry {
-    readonly conceptName: string;
-    readonly basis: ConceptEvidenceBasis;
-    readonly citations: readonly EvidenceQuestionCitation[];
-    readonly objectivesCitations: readonly EvidenceObjectivesCitation[];
-    readonly confidence: number;
-    readonly citationCount: number;
-    readonly sourceCount: number;
-  }
+  // never merged into one entry. `CourseEvidenceEntry` itself is declared at
+  // module scope — see its own doc.
 
   function pastPaperEntries(
     byConcept: ReadonlyMap<string, ConceptCitation[]>,
@@ -404,6 +491,11 @@ export async function buildConceptAssessmentEdges(
   const assessmentsByPath = new Map<VaultPath, AssessmentRecord>();
   for (const record of assessmentsRead.records) assessmentsByPath.set(record.path, record);
 
+  // `[D-247]`: the real, registered vocabulary a brief mention is matched
+  // against — `options.concepts`' own names, deduplicated, never a wider
+  // candidate list. See `findMentionedConceptNames`'s doc.
+  const conceptNames = [...new Set(options.concepts.map((concept) => concept.name))];
+
   const edges: ConceptAssessmentEdge[] = [];
   const assessmentsWithoutCourse: VaultPath[] = [];
   const assessmentsWithNoEvidence: VaultPath[] = [];
@@ -416,8 +508,25 @@ export async function buildConceptAssessmentEdges(
       assessmentsWithoutCourse.push(record.path);
       continue;
     }
-    const evidence = evidenceByCourse.get(course);
-    if (evidence === undefined || evidence.length === 0) {
+    // Course-level (past-paper/objectives) evidence, shared with every
+    // other assessment in this course, PLUS this one assessment's own
+    // `'assessment-brief'` entries (`[D-247]`) — never shared, see
+    // `briefEntriesForAssessment`'s doc. Re-sorting the combined list with
+    // the SAME comparator `evidenceByCourse` was already sorted with is a
+    // no-op whenever brief entries are empty (a stable sort of an
+    // already-sorted list under an unchanged comparator reproduces the same
+    // order byte-for-byte) — the existing past-paper/objectives ranking is
+    // therefore unchanged for every assessment that carries no brief.
+    const courseEvidence = evidenceByCourse.get(course) ?? [];
+    const briefEntries =
+      options.includeAssessmentBriefBasis === true
+        ? briefEntriesForAssessment(record, conceptNames)
+        : [];
+    const evidence =
+      briefEntries.length === 0
+        ? courseEvidence
+        : [...courseEvidence, ...briefEntries].sort(compareByYield);
+    if (evidence.length === 0) {
       assessmentsWithNoEvidence.push(record.path);
       continue;
     }
@@ -432,6 +541,7 @@ export async function buildConceptAssessmentEdges(
         citations: entry.citations,
         basis: entry.basis,
         ...(entry.basis === 'objectives' ? { objectivesCitations: entry.objectivesCitations } : {}),
+        ...(entry.basis === 'assessment-brief' ? { briefCitations: entry.briefCitations } : {}),
       });
     });
   }
