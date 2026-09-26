@@ -132,6 +132,53 @@ describe('front carries dedupeReason — [D-240] item 5', () => {
   });
 });
 
+// F2.22's per-item "why is this here" (`[D-331]`, `[D-374]`, `ol-3ux7.5.57.14.58`):
+// `ReviewQueueItem.rankedReason` reaches the `'front'` view model verbatim, and
+// only that phase — mirrors the `dedupeReason` coverage just above exactly.
+describe('front carries rankedReason — F2.22, ol-3ux7.5.57.14.58', () => {
+  it('threads a recorded reason through to the front phase', async () => {
+    const item = {
+      ...queueItem(qaFixture()),
+      rankedReason: 'It is overdue and blocks two later concepts.',
+    };
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('front');
+    if (vm.phase === 'front') {
+      expect(vm.rankedReason).toBe('It is overdue and blocks two later concepts.');
+    }
+  });
+
+  it('is absent (never fabricated) when the queue item carried no reason', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('front');
+    if (vm.phase === 'front') {
+      expect(vm.rankedReason).toBeUndefined();
+      expect(Object.hasOwn(vm, 'rankedReason')).toBe(false);
+    }
+  });
+
+  it('does not carry onto the reveal phase — asked once, never argued a second time', async () => {
+    const item = {
+      ...queueItem(qaFixture()),
+      rankedReason: 'It is overdue and blocks two later concepts.',
+    };
+    const session = new ReviewSession(baseDeps({ queue: [item] }));
+    await session.start();
+    session.reveal();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('reveal');
+    expect(Object.hasOwn(vm, 'rankedReason')).toBe(false);
+  });
+});
+
 describe('F2.2 — advancing is immediate', () => {
   it('rating an item immediately presents the next one', async () => {
     const items = [

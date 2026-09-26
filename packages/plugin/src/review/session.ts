@@ -103,6 +103,17 @@ export type ReviewViewModel =
        * (never recall-tier, so never this reason).
        */
       readonly dedupeReason?: QueueItemReason;
+      /**
+       * F2.22's per-item "why is this here" (`[D-331]`, `[D-374]`,
+       * `ol-3ux7.5.57.14.58`): this item's own `ReviewQueueItem.rankedReason`,
+       * passed straight through so the ask-for-the-reason control
+       * (`ol-3ux7.5.57.14.54`) can render it on the one screen she is
+       * actually asked to answer — same "front only, never reveal" scope
+       * `dedupeReason` above already has. `undefined` when the item carries
+       * none (today, always — see `queue-adapter.ts`'s module doc): never
+       * generated, defaulted or paraphrased here.
+       */
+      readonly rankedReason?: string;
     }
   | {
       readonly phase: 'reveal';
@@ -657,6 +668,7 @@ export class ReviewSession {
           instrument: this.requireQaOrCloze(item),
           progress: this.progress(),
           ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
+          ...(item.rankedReason !== undefined ? { rankedReason: item.rankedReason } : {}),
         };
       }
       case 'reveal': {

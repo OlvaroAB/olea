@@ -133,6 +133,25 @@ export interface ReviewQueueItem {
    * `dedupeReasonLine` renders a sentence for.
    */
   readonly dedupeReason?: QueueItemReason;
+  /**
+   * F2.22's per-item "why is this here" (`[D-331]`, `[D-374]`,
+   * `ol-3ux7.5.57.14.58`): `olea-core`'s `StudySessionItem.rankedReason`,
+   * passed straight through by `queue-adapter.ts` when the caller's input
+   * carries one — `oracle.rank.v1`'s own one-clause reasoning for this
+   * item's concept. Held, never shown by default: F2.22's ask-for-the-reason
+   * control (`ol-3ux7.5.57.14.54`) is what renders it, not this file.
+   *
+   * A DIFFERENT question from {@link dedupeReason} above, which is "why did
+   * this instrument win a dedupe tie" — never reuse one field for the other.
+   *
+   * `undefined` for every caller today: nothing upstream of this adapter's
+   * input currently carries a resolved `rankedReason` per item (see
+   * `queue-adapter.ts`'s module doc for exactly where the production path
+   * loses it before it would reach here). Never generated, defaulted or
+   * paraphrased by this file or its adapter — absence means "no recorded
+   * reason," never an invented one.
+   */
+  readonly rankedReason?: string;
 }
 
 export type { Rating, SelectionContextV4 };

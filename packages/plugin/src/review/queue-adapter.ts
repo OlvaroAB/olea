@@ -55,6 +55,39 @@
  * is not preserved into a presentation. The correct answer never gets a lookup — it is never a key
  * in the sidecar (`distractor-provenance-store.ts`'s own doc) and this file does not try.
  *
+ * ## F2.22's `rankedReason` — a fourth pre-fetched map, and where the production path loses it today
+ *
+ * `ol-3ux7.5.57.14.58`: `olea-core`'s `study-session/build.ts` computes
+ * `StudySessionItem.rankedReason` (oracle.rank.v1's one-clause "why this
+ * concept" for a row) at COMPOSITION time, keyed by concept. Neither
+ * `ComposedQueue`'s `QueueItem` (`queue/types.ts`) nor `PlannedQueueItem`
+ * (`plan/execute.ts`) carries a field for it, so — same shape as
+ * `distractorProvenanceById` just above — `rankedReasonsById` is a fourth
+ * pre-fetched map, keyed by `instrumentId`, that whichever caller assembles
+ * this adapter's input would build from the `StudySessionItem[]` it already
+ * has in hand (each row names its own `instrumentId`) and pass in.
+ *
+ * **No caller does this today, and the field is lost on the production path
+ * before it would ever reach this file.** Traced from composition to the
+ * review screen (`ol-3ux7.5.57.14.58`'s own investigation step):
+ * `buildComposedStudySession` produces `StudySessionItem[]` carrying
+ * `rankedReason` (`study-session/build.ts`), but `session/build.ts`'s
+ * `queueItemsFromComposedSession` (the one production translator from that
+ * shape into this adapter's `QueueItem[]` input, `open-session.ts:527`'s
+ * `executeStudyPlanOverComposedRows({ items: queueItems, ... })`) builds each
+ * `QueueItem` from an EXPLICIT field list — `instrumentId`, `instrumentType`,
+ * `conceptIds`, `priorState`, `selectionContext`, `dedupeReason` — that does
+ * not name `rankedReason`, and `QueueItem`/`PlannedQueueItem` have no field
+ * to carry it even if it did. So today, `rankedReasonsById` is always
+ * omitted in production, and every item's `rankedReason` reads `undefined` —
+ * honest, not a regression this file introduces. Closing that gap (either
+ * widening `queueItemsFromComposedSession`'s field list plus a `rankedReason`
+ * field on `QueueItem`/`PlannedQueueItem`, or having `open-session.ts` build
+ * `rankedReasonsById` itself from the same `StudySessionItem[]` and pass it
+ * to `adaptExecutedReviewQueue`) is outside this lane's file ownership
+ * (`session/build.ts`, `queue/types.ts`, `plan/execute.ts` and
+ * `open-session.ts` all belong to other beads) — filed as a follow-up.
+ *
  * ## `adaptExecutedReviewQueue` — P5-T07's addition, `adaptReviewQueue` untouched
  *
  * `adaptReviewQueue`'s `toSelectionContext` states `planVersion: null` because
@@ -374,6 +407,18 @@ export interface AdaptReviewQueueInput {
    * entirely (every caller today) means no `mcq` option gets `believes`/`source_says`.
    */
   readonly distractorProvenanceById?: ReadonlyMap<string, DistractorProvenance>;
+  /**
+   * F2.22 (`[D-331]`, `[D-374]`, `ol-3ux7.5.57.14.58`): `instrumentId` ->
+   * `olea-core`'s `StudySessionItem.rankedReason`, pre-fetched by the
+   * caller — same "caller supplies it, this file only maps it" convention
+   * `recordsById` and `distractorProvenanceById` already use, because
+   * `StudySessionItem` is a different composer's output shape (see this
+   * file's module doc) that neither `ComposedQueue` nor `PlannedQueueItem`
+   * carries a field for. Omitted entirely (every caller today — see the
+   * module doc's "where the production path loses it" section) means no
+   * item gets a `rankedReason`.
+   */
+  readonly rankedReasonsById?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -526,6 +571,7 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
   for (const item of input.queue.items) {
     const record = input.recordsById.get(item.instrumentId);
     if (record === undefined) continue;
+    const rankedReason = input.rankedReasonsById?.get(item.instrumentId);
     items.push({
       instrument: toReviewInstrument(
         record,
@@ -536,6 +582,7 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
       priorState: item.priorState,
       selectionContext: toSelectionContext(item),
       ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
+      ...(rankedReason !== undefined ? { rankedReason } : {}),
     });
   }
 
@@ -562,6 +609,8 @@ export interface AdaptExecutedReviewQueueInput {
   readonly supportSelfAssessment?: SelfAssessmentFeeling;
   /** See {@link AdaptReviewQueueInput.distractorProvenanceById}. */
   readonly distractorProvenanceById?: ReadonlyMap<string, DistractorProvenance>;
+  /** See {@link AdaptReviewQueueInput.rankedReasonsById}. */
+  readonly rankedReasonsById?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -583,6 +632,7 @@ export function adaptExecutedReviewQueue(
   for (const item of input.items) {
     const record = input.recordsById.get(item.instrumentId);
     if (record === undefined) continue;
+    const rankedReason = input.rankedReasonsById?.get(item.instrumentId);
     items.push({
       instrument: toReviewInstrument(
         record,
@@ -593,6 +643,7 @@ export function adaptExecutedReviewQueue(
       priorState: item.priorState,
       selectionContext: item.selectionContext,
       ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
+      ...(rankedReason !== undefined ? { rankedReason } : {}),
     });
   }
 

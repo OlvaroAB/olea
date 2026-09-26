@@ -684,6 +684,81 @@ describe('both adapters carry dedupeReason through verbatim ([D-240] item 5)', (
   });
 });
 
+// F2.22 (`[D-331]`, `[D-374]`, `ol-3ux7.5.57.14.58`): both adapters map
+// `rankedReasonsById` onto `ReviewQueueItem.rankedReason` verbatim, by
+// `instrumentId` — same "read straight off the pre-fetched map, never
+// derived here" discipline `distractorProvenanceById` already follows,
+// because neither `QueueItem` nor `PlannedQueueItem` carries the field
+// itself (see this file's module doc for exactly where the production path
+// loses it before it would reach here).
+describe('both adapters map rankedReasonsById onto rankedReason, never fabricating one (F2.22)', () => {
+  it('adaptReviewQueue carries the reason for the named instrument, and omits it for every other item', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const [first, ...rest] = composedQueueFor(session).items;
+    if (first === undefined) throw new Error('expected a composed item');
+
+    const items = adaptReviewQueue({
+      queue: { items: [first, ...rest], deferred: [] },
+      recordsById: session.recordsById,
+      rankedReasonsById: new Map([
+        [first.instrumentId, 'It is overdue and blocks two later concepts.'],
+      ]),
+    });
+    const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
+    expect(adapted?.rankedReason).toBe('It is overdue and blocks two later concepts.');
+    // Never fabricated for an item the map names nothing for.
+    for (const item of items) {
+      if (item.instrument.instrumentId === first.instrumentId) continue;
+      expect(item.rankedReason).toBeUndefined();
+      expect(Object.hasOwn(item, 'rankedReason')).toBe(false);
+    }
+  });
+
+  it('omitting rankedReasonsById leaves every item without a rankedReason — every caller today', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const items = adaptReviewQueue({
+      queue: composedQueueFor(session),
+      recordsById: session.recordsById,
+    });
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(Object.hasOwn(item, 'rankedReason')).toBe(false);
+    }
+  });
+
+  it('adaptExecutedReviewQueue carries the same field through PlannedQueueItem', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const [first, ...rest] = composedQueueFor(session).items;
+    if (first === undefined) throw new Error('expected a composed item');
+
+    const executed = executeStudyPlan({
+      queue: { items: [first, ...rest], deferred: [] },
+      plan: null,
+    });
+    const items = adaptExecutedReviewQueue({
+      items: executed.items,
+      recordsById: session.recordsById,
+      rankedReasonsById: new Map([
+        [first.instrumentId, 'It is overdue and blocks two later concepts.'],
+      ]),
+    });
+    const adapted = items.find((i) => i.instrument.instrumentId === first.instrumentId);
+    expect(adapted?.rankedReason).toBe('It is overdue and blocks two later concepts.');
+  });
+});
+
 // [SUPP-3] (`ol-lpl4`): row 3.9's chooser input, built from raw review-log
 // entries and threaded through both adapters — the live queue's equivalent of
 // `study-session/build.ts`'s composition-time wiring ([SUPP-2], `ol-95vv.4`).
