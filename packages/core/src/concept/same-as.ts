@@ -40,10 +40,20 @@
  * and, on a later sever, surfaces them as migration candidates
  * (`edgesEligibleForSplitMigration`) — it does not un-remap them. A human or a future bead
  * decides what a migration candidate does next.
+ *
+ * **Reads by identity, transitions by record (`[D-378]`, `ol-egov.141.89.9.56`).** Two
+ * `.olea/concepts/` records sharing an anchor are one identity, and `./key-store.ts`'s canonical-key
+ * index names its canonical key. `checkSameAsClosureCompatibility` and `proposeSameAsLink`'s look-up
+ * of an existing decision read every link's keys through that index, so a pair confirmed, declined
+ * or severed under a superseded duplicate's key counts for its canonical identity. The transitions
+ * (`confirmSameAsLink`, `declineSameAsLink`, `severSameAsLink`) still address one record by the
+ * keys it was written with, and nothing here rewrites a record's keys. A shared introducing passage
+ * alone never makes two concepts one identity, so it never joins two links either.
  */
 
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { type ConceptKeyCanonicalIndex, readConceptKeyCanonicalIndex } from './key-store.js';
 import {
   type KeyedConceptRelation,
   listRelationCacheRecords,
@@ -194,6 +204,31 @@ async function findLink(
   return undefined;
 }
 
+/**
+ * A link already recorded for this identity pair under other keys (`[D-378]`, module doc): a record
+ * whose two keys resolve, through the canonical-key index, to the pair `keyA`/`keyB` resolve to. A
+ * decision outranks a pending proposal when there are several (the first `'confirmed'`,
+ * `'declined'` or `'severed'` record in listing order, else the first `'proposed'` one).
+ * `undefined` on a store with no duplicates, without listing a single link.
+ */
+async function findLinkForIdentityPair(
+  vault: VaultSource,
+  keyA: string,
+  keyB: string,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): Promise<{ readonly path: VaultPath; readonly record: SameAsLinkRecord } | undefined> {
+  if (canonicalKeys.superseded.size === 0) return undefined;
+  const target = linkIdentity(canonicalKeys.canonicalOf(keyA), canonicalKeys.canonicalOf(keyB));
+  const matches = (await listSameAsLinkRecords(vault)).filter(
+    ({ record }) =>
+      linkIdentity(
+        canonicalKeys.canonicalOf(record.keyA),
+        canonicalKeys.canonicalOf(record.keyB),
+      ) === target,
+  );
+  return matches.find(({ record }) => record.status !== 'proposed') ?? matches[0];
+}
+
 function defaultNow(): string {
   return new Date().toISOString();
 }
@@ -207,6 +242,11 @@ export interface ProposeSameAsLinkOptions {
    * every other status gets exactly the prior behaviour.
    */
   readonly evidenceFingerprint?: string;
+  /**
+   * `[D-378]`: the canonical-key index an existing decision is looked up through (see below). Read
+   * from the vault's `.olea/concepts/` store when omitted and the exact pair has no record.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
 }
 
 /**
@@ -232,6 +272,13 @@ export interface ProposeSameAsLinkOptions {
  * never passes `evidenceFingerprint` never triggers this path: a declined link with no fingerprint
  * on either side compares `undefined === undefined` and stays declined, matching the
  * conservative default every other branch already has.
+ *
+ * **An existing decision is found by identity (`[D-378]`, module doc).** When this exact pair has
+ * no record, a record for the same identity pair under a superseded duplicate's key is this pair's
+ * record, and every rule above applies to it — so a pair declined under one key of an identity is
+ * not re-proposed under another. A brand-new record carries the keys as given; a caller proposing
+ * from the concept store resolves them first (`packages/plugin/src/concept/wiring.ts`'s
+ * `proposeSameAsForMovedNoteAnchors`).
  */
 export async function proposeSameAsLink(
   vault: VaultSource,
@@ -240,7 +287,14 @@ export async function proposeSameAsLink(
   options: ProposeSameAsLinkOptions = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findLink(vault, keyA, keyB);
+  const existing =
+    (await findLink(vault, keyA, keyB)) ??
+    (await findLinkForIdentityPair(
+      vault,
+      keyA,
+      keyB,
+      options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
+    ));
   if (existing !== undefined) {
     if (
       existing.record.status === 'declined' &&
@@ -323,16 +377,29 @@ export interface SameAsClosureCheckResult {
  * A `'proposed'` link between two class members is never a conflict — proposing something is not
  * her evidential read of it, and this function's whole job is checking against what she HAS read
  * (`'declined'`/`'severed'`), never against an unresolved proposal.
+ *
+ * **Keys are read by identity (`[D-378]`, module doc).** Every link's keys, and `keyA`/`keyB`
+ * themselves, are resolved through the canonical-key index before the class is walked, so a pair
+ * declined or severed under a superseded duplicate's key conflicts exactly as it would under the
+ * canonical key, and `resultingClass` and `conflict` name canonical keys. A pair with several
+ * records under duplicate keys conflicts when any one of them was declined or severed. On a store
+ * with no duplicates this reads exactly as it did before. `canonicalKeys` is read from the vault's
+ * `.olea/concepts/` store when omitted.
  */
 export async function checkSameAsClosureCompatibility(
   vault: VaultSource,
   keyA: string,
   keyB: string,
+  options: { readonly canonicalKeys?: ConceptKeyCanonicalIndex } = {},
 ): Promise<SameAsClosureCheckResult> {
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  const canonicalOf = (key: string): string => canonicalKeys.canonicalOf(key);
   const all = await listSameAsLinkRecords(vault);
-  const byIdentity = new Map<string, SameAsLinkRecord>();
+  const readApart = new Map<string, 'declined' | 'severed'>();
   for (const { record } of all) {
-    byIdentity.set(linkIdentity(record.keyA, record.keyB), record);
+    if (record.status !== 'declined' && record.status !== 'severed') continue;
+    const identity = linkIdentity(canonicalOf(record.keyA), canonicalOf(record.keyB));
+    if (!readApart.has(identity)) readApart.set(identity, record.status);
   }
 
   const adjacency = new Map<string, Set<string>>();
@@ -343,15 +410,19 @@ export async function checkSameAsClosureCompatibility(
     adjacency.get(y)?.add(x);
   };
   for (const { record } of all) {
-    if (record.status === 'confirmed') addEdge(record.keyA, record.keyB);
+    if (record.status === 'confirmed') {
+      addEdge(canonicalOf(record.keyA), canonicalOf(record.keyB));
+    }
   }
   // The hypothetical edge this confirm would add — included so keyA's and keyB's existing
   // classes (if any) are reached in the same walk, whether or not either key has any confirmed
   // link yet.
-  addEdge(keyA, keyB);
+  const startA = canonicalOf(keyA);
+  const startB = canonicalOf(keyB);
+  addEdge(startA, startB);
 
-  const visited = new Set<string>([keyA]);
-  const stack: string[] = [keyA];
+  const visited = new Set<string>([startA]);
+  const stack: string[] = [startA];
   while (stack.length > 0) {
     const current = stack.pop();
     if (current === undefined) continue;
@@ -363,7 +434,7 @@ export async function checkSameAsClosureCompatibility(
     }
   }
   const resultingClass = [...visited].sort(byCodeUnit);
-  const [confirmingA, confirmingB] = canonicalPair(keyA, keyB);
+  const [confirmingA, confirmingB] = canonicalPair(startA, startB);
 
   for (let i = 0; i < resultingClass.length; i += 1) {
     for (let j = i + 1; j < resultingClass.length; j += 1) {
@@ -371,11 +442,11 @@ export async function checkSameAsClosureCompatibility(
       const y = resultingClass[j];
       if (x === undefined || y === undefined) continue;
       if (x === confirmingA && y === confirmingB) continue; // the pair being decided: not its own conflict ([D-257] ruling 3).
-      const record = byIdentity.get(linkIdentity(x, y));
-      if (record?.status === 'declined' || record?.status === 'severed') {
+      const status = readApart.get(linkIdentity(x, y));
+      if (status !== undefined) {
         return {
           compatible: false,
-          conflict: { keyA: x, keyB: y, status: record.status },
+          conflict: { keyA: x, keyB: y, status },
           resultingClass,
         };
       }
@@ -401,13 +472,14 @@ export async function checkSameAsClosureCompatibility(
  * **The class-level compatibility check (`[D-295 / CPT-D2]` item 2, `[IL-D8]`) runs before the
  * write.** If closing this pair would transitively join the resulting equivalence class to a pair
  * she has already declined or severed, `checkSameAsClosureCompatibility` reports the conflict and
- * this function throws instead of writing — the record on file is left exactly as it was.
+ * this function throws instead of writing — the record on file is left exactly as it was. The
+ * check reads keys by identity (`[D-378]`); `options.canonicalKeys` is handed to it when given.
  */
 export async function confirmSameAsLink(
   vault: VaultSource,
   keyA: string,
   keyB: string,
-  options: { readonly now?: () => string } = {},
+  options: { readonly now?: () => string; readonly canonicalKeys?: ConceptKeyCanonicalIndex } = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
   const existing = await findLink(vault, keyA, keyB);
@@ -419,7 +491,12 @@ export async function confirmSameAsLink(
   }
   if (existing.record.status === 'confirmed') return existing.record;
 
-  const closureCheck = await checkSameAsClosureCompatibility(vault, keyA, keyB);
+  const closureCheck = await checkSameAsClosureCompatibility(
+    vault,
+    keyA,
+    keyB,
+    options.canonicalKeys !== undefined ? { canonicalKeys: options.canonicalKeys } : {},
+  );
   if (!closureCheck.compatible) {
     const conflict = closureCheck.conflict;
     throw new Error(

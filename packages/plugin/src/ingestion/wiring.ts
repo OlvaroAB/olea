@@ -51,6 +51,7 @@
  */
 
 import {
+  buildConceptKeyCanonicalIndex,
   type ConceptKeyRecord,
   conceptRegistryEntryFromRecord,
   createExtractionJobRunner,
@@ -931,6 +932,12 @@ export async function runOutcomesExtractAndReconcile(
  * `RunOutcomesExtractResult` from its own single `reader.read()` call and must not make a second
  * one just to reach this step. Body unmoved from `runOutcomesExtractAndReconcile`'s own inline
  * version before this bead.
+ *
+ * **Concept keys by identity (`[D-378]`, `ol-egov.141.89.9.56`).** The concept key store's
+ * canonical-key index is built once, from the same listing the registry is built from, and handed
+ * to both the reconciliation (which folds same-anchor duplicates into one entry under the
+ * canonical key, so an outcome attaches that identity once) and the re-read of the outcome store
+ * (which reads each attached key as its canonical key). No concept key record is written here.
  */
 async function reconcileResolvedOutcomes(
   vault: VaultSource,
@@ -939,10 +946,13 @@ async function reconcileResolvedOutcomes(
 ): Promise<RunOutcomesExtractAndReconcileResult> {
   const { outcomes, paperStructure } = resolved;
   const conceptRecords = await listConceptKeyRecords(vault);
+  const canonicalKeys = buildConceptKeyCanonicalIndex(conceptRecords.map(({ record }) => record));
   const concepts = courseScopedConceptRegistry(conceptRecords, options.courses);
-  const reconciliation = await reconcileOutcomeConcepts(vault, outcomes, concepts);
+  const reconciliation = await reconcileOutcomeConcepts(vault, outcomes, concepts, {
+    canonicalKeys,
+  });
 
-  const persisted = await listOutcomeRecords(vault);
+  const persisted = await listOutcomeRecords(vault, { canonicalKeys });
   const byId = new Map(persisted.map(({ record }) => [record.id, record]));
   const reconciledOutcomes = outcomes.map((outcome) => byId.get(outcome.id) ?? outcome);
 

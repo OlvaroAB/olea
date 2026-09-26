@@ -37,8 +37,19 @@
  * its own dot-prefixed folder, written and read through the injected `VaultSource` port — never
  * into her authored notes (INV-6 Part one has nothing to say about `.olea/`, same argument
  * `same-as.ts` and `../outcome/store.ts` already make).
+ *
+ * **An existing decision is found by concept identity (`[D-378]`, `ol-egov.141.89.9.56`).** Two
+ * same-anchor concept key records are one identity (`../concept/key-store.ts`'s canonical-key
+ * index). `proposeOutcomeConceptNearMatch` treats a record for this outcome and any key of the
+ * concept's identity as this pair's record, so a near match declined under a superseded
+ * duplicate's key is not proposed again under the canonical key. Records keep the keys they were
+ * written with; confirm and decline still address one record by its own pair.
  */
 
+import {
+  type ConceptKeyCanonicalIndex,
+  readConceptKeyCanonicalIndex,
+} from '../concept/key-store.js';
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
@@ -155,6 +166,35 @@ function defaultNow(): string {
 
 export interface ProposeOutcomeConceptNearMatchOptions {
   readonly now?: () => string;
+  /**
+   * `[D-378]`: the canonical-key index an existing decision is looked up through (module doc).
+   * Read from the vault's `.olea/concepts/` store when omitted and the exact pair has no record.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+}
+
+/**
+ * A record for this outcome and another key of the same concept identity (`[D-378]`, module doc).
+ * A decision outranks a pending proposal when there are several (the first `'confirmed'` or
+ * `'declined'` record in listing order, else the first `'proposed'` one). `undefined` on a store
+ * with no duplicates, without listing a single record.
+ */
+async function findNearMatchForIdentity(
+  vault: VaultSource,
+  outcomeId: string,
+  conceptKey: string,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): Promise<
+  { readonly path: VaultPath; readonly record: OutcomeConceptNearMatchRecord } | undefined
+> {
+  if (canonicalKeys.superseded.size === 0) return undefined;
+  const canonicalKey = canonicalKeys.canonicalOf(conceptKey);
+  const matches = (await listOutcomeConceptNearMatchRecords(vault)).filter(
+    ({ record }) =>
+      record.outcomeId === outcomeId &&
+      canonicalKeys.canonicalOf(record.conceptKey) === canonicalKey,
+  );
+  return matches.find(({ record }) => record.status !== 'proposed') ?? matches[0];
 }
 
 /**
@@ -165,6 +205,10 @@ export interface ProposeOutcomeConceptNearMatchOptions {
  * (already resolved as not containment; a re-run finding the same token-set containment is not new
  * evidence). Mirrors `same-as.ts`'s `proposeSameAsLink` exactly, for the same idempotent-signal
  * reason.
+ *
+ * When this exact pair has no record, a record for the same outcome and another key of the
+ * concept's identity is this pair's record (`[D-378]`, module doc) — the same no-op applies to it.
+ * A brand-new record carries the keys as given; `./reconcile.ts` passes the canonical key.
  */
 export async function proposeOutcomeConceptNearMatch(
   vault: VaultSource,
@@ -173,7 +217,14 @@ export async function proposeOutcomeConceptNearMatch(
   options: ProposeOutcomeConceptNearMatchOptions = {},
 ): Promise<OutcomeConceptNearMatchRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findNearMatch(vault, outcomeId, conceptKey);
+  const existing =
+    (await findNearMatch(vault, outcomeId, conceptKey)) ??
+    (await findNearMatchForIdentity(
+      vault,
+      outcomeId,
+      conceptKey,
+      options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
+    ));
   if (existing !== undefined) return existing.record;
 
   const record: OutcomeConceptNearMatchRecord = {

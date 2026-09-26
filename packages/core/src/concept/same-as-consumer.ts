@@ -57,9 +57,23 @@
  * reason) across every record folded under one canonical key — never a preference between the
  * two sides', matching `ConceptRecord.courses`'s own existing M:N union discipline
  * (`./types.ts`).
+ *
+ * **Same-anchor duplicates first, then links (`[D-378]`, `ol-egov.141.89.9.56`).** A same-as link
+ * joins two identities; two `.olea/concepts/` records sharing an anchor are already ONE identity,
+ * whose canonical key `./key-store.ts`'s canonical-key index names (the earliest-minted record).
+ * Every function below takes that index as an optional last argument. Given it, each key — a
+ * concept's, a relation-cache endpoint's, and each link's own two — is resolved to its canonical
+ * key before any link redirect applies, so a superseded duplicate reads as its canonical key, and a
+ * link confirmed under a superseded key still folds its identity. A link whose two keys resolve to
+ * one identity redirects nothing, and a confirmed link's surviving key is the code-unit-first of
+ * its two canonical keys (the same `keyA` rule, applied after resolution). Two concepts that share
+ * only an introducing passage are two identities in the index, so nothing here folds them. Omitted,
+ * every function reads exactly as it did before the index existed. Still a view: nothing is
+ * written, and no stored key is rewritten.
  */
 
 import type { VaultPath } from '../vault/types.js';
+import type { ConceptKeyCanonicalIndex } from './key-store.js';
 import {
   propositionKey,
   type RelationCacheAttestation,
@@ -101,15 +115,37 @@ export function canonicalKeyForLink(link: SameAsLinkRecord): string | undefined 
  * applies to its own keyed records. `'proposed'`, `'declined'` and `'severed'` links contribute
  * nothing (requirements 2 and 3) — this is the one seam through which every function below
  * inherits that discipline, rather than each re-checking `status` itself.
+ *
+ * **Given `canonicalKeys` (`[D-378]`, module doc)**, the map also sends every superseded duplicate
+ * key to its identity's key — its canonical key, or where a confirmed link folds that identity into
+ * another, the link's surviving key — and each link is read over its two canonical keys, so the
+ * returned map alone resolves any key a caller holds.
  */
 export function buildSameAsKeyRedirect(
   links: readonly SameAsLinkRecord[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
 ): ReadonlyMap<string, string> {
+  if (canonicalKeys === undefined) {
+    const redirect = new Map<string, string>();
+    for (const link of links) {
+      const canonicalKey = canonicalKeyForLink(link);
+      if (canonicalKey === undefined) continue;
+      if (link.keyB !== canonicalKey) redirect.set(link.keyB, canonicalKey);
+    }
+    return redirect;
+  }
+
   const redirect = new Map<string, string>();
   for (const link of links) {
-    const canonicalKey = canonicalKeyForLink(link);
-    if (canonicalKey === undefined) continue;
-    if (link.keyB !== canonicalKey) redirect.set(link.keyB, canonicalKey);
+    if (canonicalKeyForLink(link) === undefined) continue;
+    const a = canonicalKeys.canonicalOf(link.keyA);
+    const b = canonicalKeys.canonicalOf(link.keyB);
+    if (a === b) continue;
+    const [surviving, losing] = a < b ? [a, b] : [b, a];
+    redirect.set(losing, surviving);
+  }
+  for (const [superseded, canonical] of canonicalKeys.superseded) {
+    redirect.set(superseded, redirect.get(canonical) ?? canonical);
   }
   return redirect;
 }
@@ -134,12 +170,17 @@ function dedupeSorted(values: readonly string[]): readonly string[] {
  *
  * No confirmed link touching this set (the ordinary case) returns the input completely
  * unchanged, by reference — `merged: 0`.
+ *
+ * Given `canonicalKeys` (`[D-378]`, module doc), a same-anchor pair folds exactly as a confirmed
+ * pair does, under its canonical key; the unchanged-by-reference return then also needs a store
+ * with no duplicates.
  */
 export function resolveConceptsWithSameAsLinks<T extends SameAsResolvableConcept>(
   concepts: readonly T[],
   links: readonly SameAsLinkRecord[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
 ): ResolveConceptsWithSameAsResult<T> {
-  const redirect = buildSameAsKeyRedirect(links);
+  const redirect = buildSameAsKeyRedirect(links, canonicalKeys);
   if (redirect.size === 0) return { concepts, merged: 0 };
 
   const groups = new Map<string, T[]>();
@@ -216,12 +257,16 @@ function rankAttestations(a: RelationCacheAttestation, b: RelationCacheAttestati
  * the gap the write side leaves on purpose. Attestations are unioned (deduplicated on content,
  * never on object identity) and ranked the same provenance-then-confidence way the write side's
  * cache does.
+ *
+ * Given `canonicalKeys` (`[D-378]`, module doc), a record cached under a superseded duplicate's key
+ * resolves to its canonical proposition and folds with the record already there, the same way.
  */
 export function resolveRelationCacheRecordsWithSameAsLinks(
   records: readonly RelationCacheRecord[],
   links: readonly SameAsLinkRecord[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
 ): readonly RelationCacheRecord[] {
-  const redirect = buildSameAsKeyRedirect(links);
+  const redirect = buildSameAsKeyRedirect(links, canonicalKeys);
   if (redirect.size === 0) return records;
 
   const groups = new Map<string, RelationCacheRecord[]>();

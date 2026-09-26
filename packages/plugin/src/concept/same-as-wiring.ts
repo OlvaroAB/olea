@@ -37,6 +37,15 @@
  * **No persisted shape changes here.** This composes three existing reads
  * (`listSameAsLinkRecords`, `listRelationCacheRecords`, `listEdgeDispositionLogs`) and two pure
  * core functions; it writes nothing and defines no new record shape.
+ *
+ * **Same-anchor duplicates read as one identity too (`[D-378]`, `ol-egov.141.89.9.56`).** Two
+ * `.olea/concepts/` records sharing an anchor are one identity already, before any link;
+ * `olea-core`'s canonical-key index names its canonical key. `resolveSameAsForPass` reads that
+ * index once and hands it to all three pure functions, so a duplicate's key reads as its canonical
+ * key in the pass's concepts, in the relation-cache records, in each link's own keys and in the
+ * edge dispositions — a decline recorded under a duplicate's proposition withholds the canonical
+ * edge. A concept that shares only an introducing passage is its own identity there and is never
+ * folded. Still read-only: no stored key is rewritten.
  */
 
 import {
@@ -49,6 +58,7 @@ import {
   type ReadConcept,
   type RelationCacheRecord,
   type RelationSet,
+  readConceptKeyCanonicalIndex,
   resolveConceptsWithSameAsLinks,
   resolveRelationCacheRecordsWithSameAsLinks,
   type VaultSource,
@@ -96,8 +106,9 @@ export async function resolveSameAsForPass(
 ): Promise<SameAsResolvedPass> {
   const sameAsLinkEntries = await listSameAsLinkRecords(vault);
   const links = sameAsLinkEntries.map((entry) => entry.record);
+  const canonicalKeys = await readConceptKeyCanonicalIndex(vault);
 
-  const conceptsResult = resolveConceptsWithSameAsLinks(pass.read.concepts, links);
+  const conceptsResult = resolveConceptsWithSameAsLinks(pass.read.concepts, links, canonicalKeys);
 
   const [cacheRecordEntries, dispositionLogEntries] = await Promise.all([
     listRelationCacheRecords(vault),
@@ -107,10 +118,12 @@ export async function resolveSameAsForPass(
   const resolvedCacheRecords = resolveRelationCacheRecordsWithSameAsLinks(
     cacheRecordEntries.map((entry) => entry.record),
     links,
+    canonicalKeys,
   );
   const servedCacheRecords = excludeDisposedRelationCacheRecords(
     resolvedCacheRecords,
     dispositionLogs,
+    canonicalKeys,
   );
   const sameAsCachedRelations: ConceptRelation[] = [];
   for (const record of servedCacheRecords) {

@@ -46,13 +46,26 @@
  * daily-file mechanism a captured review event uses — an edge disposition is Olea's own
  * judgement about her material, not something she did, so it does not belong in the log the
  * architecture boundary reserves for her acts (relation-landing-design.md §2, §6).
+ *
+ * **Read by concept identity, given the canonical-key index (`[D-378]`, `ol-egov.141.89.9.56`).**
+ * A proposition's two endpoint keys may include a superseded same-anchor duplicate's key
+ * (`./key-store.ts`'s canonical-key index names each identity's canonical key). Given the index,
+ * `excludedPropositionKeys` and `excludeDisposedRelationCacheRecords` read every log under the
+ * canonical proposition it now names (`./relation-cache.ts`'s `canonicalPropositionKey`), so a
+ * decline recorded against a duplicate's proposition withholds the canonical edge. Where one
+ * canonical proposition has logs under more than one key, its current disposition is the latest
+ * event across them (the log under the canonical proposition itself wins a same-instant tie).
+ * Logs are still written and kept under the key they were recorded with; nothing here rewrites
+ * one. A shared introducing passage alone never makes two concepts one identity, so it never joins
+ * two logs. Without the index, every log reads by its own key exactly as before.
  */
 
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import type { ConceptKeyCanonicalIndex } from './key-store.js';
 import type { RelationType } from './relation.js';
 import type { RelationCacheRecord } from './relation-cache.js';
-import { propositionKey } from './relation-cache.js';
+import { canonicalPropositionKey, propositionKey } from './relation-cache.js';
 
 /** The vault folder this module owns. */
 export const EDGE_DISPOSITION_FOLDER: VaultPath = '.olea/relation-dispositions';
@@ -191,11 +204,61 @@ export function isExcludedAtReadTime(kind: EdgeDispositionKind | undefined): boo
   return kind === 'declined' || kind === 'expired';
 }
 
-/** Every proposition key currently excluded, computed once so a caller reading many records pays one pass over the logs rather than one lookup per record. */
-export function excludedPropositionKeys(logs: readonly EdgeDispositionLog[]): ReadonlySet<string> {
-  const excluded = new Set<string>();
+/**
+ * The current disposition of one canonical proposition whose logs sit under several keys
+ * (`[D-378]`, module doc): the latest event across them, the log under `canonicalKey` itself
+ * winning a same-instant tie. A single log reads exactly as `currentDisposition` reads it.
+ */
+function currentDispositionAcross(
+  logs: readonly EdgeDispositionLog[],
+  canonicalKey: string,
+): EdgeDispositionKind | undefined {
+  if (logs.length === 1) return currentDisposition(logs[0]);
+  let latest: { readonly event: EdgeDispositionEvent; readonly own: boolean } | undefined;
   for (const log of logs) {
-    if (isExcludedAtReadTime(currentDisposition(log))) excluded.add(log.propositionKey);
+    const event = log.events[log.events.length - 1];
+    if (event === undefined) continue;
+    const own = log.propositionKey === canonicalKey;
+    if (
+      latest === undefined ||
+      event.at > latest.event.at ||
+      (event.at === latest.event.at && own && !latest.own)
+    ) {
+      latest = { event, own };
+    }
+  }
+  return latest?.event.kind;
+}
+
+/**
+ * Every proposition key currently excluded, computed once so a caller reading many records pays
+ * one pass over the logs rather than one lookup per record.
+ *
+ * Given `canonicalKeys` (`[D-378]`, module doc), the keys are canonical propositions: each log is
+ * read under the canonical proposition it names, and a proposition with logs under several keys is
+ * excluded when the latest disposition across them is. Omitted, each log's own key, as before.
+ */
+export function excludedPropositionKeys(
+  logs: readonly EdgeDispositionLog[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
+): ReadonlySet<string> {
+  const excluded = new Set<string>();
+  if (canonicalKeys === undefined) {
+    for (const log of logs) {
+      if (isExcludedAtReadTime(currentDisposition(log))) excluded.add(log.propositionKey);
+    }
+    return excluded;
+  }
+
+  const byCanonicalProposition = new Map<string, EdgeDispositionLog[]>();
+  for (const log of logs) {
+    const key = canonicalPropositionKey(log.propositionKey, canonicalKeys);
+    const group = byCanonicalProposition.get(key);
+    if (group === undefined) byCanonicalProposition.set(key, [log]);
+    else group.push(log);
+  }
+  for (const [key, group] of byCanonicalProposition) {
+    if (isExcludedAtReadTime(currentDispositionAcross(group, key))) excluded.add(key);
   }
   return excluded;
 }
@@ -205,13 +268,31 @@ export function excludedPropositionKeys(logs: readonly EdgeDispositionLog[]): Re
  * `./relation-cache.ts`'s own name-based fold — see that module's
  * `relationCacheRecordsAsConceptRelations`, which accepts this function's output as
  * `excludePropositionKeys`. Pure and total: never mutates a record, only filters the list.
+ *
+ * Given `canonicalKeys` (`[D-378]`, module doc), each record is matched by the canonical
+ * proposition its endpoints' canonical keys make, against `excludedPropositionKeys`' canonical
+ * set — so a record keyed by a superseded duplicate and one keyed canonically are withheld or
+ * served together. The records returned are the ones given, unchanged.
  */
 export function excludeDisposedRelationCacheRecords(
   records: readonly RelationCacheRecord[],
   logs: readonly EdgeDispositionLog[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
 ): readonly RelationCacheRecord[] {
-  const excluded = excludedPropositionKeys(logs);
-  return records.filter((record) => !excluded.has(record.propositionKey));
+  const excluded = excludedPropositionKeys(logs, canonicalKeys);
+  if (canonicalKeys === undefined) {
+    return records.filter((record) => !excluded.has(record.propositionKey));
+  }
+  return records.filter(
+    (record) =>
+      !excluded.has(
+        propositionKey(
+          record.type,
+          canonicalKeys.canonicalOf(record.fromKey),
+          canonicalKeys.canonicalOf(record.toKey),
+        ),
+      ),
+  );
 }
 
 export type { RelationType };

@@ -54,10 +54,23 @@
  * **Retired outcomes are skipped.** F8.5's withdrawal state means an outcome no longer represents
  * live scope; reconciling new concepts onto it would grow a scope the exam is not asking about. A
  * caller that wants a retired outcome reconciled anyway calls this before retiring it, not after.
+ *
+ * **One entry per concept identity (`[D-378]`, `ol-egov.141.89.9.56`).** Two same-anchor concept
+ * key records are one identity; `../concept/key-store.ts`'s canonical-key index names its
+ * canonical key. A registry built record by record (`conceptRegistryEntryFromRecord` over
+ * `listConceptKeyRecords`) holds one entry per record, so before matching,
+ * `reconcileOutcomeConcepts` folds the entries of one identity into one, under the canonical key,
+ * answering to every wording any of them carries. An outcome then attaches that identity once, by
+ * its canonical key, and a near match is proposed once. Two concepts that share only an
+ * introducing passage are two identities in the index and stay two entries here.
  */
 
 import { conceptIdentityNormalizationIndex } from '../concept/concept-key.js';
-import type { ConceptKeyRecord } from '../concept/key-store.js';
+import {
+  type ConceptKeyCanonicalIndex,
+  type ConceptKeyRecord,
+  readConceptKeyCanonicalIndex,
+} from '../concept/key-store.js';
 import type { VaultSource } from '../vault/types.js';
 import {
   type OutcomeConceptNearMatchStatus,
@@ -200,6 +213,52 @@ export interface OutcomeConceptReconciliationReport {
 export interface ReconcileOutcomeConceptsOptions {
   /** Threaded through to `attachConceptToOutcome`/`proposeOutcomeConceptNearMatch`. Injectable for deterministic tests. */
   readonly now?: () => string;
+  /**
+   * `[D-378]`: the canonical-key index the registry is folded through (module doc), and threaded
+   * through to both writers. Read from the vault's `.olea/concepts/` store when omitted.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+}
+
+/**
+ * `concepts` with the entries of one identity folded into one (`[D-378]`, module doc): keyed by the
+ * canonical key, first-seen order kept. The folded entry takes the canonical key's own entry's
+ * name when that entry is present (else the first non-null name), and answers to every other name
+ * and alias in the group as an alias. An entry alone in its identity under its canonical key is
+ * passed through as it is.
+ */
+function foldRegistryThroughCanonicalKeys(
+  concepts: readonly OutcomeConceptRegistryEntry[],
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): readonly OutcomeConceptRegistryEntry[] {
+  const groups = new Map<string, OutcomeConceptRegistryEntry[]>();
+  for (const concept of concepts) {
+    const key = canonicalKeys.canonicalOf(concept.key);
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [concept]);
+    else group.push(concept);
+  }
+  const folded: OutcomeConceptRegistryEntry[] = [];
+  for (const [key, group] of groups) {
+    const [only] = group;
+    if (group.length === 1 && only !== undefined && only.key === key) {
+      folded.push(only);
+      continue;
+    }
+    const own = group.find((concept) => concept.key === key);
+    const name = own?.name ?? group.find((concept) => concept.name !== null)?.name ?? null;
+    const wordings = [own, ...group.filter((concept) => concept !== own)].flatMap((concept) =>
+      concept === undefined
+        ? []
+        : [...(concept.name !== null ? [concept.name] : []), ...concept.aliases],
+    );
+    folded.push({
+      key,
+      name,
+      aliases: dedupe(wordings.filter((wording) => wording !== name)),
+    });
+  }
+  return folded;
 }
 
 /**
@@ -209,7 +268,8 @@ export interface ReconcileOutcomeConceptsOptions {
  * (`proposeOutcomeConceptNearMatch`) rather than attaching; no match at all leaves the outcome
  * untouched and its id lands in `unattachedOutcomeIds`. Both underlying writers are idempotent, so
  * re-running this against a course already partly reconciled writes nothing new for a pair
- * already settled.
+ * already settled. `concepts` is first folded to one entry per concept identity, under its
+ * canonical key (`[D-378]`, module doc), so "every entry" means every identity.
  *
  * `outcomes` and `concepts` are the caller's course-scoped views — this module's own brief is
  * "given a COURSE's Outcome records and its concept registry" — so no course filtering happens
@@ -226,20 +286,21 @@ export async function reconcileOutcomeConcepts(
   const attached: OutcomeConceptAttachment[] = [];
   const proposed: OutcomeConceptProposal[] = [];
   const unattachedOutcomeIds: string[] = [];
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  const registry = foldRegistryThroughCanonicalKeys(concepts, canonicalKeys);
+  const writerOptions = {
+    canonicalKeys,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  };
 
   for (const outcome of outcomes) {
     if (outcome.status !== 'active') continue;
     let matchedAny = false;
 
-    for (const concept of concepts) {
+    for (const concept of registry) {
       const kind = classifyOutcomeConceptMatch(outcome.label, concept);
       if (kind === 'exact-name' || kind === 'accepted-alias') {
-        await attachConceptToOutcome(
-          vault,
-          outcome.id,
-          concept.key,
-          options.now !== undefined ? { now: options.now } : {},
-        );
+        await attachConceptToOutcome(vault, outcome.id, concept.key, writerOptions);
         attached.push({ outcomeId: outcome.id, conceptKey: concept.key, kind });
         matchedAny = true;
       } else if (kind === 'near-token-containment') {
@@ -247,7 +308,7 @@ export async function reconcileOutcomeConcepts(
           vault,
           outcome.id,
           concept.key,
-          options.now !== undefined ? { now: options.now } : {},
+          writerOptions,
         );
         proposed.push({
           outcomeId: outcome.id,

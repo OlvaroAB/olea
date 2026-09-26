@@ -69,6 +69,7 @@
  */
 
 import {
+  buildConceptKeyCanonicalIndex,
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
   type ClassifyKnowledgeKindResult,
@@ -378,6 +379,16 @@ export interface MovedNoteAnchorCandidate {
  * the full argument. Returns every link this call actually proposed (a
  * caller wanting the no-op case — an existing record left unchanged — reads
  * `proposeSameAsLink`'s own return value directly).
+ *
+ * **Keys by identity (`[D-378]`, `ol-egov.141.89.9.56`).** Two key records
+ * sharing an anchor are one identity, so an orphaned note anchor held by a
+ * record and its superseded duplicate is one orphan: both keys are resolved
+ * through the canonical-key index (`olea-core`'s
+ * `buildConceptKeyCanonicalIndex`, over the same listing this call reads)
+ * and the pair is proposed once, under the canonical keys. A candidate of
+ * the orphan's own identity is never a proposal. Candidates that share only
+ * an introducing passage are distinct identities there, so each is proposed
+ * on its own. Nothing already written is rewritten.
  */
 export async function proposeSameAsForMovedNoteAnchors(
   vault: VaultSource,
@@ -385,18 +396,25 @@ export async function proposeSameAsForMovedNoteAnchors(
 ): Promise<readonly SameAsLinkRecord[]> {
   const currentNotePaths = new Set(await vault.list({ extensions: ['md'] }));
   const records = await listConceptKeyRecords(vault);
+  const canonicalKeys = buildConceptKeyCanonicalIndex(records.map(({ record }) => record));
 
   const proposed: SameAsLinkRecord[] = [];
+  const proposedPairs = new Set<string>();
   for (const { record } of records) {
     if (record.anchor.kind !== 'note') continue;
     if (record.anchor.noteUid !== null) continue; // a stable id means the ordinary match already tracks a move.
     if (currentNotePaths.has(record.anchor.notePath)) continue; // still there: not orphaned.
 
+    const orphanKey = canonicalKeys.canonicalOf(record.key);
     const oldIndex = conceptIdentityNormalizationIndex(noteNameFromPath(record.anchor.notePath));
     for (const candidate of candidates) {
-      if (candidate.key === record.key) continue;
+      const candidateKey = canonicalKeys.canonicalOf(candidate.key);
+      if (candidateKey === orphanKey) continue;
       if (conceptIdentityNormalizationIndex(candidate.name) !== oldIndex) continue;
-      proposed.push(await proposeSameAsLink(vault, record.key, candidate.key));
+      const pair = JSON.stringify([orphanKey, candidateKey].sort());
+      if (proposedPairs.has(pair)) continue;
+      proposedPairs.add(pair);
+      proposed.push(await proposeSameAsLink(vault, orphanKey, candidateKey, { canonicalKeys }));
     }
   }
   return proposed;

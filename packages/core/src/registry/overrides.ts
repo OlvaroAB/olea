@@ -44,8 +44,34 @@
  * is a no-op — never an error, and never a reason to invent a "delete" path
  * (F8.5's hard clamp: no surface may offer `Delete`, and none of these
  * functions do).
+ *
+ * ## Every stored key of an identity (`[D-378]`, `ol-egov.141.89.9.56`)
+ *
+ * Renames and withdrawals are keyed by concept key, and a key stored before
+ * two same-anchor `.olea/concepts/` records were read as one identity may be
+ * the superseded duplicate's (`../concept/key-store.ts`'s canonical-key
+ * index names the identity's canonical key). Given that index as their last
+ * argument, `renameConcept`, `pruneConcept` and `unpruneConcept` act on the
+ * identity rather than the one key:
+ *
+ * - **Withdraw** is a no-op when the identity is already withdrawn under any
+ *   of its keys, and otherwise stores the canonical key.
+ * - **Restore** removes every stored key of the identity — without that, a
+ *   withdrawal made under a duplicate's key would outlive her restore.
+ * - **Rename** starts from the rename the read view shows for the identity
+ *   (the canonical key's own, else the code-unit-first stored key's — the
+ *   declared tie-break the plugin's `resolveRegistryOverridesThroughCanonicalKeys`
+ *   applies on read), writes the result once, under the canonical key, and
+ *   drops the identity's other stored entries, their wordings kept as
+ *   aliases. **A rename back to the original wording clears every stored key
+ *   of the identity**, so a duplicate's older rename cannot resurface.
+ *
+ * A concept that shares only an introducing passage is its own identity in
+ * the index, so its entries are never touched. Without the index every
+ * transform reads keys exactly as stored, as before.
  */
 
+import type { ConceptKeyCanonicalIndex } from '../concept/key-store.js';
 import type { ConceptTier } from '../concept/types.js';
 import type { RegistryOverrides, RegistryRenameOverride } from './types.js';
 
@@ -78,6 +104,9 @@ function dedupeAliases(candidate: string, existing: readonly string[]): readonly
  * other caller — a rename she types herself directly carries no tier at all
  * (her own word, tier-less, INV-6), so a follow-up hand-typed rename over an
  * accepted one correctly clears any `sourceTier` the acceptance had set.
+ *
+ * `canonicalKeys` (`[D-378]`): given, the rename acts on the concept's
+ * identity — see this module's doc, "Every stored key of an identity".
  */
 export function renameConcept(
   overrides: RegistryOverrides,
@@ -85,7 +114,11 @@ export function renameConcept(
   originalName: string,
   newDisplayName: string,
   sourceTier?: ConceptTier,
+  canonicalKeys?: ConceptKeyCanonicalIndex,
 ): RegistryOverrides {
+  if (canonicalKeys !== undefined) {
+    return renameIdentity(overrides, key, originalName, newDisplayName, sourceTier, canonicalKeys);
+  }
   const trimmed = newDisplayName.trim();
   const currentOverride = overrides.renames[key];
   const currentDisplayName = currentOverride?.displayName ?? originalName;
@@ -111,7 +144,79 @@ export function renameConcept(
   return { ...overrides, renames: { ...overrides.renames, [key]: nextOverride } };
 }
 
-export function pruneConcept(overrides: RegistryOverrides, key: string): RegistryOverrides {
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * `renameConcept` over the identity (`[D-378]`, module doc). An identity with no stored rename, or
+ * one stored only under its canonical key, is exactly the plain rename of the canonical key.
+ */
+function renameIdentity(
+  overrides: RegistryOverrides,
+  key: string,
+  originalName: string,
+  newDisplayName: string,
+  sourceTier: ConceptTier | undefined,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): RegistryOverrides {
+  const canonical = canonicalKeys.canonicalOf(key);
+  const identityKeys = Object.keys(overrides.renames)
+    .filter((stored) => canonicalKeys.canonicalOf(stored) === canonical)
+    .sort(byCodeUnit);
+  if (identityKeys.every((stored) => stored === canonical)) {
+    return renameConcept(overrides, canonical, originalName, newDisplayName, sourceTier);
+  }
+
+  const shownKey = identityKeys.includes(canonical) ? canonical : identityKeys[0];
+  const shown = shownKey === undefined ? undefined : overrides.renames[shownKey];
+  const trimmed = newDisplayName.trim();
+  const currentDisplayName = shown?.displayName ?? originalName;
+  if (trimmed.length === 0 || trimmed === currentDisplayName) return overrides;
+
+  const otherRenames = Object.fromEntries(
+    Object.entries(overrides.renames).filter(([stored]) => !identityKeys.includes(stored)),
+  );
+  if (trimmed === originalName) return { ...overrides, renames: otherRenames };
+
+  const priorAliases = shown?.aliases ?? [];
+  const otherWordings = identityKeys
+    .filter((stored) => stored !== shownKey)
+    .flatMap((stored) => {
+      const rename = overrides.renames[stored];
+      return rename === undefined ? [] : [rename.displayName, ...rename.aliases];
+    });
+  const aliases = dedupeAliases(currentDisplayName, [
+    ...priorAliases,
+    ...otherWordings.filter(
+      (wording, index) =>
+        !priorAliases.includes(wording) && otherWordings.indexOf(wording) === index,
+    ),
+  ]);
+  const nextOverride: RegistryRenameOverride = {
+    displayName: trimmed,
+    aliases,
+    ...(sourceTier !== undefined ? { sourceTier } : {}),
+  };
+  return { ...overrides, renames: { ...otherRenames, [canonical]: nextOverride } };
+}
+
+/**
+ * `canonicalKeys` (`[D-378]`): given, a no-op when the identity is already withdrawn under any of
+ * its keys, and otherwise the canonical key is stored — see this module's doc.
+ */
+export function pruneConcept(
+  overrides: RegistryOverrides,
+  key: string,
+  canonicalKeys?: ConceptKeyCanonicalIndex,
+): RegistryOverrides {
+  if (canonicalKeys !== undefined) {
+    const canonical = canonicalKeys.canonicalOf(key);
+    const withdrawn = overrides.prunedConceptKeys.some(
+      (stored) => canonicalKeys.canonicalOf(stored) === canonical,
+    );
+    return withdrawn ? overrides : pruneConcept(overrides, canonical);
+  }
   if (overrides.prunedConceptKeys.includes(key)) return overrides;
   return {
     ...overrides,
@@ -119,7 +224,23 @@ export function pruneConcept(overrides: RegistryOverrides, key: string): Registr
   };
 }
 
-export function unpruneConcept(overrides: RegistryOverrides, key: string): RegistryOverrides {
+/**
+ * `canonicalKeys` (`[D-378]`): given, removes every stored key of the identity, so a withdrawal
+ * made under a superseded duplicate's key is undone too — see this module's doc.
+ */
+export function unpruneConcept(
+  overrides: RegistryOverrides,
+  key: string,
+  canonicalKeys?: ConceptKeyCanonicalIndex,
+): RegistryOverrides {
+  if (canonicalKeys !== undefined) {
+    const canonical = canonicalKeys.canonicalOf(key);
+    const kept = overrides.prunedConceptKeys.filter(
+      (stored) => canonicalKeys.canonicalOf(stored) !== canonical,
+    );
+    if (kept.length === overrides.prunedConceptKeys.length) return overrides;
+    return { ...overrides, prunedConceptKeys: kept };
+  }
   if (!overrides.prunedConceptKeys.includes(key)) return overrides;
   return {
     ...overrides,

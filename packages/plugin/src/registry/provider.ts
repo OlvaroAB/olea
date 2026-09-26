@@ -139,11 +139,34 @@
  * against `deps.vault` — no new port, since neither needs Obsidian. See `./same-as-identity.ts`'s
  * own module doc for why an empty `identityProposals` array is the honest, expected value on
  * today's vault (nothing in this plugin calls `proposeSameAsLink` yet).
+ *
+ * ## Overrides by concept identity (`[D-378]`, `ol-egov.141.89.9.56`)
+ *
+ * Renames and withdrawals are stored by concept key, and a key stored before two same-anchor
+ * `.olea/concepts/` records were read as one identity may be the superseded duplicate's. Both
+ * sides go through `olea-core`'s canonical-key index:
+ *
+ * - **Read.** `load()` reads the overrides as stored, then files each rename and withdrawal under
+ *   its canonical key (`./overrides-store.ts`'s `resolveRegistryOverridesThroughCanonicalKeys`),
+ *   so the canonical row the vault walk produces shows it.
+ * - **Write.** `rename`, `withdrawConcept`, `restoreConcept` and `acceptRenameProposal` read the
+ *   blob as stored and hand the index to `olea-core`'s `renameConcept`/`pruneConcept`/
+ *   `unpruneConcept`, which act on every stored key of the identity: a restore clears a withdrawal
+ *   made under a duplicate's key, a rename back to the original clears a duplicate's rename, and a
+ *   new rename is stored once, under the canonical key. Saving a read view back would itself
+ *   rewrite stored keys, so no write starts from one.
+ * - **Cache.** `deps.onOverridesChanged` receives the read view of what was just saved, so
+ *   `main.ts`'s cached copy reads the same way `load()` does.
+ *
+ * A concept that shares only an introducing passage is its own identity in the index; its
+ * overrides are never touched. When the concept store cannot be read, every key reads as stored,
+ * which is exactly the behaviour before this section existed.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildRegistryModel,
+  type ConceptKeyCanonicalIndex,
   type ConceptRecord,
   type ConceptTier,
   type CourseOracleRanking,
@@ -161,6 +184,7 @@ import {
   type RegistryModel,
   type RegistryOverrides,
   type RegistrySourceLocation,
+  readConceptKeyCanonicalIndex,
   readReviewLogFile,
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
@@ -174,7 +198,10 @@ import {
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { ObsidianDataHost } from './overrides-store.js';
-import { ObsidianRegistryOverridesStore } from './overrides-store.js';
+import {
+  ObsidianRegistryOverridesStore,
+  resolveRegistryOverridesThroughCanonicalKeys,
+} from './overrides-store.js';
 import { createVaultPruneInstrumentPort, type PruneInstrumentPort } from './ports.js';
 import {
   buildSameAsIdentityProposals,
@@ -330,6 +357,25 @@ async function vaultNoteTitlesFrom(vault: VaultSource): Promise<readonly string[
   return [...new Set(paths.map(noteTitleFromPath))];
 }
 
+/** Each key as itself — how every override read before `[D-378]`'s canonical lookup. */
+const KEYS_AS_STORED: ConceptKeyCanonicalIndex = {
+  canonicalOf: (key) => key,
+  superseded: new Map(),
+};
+
+/**
+ * The concept store's canonical-key index (module doc, "Overrides by concept identity"), or each
+ * key as stored when the store cannot be read — the pre-`[D-378]` reading, so an unreadable
+ * concept store never blocks a rename, a withdrawal or a restore.
+ */
+async function canonicalKeysOrAsStored(vault: VaultSource): Promise<ConceptKeyCanonicalIndex> {
+  try {
+    return await readConceptKeyCanonicalIndex(vault);
+  } catch {
+    return KEYS_AS_STORED;
+  }
+}
+
 /** Mirrors `../../core/registry/rename-proposal.ts`'s `recordDeclinedRenameProposal` — `[D-206]`'s persisted form, operating on the whole `RegistryOverrides` rather than a bare `Set`, so the caller can save it through `overridesStore` exactly as `rename`/`withdrawConcept`/`restoreConcept` already do. */
 function recordDeclinedRenameProposal(
   overrides: RegistryOverrides,
@@ -408,6 +454,11 @@ export interface CreateLocalRegistryProviderDeps {
    * directory over (`ingestion/wiring.ts`, `ingestion/materiality/wiring.ts`)
    * for the identical reason: a downstream cache-refresh failure must never
    * make a rename/prune/restore itself look like it failed.
+   *
+   * **The value is the READ view of the saved blob (`[D-378]`)** — every key
+   * filed under its canonical key (module doc, "Overrides by concept
+   * identity"), the same view `load()` builds the registry from. It is for
+   * reading only; never save it back.
    */
   readonly onOverridesChanged?: (overrides: RegistryOverrides) => void;
   /**
@@ -590,14 +641,22 @@ function createLoadModel(
       const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
       const additionalPaths = await additionalReviewLogPaths(today, probeDays, deps.deviceId);
 
-      const [{ entries, files }, enumeration, overrides, vaultNoteTitles] = await Promise.all([
-        readReviewLogHistory(deps.vault, { additionalPaths }),
-        // `[D-357]`: the permanent concept key — the key her review log carries, and the key a
-        // rename or withdrawal is stored under, so Today reads the same override for it.
-        enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
-        overridesStore.load(),
-        vaultNoteTitlesFrom(deps.vault),
-      ]);
+      const [{ entries, files }, enumeration, storedOverrides, vaultNoteTitles] = await Promise.all(
+        [
+          readReviewLogHistory(deps.vault, { additionalPaths }),
+          // `[D-357]`: the permanent concept key — the key her review log carries, and the key a
+          // rename or withdrawal is stored under, so Today reads the same override for it.
+          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
+          overridesStore.load(),
+          vaultNoteTitlesFrom(deps.vault),
+        ],
+      );
+      // `[D-378]`: renames and withdrawals by concept identity — one stored under a superseded
+      // duplicate's key reads on the canonical row (module doc, "Overrides by concept identity").
+      const overrides = resolveRegistryOverridesThroughCanonicalKeys(
+        storedOverrides,
+        await canonicalKeysOrAsStored(deps.vault),
+      );
       const [disputes, courseRankings] = await Promise.all([
         disputesFromFiles(deps.vault, files),
         courseRankingsForNoteOffer(
@@ -715,28 +774,49 @@ export function createLocalRegistryProvider(
     renameProposalMemory,
   );
 
+  /**
+   * Every overrides write (module doc, "Overrides by concept identity", `[D-378]`): reads the blob
+   * AS STORED, applies `update` with the canonical-key index, saves, and hands
+   * `deps.onOverridesChanged` the READ view of what was saved.
+   */
+  async function updateOverrides(
+    update: (
+      stored: RegistryOverrides,
+      canonicalKeys: ConceptKeyCanonicalIndex,
+    ) => RegistryOverrides,
+  ): Promise<void> {
+    const canonicalKeys = await canonicalKeysOrAsStored(deps.vault);
+    const next = update(await overridesStore.load(), canonicalKeys);
+    await overridesStore.save(next);
+    deps.onOverridesChanged?.(resolveRegistryOverridesThroughCanonicalKeys(next, canonicalKeys));
+  }
+
   return {
     load: loadModel,
 
     async rename(entry: RegistryConceptEntry, newDisplayName: string): Promise<void> {
-      const overrides = await overridesStore.load();
-      const next = renameConceptOverride(overrides, entry.key, entry.originalName, newDisplayName);
-      await overridesStore.save(next);
-      deps.onOverridesChanged?.(next);
+      await updateOverrides((overrides, canonicalKeys) =>
+        renameConceptOverride(
+          overrides,
+          entry.key,
+          entry.originalName,
+          newDisplayName,
+          undefined,
+          canonicalKeys,
+        ),
+      );
     },
 
     async withdrawConcept(entry: RegistryConceptEntry): Promise<void> {
-      const overrides = await overridesStore.load();
-      const next = pruneConceptOverride(overrides, entry.key);
-      await overridesStore.save(next);
-      deps.onOverridesChanged?.(next);
+      await updateOverrides((overrides, canonicalKeys) =>
+        pruneConceptOverride(overrides, entry.key, canonicalKeys),
+      );
     },
 
     async restoreConcept(entry: RegistryConceptEntry): Promise<void> {
-      const overrides = await overridesStore.load();
-      const next = unpruneConceptOverride(overrides, entry.key);
-      await overridesStore.save(next);
-      deps.onOverridesChanged?.(next);
+      await updateOverrides((overrides, canonicalKeys) =>
+        unpruneConceptOverride(overrides, entry.key, canonicalKeys),
+      );
     },
 
     async withdrawInstrument(instrument: RegistryInstrumentSummary): Promise<void> {
@@ -822,16 +902,17 @@ export function createLocalRegistryProvider(
       // `originalName` parameter — see `../../core/registry/rename-proposal.ts`'s
       // `acceptRenameProposal` doc for exactly why the other order silently
       // no-ops and drops the alias.
-      const overrides = await overridesStore.load();
-      const next = renameConceptOverride(
-        overrides,
-        proposal.key,
-        proposal.currentDisplayName,
-        proposal.candidate.wording,
-        proposal.candidate.tier,
+      // `[D-378]`: acts on every stored key of the identity, like `rename()` above.
+      await updateOverrides((overrides, canonicalKeys) =>
+        renameConceptOverride(
+          overrides,
+          proposal.key,
+          proposal.currentDisplayName,
+          proposal.candidate.wording,
+          proposal.candidate.tier,
+          canonicalKeys,
+        ),
       );
-      await overridesStore.save(next);
-      deps.onOverridesChanged?.(next);
       // The concept now has a manual override (`displayName !== originalName`
       // next load), which `gateRenameProposal` already suppresses on its own
       // — clearing the memory here is tidiness, not correctness-bearing.
@@ -848,10 +929,9 @@ export function createLocalRegistryProvider(
       // (tier, wording) pair does not re-fire even after an Obsidian
       // restart — read back on the next `load()` via
       // `declinedRenameSignaturesFrom(overrides)`, not session memory.
-      const overrides = await overridesStore.load();
-      const next = recordDeclinedRenameProposal(overrides, proposal);
-      await overridesStore.save(next);
-      deps.onOverridesChanged?.(next);
+      // A decline signature is keyed by wording, never by concept; `updateOverrides` is used so
+      // the cache still receives the read view.
+      await updateOverrides((overrides) => recordDeclinedRenameProposal(overrides, proposal));
     },
 
     async confirmIdentityProposal(proposal: SameAsIdentityProposal): Promise<void> {

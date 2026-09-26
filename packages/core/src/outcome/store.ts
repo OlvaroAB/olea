@@ -24,8 +24,23 @@
  * `bindConceptKeyToNote` (key-driven rebind): a caller that already holds an `outcomeId`
  * (typically because it just resolved or was handed one) calls `attachConceptToOutcome` or
  * `retireOutcome` directly, by id, never by re-deriving a source match.
+ *
+ * **Concept keys read through the canonical-key index (`[D-378]`, `ol-egov.141.89.9.56`).** An
+ * outcome's `conceptKeys` are historical references: a key attached before two same-anchor concept
+ * records were read as one identity may be the superseded duplicate's. `listOutcomeRecords`, the
+ * reader every consumer goes through, resolves each through `../concept/key-store.ts`'s
+ * canonical-key index (duplicates collapsing onto one canonical key, first occurrence kept), and
+ * `attachConceptToOutcome` treats an identity already attached under any of its keys as attached
+ * and writes a fresh attachment under the canonical key. **Nothing already written is rewritten**:
+ * a stored record keeps the key it was written with, and the writers here read records as stored
+ * (`listStoredOutcomeRecords`) so a write never carries a resolved view back to disk. A shared
+ * introducing passage alone never makes two concepts one identity, so it never collapses two keys.
  */
 
+import {
+  type ConceptKeyCanonicalIndex,
+  readConceptKeyCanonicalIndex,
+} from '../concept/key-store.js';
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { OutcomeEvent } from './events.js';
@@ -97,14 +112,57 @@ export function outcomeRecordPath(id: string): VaultPath {
   return `${OUTCOME_STORE_FOLDER}/${encodeURIComponent(id)}.json`;
 }
 
+export interface ListOutcomeRecordsOptions {
+  /**
+   * `[D-378]`: the canonical-key index each attached concept key is resolved through (module doc).
+   * Read from the vault's `.olea/concepts/` store when omitted; a caller already holding one for
+   * this pass passes it to save a second listing.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+}
+
 /**
- * Every valid `OutcomeRecord` currently under `.olea/outcomes/`, alongside its path. A file that
- * fails to parse or fails validation is skipped rather than thrown on — the same
- * referential-integrity posture `../concept/key-store.ts`'s `listConceptKeyRecords` and
- * `../misconception`'s content-store reader both take, because one corrupt sidecar file must
- * never take down a read of every other outcome.
+ * `record` with each attached concept key resolved to its canonical key, a duplicate that resolves
+ * to a key already listed dropped (first occurrence kept, attachment order otherwise unchanged).
+ * The same object when nothing changes.
+ */
+function outcomeRecordThroughCanonicalKeys(
+  record: OutcomeRecord,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): OutcomeRecord {
+  const conceptKeys = [...new Set(record.conceptKeys.map((key) => canonicalKeys.canonicalOf(key)))];
+  const unchanged =
+    conceptKeys.length === record.conceptKeys.length &&
+    conceptKeys.every((key, index) => key === record.conceptKeys[index]);
+  return unchanged ? record : { ...record, conceptKeys };
+}
+
+/**
+ * Every valid `OutcomeRecord` currently under `.olea/outcomes/`, alongside its path, with each
+ * attached concept key read through the canonical-key index (module doc) — so an outcome that
+ * parents a superseded duplicate reads as parenting its canonical key. `path` still names the file
+ * as stored; this is a read, and nothing here writes. A file that fails to parse or fails
+ * validation is skipped rather than thrown on — the same referential-integrity posture
+ * `../concept/key-store.ts`'s `listConceptKeyRecords` and `../misconception`'s content-store reader
+ * both take, because one corrupt sidecar file must never take down a read of every other outcome.
  */
 export async function listOutcomeRecords(
+  vault: VaultSource,
+  options: ListOutcomeRecordsOptions = {},
+): Promise<readonly { readonly path: VaultPath; readonly record: OutcomeRecord }[]> {
+  const stored = await listStoredOutcomeRecords(vault);
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  return stored.map(({ path, record }) => ({
+    path,
+    record: outcomeRecordThroughCanonicalKeys(record, canonicalKeys),
+  }));
+}
+
+/**
+ * The records exactly as stored — the listing this module's writers read before they write, so a
+ * write never carries `listOutcomeRecords`' resolved view back to disk (module doc).
+ */
+async function listStoredOutcomeRecords(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: OutcomeRecord }[]> {
   // `listFolder`, not `vault.list`: `ObsidianSource.list()` never sees a dot folder (`ol-egov.141.89.10.52`).
@@ -189,7 +247,7 @@ export async function resolveOutcome(
   options: ResolveOutcomeOptions = {},
 ): Promise<OutcomeRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await listOutcomeRecords(vault);
+  const existing = await listStoredOutcomeRecords(vault);
   const hit = existing.find(({ record }) => sourceMatches(record.source, input.source));
   if (hit !== undefined) return hit.record;
 
@@ -225,15 +283,22 @@ export async function resolveOutcome(
  * time. **Never mints**: an `outcomeId` with no existing record is a caller error, and this
  * function throws rather than silently creating one, mirroring
  * `../concept/key-store.ts`'s `bindConceptKeyToNote`.
+ *
+ * **By identity (`[D-378]`, module doc).** An identity already attached under any of its keys — a
+ * superseded duplicate's included — counts as attached, and writes nothing; a fresh attachment is
+ * written under the canonical key. Keys already stored are never rewritten, and the record returned
+ * is `listOutcomeRecords`' resolved view of it. `canonicalKeys` is read from the vault's
+ * `.olea/concepts/` store when omitted.
  */
 export async function attachConceptToOutcome(
   vault: VaultSource,
   outcomeId: string,
   conceptKey: string,
-  options: Pick<ResolveOutcomeOptions, 'now'> = {},
+  options: Pick<ResolveOutcomeOptions, 'now'> & ListOutcomeRecordsOptions = {},
 ): Promise<OutcomeRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await listOutcomeRecords(vault);
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  const existing = await listStoredOutcomeRecords(vault);
   const hit = existing.find(({ record }) => record.id === outcomeId);
   if (hit === undefined) {
     throw new Error(
@@ -242,18 +307,26 @@ export async function attachConceptToOutcome(
     );
   }
 
+  const canonicalKey = canonicalKeys.canonicalOf(conceptKey);
+  const alreadyAttached = hit.record.conceptKeys.some(
+    (key) => canonicalKeys.canonicalOf(key) === canonicalKey,
+  );
+  if (alreadyAttached) return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
+
   const event: OutcomeEvent = {
     kind: 'concept-attached',
     schemaVersion: 1,
     eventId: globalThis.crypto.randomUUID(),
     timestamp: now(),
     outcomeId,
-    conceptKey,
+    conceptKey: canonicalKey,
   };
   const updated = applyOutcomeEvent(hit.record, event);
-  if (updated === undefined || updated === hit.record) return hit.record;
+  if (updated === undefined || updated === hit.record) {
+    return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
+  }
   await vault.write(hit.path, serialize(updated));
-  return updated;
+  return outcomeRecordThroughCanonicalKeys(updated, canonicalKeys);
 }
 
 /**
@@ -267,7 +340,7 @@ export async function retireOutcome(
   options: Pick<ResolveOutcomeOptions, 'now'> = {},
 ): Promise<OutcomeRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await listOutcomeRecords(vault);
+  const existing = await listStoredOutcomeRecords(vault);
   const hit = existing.find(({ record }) => record.id === outcomeId);
   if (hit === undefined) {
     throw new Error(

@@ -42,13 +42,26 @@
  * shape.** `confirmSameAsIdentityProposal`/`declineSameAsIdentityProposal` are thin, directly
  * testable wrappers over `olea-core`'s `confirmSameAsLink`/`declineSameAsLink` (`ol-egov.141.33`
  * [TRIAGE-5]) — this file mints nothing and never re-derives their state-transition rules.
+ *
+ * **A link's keys are read by identity (`[D-378]`, `ol-egov.141.89.9.56`).** Two
+ * `.olea/concepts/` records sharing an anchor are one identity, and the registry lists it once,
+ * under its canonical key. `buildSameAsIdentityProposals` resolves both of a link's keys through
+ * `olea-core`'s canonical-key index before looking them up, so a proposal recorded under a
+ * superseded duplicate's key is shown against the canonical row. A link whose two keys are one
+ * identity is never asked about (it already is one), and an identity pair is asked about at most
+ * once, and not at all once any record for it is confirmed, declined or severed. The proposal
+ * keeps the stored link's own keys, so accepting or declining transitions that record and no other;
+ * no stored key is rewritten. Two concepts that share only an introducing passage are two
+ * identities in the index and are shown as two rows.
  */
 
 import {
+  type ConceptKeyCanonicalIndex,
   confirmSameAsLink,
   declineSameAsLink,
   type RegistryConceptEntry,
   type RegistrySourceLocation,
+  readConceptKeyCanonicalIndex,
   type SameAsLinkRecord,
   type VaultSource,
 } from 'olea-core';
@@ -71,6 +84,7 @@ export interface SameAsIdentityPassage {
  * cannot carry one, matching the clause's "nothing is shown as a score."
  */
 export interface SameAsIdentityProposal {
+  /** The stored link's own keys, as written — what accept and decline address; the rows shown are resolved by identity (module doc). */
   readonly keyA: string;
   readonly keyB: string;
   readonly nameA: string;
@@ -147,24 +161,75 @@ async function passageForConcept(
   return { location, excerpt };
 }
 
+/** Each key as itself — the reading when the concept store cannot be read (see below). */
+const KEYS_AS_STORED: ConceptKeyCanonicalIndex = {
+  canonicalOf: (key) => key,
+  superseded: new Map(),
+};
+
+export interface BuildSameAsIdentityProposalsOptions {
+  /**
+   * `[D-378]`: the canonical-key index a link's keys are resolved through (module doc). Read from
+   * the vault's `.olea/concepts/` store when omitted and there is a proposal to resolve; when that
+   * store cannot be read, each key reads as itself, the same reading a key the store holds no
+   * record for already gets, and the passage rule below still decides what is shown.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+}
+
+/** One unordered identity pair, as a map key. */
+function identityPairKey(a: string, b: string): string {
+  return JSON.stringify(a < b ? [a, b] : [b, a]);
+}
+
 /**
  * Every currently-`'proposed'` same-as link that can show its passages, resolved against
  * `concepts` — the F8.4a identity section's whole read side. See this module's doc for why an
- * empty result is the honest, expected answer until a propose-side signal exists.
+ * empty result is the honest, expected answer until a propose-side signal exists, and for how a
+ * link's keys are read by identity (`[D-378]`).
  */
 export async function buildSameAsIdentityProposals(
   vault: VaultSource,
   links: readonly SameAsLinkRecord[],
   concepts: readonly RegistryConceptEntry[],
+  options: BuildSameAsIdentityProposalsOptions = {},
 ): Promise<readonly SameAsIdentityProposal[]> {
-  const byKey = new Map(concepts.map((entry) => [entry.key, entry]));
-  const proposals: SameAsIdentityProposal[] = [];
+  if (!links.some((link) => link.status === 'proposed')) return [];
+  const canonicalKeys =
+    options.canonicalKeys ??
+    (await readConceptKeyCanonicalIndex(vault).catch(() => KEYS_AS_STORED));
+  const canonicalOf = (key: string): string => canonicalKeys.canonicalOf(key);
 
+  // One row per identity: the row under the canonical key itself, else the first row of it.
+  const byKey = new Map<string, RegistryConceptEntry>();
+  for (const entry of concepts) {
+    if (canonicalOf(entry.key) === entry.key) byKey.set(entry.key, entry);
+  }
+  for (const entry of concepts) {
+    const key = canonicalOf(entry.key);
+    if (!byKey.has(key)) byKey.set(key, entry);
+  }
+
+  // An identity pair any record has already settled — confirmed, declined or severed.
+  const settled = new Set<string>();
+  for (const link of links) {
+    if (link.status === 'proposed') continue;
+    settled.add(identityPairKey(canonicalOf(link.keyA), canonicalOf(link.keyB)));
+  }
+
+  const proposals: SameAsIdentityProposal[] = [];
+  const shown = new Set<string>();
   for (const link of links) {
     if (link.status !== 'proposed') continue;
 
-    const a = byKey.get(link.keyA);
-    const b = byKey.get(link.keyB);
+    const keyA = canonicalOf(link.keyA);
+    const keyB = canonicalOf(link.keyB);
+    if (keyA === keyB) continue;
+    const pair = identityPairKey(keyA, keyB);
+    if (settled.has(pair) || shown.has(pair)) continue;
+
+    const a = byKey.get(keyA);
+    const b = byKey.get(keyB);
     if (a === undefined || b === undefined) continue;
 
     const [passageA, passageB] = await Promise.all([
@@ -173,6 +238,7 @@ export async function buildSameAsIdentityProposals(
     ]);
     if (passageA === undefined || passageB === undefined) continue;
 
+    shown.add(pair);
     proposals.push({
       keyA: link.keyA,
       keyB: link.keyB,
