@@ -755,6 +755,13 @@ test('a missing register file fails closed (exit 2)', () => {
   assert.match(out, /not found/);
 });
 
+test("a missing register at the DEFAULT (unspecified) path is a soft skip (exit 0), not a structural failure — this repo's own hosted CI, verified against .github/workflows/ci.yml, has no sibling ../olea-service checkout and hits exactly this branch every run; mirrors check-surface-register.mjs's identical handling of the same gap", () => {
+  const root = fixtureRepo(); // no `../olea-service` sibling for this throwaway tmp dir either
+  const { code, out } = runGuard(['--repo-root', root]);
+  assert.equal(code, 0, out);
+  assert.match(out, /register not found at the default path/);
+});
+
 test('an empty register file fails closed (exit 2)', () => {
   const root = fixtureRepo();
   write(root, 'docs/dev/wiring-register.md', '   \n');
@@ -801,7 +808,12 @@ test('SKIP_WIRING_REGISTER=1 bypasses the check and says so loudly', () => {
 // generalised the same `registerArg(root)` pattern to every OTHER fixture test in this file that
 // was omitting `--register` (24 of them) — each was silently falling through to that unreachable
 // default path and failing closed on "register not found" rather than exercising the scenario it
-// named. The helper below is that general fix, not a hack scoped to this section.
+// named. The helper below is that general fix, not a hack scoped to this section. (Note, added
+// 2026-09-26, `ol-egov.141.89.45`: the default path now SOFT-skips, exit 0, rather than failing
+// closed — see the test just above this block — so omitting `--register` today would make these
+// fixtures silently report a clean pass instead of the scenario they name; `registerArg(root)`
+// is still required for exactly that reason, just a different failure shape than when this note
+// was written.)
 // ------------------------------------------------------------------------------------------
 
 /** A throwaway repo tree with `packages/{core,plugin,workbench}/src` all present. */

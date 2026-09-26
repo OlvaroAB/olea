@@ -30,6 +30,32 @@
 //      anything the product runs. This is the whole point (see the "calibration" note below).
 //
 // ==============================================================================================
+// WHAT THIS CHECKS / WHAT THIS DOES NOT CHECK — the register's own intro cites this section by
+// name; keep the two in sync if either changes.
+// ==============================================================================================
+// WHAT THIS CHECKS, as three independently-failing items (this is RESOLVABILITY and COMPLETENESS
+// from the section above, split differently — grouped here by what a reader sees fail, not by the
+// three-part argument for why the tool exists):
+//   1. Every row's "Production caller" citation resolves — the caller cross-check ("WHAT COUNTS AS
+//      A 'PRODUCTION CALLER'" below) plus the plain file:line resolvability every column gets.
+//   2. A completeness scan, both directions: a port-shaped export in source with no register row,
+//      and a register row naming a port the scan no longer finds. "Port-shaped" is the rule in
+//      "WHAT COUNTS AS A 'PORT'" just below, MINUS `NARROWING_ALIAS_EXCLUSIONS` (see that
+//      constant's own doc, in "THE PORT SCAN" section) — a short, by-name, human-curated list of
+//      function-typed aliases that match the port-suffix rule literally but narrow an
+//      already-tracked port to one concrete response shape, not a second seam. Excluded here
+//      means invisible to this item entirely: no row is required, and adding one anyway fails
+//      closed as "STALE IN REGISTER" (the scan will never "find" an excluded name).
+//   3. The register's own tally line (the bold summary sentence after the table) is checked
+//      against the table's actual row count — see `checkTallyLine` below.
+// WHAT THIS DOES NOT CHECK: whether "intended phase has passed" is itself correct (see
+// "REACHABILITY" below for where that signal comes from and its documented fallback); the
+// option-gate and workbench-only-caller shapes ("THE BLIND SPOT" below) are separate, narrower
+// checks layered on top of item 1, not part of it. Every other documented blind spot in this file
+// (structural typing, re-exports under a new name, a stored-but-uninvoked reference, and the rest)
+// is called out inline, in the section closest to the check it limits, rather than repeated here.
+//
+// ==============================================================================================
 // WHAT COUNTS AS A "PORT" — the completeness rule, stated once, checkably
 // ==============================================================================================
 // An exported `interface` OR a function-typed exported `type` alias, in `packages/core/src/**`
@@ -208,6 +234,12 @@
 // `bd -C ../olea-service show <id> --json` if this snapshot might be stale. `--task-status` (see
 // below) exists precisely so this file's own test does not depend on either the live query or
 // this snapshot staying in sync with the real database.
+//
+// SCOPE NOTE, added 2026-09-26 (`ol-egov.141.89.45`): this fallback answers "what if the register
+// loaded but the live task-status query can't run" — it assumes the register file itself was
+// found. The register FILE not existing at all (the guaranteed case in this repo's own CI, which
+// has no sibling checkout) is a separate, earlier gap, handled by the soft-skip branch in
+// `main()` before any of this task-status logic runs — see the EXIT CODES section above.
 //
 // ==============================================================================================
 // CALIBRATION — an unwired port whose owning task has NOT closed yet is CORRECT, not a finding
@@ -431,12 +463,17 @@ function findStaleNoCallerClaims(repoRoot, files, registerRows) {
 // ==============================================================================================
 // EXIT CODES
 //   0  register complete, every reference resolves, and this run's findings are EXACTLY the
-//      `KNOWN_FINDINGS` set — no new finding, no known finding that has quietly disappeared
+//      `KNOWN_FINDINGS` set — no new finding, no known finding that has quietly disappeared — OR
+//      the register is missing at its DEFAULT (unspecified) path, logged as a loud warning (this
+//      repo's own hosted CI, which has no sibling ../olea-service checkout — see the soft-skip
+//      branch in `main()`, added 2026-09-26, `ol-egov.141.89.45`, mirroring
+//      `check-surface-register.mjs`'s identical, already-established handling of the same gap)
 //   1  the finding set differs from `KNOWN_FINDINGS` in either direction (see above) — a real
 //      wiring gap or a stale exemption, not an environment problem
-//   2  could not run the check honestly at all: register missing/empty, zero ports found by the
-//      scan, an unparseable row, an unresolvable file:line, a bad CLI argument, or a row whose
-//      reachability cannot be determined at all (no owning task cited, or task status unknown)
+//   2  could not run the check honestly at all: an EXPLICITLY-PASSED `--register` missing/empty,
+//      zero ports found by the scan, an unparseable row, an unresolvable file:line, a bad CLI
+//      argument, or a row whose reachability cannot be determined at all (no owning task cited,
+//      or task status unknown)
 // ==============================================================================================
 //
 // Usage:
@@ -469,6 +506,7 @@ function parseArgs(argv) {
   const opts = {
     repoRoot: defaultRepoRoot,
     registerPath: null,
+    registerPathIsDefault: true,
     taskStatusPath: null,
     knownFindingsPath: null,
   };
@@ -478,6 +516,7 @@ function parseArgs(argv) {
       opts.repoRoot = resolve(argv[++i] ?? '');
     } else if (a === '--register') {
       opts.registerPath = resolve(argv[++i] ?? '');
+      opts.registerPathIsDefault = false;
     } else if (a === '--task-status') {
       opts.taskStatusPath = resolve(argv[++i] ?? '');
     } else if (a === '--known-findings') {
@@ -566,6 +605,25 @@ const PORT_NAME_RE = /^[A-Za-z0-9]+(?:Port|Store|Provider|Sink|Transport|Caller|
 const PORT_DECL_RE = /^export (interface|type) ([A-Za-z0-9]+)\b/;
 const SKIP_DIR_NAMES = new Set(['node_modules', 'dist', '.git', 'test']);
 
+/** Named, by-name exclusions from the port scan — see "WHAT THIS CHECKS" item 2 above. Each entry
+ * is a function-typed alias that matches `PORT_NAME_RE` literally (ends in one of the port
+ * suffixes) but is a NARROWING of an already-tracked port to one concrete response shape its own
+ * factory produces, not a second seam — the same "not a real second port" judgment `*Deps` gets
+ * structurally (by name pattern) a few lines below, except a narrowing alias's name does NOT
+ * follow a mechanically-decidable pattern, so it is excluded by literal name instead, one at a
+ * time, each with its own citation here. Adding a name here is a judgment call, not automatic:
+ * verify (by reading the alias's own module doc, as `docs/dev/wiring-register.md`'s "Beyond the
+ * table" section does for each entry below) that it is genuinely covariant with, and always used
+ * in place of, an already-registered port before adding it — the exclusion is invisible to the
+ * completeness scan, so a wrong entry here silently hides a real unwired port forever.
+ *   - `StampedJudgeCaller` (`packages/core/src/grading/workerJudgeCaller.ts`) — narrows
+ *     `JudgeCaller` with a D7.3 `.stamp` field; see `docs/dev/wiring-register.md`'s "Beyond the
+ *     table" entry for the full argument. Added 2026-09-26 (`ol-egov.141.89.45`).
+ *   - `StampedSoloJudgeCaller` (`packages/core/src/grading/workerSoloJudgeCaller.ts`) — the same
+ *     narrowing of `SoloJudgeCaller`. Added 2026-09-26 (`ol-egov.141.89.45`).
+ */
+const NARROWING_ALIAS_EXCLUSIONS = new Set(['StampedJudgeCaller', 'StampedSoloJudgeCaller']);
+
 function collectTsFiles(dir, acc = []) {
   let entries;
   try {
@@ -606,6 +664,7 @@ function scanPorts(repoRoot) {
         const name = m[2];
         if (!PORT_NAME_RE.test(name)) return;
         if (name.endsWith('Deps')) return; // belt-and-suspenders; PORT_NAME_RE never matches *Deps anyway
+        if (NARROWING_ALIAS_EXCLUSIONS.has(name)) return; // see the constant's own doc above
         if (!found.has(name)) {
           found.set(name, { file: relative(repoRoot, file), line: idx + 1 });
         }
@@ -1005,6 +1064,28 @@ function main() {
   const knownFindings = loadKnownFindings(opts.knownFindingsPath);
 
   if (!existsSync(opts.registerPath)) {
+    if (opts.registerPathIsDefault) {
+      // SOFT SKIP, DEFAULT PATH ONLY — added 2026-09-26 (ol-egov.141.89.45), mirroring
+      // check-surface-register.mjs's already-established handling of the identical gap. This
+      // repo's own hosted CI has no sibling ../olea-service checkout (verified against
+      // .github/workflows/ci.yml: no step anywhere checks one out), so the default
+      // `../olea-service/docs/dev/wiring-register.md` path NEVER resolves there — not an
+      // occasional environment hiccup, the guaranteed case, every run, forever. Hard-failing on
+      // that (the previous behaviour) made this brand-new gate permanently red in the one CI
+      // environment it runs in, for a reason unrelated to anything it checks — the N-013 failure
+      // this project's own charter warns against, inverted: not a check that cannot fail, one
+      // that cannot succeed. An EXPLICITLY-PASSED `--register` that is missing is a real error
+      // (a typo, not an environment gap) and still hard-fails just below, unchanged.
+      console.log(
+        '::warning::check-wiring-register: register not found at the default path ' +
+          `(${opts.registerPath}) — this repo's own CI has no sibling ../olea-service checkout, ` +
+          'so this is expected here, not a defect. Skipping with a WARNING rather than failing ' +
+          'the build on an environment gap this check cannot close. Run this locally in a ' +
+          'workspace with both repos cloned as siblings for the real check, or pass ' +
+          '--register <path> to point at a copy directly.',
+      );
+      process.exit(0);
+    }
     console.error(`check-wiring-register: register not found at ${opts.registerPath}`);
     process.exit(2);
   }
