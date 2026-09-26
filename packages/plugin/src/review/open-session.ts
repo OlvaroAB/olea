@@ -130,15 +130,15 @@
  * is `undefined` and this map is empty — honest, not a regression this
  * module introduces.
  *
- * ## `[D-323]`'s instrument-standing reader (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`)
+ * ## `[D-323]`'s instrument-standing reader (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`, `ol-egov.141.89.6.54`)
  *
  * `./session.ts`'s `logAndAdvance` withholds an F2.12 explain-back offer and
  * routes to item repair instead when the just-graded instrument's own
  * recorded standing is suspect — but the port's own doc says the real reader
  * belongs here, where the whole review log is already in hand. Two of the
- * ruling's six named concerns are real, wired production reads today:
- * `rejected` (a `rejected` verdict, or a grade dispute that resolved
- * `corrected` — both fold onto `rejected` here, since both mean the
+ * ruling's six named concerns are real, wired production reads today,
+ * unconditionally: `rejected` (a `rejected` verdict, or a grade dispute that
+ * resolved `corrected` — both fold onto `rejected` here, since both mean the
  * instrument is proven invalid; see {@link readInstrumentStanding}'s own doc
  * for why) folds straight off the SAME `composed.entries` this module
  * already reads for `replayUnconsumedSchedulingObservations`/
@@ -153,12 +153,24 @@
  * shared: different bead's owns, and this is six lines" precedent
  * `today/data-source.ts`'s own `disputesFromFiles` already sets in this
  * package, rather than widen `session/history.ts` (core, outside this
- * lane's owns). See {@link disputesFromReviewLog}. The remaining four
- * concerns stay genuinely unread — never guessed toward clear, matching
- * this port's own "an honest gap, not a
- * guessed false" doc for `flagged`/`safety-information-unavailable` — see
- * that function's doc for exactly why each of the four is out of reach here,
- * and the follow-up each one needs.
+ * lane's owns). See {@link disputesFromReviewLog}.
+ *
+ * **Two more are real, wired reads, each conditional on a caller actually
+ * supplying its own optional input (`ol-egov.141.89.6.54`) — absent means
+ * exactly today's behaviour, never guessed toward clear:** `pending-
+ * revalidation` reads {@link OpenReviewSessionInput.citationHashStore} when
+ * supplied (mirroring `session-builder/provider.ts`'s own
+ * `resolveCitationPendingRevalidation`, duplicated rather than shared for
+ * the identical reason `disputesFromReviewLog` is); `safety-information-
+ * unavailable` reads {@link OpenReviewSessionInput.safetyUnavailableInstrumentIds}
+ * when supplied — a bare passed-through set, because (unlike pending-
+ * revalidation) this module's OWN same-open enumeration can never supply it
+ * itself; see that field's own doc for why. The remaining two concerns
+ * (`changed-source-passage`, `flagged`) stay genuinely unread — matching
+ * this port's own "an honest gap, not a guessed false" doc — see {@link
+ * readInstrumentStanding}'s own doc for exactly why each of the four
+ * caller-dependent-or-unreached concerns is where it is, and the follow-up
+ * each one needs.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
@@ -208,6 +220,7 @@ import {
   evaluateInstrumentStanding,
   evaluateSchedulingObservationRouting,
 } from '../grading/wiring.js';
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
 import type { StudySessionHolder } from '../session/holder.js';
@@ -410,6 +423,62 @@ export interface OpenReviewSessionInput {
   readonly extendDefaultStudySession?: (
     previous: ComposedStudySession,
   ) => Promise<ComposedStudySession | null>;
+  /**
+   * `[D-351]`/`[D-323]` (`ol-egov.141.89.6.54`): the plugin's own citation
+   * pending-revalidation store — the SAME `CitationHashStore` interface
+   * `session-builder/provider.ts`'s `citationHashStore`/
+   * `resolveCitationPendingRevalidation` already read for the identical
+   * store (see that file). When supplied, {@link readInstrumentStanding}'s
+   * `pending-revalidation` concern becomes a real, wired read: an
+   * instrument this open's own `composed.instruments.records` still
+   * schedules, whose PERSISTED `pendingRevalidation` fact the store
+   * confirms current right now (`isPendingRevalidationCurrent`, re-checked
+   * per instrument rather than trusted from `loadAll()`'s snapshot alone —
+   * the identical "a late result for an earlier edit must not clear a newer
+   * pending state" argument that provider's own resolver doc gives), reads
+   * suspect. This module builds its own copy of those same few lines rather
+   * than importing that provider's resolver — the "duplicated rather than
+   * shared: different bead's owns, and this is six lines" precedent {@link
+   * disputesFromReviewLog} above already sets in this file.
+   *
+   * Omitted — every test in `open-session.spec.ts`, and every caller before
+   * this bead — keeps today's behaviour exactly: `pending-revalidation`
+   * stays genuinely unread, never guessed toward clear (this module's own
+   * "an honest gap, not a guessed false" doc). `main.ts:2035` already
+   * constructs one (`this.citationHashStore = new
+   * ObsidianCitationHashStore(this)`) for a different consumer
+   * (`citation-revision-wiring.ts`'s tick); threading that SAME instance
+   * here too is `main.ts`'s own one-line follow-up (see this bead's
+   * report) — the store's persisted state is one truth regardless of who
+   * reads it.
+   */
+  readonly citationHashStore?: CitationHashStore;
+  /**
+   * `[D-323]`'s `safety-information-unavailable` (M5, C5.3) concern
+   * (`ol-egov.141.89.6.4`, `ol-egov.141.89.6.54`): every instrument id
+   * currently withheld somewhere for an unresolved embedded asset — the
+   * CALLER's job to supply, never this module's own `composed.instruments
+   * .invalidMcqBlocks`/`.invalidCardBlocks` from the SAME open. Those two
+   * lists can never name the instrument {@link readInstrumentStanding} is
+   * actually asked about: `session/build.ts`'s
+   * `queueItemsFromComposedSession` drops any queue item whose id is
+   * missing from THIS SAME `composed.recordsById` before grading is even
+   * possible, so an id gradable in this open's queue and an id M5-invalid
+   * in this open's own walk are disjoint by construction — the identical
+   * "an instrument reading stale AT COMPOSITION can never be the
+   * just-graded instrument this function is asked about" argument this
+   * module's doc already gives for `changed-source-passage`. A real signal
+   * needs a SEPARATE, independently-timed observation (a background walk
+   * `main.ts` keeps between opens, the same role {@link citationHashStore}
+   * plays for pending-revalidation) — not built yet; no `main.ts` value
+   * exists today to supply it (see this bead's report; a persisted tracker
+   * would itself be Class C, not this lane's to invent unprompted).
+   *
+   * Omitted — every caller before this bead — reads exactly as before:
+   * genuinely unread, never guessed toward clear, same posture as every
+   * other absent concern here.
+   */
+  readonly safetyUnavailableInstrumentIds?: ReadonlySet<string>;
 }
 
 export type OpenReviewSessionOutcome =
@@ -722,6 +791,21 @@ export async function openReviewSession(
     const disputes = await disputesFromReviewLog(input.vault, additionalPaths);
     const instrumentValidity = projectInstrumentValidity(composed.entries, disputes);
 
+    // `[D-351]` (`ol-egov.141.89.6.54`): a real read of the caller's citation
+    // pending-revalidation store, when one is supplied — see
+    // `OpenReviewSessionInput.citationHashStore`'s doc for why this concern
+    // (unlike `safety-information-unavailable` below) is reachable from a
+    // just-graded instrument's own id. Scoped to THIS open's own schedulable
+    // instruments, which covers every id `readInstrumentStanding` could ever
+    // actually be asked about. No store supplied reads as no pending ids —
+    // genuinely unread, never guessed toward clear.
+    const pendingRevalidationInstrumentIds = input.citationHashStore
+      ? await pendingRevalidationInstrumentIdsFrom(
+          input.citationHashStore,
+          composed.instruments.records.map((record) => record.instrumentId),
+        )
+      : EMPTY_INSTRUMENT_ID_SET;
+
     // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): every still-pending
     // draft, read fresh, ahead of the ordinarily-scheduled items — see
     // `OpenReviewSessionInput.draftCache`'s doc. `[]` when no cache is
@@ -752,17 +836,24 @@ export async function openReviewSession(
       ...(input.ports.explainBackOfferLog
         ? { explainBackOfferLog: input.ports.explainBackOfferLog }
         : {}),
-      // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`): closes over
-      // the SAME `instrumentValidity` projection just built above — always
-      // wired, unconditionally, same "computed HERE, no caller-omission
-      // case" posture `evaluateSchedulingObservationRouting` just below
-      // states for itself, and for the identical reason: the whole review
-      // log is already in hand here, which `session.ts` neither holds nor
-      // should learn to compute. See `readInstrumentStanding`'s own doc for
-      // exactly which of the ruling's six named concerns this real reader
-      // covers, and this module's own doc for the four that do not reach
-      // here yet.
-      resolveInstrumentStanding: readInstrumentStanding(instrumentValidity),
+      // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`,
+      // `ol-egov.141.89.6.54`): closes over the SAME `instrumentValidity`
+      // projection and `pendingRevalidationInstrumentIds` just built above,
+      // plus `input.safetyUnavailableInstrumentIds` (absent reads as no
+      // ids) — always wired, unconditionally, same "computed HERE, no
+      // caller-omission case" posture `evaluateSchedulingObservationRouting`
+      // just below states for itself: the whole review log, and (when
+      // supplied) the citation store, are already in hand here, which
+      // `session.ts` neither holds nor should learn to compute. See
+      // `readInstrumentStanding`'s own doc for exactly which of the
+      // ruling's six named concerns this real reader covers today, and
+      // which two of those are conditional on a caller actually supplying
+      // their input.
+      resolveInstrumentStanding: readInstrumentStanding(
+        instrumentValidity,
+        pendingRevalidationInstrumentIds,
+        input.safetyUnavailableInstrumentIds ?? EMPTY_INSTRUMENT_ID_SET,
+      ),
       // The ruling's own decision, delegated to `grading/wiring.ts`'s pure
       // `evaluateInstrumentStanding` — mirroring `evaluateConfusionRouting`'s
       // own "keeps this class swappable in a test" reason (`session.ts`'s own
@@ -981,13 +1072,14 @@ async function disputesFromReviewLog(
 
 /**
  * `[D-323]`'s real instrument-standing reader (`ol-egov.141.89.6.4`,
- * `ol-egov.141.89.10.45`) — see this module's own doc's "`[D-323]`'s
- * instrument-standing reader" section for the summary; this is the detail.
+ * `ol-egov.141.89.10.45`, `ol-egov.141.89.6.54`) — see this module's own
+ * doc's "`[D-323]`'s instrument-standing reader" section for the summary;
+ * this is the detail.
  *
  * **Two of the six named concerns are real, wired reads, both folded from
  * the SAME `InstrumentValidityProjection` (`olea-core`'s `mastery/validity.ts`,
  * built once per open from `composed.entries` plus {@link disputesFromReviewLog}'s
- * real disputes):**
+ * real disputes), unconditionally — no caller-omission case:**
  *
  * - `contested`: the projection's own `contested` set — an OPEN, unresolved
  *   grade dispute (`[D-095]`'s "quarantines"; `review-log/contest.ts`'s
@@ -1005,7 +1097,23 @@ async function disputesFromReviewLog(
  *   whichever of the two facts proved it. Flagged for review rather than
  *   left undone.
  *
- * **The remaining four stay genuinely unread — never guessed toward clear,
+ * **A third is a real, wired read, conditional on a caller actually
+ * supplying its input (`ol-egov.141.89.6.54`):**
+ *
+ * - `pending-revalidation`: `pendingRevalidationInstrumentIds`, resolved by
+ *   {@link pendingRevalidationInstrumentIdsFrom} against
+ *   `OpenReviewSessionInput.citationHashStore` when one is supplied — see
+ *   that field's own doc. Unlike `changed-source-passage`/
+ *   `safety-information-unavailable` below, this concern IS reachable from a
+ *   just-graded instrument's own id: `[D-351]`'s pending fact lives in a
+ *   store keyed by `instrumentId`, entirely independent of THIS open's own
+ *   `composed.recordsById` schedulability walk, so the two data sources
+ *   never collide the way a same-open enumeration would. No store supplied
+ *   (every caller before this bead) reads as no pending ids — genuinely
+ *   unread, never guessed toward clear, matching this port's own "an honest
+ *   gap, not a guessed false" doc.
+ *
+ * **The remaining two stay genuinely unread — never guessed toward clear,
  * matching this port's own "an honest gap, not a guessed false" doc:**
  *
  * - `changed-source-passage`: `readInstrumentCitation` (`olea-core`'s
@@ -1025,48 +1133,91 @@ async function disputesFromReviewLog(
  *   open. Follow-up: a real reader needs a new, cheap "current digest for
  *   this one citation" capability threaded in from wherever the materiality
  *   pipeline already runs (`main.ts`) — more than a single wiring line.
- * - `pending-revalidation`: `[D-351]`'s fact lives in
- *   `ObsidianCitationHashStore` (`ingestion/materiality/citation-hash-store.ts`),
- *   keyed by `instrumentId` — but that store reads through `ObsidianDataHost`
- *   (the plugin's own `data.json`), a port this Obsidian-free module has
- *   none of and should not grow silently (see this file's own module doc,
- *   "Obsidian-free on purpose"). `main.ts:2035` already constructs
- *   `this.citationHashStore = new ObsidianCitationHashStore(this)`, but no
- *   call site threads it (or a lookup over it) into `OpenReviewSessionInput`.
- *   Follow-up: add an optional `citationAnchors: ReadonlyMap<string,
- *   CitationAnchorRecord>` (or similar) field to `OpenReviewSessionInput`,
- *   built from `this.citationHashStore.loadAll()` at `main.ts`'s own call
- *   site(s) for `openReviewSession`/`createReviewSessionOpener`, and read
- *   here for `.pendingRevalidation !== undefined`.
  * - `flagged`: no reader anywhere in this codebase (searched; confirmed by
  *   `ol-egov.141.89.6.4`'s own investigation, restated by this bead's own) —
  *   not a wiring gap, a missing mechanism entirely (a new persisted concept,
  *   Class C, not this lane's to invent).
- * - `safety-information-unavailable` (M5, C5.3): `session/enumerate.ts`
- *   filters an M5-invalid block out of `records` entirely, before an id is
- *   even derived for it (`invalidMcqBlocks`/`invalidCardBlocks` carry only
- *   `notePath` and the raw block, no `instrumentId`) — so no instrumentId-
- *   keyed fact exists to read even in principle, for an instrument that
- *   reached grading in THIS open (which, by construction, already passed M5
- *   at this open's own enumeration to be schedulable at all). A real fix
- *   needs `session/enumerate.ts` itself (core, read-only for this lane) to
- *   keep the id and flag it rather than drop the block.
  *
- * Every one of the four above is simply absent from `concerns` — the
- * difference between "checked, found nothing" (the two wired concerns) and
- * "not checked at all" (these four) is stated here, in the one place a
- * reader can see it, rather than collapsed into one boolean.
+ * **`safety-information-unavailable` (M5, C5.3) is now a real, wired read,
+ * ALSO conditional on a caller supplying its input — but for a different
+ * reason than `pending-revalidation` above.** `ol-egov.141.89.6.4` added
+ * `instrumentId` to `InvalidMcqReport`/`InvalidCardReport`, so the id
+ * exists — but `OpenReviewSessionInput.safetyUnavailableInstrumentIds`'s own
+ * doc explains why this module's own `composed.instruments.invalidMcqBlocks`/
+ * `.invalidCardBlocks` from the SAME open can never be the source: an id
+ * gradable in THIS open's queue and an id M5-invalid in THIS open's own walk
+ * are disjoint by construction (`session/build.ts`'s
+ * `queueItemsFromComposedSession` drops any queue item missing from THIS
+ * SAME `composed.recordsById`) — the identical "an instrument reading stale
+ * AT COMPOSITION can never be the just-graded instrument this function is
+ * asked about" argument `changed-source-passage` above already makes. So
+ * unlike `pending-revalidation`, no in-module computation could ever make
+ * this one real; it is a bare passed-through set, real once a caller
+ * supplies one from a SEPARATE, independently-timed observation (no such
+ * observation exists in `main.ts` today — see that field's doc). Absent
+ * (every caller before this bead) reads as no ids — genuinely unread, never
+ * guessed toward clear.
+ *
+ * Every one of the two truly-unreachable concerns above is simply absent
+ * from `concerns` — the difference between "checked, found nothing" (the
+ * three wired-when-supplied concerns) and "not checked at all" (these two)
+ * is stated here, in the one place a reader can see it, rather than
+ * collapsed into one boolean.
  */
 function readInstrumentStanding(
   validity: InstrumentValidityProjection,
+  pendingRevalidationInstrumentIds: ReadonlySet<string>,
+  safetyUnavailableInstrumentIds: ReadonlySet<string>,
 ): (instrumentId: string) => InstrumentStanding {
   return (instrumentId: string): InstrumentStanding => {
     const concerns: InstrumentStandingConcern[] = [];
     if (validity.contested.has(instrumentId)) concerns.push('contested');
     if (validity.provenInvalid.has(instrumentId)) concerns.push('rejected');
+    if (pendingRevalidationInstrumentIds.has(instrumentId)) concerns.push('pending-revalidation');
+    if (safetyUnavailableInstrumentIds.has(instrumentId)) {
+      concerns.push('safety-information-unavailable');
+    }
     return { concerns };
   };
 }
+
+/**
+ * `[D-351]` (`ol-egov.141.89.6.54`): mirrors `session-builder/provider.ts`'s
+ * `resolveCitationPendingRevalidation` — duplicated rather than shared (that
+ * file is a different lane's `owns`, and this is a few lines — the same
+ * "duplicated rather than shared: different bead's owns, and this is six
+ * lines" precedent {@link disputesFromReviewLog} above already sets in this
+ * module). Re-checks each candidate's PERSISTED currency via
+ * `isPendingRevalidationCurrent` rather than trusting `loadAll()`'s snapshot
+ * alone — the identical "a late result for an earlier edit must not clear a
+ * newer pending state" reason that provider's own resolver doc gives; see it
+ * for the fuller argument. An instrument with no pending fact at all, or one
+ * the store no longer confirms current, is simply absent from the result —
+ * `[D-330]`'s "unknown never withholds on its own", encoded as an omission,
+ * never a fabricated `false`.
+ */
+async function pendingRevalidationInstrumentIdsFrom(
+  store: CitationHashStore,
+  instrumentIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const anchors = await store.loadAll();
+  const result = new Set<string>();
+  await Promise.all(
+    instrumentIds.map(async (instrumentId) => {
+      const pending = anchors.get(instrumentId)?.pendingRevalidation;
+      if (pending === undefined) return;
+      const isCurrent = await store.isPendingRevalidationCurrent(
+        instrumentId,
+        pending.sinceContentHash,
+      );
+      if (isCurrent) result.add(instrumentId);
+    }),
+  );
+  return result;
+}
+
+/** Shared, never mutated — the "no store/ids supplied" reading both new `[D-323]` concerns fall back to. */
+const EMPTY_INSTRUMENT_ID_SET: ReadonlySet<string> = new Set();
 
 // ---------------------------------------------------------------------------
 // `ol-v7r5.35` (`[D-193]`) — the reachable wiring `queue-adapter.ts`'s own
