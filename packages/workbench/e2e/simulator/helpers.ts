@@ -265,6 +265,26 @@ export async function readDueCount(page: Page): Promise<number | 'none'> {
 }
 
 /**
+ * `[D-373]` (`ol-egov.141.89.10.38`): the SECOND `.olea-today-note` line in
+ * the due section — `today/view.ts`'s `renderDue`, drawn only when
+ * `vm.sessionComposition?.composed === false` (the composed-session path
+ * ranked no concepts, so {@link readDueCount} above is already reading the
+ * KNOWN due count from what she has already scheduled, never a suppressed
+ * zero). `null` when the composition succeeded and this line was never
+ * rendered — a caller checking "was a reason given" reads `null` as no,
+ * never as an empty string.
+ *
+ * Call only after {@link readDueCount} — same ordering rule that function's
+ * own doc states, and for the same reason: both read the same rendered
+ * section after `waitForTodayRendered` has already resolved.
+ */
+export async function sessionNotComposedNote(page: Page): Promise<string | null> {
+  const note = frame(page).locator('.olea-today-due .olea-today-note').nth(1);
+  if ((await note.count()) === 0) return null;
+  return ((await note.textContent()) ?? '').trim();
+}
+
+/**
  * `[data-sim-reset]` — clears the overlay, plugin data and clock offset
  * together (`SimulatorStore.resetAll`). That same plugin-data blob is where
  * WBX-9's course-setup seen-set lives, so a reset is a genuine "fresh

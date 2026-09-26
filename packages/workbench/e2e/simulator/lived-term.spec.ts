@@ -28,11 +28,50 @@ import {
   rateNextDue,
   readDueCount,
   resetSimulator,
+  sessionNotComposedNote,
   SIMULATOR_STATE_ID,
   scrubberDateLocator,
   scrubberLocator,
   scrubTo,
 } from './helpers.js';
+
+/**
+ * `ol-egov.141.89.10.38` (root cause B of `ol-egov.141.89.10.34`): the
+ * fixture world's clock (`../../src/clock.ts`'s `WORKBENCH_NOW`,
+ * 2027-01-15) sits after every assessment the fixture vault originally
+ * declared (the last was due 2026-11-27), so the oracle's C5.10
+ * `'assessment-passed'` veto removed every concept's evidence and the real
+ * composer (`composeStudySessionForRequest`) ranked nothing — Today read a
+ * bare zero while she still had scheduled work. **Fixed by adding one new
+ * assessment, not by moving the clock**: `packages/core/fixtures/vault/02
+ * Assignments/Season Checkpoint - GEOL204.md`, due 2027-01-29 (14 days
+ * past `WORKBENCH_NOW`, the same offset `ol-tq8f`'s persona-world fix used
+ * for the identical veto). Moving `WORKBENCH_NOW` instead was rejected:
+ * that constant is read by thirteen other workbench modules outside this
+ * suite's `owns` (`timeline-scenarios.ts`, `trends-scenarios.ts`,
+ * `oracle-scenarios.ts`, `main.ts`, and more), so it would have shifted
+ * goldens this bead has no mandate to touch. Adding one fixture file keeps
+ * every OTHER workbench golden byte-identical and only the 22 simulator
+ * goldens named in this bead's acceptance move.
+ *
+ * Measured against the real production composer (a throwaway Vitest probe,
+ * `packages/plugin/src/session-builder/provider.ts`'s
+ * `composeStudySessionForRequest`, over `FolderSource` on the real fixture
+ * vault, deleted after use — the identical discipline `[SESS-12]` used):
+ * at `WORKBENCH_NOW` the composed session now has 3 items, all GEOL204,
+ * `composed: true`. Past the new assessment's due date (verified at
+ * `WORKBENCH_NOW` + 20 days) every course's evidence has passed again,
+ * the composer ranks nothing, and `[D-373]`'s already-landed fallback
+ * (`ol-egov.141.89.10.66`) takes over: Today falls back to the KNOWN due
+ * count (13, the same legacy whole-vault enumeration `[SESS-12]` measured
+ * as "13 due instruments across 2 courses") plus a separate sentence
+ * naming why no session was composed — never a bare zero.
+ *
+ * **`[SESS-12]`'s own finding applies here unchanged**: the composed
+ * session is a budget-filled composition rebuilt on remount, not a FIFO
+ * drain, so rating an item is never asserted here as "the count minus
+ * one" — see the two tests below that changed for this reason.
+ */
 
 test.describe.configure({ mode: 'parallel' });
 
@@ -50,8 +89,16 @@ test('@auto-web:simulator/lived-term — a review written today is there after a
   }
 
   await rateNextDue(page);
+  // `ol-egov.141.89.10.38`: NOT asserted as `before - 1`. The due count is a
+  // budget-filled composition rebuilt on remount (`[SESS-12]`,
+  // `ol-egov.132.13`) — rating one item can leave the total unchanged (the
+  // composer refills from the same ranked concept's other instrument),
+  // lower it by one, or by more than one, depending on what else the same
+  // remount's obligation replay now excludes. What this test needs is
+  // persistence across a reload, not the arithmetic — so it reads the REAL
+  // post-rate value and checks THAT survives, rather than a value this
+  // suite would otherwise have to assume.
   const afterRate = await readDueCount(page);
-  expect(afterRate).toBe(before === 1 ? 'none' : before - 1);
 
   // Reload is a full page load — a fresh module evaluation, a fresh
   // SimulatorController.create(), and (per `SimulatorController.create`)
@@ -217,8 +264,12 @@ test("@auto-web:simulator/lived-term — scrubbing backward hides a later day's 
     );
   }
   await rateNextDue(page);
+  // `ol-egov.141.89.10.38`: not asserted as `dueAtLaterDayBeforeRating - 1` —
+  // see this file's module doc and the sibling reload test's own comment.
+  // This test's actual claim is the hide/restore round trip below, which
+  // reads whatever the REAL post-rate value is and checks it survives a
+  // scrub away and back, never the decrement arithmetic itself.
   const dueAtLaterDayAfterRating = await readDueCount(page);
-  expect(dueAtLaterDayAfterRating).toBe(dueAtLaterDayBeforeRating - 1);
   const overlayAfterRating = await overlayEntryCount(page);
   expect(overlayAfterRating).toBeGreaterThan(overlayBeforeAnyRating);
 
@@ -272,4 +323,48 @@ test('@auto-web:simulator/lived-term — reset returns the scrubber to asOf and 
   // against the SAME day's own pre-test baseline, never against a count
   // recorded on a different day.
   expect(await readDueCount(page)).toBe(dueAtAsOfBaseline);
+});
+
+// `ol-egov.141.89.10.38`, `[D-373]`: once the term's declared evidence has
+// passed (the new fixture assessment `Season Checkpoint - GEOL204.md`, due
+// 14 days past `asOf` — see this file's module doc; this test scrubs to 20
+// days past `asOf`, past that due date), the real composer
+// ranks no concepts again, the SAME veto that made `WORKBENCH_NOW`'s own
+// snapshot empty before this bead's fix. `[D-373]`'s already-landed
+// fallback (`ol-egov.141.89.10.66`) is what this test actually exercises:
+// Today falls back to the known due count from what she has already
+// scheduled and states separately why no session was composed — never a
+// bare zero. This is the "completed-course maintenance" case `[D-373]`'s
+// own text names as distinct from a course that never had an assessment
+// declared at all (D-329's need-only path) — the fixture vault's two
+// courses both always carry a declared assessment, so the
+// no-assessment-declared half of that distinction is not exercised here;
+// see this bead's report.
+test('@auto-web:simulator/lived-term — once every declared assessment has passed, Today shows the known due count and why no session was composed, never a bare zero', async ({
+  page,
+}) => {
+  await gotoSimulator(page);
+  await resetSimulator(page);
+
+  // Bounded forward from `asOf` by `SCRUBBER_MAX_DAYS` (112) — 20 days is
+  // comfortably past the new fixture assessment's due date (+14 days) and
+  // well inside that bound.
+  const PAST_EVERY_ASSESSMENT_DAYS = 20;
+  await scrubTo(page, PAST_EVERY_ASSESSMENT_DAYS);
+
+  const due = await readDueCount(page);
+  // The known-due-count fallback reads a real enumeration, never the
+  // composition's own empty list — so this must be a number, not the
+  // 'none' `readDueCount` returns for a genuine "nothing due" sentence,
+  // and never a bare zero either.
+  expect(due).not.toBe('none');
+  expect(due).not.toBe(0);
+  expect(typeof due).toBe('number');
+
+  // The distinct second fact `[D-373]` requires: why no session was
+  // composed, stated separately from the due count above — never folded
+  // into one sentence (`today/copy.ts`'s `sessionNotComposedSentence`).
+  await expect
+    .poll(() => sessionNotComposedNote(page))
+    .toBe('No session was composed today: no course currently has an upcoming assessment.');
 });
