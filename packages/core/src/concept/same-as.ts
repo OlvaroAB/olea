@@ -53,7 +53,11 @@
 
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { type ConceptKeyCanonicalIndex, readConceptKeyCanonicalIndex } from './key-store.js';
+import {
+  type ConceptKeyCanonicalIndex,
+  type ConceptKeyRecord,
+  readConceptKeyCanonicalIndex,
+} from './key-store.js';
 import {
   type KeyedConceptRelation,
   listRelationCacheRecords,
@@ -327,6 +331,77 @@ export async function proposeSameAsLink(
   };
   await vault.write(sameAsLinkRecordPath(keyA, keyB), serialize(record));
   return record;
+}
+
+/**
+ * The mint-time half of the collision-to-proposal step (`docs/dev/intelligence-build/cpt.md`
+ * §2 "1.1a proposals", §7 `[D-295 / CPT-D2]`) — the other half, the moved-note anchor case, is
+ * `packages/plugin/src/concept/wiring.ts`'s `proposeSameAsForMovedNoteAnchors`, landed by
+ * `ol-egov.141.89.3.8`. `./key-store.ts`'s `resolveOne` already computes and stores a
+ * normalisation collision at mint time (`ConceptKeyRecord.normalizationCollisions`, topic
+ * anchors only — see that field's own doc), but nothing before this function ever read it back
+ * to propose anything: it sat as "provenance for a later evidential read ... not yet built" (that
+ * field's own words). This is that seam.
+ *
+ * Turns every stored `normalizationCollisions` entry into a `'proposed'` same-as link, through
+ * `proposeSameAsLink`'s own bias-to-splits seam — so calling this over the same `records` twice,
+ * or once per run over a store that keeps accumulating unrelated mints, writes nothing new for a
+ * pair that already has a decision (`proposeSameAsLink`'s own no-op rule: already `'proposed'`,
+ * `'confirmed'`, `'severed'`, or `'declined'` with unchanged evidence). Nothing here is ever
+ * confirmed automatically — this function only ever calls `proposeSameAsLink`, never
+ * `confirmSameAsLink`.
+ *
+ * **Takes a listing, not a vault scan of its own** (`records`, typically a caller's own
+ * `listConceptKeyRecords(vault)` result — `./key-store.ts`'s `resolveConceptKeys` already reads
+ * one per batch), so a caller already holding this pass's listing need not read the vault a
+ * second time. Scans every record that carries a collision, not only ones a caller names,
+ * because a collision recorded on an earlier run and never proposed (the mint-time half not yet
+ * wired into production, cpt.md §2) is exactly the backlog this seam exists to catch up on once
+ * it is wired in — see this function's own "no production caller yet" note below.
+ *
+ * **Keys by identity (`[D-378]`).** Every key — a record's own and each of its collisions — is
+ * resolved through `canonicalKeys` before proposing, the same discipline
+ * `proposeSameAsForMovedNoteAnchors` already applies: two records sharing an anchor are one
+ * identity, so a collision against a superseded duplicate's key proposes against that identity's
+ * canonical key, never a second link for the same pair under a different key. A collision that
+ * normalises to the record's OWN canonical identity (already-merged duplicates) proposes nothing
+ * — there is no split to reconcile. Each canonical pair is proposed at most once per call, even
+ * when several records point at the same collision.
+ *
+ * **No production caller yet ([D-072]).** Wiring this into the real ingestion tick — after
+ * `key-store.ts`'s `resolveConceptKeys` in `packages/plugin/src/concept/wiring.ts`'s
+ * `buildConceptWiring`/`readConceptsAndRelations` composition, alongside
+ * `proposeSameAsForMovedNoteAnchors` — is `[ILB-CPT-4]`'s remaining to-do; this function is the
+ * tested, composable unit that step calls.
+ */
+export async function proposeSameAsFromMintCollisions(
+  vault: VaultSource,
+  records: readonly { readonly record: ConceptKeyRecord }[],
+  options: { readonly now?: () => string; readonly canonicalKeys?: ConceptKeyCanonicalIndex } = {},
+): Promise<readonly SameAsLinkRecord[]> {
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  const proposed: SameAsLinkRecord[] = [];
+  const proposedPairs = new Set<string>();
+
+  for (const { record } of records) {
+    const collisions = record.normalizationCollisions ?? [];
+    if (collisions.length === 0) continue;
+    const ownKey = canonicalKeys.canonicalOf(record.key);
+    for (const collisionKey of collisions) {
+      const otherKey = canonicalKeys.canonicalOf(collisionKey);
+      if (otherKey === ownKey) continue; // already one identity: nothing to propose.
+      const pair = JSON.stringify(canonicalPair(ownKey, otherKey));
+      if (proposedPairs.has(pair)) continue;
+      proposedPairs.add(pair);
+      proposed.push(
+        await proposeSameAsLink(vault, ownKey, otherKey, {
+          canonicalKeys,
+          ...(options.now !== undefined ? { now: options.now } : {}),
+        }),
+      );
+    }
+  }
+  return proposed;
 }
 
 /**

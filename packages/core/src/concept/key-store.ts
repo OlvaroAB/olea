@@ -195,10 +195,13 @@ export interface ConceptKeyRecord {
    * **A candidate list, never a merge.** Recording a collision here changes nothing about either
    * key's identity: this record and every key listed here keep their own key, their own history,
    * and their own evidence, exactly as C7.10/F8.6's same-as mechanics require ("nothing is
-   * unioned"). Nothing in this module reads this field back to auto-resolve anything — it is
-   * provenance for a later evidential read (F8.6's proposal-and-resolve surface, not yet built),
-   * the same "record now, act later" posture `TopicAnchor.introducingPaths` already established
-   * for the rename-signature match.
+   * unioned"). Nothing in THIS module reads this field back to auto-resolve anything — this
+   * module's own concern stops at recording it — but `./same-as.js`'s `proposeSameAsFromMintCollisions`
+   * (`ol-egov.141.89.3.4` [ILB-CPT-4]) is now the seam that reads it back and turns it into a
+   * `'proposed'` same-as link (F8.6's proposal-and-resolve surface). This field's own "record now,
+   * act later" posture — the same one `TopicAnchor.introducingPaths` already established for the
+   * rename-signature match — is unchanged: nothing here is minted, retired or merged because of a
+   * collision; the acting happens one layer up.
    *
    * Absent when no collision was found at mint — the common case, since ONT-R1's own measured
    * fact is that the identity rule bites on roughly one concept in nine. **Never recomputed

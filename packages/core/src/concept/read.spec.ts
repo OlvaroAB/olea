@@ -875,6 +875,79 @@ describe('readConcepts — coverage surfaces truncation and a section inventory 
   });
 });
 
+describe('readConcepts — rejected anchors are extraction loss, folded onto the document row, never absence (`ol-egov.141.89.3.12`)', () => {
+  const ONE_DOC_VAULT = new MemoryVault({
+    '01 Courses/ABCD101/Notes.md': '# Intro\n\nIntro body about Foo.\n',
+  });
+
+  it('the reader gave a count: it lands on that document coverage row, not on concepts.length', async () => {
+    const reader: ConceptReaderPort = {
+      read(request) {
+        return Promise.resolve({
+          concepts: [proposal('Foo', anchorIn(request.passages[0]?.anchor.sourcePath ?? ''))],
+          anchorsRejected: 2,
+        });
+      },
+    };
+    const result = await readConcepts(ONE_DOC_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    expect(row?.anchorsRejected).toBe(2);
+    // A rejection is never inferred as the concept's absence, and never
+    // folds into what the reader actually returned.
+    expect(result.concepts).toHaveLength(1);
+  });
+
+  it('a reader that names no anchorsRejected count folds as 0, never as a gap (an older port)', async () => {
+    const reader = new ScriptedReader([proposal('Foo', anchorIn('01 Courses/ABCD101/Notes.md'))]);
+    const result = await readConcepts(ONE_DOC_VAULT, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    expect(row?.anchorsRejected).toBe(0);
+  });
+
+  it('two batches of one split document (`[D-210]`) fold their own rejections onto the SAME row, summed', async () => {
+    const SPLIT_VAULT = new MemoryVault({
+      '01 Courses/ABCD101/Long.md': 'First half about Torvane.\n\nSecond half about Torvane.\n',
+    });
+    let call = 0;
+    const reader: ConceptReaderPort = {
+      read() {
+        call += 1;
+        return Promise.resolve({ concepts: [], anchorsRejected: call === 1 ? 3 : 1 });
+      },
+    };
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Long.md');
+    // Two calls belonging to the same document (`calls` would read 2 here)
+    // fold their rejection counts onto that one row, exactly the way
+    // `calls` itself folds — 3 + 1, never only the last call's count.
+    expect(row?.calls).toBe(2);
+    expect(row?.anchorsRejected).toBe(4);
+  });
+
+  it("a document the run never sends a call for reports 0, never undefined — buildCoverage's own default", async () => {
+    const reader = new ScriptedReader([]);
+    // Budget of 0 passages: nothing is ever sent to the reader, so the
+    // early `no-readable-material` path returns before any call is made.
+    const result = await readConcepts(ONE_DOC_VAULT, reader, { budget: { maxPassages: 0 } });
+
+    expect(result.outcome).toBe('unrecognised');
+    const row = result.coverage.find((c) => c.sourcePath === '01 Courses/ABCD101/Notes.md');
+    expect(row?.anchorsRejected).toBe(0);
+  });
+});
+
 describe('gatherPassages — passage-grain provenance (`[D-082]`, `[D-085]`)', () => {
   it('every passage anchors to a character range, not merely to a file', async () => {
     const passages = await gatherPassages(BARE_VAULT);

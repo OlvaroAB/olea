@@ -3,6 +3,11 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FolderSource } from '../vault/folder-source.js';
+import {
+  buildConceptKeyCanonicalIndex,
+  listConceptKeyRecords,
+  resolveConceptKey,
+} from './key-store.js';
 import { listRelationCacheRecords, writeRelationCache } from './relation-cache.js';
 import {
   checkSameAsClosureCompatibility,
@@ -11,6 +16,7 @@ import {
   edgesEligibleForSplitMigration,
   isSameAsLinkRecord,
   listSameAsLinkRecords,
+  proposeSameAsFromMintCollisions,
   proposeSameAsLink,
   remapIncidentRelationCacheRecords,
   sameAsLinkRecordPath,
@@ -110,6 +116,117 @@ describe('proposeSameAsLink — a collision proposes, it never merges (ONT-R1)',
     expect(reopened.evidenceFingerprint).toBe('fp-2');
     // Decline history kept — the record still shows it was declined once.
     expect(reopened.declinedAt).toBe('2026-09-16');
+  });
+});
+
+describe('proposeSameAsFromMintCollisions — the mint-time half of the collision-to-proposal step (`ol-egov.141.89.3.4` [ILB-CPT-4], `[D-295 / CPT-D2]`)', () => {
+  let root: string;
+  let source: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-same-as-mint-collisions-'));
+    source = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a real mint-time collision from key-store.ts becomes a proposed same-as link', async () => {
+    const first = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    // A case/whitespace-folded wording — key-store.ts's own collision case
+    // (key-store.spec.ts), mints a second key and records the collision.
+    await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: '  BASALT   Weathering  ',
+      aliases: [],
+    });
+
+    const records = await listConceptKeyRecords(source);
+    const proposed = await proposeSameAsFromMintCollisions(source, records, {
+      now: () => '2026-09-26',
+    });
+
+    expect(proposed).toHaveLength(1);
+    expect(proposed[0]?.status).toBe('proposed');
+    expect(proposed[0]?.reason).toBe('normalisation-collision');
+    expect([proposed[0]?.keyA, proposed[0]?.keyB]).toContain(first);
+    expect(await listSameAsLinkRecords(source)).toHaveLength(1);
+  });
+
+  it('a record with no normalizationCollisions proposes nothing', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    const records = await listConceptKeyRecords(source);
+    expect(records.find((r) => r.record.key === key)?.record.normalizationCollisions).toBeUndefined();
+
+    const proposed = await proposeSameAsFromMintCollisions(source, records);
+    expect(proposed).toHaveLength(0);
+    expect(await listSameAsLinkRecords(source)).toHaveLength(0);
+  });
+
+  it('bias to splits: re-running over the same collision, once the pair is already confirmed, proposes nothing new', async () => {
+    await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: '  BASALT   Weathering  ',
+      aliases: [],
+    });
+    const records = await listConceptKeyRecords(source);
+    const [firstProposal] = await proposeSameAsFromMintCollisions(source, records);
+    // biome-ignore lint/style/noNonNullAssertion: the collision test above proves exactly one link is proposed.
+    await confirmSameAsLink(source, firstProposal!.keyA, firstProposal!.keyB);
+
+    const rerun = await proposeSameAsFromMintCollisions(source, records);
+    expect(rerun).toHaveLength(1);
+    expect(rerun[0]?.status).toBe('confirmed'); // proposeSameAsLink's own no-op: left untouched.
+    expect(await listSameAsLinkRecords(source)).toHaveLength(1);
+  });
+
+  it('a collision pointing at its own canonical identity ([D-378] duplicates) proposes nothing', async () => {
+    const key = await resolveConceptKey(source, 2, {
+      kind: 'topic',
+      course: 'COURSEA',
+      name: 'Basalt weathering',
+      aliases: [],
+    });
+    const records = await listConceptKeyRecords(source);
+    const original = records[0]?.record;
+    if (original === undefined) throw new Error('fixture: expected exactly one minted record');
+    // A hand-built duplicate record sharing the same anchor as `key` (never
+    // written to the vault — this exercises the function's own dedup logic
+    // defensively; production duplicates never carry a self-pointing
+    // collision, since `findNormalizationCollisions` only ever sees records
+    // that existed BEFORE this one minted), with a self-pointing collision.
+    const duplicateRecord = { ...original, key: `${key}-dup`, normalizationCollisions: [key] };
+    const recordsWithDuplicate = [...records, { path: original.key, record: duplicateRecord }];
+    // Same anchor as `original` (spread above), so the two share one
+    // identity — build the index over both so `canonicalOf` actually knows
+    // that, the same way a real listing that included this duplicate would.
+    const canonicalKeys = buildConceptKeyCanonicalIndex(
+      recordsWithDuplicate.map(({ record }) => record),
+    );
+
+    const proposed = await proposeSameAsFromMintCollisions(source, recordsWithDuplicate, {
+      canonicalKeys,
+    });
+    expect(proposed).toHaveLength(0);
   });
 });
 

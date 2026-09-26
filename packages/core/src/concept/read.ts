@@ -197,6 +197,24 @@ export interface ConceptReadResponse {
    * an empty array to satisfy the type.
    */
   readonly relations?: readonly ProposedRelation[];
+  /**
+   * How many of this call's proposed concepts the reader itself dropped for
+   * a dangling anchor (`anchorIndex` naming no passage actually shown) —
+   * the Worker's own `groundingReport.droppedUngroundedAnchorCount`
+   * (`conceptsExtract.ts:210-222,271-318`, this service repo), forwarded
+   * rather than discarded (`ol-egov.141.89.3.12`; `docs/dev/intelligence-build/cpt.md`
+   * §2 "Rejected anchors and extraction loss"). **Optional, the same way
+   * `relations` above is**: absent means the port has no such count to give
+   * (an older contract version, or a test double), never that nothing was
+   * rejected — `readConcepts` folds an absent value as `0`, exactly the
+   * "absent field and an empty count mean the same thing" posture
+   * `relations`' own doc states, never a claim that zero were dropped.
+   * `readConcepts` folds this into `ConceptReadCoverage.anchorsRejected`,
+   * never into `concepts.length` or any precision/recall count — a
+   * rejection is extraction loss, not evidence the concept was absent
+   * (`[D-294]`, `[D-326]`).
+   */
+  readonly anchorsRejected?: number;
 }
 
 /**
@@ -370,6 +388,34 @@ export interface ConceptReadCoverage {
    * `location.section` (PDF, always).
    */
   readonly sections: readonly string[];
+  /**
+   * How many concepts this document's batches proposed and the reader
+   * dropped for a dangling anchor, folded across every call belonging to
+   * this document exactly the way `calls` above already folds
+   * (`ol-egov.141.89.3.12`; `docs/dev/intelligence-build/cpt.md` §2, §3).
+   * This is extraction loss, never a fifth outcome state and never folded
+   * into `conceptsFound`: a document is still fully `processed` whether or
+   * not any of its proposals were rejected, the same way `truncatedByBudget`
+   * sits beside the outcome rather than replacing it. **Never read as
+   * evidence a concept was absent** — the same discipline `truncatedByBudget`
+   * already carries (cpt.md §2's "a rejected anchor is never read as the
+   * concept's absence"). `0` when the reader gave no `anchorsRejected` count
+   * at all (an older port) as well as when it gave one and it was zero —
+   * this row cannot distinguish the two, matching `calls`' own "0" for a
+   * document the budget never let through.
+   *
+   * **Optional, deliberately, so an existing fixture or a persisted row
+   * written before this field existed (`packages/plugin/src/grove/read-
+   * completeness-store.ts` keeps `ConceptReadCoverage` rows across desktop
+   * sessions) stays valid without a migration** — the same additive,
+   * no-decision-needed posture cpt.md §7 rules for this count ("the same
+   * kind of count [D-294] already covers ... not a new top-level shape").
+   * Every reader in this module treats an absent value as `0`
+   * (`row.anchorsRejected ?? 0`), never as "unknown" — there is no state
+   * this field can be in besides "counted" or "not asked yet", and both
+   * read as zero to a caller that only wants the count.
+   */
+  readonly anchorsRejected?: number;
 }
 
 /** Why a read produced no concepts, when the cause was the run rather than the vault. */
@@ -969,6 +1015,7 @@ function buildCoverage(
   read: readonly ConceptPassage[],
   found: ReadonlyMap<VaultPath, number>,
   calls: ReadonlyMap<VaultPath, number> = NO_CALLS,
+  anchorsRejected: ReadonlyMap<VaultPath, number> = NO_ANCHORS_REJECTED,
 ): readonly ConceptReadCoverage[] {
   const rows = new Map<VaultPath, { offered: number; read: number; sections: Set<string> }>();
   function rowFor(sourcePath: VaultPath) {
@@ -1001,12 +1048,14 @@ function buildCoverage(
       calls: calls.get(sourcePath) ?? 0,
       truncatedByBudget: row.read < row.offered,
       sections: [...row.sections],
+      anchorsRejected: anchorsRejected.get(sourcePath) ?? 0,
     }))
     .sort((a, b) => byCodeUnit(a.sourcePath, b.sourcePath));
 }
 
 const NO_CONCEPTS: ReadonlyMap<VaultPath, number> = new Map();
 const NO_CALLS: ReadonlyMap<VaultPath, number> = new Map();
+const NO_ANCHORS_REJECTED: ReadonlyMap<VaultPath, number> = new Map();
 
 /**
  * One call's worth of passages, all drawn from the same document, plus which
@@ -1322,11 +1371,23 @@ export async function readConcepts(
   const documentBatches = batchesByDocument(budgeted, perCall);
   const proposals: ProposedConcept[] = [];
   const proposedRelations: ProposedRelation[] = [];
+  // `ol-egov.141.89.3.12`: extraction loss, folded per document across every
+  // call belonging to it — see `ConceptReadCoverage.anchorsRejected`'s own
+  // doc. An absent `response.anchorsRejected` folds as `0`, never as a gap in
+  // the map (a document with at least one batch always gets an entry here,
+  // even when every batch's count was absent or zero) — `buildCoverage`'s
+  // `?? 0` fallback would already cover a missing entry too, but writing the
+  // entry keeps this map's shape the same as `calls`' own.
+  const anchorsRejectedBySource = new Map<VaultPath, number>();
   try {
-    for (const { batch } of documentBatches) {
+    for (const { sourcePath, batch } of documentBatches) {
       const response = await reader.read({ passages: batch });
       proposals.push(...response.concepts);
       if (response.relations !== undefined) proposedRelations.push(...response.relations);
+      anchorsRejectedBySource.set(
+        sourcePath,
+        (anchorsRejectedBySource.get(sourcePath) ?? 0) + (response.anchorsRejected ?? 0),
+      );
     }
   } catch (error) {
     if (error instanceof ConceptReaderUnavailableError) {
@@ -1462,7 +1523,13 @@ export async function readConcepts(
     concepts: sorted,
     relations: reconciled.relations,
     relationsDropped: totalDropped(reconciled.dropped),
-    coverage: buildCoverage(all, budgeted, found, callsBySource(documentBatches)),
+    coverage: buildCoverage(
+      all,
+      budgeted,
+      found,
+      callsBySource(documentBatches),
+      anchorsRejectedBySource,
+    ),
     ...base,
   };
 }
