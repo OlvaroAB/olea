@@ -10,6 +10,7 @@
  * src/scope/grove.spec.ts` and `coverage.spec.ts`'s job.
  */
 import {
+  addManualAssessmentEntry,
   buildRegistryModel,
   type ConceptRelation,
   type GroveCourseModel,
@@ -648,6 +649,26 @@ describe('createLocalGroveProvider — load', () => {
     const courses = await sectionsFrom(await provider.load());
     expect(courses.map((c) => c.course).sort()).toEqual(['TESTC101', 'TESTC202']);
     for (const course of courses) expect(course.offerCards).toEqual([]);
+  });
+
+  it('with no assignments Base configured, a manual entry still surfaces its course — F1.2 (ol-egov.141.8.10)', async () => {
+    const vault = fixtureVaultWithRegisteredSource();
+    await addManualAssessmentEntry(vault, {
+      course: 'TESTC303',
+      type: 'exam',
+      due: '2026-12-01',
+    });
+    const provider = createLocalGroveProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+    });
+    const courses = await sectionsFrom(await provider.load());
+    // TESTC303 has neither concepts nor a registered source — its only
+    // presence here is the manual entry's own `course` field, reached
+    // through `safeAssessmentRecords`'s switch to `resolveAssessments`.
+    expect(courses.map((c) => c.course)).toContain('TESTC303');
   });
 
   it('returns unavailable, never throws, when the vault cannot be read', async () => {

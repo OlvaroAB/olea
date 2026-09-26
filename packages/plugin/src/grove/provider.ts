@@ -190,9 +190,9 @@ import {
   type InvalidMcqReport,
   isRegisterableDocument,
   projectRegisteredFiles,
-  readAssessments,
   readReviewLogFile,
   readReviewLogHistory,
+  resolveAssessments,
   reviewLogPath,
   suspendedInstrumentIds,
   type UnreadableFile,
@@ -466,18 +466,21 @@ async function registerCandidatesByCourse(
   return new Map(entries);
 }
 
+/**
+ * `ol-egov.141.8.10`: `resolveAssessments` (F1.2) already turns "not-yet-configured
+ * (`assignmentsBasePath === ''`)" and "an unreadable `.base` file" into the manual-entry
+ * fallback rather than a throw, so a manual entry now reaches the grove exactly as a Base row
+ * would — this function's own `try`/`catch` is left in place only for a genuinely unexpected
+ * failure past that fallback (e.g. the manual store itself unreadable), which still must not sink
+ * the whole view the way `registry/provider.ts`'s vault-walk failure legitimately does.
+ */
 async function safeAssessmentRecords(
   vault: VaultSource,
   basePath: string,
 ): Promise<readonly AssessmentRecord[]> {
   try {
-    return (await readAssessments(vault, basePath)).records;
+    return (await resolveAssessments(vault, basePath)).records;
   } catch {
-    // Not-yet-configured (`assignmentsBasePath === ''`) and an unreadable
-    // `.base` file both land here — the grove's concept sections are still
-    // real without a single registered assessment, so this module does not
-    // let a missing assignments Base sink the whole view the way `registry/
-    // provider.ts`'s vault-walk failure legitimately does.
     return [];
   }
 }

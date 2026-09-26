@@ -19,6 +19,7 @@
 
 import type { VaultSource } from 'olea-core';
 import {
+  addManualAssessmentEntry,
   attachConceptToOutcome,
   buildPaperBlueprint,
   type ConceptRecord,
@@ -117,6 +118,32 @@ describe('createLocalPracticePaperProvider — load()', () => {
     const state = await provider.load('COURSEA');
     expect(state).toMatchObject({ kind: 'locked', nearestAssessmentDue: '2026-12-01' });
     if (state.kind === 'locked') expect(state.daysUntilNearest).toBeGreaterThan(0);
+  });
+
+  it('with no assignments Base configured, a manual entry still reaches this course — F1.2 (ol-egov.141.8.10)', async () => {
+    const vault = fakeVault();
+    await addManualAssessmentEntry(vault, {
+      course: 'COURSEA',
+      type: 'exam',
+      due: '2026-09-22',
+      status: 'pending',
+    });
+    const provider = createLocalPracticePaperProvider(
+      baseDeps({ vault, settingsStore: UNCONFIGURED_SETTINGS }),
+    );
+    const state = await provider.load('COURSEA');
+    // Same window/date the base-backed "unlocked-not-pulled" scenario above
+    // exercises — proving the manual entry, not a Base row, drove this.
+    expect(state.kind).toBe('unlocked-not-pulled');
+  });
+
+  it('with no assignments Base configured and no manual entry at all, still reads assignments-not-configured', async () => {
+    const vault = fakeVault();
+    const provider = createLocalPracticePaperProvider(
+      baseDeps({ vault, settingsStore: UNCONFIGURED_SETTINGS }),
+    );
+    const state = await provider.load('COURSEA');
+    expect(state.kind).toBe('assignments-not-configured');
   });
 });
 

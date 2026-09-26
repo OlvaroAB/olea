@@ -12,6 +12,7 @@
 import { studyPlanEnvelope } from 'olea-contracts';
 import type { Scheduler } from 'olea-core';
 import {
+  addManualAssessmentEntry,
   createFsrsScheduler,
   type RetrievabilityInput,
   type RetrievabilityOutput,
@@ -101,6 +102,31 @@ describe('createLocalStudyPlanProvider — not configured', () => {
   it('throws rather than returning a fabricated or empty plan when no Base path is set', async () => {
     const provider = createLocalStudyPlanProvider({
       vault: studyVault(),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+    await expect(provider.fetchPlan()).rejects.toThrow(/assignments Base path/);
+  });
+
+  /**
+   * `ol-egov.141.8.10`: unlike `paper/provider.ts`/`grove/provider.ts`/`retrospective/
+   * provider.ts`, this provider's own `isStudyPlanConfigured` throw (above) fires BEFORE
+   * `resolveAssessments` is ever called — and even past that gate, `composeOracleRanking` (this
+   * bead's `owns` stops at `plan/provider.ts` itself) still reaches assessments through its own,
+   * unswitched `readAssessments` call (`oracle/compose.ts` → `evidence-edge/build.ts`, both core,
+   * outside `owns`). So a manual-only setup does not yet produce a plan here — this pins that gap
+   * rather than silently reporting it closed; see this bead's report for the follow-up.
+   */
+  it('REGRESSION-PENDING: a manual entry alone still does not let fetchPlan compose — the gap is in composeOracleRanking, outside this owns', async () => {
+    const vault = studyVault();
+    await addManualAssessmentEntry(vault, {
+      course: 'TESTC101',
+      type: 'Quiz',
+      due: '2026-09-01',
+    });
+    const provider = createLocalStudyPlanProvider({
+      vault,
       deviceId: DEVICE,
       settingsHost: new FakeDataHost(),
       now: () => new Date('2026-08-10T09:00:00-04:00'),

@@ -9,11 +9,19 @@
  * **What this composes, and on what basis** — see `assemble.ts` and `unlock.ts`'s own module docs
  * for exactly which of F4.11's four blueprint inputs are read from real, already-wired production
  * data today (course-scoped `ConceptRecord`s via `enumerateVaultInstruments`, real assignments via
- * `readAssessments`, and, since `ol-2zfj.172`, real Outcome coverage and Outcome labels via
+ * `resolveAssessments` — F1.2's Base-or-manual-fallback choice, `ol-egov.141.8.10` — and, since
+ * `ol-2zfj.172`, real Outcome coverage and Outcome labels via
  * `listOutcomeRecords`/`outcomeConceptCoverage`) and which are still honestly degraded because no
  * production reader exists yet anywhere in this repo (taughtSignal, mastery, past-paper
  * structure/demand recovery). Composing those remaining readers is a separate, multi-bead effort
  * this bead's own `owns` (`packages/plugin/src/paper/`) does not cover.
+ *
+ * **F1.2's fallback now reaches this provider (`ol-egov.141.8.10`).** `loadCourseState` no longer
+ * exits to `'assignments-not-configured'` on a blank/unreadable Base alone — it reads through
+ * `resolveAssessments` first and only reports that state when NEITHER a real Base NOR any manual
+ * entry (any course) produced a record; a single manual entry is enough to graduate past it, even
+ * for a different course than the one being loaded (that course then reads its own, ordinary
+ * `'no-assessment-ahead'`/`'locked'`/`'unlocked-not-pulled'` state off whatever `records` it has).
  */
 
 import {
@@ -28,11 +36,10 @@ import {
   type PaperItemGenerationPort,
   type PaperRecord,
   paperCompositionAccountFromBlueprint,
-  readAssessments,
+  resolveAssessments,
   type VaultSource,
 } from 'olea-core';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
-import { isStudyPlanConfigured } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { PartialPaperStatement } from './copy.js';
 import { buildPartialPaperStatement } from './copy.js';
@@ -89,23 +96,31 @@ function isoToday(now: Date): string {
 }
 
 /**
- * Reads real assignments-table records for `course`, real Outcome coverage (`ol-2zfj.172`) and
- * evaluates the unlock rule against them (`unlock.ts`). No cache — recomputed on every call, same
- * as `requestPaper` (module doc).
+ * Reads real assignments-table records for `course` (F1.2's Base-or-manual fallback,
+ * `resolveAssessments`), real Outcome coverage (`ol-2zfj.172`) and evaluates the unlock rule
+ * against them (`unlock.ts`). No cache — recomputed on every call, same as `requestPaper` (module
+ * doc).
  */
 async function loadCourseState(
   deps: CreateLocalPracticePaperProviderDeps,
   course: string,
 ): Promise<PracticePaperCourseState> {
   const config = await deps.settingsStore.load();
-  if (!isStudyPlanConfigured(config)) return { kind: 'assignments-not-configured' };
 
-  const [{ records }, enumeration, outcomeRecords] = await Promise.all([
-    readAssessments(deps.vault, config.assignmentsBasePath),
+  const [assessmentsRead, enumeration, outcomeRecords] = await Promise.all([
+    resolveAssessments(deps.vault, config.assignmentsBasePath),
     // `[D-357]`: the permanent concept key, the one her review log carries.
     enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
     listOutcomeRecords(deps.vault),
   ]);
+  const { records } = assessmentsRead;
+  // F1.2: "not configured" now means neither a real Base NOR any manual entry produced anything
+  // to work from — `resolveAssessments`'s own `source: 'manual'` with zero records is exactly
+  // that state (a blank OR unreadable Base, and she has typed nothing by hand either).
+  if (assessmentsRead.source === 'manual' && records.length === 0) {
+    return { kind: 'assignments-not-configured' };
+  }
+
   const courseAssessments = records.filter((record) => record.course === course);
   const asOf = isoToday(deps.now());
 
@@ -200,7 +215,7 @@ export function createLocalPracticePaperProvider(
       const config = await deps.settingsStore.load();
       const asOf = isoToday(deps.now());
       const [{ records }, enumeration, outcomeRecords] = await Promise.all([
-        readAssessments(deps.vault, config.assignmentsBasePath),
+        resolveAssessments(deps.vault, config.assignmentsBasePath),
         // `[D-357]`: the permanent concept key, the one her review log carries.
         enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
         listOutcomeRecords(deps.vault),

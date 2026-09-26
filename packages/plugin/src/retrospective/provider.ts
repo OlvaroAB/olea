@@ -57,8 +57,8 @@ import {
   type RetrospectiveOfferStatus,
   type RetrospectiveReading,
   type RetrospectiveScopeOrigin,
-  readAssessments,
   resolveAssessmentGroupingContext,
+  resolveAssessments,
   resolveRetrospectiveOfferStatus,
   type VaultPath,
   type VaultSource,
@@ -151,25 +151,26 @@ function hasStatedScope(assessment: AssessmentRecord): boolean {
 }
 
 /**
- * `readAssessments`, but an unconfigured or unreadable `.base` path
- * resolves to an honest empty report rather than a thrown exception —
- * matching `home/provider.ts`'s `safeAssessmentRecords` for the identical
- * input (`assignmentsBasePath === ''` is the ordinary early-install case,
- * not a read failure). Before this fix, `load()` below let that throw
- * propagate all the way to `main.ts`'s outer `try`/`catch`, which turns ANY
- * exception into `{ kind: 'unavailable' }` — the alarming "Olea could not
- * read your vault just now" message — even though `retrospective/view.ts`'s
- * own module doc distinguishes `'unavailable'` (a real read failure) from
- * `'none'` (nothing has passed yet, the correct state when there is simply
- * no assignments Base configured). Class A fix (`[D-072]`-style bug, no
- * contract change): see `retrospective/provider.safe-read.spec.ts`.
+ * `resolveAssessments` (F1.2's Base-or-manual fallback, `ol-egov.141.8.10`) — an unconfigured or
+ * unreadable `.base` path now resolves to her manual entries, if any, and to an honest empty
+ * report only when neither exists, rather than a thrown exception — matching `home/provider.ts`'s
+ * `safeAssessmentRecords` for the identical input (`assignmentsBasePath === ''` is the ordinary
+ * early-install case, not a read failure). Before the original (`readAssessments`-only) fix,
+ * `load()` below let that throw propagate all the way to `main.ts`'s outer `try`/`catch`, which
+ * turns ANY exception into `{ kind: 'unavailable' }` — the alarming "Olea could not read your
+ * vault just now" message — even though `retrospective/view.ts`'s own module doc distinguishes
+ * `'unavailable'` (a real read failure) from `'none'` (nothing has passed yet, the correct state
+ * when there is simply no assignments Base configured and no manual entry either). This `catch`
+ * now guards only a failure genuinely past `resolveAssessments`'s own fallback (e.g. the manual
+ * store itself unreadable). Class A fix (`[D-072]`-style bug, no contract change): see
+ * `retrospective/provider.safe-read.spec.ts`.
  */
 async function safeReadAssessments(
   vault: VaultSource,
   basePath: string,
 ): Promise<AssessmentReadReport> {
   try {
-    return await readAssessments(vault, basePath);
+    return await resolveAssessments(vault, basePath);
   } catch {
     return {
       records: [],

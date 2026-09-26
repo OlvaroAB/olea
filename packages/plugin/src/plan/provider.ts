@@ -64,8 +64,8 @@ import {
   createFsrsScheduler,
   loadCachedStudyPlan,
   pastSessionsFromReviewLog,
-  readAssessments,
   readReviewLogHistory,
+  resolveAssessments,
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
@@ -217,20 +217,35 @@ export function createLocalStudyPlanProvider(
       // one reads her material, the other is a network call to the Worker
       // (or a same-tick `undefined` when `readRankWeights` is absent) — so
       // all three run concurrently, same discipline as the two walks below.
-      // `readAssessments` here is a SECOND read of the same Base file
-      // `composeOracleRanking` reads internally — accepted duplication
-      // rather than widening that function's already-external result shape
-      // (`ComposeOracleRankingResult` is `oracle/compose.ts`, outside this
-      // bead's granted `owns`): both reads are the same read-only vault
-      // walk, and this is the only raw source component 3.5's
-      // `assessmentWorth`/`daysToNextAssessment` inputs can be resolved
-      // from without duplicating 3.3's own half-life/divisor (see
+      // `resolveAssessments` here (`ol-egov.141.8.10`, F1.2's Base-or-manual
+      // fallback) is a SECOND read of the same Base path `composeOracleRanking`
+      // reads internally via its own (unswitched) `readAssessments` call —
+      // accepted duplication rather than widening that function's already-
+      // external result shape (`ComposeOracleRankingResult` is
+      // `oracle/compose.ts`, outside this bead's granted `owns`): both reads
+      // target the same read-only vault, and this is the only raw source
+      // component 3.5's `assessmentWorth`/`daysToNextAssessment` inputs can be
+      // resolved from without duplicating 3.3's own half-life/divisor (see
       // `resolvePlanPolicyCourseInputs`'s module doc, `olea-core`).
+      // **This one call site's manual fallback is NOT yet load-bearing for
+      // the ranking itself** — `composeOracleRanking` → `buildConceptAssessmentEdges`
+      // (`olea-core/evidence-edge/build.ts`) still calls `readAssessments`
+      // directly, so a manual-only setup (no Base configured) still ranks
+      // with zero assessment edges; only `resolvePlanPolicyCourseInputs`'s
+      // own inputs below see a manual entry today. See this bead's report
+      // for the follow-up that would close that gap (core-side, outside
+      // this bead's `owns`), and why `fetchPlan`'s earlier
+      // `isStudyPlanConfigured` throw (above) is deliberately left
+      // untouched: relaxing it here would not let a manual-only setup
+      // through anyway (that internal `readAssessments` call still throws
+      // on a blank `basePath`), only replace this function's own clear
+      // "no assignments Base path configured" message with an uglier one
+      // surfacing from two calls deeper.
       const [{ entries }, concepts, options, assessmentReport] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
         extractConceptsFromVault(deps.vault, {}),
         deps.readRankWeights?.() ?? Promise.resolve(undefined),
-        readAssessments(deps.vault, config.assignmentsBasePath),
+        resolveAssessments(deps.vault, config.assignmentsBasePath),
       ]);
 
       const { ranking } = await composeOracleRanking({

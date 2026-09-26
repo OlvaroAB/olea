@@ -16,7 +16,7 @@
  * invented for this suite; nothing is drawn from a real vault.
  */
 import type { ReviewLogRecord } from 'olea-contracts';
-import { reviewLogPath } from 'olea-core';
+import { addManualAssessmentEntry, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -311,6 +311,30 @@ describe('createLocalRetrospectiveProvider — D-134 Q6 scope resolution (ol-0r9
     // though every segment missed.
     expect(result.reading.scopeOrigin).toBe('assessment-stated');
     expect(result.reading.scopeCount).toBe(0);
+  });
+});
+
+describe('createLocalRetrospectiveProvider — F1.2 manual entry fallback (ol-egov.141.8.10)', () => {
+  it('with no assignments Base configured, a manual entry still produces a retrospective', async () => {
+    const vault = await vaultWithReviewedConcepts({}, ['Photosynthesis']);
+    await addManualAssessmentEntry(vault, {
+      course: 'TESTC101',
+      type: 'Quiz',
+      due: '2026-01-01',
+      status: 'done',
+    });
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: new FakeDataHost(), // blank — no assignments Base configured
+      now: () => NOW,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load from the manual entry');
+    expect(result.reading.course).toBe('TESTC101');
   });
 });
 
