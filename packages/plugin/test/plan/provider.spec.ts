@@ -110,15 +110,14 @@ describe('createLocalStudyPlanProvider — not configured', () => {
   });
 
   /**
-   * `ol-egov.141.8.10`: unlike `paper/provider.ts`/`grove/provider.ts`/`retrospective/
-   * provider.ts`, this provider's own `isStudyPlanConfigured` throw (above) fires BEFORE
-   * `resolveAssessments` is ever called — and even past that gate, `composeOracleRanking` (this
-   * bead's `owns` stops at `plan/provider.ts` itself) still reaches assessments through its own,
-   * unswitched `readAssessments` call (`oracle/compose.ts` → `evidence-edge/build.ts`, both core,
-   * outside `owns`). So a manual-only setup does not yet produce a plan here — this pins that gap
-   * rather than silently reporting it closed; see this bead's report for the follow-up.
+   * `ol-egov.141.8.10`: the regression this test used to pin as REGRESSION-PENDING. Both the
+   * core-side read (`evidence-edge/build.ts` → `resolveAssessments`) and this provider's own gate
+   * (above, now reading `resolveAssessments`'s report instead of the raw configured-path boolean)
+   * were switched together — a manual-only setup (no Base configured) now composes a real plan,
+   * ranking off the one manual entry, the same as `paper/provider.ts`/`grove/provider.ts`/
+   * `retrospective/provider.ts` already do for their own screens.
    */
-  it('REGRESSION-PENDING: a manual entry alone still does not let fetchPlan compose — the gap is in composeOracleRanking, outside this owns', async () => {
+  it('a manual entry alone, with no Base configured, lets fetchPlan compose a real plan', async () => {
     const vault = studyVault();
     await addManualAssessmentEntry(vault, {
       course: 'TESTC101',
@@ -131,7 +130,10 @@ describe('createLocalStudyPlanProvider — not configured', () => {
       settingsHost: new FakeDataHost(),
       now: () => new Date('2026-08-10T09:00:00-04:00'),
     });
-    await expect(provider.fetchPlan()).rejects.toThrow(/assignments Base path/);
+    const raw = await provider.fetchPlan();
+    const plan = studyPlanEnvelope.parse(raw);
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
+    expect(course?.status).toBe('ranked');
   });
 });
 

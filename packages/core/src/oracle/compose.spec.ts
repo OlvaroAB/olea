@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { addManualAssessmentEntry } from '../assessment/manual.js';
 import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
@@ -186,6 +187,26 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // re-run the tier-3 walk to get the sourceCoverage it also needs.
     expect(result.edges.edges.some((e) => e.conceptName === 'Widget theory')).toBe(true);
     expect(result.edges.edges.some((e) => e.conceptKey === widgetKey)).toBe(true);
+  });
+
+  it('F1.2 (ol-egov.141.8.10): a blank basePath plus one manual entry still ranks — the manual fallback now reaches this composition, not just buildConceptAssessmentEdges on its own', async () => {
+    await addManualAssessmentEntry(source, {
+      course: 'TESTC101',
+      type: 'Quiz',
+      due: '2026-09-01',
+    });
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: '',
+      reviewLog: [review(widgetKey)],
+      asOf: '2026-08-15',
+      concepts,
+    });
+
+    expect(result.edges.assessmentsRead.source).toBe('manual');
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    expect(course?.status).toBe('ranked');
   });
 
   it('returns the mastery map it composed for rankOracle, keyed exactly by the edge concept KEY set — never the display name', async () => {

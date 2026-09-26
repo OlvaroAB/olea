@@ -4,7 +4,7 @@
  * silent that this module had to decide.
  */
 
-import { readAssessments } from '../assessment/read.js';
+import { resolveAssessments } from '../assessment/resolve.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import { extractFromVault } from '../extract/registry.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
@@ -247,17 +247,28 @@ function sourcePathsByCourseForRole(
 
 /**
  * Builds every concept↔assessment evidence edge reachable from `vault` — a
- * pure, rebuildable projection over `readAssessments` (assessment records)
- * and `extractTier3Evidence` (past-paper citations). See `./types.js`'s
+ * pure, rebuildable projection over `resolveAssessments` (assessment
+ * records — F1.2's Base-or-manual fallback, `ol-egov.141.8.10`: a readable
+ * Base always wins, whatever it contains; manual entries are read only on a
+ * blank or unreadable `basePath`, see `../assessment/resolve.js`'s module
+ * doc) and `extractTier3Evidence` (past-paper citations). See `./types.js`'s
  * module doc for the edge shape and the two calls made where the knowledge
  * model is silent.
+ *
+ * **This is the seam that used to leave a manual-only setup unranked.**
+ * Every production caller reaches assessment records only through this
+ * function (`oracle/compose.ts` → here), so switching this one call from
+ * `readAssessments` to `resolveAssessments` is what makes a manual-only
+ * setup (no configured Base) produce real edges rather than zero, with no
+ * change to a readable Base's own output (`resolveAssessments` returns that
+ * report unchanged but for the added `source: 'base'` field).
  */
 export async function buildConceptAssessmentEdges(
   vault: VaultSource,
   options: BuildConceptAssessmentEdgesOptions,
 ): Promise<BuildConceptAssessmentEdgesResult> {
   const [assessmentsRead, tier3] = await Promise.all([
-    readAssessments(vault, options.basePath),
+    resolveAssessments(vault, options.basePath),
     extractTier3Evidence(vault, options),
   ]);
 

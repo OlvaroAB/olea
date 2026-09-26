@@ -15,6 +15,7 @@ import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { addManualAssessmentEntry } from '../assessment/manual.js';
 import type { ConceptCitation } from '../tier3-evidence/types.js';
 import { FolderSource } from '../vault/folder-source.js';
 import {
@@ -395,6 +396,85 @@ describe('buildConceptAssessmentEdges — synthetic vault covering the acceptanc
     );
     expect(after).toEqual(before);
     expect(await source.list()).toEqual(allPaths);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// F1.2 (`ol-egov.141.8.10`): the manual-entry fallback now reaches this module
+// too, via `resolveAssessments` — see `build.ts`'s module doc on
+// `buildConceptAssessmentEdges` for why this is the one seam that used to
+// leave a manual-only setup unranked. Reuses the shared TESTC101 past-paper
+// fixture above (a fresh copy, own root) so this is exercising the real
+// citation→edge path, not a hand-built edge.
+// ---------------------------------------------------------------------------
+
+describe('buildConceptAssessmentEdges — F1.2 manual fallback (ol-egov.141.8.10)', () => {
+  let root: string;
+  let source: FolderSource;
+  const BLANK_BASE_PATH = '';
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-evidence-edge-manual-'));
+    source = new FolderSource(root);
+
+    await write('05 Zettelkasten/Widget theory.md', '# Widget theory\n');
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a blank basePath with no manual entries still resolves via the manual reader — records empty, no throw', async () => {
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BLANK_BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
+    expect(result.assessmentsRead.source).toBe('manual');
+    expect(result.assessmentsRead.records).toEqual([]);
+    expect(result.edges).toEqual([]);
+  });
+
+  it('a blank basePath plus one manual entry produces a real edge for the manual entry’s assessment — the F1.2 fallback is now load-bearing here', async () => {
+    const { path: manualPath } = await addManualAssessmentEntry(source, {
+      course: 'TESTC101',
+      type: 'Quiz',
+      due: '2026-09-01',
+    });
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: BLANK_BASE_PATH,
+      concepts: NO_CONCEPTS,
+    });
+
+    expect(result.assessmentsRead.source).toBe('manual');
+    expect(result.assessmentsRead.records).toHaveLength(1);
+    expect(result.assessmentsWithNoEvidence).toEqual([]);
+    const edge = result.edges.find((e) => e.assessmentPath === manualPath);
+    expect(edge).toBeDefined();
+    expect(edge?.conceptName).toBe('Widget theory');
+    expect(edge?.course).toBe('TESTC101');
   });
 });
 
