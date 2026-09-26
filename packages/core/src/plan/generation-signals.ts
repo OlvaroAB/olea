@@ -9,38 +9,28 @@
  * recomputed here (that would mean this module reaching into `oracle/`,
  * which is not this bead's owned path either).
  *
- * ## Duplicated constant, named on purpose
+ * ## One divisor, one cutoff rule, shared with `concept/note-offer.ts`
  *
- * "Top band" is [D-176]'s own ceil(len/3)-floored-at-1 partition, defined
- * today as `concept/note-offer.ts`'s unexported `TOP_BAND_DIVISOR`/
- * `isInTopBand`, applied there to a LIVE `CourseOracleRanking` for the
- * note-offer gate. That module is outside this bead's owned paths this round
- * (`packages/core/src/plan/`, `scheduler/`, `review-log/`, `mastery/`, and
- * the plugin's `ingestion/` — not `concept/`), it is held by a concurrent
- * lane this round, and neither the divisor nor a band-membership helper is
- * exported from it or from this package's barrel (`index.ts`, also not this
- * bead's to edit) — so this function cannot literally call it.
- *
- * Rather than invent a DIFFERENT number for the same concept ("top band"),
- * this restates the SAME declared constant (3) and the SAME ceil/floor
- * formula, over the CACHED plan's own `rank`/`concepts.length`
- * (`PlannedConcept`) instead of a live ranking's `rank`/`ranked.length`
- * (`ConceptPriority`) — the same shape, one instance persisted, one live.
- *
- * **Follow-up filed (this bead's report):** export a single shared
- * `TOP_BAND_DIVISOR`/band-membership helper both call sites can use, so the
- * two copies cannot silently drift apart.
+ * "Top band" is [D-176]'s own ceil(len/3)-floored-at-1 partition. Its one
+ * source of truth is `concept/note-offer.ts`'s exported `TOP_BAND_DIVISOR`
+ * and `isRankInTopBand` (a follow-up from this bead's own earlier round,
+ * now landed): this module imports both rather than restating the divisor
+ * or the ceil/floor formula a second time, so `note-offer.ts`'s LIVE
+ * `CourseOracleRanking` reading and this module's CACHED `StudyPlanCourse`
+ * reading (`PlannedConcept.rank`/`concepts.length` vs. `ConceptPriority.rank`/
+ * `ranked.length` — the same shape, one instance persisted, one live) can
+ * never silently drift apart.
  */
 
 import type { StudyPlanCourse } from 'olea-contracts';
+import { isRankInTopBand, TOP_BAND_DIVISOR } from '../concept/note-offer.js';
 
 /**
- * See module doc. Not a fresh number — restates `concept/note-offer.ts`'s
- * own `TOP_BAND_DIVISOR` (that file's doc: DECLARED, Class B, unratified;
- * flagged for retroactive review, revisit once a semester of real
- * offer/accept/decline data exists).
+ * Re-exported under this module's own established name (existing callers
+ * and this file's spec import it this way) — the identical value as
+ * `concept/note-offer.ts#TOP_BAND_DIVISOR`, never a second constant.
  */
-export const GENERATION_TOP_BAND_DIVISOR = 3;
+export const GENERATION_TOP_BAND_DIVISOR = TOP_BAND_DIVISOR;
 
 /**
  * Has `conceptId` (`PlannedConcept.conceptId` — that field's own doc still
@@ -60,6 +50,5 @@ export function conceptEnteredTopBand(course: StudyPlanCourse, conceptId: string
   if (course.status !== 'ranked') return false;
   const entry = course.concepts.find((concept) => concept.conceptId === conceptId);
   if (entry === undefined) return false;
-  const cutoff = Math.max(1, Math.ceil(course.concepts.length / GENERATION_TOP_BAND_DIVISOR));
-  return entry.rank <= cutoff;
+  return isRankInTopBand(entry.rank, course.concepts.length);
 }

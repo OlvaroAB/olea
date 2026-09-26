@@ -8,49 +8,30 @@
  * mean this bead reaching into `plan/`, `review-log/`, `scheduler/` and
  * `mastery/`, none of which are its owned paths." Those four directories
  * (plus this plugin's `ingestion/`) ARE this bead's owned paths, and the
- * CANONICAL, tested signal-computing functions this file's logic mirrors
+ * CANONICAL, tested signal-computing functions this file's logic runs
  * live there: `plan/generation-signals.ts#conceptEnteredTopBand`,
  * `review-log/generation-signals.ts#observedInstrumentTypeOrder`/
  * `requestedKindFor`, `scheduler/generation-signals.ts#deckServingSignal`.
- * **Mirrored, not imported** — none of the three is re-exported from
- * `olea-core`'s barrel (`index.ts`, not this bead's to edit either), for
- * the identical reason `generation/triggers.ts` itself is not (see "The
- * mirror" section below): these three files are new this bead, and adding
- * them to the barrel would be the same edit to the same locked file. Each
- * mirror below is a one-for-one restatement of its canonical counterpart,
- * cited by path; the canonical file is where the tests and the reasoning
- * live.
+ * **Imported, not mirrored** — this bead's own barrel edit
+ * (`packages/core/src/index.ts`) now re-exports all three plus
+ * `generation/triggers.ts`'s `evaluateGenerationTriggers` and its four
+ * named triggers, so this file imports the real thing across the package
+ * boundary rather than restating its logic a second time. (An earlier round
+ * of this bead carried a one-for-one mirror of all of the above, cited by
+ * path, while the barrel stayed closed; that mirror is deleted below.)
  *
  * ## Which three, and which one stays inactive (D-269)
  *
  * Per D-269 (`ol-2zfj.138`, David, 2026-09-25): top-band, format-ask and
  * deck-served-out-or-lapsed are wired to real state below. Nothing here
- * wires `repeatedRejectionTrigger` — `evaluateGenerationTriggers` (mirrored
- * below) requires a `threshold` on every call, so this file supplies
+ * wires `repeatedRejectionTrigger` — `evaluateGenerationTriggers` requires a
+ * `threshold` on every call, so this file supplies
  * `Number.POSITIVE_INFINITY`, which makes the trigger structurally unable
  * to fire for ANY finite rejection count, now or ever, without that being a
  * threshold pick of its own (proved in this file's own spec: fuzzed
  * rejection counts up to a very large number never fire it). Replacing
  * `Number.POSITIVE_INFINITY` with any finite number is `ol-2zfj.138`'s own
  * decision to make, never this file's.
- *
- * ## The mirror, and why it exists (same reason as `generation-queue.ts`'s)
- *
- * `packages/core/src/generation/triggers.ts` is "deliberately NOT
- * re-exported from `index.ts`" (that module's own doc) — the barrel is not
- * this bead's owned path either (per this bead's brief: "NOT core
- * study-session/ or core index.ts (report)"), so
- * `evaluateGenerationTriggers` and its four named triggers cannot be
- * imported across the package boundary. `EVALUATE_GENERATION_TRIGGERS_MIRROR`
- * below is a faithful, minimal restatement of that module's logic — same
- * order (top-band, format-ask, deck-served-out-or-lapsed,
- * repeated-rejection), same dedup-by-`instrumentKind` rule ("the unit is the
- * call") — so this file can literally RUN the D-238 policy engine rather
- * than reimplement its judgment differently. **Follow-up filed** (this
- * bead's report, alongside `ol-2zfj.137` [GEN-3.6]'s own still-open
- * "delete the mirror once the barrel opens"): once `index.ts` exports
- * `generation/triggers.ts`, this mirror is deleted and this file imports
- * the real thing.
  *
  * ## Scope, honestly bounded
  *
@@ -85,196 +66,30 @@
  * call (this bead's sibling code) is already in.
  */
 
-import type { ReviewLogEntry, StudyPlanCourse } from 'olea-contracts';
+import type { StudyPlanCourse } from 'olea-contracts';
 import {
   buildConceptInstrumentIndex,
-  CONFUSION_ROUTING_LAPSE_THRESHOLD,
   type ConceptRecord,
+  conceptEnteredTopBand,
   createFsrsScheduler,
   DEFAULT_COURSES_FOLDER,
+  deckServingSignal,
   type ExtractedUnit,
   enumerateVaultInstruments,
-  isRecallTier,
+  evaluateGenerationTriggers,
   type JobEnqueuer,
   loadCachedStudyPlan,
+  type OtherKindInput,
+  observedInstrumentTypeOrder,
   readReviewLogHistory,
   replayedStateOf,
   replaySchedulerStates,
+  requestedKindFor,
   type SchedulableInstrumentType,
-  type SchedulerState,
   type StudyPlanStore,
   type VaultSource,
 } from 'olea-core';
 import { courseCodesForLandedUnits, enqueueTriggeredGenerationCall } from './generation-queue.js';
-
-// -----------------------------------------------------------------------------
-// The signal mirrors — see this file's module doc, "Mirrored, not imported".
-// Each is a one-for-one restatement of its canonical counterpart; canonical
-// source, tests and reasoning live at the cited path.
-// -----------------------------------------------------------------------------
-
-/** Mirrors `packages/core/src/plan/generation-signals.ts#GENERATION_TOP_BAND_DIVISOR`. */
-const GENERATION_TOP_BAND_DIVISOR_MIRROR = 3;
-
-/** Mirrors `packages/core/src/plan/generation-signals.ts#conceptEnteredTopBand`. */
-function conceptEnteredTopBandMirror(course: StudyPlanCourse, conceptId: string): boolean {
-  if (course.status !== 'ranked') return false;
-  const entry = course.concepts.find((concept) => concept.conceptId === conceptId);
-  if (entry === undefined) return false;
-  const cutoff = Math.max(
-    1,
-    Math.ceil(course.concepts.length / GENERATION_TOP_BAND_DIVISOR_MIRROR),
-  );
-  return entry.rank <= cutoff;
-}
-
-/** Mirrors `packages/core/src/review-log/generation-signals.ts#observedInstrumentTypeOrder`. */
-function observedInstrumentTypeOrderMirror(
-  entries: readonly ReviewLogEntry[],
-): readonly SchedulableInstrumentType[] {
-  const listedOrder: readonly SchedulableInstrumentType[] = ['qa', 'cloze', 'mcq'];
-  const counts = new Map<SchedulableInstrumentType, number>();
-  for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
-    if (entry.instrumentType === 'explain-back') continue;
-    counts.set(entry.instrumentType, (counts.get(entry.instrumentType) ?? 0) + 1);
-  }
-  return listedOrder
-    .filter((kind) => (counts.get(kind) ?? 0) > 0)
-    .sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0));
-}
-
-/** Mirrors `packages/core/src/review-log/generation-signals.ts#requestedKindFor`. */
-function requestedKindForMirror(
-  formatMatch: SchedulableInstrumentType | null,
-  recordedPreference: readonly SchedulableInstrumentType[],
-): SchedulableInstrumentType | null {
-  if (formatMatch !== null) return formatMatch;
-  return recordedPreference[0] ?? null;
-}
-
-interface DeckServingSignalInputMirror {
-  readonly deck: readonly {
-    readonly instrumentType: SchedulableInstrumentType;
-    readonly state: SchedulerState | null;
-  }[];
-}
-
-/** Mirrors `packages/core/src/scheduler/generation-signals.ts#deckServingSignal` — `isRecallTier`/`CONFUSION_ROUTING_LAPSE_THRESHOLD` are the real, already-exported functions, not mirrored (only the fold combining them is). */
-function deckServingSignalMirror(input: DeckServingSignalInputMirror): {
-  readonly deckServedOut: boolean;
-  readonly lapsed: boolean;
-} {
-  const deckServedOut = input.deck.length > 0 && input.deck.every((item) => item.state !== null);
-  const lapsed = input.deck.some(
-    (item) =>
-      isRecallTier(item.instrumentType) &&
-      item.state !== null &&
-      item.state.lapses >= CONFUSION_ROUTING_LAPSE_THRESHOLD,
-  );
-  return { deckServedOut, lapsed };
-}
-
-// -----------------------------------------------------------------------------
-// The mirror — see this file's module doc, "The mirror, and why it exists".
-// Faithful restatement of `packages/core/src/generation/triggers.ts`, not a
-// re-derivation: every branch below matches that file's own, one for one.
-// -----------------------------------------------------------------------------
-
-/** Mirrors `generation/triggers.ts`'s `GenerationTriggerKind` — the four further-call names plus `'arrival'`, never a fifth. */
-type GenerationTriggerKindMirror =
-  | 'arrival'
-  | 'top-band'
-  | 'format-ask'
-  | 'deck-served-out-or-lapsed'
-  | 'repeated-rejection';
-
-/** Mirrors `generation/types.ts`'s `GenerationTrigger`. */
-interface GenerationTriggerMirror {
-  readonly kind: GenerationTriggerKindMirror;
-  readonly instrumentKind: SchedulableInstrumentType;
-}
-
-interface OtherKindInputMirror {
-  readonly builtKinds: readonly SchedulableInstrumentType[];
-  readonly preferredOrder: readonly SchedulableInstrumentType[];
-}
-
-/** Mirrors `generation/triggers.ts#otherKindToDraft`. */
-function otherKindToDraftMirror(input: OtherKindInputMirror): SchedulableInstrumentType | null {
-  for (const kind of input.preferredOrder) {
-    if (!input.builtKinds.includes(kind)) return kind;
-  }
-  return null;
-}
-
-interface GenerationTriggerSignalsMirror {
-  readonly topBand: { readonly enteredTopBand: boolean; readonly other: OtherKindInputMirror };
-  readonly formatAsk: {
-    readonly requestedKind: SchedulableInstrumentType | null;
-    readonly builtKinds: readonly SchedulableInstrumentType[];
-  };
-  readonly deckServedOutOrLapsed: {
-    readonly deckServedOut: boolean;
-    readonly lapsed: boolean;
-    readonly other: OtherKindInputMirror;
-  };
-  readonly repeatedRejection: {
-    readonly rejectionCount: number;
-    readonly threshold: number;
-    readonly other: OtherKindInputMirror;
-  };
-}
-
-/** Mirrors `generation/triggers.ts#evaluateGenerationTriggers` — same order, same dedup-by-`instrumentKind` rule. */
-function evaluateGenerationTriggersMirror(
-  signals: GenerationTriggerSignalsMirror,
-): readonly GenerationTriggerMirror[] {
-  const candidates: (GenerationTriggerMirror | null)[] = [
-    // top-band
-    (() => {
-      if (!signals.topBand.enteredTopBand) return null;
-      const instrumentKind = otherKindToDraftMirror(signals.topBand.other);
-      return instrumentKind === null ? null : { kind: 'top-band' as const, instrumentKind };
-    })(),
-    // format-ask
-    (() => {
-      const { requestedKind, builtKinds } = signals.formatAsk;
-      if (requestedKind === null) return null;
-      if (builtKinds.includes(requestedKind)) return null;
-      return { kind: 'format-ask' as const, instrumentKind: requestedKind };
-    })(),
-    // deck-served-out-or-lapsed
-    (() => {
-      if (!signals.deckServedOutOrLapsed.deckServedOut && !signals.deckServedOutOrLapsed.lapsed) {
-        return null;
-      }
-      const instrumentKind = otherKindToDraftMirror(signals.deckServedOutOrLapsed.other);
-      return instrumentKind === null
-        ? null
-        : { kind: 'deck-served-out-or-lapsed' as const, instrumentKind };
-    })(),
-    // repeated-rejection — see module doc: never fires while D-269 stays open.
-    (() => {
-      if (signals.repeatedRejection.rejectionCount < signals.repeatedRejection.threshold) {
-        return null;
-      }
-      const instrumentKind = otherKindToDraftMirror(signals.repeatedRejection.other);
-      return instrumentKind === null
-        ? null
-        : { kind: 'repeated-rejection' as const, instrumentKind };
-    })(),
-  ];
-  const seen = new Set<SchedulableInstrumentType>();
-  const fired: GenerationTriggerMirror[] = [];
-  for (const candidate of candidates) {
-    if (candidate === null) continue;
-    if (seen.has(candidate.instrumentKind)) continue;
-    seen.add(candidate.instrumentKind);
-    fired.push(candidate);
-  }
-  return fired;
-}
 
 /**
  * D-269's inert value for `repeatedRejectionTrigger`'s required `threshold`
@@ -343,11 +158,11 @@ export async function enqueueFurtherGenerationCallsForCourse(
     plan?.body.courses.find((entry) => entry.course === courseCode) ?? null;
 
   const { entries } = await readReviewLogHistory(deps.vault);
-  const recordedPreference = observedInstrumentTypeOrderMirror(entries);
+  const recordedPreference = observedInstrumentTypeOrder(entries);
   const preferredOrder = preferredOrderFor(recordedPreference);
   const replayResult = replaySchedulerStates(entries, createFsrsScheduler());
   const formatMatch = deps.formatMatchFor?.(courseCode) ?? null;
-  const requestedKind = requestedKindForMirror(formatMatch, recordedPreference);
+  const requestedKind = requestedKindFor(formatMatch, recordedPreference);
 
   let concepts: readonly ConceptRecord[];
   try {
@@ -372,16 +187,16 @@ export async function enqueueFurtherGenerationCallsForCourse(
       // it as "the verbatim display name" (stale; not this bead's to fix).
       const deck = instrumentIndex.instrumentsFor(concept.key);
       const builtKinds = [...new Set(deck.map((record) => record.instrumentType))];
-      const other: OtherKindInputMirror = { builtKinds, preferredOrder };
+      const other: OtherKindInput = { builtKinds, preferredOrder };
 
       const deckWithStates = deck.map((record) => ({
         instrumentType: record.instrumentType,
         state: replayedStateOf(replayResult, record.instrumentId),
       }));
-      const { deckServedOut, lapsed } = deckServingSignalMirror({ deck: deckWithStates });
-      const enteredTopBand = course !== null && conceptEnteredTopBandMirror(course, concept.key);
+      const { deckServedOut, lapsed } = deckServingSignal({ deck: deckWithStates });
+      const enteredTopBand = course !== null && conceptEnteredTopBand(course, concept.key);
 
-      const fired = evaluateGenerationTriggersMirror({
+      const fired = evaluateGenerationTriggers({
         topBand: { enteredTopBand, other },
         formatAsk: { requestedKind, builtKinds },
         deckServedOutOrLapsed: { deckServedOut, lapsed, other },

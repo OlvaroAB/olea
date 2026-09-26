@@ -233,6 +233,86 @@ describe('enqueueFurtherGenerationCallsForCourse — top-band (F4.2)', () => {
   });
 });
 
+describe('enqueueFurtherGenerationCallsForCourse — dedup across two real signals (D-238 "the unit is the call")', () => {
+  it('a concept both in the top band and deck-served-out enqueues exactly one call, not two', async () => {
+    const conceptName = 'Osmosis';
+    const notePath = `01 Courses/${COURSE}/note.md`;
+    const built = concept(conceptName);
+    const vaultFiles = { [notePath]: mcqNote(conceptName) };
+
+    // Same real-id discovery `deck-served-out-or-lapsed`'s own test above
+    // uses, so the review-log fixture below matches the note's real mcq
+    // instrument id rather than a guessed one.
+    const discovery = await enumerateVaultInstruments(memoryVault(vaultFiles), {
+      under: `01 Courses/${COURSE}`,
+    });
+    const instrumentId = discovery.records[0]?.instrumentId;
+    expect(instrumentId).toBeDefined();
+
+    const vault = memoryVault({
+      ...vaultFiles,
+      '.olea/reviews/2026-09-20-device-1.jsonl': JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'e1',
+        timestamp: '2026-09-20T09:00:00+00:00',
+        instrumentId,
+        instrumentType: 'mcq',
+        conceptIds: [built.key],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: null,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['mcq'],
+          planVersion: null,
+        },
+      }),
+    });
+    const enqueuer = new RecordingEnqueuer();
+    await enqueueFurtherGenerationCallsForCourse(COURSE, {
+      vault,
+      // Rank 1 of 1 — top band per `isRankInTopBand`'s floor-at-1 rule — so
+      // this concept ALSO satisfies deck-served-out-or-lapsed above.
+      studyPlanStore: studyPlanStore(
+        samplePlan([
+          {
+            course: COURSE,
+            status: 'ranked',
+            concepts: [
+              {
+                conceptId: built.key,
+                rank: 1,
+                weight: 1,
+                examProximityDays: null,
+                reasoning: 'top ranked',
+                citations: [{ sourcePath: 'papers/p1.md', questionLabel: '1' }],
+              },
+            ],
+          },
+        ]),
+      ),
+      enqueuer,
+      listConceptsForCourse: async () => [built],
+      now: () => NOW,
+    });
+
+    // Two real signal sources both name 'qa' (the next undrafted kind after
+    // 'mcq') for the same concept; `evaluateGenerationTriggers`'s
+    // dedup-by-instrumentKind collapses them to one enqueued job, and
+    // top-band keeps credit as the first trigger `generation/triggers.ts`
+    // evaluates.
+    expect(enqueuer.calls).toHaveLength(1);
+    expect(enqueuer.calls[0]?.payload).toMatchObject({
+      trigger: 'top-band',
+      instrumentKind: 'qa',
+      conceptKey: built.key,
+    });
+  });
+});
+
 describe('enqueueFurtherGenerationCallsForCourse — format-ask (F4.8/D7.1)', () => {
   it('her observed instrument-type order (D7.1) asking for a kind not yet built fires format-ask', async () => {
     const conceptName = 'Osmosis';

@@ -1,7 +1,7 @@
 // Signal source for D-238's top-band generation trigger — GEN-3.5 (`ol-2zfj.136`).
-// See generation-signals.ts's module doc for why the `GENERATION_TOP_BAND_DIVISOR`
-// constant restates (rather than imports) `concept/note-offer.ts`'s own
-// `TOP_BAND_DIVISOR`.
+// `GENERATION_TOP_BAND_DIVISOR` is this module's own re-export of
+// `concept/note-offer.ts`'s `TOP_BAND_DIVISOR` (see generation-signals.ts's
+// module doc) — the identical value, never a second constant.
 
 import type { PlannedConcept, StudyPlanCourse } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';

@@ -610,10 +610,7 @@ export {
 // lanes were touching this one barrel file), which forced
 // `packages/plugin/src/ingestion/generation-queue.ts` to re-declare a
 // mirror of this logic to run the policy at all; `ol-2zfj.137` [GEN-3.6]
-// opens the barrel and deletes that mirror, importing these instead.
-// `./generation/triggers.js`'s further-call rules (top-band, format-ask,
-// deck-served-out-or-lapsed, repeated-rejection) stay unexported — nothing
-// outside this package calls them yet.
+// opened the barrel and deleted that mirror.
 export type { BuildGenerationJobPayloadInput, GenerationJobKeyInput } from './generation/job.js';
 export {
   buildGenerationJobPayload,
@@ -630,6 +627,28 @@ export type {
   GenerationTriggerKind,
 } from './generation/types.js';
 export { isGenerationJobPayload } from './generation/types.js';
+// `./generation/triggers.js`'s further-call rules (top-band, format-ask,
+// deck-served-out-or-lapsed, repeated-rejection) plus the policy engine that
+// runs all four and dedups by instrument kind — GEN-3.5 (`ol-2zfj.136`)
+// opens this half of the barrel, so
+// `packages/plugin/src/ingestion/further-generation-triggers.ts` can import
+// the real thing instead of the mirror it carried while this stayed closed.
+export type {
+  DeckServedOutOrLapsedTriggerInput,
+  FormatAskTriggerInput,
+  GenerationTriggerSignals,
+  OtherKindInput,
+  RepeatedRejectionTriggerInput,
+  TopBandTriggerInput,
+} from './generation/triggers.js';
+export {
+  deckServedOutOrLapsedTrigger,
+  evaluateGenerationTriggers,
+  formatAskTrigger,
+  otherKindToDraft,
+  repeatedRejectionTrigger,
+  topBandTrigger,
+} from './generation/triggers.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
 // this is the one impure export in that file. `ol-cqz8` widens this block to
@@ -1566,6 +1585,10 @@ export type {
   StudyPlanSource,
   StudyPlanStore,
 } from './plan/types.js';
+// D-238/F3.7's top-band further-call trigger signal — GEN-3.5 (`ol-2zfj.136`).
+// Reads the CACHED study plan (this directory), sharing its cutoff rule with
+// `concept/note-offer.ts#isRankInTopBand` rather than a second copy.
+export { conceptEnteredTopBand, GENERATION_TOP_BAND_DIVISOR } from './plan/generation-signals.js';
 // Queue composition v1 (P2-T07): plain FSRS due order, per-session concept
 // dedupe that defers rather than drops (F2.17), course/topic filter (F2.5),
 // and the suspended set excluded (F2.6). The one module that joins instruments
@@ -1855,6 +1878,14 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 // INV-6's accept step, evidenced (`ol-548w`): the verdict projection folded
 // from the review log, never stored — see review-log/verdicts.ts.
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
+// D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
+// (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
+// see review-log/generation-signals.ts's module doc for the named
+// per-course limitation.
+export {
+  observedInstrumentTypeOrder,
+  requestedKindFor,
+} from './review-log/generation-signals.js';
 export type {
   AppendDisputeLogResult,
   AppendExplainBackOfferLogResult,
@@ -2003,6 +2034,15 @@ export type {
   SchedulerConfigurationSource,
   SchedulerState,
 } from './scheduler/types.js';
+// D-238/F3.7's deck-served-out-or-lapsed further-call trigger signal —
+// GEN-3.5 (`ol-2zfj.136`). Reuses F2.12's already-ratified
+// `CONFUSION_ROUTING_LAPSE_THRESHOLD` (exported elsewhere in this barrel);
+// see scheduler/generation-signals.ts's module doc.
+export type {
+  DeckServingSignal,
+  DeckServingSignalInput,
+} from './scheduler/generation-signals.js';
+export { deckServingSignal } from './scheduler/generation-signals.js';
 // F8.1's six-state grove coverage computation (`[D-054]`, `ol-o8eo`) — the
 // examiner-declared denominator (F1.5/F4.1), never Olea's own inference.
 // `./scope/coverage.ts` classifies one concept; `./scope/grove.ts` assembles

@@ -113,7 +113,7 @@ import { conceptIdentityNormalizationIndex } from './concept-key.js';
  * per the run charter; revisit once a semester of real offer/accept/decline
  * data exists to inform it.
  */
-const TOP_BAND_DIVISOR = 3;
+export const TOP_BAND_DIVISOR = 3;
 
 /** The concept `noteOfferEligible` is asked about. */
 export interface NoteOfferConcept {
@@ -260,18 +260,31 @@ function existingNoteFound(
 }
 
 /**
- * `ranking.ranked` is already sorted best-first (`rank.ts`: 1-based,
- * ascending, lower is higher-priority) — the top band is the leading
- * `ceil(ranked.length / TOP_BAND_DIVISOR)` entries, floored at 1 so a
- * course with any ranking at all always has a non-empty top band. A course
- * that abstained, or a concept every one of whose edges was vetoed (so it
- * never appears in `ranked` at all — see `OracleVetoedConcept`), is never
- * in the top band: there is no ranking to sit in.
+ * The one place `TOP_BAND_DIVISOR`'s cutoff arithmetic lives — exported so
+ * every "is this rank in the top band" reading in this package (this
+ * module's own `isInTopBand` below, and `plan/generation-signals.ts#
+ * conceptEnteredTopBand`, GEN-3.5 `ol-2zfj.136`, over the CACHED plan's
+ * ranking rather than a live one) shares the identical rule instead of each
+ * restating the divisor and the floor-at-1 separately. `rank` is 1-based,
+ * ascending, lower is higher-priority (`rank.ts`'s convention, also true of
+ * a cached `PlannedConcept.rank`); the top band is the leading
+ * `ceil(totalRanked / TOP_BAND_DIVISOR)` entries, floored at 1 so any
+ * non-empty ranking has a non-empty top band.
+ */
+export function isRankInTopBand(rank: number, totalRanked: number): boolean {
+  const cutoff = Math.max(1, Math.ceil(totalRanked / TOP_BAND_DIVISOR));
+  return rank <= cutoff;
+}
+
+/**
+ * A course that abstained, or a concept every one of whose edges was vetoed
+ * (so it never appears in `ranked` at all — see `OracleVetoedConcept`), is
+ * never in the top band: there is no ranking to sit in. Otherwise defers to
+ * `isRankInTopBand` above.
  */
 function isInTopBand(conceptKey: string, ranking: CourseOracleRanking): boolean {
   if (ranking.status !== 'ranked') return false;
   const entry = ranking.ranked.find((candidate) => candidate.conceptKey === conceptKey);
   if (entry === undefined) return false;
-  const cutoff = Math.max(1, Math.ceil(ranking.ranked.length / TOP_BAND_DIVISOR));
-  return entry.rank <= cutoff;
+  return isRankInTopBand(entry.rank, ranking.ranked.length);
 }
