@@ -26,6 +26,7 @@ import type {
   WorkerTaskRequest,
 } from 'olea-core';
 import {
+  CONCEPT_KEY_STORE_FOLDER,
   EmbeddingCacheEngine,
   FolderSource,
   hashText,
@@ -752,6 +753,64 @@ describe('readConceptsAndRelations — both producers land in one fold', () => {
     expect(cachePaths.length).toBeGreaterThan(0);
     const cacheContents = await Promise.all(cachePaths.map((path) => vault.read(path)));
     expect(cacheContents.some((content) => content.includes('contrasts-with'))).toBe(true);
+  });
+
+  it('reads the canonical-key index once per tick, not once per each of its three consumers (`[D-378]`, `ol-egov.141.89.9.57`)', async () => {
+    // A per-document read that finds no concepts at all (`concepts: []`) never calls
+    // `resolveConceptKeys` (extraction's own, unrelated `.olea/concepts/` listing short-circuits
+    // on an empty request batch — `extract.ts`'s `keysFor`) — so with THIS vault, the only
+    // `.olea/concepts/` listing anywhere in the tick is the canonical-key index read this bead
+    // consolidates. A real passage is still needed (`budgeted.length === 0` would make the read
+    // `'unrecognised'` rather than an empty `'read'`), hence the note has real prose.
+    const emptyReadTransport = {
+      calls: [] as WorkerTaskRequest[],
+      send: async (request: WorkerTaskRequest) => {
+        emptyReadTransport.calls.push(request);
+        if (request.taskId === 'concepts.extract.v1') {
+          return { ok: true, result: { concepts: [], relations: [] } };
+        }
+        return { ok: true, result: { verdicts: [] } };
+      },
+    };
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => emptyReadTransport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => emptyReadTransport,
+    });
+    let conceptKeyListCalls = 0;
+    const inner = new MemoryVault({
+      '01 Courses/CourseA/Note.md':
+        'Some incidental prose that introduces no concept worth extracting.\n\nA second sentence, so the passage read is not empty either.\n',
+    });
+    class CountingVault implements VaultSource {
+      list(options?: ListOptions): Promise<readonly VaultPath[]> {
+        if (options?.under === CONCEPT_KEY_STORE_FOLDER) conceptKeyListCalls++;
+        return inner.list(options);
+      }
+      read = inner.read.bind(inner);
+      readBinary = inner.readBinary.bind(inner);
+      write = inner.write.bind(inner);
+      exists = inner.exists.bind(inner);
+      watch = inner.watch.bind(inner);
+    }
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault: new CountingVault(), ingestionSessionClosed: true },
+    );
+
+    // Before this bead, `persistRelationCacheFromPass`, `readRelationSetWithCache` and
+    // `resolveSameAsForPass` each read `readConceptKeyCanonicalIndex` (hence `.olea/concepts/`)
+    // for themselves — three listings on one tick for an index that cannot have changed between
+    // them (nothing in this tick mints or rewrites a key). Collapsed to one shared read.
+    expect(pass).not.toBeNull();
+    expect(pass?.read.outcome).toBe('read');
+    expect(conceptKeyListCalls).toBe(1);
   });
 });
 

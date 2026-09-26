@@ -46,9 +46,20 @@
  * edge dispositions — a decline recorded under a duplicate's proposition withholds the canonical
  * edge. A concept that shares only an introducing passage is its own identity there and is never
  * folded. Still read-only: no stored key is rewritten.
+ *
+ * **The index is now a caller-suppliable option (`ol-egov.141.89.9.57`).** `./wiring.ts`'s
+ * `readConceptsAndRelations` already reads one canonical-key index per tick to hand to
+ * `persistRelationCacheFromPass` and `readRelationSetWithCache` (`relation-wiring.ts`'s own
+ * `[D-378]` note); before this change, this function read a THIRD copy of the same index on
+ * every tick — one extra `.olea/concepts/` listing for no behavioural difference, since the
+ * index cannot change between the three reads within one tick (nothing here mints or rewrites a
+ * key). `options.canonicalKeys` lets a caller hand in the one it already read; omitted, this
+ * function reads it itself exactly as before, so a caller that does not thread it through sees
+ * unchanged behaviour.
  */
 
 import {
+  type ConceptKeyCanonicalIndex,
   type ConceptRelation,
   deriveRelationSet,
   excludeDisposedRelationCacheRecords,
@@ -72,6 +83,16 @@ export interface SameAsResolvedPass {
   readonly relations: RelationSet;
   /** How many concept records were folded into another this call — `0` on the ordinary tick where no confirmed link touches this pass's concepts. */
   readonly conceptsMerged: number;
+}
+
+/** The options `resolveSameAsForPass` takes (`ol-egov.141.89.9.57`). */
+export interface ResolveSameAsForPassOptions {
+  /**
+   * The canonical-key index this tick already read (`./wiring.ts`'s `readConceptsAndRelations`
+   * reads one for `persistRelationCacheFromPass`/`readRelationSetWithCache` and can hand the
+   * same one on here). Omitted, this function reads it itself, exactly as it always did.
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
 }
 
 /** The best (first-ranked) attestation of a resolved relation-cache record, as the `ConceptRelation` `deriveRelationSet` folds — the same per-record projection `olea-core`'s `relationCacheRecordsAsConceptRelations` performs, restated over an in-memory list here because that function always re-reads the vault itself and this caller already holds the same-as-resolved records in memory. */
@@ -99,14 +120,19 @@ function bestAttestationAsConceptRelation(
  * only adds one more group: the same-as-resolved, disposition-excluded relation-cache records,
  * which can carry a merged attestation set `pass.relations`'s own fold never saw (two records
  * that only collide onto one proposition identity AFTER same-as resolution).
+ *
+ * `options.canonicalKeys` (`ol-egov.141.89.9.57`): a caller already holding this tick's
+ * canonical-key index passes it through rather than making this function read a third copy of
+ * it (see module doc). Omitted, it is read here exactly as before.
  */
 export async function resolveSameAsForPass(
   vault: VaultSource,
   pass: ConceptAndRelationPass,
+  options: ResolveSameAsForPassOptions = {},
 ): Promise<SameAsResolvedPass> {
   const sameAsLinkEntries = await listSameAsLinkRecords(vault);
   const links = sameAsLinkEntries.map((entry) => entry.record);
-  const canonicalKeys = await readConceptKeyCanonicalIndex(vault);
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
 
   const conceptsResult = resolveConceptsWithSameAsLinks(pass.read.concepts, links, canonicalKeys);
 

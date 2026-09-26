@@ -94,6 +94,7 @@ import {
   proposeSameAsLink,
   type ReadConcept,
   type RelationSet,
+  readConceptKeyCanonicalIndex,
   readConcepts,
   runCorpusRelationBatch,
   type SameAsLinkRecord,
@@ -882,14 +883,26 @@ export async function readConceptsAndRelations(
     corpus,
     relations: deriveRelationSet(read.relations, corpus.relations ?? []),
   };
-  const cacheSyncOptions = options.now !== undefined ? { now: options.now } : {};
+  // `[D-378]`/`ol-egov.141.89.9.57`: one canonical-key index for the whole tick, read once here
+  // and handed to all three consumers below, rather than each of them reading its own copy of
+  // `.olea/concepts/` (three listings collapsed to one; behaviour unchanged, since nothing in
+  // this tick mints or rewrites a key between these three reads).
+  const canonicalKeys = await readConceptKeyCanonicalIndex(options.vault);
+  const cacheSyncOptions = {
+    canonicalKeys,
+    ...(options.now !== undefined ? { now: options.now } : {}),
+  };
   await persistRelationCacheFromPass(options.vault, passSoFar, cacheSyncOptions);
-  const relations = await readRelationSetWithCache(options.vault, passSoFar);
+  const relations = await readRelationSetWithCache(options.vault, passSoFar, { canonicalKeys });
 
   // The confirmed same-as link's first read consumer (`ol-2zfj.86` ONT-R1, F8.6) — see this
   // function's own doc and `./same-as-wiring.ts`'s module doc. A `'proposed'`/`'severed'` link,
   // or no link at all (the ordinary tick), returns `read.concepts`/`relations` unchanged.
-  const sameAs = await resolveSameAsForPass(options.vault, { read, corpus, relations });
+  const sameAs = await resolveSameAsForPass(
+    options.vault,
+    { read, corpus, relations },
+    { canonicalKeys },
+  );
 
   return { read: { ...read, concepts: sameAs.concepts }, corpus, relations: sameAs.relations };
 }
