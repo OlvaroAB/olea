@@ -24,24 +24,6 @@ export {
 // itself. See `./assessment/format-class.js`'s module doc.
 export type { AssessmentFormatClass } from './assessment/format-class.js';
 export { formatClassOf, isDeclaredAssessmentType } from './assessment/format-class.js';
-export { readAssessments } from './assessment/read.js';
-// F2.19's assessment-scope resolver (`ol-v7r5.11`): F1.7's free-text scope
-// and F4.7's due day, resolved to the `conceptKey`-keyed context
-// `study-session/compose.ts`'s within-block grouping seam reads. See
-// `./assessment/scope-concept-keys.js`'s module doc for the exact/
-// normalized-exact-only matching convention (`ol-2zfj.27`).
-export type {
-  AssessmentConceptContext,
-  AssessmentGroupingContextResolution,
-} from './assessment/scope-concept-keys.js';
-export { resolveAssessmentGroupingContext } from './assessment/scope-concept-keys.js';
-export type {
-  AssessmentField,
-  AssessmentReadReport,
-  AssessmentRecord,
-  ColumnMapping,
-} from './assessment/types.js';
-export { REQUIRED_ASSESSMENT_FIELDS } from './assessment/types.js';
 export type {
   AddManualAssessmentOptions,
   ManualAssessmentEntryInput,
@@ -61,7 +43,25 @@ export {
   readManualAssessments,
   removeManualAssessmentEntry,
 } from './assessment/manual.js';
+export { readAssessments } from './assessment/read.js';
 export { hasReadableAssessmentsBase, resolveAssessments } from './assessment/resolve.js';
+// F2.19's assessment-scope resolver (`ol-v7r5.11`): F1.7's free-text scope
+// and F4.7's due day, resolved to the `conceptKey`-keyed context
+// `study-session/compose.ts`'s within-block grouping seam reads. See
+// `./assessment/scope-concept-keys.js`'s module doc for the exact/
+// normalized-exact-only matching convention (`ol-2zfj.27`).
+export type {
+  AssessmentConceptContext,
+  AssessmentGroupingContextResolution,
+} from './assessment/scope-concept-keys.js';
+export { resolveAssessmentGroupingContext } from './assessment/scope-concept-keys.js';
+export type {
+  AssessmentField,
+  AssessmentReadReport,
+  AssessmentRecord,
+  ColumnMapping,
+} from './assessment/types.js';
+export { REQUIRED_ASSESSMENT_FIELDS } from './assessment/types.js';
 // The byte path, body side (INV-2). Every write into a note goes through this;
 // see block/edit.ts for why it rejects rather than performs a straddling edit.
 export type { AppliedSpan, DocumentEdit, DocumentEditResult } from './block/edit.js';
@@ -621,12 +621,6 @@ export type { GenerationAwareJobRunnerDeps } from './generation/job-runner.js';
 export { createGenerationAwareJobRunner } from './generation/job-runner.js';
 export type { PrimaryKindInput } from './generation/primary-kind.js';
 export { DEFAULT_PRIMARY_KIND_FLOOR, primaryKindFor } from './generation/primary-kind.js';
-export type {
-  GenerationJobPayload,
-  GenerationTrigger,
-  GenerationTriggerKind,
-} from './generation/types.js';
-export { isGenerationJobPayload } from './generation/types.js';
 // `./generation/triggers.js`'s further-call rules (top-band, format-ask,
 // deck-served-out-or-lapsed, repeated-rejection) plus the policy engine that
 // runs all four and dedups by instrument kind — GEN-3.5 (`ol-2zfj.136`)
@@ -649,6 +643,12 @@ export {
   repeatedRejectionTrigger,
   topBandTrigger,
 } from './generation/triggers.js';
+export type {
+  GenerationJobPayload,
+  GenerationTrigger,
+  GenerationTriggerKind,
+} from './generation/types.js';
+export { isGenerationJobPayload } from './generation/types.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
 // this is the one impure export in that file. `ol-cqz8` widens this block to
@@ -1577,6 +1577,10 @@ export type {
   PlannedQueueItem,
 } from './plan/execute.js';
 export { executeStudyPlan, executeStudyPlanOverComposedRows } from './plan/execute.js';
+// D-238/F3.7's top-band further-call trigger signal — GEN-3.5 (`ol-2zfj.136`).
+// Reads the CACHED study plan (this directory), sharing its cutoff rule with
+// `concept/note-offer.ts#isRankInTopBand` rather than a second copy.
+export { conceptEnteredTopBand, GENERATION_TOP_BAND_DIVISOR } from './plan/generation-signals.js';
 export type { RefreshStudyPlanDeps } from './plan/refresh.js';
 export { refreshStudyPlan } from './plan/refresh.js';
 export type {
@@ -1585,10 +1589,6 @@ export type {
   StudyPlanSource,
   StudyPlanStore,
 } from './plan/types.js';
-// D-238/F3.7's top-band further-call trigger signal — GEN-3.5 (`ol-2zfj.136`).
-// Reads the CACHED study plan (this directory), sharing its cutoff rule with
-// `concept/note-offer.ts#isRankInTopBand` rather than a second copy.
-export { conceptEnteredTopBand, GENERATION_TOP_BAND_DIVISOR } from './plan/generation-signals.js';
 // Queue composition v1 (P2-T07): plain FSRS due order, per-session concept
 // dedupe that defers rather than drops (F2.17), course/topic filter (F2.5),
 // and the suspended set excluded (F2.6). The one module that joins instruments
@@ -1862,6 +1862,14 @@ export {
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
 } from './review-log/explain-back-history.js';
+// D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
+// (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
+// see review-log/generation-signals.ts's module doc for the named
+// per-course limitation.
+export {
+  observedInstrumentTypeOrder,
+  requestedKindFor,
+} from './review-log/generation-signals.js';
 export type { MergeReviewLogResult } from './review-log/merge.js';
 export { mergeReviewLogRecords } from './review-log/merge.js';
 export type { InvalidReviewLogLine, ParseReviewLogResult } from './review-log/parse.js';
@@ -1878,14 +1886,6 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 // INV-6's accept step, evidenced (`ol-548w`): the verdict projection folded
 // from the review log, never stored — see review-log/verdicts.ts.
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
-// D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
-// (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
-// see review-log/generation-signals.ts's module doc for the named
-// per-course limitation.
-export {
-  observedInstrumentTypeOrder,
-  requestedKindFor,
-} from './review-log/generation-signals.js';
 export type {
   AppendDisputeLogResult,
   AppendExplainBackOfferLogResult,
@@ -2006,6 +2006,15 @@ export {
   DECLARED_SCHEDULER_CONFIGURATION,
   resolveSchedulerConfiguration,
 } from './scheduler/fsrs-scheduler.js';
+// D-238/F3.7's deck-served-out-or-lapsed further-call trigger signal —
+// GEN-3.5 (`ol-2zfj.136`). Reuses F2.12's already-ratified
+// `CONFUSION_ROUTING_LAPSE_THRESHOLD` (exported elsewhere in this barrel);
+// see scheduler/generation-signals.ts's module doc.
+export type {
+  DeckServingSignal,
+  DeckServingSignalInput,
+} from './scheduler/generation-signals.js';
+export { deckServingSignal } from './scheduler/generation-signals.js';
 // `[D-240]` item 2's serving rule (`ol-2zfj.71` [SESS-7]) — ONE
 // implementation, called by both session composers. Exported because the
 // harness's three-arm sweep selects the policy by name and because
@@ -2034,15 +2043,6 @@ export type {
   SchedulerConfigurationSource,
   SchedulerState,
 } from './scheduler/types.js';
-// D-238/F3.7's deck-served-out-or-lapsed further-call trigger signal —
-// GEN-3.5 (`ol-2zfj.136`). Reuses F2.12's already-ratified
-// `CONFUSION_ROUTING_LAPSE_THRESHOLD` (exported elsewhere in this barrel);
-// see scheduler/generation-signals.ts's module doc.
-export type {
-  DeckServingSignal,
-  DeckServingSignalInput,
-} from './scheduler/generation-signals.js';
-export { deckServingSignal } from './scheduler/generation-signals.js';
 // F8.1's six-state grove coverage computation (`[D-054]`, `ol-o8eo`) — the
 // examiner-declared denominator (F1.5/F4.1), never Olea's own inference.
 // `./scope/coverage.ts` classifies one concept; `./scope/grove.ts` assembles
