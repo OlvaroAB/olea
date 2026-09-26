@@ -967,8 +967,10 @@ describe('C7.9 containment relations reach both session-composition call sites (
     // `[SESS-8.4]` (`ol-egov.132.4`): `studySessionHolder`/
     // `composeDefaultStudySession` now follow `assessments` in the same
     // object, before the closing brace — see that method's own doc.
+    // `ol-egov.141.89.6.54`'s `citationHashStore` spread now rides between
+    // `assessments` and `studySessionHolder` too (widened budget below).
     expect(main).toMatch(
-      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,[\s\S]{0,300}?\};/,
+      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,200}?assessments,[\s\S]{0,1200}?\};/,
     );
   });
 
@@ -989,6 +991,62 @@ describe('C7.9 containment relations reach both session-composition call sites (
 
   it('imports servedRelations from olea-core, not a local reimplementation', () => {
     expect(main).toMatch(/servedRelations,/);
+  });
+});
+
+describe('ol-egov.141.8.10 (F1.2): both readAssessments call sites now read through the manual-entry fallback', () => {
+  // F1.2: manual course-and-date entry is a fallback where no assessments
+  // Base exists or it cannot be read — never the default path. `olea f6f3875`
+  // already switched the paper, plan, Grove and retrospective providers to
+  // `resolveAssessments` (`assessment/resolve.ts`, `olea-core`); this bead's
+  // own report named `main.ts`'s two remaining direct `readAssessments` call
+  // sites as pending. With a readable Base every output is unchanged
+  // (`resolveAssessments`'s own doc); a blank or unreadable Base now reads her
+  // hand-entered assessments instead of nothing.
+
+  it('imports resolveAssessments from olea-core, and no longer imports readAssessments', () => {
+    expect(main).toMatch(/resolveAssessments,/);
+    expect(main).not.toMatch(/readAssessments/);
+  });
+
+  it('no longer imports isStudyPlanConfigured — both call sites that gated on it are gone', () => {
+    expect(main).not.toMatch(/isStudyPlanConfigured/);
+  });
+
+  it('buildFormatMatchProducer (F4.8) reads through resolveAssessments unconditionally, with no isStudyPlanConfigured early return', () => {
+    expect(main).toMatch(
+      /const assignmentsConfig = await new ObsidianStudyPlanSettingsStore\(this\)\.load\(\);\s*const assessments = \(await resolveAssessments\(vault, assignmentsConfig\.assignmentsBasePath\)\)\s*\.records;/,
+    );
+  });
+
+  it('buildReviewSessionInput’s F2.19 assessments read through resolveAssessments unconditionally, with no isStudyPlanConfigured ternary', () => {
+    expect(main).toMatch(
+      /const assignmentsConfig = await new ObsidianStudyPlanSettingsStore\(this\)\.load\(\);\s*const assessments = \(\s*await resolveAssessments\(wiring\.vault, assignmentsConfig\.assignmentsBasePath\)\s*\)\.records;/,
+    );
+  });
+});
+
+describe('ol-egov.141.89.6.54: buildReviewSessionInput threads the SAME citationHashStore instance into OpenReviewSessionInput', () => {
+  // `[D-351]`/`[D-323]`: `open-session.ts`'s `OpenReviewSessionInput.citationHashStore` (new,
+  // optional field) makes `readInstrumentStanding`'s pending-revalidation concern a real, wired
+  // read once supplied — previously omitted by every caller, so it stayed a genuine, honest gap
+  // rather than a guessed clear. `composeDefaultStudySession`/`extendDefaultStudySession` already
+  // spread `this.citationHashStore` into their own composer deps for a different consumer
+  // (session-builder's own resolver); this bead's own report named `buildReviewSessionInput` — the
+  // one production `OpenReviewSessionInput` builder — as the one-line follow-up that threads the
+  // SAME instance (constructed once, `main.ts`'s `onload`) into the review tab's own open/extend
+  // path too, never a second store. No `safetyUnavailableInstrumentIds` is added alongside it —
+  // no real production source exists for that concern yet (see `OpenReviewSessionInput`'s own doc).
+
+  it('spreads this.citationHashStore into the returned OpenReviewSessionInput, omitted rather than null before the store is up', () => {
+    const inputBody = main.slice(
+      main.indexOf('private async buildReviewSessionInput('),
+      main.indexOf('private async composeReviewSession('),
+    );
+    expect(inputBody).toMatch(
+      /assessments,\s*\.\.\.\(this\.citationHashStore \? \{ citationHashStore: this\.citationHashStore \} : \{\}\),/,
+    );
+    expect(inputBody).not.toMatch(/safetyUnavailableInstrumentIds/);
   });
 });
 
@@ -1754,9 +1812,17 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
     );
   });
 
-  it('all four compose call sites (three direct, one via Home) receive it — exactly four occurrences', () => {
+  // `ol-egov.141.89.6.54` adds a FIFTH occurrence of this same literal spread
+  // — `buildReviewSessionInput`'s own construction of `OpenReviewSessionInput`
+  // (pinned in that bead's own describe block below) — but for a different
+  // concern: it feeds `open-session.ts`'s own `readInstrumentStanding`
+  // pending-revalidation READ, never one of the four COMPOSE call sites this
+  // block is about. Counted here anyway, since this assertion matches the
+  // literal string wherever it occurs; kept at exactly five so a sixth,
+  // unaccounted-for occurrence still fails this test.
+  it('all four compose call sites (three direct, one via Home) plus the review-tab open/extend site receive it — exactly five occurrences', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(4);
+    expect(occurrences.length).toBe(5);
   });
 });
 
@@ -1841,26 +1907,48 @@ describe('ol-egov.141.89.10.4 (bug, fixed): a second outrun-the-target extend no
   });
 });
 
-describe('ol-egov.141.89.10.47: Start’s holder entry captures the composing plan, not just a fresh sitting', () => {
-  // CONFIRMED bug: `enterStudySessionHolderForStart` called
-  // `this.studySessionHolder.enter(now, composed)` with no third argument,
-  // so `StudySessionHolder.enter` (`session/holder.ts`) left the sitting's
-  // composition plan uncaptured — captured only lazily, at the first
-  // `resolveCompositionPlan` call, which in practice is the first review-tab
-  // open rather than the true entry instant (C5.8, `[D-193]`).
+describe('ol-egov.141.89.10.4.1 (bug, fixed): Start’s holder entry passes the COMPOSITION’s own plan, not a fresh re-read', () => {
+  // `ol-egov.141.89.10.47` first fixed `enterStudySessionHolderForStart`
+  // calling `this.studySessionHolder.enter(now, composed)` with no third
+  // argument at all (`StudySessionHolder.enter`, `session/holder.ts`, left
+  // the sitting's composition plan uncaptured — captured only lazily, at the
+  // first `resolveCompositionPlan` call, in practice the first review-tab
+  // open rather than the true entry instant, C5.8/`[D-193]`) by passing
+  // `this.review?.plan ?? null`. That fix was itself a second bug, confirmed
+  // by `ol-egov.141.89.10.65`'s lane: `this.review?.plan ??
+  // null` re-read `this.review.plan` fresh AFTER `composeDefaultStudySession`
+  // had already resolved. `refreshCachedStudyPlan` mutates `this.review.plan`
+  // in place on its own schedule, so a refresh landing while
+  // `composeDefaultStudySession` was still running (it awaits a vault walk, a
+  // review-log read and the oracle chain) meant the plan `enter()` stamped
+  // onto the sitting could disagree with the plan the composition actually
+  // read — the review-log stamp then disagrees with what was composed. Fixed
+  // by capturing the plan as a side effect of the SAME getter
+  // `composeStudySessionForRequest` calls internally
+  // (`this.lastComposedSessionPlan`, that field's own doc), so there is only
+  // one read of `wiring.plan` for a given compose, not two independently
+  // timed ones.
 
-  it('enter is called with the live review plan as its third argument', () => {
+  it('captures the plan inside composeDefaultStudySession’s own plan getter, into this.lastComposedSessionPlan', () => {
     expect(main).toMatch(
-      /if \(composed !== null\) this\.studySessionHolder\.enter\(now, composed, this\.review\?\.plan \?\? null\);/,
+      /plan: \(\) => \{\s*this\.lastComposedSessionPlan = wiring\.plan;\s*return wiring\.plan;\s*\},/,
     );
   });
 
-  // `ReviewWiring.plan`'s doc-comment correction (it used to claim the
-  // opposite of C5.8/`[D-193]`'s resumed-sitting rule) is prose, stripped by
-  // this file's own `codeOf` before `main` is built — "a doc paragraph
-  // describing the wiring must not satisfy an assertion about it" (this
-  // file's own module doc). Not asserted here for that reason; see this
-  // bead's close evidence / report for the corrected text.
+  it('declares this.lastComposedSessionPlan as a private field, typed to allow the "nothing composed yet" state', () => {
+    expect(main).toMatch(
+      /private lastComposedSessionPlan: StudyPlanEnvelope \| null \| undefined;/,
+    );
+  });
+
+  it('enter is called with the captured composition plan, never a fresh this.review?.plan read', () => {
+    expect(main).toMatch(
+      /if \(composed !== null\)\s*this\.studySessionHolder\.enter\(now, composed, this\.lastComposedSessionPlan\);/,
+    );
+    expect(main).not.toMatch(
+      /this\.studySessionHolder\.enter\(now, composed, this\.review\?\.plan \?\? null\)/,
+    );
+  });
 });
 
 describe('ol-egov.141.89.10.14 (bug, fixed): the shared session holder now computes real staleness', () => {

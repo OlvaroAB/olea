@@ -54,12 +54,12 @@ import {
   type QueueSnapshot,
   type RegistryOverrides,
   type RelationSet,
-  readAssessments,
   readConceptKeyCanonicalIndex,
   readList,
   readReviewLogFile,
   readReviewLogHistory,
   refreshStudyPlan,
+  resolveAssessments,
   type Scheduler,
   type SittingScopeSnapshot,
   servedRelations,
@@ -183,7 +183,7 @@ import type { PlanPolicyHttpPost } from './plan/plan-policy-provider.js';
 import { buildPlanPolicyWiring, type PlanPolicyWiring } from './plan/plan-policy-wiring.js';
 import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { studyPlanRefreshDue } from './plan/refresh-schedule.js';
-import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
+import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
@@ -466,6 +466,25 @@ export default class OleaPlugin extends Plugin {
    */
   private sharedSittingFrozenScope: FrozenSittingScope | undefined;
   private sharedSittingFrozenSnapshot: SittingScopeSnapshot | undefined;
+  /**
+   * `ol-egov.141.89.10.4.1` (bug fix): the plan value THIS call's own `plan`
+   * getter actually handed the composer — captured as a side effect of that
+   * getter, at the exact point `composeStudySessionForRequest` reads it
+   * (`session-builder/provider.ts`'s `deps.plan?.()`, called exactly once,
+   * unconditionally, whenever a plan is configured) — never re-derived by
+   * reading `this.review.plan` again afterward. Previously
+   * `enterStudySessionHolderForStart` passed `this.review?.plan ?? null` —
+   * read fresh AFTER `composeDefaultStudySession` had already resolved — so a
+   * `refreshCachedStudyPlan` tick landing between the compose starting and
+   * `enter()` running made the sitting's stamped plan disagree with the plan
+   * the composition actually read. `enterStudySessionHolderForStart` now
+   * reads this field instead. `undefined` before any compose has run this
+   * session, or when the last compose found no plan configured; a value left
+   * over from an EARLIER compose is never mistaken for a later one's, because
+   * the one reader always reads it immediately after its own
+   * `composeDefaultStudySession()` await settles, never later.
+   */
+  private lastComposedSessionPlan: StudyPlanEnvelope | null | undefined;
   /**
    * `[JEV-11]` (`ol-3ux7.96`): the one recorder for this plugin instance,
    * same "constructed unconditionally at class-field init, never rebuilt"
@@ -3131,23 +3150,28 @@ export default class OleaPlugin extends Plugin {
    * `ol-v7r5.37`'s production `deps.formatMatch` (F4.8, `[D-188]`):
    * `generation/format-match.ts`'s `buildFormatMatch`, given a fresh
    * `ObsidianSource` and whatever her assignments table currently holds — the
-   * same `ObsidianStudyPlanSettingsStore`/`isStudyPlanConfigured`/
-   * `readAssessments` join `buildReviewSessionInput` already uses for F2.19,
-   * read fresh here for the identical reason `draftQuizCardsDeps` and the
-   * routing classifier below are read fresh per tick rather than once at
-   * `onload`. Returns `() => undefined` for every course — never `null` —
-   * when study-plan settings are not configured yet, so an unconfigured
-   * assignments Base degrades to exactly the pre-`ol-v7r5.37` behaviour
-   * (`purpose`/`registerHint` both absent) rather than throwing into
-   * `onUnitsLanded`'s own `try`.
+   * same `ObsidianStudyPlanSettingsStore`/`resolveAssessments` join
+   * `buildReviewSessionInput` already uses for F2.19, read fresh here for the
+   * identical reason `draftQuizCardsDeps` and the routing classifier below
+   * are read fresh per tick rather than once at `onload`. A read failure past
+   * `resolveAssessments`'s own manual-entry fallback still degrades to
+   * `() => undefined` for every course — never `null` — rather than throwing
+   * into `onUnitsLanded`'s own `try`; `purpose`/`registerHint` are both absent
+   * exactly as before this bead in that case.
+   *
+   * `ol-egov.141.8.10` (F1.2): `resolveAssessments` replaces `readAssessments`
+   * here, and the former `isStudyPlanConfigured` early return is gone with
+   * it — a blank or unreadable Base no longer skips assessments entirely,
+   * because `resolveAssessments` itself reads her hand-entered assessments in
+   * that case (`assessment/resolve.ts`'s own doc); with a readable Base every
+   * output is unchanged.
    */
   private async buildFormatMatchProducer(): Promise<
     (courseCode: string) => FormatMatchDecision | undefined
   > {
     const vault = new ObsidianSource(this.app);
     const assignmentsConfig = await new ObsidianStudyPlanSettingsStore(this).load();
-    if (!isStudyPlanConfigured(assignmentsConfig)) return () => undefined;
-    const assessments = (await readAssessments(vault, assignmentsConfig.assignmentsBasePath))
+    const assessments = (await resolveAssessments(vault, assignmentsConfig.assignmentsBasePath))
       .records;
     return buildFormatMatch({ vault, assessments, now: this.now });
   }
@@ -3396,7 +3420,13 @@ export default class OleaPlugin extends Plugin {
         now: () => now,
         scheduler: wiring.scheduler,
         relations: () => this.servedRelationEdges(),
-        plan: () => wiring.plan,
+        // `ol-egov.141.89.10.4.1`: captures the exact value handed to the
+        // composer into `this.lastComposedSessionPlan` (that field's own
+        // doc) — never a separate re-read of `wiring.plan` later.
+        plan: () => {
+          this.lastComposedSessionPlan = wiring.plan;
+          return wiring.plan;
+        },
         // `[SESS-13]` (`ol-egov.132.14`): `[D-092]`'s window deficit, read off
         // her review log through C5.5's clustering — see
         // `windowDeficitFromReviewLog` above.
@@ -3639,13 +3669,21 @@ export default class OleaPlugin extends Plugin {
       this.studySessionHolder.exit();
     }
     const composed = await this.composeDefaultStudySession();
-    // `ol-egov.141.89.10.47` (C5.8, `[D-193]`): pass the live review plan as
-    // `enter`'s third argument, so the composition PLAN is captured at the
-    // exact instant this fresh sitting begins, not lazily at the first
-    // `resolveCompositionPlan` call (previously the first review-tab open) —
-    // see `ReviewWiring.plan`'s own doc and `session/holder.ts`'s
+    // `ol-egov.141.89.10.47` (C5.8, `[D-193]`): pass the composition's own
+    // plan as `enter`'s third argument, so the composition PLAN is captured
+    // at the exact instant this fresh sitting begins, not lazily at the
+    // first `resolveCompositionPlan` call (previously the first review-tab
+    // open) — see `ReviewWiring.plan`'s own doc and `session/holder.ts`'s
     // `resolveCompositionPlan`.
-    if (composed !== null) this.studySessionHolder.enter(now, composed, this.review?.plan ?? null);
+    //
+    // `ol-egov.141.89.10.4.1` (bug fix): that plan is
+    // `this.lastComposedSessionPlan` (this field's own doc) — the value the
+    // compose call above actually handed the composer — never a fresh
+    // `this.review?.plan` read here, which could disagree with what was
+    // composed if `refreshCachedStudyPlan` landed a background refresh while
+    // `composeDefaultStudySession` was still running.
+    if (composed !== null)
+      this.studySessionHolder.enter(now, composed, this.lastComposedSessionPlan);
   }
 
   /**
@@ -3669,11 +3707,18 @@ export default class OleaPlugin extends Plugin {
 
     // F2.19 (`ol-vr8z`): assessment records for within-block scope grouping,
     // sourced the same way `session-builder/provider.ts` does — the study-plan
-    // settings store's assignments base, gated on it being configured at all.
+    // settings store's assignments base.
+    //
+    // `ol-egov.141.8.10` (F1.2): `resolveAssessments` replaces the former
+    // `isStudyPlanConfigured`-gated `readAssessments` call — a blank or
+    // unreadable Base no longer reads as "no assessments at all" here; her
+    // hand-entered assessments join exactly as the Base would
+    // (`assessment/resolve.ts`'s own doc). With a readable Base every output
+    // is unchanged.
     const assignmentsConfig = await new ObsidianStudyPlanSettingsStore(this).load();
-    const assessments = isStudyPlanConfigured(assignmentsConfig)
-      ? (await readAssessments(wiring.vault, assignmentsConfig.assignmentsBasePath)).records
-      : [];
+    const assessments = (
+      await resolveAssessments(wiring.vault, assignmentsConfig.assignmentsBasePath)
+    ).records;
 
     return {
       vault: wiring.vault,
@@ -3699,6 +3744,17 @@ export default class OleaPlugin extends Plugin {
       // F2.19 (`ol-vr8z`): resolved into `assessmentContext` inside
       // `buildReviewSession`, alongside `relations` above.
       assessments,
+      // `[D-351]`/`[D-323]` (`ol-egov.141.89.6.54`): the SAME `CitationHashStore`
+      // instance `this.citationHashStore` already is for `citation-revision-
+      // wiring.ts`'s tick (constructed once, `main.ts`'s `onload`) — threaded
+      // here too so `OpenReviewSessionInput.citationHashStore`'s own
+      // `pending-revalidation` concern (`open-session.ts`'s
+      // `readInstrumentStanding`) becomes a real, wired read for the review
+      // tab, not merely for `composeDefaultStudySession`/
+      // `extendDefaultStudySession` above, which already carry the identical
+      // spread. Omitted (never `null`) before the Worker/store is up, the
+      // same `exactOptionalPropertyTypes` discipline those two call sites use.
+      ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
       // `[SESS-8.2]`/`[SESS-8.4]` (`docs/dev/one-assembly-path.md` §3a/§3c):
       // the one plugin-wide composed-session holder, and the port
       // `open-session.ts` calls through when it finds that holder idle —
