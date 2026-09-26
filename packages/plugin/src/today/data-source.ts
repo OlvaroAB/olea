@@ -332,6 +332,43 @@ export async function readReviewHistory(
 }
 
 /**
+ * `[D-373]`: why no session was composed, read separately from the due count
+ * itself. The composed-session path (`[SESS-8.5]`) can compose successfully
+ * and still rank no concepts — a course-lacking-evidence veto, most often —
+ * and that is not the same statement as "nothing is due": `[D-373]` amends
+ * F6.1 to say the known due count (what she has already scheduled) instead,
+ * and to state this fact beside it, never folded into the count.
+ *
+ * `{ composed: true }` — the composition held at least one item;
+ * `listDueCandidates()` returned that composition's own list, unchanged from
+ * before this amendment. `{ composed: false, reason }` — the composition
+ * succeeded but ranked zero concepts; `listDueCandidates()` fell back to the
+ * known due count (the same enumeration the legacy, no-composer path below
+ * always used) rather than reading the empty list as a true zero.
+ *
+ * **Not a fourth state alongside "cannot count yet."** When
+ * `composeDefaultStudySession()` itself returns `null` (the study plan is
+ * not configured, or the walk failed), `listDueCandidates()` still returns
+ * `null` exactly as it did before `[D-373]` — genuinely unknown, with
+ * nothing yet to give a reason for — and this outcome is not read at all in
+ * that case.
+ *
+ * **One reason exists today.** `'nothing-assessed-soon'` is the one cause
+ * this file can name without a change outside its `owns`: the oracle's
+ * per-course abstain/veto reasoning (`../oracle/rank.ts`'s `checkEdgeVeto`
+ * and its `'no-evidence'` abstain path) never reaches `ComposedStudySession`
+ * — nothing on that type carries it through. A richer, per-course reason
+ * (telling a course genuinely lacking upcoming assessment evidence apart
+ * from a completed course's own maintenance case, which `[D-373]`'s own text
+ * defers to a separate reading) needs a structured signal
+ * `study-session/compose.ts` does not expose yet — see this bead's report
+ * for the exact change and the companion core lane it belongs to.
+ */
+export type SessionCompositionOutcome =
+  | { readonly composed: true }
+  | { readonly composed: false; readonly reason: 'nothing-assessed-soon' };
+
+/**
  * Where the panel gets the instruments it counts. Implemented for real by
  * `createVaultInstrumentSource` below, over `olea-core`'s session pipeline;
  * `unavailableInstrumentSource` is what that source returns when it cannot
@@ -349,8 +386,28 @@ export interface TodayInstrumentSource {
    * reads the full history and excludes it, exactly as F2.6's scenarios say.
    * `summariseDue` still takes a suspended set, for a caller that does hold
    * the whole log; this one does not pass one, because it would be wrong.
+   *
+   * **`[D-373]`: an empty list from the composed-session path is now a
+   * fallback to the known due count, never the composition's own empty
+   * list** — see `SessionCompositionOutcome`'s doc and
+   * `sessionCompositionOutcome` below for the fact this collapses out of
+   * this return value alone.
    */
   listDueCandidates(): Promise<readonly DueInstrument[] | null>;
+  /**
+   * `[D-373]` — optional. Read AFTER a `listDueCandidates()` call on the
+   * SAME source instance has resolved; meaningless before that, and this
+   * file's own production wiring (`main.ts`) creates one fresh instance per
+   * panel load, so there is no concurrent-call ambiguity to guard against.
+   * `undefined` — the method itself absent, or present and returning
+   * `undefined` — on `unavailableInstrumentSource`, on the legacy
+   * (no-holder/no-composer) path, which never composes a session to report
+   * on, and whenever `listDueCandidates()` itself returned `null`: every one
+   * of those is "nothing to add", and `loadTodayPanel` reads this through an
+   * optional call for exactly that reason, so a panel that never wires this
+   * signal renders exactly as it did before `[D-373]`.
+   */
+  sessionCompositionOutcome?(): SessionCompositionOutcome | undefined;
 }
 
 /**
@@ -503,14 +560,70 @@ function dueInstrumentsFromComposition(
  *
  * **`[SESS-8.5]`: this is the legacy path.** When `deps.studySessionHolder`
  * and `deps.composeDefaultStudySession` are both supplied (`main.ts`'s real
- * wiring), `listDueCandidates` never reaches `buildReviewSession` at all —
- * see {@link dueInstrumentsFromComposition} and this file's module doc.
+ * wiring), `listDueCandidates` reaches this walk only as `[D-373]`'s
+ * fallback (see `createVaultInstrumentSource` below) — never for its own
+ * primary count, which reads {@link dueInstrumentsFromComposition} instead.
+ *
+ * Extracted to its own function so `createVaultInstrumentSource` can call it
+ * from both places it is needed: the primary count on the no-composer path,
+ * and the `[D-373]` fallback on the composed-session path.
  */
+async function legacyDueCandidates(
+  deps: VaultInstrumentSourceDeps,
+): Promise<readonly DueInstrument[] | null> {
+  try {
+    const today = localToday(deps.now());
+    const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+    const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
+      reviewLogPath(day, deps.deviceId),
+    );
+
+    const session = await buildReviewSession({
+      vault: deps.vault,
+      scheduler: deps.scheduler,
+      now: deps.now(),
+      reviewLog: { additionalPaths },
+      // `[D-357]`: the permanent concept key, the one her review log now carries.
+      instruments: {
+        concepts: { stampConceptKeys: true },
+        ...(deps.excludePaths !== undefined ? { excludePaths: deps.excludePaths } : {}),
+      },
+      ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
+    });
+
+    // `toDueInstruments` maps every enumerated record, not
+    // `session.candidates` — so C7.9's containment filter (`ol-v7r5.7`)
+    // has to be re-applied here by instrument id, the same way suspension
+    // already is, or a `relations` argument would compose the queue
+    // correctly while the Today count kept the container's candidates.
+    const containmentDropped = new Set(
+      session.containmentDropped.map((candidate) => candidate.instrumentId),
+    );
+    return toDueInstruments(session.instruments.records, session.replay).filter(
+      (instrument) =>
+        !session.suspended.has(instrument.instrumentId) &&
+        !containmentDropped.has(instrument.instrumentId),
+    );
+  } catch {
+    // "We could not read your vault" is not "nothing is due". The panel
+    // renders `null` as the former, which is the true statement.
+    return null;
+  }
+}
+
 export function createVaultInstrumentSource(
   deps: VaultInstrumentSourceDeps,
 ): TodayInstrumentSource {
+  // `[D-373]`: set by the most recent `listDueCandidates()` call on THIS
+  // instance — see `TodayInstrumentSource.sessionCompositionOutcome`'s doc
+  // for why a single-use, freshly-created-per-load source (`main.ts`'s
+  // wiring) makes this safe rather than a hidden concurrency hazard.
+  let lastCompositionOutcome: SessionCompositionOutcome | undefined;
+
   return {
     async listDueCandidates() {
+      lastCompositionOutcome = undefined;
+
       if (deps.studySessionHolder !== undefined && deps.composeDefaultStudySession !== undefined) {
         const holder = deps.studySessionHolder;
         const composeDefaultStudySession = deps.composeDefaultStudySession;
@@ -522,48 +635,38 @@ export function createVaultInstrumentSource(
         // the composer is pure over the same inputs.
         const composed =
           sitting.status === 'active' ? sitting.items : await composeDefaultStudySession();
+        // `null`: the composition could not be produced at all — the
+        // genuinely-unknown "cannot count yet" case, unchanged by `[D-373]`.
+        // There is nothing yet to give a reason for, so
+        // `lastCompositionOutcome` stays `undefined`.
         if (composed === null) return null;
-        return dueInstrumentsFromComposition(composed, deps.now());
+
+        const items = dueInstrumentsFromComposition(composed, deps.now());
+        if (items.length > 0) {
+          lastCompositionOutcome = { composed: true };
+          return items;
+        }
+
+        // `[D-373]`: the composition succeeded but ranked no concepts at
+        // all — not the same statement as "nothing is due". Fall back to
+        // the known due count from what she has already scheduled, the
+        // same enumeration `legacyDueCandidates` always used, and record
+        // why no session was composed. If even THAT fallback cannot
+        // enumerate (a vault read failure), there is nothing honest to say
+        // beyond "cannot count yet" — `lastCompositionOutcome` stays
+        // `undefined` and the `null` return speaks for itself, exactly as
+        // it always has.
+        const known = await legacyDueCandidates(deps);
+        if (known !== null) {
+          lastCompositionOutcome = { composed: false, reason: 'nothing-assessed-soon' };
+        }
+        return known;
       }
 
-      try {
-        const today = localToday(deps.now());
-        const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
-        const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
-          reviewLogPath(day, deps.deviceId),
-        );
-
-        const session = await buildReviewSession({
-          vault: deps.vault,
-          scheduler: deps.scheduler,
-          now: deps.now(),
-          reviewLog: { additionalPaths },
-          // `[D-357]`: the permanent concept key, the one her review log now carries.
-          instruments: {
-            concepts: { stampConceptKeys: true },
-            ...(deps.excludePaths !== undefined ? { excludePaths: deps.excludePaths } : {}),
-          },
-          ...(deps.relations !== undefined ? { relations: deps.relations } : {}),
-        });
-
-        // `toDueInstruments` maps every enumerated record, not
-        // `session.candidates` — so C7.9's containment filter (`ol-v7r5.7`)
-        // has to be re-applied here by instrument id, the same way suspension
-        // already is, or a `relations` argument would compose the queue
-        // correctly while the Today count kept the container's candidates.
-        const containmentDropped = new Set(
-          session.containmentDropped.map((candidate) => candidate.instrumentId),
-        );
-        return toDueInstruments(session.instruments.records, session.replay).filter(
-          (instrument) =>
-            !session.suspended.has(instrument.instrumentId) &&
-            !containmentDropped.has(instrument.instrumentId),
-        );
-      } catch {
-        // "We could not read your vault" is not "nothing is due". The panel
-        // renders `null` as the former, which is the true statement.
-        return null;
-      }
+      return legacyDueCandidates(deps);
+    },
+    sessionCompositionOutcome() {
+      return lastCompositionOutcome;
     },
   };
 }
@@ -1185,6 +1288,25 @@ export interface TodayPanelDeps {
 type TodayPanelVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
 
 /**
+ * `[D-373]`: `loadTodayPanel`'s actual return shape — `olea-core`'s
+ * `TodayViewModel` plus the session-composition signal, riding alongside it
+ * rather than inside it. `TodayViewModel` is `olea-core`'s type
+ * (`today/panel.ts`), and widening it to carry this field is a change to
+ * that package, outside this bead's `owns` — see
+ * `TodayInstrumentSource.sessionCompositionOutcome`'s doc for the exact
+ * change and why this file cannot make it itself.
+ *
+ * The extra field is optional and purely additive, so every existing caller
+ * typed against plain `TodayViewModel` still satisfies this type unchanged
+ * — in particular the workbench's `today-scenarios.ts`, which builds a
+ * `TodayViewModel` directly with `buildTodayPanel` and never sets this
+ * field at all.
+ */
+export interface TodayViewModelWithSessionComposition extends TodayViewModel {
+  readonly sessionComposition?: SessionCompositionOutcome;
+}
+
+/**
  * Loads both halves and folds them through core's one entry point. This is the
  * whole of what `view.ts` calls; everything it then does is DOM.
  *
@@ -1199,8 +1321,16 @@ type TodayPanelVitalityInputs = NonNullable<TodayPanelInput['vitality']>;
  * perform. See `resolveScheduleFreshness` below for how it is computed and
  * `view.ts`'s `renderRhythmBody` for how it feeds the already-drawn rhythm
  * empty state.
+ *
+ * **`[D-373]`'s session-composition signal is spliced on after
+ * `buildTodayPanel` returns**, the same "plugin-local widening" shape
+ * `TodayViewModelWithSchedule` (`ol-at1a`) used before its field found a
+ * home in core — see `TodayViewModelWithSessionComposition`'s own doc for
+ * why this one cannot move core-ward from inside this bead.
  */
-export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewModel> {
+export async function loadTodayPanel(
+  deps: TodayPanelDeps,
+): Promise<TodayViewModelWithSessionComposition> {
   const now = deps.now();
   const today = localToday(now);
   // Resolved here rather than forwarded as `undefined`: under
@@ -1212,6 +1342,11 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
     windowDays: deps.windowDays ?? DEFAULT_STREAK_WINDOW_DAYS,
   });
   const instruments = await deps.instruments.listDueCandidates();
+  // `[D-373]`: read immediately after the call above, on the same instance —
+  // see `TodayInstrumentSource.sessionCompositionOutcome`'s doc for why that
+  // ordering is what makes this safe. `undefined` on every source that
+  // predates this signal, or that has nothing to add for this load.
+  const sessionComposition = deps.instruments.sessionCompositionOutcome?.();
 
   // F2.11/D-116's vitality axis (`[VIT-2]`, `ol-a3hv`; wired here by
   // `ol-95vv.5`) — supplied unconditionally, the same posture `now` above
@@ -1275,7 +1410,14 @@ export async function loadTodayPanel(deps: TodayPanelDeps): Promise<TodayViewMod
   // model, never a second computation of mastery or vitality. See
   // `olea-core`'s `mastery/sprig.ts#TendingConcept` for why this has to
   // happen here rather than inside the fold that builds `tending` itself.
-  return withTendingDisplayNames(result, trends.conceptDisplayNames);
+  const withNames = withTendingDisplayNames(result, trends.conceptDisplayNames);
+
+  // `[D-373]`: spliced on last, and only when there is something to add —
+  // under `exactOptionalPropertyTypes`, `sessionComposition: undefined`
+  // is not the same as omitting the key, and every consumer typed against
+  // plain `TodayViewModel` (the workbench's `today-scenarios.ts` included)
+  // must keep seeing exactly that shape when this signal was never wired.
+  return sessionComposition === undefined ? withNames : { ...withNames, sessionComposition };
 }
 
 /**

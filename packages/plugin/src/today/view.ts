@@ -87,6 +87,7 @@ import {
   SCOPE_NOT_YET_DECLARED,
   START_REVIEW,
   scopeSummaryLine,
+  sessionNotComposedSentence,
   showsStartReviewAction,
   showsTermDatesPointer,
   spacingRateSentence,
@@ -97,6 +98,7 @@ import {
   tendingLine,
   vitalityCountLabel,
 } from './copy.js';
+import type { TodayViewModelWithSessionComposition } from './data-source.js';
 import type { TermDatesAskState } from './term-window-store.js';
 
 /**
@@ -138,8 +140,17 @@ export interface TermDatesAskSupport {
 }
 
 export interface TodayViewDeps {
-  /** Loads the view model. Async because it reads the vault. */
-  readonly load: () => Promise<TodayViewModel>;
+  /**
+   * Loads the view model. Async because it reads the vault.
+   *
+   * **`[D-373]`: may carry `sessionComposition` alongside the plain
+   * `TodayViewModel` fields** — see `data-source.ts`'s
+   * `TodayViewModelWithSessionComposition` doc. The field is optional, so
+   * every implementation that predates this signal (the workbench's
+   * `today-scenarios.ts`, which builds a plain `TodayViewModel` with
+   * `buildTodayPanel` directly) still satisfies this type unchanged.
+   */
+  readonly load: () => Promise<TodayViewModelWithSessionComposition>;
   /** What the one primary action does. Wired to the review command in `main.ts`. */
   readonly startReview: () => void;
   /**
@@ -206,7 +217,7 @@ export class TodayView extends ItemView {
     this.render(vm);
   }
 
-  private render(vm: TodayViewModel): void {
+  private render(vm: TodayViewModelWithSessionComposition): void {
     const root = this.contentEl;
     root.empty();
     // Every claim the panel asserts, enumerated once, in core — so the gesture
@@ -769,8 +780,16 @@ export class TodayView extends ItemView {
    * one shared `.olea-today-note` treatment, under one `DUE_LABEL` eyebrow
    * matching the mastery/scope/insights/rhythm sections below it. Which of
    * the three is true is the only thing that still changes on screen.
+   *
+   * **`[D-373]`: a fourth, independent fact can render alongside any of
+   * those three.** `vm.sessionComposition?.composed === false` means the
+   * composed-session path ranked no concepts — the due state above (by then
+   * already the KNOWN due count from `data-source.ts`'s fallback, never a
+   * suppressed zero) says how much is due; this says separately why no
+   * session was composed. The two are never merged into one sentence: F6.1's
+   * amendment asks for both facts, stated as themselves.
    */
-  private renderDue(parent: HTMLElement, vm: TodayViewModel): void {
+  private renderDue(parent: HTMLElement, vm: TodayViewModelWithSessionComposition): void {
     const section = parent.createDiv({ cls: 'olea-today-due' });
     section.createDiv({ cls: 'olea-today-due-label', text: DUE_LABEL });
 
@@ -797,6 +816,17 @@ export class TodayView extends ItemView {
       for (const course of vm.due.courses) {
         this.renderCourseRow(list, course);
       }
+    }
+
+    // `[D-373]`: an ADDITIONAL line, drawn in the same `.olea-today-note`
+    // treatment as the due state above it (never a new CSS class — see this
+    // file's module doc on why styles ship in `styles.css`, outside this
+    // bead's `owns`), stating separately why no session was composed.
+    if (vm.sessionComposition?.composed === false) {
+      section.createDiv({
+        cls: 'olea-today-note',
+        text: sessionNotComposedSentence(vm.sessionComposition.reason),
+      });
     }
 
     // Kept even at zero due (ol-h3wy): this is the review entry point F6's

@@ -131,6 +131,33 @@ export const NOTHING_DUE = 'Nothing due today.';
 export const DUE_UNAVAILABLE =
   "Olea can't count what's due — it couldn't read your vault just now.";
 
+/**
+ * `[D-373]`: an ADDITIONAL line, never a replacement for `dueTodaySentence`/
+ * `NOTHING_DUE` beside it. Shown when the composed-session path composed
+ * successfully but ranked no concepts at all — the due state above it by
+ * then already carries the KNOWN due count from what she has already
+ * scheduled (`data-source.ts`'s fallback, `SessionCompositionOutcome`'s
+ * doc), never a suppressed zero. This sentence answers the separate
+ * question `[D-373]` requires: why no session was composed.
+ *
+ * **States the one fact the ruling names, and nothing it did not rule on.**
+ * "No course currently has an upcoming assessment" is the cause this file
+ * can name without a change outside its `owns` (see `data-source.ts`'s
+ * `SessionCompositionOutcome` doc) — it does not name which course, and it
+ * does not distinguish this from a completed course's own maintenance case,
+ * which `[D-373]`'s own text hands to a separate, later reading rather than
+ * deciding here.
+ *
+ * **Class B, pending the copy pass** — this bead's own report flags it as a
+ * new string for review, per the task's own instruction.
+ */
+export function sessionNotComposedSentence(reason: 'nothing-assessed-soon'): string {
+  switch (reason) {
+    case 'nothing-assessed-soon':
+      return 'No session was composed today: no course currently has an upcoming assessment.';
+  }
+}
+
 /** The one primary action. */
 export const START_REVIEW = 'Start review';
 
@@ -889,6 +916,8 @@ export function allTodayStrings(): readonly string[] {
     DUE_TODAY_LABEL,
     NOTHING_DUE,
     DUE_UNAVAILABLE,
+    // `[D-373]` — one reason exists today; see `sessionNotComposedSentence`'s doc.
+    sessionNotComposedSentence('nothing-assessed-soon'),
     START_REVIEW,
     dueTodaySentence(0),
     dueTodaySentence(1),

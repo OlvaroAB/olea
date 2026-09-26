@@ -896,6 +896,167 @@ describe('createVaultInstrumentSource — [SESS-8.5] reading the shared composit
   });
 });
 
+// Scenarios: features/F6-today.md, "F6.1 — Composed, not composed, and
+// cannot count yet are three different states" (`[D-373]`) —
+// @auto:plugin/today/data-source.spec
+describe('createVaultInstrumentSource — [D-373] an empty ranked session is not a true zero', () => {
+  const now = () => new Date(2026, 7, 10, 9, 15);
+
+  const scheduledVault = memoryVault({
+    'Courses/GEO/one.md': [
+      '---',
+      'topic: [Alpha]',
+      'course: GEO101',
+      '---',
+      '',
+      '## First?',
+      '',
+      'Alpha front::Alpha back ^a1',
+      '',
+    ].join('\n'),
+  });
+
+  it('falls back to the known due count when the composition ranked no concepts, and records why', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> =>
+      fixtureComposedSession([], now());
+
+    const source = createVaultInstrumentSource({
+      vault: scheduledVault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    const due = await source.listDueCandidates();
+
+    // FAILING-FIRST (before this bead): an empty composition returned `[]`
+    // here unconditionally — a true zero the vault's own scheduled
+    // instrument directly contradicts.
+    expect(due).not.toBeNull();
+    expect(due).toHaveLength(1);
+    expect(due?.[0]?.courseCode).toBe('GEO101');
+    expect(source.sessionCompositionOutcome?.()).toEqual({
+      composed: false,
+      reason: 'nothing-assessed-soon',
+    });
+  });
+
+  it('a vault with nothing scheduled either still reports the real, known zero — plus the reason, never "cannot count yet"', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> =>
+      fixtureComposedSession([], now());
+
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    const due = await source.listDueCandidates();
+
+    expect(due).toEqual([]);
+    expect(source.sessionCompositionOutcome?.()).toEqual({
+      composed: false,
+      reason: 'nothing-assessed-soon',
+    });
+  });
+
+  it('a real, non-empty composition still reports composed: true — unchanged from before this bead', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> =>
+      fixtureComposedSession([{ instrumentId: 'qa:alpha:1', course: 'GEO101' }], now());
+
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    const due = await source.listDueCandidates();
+
+    expect(due).toHaveLength(1);
+    expect(source.sessionCompositionOutcome?.()).toEqual({ composed: true });
+  });
+
+  it('a composition that cannot be produced at all stays "cannot count yet", with nothing to add', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => null;
+
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    const due = await source.listDueCandidates();
+
+    expect(due).toBeNull();
+    expect(source.sessionCompositionOutcome?.()).toBeUndefined();
+  });
+
+  it('the legacy (no-composer) path never sets a composition outcome — absent, not a wrong answer', async () => {
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+    });
+
+    await source.listDueCandidates();
+
+    expect(source.sessionCompositionOutcome?.()).toBeUndefined();
+  });
+
+  it('loadTodayPanel carries the known due count and the composition outcome through to the view model', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> =>
+      fixtureComposedSession([], now());
+
+    const vm = await loadTodayPanel({
+      vault: scheduledVault,
+      deviceId: DEVICE,
+      instruments: createVaultInstrumentSource({
+        vault: scheduledVault,
+        scheduler: createFsrsScheduler(),
+        deviceId: DEVICE,
+        now,
+        studySessionHolder: holder,
+        composeDefaultStudySession,
+      }),
+      now,
+      windowDays: 30,
+    });
+
+    expect(vm.due).not.toBeNull();
+    expect(vm.due?.total).toBe(1);
+    expect(vm.sessionComposition).toEqual({ composed: false, reason: 'nothing-assessed-soon' });
+  });
+
+  it('loadTodayPanel omits sessionComposition entirely for a source that never wires the signal (exactOptionalPropertyTypes)', async () => {
+    const vm = await loadTodayPanel({
+      vault: memoryVault({}),
+      deviceId: DEVICE,
+      instruments: { listDueCandidates: async () => [] },
+      now,
+      windowDays: 30,
+    });
+
+    expect('sessionComposition' in vm).toBe(false);
+  });
+});
+
 describe('loadTodayPanel', () => {
   const now = () => new Date(2026, 7, 10, 9, 15);
 
