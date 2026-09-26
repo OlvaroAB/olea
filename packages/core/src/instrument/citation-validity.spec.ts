@@ -98,6 +98,40 @@ describe('citationValidityStatus', () => {
     });
   });
 
+  describe('[D-351] store-scoped pending evidence, keyed by instrument (ol-egov.141.89.5.19) — no sourceRevision to match', () => {
+    it('reads pending when isPending is true and sourceRevision is omitted entirely, even though the digest would otherwise read current', () => {
+      const result = citationValidityStatus(base, {
+        currentPassageDigest: 'digest-abc', // would read 'current' on its own
+        pendingRevalidation: { isPending: true },
+      });
+      expect(result.status).toBe('pending');
+    });
+
+    it('honours store-scoped pending evidence even for a legacy citation with no sourceRevision of its own — unlike the sourceRevision-matched path above, this shape needs none', () => {
+      const legacy: InstrumentCitation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      const result = citationValidityStatus(legacy, {
+        currentPassageDigest: 'digest-abc',
+        pendingRevalidation: { isPending: true },
+      });
+      expect(result.status).toBe('pending');
+    });
+
+    it('a resolved (isPending: false) store-scoped signal never manufactures a status on its own — falls through to the ordinary digest comparison', () => {
+      const result = citationValidityStatus(base, {
+        currentPassageDigest: 'digest-abc',
+        pendingRevalidation: { isPending: false },
+      });
+      expect(result.status).toBe('current');
+    });
+
+    it('the existing sourceRevision-matched path keeps working unchanged alongside the new shape', () => {
+      const result = citationValidityStatus(base, {
+        pendingRevalidation: { sourceRevision: base.sourceRevision, isPending: true },
+      });
+      expect(result.status).toBe('pending');
+    });
+  });
+
   it('never shadows or duplicates classifyCitationFreshness — a legacy citation with only page/section reads unknown just like the freshness check does', () => {
     const withoutDigest: InstrumentCitation = { sourcePath: 'Sources/A.pdf', page: 1 };
     const result = citationValidityStatus(withoutDigest, { currentPassageDigest: 'digest-abc' });

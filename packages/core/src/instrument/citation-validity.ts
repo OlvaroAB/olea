@@ -32,20 +32,37 @@
  * shadows the pending field, it only reads a value someone else already resolved.
  *
  * ===========================================================================
- * `[D-351]`'s SCOPING RULE, ENCODED IN THE CONTRACT (not merely a comment)
+ * `[D-351]`'s SCOPING RULE, ENCODED IN THE CONTRACT (not merely a comment) — TWO HONOURED SHAPES
  * ===========================================================================
  * David's ruling: "the pending state belongs to the particular source revision being checked, so
  * a late result for an earlier edit never clears a newer pending state." This function has no
  * memory across calls — it cannot itself "clear" anything — so the ruling is encoded as a
- * matching rule: {@link CitationValidityEvidence.pendingRevalidation} is honoured ONLY when its
- * `sourceRevision` is exactly the citation's own recorded `sourceRevision` (the revision this
- * particular citation was drafted against, i.e. the revision actually being checked here). A
- * pending signal named for any other revision — earlier, later, or the citation has none recorded
- * at all — is never treated as applying to this citation: it neither raises `'pending'` nor
- * resolves it to `'current'`. That refusal to interpret revision-mismatched evidence is what stops
- * this function from ever being the channel through which a stale result for one revision
- * overrides a fact that belongs to another; see `citation-validity.spec.ts`'s
- * "[D-351] scoping" describe block.
+ * matching rule on {@link CitationValidityEvidence.pendingRevalidation}, which accepts evidence in
+ * either of two shapes:
+ *
+ * 1. **With `sourceRevision`** (this module's original contract): honoured ONLY when it is
+ *    exactly the citation's own recorded `sourceRevision` (the revision this particular citation
+ *    was drafted against, i.e. the revision actually being checked here). A pending signal named
+ *    for any other revision — earlier, later, or the citation has none recorded at all — is never
+ *    treated as applying to this citation: it neither raises `'pending'` nor resolves it to
+ *    `'current'`. That refusal to interpret revision-mismatched evidence is what stops this
+ *    function from ever being the channel through which a stale result for one revision overrides
+ *    a fact that belongs to another; see `citation-validity.spec.ts`'s "[D-351] scoping" describe
+ *    block.
+ * 2. **Without `sourceRevision` — STORE-SCOPED, keyed by instrument** (added `ol-egov.141.89.5.19`,
+ *    the orchestrator's Class B design closing `ol-egov.141.89.5.4`'s own open question):
+ *    `sourceRevision` omitted entirely means the caller already resolved this signal per
+ *    `instrumentId`, against a store that enforces `[D-351]`'s own revision scoping internally
+ *    (`packages/plugin/src/ingestion/materiality/citation-hash-store.ts`'s
+ *    `CitationHashStore.isPendingRevalidationCurrent`) — never against this module's own
+ *    `InstrumentCitation.sourceRevision`, which `ol-egov.141.89.5.4`'s report found lives in a
+ *    DIFFERENT hash space (a digest of the cited passage's own material text, not the whole source
+ *    file `sourceRevision` digests). Comparing the two would almost never match, silently
+ *    disabling `'pending'` forever — so this shape is honoured UNCONDITIONALLY on `isPending:
+ *    true`, with no cross-check against this citation's own `sourceRevision` to make. This is safe
+ *    only because the caller supplying it has already done the per-instrument, per-revision
+ *    resolution the store's own currency check performs; a caller with a real `sourceRevision` to
+ *    offer still uses shape 1 above unchanged.
  *
  * ===========================================================================
  * NEVER `'current'` BY DEFAULT
@@ -73,16 +90,23 @@ import {
  */
 export type CitationValidityStatus = 'current' | 'superseded' | 'pending' | 'unknown';
 
-/** One `[D-351]` pending-revalidation signal, scoped to the source revision it was raised for. */
+/**
+ * One `[D-351]` pending-revalidation signal. `sourceRevision` is OPTIONAL — see the module doc's
+ * "`[D-351]`'s scoping rule — two honoured shapes" section for the two ways this is read:
+ * supplied, it must equal the citation's own `sourceRevision` to be honoured (the original,
+ * unchanged contract); omitted, it is store-scoped evidence already resolved per instrument
+ * (`ol-egov.141.89.5.19`), honoured unconditionally.
+ */
 export interface PendingRevalidationEvidence {
   /**
    * The source revision this pending signal is about — the same revision-identifying value
-   * `InstrumentCitation.sourceRevision` carries (`[D-292]`'s content-hash revision). Only ever
-   * honoured by {@link citationValidityStatus} when it equals the citation's own
-   * `sourceRevision`; see the module doc's "`[D-351]`'s scoping rule" section.
+   * `InstrumentCitation.sourceRevision` carries (`[D-292]`'s content-hash revision). When present,
+   * only ever honoured by {@link citationValidityStatus} when it equals the citation's own
+   * `sourceRevision`. When OMITTED, the signal is honoured unconditionally as store-scoped,
+   * per-instrument evidence — see the module doc.
    */
-  readonly sourceRevision: string;
-  /** Whether a revalidation for that revision is currently outstanding (unresolved). */
+  readonly sourceRevision?: string;
+  /** Whether a revalidation is currently outstanding (unresolved). */
   readonly isPending: boolean;
 }
 
@@ -100,8 +124,10 @@ export interface CitationValidityEvidence {
    */
   readonly currentPassageDigest?: string;
   /**
-   * `[D-351]`'s pending-revalidation fact, for the revision the caller is checking right now.
-   * `undefined` means "no pending information available" — never "confirmed not pending".
+   * `[D-351]`'s pending-revalidation fact — either scoped to the revision the caller is checking
+   * right now (its own `sourceRevision` set), or store-scoped per-instrument evidence with no
+   * `sourceRevision` at all (`ol-egov.141.89.5.19`; see {@link PendingRevalidationEvidence}'s own
+   * doc). `undefined` means "no pending information available" — never "confirmed not pending".
    */
   readonly pendingRevalidation?: PendingRevalidationEvidence;
 }
@@ -115,8 +141,10 @@ export interface CitationValidityResult {
 /**
  * Classify one citation's current validity — pure, no vault I/O, no persisted field, no schema
  * version. See the module doc for the full contract; in short: `'pending'` wins whenever
- * {@link CitationValidityEvidence.pendingRevalidation} is scoped to this citation's own
- * `sourceRevision` and reports `isPending: true`; otherwise the answer falls to comparing
+ * {@link CitationValidityEvidence.pendingRevalidation} reports `isPending: true` AND either (a)
+ * it names no `sourceRevision` at all — store-scoped, per-instrument evidence, honoured
+ * unconditionally (`ol-egov.141.89.5.19`) — or (b) it names one that equals this citation's own
+ * recorded `sourceRevision` (the original contract). Otherwise the answer falls to comparing
  * `passageDigest` against `currentPassageDigest` via {@link classifyCitationFreshness}, mapping
  * its `'fresh'`/`'stale'`/`'unknown'` onto `'current'`/`'superseded'`/`'unknown'`.
  */
@@ -126,16 +154,26 @@ export function citationValidityStatus(
 ): CitationValidityResult {
   const { currentPassageDigest, pendingRevalidation } = evidence;
 
-  if (
-    pendingRevalidation !== undefined &&
-    pendingRevalidation.isPending &&
-    citation.sourceRevision !== undefined &&
-    pendingRevalidation.sourceRevision === citation.sourceRevision
-  ) {
-    return {
-      status: 'pending',
-      reason: `a [D-351] revalidation for source revision ${pendingRevalidation.sourceRevision} (this citation's own recorded revision) is outstanding; withheld until it resolves`,
-    };
+  if (pendingRevalidation !== undefined && pendingRevalidation.isPending) {
+    if (pendingRevalidation.sourceRevision === undefined) {
+      // `ol-egov.141.89.5.19`: store-scoped evidence, already resolved per instrument against a
+      // store that enforces [D-351]'s own revision scoping internally — see the module doc's
+      // "two honoured shapes". No `sourceRevision` here to cross-check, and none required.
+      return {
+        status: 'pending',
+        reason:
+          "a [D-351] revalidation is outstanding for this citation's own instrument (store-scoped evidence, already resolved by the caller's own currency check); withheld until it resolves",
+      };
+    }
+    if (
+      citation.sourceRevision !== undefined &&
+      pendingRevalidation.sourceRevision === citation.sourceRevision
+    ) {
+      return {
+        status: 'pending',
+        reason: `a [D-351] revalidation for source revision ${pendingRevalidation.sourceRevision} (this citation's own recorded revision) is outstanding; withheld until it resolves`,
+      };
+    }
   }
 
   const freshness = classifyCitationFreshness(citation, currentPassageDigest);

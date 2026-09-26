@@ -269,6 +269,10 @@ import {
   reviewLogPath,
   suspendedInstrumentIds,
 } from 'olea-core';
+// `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
+// see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
+// resolver from `resolveCitationFreshness` above, never a shared one.
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
   isStudyPlanConfigured,
   type ObsidianDataHost,
@@ -407,6 +411,25 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * `main.ts` wiring that passes it, close that gap.
    */
   readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  /**
+   * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own citation pending-revalidation
+   * store (`../ingestion/materiality/citation-hash-store.js`'s `ObsidianCitationHashStore`) —
+   * when supplied, `composeStudySessionForRequest` resolves `study-session/compose.ts`'s
+   * `citationPendingRevalidation` set from it (`resolveCitationPendingRevalidation` below), so a
+   * cited passage with a raw digest mismatch not yet judged withholds its instrument from
+   * today's composition — `[D-330]`'s removal rule, actioned by `compose.ts` itself, including
+   * inside an already-open session via `composedInput`'s reuse in `extendComposedStudySession`
+   * (`[SESS-8.6]`).
+   *
+   * Omitted — no store wired yet — reads exactly as before this bead: `citationPendingRevalidation`
+   * stays off `composedInput` entirely, the same "ready for the signal the day a caller supplies
+   * it" posture `compose.ts`'s own module doc already names for this exact field, and `[D-330]`'s
+   * "unknown never withholds on its own" holds by construction. `main.ts` does not construct one
+   * for this call yet (it already builds an `ObsidianCitationHashStore(this)` for a different
+   * consumer, `citationRevision`'s wiring, at `main.ts`'s `onload`) — threading it here is a
+   * one-line follow-up outside this file's `owns`; see this bead's report.
+   */
+  readonly citationHashStore?: CitationHashStore;
 }
 
 /** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
@@ -824,6 +847,53 @@ export async function resolveCitationFreshness(
 }
 
 /**
+ * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`, follow-up from `ol-egov.141.89.5.4`/
+ * `ol-egov.141.89.5.13`): the production resolver that turns the plugin's own citation
+ * pending-revalidation store (`../ingestion/materiality/citation-hash-store.js`) into the
+ * `citationPendingRevalidation` set `study-session/compose.ts`'s `buildComposedStudySession`
+ * accepts — a set of instrument ids, keyed purely on `instrumentId`.
+ *
+ * **Why keyed on `instrumentId` alone, never on `InstrumentCitation.sourceRevision`.**
+ * `ol-egov.141.89.5.4`'s own report (section 5, "the hash-space mismatch") found that the store's
+ * `PendingRevalidation.sinceContentHash` is a digest of the CITED PASSAGE's own material text,
+ * while `InstrumentCitation.sourceRevision` (`../instrument/citation-store.js`, `[D-292]`) is a
+ * digest of the WHOLE SOURCE FILE — two different hash spaces that would almost never agree, so
+ * comparing them here would silently disable `'pending'` forever. This bead's Class B design
+ * (its own bead description) resolves that by never comparing the two hashes at all: the STORE
+ * already enforces `[D-351]`'s own revision scoping internally (`CitationHashStore.
+ * isPendingRevalidationCurrent`'s own doc — "a late result for an earlier edit... discarded
+ * rather than acted on"), so this resolver only needs to ask the store, per instrument, "is a
+ * pending fact outstanding for you right now" — never re-derive or cross-check that scoping
+ * itself. `../instrument/citation-validity.js`'s `citationValidityStatus` is widened the same way,
+ * for a caller that reads one citation at a time rather than a whole candidate set.
+ *
+ * **Re-checks currency per instrument, rather than trusting `loadAll()`'s snapshot alone.** A
+ * concurrent, overlapping revision-tick (`main.ts`'s 30s interval has no overlap guard,
+ * `ol-egov.141.89.5.4`'s report) can move an instrument's pending hash on between this call
+ * starting and finishing, so each candidate's OWN `isPendingRevalidationCurrent` call is the
+ * live truth, not merely "did `loadAll()` show a `pendingRevalidation` field." An instrument
+ * with no pending fact at all (or one the store no longer confirms as current) is simply absent
+ * from the returned set — `[D-330]`'s "unknown never withholds on its own", encoded as an
+ * omission, never a fabricated `false`.
+ */
+export async function resolveCitationPendingRevalidation(
+  store: CitationHashStore,
+  instrumentIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const anchors = await store.loadAll();
+  const result = new Set<string>();
+  await Promise.all(
+    instrumentIds.map(async (instrumentId) => {
+      const pending = anchors.get(instrumentId)?.pendingRevalidation;
+      if (pending === undefined) return;
+      const isCurrent = await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash);
+      if (isCurrent) result.add(instrumentId);
+    }),
+  );
+  return result;
+}
+
+/**
  * `[SESS-8.4]` (`ol-egov.132.4`) — the ONE place a plugin assembles the
  * study-session composer's real input (the oracle chain, the gap view, her
  * review history, F2.19's two resolvers, A2.5's cached allocation) from a
@@ -970,6 +1040,19 @@ export async function composeStudySessionForRequest(
     () => undefined,
   );
 
+  // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the same candidate scope as `citationFreshness`
+  // above, resolved against the plugin's own pending-revalidation store instead of a vault
+  // citation read — see `resolveCitationPendingRevalidation`'s own doc. `deps.citationHashStore`
+  // absent (no production caller wires one yet) leaves this `undefined`, which omits the key
+  // below entirely — `citationPendingRevalidation` then reads "nothing pending" exactly as it did
+  // before this bead, never a fabricated empty set standing in for "confirmed clear".
+  const citationPendingRevalidation =
+    deps.citationHashStore !== undefined
+      ? await resolveCitationPendingRevalidation(deps.citationHashStore, [
+          ...citationCandidateInstrumentIds,
+        ])
+      : undefined;
+
   // `ol-v7r5.26`: this sitting's own frozen scope — every `GapRow`
   // candidate this call considered (not just the ones the budget cut
   // kept), so a concept that only narrowly missed the cut still counts
@@ -1055,6 +1138,10 @@ export async function composeStudySessionForRequest(
     // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`): resolved above, scoped to today's
     // candidate concepts — see that resolution's own comment.
     citationFreshness,
+    // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): resolved above from the plugin's own
+    // pending-revalidation store — omitted (rather than an empty set) when `deps.citationHashStore`
+    // is absent, matching every other optional resolver on this input.
+    ...(citationPendingRevalidation !== undefined ? { citationPendingRevalidation } : {}),
     replay,
     // The first production read of the review log's `durationMs` (INV-4:
     // the discipline went in ahead of the feature, and this is the
