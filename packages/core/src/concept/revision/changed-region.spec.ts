@@ -33,10 +33,10 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 1 },
     });
     expect(regions).toHaveLength(1);
-    expect(regions[0]!.previousText).toBe(lines('c', 'd', 'e'));
-    expect(regions[0]!.currentText).toBe(lines('c', 'CHANGED', 'e'));
-    expect(regions[0]!.previousStartLine).toBe(2);
-    expect(regions[0]!.previousEndLine).toBe(5);
+    expect(regions[0]?.previousText).toBe(lines('c', 'd', 'e'));
+    expect(regions[0]?.currentText).toBe(lines('c', 'CHANGED', 'e'));
+    expect(regions[0]?.previousStartLine).toBe(2);
+    expect(regions[0]?.previousEndLine).toBe(5);
   });
 
   it('merges two changes separated by a short unchanged gap into one region', () => {
@@ -49,8 +49,8 @@ describe('extractChangedRegions', () => {
     });
     expect(regions).toHaveLength(1);
     // The whole span from just before "b" to just after "f", context included.
-    expect(regions[0]!.previousText).toBe(lines('a', 'b', 'c', 'd', 'e', 'f', 'g'));
-    expect(regions[0]!.currentText).toBe(lines('a', 'FIRST', 'c', 'd', 'e', 'SECOND', 'g'));
+    expect(regions[0]?.previousText).toBe(lines('a', 'b', 'c', 'd', 'e', 'f', 'g'));
+    expect(regions[0]?.currentText).toBe(lines('a', 'FIRST', 'c', 'd', 'e', 'SECOND', 'g'));
   });
 
   it('keeps two changes separated by a long unchanged gap as two regions', () => {
@@ -62,8 +62,8 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 1, mergeGapLines: 2 },
     });
     expect(regions).toHaveLength(2);
-    expect(regions[0]!.currentText).toBe(lines('a', 'FIRST', 'c'));
-    expect(regions[1]!.currentText).toBe(lines('h', 'SECOND', 'j'));
+    expect(regions[0]?.currentText).toBe(lines('a', 'FIRST', 'c'));
+    expect(regions[1]?.currentText).toBe(lines('h', 'SECOND', 'j'));
   });
 
   it('handles a pure insertion (no deleted lines) at the region boundary', () => {
@@ -75,8 +75,8 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 1 },
     });
     expect(regions).toHaveLength(1);
-    expect(regions[0]!.previousText).toBe(lines('a', 'b'));
-    expect(regions[0]!.currentText).toBe(lines('a', 'INSERTED', 'b'));
+    expect(regions[0]?.previousText).toBe(lines('a', 'b'));
+    expect(regions[0]?.currentText).toBe(lines('a', 'INSERTED', 'b'));
   });
 
   it('handles a pure deletion (no inserted lines)', () => {
@@ -88,8 +88,8 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 1 },
     });
     expect(regions).toHaveLength(1);
-    expect(regions[0]!.previousText).toBe(lines('b', 'REMOVED', 'c'));
-    expect(regions[0]!.currentText).toBe(lines('b', 'c'));
+    expect(regions[0]?.previousText).toBe(lines('b', 'REMOVED', 'c'));
+    expect(regions[0]?.currentText).toBe(lines('b', 'c'));
   });
 
   it('clamps context at the start and end of the text', () => {
@@ -101,10 +101,10 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 2, mergeGapLines: 0 },
     });
     expect(regions).toHaveLength(2);
-    expect(regions[0]!.previousStartLine).toBe(0);
-    expect(regions[0]!.currentText).toBe(lines('NEW-START', 'b', 'c'));
-    expect(regions[1]!.currentText).toBe(lines('c', 'd', 'NEW-END'));
-    expect(regions[1]!.currentEndLine).toBe(5);
+    expect(regions[0]?.previousStartLine).toBe(0);
+    expect(regions[0]?.currentText).toBe(lines('NEW-START', 'b', 'c'));
+    expect(regions[1]?.currentText).toBe(lines('c', 'd', 'NEW-END'));
+    expect(regions[1]?.currentEndLine).toBe(5);
   });
 
   it('treats a change at the very start with no preceding equal run correctly', () => {
@@ -116,8 +116,8 @@ describe('extractChangedRegions', () => {
       options: { contextLines: 1 },
     });
     expect(regions).toHaveLength(1);
-    expect(regions[0]!.previousStartLine).toBe(0);
-    expect(regions[0]!.previousText).toBe(lines('OLD', 'b'));
+    expect(regions[0]?.previousStartLine).toBe(0);
+    expect(regions[0]?.previousText).toBe(lines('OLD', 'b'));
   });
 
   it('covers the whole text as one region when nothing is shared', () => {
@@ -125,8 +125,8 @@ describe('extractChangedRegions', () => {
     const current = lines('four', 'five', 'six', 'seven');
     const regions = extractChangedRegions({ previousText: previous, currentText: current });
     expect(regions).toHaveLength(1);
-    expect(regions[0]!.previousText).toBe(previous);
-    expect(regions[0]!.currentText).toBe(current);
+    expect(regions[0]?.previousText).toBe(previous);
+    expect(regions[0]?.currentText).toBe(current);
   });
 
   it('defaults contextLines to 2 and mergeGapLines to 2x contextLines', () => {

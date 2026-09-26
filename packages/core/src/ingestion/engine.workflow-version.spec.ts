@@ -99,7 +99,8 @@ describe('enqueue — version-aware dedup (workflowVersion, D-381)', () => {
     const jobs = engine.list();
     expect(jobs).toHaveLength(2);
     const stillOld = jobs.find(
-      (j) => j.contentHash === 'abc123' && (j as { workflowVersion?: string }).workflowVersion === 'v1',
+      (j) =>
+        j.contentHash === 'abc123' && (j as { workflowVersion?: string }).workflowVersion === 'v1',
     );
     expect(stillOld).toEqual(oldJob);
   });
@@ -119,7 +120,12 @@ describe('enqueue — version-aware dedup (workflowVersion, D-381)', () => {
     expect(runner).toHaveBeenCalledTimes(1);
 
     // The version bump alone (enqueue for v2) never ran anything above.
-    await engine.enqueue({ contentHash: 'h1', label: 'L1', payload: { v: 2 }, workflowVersion: 'v2' });
+    await engine.enqueue({
+      contentHash: 'h1',
+      label: 'L1',
+      payload: { v: 2 },
+      workflowVersion: 'v2',
+    });
     expect(runner).toHaveBeenCalledTimes(1);
 
     // A real consumer needs it now — the next tick runs exactly one more

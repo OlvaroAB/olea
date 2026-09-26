@@ -13,8 +13,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
 import type { MisconceptionRecord } from '../../misconception/types.js';
-import { type ConceptRelation, deriveRelationSet, type RelationSet } from '../relation.js';
 import { OPAQUE_CONCEPT_KEY_PREFIX } from '../concept-key.js';
+import { type ConceptRelation, deriveRelationSet, type RelationSet } from '../relation.js';
 import { corroborateConfusionPairs } from './corroborate.js';
 import type { ConfusionPairingConcept } from './types.js';
 

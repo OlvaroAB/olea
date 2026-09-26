@@ -14,11 +14,11 @@ import type { SourceBlockRef } from '../grading/gradingPipeline.js';
 import {
   buildGradingSourceMaterial,
   buildSchedulingObservationField,
-  resolveGradingRelationContext,
-  resolveRelationProvenance,
   type ConceptDefiningPassages,
   type GradingRetrievalInput,
   type ResolvedRelationEdge,
+  resolveGradingRelationContext,
+  resolveRelationProvenance,
 } from './gradingInputContract.js';
 
 function block(blockId: string, text = `text for ${blockId}`): SourceBlockRef {
@@ -291,7 +291,11 @@ describe('resolveGradingRelationContext', () => {
       edge: undefined,
     });
 
-    expect(context).toEqual({ kind: 'relation', neighbourConceptId: 'concept-y', provenance: { kind: 'no-edge' } });
+    expect(context).toEqual({
+      kind: 'relation',
+      neighbourConceptId: 'concept-y',
+      provenance: { kind: 'no-edge' },
+    });
   });
 
   it('feeds straight into buildGradingSourceMaterial: a current edge is used as edge-provenance end to end', () => {

@@ -11,6 +11,7 @@
 //
 // Concept and instrument ids below are structural placeholders
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
+import assert from 'node:assert';
 import type {
   InstrumentType,
   Rating,
@@ -939,9 +940,10 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
   it('@auto:MAT-C5-correctness-required — a structurally deep but INCORRECT answer never reaches `tree`', () => {
     for (const verdict of ['partial', 'incorrect'] as const) {
       const entry = gradedExplainBack('relational');
+      assert(entry.explainBackGrade);
       const wrong = {
         ...entry,
-        explainBackGrade: { ...entry.explainBackGrade!, correctness: verdict },
+        explainBackGrade: { ...entry.explainBackGrade, correctness: verdict },
       };
       const result = computeConceptMastery([wrong], 'concept-a');
       expect(result.evidence.depthGateCleared).toBe(true);
@@ -952,7 +954,8 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
 
   it('@auto:MAT-C5-legacy-unknown — a record written before the correctness field existed reads as unknown, never as correct', () => {
     const entry = gradedExplainBack('extended-abstract');
-    const { correctness: _dropped, ...legacyGrade } = entry.explainBackGrade!;
+    assert(entry.explainBackGrade);
+    const { correctness: _dropped, ...legacyGrade } = entry.explainBackGrade;
     const legacy = { ...entry, explainBackGrade: legacyGrade };
     const result = computeConceptMastery([legacy], 'concept-a');
     expect(result.evidence.topStageQualified).toBe(false);
@@ -995,9 +998,10 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
       eventId: 'g2',
       timestamp: '2026-02-01T09:00:00-04:00',
     });
+    assert(correction.explainBackGrade);
     const corrected = {
       ...correction,
-      explainBackGrade: { ...correction.explainBackGrade!, revisionOf: 'g1' },
+      explainBackGrade: { ...correction.explainBackGrade, revisionOf: 'g1' },
     };
     expect(computeConceptMastery([original], 'concept-a').state).toBe('tree');
     expect(computeConceptMastery([original, corrected], 'concept-a').state).toBe('sprout');
@@ -1007,9 +1011,10 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
   it('a correction that itself qualifies still grants the stage — supersession replaces, it does not punish', () => {
     const original = gradedExplainBack('relational', { eventId: 'g1' });
     const correction = gradedExplainBack('extended-abstract', { eventId: 'g2' });
+    assert(correction.explainBackGrade);
     const corrected = {
       ...correction,
-      explainBackGrade: { ...correction.explainBackGrade!, revisionOf: 'g1' },
+      explainBackGrade: { ...correction.explainBackGrade, revisionOf: 'g1' },
     };
     expect(computeConceptMastery([original, corrected], 'concept-a').state).toBe('tree');
   });
@@ -1022,11 +1027,12 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
     // corrector, g2) would wrongly settle on g2's `incorrect` verdict as final;
     // R10 requires the LATEST re-grade, g3, to be what stands.
     const g1 = gradedExplainBack('relational', { eventId: 'g1' });
+    assert(g1.explainBackGrade);
     const g2 = gradedExplainBack('relational', {
       eventId: 'g2',
       timestamp: '2026-02-01T09:00:00-04:00',
       explainBackGrade: {
-        ...g1.explainBackGrade!,
+        ...g1.explainBackGrade,
         correctness: 'incorrect',
         revisionOf: 'g1',
       },
@@ -1035,7 +1041,7 @@ describe('computeConceptMastery — [D-281] qualifying evidence for the top stag
       eventId: 'g3',
       timestamp: '2026-02-02T09:00:00-04:00',
       explainBackGrade: {
-        ...g1.explainBackGrade!,
+        ...g1.explainBackGrade,
         correctness: 'correct',
         revisionOf: 'g2',
       },

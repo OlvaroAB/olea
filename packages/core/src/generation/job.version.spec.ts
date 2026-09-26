@@ -16,30 +16,66 @@ describe('generationJobIdentityString — D-381 version/content term', () => {
   });
 
   it('an unchanged version reuses the cache: identical sourceContentHash and promptVersion produce the same identity', () => {
-    const a = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
-    const b = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
+    const a = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
+    const b = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
     expect(a).toBe(b);
   });
 
   it('a bumped promptVersion changes the identity string (and therefore the contentHash) for otherwise-unchanged content', async () => {
-    const v1 = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
-    const v2 = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v2' });
+    const v1 = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
+    const v2 = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v2',
+    });
     expect(v1).not.toBe(v2);
 
-    const hashV1 = await generationJobContentHash({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
-    const hashV2 = await generationJobContentHash({ ...base, sourceContentHash: 'h1', promptVersion: 'v2' });
+    const hashV1 = await generationJobContentHash({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
+    const hashV2 = await generationJobContentHash({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v2',
+    });
     expect(hashV1).not.toBe(hashV2);
   });
 
   it('a changed sourceContentHash changes the identity string for an unchanged promptVersion — the content-digest term the audit found entirely missing', () => {
-    const a = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
-    const b = generationJobIdentityString({ ...base, sourceContentHash: 'h2', promptVersion: 'v1' });
+    const a = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
+    const b = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h2',
+      promptVersion: 'v1',
+    });
     expect(a).not.toBe(b);
   });
 
   it('supplying the new fields never collides with the no-fields identity string for the same triple (no accidental "duplicate")', () => {
     const withoutFields = generationJobIdentityString(base);
-    const withFields = generationJobIdentityString({ ...base, sourceContentHash: 'h1', promptVersion: 'v1' });
+    const withFields = generationJobIdentityString({
+      ...base,
+      sourceContentHash: 'h1',
+      promptVersion: 'v1',
+    });
     expect(withFields).not.toBe(withoutFields);
   });
 });

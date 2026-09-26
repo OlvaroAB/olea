@@ -118,7 +118,10 @@ describe('evaluateCitedPassageRevision', () => {
       current: { kind: 'found-at-anchor', text: newText },
     };
     const outcome = await evaluateCitedPassageRevision(input, null, clock);
-    expect(outcome).toEqual({ kind: 'judge-unavailable', sourceContentHash: await hashText(newText) });
+    expect(outcome).toEqual({
+      kind: 'judge-unavailable',
+      sourceContentHash: await hashText(newText),
+    });
   });
 
   describe('[D-351] pending-revalidation recording', () => {
@@ -138,8 +141,13 @@ describe('evaluateCitedPassageRevision', () => {
         current: { kind: 'found-at-anchor', text: newText },
       };
       const outcome = await evaluateCitedPassageRevision(input, null, clock, pendingRecorder);
-      expect(calls).toEqual([{ instrumentId: 'inst-10', sourceContentHash: await hashText(newText) }]);
-      expect(outcome).toEqual({ kind: 'judge-unavailable', sourceContentHash: await hashText(newText) });
+      expect(calls).toEqual([
+        { instrumentId: 'inst-10', sourceContentHash: await hashText(newText) },
+      ]);
+      expect(outcome).toEqual({
+        kind: 'judge-unavailable',
+        sourceContentHash: await hashText(newText),
+      });
     });
 
     it('records pending before the judge call, and still resolves the verdict afterwards', async () => {
@@ -182,7 +190,12 @@ describe('evaluateCitedPassageRevision', () => {
         previousContentHash: await hashText(oldText),
         current: { kind: 'not-found', relocationCandidates: [] },
       };
-      await evaluateCitedPassageRevision(stranded, stubJudge({ material: true }), clock, pendingRecorder);
+      await evaluateCitedPassageRevision(
+        stranded,
+        stubJudge({ material: true }),
+        clock,
+        pendingRecorder,
+      );
       expect(calls).toEqual([]);
     });
 

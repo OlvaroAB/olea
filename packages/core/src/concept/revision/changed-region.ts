@@ -103,6 +103,21 @@ function splitLines(text: string): readonly string[] {
   return text.split(/\r\n|\r|\n/);
 }
 
+/**
+ * Reads `source[index]`, narrowing away the `| undefined` that
+ * `noUncheckedIndexedAccess` adds to every indexed read. Every call site
+ * below documents, at the point it is used, why `index` is in bounds for
+ * `source` — this only ever throws if one of those invariants is wrong,
+ * which would already be a bug the `!` it replaces was silently trusting.
+ */
+function at<T>(source: ArrayLike<T>, index: number): T {
+  const value = source[index];
+  if (value === undefined) {
+    throw new Error(`changed-region: index ${index} out of bounds (length ${source.length})`);
+  }
+  return value;
+}
+
 type DiffOp =
   | { readonly kind: 'equal'; readonly previousLine: number; readonly currentLine: number }
   | { readonly kind: 'delete'; readonly previousLine: number }
@@ -128,13 +143,14 @@ function diffLines(previous: readonly string[], current: readonly string[]): rea
   for (let i = 0; i <= n; i++) dp[i] = new Uint32Array(m + 1);
   // Every index below is in range by construction (`i`/`j` never leave
   // `[0, n]`/`[0, m]`, and `dp` has exactly `n + 1` rows of `m + 1` cells,
-  // all populated by the loop just above) — `!` documents that, it does not
+  // all populated by the loop just above) — `at` documents that, it does not
   // create it.
   for (let i = n - 1; i >= 0; i--) {
-    const dpI = dp[i]!;
-    const dpI1 = dp[i + 1]!;
+    const dpI = at(dp, i);
+    const dpI1 = at(dp, i + 1);
     for (let j = m - 1; j >= 0; j--) {
-      dpI[j] = previous[i] === current[j] ? dpI1[j + 1]! + 1 : Math.max(dpI1[j]!, dpI[j + 1]!);
+      dpI[j] =
+        previous[i] === current[j] ? at(dpI1, j + 1) + 1 : Math.max(at(dpI1, j), at(dpI, j + 1));
     }
   }
   const ops: DiffOp[] = [];
@@ -145,7 +161,7 @@ function diffLines(previous: readonly string[], current: readonly string[]): rea
       ops.push({ kind: 'equal', previousLine: i, currentLine: j });
       i++;
       j++;
-    } else if (dp[i + 1]![j]! >= dp[i]![j + 1]!) {
+    } else if (at(at(dp, i + 1), j) >= at(at(dp, i), j + 1)) {
       ops.push({ kind: 'delete', previousLine: i });
       i++;
     } else {
@@ -183,12 +199,12 @@ function equalSegments(
   ];
   let index = 0;
   while (index < ops.length) {
-    if (ops[index]!.kind !== 'equal') {
+    if (at(ops, index).kind !== 'equal') {
       index++;
       continue;
     }
     const start = index;
-    while (index < ops.length && ops[index]!.kind === 'equal') index++;
+    while (index < ops.length && at(ops, index).kind === 'equal') index++;
     const first = ops[start] as { readonly previousLine: number; readonly currentLine: number };
     const last = ops[index - 1] as { readonly previousLine: number; readonly currentLine: number };
     segments.push({
@@ -214,9 +230,7 @@ interface RawRegion {
   currentEnd: number;
 }
 
-export function extractChangedRegions(
-  input: ExtractChangedRegionsInput,
-): readonly ChangedRegion[] {
+export function extractChangedRegions(input: ExtractChangedRegionsInput): readonly ChangedRegion[] {
   const previousLines = splitLines(input.previousText);
   const currentLines = splitLines(input.currentText);
   const contextLines = input.options?.contextLines ?? DEFAULT_CONTEXT_LINES;
@@ -239,15 +253,16 @@ export function extractChangedRegions(
   for (let k = 0; k < segments.length - 1; k++) {
     // `k` and `k + 1` are always in `[0, segments.length - 1]` by the loop
     // bound above.
-    const before = segments[k]!;
-    const after = segments[k + 1]!;
+    const before = at(segments, k);
+    const after = at(segments, k + 1);
     const region: RawRegion = {
       previousStart: before.previousEnd,
       previousEnd: after.previousStart,
       currentStart: before.currentEnd,
       currentEnd: after.currentStart,
     };
-    const isDegenerate = region.previousStart === region.previousEnd && region.currentStart === region.currentEnd;
+    const isDegenerate =
+      region.previousStart === region.previousEnd && region.currentStart === region.currentEnd;
     const touchesBookend = k === 0 || k === segments.length - 2;
     if (isDegenerate && touchesBookend) continue;
     if (rawRegions.length > 0) sepLength.push(before.previousEnd - before.previousStart);
@@ -258,14 +273,14 @@ export function extractChangedRegions(
 
   // Merge consecutive raw regions whose separating equal run is short
   // enough that their own context windows would have overlapped anyway.
-  // `rawRegions.length === 0` already returned above, so `rawRegions[0]!`
+  // `rawRegions.length === 0` already returned above, so `at(rawRegions, 0)`
   // below is non-empty; every other index in this loop is bounded by the
   // `for` condition or by `merged.length - 1` with `merged` non-empty.
-  const merged: RawRegion[] = [rawRegions[0]!];
+  const merged: RawRegion[] = [at(rawRegions, 0)];
   for (let k = 1; k < rawRegions.length; k++) {
-    const region = rawRegions[k]!;
-    if (sepLength[k - 1]! <= mergeGapLines) {
-      const last = merged[merged.length - 1]!;
+    const region = at(rawRegions, k);
+    if (at(sepLength, k - 1) <= mergeGapLines) {
+      const last = at(merged, merged.length - 1);
       last.previousEnd = region.previousEnd;
       last.currentEnd = region.currentEnd;
     } else {

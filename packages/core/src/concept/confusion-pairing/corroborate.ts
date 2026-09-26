@@ -60,7 +60,10 @@ function resolveConfusionPairingConceptId(
   id: string,
   byName: ReadonlyMap<string, ConfusionPairingConcept>,
   byKey: ReadonlyMap<string, ConfusionPairingConcept>,
-): { readonly concept: ConfusionPairingConcept | undefined; readonly scheme: MisconceptionConceptIdScheme } {
+): {
+  readonly concept: ConfusionPairingConcept | undefined;
+  readonly scheme: MisconceptionConceptIdScheme;
+} {
   const scheme = classifyMisconceptionConceptIdScheme(id);
   const concept = scheme === 'opaque-key' ? byKey.get(id) : byName.get(id);
   return { concept, scheme };

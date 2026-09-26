@@ -7,10 +7,10 @@ export {
   WASTED_REBUILD_RATE_CEILING,
 } from '../queue/rebuild-controller.js';
 export {
-  checkCoverageDenominator,
   type CountedUnitKind,
   type CoverageDenominatorCase,
   type CoverageDenominatorMeasured,
+  checkCoverageDenominator,
 } from './concept-size-denominator.js';
 export {
   checkEarlierCourseRecognitionNeutralisedTwin,

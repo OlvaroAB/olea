@@ -395,9 +395,7 @@ describe('checkSameAsClosureCompatibility / confirmSameAsLink — class-level co
     await confirmSameAsLink(source, 'b', 'c');
     await proposeSameAsLink(source, 'a', 'b');
 
-    await expect(confirmSameAsLink(source, 'a', 'b')).rejects.toThrow(
-      /closure|compatibility/i,
-    );
+    await expect(confirmSameAsLink(source, 'a', 'b')).rejects.toThrow(/closure|compatibility/i);
 
     // The proposal for a/b is left exactly as it was — the confirm never wrote anything.
     const records = await listSameAsLinkRecords(source);

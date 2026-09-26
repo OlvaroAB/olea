@@ -1,3 +1,4 @@
+import assert from 'node:assert';
 import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -570,12 +571,13 @@ describe('[D-338] a corrected grade dispute reaches the growth-stage fold (att.m
 
   it('a corrective re-grade with a real revisionOf supersedes the attempt it corrects, through the same unedited fold', () => {
     const original = qualifyingExplainBack();
+    assert(original.explainBackGrade);
     const correction: ReviewLogRecord = {
       ...original,
       eventId: 'g2',
       timestamp: '2026-01-11T09:00:00-04:00',
       explainBackGrade: {
-        ...original.explainBackGrade!,
+        ...original.explainBackGrade,
         soloLevel: 'multistructural',
         revisionOf: original.eventId,
       },
