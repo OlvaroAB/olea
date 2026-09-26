@@ -62,6 +62,16 @@
  * into one. Coverage-gap has no detail page — pass5g's own `GapClasses` note
  * says designing it in is how the three classes merged the first time.
  *
+ * **Registry §22 (`[D-348]`, ruled, `ol-egov.141.89.9.58`).** A third thing
+ * this surface breached, found by the sibling audit that landed the
+ * registry entry (`ol-egov.141.89.9.27`): {@link masteryGapLine}'s usual
+ * sentence ("recall here hasn't caught up") is deficit phrasing, and §22
+ * forbids exactly that for a row whose need basis is `'unknown'` — no
+ * eligible evidence at all — however high its ranking priority. The branch
+ * in {@link masteryGapLine} on `row.need?.basis` is the fix; its `'unknown'`
+ * sentence is new wording, **AWAITING A COPY PASS (Class B)** — not yet
+ * reviewed by David, unlike the ratified strings above.
+ *
  * **INV-1.** No `obsidian` import here — this module is unit-tested, which is
  * the entire point of it being separate from `view.ts`.
  */
@@ -361,10 +371,27 @@ function paperCount(n: number): string {
  * however honestly labelled. This sentence carries the same two COUNTED
  * facts the reasoning string carries — how much is built, how often it has
  * been asked — with no fitted number in it at all.
+ *
+ * **The `[D-348]` branch (registry §22).** `GapRow.need` already carries a
+ * basis when the caller supplies one (`gap/build.ts`'s `BuildGapViewInput.need`
+ * — no production caller does yet, see that field's own doc). "Recall here
+ * hasn't caught up" is a measured-shortfall claim, which is exactly what §22
+ * forbids saying about a row whose need basis is `'unknown'`: no eligible
+ * evidence exists at all, so there is nothing to say has or hasn't caught up
+ * — that is true even when the same row is ranked at the declared maximum
+ * priority a never-practised concept gets (`UNKNOWN_NEED_VALUE`,
+ * `mastery/attainment.ts`). `row.need?.basis === 'unknown'` gets its own
+ * sentence that names the absence of evidence and claims nothing about her
+ * knowledge; `'estimated'` — or no `need` supplied at all — keeps the
+ * existing wording unchanged. The `'unknown'` sentence below is proposed
+ * copy, **AWAITING A COPY PASS (Class B)**, per this module's own doc.
  */
 export function masteryGapLine(row: GapRow): string {
   const instruments =
     row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  if (row.need?.basis === 'unknown') {
+    return `Asked in ${paperCount(row.distinctSourceCount)}; you have ${instruments} built, but recall here is unknown — nothing has been checked yet, so this says nothing about what you know.`;
+  }
   return `Asked in ${paperCount(row.distinctSourceCount)}; you have ${instruments} built but recall here hasn't caught up.`;
 }
 

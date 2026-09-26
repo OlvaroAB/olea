@@ -198,7 +198,8 @@ export interface GapRow {
   /**
    * The need reading this row's `gapScore` used, with its basis — present
    * exactly when the caller supplied need. An `'unknown'` basis is never
-   * worded or drawn as weakness (`[D-348]`, open).
+   * worded or drawn as weakness (`[D-348]`, ruled; registry §22) — the gap
+   * copy layer branches on it (`gap/copy.ts`'s `masteryGapLine`).
    */
   readonly need?: NeedReading;
   /**

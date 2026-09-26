@@ -45,9 +45,9 @@
  * ones is `[D-347]`, open — built as {@link WithheldEvidencePolicy} with
  * today's behaviour ("count them") as the default. Readiness additionally
  * needs an unaided (independent) success (`[D-264]`); need carries a basis
- * (`[D-348]`, open: unknown enters at a declared value); the recognition
- * credit reads only a correct answer that is current and standing (review
- * 3.4; `ol-lfhj`; `[D-278]`).
+ * (`[D-348]`, ruled: unknown enters at a declared value, never worded as a
+ * deficit); the recognition credit reads only a correct answer that is
+ * current and standing (review 3.4; `ol-lfhj`; `[D-278]`).
  *
  * **Operational failure is never a fact about her**: an event whose
  * timestamp cannot be read is left out of an as-of fold, and a concept the
@@ -126,13 +126,14 @@ const WITHHELD_POLICIES: readonly WithheldEvidencePolicy[] = [
 ];
 
 /**
- * **Need's value when its basis is unknown — `[D-348]`, OPEN** (the chain
- * spec's proposal 4). Declared, never fitted: nothing she has shown lowers
- * it, so it enters at 1, the value a never-practised concept has in the
- * ranking today (`../oracle/rank.ts`'s mastery-need ladder for `seed`). It
- * is never a measured zero in readiness (`[D-264]`), and every surface that
- * words it says it is unknown, never that she is weak. The ruling's
- * alternative, a declared middle value, can be handed in to {@link readNeed}.
+ * **Need's value when its basis is unknown — `[D-348]`, RULED** (the chain
+ * spec's proposal 4; registry §22). Declared, never fitted: nothing she has
+ * shown lowers it, so it enters at 1, the value a never-practised concept
+ * has in the ranking today (`../oracle/rank.ts`'s mastery-need ladder for
+ * `seed`). It is never a measured zero in readiness (`[D-264]`), and every
+ * surface that words it says it is unknown, never that she is weak — the
+ * ruling's point, per registry §22. The ruling's alternative, a declared
+ * middle value, can be handed in to {@link readNeed}.
  */
 export const UNKNOWN_NEED_VALUE = 1;
 
@@ -581,7 +582,7 @@ export function readAllConceptReadiness(
   return result;
 }
 
-/** Whether need rests on eligible evidence, or on none (`[D-348]`, open). */
+/** Whether need rests on eligible evidence, or on none (`[D-348]`, ruled). */
 export type NeedBasis = 'estimated' | 'unknown';
 
 /** Need for one concept: its basis, its value, and the readiness reading it came from. */
@@ -595,10 +596,12 @@ export interface NeedReading {
 /**
  * Need from the per-concept readiness reading (`[D-332]`, ruled: need reads
  * current recall, then demand-aware readiness once `ol-v7r5.65` lands, never
- * both). The basis split and the unknown value are `[D-348]`'s, open:
+ * both). The basis split and the unknown value are `[D-348]`'s, ruled:
  * **no production caller may word an unknown basis as weakness** — that is
- * the part the ruling was asked for. No caller yet: the ranking's need input
- * is `PLN`'s, and the gap view's is `ol-egov.141.89.9.5`'s.
+ * the part the ruling was asked for (registry §22). No production caller
+ * yet for the ranking's own need input (`PLN`'s); the gap view's copy layer
+ * reads the basis as of `ol-egov.141.89.9.58` (`gap/copy.ts`'s
+ * `masteryGapLine`).
  */
 export function readNeed(
   readiness: ReadinessRecallReading,

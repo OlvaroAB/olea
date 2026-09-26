@@ -1,5 +1,5 @@
 import type { GapCourseView, GapRow, SourceCoverage, VaultPath } from 'olea-core';
-import { summariseCoverageScope } from 'olea-core';
+import { readNeed, summariseCoverageScope } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   abstainedCourseSentence,
@@ -446,6 +446,46 @@ describe('row copy', () => {
     expect(line.toLowerCase()).not.toContain('priority score');
     expect(line.toLowerCase()).not.toContain('weight score');
     expect(line.toLowerCase()).not.toContain('yield rank');
+  });
+
+  // Registry §22 (`[D-348]`): a row whose need basis is unknown reads as
+  // unknown, never as a deficit, however high its ranking priority — even
+  // though the mastery-gap line's usual wording ("recall here hasn't caught
+  // up") is exactly the deficit phrasing the ruling forbids for that case.
+  it('never claims a deficit for a mastery-gap row whose need basis is unknown (registry §22, `[D-348]`)', () => {
+    const unknownNeed = readNeed({ weakest: null, instrumentsRead: 0 });
+    expect(unknownNeed.basis).toBe('unknown');
+    const r = row({ need: unknownNeed, distinctSourceCount: 2, instrumentCount: 3 });
+    const line = masteryGapLine(r);
+    expect(line).not.toBe(
+      "Asked in 2 past papers; you have 3 instruments built but recall here hasn't caught up.",
+    );
+    const forbidden = ['weak', 'struggling', 'behind', "hasn't caught up", 'catch up'];
+    for (const word of forbidden) {
+      expect(line.toLowerCase(), `forbidden word "${word}"`).not.toContain(word);
+    }
+    expect(line.toLowerCase()).toContain('unknown');
+    expect(gapRowLine(r)).toBe(line);
+  });
+
+  it('keeps the existing wording for an estimated-basis need (registry §22, `[D-348]`)', () => {
+    const estimatedNeed = readNeed({
+      weakest: { instrumentId: 'i1', recallProbability: 0.4 },
+      instrumentsRead: 1,
+    });
+    expect(estimatedNeed.basis).toBe('estimated');
+    const r = row({ need: estimatedNeed, distinctSourceCount: 2, instrumentCount: 3 });
+    expect(masteryGapLine(r)).toBe(
+      "Asked in 2 past papers; you have 3 instruments built but recall here hasn't caught up.",
+    );
+  });
+
+  it('keeps the existing wording when no need is supplied at all (no production caller attaches it yet)', () => {
+    const r = row({ distinctSourceCount: 2, instrumentCount: 3 });
+    expect(r.need).toBeUndefined();
+    expect(masteryGapLine(r)).toBe(
+      "Asked in 2 past papers; you have 3 instruments built but recall here hasn't caught up.",
+    );
   });
 
   it('labels every affordance core can actually offer, and no commissioning affordance exists to label', () => {
