@@ -1061,6 +1061,42 @@ function refineSchedulingObservationNotSubject(
 }
 
 /**
+ * Where a review came from, when it came from somewhere other than her
+ * ordinary review (`[D-367]`, `ol-0r92.118`; F4.11, `[D-252]`). One value
+ * today: `'practice-paper'`, the review through which an item she deliberately
+ * handed over from a practice paper entered ordinary review. The vocabulary
+ * registry words that context **"from a practice paper"** on her surface
+ * (§8, `[D-252]`); that phrase is display copy and is never the stored value.
+ *
+ * **An enum, not a boolean, as the ruling requires**: a second origin, if one
+ * is ever ruled, is a new literal here rather than a second flag. Internal
+ * vocabulary, never printed.
+ *
+ * **When a record carries it.** Only on the review by which the handed-over
+ * item entered ordinary review — the one deliberate act, going forward from
+ * it. Absent on every other record: an ordinary review, every later review of
+ * the same instrument, and every record written before the field existed.
+ * **It never rides a record built from paper activity before the act**: a
+ * response she gave on the paper stays on the paper as exam-simulation
+ * evidence (F4.11) and is never turned into a scored ordinary review by the
+ * hand-off (the ruling's binding clarification). Nothing backfills it, and its
+ * absence means only that no hand-off stands behind the record.
+ *
+ * **Read by nothing today.** No fold, stage, vitality, attainment, streak or
+ * spacing reading imports it, so its presence changes no reading and its
+ * absence needs no special case (the ruling's other binding clarification;
+ * `packages/core/src/review-log/review-origin-readers.spec.ts` holds that
+ * over generated logs). It is what lets a later reader keep practice-paper
+ * evidence apart from ordinary review evidence, never blended unlabelled
+ * (F4.11); whether any reading should weigh it differently is for a ruling,
+ * never something a reader starts doing because the key appeared.
+ *
+ * **No content, per D-005**: one literal.
+ */
+export const reviewOrigin = z.enum(['practice-paper']);
+export type ReviewOrigin = z.infer<typeof reviewOrigin>;
+
+/**
  * One review event, **schema version 5 — the current review record**
  * (`ol-tka5`, ratified `[D-117]`).
  *
@@ -1129,6 +1165,17 @@ export const reviewLogRecordV5 = z
      * reasoning.
      */
     answerEdits: answerEdits.optional(),
+    /**
+     * `'practice-paper'` only on the review through which an item she
+     * deliberately handed over from a practice paper entered ordinary review
+     * (`[D-367]`); absent on every other record. See `reviewOrigin`'s doc.
+     * Additive on v5 with no version bump, the way `[D-369]` added the
+     * non-attempt record's offer reference: an optional field whose absence
+     * every record already on disk satisfies. Last on the line, so a record
+     * without it serialises exactly as before; v6 inherits it by derivation,
+     * in this same place, ahead of every field new at v6.
+     */
+    origin: reviewOrigin.optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineExplainBackGradeInstrumentType)
@@ -2127,7 +2174,10 @@ function refineExplainBackCorrectness(
  * Every v5 field, by derivation, with `masteryAtTime` widened in place to
  * `masteryAtTimeV6`, plus three optional top-level fields. Every v5
  * refinement is re-applied unchanged (a refined object's refinements do not
- * travel with its `.shape`), plus the three v6 adds.
+ * travel with its `.shape`), plus the three v6 adds. `[D-367]`'s `origin` is
+ * a v5 field, so it arrives here with the spread, after `answerEdits` and
+ * before the first v6 field, and a v5 record carrying it restamps to 6
+ * byte-identically apart from the version digit.
  */
 export const reviewLogRecordV6 = z
   .object({

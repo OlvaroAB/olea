@@ -158,8 +158,8 @@ describe('review-log schema version 5 is the current one', () => {
   });
 });
 
-describe('v5 is v4 plus five optional fields — nothing else changed', () => {
-  it('the record gains exactly five keys: the three [D-117] added plus [D-205]’s correctness and [D-228]’s answerEdits', () => {
+describe('v5 is v4 plus six optional fields — nothing else changed', () => {
+  it('the record gains exactly six keys: the three [D-117] added plus [D-205]’s correctness, [D-228]’s answerEdits and [D-367]’s origin', () => {
     // `reviewLogRecordV4` no longer exists as a symbol (`[D-109]`'s
     // migrate-in-place rename), so the comparison is against v3 plus every
     // key v4 ever added: `masteryAtTime` (`ol-g6zg`), the three `[D-117]`
@@ -175,6 +175,7 @@ describe('v5 is v4 plus five optional fields — nothing else changed', () => {
         'schedulingObservation',
         'correctness',
         'answerEdits',
+        'origin',
       ].sort(),
     );
   });

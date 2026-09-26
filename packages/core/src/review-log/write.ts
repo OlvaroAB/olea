@@ -319,6 +319,25 @@ async function appendEntryLine(
  * an explicit `null` — see contracts' review-log.ts doc on why omission and
  * `null` are not interchangeable here) and a permanently corrupt semester of
  * history.
+ *
+ * **The review origin (`[D-367]`).** `input.origin` is `'practice-paper'` only
+ * when the caller is writing the review through which an item she deliberately
+ * handed over from a practice paper entered ordinary review, and it is the
+ * caller's to pass: this writer never looks one up, infers one or defaults
+ * one, and never writes one onto any earlier line (every append adds one line
+ * and rewrites nothing, so no review already on disk is relabelled after the
+ * fact). A caller with no hand-off behind the review passes nothing, and the
+ * record then carries no such key at all; an `undefined` value that reaches
+ * here past the types is dropped rather than kept as a key, so the returned
+ * record's absence is a true absence and the line is byte-identical to one
+ * written before the field existed. A value outside the ruled enum, `null`, an
+ * empty string or a boolean is refused before any byte is written.
+ *
+ * **Reachability of the origin.** No production caller passes one yet: the
+ * plugin's `createVaultReviewLogPort` (`packages/plugin/src/review/ports.ts`)
+ * builds its record field by field and has no origin to forward until the
+ * paper view's per-item hand-off (F4.11) is wired to the ordinary review path
+ * — the follow-up to `ol-0r92.118`, not this writer's.
  */
 export async function appendReviewLogRecord(
   vault: VaultSource,
@@ -327,11 +346,13 @@ export async function appendReviewLogRecord(
 ): Promise<AppendReviewLogResult> {
   const generateEventId = options.generateEventId ?? defaultGenerateEventId;
 
+  const { origin, ...fields } = input;
   const candidate: unknown = {
     schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
     kind: 'review',
     eventId: generateEventId(),
-    ...input,
+    ...fields,
+    ...(origin !== undefined ? { origin } : {}),
   };
 
   const parsed = reviewLogRecord.safeParse(candidate);
