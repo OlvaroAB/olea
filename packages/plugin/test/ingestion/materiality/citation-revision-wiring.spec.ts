@@ -14,9 +14,18 @@
  * split-home-note fix specifically: every outcome above, replayed against a
  * fixture where the instrument's home note and its cited material are
  * DIFFERENT files, `sourceProvenance.sourcePath` naming the real source.
+ *
+ * The third `describe` block (`[D-366]`, `ol-v7r5.68`) is the widening past
+ * MCQ: a self-contained Q&A/cloze card (no citation naming a separate note)
+ * is exempt — her own note's edit never suspends her own card — while a
+ * Q&A/cloze card whose citation DOES name a separate, changed note is
+ * suspended exactly like MCQ already was. A dedicated MCQ case proves that
+ * path is untouched: a self-contained MCQ (the pre-existing, unchanged
+ * behaviour) still suspends, unlike its Q&A/cloze counterpart now does not.
  */
 import {
   citationStorePath,
+  enumerateVaultInstruments,
   type ListOptions,
   type RevisionJudgePort,
   type Unsubscribe,
@@ -98,7 +107,10 @@ class FakeCitationHashStore implements CitationHashStore {
     instrumentId: string,
     expectedSourceContentHash: string,
   ): Promise<boolean> {
-    return this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash;
+    return (
+      this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash ===
+      expectedSourceContentHash
+    );
   }
 }
 
@@ -593,6 +605,251 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
     expect(report.newlyBaselined).toBe(1);
     const stored = await store.loadAll();
     expect(stored.get(MCQ_ID)?.sourcePath).toBe(NOTE_PATH);
+  });
+});
+
+/**
+ * `[D-366]` (David, 2026-09-25, ruled on `ol-v7r5.83`) — the widening past
+ * MCQ, and the exemption ruling carries.
+ */
+describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
+  const QA_HAND_NOTE_PATH = 'Courses/GEO101/HandAuthoredQa.md';
+  const CLOZE_HAND_NOTE_PATH = 'Courses/GEO101/HandAuthoredCloze.md';
+  const QA_GENERATED_HOME_PATH = 'Zettel/Weathering QA (Olea).md';
+  const CLOZE_GENERATED_HOME_PATH = 'Zettel/Weathering Cloze (Olea).md';
+  const GENERATED_SOURCE_PATH = 'Zettel/Weathering rates for cards.md';
+
+  function handAuthoredQaNote(paragraph: string): string {
+    return [
+      '---',
+      `topic: [${CONCEPT_TOPIC}]`,
+      'course: GEO101',
+      '---',
+      '',
+      '## What resists weathering?',
+      '',
+      paragraph,
+      '',
+      'Which mineral is most weathering-resistant?::Quartz',
+      '',
+    ].join('\n');
+  }
+
+  function handAuthoredClozeNote(paragraph: string): string {
+    return [
+      '---',
+      `topic: [${CONCEPT_TOPIC}]`,
+      'course: GEO101',
+      '---',
+      '',
+      '## What resists weathering?',
+      '',
+      paragraph,
+      '',
+      'The most weathering-resistant mineral is ==quartz==.',
+      '',
+    ].join('\n');
+  }
+
+  function generatedQaHomeNote(): string {
+    return [
+      '---',
+      `topic: [${CONCEPT_TOPIC}]`,
+      'course: GEO101',
+      '---',
+      '',
+      'Which mineral is most weathering-resistant?::Quartz',
+      '',
+    ].join('\n');
+  }
+
+  function generatedClozeHomeNote(): string {
+    return [
+      '---',
+      `topic: [${CONCEPT_TOPIC}]`,
+      'course: GEO101',
+      '---',
+      '',
+      'The most weathering-resistant mineral is ==quartz==.',
+      '',
+    ].join('\n');
+  }
+
+  /** Discovers the one instrument's real, enumerate.ts-derived id — never hand-rolled — so the citation sidecar below is keyed exactly as production would key it. */
+  async function soleInstrumentId(vault: MemoryVaultSource): Promise<string> {
+    const enumeration = await enumerateVaultInstruments(vault, {});
+    expect(enumeration.records).toHaveLength(1);
+    const [record] = enumeration.records;
+    if (record === undefined) throw new Error('expected exactly one record');
+    return record.instrumentId;
+  }
+
+  describe('a self-contained, hand-authored card (no citation naming a separate source)', () => {
+    it('Q&A: editing her own note never suspends her own card — never tracked, never judged', async () => {
+      const vault = new MemoryVaultSource({ [QA_HAND_NOTE_PATH]: handAuthoredQaNote(PARAGRAPH_A) });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'would suspend if ever called' })),
+      };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.exemptSelfContained).toBe(1);
+      expect(baseline.newlyBaselined).toBe(0);
+      expect(baseline.tracked).toBe(0);
+
+      // She edits her own note — the surrounding material this trigger
+      // would otherwise diff for a tracked instrument.
+      await vault.write(QA_HAND_NOTE_PATH, handAuthoredQaNote(PARAGRAPH_B));
+      const act = actions();
+      const report = await trigger.tick(vault, act);
+
+      expect(report.exemptSelfContained).toBe(1);
+      expect(judge.judge).not.toHaveBeenCalled();
+      expect(act.suspend).not.toHaveBeenCalled();
+      expect(act.enqueue).not.toHaveBeenCalled();
+      const stored = await store.loadAll();
+      expect(stored.size).toBe(0);
+    });
+
+    it('cloze: editing her own note never suspends her own card — never tracked, never judged', async () => {
+      const vault = new MemoryVaultSource({
+        [CLOZE_HAND_NOTE_PATH]: handAuthoredClozeNote(PARAGRAPH_A),
+      });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'would suspend if ever called' })),
+      };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.exemptSelfContained).toBe(1);
+      expect(baseline.newlyBaselined).toBe(0);
+
+      await vault.write(CLOZE_HAND_NOTE_PATH, handAuthoredClozeNote(PARAGRAPH_B));
+      const act = actions();
+      const report = await trigger.tick(vault, act);
+
+      expect(report.exemptSelfContained).toBe(1);
+      expect(judge.judge).not.toHaveBeenCalled();
+      expect(act.suspend).not.toHaveBeenCalled();
+      expect(act.enqueue).not.toHaveBeenCalled();
+      const stored = await store.loadAll();
+      expect(stored.size).toBe(0);
+    });
+
+    it('MCQ path is unchanged: a self-contained hand-authored MCQ still suspends on a changed-claim revision, unlike its Q&A/cloze counterpart above', async () => {
+      const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+      };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(1);
+      expect(baseline.exemptSelfContained).toBe(0);
+
+      await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+      const act = actions();
+      const report = await trigger.tick(vault, act);
+
+      expect(report.revised).toBe(1);
+      expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+      expect(act.enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('a generated card whose citation names a separate, real source', () => {
+    it('Q&A: a changed-claim revision suspends the predecessor and enqueues a successor, exactly like the MCQ path', async () => {
+      const vault = new MemoryVaultSource({
+        [QA_GENERATED_HOME_PATH]: generatedQaHomeNote(),
+        [GENERATED_SOURCE_PATH]: PARAGRAPH_A,
+      });
+      const instrumentId = await soleInstrumentId(vault);
+      await vault.write(
+        citationStorePath(instrumentId),
+        citationSidecar(instrumentId, GENERATED_SOURCE_PATH),
+      );
+
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = { judge: vi.fn() };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(1);
+      expect(baseline.exemptSelfContained).toBe(0);
+      const baselined = await store.loadAll();
+      expect(baselined.get(instrumentId)?.sourcePath).toBe(GENERATED_SOURCE_PATH);
+
+      await vault.write(GENERATED_SOURCE_PATH, PARAGRAPH_B);
+      const materialJudge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+      };
+      const trigger2 = new CitationRevisionTrigger({
+        store,
+        judge: materialJudge,
+        clock: fakeClock(1000),
+      });
+      const act = actions();
+      const report = await trigger2.tick(vault, act);
+
+      expect(report.revised).toBe(1);
+      expect(act.suspend).toHaveBeenCalledWith(instrumentId, [expect.any(String)]);
+      expect(act.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: 'instrument-revision',
+            predecessorInstrumentId: instrumentId,
+          }),
+        }),
+      );
+      const stored = await store.loadAll();
+      expect(stored.has(instrumentId)).toBe(false);
+    });
+
+    it('cloze: a changed-claim revision suspends the predecessor and enqueues a successor, exactly like the MCQ path', async () => {
+      const vault = new MemoryVaultSource({
+        [CLOZE_GENERATED_HOME_PATH]: generatedClozeHomeNote(),
+        [GENERATED_SOURCE_PATH]: PARAGRAPH_A,
+      });
+      const instrumentId = await soleInstrumentId(vault);
+      await vault.write(
+        citationStorePath(instrumentId),
+        citationSidecar(instrumentId, GENERATED_SOURCE_PATH),
+      );
+
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = { judge: vi.fn() };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(1);
+      expect(baseline.exemptSelfContained).toBe(0);
+
+      await vault.write(GENERATED_SOURCE_PATH, PARAGRAPH_B);
+      const materialJudge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+      };
+      const trigger2 = new CitationRevisionTrigger({
+        store,
+        judge: materialJudge,
+        clock: fakeClock(1000),
+      });
+      const act = actions();
+      const report = await trigger2.tick(vault, act);
+
+      expect(report.revised).toBe(1);
+      expect(act.suspend).toHaveBeenCalledWith(instrumentId, [expect.any(String)]);
+      expect(act.enqueue).toHaveBeenCalledWith(
+        expect.objectContaining({
+          payload: expect.objectContaining({
+            kind: 'instrument-revision',
+            predecessorInstrumentId: instrumentId,
+          }),
+        }),
+      );
+    });
   });
 });
 

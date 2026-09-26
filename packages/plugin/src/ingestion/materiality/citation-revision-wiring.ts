@@ -6,7 +6,7 @@
  * bead's close notes for the exact hook").
  *
  * ===========================================================================
- * SCOPE: MCQ INSTRUMENTS ONLY, ONE BATCH PASS PER TICK — READ BEFORE EXTENDING
+ * SCOPE: MCQ, Q&A AND CLOZE, ONE BATCH PASS PER TICK — READ BEFORE EXTENDING
  * ===========================================================================
  * `[D-093]`'s own scenario text says a changed cited passage "gets the model
  * read at the next BATCH PASS" — not on every keystroke. This trigger runs
@@ -23,12 +23,40 @@
  * here, it is what the free/paid split's own performance shape already
  * assumes.
  *
- * Scoped to MCQ instruments (`McqInstrumentRecord`) only, not Q&A/cloze: the
- * `[D-133]` predecessor/successor chain this outcome's `'revised'` arm feeds
- * (`predecessor:` field, `InstrumentRevisionJobPayload`,
- * `revision-job-runner.ts`) is MCQ-only today — `McqInstrument.predecessor`
- * has no Q&A/cloze counterpart. Widening to hand-authored cards is a
- * follow-on, not silently assumed here.
+ * ===========================================================================
+ * `[D-366]` — Q&A/CLOZE ARE TRACKED TOO, EXCEPT WHEN SELF-CONTAINED
+ * ===========================================================================
+ * MCQ is unchanged: every MCQ instrument is tracked, exactly as before this
+ * bead (`ol-v7r5.68`). A Q&A or cloze instrument is now tracked as well —
+ * `evaluateCitedPassageRevision`, `buildSuccessorRevisionEnqueueInput` and
+ * `InstrumentRevisionJobPayload` never assumed MCQ (they key everything by
+ * `instrumentId` and plain text) — **except** when it is exempt under
+ * `[D-366]` (David, 2026-09-25, ruled on `ol-v7r5.83`): "editing a
+ * self-contained, learner-authored card should update that card without
+ * automatic suspension... use actual source dependencies and authorship,
+ * never file location."
+ *
+ * `isTrackedForRevision` below is that rule. It is **not** the same test as
+ * "does it happen to live alone in its note": it asks whether
+ * `citedPassagePath` resolves to a note DIFFERENT from the instrument's own
+ * `notePath` — a genuine, actual dependency on separate material, wherever
+ * the block physically sits. An authored card that quotes a separate source
+ * note is tracked (its dependency's change can still suspend it); a
+ * generated card materialized into the very note its source text lives in
+ * is, by this file's own available signals, indistinguishable from a
+ * hand-authored one — see that function's doc for exactly what is known,
+ * what is not, and why the untellable case defaults to exempt rather than a
+ * guess. The `[D-133]` predecessor/successor chain a `'revised'` outcome
+ * enqueues stays enqueue-only here for every instrument type — this file
+ * never generates a successor, only asks the existing ingestion queue to
+ * (`CitationRevisionActions.enqueue`'s own doc). **Generating one for a Q&A
+ * or cloze predecessor is not yet wired end to end**: `materialize-card.ts`
+ * has no `predecessorInstrumentId` parameter today (its own module doc:
+ * "drafts a card REVISION yet, so `predecessorInstrumentId` has no
+ * producer"), and `revision-job-runner.ts` drafts every successor through
+ * `draftQuizCardsForConcept` regardless of the predecessor's original
+ * `instrumentType` — both outside this bead's `owns`, reported rather than
+ * changed here (see this bead's hand-back notes).
  *
  * ===========================================================================
  * "THE CITED PASSAGE" — WHAT THIS CALLER FEEDS `evaluateCitedPassageRevision`
@@ -40,8 +68,11 @@
  * own wording. That keeps the predecessor instrument physically unchanged in
  * the vault when a `'revised'` outcome suspends it (a real, still-present
  * block gets suspended, not one whose bytes a judge call just rewrote), at
- * the cost of every MCQ sharing one note reacting to the same material delta
- * rather than to its own individually-nearest passage.
+ * the cost of every TRACKED instrument sharing one note reacting to the same
+ * material delta rather than to its own individually-nearest passage — MCQ
+ * always, and a Q&A/cloze instrument only when it is tracked at all (see the
+ * `[D-366]` section above: a self-contained one is exempt, so this
+ * shared-note cost never reaches it).
  *
  * **Exception, since `[D-179]`/`[D-214]` split an instrument's home note from
  * its actual source (`ol-0r92.46`): when `sourceProvenance.sourcePath` names
@@ -70,7 +101,6 @@ import {
   enumerateVaultInstruments,
   evaluateCitedPassageRevision,
   hashText,
-  type McqInstrumentRecord,
   type PendingRevalidationRecorder,
   type RelocationCandidate,
   type RevisionJudgeInput,
@@ -125,6 +155,17 @@ export interface CitationRevisionTickReport {
    * later pass.
    */
   readonly staleResultDiscarded: number;
+  /**
+   * `[D-366]`: how many Q&A/cloze instruments THIS PASS found self-contained
+   * by citation — no `sourceProvenance` naming a real, separate note — and
+   * therefore exempt from tracking under this trigger altogether. Counted,
+   * never tracked, never baselined, never sent to the judge: her own
+   * self-contained card follows her own edit with no automatic suspension.
+   * See `isTrackedForRevision`'s own doc for exactly what this can and
+   * cannot tell apart. MCQ never contributes to this count (unchanged
+   * scope).
+   */
+  readonly exemptSelfContained: number;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -149,10 +190,6 @@ export interface CitationRevisionTriggerDeps {
   readonly clock: Clock;
 }
 
-function isMcqRecord(record: VaultInstrumentRecord): record is McqInstrumentRecord {
-  return record.instrumentType === 'mcq';
-}
-
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
 function isMarkdownVaultPath(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
@@ -164,9 +201,11 @@ function isMarkdownVaultPath(path: VaultPath): boolean {
  * implements. `sourceProvenance` is `undefined` for a hand-authored
  * instrument (nothing mints a citation sidecar for those) and for a
  * generated one no sidecar-writer has cited yet — both fall through to the
- * pre-existing `notePath` rule, unchanged.
+ * pre-existing `notePath` rule, unchanged. Instrument-type-agnostic since
+ * `[D-366]` (`sourceProvenance` lives on `VaultInstrumentCommon`, shared by
+ * every instrument type — `session/types.ts`).
  */
-function citedPassagePath(record: McqInstrumentRecord): VaultPath {
+function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
   const sourcePath = record.sourceProvenance?.sourcePath;
   if (
     sourcePath !== undefined &&
@@ -176,6 +215,28 @@ function citedPassagePath(record: McqInstrumentRecord): VaultPath {
     return sourcePath;
   }
   return record.notePath;
+}
+
+/**
+ * `[D-366]` — whether an instrument is tracked under `[D-093]`'s
+ * passage-change auto-suspension at all. See this module's own "`[D-366]` —
+ * Q&A/CLOZE ARE TRACKED TOO" doc section for the full ruling and its limits;
+ * this is that rule, in code.
+ *
+ * MCQ: always tracked, unchanged — this bead does not touch that path.
+ *
+ * Q&A/cloze: tracked only when {@link citedPassagePath} resolves to a note
+ * DIFFERENT from the instrument's own `notePath` — a real, actual citation
+ * naming separate material, never inferred from where the block sits.
+ * Falling back to the instrument's own note (no `sourceProvenance` at all,
+ * one naming a non-markdown source, or one naming the note itself) is
+ * exempt: `[D-366]`'s "self-contained, learner-authored" case, or — where
+ * this module genuinely cannot tell the two apart, see `citedPassagePath`'s
+ * own doc — the safe default for the case it cannot tell.
+ */
+function isTrackedForRevision(record: VaultInstrumentRecord): boolean {
+  if (record.instrumentType === 'mcq') return true;
+  return citedPassagePath(record) !== record.notePath;
 }
 
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
@@ -190,6 +251,7 @@ interface MutableTickReport {
   newlyBaselined: number;
   formattingOnly: number;
   staleResultDiscarded: number;
+  exemptSelfContained: number;
 }
 
 export class CitationRevisionTrigger {
@@ -214,6 +276,7 @@ export class CitationRevisionTrigger {
       newlyBaselined: 0,
       formattingOnly: 0,
       staleResultDiscarded: 0,
+      exemptSelfContained: 0,
     };
 
     // `[D-351]`: the moment `evaluateCitedPassageRevision` confirms a real
@@ -222,14 +285,28 @@ export class CitationRevisionTrigger {
     // per tick, stateless across iterations — closes only over `this.deps`.
     const pendingRecorder: PendingRevalidationRecorder = {
       recordPending: ({ instrumentId, sourceContentHash }) =>
-        this.deps.store.setPendingRevalidation(instrumentId, sourceContentHash, this.deps.clock.now()),
+        this.deps.store.setPendingRevalidation(
+          instrumentId,
+          sourceContentHash,
+          this.deps.clock.now(),
+        ),
     };
 
     // `[D-357]`: the permanent concept key on every record this walk hands on.
     const enumeration = await enumerateVaultInstruments(vault, {
       concepts: { stampConceptKeys: true },
     });
-    const mcqRecords = enumeration.records.filter(isMcqRecord);
+    // `[D-366]`: exempt Q&A/cloze instruments (self-contained by citation —
+    // see `isTrackedForRevision`'s own doc) are counted here, once, and then
+    // never touched again this pass: excluded from `trackedRecords` below,
+    // so they are never baselined, never diffed, never sent to the judge.
+    report.exemptSelfContained = enumeration.records.filter(
+      (record) => record.instrumentType !== 'mcq' && !isTrackedForRevision(record),
+    ).length;
+    const trackedRecords = enumeration.records.filter(isTrackedForRevision);
+    const currentAllByInstrumentId = new Map(
+      enumeration.records.map((record) => [record.instrumentId, record] as const),
+    );
 
     // Every instrument's own span, of every type, in the note it lives in —
     // what `stripInstrumentSpans` removes to get at "the material," per
@@ -253,12 +330,28 @@ export class CitationRevisionTrigger {
     };
 
     const currentByInstrumentId = new Map(
-      mcqRecords.map((record) => [record.instrumentId, record] as const),
+      trackedRecords.map((record) => [record.instrumentId, record] as const),
     );
     const stored = await this.deps.store.loadAll();
     report.tracked = stored.size;
 
     for (const [instrumentId, previous] of stored) {
+      // `[D-366]`: an id that WAS tracked but, under the current rule, no
+      // longer is — e.g. a rule change since it was last baselined, since
+      // `sourceProvenance` is write-once and cannot itself change underneath
+      // a still-existing record. Retire silently: this is a real, present
+      // instrument, never `'stranded'` (nothing this module decides alone)
+      // and never a relocation search (nothing has moved).
+      const currentAny = currentAllByInstrumentId.get(instrumentId);
+      if (currentAny !== undefined && !isTrackedForRevision(currentAny)) {
+        try {
+          await this.deps.store.remove(instrumentId);
+        } catch (error) {
+          console.error('Olea: citation-revision exempt-retire write failed', error);
+        }
+        continue;
+      }
+
       const currentRecord = currentByInstrumentId.get(instrumentId);
       let current: CurrentPassageState;
       try {
@@ -270,7 +363,7 @@ export class CitationRevisionTrigger {
         } else {
           current = {
             kind: 'not-found',
-            relocationCandidates: await buildRelocationCandidates(mcqRecords, materialFor),
+            relocationCandidates: await buildRelocationCandidates(trackedRecords, materialFor),
           };
         }
       } catch (error) {
@@ -343,8 +436,11 @@ export class CitationRevisionTrigger {
       );
     }
 
-    // Baseline every MCQ instrument this pass found that the store has never
-    // recorded — the first-sighting case, same posture
+    // Baseline every TRACKED instrument this pass found that the store has
+    // never recorded — every MCQ, plus a Q&A/cloze that names a genuine
+    // separate citation (`[D-366]`; a self-contained one was already
+    // counted into `report.exemptSelfContained` above and never reaches
+    // `trackedRecords`) — the first-sighting case, same posture
     // `ObsidianMaterialityHashStore`'s `record === null` branch takes: record
     // now, nothing to diff against yet.
     for (const [instrumentId, record] of currentByInstrumentId) {
@@ -369,7 +465,7 @@ export class CitationRevisionTrigger {
   private async applyOutcome(
     instrumentId: string,
     previous: CitationAnchorRecord,
-    currentRecord: McqInstrumentRecord | undefined,
+    currentRecord: VaultInstrumentRecord | undefined,
     current: CurrentPassageState,
     outcome: CitedPassageRevisionOutcome,
     actions: CitationRevisionActions,
@@ -497,23 +593,27 @@ export class CitationRevisionTrigger {
 }
 
 /**
- * Every currently-enumerated note's material, one `RelocationCandidate` each
- * — `location` is a placeholder whole-text range, the same "never read past
- * `embeddedIn.notePath`/`sourcePath`" posture `main.ts`'s
+ * Every currently-TRACKED instrument's material, one `RelocationCandidate`
+ * each — `location` is a placeholder whole-text range, the same "never read
+ * past `embeddedIn.notePath`/`sourcePath`" posture `main.ts`'s
  * `triggerAuthoredNoteGenerationIfObserved` already uses for a synthesised
  * `Provenance`: `classifyRelocation` only ever reads `candidate.text` and
  * `candidate.anchor.sourcePath`. Deduped and read by `citedPassagePath`, not
  * raw `notePath` — the same substitution `tick`'s tracked-instrument loop
  * makes, so a relocation search for a split-home-note instrument (`ol-0r92.46`)
  * looks at candidates' real source text too, not their empty home-note stubs.
+ * Drawn from `trackedRecords` (`[D-366]`), not every enumerated instrument —
+ * an exempt, self-contained Q&A/cloze instrument's own note is never offered
+ * as somewhere a DIFFERENT, tracked instrument's citation relocated to;
+ * MCQ's population is unchanged (it was already every MCQ).
  */
 async function buildRelocationCandidates(
-  mcqRecords: readonly McqInstrumentRecord[],
+  trackedRecords: readonly VaultInstrumentRecord[],
   materialFor: (path: VaultPath) => Promise<string>,
 ): Promise<RelocationCandidate[]> {
   const seen = new Set<VaultPath>();
   const candidates: RelocationCandidate[] = [];
-  for (const record of mcqRecords) {
+  for (const record of trackedRecords) {
     const path = citedPassagePath(record);
     if (seen.has(path)) continue;
     seen.add(path);
