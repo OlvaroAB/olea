@@ -3447,7 +3447,13 @@ export default class OleaPlugin extends Plugin {
    * more `DEFAULT_SESSION_BUDGET_MINUTES`-sized step — a declared, plain-
    * English default (C5.5's "her typical session length" unit, reused as the
    * growth step rather than inventing a second number), not a fitted
-   * threshold, so it needs no decision bead.
+   * threshold, so it needs no decision bead. **The returned session's own
+   * `model.budgetMinutes` carries `widerBudgetMinutes` forward**
+   * (`ol-egov.141.89.10.4`, bug fixed): a prior version spread only `items`
+   * onto `previous.model`, so a SECOND outrun read the same stale, never-
+   * widened figure, recomputed the identical `widerBudgetMinutes` the first
+   * extend already used, and silently appended nothing — see
+   * `test/session-builder/outrun-extend-budget-progression.spec.ts`.
    *
    * **`courseOrTopic` is pinned to `previous`'s own course**
    * (`ol-egov.141.89.10.15`, F2.18/C5.6, C5.8 as amended: "where she outruns
@@ -3529,7 +3535,14 @@ export default class OleaPlugin extends Plugin {
       { ...result.composedInput, budgetMinutes: widerBudgetMinutes },
       previous,
     );
-    return { ...previous, model: { ...previous.model, items } };
+    // `ol-egov.141.89.10.4` (bug, fixed): `model.budgetMinutes` must carry
+    // `widerBudgetMinutes` forward onto the RETURNED session, not just
+    // `items` — otherwise a second outrun reads this same (never-updated)
+    // `previous.model.budgetMinutes` above, recomputes the IDENTICAL
+    // `widerBudgetMinutes` the first extend already used, and appends
+    // nothing (every instrument up to that budget was already served). See
+    // `test/session-builder/outrun-extend-budget-progression.spec.ts`.
+    return { ...previous, model: { ...previous.model, budgetMinutes: widerBudgetMinutes, items } };
   }
 
   /**

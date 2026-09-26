@@ -1813,6 +1813,34 @@ describe('ol-egov.141.89.10.15 (bug): extending an outrun session holds the same
   });
 });
 
+describe('ol-egov.141.89.10.4 (bug, fixed): a second outrun-the-target extend now widens further than the first, instead of landing on the same figure', () => {
+  // CONFIRMED bug (filed as a follow-up from `ol-egov.141.89.10.65`'s
+  // report): `extendDefaultStudySession` computed `widerBudgetMinutes` off
+  // `previous.model.budgetMinutes`, then returned `{ ...previous, model: {
+  // ...previous.model, items } }` — spreading the wider `items` but never
+  // `budgetMinutes` onto the returned session. F2.17/C5.8 and F2.18 (`the
+  // extension is composed under the same plan's shares... where she outruns
+  // it, C5.8's outrun extends this course's own material`) say she can keep
+  // outrunning the target; this method's own doc says each call widens "by
+  // one more DEFAULT_SESSION_BUDGET_MINUTES-sized step" from wherever the
+  // session currently stands. With `budgetMinutes` never persisted, a SECOND
+  // "keep going" read the same stale figure the first one started from,
+  // recomputed the identical `widerBudgetMinutes`, and appended nothing —
+  // the outrun silently stalled the second time. The behavioural proof, run
+  // through the real `composeStudySessionForRequest`/`extendComposedStudySession`
+  // functions this method calls, lives in
+  // `test/session-builder/outrun-extend-budget-progression.spec.ts`, since
+  // `main.ts` cannot be imported under Vitest (this file's own module doc)
+  // — this is the source-level pin that a future edit dropping the
+  // `budgetMinutes` update, or reintroducing the old spread, still fails.
+  it('persists the widened budget onto the returned session, not only the wider item list', () => {
+    const extendBody = main.slice(main.indexOf('private async extendDefaultStudySession('));
+    expect(extendBody).toMatch(
+      /return \{ \.\.\.previous, model: \{ \.\.\.previous\.model, budgetMinutes: widerBudgetMinutes, items \} \};/,
+    );
+  });
+});
+
 describe('ol-egov.141.89.10.47: Start’s holder entry captures the composing plan, not just a fresh sitting', () => {
   // CONFIRMED bug: `enterStudySessionHolderForStart` called
   // `this.studySessionHolder.enter(now, composed)` with no third argument,
