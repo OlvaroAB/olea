@@ -36,6 +36,11 @@
 
 import type { Rating } from 'olea-contracts';
 import type { AcceptedExplainBackGrading, QueueItemReason } from 'olea-core';
+// F2.22's per-item reason (`[D-331]`, `[D-374]`) reuses `session-builder/
+// copy.ts`'s `itemReasonLine` as its render-time wording backstop — see
+// `rankedReasonLine` below for why this is a reuse, never a second
+// implementation of the same rule.
+import { itemReasonLine } from '../session-builder/copy.js';
 import { type ReviewAction, type ReviewScreen, resolveReviewKey } from './keymap.js';
 import type { SessionCompleteSummary } from './session.js';
 import type { ClozeCard, QaCard } from './types.js';
@@ -386,6 +391,51 @@ export function dedupeReasonLine(dedupeReason: QueueItemReason | undefined): str
     "Recall takes it today instead, because it hasn't been asked without the answer choices for as " +
     'long as its own review interval allows.'
   );
+}
+
+// ---------------------------------------------------------------------------
+// F2.22's per-item "ask for the reason" control (`[D-331]`, `[D-374]`,
+// `ol-3ux7.5.57.14.54`) — hidden by default, on the existing per-item render
+// point (`view.ts`'s `renderFront`), never a new surface.
+// ---------------------------------------------------------------------------
+
+/**
+ * The plain, fixed label on the hidden-by-default control (F2.22: "available
+ * on request and never shown by default"). One label — asking reveals the
+ * reason and, per F2.22's own scenario, "nothing else on the session screen
+ * changes," so there is no second, "hide it again" label to draft alongside
+ * this one.
+ *
+ * Class B for the copy pass (new string, not yet reviewed against the
+ * vocabulary registry's worked examples): see the lane report.
+ */
+export const WHY_THIS_ITEM_LABEL = 'Why this item?';
+
+/**
+ * The one-clause line the control reveals — this item's own
+ * `ReviewViewModel`'s `front`-phase `rankedReason` (`olea-core`'s
+ * `StudySessionItem.rankedReason`, F2.22, `[D-331]`, `[D-374]`), or `null`
+ * when the item carries none at all.
+ *
+ * **Never invents, defaults or paraphrases a reason.** `undefined` in means
+ * `null` out — the same posture `dedupeReasonLine` above already takes for
+ * its own optional reason, and the one this bead's acceptance criteria name
+ * explicitly: "never a generic or invented reason."
+ *
+ * **`itemReasonLine` is the render-time wording backstop, reused here rather
+ * than reimplemented.** `session-builder/copy.ts` already owns the one
+ * MECHANICAL rule available at render time for this exact shape of string —
+ * a freeform, server-generated one-clause reason that may arrive with
+ * evidence appended as a further sentence or after a semicolon — and that
+ * module's own doc explains why a render-time backstop, not a full fix, is
+ * all that is possible client-side. Calling it here is a no-op on a reason
+ * that is already one clause (idempotent, by that module's own tests), so
+ * this can never damage a reason that was already fine.
+ */
+export function rankedReasonLine(rankedReason: string | undefined): string | null {
+  if (rankedReason === undefined) return null;
+  const line = itemReasonLine(rankedReason);
+  return line.length === 0 ? null : line;
 }
 
 // ---------------------------------------------------------------------------

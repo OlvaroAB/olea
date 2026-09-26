@@ -30,12 +30,14 @@ import {
   questionText,
   REVIEW_UNAVAILABLE_BODY,
   REVIEW_UNAVAILABLE_TITLE,
+  rankedReasonLine,
   ratingKeycap,
   ratingLabel,
   SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL,
   SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
+  WHY_THIS_ITEM_LABEL,
 } from '../../src/review/copy.js';
 import { resolveReviewKey } from '../../src/review/keymap.js';
 import type { ClozeCard, QaCard } from '../../src/review/types.js';
@@ -81,6 +83,53 @@ describe('dedupeReasonLine — [D-240] item 5 (ol-egov.130, ol-2zfj.67 SESS-6)',
     // Never the forbidden harvest word, and never a bare percentage/quotient (V6).
     expect(line.toLowerCase()).not.toContain('yield');
     expect(line).not.toMatch(/\d+%/);
+  });
+});
+
+// --------------------------------------------------------------------------
+// F2.22's ask-for-the-reason control (`[D-331]`, `[D-374]`, `ol-3ux7.5.57.14.54`)
+// --------------------------------------------------------------------------
+
+describe('rankedReasonLine — the recorded selection reason, one clause, wording-ruled', () => {
+  it('renders nothing for undefined — never a reason for an item that carries none', () => {
+    expect(rankedReasonLine(undefined)).toBeNull();
+  });
+
+  it('passes an already-one-clause reason through unchanged', () => {
+    expect(rankedReasonLine('You missed this twice in your last five attempts.')).toBe(
+      'You missed this twice in your last five attempts.',
+    );
+  });
+
+  it('applies the itemReasonLine wording backstop, cutting a second sentence of evidence', () => {
+    expect(
+      rankedReasonLine(
+        'You missed this twice in your last five attempts. It is also cited in three past papers.',
+      ),
+    ).toBe('You missed this twice in your last five attempts.');
+  });
+
+  it('applies the same backstop to a semicolon-appended evidence clause', () => {
+    expect(
+      rankedReasonLine('It matches your weakest concept; it is also due in 4 days at 3.5%.'),
+    ).toBe('It matches your weakest concept.');
+  });
+
+  it('renders nothing for a reason that is empty or only whitespace', () => {
+    expect(rankedReasonLine('')).toBeNull();
+    expect(rankedReasonLine('   ')).toBeNull();
+  });
+
+  it('is idempotent — the backstop never removes more on a second pass', () => {
+    const once = rankedReasonLine('You missed this twice. It is also cited in three past papers.');
+    expect(rankedReasonLine(once ?? undefined)).toBe(once);
+  });
+});
+
+describe('WHY_THIS_ITEM_LABEL — the hidden-by-default control label', () => {
+  it('is plain, fixed wording naming no specific reason', () => {
+    expect(WHY_THIS_ITEM_LABEL.length).toBeGreaterThan(0);
+    expect(WHY_THIS_ITEM_LABEL).not.toMatch(/\d+%/);
   });
 });
 

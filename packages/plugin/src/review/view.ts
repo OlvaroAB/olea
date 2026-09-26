@@ -88,12 +88,14 @@ import {
   REGISTRY_ENTRY_ACTION,
   REVIEW_UNAVAILABLE_BODY,
   REVIEW_UNAVAILABLE_TITLE,
+  rankedReasonLine,
   ratingKeycap,
   ratingLabel,
   SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL,
   SESSION_COMPLETE_CONTINUE_LABEL,
   sessionCompleteSentence,
   verifiedKeycap,
+  WHY_THIS_ITEM_LABEL,
 } from './copy.js';
 import type { ExplainWhyOutcome } from './explainWhy.js';
 import {
@@ -329,6 +331,15 @@ export class ReviewView extends ItemView {
   private confusionBanner: ConfusionBannerState | null = null;
   private schedulingObservationBanner: SchedulingObservationBannerState | null = null;
   private strongRecallBanner: StrongRecallBannerState | null = null;
+  /**
+   * F2.22's ask-for-the-reason control (`[D-331]`, `[D-374]`,
+   * `ol-3ux7.5.57.14.54`): which instrument's own reason she has asked to
+   * see, or `null` when none has been asked for yet. Keyed by instrument id,
+   * the same pattern `explainWhyPanel` above already uses, so moving to a
+   * NEW item never carries a previous item's reveal forward — every fresh
+   * front phase starts hidden by default, exactly as F2.22 requires.
+   */
+  private revealedRankedReasonInstrumentId: string | null = null;
 
   /**
    * `onReviewActivity` fires whenever her due counts may have moved, which is
@@ -689,7 +700,7 @@ export class ReviewView extends ItemView {
       case 'front': {
         const screen = this.currentScreen(vm);
         this.renderHeader(vm.progress, screen, vm.instrument);
-        this.renderFront(vm.instrument, screen, vm.dedupeReason);
+        this.renderFront(vm.instrument, screen, vm.dedupeReason, vm.rankedReason);
         break;
       }
       case 'reveal': {
@@ -1392,6 +1403,7 @@ export class ReviewView extends ItemView {
     instrument: QaCard | ClozeCard,
     screen: ReviewScreen,
     dedupeReason?: QueueItemReason,
+    rankedReason?: string,
   ): void {
     const body = this.contentEl.createDiv({ cls: 'olea-review-body' });
     this.meta(body, instrument.courseCode, instrument.noteTitle);
@@ -1402,9 +1414,50 @@ export class ReviewView extends ItemView {
     if (reasonLine !== null) {
       body.createDiv({ cls: 'olea-prose olea-review-dedupe-reason', text: reasonLine });
     }
+    this.renderRankedReasonControl(body, instrument.instrumentId, rankedReason);
     body.createEl('h2', { cls: 'olea-review-question', text: questionText(instrument) });
     body.createDiv({ cls: 'olea-review-divider' });
     this.hints(body, screen);
+  }
+
+  /**
+   * F2.22's ask-for-the-reason control (`[D-331]`, `[D-374]`,
+   * `ol-3ux7.5.57.14.54`) — the existing per-item render point
+   * (`renderFront`, above), never a new surface. `rankedReason` is this
+   * item's own `ReviewViewModel`'s `front`-phase field, passed straight
+   * through `render()`; `copy.ts`'s `rankedReasonLine` decides whether there
+   * is anything to show at all (`null` when the item carries none) and
+   * applies the wording backstop when there is.
+   *
+   * **Hidden by default, one button, no second "hide" control.** Before she
+   * asks, only the button renders; once `revealedRankedReasonInstrumentId`
+   * names THIS instrument, the button is replaced by the reason itself and
+   * nothing else on the screen changes (F2.22's own scenario) — advancing to
+   * a different item resets this automatically, because the id comparison
+   * below stops matching (see that field's own doc).
+   */
+  private renderRankedReasonControl(
+    parent: HTMLElement,
+    instrumentId: string,
+    rankedReason: string | undefined,
+  ): void {
+    const line = rankedReasonLine(rankedReason);
+    if (line === null) return;
+
+    if (this.revealedRankedReasonInstrumentId === instrumentId) {
+      parent.createDiv({ cls: 'olea-prose olea-review-ranked-reason', text: line });
+      return;
+    }
+
+    const btn = parent.createEl('button', {
+      cls: 'olea-review-ghost-action olea-review-ranked-reason-toggle',
+      attr: { [FOCUSABLE_ATTR]: 'true' },
+    });
+    btn.createSpan({ text: WHY_THIS_ITEM_LABEL });
+    this.registerDomEvent(btn, 'click', () => {
+      this.revealedRankedReasonInstrumentId = instrumentId;
+      this.render();
+    });
   }
 
   /** `screen` — see `renderFront`'s doc; same reasoning, same source. */
