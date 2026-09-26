@@ -1749,9 +1749,16 @@ describe('buildComposedStudySession', () => {
         // and unrelated to the F2.22 scope this test is about.
         'focusPolicy',
         'forcedCourses',
+        // `[D-331]` (`ol-egov.141.89.10.65`): the composition's own account — a discrete
+        // grouping signal, set-aside ids with enum reasons, and an instrument→concept key map.
+        // Structural, never prose: the grouping sentence is still rendered elsewhere, from
+        // `groupingSignal`, exactly as the course sentence is rendered from `focusBranch`.
+        'groupingSignal',
+        'itemConceptKeys',
         'model',
         'obligationClasses',
         'overflow',
+        'setAside',
       ].sort(),
     );
   });

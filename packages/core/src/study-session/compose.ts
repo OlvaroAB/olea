@@ -347,6 +347,30 @@
  * (this module has no per-instrument view at selection time) but the fill then finds nothing to
  * serve for it — "nothing takes its place," never a replacement row.
  *
+ * ## `[D-331]` — the composition's own account (`ol-egov.141.89.10.65`)
+ *
+ * `[D-331]` (ruled 2026-09-25) preserves what a composition selected, what it set aside and why.
+ * This module computes three facts for that and keeps them on the result, beside the order they
+ * explain, without changing the order: `./composition-record.ts` freezes them into the durable
+ * record, and nothing here writes anything.
+ *
+ * - **`groupingSignal`** ({@link dominantGroupingSignal}): which of F2.19's three blended signals
+ *   decided the order inside the presented tie bands, as one discrete value (`./types.ts`'s
+ *   `GroupingSignal`). {@link withinBlockGroupingScore} still computes the one score the sort
+ *   reads, untouched; the attribution re-reads the same three terms separately after the order
+ *   is fixed, so no floating-point rewrite of the score can reach the sort.
+ * - **`setAside`**: what the composition weighed and did not serve, each with why, by id, at the
+ *   grain the composer decided at (a course, a concept, an instrument; see `./types.ts`).
+ * - **`itemConceptKeys`**: the concept key each served instrument was composed under.
+ *   `StudySessionItem` names its concept only by display name (`./build.ts`, not this module's
+ *   file), so the key is recovered from the fill's own attribution rule: the ordered row with that
+ *   course and name, narrowed by which row's instruments contain the item when two rows share a
+ *   name. A still-ambiguous item is left out of the map (unknown), never guessed.
+ *
+ * {@link extendComposedStudySessionWithAccount} carries the same account through an outrun
+ * extension; {@link extendComposedStudySession} is now that function's item list, byte-identical
+ * to what it returned before.
+ *
  * ## INV-1 / §7.1
  *
  * Pure. No `obsidian`, no vault I/O, no clock (`asOf` is an argument),
@@ -382,6 +406,13 @@ import {
 } from './build.js';
 import type { DurationModel } from './duration.js';
 import type { ConceptInstrumentIndex } from './instrument-index.js';
+import type {
+  CompositionSetAside,
+  GroupingSignal,
+  SetAsideConcept,
+  SetAsideCourse,
+  SetAsideInstrument,
+} from './types.js';
 import type { WindowDeficitEntry } from './window.js';
 
 const SECONDS_PER_MINUTE = 60;
@@ -775,6 +806,156 @@ function withinBlockGroupingScore(
   const proximity = withinBlockAssessmentProximity(context.dueDay, asOf);
   const scopeMembership = context.scopeConceptKeys.has(c.row.conceptKey) ? 1 : 0;
   return (1 - proximity) * blendedRelatedness + proximity * scopeMembership;
+}
+
+/** A grouping signal that can decide an adjacency — every {@link GroupingSignal} but `'none'`. */
+type DecidingGroupingSignal = Exclude<GroupingSignal, 'none'>;
+
+/**
+ * `[D-331]`: which signal wins when two decided the same number of adjacencies, in F2.19's own
+ * precedence — the proximity term "still has final say" over the relatedness-plus-cohort blend
+ * (the module doc's cohort section), and the cohort is what that blend leans on while material is
+ * fresh. **Declared, never fitted**: a reading of the clause, not a number.
+ */
+const GROUPING_SIGNAL_PRECEDENCE: readonly DecidingGroupingSignal[] = [
+  'assessment-scope',
+  'arrival-cohort',
+  'relatedness',
+];
+
+/**
+ * {@link withinBlockGroupingScore}'s three terms, kept apart so {@link dominantGroupingSignal} can
+ * say which of them moved an adjacency. Algebraically the score is their sum (with no assessment
+ * context the proximity reads `0`, which is exactly the score's own early return); this function
+ * never feeds a sort, so a last-bit floating-point difference between the sum and the score is
+ * harmless by construction — the sort keeps reading {@link withinBlockGroupingScore} alone.
+ */
+function withinBlockGroupingComponents(
+  c: ClassifiedRow,
+  peers: readonly string[],
+  relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  peerNotePaths: ReadonlyMap<string, readonly VaultPath[]>,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+  asOf: CalendarDay,
+): Readonly<Record<DecidingGroupingSignal, number>> {
+  const relatedness = withinBlockRelatedness(c.row.conceptKey, peers, relatedConceptKeys);
+  const cohortWeight = withinBlockCohortDecayWeight(
+    arrivalDays?.get(c.row.conceptKey) ?? null,
+    asOf,
+  );
+  const cohortAffinity = withinBlockCohortAffinity(c.row.notePaths, peers, peerNotePaths);
+  const context =
+    c.row.targetAssessmentPath !== null
+      ? assessmentContext?.get(c.row.targetAssessmentPath)
+      : undefined;
+  const proximity =
+    context === undefined ? 0 : withinBlockAssessmentProximity(context.dueDay, asOf);
+  const scopeMembership = context?.scopeConceptKeys.has(c.row.conceptKey) === true ? 1 : 0;
+  return {
+    relatedness: (1 - proximity) * (1 - cohortWeight) * relatedness,
+    'arrival-cohort': (1 - proximity) * cohortWeight * cohortAffinity,
+    'assessment-scope': proximity * scopeMembership,
+  };
+}
+
+/**
+ * `[D-331]`, F2.22's "why this grouping": the one F2.19 signal that decided the within-course
+ * order of the PRESENTED composition, as a discrete value. Reads the order after it is fixed and
+ * changes nothing in it.
+ *
+ * `orderedBlocks` is the presentation order {@link blockByCoursePresentation} returned: contiguous
+ * course blocks, each sorted by {@link withinBlockOrder}, so each block's exact-`overdueDays` tie
+ * bands are contiguous runs, with the same members, peers and note paths that function scored.
+ * For every adjacent pair inside a band whose grouping scores differ (the score, not the urgency
+ * fallback, decided that adjacency), the deciding signal is the one whose term lifts the earlier
+ * row most over the later one ({@link GROUPING_SIGNAL_PRECEDENCE} on an exact tie). The signal
+ * deciding the most adjacencies is the composition's; a tie in that count goes by the same
+ * precedence. `'none'` when no adjacency was decided by a score, which is every composition with
+ * no F2.19 signal supplied (the module doc's no-op proof: every score reads `0`).
+ *
+ * Counted over what she is shown (the chosen set's presentation), not over the dominant course's
+ * whole candidate order the focused selection grouped before choosing: the grouping sentence
+ * describes the session she meets. Class B, flagged on the bead.
+ */
+function dominantGroupingSignal(
+  orderedBlocks: readonly ClassifiedRow[],
+  relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
+  assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
+  arrivalDays: ReadonlyMap<string, CalendarDay> | undefined,
+  asOf: CalendarDay,
+): GroupingSignal {
+  const decided = new Map<DecidingGroupingSignal, number>();
+  let i = 0;
+  while (i < orderedBlocks.length) {
+    const first = orderedBlocks[i];
+    if (first === undefined) break;
+    let j = i + 1;
+    while (
+      j < orderedBlocks.length &&
+      orderedBlocks[j]?.row.course === first.row.course &&
+      orderedBlocks[j]?.overdueDays === first.overdueDays
+    ) {
+      j += 1;
+    }
+    const band = orderedBlocks.slice(i, j);
+    i = j;
+    if (band.length < 2) continue;
+    const keys = band.map((c) => c.row.conceptKey);
+    const notePathsByKey = new Map<string, readonly VaultPath[]>(
+      band.map((c) => [c.row.conceptKey, c.row.notePaths]),
+    );
+    const peersOf = (c: ClassifiedRow) => keys.filter((k) => k !== c.row.conceptKey);
+    const score = (c: ClassifiedRow) =>
+      withinBlockGroupingScore(
+        c,
+        peersOf(c),
+        relatedConceptKeys,
+        assessmentContext,
+        notePathsByKey,
+        arrivalDays,
+        asOf,
+      );
+    const terms = (c: ClassifiedRow) =>
+      withinBlockGroupingComponents(
+        c,
+        peersOf(c),
+        relatedConceptKeys,
+        assessmentContext,
+        notePathsByKey,
+        arrivalDays,
+        asOf,
+      );
+    for (let k = 0; k + 1 < band.length; k += 1) {
+      const earlier = band[k];
+      const later = band[k + 1];
+      if (earlier === undefined || later === undefined) continue;
+      // An exact tie fell through to `overdueFirst`: urgency, not a grouping signal, decided it.
+      if (!(score(earlier) > score(later))) continue;
+      const earlierTerms = terms(earlier);
+      const laterTerms = terms(later);
+      let decider: DecidingGroupingSignal | undefined;
+      let largestLift = Number.NEGATIVE_INFINITY;
+      for (const signal of GROUPING_SIGNAL_PRECEDENCE) {
+        const lift = earlierTerms[signal] - laterTerms[signal];
+        if (lift > largestLift) {
+          decider = signal;
+          largestLift = lift;
+        }
+      }
+      if (decider !== undefined) decided.set(decider, (decided.get(decider) ?? 0) + 1);
+    }
+  }
+  let dominant: GroupingSignal = 'none';
+  let mostDecided = 0;
+  for (const signal of GROUPING_SIGNAL_PRECEDENCE) {
+    const count = decided.get(signal) ?? 0;
+    if (count > mostDecided) {
+      dominant = signal;
+      mostDecided = count;
+    }
+  }
+  return dominant;
 }
 
 /**
@@ -1687,6 +1868,23 @@ export interface ComposeSessionRowsResult {
    * appears in the fill the way `citationRecheckQueued`'s does.
    */
   readonly citationRevalidationPending: ReadonlySet<string>;
+  /**
+   * `[D-331]`: which F2.19 signal decided the presented within-course grouping — see
+   * {@link dominantGroupingSignal} and the module doc's "`[D-331]`" section. Optional only so a
+   * hand-built fixture predating this field remains valid, the same pattern
+   * {@link containmentDropped} uses; `composeSessionRows` always sets it.
+   */
+  readonly groupingSignal?: GroupingSignal;
+  /**
+   * `[D-331]`: what this SELECTION weighed and did not take, each with why, by id — other
+   * eligible courses (course grain), the session's own concepts whose group did not fit or that
+   * yielded to a part (concept grain), and instruments withheld under `[D-330]` (instrument
+   * grain, the same ids {@link citationRevalidationPending} names). The fill's own set-asides
+   * (a selected concept no instrument of which got a slot) are added by
+   * {@link buildComposedStudySession}, which runs the fill. Optional for the same fixture reason
+   * as {@link groupingSignal}; `composeSessionRows` always sets it.
+   */
+  readonly setAside?: CompositionSetAside;
 }
 
 /**
@@ -1888,6 +2086,9 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   // same `orderedBlocks` scope `obligationClasses` above uses), never the full candidate pool.
   const citationRecheckQueued = new Set<string>();
   const citationRevalidationPending = new Set<string>();
+  // `[D-331]`: the same withheld ids, in the order met, each with the concept it was composed
+  // under — the instrument grain of `setAside` below. Filled alongside the set, never instead of it.
+  const setAsideInstruments: SetAsideInstrument[] = [];
   for (const c of orderedBlocks) {
     for (const record of instruments.instrumentsFor(c.row.conceptKey)) {
       // `[D-330]`: `'stale'` (a confirmed digest disagreement) and `[D-351]`'s pending fact are
@@ -1900,12 +2101,48 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
           input.citationPendingRevalidation,
         )
       ) {
+        if (!citationRevalidationPending.has(record.instrumentId)) {
+          setAsideInstruments.push({
+            instrumentId: record.instrumentId,
+            conceptKey: c.row.conceptKey,
+            reason: 'cited-passage-changed',
+          });
+        }
         citationRevalidationPending.add(record.instrumentId);
       } else if ((input.citationFreshness?.get(record.instrumentId) ?? 'unknown') === 'unknown') {
         citationRecheckQueued.add(record.instrumentId);
       }
     }
   }
+
+  // `[D-331]`: the selection's own set-asides — see `ComposeSessionRowsResult.setAside`. Read off
+  // the facts the selection above already decided (`focusResult`, `chosenKeys`, `classified`,
+  // `containment`); nothing here feeds back into `orderedRows`.
+  const sessionCourses: ReadonlySet<string> =
+    focusResult !== undefined ? new Set([focusResult.dominantCourse]) : new Set(courses);
+  const setAsideCourses: SetAsideCourse[] =
+    focusResult === undefined
+      ? []
+      : [...courses]
+          .filter((course) => course !== focusResult.dominantCourse)
+          .sort()
+          .map((courseId) => ({ courseId, reason: 'another-course-chosen' }));
+  const setAsideConcepts: SetAsideConcept[] = [
+    ...classified
+      .filter((c) => sessionCourses.has(c.row.course) && !chosenKeys.has(c.row.conceptKey))
+      .sort(overdueFirst)
+      .map((c): SetAsideConcept => ({ conceptKey: c.row.conceptKey, reason: 'did-not-fit' })),
+    // C7.9 ran over the whole pool before [STEER-1]'s filter; only a yielded concept she could
+    // have been served here (inside her steering, in this session's course) was set aside by it.
+    ...containment.dropped
+      .filter(
+        (row) =>
+          sessionCourses.has(row.course) &&
+          (courseFilter === undefined || courseFilter.includes(row.course)) &&
+          (conceptIdFilter === undefined || conceptIdFilter.includes(row.conceptKey)),
+      )
+      .map((row): SetAsideConcept => ({ conceptKey: row.conceptKey, reason: 'yields-to-part' })),
+  ];
 
   return {
     orderedRows,
@@ -1917,6 +2154,18 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     containmentDropped: containment.dropped,
     citationRecheckQueued,
     citationRevalidationPending,
+    groupingSignal: dominantGroupingSignal(
+      orderedBlocks,
+      relatedConceptKeys,
+      assessmentContext,
+      arrivalDays,
+      asOf,
+    ),
+    setAside: {
+      courses: setAsideCourses,
+      concepts: setAsideConcepts,
+      instruments: setAsideInstruments,
+    },
     // `[FOCUS-3]`'s echo discipline, unchanged by `[FOCUS-5]`'s default flip:
     // the `focusPolicy` field is echoed only when the caller explicitly
     // supplied one (even `'every-course'` explicitly), never synthesised
@@ -2042,6 +2291,27 @@ export interface ComposedStudySession {
   readonly citationRecheckQueued: ReadonlySet<string>;
   /** See `ComposeSessionRowsResult.citationRevalidationPending`. */
   readonly citationRevalidationPending: ReadonlySet<string>;
+  /**
+   * `[D-331]` — see `ComposeSessionRowsResult.groupingSignal`. Optional only so a hand-built
+   * fixture predating this field remains valid; `buildComposedStudySession` always sets it.
+   */
+  readonly groupingSignal?: GroupingSignal;
+  /**
+   * `[D-331]`: the whole composition's set-asides — `ComposeSessionRowsResult.setAside` plus the
+   * fill's own: a selected concept no instrument of which got a slot (`'did-not-fit'`), or with
+   * nothing to practise it (`'no-instruments'`). A selected concept whose instruments all sit in
+   * the session under another concept is in the session, so it is not listed; one whose
+   * instruments were all withheld is listed at the instrument grain only. Optional for the same
+   * fixture reason; `buildComposedStudySession` always sets it.
+   */
+  readonly setAside?: CompositionSetAside;
+  /**
+   * `[D-331]`: `instrumentId` → the concept key each item of `model.items` was composed under —
+   * see the module doc's "`[D-331]`" section for how it is recovered and why an ambiguous item
+   * is absent rather than guessed. Optional for the same fixture reason;
+   * `buildComposedStudySession` always sets it.
+   */
+  readonly itemConceptKeys?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -2088,6 +2358,72 @@ function withholdInstruments(
         .filter((record) => !withheldInstrumentIds.has(record.instrumentId));
     },
   };
+}
+
+/**
+ * `[D-331]`: the concept key each served item was composed under — see the module doc's
+ * "`[D-331]`" section. `build.ts`'s fill attributes an instrument naming several concepts to the
+ * row whose queue took it and stamps that row's display name and course on the item, so the
+ * rows sharing the item's course and name are the only candidates; when two share them, the ones
+ * whose own instruments contain the item narrow it; anything still ambiguous is left out.
+ */
+function attributeItemConceptKeys(
+  items: readonly StudySessionItem[],
+  orderedRows: readonly GapRow[],
+  instruments: ConceptInstrumentIndex,
+): ReadonlyMap<string, string> {
+  const rowsByCourseAndName = new Map<string, GapRow[]>();
+  for (const row of orderedRows) {
+    const key = JSON.stringify([row.course, row.conceptName]);
+    const bucket = rowsByCourseAndName.get(key);
+    if (bucket === undefined) rowsByCourseAndName.set(key, [row]);
+    else bucket.push(row);
+  }
+  const keys = new Map<string, string>();
+  for (const item of items) {
+    const candidates = rowsByCourseAndName.get(JSON.stringify([item.course, item.conceptName]));
+    if (candidates === undefined) continue;
+    const narrowed =
+      candidates.length === 1
+        ? candidates
+        : candidates.filter((row) =>
+            instruments
+              .instrumentsFor(row.conceptKey)
+              .some((record) => record.instrumentId === item.instrumentId),
+          );
+    const only = narrowed.length === 1 ? narrowed[0] : undefined;
+    if (only !== undefined) keys.set(item.instrumentId, only.conceptKey);
+  }
+  return keys;
+}
+
+/**
+ * `[D-331]`: the fill's own set-asides, over the selection's rows in session order — see
+ * `ComposedStudySession.setAside`'s doc for what is and is not listed, and why.
+ */
+function fillSetAsideConcepts(
+  orderedRows: readonly GapRow[],
+  instruments: ConceptInstrumentIndex,
+  withheld: ReadonlySet<string>,
+  items: readonly StudySessionItem[],
+  itemConceptKeys: ReadonlyMap<string, string>,
+): readonly SetAsideConcept[] {
+  const servedInstrumentIds = new Set(items.map((item) => item.instrumentId));
+  const servedConceptKeys = new Set(itemConceptKeys.values());
+  const out: SetAsideConcept[] = [];
+  for (const row of orderedRows) {
+    if (servedConceptKeys.has(row.conceptKey)) continue;
+    const records = instruments.instrumentsFor(row.conceptKey);
+    if (records.length === 0) {
+      out.push({ conceptKey: row.conceptKey, reason: 'no-instruments' });
+      continue;
+    }
+    const available = records.filter((record) => !withheld.has(record.instrumentId));
+    if (available.length === 0) continue;
+    if (available.every((record) => servedInstrumentIds.has(record.instrumentId))) continue;
+    out.push({ conceptKey: row.conceptKey, reason: 'did-not-fit' });
+  }
+  return out;
 }
 
 /**
@@ -2170,6 +2506,29 @@ export function buildComposedStudySession(
     courseBudgetSeconds: composed.courseSeconds,
   });
 
+  // `[D-331]`: the composition's own account, read off the fill just run — see the module doc's
+  // "`[D-331]`" section. Nothing below feeds `model`.
+  const itemConceptKeys = attributeItemConceptKeys(
+    model.items,
+    composed.orderedRows,
+    input.instruments,
+  );
+  const selectionSetAside = composed.setAside ?? { courses: [], concepts: [], instruments: [] };
+  const setAside: CompositionSetAside = {
+    courses: selectionSetAside.courses,
+    concepts: [
+      ...fillSetAsideConcepts(
+        composed.orderedRows,
+        input.instruments,
+        composed.citationRevalidationPending,
+        model.items,
+        itemConceptKeys,
+      ),
+      ...selectionSetAside.concepts,
+    ],
+    instruments: selectionSetAside.instruments,
+  };
+
   return {
     model,
     overflow: composed.overflow,
@@ -2178,6 +2537,9 @@ export function buildComposedStudySession(
     obligationClasses: composed.obligationClasses,
     citationRecheckQueued: composed.citationRecheckQueued,
     citationRevalidationPending: composed.citationRevalidationPending,
+    groupingSignal: composed.groupingSignal ?? 'none',
+    setAside,
+    itemConceptKeys,
     ...(composed.containmentDropped !== undefined
       ? { containmentDropped: composed.containmentDropped }
       : {}),
@@ -2241,11 +2603,44 @@ export function buildComposedStudySession(
  * comes from `session-builder/provider.ts`'s `composeStudySessionForRequest`, which already
  * carries `citationFreshness` (that file's `resolveCitationFreshness` call), so this function's
  * `[D-330]` removal reaches production without any further wiring.
+ *
+ * `[D-331]` (`ol-egov.141.89.10.65`): now the item list of
+ * {@link extendComposedStudySessionWithAccount}, which also carries the composition's own account
+ * through the extension. The items are byte-identical to what this function returned before, and
+ * an extension that changes nothing still returns `previous.model.items` itself.
  */
 export function extendComposedStudySession(
   input: BuildComposedStudySessionInput,
   previous: ComposedStudySession,
 ): readonly StudySessionItem[] {
+  return extendComposedStudySessionWithAccount(input, previous).model.items;
+}
+
+/**
+ * {@link extendComposedStudySession}'s growth, returned as the whole extended session with the
+ * composition's `[D-331]` account kept true through it (`ol-egov.141.89.10.65`).
+ *
+ * The session is exactly the one `main.ts`'s `extendDefaultStudySession` builds today from the
+ * item list (`{ ...previous, model: { ...previous.model, items } }`), so a caller switching to
+ * this function changes nothing it already shows; only the account fields differ from a plain
+ * spread, which would carry `previous`'s account unchanged and leave every appended item without
+ * a concept key:
+ *
+ * - `itemConceptKeys`: each item's key as `previous` recorded it, else as the wider composition
+ *   recorded it (appended items);
+ * - `setAside`: the other courses as `previous` set them aside (the extension is pinned to the
+ *   same course and does not re-weigh them); the wider composition's concepts and withheld
+ *   instruments, less anything now in the session; plus every `previous` item this extension
+ *   dropped under `[D-330]`, as `'cited-passage-changed'` (the only removal this function applies);
+ * - `groupingSignal`: `previous`'s, unchanged. F2.22 states the composition once, at the start,
+ *   and an extension grows that same composition rather than restating it.
+ *
+ * Returns `previous` itself when nothing was appended and nothing removed.
+ */
+export function extendComposedStudySessionWithAccount(
+  input: BuildComposedStudySessionInput,
+  previous: ComposedStudySession,
+): ComposedStudySession {
   const widened = buildComposedStudySession(input);
   // `[D-330]`/`[D-351]`: removal reaches an already-open session's own previously-served items,
   // not only what this wider recomposition would newly offer — read against THIS call's own
@@ -2263,7 +2658,7 @@ export function extendComposedStudySession(
   const somethingWasRemoved = retainedPrevious.length !== previous.model.items.length;
   const alreadyServed = new Set(retainedPrevious.map((item) => item.instrumentId));
   const appended = widened.model.items.filter((item) => !alreadyServed.has(item.instrumentId));
-  if (appended.length === 0 && !somethingWasRemoved) return previous.model.items;
+  if (appended.length === 0 && !somethingWasRemoved) return previous;
   // A removal reopens gaps in `position` (e.g. 1, 2, 3 with 2 removed) that appending after
   // `retainedPrevious.length` alone would collide with — renumbered only when something was
   // actually removed, so the ordinary append-only path keeps every retained item's own
@@ -2271,11 +2666,53 @@ export function extendComposedStudySession(
   const renumberedPrevious = somethingWasRemoved
     ? retainedPrevious.map((item, index) => ({ ...item, position: index + 1 }))
     : retainedPrevious;
-  return [
+  const items: readonly StudySessionItem[] = [
     ...renumberedPrevious,
     ...appended.map((item, index) => ({
       ...item,
       position: renumberedPrevious.length + index + 1,
     })),
   ];
+
+  // `[D-331]`: the account, carried through — see this function's own doc. Nothing below feeds
+  // `items`.
+  const itemConceptKeys = new Map<string, string>();
+  for (const item of items) {
+    const key =
+      previous.itemConceptKeys?.get(item.instrumentId) ??
+      widened.itemConceptKeys?.get(item.instrumentId);
+    if (key !== undefined) itemConceptKeys.set(item.instrumentId, key);
+  }
+  const inSession = new Set(items.map((item) => item.instrumentId));
+  const conceptsInSession = new Set(itemConceptKeys.values());
+  const widenedSetAside = widened.setAside ?? { courses: [], concepts: [], instruments: [] };
+  const removed: SetAsideInstrument[] = [];
+  for (const item of previous.model.items) {
+    if (alreadyServed.has(item.instrumentId)) continue;
+    const conceptKey =
+      previous.itemConceptKeys?.get(item.instrumentId) ??
+      widenedSetAside.instruments.find((entry) => entry.instrumentId === item.instrumentId)
+        ?.conceptKey;
+    if (conceptKey !== undefined) {
+      removed.push({
+        instrumentId: item.instrumentId,
+        conceptKey,
+        reason: 'cited-passage-changed',
+      });
+    }
+  }
+  const listed = new Set<string>();
+  const setAsideInstruments: SetAsideInstrument[] = [];
+  for (const entry of [...removed, ...widenedSetAside.instruments]) {
+    if (inSession.has(entry.instrumentId) || listed.has(entry.instrumentId)) continue;
+    listed.add(entry.instrumentId);
+    setAsideInstruments.push(entry);
+  }
+  const setAside: CompositionSetAside = {
+    courses: previous.setAside?.courses ?? widenedSetAside.courses,
+    concepts: widenedSetAside.concepts.filter((entry) => !conceptsInSession.has(entry.conceptKey)),
+    instruments: setAsideInstruments,
+  };
+
+  return { ...previous, model: { ...previous.model, items }, setAside, itemConceptKeys };
 }
