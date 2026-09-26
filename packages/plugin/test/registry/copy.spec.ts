@@ -42,6 +42,9 @@ import {
   WITHDRAW_INSTRUMENT_ACTION,
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
+  WITHHELD_EDIT_ACTION,
+  WITHHELD_SECTION_HEADING,
+  withheldItemLine,
 } from '../../src/registry/copy.js';
 
 function instrument(
@@ -404,5 +407,70 @@ describe('instrumentMixLine (frame 01\'s "3 Q&A · 1 cloze · 2 MCQ")', () => {
       instrument('qa', true),
     ]);
     expect(line).toBe('2 Q&A · 1 cloze · 1 MCQ');
+  });
+});
+
+// Scenario: olea-service/features/F2-review.md — "F2.23 / [D-334] — the
+// withheld-item sentence names the defect, never the internal word, never
+// framed as her performance", tagged `@auto:plugin/registry/copy.spec`.
+describe('withheldItemLine ([D-334])', () => {
+  it('never prints the internal word "withheld" itself (vocabulary registry §23)', () => {
+    const reasons: readonly ['mcq' | 'qa' | 'cloze', string][] = [
+      ['mcq', 'missing-stem'],
+      ['mcq', 'missing-answer'],
+      ['mcq', 'repeated-field'],
+      ['mcq', 'insufficient-distractors'],
+      ['mcq', 'duplicate-option'],
+      ['mcq', 'empty-value'],
+      ['mcq', 'unknown-field'],
+      ['mcq', 'corrupted-or-unterminated'],
+      ['mcq', 'unresolved-asset'],
+      ['qa', 'missing-front'],
+      ['qa', 'missing-back'],
+      ['qa', 'corrupted-or-unterminated'],
+      ['qa', 'unresolved-asset'],
+      ['cloze', 'unterminated-delimiter'],
+    ];
+    for (const [kind, reason] of reasons) {
+      const line = withheldItemLine(kind, reason);
+      expect(line.toLowerCase()).not.toContain('withheld');
+      // Never framed as her performance — a fact about the vault/Olea, never a claim about her.
+      expect(line.toLowerCase()).not.toMatch(/you (wrote|made|forgot|should)/);
+    }
+    expect(WITHHELD_SECTION_HEADING.toLowerCase()).not.toContain('withheld');
+  });
+
+  it('gives every kind/reason pair a distinct, non-fallback sentence', () => {
+    expect(withheldItemLine('mcq', 'missing-stem')).toBe(
+      "This multiple-choice item has no question text, so Olea isn't showing it.",
+    );
+    expect(withheldItemLine('qa', 'missing-front')).toBe(
+      "This card has no question side, so Olea isn't showing it.",
+    );
+    expect(withheldItemLine('cloze', 'unterminated-delimiter')).toBe(
+      "This cloze deletion never closes its blank, so Olea isn't showing it.",
+    );
+  });
+
+  it('falls back to an honest, non-guessing sentence for a reason it does not recognise, rather than throwing', () => {
+    expect(() =>
+      withheldItemLine('mcq', 'a-future-reason-this-file-does-not-know-about'),
+    ).not.toThrow();
+    expect(withheldItemLine('mcq', 'a-future-reason-this-file-does-not-know-about')).toMatch(
+      /Olea/,
+    );
+  });
+
+  it("M5's own clarification: an unresolved embedded asset is never said to be permanently broken or deleted (D-334's clarification, since the underlying check cannot tell the two apart)", () => {
+    for (const kind of ['mcq', 'qa'] as const) {
+      const line = withheldItemLine(kind, 'unresolved-asset').toLowerCase();
+      expect(line).not.toContain('permanently');
+      expect(line).not.toContain('deleted');
+      expect(line).not.toContain('broken');
+    }
+  });
+
+  it("WITHHELD_EDIT_ACTION is a plain verb, matching every other registry action label's register", () => {
+    expect(WITHHELD_EDIT_ACTION).toBe('Edit it');
   });
 });

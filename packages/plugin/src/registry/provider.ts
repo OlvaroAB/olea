@@ -176,6 +176,9 @@ import {
   type DisputeLogRecord,
   enumerateVaultInstruments,
   HOLDING_CUT,
+  type InvalidCardReport,
+  type InvalidClozeReport,
+  type InvalidMcqReport,
   listSameAsLinkRecords,
   pruneConcept as pruneConceptOverride,
   type RankOracleOptions,
@@ -209,7 +212,7 @@ import {
   declineSameAsIdentityProposal,
   type SameAsIdentityProposal,
 } from './same-as-identity.js';
-import type { RegistryViewDeps, RegistryViewState } from './view.js';
+import type { RegistryViewDeps, RegistryViewState, RegistryWithheldItem } from './view.js';
 
 /**
  * Vitality's own module doc (`../../core/mastery/rollup.ts`) names the
@@ -622,6 +625,54 @@ async function courseRankingsForNoteOffer(
 }
 
 /**
+ * `[D-334]` (functional scope C5.3, knowledge model R11): merges
+ * `enumeration.invalidMcqBlocks`/`.invalidCardBlocks`/`.invalidClozeBlocks` into the
+ * `RegistryWithheldItem[]` `./view.ts` renders on the registry's own withheld-items section — off
+ * the SAME `enumeration` `loadModel` below already walks for every other reading, no second vault
+ * pass. Duplicated from `../grove/provider.ts#withheldInstrumentsFromEnumeration` rather than
+ * imported — that file sits outside this bead's `owns`, the same "different bead's owns" reasoning
+ * this codebase already documents for its other small cross-bead duplicates (e.g. this file's own
+ * `disputesFromFiles`, mirroring `../grove/provider.ts`'s twin of the same name).
+ *
+ * **No `instrumentId`, no `conceptIds` here, on purpose.** Every one of these reports is a block
+ * that never reached `../../core/session/enumerate.ts`'s id-derivation or concept-binding step —
+ * see that module's own doc ("filtered out before... id derivation... ever sees it"). `[D-097]`'s
+ * reject action writes a `VerdictLogRecord`, which requires both fields plus `artifactProvenance`
+ * (a machine-generated artifact's task/prompt/model — absent by construction for a hand-authored
+ * item, which `[D-334]`/INV-6 also withholds this same way). This bead's report names the exact
+ * gap and proposes how to close it; nothing here fabricates either field to route around it.
+ */
+function withheldItemsFromEnumeration(enumeration: {
+  readonly invalidMcqBlocks: readonly InvalidMcqReport[];
+  readonly invalidCardBlocks: readonly InvalidCardReport[];
+  readonly invalidClozeBlocks: readonly InvalidClozeReport[];
+}): readonly RegistryWithheldItem[] {
+  return [
+    ...enumeration.invalidMcqBlocks.map(
+      (report): RegistryWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'mcq',
+        reason: report.block.reason,
+      }),
+    ),
+    ...enumeration.invalidCardBlocks.map(
+      (report): RegistryWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'qa',
+        reason: report.block.reason,
+      }),
+    ),
+    ...enumeration.invalidClozeBlocks.map(
+      (report): RegistryWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'cloze',
+        reason: report.block.reason,
+      }),
+    ),
+  ];
+}
+
+/**
  * The whole of `load()`'s composition, factored out so `acceptNoteOffer`
  * below can call it a second time at accept-time — see that method's own
  * doc for why a second full call, not a narrower re-derivation, is the
@@ -716,7 +767,15 @@ function createLoadModel(
         gatedConcepts,
       );
 
-      return { kind: 'model', model: gatedModel, identityProposals };
+      return {
+        kind: 'model',
+        model: gatedModel,
+        identityProposals,
+        // `[D-334]`: computed off the same `enumeration` this call already walked above — no
+        // second vault pass. See `withheldItemsFromEnumeration`'s own doc for what this omits and
+        // why.
+        withheldInstruments: withheldItemsFromEnumeration(enumeration),
+      };
     } catch (error) {
       console.error('Olea: could not compose the registry', error);
       return { kind: 'unavailable' };
@@ -833,6 +892,21 @@ export function createLocalRegistryProvider(
 
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       await openSourceLocationPort.open(location);
+    },
+
+    /**
+     * `[D-334]`'s "edit it" action: opens the note the withheld block lives in, via the same
+     * `openSourceLocationPort` every other click-through in this provider already uses. No
+     * `heading`/`blockId` to pass — a block this defective never reached the anchor-derivation
+     * step that would compute either (`withheldItemsFromEnumeration`'s own doc) — so this opens
+     * at the note alone, the same honest degrade `openSourceLocationPort`'s own callers already
+     * make when a location carries no finer grain (`sourceLocationLinktext`'s "block over heading
+     * over the bare note, never guessing past what location actually carries", `[D-171]`). Olea
+     * never edits her note itself (INV-6); the withholding clears on its own, read-time, the next
+     * time this view loads (R11).
+     */
+    async editWithheldItem(item: RegistryWithheldItem): Promise<void> {
+      await openSourceLocationPort.open({ sourcePath: item.notePath });
     },
 
     /**

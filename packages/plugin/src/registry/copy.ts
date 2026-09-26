@@ -410,3 +410,113 @@ export function instrumentLabel(instrumentType: 'qa' | 'cloze' | 'mcq'): string 
       return 'MCQ';
   }
 }
+
+/**
+ * `[D-334]`'s automatic-withholding surface (functional scope C5.3, knowledge model R11,
+ * vocabulary registry §23) — genuinely NEW copy, permitted for the same reason every other
+ * standing-affordance section in this file is: the ruling defines this surface. Registry §23's
+ * own words bind every string below: the internal word itself is **never printed**; one plain
+ * sentence names the defect; the framing is never about her performance, always about what Olea
+ * found and is doing about it (`... so Olea isn't showing it`, never `you made a mistake`).
+ *
+ * **`WITHHELD_ITEM_LINE_FALLBACK` is a defensive default, not a guess.** `withheldItemLine`
+ * switches over every reason value `../../core/instrument/types.ts` declares today
+ * (`McqInvalidReason`/`CardInvalidReason`/`ClozeInvalidReason`); the fallback exists only so a
+ * reason value this file has not yet been told about (a future `[D-334]` list amendment landing
+ * in core before this bead's copy catches up) still shows something honest and non-blaming rather
+ * than a blank row or a thrown error — it never claims a specific defect it cannot name.
+ *
+ * **M5's own clarification, honoured in the wording, not just the reason value.** The ruling's
+ * clarification distinguishes a genuinely missing embedded asset from one only temporarily
+ * unavailable through vault syncing or offline access, and says the latter must never be shown as
+ * permanently broken. `../../core/session/enumerate.ts`'s M5 check (`firstUnresolvedEmbed`,
+ * `embedResolves`) is a single vault-wide path-existence test with no separate signal for
+ * "temporarily unavailable" versus "genuinely absent" — see this bead's own report for why that
+ * gap sits in a file outside this bead's `owns` and could not be closed here. Given only one
+ * undifferentiated `'unresolved-asset'` reason to work from, the wording below says only what is
+ * actually known — "can't currently find" — and deliberately never says "permanently", "deleted"
+ * or "broken", so it does not overclaim a permanence the underlying check cannot establish.
+ *
+ * **No "reject it" action is offered here (yet).** `[D-334]` names it as the withheld item's
+ * second action, alongside edit — see this bead's report for exactly why: none of these reports
+ * carries an `instrumentId` or `conceptIds` (both required by `VerdictLogRecord`, the schema
+ * `[D-097]`'s reject action writes through — `../../core/session/enumerate.ts` filters every
+ * invalid block out before its id-derivation and concept-binding steps ever run), and a
+ * machine-generated artifact's `artifactProvenance` is required on that same schema where a
+ * hand-authored withheld item — which `[D-334]`/INV-6 explicitly also covers — has none to give.
+ * Inventing either would be exactly the guess D-005 and this codebase's "never invent" discipline
+ * forbid, so this file renders the one-sentence reason and the edit action only.
+ */
+export const WITHHELD_SECTION_HEADING = 'Not shown right now';
+
+export const WITHHELD_EDIT_ACTION = 'Edit it';
+
+const WITHHELD_ITEM_LINE_FALLBACK =
+  "Olea found a problem with this item it can't describe further, so Olea isn't showing it.";
+
+function withheldMcqLine(reason: string): string {
+  switch (reason) {
+    case 'missing-stem':
+      return "This multiple-choice item has no question text, so Olea isn't showing it.";
+    case 'missing-answer':
+      return "This multiple-choice item has no marked correct answer, so Olea isn't showing it.";
+    case 'repeated-field':
+      return "This multiple-choice item repeats one of its fields, so Olea isn't showing it.";
+    case 'insufficient-distractors':
+      return "This multiple-choice item doesn't have enough wrong answers to show, so Olea isn't showing it.";
+    case 'duplicate-option':
+      return "Two of this multiple-choice item's options read the same, so Olea isn't showing it.";
+    case 'empty-value':
+      return "One of this multiple-choice item's fields is blank, so Olea isn't showing it.";
+    case 'unknown-field':
+      return "This multiple-choice item has a field Olea doesn't recognise, so Olea isn't showing it.";
+    case 'corrupted-or-unterminated':
+      return "This multiple-choice item's text looks corrupted, or its block never closed, so Olea isn't showing it.";
+    case 'unresolved-asset':
+      return "This multiple-choice item points at an image or file Olea can't currently find in your vault, so Olea isn't showing it.";
+    default:
+      return WITHHELD_ITEM_LINE_FALLBACK;
+  }
+}
+
+function withheldQaLine(reason: string): string {
+  switch (reason) {
+    case 'missing-front':
+      return "This card has no question side, so Olea isn't showing it.";
+    case 'missing-back':
+      return "This card has no answer side, so Olea isn't showing it.";
+    case 'corrupted-or-unterminated':
+      return "This card's text looks corrupted, so Olea isn't showing it.";
+    case 'unresolved-asset':
+      return "This card points at an image or file Olea can't currently find in your vault, so Olea isn't showing it.";
+    default:
+      return WITHHELD_ITEM_LINE_FALLBACK;
+  }
+}
+
+function withheldClozeLine(reason: string): string {
+  switch (reason) {
+    case 'unterminated-delimiter':
+      return "This cloze deletion never closes its blank, so Olea isn't showing it.";
+    default:
+      return WITHHELD_ITEM_LINE_FALLBACK;
+  }
+}
+
+/**
+ * `[D-334]`'s one required sentence per withheld item — never the word itself, never a claim
+ * about her (registry §23). `kind`/`reason` are read as plain strings (never a per-kind reason
+ * union import) matching `../../grove/provider.ts#withheldInstrumentsFromEnumeration`'s own
+ * documented choice for the identical reason: the per-kind reason unions are not exported for
+ * this file to switch on exhaustively, and this file only ever needs the string back out.
+ */
+export function withheldItemLine(kind: 'mcq' | 'qa' | 'cloze', reason: string): string {
+  switch (kind) {
+    case 'mcq':
+      return withheldMcqLine(reason);
+    case 'qa':
+      return withheldQaLine(reason);
+    case 'cloze':
+      return withheldClozeLine(reason);
+  }
+}

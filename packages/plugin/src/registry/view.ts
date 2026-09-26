@@ -131,6 +131,7 @@ import {
   type RegistryInstrumentSummary,
   type RegistryModel,
   type RegistrySourceLocation,
+  type VaultPath,
 } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
@@ -182,6 +183,9 @@ import {
   WITHDRAW_INSTRUMENT_ACTION,
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
+  WITHHELD_EDIT_ACTION,
+  WITHHELD_SECTION_HEADING,
+  withheldItemLine,
 } from './copy.js';
 import type { SameAsIdentityProposal } from './same-as-identity.js';
 
@@ -284,12 +288,32 @@ function renameProposalLine(proposal: RenameProposal): string {
  */
 const FOCUSABLE_SELECTOR = 'button, input';
 
+/**
+ * `[D-334]`'s automatic-withholding surface (functional scope C5.3, knowledge model R11): one
+ * structurally-broken block, never nested under a concept row the way an ordinary
+ * `RegistryInstrumentSummary` is — a block this defective never reached concept binding at all
+ * (`../../core/session/enumerate.ts`'s own module doc: filtered out before ordinal counting, id
+ * derivation and concept binding ever run), so there is no concept row to attach it to. Mirrors
+ * `../grove/view.ts#GroveWithheldItem`'s shape exactly — duplicated rather than imported, the same
+ * "different bead's owns" reasoning `../grove/provider.ts`'s own module doc already gives for its
+ * sibling functions. `reason` is deliberately untyped by the per-kind reason union (see
+ * `./copy.ts#withheldItemLine`'s own doc) — this file only ever hands it to that function and
+ * never branches on which value it is.
+ */
+export interface RegistryWithheldItem {
+  readonly notePath: VaultPath;
+  readonly kind: 'mcq' | 'qa' | 'cloze';
+  readonly reason: string;
+}
+
 export type RegistryViewState =
   | {
       readonly kind: 'model';
       readonly model: RegistryModel;
       /** `[D-257]` (TRIAGE-6): every currently-resolvable F8.4a concept-identity proposal — see `./same-as-identity.ts`'s own doc for how this is built and why an empty array is the honest, expected value until a propose-side signal exists. */
       readonly identityProposals: readonly SameAsIdentityProposal[];
+      /** `[D-334]`: every currently-withheld structurally-broken block, computed off the SAME vault walk this state's `model` is built from — no second enumeration. Empty is the honest, expected value on a vault with no structurally-broken block. */
+      readonly withheldInstruments: readonly RegistryWithheldItem[];
     }
   | { readonly kind: 'unavailable' };
 
@@ -325,6 +349,17 @@ export interface RegistryViewDeps {
   readonly confirmIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
   /** F8.4a's identity-section decline (`[D-257]` TRIAGE-6) — a hard labelled negative, never a claim the two concepts differ. */
   readonly declineIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
+  /**
+   * `[D-334]`'s "edit it" action: takes her to the block in her note, the same click-through
+   * `deps.openSourceLocation` already gives a concept or instrument row — Olea never edits her
+   * note itself (INV-6); once the block parses cleanly the withholding clears on its own at the
+   * next `load()` (R11: a read-time projection, never stored), with no action from this view.
+   *
+   * **No `rejectWithheldItem` alongside it.** `[D-334]` names reject as the withheld item's other
+   * action; this bead's report explains why it is not built this round — a schema gap in files
+   * outside this bead's `owns`, not an oversight here.
+   */
+  readonly editWithheldItem: (item: RegistryWithheldItem) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
@@ -525,6 +560,13 @@ export class RegistryView extends ItemView {
     // select). See this file's module doc for the "kept apart from relation candidates" argument.
     this.renderIdentitySection(root, state.identityProposals);
 
+    // `[D-334]`: withheld items are a standing, top-level section — never nested per concept
+    // (they never reached concept binding at all, see `RegistryWithheldItem`'s own doc) and never
+    // gated by `this.filter`, matching `renderIdentitySection` immediately above for the same
+    // reason. Drawn before the filter chips/concept list, mirroring where `../grove/view.ts`
+    // places its own withheld-items list ("shown before the course grid").
+    this.renderWithheldSection(root, state.withheldInstruments);
+
     this.renderFilterChips(root, concepts);
 
     const visible = concepts.filter((entry) => matchesRegistryFilter(entry, this.filter));
@@ -648,6 +690,44 @@ export class RegistryView extends ItemView {
     const declineButton = actions.createEl('button', { text: IDENTITY_DECLINE_ACTION });
     declineButton.addEventListener('click', () => {
       void this.deps.declineIdentityProposal(proposal).then(() => this.refresh());
+    });
+  }
+
+  /**
+   * `[D-334]`'s automatic-withholding section (functional scope C5.3, knowledge model R11).
+   * Renders nothing when `items` is empty — the honest, expected state on a vault with no
+   * structurally-broken block — matching `renderIdentitySection`'s own "no empty heading" rule
+   * immediately above.
+   */
+  private renderWithheldSection(root: HTMLElement, items: readonly RegistryWithheldItem[]): void {
+    if (items.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-registry-withheld-section' });
+    section.createEl('h3', { text: WITHHELD_SECTION_HEADING });
+    for (const item of items) this.renderWithheldItem(section, item);
+  }
+
+  /**
+   * One withheld item: `[D-334]`'s one required sentence naming the defect (`./copy.ts`'s
+   * `withheldItemLine`, never the internal word itself), plus its one built action today, edit
+   * it — `deps.editWithheldItem`, the same click-through every other registry action uses to
+   * navigate rather than edit anything itself (INV-6). No refresh after the click: she is leaving
+   * to edit the note in Obsidian, and the withholding will not have cleared yet — the next
+   * `refresh()` (opening the tab again, or any other action that already triggers one) is what
+   * picks up a since-fixed block, exactly as `renderSourceLocations`' buttons already behave.
+   *
+   * **No reject-it button here** — see `RegistryViewDeps.editWithheldItem`'s own doc and this
+   * bead's report for exactly why.
+   */
+  private renderWithheldItem(root: HTMLElement, item: RegistryWithheldItem): void {
+    const row = root.createDiv({ cls: 'olea-registry-withheld-item' });
+    row.createEl('p', { text: withheldItemLine(item.kind, item.reason) });
+    const actions = row.createDiv({ cls: 'olea-registry-withheld-actions' });
+    const editButton = actions.createEl('button', {
+      cls: 'olea-button-quiet',
+      text: WITHHELD_EDIT_ACTION,
+    });
+    editButton.addEventListener('click', () => {
+      void this.deps.editWithheldItem(item);
     });
   }
 

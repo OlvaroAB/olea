@@ -1525,3 +1525,77 @@ describe('createLocalRegistryProvider — the note-offer gate sees the full vaul
     expect(withUnrelated.concepts[0]?.tier).toBe(withoutUnrelated.concepts[0]?.tier);
   });
 });
+
+// Scenario: olea-service/features/F2-review.md — "F2.23 / [D-334] — a withheld
+// item shows its defect and an edit-it action on the registry surface",
+// tagged `@auto:plugin/registry/provider.spec`.
+describe('createLocalRegistryProvider — withheld items ([D-334])', () => {
+  it('lists a structurally-broken MCQ block as withheld, with its note, kind and reason, off the same vault walk', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      'Notes/broken.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    });
+
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+
+    expect(state.withheldInstruments).toEqual([
+      { notePath: 'Notes/broken.md', kind: 'mcq', reason: 'insufficient-distractors' },
+    ]);
+    // The broken block never became a browsable instrument on any concept row.
+    const brokenConcept = state.model.concepts.find((c) => c.displayName === 'Concept A');
+    expect(brokenConcept?.instruments).toHaveLength(1);
+  });
+
+  it('reports no withheld items on a vault with nothing structurally broken — the honest, expected default', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.withheldInstruments).toEqual([]);
+  });
+
+  it('editWithheldItem opens the note the block lives in, via the injected openSourceLocationPort, with no heading or block id to offer', async () => {
+    const opened: RegistrySourceLocation[] = [];
+    const openSourceLocationPort: OpenSourceLocationPort = {
+      open: async (location) => {
+        opened.push(location);
+      },
+    };
+    const provider = createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      openSourceLocationPort,
+    });
+
+    await provider.editWithheldItem({
+      notePath: 'Notes/broken.md',
+      kind: 'mcq',
+      reason: 'insufficient-distractors',
+    });
+    expect(opened).toEqual([{ sourcePath: 'Notes/broken.md' }]);
+  });
+});
