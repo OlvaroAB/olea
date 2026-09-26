@@ -1363,6 +1363,32 @@ export interface RequestUrlResponse {
  * `fetch()` rather than a throw, so the type seam is honest rather than a
  * landmine for whichever later tranche's fixture does click that button.
  */
+/**
+ * Obsidian's bundled `loadPdfJs` (`obsidian.d.ts:3870`, obsidian 1.13.1).
+ * Added to unblock every workbench production/e2e build — a regression from
+ * client commit 9e15206 (`ol-egov.141.89.10.38` part 2 caught it): `main.ts`
+ * now composes `createObsidianPageRenderer`
+ * (`packages/plugin/src/ingestion/page-renderer.ts`) into every mount,
+ * including this workbench's, and that file is `packages/plugin`'s one
+ * sanctioned `loadPdfJs` importer (INV-1) — so the moment ANY full
+ * production bundle pulls `main.ts` in transitively, esbuild needs this name
+ * to exist here too, not only under a narrower test import.
+ *
+ * **Always rejects — never a stub success.** pdf.js itself ships inside
+ * Obsidian's real app shell, not inside this workbench, and there is nothing
+ * honest to fake a real render against (this file's own head-of-file rule:
+ * chrome only, never product logic — a real page-render RESULT would not be
+ * chrome). `PdfJsPageRenderer.renderPage`
+ * (`packages/plugin/src/ingestion/page-render/pdf-page-renderer.ts`) already
+ * catches a rejecting `loadPdfJs` and reports the typed `renderer-
+ * unavailable` `PageRenderError` — so a workbench mount takes the exact same
+ * "no renderer available" path a real host would take if Obsidian's own
+ * pdf.js failed to load, never a fabricated render.
+ */
+export async function loadPdfJs(): Promise<never> {
+  throw new Error('[obsidian-shim] loadPdfJs: no PDF renderer is available in the workbench.');
+}
+
 export async function requestUrl(request: RequestUrlParam | string): Promise<RequestUrlResponse> {
   const params: RequestUrlParam = typeof request === 'string' ? { url: request } : request;
   const response = await fetch(params.url, {

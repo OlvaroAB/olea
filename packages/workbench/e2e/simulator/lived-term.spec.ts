@@ -28,11 +28,11 @@ import {
   rateNextDue,
   readDueCount,
   resetSimulator,
-  sessionNotComposedNote,
   SIMULATOR_STATE_ID,
   scrubberDateLocator,
   scrubberLocator,
   scrubTo,
+  sessionNotComposedNote,
 } from './helpers.js';
 
 /**
