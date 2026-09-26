@@ -406,3 +406,59 @@ export function isKnownTaskId(id: string): id is KnownTaskId {
  * URLs, which is a small thing, but free to avoid.
  */
 export const TASK_ENDPOINT_PATH = '/v1/task' as const;
+
+/**
+ * `[D-333]` (whole-workflow spend allowance) / `[D-341]` (enforceable, not
+ * observed, reservations): an OPTIONAL field a task request may carry, naming
+ * what remains — in US dollars, the same unit the spend ledger already prices
+ * in (`olea-service/src/harness/neurons.ts`'s `neuronsToUsd`) — of the calling
+ * background workflow's shared spend allowance at the moment this call is
+ * made.
+ *
+ * **Absent means today's behaviour exactly** — no allowance is in force, the
+ * Worker's retry loop runs unbounded within its own existing limits
+ * (`olea-service/src/structuredOutput.ts`'s `maxAttempts`/`[D-128]`), same as
+ * every call before this field existed. Present: the Worker bounds its own
+ * retry loop so a call's worst case cannot exceed it, and refuses outright
+ * (sending nothing upstream) when even one attempt cannot be covered — see
+ * that file's `runStructuredGeneration` `remainingAllowanceUsd`/
+ * `worstCaseAttemptCostUsd` parameters, which this field's value is meant to
+ * reach.
+ *
+ * **Not yet part of `requestEnvelope`** (`packages/contracts/src/worker.ts`)
+ * or `WorkerTaskRequest` (`packages/core/src/retrieval/workerProvider.ts`) —
+ * both outside this bead's owned paths (`ol-3ux7.103`). Declared here,
+ * against the closed task-id catalogue this file already owns, so both sides
+ * of the wire have one shared name and unit to build against; see this
+ * bead's report for the exact lines the envelope and `WorkerTaskRequest`
+ * still need to carry it structurally rather than just by convention.
+ *
+ * A structural intersection, not a zod schema: the envelope's own
+ * `payload: z.unknown()` already lets a request carry arbitrary extra keys
+ * the Worker chooses to read informally (see `structuredOutput.ts`'s module
+ * doc on reading it "structurally" before the contract is formally
+ * vendored), and this type exists so every caller and test spells the same
+ * field name and comment rather than inventing their own.
+ */
+export interface RemainingAllowanceField {
+  /**
+   * USD remaining in the calling workflow's shared allowance. `undefined`
+   * (the field omitted entirely, never `0` standing in for "unknown") means
+   * no allowance is in force for this call.
+   */
+  readonly remainingAllowanceUsd?: number;
+}
+
+/**
+ * The one validation rule every reader of `remainingAllowanceUsd` applies,
+ * shared here so a vendored zod schema and a pre-vendoring structural read
+ * (`olea-service/src/index.ts`, reading the raw request body before this
+ * field exists in `requestEnvelope`) agree on what counts as present:
+ * finite, non-negative. Anything else — a string, `NaN`, `Infinity`, a
+ * negative number — is treated as the field being absent, never as a
+ * malformed request: this is a courtesy field a sender may omit, not one a
+ * malformed value should ever 400 over.
+ */
+export function isValidRemainingAllowanceUsd(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}

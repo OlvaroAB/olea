@@ -117,6 +117,35 @@ describe('sendWorkerTask — the request it sends', () => {
     expect(captured.headers['content-type']).toBe('application/json');
     expect(JSON.parse(captured.body)).toEqual(REQUEST);
   });
+
+  // [D-333]/[D-341] (ol-3ux7.103): the optional remaining-allowance courtesy
+  // field, present on the wire when the caller sets it, absent (today's
+  // behaviour exactly) when it does not.
+  it('carries remainingAllowanceUsd on the wire when the caller sets it', async () => {
+    const captures: CapturedRequest[] = [];
+    const httpRequest: HttpRequestFn = async (params) => {
+      captures.push(params);
+      return { status: 200, text: JSON.stringify({ ok: true, stamp: {}, result: {} }) };
+    };
+
+    await sendWorkerTask(httpRequest, CONFIG, { ...REQUEST, remainingAllowanceUsd: 0.42 });
+
+    const captured = captures[0] as CapturedRequest;
+    expect(JSON.parse(captured.body)).toEqual({ ...REQUEST, remainingAllowanceUsd: 0.42 });
+  });
+
+  it('sends no remainingAllowanceUsd key at all when the caller omits it — unchanged wire shape', async () => {
+    const captures: CapturedRequest[] = [];
+    const httpRequest: HttpRequestFn = async (params) => {
+      captures.push(params);
+      return { status: 200, text: JSON.stringify({ ok: true, stamp: {}, result: {} }) };
+    };
+
+    await sendWorkerTask(httpRequest, CONFIG, REQUEST);
+
+    const captured = captures[0] as CapturedRequest;
+    expect(Object.keys(JSON.parse(captured.body))).not.toContain('remainingAllowanceUsd');
+  });
 });
 
 describe('WorkerHttpTransport — `[D-123]` usage figures reach `onCallRecorded`', () => {

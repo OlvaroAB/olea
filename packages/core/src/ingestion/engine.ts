@@ -76,6 +76,8 @@ import {
   MAX_ATTEMPTS,
   nextUtcMidnightMs,
   pacingDelayMs,
+  spendFromWorkflowAllowance,
+  workflowAllowanceExhausted,
 } from './budget.js';
 import type { EnqueueDebouncePolicy } from './enqueue-debounce.js';
 import { evaluateEnqueueDebounce } from './enqueue-debounce.js';
@@ -139,7 +141,23 @@ export type JobPriorityComparator = (a: PersistedJob, b: PersistedJob) => number
  * for — or confused with, when recording an outcome — the job already on
  * record for an earlier version of the same content.
  */
-type StoredJob = PersistedJob & { readonly sourceUnitId?: string; readonly workflowVersion?: string };
+type StoredJob = PersistedJob & {
+  readonly sourceUnitId?: string;
+  readonly workflowVersion?: string;
+  /**
+   * `[D-333]`/`[D-341]` (`ol-3ux7.103`): what remains of this job's own
+   * background-workflow spend allowance, set at `enqueue`-time from
+   * `EngineDeps.workflowAllowance.allowanceUsd` and spent by
+   * `budget.ts`'s `spendFromWorkflowAllowance` after every attempt — success
+   * or failure alike. `undefined` (every job enqueued before this feature
+   * existed, and every job enqueued while `EngineDeps.workflowAllowance` is
+   * not configured): no allowance tracking applies to this job, unchanged
+   * behaviour. See that type's own doc for why this stays a `StoredJob`-only
+   * addition rather than a `PersistedJob` field (the same posture
+   * `sourceUnitId`/`workflowVersion` already take, for the same reason).
+   */
+  readonly workflowAllowanceRemainingUsd?: number;
+};
 
 /**
  * `EnqueueInput` (`types.ts`) plus the same optional `workflowVersion` this
@@ -164,6 +182,29 @@ export type VersionedEnqueueInput = EnqueueInput & { readonly workflowVersion?: 
  */
 function sameStoredJob(a: StoredJob, b: StoredJob): boolean {
   return a.contentHash === b.contentHash && a.workflowVersion === b.workflowVersion;
+}
+
+/**
+ * `[D-333]`/`[D-341]` (`ol-3ux7.103`) — the size of one background workflow's
+ * (one job's) shared spend allowance, and its enforceable per-attempt
+ * ceiling. Optional and additive: `EngineDeps.workflowAllowance`'s own doc
+ * covers the omitted case. This module supplies the mechanism only; sizing
+ * these two numbers from real production spend is a named follow-up, not
+ * built here (`budget.ts`'s module doc).
+ */
+export interface WorkflowAllowanceConfig {
+  /** [D-333]: this job's whole allowance across every attempt it makes, USD. */
+  readonly allowanceUsd: number;
+  /**
+   * [D-341]: the enforceable worst-case USD cost of one Worker call this
+   * queue's jobs make — never an observed or merely declared figure (the
+   * same discipline `olea-service/src/harness/workflowBudget.ts`'s
+   * `AttemptCeiling` argues for at length). A caller with several distinct
+   * per-task ceilings composes several engines, or picks the worst across
+   * its job kinds — this type carries one number because `IngestionQueueEngine`
+   * itself is job-kind-agnostic (module doc, "Priority seam").
+   */
+  readonly perAttemptCeilingUsd: number;
 }
 
 export interface EngineDeps {
@@ -202,6 +243,22 @@ export interface EngineDeps {
    * cited in the module doc above.
    */
   readonly priority?: JobPriorityComparator;
+  /**
+   * `[D-333]`/`[D-341]` (`ol-3ux7.103`): one spend allowance per background
+   * workflow. Omitted (every current production caller): `enqueue` never
+   * sets a job's `workflowAllowanceRemainingUsd`, `tick()`'s allowance gate
+   * never fires, and `recordOutcome()` never spends against it — behaviour
+   * is byte-identical to before this option existed. Supplied: every newly
+   * `enqueue`d job starts with `allowanceUsd` remaining; each attempt spends
+   * `perAttemptCeilingUsd` from it, success or failure alike ([D-333]:
+   * "usage including failed calls"); when what remains can no longer cover
+   * one more attempt, the job is deferred (`'transient-error'`, resumable —
+   * never dropped, never marked `'failed'`) rather than run past its
+   * allowance. See the module doc's "Priority seam" note for why this, like
+   * `priority`, is one engine-wide config rather than a per-job value: a
+   * caller needing several distinct allowances composes several engines.
+   */
+  readonly workflowAllowance?: WorkflowAllowanceConfig;
 }
 
 /** Any job left `in-flight` belongs to a session that died before recording an outcome — requeue it (see the module doc's "persist-before-await" note). Returns the corrected array and whether anything changed. */
@@ -232,6 +289,7 @@ export class IngestionQueueEngine {
   private readonly random: RandomSource;
   private readonly enqueueDebounce: EnqueueDebouncePolicy | null;
   private readonly priority: JobPriorityComparator | null;
+  private readonly workflowAllowance: WorkflowAllowanceConfig | null;
 
   private jobs: StoredJob[];
   private headroom: number | null;
@@ -254,6 +312,7 @@ export class IngestionQueueEngine {
     this.random = deps.random ?? defaultRandom;
     this.enqueueDebounce = deps.enqueueDebounce ?? null;
     this.priority = deps.priority ?? null;
+    this.workflowAllowance = deps.workflowAllowance ?? null;
     this.jobs = [...jobs];
     this.headroom = headroom;
     this.budgetResumeAt = budgetResumeAt;
@@ -380,6 +439,12 @@ export class IngestionQueueEngine {
       attempts: 0,
       ...(input.sourceUnitId !== undefined ? { sourceUnitId: input.sourceUnitId } : {}),
       ...(input.workflowVersion !== undefined ? { workflowVersion: input.workflowVersion } : {}),
+      // [D-333] (ol-3ux7.103): this job's own background-workflow allowance
+      // starts full. Absent when `EngineDeps.workflowAllowance` is not
+      // configured — see that field's own doc.
+      ...(this.workflowAllowance === null
+        ? {}
+        : { workflowAllowanceRemainingUsd: this.workflowAllowance.allowanceUsd }),
     };
     this.jobs.push(job);
     await this.persist();
@@ -487,16 +552,57 @@ export class IngestionQueueEngine {
     // biome-ignore lint/style/noNonNullAssertion: index came from findIndex above and is bounds-checked.
     const eligible = this.jobs[index]!;
 
+    // [D-333]/[D-341] (ol-3ux7.103): refuse before sending anything, never
+    // after. If this job's own background-workflow allowance cannot cover
+    // even one more attempt at its enforceable ceiling, defer it now —
+    // resumable, never dropped and never `'failed'` — instead of calling the
+    // runner. Mirrors `olea-service/src/harness/workflowBudget.ts`'s
+    // `reserve()` refusing before a call exists, on the client's own side of
+    // the wire. Does not consume an attempt (none was made), so it never
+    // interacts with `MAX_ATTEMPTS`'s unrelated cap. No-op when
+    // `EngineDeps.workflowAllowance` is not configured, or this job predates
+    // it (`workflowAllowanceRemainingUsd === undefined`).
+    if (
+      this.workflowAllowance !== null &&
+      eligible.workflowAllowanceRemainingUsd !== undefined &&
+      workflowAllowanceExhausted(
+        eligible.workflowAllowanceRemainingUsd,
+        this.workflowAllowance.perAttemptCeilingUsd,
+      )
+    ) {
+      const resumeNotBefore = now + backoffDelayMs(eligible.attempts + 1, this.random);
+      this.replace({
+        ...clearDefer(eligible),
+        status: 'deferred',
+        deferReason: 'transient-error',
+        resumeNotBefore,
+      });
+      await this.persist();
+      return { kind: 'ran', contentHash: eligible.contentHash, outcome: 'deferred' };
+    }
+
     const attempts = eligible.attempts + 1;
     const inFlight: StoredJob = { ...clearDefer(eligible), status: 'in-flight', attempts };
     this.replace(inFlight);
     await this.persist(); // persist-before-await — see the module doc.
 
+    // [D-333] "each call carries what remains": `workflowAllowanceRemainingUsd`
+    // rides along as an ADDITIVE extra field on the object handed to
+    // `this.runner` — not a `JobRunnerView` change (that type lives in
+    // `types.ts`, outside this bead's owned paths; see this bead's report for
+    // the one-field addition it still needs). `JobRunner`'s declared parameter
+    // type is exactly `JobRunnerView`, so passing this wider object needs no
+    // cast: TypeScript accepts a value with EXTRA fields wherever the
+    // narrower type is expected. A production `JobRunner` that does not yet
+    // read this field (every one today) is completely unaffected.
     const outcome = await this.runner({
       contentHash: inFlight.contentHash,
       label: inFlight.label,
       payload: inFlight.payload,
       attempts: inFlight.attempts,
+      ...(inFlight.workflowAllowanceRemainingUsd === undefined
+        ? {}
+        : { workflowAllowanceRemainingUsd: inFlight.workflowAllowanceRemainingUsd }),
     });
 
     return this.recordOutcome(inFlight, outcome);
@@ -507,6 +613,24 @@ export class IngestionQueueEngine {
     outcome: Awaited<ReturnType<JobRunner>>,
   ): Promise<TickResult> {
     const now = this.clock.now();
+
+    // [D-333]/[D-341] (ol-3ux7.103): the attempt that just ran spends its
+    // ceiling from this job's own workflow allowance, unconditionally — an
+    // `ok`, a retryable failure and a permanent failure all charge the same
+    // enforceable worst case, never an observed actual (`budget.ts`'s
+    // `spendFromWorkflowAllowance` doc: "usage including failed calls",
+    // "err toward having spent more, never less"). No-op when
+    // `EngineDeps.workflowAllowance` is not configured or this job predates
+    // it.
+    if (this.workflowAllowance !== null && job.workflowAllowanceRemainingUsd !== undefined) {
+      job = {
+        ...job,
+        workflowAllowanceRemainingUsd: spendFromWorkflowAllowance(
+          job.workflowAllowanceRemainingUsd,
+          this.workflowAllowance.perAttemptCeilingUsd,
+        ),
+      };
+    }
 
     if (outcome.ok) {
       this.replace({ ...job, status: 'done', doneAt: now });

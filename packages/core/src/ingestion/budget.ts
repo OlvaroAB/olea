@@ -171,6 +171,54 @@ export function backoffDelayMs(attempts: number, random: RandomSource): number {
 }
 
 /**
+ * `[D-333]`/`[D-341]` — the pure half of "one allowance per background
+ * workflow" (`ol-3ux7.103`, the client complement of the harness-only
+ * `olea-service/src/harness/workflowBudget.ts`, `ol-3ux7.75`). A background
+ * workflow here is one queued job's whole lifecycle across every attempt it
+ * takes: `engine.ts` gives a job an initial USD allowance at `enqueue`-time
+ * (when `EngineDeps.workflowAllowance` is configured) and spends from it
+ * after every attempt, success or failure alike — [D-333]'s "usage including
+ * failed calls" — via these two functions.
+ *
+ * **This module supplies the mechanism, never a size.** `allowanceUsd` and
+ * `perAttemptCeilingUsd` are the caller's to set (`EngineDeps
+ * .workflowAllowance`), the same posture `sizeWorkflowAllowance` on the
+ * harness side takes toward its own sizing — a client-side sizing rule from
+ * measured production spend is a follow-up this bead's report names, not
+ * guessed here. `perAttemptCeilingUsd` must be an ENFORCEABLE worst case
+ * (`[D-341]`: never an observed or declared-only figure) — the same
+ * discipline `workflowBudget.ts`'s module doc argues for at length.
+ *
+ * Absent `EngineDeps.workflowAllowance` (every caller before this feature
+ * existed): `enqueue` never sets a job's `workflowAllowanceRemainingUsd`,
+ * these two functions are never called, and `tick()`/`recordOutcome()`
+ * behave exactly as before this feature existed.
+ */
+export function workflowAllowanceExhausted(
+  remainingUsd: number,
+  perAttemptCeilingUsd: number,
+): boolean {
+  return remainingUsd < perAttemptCeilingUsd;
+}
+
+/**
+ * Spends one attempt's worst-case ceiling from a workflow's remaining
+ * allowance, floored at zero. Charged unconditionally — on `ok`, on a
+ * retryable failure, and on a permanent failure alike — because [D-333]'s own
+ * words are "usage including failed calls": a failed attempt still cost the
+ * Worker's time and (per `[D-341]`) is charged at its enforceable ceiling
+ * exactly the way `workflowBudget.ts`'s `unmeasured()` charges an attempt with
+ * no server-reported figure to settle against — "err toward having spent
+ * more, never less."
+ */
+export function spendFromWorkflowAllowance(
+  remainingUsd: number,
+  perAttemptCeilingUsd: number,
+): number {
+  return Math.max(0, remainingUsd - perAttemptCeilingUsd);
+}
+
+/**
  * The next UTC daily reset instant strictly after `nowMs` — Workers AI's
  * free neuron allocation resets at 00:00 UTC (cost model §4), and this is
  * the instant `IngestionQueueEngine` uses as `resumeNotBefore` for jobs

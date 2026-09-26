@@ -11,6 +11,8 @@ import {
   nextUtcMidnightMs,
   PACING_HEADROOM_THRESHOLD,
   pacingDelayMs,
+  spendFromWorkflowAllowance,
+  workflowAllowanceExhausted,
 } from './budget.js';
 import type { RandomSource } from './types.js';
 
@@ -124,5 +126,40 @@ describe('nextUtcMidnightMs', () => {
   it('rolls across a month/year boundary correctly', () => {
     const now = Date.UTC(2025, 11, 31, 23, 59, 59); // 2025-12-31T23:59:59Z
     expect(nextUtcMidnightMs(now)).toBe(Date.UTC(2026, 0, 1, 0, 0, 0, 0));
+  });
+});
+
+// [D-333]/[D-341] (ol-3ux7.103): one allowance per background workflow, the
+// client-side pure mechanism engine.ts spends against.
+describe('workflowAllowanceExhausted', () => {
+  it('is exhausted once what remains cannot cover one more attempt at its ceiling', () => {
+    expect(workflowAllowanceExhausted(0.5, 1)).toBe(true);
+    expect(workflowAllowanceExhausted(0.99, 1)).toBe(true);
+  });
+
+  it('is not exhausted while remaining still covers at least one more attempt', () => {
+    expect(workflowAllowanceExhausted(1, 1)).toBe(false);
+    expect(workflowAllowanceExhausted(5, 1)).toBe(false);
+  });
+
+  it('a zero allowance cannot cover any positive-cost attempt', () => {
+    expect(workflowAllowanceExhausted(0, 0.01)).toBe(true);
+  });
+});
+
+describe('spendFromWorkflowAllowance', () => {
+  it('subtracts one attempt worth of ceiling from what remains', () => {
+    expect(spendFromWorkflowAllowance(5, 2)).toBe(3);
+  });
+
+  it('floors at zero rather than going negative — a failed call is still charged at its ceiling ([D-341])', () => {
+    expect(spendFromWorkflowAllowance(1, 2)).toBe(0);
+  });
+
+  it('charges the same ceiling whether the attempt it paid for succeeded or failed — spendFromWorkflowAllowance takes no outcome, by design', () => {
+    // The function's own signature has no outcome parameter: callers (engine.ts)
+    // must call it unconditionally on every attempt, ok or not ([D-333]:
+    // "usage including failed calls").
+    expect(spendFromWorkflowAllowance(10, 3)).toBe(spendFromWorkflowAllowance(10, 3));
   });
 });

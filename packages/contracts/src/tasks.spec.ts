@@ -8,7 +8,14 @@
 // So the literal strings are asserted here, not just their types: this suite
 // exists to make a rename a deliberate, visible act.
 import { describe, expect, it } from 'vitest';
-import { ALL_TASK_IDS, isKnownTaskId, knownTaskId, TASK_ENDPOINT_PATH, TASK_IDS } from './tasks.js';
+import {
+  ALL_TASK_IDS,
+  isKnownTaskId,
+  isValidRemainingAllowanceUsd,
+  knownTaskId,
+  TASK_ENDPOINT_PATH,
+  TASK_IDS,
+} from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
   it('is exactly these twenty-two ids, spelled exactly this way', () => {
@@ -152,5 +159,24 @@ describe('the closed task-id catalogue', () => {
 
   it('pins the single task endpoint path', () => {
     expect(TASK_ENDPOINT_PATH).toBe('/v1/task');
+  });
+});
+
+// [D-333]/[D-341] client wire half (ol-3ux7.103): the optional
+// remaining-allowance field's one shared validation rule.
+describe('isValidRemainingAllowanceUsd', () => {
+  it('accepts zero and positive finite numbers', () => {
+    expect(isValidRemainingAllowanceUsd(0)).toBe(true);
+    expect(isValidRemainingAllowanceUsd(0.5)).toBe(true);
+    expect(isValidRemainingAllowanceUsd(1_000)).toBe(true);
+  });
+
+  it('rejects negative numbers, non-finite numbers, and non-numbers rather than throwing', () => {
+    expect(isValidRemainingAllowanceUsd(-0.01)).toBe(false);
+    expect(isValidRemainingAllowanceUsd(Number.NaN)).toBe(false);
+    expect(isValidRemainingAllowanceUsd(Number.POSITIVE_INFINITY)).toBe(false);
+    expect(isValidRemainingAllowanceUsd('1.5')).toBe(false);
+    expect(isValidRemainingAllowanceUsd(undefined)).toBe(false);
+    expect(isValidRemainingAllowanceUsd(null)).toBe(false);
   });
 });
