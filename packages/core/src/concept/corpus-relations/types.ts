@@ -334,7 +334,9 @@ export interface JudgePolicyKey {
 
 /** Two `JudgePolicyKey`s are the same policy when every field matches exactly — no partial credit. */
 export function judgePolicyKeysEqual(a: JudgePolicyKey, b: JudgePolicyKey): boolean {
-  return a.task === b.task && a.promptVersion === b.promptVersion && a.modelIdentity === b.modelIdentity;
+  return (
+    a.task === b.task && a.promptVersion === b.promptVersion && a.modelIdentity === b.modelIdentity
+  );
 }
 
 /**

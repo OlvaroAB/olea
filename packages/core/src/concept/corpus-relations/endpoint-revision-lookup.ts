@@ -42,8 +42,8 @@
  */
 
 import type { VaultPath } from '../../vault/types.js';
-import type { EndpointRevisionLookup } from './eligibility.js';
 import type { ConceptKeyAnchor, ConceptKeyRecord } from '../key-store.js';
+import type { EndpointRevisionLookup } from './eligibility.js';
 
 /**
  * The source path(s) that introduce a concept, read from its `ConceptKeyRecord.anchor`

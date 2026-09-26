@@ -35,7 +35,7 @@ describe('findPrerequisiteCycles', () => {
     expect(isEdgeBlockedByCycle({ fromKey: 'ck-c', toKey: 'ck-a' }, report)).toBe(true);
   });
 
-  it('a cycle member\'s edge to a dependent outside the cycle stays unblocked (Default 2, clarified ol-egov.141.89.4.12)', () => {
+  it("a cycle member's edge to a dependent outside the cycle stays unblocked (Default 2, clarified ol-egov.141.89.4.12)", () => {
     const report = findPrerequisiteCycles([
       { fromKey: 'ck-a', toKey: 'ck-b' },
       { fromKey: 'ck-b', toKey: 'ck-c' },
@@ -45,7 +45,7 @@ describe('findPrerequisiteCycles', () => {
     expect(isEdgeBlockedByCycle({ fromKey: 'ck-a', toKey: 'ck-dependent' }, report)).toBe(false);
   });
 
-  it('two disjoint cycles never cross-block each other\'s edges', () => {
+  it("two disjoint cycles never cross-block each other's edges", () => {
     const report = findPrerequisiteCycles([
       { fromKey: 'ck-a', toKey: 'ck-b' },
       { fromKey: 'ck-b', toKey: 'ck-a' },

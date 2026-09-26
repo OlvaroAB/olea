@@ -15,7 +15,11 @@ import {
 } from './remember.js';
 
 const evidence = { from: 'digest-a-1', to: 'digest-b-1' };
-const policy = { task: 'concepts.relations.v1', promptVersion: '1.2.0', modelIdentity: 'gemma-4-26b' };
+const policy = {
+  task: 'concepts.relations.v1',
+  promptVersion: '1.2.0',
+  modelIdentity: 'gemma-4-26b',
+};
 
 describe('shouldReaskProposition', () => {
   it('re-asks when nothing was ever remembered', () => {
@@ -44,8 +48,12 @@ describe('shouldReaskProposition', () => {
       evidenceDigest: evidence,
       judgePolicy: policy,
     });
-    expect(shouldReaskProposition(record, { from: 'digest-a-2', to: 'digest-b-1' }, policy)).toBe(true);
-    expect(shouldReaskProposition(record, { from: 'digest-a-1', to: 'digest-b-2' }, policy)).toBe(true);
+    expect(shouldReaskProposition(record, { from: 'digest-a-2', to: 'digest-b-1' }, policy)).toBe(
+      true,
+    );
+    expect(shouldReaskProposition(record, { from: 'digest-a-1', to: 'digest-b-2' }, policy)).toBe(
+      true,
+    );
   });
 
   it('re-asks the instant the judge policy changes — a different model, or a revised prompt version', () => {
@@ -58,9 +66,14 @@ describe('shouldReaskProposition', () => {
       judgePolicy: policy,
     });
     expect(
-      shouldReaskProposition(record, evidence, { ...policy, modelIdentity: 'a-benchmarked-candidate' }),
+      shouldReaskProposition(record, evidence, {
+        ...policy,
+        modelIdentity: 'a-benchmarked-candidate',
+      }),
     ).toBe(true);
-    expect(shouldReaskProposition(record, evidence, { ...policy, promptVersion: '1.3.0' })).toBe(true);
+    expect(shouldReaskProposition(record, evidence, { ...policy, promptVersion: '1.3.0' })).toBe(
+      true,
+    );
   });
 });
 
@@ -76,6 +89,8 @@ describe('indexRememberedRecords / rememberedPropositionIdentity', () => {
     });
     const index = indexRememberedRecords([record]);
     expect(index.get(rememberedPropositionIdentity('contrasts-with', 'ck-a', 'ck-b'))).toBe(record);
-    expect(index.get(rememberedPropositionIdentity('prerequisite', 'ck-a', 'ck-b'))).toBeUndefined();
+    expect(
+      index.get(rememberedPropositionIdentity('prerequisite', 'ck-a', 'ck-b')),
+    ).toBeUndefined();
   });
 });

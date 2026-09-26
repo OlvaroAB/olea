@@ -103,10 +103,7 @@ describe('writingFromVisionPageExtract — the producer half', () => {
   });
 
   it('a test double answering with no wire stamp (modelId/promptVersion absent) carries a null stamp, never an invented one', () => {
-    const outcome = writingFromVisionPageExtract(
-      unstamped(),
-      context,
-    );
+    const outcome = writingFromVisionPageExtract(unstamped(), context);
     expect(outcome.kind).toBe('written');
     if (outcome.kind !== 'written') throw new Error('unreachable');
     expect(outcome.receipt.provenance.producer).toMatchObject({ kind: 'model', stamp: null });

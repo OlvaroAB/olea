@@ -38,7 +38,7 @@ describe('mergeWithBacklog', () => {
     ]);
   });
 
-  it('a fresh candidate that duplicates a backlogged item is not judged twice, and keeps the backlog\'s own age', () => {
+  it("a fresh candidate that duplicates a backlogged item is not judged twice, and keeps the backlog's own age", () => {
     const backlog: readonly BacklogEntry<string>[] = [{ item: 'dup', age: 2 }];
     const result = mergeWithBacklog(backlog, ['dup', 'new'], keyOf, 5);
     expect(result.ordered).toEqual(['dup', 'new']);

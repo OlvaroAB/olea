@@ -10,8 +10,6 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { PrerequisiteCycleReport } from './graph-checks.js';
-import { findPrerequisiteCycles } from './graph-checks.js';
 import {
   evaluateEligibility,
   evaluateEndpointFreshness,
@@ -19,30 +17,32 @@ import {
   evaluatePropositionFreshnessWithLookup,
   type JudgedEndpointRevision,
 } from './eligibility.js';
+import type { PrerequisiteCycleReport } from './graph-checks.js';
+import { findPrerequisiteCycles } from './graph-checks.js';
 
 describe('evaluateEndpointFreshness', () => {
   it('reads current when the revision matches', () => {
-    expect(
-      evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, 'rev-1'),
-    ).toBe('current');
+    expect(evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, 'rev-1')).toBe(
+      'current',
+    );
   });
 
   it('reads stale when the revision has moved', () => {
-    expect(
-      evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, 'rev-2'),
-    ).toBe('stale');
+    expect(evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, 'rev-2')).toBe(
+      'stale',
+    );
   });
 
   it('reads unverified, never current, when no revision was recorded at judgment time', () => {
-    expect(
-      evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: undefined }, 'rev-1'),
-    ).toBe('unverified');
+    expect(evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: undefined }, 'rev-1')).toBe(
+      'unverified',
+    );
   });
 
   it('reads unverified, never current, when no current revision exists to compare against', () => {
-    expect(
-      evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, undefined),
-    ).toBe('unverified');
+    expect(evaluateEndpointFreshness({ key: 'ck-a', revisionAtJudgment: 'rev-1' }, undefined)).toBe(
+      'unverified',
+    );
   });
 });
 
@@ -117,12 +117,16 @@ describe('evaluateEligibility', () => {
       { fromKey: 'ck-b', toKey: 'ck-c' },
       { fromKey: 'ck-c', toKey: 'ck-a' },
     ]);
-    const verdict = evaluateEligibility({ fromKey: 'ck-a', toKey: 'ck-b' }, currentFreshness, report);
+    const verdict = evaluateEligibility(
+      { fromKey: 'ck-a', toKey: 'ck-b' },
+      currentFreshness,
+      report,
+    );
     expect(verdict.blockedByCycle).toBe(true);
     expect(verdict.servable).toBe(false);
   });
 
-  it('still serves a cycle member\'s edge to a dependent outside the cycle (Default 2)', () => {
+  it("still serves a cycle member's edge to a dependent outside the cycle (Default 2)", () => {
     const report: PrerequisiteCycleReport = findPrerequisiteCycles([
       { fromKey: 'ck-a', toKey: 'ck-b' },
       { fromKey: 'ck-b', toKey: 'ck-c' },

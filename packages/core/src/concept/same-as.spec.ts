@@ -168,7 +168,9 @@ describe('proposeSameAsFromMintCollisions — the mint-time half of the collisio
       aliases: [],
     });
     const records = await listConceptKeyRecords(source);
-    expect(records.find((r) => r.record.key === key)?.record.normalizationCollisions).toBeUndefined();
+    expect(
+      records.find((r) => r.record.key === key)?.record.normalizationCollisions,
+    ).toBeUndefined();
 
     const proposed = await proposeSameAsFromMintCollisions(source, records);
     expect(proposed).toHaveLength(0);

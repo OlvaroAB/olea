@@ -44,7 +44,9 @@ function edgeId(fromKey: string, toKey: string): string {
  * marking (white/grey/black) — cheap and sufficient at the scale this stage runs at (one course's
  * concept set per batch, not the whole vault).
  */
-export function findPrerequisiteCycles(edges: readonly PrerequisiteEdge[]): PrerequisiteCycleReport {
+export function findPrerequisiteCycles(
+  edges: readonly PrerequisiteEdge[],
+): PrerequisiteCycleReport {
   const adjacency = new Map<string, string[]>();
   for (const edge of edges) {
     const list = adjacency.get(edge.fromKey);
@@ -105,7 +107,10 @@ export function findPrerequisiteCycles(edges: readonly PrerequisiteEdge[]): Prer
 }
 
 /** Whether one edge is blocked by a cycle report — the read side `./eligibility.ts` calls. */
-export function isEdgeBlockedByCycle(edge: PrerequisiteEdge, report: PrerequisiteCycleReport): boolean {
+export function isEdgeBlockedByCycle(
+  edge: PrerequisiteEdge,
+  report: PrerequisiteCycleReport,
+): boolean {
   return report.blockedEdgeIds.has(edgeId(edge.fromKey, edge.toKey));
 }
 
@@ -117,6 +122,9 @@ export function isEdgeBlockedByCycle(edge: PrerequisiteEdge, report: Prerequisit
  * a structural check rather than only a merge-time observation, so a self-loop reaching this stage
  * by any other route is caught the same way.
  */
-export function violatesPredicateContract(edge: { readonly fromKey: string; readonly toKey: string }): boolean {
+export function violatesPredicateContract(edge: {
+  readonly fromKey: string;
+  readonly toKey: string;
+}): boolean {
   return edge.fromKey === edge.toKey;
 }

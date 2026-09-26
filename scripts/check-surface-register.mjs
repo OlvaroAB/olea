@@ -289,9 +289,7 @@ function parseRegister(text) {
     }
     const clauseTokens = [...clauseCell.matchAll(CLAUSE_TOKEN_RE)].map((m) => m[0]);
     if (clauseTokens.length === 0) {
-      throw new Error(
-        `line ${idx + 1}: row for '${idMatch[1]}' cites no F<n>.<m> contract clause`,
-      );
+      throw new Error(`line ${idx + 1}: row for '${idMatch[1]}' cites no F<n>.<m> contract clause`);
     }
     rows.push({
       lineNo: idx + 1,

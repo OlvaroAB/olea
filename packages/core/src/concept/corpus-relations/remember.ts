@@ -73,7 +73,11 @@ export function recordNegativeResult(input: {
 }
 
 /** A remembered record's own identity — restated from `../relation-cache.js`'s `propositionKey` shape rather than imported, so a lookup index can be built without this module depending on the cache module (kept independently closed, same reasoning `./verdict.ts`'s own doc gives for duplicating `./nominate.ts`'s pair-key helper). */
-export function rememberedPropositionIdentity(type: RelationType, fromKey: string, toKey: string): string {
+export function rememberedPropositionIdentity(
+  type: RelationType,
+  fromKey: string,
+  toKey: string,
+): string {
   return `${type} ${fromKey} ${toKey}`;
 }
 

@@ -55,7 +55,8 @@ export function evaluateEndpointFreshness(
   endpoint: JudgedEndpointRevision,
   currentRevision: string | undefined,
 ): EndpointFreshness {
-  if (endpoint.revisionAtJudgment === undefined || currentRevision === undefined) return 'unverified';
+  if (endpoint.revisionAtJudgment === undefined || currentRevision === undefined)
+    return 'unverified';
   return endpoint.revisionAtJudgment === currentRevision ? 'current' : 'stale';
 }
 

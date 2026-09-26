@@ -51,7 +51,7 @@
  * never a fabricated pace.
  */
 
-import { isCalendarDay, type CalendarDay } from './calendar-day.js';
+import { type CalendarDay, isCalendarDay } from './calendar-day.js';
 import { DECLARED_FLAT_TEMPO_WEIGHT } from './rhythm.js';
 
 /**
@@ -157,9 +157,7 @@ export function deriveCourseTempo(
   const cadenceByCourse = new Map<string, number | null>();
   for (const facts of courses) cadenceByCourse.set(facts.course, cadenceDaysOf(facts));
 
-  const usableCadences = [...cadenceByCourse.values()].filter(
-    (c): c is number => c !== null,
-  );
+  const usableCadences = [...cadenceByCourse.values()].filter((c): c is number => c !== null);
 
   if (usableCadences.length < MIN_COURSES_WITH_CADENCE_FOR_RELATIVE_TEMPO) {
     return courses.map((facts) => ({

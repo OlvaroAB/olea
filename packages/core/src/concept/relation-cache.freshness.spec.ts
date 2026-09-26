@@ -109,7 +109,11 @@ describe('writeRelationCache — producer provenance is additive and round-trips
       );
       const { servable } = await relationCacheRecordsWithFreshness(source, () => 'rev-1');
       expect(servable).toHaveLength(1);
-      expect(servable[0]).toMatchObject({ type: 'prerequisite', from: 'Concept A', to: 'Concept B' });
+      expect(servable[0]).toMatchObject({
+        type: 'prerequisite',
+        from: 'Concept A',
+        to: 'Concept B',
+      });
     });
   });
 
@@ -123,7 +127,7 @@ describe('writeRelationCache — producer provenance is additive and round-trips
 });
 
 describe('evaluateRelationCacheRecordFreshness', () => {
-  it('reads a record\'s stored best attestation directly, without a vault', () => {
+  it("reads a record's stored best attestation directly, without a vault", () => {
     const record = {
       propositionKey: 'prerequisite ck-a ck-b',
       type: 'prerequisite' as const,
