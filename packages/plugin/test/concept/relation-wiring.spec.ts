@@ -9,9 +9,16 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { ConceptRelation, ConceptsRead } from 'olea-core';
+import type {
+  ConceptKeyRecord,
+  ConceptRelation,
+  ConceptsRead,
+  EdgeDispositionKind,
+  TopicAnchor,
+} from 'olea-core';
 import {
   appendEdgeDisposition,
+  conceptKeyRecordPath,
   FolderSource,
   listRelationCacheRecords,
   propositionKey,
@@ -121,9 +128,7 @@ describe('persistRelationCacheFromPass', () => {
       );
       await persistRelationCacheFromPass(
         vault,
-        passWith([
-          corpusEdge({ introducingPassages: secondAttestationPassages, confidence: 0.9 }),
-        ]),
+        passWith([corpusEdge({ introducingPassages: secondAttestationPassages, confidence: 0.9 })]),
       );
 
       const records = await listRelationCacheRecords(vault);
@@ -198,5 +203,120 @@ describe('excludedEdgeDispositionSummary / relationCacheRecordsExcludingDisposed
 
     const remaining = await relationCacheRecordsExcludingDisposed(vault);
     expect(remaining).toHaveLength(0);
+  });
+});
+
+// `[D-378]` (`ol-egov.141.89.9.56`, round 3): the tick read-back reads edge dispositions by concept
+// identity. `CANONICAL` (minted first) and `DUPLICATE` share one anchor, so a proposition keyed by
+// either is one proposition, and its current disposition is the latest event across both keys'
+// logs. `PASSAGE_A` and `PASSAGE_B` share only an introducing note: two identities, never joined.
+// Every fixture string is invented (INV-3).
+describe('the tick read-back resolves dispositions by concept identity, latest wins ([D-378], ol-egov.141.89.9.56)', () => {
+  const CANONICAL = 'concept-key1:aaaa';
+  const DUPLICATE = 'concept-key1:bbbb';
+  const PASSAGE_A = 'concept-key1:eeee';
+  const PASSAGE_B = 'concept-key1:ffff';
+  const OTHER = 'concept-key1:xxxx';
+  const EARLIER = '2026-09-06T00:00:00.000Z';
+  const LATER = '2026-09-08T00:00:00.000Z';
+
+  let root: string;
+  let vault: FolderSource;
+
+  function topic(name: string, introducingPaths?: readonly string[]): TopicAnchor {
+    return {
+      kind: 'topic',
+      course: 'TESTC1',
+      name,
+      aliases: [],
+      ...(introducingPaths !== undefined ? { introducingPaths } : {}),
+    };
+  }
+
+  async function seedConcept(key: string, anchor: TopicAnchor, mintedAt: string): Promise<void> {
+    const record: ConceptKeyRecord = {
+      key,
+      tier: 2,
+      anchor,
+      aliases: [],
+      mintedAt,
+      schemaVersion: 1,
+    };
+    await vault.write(conceptKeyRecordPath(record.key), `${JSON.stringify(record, null, 2)}\n`);
+  }
+
+  async function dispose(fromKey: string, kind: EdgeDispositionKind, at: string): Promise<void> {
+    await appendEdgeDisposition(vault, propositionKey('prerequisite', fromKey, OTHER), kind, {
+      now: () => at,
+    });
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-relation-wiring-identity-'));
+    vault = new FolderSource(root);
+    const shared = ['01 Courses/TESTC1/Week one.md'];
+    await seedConcept(CANONICAL, topic('Widget theory'), '2026-09-01');
+    await seedConcept(DUPLICATE, topic('Widget theory'), '2026-09-05');
+    await seedConcept(PASSAGE_A, topic('Gadget theory', shared), '2026-09-02');
+    await seedConcept(PASSAGE_B, topic('Sprocket theory', shared), '2026-09-03');
+    await seedConcept(OTHER, topic('Flange theory'), '2026-09-04');
+    await persistRelationCacheFromPass(
+      vault,
+      passWith([
+        corpusEdge({
+          from: 'Widget theory',
+          to: 'Flange theory',
+          fromKey: CANONICAL,
+          toKey: OTHER,
+        }),
+        corpusEdge({
+          from: 'Gadget theory',
+          to: 'Flange theory',
+          fromKey: PASSAGE_A,
+          toKey: OTHER,
+        }),
+      ]),
+    );
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('a later accept under the canonical key outranks an earlier decline under the duplicate: the edge is served', async () => {
+    await dispose(DUPLICATE, 'declined', EARLIER);
+    await dispose(CANONICAL, 'accepted', LATER);
+
+    const served = servedRelations(await readRelationSetWithCache(vault, passWith(undefined)));
+    expect(served.map((relation) => relation.from).sort()).toEqual([
+      'Gadget theory',
+      'Widget theory',
+    ]);
+    expect(
+      (await relationCacheRecordsExcludingDisposed(vault))
+        .map((entry) => entry.record.fromKey)
+        .sort(),
+    ).toEqual([CANONICAL, PASSAGE_A]);
+  });
+
+  it('a later decline under the duplicate outranks an earlier accept under the canonical key: the edge is withheld', async () => {
+    await dispose(CANONICAL, 'accepted', EARLIER);
+    await dispose(DUPLICATE, 'declined', LATER);
+
+    const served = servedRelations(await readRelationSetWithCache(vault, passWith(undefined)));
+    expect(served.map((relation) => relation.from)).toEqual(['Gadget theory']);
+    expect(
+      (await relationCacheRecordsExcludingDisposed(vault)).map((entry) => entry.record.fromKey),
+    ).toEqual([PASSAGE_A]);
+  });
+
+  it('a decline for a concept that shares only an introducing passage never withholds its partner’s edge', async () => {
+    await dispose(PASSAGE_B, 'declined', LATER);
+
+    const served = servedRelations(await readRelationSetWithCache(vault, passWith(undefined)));
+    expect(served.map((relation) => relation.from)).toContain('Gadget theory');
+    expect(
+      (await relationCacheRecordsExcludingDisposed(vault)).map((entry) => entry.record.fromKey),
+    ).toContain(PASSAGE_A);
   });
 });

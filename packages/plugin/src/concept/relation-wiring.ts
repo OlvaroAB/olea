@@ -39,9 +39,23 @@
  * `OleaPlugin.tickIngestionAndMaybeRunCorpusRelations` (`packages/plugin/src/main.ts`) — see that
  * function's own module doc for the full chain. Corrected 2026-09-25, `ol-egov.141.89.15`; this
  * paragraph previously said neither function had a production caller.
+ *
+ * **Dispositions by concept identity (`[D-378]`, `ol-egov.141.89.9.56`).** Two `.olea/concepts/`
+ * records sharing an anchor are one identity, and `olea-core`'s canonical-key index names its
+ * canonical key. `readRelationSetWithCache` and `relationCacheRecordsExcludingDisposed` read that
+ * index once per call and hand the same one to every step: the disposition logs are read by
+ * canonical proposition, so where one identity's proposition has logs under more than one key
+ * the latest disposition across them decides (a later accept under the canonical key outranks an
+ * earlier decline under a duplicate's, and the reverse); the cached edges are folded by canonical
+ * proposition. `syncRelationCacheAndDerive` reads it once for both its write and its read, and a
+ * caller already holding one for the tick passes it through `canonicalKeys`. A concept that
+ * shares only an introducing passage is its own identity there, so a decline for it never
+ * withholds its partner's edge. Nothing already written is rewritten, and the patch write stays
+ * the default.
  */
 
 import {
+  type ConceptKeyCanonicalIndex,
   type ConceptRelation,
   currentDisposition,
   deriveRelationSet,
@@ -54,6 +68,7 @@ import {
   type RelationCacheRecord,
   type RelationCacheWriteResult,
   type RelationSet,
+  readConceptKeyCanonicalIndex,
   relationCacheRecordsAsConceptRelations,
   type VaultPath,
   type VaultSource,
@@ -73,6 +88,18 @@ export interface RelationCacheSyncOptions {
    * `./wiring.ts` is outside this bead's owns (`ol-3ux7.64.26`).
    */
   readonly now?: () => Date;
+  /**
+   * `[D-378]` (module doc): the canonical-key index this tick already read, handed on so the
+   * write resolves endpoint keys without listing `.olea/concepts/` again. Omitted, the write reads
+   * it itself (`olea-core`'s `writeRelationCache` default).
+   */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+}
+
+/** The read options `readRelationSetWithCache` takes (`[D-378]`, module doc). */
+export interface RelationSetReadOptions {
+  /** The canonical-key index this tick already read. Omitted, it is read once, here. */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
 }
 
 /**
@@ -92,6 +119,7 @@ export async function persistRelationCacheFromPass(
   return writeRelationCache(vault, edges, {
     mode: 'patch',
     now: () => now().toISOString(),
+    ...(options.canonicalKeys !== undefined ? { canonicalKeys: options.canonicalKeys } : {}),
   });
 }
 
@@ -100,15 +128,22 @@ export async function persistRelationCacheFromPass(
  * prior passes, with a declined/expired disposition excluded before either reaches
  * `deriveRelationSet`. See module doc for why this exists alongside, rather than inside,
  * `./wiring.ts`'s own `readConceptsAndRelations`.
+ *
+ * `[D-378]` (module doc): one canonical-key index — `options.canonicalKeys`, or read once here —
+ * decides both which propositions are excluded (latest disposition across one identity's logs)
+ * and how the cached edges fold.
  */
 export async function readRelationSetWithCache(
   vault: VaultSource,
   pass: ConceptAndRelationPass,
+  options: RelationSetReadOptions = {},
 ): Promise<RelationSet> {
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
   const dispositionLogs = (await listEdgeDispositionLogs(vault)).map((entry) => entry.log);
-  const excluded = excludedPropositionKeys(dispositionLogs);
+  const excluded = excludedPropositionKeys(dispositionLogs, canonicalKeys);
   const cached = await relationCacheRecordsAsConceptRelations(vault, {
     excludePropositionKeys: excluded,
+    canonicalKeys,
   });
   const fresh: readonly ConceptRelation[] = pass.corpus.relations ?? [];
   return deriveRelationSet(pass.read.relations, fresh, cached);
@@ -118,15 +153,17 @@ export async function readRelationSetWithCache(
  * Convenience composition of both operations, in the order a real tick needs them: persist this
  * pass's fresh corpus edges first, then fold the now-updated cache back in — so an edge minted
  * on THIS tick is immediately reflected in the RelationSet this same tick returns, rather than
- * lagging one tick behind its own write.
+ * lagging one tick behind its own write. Reads the canonical-key index once (unless
+ * `options.canonicalKeys` carries it) and hands it to both steps (`[D-378]`, module doc).
  */
 export async function syncRelationCacheAndDerive(
   vault: VaultSource,
   pass: ConceptAndRelationPass,
   options: RelationCacheSyncOptions = {},
 ): Promise<{ readonly write: RelationCacheWriteResult | null; readonly relations: RelationSet }> {
-  const write = await persistRelationCacheFromPass(vault, pass, options);
-  const relations = await readRelationSetWithCache(vault, pass);
+  const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+  const write = await persistRelationCacheFromPass(vault, pass, { ...options, canonicalKeys });
+  const relations = await readRelationSetWithCache(vault, pass, { canonicalKeys });
   return { write, relations };
 }
 
@@ -145,17 +182,25 @@ export async function excludedEdgeDispositionSummary(vault: VaultSource): Promis
   return { excludedCount: excludedLogs.length, excludedLogs };
 }
 
-/** For a caller that wants the raw filtered records rather than the folded `ConceptRelation`s — used by `relation-wiring.spec.ts` and available to a future triage surface's read model. */
+/**
+ * For a caller that wants the raw filtered records rather than the folded `ConceptRelation`s —
+ * used by `relation-wiring.spec.ts` and available to a future triage surface's read model. The
+ * records come back as stored; which ones are withheld is decided by concept identity, through one
+ * canonical-key index read here (`[D-378]`, module doc), so it agrees with
+ * `readRelationSetWithCache`.
+ */
 export async function relationCacheRecordsExcludingDisposed(
   vault: VaultSource,
 ): Promise<readonly { readonly path: VaultPath; readonly record: RelationCacheRecord }[]> {
-  const [records, logs] = await Promise.all([
+  const [records, logs, canonicalKeys] = await Promise.all([
     listRelationCacheRecords(vault),
     listEdgeDispositionLogs(vault).then((entries) => entries.map((entry) => entry.log)),
+    readConceptKeyCanonicalIndex(vault),
   ]);
   const included = excludeDisposedRelationCacheRecords(
     records.map((entry) => entry.record),
     logs,
+    canonicalKeys,
   );
   const includedKeys = new Set(included.map((record) => record.propositionKey));
   return records.filter((entry) => includedKeys.has(entry.record.propositionKey));
