@@ -310,3 +310,53 @@ export function emptyCorpusDropCounts(): Record<CorpusRelationDropReason, number
 export function totalCorpusDropped(dropped: CorpusRelationBatchResult['dropped']): number {
   return CORPUS_RELATION_DROP_REASONS.reduce((sum, reason) => sum + dropped[reason], 0);
 }
+
+// ===========================================================================
+// PHASE A TARGET SHAPE (`[ILB-REL-4]`, `docs/dev/intelligence-build/rel.md`
+// §2's diagram and §3's Class B defaults, `[D-297]`) — one result per pair
+// PER ELIGIBLE PREDICATE, a fair backlog, and a remembered negative keyed on
+// evidence and judge policy. This section adds shape only; `./proposition.js`,
+// `./backlog.js` and `./remember.js` are the code that reads it.
+// ===========================================================================
+
+/**
+ * The producer-provenance triple every stored model output carries (INV-4,
+ * `[D7.3]`, `README.md` "Producer provenance on every stored model output") —
+ * restated here as its own named shape rather than three loose strings, so
+ * `./remember.js`'s and `./relation-cache.js`'s Default-3 comparison
+ * ("either changing re-opens it") has one thing to compare rather than three.
+ */
+export interface JudgePolicyKey {
+  readonly task: string;
+  readonly promptVersion: string;
+  readonly modelIdentity: string;
+}
+
+/** Two `JudgePolicyKey`s are the same policy when every field matches exactly — no partial credit. */
+export function judgePolicyKeysEqual(a: JudgePolicyKey, b: JudgePolicyKey): boolean {
+  return a.task === b.task && a.promptVersion === b.promptVersion && a.modelIdentity === b.modelIdentity;
+}
+
+/**
+ * The evidence a proposition was judged against — a digest of each
+ * endpoint's introducing passage, the same grain `ConceptRelation.
+ * introducingPassages` already names but content-hashed (D-005: a digest,
+ * never the text) so two records can be compared without holding either
+ * passage in memory.
+ */
+export interface EvidenceDigestPair {
+  readonly from: string;
+  readonly to: string;
+}
+
+/**
+ * Every corpus-eligible predicate a pair could hold, independently judged
+ * (rel.md §3 Default 1: "the chain does not pick one predicate per pair; it
+ * resolves every corpus-eligible predicate the pair could hold,
+ * independently"). Derived from `CORPUS_STAGE_EMITTABLE_TYPES` rather than
+ * restated, in a stable order, so a change to that set moves this list with
+ * it.
+ */
+export function corpusEligiblePredicates(): readonly RelationType[] {
+  return [...CORPUS_STAGE_EMITTABLE_TYPES].sort();
+}
