@@ -3758,6 +3758,16 @@ export default class OleaPlugin extends Plugin {
       // the live, served relation fold, read fresh at open time — `[]` before
       // the first corpus-relation batch has run.
       relations: this.servedRelationEdges(),
+      // `ol-egov.141.51.1.1` [INTERV-16]: the concept records `relations`'
+      // names join against for F2.12's prerequisite-aware branch
+      // (`open-session.ts`'s `concepts` field, its own doc) — the SAME
+      // `this.conceptRecords` the registry view already reads through a
+      // thunk, refreshed on the same ingestion tick as `relations` above.
+      // Omitted (never `null`) before the first vault walk has completed,
+      // the same `exactOptionalPropertyTypes` discipline `draftCache` and
+      // `citationHashStore` below already use — until then the branch stays
+      // the documented no-op `open-session.ts` describes.
+      ...(this.conceptRecords ? { concepts: this.conceptRecords } : {}),
       // F2.19 (`ol-vr8z`): resolved into `assessmentContext` inside
       // `buildReviewSession`, alongside `relations` above.
       assessments,

@@ -231,15 +231,19 @@ export interface ReviewSessionDeps {
    * alongside `createStrongRecallProposalReader`), not threaded from
    * `main.ts`.
    *
-   * **No production composer wires this yet.** `open-session.ts` and a
-   * prerequisite-evidence reader analogous to `./strong-recall-wiring.ts`
-   * are both outside this port's owning bead's file ownership
-   * (`packages/core/src/index.ts` and this file only) — filed as a follow-up
-   * so the prerequisite branch this port makes reachable-by-type does not
-   * silently stay reachable-by-type only. Optional and absent by default,
-   * same "simply cannot offer it" posture every other optional port here
-   * has — an absent resolver reads as "no direct prerequisite known," which
-   * is exactly `ConfusionRoutingInput.directPrerequisite`'s own "absent"
+   * **`ol-egov.141.51.1.1` [INTERV-16] landed the real composer.**
+   * `./prerequisite-evidence-wiring.ts`'s `createPrerequisiteEvidenceReader`
+   * is composed at `../review/open-session.ts` (alongside
+   * `createStrongRecallProposalReader`, mirroring its own seam exactly) and
+   * wired unconditionally into every real `ReviewSession` that file opens.
+   * Reachability is by way of `open-session.ts`'s own `relations`/`concepts`
+   * input fields, both fed from `main.ts`'s `buildReviewSessionInput` — the
+   * SAME `relations: this.servedRelationEdges()` call site now also spreads
+   * `concepts: this.conceptRecords` right after it. Before either field is
+   * live (no vault walk yet), or with no direct-prerequisite edge, the
+   * resolver's own no-op default applies: an absent resolver, or one that
+   * finds nothing, reads as "no direct prerequisite known," which is
+   * exactly `ConfusionRoutingInput.directPrerequisite`'s own "absent"
    * default (the ordinary offer stands, unchanged from before this bead).
    */
   readonly resolvePrerequisiteEvidence?: (

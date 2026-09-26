@@ -972,6 +972,19 @@ describe('C7.9 containment relations reach both session-composition call sites (
     );
   });
 
+  it('also threads this.conceptRecords onto the same input, as concepts, right after relations (ol-egov.141.51.1.1, INTERV-16)', () => {
+    // `open-session.ts`'s `concepts` field (`[D-265]` ruling 2's F2.12
+    // prerequisite-aware branch, `resolvePrerequisiteEvidence`) stayed a
+    // documented no-op until this line — `this.conceptRecords` was already
+    // held on the same ingestion tick as `relations` above (the registry
+    // view already reads it through a thunk) but was never forwarded here.
+    // Optional, spread conditionally like `draftCache`/`citationHashStore`
+    // below: omitted (never `null`) before the first vault walk completes.
+    expect(main).toMatch(
+      /relations:\s*this\.servedRelationEdges\(\),[\s\S]{0,400}?\.\.\.\(this\.conceptRecords\s*\?\s*\{\s*concepts:\s*this\.conceptRecords\s*\}\s*:\s*\{\}\),/,
+    );
+  });
+
   it("the Today panel's instrument source is wired over the shared composed-session holder ([SESS-8.5], ol-egov.132.5)", () => {
     // `[SESS-8.5]` (`ol-egov.132.5`) stopped Today's instrument source
     // running its own `buildReviewSession`-based walk (the "legacy path"
