@@ -11,12 +11,14 @@ const BASE_PATH = '02 Assignments/Assignments.base';
 describe('readAssessments — against the real Assignments.base fixture', () => {
   const source = new FolderSource(FIXTURE_ROOT);
 
-  it('reads all 15 assessment records, none dropped', async () => {
+  // 16, not 15: `Season Checkpoint - GEOL204.md` (D-373, ol-egov.141.89.10.38) added a
+  // sixteenth assessment note to this fixture folder, ahead of the workbench simulator's clock.
+  it('reads all 16 assessment records, none dropped', async () => {
     const report = await readAssessments(source, BASE_PATH);
     expect(report.configErrors).toEqual([]);
     expect(report.sourceFolders).toEqual(['02 Assignments']);
-    expect(report.notesScanned).toHaveLength(15);
-    expect(report.records).toHaveLength(15);
+    expect(report.notesScanned).toHaveLength(16);
+    expect(report.records).toHaveLength(16);
   });
 
   it('resolves all five fields to their real (canonical) frontmatter keys', () => {
@@ -52,6 +54,10 @@ describe('readAssessments — against the real Assignments.base fixture', () => 
   // sums to 1, not 100. The sum is the check worth keeping (it is the Base's
   // own `Sum` summary), and it is now basis-independent: whichever way she
   // writes them, a complete course comes to the whole grade.
+  // `Season Checkpoint - GEOL204.md` and `Presentation 1 - GEOL204.md` both
+  // carry no `weight` at all (an announced-later / ungraded record), so the
+  // loop below skips them (`r.weight === undefined`) and the already-fully-
+  // weighted seven GEOL204 records still sum to exactly 1.
   it('parses weight as a number and each course sums to the whole grade (1.0) after [D-143] normalization', async () => {
     const report = await readAssessments(source, BASE_PATH);
     const byCourse = new Map<string, number>();

@@ -84,11 +84,13 @@ describe('resolveAssessments — F1.2 choice between the Base and the manual fal
     expect(report.records[0]?.course).toBe('Course A');
   });
 
+  // 16, not 15: `Season Checkpoint - GEOL204.md` (D-373, ol-egov.141.89.10.38) added a
+  // sixteenth assessment note to the fixture, ahead of the workbench simulator's clock.
   it('against the real fixture Base, resolves to the Base and reports it as the source', async () => {
     const fixtureSource = new FolderSource(REAL_BASE_FIXTURE_ROOT);
     const report = await resolveAssessments(fixtureSource, REAL_BASE_PATH);
     expect(report.source).toBe('base');
-    expect(report.records).toHaveLength(15);
+    expect(report.records).toHaveLength(16);
   });
 });
 
