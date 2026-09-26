@@ -601,6 +601,58 @@ function assessmentErrorAdjacencySignals(
 }
 
 /**
+ * Key-first, name-for-keyless-only identity — the same discipline
+ * `packages/core/src/concept/corpus-relations/nominate.ts`'s own
+ * `identityOf` applies at candidate-generation time (`ol-egov.141.89.4.16`)
+ * and `packages/core/src/concept/corpus-relations/verdict.ts`'s `byName`
+ * applies at verdict-resolution time (`ol-egov.141.89.4.18`), restated here
+ * rather than imported across the client/plugin boundary — this module
+ * already restates other core helpers deliberately (module doc,
+ * `unorderedPairKey` below). A concept's `key` when it has one, its `name`
+ * only as the fallback for a keyless concept.
+ */
+function identityOf(concept: CorpusConcept): string {
+  return concept.key ?? concept.name;
+}
+
+/**
+ * `concept.name`/`.aliases` -> `CorpusConcept`, for the `her-link` wikilink
+ * pass and `assessmentErrorAdjacencySignals` below. **A name or alias held
+ * by two distinct, differently-keyed concepts is ambiguous within this
+ * concept set and is excluded from the index entirely** (rel.md §3 Default
+ * 5, `ol-egov.141.89.4.18` — the same key-first, name-for-keyless-only
+ * discipline `./nominate.ts`'s widened byName and `./verdict.ts`'s byName
+ * fallback both apply): a wikilink or misconception record naming it then
+ * misses here exactly as a name outside the set would, and nominates
+ * nothing for it — never a silent last-write-wins pick of whichever
+ * concept happened to be indexed last. Two concepts sharing a name or
+ * alias but the SAME identity (the same concept's own alias colliding with
+ * its own name, or two keyless concepts indistinguishable by construction)
+ * are not ambiguous and still resolve, unchanged from before this fix.
+ */
+function buildByNameIndex(concepts: readonly CorpusConcept[]): ReadonlyMap<string, CorpusConcept> {
+  const index = new Map<string, CorpusConcept>();
+  const identityByName = new Map<string, string>();
+  const ambiguousNames = new Set<string>();
+  const consider = (nameOrAlias: string, concept: CorpusConcept) => {
+    const identity = identityOf(concept);
+    const priorIdentity = identityByName.get(nameOrAlias);
+    if (priorIdentity === undefined) {
+      identityByName.set(nameOrAlias, identity);
+      index.set(nameOrAlias, concept);
+    } else if (priorIdentity !== identity) {
+      ambiguousNames.add(nameOrAlias);
+    }
+  };
+  for (const concept of concepts) {
+    consider(concept.name, concept);
+    for (const alias of concept.aliases) consider(alias, concept);
+  }
+  for (const name of ambiguousNames) index.delete(name);
+  return index;
+}
+
+/**
  * One vault pass over `concepts`' own anchor files, the classified
  * assessment documents `registerSources` finds, and (when wired) the local
  * embedding cache: resolves each concept's introducing-passage text (for
@@ -622,13 +674,7 @@ export async function gatherCorpusRelationVaultContext(
   concepts: readonly CorpusConcept[],
   options: CorpusRelationVaultContextOptions = {},
 ): Promise<CorpusRelationVaultContext> {
-  const byName = new Map<string, CorpusConcept>();
-  for (const concept of concepts) {
-    if (!byName.has(concept.name)) byName.set(concept.name, concept);
-    for (const alias of concept.aliases) {
-      if (!byName.has(alias)) byName.set(alias, concept);
-    }
-  }
+  const byName = buildByNameIndex(concepts);
 
   const fileCache = new Map<VaultPath, string>();
   async function readCached(path: VaultPath): Promise<string> {

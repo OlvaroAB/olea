@@ -258,14 +258,58 @@ export interface ReconcileCorpusVerdictsResult {
   readonly dropped: Readonly<Partial<Record<CorpusRelationDropReason, number>>>;
 }
 
+/**
+ * Key-first, name-for-keyless-only identity — the same discipline
+ * `./nominate.js`'s own `identityOf` applies at candidate-generation time
+ * (`ol-egov.141.89.4.16`), restated here rather than imported (that
+ * function is not exported, and this file already duplicates
+ * `./nominate.js`'s reconciliation posture deliberately — module doc,
+ * `pairKey` above). A concept's `key` when it has one, its `name` only as
+ * the fallback for a keyless concept — two keyless concepts sharing a name
+ * are, by construction, indistinguishable and so share one identity too.
+ */
+function identityOf(concept: CorpusConcept): string {
+  return concept.key ?? concept.name;
+}
+
+/**
+ * `ol-egov.141.89.4.16` widened `./nominate.js`'s own byName index to
+ * return every concept sharing a name, not just the first — so a batch can
+ * now legitimately hold two distinct, differently-keyed candidates under
+ * one shared name. A name that resolves to more than one DISTINCT identity
+ * within this batch is ambiguous and is excluded from the index entirely
+ * (rel.md §3 Default 5, `ol-egov.141.89.4.18`): a keyless verdict naming it
+ * then misses here exactly as an unrecognised name would, and is dropped
+ * as `'unknown-concept'` by the same check `reconcileCorpusVerdicts` below
+ * already runs for that reason — never a silent last-write-wins pick of
+ * whichever candidate happened to be indexed last.
+ *
+ * Two candidates sharing a name but the SAME identity (the same concept
+ * reappearing across several candidate pairs, or two keyless concepts that
+ * are — by `identityOf`'s own contract — indistinguishable) are not
+ * ambiguous and still resolve, unchanged from before this fix.
+ */
 function byName(
   candidates: readonly CorpusRelationCandidate[],
 ): ReadonlyMap<string, CorpusConcept> {
   const index = new Map<string, CorpusConcept>();
+  const identityByName = new Map<string, string>();
+  const ambiguousNames = new Set<string>();
+  const consider = (concept: CorpusConcept) => {
+    const identity = identityOf(concept);
+    const priorIdentity = identityByName.get(concept.name);
+    if (priorIdentity === undefined) {
+      identityByName.set(concept.name, identity);
+      index.set(concept.name, concept);
+    } else if (priorIdentity !== identity) {
+      ambiguousNames.add(concept.name);
+    }
+  };
   for (const candidate of candidates) {
-    index.set(candidate.a.name, candidate.a);
-    index.set(candidate.b.name, candidate.b);
+    consider(candidate.a);
+    consider(candidate.b);
   }
+  for (const name of ambiguousNames) index.delete(name);
   return index;
 }
 

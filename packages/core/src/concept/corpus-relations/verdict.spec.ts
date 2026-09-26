@@ -306,6 +306,75 @@ describe('reconcileCorpusVerdicts — key-based join (`ol-l40p` [REL-9])', () =>
   });
 });
 
+describe('reconcileCorpusVerdicts — a keyless verdict is never resolved through an ambiguous name (ol-egov.141.89.4.18, rel.md §3 Default 5)', () => {
+  // `ol-egov.141.89.4.16` widened `./nominate.js`'s byName index to return
+  // EVERY concept sharing a name, not just the first — so a batch can now
+  // legitimately hold two distinct, differently-keyed candidates under one
+  // shared name (coined here as "Loam", mirroring nominate.spec.ts's own
+  // KEY IDENTITY scenario shape). rel.md's Default 5 rules that a verdict
+  // missing either endpoint's key round-trip is never resolved through a
+  // partner's name "however unique within the call" — this suite is the
+  // ambiguous half of that: when the SAME name in one batch could mean
+  // either of two distinct concepts, a keyless verdict naming it must never
+  // silently pick one (last-write-wins, the pre-fix defect).
+
+  it('drops a keyless verdict whose name is shared by two distinct, differently-keyed candidates in the batch, rather than silently resolving to whichever was seen last', () => {
+    const loamA = concept('Loam', { key: 'key-loam-a' });
+    const partnerA = concept('Partner A', { key: 'key-partner-a' });
+    const loamB = concept('Loam', { key: 'key-loam-b' });
+    const partnerB = concept('Partner B', { key: 'key-partner-b' });
+
+    const result = reconcileCorpusVerdicts(
+      // Keyless verdict: no aKey/bKey, so resolution can only fall back to
+      // the name "Loam" — ambiguous in this batch between key-loam-a and
+      // key-loam-b.
+      [verdict({ a: 'Loam', b: 'Partner A' })],
+      [candidate(loamA, partnerA), candidate(loamB, partnerB)],
+    );
+
+    expect(result.relations).toHaveLength(0);
+    expect(result.dropped['unknown-concept']).toBe(1);
+  });
+
+  it('an unambiguous keyless verdict still resolves by name exactly as before, even when OTHER candidates in the same batch share names ambiguously', () => {
+    const loamA = concept('Loam', { key: 'key-loam-a' });
+    const partnerA = concept('Partner A', { key: 'key-partner-a' });
+    const loamB = concept('Loam', { key: 'key-loam-b' });
+    const partnerB = concept('Partner B', { key: 'key-partner-b' });
+    // A third, unambiguously-named pair in the SAME batch as the ambiguous
+    // "Loam" pairs above.
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+
+    const result = reconcileCorpusVerdicts(
+      [verdict()], // names Osmosis/Diffusion basics — unambiguous in this batch
+      [candidate(loamA, partnerA), candidate(loamB, partnerB), candidate(osmosis, diffusion)],
+    );
+
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.from).toBe('Diffusion basics');
+    expect(result.relations[0]?.to).toBe('Osmosis');
+  });
+
+  it('two fully keyless candidates sharing a name still degrade to resolving as one node — unchanged, pre-existing limitation (no key exists to tell them apart)', () => {
+    const loamA = concept('Loam'); // no key at all — legacy caller
+    const partnerA = concept('Partner A');
+    const loamB = concept('Loam'); // same name, also no key — indistinguishable from loamA
+    const partnerB = concept('Partner B');
+
+    const result = reconcileCorpusVerdicts(
+      [verdict({ a: 'Loam', b: 'Partner A' })],
+      [candidate(loamA, partnerA), candidate(loamB, partnerB)],
+    );
+
+    // Neither concept carries a key, so there is no way to tell them apart —
+    // the name resolves (to whichever, since they are indistinguishable),
+    // unlike the keyed-ambiguous case above which is dropped.
+    expect(result.relations).toHaveLength(1);
+    expect(result.dropped['unknown-concept']).toBeUndefined();
+  });
+});
+
 describe('reconcileCorpusVerdicts — endpointRevisions stamping at judgment time (ol-egov.141.89.4.14)', () => {
   function stampingOver(
     pathsByConceptName: Record<string, readonly VaultPath[]>,

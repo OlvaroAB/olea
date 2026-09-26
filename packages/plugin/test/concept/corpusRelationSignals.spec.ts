@@ -397,6 +397,51 @@ describe('gatherCorpusRelationVaultContext — her-link nomination signal', () =
 
     expect(signals).toEqual([{ kind: 'her-link', a: 'Type I error', b: 'Type II error' }]);
   });
+
+  it(
+    'a wikilink to a name shared by two distinct, differently-keyed concepts nominates ' +
+      'nothing, rather than resolving to whichever one this module happened to index last ' +
+      '(ol-egov.141.89.4.18, rel.md §3 Default 5’s key-first discipline applied to nomination)',
+    async () => {
+      const vault = new MemoryVault({
+        'A.md': 'See also [[Loam]].',
+        'B.md': 'Loam, one of two distinct coined concepts sharing this exact name.',
+        'C.md': 'Loam, the other distinct coined concept sharing this exact name.',
+      });
+      const concepts: CorpusConcept[] = [
+        concept('Anchor concept', 'A.md', [0, 19]),
+        { ...concept('Loam', 'B.md', [0, 67]), key: 'key-loam-b' },
+        { ...concept('Loam', 'C.md', [0, 65]), key: 'key-loam-c' },
+      ];
+
+      const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+      expect(signals).toEqual([]);
+    },
+  );
+
+  it(
+    'a wikilink to a name held by only ONE keyed concept still resolves, even when a ' +
+      'DIFFERENT name elsewhere in the same set is ambiguous',
+    async () => {
+      const vault = new MemoryVault({
+        'A.md': 'A Type I error occurs when... see also [[Type II error]] for the converse.',
+        'B.md': 'A Type II error is a false negative.',
+        'C.md': 'Loam, one of two distinct coined concepts sharing this exact name.',
+        'D.md': 'Loam, the other distinct coined concept sharing this exact name.',
+      });
+      const concepts: CorpusConcept[] = [
+        concept('Type I error', 'A.md', [0, 76]),
+        concept('Type II error', 'B.md', [0, 37]),
+        { ...concept('Loam', 'C.md', [0, 67]), key: 'key-loam-c' },
+        { ...concept('Loam', 'D.md', [0, 65]), key: 'key-loam-d' },
+      ];
+
+      const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+      expect(signals).toEqual([{ kind: 'her-link', a: 'Type I error', b: 'Type II error' }]);
+    },
+  );
 });
 
 describe('gatherCorpusRelationVaultContext — assessment-cooccurrence nomination signal', () => {
@@ -803,4 +848,32 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
     );
     expect(signals).toHaveLength(2);
   });
+
+  it(
+    'a misconception record naming a conceptId shared by two distinct, differently-keyed ' +
+      'concepts nominates nothing, rather than resolving to whichever one this module ' +
+      'happened to index last (ol-egov.141.89.4.18)',
+    async () => {
+      const vault = new MemoryVault({
+        'B.md': 'Loam, one of two distinct coined concepts sharing this exact name.',
+        'C.md': 'Loam, the other distinct coined concept sharing this exact name.',
+        'D.md': 'A Silt error is unrelated.',
+      });
+      const concepts: CorpusConcept[] = [
+        { ...concept('Loam', 'B.md', [0, 67]), key: 'key-loam-b' },
+        { ...concept('Loam', 'C.md', [0, 65]), key: 'key-loam-c' },
+        concept('Silt error', 'D.md', [0, 26]),
+      ];
+
+      const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+        assessmentErrorAdjacency: {
+          records: [
+            misconceptionRecord({ conceptId: 'Loam', confusedWithConceptId: 'Silt error' }),
+          ],
+        },
+      });
+
+      expect(signals.filter((s) => s.kind === 'assessment-error-adjacency')).toEqual([]);
+    },
+  );
 });

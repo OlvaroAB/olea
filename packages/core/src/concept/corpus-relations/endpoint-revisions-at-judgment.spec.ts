@@ -16,6 +16,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
 import type { VaultPath } from '../../vault/types.js';
+import type { ConceptKeyRecord } from '../key-store.js';
 import { runCorpusRelationBatch } from './batch.js';
 import {
   evaluatePropositionFreshnessWithLookup,
@@ -26,7 +27,10 @@ import {
   type PathRevisionLookup,
 } from './endpoint-revision-lookup.js';
 import type { CorpusConcept } from './types.js';
-import type { CorpusRelationVerdictPort } from './verdict.js';
+import type {
+  CorpusReconciledRelationWithEndpointRevisions,
+  CorpusRelationVerdictPort,
+} from './verdict.js';
 
 function anchor(sourcePath: VaultPath): Provenance {
   return { sourcePath, location: { page: 1, charRange: { start: 0, end: 10 } } };
@@ -48,7 +52,36 @@ function concept(name: string): CorpusConcept {
   return { name, aliases: [], anchor: anchor(INTRODUCING_PATHS[name]?.[0] ?? 'Lecture 1.md') };
 }
 
-async function judgeWithRevisions(revisionsAtJudgment: Record<string, string>) {
+/**
+ * The two lookup key records every test in this suite builds its
+ * `buildEndpointRevisionLookup` call from — factored out once rather than
+ * repeated per test. `introducingPaths` is spread in only when
+ * `INTRODUCING_PATHS['Diffusion basics']` actually resolves (it always
+ * does here; `noUncheckedIndexedAccess` still types the lookup as
+ * possibly `undefined`), never set to `undefined` directly — `TopicAnchor.
+ * introducingPaths` is optional, and `exactOptionalPropertyTypes` refuses
+ * an explicit `undefined` for an optional field.
+ */
+function lookupKeyRecords(): readonly Pick<ConceptKeyRecord, 'key' | 'anchor'>[] {
+  const diffusionPaths = INTRODUCING_PATHS['Diffusion basics'];
+  return [
+    { key: 'ck-osmosis', anchor: { kind: 'note', noteUid: null, notePath: 'Lecture 1.md' } },
+    {
+      key: 'ck-diffusion',
+      anchor: {
+        kind: 'topic',
+        course: 'course-a',
+        name: 'coined-diffusion',
+        aliases: [],
+        ...(diffusionPaths !== undefined ? { introducingPaths: diffusionPaths } : {}),
+      },
+    },
+  ];
+}
+
+async function judgeWithRevisions(
+  revisionsAtJudgment: Record<string, string>,
+): Promise<CorpusReconciledRelationWithEndpointRevisions> {
   const osmosis = concept('Osmosis');
   const diffusion = concept('Diffusion basics');
   const port: CorpusRelationVerdictPort = {
@@ -77,7 +110,16 @@ async function judgeWithRevisions(revisionsAtJudgment: Record<string, string>) {
   expect(result.relations).toHaveLength(1);
   const [relation] = result.relations;
   if (relation === undefined) throw new Error('unreachable: length checked above');
-  return relation;
+  // `runCorpusRelationBatch`'s declared return type is `CorpusReconciledRelation[]`
+  // (`./batch.ts`, outside this bead's owns) — narrower than what actually flows
+  // through when `endpointRevisionStamping` is supplied, above. `./verdict.ts`'s
+  // own module doc: `reconcileCorpusVerdicts` returns the wider
+  // `CorpusReconciledRelationWithEndpointRevisions` by construction, and
+  // `deriveRelationSet` holds the original edge object by reference rather than
+  // reconstructing it, so the extra field survives unchanged — this narrows the
+  // type back to what is actually there rather than fixing `./batch.ts`'s
+  // signature (a file this bead does not own).
+  return relation as CorpusReconciledRelationWithEndpointRevisions;
 }
 
 function judgedRevisionsFor(relation: {
@@ -99,22 +141,7 @@ describe('endpoint revisions: judged at one time, read at another (ol-egov.141.8
     expect(relation.endpointRevisions).toBeDefined();
 
     const currentRevisionOf: PathRevisionLookup = (path) => R1[path as keyof typeof R1];
-    const lookup = buildEndpointRevisionLookup(
-      [
-        { key: 'ck-osmosis', anchor: { kind: 'note', noteUid: null, notePath: 'Lecture 1.md' } },
-        {
-          key: 'ck-diffusion',
-          anchor: {
-            kind: 'topic',
-            course: 'course-a',
-            name: 'coined-diffusion',
-            aliases: [],
-            introducingPaths: INTRODUCING_PATHS['Diffusion basics'],
-          },
-        },
-      ],
-      currentRevisionOf,
-    );
+    const lookup = buildEndpointRevisionLookup(lookupKeyRecords(), currentRevisionOf);
 
     const { from, to } = judgedRevisionsFor(relation);
     const freshness = evaluatePropositionFreshnessWithLookup(from, to, lookup);
@@ -128,22 +155,7 @@ describe('endpoint revisions: judged at one time, read at another (ol-egov.141.8
 
     const changed = { ...R1, 'Lecture 3.md': 'rev-CHANGED' }; // one of diffusion's two paths
     const currentRevisionOf: PathRevisionLookup = (path) => changed[path as keyof typeof changed];
-    const lookup = buildEndpointRevisionLookup(
-      [
-        { key: 'ck-osmosis', anchor: { kind: 'note', noteUid: null, notePath: 'Lecture 1.md' } },
-        {
-          key: 'ck-diffusion',
-          anchor: {
-            kind: 'topic',
-            course: 'course-a',
-            name: 'coined-diffusion',
-            aliases: [],
-            introducingPaths: INTRODUCING_PATHS['Diffusion basics'],
-          },
-        },
-      ],
-      currentRevisionOf,
-    );
+    const lookup = buildEndpointRevisionLookup(lookupKeyRecords(), currentRevisionOf);
 
     const { from, to } = judgedRevisionsFor(relation);
     const freshness = evaluatePropositionFreshnessWithLookup(from, to, lookup);
@@ -158,22 +170,7 @@ describe('endpoint revisions: judged at one time, read at another (ol-egov.141.8
     const dropped: Partial<typeof R1> = { ...R1 };
     delete dropped['Lecture 3.md']; // one of diffusion's two paths now has no revision on record
     const currentRevisionOf: PathRevisionLookup = (path) => dropped[path as keyof typeof R1];
-    const lookup = buildEndpointRevisionLookup(
-      [
-        { key: 'ck-osmosis', anchor: { kind: 'note', noteUid: null, notePath: 'Lecture 1.md' } },
-        {
-          key: 'ck-diffusion',
-          anchor: {
-            kind: 'topic',
-            course: 'course-a',
-            name: 'coined-diffusion',
-            aliases: [],
-            introducingPaths: INTRODUCING_PATHS['Diffusion basics'],
-          },
-        },
-      ],
-      currentRevisionOf,
-    );
+    const lookup = buildEndpointRevisionLookup(lookupKeyRecords(), currentRevisionOf);
 
     const { from, to } = judgedRevisionsFor(relation);
     const freshness = evaluatePropositionFreshnessWithLookup(from, to, lookup);
