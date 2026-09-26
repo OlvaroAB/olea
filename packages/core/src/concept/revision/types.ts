@@ -65,6 +65,59 @@ export interface RevisionJudgePort {
 }
 
 /**
+ * `[D-343]`/`[D-351]` — the instant `evaluateCitedPassageRevision` confirms a
+ * real difference at this cited passage (a raw hash mismatch against
+ * `previousContentHash`), it reports that fact here, BEFORE it does anything
+ * else: before checking whether a judge is even configured, and before any
+ * judge call is attempted. This is the recording half `chg.md` §3 requires
+ * ("this recognition happens... and is never delayed by this gate's
+ * debounce, floor or escalation logic" — the same posture applies at this
+ * un-gated grain: recording is unconditional, judging is not). The caller
+ * persists it durably (retried until the write succeeds, never dropped,
+ * never left half-applied — `[D-343]`'s own words: "a citation already known
+ * to differ must never silently read as fresh again").
+ *
+ * **Never called for `'unchanged'`, `'relocated'`, `'relocation-proposed'`
+ * or `'stranded'`** — those answer a different question (the anchor moved or
+ * was lost, not "did this text change"); recording a pending revalidation
+ * for any of them would conflate two facts `chg.md` §3 keeps deliberately
+ * apart.
+ *
+ * **Propagation, not swallowing, on failure.** If `recordPending` rejects,
+ * `evaluateCitedPassageRevision` propagates the rejection rather than
+ * continuing on to a judge call the caller never durably recorded as
+ * pending — this module holds no retry loop of its own; the caller's own
+ * next pass, re-evaluating the same still-unrecorded difference, is what
+ * gives the "retried until it succeeds" guarantee (see
+ * `citation-revision-wiring.ts`'s `tick`, which already treats a thrown
+ * evaluation the same way: `continue`, leaving every prior persisted fact
+ * untouched for the next pass to retry).
+ */
+export interface PendingRevalidationRecorder {
+  recordPending(input: {
+    readonly instrumentId: string;
+    /**
+     * The content hash of the passage text this pending state is raised
+     * against — `[D-351]`'s "the particular source revision being checked."
+     * Computed the same way (`hashText`) and in the same value space as
+     * {@link CitedPassageInput.previousContentHash} and this call's own
+     * `newContentHash` — a digest of THIS chain's own notion of "revision"
+     * (the cited passage's material text at citation-revision grain), not
+     * necessarily the same value space as `InstrumentCitation.sourceRevision`
+     * (`../../instrument/citation-store.js`, a hash of the whole source
+     * file, minted at draft time) — see this bead's close notes for why a
+     * caller bridging the two must not assume they are literally equal.
+     * A later resolution computed for a DIFFERENT hash must never clear or
+     * act on the pending state THIS call raises, once a newer edit has
+     * recorded its own (the caller's compare-and-check, e.g.
+     * `CitationHashStore.isPendingRevalidationCurrent`, enforces this; this
+     * type only carries the value being keyed on).
+     */
+    readonly sourceContentHash: string;
+  }): Promise<void>;
+}
+
+/**
  * What this module produces when a cited passage's hash changes and the
  * judge is called — the bead's own words: "the instrument, the time, the
  * old and new content hashes, and the change that caused it."
@@ -159,7 +212,10 @@ export interface CitedPassageInput {
  * - `'judge-unavailable'` — the hash changed (a real signal) but no judge
  *   was configured to read it — mirrors row 1.4's own `wiring.ts` grey-out
  *   contract exactly: never fabricate a verdict, never silently drop the
- *   change.
+ *   change. `sourceContentHash` is the same value already passed to
+ *   {@link PendingRevalidationRecorder.recordPending} for this call — carried
+ *   here too so a caller can report or re-check the pending fact without
+ *   re-hashing.
  * - `'refreshed'` — the judge read old and new text and found the same
  *   claim: the {@link RevisionEvent} is produced, and the caller refreshes
  *   the instrument's text in place, keeping its id and review history.
@@ -176,7 +232,7 @@ export type CitedPassageRevisionOutcome =
   | { readonly kind: 'relocated'; readonly candidate: RelocationCandidate }
   | { readonly kind: 'relocation-proposed'; readonly candidate: RelocationCandidate }
   | { readonly kind: 'stranded' }
-  | { readonly kind: 'judge-unavailable' }
+  | { readonly kind: 'judge-unavailable'; readonly sourceContentHash: string }
   | { readonly kind: 'refreshed'; readonly event: RevisionEvent }
   | {
       readonly kind: 'revised';

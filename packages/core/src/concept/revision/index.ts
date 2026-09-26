@@ -33,6 +33,7 @@ export type {
   ItemValidationOutcome,
   ItemValidationProposal,
   ItemValidationTriggerOutcome,
+  PendingRevalidationRecorder,
   RelocationCandidate,
   RevisionEvent,
   RevisionJudgeInput,

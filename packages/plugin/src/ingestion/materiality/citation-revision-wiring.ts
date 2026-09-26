@@ -71,6 +71,7 @@ import {
   evaluateCitedPassageRevision,
   hashText,
   type McqInstrumentRecord,
+  type PendingRevalidationRecorder,
   type RelocationCandidate,
   type RevisionJudgeInput,
   type RevisionJudgePort,
@@ -112,6 +113,18 @@ export interface CitationRevisionTickReport {
    * Never a judge call, never a dependant invalidation.
    */
   readonly formattingOnly: number;
+  /**
+   * `[D-351]`: a verdict was computed against an EARLIER content hash, but
+   * this instrument's persisted pending-revalidation fact has since moved on
+   * to a newer one — a late result for an earlier edit, once a newer edit
+   * has already raised its own pending state (only possible when two ticks
+   * overlap: `main.ts`'s `tickCitationRevisions` fires on a fixed interval
+   * without waiting for the previous pass, `main.ts:1985-2005`). Discarded
+   * rather than acted on: no suspend, no enqueue, no restore-to-current
+   * write. The newer edit gets its own evaluation, and its own verdict, on a
+   * later pass.
+   */
+  readonly staleResultDiscarded: number;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -176,6 +189,7 @@ interface MutableTickReport {
   judgeUnavailable: number;
   newlyBaselined: number;
   formattingOnly: number;
+  staleResultDiscarded: number;
 }
 
 export class CitationRevisionTrigger {
@@ -199,6 +213,16 @@ export class CitationRevisionTrigger {
       judgeUnavailable: 0,
       newlyBaselined: 0,
       formattingOnly: 0,
+      staleResultDiscarded: 0,
+    };
+
+    // `[D-351]`: the moment `evaluateCitedPassageRevision` confirms a real
+    // difference, it calls this BEFORE any judge call, so the pending fact
+    // is durable even while the judge is delayed or unavailable. Built once
+    // per tick, stateless across iterations — closes only over `this.deps`.
+    const pendingRecorder: PendingRevalidationRecorder = {
+      recordPending: ({ instrumentId, sourceContentHash }) =>
+        this.deps.store.setPendingRevalidation(instrumentId, sourceContentHash, this.deps.clock.now()),
     };
 
     // `[D-357]`: the permanent concept key on every record this walk hands on.
@@ -275,6 +299,13 @@ export class CitationRevisionTrigger {
           await this.deps.store.save(instrumentId, {
             sourcePath: citedPassagePath(currentRecord),
             text: current.text,
+            // [D-351]: a formatting-only edit is not a resolution — carry
+            // over whatever pending-revalidation fact was already recorded
+            // (from an earlier, still-unresolved real difference) rather
+            // than silently clearing it via this unrelated write.
+            ...(previous.pendingRevalidation !== undefined
+              ? { pendingRevalidation: previous.pendingRevalidation }
+              : {}),
             conceptIds: currentRecord.conceptIds,
           });
         } catch (error) {
@@ -294,6 +325,7 @@ export class CitationRevisionTrigger {
           },
           this.deps.judge,
           this.deps.clock,
+          pendingRecorder,
         );
       } catch (error) {
         console.error('Olea: citation-revision evaluation failed', error);
@@ -371,12 +403,20 @@ export class CitationRevisionTrigger {
         return;
       case 'relocated':
         // Exact whitespace-normalised match found elsewhere — heals
-        // silently, no judge call happens for this arm, no event.
+        // silently, no judge call happens for this arm, no event. This is a
+        // different question from a text change at the anchor (`[D-351]`'s
+        // pending fact is never raised on this branch — see
+        // `evaluateCitedPassageRevision`'s own doc), so whatever pending
+        // fact was already recorded carries over unresolved rather than
+        // being silently cleared by this unrelated write.
         report.relocated += 1;
         try {
           await this.deps.store.save(instrumentId, {
             sourcePath: outcome.candidate.anchor.sourcePath,
             text: outcome.candidate.text,
+            ...(previous.pendingRevalidation !== undefined
+              ? { pendingRevalidation: previous.pendingRevalidation }
+              : {}),
             conceptIds: previous.conceptIds,
           });
         } catch (error) {
@@ -392,10 +432,25 @@ export class CitationRevisionTrigger {
         report.refreshed += 1;
         if (currentRecord !== undefined && current.kind === 'found-at-anchor') {
           try {
+            // [D-351]: this verdict was computed against
+            // `outcome.event.newContentHash`. Only restore to current
+            // (clearing the pending fact — the write below omits it) when
+            // the PERSISTED pending hash still matches: a mismatch means a
+            // newer edit has already raised its own pending state, and this
+            // is a late result for an earlier edit that must not clear it.
+            const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
+              instrumentId,
+              outcome.event.newContentHash,
+            );
+            if (!pendingStillCurrent) {
+              report.staleResultDiscarded += 1;
+              return;
+            }
             await this.deps.store.save(instrumentId, {
               sourcePath: citedPassagePath(currentRecord),
               text: current.text,
               conceptIds: currentRecord.conceptIds,
+              // pendingRevalidation omitted -- restored to current [D-351].
             });
           } catch (error) {
             console.error('Olea: citation-revision refresh write failed', error);
@@ -406,6 +461,18 @@ export class CitationRevisionTrigger {
         report.revised += 1;
         const conceptIds = currentRecord?.conceptIds ?? previous.conceptIds;
         try {
+          // [D-351]: same guard as `refreshed` above, before acting on the
+          // verdict at all — a stale 'revised' verdict must not suspend the
+          // predecessor or enqueue a successor against content a newer edit
+          // has already superseded.
+          const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
+            instrumentId,
+            outcome.event.newContentHash,
+          );
+          if (!pendingStillCurrent) {
+            report.staleResultDiscarded += 1;
+            return;
+          }
           await actions.suspend(outcome.predecessorInstrumentId, conceptIds);
           await actions.enqueue(outcome.successorEnqueueInput);
           // Retire tracking: the predecessor is suspended, so further

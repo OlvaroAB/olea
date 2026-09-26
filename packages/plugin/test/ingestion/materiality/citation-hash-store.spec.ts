@@ -98,4 +98,85 @@ describe('ObsidianCitationHashStore', () => {
     expect(loaded.has('instrument-1')).toBe(false);
     expect(loaded.get('instrument-2')).toEqual(RECORD_B);
   });
+
+  describe('[D-351] pendingRevalidation', () => {
+    it('an existing record with no pendingRevalidation field still reads correctly (INV-2)', async () => {
+      const host = new FakeDataHost();
+      host.blob = { [CITATION_ANCHOR_STORAGE_KEY]: { 'instrument-1': RECORD_A } };
+      const store = new ObsidianCitationHashStore(host);
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-1')).toEqual(RECORD_A);
+    });
+
+    it('setPendingRevalidation attaches the fact to an existing record, keyed to the given hash', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-1')).toEqual({
+        ...RECORD_A,
+        pendingRevalidation: { sinceContentHash: 'hash-1', since: 1_000 },
+      });
+    });
+
+    it('setPendingRevalidation is a no-op when nothing is tracked yet for the instrument', async () => {
+      const host = new FakeDataHost();
+      const store = new ObsidianCitationHashStore(host);
+      await store.setPendingRevalidation('never-saved', 'hash-1', 1_000);
+      expect(await store.loadAll()).toEqual(new Map());
+    });
+
+    it('setPendingRevalidation does not disturb another instrument already tracked', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.save('instrument-2', RECORD_B);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-2')).toEqual(RECORD_B);
+    });
+
+    it('isPendingRevalidationCurrent is true only when the persisted hash matches', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-1')).toBe(true);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-2')).toBe(false);
+    });
+
+    it('isPendingRevalidationCurrent is false when nothing is pending at all', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-1')).toBe(false);
+    });
+
+    it('a late setPendingRevalidation call for an earlier hash never overwrites a newer pending hash — last write observed wins, and isPendingRevalidationCurrent tracks whichever is persisted', async () => {
+      // Models the ordering, not true concurrency: tick A raises hash-1, then
+      // tick B (a newer edit) raises hash-2 before A's judge call resolves.
+      // The SETTING half always keeps the freshest known real difference.
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      await store.setPendingRevalidation('instrument-1', 'hash-2', 2_000);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-1')).toBe(false);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-2')).toBe(true);
+    });
+
+    it('save (the ordinary restore-to-current write) clears any pendingRevalidation, since it writes a full replacement record', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      await store.save('instrument-1', RECORD_A);
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-1')?.pendingRevalidation).toBeUndefined();
+    });
+
+    it('the atomic path behaves identically to the fallback path for set and check', async () => {
+      const raw = new FakeDataHost();
+      const host = new SerializingDataHost(raw);
+      const store = new ObsidianCitationHashStore(host);
+      await store.save('instrument-1', RECORD_A);
+      await store.setPendingRevalidation('instrument-1', 'hash-1', 1_000);
+      expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-1')).toBe(true);
+    });
+  });
 });

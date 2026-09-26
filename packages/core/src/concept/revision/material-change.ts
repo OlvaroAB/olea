@@ -26,6 +26,13 @@
  * cluster, a different lane's files); and a persisted revision event, which
  * has no ratified schema home yet (Class C — see this bead's close notes for
  * the exact schema gap and the clause that would need to authorise it).
+ *
+ * **`[D-351]` (ruled 2026-09-25): the pending-revalidation recording half.**
+ * The instant a real difference is confirmed (the hash check above), and
+ * before checking whether a judge is configured, this function calls the
+ * optional {@link PendingRevalidationRecorder} so the caller can persist
+ * `[D-343]`'s pending-revalidation fact durably — still never writing
+ * anything itself (no vault access here either; see the paragraph above).
  */
 
 import { hashText } from '../../ingestion/hash.js';
@@ -35,6 +42,7 @@ import { classifyRelocation } from './relocate.js';
 import type {
   CitedPassageInput,
   CitedPassageRevisionOutcome,
+  PendingRevalidationRecorder,
   RevisionEvent,
   RevisionJudgePort,
 } from './types.js';
@@ -46,6 +54,7 @@ export async function evaluateCitedPassageRevision(
   input: CitedPassageInput,
   judge: RevisionJudgePort | null,
   clock: Clock,
+  pendingRecorder?: PendingRevalidationRecorder,
 ): Promise<CitedPassageRevisionOutcome> {
   if (input.current.kind === 'not-found') {
     const match = classifyRelocation(input.previousText, input.current.relocationCandidates);
@@ -60,8 +69,19 @@ export async function evaluateCitedPassageRevision(
     return { kind: 'unchanged' };
   }
 
+  // `[D-343]`/`[D-351]`: a real difference is now known. Record it as
+  // pending revalidation BEFORE checking whether a judge is even configured
+  // and before any judge call — recording is unconditional, judging is not
+  // (see `PendingRevalidationRecorder`'s own doc). A failure here propagates
+  // rather than being swallowed, so this function never proceeds past an
+  // unrecorded pending state.
+  await pendingRecorder?.recordPending({
+    instrumentId: input.instrumentId,
+    sourceContentHash: newContentHash,
+  });
+
   if (judge === null) {
-    return { kind: 'judge-unavailable' };
+    return { kind: 'judge-unavailable', sourceContentHash: newContentHash };
   }
 
   const verdict = await judge.judge({

@@ -17,7 +17,12 @@ import { describe, expect, it } from 'vitest';
 import { hashText } from '../../ingestion/hash.js';
 import type { Clock } from '../../ingestion/types.js';
 import { evaluateCitedPassageRevision } from './material-change.js';
-import type { CitedPassageInput, RevisionJudgePort, RevisionJudgeVerdict } from './types.js';
+import type {
+  CitedPassageInput,
+  PendingRevalidationRecorder,
+  RevisionJudgePort,
+  RevisionJudgeVerdict,
+} from './types.js';
 
 const clock: Clock = { now: () => 5_000 };
 
@@ -105,14 +110,108 @@ describe('evaluateCitedPassageRevision', () => {
   });
 
   it('reports judge-unavailable when the hash changed but no judge is configured — never fabricates a verdict', async () => {
+    const newText = 'the new wording of the passage';
     const input: CitedPassageInput = {
       instrumentId: 'inst-5',
       previousText: 'the old wording of the passage',
       previousContentHash: await hashText('the old wording of the passage'),
-      current: { kind: 'found-at-anchor', text: 'the new wording of the passage' },
+      current: { kind: 'found-at-anchor', text: newText },
     };
     const outcome = await evaluateCitedPassageRevision(input, null, clock);
-    expect(outcome).toEqual({ kind: 'judge-unavailable' });
+    expect(outcome).toEqual({ kind: 'judge-unavailable', sourceContentHash: await hashText(newText) });
+  });
+
+  describe('[D-351] pending-revalidation recording', () => {
+    it('records pending BEFORE checking whether a judge is configured, keyed to the new content hash', async () => {
+      const calls: { instrumentId: string; sourceContentHash: string }[] = [];
+      const pendingRecorder: PendingRevalidationRecorder = {
+        recordPending: async (input) => {
+          calls.push(input);
+        },
+      };
+      const oldText = 'the glacier retreated slowly';
+      const newText = 'the glacier retreated quickly';
+      const input: CitedPassageInput = {
+        instrumentId: 'inst-10',
+        previousText: oldText,
+        previousContentHash: await hashText(oldText),
+        current: { kind: 'found-at-anchor', text: newText },
+      };
+      const outcome = await evaluateCitedPassageRevision(input, null, clock, pendingRecorder);
+      expect(calls).toEqual([{ instrumentId: 'inst-10', sourceContentHash: await hashText(newText) }]);
+      expect(outcome).toEqual({ kind: 'judge-unavailable', sourceContentHash: await hashText(newText) });
+    });
+
+    it('records pending before the judge call, and still resolves the verdict afterwards', async () => {
+      const order: string[] = [];
+      const pendingRecorder: PendingRevalidationRecorder = {
+        recordPending: async () => {
+          order.push('recorded');
+        },
+      };
+      const judge: RevisionJudgePort = {
+        judge: async () => {
+          order.push('judged');
+          return { material: false };
+        },
+      };
+      const oldText = 'the current is 2 amps';
+      const newText = 'the current is 3 amps';
+      const input: CitedPassageInput = {
+        instrumentId: 'inst-11',
+        previousText: oldText,
+        previousContentHash: await hashText(oldText),
+        current: { kind: 'found-at-anchor', text: newText },
+      };
+      const outcome = await evaluateCitedPassageRevision(input, judge, clock, pendingRecorder);
+      expect(order).toEqual(['recorded', 'judged']);
+      expect(outcome.kind).toBe('refreshed');
+    });
+
+    it('never records pending for relocated, relocation-proposed or stranded outcomes — a different question', async () => {
+      const calls: unknown[] = [];
+      const pendingRecorder: PendingRevalidationRecorder = {
+        recordPending: async (input) => {
+          calls.push(input);
+        },
+      };
+      const oldText = 'the ridge formed by subduction';
+      const stranded: CitedPassageInput = {
+        instrumentId: 'inst-12',
+        previousText: oldText,
+        previousContentHash: await hashText(oldText),
+        current: { kind: 'not-found', relocationCandidates: [] },
+      };
+      await evaluateCitedPassageRevision(stranded, stubJudge({ material: true }), clock, pendingRecorder);
+      expect(calls).toEqual([]);
+    });
+
+    it('propagates a recorder rejection rather than proceeding to the judge unrecorded', async () => {
+      const pendingRecorder: PendingRevalidationRecorder = {
+        recordPending: async () => {
+          throw new Error('write failed');
+        },
+      };
+      let judgeCalled = false;
+      const judge: RevisionJudgePort = {
+        judge: async () => {
+          judgeCalled = true;
+          return { material: true };
+        },
+      };
+      const oldText = 'the voltage is 5 volts';
+      const newText = 'the voltage is 6 volts';
+      const input: CitedPassageInput = {
+        instrumentId: 'inst-13',
+        previousText: oldText,
+        previousContentHash: await hashText(oldText),
+        current: { kind: 'found-at-anchor', text: newText },
+      };
+      await expect(
+        evaluateCitedPassageRevision(input, judge, clock, pendingRecorder),
+      ).rejects.toThrow('write failed');
+      expect(judgeCalled).toBe(false);
+    });
   });
 
   it('every hash difference reaches the judge, with no size floor at this grain', async () => {

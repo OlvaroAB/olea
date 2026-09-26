@@ -80,6 +80,26 @@ class FakeCitationHashStore implements CitationHashStore {
   async remove(instrumentId: string): Promise<void> {
     this.byId.delete(instrumentId);
   }
+  // [D-351] — same semantics as `ObsidianCitationHashStore`: a no-op when
+  // nothing is tracked yet; overwrites whatever hash was pending before.
+  async setPendingRevalidation(
+    instrumentId: string,
+    sourceContentHash: string,
+    since: number,
+  ): Promise<void> {
+    const existing = this.byId.get(instrumentId);
+    if (existing === undefined) return;
+    this.byId.set(instrumentId, {
+      ...existing,
+      pendingRevalidation: { sinceContentHash: sourceContentHash, since },
+    });
+  }
+  async isPendingRevalidationCurrent(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+  ): Promise<boolean> {
+    return this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash;
+  }
 }
 
 function fakeClock(now: number) {
@@ -343,6 +363,102 @@ describe('CitationRevisionTrigger.tick', () => {
     const third = await trigger.tick(vault, actions());
     expect(third.formattingOnly).toBe(0);
     expect(judge.judge).not.toHaveBeenCalled();
+  });
+
+  it('[D-351] sets pendingRevalidation the moment a real difference is seen, even with no judge configured', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const trigger = new CitationRevisionTrigger({ store, judge: null, clock: fakeClock(1_000) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    await trigger.tick(vault, actions());
+
+    const stored = await store.loadAll();
+    const record = stored.get(MCQ_ID);
+    expect(record?.pendingRevalidation?.since).toBe(1_000);
+    expect(record?.pendingRevalidation?.sinceContentHash).toBeDefined();
+    // The stored `text` never advanced (grey-out) but the pending fact is
+    // recorded regardless — [D-343]'s recognition is unconditional, unlike
+    // the judge call itself.
+    expect(record?.text).toContain('humid climates');
+  });
+
+  it('[D-351] clears pendingRevalidation on a same-claim (refreshed) resolution', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    await trigger.tick(vault, actions());
+
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+  });
+
+  it('[D-351] a late refreshed result for an earlier edit is discarded once a newer edit has raised its own pending state — no restore, no stale clear', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    // The judge call is slow: WHILE it is in flight, simulate a second,
+    // overlapping tick's own pass raising its OWN pending state for a newer
+    // edit (`main.ts`'s `tickCitationRevisions` fires on a plain interval
+    // with no overlap guard — see this trigger's own report doc). The
+    // outcome `evaluateCitedPassageRevision` returns is still computed
+    // against the ORIGINAL (now-stale) hash.
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        await store.setPendingRevalidation(MCQ_ID, 'a-newer-hash-from-an-overlapping-tick', 999);
+        return { material: false };
+      }),
+    };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(report.refreshed).toBe(1);
+    expect(report.staleResultDiscarded).toBe(1);
+    // Discarded: no restore-to-current write, no suspend, no enqueue.
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+    // The newer pending state is left completely untouched.
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash).toBe(
+      'a-newer-hash-from-an-overlapping-tick',
+    );
+  });
+
+  it('[D-351] a late revised result for an earlier edit is discarded — no suspend, no enqueue, tracking stays', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        await store.setPendingRevalidation(MCQ_ID, 'a-newer-hash-from-an-overlapping-tick', 999);
+        return { material: true, reason: 'different claim' };
+      }),
+    };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(report.revised).toBe(1);
+    expect(report.staleResultDiscarded).toBe(1);
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+    // Tracking is NOT retired -- the newer pending state (from the
+    // overlapping tick) is exactly what remains, untouched.
+    const stored = await store.loadAll();
+    expect(stored.has(MCQ_ID)).toBe(true);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash).toBe(
+      'a-newer-hash-from-an-overlapping-tick',
+    );
   });
 
   it('heals a stranded citation silently when its old material reappears verbatim elsewhere', async () => {

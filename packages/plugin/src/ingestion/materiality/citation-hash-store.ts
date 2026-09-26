@@ -70,6 +70,32 @@ export interface ObsidianDataHost {
   saveData(data: unknown): Promise<void>;
 }
 
+/**
+ * `[D-351]` (ruled 2026-09-25): one instrument's pending-revalidation fact,
+ * kept as a sub-field on {@link CitationAnchorRecord} rather than a new
+ * store — David's own ruling. Set the moment `tick()` observes a raw-hash
+ * mismatch against this record's own `text` (before any judge call resolves
+ * it), cleared once resolved (an `immaterial` verdict restores to current;
+ * `material`/`uncertain`/an unavailable verdict confirm the change, and
+ * `citation-revision-wiring.ts` retires the whole record via `remove` in
+ * that case, so no separate clearing write applies there).
+ *
+ * **Keyed to the particular source revision being checked** — David's own
+ * clarification: "a late result for an earlier edit must not clear a newer
+ * pending state." `sinceContentHash` is that key: the content hash (the same
+ * `hashText` value space `evaluateCitedPassageRevision`, olea-core, already
+ * uses for `previousContentHash`/`newContentHash`) of the passage text that
+ * RAISED this pending state. A resolution is only ever applied when it was
+ * computed against this exact hash — see `CitationHashStore.isPendingRevalidationCurrent`
+ * and its callers in `citation-revision-wiring.ts`'s `applyOutcome`.
+ */
+export interface PendingRevalidation {
+  /** The content hash this pending state was raised against — [D-351]'s "the particular source revision being checked." */
+  readonly sinceContentHash: string;
+  /** Epoch ms this pending state was first recorded — reporting only, never gating logic (the key above is what gates). */
+  readonly since: number;
+}
+
 /** One instrument's last-observed citation anchor. */
 export interface CitationAnchorRecord {
   /**
@@ -83,6 +109,13 @@ export interface CitationAnchorRecord {
   readonly text: string;
   /** The instrument's own concept bindings at last observation — carried so a later `'revised'` suspend write has them without a second vault walk. */
   readonly conceptIds: readonly string[];
+  /**
+   * `[D-351]`: set the moment a raw digest mismatch is observed against
+   * `text` above, cleared once resolved. Optional so an existing persisted
+   * record with no such field still reads correctly (INV-2) — absent means
+   * "current," never treated as an error or migrated on read.
+   */
+  readonly pendingRevalidation?: PendingRevalidation;
 }
 
 export interface CitationHashStore {
@@ -90,20 +123,65 @@ export interface CitationHashStore {
   save(instrumentId: string, record: CitationAnchorRecord): Promise<void>;
   /** Drops tracking for an instrument whose predecessor has just been suspended (`'revised'`) — its own material no longer needs watching. */
   remove(instrumentId: string): Promise<void>;
+  /**
+   * `[D-351]`: set THIS instrument's pending-revalidation fact, read-modify-
+   * write against the freshest persisted record. A no-op (returns without
+   * writing) when nothing is tracked yet for `instrumentId` — this method
+   * attaches a fact to an existing record, it never fabricates one with no
+   * `sourcePath`/`text`; `save`'s own baseline write is what creates the
+   * entry in the first place, and `tick()` never calls this before that
+   * baseline exists. Overwriting an already-pending record with a fresher
+   * hash is correct and expected: the SETTING half always wins with the
+   * newest known real difference (only the RESOLVING half below needs the
+   * compare-and-check guard, because resolving acts on a verdict computed
+   * earlier, against a specific hash, which may since have gone stale).
+   */
+  setPendingRevalidation(instrumentId: string, sourceContentHash: string, since: number): Promise<void>;
+  /**
+   * `[D-351]`: true when this instrument's PERSISTED `pendingRevalidation`
+   * fact still carries `expectedSourceContentHash` — read fresh, never
+   * against a snapshot the caller took earlier in its own pass (e.g. at the
+   * top of `tick()`). `false` means either nothing is pending for this
+   * instrument, or a newer edit has already moved the pending hash on: a
+   * late result for an earlier edit, which the caller must then discard
+   * rather than act on — see `citation-revision-wiring.ts`'s `applyOutcome`.
+   */
+  isPendingRevalidationCurrent(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+  ): Promise<boolean>;
 }
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob — distinct from `MATERIALITY_HASH_STORAGE_KEY`, same blob, same read-modify-write discipline. */
 export const CITATION_ANCHOR_STORAGE_KEY = 'citationRevisionAnchors';
 
+function isPendingRevalidation(value: unknown): value is PendingRevalidation {
+  if (typeof value !== 'object' || value === null) return false;
+  const candidate = value as Record<string, unknown>;
+  return typeof candidate.sinceContentHash === 'string' && typeof candidate.since === 'number';
+}
+
 function isCitationAnchorRecord(value: unknown): value is CitationAnchorRecord {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return (
-    typeof candidate.sourcePath === 'string' &&
-    typeof candidate.text === 'string' &&
-    Array.isArray(candidate.conceptIds) &&
-    candidate.conceptIds.every((id) => typeof id === 'string')
-  );
+  if (
+    !(
+      typeof candidate.sourcePath === 'string' &&
+      typeof candidate.text === 'string' &&
+      Array.isArray(candidate.conceptIds) &&
+      candidate.conceptIds.every((id) => typeof id === 'string')
+    )
+  ) {
+    return false;
+  }
+  // [D-351]: optional, so a record predating this field (INV-2) still
+  // reads — but if present, it must be well-formed, same "corrupted or
+  // unrecognised entries are dropped" posture this validator already takes
+  // for the record as a whole.
+  if (candidate.pendingRevalidation !== undefined && !isPendingRevalidation(candidate.pendingRevalidation)) {
+    return false;
+  }
+  return true;
 }
 
 export class ObsidianCitationHashStore implements CitationHashStore {
@@ -184,5 +262,60 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     const existingTable = (existing as Record<string, unknown>)[CITATION_ANCHOR_STORAGE_KEY];
     if (typeof existingTable !== 'object' || existingTable === null) return;
     await this.host.saveData(mutate(existing));
+  }
+
+  /**
+   * `[D-351]`. Read-modify-write, same reason `save`/`remove` above give.
+   * A no-op when `instrumentId` has no persisted record yet — see this
+   * method's own interface doc.
+   */
+  async setPendingRevalidation(
+    instrumentId: string,
+    sourceContentHash: string,
+    since: number,
+  ): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      const currentEntry = table[instrumentId];
+      if (!isCitationAnchorRecord(currentEntry)) {
+        // Nothing tracked for this instrument yet to attach a pending fact
+        // to — a no-op, per this method's own interface doc.
+        return blob;
+      }
+      table[instrumentId] = {
+        ...currentEntry,
+        pendingRevalidation: { sinceContentHash: sourceContentHash, since },
+      };
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    const existing = await this.host.loadData();
+    await this.host.saveData(merge(existing));
+  }
+
+  /**
+   * `[D-351]`. Reads the freshest persisted record via `loadAll` — never a
+   * snapshot the caller took earlier in its own pass — so a concurrent
+   * overlapping tick's own `setPendingRevalidation` write for the SAME
+   * instrument is always seen by a resolution that runs after it.
+   */
+  async isPendingRevalidationCurrent(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+  ): Promise<boolean> {
+    const all = await this.loadAll();
+    return all.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash;
   }
 }
