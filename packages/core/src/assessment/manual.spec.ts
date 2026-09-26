@@ -60,7 +60,6 @@ describe('addManualAssessmentEntry / listManualAssessmentRecords — F1.2 manual
       type: '  Quiz  ',
       weightRaw: '   ',
       due: '',
-      status: undefined,
     });
     expect(record.course).toBe('Course A');
     expect(record.type).toBe('Quiz');

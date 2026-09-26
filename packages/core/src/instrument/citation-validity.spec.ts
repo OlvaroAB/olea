@@ -44,7 +44,7 @@ describe('citationValidityStatus', () => {
   });
 
   describe('[D-351] pending revalidation', () => {
-    it('reads pending when a revalidation for this citation\'s own source revision is outstanding, even if the digest would otherwise read current', () => {
+    it("reads pending when a revalidation for this citation's own source revision is outstanding, even if the digest would otherwise read current", () => {
       const result = citationValidityStatus(base, {
         currentPassageDigest: 'digest-abc', // would read 'current' on its own
         pendingRevalidation: { sourceRevision: 'rev-2', isPending: true },
@@ -89,7 +89,10 @@ describe('citationValidityStatus', () => {
     });
 
     it('a pending signal is never honoured when the citation itself carries no sourceRevision to scope it against (pre-D-292 record)', () => {
-      const legacy: InstrumentCitation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      const legacy: InstrumentCitation = {
+        sourcePath: 'Sources/A.pdf',
+        passageDigest: 'digest-abc',
+      };
       const result = citationValidityStatus(legacy, {
         currentPassageDigest: 'digest-abc',
         pendingRevalidation: { sourceRevision: 'rev-1', isPending: true },
@@ -108,7 +111,10 @@ describe('citationValidityStatus', () => {
     });
 
     it('honours store-scoped pending evidence even for a legacy citation with no sourceRevision of its own — unlike the sourceRevision-matched path above, this shape needs none', () => {
-      const legacy: InstrumentCitation = { sourcePath: 'Sources/A.pdf', passageDigest: 'digest-abc' };
+      const legacy: InstrumentCitation = {
+        sourcePath: 'Sources/A.pdf',
+        passageDigest: 'digest-abc',
+      };
       const result = citationValidityStatus(legacy, {
         currentPassageDigest: 'digest-abc',
         pendingRevalidation: { isPending: true },
@@ -126,7 +132,10 @@ describe('citationValidityStatus', () => {
 
     it('the existing sourceRevision-matched path keeps working unchanged alongside the new shape', () => {
       const result = citationValidityStatus(base, {
-        pendingRevalidation: { sourceRevision: base.sourceRevision, isPending: true },
+        pendingRevalidation: {
+          ...(base.sourceRevision !== undefined ? { sourceRevision: base.sourceRevision } : {}),
+          isPending: true,
+        },
       });
       expect(result.status).toBe('pending');
     });
