@@ -1,9 +1,12 @@
-# The pre-computed embedding cassette (ol-opmb.2 [TB-2]) — a local, derived
-# artifact written by scripts/precompute-embeddings.mjs and copied into
-# dist/ verbatim by build.mjs. Never committed: it is reproducible from
-# olea-synthetic's retrieval-corpus.ts + queries.ts plus one priced,
-# spend-guarded model pass, and re-generating it costs nothing once cached.
-.embedding-cassette/
+# The pre-computed embedding cassette (ol-opmb.2 [TB-2]) — a derived artifact
+# written by scripts/precompute-embeddings.mjs and copied into dist/ verbatim by
+# build.mjs. cassette.json is TRACKED (ol-egov.141.89.45): the explain and
+# generate e2e specs need it, hosted CI has no model access to rebuild it, and
+# every entry is a content hash plus vector for olea-synthetic's own
+# retrieval-corpus.ts + queries.ts (verified 135/135 at commit). Anything else
+# written here stays local.
+.embedding-cassette/*
+!.embedding-cassette/cassette.json
 
 # The pre-computed generation cassette (ol-opmb.3 [TB-3]) — same reasoning as
 # .embedding-cassette/ above, written by scripts/precompute-generation.mjs.
@@ -22,3 +25,8 @@
 # silently invalidate the committed goldens that were baselined against this exact
 # entry. It is TRACKED on purpose. See build.mjs's SIMULATOR_CASSETTE doc.
 !.generation-cassette/simulator-cassette.json
+
+# cassette.json is TRACKED too (ol-egov.141.89.45), for the same CI reason as
+# the embedding cassette: four recorded responses over the synthetic corpus
+# and the committed fixture explain-back journey.
+!.generation-cassette/cassette.json

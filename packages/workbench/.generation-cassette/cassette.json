@@ -1,0 +1,128 @@
+{
+  "version": 1,
+  "datasetVersion": 1,
+  "entries": [
+    {
+      "taskId": "explain-why.generate.v1",
+      "promptVersion": "1.0.0",
+      "modelId": "@cf/nvidia/nemotron-3-120b-a12b",
+      "payloadHash": "4bafbcb0587913cca02beabbefce480bde1084f127a1f5bea56a268b48c5b963",
+      "response": {
+        "ok": true,
+        "result": {
+          "explanations": [
+            {
+              "text": "Her answer incorrectly attributes imbrication to the current pushing the flat side downstream, whereas the source describes that imbrication results when a rolling clast strikes a resting clast and the stalled clast tips until its long axis leans (i.e., dips) upstream as the bed rolls.",
+              "citedChunkIndex": 2
+            }
+          ],
+          "groundingReport": {
+            "citationsAvailable": true,
+            "droppedUngroundedCount": 0
+          }
+        }
+      }
+    },
+    {
+      "taskId": "explain-why.generate.v1",
+      "promptVersion": "1.0.0",
+      "modelId": "@cf/nvidia/nemotron-3-120b-a12b",
+      "payloadHash": "b4b0903fd372432e974379a5565662be8bb76e4ecbee15f1c413f98c1b13fce6",
+      "response": {
+        "ok": true,
+        "result": {
+          "explanations": [
+            {
+              "text": "Her answer says the current pushes the flat side of each clast downstream, but source [2] explains that imbrication forms when a rolling clast stalls against a resting clast and tips until its long axis leans downstream, showing that the fabric records flow direction through clast‑to‑clast tipping, not by the current simply aligning flat sides.",
+              "citedChunkIndex": 2
+            }
+          ],
+          "groundingReport": {
+            "citationsAvailable": true,
+            "droppedUngroundedCount": 0
+          }
+        }
+      }
+    },
+    {
+      "taskId": "quiz.generate.v1",
+      "promptVersion": "1.3.0",
+      "modelId": "@cf/google/gemma-4-26b-a4b-it",
+      "payloadHash": "26accf3ba45e39c1217d927e03ddbe47c45ee5318a6a1a63fd79db0410ca65b8",
+      "response": {
+        "ok": true,
+        "result": {
+          "questions": []
+        }
+      }
+    },
+    {
+      "taskId": "quiz.generate.v1",
+      "promptVersion": "1.3.0",
+      "modelId": "@cf/google/gemma-4-26b-a4b-it",
+      "payloadHash": "cee64da3b9d1043c8015b1ed31f640c2123bd6b2cb87fbb8455693d8ea2e7c9d",
+      "response": {
+        "ok": true,
+        "result": {
+          "questions": [
+            {
+              "stem": "Which part of quorbin names ilmenor alongside sarquith?",
+              "correctAnswer": "section 3",
+              "distractors": [
+                "passage 1",
+                "passage 4",
+                "passage 9",
+                "passage 10"
+              ],
+              "feedback": "Within quorbin, section 3, ilmenor is named alongside sarquith."
+            },
+            {
+              "stem": "Which part of quorbin provides a further note on ilmenor that expands earlier coverage?",
+              "correctAnswer": "passage 4",
+              "distractors": [
+                "passage 1",
+                "passage 9",
+                "passage 10",
+                "section 3"
+              ],
+              "feedback": "Passage 4 contains a further note on ilmenor that expands earlier coverage of quorbin."
+            },
+            {
+              "stem": "Where is additional material on ilmenor recorded within quorbin?",
+              "correctAnswer": "passage 9",
+              "distractors": [
+                "passage 1",
+                "passage 4",
+                "passage 10",
+                "section 3"
+              ],
+              "feedback": "Additional material on ilmenor is recorded under quorbin, passage 9."
+            },
+            {
+              "stem": "Which part of quorbin contains a note on ilmenor that is cross-referenced against sarquith?",
+              "correctAnswer": "passage 10",
+              "distractors": [
+                "passage 1",
+                "passage 4",
+                "passage 9",
+                "section 3"
+              ],
+              "feedback": "A note on ilmenor follows in passage 10, which is cross-referenced against sarquith."
+            },
+            {
+              "stem": "Which part of quorbin discusses ilmenor in relation to quorbin?",
+              "correctAnswer": "passage 1",
+              "distractors": [
+                "passage 4",
+                "passage 9",
+                "passage 10",
+                "section 3"
+              ],
+              "feedback": "Passage 1 discusses ilmenor in relation to quorbin."
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
