@@ -108,6 +108,57 @@
  * here asks her anything: no clause defines an affordance to confirm or
  * decline, so this stops at the record. A failed write of that record never
  * costs her the review; the next open writes it.
+ *
+ * ## F2.22's `rankedReason` closes `queue-adapter.ts`'s named strip point (`ol-3ux7.5.57.14.58`, `[D-331]`/`[D-374]`)
+ *
+ * `olea-core`'s `study-session/build.ts` computes `StudySessionItem.rankedReason`
+ * at composition time, keyed by concept, but `session/build.ts`'s
+ * `queueItemsFromComposedSession` — the one production translator into this
+ * adapter's `QueueItem[]` input — builds each row from an explicit field list
+ * that does not name it, and neither `QueueItem` nor `PlannedQueueItem` has a
+ * field to carry it. `queue-adapter.ts`'s own module doc names the fix this
+ * module makes: `rankedReasonsById` is built HERE, straight off the SAME
+ * `composedItems` array (`withholdLosingCopies`'s own output) that
+ * `queueItemsFromComposedSession` already reads, keyed by `instrumentId` —
+ * never a second composition, never a second walk. Only an item whose
+ * `rankedReason` is actually present contributes an entry; nothing here
+ * computes, defaults or paraphrases one (F2.22: "the reason exists for every
+ * item... what is ruled here is where it is displayed, not whether it is
+ * held"). `adaptExecutedReviewQueue` reads the map and never fabricates a
+ * reason for a key it does not find. Until `oracle.rank.v1` has a production
+ * caller (`ol-egov.142.2`, open), every real `StudySessionItem.rankedReason`
+ * is `undefined` and this map is empty — honest, not a regression this
+ * module introduces.
+ *
+ * ## `[D-323]`'s instrument-standing reader (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`)
+ *
+ * `./session.ts`'s `logAndAdvance` withholds an F2.12 explain-back offer and
+ * routes to item repair instead when the just-graded instrument's own
+ * recorded standing is suspect — but the port's own doc says the real reader
+ * belongs here, where the whole review log is already in hand. Two of the
+ * ruling's six named concerns are real, wired production reads today:
+ * `rejected` (a `rejected` verdict, or a grade dispute that resolved
+ * `corrected` — both fold onto `rejected` here, since both mean the
+ * instrument is proven invalid; see {@link readInstrumentStanding}'s own doc
+ * for why) folds straight off the SAME `composed.entries` this module
+ * already reads for `replayUnconsumedSchedulingObservations`/
+ * `buildSupportLevelHistoryLookup`, no second parse. `contested` (an open,
+ * unresolved grade dispute) needs one MORE fact `composed.entries` does not
+ * carry — `review-log/parse.ts`'s own doc: a dispute line is deliberately
+ * pulled OUT of `entries` into a separate `disputes` array, and
+ * `readReviewLogHistory` (what `buildReviewSession` calls) discards that
+ * array entirely (`today/data-source.ts`'s own `TodayPanelInput.disputes`
+ * doc names the identical gap) — so this module re-reads the SAME
+ * `additionalPaths` files a second time, the same "duplicated rather than
+ * shared: different bead's owns, and this is six lines" precedent
+ * `today/data-source.ts`'s own `disputesFromFiles` already sets in this
+ * package, rather than widen `session/history.ts` (core, outside this
+ * lane's owns). See {@link disputesFromReviewLog}. The remaining four
+ * concerns stay genuinely unread — never guessed toward clear, matching
+ * this port's own "an honest gap, not a
+ * guessed false" doc for `flagged`/`safety-information-unavailable` — see
+ * that function's doc for exactly why each of the four is out of reach here,
+ * and the follow-up each one needs.
  */
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
@@ -117,7 +168,11 @@ import type {
   ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
+  DisputeLogRecord,
   DistractorProvenance,
+  InstrumentStanding,
+  InstrumentStandingConcern,
+  InstrumentValidityProjection,
   QueueFilter,
   RandomSource,
   Scheduler,
@@ -134,8 +189,13 @@ import {
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlanOverComposedRows,
+  listFolder,
+  projectInstrumentValidity,
   queueItemsFromComposedSession,
+  REVIEW_LOG_EXTENSION,
+  REVIEW_LOG_FOLDER,
   readDistractorProvenance,
+  readReviewLogFile,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
   resolveInstrumentDuplications,
@@ -144,7 +204,10 @@ import {
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
-import { evaluateSchedulingObservationRouting } from '../grading/wiring.js';
+import {
+  evaluateInstrumentStanding,
+  evaluateSchedulingObservationRouting,
+} from '../grading/wiring.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
 import type { StudySessionHolder } from '../session/holder.js';
@@ -524,12 +587,29 @@ export async function openReviewSession(
     // that report yet. A duplicated id's rows are cut to one before the join
     // (`withholdLosingCopies`), and the join reads the resolution's candidates,
     // which carry at most one per duplicated id (C5.3, `ol-v7r5.88`).
+    const composedItems = withholdLosingCopies(
+      composedSession.model.items,
+      duplicatedInstrumentIds,
+    );
     const { items: queueItems } = queueItemsFromComposedSession({
-      items: withholdLosingCopies(composedSession.model.items, duplicatedInstrumentIds),
+      items: composedItems,
       recordsById: duplication.recordsById,
       candidates: duplication.candidates,
       now,
     });
+    // F2.22 (`ol-3ux7.5.57.14.58`, `[D-331]`/`[D-374]`): closes the strip
+    // point `queue-adapter.ts`'s own module doc names — see this module's
+    // doc's "F2.22's rankedReason" section. Off the SAME `composedItems`
+    // array just read above, never a second walk; only an item that actually
+    // carries a recorded reason contributes an entry, so a key absent here
+    // reads as "no reason recorded" (never a generated or defaulted one) at
+    // both `queue-adapter.ts` and `session.ts`'s hops.
+    const rankedReasonsById = new Map<string, string>();
+    for (const item of composedItems) {
+      if (item.rankedReason !== undefined) {
+        rankedReasonsById.set(item.instrumentId, item.rankedReason);
+      }
+    }
     // C5.7 (`ol-egov.141.89.10.18`, `ol-egov.141.89.10.45`, fixed by
     // `ol-egov.141.89.10.54`): NOT `courseShares.keys().next().value` —
     // `courseShares` carries a zero entry for every course in the wider
@@ -597,6 +677,7 @@ export async function openReviewSession(
       recordsById: composed.recordsById,
       supportHistory: buildSupportLevelHistoryLookup(composed.entries),
       distractorProvenanceById,
+      rankedReasonsById,
       ...(input.random !== undefined ? { random: input.random } : {}),
     };
     // `ol-v7r5.35` (`[D-193]`): a caller-supplied `frozenQueue` routes this
@@ -630,6 +711,17 @@ export async function openReviewSession(
     // proposes the reciprocal offer once she reaches the neighbour concept.
     const liveSchedulingObservations = replayUnconsumedSchedulingObservations(composed.entries);
 
+    // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`): `entries` is
+    // the SAME `composed.entries` this module already read for
+    // `liveSchedulingObservations`/`buildSupportLevelHistoryLookup` above —
+    // no second parse there. `disputes` IS a second, deliberate read (see
+    // `disputesFromReviewLog`'s own doc for why `composed.entries` cannot
+    // carry them). See this module's doc's "`[D-323]`'s instrument-standing
+    // reader" section and `readInstrumentStanding`'s own doc for exactly
+    // which of the ruling's six concerns this covers.
+    const disputes = await disputesFromReviewLog(input.vault, additionalPaths);
+    const instrumentValidity = projectInstrumentValidity(composed.entries, disputes);
+
     // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): every still-pending
     // draft, read fresh, ahead of the ordinarily-scheduled items — see
     // `OpenReviewSessionInput.draftCache`'s doc. `[]` when no cache is
@@ -660,6 +752,25 @@ export async function openReviewSession(
       ...(input.ports.explainBackOfferLog
         ? { explainBackOfferLog: input.ports.explainBackOfferLog }
         : {}),
+      // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`): closes over
+      // the SAME `instrumentValidity` projection just built above — always
+      // wired, unconditionally, same "computed HERE, no caller-omission
+      // case" posture `evaluateSchedulingObservationRouting` just below
+      // states for itself, and for the identical reason: the whole review
+      // log is already in hand here, which `session.ts` neither holds nor
+      // should learn to compute. See `readInstrumentStanding`'s own doc for
+      // exactly which of the ruling's six named concerns this real reader
+      // covers, and this module's own doc for the four that do not reach
+      // here yet.
+      resolveInstrumentStanding: readInstrumentStanding(instrumentValidity),
+      // The ruling's own decision, delegated to `grading/wiring.ts`'s pure
+      // `evaluateInstrumentStanding` — mirroring `evaluateConfusionRouting`'s
+      // own "keeps this class swappable in a test" reason (`session.ts`'s own
+      // doc). Wiring it here rather than leaving it absent is a no-op change
+      // in production (the delegate reproduces `evaluateRepeatedFailureStandingCheck`
+      // byte-for-byte); it is wired anyway so the real reader just above has
+      // a real decision to feed, not only a type-reachable one.
+      evaluateInstrumentStanding,
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -831,6 +942,130 @@ async function distractorProvenanceLookupFor(
     if (provenance !== undefined) byId.set(id, provenance);
   }
   return byId;
+}
+
+/**
+ * `[D-323]`'s `contested` concern needs `DisputeLogRecord`s, which
+ * `composed.entries` never carries — `review-log/parse.ts`'s own doc: a
+ * dispute line is pulled OUT of `records`/`entries` into its own array on
+ * purpose, and `session/history.ts`'s `readReviewLogHistory` (what
+ * `buildReviewSession` calls) discards that array entirely. Rather than
+ * widen `session/history.ts` (core, outside this lane's owns), this re-reads
+ * the SAME files `additionalPaths` already names, a second time — the exact
+ * "duplicated rather than shared: different bead's owns, and this is six
+ * lines" precedent `today/data-source.ts`'s own `disputesFromFiles` already
+ * sets in this package, for the identical reason. Every file this walk
+ * cannot find reads as no disputes (`readReviewLogFile`'s own "never
+ * written reads as no records" posture), never an error that would cost her
+ * the review.
+ */
+async function disputesFromReviewLog(
+  vault: VaultSource,
+  additionalPaths: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const paths = new Set<VaultPath>(additionalPaths);
+  try {
+    for (const path of await listFolder(vault, REVIEW_LOG_FOLDER, {
+      extensions: [REVIEW_LOG_EXTENSION],
+    })) {
+      paths.add(path);
+    }
+  } catch {
+    // Same posture as `session/history.ts`'s own `readReviewLogHistory`: a
+    // host that refuses to list a dot-prefixed folder is expected, not an
+    // error — `additionalPaths` is the guaranteed route either way.
+  }
+  const reads = await Promise.all([...paths].map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
+}
+
+/**
+ * `[D-323]`'s real instrument-standing reader (`ol-egov.141.89.6.4`,
+ * `ol-egov.141.89.10.45`) — see this module's own doc's "`[D-323]`'s
+ * instrument-standing reader" section for the summary; this is the detail.
+ *
+ * **Two of the six named concerns are real, wired reads, both folded from
+ * the SAME `InstrumentValidityProjection` (`olea-core`'s `mastery/validity.ts`,
+ * built once per open from `composed.entries` plus {@link disputesFromReviewLog}'s
+ * real disputes):**
+ *
+ * - `contested`: the projection's own `contested` set — an OPEN, unresolved
+ *   grade dispute (`[D-095]`'s "quarantines"; `review-log/contest.ts`'s
+ *   `quarantinedGradeInstrumentIds`). This is exactly D-323's own "a
+ *   contest" ground.
+ * - `rejected`: the projection's `provenInvalid` map, folding BOTH of its
+ *   reasons onto this one concern — a verdict of `rejected` (D-323's own
+ *   "a rejection" ground, named literally), and a grade dispute that
+ *   resolved `corrected` (`'corrected-on-contest'`, not literally named by
+ *   the ruling's six-way vocabulary). Folding the second reason in here,
+ *   rather than leaving it unmapped, is a Class B choice, not Class C
+ *   (non-persisted, reversible): `mastery/validity.ts`'s own doc calls both
+ *   readings "proven invalid," and offering an ordinary explain-back on a
+ *   proven-invalid instrument is precisely what D-323 exists to prevent,
+ *   whichever of the two facts proved it. Flagged for review rather than
+ *   left undone.
+ *
+ * **The remaining four stay genuinely unread — never guessed toward clear,
+ * matching this port's own "an honest gap, not a guessed false" doc:**
+ *
+ * - `changed-source-passage`: `readInstrumentCitation` (`olea-core`'s
+ *   `instrument/citation-store.ts`) is a plain vault read this module could
+ *   make, but classifying it (`classifyCitationFreshness`) needs a CURRENT
+ *   passage digest to compare the stored one against, and nothing in this
+ *   repo computes one outside the extraction-plus-materiality-hash pipeline
+ *   (`ingestion/materiality/`) main.ts's background tick owns — a heavier
+ *   dependency than a vault read, not reachable from here today.
+ *   `composedSession.citationRevalidationPending`/`citationRecheckQueued`
+ *   do not substitute: `study-session/compose.ts` WITHHOLDS a `'stale'`
+ *   instrument from `model.items` at compose time (`[D-330]`), so an
+ *   instrument reading stale AT COMPOSITION can never be the "just-graded"
+ *   instrument this function is asked about — the gap this concern would
+ *   close is staleness discovered mid-sitting, after composition, which
+ *   needs a live digest computed right now, not a set computed once at
+ *   open. Follow-up: a real reader needs a new, cheap "current digest for
+ *   this one citation" capability threaded in from wherever the materiality
+ *   pipeline already runs (`main.ts`) — more than a single wiring line.
+ * - `pending-revalidation`: `[D-351]`'s fact lives in
+ *   `ObsidianCitationHashStore` (`ingestion/materiality/citation-hash-store.ts`),
+ *   keyed by `instrumentId` — but that store reads through `ObsidianDataHost`
+ *   (the plugin's own `data.json`), a port this Obsidian-free module has
+ *   none of and should not grow silently (see this file's own module doc,
+ *   "Obsidian-free on purpose"). `main.ts:2035` already constructs
+ *   `this.citationHashStore = new ObsidianCitationHashStore(this)`, but no
+ *   call site threads it (or a lookup over it) into `OpenReviewSessionInput`.
+ *   Follow-up: add an optional `citationAnchors: ReadonlyMap<string,
+ *   CitationAnchorRecord>` (or similar) field to `OpenReviewSessionInput`,
+ *   built from `this.citationHashStore.loadAll()` at `main.ts`'s own call
+ *   site(s) for `openReviewSession`/`createReviewSessionOpener`, and read
+ *   here for `.pendingRevalidation !== undefined`.
+ * - `flagged`: no reader anywhere in this codebase (searched; confirmed by
+ *   `ol-egov.141.89.6.4`'s own investigation, restated by this bead's own) —
+ *   not a wiring gap, a missing mechanism entirely (a new persisted concept,
+ *   Class C, not this lane's to invent).
+ * - `safety-information-unavailable` (M5, C5.3): `session/enumerate.ts`
+ *   filters an M5-invalid block out of `records` entirely, before an id is
+ *   even derived for it (`invalidMcqBlocks`/`invalidCardBlocks` carry only
+ *   `notePath` and the raw block, no `instrumentId`) — so no instrumentId-
+ *   keyed fact exists to read even in principle, for an instrument that
+ *   reached grading in THIS open (which, by construction, already passed M5
+ *   at this open's own enumeration to be schedulable at all). A real fix
+ *   needs `session/enumerate.ts` itself (core, read-only for this lane) to
+ *   keep the id and flag it rather than drop the block.
+ *
+ * Every one of the four above is simply absent from `concerns` — the
+ * difference between "checked, found nothing" (the two wired concerns) and
+ * "not checked at all" (these four) is stated here, in the one place a
+ * reader can see it, rather than collapsed into one boolean.
+ */
+function readInstrumentStanding(
+  validity: InstrumentValidityProjection,
+): (instrumentId: string) => InstrumentStanding {
+  return (instrumentId: string): InstrumentStanding => {
+    const concerns: InstrumentStandingConcern[] = [];
+    if (validity.contested.has(instrumentId)) concerns.push('contested');
+    if (validity.provenInvalid.has(instrumentId)) concerns.push('rejected');
+    return { concerns };
+  };
 }
 
 // ---------------------------------------------------------------------------
