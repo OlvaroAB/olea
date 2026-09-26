@@ -93,6 +93,17 @@
  * refreshed since she opened would be silently disagreeing with the
  * interval preview it showed her minutes earlier over the SAME item — the
  * identical reasoning this module's own `now` doc gives for one clock.
+ * **The fresh-entry side of the same capture (`ol-egov.141.89.10.4.1`, bug
+ * fix).** `.45` fixed the RESUME half; the fresh-sitting `enter()` call
+ * itself captured `input.plan ?? null` — a value the caller
+ * (`main.ts`'s `buildReviewSessionInput`) fixes once, when it builds this
+ * input object, before {@link OpenReviewSessionInput.composeDefaultStudySession}
+ * is ever called. A plan refresh landing while that call is in flight left
+ * the sitting entered against a plan the composition never actually saw —
+ * the exact race `main.ts`'s `lastComposedSessionPlan` field already closed
+ * for `enterStudySessionHolderForStart`'s Start path. {@link
+ * OpenReviewSessionInput.composedSessionPlan}, read AFTER that call settles,
+ * closes it here too; see that port's own doc.
  *
  * ## C5.3 / `[D-090]`: a duplicated item id's losing copy is withheld (`ol-v7r5.88`)
  *
@@ -400,6 +411,22 @@ export interface OpenReviewSessionInput {
    */
   readonly composeDefaultStudySession: () => Promise<ComposedStudySession | null>;
   /**
+   * `ol-egov.141.89.10.4.1` (bug fix): the plan value the fresh compose
+   * above actually read, called ONLY after {@link composeDefaultStudySession}
+   * settles, and read in its place for the fresh-sitting entry below — never
+   * `input.plan` there. `plan` is captured by the caller
+   * (`main.ts`'s `buildReviewSessionInput`) once, when this input object is
+   * built, which is BEFORE `composeDefaultStudySession` is ever called — the
+   * exact same defect `main.ts`'s `lastComposedSessionPlan` field (see its
+   * own doc) already fixes for `enterStudySessionHolderForStart`'s Start
+   * path: a `refreshCachedStudyPlan` tick landing while the compose await is
+   * in flight left the entered sitting's stamped plan disagreeing with the
+   * plan the composition actually joined against. Omitted (every fixture in
+   * `open-session.spec.ts` that does not exercise this exact race) falls
+   * back to `input.plan ?? null` — today's behaviour, unchanged.
+   */
+  readonly composedSessionPlan?: () => StudyPlanEnvelope | null;
+  /**
    * `[SESS-8.6]` (`ol-egov.132.6`, `[SESS-11]`'s own close notes): F2.17/
    * C5.8's "outrun the target" growth for the held composition. Called ONLY
    * when {@link studySessionHolder} holds an active sitting AND
@@ -640,7 +667,13 @@ export async function openReviewSession(
         );
       }
       composedSession = fresh;
-      compositionPlan = input.plan ?? null;
+      // `ol-egov.141.89.10.4.1` (bug fix): `composedSessionPlan`, when
+      // supplied, is read AFTER `composeDefaultStudySession` above has
+      // settled — the plan the composition actually joined against — never
+      // `input.plan`, which the caller captured before that call even ran
+      // (see `composedSessionPlan`'s own doc). Falls back to `input.plan`
+      // when the port is absent, unchanged from before this fix.
+      compositionPlan = input.composedSessionPlan?.() ?? input.plan ?? null;
       // Captured beside the sitting, at the instant it begins.
       input.studySessionHolder.enter(now, composedSession, compositionPlan);
     }

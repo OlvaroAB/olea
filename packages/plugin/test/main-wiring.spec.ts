@@ -1951,6 +1951,38 @@ describe('ol-egov.141.89.10.4.1 (bug, fixed): Start’s holder entry passes the 
   });
 });
 
+describe('ol-egov.141.89.10.4.1 (open-session half, bug fixed): buildReviewSessionInput supplies composedSessionPlan over this.lastComposedSessionPlan', () => {
+  // The Start path above (`enterStudySessionHolderForStart`) was fixed to
+  // read `this.lastComposedSessionPlan` instead of a fresh `this.review?.plan`
+  // read. `review/open-session.ts`'s OWN fresh-compose branch (opening the
+  // review tab directly, holder idle) had the identical defect one layer
+  // earlier: `buildReviewSessionInput` supplied `plan: wiring.plan` — a
+  // snapshot fixed when this whole input object is built, BEFORE
+  // `composeDefaultStudySession` is ever invoked — and `open-session.ts`
+  // stamped the fresh sitting from that stale `input.plan` rather than the
+  // plan the composition actually read. Fixed by threading a new
+  // `composedSessionPlan` port, a closure over the SAME
+  // `this.lastComposedSessionPlan` field the Start-path fix above already
+  // populates, which `open-session.ts` now reads instead of `input.plan`
+  // for a fresh entry (see that module's own doc).
+
+  it('buildReviewSessionInput supplies composedSessionPlan as a closure over this.lastComposedSessionPlan, right after composeDefaultStudySession', () => {
+    expect(main).toMatch(
+      /composeDefaultStudySession:\s*\(\)\s*=>\s*this\.composeDefaultStudySession\(\),\s*(?:\/\/.*\s*)*composedSessionPlan:\s*\(\)\s*=>\s*this\.lastComposedSessionPlan\s*\?\?\s*null,/,
+    );
+  });
+
+  it('never re-reads wiring.plan for composedSessionPlan (that would reintroduce the pre-fix race)', () => {
+    const buildReviewSessionInputBody = main.slice(
+      main.indexOf('private async buildReviewSessionInput('),
+      main.indexOf('private async composeReviewSession('),
+    );
+    expect(buildReviewSessionInputBody).not.toMatch(
+      /composedSessionPlan:\s*\(\)\s*=>\s*wiring\.plan/,
+    );
+  });
+});
+
 describe('ol-egov.141.89.10.14 (bug, fixed): the shared session holder now computes real staleness', () => {
   // FIXED: `ol-egov.141.89.10.46` (client 15a222d) exported
   // `session-builder/provider.ts`'s `buildScopeSnapshotAt` (plus its two

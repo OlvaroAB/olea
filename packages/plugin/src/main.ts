@@ -3761,6 +3761,15 @@ export default class OleaPlugin extends Plugin {
       // never a private composition step of its own.
       studySessionHolder: this.studySessionHolder,
       composeDefaultStudySession: () => this.composeDefaultStudySession(),
+      // `ol-egov.141.89.10.4.1` (bug fix): `open-session.ts`'s fresh-entry
+      // branch reads this AFTER `composeDefaultStudySession` above settles,
+      // in place of the `plan` snapshot above — which this method already
+      // fixed captured BEFORE that call ever runs. Closure over
+      // `this.lastComposedSessionPlan` (that field's own doc) — the value
+      // the compose call actually handed the composer — never a fresh
+      // `wiring.plan` re-read, the same fix `enterStudySessionHolderForStart`
+      // already applies to the Start path.
+      composedSessionPlan: () => this.lastComposedSessionPlan ?? null,
       // `[SESS-8.6]` (`ol-egov.132.6`): F2.17/C5.8's outrun-the-target growth
       // for the held composition — see `extendDefaultStudySession`'s own doc.
       extendDefaultStudySession: (previous) => this.extendDefaultStudySession(previous),

@@ -1303,6 +1303,60 @@ describe('ol-egov.141.89.10.45 — a resumed sitting stamps against its composin
     expect(secondBeta?.selectionContext.yieldRank).toBe(1);
     expect(secondBeta?.selectionContext.examProximity).toBe(3);
   });
+
+  // `ol-egov.141.89.10.4.1`: `.45` above fixed the RESUME half of this bug
+  // (a plan refresh landing while the sitting is already held open); this
+  // is the FRESH-ENTRY half. `input.plan` is the caller's snapshot,
+  // captured before `composeDefaultStudySession` is even called — see
+  // `main.ts`'s `buildReviewSessionInput`, which builds this whole input
+  // object (including `plan`) before ever invoking the composer closure.
+  // `composedSessionPlan` simulates `main.ts`'s `lastComposedSessionPlan`:
+  // the plan value the compose call itself actually read, set as a side
+  // effect of that call settling — exactly the window a live plan refresh
+  // can land in.
+  it('a fresh entry stamps against the plan the composition actually read, not the stale snapshot the caller captured before composing', async () => {
+    const vault = studyVault();
+    const ids = await defaultComposedSessionInstrumentIds(vault);
+    const holder = createStudySessionHolder();
+    expect(holder.getSitting().status).toBe('idle');
+
+    // The caller's `plan` argument, fixed before compose ever runs — the
+    // same "captured too early" snapshot `buildReviewSessionInput` takes.
+    let composedSessionPlanRead: StudyPlanEnvelope | null = FIRST_PLAN;
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      // A `refreshCachedStudyPlan` tick lands while this compose is in
+      // flight — `main.ts`'s `lastComposedSessionPlan` would capture
+      // `SECOND_PLAN` here, the plan the composition actually joins
+      // against, disagreeing with the stale `plan` argument below.
+      composedSessionPlanRead = SECOND_PLAN;
+      return composedSessionFixture(vault, ids);
+    };
+
+    const outcome = await openReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: ports(vault).ports,
+      random: fixedRandom,
+      probeDays: 30,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+      plan: FIRST_PLAN,
+      composedSessionPlan: () => composedSessionPlanRead,
+    });
+    if (!outcome.ok) throw new Error('expected a composed session');
+    expect(holder.getSitting().status).toBe('active');
+    const beta = outcome.scheduledQueue.find((item) =>
+      item.instrument.conceptIds.includes(unboundKey('Beta')),
+    );
+
+    // Entered against `SECOND_PLAN` — the plan the composition actually
+    // read via `composedSessionPlan` — never the stale `FIRST_PLAN`
+    // snapshot `plan` still carries.
+    expect(beta?.selectionContext.planVersion).toBe(SECOND_PLAN.policyVersion);
+    expect(beta?.selectionContext.yieldRank).toBe(1);
+    expect(beta?.selectionContext.examProximity).toBe(30);
+  });
 });
 
 describe('nextDueLabel — the empty screen names the next item, in whole local days', () => {
