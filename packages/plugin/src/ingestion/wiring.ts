@@ -155,6 +155,7 @@ import {
   OUTCOMES_EXTRACT_TASK_ID,
   WorkerOutcomesExtractReader,
 } from './outcomes-extract-adapter.js';
+import type { PageRenderPort } from './page-render/types.js';
 import { PendingIndexingSink } from './pending-indexing-sink.js';
 import { createWorkerVisionPageRunner, WorkerVisionPageExtractor } from './vision-page-runner.js';
 import type { VisionRouteHttpGet } from './vision-route-provider.js';
@@ -207,6 +208,26 @@ export interface IngestionWiringDeps {
     readonly dataHost: ObsidianDataHost;
     readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
   };
+  /**
+   * `[D-324]`, resolving `ol-9cle`: the real `PageRenderPort` for a `'pdf'`
+   * `'vision-page'` job, forwarded unchanged into
+   * `WorkerVisionPageRunnerDeps.pageRenderer` (`vision-page-runner.ts`'s own
+   * doc, "PDF pages, rendered" section) so `createWorkerVisionPageRunner`'s
+   * PDF branch can actually render rather than hitting the honest "no page
+   * renderer wired" gap. Type-only import (`./page-render/types.js`) —
+   * this file stays free of a runtime `obsidian` import (see this module's
+   * own top doc and `wiring.spec.ts`'s: "no `obsidian` import anywhere in
+   * this file, and none needed"); the real adapter is
+   * `createObsidianPageRenderer` (`./page-renderer.js`), a zero-argument
+   * factory with no seam of its own to thread here, composed at the true
+   * production composition root (`main.ts`'s `buildIngestionRunner` call) —
+   * see this bead's report for the one line that still needs adding there
+   * (outside this bead's `owns` this round). Omitted (every caller before
+   * this bead, including today's real `main.ts` call) leaves `pageRenderer`
+   * unset, so a `'pdf'` `'vision-page'` job keeps the pre-existing honest gap
+   * unchanged.
+   */
+  readonly pageRenderer?: PageRenderPort;
   /**
    * `[ILB-PER-4]` §8 item 2: component 1.6's delivered vision-routing
    * threshold, resolved once here (via `vision-route-wiring.ts#
@@ -328,11 +349,17 @@ export interface OutcomesExtractTriggerDeps {
  * present (F7.8's "everything else works regardless" grey-out), the same
  * condition `concept/wiring.ts`'s `buildConceptWiring` and every sibling
  * Worker-backed wiring function in this plugin already gate on.
+ *
+ * `pageRenderer` (`deps.pageRenderer` above, `[D-324]`) is forwarded
+ * unchanged into `WorkerVisionPageRunnerDeps.pageRenderer` — this function
+ * makes no decision about it, it only carries `IngestionWiringDeps`'
+ * optional field through to the one place that reads it.
  */
 async function buildVisionRunner(
   vision: NonNullable<IngestionWiringDeps['vision']>,
   vault: VaultSource,
   sink: ExtractedUnitSink,
+  pageRenderer: PageRenderPort | undefined,
 ): Promise<JobRunner | undefined> {
   const configStore = new ObsidianWorkerConfigStore(vision.dataHost);
   const config = await configStore.load();
@@ -340,7 +367,12 @@ async function buildVisionRunner(
 
   const transport = vision.createTransport({ baseUrl: config.baseUrl, token: config.token });
   const extractor = new WorkerVisionPageExtractor({ transport });
-  return createWorkerVisionPageRunner({ vault, extractor, sink });
+  return createWorkerVisionPageRunner({
+    vault,
+    extractor,
+    sink,
+    ...(pageRenderer ? { pageRenderer } : {}),
+  });
 }
 
 export interface IngestionWiring {
@@ -710,7 +742,7 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     );
   }
   const visionRunner = deps.vision
-    ? await buildVisionRunner(deps.vision, deps.vault, runnerSink)
+    ? await buildVisionRunner(deps.vision, deps.vault, runnerSink, deps.pageRenderer)
     : undefined;
   // `[ILB-PER-4]` §8 item 2: the delivered vision-routing threshold,
   // resolved at most once here (never per extraction call) and forwarded

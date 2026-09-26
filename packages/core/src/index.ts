@@ -816,6 +816,34 @@ export type {
   QueueStore,
   RandomSource,
 } from './ingestion/types.js';
+// `[D-326]`'s per-source-revision completeness record (`ol-egov.141.89.8.4`
+// [ILB-PER-4]) — reading status and concept-extraction status tracked apart,
+// per per.md section 3. `vision-page-runner.ts` (`packages/plugin`) reads
+// these exported names now rather than mirroring them locally (see that
+// file's own module doc). No durable store exists yet for `UnitManifest`
+// itself — that stays a later wiring decision, unchanged by this export.
+export {
+  type AbsenceGrounding,
+  absenceGroundingFor,
+  hasPendingUnits,
+  isFullyRead,
+  markConceptExtractionComplete,
+  newPendingEntry,
+  stableUnitId,
+  withEntry,
+  withReadingState,
+} from './ingestion/unit-manifest/manifest.js';
+export type {
+  ConceptExtractionState,
+  UnitFailedReason,
+  UnitManifest,
+  UnitManifestEntry,
+  UnitPendingReason,
+  UnitProducerProvenance,
+  UnitReadingState,
+  UnitReadMethod,
+  UnitUnreadableReason,
+} from './ingestion/unit-manifest/types.js';
 // F6.5's observed-pattern insights (`ol-p6t04` / P6-T04). Detectors only — every
 // sentence lives in packages/plugin's today/copy.ts, in one enumerable list,
 // because the phrasing is David's to review before ship.

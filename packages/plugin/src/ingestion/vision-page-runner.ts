@@ -62,11 +62,13 @@
  * `VisionPageExtractResult.modelId`/`.promptVersion` are the ACTUAL model
  * and prompt version that produced THIS reading, never a locally-assumed
  * constant. `readAndLandPage` (below) turns every reading — `'complete'`,
- * `'partial'` and `'unreadable'` alike — into a manifest-entry value
- * (mirroring `packages/core/src/ingestion/unit-manifest/types.ts`'s shape
- * locally; see `VisionUnitManifestEntry`'s own doc for why it is mirrored
- * rather than imported) carrying that provenance plus a digest of the image
- * bytes sent, and hands it to `deps.onManifestEntry` when one is supplied.
+ * `'partial'` and `'unreadable'` alike — into a manifest-entry value (this
+ * bead exported `packages/core/src/ingestion/unit-manifest/types.ts`'s
+ * shape from `olea-core`; `UnitProducerProvenance` is now imported directly
+ * and `VisionUnitReadingState`/`VisionUnitManifestEntry` stay local,
+ * deliberately narrower mirrors — see `VisionUnitReadingState`'s own doc for
+ * why) carrying that provenance plus a digest of the image bytes sent, and
+ * hands it to `deps.onManifestEntry` when one is supplied.
  * **Persisting that entry anywhere durable is deliberately NOT done here** —
  * `UnitManifest` has no store yet (a stored-shape call this bead does not
  * make unilaterally); `onManifestEntry` is the seam a later wiring bead
@@ -192,11 +194,12 @@ import type {
   JobRunner,
   JobRunnerView,
   JobRunOutcome,
+  UnitProducerProvenance,
   VaultPath,
   VaultSource,
   WorkerTaskTransport,
 } from 'olea-core';
-import { isExtractionJobPayload } from 'olea-core';
+import { isExtractionJobPayload, stableUnitId } from 'olea-core';
 import { PageRenderError } from './page-render/errors.js';
 import type { PageRenderPort } from './page-render/types.js';
 
@@ -446,30 +449,40 @@ function readVisionResult(body: unknown): VisionPageExtractResult {
 }
 
 /**
- * Mirrors `packages/core/src/ingestion/unit-manifest/types.ts`'s
- * `UnitProducerProvenance` — not imported directly because that module is
- * not yet exported from `olea-core`'s public surface
- * (`packages/core/src/index.ts`, a shared file staged by the orchestrator,
- * not this bead's to edit; see this bead's report for the export lines it
- * still needs). Same reasoning `VISION_EXTRACT_V2_TASK_ID`'s own doc gives
- * for mirroring the frozen catalogue's task id locally rather than
- * importing it: mirror the shape, pin it, report the wiring gap rather than
- * reach around the package boundary.
+ * `packages/core/src/ingestion/unit-manifest/types.ts`'s
+ * `UnitProducerProvenance`, re-exported under this file's established name
+ * — this bead (`ol-egov.141.89.8.4`) added the export lines
+ * (`packages/core/src/index.ts`) that make the direct import possible, so
+ * this is no longer a hand-mirrored shape: a real divergence from core's
+ * type is now a compile error here, not a silent drift risk. Kept as a type
+ * alias, not a bare re-export of the name, so nothing downstream that
+ * already spells `VisionUnitProducerProvenance` needs to change.
  */
-export interface VisionUnitProducerProvenance {
-  readonly task: string;
-  readonly promptVersion: string;
-  readonly modelIdentity: string;
-  readonly imageDigest: string;
-}
+export type VisionUnitProducerProvenance = UnitProducerProvenance;
 
 /**
- * Mirrors the three outcomes this runner can actually reach in
- * `unit-manifest/types.ts`'s `UnitReadingState` union — always `method:
- * 'image'` here, since every unit this file lands came from the image path
- * (a standalone image, or a rendered PDF page); the `'text-and-image'`
- * method belongs to `[D-324]`'s still-open figure-cue routing (see this
- * bead's report), not reachable from this file yet.
+ * Deliberately still a local, narrower mirror of core's `UnitReadingState`
+ * union, NOT swapped for the exported type even though this bead also
+ * exported it (see `VisionUnitProducerProvenance`'s doc just above for the
+ * case where a swap WAS clean). Two reasons the swap does not apply here:
+ *
+ * 1. This runner only ever reaches three of `UnitReadingState`'s six kinds
+ *    (`'read'`/`'partial'`/`'unreadable'` — never `'pending'`/`'unavailable'`/
+ *    `'failed'`, which belong to the job-runner's `JobRunOutcome` side, not a
+ *    settled reading); narrowing to those three here is deliberate, not an
+ *    oversight to fix.
+ * 2. `'unreadable'`'s `reason` is core's closed `UnitUnreadableReason`
+ *    enum (`'blank-page'`/`'not-legible'`/`'no-text-on-page'`) — the SAME
+ *    three values the Worker's own schema enforces
+ *    (`olea-service/src/tasks/visionExtract.ts`'s `VISION_UNREADABLE_REASONS`),
+ *    but this file reads `result.unreadableReason` off the wire as a plain,
+ *    unvalidated `string | null` (`readNullableString`, above) — it checks
+ *    "is a string", never "is one of the three catalogue values". Widening
+ *    this field's type to the closed enum without adding that check would
+ *    let an out-of-catalogue string the Worker should never send, but this
+ *    file cannot actually rule out, type-check as if it were closed — an
+ *    unsafe swap, not a clean one. Reported as a follow-up rather than made
+ *    unilaterally (see this bead's report).
  */
 export type VisionUnitReadingState =
   | {
@@ -489,23 +502,23 @@ export type VisionUnitReadingState =
       readonly provenance: VisionUnitProducerProvenance;
     };
 
-/** Mirrors `unit-manifest/types.ts`'s `UnitManifestEntry` — see `VisionUnitProducerProvenance`'s doc for why mirrored rather than imported. Always `conceptExtractionState: 'not-started'`: this file only ever produces a freshly-read entry, never one concept extraction has already run over. */
+/**
+ * A local, narrower mirror of core's exported `UnitManifestEntry` for the
+ * same reason `VisionUnitReadingState`'s own doc gives (its `readingState`
+ * field is this narrower union, not core's full one). Always
+ * `conceptExtractionState: 'not-started'`: this file only ever produces a
+ * freshly-read entry, never one concept extraction has already run over —
+ * still a valid `UnitManifestEntry` structurally, since `'not-started'` is
+ * one of `ConceptExtractionState`'s two members, but kept as its own named
+ * type here so `deps.onManifestEntry`'s signature says exactly what this
+ * file can actually produce.
+ */
 export interface VisionUnitManifestEntry {
   readonly unitId: string;
   readonly sourcePath: VaultPath;
   readonly page: number;
   readonly readingState: VisionUnitReadingState;
   readonly conceptExtractionState: 'not-started';
-}
-
-/**
- * Mirrors `unit-manifest/manifest.ts#stableUnitId`'s algorithm exactly
- * (`${sourcePath}#${page}`) — not imported for the same reason above.
- * `vision-page-runner.spec.ts` pins the literal format so a future import
- * of the real function is a safe, test-verified swap.
- */
-function stableVisionUnitId(sourcePath: VaultPath, page: number): string {
-  return `${sourcePath}#${page}`;
 }
 
 /** The declared placeholder used when a `VisionPageExtractPort` (a test double, never the real `WorkerVisionPageExtractor`) answers without a `modelId`/`promptVersion` — see `VisionPageExtractResult`'s own doc. Honestly labelled rather than silently substituting an empty string a reader might mistake for real data. */
@@ -672,7 +685,7 @@ async function emitManifestEntry(
         : { kind: 'read', method: 'image', provenance };
 
   deps.onManifestEntry({
-    unitId: stableVisionUnitId(sourcePath, page),
+    unitId: stableUnitId(sourcePath, page),
     sourcePath,
     page,
     readingState,
