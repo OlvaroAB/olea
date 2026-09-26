@@ -105,6 +105,7 @@ import {
   GROVE_VIEW_TITLE,
   GROVE_VOLUNTEER_SECTION_HEADING,
   GROVE_VOLUNTEER_SECTION_NOTE,
+  GROVE_WITHHELD_HEADING,
   groveCoverageSplitLine,
   grovePapersLabel,
   groveReadCompletenessLine,
@@ -112,6 +113,7 @@ import {
   groveStateLabel,
   groveSummaryLine,
   groveUnreadableReasonLabel,
+  groveWithheldReasonLabel,
   OPEN_RETROSPECTIVE_ACTION,
 } from './copy.js';
 
@@ -169,8 +171,40 @@ export interface GroveCourseSection {
   readonly registerCandidates: readonly VaultPath[];
 }
 
+/**
+ * `[D-334]` (David, 2026-09-25): one block that failed one of the ruling's
+ * closed deterministic checks (M1-M5), across every note in the vault — the
+ * merge of `olea-core#enumerateVaultInstruments`'s `invalidMcqBlocks`,
+ * `invalidCardBlocks` and `invalidClozeBlocks` (`./provider.ts`'s own
+ * doc names the merge). `reason` is read off the enumeration as a plain
+ * string rather than the per-kind reason union (`McqInvalidReason` /
+ * `CardInvalidReason` / the cloze one, which is not exported from
+ * `olea-core`'s barrel today — see `./copy.ts#groveWithheldReasonLabel`'s
+ * own doc) — a reason this module has not named degrades to a safe
+ * fallback sentence rather than a compile error.
+ */
+export interface GroveWithheldItem {
+  readonly notePath: VaultPath;
+  readonly kind: 'mcq' | 'qa' | 'cloze';
+  readonly reason: string;
+}
+
 export type GroveViewState =
-  | { readonly kind: 'model'; readonly courses: readonly GroveCourseSection[] }
+  | {
+      readonly kind: 'model';
+      readonly courses: readonly GroveCourseSection[];
+      /**
+       * `[D-334]`: every withheld item in the vault, not scoped to any one
+       * course — a broken block can sit in a note bound to no concept at
+       * all, so this is not nested under `courses`. Optional so a caller
+       * that predates this field (the workbench's grove scenarios/bridge,
+       * `packages/workbench/src/grove-scenarios.ts`/`grove-bridge.ts`,
+       * outside this bead's `owns`) stays valid — absent reads as "nothing
+       * withheld", not "not asked", the same convention `relations`/
+       * `scopeCorrectionReceipt` already hold on this same type.
+       */
+      readonly withheldInstruments?: readonly GroveWithheldItem[];
+    }
   | { readonly kind: 'unavailable' };
 
 export interface GroveViewDeps {
@@ -245,6 +279,11 @@ export class GroveView extends ItemView {
       root.createDiv({ cls: 'olea-grove-unavailable', text: GROVE_UNAVAILABLE });
       return;
     }
+
+    // `[D-334]`: shown before the per-course grid, and before the no-courses
+    // empty state returns early — a withheld block can sit in a note bound
+    // to no course at all, so it must not depend on any course rendering.
+    this.renderWithheldInstruments(root, state.withheldInstruments ?? []);
 
     if (state.courses.length === 0) {
       // WBX-18 (`ol-qm6u`): never a bare title with nothing under it — same principle F8.1's
@@ -503,6 +542,39 @@ export class GroveView extends ItemView {
     gapItem.createSpan({ text: GROVE_LEGEND_MATERIAL_GAP_NOTE });
     const papersItem = el.createDiv({ cls: 'olea-grove-legend-item' });
     papersItem.createSpan({ text: GROVE_LEGEND_PAPERS_NOTE });
+  }
+
+  /**
+   * `[D-334]` (David, 2026-09-25): every withheld item across the whole
+   * vault, named in one sentence each — never silently, never mid-session
+   * (this method runs on every `render()`, including a mid-session
+   * `refresh()` call, so a defect found while she is working disappears the
+   * same way it would on any other read). Reuses the unreadable-files
+   * classes rather than adding new CSS: `packages/plugin/styles.css` is
+   * outside this bead's `owns`, and that treatment's "path plus one-sentence
+   * reason" row shape is exactly what this list needs too.
+   *
+   * **Not the ruling's full surface.** `[D-334]` places the edit/reject
+   * actions on "the registry instrument surface" (`../registry/*`, a
+   * different bead's `owns`) — this list is the count-or-listing minimum
+   * `ol-v7r5.72` already established as acceptable ahead of that fuller
+   * surface; see this bead's close notes for the follow-up.
+   */
+  private renderWithheldInstruments(
+    parent: HTMLElement,
+    items: readonly GroveWithheldItem[],
+  ): void {
+    if (items.length === 0) return;
+    const box = parent.createDiv({ cls: 'olea-grove-unreadable' });
+    box.createDiv({ cls: 'olea-grove-unreadable-heading', text: GROVE_WITHHELD_HEADING });
+    for (const item of items) {
+      const row = box.createDiv({ cls: 'olea-grove-unreadable-row' });
+      row.createSpan({ cls: 'olea-grove-unreadable-path', text: item.notePath });
+      row.createSpan({
+        cls: 'olea-grove-unreadable-reason',
+        text: groveWithheldReasonLabel(item.kind, item.reason),
+      });
+    }
   }
 
   /**

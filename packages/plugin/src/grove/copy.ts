@@ -121,6 +121,82 @@ export function groveUnreadableReasonLabel(reason: UnreadableReason): string {
   return GROVE_UNREADABLE_REASON_LABEL[reason];
 }
 
+/**
+ * `[D-334]` (David, 2026-09-25): a block that failed one of the ruling's
+ * closed deterministic checks (M1-M5) is withheld from serving and "never
+ * silently and never mid-session" shown to her, naming the defect in one
+ * sentence — `olea-core#enumerateVaultInstruments`'s `invalidMcqBlocks`,
+ * `invalidCardBlocks` and `invalidClozeBlocks` (`./provider.ts`'s
+ * `GroveWithheldItem` merges the three). The ruling's own full surface —
+ * edit it (clears the withholding) or reject it (`[D-097]`) — is the
+ * "registry instrument surface", not this screen (`../registry/*`, outside
+ * this bead's `owns`): this heading and its one-sentence-per-item list are
+ * the minimal visibility fix `ol-v7r5.72` already established is acceptable
+ * ahead of that fuller surface (see this bead's close notes for the
+ * follow-up naming edit/reject actions explicitly).
+ *
+ * Shown regardless of whether any course reached a real grid — a broken
+ * block can sit in a note with no concept binding at all, and C7.10's
+ * "never silently serve nothing" does not narrow to notes that happen to be
+ * bound.
+ */
+export const GROVE_WITHHELD_HEADING = 'Items Olea is withholding';
+
+/**
+ * Plain-language, one-sentence specifics per instrument kind and reason —
+ * never the parser's own `block.detail` (`olea-core#InvalidMcqBlock` et
+ * al.), which names Unicode code points and internal separator syntax and
+ * is diagnostics, not her-facing copy (principle 12).
+ */
+const GROVE_WITHHELD_REASON_LABEL: Readonly<
+  Record<'mcq' | 'qa' | 'cloze', Readonly<Record<string, string>>>
+> = {
+  mcq: {
+    'missing-stem': 'Missing its question.',
+    'missing-answer': 'Missing its answer.',
+    'repeated-field': 'Repeats a field it should only have once.',
+    'insufficient-distractors': "Doesn't have enough wrong options to choose from.",
+    'duplicate-option': 'One of its options repeats another, or repeats the answer.',
+    'empty-value': 'One of its fields is empty.',
+    'unknown-field': 'Has a field Olea does not recognise.',
+    'corrupted-or-unterminated': 'Its text looks corrupted, or it never closed.',
+    'unresolved-asset': "Points to a file Olea can't find anywhere in your vault.",
+  },
+  qa: {
+    'missing-front': 'Missing its front.',
+    'missing-back': 'Missing its back.',
+    'corrupted-or-unterminated': 'Its text looks corrupted, or it never closed.',
+    'unresolved-asset': "Points to a file Olea can't find anywhere in your vault.",
+  },
+  cloze: {
+    'unterminated-delimiter': 'Started a blank-out but never closed it.',
+  },
+};
+
+/** Plain-English name for one of the three kinds `GroveWithheldItem.kind` carries. */
+const GROVE_WITHHELD_KIND_LABEL: Readonly<Record<'mcq' | 'qa' | 'cloze', string>> = {
+  mcq: 'Multiple choice',
+  qa: 'Q&A card',
+  cloze: 'Cloze deletion',
+};
+
+/**
+ * One sentence naming the defect (`[D-334]`'s own words) for one withheld
+ * item — the kind, then the specific reason. Falls back to a safe, honest
+ * default for a reason this module has not named (never a thrown error, and
+ * never her-facing `block.detail`): `reason` is read off `enumerateVaultInstruments`'s
+ * output as a plain string rather than the (unexported, for cloze)
+ * `McqInvalidReason`/`CardInvalidReason`/`ClozeInvalidReason` union, so a
+ * future reason this module has not yet named degrades to the fallback
+ * instead of a compile error or a blank line.
+ */
+export function groveWithheldReasonLabel(kind: 'mcq' | 'qa' | 'cloze', reason: string): string {
+  const kindLabel = GROVE_WITHHELD_KIND_LABEL[kind];
+  const reasonText =
+    GROVE_WITHHELD_REASON_LABEL[kind][reason] ?? "Olea can't read this as a complete item.";
+  return `${kindLabel} — ${reasonText}`;
+}
+
 /** Section heading over `volunteer` concepts — outside the declared count, never hidden (F8.2). */
 export const GROVE_VOLUNTEER_SECTION_HEADING = 'Also growing here';
 export const GROVE_VOLUNTEER_SECTION_NOTE =
@@ -299,6 +375,7 @@ export function allGroveStrings(): readonly string[] {
     GROVE_NO_COURSES_BODY,
     GROVE_MATERIAL_GAP_LABEL,
     GROVE_UNREADABLE_HEADING,
+    GROVE_WITHHELD_HEADING,
     GROVE_VOLUNTEER_SECTION_HEADING,
     GROVE_VOLUNTEER_SECTION_NOTE,
     GROVE_GROUND_STALL_NOTE,

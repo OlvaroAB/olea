@@ -148,6 +148,22 @@
  * exactly this read's `'declared'`-course summaries: a course that stops
  * being `'declared'` has nothing current to report and must not linger as
  * a stale prior either.
+ *
+ * ## Withheld structurally-broken blocks, surfaced (`[D-334]`, `ol-v7r5.80`)
+ *
+ * `olea-core`'s `enumerateVaultInstruments` (`ol-v7r5.72`, `ol-v7r5.90`) has
+ * collected `invalidMcqBlocks`/`invalidCardBlocks`/`invalidClozeBlocks` for a
+ * while now — every block that failed one of `[D-334]`'s closed deterministic
+ * checks (M1-M5) — but nothing in `packages/plugin` read any of the three
+ * lists until this bead: a broken block still vanished from what she sees,
+ * which is exactly the C7.10 "never silently serve nothing" gap `ol-v7r5.72`
+ * named. `withheldInstrumentsFromEnumeration` below merges the three into
+ * `GroveWithheldItem[]` off the SAME `enumeration` this `load()` already
+ * walks for every other reading — no second vault pass — and `./view.ts`
+ * renders one sentence per item, always, never mid-session-hidden. See that
+ * function's own doc for why the merge is untyped by the per-kind reason
+ * unions, and `./view.ts#GroveWithheldItem`'s doc for why the result is not
+ * nested under any one course.
  */
 
 import type { SourceRegisteredRole } from 'olea-contracts';
@@ -199,7 +215,12 @@ import {
   ObsidianGrovePriorDenominatorStore,
 } from './prior-denominator-store.js';
 import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js';
-import type { GroveCourseSection, GroveScopeCorrectionReceipt, GroveViewState } from './view.js';
+import type {
+  GroveCourseSection,
+  GroveScopeCorrectionReceipt,
+  GroveViewState,
+  GroveWithheldItem,
+} from './view.js';
 
 export interface CreateLocalGroveProviderDeps {
   readonly vault: VaultSource;
@@ -277,6 +298,59 @@ async function disputesFromFiles(
 ): Promise<readonly DisputeLogRecord[]> {
   const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
   return reads.flatMap((read) => read.disputes);
+}
+
+/**
+ * `[D-334]` (David, 2026-09-25): merges `enumeration.invalidMcqBlocks`,
+ * `.invalidCardBlocks` and `.invalidClozeBlocks` into the one flat list
+ * `./view.ts#GroveWithheldItem` renders — see that type's own doc for why
+ * this is not nested per course. `reason` is read off each report as a
+ * plain string, never a named per-kind reason type: `InvalidClozeReport`
+ * (`packages/core/src/session/types.ts`) is not exported from `olea-core`'s
+ * barrel today (`ol-v7r5.90`'s own bead names the gap; widening
+ * `packages/core/src/index.ts` sits outside this bead's `owns`), and typing
+ * this function's `enumeration` parameter loosely — reading the three
+ * fields structurally off whatever `enumerateVaultInstruments` returns,
+ * rather than naming `InvalidMcqReport`/`InvalidCardReport`/
+ * `InvalidClozeReport` — is what lets this compile without that export.
+ */
+function withheldInstrumentsFromEnumeration(enumeration: {
+  readonly invalidMcqBlocks: readonly {
+    readonly notePath: VaultPath;
+    readonly block: { readonly reason: string };
+  }[];
+  readonly invalidCardBlocks: readonly {
+    readonly notePath: VaultPath;
+    readonly block: { readonly reason: string };
+  }[];
+  readonly invalidClozeBlocks: readonly {
+    readonly notePath: VaultPath;
+    readonly block: { readonly reason: string };
+  }[];
+}): readonly GroveWithheldItem[] {
+  return [
+    ...enumeration.invalidMcqBlocks.map(
+      (report): GroveWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'mcq',
+        reason: report.block.reason,
+      }),
+    ),
+    ...enumeration.invalidCardBlocks.map(
+      (report): GroveWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'qa',
+        reason: report.block.reason,
+      }),
+    ),
+    ...enumeration.invalidClozeBlocks.map(
+      (report): GroveWithheldItem => ({
+        notePath: report.notePath,
+        kind: 'cloze',
+        reason: report.block.reason,
+      }),
+    ),
+  ];
 }
 
 /**
@@ -689,7 +763,13 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         await groundStreakStore.save(nextGroundStreaks);
         await priorDenominatorStore.save(nextPriorDenominators);
 
-        return { kind: 'model', courses };
+        return {
+          kind: 'model',
+          courses,
+          // `[D-334]`: computed off the same `enumeration` this call already
+          // paid for above — no second walk.
+          withheldInstruments: withheldInstrumentsFromEnumeration(enumeration),
+        };
       } catch (error) {
         console.error('Olea: could not compose the grove', error);
         return { kind: 'unavailable' };
