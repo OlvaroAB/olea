@@ -2304,6 +2304,7 @@ export { buildStudySession, CONCEPT_SIZE_SECONDS_MULTIPLIER } from './study-sess
 // blocks) — see compose.ts's module doc for the full algorithm.
 export type {
   BuildComposedStudySessionInput,
+  ClassifiedRow,
   ComposedStudySession,
   ComposeSessionRowsInput,
   ComposeSessionRowsResult,
@@ -2312,12 +2313,26 @@ export type {
   ObligationOverflowEntry,
   ObligationSignals,
 } from './study-session/compose.js';
+// `fillWholeGroups`, `groupConceptRows`, `selectDominantCourse`, `withinBlockGroupingScore` and
+// `withinBlockOrder` (plus the `ClassifiedRow` type above) are `ol-egov.141.89.10.4` [ILB-PLN-4]
+// part 5's addition: the compose family's smallest pure deciding functions, exported so
+// `scripts/harness/ilb-pln/` (olea-service) can drive the `focus`, `order` and `fill` case
+// families against light fixtures built from each case's own declared facts, without needing the
+// full GapRow/QaInstrumentRecord roster their only production caller
+// (composeFocusedSelection/composeSessionRows) builds them from. Kept in ONE export statement per
+// specifier (biome's organizeImports assist merges a second one from the same module) rather than
+// a visually separate block.
 export {
   buildComposedStudySession,
   classifyObligation,
   composeSessionRows,
   extendComposedStudySession,
+  fillWholeGroups,
+  groupConceptRows,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
+  selectDominantCourse,
+  withinBlockGroupingScore,
+  withinBlockOrder,
 } from './study-session/compose.js';
 export type {
   DurationEstimateSource,

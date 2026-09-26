@@ -613,7 +613,14 @@ function representativeSecondsFor(
   return cheapest * CONCEPT_SIZE_SECONDS_MULTIPLIER[sizeBand];
 }
 
-interface ClassifiedRow {
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5): the
+ * within-course tie-band/fill deciding functions below (`withinBlockGroupingScore`,
+ * `withinBlockOrder`, `groupConceptRows`, `fillWholeGroups`, `selectDominantCourse`) all take or
+ * return this shape, so it has to be nameable outside this module for those functions to be
+ * exported too. No behaviour change: the shape itself is unchanged.
+ */
+export interface ClassifiedRow {
   readonly row: GapRow;
   readonly klass: ObligationClass;
   readonly overdueDays: number;
@@ -808,7 +815,15 @@ export function withinBlockCohortDecayWeight(
  * none of the optional signals are supplied — see the module doc's no-op
  * proof.
  */
-function withinBlockGroupingScore(
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5) — the case
+ * runner's `order` family drives this real combiner directly, against a light `ClassifiedRow`
+ * fixture built from a case's own declared facts, rather than approximating it by recombining
+ * `withinBlockAssessmentProximity`/`withinBlockRelatedness`/`withinBlockCohortAffinity` itself (the
+ * three pieces alone answer a different, narrower question than the one score the sort orders by
+ * — see this bead's part 4 report). No behaviour change: export keyword only.
+ */
+export function withinBlockGroupingScore(
   c: ClassifiedRow,
   peers: readonly string[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
@@ -1014,7 +1029,15 @@ function dominantGroupingSignal(
  * only appends more of the same course under the same shares (see that function's doc) and never
  * re-runs this ordering over what she already has.
  */
-function withinBlockOrder(
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5): the case
+ * runner's `order` family (C15's prerequisite tie-band, C16's relatedness/cohort tie-band) drives
+ * this real per-band reordering function directly, over a `ClassifiedRow[]` fixture built only
+ * from each case's declared facts (a tie band's own conceptKey/notePaths/relatedTo/prerequisite
+ * facts), rather than reimplementing its band-detection or its prerequisite pass. No behaviour
+ * change: export keyword only.
+ */
+export function withinBlockOrder(
   bucket: readonly ClassifiedRow[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
   assessmentContext: ReadonlyMap<VaultPath, AssessmentGroupingContext> | undefined,
@@ -1372,7 +1395,12 @@ function groupCost(group: readonly ClassifiedRow[]): number {
  * group" guarantee holds by construction whenever the inputs are absent,
  * exactly as it does now that a caller supplies relatedness.
  */
-function groupConceptRows(
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5) — the case
+ * runner's `fill` family drives this real grouping primitive, then `fillWholeGroups`, over a
+ * `ClassifiedRow[]` fixture built from a case's own declared facts. No behaviour change.
+ */
+export function groupConceptRows(
   orderedCourseRows: readonly ClassifiedRow[],
   relatedConceptKeys: ReadonlyMap<string, ReadonlySet<string>> | undefined,
 ): readonly (readonly ClassifiedRow[])[] {
@@ -1402,7 +1430,11 @@ function groupConceptRows(
  * Pass 1's existing `if (spent + c.cost > cap) continue` already gives a
  * single concept, generalised here to a group.
  */
-function fillWholeGroups(
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5) — see
+ * `groupConceptRows`'s doc above. No behaviour change.
+ */
+export function fillWholeGroups(
   groups: readonly (readonly ClassifiedRow[])[],
   budgetSeconds: number,
 ): { readonly chosen: readonly ClassifiedRow[]; readonly spent: number } {
@@ -1451,7 +1483,14 @@ function fillWholeGroups(
  * both readings already use. `courseId` still breaks a remaining tie, for
  * determinism only.
  */
-function selectDominantCourse(
+/**
+ * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5): the case
+ * runner's `focus` family can drive this real hierarchy directly against plain
+ * urgency/deficit/recency maps built from a case's own declared facts, without needing the full
+ * `GapRow` roster `composeFocusedSelection` (its only caller) builds them from. No behaviour
+ * change: export keyword only.
+ */
+export function selectDominantCourse(
   eligibleCourses: readonly string[],
   courseFilter: readonly string[] | undefined,
   urgencyByCourse: ReadonlyMap<string, number>,
