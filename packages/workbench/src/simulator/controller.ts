@@ -574,6 +574,61 @@ function settle(): Promise<void> {
   });
 }
 
+/**
+ * The attribute {@link installContentGenerationCounter} bumps — read by
+ * `e2e/simulator/helpers.ts`'s own wait, the same before/after pattern
+ * `waitForRemount`/`[data-wb-remount]` already use, scoped one level finer.
+ */
+const CONTENT_GENERATION_ATTR = 'data-wb-content-gen';
+
+/**
+ * `ol-egov.141.89.10.38`: `[data-wb-remount]` only ever bumps once per whole
+ * `remountPane()` call — the right settle signal for a day-advance/reset/
+ * scrub, all of which tear down and rebuild the entire mount. It is the
+ * WRONG signal for a command invoked through the palette
+ * (`e2e/simulator/helpers.ts`'s `openCommandViaPalette`): `Plugin.
+ * invokeCommand` (`obsidian-shim/index.ts`) runs a command's `callback`
+ * fire-and-forget (every reveal command in `packages/plugin/src/main.ts` is
+ * `() => { void this.revealXView(); }`, by that file's own design — a
+ * command must return before its view has necessarily finished refreshing).
+ * On an ALREADY-OPEN leaf (the common case here: `remountPane` already
+ * opened Home and Today once), that reveal's own "refresh on the way out"
+ * (`main.ts`'s own `ol-h3wy` doc) re-renders a view that was already
+ * showing something — so a wait keyed on content simply APPEARING
+ * (`waitForTodayRendered`'s `.olea-today-note` check) is satisfied
+ * instantly by the STALE render already on screen, never by the fresh one
+ * the command actually triggered. Playwright's own screenshot-stability
+ * heuristic (two identical animation frames) is no substitute either: nothing
+ * here animates, so two consecutive frames of the stale render are already
+ * "stable" the instant the click handler returns, well before the
+ * fire-and-forget refresh resolves.
+ *
+ * The fix mirrors `[data-wb-remount]` one level down: a `MutationObserver`
+ * on the pane a reveal command actually redraws (`elements.main`/
+ * `elements.right` — both stable across a same-mount refresh, only their
+ * CHILDREN are emptied and rebuilt, `shell.ts`'s own doc), bumping an
+ * attribute once per batch of synchronous DOM writes. `TodayView.render`/
+ * `HomeView.refresh`'s own render pass empties and rebuilds its content in
+ * one synchronous call with no `await` in the middle, so the browser
+ * coalesces it into exactly one mutation-observer callback — one bump per
+ * real render pass, not a per-node flood and not a fixed poll interval.
+ * Installed once, for the controller's whole lifetime (the same "not
+ * per-remount" reasoning `course-setup-bridge.ts` gives for its own
+ * observer): a fresh observer per `remountPane()` call would miss exactly
+ * the gap this exists to catch, since that gap is what happens BETWEEN two
+ * `remountPane()` calls.
+ */
+function installContentGenerationCounter(pane: HTMLElement): () => void {
+  let generation = 0;
+  pane.setAttribute(CONTENT_GENERATION_ATTR, String(generation));
+  const observer = new MutationObserver(() => {
+    generation += 1;
+    pane.setAttribute(CONTENT_GENERATION_ATTR, String(generation));
+  });
+  observer.observe(pane, { childList: true, subtree: true, characterData: true });
+  return () => observer.disconnect();
+}
+
 function makeSimpleLeaf(host: HTMLElement): WorkspaceLeaf {
   return {
     view: null,
@@ -1307,6 +1362,8 @@ export class SimulatorController {
   private readonly courseSetupSeenBridge: CourseSetupSeenBridge;
   /** Bumped once per `remountPane()` call, written onto `elements.root`'s `[data-wb-remount]` — see {@link SimulatorControllerOptions.elements}'s own doc. */
   private remountCount = 0;
+  /** Disposes the two {@link installContentGenerationCounter} observers (`elements.main`/`elements.right`) — see that function's own doc. */
+  private readonly disposeContentGenerationCounters: () => void;
   /** `[HARD-18]`: the lazy frontier-sessions loader's per-mount cache — see `renderFrontierPanel`'s own doc. Assigned in the constructor, not a field initialiser, so its doc sits beside the other constructor-body assignments. */
   private readonly frontierSessionsCache: FrontierSessionsCache;
 
@@ -1367,6 +1424,12 @@ export class SimulatorController {
       this.pluginDataHost,
       () => this.beforeMountCourseSetupSeenCodes,
     );
+    const disposeMain = installContentGenerationCounter(elements.main);
+    const disposeRight = installContentGenerationCounter(elements.right);
+    this.disposeContentGenerationCounters = () => {
+      disposeMain();
+      disposeRight();
+    };
   }
 
   static async create(options: SimulatorControllerOptions): Promise<SimulatorController> {
@@ -1499,6 +1562,7 @@ export class SimulatorController {
   async dispose(): Promise<void> {
     this.uninstallTransportBridge();
     this.courseSetupSeenBridge.dispose();
+    this.disposeContentGenerationCounters();
     await this.closeCurrent();
   }
 

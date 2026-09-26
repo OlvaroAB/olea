@@ -244,6 +244,42 @@ export async function waitForRemount(page: Page, before: string | null): Promise
 }
 
 /**
+ * `[data-wb-content-gen]` on `elements.main`/`elements.right`
+ * (`controller.ts`'s `installContentGenerationCounter`, `ol-egov.141.89.10.38`)
+ * — bumped by a `MutationObserver` once per synchronous render pass on that
+ * pane, whether the pane's content changed because of a full `remountPane()`
+ * or because a palette command re-revealed a view that was already open (see
+ * that function's own doc for why `[data-wb-remount]` alone is the wrong
+ * signal for the second case). `pane` matches {@link openCommandViaPalette}'s
+ * own parameter: `'right'` is `elements.right` (Today's pool), `'main'` is
+ * `elements.main` (Home's).
+ */
+function contentGenerationLocator(page: Page, pane: 'main' | 'right'): Locator {
+  const selector = pane === 'main' ? '[data-wb-sim-main]' : '[data-wb-sim-right]';
+  return frame(page).locator(selector);
+}
+
+/**
+ * Waits for the given pane's content-generation counter to move past
+ * `before` — the same before/after shape {@link waitForRemount} uses one
+ * level up. Shares that function's timeout: a command-triggered re-render is
+ * never slower than a full remount's own worst case, and giving it the
+ * identical bound keeps this file's one settle budget in one place
+ * ({@link REMOUNT_TIMEOUT_MS}).
+ */
+async function waitForContentGeneration(
+  page: Page,
+  pane: 'main' | 'right',
+  before: string | null,
+): Promise<void> {
+  await expect(contentGenerationLocator(page, pane)).not.toHaveAttribute(
+    'data-wb-content-gen',
+    before ?? '0',
+    { timeout: REMOUNT_TIMEOUT_MS },
+  );
+}
+
+/**
  * Reads the due section's `.olea-today-note` sentence and returns its count,
  * or `'none'` when the sentence reads "nothing due" or "can't count" instead
  * of a real total. Call only after {@link waitForTodayRendered}.
@@ -395,6 +431,20 @@ export async function rateNextDue(page: Page): Promise<void> {
  * pane AWAY from Home (e.g. via `COMMAND_GAP_OPEN`) — otherwise the
  * assertion would pass even if the command's callback silently did nothing,
  * since Home was already the active main-pane view either way.
+ *
+ * **`ol-egov.141.89.10.38`: also waits for `pane`'s content-generation
+ * counter to move past its own pre-click value.** The command's callback in
+ * `packages/plugin/src/main.ts` is fire-and-forget (`() => { void this.
+ * revealXView(); }`) by that file's own design, and on a leaf that is
+ * already open (the ordinary case here — `remountPane` opened both Home and
+ * Today once already), the reveal's real work is a re-render, not the
+ * `data-wb-active-view-type` flip this function already waited on — that
+ * attribute is already correct before the click, so waiting on it again
+ * proves nothing about whether the re-render has happened. A caller that
+ * screenshots right after this function returned used to be racing that
+ * fire-and-forget refresh; see `installContentGenerationCounter`'s own doc
+ * (`controller.ts`) for why `[data-wb-remount]` cannot stand in for it and
+ * why a `MutationObserver`-backed counter can.
  */
 export async function openCommandViaPalette(
   page: Page,
@@ -403,6 +453,9 @@ export async function openCommandViaPalette(
   pane: 'main' | 'right' = 'right',
 ): Promise<void> {
   const paneSelector = pane === 'main' ? '[data-wb-pane]' : '[data-wb-right-pane]';
+  const beforeContentGeneration = await contentGenerationLocator(page, pane).getAttribute(
+    'data-wb-content-gen',
+  );
   await frame(page).locator('[data-wb-palette-toggle]').click();
   await expect(frame(page).locator('[data-wb-palette]')).toBeVisible();
   await frame(page).locator(`[data-wb-command-id="${commandId}"]`).click();
@@ -410,6 +463,7 @@ export async function openCommandViaPalette(
     'data-wb-active-view-type',
     expectedViewType,
   );
+  await waitForContentGeneration(page, pane, beforeContentGeneration);
   await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
 }
 
