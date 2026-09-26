@@ -1806,6 +1806,33 @@ export default class OleaPlugin extends Plugin {
         draftDeps: () => this.draftQuizCardsDeps(),
         now: this.now,
       },
+      // `deps.generation` (`[D-238]`) is deliberately NOT supplied here yet —
+      // held, not omitted by oversight. `ol-2zfj.63` [GEN-3.1] built and
+      // tested the composition seam; `ol-2zfj.135` [GEN-3.4] built and
+      // tested real `draft`/`hasAnyBuiltKind` implementations
+      // (`./generation/generation-job-runner.js#createGenerationDraftRunner`/
+      // `#createHasAnyBuiltKind`) but held wiring them in here, because
+      // supplying `deps.generation` at all makes the ingestion queue call
+      // the Worker's generation task automatically on every material
+      // arrival — a new, unauthorised automatic-spend surface while
+      // `[D-261]` holds ledger spend at zero. `ol-2zfj.171` (open, blocked
+      // by `[D-261]`) is the named follow-up, with the held diff already
+      // written (`generation: { draft: createGenerationDraftRunner({vault,
+      // cache: generationWiring.cache, draftDeps: () =>
+      // this.draftQuizCardsDeps()}), hasAnyBuiltKind:
+      // createHasAnyBuiltKind(generationWiring.cache) }`, plus its own
+      // main-wiring test) waiting in the orchestrator's scratchpad. `[D-368]`
+      // (`ol-2zfj.170`, `ol-2zfj.173`) has since ruled the drain-order key
+      // this seam's `priority` field wants: `./generation/priority-source.js
+      // #createGenerationPrioritySource` is that live need/yield reading,
+      // built and auto-tested (`test/generation/priority-source.spec.ts`) on
+      // its own terms — a third field, `priority:
+      // createGenerationPrioritySource({vault,
+      // scheduler}).priority`, ready to add to `ol-2zfj.171`'s object
+      // literal above the day `[D-261]` authorises composing it. No
+      // production caller exists yet for either half — see this bead's
+      // (`ol-2zfj.173`) report for why, per `[D-072]`'s "or why there
+      // deliberately is none yet and which bead adds it."
       // `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]:
       // outcomes.extract.v1's production trigger — a registered objectives/past-paper document's
       // landed units (this SAME ingestion tick's own extraction, `deps.vault` above) are checked

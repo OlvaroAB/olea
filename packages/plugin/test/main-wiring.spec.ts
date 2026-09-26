@@ -1317,6 +1317,26 @@ describe("component 1.6's delivered vision-routing threshold has a real producti
   });
 });
 
+describe('[D-368]/[D-348] (ol-2zfj.173): the generation drain-order reading is built and auto-tested, but deps.generation stays unsupplied — held for ol-2zfj.171, blocked by D-261', () => {
+  // `ol-2zfj.135` [GEN-3.4] already built and tested real `draft`/
+  // `hasAnyBuiltKind` implementations, but composing `deps.generation` at
+  // all would make the ingestion queue call the Worker's generation task
+  // automatically on every material arrival — a new automatic-spend surface
+  // while `[D-261]` holds ledger spend at zero. This bead's own
+  // `priority-source.ts` reading is built and auto-tested on its own terms
+  // (`test/generation/priority-source.spec.ts`) but is equally unreachable
+  // until that same hold lifts. This pin exists so a later change that adds
+  // `generation:` to the real call — correctly, once `[D-261]` authorises it
+  // — fails here and forces this note (and `ol-2zfj.171`'s own acceptance)
+  // to be updated alongside it, rather than the gap going stale silently.
+
+  it('does not yet supply deps.generation to the real buildIngestionRunner call', () => {
+    const match = main.match(/this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?\}\);/);
+    expect(match).not.toBeNull();
+    expect(match?.[0]).not.toContain('generation:');
+  });
+});
+
 describe("retrieve()'s two production callers supply registryOverrides, so alias expansion is actually exercised (ol-r5j4)", () => {
   // `ol-l5og.11`'s own diagnosis: `retrieve()` expands keyword queries with
   // rename aliases when `RetrieveDeps.registryOverrides` is supplied, but
