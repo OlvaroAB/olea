@@ -150,7 +150,7 @@ import {
   createFrozenReviewQueue,
   type FrozenReviewQueue,
 } from './queue-adapter.js';
-import { ReviewSession } from './session.js';
+import { type ContestRegradeEnqueuePort, ReviewSession } from './session.js';
 import { createStrongRecallProposalReader } from './strong-recall-wiring.js';
 import type { ReviewQueueItem } from './types.js';
 
@@ -183,6 +183,15 @@ export interface ReviewSessionPorts {
    * ports above.
    */
   readonly gradeContestPort?: GradeContestPort;
+  /**
+   * `[D-360]` (`ol-egov.141.89.9.34`): the queued regrading workflow's
+   * moment-of-dispute trigger, called by the session right after
+   * `gradeContestPort` records a dispute. Optional; absent means a contest is
+   * still recorded and simply enqueues nothing — `ReviewSessionDeps
+   * .contestRegradeEnqueuer`'s own posture, threaded straight through. Inert
+   * until `main.ts` supplies it.
+   */
+  readonly contestRegradeEnqueuer?: ContestRegradeEnqueuePort;
   /**
    * The D7.1 write path for F2.12's explain-back offer and its paired
    * decline (`[D-178 / LOG-3]` item 2, `ol-0r92.28`). Optional; absent means
@@ -602,6 +611,9 @@ export async function openReviewSession(
         ? { evaluateConfusionRouting: input.ports.evaluateConfusionRouting }
         : {}),
       ...(input.ports.gradeContestPort ? { gradeContestPort: input.ports.gradeContestPort } : {}),
+      ...(input.ports.contestRegradeEnqueuer
+        ? { contestRegradeEnqueuer: input.ports.contestRegradeEnqueuer }
+        : {}),
       ...(input.ports.explainBackOfferLog
         ? { explainBackOfferLog: input.ports.explainBackOfferLog }
         : {}),
