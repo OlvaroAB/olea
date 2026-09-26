@@ -48,6 +48,49 @@
  * primary kind on arrival" — through the SAME `enqueuer` `arrival-watch.ts`
  * uses, so a primary call is itself just another job this engine's own
  * tick loop drains, never a call made directly at ingestion time.
+ *
+ * **The drain-order comparator (`[D-368]`, `ol-2zfj.170`, F3.7).** `olea-
+ * core`'s `IngestionQueueEngine` (`ingestion/engine.ts`) has carried an
+ * inert, optional `EngineDeps.priority` seam since `ol-2zfj.168`: omitted,
+ * `nextEligibleIndex` drains strict FIFO for every job kind sharing the
+ * queue. `[D-368]` (David, 2026-09-25) ruled the ordering key F3.7 left
+ * open — the drain order is now RULED, so `buildIngestionRunner` below
+ * always supplies a real comparator (`compareGenerationPriority`), not the
+ * `undefined` every caller has passed until this bead. The ruling: among
+ * pending `'generation'` jobs, order by current recall/readiness and
+ * instrument need (`GenerationPrioritySignal.need`, higher drains first),
+ * breaking ties by each job's own expected item count (`.expectedYield`,
+ * higher drains first), and any remaining tie by arrival order — which
+ * `engine.ts`'s own seam already gives for free (a `0` comparison keeps
+ * whichever job was found first). Extraction and instrument-revision jobs
+ * are untouched: the comparator returns `0` for any pair where either side
+ * is not `'generation'`-kind, so they "keep theirs" (arrival order) exactly
+ * as before this bead.
+ *
+ * **Read fresh at drain time — the binding clarification.** `[D-368]`:
+ * "a freshly read historical growth/mastery stage is still historical, not
+ * current ability." `deps.generation.priority`, when supplied, is called
+ * ONCE PER COMPARISON, from inside the engine's own `tick()` → `
+ * nextEligibleIndex` loop — i.e. at drain time, never memoized at enqueue
+ * time or at this function's own construction time. A caller that reads a
+ * cached snapshot instead of the vault's current state breaks the ruling on
+ * its own side, not this seam's: this file's contract is only "called
+ * fresh, every comparison," never "computes the right number."
+ *
+ * **No production implementation is composed yet (named follow-up, this
+ * bead's close evidence) — same posture as `deps.generation.draft`/
+ * `.hasAnyBuiltKind` just below, which `main.ts`'s actual call also omits
+ * today.** Omitted, `generationPrioritySignalFor` returns
+ * `DEFAULT_GENERATION_PRIORITY_SIGNAL` (`{ need: 0, expectedYield: 0 }`) for
+ * every `'generation'` job, so every pair compares equal and arrival order
+ * governs — byte-identical to today's behaviour. The real reading
+ * (`olea-core`'s `readAllConceptReadiness`/`readNeed` in
+ * `mastery/attainment.ts` already compute exactly this "current recall,
+ * `UNKNOWN_NEED_VALUE` when there is no current evidence" pair — `[D-348]`'s
+ * open basis split is D-368's own named default policy, not a new one this
+ * bead invents) and the expected-item-count reading are both a later
+ * caller's to wire, once one exists that already has the vault-scoped
+ * review log, scheduler and validity projection loaded.
  */
 
 import {
@@ -60,6 +103,7 @@ import {
   deferredEnqueuer,
   type ExtractedUnit,
   type ExtractedUnitSink,
+  type GenerationJobPayload,
   IngestionQueueEngine,
   type JobRunner,
   type JobRunnerView,
@@ -94,6 +138,7 @@ import {
   createGenerationAwareJobRunner,
   enqueuePrimaryGenerationCallsForLandedUnits,
   type GenerationArrivalDeps,
+  isGenerationJobPayload,
 } from './generation-queue.js';
 import type {
   OutcomeSourcePassage,
@@ -174,6 +219,25 @@ export interface IngestionWiringDeps {
     /** F2.14's observed order (D7.1), opt-in. Absent means nothing observed yet for every course. */
     readonly recordedPreferenceFor?: GenerationArrivalDeps['recordedPreferenceFor'];
     readonly coursesFolder?: string;
+    /**
+     * `[D-368]`'s drain-order key for pending `'generation'` jobs — see this
+     * module's doc, "The drain-order comparator." Called FRESH on every
+     * comparison the engine's own `tick()` makes (never cached by this
+     * module) — the caller's job is to answer with whatever is current AT
+     * THAT INSTANT, never a value carried over from enqueue time. Returning
+     * `null` is for a `payload` this callback genuinely has no reading for
+     * (e.g. an unrecognised `courseCode`) — it is NOT how "no current
+     * evidence for this concept" is expressed; `olea-core`'s `readNeed`
+     * already answers that with its own `NeedReading.basis === 'unknown'`
+     * and `UNKNOWN_NEED_VALUE` default (`mastery/attainment.ts`), and a
+     * caller wiring this should apply that default itself before returning,
+     * per `[D-368]`'s "an explicit stated unknown/default policy." Omitted
+     * (every caller before this bead, and `main.ts`'s actual call today):
+     * `compareGenerationPriority` reads `DEFAULT_GENERATION_PRIORITY_SIGNAL`
+     * for every `'generation'` job instead, so every pair ties and arrival
+     * order governs — byte-identical to before this option existed.
+     */
+    readonly priority?: (payload: GenerationJobPayload) => GenerationPrioritySignal | null;
   };
   /**
    * `[D-344]` (`ol-2zfj.163`, option b) / `ol-2zfj.141` [IL-D10] / `ol-2zfj.153` [DOS-I4]: when
@@ -429,6 +493,75 @@ function withOutcomesExtractHook(
 }
 
 /**
+ * `[D-368]`'s per-job drain-order reading — see `IngestionWiringDeps
+ * .generation.priority`'s doc for who supplies it and when it is called.
+ * `need` is the ruling's "current recall/readiness and instrument need,"
+ * folded into the one number `olea-core`'s `readNeed` already computes
+ * (`NeedReading.value`, `[0, 1]`, higher = less current recall = more in
+ * need of coverage); `expectedYield` is "each job's own expected item
+ * count," the ruling's named tie-break ahead of arrival order.
+ */
+export interface GenerationPrioritySignal {
+  readonly need: number;
+  readonly expectedYield: number;
+}
+
+/**
+ * `[D-368]`'s declared default when `deps.generation.priority` is omitted,
+ * or is supplied but returns `null` for a particular job — every
+ * `'generation'` job reads identically, so `compareGenerationPriority`
+ * finds nothing to distinguish them and arrival order governs. This is NOT
+ * the ruling's "no current evidence" default (that is `readNeed`'s own
+ * `UNKNOWN_NEED_VALUE`, a caller's to apply); this is "no reading composed
+ * at all," the honest state of every caller before this bead.
+ */
+const DEFAULT_GENERATION_PRIORITY_SIGNAL: GenerationPrioritySignal = { need: 0, expectedYield: 0 };
+
+/** `payload` narrowed to a `'generation'` job's own reading, or `null` for any other kind — see `compareGenerationPriority`. */
+function generationPrioritySignalFor(
+  payload: unknown,
+  priorityFor: ((payload: GenerationJobPayload) => GenerationPrioritySignal | null) | undefined,
+): GenerationPrioritySignal | null {
+  if (!isGenerationJobPayload(payload)) return null;
+  if (!priorityFor) return DEFAULT_GENERATION_PRIORITY_SIGNAL;
+  return priorityFor(payload) ?? DEFAULT_GENERATION_PRIORITY_SIGNAL;
+}
+
+/**
+ * `[D-368]`'s comparator, passed as `EngineDeps.priority` (`olea-core`
+ * `ingestion/engine.ts`) — see this module's doc, "The drain-order
+ * comparator," for the ruling this fulfils. Same contract as
+ * `Array.prototype.sort`: negative when `a` should drain before `b`,
+ * positive for the reverse, `0` for "no opinion" (the engine's own seam
+ * then keeps arrival order — `[D-368]`'s final tie-break, for free, never
+ * reimplemented here).
+ *
+ * Returns `0` — untouched — for ANY pair where at least one side is not a
+ * `'generation'`-kind job: extraction and instrument-revision jobs are
+ * never reordered by this, whether paired against each other or against a
+ * generation job, so they "keep theirs" exactly as this bead's acceptance
+ * asks. Between two generation jobs: higher `need` drains first
+ * (descending); a tie on `need` breaks by higher `expectedYield`
+ * (descending, `[D-368]`'s named tie-break); a tie on both leaves `0`, so
+ * arrival order decides — `[D-368]`'s LAST tie-break, already the seam's
+ * own default.
+ */
+function compareGenerationPriority(
+  a: PersistedJob,
+  b: PersistedJob,
+  priorityFor: ((payload: GenerationJobPayload) => GenerationPrioritySignal | null) | undefined,
+): number {
+  const signalA = generationPrioritySignalFor(a.payload, priorityFor);
+  const signalB = generationPrioritySignalFor(b.payload, priorityFor);
+  if (signalA === null || signalB === null) return 0;
+  if (signalA.need !== signalB.need) return signalB.need - signalA.need;
+  if (signalA.expectedYield !== signalB.expectedYield) {
+    return signalB.expectedYield - signalA.expectedYield;
+  }
+  return 0;
+}
+
+/**
  * Builds one real, drainable ingestion pipeline: `createExtractionJobRunner`
  * wired to `deps.vault` and a fresh `PendingIndexingSink`, fed into
  * `IngestionQueueEngine.create` with `deps.queueStore`/`deps.capability`,
@@ -524,6 +657,14 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     // `EnqueueInput.lastChangedAt` (`ingestion/arrival-watch.ts` is the
     // production caller that does).
     enqueueDebounce: DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
+    // `[D-368]` (`ol-2zfj.170`): always supplied now that the ordering key
+    // is ruled — see this module's doc, "The drain-order comparator." With
+    // no `deps.generation.priority` (every caller today, `main.ts` included)
+    // this compares every pair as equal for every job kind, which is
+    // byte-identical to the DRAIN order every caller already had with no
+    // comparator at all (`nextEligibleIndex`'s own doc: a `0` comparison
+    // never moves `bestIndex` off the first eligible job found).
+    priority: (a, b) => compareGenerationPriority(a, b, deps.generation?.priority),
   });
   enqueuer.bind(engine);
   return { engine, sink };

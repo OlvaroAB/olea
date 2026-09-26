@@ -18,6 +18,7 @@
  */
 import type {
   ExtractedUnit,
+  GenerationJobPayload,
   JobStatus,
   ListOptions,
   OutcomeProvenance,
@@ -658,6 +659,224 @@ describe('buildIngestionRunner — deps.generation (ol-2zfj.63 [GEN-3.1], [D-238
     const secondTick = await engine.tick();
     expect(secondTick).toEqual({ kind: 'idle', reason: 'nothing-eligible' }); // nothing was enqueued
     expect(draftCalls).toHaveLength(0);
+  });
+});
+
+// `deps.generation.priority` (`[D-368]`, `ol-2zfj.170`, F3.7's "coverage-first
+// order" for pending generation jobs) — see `wiring.ts`'s module doc, "The
+// drain-order comparator," for the ruling these tests hold the wiring to.
+// `NOOP_GENERATION` supplies the required `draft`/`hasAnyBuiltKind` fields
+// with fakes that never matter to these tests — only WHICH job `tick()`
+// picks is under test here, never what draining it does.
+
+function generationJobPayload(courseCode: string, conceptKey: string): GenerationJobPayload {
+  return {
+    kind: 'generation',
+    courseCode,
+    conceptKey,
+    conceptName: conceptKey,
+    instrumentKind: 'mcq',
+    trigger: 'arrival',
+  };
+}
+
+const NOOP_GENERATION = {
+  draft: async () => ({ ok: true as const }),
+  hasAnyBuiltKind: async () => false,
+};
+
+describe("buildIngestionRunner — deps.generation.priority ([D-368] 'the ordering key', ol-2zfj.170)", () => {
+  it('omitted: every generation pair reads the same declared default, so ties leave arrival order deciding — byte-identical to no comparator at all', async () => {
+    const { engine } = await buildIngestionRunner({
+      vault: new MemoryVaultSource(),
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+    });
+    await engine.enqueue({
+      contentHash: 'first',
+      label: 'first',
+      payload: generationJobPayload('A', 'ck-1'),
+    });
+    await engine.enqueue({
+      contentHash: 'second',
+      label: 'second',
+      payload: generationJobPayload('A', 'ck-2'),
+    });
+
+    const tick = await engine.tick();
+    expect(tick).toMatchObject({ kind: 'ran', contentHash: 'first' });
+  });
+
+  it('the job with higher current need drains first, even though it arrived later — mastery/yield decide order, not arrival', async () => {
+    const { engine } = await buildIngestionRunner({
+      vault: new MemoryVaultSource(),
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: {
+        ...NOOP_GENERATION,
+        priority: (payload) =>
+          payload.conceptKey === 'ck-high-need'
+            ? { need: 0.9, expectedYield: 1 }
+            : { need: 0.1, expectedYield: 1 },
+      },
+    });
+    // Arrives FIRST — plain FIFO (no comparator) would run this one first.
+    await engine.enqueue({
+      contentHash: 'low-need-arrived-first',
+      label: 'low current need, arrived first',
+      payload: generationJobPayload('A', 'ck-low-need'),
+    });
+    // Arrives SECOND.
+    await engine.enqueue({
+      contentHash: 'high-need-arrived-second',
+      label: 'high current need, arrived second',
+      payload: generationJobPayload('A', 'ck-high-need'),
+    });
+
+    const tick = await engine.tick();
+    expect(tick).toMatchObject({ kind: 'ran', contentHash: 'high-need-arrived-second' });
+  });
+
+  it(
+    'reads need FRESH at drain time, never a frozen snapshot from enqueue: a concept whose reading looked low-need ' +
+      '(a high historical stage) when its job was enqueued still builds earlier once the CURRENT reading, taken at ' +
+      "drain time, is high-need (low current recall) — D-368's binding clarification",
+    async () => {
+      // Models "the fresh reading, if taken right now" for one concept: LOW
+      // at enqueue time (she had just answered it — a high historical
+      // stage a memoizing caller might record then), HIGH by the time the
+      // engine actually drains (she has since forgotten it — low CURRENT
+      // recall). The wiring under test must only ever call `priority` from
+      // inside `tick()`, AFTER this flips — never cache what it returned at
+      // enqueue time.
+      let forgottenConceptNeed = 0.1; // "just answered it correctly" — looks low-need right now
+      const { engine } = await buildIngestionRunner({
+        vault: new MemoryVaultSource(),
+        queueStore: new MemoryQueueStore(),
+        capability: CAN_DRAIN,
+        generation: {
+          ...NOOP_GENERATION,
+          priority: (payload) =>
+            payload.conceptKey === 'ck-forgotten'
+              ? { need: forgottenConceptNeed, expectedYield: 1 }
+              : { need: 0.5, expectedYield: 1 },
+        },
+      });
+
+      // `ck-steady` arrives FIRST; `ck-forgotten` arrives SECOND, at the
+      // instant its reading still looks low-need (its high historical
+      // stage).
+      await engine.enqueue({
+        contentHash: 'steady',
+        label: 'steady concept, arrived first',
+        payload: generationJobPayload('A', 'ck-steady'),
+      });
+      await engine.enqueue({
+        contentHash: 'forgotten',
+        label: 'once-high-stage concept, arrived second, looked low-need at enqueue time',
+        payload: generationJobPayload('A', 'ck-forgotten'),
+      });
+
+      // Time passes; she forgets it. The reading taken fresh right now is
+      // high-need — this is what the comparator must see, never the 0.1
+      // that stood when the job was enqueued.
+      forgottenConceptNeed = 0.9;
+
+      const tick = await engine.tick();
+      expect(tick).toMatchObject({ kind: 'ran', contentHash: 'forgotten' });
+    },
+  );
+
+  it("a tie on current need breaks by each job's own expected item count (yield), higher first", async () => {
+    const { engine } = await buildIngestionRunner({
+      vault: new MemoryVaultSource(),
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: {
+        ...NOOP_GENERATION,
+        priority: (payload) =>
+          payload.conceptKey === 'ck-high-yield'
+            ? { need: 0.5, expectedYield: 5 }
+            : { need: 0.5, expectedYield: 1 },
+      },
+    });
+    await engine.enqueue({
+      contentHash: 'low-yield-arrived-first',
+      label: 'low expected yield, arrived first',
+      payload: generationJobPayload('A', 'ck-low-yield'),
+    });
+    await engine.enqueue({
+      contentHash: 'high-yield-arrived-second',
+      label: 'high expected yield, arrived second',
+      payload: generationJobPayload('A', 'ck-high-yield'),
+    });
+
+    const tick = await engine.tick();
+    expect(tick).toMatchObject({ kind: 'ran', contentHash: 'high-yield-arrived-second' });
+  });
+
+  it('a tie on both need and yield leaves arrival order deciding, unchanged from FIFO', async () => {
+    const { engine } = await buildIngestionRunner({
+      vault: new MemoryVaultSource(),
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: {
+        ...NOOP_GENERATION,
+        priority: () => ({ need: 0.5, expectedYield: 3 }),
+      },
+    });
+    await engine.enqueue({
+      contentHash: 'arrived-first',
+      label: 'arrived first',
+      payload: generationJobPayload('A', 'ck-1'),
+    });
+    await engine.enqueue({
+      contentHash: 'arrived-second',
+      label: 'arrived second',
+      payload: generationJobPayload('A', 'ck-2'),
+    });
+
+    const tick = await engine.tick();
+    expect(tick).toMatchObject({ kind: 'ran', contentHash: 'arrived-first' });
+  });
+
+  it('extraction and instrument-revision jobs keep arrival order — never reordered by this, even against a maximally-prioritised generation job', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('01 Courses/A/lecture.pdf', buildOnePagePdf('Some real material here.'));
+    const { engine } = await buildIngestionRunner({
+      vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: {
+        ...NOOP_GENERATION,
+        // Maximal on every axis — would win any comparison it was allowed into.
+        priority: () => ({ need: 1, expectedYield: 999 }),
+      },
+    });
+
+    // Arrival order: extraction, then instrument-revision, then the
+    // maximally-prioritised generation job.
+    await engine.enqueue({
+      contentHash: 'extraction-first',
+      label: 'extraction, arrived first',
+      payload: { kind: 'source', sourcePath: '01 Courses/A/lecture.pdf', format: 'pdf' },
+    });
+    await engine.enqueue({
+      contentHash: 'revision-second',
+      label: 'instrument-revision, arrived second',
+      payload: { kind: 'instrument-revision' },
+    });
+    await engine.enqueue({
+      contentHash: 'generation-third-but-max-priority',
+      label: 'generation, arrived third, maximal priority',
+      payload: generationJobPayload('A', 'ck-max'),
+    });
+
+    const firstTick = await engine.tick();
+    expect(firstTick).toMatchObject({ kind: 'ran', contentHash: 'extraction-first' });
+
+    const secondTick = await engine.tick();
+    expect(secondTick).toMatchObject({ kind: 'ran', contentHash: 'revision-second' });
   });
 });
 
