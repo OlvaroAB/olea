@@ -105,7 +105,7 @@
  * separately-composed description that could drift from what actually
  * produced the order.
  *
- * ## The abstain path
+ * ## The abstain path, and `[D-329]`'s "unknown relevance" exception
  *
  * A course whose assessments have zero edges — every one of them landed in
  * P5-T03's `assessmentsWithNoEvidence` — produces no `ranked` entries and
@@ -116,7 +116,41 @@
  * discipline P5-T03 enforces, one layer up: an oracle that ranked concepts
  * for a course with no evidence would be inferring a ranking from course
  * membership alone, which is exactly what P5-T03's edges refuse to do and
- * what this module must not undo.
+ * what this module must not undo — **when the caller supplies no
+ * {@link RankOracleCourseConceptsInput.courseConcepts}**, which is every
+ * production caller today, so this path is byte-identical to before.
+ *
+ * `[D-329]` (`ol-egov.141.89.10.8`, proposal 2) rules that abstaining is the
+ * wrong answer once a concept's course membership is known independently of
+ * its assessment evidence (`SCP`/`CPT`'s job, not this module's): "unknown
+ * relevance stays unknown rather than low", and a course with no assessment
+ * evidence anywhere is served **on need alone** rather than refused. A
+ * caller that supplies `courseConcepts` for a course opts that course INTO
+ * this: a concept in the map with no real edge — `edgesByConcept` never
+ * gained an entry for it, whether because the course has no edges at all or
+ * because this ONE concept has none while its course-mates do (the R2
+ * "concept with no evidence edge in a course that has some" half of the
+ * proposal) — is still ranked, via {@link buildUnknownRelevanceEntry}: its
+ * relevance reads {@link DECLARED_FALLBACK_UNKNOWN_RELEVANCE}, never `0`
+ * (which would silence it exactly as C5.10 already names a defect) and
+ * never the scale's top (which would let the ABSENCE of evidence win over a
+ * concept with real, weighted evidence — proposal 2's own mirror-image
+ * worry). It is flagged implicitly, not by a new stored field this module
+ * cannot add without editing `./types.ts` (outside this bead's one owned
+ * file, `ol-egov.141.89.10.4`'s `owns`): a synthesized entry is the only
+ * `ConceptPriority` this module ever builds with both `factors.contributions`
+ * and `factors.citations` empty — every concept surviving from a real edge
+ * always has at least one non-empty basis (`evidence-edge/build.ts`'s
+ * "evidential, not membership" rule) — so `contributions.length === 0 &&
+ * (factors.vetoedEdges ?? []).length === 0` is a safe, exhaustive test a
+ * caller (this chain's harness, or a future producer) can use to tell a
+ * `[D-329]` entry apart from an ordinary one, and is exactly what
+ * `scripts/harness/ilb-pln/` reads it through.
+ *
+ * A course present in `courseConcepts` with a concept universe of size zero
+ * (known to exist, no concepts named for it yet) is served on need alone
+ * with an EMPTY `ranked` array rather than abstaining — `status: 'ranked'`,
+ * not `'abstained'`, is itself the signal that this course was not refused.
  *
  * ## The comparable-observation tiebreak (C5.10 ruling 1, `[D-265]`,
  * `ol-egov.141.52`)
@@ -273,6 +307,48 @@ const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState,
   tree: 0.15,
   unknown: 1,
 };
+
+/**
+ * DECLARED (`[D-329]`, `ol-egov.141.89.10.8`) — the relevance
+ * ({@link OracleConceptFactors.preMasteryScore}) a concept reads when the
+ * caller knows it belongs to the course but no assessment edge names it at
+ * all, or the course has no assessment evidence anywhere. **Plain-English
+ * defense:** one edge's own `contribution` is normalised to roughly `[0,1]`
+ * (this file's module doc, "The scoring shape"); half of that range is a
+ * deliberately unremarkable middle — high enough that "no evidence yet" is
+ * never read as "nothing to examine here" (the `0` proposal 2 itself names
+ * a defect for), low enough that it can never let the ABSENCE of evidence
+ * outrank a concept with real, weighted evidence (the mirror defect the
+ * same proposal also rules out). It needs no corpus to defend, which is
+ * what makes it declared rather than derived. **`ol-egov.141.89.10.4`'s
+ * targets manifest marks the exact placement of this constant PENDING**
+ * (assertion `r2-noedge-middle`, `eval/data/ilb/pln/targets.dev.json`)
+ * until the frozen blend weights (`[D-332]`) let it be checked against
+ * every invariant of `pln.md` §5; nothing below depends on 0.5 being final,
+ * only on it being neither `0` nor unboundedly large.
+ */
+const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.5;
+
+/**
+ * `[D-329]` — additive to `RankOracleInput`, typed HERE (not `./types.js`)
+ * for the same reason {@link RankOracleTiebreakInput} is: this bead owns only
+ * `rank.ts`. Omitted entirely — every production caller today — the abstain
+ * path and per-concept invisibility for a no-edge concept are BYTE-IDENTICAL
+ * to before this decision; see the module doc's "The abstain path, and
+ * `[D-329]`'s 'unknown relevance' exception".
+ */
+export interface RankOracleCourseConceptsInput {
+  /**
+   * Course id to that course's known concept universe (`conceptKey` →
+   * `conceptName`), independent of assessment evidence — `SCP`/`CPT`'s job
+   * to supply, never re-derived here from `input.evidence`. A course key
+   * present here (even with an empty inner map) opts that course INTO
+   * `[D-329]`'s "served on need alone" reading instead of abstaining. A
+   * concept key present here that already has a real edge is a no-op: the
+   * real edge's ordinary contribution wins, never overridden or duplicated.
+   */
+  readonly courseConcepts?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+}
 
 /**
  * C5.10 ruling 1's tiebreak input (`[D-265]`, `ol-egov.141.52`) — additive to
@@ -731,6 +807,71 @@ function buildAbstainDetail(course: string, assessmentPaths: readonly VaultPath[
   );
 }
 
+/**
+ * `[D-329]` — one entry for a concept the caller knows belongs to `course`
+ * but that has no real assessment edge at all. See the module doc's "The
+ * abstain path, and `[D-329]`'s 'unknown relevance' exception" for the
+ * `contributions`/`citations`-both-empty signal this deliberately produces,
+ * and why `0.5` is safe to use before its exact placement is checked
+ * (`DECLARED_FALLBACK_UNKNOWN_RELEVANCE`'s own doc).
+ */
+function buildUnknownRelevanceEntry(
+  conceptKey: string,
+  conceptName: string,
+  course: string,
+  mastery: ReadonlyMap<string, { readonly state: MasteryState }> | undefined,
+  retrievability: ReadonlyMap<string, number> | undefined,
+  resolved: ResolvedOptions,
+): ConceptPriority {
+  const masteryState = resolveMasteryState(mastery, conceptKey);
+  const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
+  const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
+  const preMasteryScore = DECLARED_FALLBACK_UNKNOWN_RELEVANCE;
+  const factors: OracleConceptFactors = {
+    citations: [],
+    distinctSourceCount: 0,
+    objectivesCitations: [],
+    distinctObjectivesSourceCount: 0,
+    contributions: [],
+    vetoedEdges: [],
+    preMasteryScore,
+    masteryState,
+    masteryNeedWeight,
+    ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
+    priorityScore: preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1),
+  };
+  return {
+    conceptName,
+    conceptKey,
+    course,
+    rank: 0, // assigned by the caller's sort, same as every other entry
+    priorityScore: factors.priorityScore,
+    factors,
+    citations: [],
+    reasoning: buildUnknownRelevanceReasoning(conceptName, course, factors),
+  };
+}
+
+/**
+ * `[D-329]`'s reasoning sibling of `buildReasoning` — a separate function
+ * because `buildReasoning` reads `factors.contributions[0]` and throws when
+ * it is absent (by design, for every ORDINARY entry that function builds);
+ * an unknown-relevance entry has no contributing edge to quote, on purpose.
+ */
+function buildUnknownRelevanceReasoning(
+  conceptName: string,
+  course: string,
+  factors: OracleConceptFactors,
+): string {
+  return (
+    `${conceptName} (${course}): no assessment evidence recorded yet. Relevance unknown, scored ` +
+    `at the declared middle value ${factors.preMasteryScore.toFixed(2)} ([D-329]) so it is ` +
+    `neither hidden by a zero nor favoured by its own absence. Mastery: ${factors.masteryState} ` +
+    `(need weight ${factors.masteryNeedWeight.toFixed(2)}). Priority score ` +
+    `${factors.priorityScore.toFixed(3)}.`
+  );
+}
+
 function rankOneCourse(
   course: string,
   edgesForCourse: readonly ConceptAssessmentEdge[],
@@ -741,8 +882,12 @@ function rankOneCourse(
   asOf: Date,
   resolved: ResolvedOptions,
   tiebreakEligible: ReadonlySet<string> | undefined,
+  // `[D-329]`: the course's known concept universe, independent of evidence.
+  // `undefined` (every caller before this bead) keeps the abstain path
+  // byte-identical to before — see the module doc.
+  courseConceptUniverse: ReadonlyMap<string, string> | undefined,
 ): CourseOracleRanking {
-  if (edgesForCourse.length === 0) {
+  if (edgesForCourse.length === 0 && courseConceptUniverse === undefined) {
     const paths = noEvidencePathsForCourse.slice().sort();
     return {
       course,
@@ -843,6 +988,29 @@ function rankOneCourse(
     });
   }
 
+  // `[D-329]`: any concept the caller knows belongs to this course but that
+  // matched no real edge above — `edgesByConcept` never gained an entry for
+  // it, whether because the whole course has no evidence or because this
+  // one concept's course-mates do and it does not — is ranked at unknown
+  // relevance rather than staying invisible. A concept already handled
+  // above (with a real edge, contributing or fully vetoed) is skipped here:
+  // the real edge's ordinary outcome always wins, never overridden.
+  if (courseConceptUniverse !== undefined) {
+    for (const [conceptKey, conceptName] of courseConceptUniverse) {
+      if (edgesByConcept.has(conceptKey)) continue;
+      entries.push(
+        buildUnknownRelevanceEntry(
+          conceptKey,
+          conceptName,
+          course,
+          mastery,
+          retrievability,
+          resolved,
+        ),
+      );
+    }
+  }
+
   entries.sort((a, b) => {
     if (a.priorityScore !== b.priorityScore) return b.priorityScore - a.priorityScore;
     // C5.10 ruling 1 (`[D-265]`) — fires ONLY inside an exact tie the blend
@@ -871,7 +1039,9 @@ function rankOneCourse(
  * clock, no I/O. See this file's module doc for the scoring shape and the
  * abstain rule.
  */
-export function rankOracle(input: RankOracleInput & RankOracleTiebreakInput): RankOracleResult {
+export function rankOracle(
+  input: RankOracleInput & RankOracleTiebreakInput & RankOracleCourseConceptsInput,
+): RankOracleResult {
   const asOfDate = dateFromCalendarDay(input.asOf);
   if (asOfDate === null) {
     throw new Error(
@@ -892,6 +1062,15 @@ export function rankOracle(input: RankOracleInput & RankOracleTiebreakInput): Ra
     if (seenCourses.has(record.course)) continue;
     seenCourses.add(record.course);
     coursesInOrder.push(record.course);
+  }
+  // `[D-329]`: a course named in `courseConcepts` but with no assessment
+  // record at all (never even reaching the abstain path today) still gets a
+  // ranking pass — `undefined` (every caller before this bead) adds nothing
+  // here, so this loop is a no-op then.
+  for (const course of input.courseConcepts?.keys() ?? []) {
+    if (seenCourses.has(course)) continue;
+    seenCourses.add(course);
+    coursesInOrder.push(course);
   }
   coursesInOrder.sort();
 
@@ -922,6 +1101,7 @@ export function rankOracle(input: RankOracleInput & RankOracleTiebreakInput): Ra
       asOfDate,
       resolved,
       input.tiebreakEligible,
+      input.courseConcepts?.get(course),
     ),
   );
 

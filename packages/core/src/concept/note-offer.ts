@@ -195,6 +195,27 @@ export interface NoteOfferVerdict {
  * The whole of `[D-176]`'s trigger, plus the existing-note safety check this
  * bead adds, and nothing else. Pure — INV-1/§7.1: no vault I/O, no clock, no
  * network, same inputs in, same verdict out.
+ *
+ * **`[D-383]` (David, 2026-09-25; `ol-egov.141.89.10.63`): this gate is
+ * DORMANT in production today, on purpose — not a bug.** `inTopBand` and
+ * `hasNoExistingNote` are mutually exclusive for the only concepts this gate
+ * is ever asked about, now that the existing-note check reads the full
+ * vault listing (`ol-egov.141.89.10.58`, client `9763164`): a concept bound
+ * to a note (tier 1 or 3) is excluded by `hasNoExistingNote` before this
+ * point; an unbound (tier 2) concept can only be RANKED at all
+ * (`evidence.ranking`) if the ranking's production vocabulary source found
+ * words for it, and that source today is a note titled exactly like the
+ * concept somewhere in the vault — the same title `hasNoExistingNote` now
+ * (correctly) counts as an existing note. So `eligible` never reads `true`
+ * in production, and it must NOT be made to: David ruled leaving it dormant
+ * rather than weakening either check to force a fire (which would recreate
+ * the INV-6 duplicate-note risk `hasNoExistingNote` exists to close). **The
+ * one thing that revives it is an INDEPENDENT vocabulary source** — one
+ * that does not depend on a same-titled note existing elsewhere in the
+ * vault (course documents are `[D-383]`'s own example) feeding
+ * `evidence.ranking` for tier-2 concepts. A future reader who finds
+ * `eligible` never firing should look for that dependency landing, never
+ * loosen `inTopBand`'s or `hasNoExistingNote`'s conditions here.
  */
 export function noteOfferEligible(
   concept: NoteOfferConcept,
