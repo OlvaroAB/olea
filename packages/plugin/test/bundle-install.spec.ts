@@ -226,7 +226,7 @@ describe('the built bundle is what Obsidian can load', () => {
     expect(exported.default.prototype).toBeInstanceOf(FakePlugin);
   });
 
-  it('registers all nine view types and all fourteen commands when onload runs', async () => {
+  it('registers all ten view types and all fifteen commands when onload runs', async () => {
     const OleaPlugin = loadBundle().default;
     // `registerInterval(window.setInterval(...))` — Obsidian's host is a browser
     // window; Node's is not, so this is the one global the bundle needs supplied.
@@ -251,6 +251,10 @@ describe('the built bundle is what Obsidian can load', () => {
         // `ol-0r92.17` (F8.8, `[D-134]` Q1): Home — hosts every standing
         // retrospective offer, unfiltered.
         'olea-home',
+        // `[PAPER-8]`/`[PAPER-10]` (`ol-egov.141.6.1`, `ol-0r92.75.1`, F4.11): the
+        // practice-paper view, seeded per course open. Clause citation:
+        // `docs/dev/surface-register.md` (olea-service), `olea-paper` row.
+        'olea-paper',
         // `ol-4v2l` (F8.4/F8.5, `[REG-1]`, amended acceptance `[D-135]`): the
         // browsable concept-and-instrument registry — browse, per-concept
         // instrument mix and mastery, edit (delegated to Obsidian), rename
@@ -298,6 +302,15 @@ describe('the built bundle is what Obsidian can load', () => {
         // `olea-grove-open` immediately above.
         'olea-home-open',
         'olea-open',
+        // `[PAPER-8]` (`ol-egov.141.6.1`, F4.11): opens the practice-paper view for the
+        // course the active file resolves to. Registered directly on `Plugin`
+        // (`main.ts`'s own `this.addCommand`), same shape `olea-process-note-now` below
+        // uses — the command id is deliberately kept in `paper/ids.ts`, not
+        // `commands/ids.ts` (that module's own doc comment gives the reason), which is
+        // why `check-surface-register.mjs`'s command scan does not see it even though
+        // it has a real row (`docs/dev/surface-register.md`'s "Ratified, not yet
+        // built" section, olea-service).
+        'olea-practice-paper-open',
         // `ol-0r92.21` (F3.3/`[D-152]`): manual process-now on a single note —
         // timing override on the existing ingestion path, palette + file-menu.
         'olea-process-note-now',

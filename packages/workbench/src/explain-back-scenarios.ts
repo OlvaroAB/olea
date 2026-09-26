@@ -27,6 +27,7 @@
  * `bulk-review-scenarios.ts` state for their own corpora.
  */
 
+import type { MasteryState } from 'olea-contracts';
 import type {
   AcceptExplainBackGradingWithObservationContext,
   AcceptExplainBackGradingWithObservationResult,
@@ -268,6 +269,21 @@ export function buildExplainBackScenario(stateId: string): ExplainBackScenario {
       };
     },
     generateInstrumentId: () => 'explain-back:workbench-fixture:1',
+    // `explain-back-graded-clean` is this file's own documented "only path... that shows
+    // the encouragement line" (`EXPLAIN_BACK_STATES` above), but `explainBackFullDepthEncouragement`
+    // (F6.8/V5, `[D-217]`) gates on `isConfirmedFirstFullDepth(subjectConceptId, getMasteryState)`
+    // (`./first-full-depth.ts`), which is unconditionally `false` whenever `getMasteryState` is
+    // `undefined` — true for every other scenario here (an omitted dep is production's own safe
+    // default, per `ExplainBackModalDeps`'s own doc), so this one scenario alone supplies a
+    // below-`tree` reading for the fixture instrument's subject concept
+    // (`FIXTURE_INSTRUMENT.conceptIds[0]`, `'syn:concept-key:alpha'` — `modal.ts`'s
+    // `subjectConceptId = instrument.conceptIds[0] ?? null`), never for any other scenario.
+    ...(stateId === 'explain-back-graded-clean'
+      ? {
+          getMasteryState: (conceptId: string): MasteryState | null =>
+            conceptId === FIXTURE_INSTRUMENT.conceptIds[0] ? 'sprout' : null,
+        }
+      : {}),
   };
 
   const modal = new ExplainBackModal(app, deps, seed);
