@@ -39,6 +39,12 @@ import {
   mapMcqRating,
   STRONG_RECALL_PROPOSAL_TRIGGER,
 } from 'olea-core';
+// `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
+// from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
+// `owns`) — imported by source path for exactly that reason, same technique
+// `packages/workbench/src/oracle-bridge.ts` already documents for a
+// same-shaped gap.
+import { decideResolutionEvidence } from '../../../core/src/misconception/resolution-evidence-decision.js';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
@@ -60,12 +66,6 @@ import {
   type ReviewLogPort,
   type SuspendPort,
 } from './ports.js';
-// `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
-// from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
-// `owns`) — imported by source path for exactly that reason, same technique
-// `packages/workbench/src/oracle-bridge.ts` already documents for a
-// same-shaped gap.
-import { decideResolutionEvidence } from '../../../core/src/misconception/resolution-evidence-decision.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument, ReviewQueueItem } from './types.js';
 
 export interface ReviewProgress {
