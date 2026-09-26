@@ -158,6 +158,72 @@ describe('createStudySessionHolder', () => {
   });
 });
 
+// Scenarios: ../../../../olea-service/docs/dev/intelligence-build/chg.md,
+// "3.6 staleness" — @auto:plugin/session/holder.spec
+describe("materialChangedInScopeSinceFreeze — [ILB-CHG-4]'s 3.6 staleness fact (ol-egov.141.89.5.4)", () => {
+  it('answers false while idle — nothing frozen to compare against', () => {
+    const holder = createStudySessionHolder();
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1']))).toBe(false);
+  });
+
+  it('answers false when the current pending set matches what was frozen at enter() — nothing changed since', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      NOW,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-1']) }),
+    );
+
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1']))).toBe(false);
+  });
+
+  it('answers true when an instrument is pending now but was not pending at freeze time', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      NOW,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-1']) }),
+    );
+
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1', 'inst-2']))).toBe(true);
+  });
+
+  it('answers false when an instrument resolved out of pending since the freeze — losing a pending mark is not a staleness signal', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      NOW,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-1', 'inst-2']) }),
+    );
+
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1']))).toBe(false);
+  });
+
+  it('a fresh enter() resets the frozen comparison point to the new sitting\'s own pending set', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      NOW,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-1']) }),
+    );
+    holder.enter(
+      LATER,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-9']) }),
+    );
+
+    // inst-1 was pending for the FIRST sitting only; the second sitting froze with inst-9 already pending.
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-9']))).toBe(false);
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1', 'inst-9']))).toBe(true);
+  });
+
+  it('exit() clears the freeze, so the next check answers false until a fresh enter()', () => {
+    const holder = createStudySessionHolder();
+    holder.enter(
+      NOW,
+      fakeComposedStudySession({ citationRevalidationPending: new Set(['inst-1']) }),
+    );
+    holder.exit();
+
+    expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1', 'inst-2']))).toBe(false);
+  });
+});
+
 /** A structurally valid, content-free `StudyPlanEnvelope` — the holder never reads inside it, only holds it by reference, so only `policyVersion` needs to differ between fixtures. */
 function fakePlan(policyVersion: string): StudyPlanEnvelope {
   return {

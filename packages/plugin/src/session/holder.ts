@@ -67,6 +67,12 @@ import type {
   SittingState,
 } from 'olea-core';
 import { decideRebuild, enterSitting, exitSitting, IDLE_SITTING } from 'olea-core';
+// `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), chg.md's "3.6 staleness" row —
+// imported directly from the module's own path, never through
+// `concept/revision/index.ts` (another lane's file this round) or the
+// `olea-core` package barrel it feeds: see that module's own doc for why
+// this stays a source-relative import rather than an `olea-core` re-export.
+import { hasCitationRevisionChangedInScope } from '../../../core/src/concept/revision/session-staleness.js';
 
 /** The one shape this holder ever carries — never a queue, never a builder-view union. */
 export type StudySessionSitting = SittingState<ComposedStudySession>;
@@ -145,6 +151,32 @@ export interface StudySessionHolder {
   readonly resolveCompositionPlan: (
     candidate: StudyPlanEnvelope | null,
   ) => StudyPlanEnvelope | null;
+  /**
+   * `[ILB-CHG-4]` (`ol-egov.141.89.5.4`), component register row 3.6's
+   * staleness fact, sourced from this chain's own revision records rather
+   * than a vault `firstSeen`/arrival read (`docs/dev/intelligence-build/
+   * chg.md`'s "3.6 staleness" row, in the service repo). True when
+   * `currentPendingRevalidation` names an instrument id not already present
+   * on the held sitting's own `citationRevalidationPending` — a citation in
+   * today's scope newly known to have changed (`[D-343]`/`[D-351]`) since
+   * THIS sitting was frozen, never one that was already pending before the
+   * freeze. Always `false` while idle — nothing frozen to compare against,
+   * the same "the caller decides whether to call this at all" posture every
+   * other reader here takes.
+   *
+   * **Not enforcement.** `[D-330]` already withholds a pending-revalidation
+   * instrument at compose/extend time, including inside an already-open
+   * session, whether or not a caller ever reads this fact — this method
+   * only tells a caller whether the SITTING it is holding should be treated
+   * as stale and ended (`[D-162]`'s freeze contract), so `decideRebuild` can
+   * fold it into `SittingStalenessInput` alongside the other two facts. See
+   * `concept/revision/session-staleness.ts`'s own doc (imported by source
+   * path — see this file's own import comment) for the full argument and
+   * why only this one direction counts.
+   */
+  readonly materialChangedInScopeSinceFreeze: (
+    currentPendingRevalidation: ReadonlySet<string>,
+  ) => boolean;
 }
 
 /**
@@ -178,5 +210,11 @@ export function createStudySessionHolder(): StudySessionHolder {
       if (compositionPlan === undefined) compositionPlan = candidate;
       return compositionPlan;
     },
+    materialChangedInScopeSinceFreeze: (currentPendingRevalidation) =>
+      sitting.status === 'active' &&
+      hasCitationRevisionChangedInScope(
+        sitting.items.citationRevalidationPending,
+        currentPendingRevalidation,
+      ),
   };
 }
