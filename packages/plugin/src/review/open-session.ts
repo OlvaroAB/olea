@@ -188,6 +188,7 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import type {
   AssessmentRecord,
   ComposedStudySession,
+  ConceptRecord,
   ConceptRelation,
   ConfusionRoutingDecision,
   ConfusionRoutingInput,
@@ -252,6 +253,7 @@ import {
   type ReviewLogPort,
   type SuspendPort,
 } from './ports.js';
+import { createPrerequisiteEvidenceReader } from './prerequisite-evidence-wiring.js';
 import {
   adaptExecutedReviewQueue,
   buildSupportLevelHistoryLookup,
@@ -349,6 +351,24 @@ export interface OpenReviewSessionInput {
    * documents rather than a degraded mode this module invents.
    */
   readonly relations?: readonly ConceptRelation[];
+  /**
+   * `ol-egov.141.51.1.1` [INTERV-16]: the concept records
+   * `relations`' names join against — `../concept/prerequisite-order.js`'s
+   * `resolvePrerequisiteConceptKeys` own name→key fold, the same join
+   * `prerequisite-order.spec.ts` documents. Omitted or empty means the
+   * prerequisite-aware F2.12 branch below never resolves an edge (the
+   * ordinary offer stands), the same real no-op {@link relations} above
+   * documents when IT is omitted — this module invents no degraded mode
+   * of its own. `main.ts` already holds this list (`this.conceptRecords`,
+   * refreshed on the same ingestion tick as the relations it forwards to
+   * {@link relations}) but does not yet pass it here. Threading one more
+   * line at its existing `relations: this.servedRelationEdges()` call site
+   * would make the branch below fully live; `main.ts` is outside this
+   * bead's owned paths (`../concept/prerequisite-order.js`,
+   * `../mastery/rollup.js`, this file only), so that line is filed as a
+   * follow-up rather than done here.
+   */
+  readonly concepts?: readonly ConceptRecord[];
   /**
    * F2.19 (`ol-vr8z`): assessment records, forwarded straight to
    * `buildReviewSession`'s `assessments` input, which resolves them (against
@@ -931,6 +951,26 @@ export async function openReviewSession(
         entries: composed.entries,
         scheduler: input.scheduler,
         now,
+      }),
+      // F2.12's prerequisite-aware branch (`[D-265]` ruling 2,
+      // `ol-egov.141.51.1.1` [INTERV-16]): closes over the SAME
+      // `composed.entries` `evaluateStrongRecallProposal` above already
+      // reads — no third log parse. Always wired, unconditionally, same
+      // "computed HERE, no caller-omission case" posture as every other
+      // reader in this block: `input.relations`/`input.concepts` absent or
+      // empty (today's default, until `main.ts` threads `concepts` — see
+      // that field's own doc) makes every resolution a no-op, byte-identical
+      // to this port being absent entirely. See
+      // `./prerequisite-evidence-wiring.ts`'s module doc for the
+      // classification this bead's own close evidence flags Class B, and
+      // for why `deps.relations` already carries rel.md §3's Default 4
+      // freshness gate (this module never reads a raw `RelationSet`).
+      resolvePrerequisiteEvidence: createPrerequisiteEvidenceReader({
+        entries: composed.entries,
+        scheduler: input.scheduler,
+        now,
+        relations: input.relations ?? [],
+        concepts: input.concepts ?? [],
       }),
       // M2 resolution evidence: always wired, unconditionally, same posture
       // as `evaluateSchedulingObservationRouting`/`stampOnFirstSight` above —
