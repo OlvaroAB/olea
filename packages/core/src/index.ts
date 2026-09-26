@@ -433,11 +433,15 @@ export {
   // note); this is a one-line, additive re-export of an already-ratified
   // function, not a new capability.
   declineSameAsLink,
-  edgesEligibleForSplitMigration,
   isSameAsLinkRecord,
   listSameAsLinkRecords,
+  // `proposeSameAsFromMintCollisions` is the mint-time half of the collision-to-proposal step
+  // (`[D-295 / CPT-D2]`, `ol-egov.141.89.3.4` [ILB-CPT-4]) — added here so `packages/plugin/src/
+  // concept/wiring.ts`'s `readConceptsAndRelations` can wire it into the real ingestion tick
+  // through `olea-core` rather than a deep import, the same reasoning `declineSameAsLink`'s own
+  // comment above gives.
+  proposeSameAsFromMintCollisions,
   proposeSameAsLink,
-  remapIncidentRelationCacheRecords,
   SAME_AS_LINK_FOLDER,
   sameAsLinkRecordPath,
   severSameAsLink,

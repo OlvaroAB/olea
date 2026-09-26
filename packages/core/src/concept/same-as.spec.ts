@@ -8,17 +8,14 @@ import {
   listConceptKeyRecords,
   resolveConceptKey,
 } from './key-store.js';
-import { listRelationCacheRecords, writeRelationCache } from './relation-cache.js';
 import {
   checkSameAsClosureCompatibility,
   confirmSameAsLink,
   declineSameAsLink,
-  edgesEligibleForSplitMigration,
   isSameAsLinkRecord,
   listSameAsLinkRecords,
   proposeSameAsFromMintCollisions,
   proposeSameAsLink,
-  remapIncidentRelationCacheRecords,
   sameAsLinkRecordPath,
   severSameAsLink,
 } from './same-as.js';
@@ -362,100 +359,10 @@ describe('declineSameAsLink — the F8.4a triage "no" ([D-257] ruling 3)', () =>
   });
 });
 
-describe('remapIncidentRelationCacheRecords / edgesEligibleForSplitMigration', () => {
-  let root: string;
-  let source: FolderSource;
-
-  const introducingPassages = {
-    from: { sourcePath: 'A.md', location: { page: 1 } },
-    to: { sourcePath: 'B.md', location: { page: 1 } },
-  };
-
-  beforeEach(async () => {
-    root = await mkdtemp(join(tmpdir(), 'olea-same-as-remap-'));
-    source = new FolderSource(root);
-  });
-
-  afterEach(async () => {
-    await rm(root, { recursive: true, force: true });
-  });
-
-  it('remaps an incident edge from the losing key onto the surviving key on confirm', async () => {
-    await writeRelationCache(source, [
-      {
-        type: 'prerequisite',
-        from: 'Old wording',
-        to: 'Concept C',
-        provenance: 'model-proposed',
-        confidence: 0.6,
-        introducingPassages,
-        fromKey: 'losing-key',
-        toKey: 'key-c',
-      },
-    ]);
-
-    await proposeSameAsLink(source, 'surviving-key', 'losing-key');
-    await confirmSameAsLink(source, 'surviving-key', 'losing-key');
-    const result = await remapIncidentRelationCacheRecords(source, 'surviving-key', 'losing-key');
-    expect(result).toEqual({ remapped: 1, collided: 0 });
-
-    const records = await listRelationCacheRecords(source);
-    expect(records).toHaveLength(1);
-    expect(records[0]?.record.fromKey).toBe('surviving-key');
-    expect(records[0]?.record.remappedFrom?.key).toBe('losing-key');
-  });
-
-  it('never auto-reverses a remap on sever — the remapped record surfaces as a migration candidate instead', async () => {
-    await writeRelationCache(source, [
-      {
-        type: 'prerequisite',
-        from: 'Old wording',
-        to: 'Concept C',
-        provenance: 'model-proposed',
-        confidence: 0.6,
-        introducingPassages,
-        fromKey: 'losing-key',
-        toKey: 'key-c',
-      },
-    ]);
-    await proposeSameAsLink(source, 'surviving-key', 'losing-key');
-    await confirmSameAsLink(source, 'surviving-key', 'losing-key');
-    await remapIncidentRelationCacheRecords(source, 'surviving-key', 'losing-key');
-    await severSameAsLink(source, 'surviving-key', 'losing-key');
-
-    const candidates = await edgesEligibleForSplitMigration(source, 'surviving-key', 'losing-key');
-    expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.fromKey).toBe('surviving-key'); // still remapped — sever does not undo it
-  });
-
-  it('a would-be colliding remap is left unremapped and counted, never merged silently', async () => {
-    await writeRelationCache(source, [
-      {
-        type: 'prerequisite',
-        from: 'Wording B',
-        to: 'Concept C',
-        provenance: 'model-proposed',
-        confidence: 0.6,
-        introducingPassages,
-        fromKey: 'losing-key',
-        toKey: 'key-c',
-      },
-      {
-        type: 'prerequisite',
-        from: 'Wording A',
-        to: 'Concept C',
-        provenance: 'model-proposed',
-        confidence: 0.6,
-        introducingPassages,
-        fromKey: 'surviving-key',
-        toKey: 'key-c',
-      },
-    ]);
-
-    const result = await remapIncidentRelationCacheRecords(source, 'surviving-key', 'losing-key');
-    expect(result).toEqual({ remapped: 0, collided: 1 });
-  });
-});
+// `remapIncidentRelationCacheRecords` / `edgesEligibleForSplitMigration` and their tests were
+// removed here (`[D-295 / CPT-D2]`, `ol-egov.141.89.3.4` [ILB-CPT-4], cpt.md §8: "so there is
+// one merge rule, not two") — a confirmed merge rewrites no stored record, and every reader
+// resolves through `./same-as-consumer.ts`'s read-time fold instead.
 
 // Scenarios: docs/dev/intelligence-build/cpt.md section 4, "Three-way closure conflict: A=B
 // proposed, B=C confirmed, A and C declined" ([D-295 / CPT-D2] item 2, [IL-D8], ol-2zfj.147).

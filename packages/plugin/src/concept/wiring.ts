@@ -73,6 +73,7 @@ import {
   type ClassifyKnowledgeKindOptions,
   type ClassifyKnowledgeKindRequest,
   type ClassifyKnowledgeKindResult,
+  type ConceptKeyRecord,
   type ConceptReadBudget,
   type ConceptReaderPort,
   type ConceptReadResult,
@@ -91,10 +92,10 @@ import {
   type KnowledgeKindClassifierPort,
   listConceptKeyRecords,
   type Provenance,
+  proposeSameAsFromMintCollisions,
   proposeSameAsLink,
   type ReadConcept,
   type RelationSet,
-  readConceptKeyCanonicalIndex,
   readConcepts,
   runCorpusRelationBatch,
   type SameAsLinkRecord,
@@ -390,13 +391,22 @@ export interface MovedNoteAnchorCandidate {
  * the orphan's own identity is never a proposal. Candidates that share only
  * an introducing passage are distinct identities there, so each is proposed
  * on its own. Nothing already written is rewritten.
+ *
+ * **`options.records` (`ol-egov.141.89.3.4` [ILB-CPT-4]).** A caller that already holds this
+ * tick's own `.olea/concepts/` listing — `readConceptsAndRelations` below, wiring this call in
+ * alongside `proposeSameAsFromMintCollisions` — hands it here rather than making this function
+ * read the vault a second time, the same "one canonical-key index for the whole tick" contract
+ * `[D-378]`/`ol-egov.141.89.9.57` already keeps for the corpus/relation-cache consumers. Omitted,
+ * this function lists the vault itself — unchanged for every other caller, including every
+ * existing test of this function.
  */
 export async function proposeSameAsForMovedNoteAnchors(
   vault: VaultSource,
   candidates: readonly MovedNoteAnchorCandidate[],
+  options: { readonly records?: readonly { readonly record: ConceptKeyRecord }[] } = {},
 ): Promise<readonly SameAsLinkRecord[]> {
   const currentNotePaths = new Set(await vault.list({ extensions: ['md'] }));
-  const records = await listConceptKeyRecords(vault);
+  const records = options.records ?? (await listConceptKeyRecords(vault));
   const canonicalKeys = buildConceptKeyCanonicalIndex(records.map(({ record }) => record));
 
   const proposed: SameAsLinkRecord[] = [];
@@ -848,6 +858,22 @@ export interface ReadConceptsAndRelationsOptions {
  * `readRelationSetWithCache` above keeps being called with the same arguments either way, rather
  * than being replaced. A `'proposed'`, `'declined'`, or `'severed'` link changes neither field
  * (`'declined'` added by `[D-257]`/`ol-egov.141.33` [TRIAGE-5]'s fourth status).
+ *
+ * **The collision-to-proposal step's production wiring (`[D-295 / CPT-D2]`, `ol-egov.141.89.3.4`
+ * [ILB-CPT-4]).** Right after `read` succeeds, this function now calls `./same-as.js`'s
+ * `proposeSameAsFromMintCollisions` (the concurrent-mint half) and this module's own
+ * `proposeSameAsForMovedNoteAnchors` (the moved-note-anchor half, landed no-caller by
+ * `ol-egov.141.89.3.8`) over this same tick's `.olea/concepts/` listing. Both only ever
+ * *propose* through `proposeSameAsLink`'s bias-to-splits seam — never `confirmSameAsLink` — so a
+ * proposal lands on her existing F8.4a triage list (unchanged surface, no new affordance) and
+ * nothing is ever merged without her. Read is placed AFTER `read` and BEFORE the corpus stage
+ * deliberately: key minting for this tick has already happened by the time `read` returns
+ * (`stampConceptKeys`'s `resolveConceptKeys` call, inside `readConceptsFromVault`), and the
+ * corpus stage below mints no keys of its own, so a collision or orphan THIS tick minted is
+ * already visible to both calls rather than lagging one tick behind. This is also why
+ * `canonicalKeys` (below) is now read once here rather than after the corpus stage: the same
+ * "one canonical-key index for the whole tick" contract (`[D-378]`/`ol-egov.141.89.9.57`) now
+ * covers these two calls as well, not only the three it originally named.
  */
 export async function readConceptsAndRelations(
   conceptWiring: ConceptWiring,
@@ -857,6 +883,25 @@ export async function readConceptsAndRelations(
 ): Promise<ConceptAndRelationPass | null> {
   const read = await readConceptsFromVault(conceptWiring, options.vault, options.read ?? {});
   if (read === null || read.outcome !== 'read') return null;
+
+  // `[D-378]`/`ol-egov.141.89.9.57`: one `.olea/concepts/` listing for the whole tick, read once
+  // here and handed to every consumer below (including the canonical-key index, built from this
+  // SAME listing rather than `readConceptKeyCanonicalIndex`'s own separate one) — collapsed from
+  // what would otherwise be three-plus reads of an unchanging listing, since nothing in this
+  // tick mints or rewrites a key between this point and `readRelationSetWithCache` below (see
+  // this function's own doc, "The collision-to-proposal step's production wiring").
+  const keyRecords = await listConceptKeyRecords(options.vault);
+  const canonicalKeys = buildConceptKeyCanonicalIndex(keyRecords.map(({ record }) => record));
+
+  // `[D-295 / CPT-D2]` collision-to-proposal step (`ol-egov.141.89.3.4` [ILB-CPT-4]) — see this
+  // function's own doc. Neither call ever confirms or merges; a proposal only ever reaches her
+  // existing F8.4a triage list.
+  await proposeSameAsFromMintCollisions(options.vault, keyRecords, { canonicalKeys });
+  await proposeSameAsForMovedNoteAnchors(
+    options.vault,
+    read.concepts.map((concept) => ({ key: concept.key, name: concept.name })),
+    { records: keyRecords },
+  );
 
   const corpus = await runCorpusRelationBatchIfDue(corpusWiring, stateStore, {
     vault: options.vault,
@@ -883,11 +928,8 @@ export async function readConceptsAndRelations(
     corpus,
     relations: deriveRelationSet(read.relations, corpus.relations ?? []),
   };
-  // `[D-378]`/`ol-egov.141.89.9.57`: one canonical-key index for the whole tick, read once here
-  // and handed to all three consumers below, rather than each of them reading its own copy of
-  // `.olea/concepts/` (three listings collapsed to one; behaviour unchanged, since nothing in
-  // this tick mints or rewrites a key between these three reads).
-  const canonicalKeys = await readConceptKeyCanonicalIndex(options.vault);
+  // `canonicalKeys` was already read once above, right after `read` succeeded — see that read's
+  // own comment for why it now covers this consumer too, not only the two below.
   const cacheSyncOptions = {
     canonicalKeys,
     ...(options.now !== undefined ? { now: options.now } : {}),

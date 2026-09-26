@@ -270,6 +270,83 @@ describe('WorkerConceptReader — the response it reads', () => {
   });
 });
 
+describe("WorkerConceptReader — anchorsRejected, forwarded from the Worker's groundingReport (ol-egov.141.89.3.4, cpt.md §8)", () => {
+  it('forwards result.groundingReport.droppedUngroundedAnchorCount as anchorsRejected', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'Concept X', anchorIndex: 1 }],
+        groundingReport: {
+          citationsAvailable: true,
+          droppedUngroundedAnchorCount: 2,
+          droppedUngroundedRelationCount: 0,
+        },
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.anchorsRejected).toBe(2);
+  });
+
+  it('an absent groundingReport leaves anchorsRejected undefined, never 0 (absent and zero mean different things)', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [{ name: 'Concept X', anchorIndex: 1 }] }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.anchorsRejected).toBeUndefined();
+  });
+
+  it('a malformed groundingReport (not an object) is ignored rather than thrown on', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'Concept X', anchorIndex: 1 }],
+        groundingReport: 'not an object',
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.anchorsRejected).toBeUndefined();
+  });
+
+  it('a non-numeric droppedUngroundedAnchorCount is ignored rather than forwarded', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'Concept X', anchorIndex: 1 }],
+        groundingReport: { citationsAvailable: true, droppedUngroundedAnchorCount: 'two' },
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.anchorsRejected).toBeUndefined();
+  });
+
+  it('a zero count is forwarded as 0, not treated as absent', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'Concept X', anchorIndex: 1 }],
+        groundingReport: {
+          citationsAvailable: true,
+          droppedUngroundedAnchorCount: 0,
+          droppedUngroundedRelationCount: 0,
+        },
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const result = await reader.read({ passages });
+
+    expect(result.anchorsRejected).toBe(0);
+  });
+});
+
 describe('WorkerConceptReader — refuses rather than mis-anchors on a confabulated index (belt and braces)', () => {
   it('throws WorkerConceptReaderError when anchorIndex names a passage never sent', async () => {
     const transport = new RecordingTransport(() =>

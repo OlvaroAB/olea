@@ -121,7 +121,12 @@ export class WorkerConceptReader implements ConceptReaderPort {
 
     const response = readResponseBody(body);
     const concepts = readProposals(response, passages);
-    return { concepts, relations: readRelationProposals(response, concepts) };
+    const anchorsRejected = readAnchorsRejected(response);
+    return {
+      concepts,
+      relations: readRelationProposals(response, concepts),
+      ...(anchorsRejected !== undefined ? { anchorsRejected } : {}),
+    };
   }
 }
 
@@ -167,6 +172,26 @@ function readResponseBody(body: unknown): Record<string, unknown> {
 function readResult(response: Record<string, unknown>): Record<string, unknown> {
   const result = response.result;
   return typeof result === 'object' && result !== null ? (result as Record<string, unknown>) : {};
+}
+
+/**
+ * `result.groundingReport.droppedUngroundedAnchorCount` (`ol-egov.141.89.3.12`'s remaining
+ * to-do, `docs/dev/intelligence-build/cpt.md` §2 "Rejected anchors and extraction loss", §8) —
+ * the service's own `groundConcepts` (`olea-service/src/tasks/conceptsExtract.ts`) already drops
+ * every dangling-anchor proposal before this class ever sees it, and until now that count was
+ * discarded rather than forwarded into `ConceptReadResponse.anchorsRejected`
+ * (`olea-core`'s `read.ts`), the seam that field's own doc names this exact file as owing.
+ *
+ * `undefined`, never `0`, when `groundingReport` is absent or malformed — an older contract
+ * version or a test double has no such count to give, and `ConceptReadResponse.anchorsRejected`'s
+ * own doc is explicit that absent and zero mean different things one level up (`readConcepts`
+ * folds an absent value as `0` itself; this function does not pre-empt that fold by guessing).
+ */
+function readAnchorsRejected(response: Record<string, unknown>): number | undefined {
+  const groundingReport = readResult(response).groundingReport;
+  if (typeof groundingReport !== 'object' || groundingReport === null) return undefined;
+  const dropped = (groundingReport as Record<string, unknown>).droppedUngroundedAnchorCount;
+  return typeof dropped === 'number' && Number.isInteger(dropped) ? dropped : undefined;
 }
 
 function readProposals(

@@ -35,11 +35,15 @@
  * and never blocks a later confirm; it is re-proposed only on a materially-changed-evidence event
  * (`[D-093]`), which `proposeSameAsLink`'s `evidenceFingerprint` option exists to detect.
  *
- * **Severing is not an automatic reversal of a merge** (ONT-R1's own words). This module records
- * which relation-cache records were remapped by a confirmed link (`remapIncidentRelationCacheRecords`)
- * and, on a later sever, surfaces them as migration candidates
- * (`edgesEligibleForSplitMigration`) — it does not un-remap them. A human or a future bead
- * decides what a migration candidate does next.
+ * **Severing is not an automatic reversal of a merge** (ONT-R1's own words) — and, as of
+ * `[D-295 / CPT-D2]`, there is nothing on disk to reverse in the first place. This module
+ * carried an explicit write-side remap of relation-cache records early in the build
+ * (`remapIncidentRelationCacheRecords` / `edgesEligibleForSplitMigration`); `[D-295]` ruled "a
+ * confirmed merge rewrites no stored record" and every reader resolves through the same-as fold
+ * at read time instead (`./same-as-consumer.ts`), so a sever is exactly the withdrawal of that
+ * fold — nothing was ever rewritten, so nothing needs to be un-rewritten. The write-side remap
+ * was removed for that reason (`ol-egov.141.89.3.4` [ILB-CPT-4], cpt.md §8: "so there is one
+ * merge rule, not two").
  *
  * **Reads by identity, transitions by record (`[D-378]`, `ol-egov.141.89.9.56`).** Two
  * `.olea/concepts/` records sharing an anchor are one identity, and `./key-store.ts`'s canonical-key
@@ -58,14 +62,7 @@ import {
   type ConceptKeyRecord,
   readConceptKeyCanonicalIndex,
 } from './key-store.js';
-import {
-  type KeyedConceptRelation,
-  listRelationCacheRecords,
-  propositionKey,
-  RELATION_CACHE_RECORD_SCHEMA_VERSION,
-  type RelationCacheRecord,
-  relationCacheRecordPath,
-} from './relation-cache.js';
+import type { KeyedConceptRelation } from './relation-cache.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/concepts/` and `.olea/relations/`. */
 export const SAME_AS_LINK_FOLDER: VaultPath = '.olea/same-as';
@@ -428,9 +425,7 @@ export interface SameAsClosureCheckResult {
  * The class-level compatibility check `[D-295 / CPT-D2]` item 2 and `docs/dev/intelligence-build
  * /cpt.md` section 2's "1.1a closure" row require, run before a confirm closes a class
  * transitively (`[IL-D8]`). **Never a write** — this is a pure read over the currently persisted
- * same-as links, so a caller may compute it before deciding whether to confirm at all, exactly
- * the same "compute without committing" posture `remapIncidentRelationCacheRecords`'s own doc
- * comment claims for itself.
+ * same-as links, so a caller may compute it before deciding whether to confirm at all.
  *
  * **What "the resulting class" means.** Same-as links form an undirected graph; a `'confirmed'`
  * link is an edge two keys already share, so confirming `keyA`/`keyB` adds one more edge to that
@@ -660,91 +655,6 @@ export async function severSameAsLink(
   const severed: SameAsLinkRecord = { ...existing.record, status: 'severed', severedAt: now() };
   await vault.write(existing.path, serialize(severed));
   return severed;
-}
-
-/**
- * The explicit remap step ONT-R1 requires on confirmation: "incident edges are remapped through
- * an explicit step rather than silently inherited." Rewrites every relation-cache record whose
- * `fromKey`/`toKey` is `losingKey` to `survivingKey` instead, stamping `remappedFrom` so a later
- * sever can find them again (`edgesEligibleForSplitMigration`).
- *
- * **Only where no collision would result.** If the surviving key already has its own edge of the
- * same type against the same other endpoint, remapping the losing key's edge onto it would
- * collide two distinct `RelationCacheRecord`s onto one `propositionKey` — reconciling two
- * attestation histories under a merge is a real judgement call this function declines to make
- * silently. Such a record is left unremapped and counted in `collided`, a named gap for whichever
- * bead builds the reconciliation-path caller (this lane's brief: "the reconciliation path in the
- * registry build") to close explicitly, never absorbed here as a guess.
- *
- * Requires the caller to have already confirmed the link (`confirmSameAsLink`) — this function
- * does not itself check link status, because the remap is a property of relation-cache records,
- * not of the same-as link record, and a caller may legitimately want to compute what WOULD be
- * remapped before confirming. The one thing it does record is which same-as link authorised the
- * remap, via `viaSameAsLink`.
- */
-export async function remapIncidentRelationCacheRecords(
-  vault: VaultSource,
-  survivingKey: string,
-  losingKey: string,
-  options: { readonly now?: () => string } = {},
-): Promise<{ readonly remapped: number; readonly collided: number }> {
-  const now = options.now ?? defaultNow;
-  const linkId = linkIdentity(survivingKey, losingKey);
-  const all = await listRelationCacheRecords(vault);
-  const byProposition = new Map(all.map(({ record }) => [record.propositionKey, record]));
-
-  let remapped = 0;
-  let collided = 0;
-
-  for (const { path, record } of all) {
-    const touchesLosingKey = record.fromKey === losingKey || record.toKey === losingKey;
-    if (!touchesLosingKey) continue;
-
-    const newFromKey = record.fromKey === losingKey ? survivingKey : record.fromKey;
-    const newToKey = record.toKey === losingKey ? survivingKey : record.toKey;
-    const newKey = propositionKey(record.type, newFromKey, newToKey);
-
-    if (newKey !== record.propositionKey && byProposition.has(newKey)) {
-      collided += 1;
-      continue;
-    }
-
-    const updated: RelationCacheRecord = {
-      ...record,
-      propositionKey: newKey,
-      fromKey: newFromKey,
-      toKey: newToKey,
-      remappedFrom: { key: losingKey, viaSameAsLink: linkId, at: now() },
-      updatedAt: now(),
-      schemaVersion: RELATION_CACHE_RECORD_SCHEMA_VERSION,
-    };
-    await vault.write(relationCacheRecordPath(newKey), `${JSON.stringify(updated, null, 2)}\n`);
-    if (newKey !== record.propositionKey && path !== relationCacheRecordPath(newKey)) {
-      // The record's file identity moved with its remapped propositionKey — the old file is now
-      // stale and would otherwise reappear as a duplicate on the next listing.
-      await vault.delete?.(path);
-    }
-    byProposition.set(newKey, updated);
-    remapped += 1;
-  }
-
-  return { remapped, collided };
-}
-
-/**
- * Migration candidates after a sever — records remapped by the now-severed link, surfaced for a
- * human or a future bead to decide, never auto-reversed (ONT-R1: "not an automatic reversal").
- */
-export async function edgesEligibleForSplitMigration(
-  vault: VaultSource,
-  keyA: string,
-  keyB: string,
-): Promise<readonly RelationCacheRecord[]> {
-  const linkId = linkIdentity(keyA, keyB);
-  const all = await listRelationCacheRecords(vault);
-  return all
-    .filter(({ record }) => record.remappedFrom?.viaSameAsLink === linkId)
-    .map(({ record }) => record);
 }
 
 /** Re-exported for callers composing a same-as-aware relation cache write without a second import — see `./relation-wiring.ts` (plugin). */
