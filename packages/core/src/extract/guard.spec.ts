@@ -124,6 +124,19 @@ describe('extract/guard — an extractor may never report success with zero yiel
         ),
       ).toEqual([]);
     });
+
+    it("fires for 'both' too (D-324) — it makes the same text-layer claim as 'text-layer'", () => {
+      const violations = extractionYieldViolations(
+        result('extracted', [page({ charCount: 0, route: 'both', units: [] })]),
+      );
+      expect(violations).toEqual([
+        expect.stringContaining('routed to the text layer with no extracted text'),
+      ]);
+    });
+
+    it("does not fire for a genuine 'both' page carrying its text-layer units", () => {
+      expect(extractionYieldViolations(result('extracted', [page({ route: 'both' })]))).toEqual([]);
+    });
   });
 
   describe('R4/R5: a unit that carries no text, and a count that disagrees with its units', () => {
@@ -292,6 +305,13 @@ describe('extract/guard — a page may never claim a text layer it could not rea
       expect(extractionYieldViolations(result('extracted', [page()]))).toEqual([]);
     });
 
+    it("fires for 'both' too (D-324) — an unreadable text layer cannot be offered to Slot G either way", () => {
+      const garbage = page({ page: 2, charCount: 367, textLayer: 'unreadable', route: 'both' });
+      expect(extractionYieldViolations(result('extracted', [page(), garbage]))).toEqual([
+        expect.stringContaining('routed to the text layer with an unreadable text layer'),
+      ]);
+    });
+
     it('does not name the text it is rejecting (D-005, INV-3)', () => {
       const secret = 'x'.repeat(40);
       const garbage = page({
@@ -341,6 +361,15 @@ describe('extract/guard — a furniture page may never be offered as content (SC
     it('does not fire on the honest report — furniture routed to vision', () => {
       const honest = page({ furniture: true, route: 'vision', units: [], charCount: 40 });
       expect(extractionYieldViolations(result('furniture-only', [honest]))).toEqual([]);
+    });
+
+    it("fires for a (would-be invalid) furniture page marked 'both' too — defensive, R10 trusts no ordering", () => {
+      const bad = page({ furniture: true, route: 'both' });
+      expect(extractionYieldViolations(result('extracted', [bad]))).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('marked furniture but routed to the text layer'),
+        ]),
+      );
     });
   });
 

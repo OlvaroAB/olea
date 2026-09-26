@@ -137,8 +137,20 @@ export interface ExtractedUnit {
  * `'text-layer'` means the page's own extracted text is good enough to feed
  * Slot G directly; `'vision'` means it wasn't, and a later stage owes this
  * page a Slot V (W2) pass instead — this module does not perform that pass.
+ *
+ * **`'both'` (D-324, `[ILB-PER-4]` per.md §7 decision 1).** The page's text
+ * layer is good enough on its own (same claim `'text-layer'` makes, and
+ * `units` is populated exactly as it is for `'text-layer'`), *and* the page
+ * also paints a non-recurring image over a declared share of its area — a
+ * figure beside a column of text, which the text layer alone would miss.
+ * Both things are true, so both are owed: the text stays on the text layer
+ * and the page is *additionally* enqueued for a Slot V (image) pass, rather
+ * than one route pre-empting the other. See `figure-cue.ts` for the
+ * recurrence-plus-painted-share test that decides this, and
+ * `../ingestion/extraction-runner.ts` for where a `'both'` page's two
+ * obligations are actually carried out.
  */
-export type RouteDecision = 'text-layer' | 'vision';
+export type RouteDecision = 'text-layer' | 'vision' | 'both';
 
 /**
  * What happened to one page's **text layer**, as distinct from how much came
@@ -315,6 +327,17 @@ export interface ExtractionResult {
 export interface ExtractOptions {
   /** Overrides `DEFAULT_TEXT_LAYER_CHAR_THRESHOLD`. Characters-per-page strictly below this route to Slot V. */
   readonly textLayerCharThreshold?: number;
+  /**
+   * Overrides `figure-cue.ts`'s `FIGURE_CUE_MIN_SHARE` (D-324) — the share
+   * of a page's own area a non-recurring image must cover, at minimum, to
+   * upgrade an already-`'text-layer'` page to `'both'`. Unlike
+   * `textLayerCharThreshold` this is a **declared** constant, not a derived
+   * one (David, 2026-09-25: "treat the number as a plain, named,
+   * easily-revisited constant"), so this override exists for the same
+   * per-call testability `textLayerCharThreshold` has, not because a served
+   * value is expected to flow through it today.
+   */
+  readonly figureCueMinShare?: number;
 }
 
 /** What an `Extractor` needs to run. `bytes` come from `VaultSource.readBinary` — see `registry.ts` for the usual way to obtain this. */

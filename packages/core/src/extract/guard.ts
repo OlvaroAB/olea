@@ -146,17 +146,23 @@ export function extractionYieldViolations(result: ExtractionResult): readonly st
 
   for (const page of result.pages) {
     const unitChars = page.units.reduce((sum, unit) => sum + unit.text.length, 0);
+    // `'both'` (D-324, figure-cue.ts) makes exactly the same text-layer
+    // claim `'text-layer'` does — it is the SAME claim, plus an additional
+    // image-reading obligation, never a downgrade of the first one — so R3,
+    // R8 and R10 below apply to it identically. See `types.ts`'s
+    // `RouteDecision` doc.
+    const claimsTextLayer = page.route === 'text-layer' || page.route === 'both';
 
     // R3 — the page-level version, and the one the standing check is named
-    // for. `'text-layer'` is a claim: *this page's own text is good enough
-    // to feed Slot G directly* (types.ts, `RouteDecision`). A page making
-    // that claim while carrying nothing is a page reporting success with
-    // zero yield. The honest report for a page with nothing on it is
-    // `'vision'`, which is what `routePage` produces for any yield below
-    // the threshold — including zero.
-    if (page.route === 'text-layer' && unitChars === 0) {
+    // for. `'text-layer'` (and `'both'`) is a claim: *this page's own text
+    // is good enough to feed Slot G directly* (types.ts, `RouteDecision`). A
+    // page making that claim while carrying nothing is a page reporting
+    // success with zero yield. The honest report for a page with nothing on
+    // it is `'vision'`, which is what `routePage` produces for any yield
+    // below the threshold — including zero.
+    if (claimsTextLayer && unitChars === 0) {
       violations.push(
-        `page ${page.page} routed to the text layer with no extracted text (charCount ${page.charCount}, ${page.units.length} unit(s)) — a page claiming a usable text layer must carry one`,
+        `page ${page.page} routed to the text layer with no extracted text (route ${page.route}, charCount ${page.charCount}, ${page.units.length} unit(s)) — a page claiming a usable text layer must carry one`,
       );
     }
 
@@ -177,17 +183,18 @@ export function extractionYieldViolations(result: ExtractionResult): readonly st
       );
     }
 
-    // R8 — ol-s3xa. `'text-layer'` claims *this page's own text is good enough
-    // to feed Slot G directly*, and a page whose characters are not characters
-    // cannot make that claim however many of them it produced. This is the one
-    // rule here that the char-count discriminant structurally could not
-    // express: the affected pages have a large `charCount`, clear the routing
-    // threshold comfortably, and are wrong anyway. The consumer that makes it
-    // urgent is the quote span (F3.10/F3.11) — a correct citation carrying an
-    // unreadable passage is worse than no citation.
-    if (page.route === 'text-layer' && page.textLayer === 'unreadable') {
+    // R8 — ol-s3xa. `'text-layer'` (and `'both'`) claims *this page's own
+    // text is good enough to feed Slot G directly*, and a page whose
+    // characters are not characters cannot make that claim however many of
+    // them it produced. This is the one rule here that the char-count
+    // discriminant structurally could not express: the affected pages have a
+    // large `charCount`, clear the routing threshold comfortably, and are
+    // wrong anyway. The consumer that makes it urgent is the quote span
+    // (F3.10/F3.11) — a correct citation carrying an unreadable passage is
+    // worse than no citation.
+    if (claimsTextLayer && page.textLayer === 'unreadable') {
       violations.push(
-        `page ${page.page} routed to the text layer with an unreadable text layer (charCount ${page.charCount}) — a page whose characters are not characters must not be offered to Slot G or quoted`,
+        `page ${page.page} routed to the text layer with an unreadable text layer (route ${page.route}, charCount ${page.charCount}) — a page whose characters are not characters must not be offered to Slot G or quoted`,
       );
     }
 
@@ -201,10 +208,15 @@ export function extractionYieldViolations(result: ExtractionResult): readonly st
 
     // R10 — SCAN-1/ol-738i. A page marked furniture has nothing to offer
     // Slot G, the same posture R8 holds for a page whose characters are not
-    // characters, so it must not claim the text-layer route.
-    if (page.furniture && page.route === 'text-layer') {
+    // characters, so it must not claim the text-layer route. `applyFigureCue`
+    // (D-324) only ever widens an already-`'text-layer'` page to `'both'`
+    // and runs strictly after `applyFurnitureDetection`, so a furniture page
+    // (already demoted to `'vision'`, units cleared) should never also read
+    // `'both'` — checked here anyway, defensively, the same posture R8 takes
+    // on `claimsTextLayer` rather than trusting that ordering silently.
+    if (page.furniture && claimsTextLayer) {
       violations.push(
-        `page ${page.page} is marked furniture but routed to the text layer — a page that is furniture must not be offered to Slot G or quoted`,
+        `page ${page.page} is marked furniture but routed to the text layer (route ${page.route}) — a page that is furniture must not be offered to Slot G or quoted`,
       );
     }
 

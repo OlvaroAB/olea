@@ -284,6 +284,55 @@ describe('createExtractionJobRunner — mixed document: some pages text-layer, s
     );
   });
 
+  it("a page that is BOTH text-layer and vision (D-324's figure cue) keeps its text AND gets a follow-on job — neither obligation drops the other", async () => {
+    // A single page with real text well above the routing threshold, AND a
+    // non-recurring image painted at a 6% share of the page's own area
+    // (300x200 = 60000; a 60x60 image is 3600) — clears the D-324 floor, so
+    // `pdfExtractor` (via `extractFromVault`) routes it `'both'`, not
+    // `'text-layer'` or `'vision'` alone.
+    const pageBody = `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(ABOVE_THRESHOLD)}) Tj ET q 60 0 0 60 0 0 cm /Im1 Do Q`;
+    const objects =
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+      '2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n' +
+      '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+      '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R ' +
+      '/Resources << /Font << /F1 3 0 R >> /XObject << /Im1 6 0 R >> >> >>\nendobj\n' +
+      `5 0 obj\n<< /Length ${pageBody.length} >>\nstream\n${pageBody}\nendstream\nendobj\n` +
+      '6 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n';
+    const bytes = asciiBytes(
+      `%PDF-1.4\n${objects}trailer\n<< /Size 7 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+    );
+
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Lectures/figure.pdf', bytes);
+    const sink = new CollectingSink();
+    const enqueue = vi.fn(async (_input: EnqueueInput) => ({ status: 'queued' as const }));
+
+    const runner = createExtractionJobRunner({ vault, enqueuer: { enqueue }, sink });
+    const outcome = await runner({
+      contentHash: 'h-both-page',
+      label: 'Figure deck',
+      payload: { kind: 'source', sourcePath: 'Lectures/figure.pdf', format: 'pdf' },
+      attempts: 0,
+    });
+
+    expect(outcome).toEqual({ ok: true });
+
+    // The text-layer half is kept, not traded away for the image reading.
+    expect(sink.all).toHaveLength(1);
+    expect(sink.all[0]?.text).toBe(ABOVE_THRESHOLD);
+
+    // AND a distinct, durable vision-page job is enqueued for the same page
+    // — the image-reading half of the same page's two obligations.
+    expect(enqueue).toHaveBeenCalledTimes(1);
+    expect(enqueue.mock.calls[0]?.[0]?.payload).toMatchObject({
+      kind: 'vision-page',
+      sourcePath: 'Lectures/figure.pdf',
+      format: 'pdf',
+      page: 1,
+    });
+  });
+
   it('is proven servable, not just enqueued: a real engine drains the follow-on vision-page job through an injected visionRunner ("the Worker path")', async () => {
     const vault = new MemoryVaultSource();
     vault.setBinary('Lectures/deck.pdf', buildPdfBytes([ABOVE_THRESHOLD, '']));

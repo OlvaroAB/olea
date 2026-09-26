@@ -230,28 +230,36 @@ async function extractResolvedSource(
 
   const units: ExtractedUnit[] = [];
   for (const page of result.pages) {
-    if (page.route === 'text-layer') {
+    // `'text-layer'` and `'both'` (D-324, figure-cue.ts) make the identical
+    // text-layer claim — `'both'`'s units are kept exactly like
+    // `'text-layer'`'s, never traded away for the image reading it ALSO
+    // owes the page (types.ts's `RouteDecision` doc: "both are owed").
+    if (page.route === 'text-layer' || page.route === 'both') {
       units.push(...page.units);
-      continue;
     }
-    // route === 'vision': not dropped — enqueued as its own durable job.
-    const contentHash = await visionPageContentHash(
-      parentContentHash,
-      source.sourcePath,
-      page.page,
-    );
-    const visionPayload: ExtractionJobPayload = {
-      kind: 'vision-page',
-      sourcePath: source.sourcePath,
-      format: source.format,
-      page: page.page,
-      ...(source.embeddedIn ? { embeddedIn: source.embeddedIn } : {}),
-    };
-    await deps.enqueuer.enqueue({
-      contentHash,
-      label: `${basename(source.sourcePath)} — page ${page.page} (vision)`,
-      payload: visionPayload,
-    });
+    if (page.route === 'vision' || page.route === 'both') {
+      // Not dropped — enqueued as its own durable job. For `'both'` this
+      // runs IN ADDITION to the units push above, not instead of it: the
+      // page owes Slot G its text and Slot V its figure, both, per D-324's
+      // ruling that a smaller image is never thereby proven irrelevant.
+      const contentHash = await visionPageContentHash(
+        parentContentHash,
+        source.sourcePath,
+        page.page,
+      );
+      const visionPayload: ExtractionJobPayload = {
+        kind: 'vision-page',
+        sourcePath: source.sourcePath,
+        format: source.format,
+        page: page.page,
+        ...(source.embeddedIn ? { embeddedIn: source.embeddedIn } : {}),
+      };
+      await deps.enqueuer.enqueue({
+        contentHash,
+        label: `${basename(source.sourcePath)} — page ${page.page} (vision)`,
+        payload: visionPayload,
+      });
+    }
   }
   return units;
 }

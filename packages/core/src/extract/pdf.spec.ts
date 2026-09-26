@@ -717,6 +717,84 @@ function buildUndecodableContentPdf(): Uint8Array {
   );
 }
 
+/**
+ * A multi-page PDF where every page carries real text well above the
+ * routing threshold and, optionally, one or more Image XObjects painted at
+ * a caller-declared `cm` scale — the fixture the figure-cue (D-324) tests
+ * below need. `imageObjects` supplies each distinct image's own object
+ * (keyed by object number, emitted exactly once each regardless of how many
+ * pages paint it) — object numbers start at 100 to stay clear of the
+ * page/content numbering this function assigns itself, so a caller
+ * exercising *recurrence* passes the SAME `objNum` in more than one page's
+ * `paints` list, referencing one real object rather than two coincidentally
+ * identical ones.
+ */
+function buildFigureCuePdf(
+  pages: readonly {
+    readonly text: string;
+    readonly paints?: readonly { readonly objNum: number; readonly cm: string }[];
+    /** Omits `/MediaBox` from this page AND from the shared `/Pages` root it inherits from — the "layout cannot be inspected" case. */
+    readonly noMediaBox?: boolean;
+  }[],
+  imageObjects: ReadonlyMap<number, { readonly width: number; readonly height: number }>,
+): Uint8Array {
+  const fontNum = 3;
+  const firstPageNum = 4;
+  const firstContentNum = firstPageNum + pages.length;
+
+  const objects: string[] = [];
+  const kids = pages.map((_, i) => `${firstPageNum + i} 0 R`).join(' ');
+  objects.push('1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n');
+  objects.push(`2 0 obj\n<< /Type /Pages /Kids [${kids}] /Count ${pages.length} >>\nendobj\n`);
+  objects.push(
+    `${fontNum} 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n`,
+  );
+
+  pages.forEach((p, i) => {
+    const pageNum = firstPageNum + i;
+    const contentNum = firstContentNum + i;
+    const xobjectEntries = (p.paints ?? [])
+      .map((paint) => `/Im${paint.objNum} ${paint.objNum} 0 R`)
+      .join(' ');
+    const resources = `<< /Font << /F1 ${fontNum} 0 R >>${
+      xobjectEntries ? ` /XObject << ${xobjectEntries} >>` : ''
+    } >>`;
+    const mediaBox = p.noMediaBox ? '' : ' /MediaBox [0 0 300 200]';
+    objects.push(
+      `${pageNum} 0 obj\n<< /Type /Page /Parent 2 0 R${mediaBox} /Contents ${contentNum} 0 R /Resources ${resources} >>\nendobj\n`,
+    );
+  });
+
+  pages.forEach((p, i) => {
+    const contentNum = firstContentNum + i;
+    const textOp =
+      p.text.length > 0 ? `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(p.text)}) Tj ET ` : '';
+    const paintOps = (p.paints ?? [])
+      .map((paint) => `q ${paint.cm} cm /Im${paint.objNum} Do Q `)
+      .join('');
+    const body = `${textOp}${paintOps}`.trim();
+    objects.push(
+      `${contentNum} 0 obj\n<< /Length ${body.length} >>\nstream\n${body}\nendstream\nendobj\n`,
+    );
+  });
+
+  for (const [objNum, { width, height }] of imageObjects) {
+    const pixels = '\x00'.repeat(width * height);
+    objects.push(
+      `${objNum} 0 obj\n<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceGray /BitsPerComponent 8 /Length ${pixels.length} >>\nstream\n${pixels}\nendstream\nendobj\n`,
+    );
+  }
+
+  const highestObjNum = Math.max(
+    firstContentNum + pages.length - 1,
+    ...[...imageObjects.keys()],
+    1,
+  );
+  return latin1ToBytes(
+    `%PDF-1.4\n${objects.join('')}trailer\n<< /Size ${highestObjNum + 1} /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+  );
+}
+
 /** A one-page PDF that really is a scan: an Image XObject painted onto the page, no text layer anywhere. The control that keeps the new check from reddening on everything. */
 function buildImageOnlyPdf(): Uint8Array {
   const pageBody = 'q 300 0 0 200 0 0 cm /Im1 Do Q';
@@ -1483,5 +1561,144 @@ describe('pdfExtractor — subset composite fonts and their ToUnicode CMap (ol-a
 
   it('does not read a superscript nudge as a new line', async () => {
     expect(await textOfBody('BT /F1 12 Tf 20 150 Td (x) Tj 0 0.3 Td (2) Tj ET')).toBe('x2');
+  });
+});
+
+describe('pdfExtractor — the figure cue (D-324)', () => {
+  const LONG_TEXT = 'Deposition of the fluvial member across the delta front';
+
+  it("upgrades a text-bearing page to 'both' when a non-recurring image clears the declared 5% share", async () => {
+    // 300x200 page (area 60000); a 60x60 image is 3600, a 6% share.
+    const bytes = buildFigureCuePdf(
+      [{ text: LONG_TEXT, paints: [{ objNum: 101, cm: '60 0 0 60 0 0' }] }],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('both');
+    // The text-layer content is kept, not cleared, by the upgrade.
+    expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+  });
+
+  it('stays on the text layer when the image is below the declared share', async () => {
+    // A 30x30 image on the same page is 900, a 1.5% share — below the floor.
+    const bytes = buildFigureCuePdf(
+      [{ text: LONG_TEXT, paints: [{ objNum: 101, cm: '30 0 0 30 0 0' }] }],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('text-layer');
+  });
+
+  it('a caller-supplied figureCueMinShare overrides the declared default, end to end', async () => {
+    const bytes = buildFigureCuePdf(
+      [{ text: LONG_TEXT, paints: [{ objNum: 101, cm: '30 0 0 30 0 0' }] }],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    // 1.5% share, with the floor lowered to 1% — now it qualifies.
+    const result = await pdfExtractor.extract(
+      { path: 'deck.pdf', bytes },
+      { figureCueMinShare: 0.01 },
+    );
+    expect(result.pages[0]?.route).toBe('both');
+  });
+
+  it('a recurring image (majority of the document’s pages) never triggers the cue', async () => {
+    // The SAME image object (101), painted at a large share on all three
+    // pages — furniture.ts's own majority rule applied to a picture instead
+    // of a running head.
+    const bytes = buildFigureCuePdf(
+      [
+        { text: 'First page of real content here', paints: [{ objNum: 101, cm: '90 0 0 90 0 0' }] },
+        {
+          text: 'Second page of real content here',
+          paints: [{ objNum: 101, cm: '90 0 0 90 0 0' }],
+        },
+        { text: 'Third page of real content here', paints: [{ objNum: 101, cm: '90 0 0 90 0 0' }] },
+      ],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages.map((p) => p.route)).toEqual(['text-layer', 'text-layer', 'text-layer']);
+  });
+
+  it('a non-recurring image on a minority of pages triggers the cue only on the pages it actually appears on', async () => {
+    const bytes = buildFigureCuePdf(
+      [
+        { text: 'First page of real content here', paints: [{ objNum: 101, cm: '90 0 0 90 0 0' }] },
+        { text: 'Second page has no image at all here' },
+        { text: 'Third page has no image at all here' },
+      ],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages.map((p) => p.route)).toEqual(['both', 'text-layer', 'text-layer']);
+  });
+
+  it('a page with no resolvable MediaBox cannot be inspected — the cue does not fire, and the honest text-layer report stands', async () => {
+    const bytes = buildFigureCuePdf(
+      [{ text: LONG_TEXT, paints: [{ objNum: 101, cm: '90 0 0 90 0 0' }], noMediaBox: true }],
+      new Map([[101, { width: 2, height: 2 }]]),
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('text-layer');
+    expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+  });
+
+  it('an image reached only through a Form XObject is not measured — documented under-count, never a false positive', async () => {
+    // The image is painted at a large scale, but from INSIDE a Form
+    // XObject the page itself Do's — depth 1, not depth 0. `figure-cue.ts`'s
+    // own doc names this as a known limitation rather than something to
+    // guess at: it must not silently upgrade the route.
+    const formBody = 'q 90 0 0 90 0 0 cm /Im1 Do Q';
+    const objects =
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+      '2 0 obj\n<< /Type /Pages /Kids [4 0 R] /Count 1 >>\nendobj\n' +
+      '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+      '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 5 0 R ' +
+      '/Resources << /Font << /F1 3 0 R >> /XObject << /Fm1 6 0 R >> >> >>\nendobj\n' +
+      `5 0 obj\n<< /Length ${
+        `BT /F1 12 Tf 20 150 Td (${escapePdfLiteral(LONG_TEXT)}) Tj ET q 1 0 0 1 0 0 cm /Fm1 Do Q`
+          .length
+      } >>\nstream\nBT /F1 12 Tf 20 150 Td (${escapePdfLiteral(LONG_TEXT)}) Tj ET q 1 0 0 1 0 0 cm /Fm1 Do Q\nendstream\nendobj\n` +
+      `6 0 obj\n<< /Type /XObject /Subtype /Form /BBox [0 0 300 200] /Resources << /XObject << /Im1 7 0 R >> >> /Length ${formBody.length} >>\nstream\n${formBody}\nendstream\nendobj\n` +
+      '7 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n';
+    const bytes = latin1ToBytes(
+      `%PDF-1.4\n${objects}trailer\n<< /Size 8 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages[0]?.route).toBe('text-layer');
+    expect(result.pages[0]?.units[0]?.text).toBe(LONG_TEXT);
+  });
+
+  it('a furniture page is never upgraded — figure-cue runs after furniture, on pages that already have nothing to add to', async () => {
+    // Two pages sharing the SAME running-head-and-folio furniture shape
+    // (SCAN-1, mirrors furniture.spec.ts's own "GEOL204 — Lecture Notes\n4"
+    // fixture): a real line break via a vertical `Td` move (proven
+    // elsewhere in this file), not a raw byte inside the string literal.
+    // furniture.ts demotes both pages to 'vision' first. Page 1 ALSO paints
+    // a big, non-recurring image — the cue must not pull it back to
+    // 'both', because there is no text-layer content left on it to keep.
+    const runningHeadBody = (folio: string) =>
+      `BT /F1 12 Tf 20 150 Td (GEOL204 - Lecture Notes) Tj 0 -14 Td (${folio}) Tj ET`;
+    const page1Body = `${runningHeadBody('1')} q 90 0 0 90 0 0 cm /Im1 Do Q`;
+    const page2Body = runningHeadBody('2');
+    const objects =
+      '1 0 obj\n<< /Type /Catalog /Pages 2 0 R >>\nendobj\n' +
+      '2 0 obj\n<< /Type /Pages /Kids [4 0 R 5 0 R] /Count 2 >>\nendobj\n' +
+      '3 0 obj\n<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>\nendobj\n' +
+      '4 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 6 0 R ' +
+      '/Resources << /Font << /F1 3 0 R >> /XObject << /Im1 8 0 R >> >> >>\nendobj\n' +
+      '5 0 obj\n<< /Type /Page /Parent 2 0 R /MediaBox [0 0 300 200] /Contents 7 0 R ' +
+      '/Resources << /Font << /F1 3 0 R >> >> >>\nendobj\n' +
+      `6 0 obj\n<< /Length ${page1Body.length} >>\nstream\n${page1Body}\nendstream\nendobj\n` +
+      `7 0 obj\n<< /Length ${page2Body.length} >>\nstream\n${page2Body}\nendstream\nendobj\n` +
+      '8 0 obj\n<< /Type /XObject /Subtype /Image /Width 2 /Height 2 /ColorSpace /DeviceGray /BitsPerComponent 8 /Length 4 >>\nstream\n\x00\x11\x22\x33\nendstream\nendobj\n';
+    const bytes = latin1ToBytes(
+      `%PDF-1.4\n${objects}trailer\n<< /Size 9 /Root 1 0 R >>\nstartxref\n0\n%%EOF`,
+    );
+    const result = await pdfExtractor.extract({ path: 'deck.pdf', bytes });
+    expect(result.pages.map((p) => p.route)).toEqual(['vision', 'vision']);
+    expect(result.pages.map((p) => p.furniture)).toEqual([true, true]);
+    expect(result.outcome).toBe('furniture-only');
   });
 });

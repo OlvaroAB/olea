@@ -157,6 +157,7 @@
 
 import { unzlibSync } from 'fflate';
 import { decodeWithFont, type FontDecoder, parseToUnicodeCMap } from './cmap.js';
+import { applyFigureCue, FIGURE_CUE_MIN_SHARE, type PageImagePaint } from './figure-cue.js';
 import { applyFurnitureDetection } from './furniture.js';
 import { classifyPageText, isReachedButUnreadable } from './plausibility.js';
 import { routePage } from './threshold.js';
@@ -310,6 +311,26 @@ function dictRefArray(dictText: string, key: string): number[] {
     rm = refRe.exec(inner);
   }
   return refs;
+}
+
+/**
+ * An inline (non-indirect) numeric array, e.g. `/MediaBox [0 0 612 792]` —
+ * `figure-cue.ts`'s only caller of this, `pageBox` below, needs exactly this
+ * shape and nothing more general. An indirect array (`/MediaBox 5 0 R`) is
+ * deliberately not resolved: `objects` maps object numbers to *dictionary*
+ * records here, and a bare array object has no dictionary text to key off
+ * of with this parser's existing machinery — see `pageBox`'s doc for why
+ * that degrades to "layout cannot be inspected" rather than being guessed.
+ */
+function dictNumberArray(dictText: string, key: string): number[] | undefined {
+  const m = new RegExp(`/${key}\\s*\\[([^\\]]*)\\]`).exec(dictText);
+  if (!m) return undefined;
+  const nums = (m[1] ?? '')
+    .trim()
+    .split(/\s+/)
+    .filter((tok) => tok.length > 0)
+    .map(Number);
+  return nums.some((n) => Number.isNaN(n)) ? undefined : nums;
 }
 
 /** `/Contents` is either a single indirect reference or an array of them — both forms occur in the wild. */
@@ -934,6 +955,17 @@ interface ContentWalk {
    * genuine scan, so the honesty `ol-x1ch` bought survives the recursion.
    */
   sawXObjectPaint: boolean;
+  /**
+   * Every Image XObject painted directly on THIS page's own top-level
+   * content stream (`figure-cue.ts`, D-324) — never one reached through a
+   * Form XObject; see that module's doc for why a form-nested image is
+   * deliberately not recorded here rather than measured with a CTM this
+   * walker does not otherwise compose absolutely. `rawArea` is the CTM's
+   * linear determinant in page user-space points² — `getPageContent`
+   * divides it by the page's own area to produce `figure-cue.ts`'s
+   * `areaShare`, so this walker itself never needs to know the page's size.
+   */
+  imagePaints: { objectNum: number; rawArea: number }[];
 }
 
 /**
@@ -1044,6 +1076,15 @@ function walkContentTokens(
     readonly forms: ReadonlyMap<string, number>;
     /** This level's effective `/Resources` text, for a nested form to fall back to — see `resolveFormXObject`. */
     readonly resourcesText: string | undefined;
+    /**
+     * The PAGE's own Image-subtype `/XObject` resources, name to object
+     * number (`figure-cue.ts`, D-324) — supplied only by `getPageContent`'s
+     * top-level call, never threaded into a nested `resolveFormXObject`
+     * call, because the `Do` case below only ever consults this at
+     * recursion depth 0. See `resourcesXObjectImagesFromText`'s doc for why
+     * a form-nested image is out of scope for this cue.
+     */
+    readonly images?: ReadonlyMap<string, number>;
   },
 ): ContentWalk {
   const walk: ContentWalk = {
@@ -1051,6 +1092,7 @@ function walkContentTokens(
     pendingGap: false,
     sawTextOperator: false,
     sawXObjectPaint: false,
+    imagePaints: [],
   };
 
   // Ancestor-*path* cycle guard (ol-v460): an object number is added just
@@ -1237,6 +1279,30 @@ function walkContentTokens(
           break;
         case 'Do':
           walk.sawXObjectPaint = true;
+          // Image paint (`figure-cue.ts`, D-324) — page-level only (depth
+          // 0): this walker's CTM is level-relative inside a form (see the
+          // function doc's "level-relative" paragraph and
+          // `resourcesXObjectImagesFromText`'s doc), so it cannot honestly
+          // give a form-nested image's absolute page-space area — such an
+          // image simply contributes no paint record, the same
+          // "layout cannot be inspected" degrade this module uses
+          // throughout rather than guessing. `rawArea` is the CTM's
+          // linear-part determinant: the unit square an Image XObject
+          // always occupies in its own coordinate space maps, under the
+          // CTM, to a parallelogram of exactly this area — independent of
+          // the CTM's translation, which is why no absolute page position
+          // is needed here, only the level-0 CTM already tracked for
+          // `cm`/`Do` above.
+          if (depth === 0 && formCtx?.images) {
+            const imageObjectNum = formCtx.images.get(lastName);
+            if (imageObjectNum !== undefined) {
+              const [a, b, c, d] = ctm;
+              walk.imagePaints.push({
+                objectNum: imageObjectNum,
+                rawArea: Math.abs(a * d - b * c),
+              });
+            }
+          }
           // Recurse into the named resource IF it is a Form XObject this
           // level's resources know about (ol-v460). Every guard below is a
           // skip, never a throw, matching this module's discipline
@@ -1358,6 +1424,55 @@ function pageResourcesText(
 }
 
 /**
+ * A page's own area, in PDF user-space points² — `figure-cue.ts`'s
+ * denominator, needed to turn an image `Do`'s painted parallelogram area
+ * into a *share* of the page. Prefers `/CropBox` (the visible viewport) over
+ * `/MediaBox` (the full physical sheet) when both are present, per spec;
+ * inherits through `/Parent` exactly as `pageResourcesText` does immediately
+ * above, since both boxes are inheritable page-tree attributes.
+ *
+ * **Returns `undefined`, never a guess, when neither box resolves** — an
+ * indirect (`N G R`) box reference, in particular, is not followed (see
+ * `dictNumberArray`'s doc): this parser's minimal dictionary reader has no
+ * general way to tell a bare array object from a dictionary one, and this
+ * module's whole discipline is to degrade to "layout cannot be inspected"
+ * rather than fabricate a box. A page with no computable area contributes no
+ * `imagePaints` at all (`getPageContent`), which `figure-cue.ts`'s
+ * `applyFigureCue` already treats as silence, not as "no image".
+ */
+function pageBox(
+  pageDict: string,
+  objects: ReadonlyMap<number, PdfObjectRecord>,
+): { readonly width: number; readonly height: number } | undefined {
+  let dict: string | undefined = pageDict;
+  const seen = new Set<number>();
+  while (dict !== undefined) {
+    for (const key of ['CropBox', 'MediaBox']) {
+      const inline = dictNumberArray(dict, key);
+      if (inline !== undefined) {
+        if (inline.length !== 4) return undefined;
+        const [x0, y0, x1, y1] = inline as [number, number, number, number];
+        const width = Math.abs(x1 - x0);
+        const height = Math.abs(y1 - y0);
+        return width > 0 && height > 0 ? { width, height } : undefined;
+      }
+      // The key is present but only as an indirect reference this parser's
+      // minimal dictionary reader does not follow (see `dictNumberArray`'s
+      // doc) — this node DOES declare its own box, so per spec it overrides
+      // whatever an ancestor might say; falling through to the `/Parent`
+      // walk here would silently apply the wrong box rather than the right
+      // one. Degrade to "cannot inspect" instead of guessing.
+      if (new RegExp(`/${key}\\b`).test(dict)) return undefined;
+    }
+    const parent = dictRef(dict, 'Parent');
+    if (parent === undefined || seen.has(parent)) return undefined;
+    seen.add(parent);
+    dict = objects.get(parent)?.dictText;
+  }
+  return undefined;
+}
+
+/**
  * The font resources named in a `/Resources /Font` dictionary — either inline
  * or indirect, both of which occur — as `/Tf` names to decoders (ol-avvt).
  * Split out to take a resources dict *text* directly rather than a page
@@ -1444,6 +1559,41 @@ function resourcesXObjectFormsFromText(
     m = entryRe.exec(xobjects);
   }
   return forms;
+}
+
+/**
+ * The Image-subtype entries of a `/Resources /XObject` dictionary, as
+ * resource name to object number — `resourcesXObjectFormsFromText`'s
+ * sibling, filtering the opposite `/Subtype` (`figure-cue.ts`, D-324). A
+ * resource name in one `/XObject` dictionary names exactly one object, so a
+ * name never appears in both this map and `resourcesXObjectFormsFromText`'s.
+ *
+ * Deliberately page-level only: `walkContentTokens`'s `Do` handler only
+ * consults this at recursion depth 0 (see that function's doc and the `Do`
+ * case below) — a Form XObject's own nested `/XObject` dictionary is never
+ * resolved through this function, for the same level-relative-CTM reason
+ * `figure-cue.ts`'s module doc gives for not measuring a form-nested image's
+ * area at all.
+ */
+function resourcesXObjectImagesFromText(
+  resourcesText: string,
+  objects: ReadonlyMap<number, PdfObjectRecord>,
+): Map<string, number> {
+  const images = new Map<string, number>();
+  const xobjects = dictSubDict(resourcesText, 'XObject');
+  if (xobjects === undefined) return images;
+  const entryRe = /\/([A-Za-z0-9+_.#-]+)\s+(\d+)\s+\d+\s+R/g;
+  let m: RegExpExecArray | null = entryRe.exec(xobjects);
+  while (m !== null) {
+    const resourceName = m[1] ?? '';
+    const objNum = Number(m[2]);
+    const rec = objects.get(objNum);
+    if (rec && resourceName !== '' && dictName(rec.dictText, 'Subtype') === 'Image') {
+      images.set(resourceName, objNum);
+    }
+    m = entryRe.exec(xobjects);
+  }
+  return images;
 }
 
 /**
@@ -1546,6 +1696,15 @@ interface PageContent {
    * never do.
    */
   readonly textLayerReached: boolean;
+  /**
+   * Every non-form-nested image this page paints, as a share of the page's
+   * own area (`figure-cue.ts`, D-324) — `undefined` when the page's own
+   * `/MediaBox`/`/CropBox` could not be resolved, meaning this page's
+   * layout cannot be inspected for the figure cue at all (see `pageBox`'s
+   * doc). Never `undefined` merely because no image was painted — that case
+   * is an empty array, a real, inspected answer of "nothing qualifies".
+   */
+  readonly imagePaints: readonly PageImagePaint[] | undefined;
 }
 
 function getPageContent(
@@ -1554,7 +1713,7 @@ function getPageContent(
   pageNum: number,
 ): PageContent {
   const rec = objects.get(pageNum);
-  if (!rec) return { text: '', textLayerReached: false };
+  if (!rec) return { text: '', textLayerReached: false, imagePaints: undefined };
 
   const chunks: string[] = [];
   let declared = 0;
@@ -1583,6 +1742,13 @@ function getPageContent(
     resourcesText === undefined
       ? new Map<string, number>()
       : resourcesXObjectFormsFromText(resourcesText, objects);
+  // The page's own Image-subtype `/XObject` resources (`figure-cue.ts`,
+  // D-324) — same resolution as `forms` immediately above, filtering the
+  // opposite `/Subtype`.
+  const images =
+    resourcesText === undefined
+      ? new Map<string, number>()
+      : resourcesXObjectImagesFromText(resourcesText, objects);
 
   // Content streams belonging to one page are concatenated with a space —
   // PDF spec explicitly allows the split and requires readers to treat the
@@ -1591,8 +1757,24 @@ function getPageContent(
     tokenizeContentStream(chunks.join(' ')),
     fonts,
     WORD_GAP_KERN_THOUSANDTHS,
-    { bytes, objects, forms, resourcesText },
+    { bytes, objects, forms, resourcesText, images },
   );
+
+  // `figure-cue.ts`'s per-page input: this page's own area, resolved once
+  // here, turns each `Do`'s raw painted area into a share of the page.
+  // `undefined` when the box could not be resolved — "layout cannot be
+  // inspected" (`pageBox`'s doc), which `applyFigureCue` already treats as
+  // silence rather than "nothing painted".
+  const box = pageBox(rec.dictText, objects);
+  const imagePaints: readonly PageImagePaint[] | undefined =
+    box === undefined
+      ? undefined
+      : walk.imagePaints.map(
+          (paint): PageImagePaint => ({
+            objectNum: paint.objectNum,
+            areaShare: paint.rawArea / (box.width * box.height),
+          }),
+        );
 
   const textLayerReached =
     // A `/Contents` we could not turn into bytes at all: an unsupported
@@ -1608,7 +1790,7 @@ function getPageContent(
     // ol-x1ch bought survives the recursion this bead adds.
     (walk.sawXObjectPaint && forms.size > 0);
 
-  return { text: walk.text, textLayerReached };
+  return { text: walk.text, textLayerReached, imagePaints };
 }
 
 // ---- public extractor ------------------------------------------------
@@ -1674,8 +1856,18 @@ export const pdfExtractor: Extractor = {
     const walked = pagesRootNum === undefined ? [] : collectPageNums(pagesRootNum, objects);
     const pageNums = walked.length > 0 ? walked : fallbackPageNums(objects);
 
+    // Parallel to `pages` below (same order, same length) — `figure-cue.ts`'s
+    // per-page input, captured alongside the text each page yields rather
+    // than re-walked a second time.
+    const pageImagePaints: (readonly PageImagePaint[] | undefined)[] = [];
+
     const pages: PageExtraction[] = pageNums.map((pageNum, idx) => {
-      const { text: pageText, textLayerReached } = getPageContent(input.bytes, objects, pageNum);
+      const {
+        text: pageText,
+        textLayerReached,
+        imagePaints,
+      } = getPageContent(input.bytes, objects, pageNum);
+      pageImagePaints.push(imagePaints);
       const charCount = pageText.length;
       const textLayer = classifyPageText(pageText, textLayerReached);
       // `charCount` keeps reporting what actually came out — the quality check
@@ -1713,7 +1905,16 @@ export const pdfExtractor: Extractor = {
       return { page, charCount, textLayer, route, units, furniture: false };
     });
 
-    const finalPages = applyFurnitureDetection(pages);
+    const furnitureChecked = applyFurnitureDetection(pages);
+    // The figure cue (D-324) runs LAST, over the furniture-checked pages:
+    // a page furniture already demoted to `'vision'` has nothing left to
+    // add to, and only a page still honestly `'text-layer'` at this point
+    // is a candidate to widen to `'both'` (see `figure-cue.ts`'s doc).
+    const finalPages = applyFigureCue(
+      furnitureChecked,
+      pageImagePaints,
+      options?.figureCueMinShare ?? FIGURE_CUE_MIN_SHARE,
+    );
 
     return {
       sourcePath: input.path,
