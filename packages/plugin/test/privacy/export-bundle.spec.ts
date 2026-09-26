@@ -88,6 +88,8 @@ describe('buildPrivacyExportBundle (F7.4, ol-p6t01)', () => {
     expect(bundle.reviewLog).toEqual([]);
     expect(bundle.misconceptionLog).toEqual([]);
     expect(bundle.instruments).toEqual([]);
+    expect(bundle.oleaFiles).toEqual([]);
+    expect(bundle.unreadableOleaPaths).toEqual([]);
   });
 
   it('merges and deduplicates entries from more than one device file', async () => {
@@ -111,5 +113,41 @@ describe('buildPrivacyExportBundle (F7.4, ol-p6t01)', () => {
     await buildPrivacyExportBundle({ vault, deviceId: DEVICE_ID, today: TODAY });
 
     expect(vault.paths()).toEqual(before);
+  });
+
+  // ol-egov.141.8.7 regression: before this bead the export carried only the two logs and the
+  // instruments, and omitted every other store Olea writes under .olea/.
+  it('carries every other file Olea wrote under .olea/, as the exact text on disk (ol-egov.141.8.7)', async () => {
+    const vault = new MemoryVaultSource({
+      [reviewLogPath(TODAY, DEVICE_ID)]: `${JSON.stringify(reviewEvent('ev-1'))}\n`,
+      '.olea/concepts/concept-key1-synthetic.json': '{"synthetic":true}\n',
+      '.olea/same-as/synthetic.json': '{"synthetic":"same-as"}\n',
+    });
+
+    const bundle = await buildPrivacyExportBundle({ vault, deviceId: DEVICE_ID, today: TODAY });
+
+    expect(bundle.oleaFiles).toEqual([
+      { path: '.olea/concepts/concept-key1-synthetic.json', content: '{"synthetic":true}\n' },
+      { path: '.olea/same-as/synthetic.json', content: '{"synthetic":"same-as"}\n' },
+    ]);
+  });
+
+  it('names a file under .olea/ it cannot read, and still exports the rest (ol-egov.141.8.7)', async () => {
+    const vault = new MemoryVaultSource({
+      '.olea/concepts/readable.json': '{"ok":true}\n',
+      '.olea/concepts/unreadable.json': '{"ok":false}\n',
+    });
+    const originalRead = vault.read.bind(vault);
+    vault.read = async (path) => {
+      if (path === '.olea/concepts/unreadable.json') throw new Error('host refused the read');
+      return originalRead(path);
+    };
+
+    const bundle = await buildPrivacyExportBundle({ vault, deviceId: DEVICE_ID, today: TODAY });
+
+    expect(bundle.oleaFiles).toEqual([
+      { path: '.olea/concepts/readable.json', content: '{"ok":true}\n' },
+    ]);
+    expect(bundle.unreadableOleaPaths).toEqual(['.olea/concepts/unreadable.json']);
   });
 });

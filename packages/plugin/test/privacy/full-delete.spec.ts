@@ -170,4 +170,28 @@ describe('runFullDelete (F7.4, ol-p6t01)', () => {
     // NOT find (a different device's, or one outside the probe window) is
     // simply left exactly as it was; the new id just never names it.
   });
+
+  // ol-egov.141.8.7 regression: before this bead a full delete reached only the two logs and the
+  // indexed drafts, and left every other store Olea writes under .olea/ in her vault.
+  it('removes every store Olea writes under .olea/, not only the review and misconception logs (ol-egov.141.8.7)', async () => {
+    const dataHost = new FakeDataHost();
+    const vault = new MemoryVaultSource({
+      [reviewLogPath(TODAY, DEVICE_ID)]: '{"kind":"review"}\n',
+      '.olea/concepts/concept-key1-synthetic.json': '{"synthetic":true}\n',
+      '.olea/outcomes/outcome-key1-synthetic.json': '{"synthetic":true}\n',
+      '.olea/duplication-confirmation/synthetic.json': '{"synthetic":true}\n',
+      '01 Courses/SYN101/Lecture 1.md': 'What is X?::X is Y.\n',
+    });
+
+    await runFullDelete({
+      dataHost,
+      vault,
+      deviceId: DEVICE_ID,
+      today: TODAY,
+      workerConfig: { baseUrl: '', token: '' },
+      httpRequest: async () => ({ status: 200 }),
+    });
+
+    expect(vault.paths()).toEqual(['01 Courses/SYN101/Lecture 1.md']);
+  });
 });

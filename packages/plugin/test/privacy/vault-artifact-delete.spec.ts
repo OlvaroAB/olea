@@ -5,7 +5,10 @@
  */
 import { type CalendarDay, misconceptionLogPath, reviewLogPath, shiftCalendarDay } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { deleteVaultArtifacts } from '../../src/privacy/vault-artifact-delete.js';
+import {
+  deleteOleaLayerPath,
+  deleteVaultArtifacts,
+} from '../../src/privacy/vault-artifact-delete.js';
 import { MemoryVaultSource } from './fakes.js';
 
 const TODAY: CalendarDay = '2026-08-25';
@@ -22,7 +25,9 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
     // Simulate a host that refuses to list a dot-prefixed folder at all.
     const originalList = vault.list.bind(vault);
     vault.list = async (options) => {
-      if (options?.under?.startsWith('.olea/')) throw new Error('cannot list dot-prefixed folder');
+      if (options?.under === '.olea' || options?.under?.startsWith('.olea/')) {
+        throw new Error('cannot list dot-prefixed folder');
+      }
       return originalList(options);
     };
 
@@ -64,7 +69,7 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
     expect(vault.paths()).toEqual(['.olea/drafts/d1.json', '.olea/drafts/index.json']);
   });
 
-  it('never touches an instrument-bearing note — INV-6, only the two Olea-owned log folders are ever reached', async () => {
+  it("never touches an instrument-bearing note — INV-6, only Olea's own .olea/ layer is ever reached", async () => {
     const vault = new MemoryVaultSource({
       '01 Courses/SYN101/Lecture 1.md': '# Lecture 1\n\nQ: What is X?\nA: X is Y.\n',
     });
@@ -99,7 +104,9 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
     // bites when listing also fails, which is the scenario this asserts.
     const originalList = vault.list.bind(vault);
     vault.list = async (options) => {
-      if (options?.under?.startsWith('.olea/')) throw new Error('cannot list dot-prefixed folder');
+      if (options?.under === '.olea' || options?.under?.startsWith('.olea/')) {
+        throw new Error('cannot list dot-prefixed folder');
+      }
       return originalList(options);
     };
 
@@ -112,5 +119,44 @@ describe('deleteVaultArtifacts (F7.4, ol-p6t01)', () => {
 
     expect(result.deletedReviewLogPaths).toEqual([]);
     expect(vault.raw(oldPath)).toBeDefined();
+  });
+
+  it('removes every record store under .olea/ beside the two logs, but never the draft cache (ol-egov.141.8.7)', async () => {
+    const vault = new MemoryVaultSource({
+      [reviewLogPath(TODAY, DEVICE_ID)]: '{"kind":"review"}\n',
+      '.olea/concepts/concept-key1-synthetic.json': '{}\n',
+      '.olea/relations/synthetic.json': '{}\n',
+      '.olea/same-as/synthetic.json': '{}\n',
+      '.olea/reviews/not-a-log-file.txt': 'stray\n',
+      '.olea/drafts/d1.json': '{}\n',
+      '01 Courses/SYN101/Lecture 1.md': 'What is X?::X is Y.\n',
+    });
+
+    const result = await deleteVaultArtifacts({ vault, deviceId: DEVICE_ID, today: TODAY });
+
+    expect(result.deletedReviewLogPaths).toEqual([reviewLogPath(TODAY, DEVICE_ID)]);
+    expect(result.deletedRecordPaths).toEqual([
+      '.olea/concepts/concept-key1-synthetic.json',
+      '.olea/relations/synthetic.json',
+      '.olea/reviews/not-a-log-file.txt',
+      '.olea/same-as/synthetic.json',
+    ]);
+    expect(vault.paths()).toEqual(['.olea/drafts/d1.json', '01 Courses/SYN101/Lecture 1.md']);
+  });
+
+  it('refuses, by throwing, to delete any path outside .olea/ (INV-6 at the point of no return)', async () => {
+    const vault = new MemoryVaultSource({
+      '01 Courses/SYN101/Lecture 1.md': 'What is X?::X is Y.\n',
+      '.olea-harness/run.json': '{}\n',
+    });
+
+    await expect(deleteOleaLayerPath(vault, '01 Courses/SYN101/Lecture 1.md')).rejects.toThrow(
+      /INV-6/,
+    );
+    await expect(deleteOleaLayerPath(vault, '.olea-harness/run.json')).rejects.toThrow(/INV-6/);
+    await expect(
+      deleteOleaLayerPath(vault, '.olea/../01 Courses/SYN101/Lecture 1.md'),
+    ).rejects.toThrow(/INV-6/);
+    expect(vault.paths()).toEqual(['.olea-harness/run.json', '01 Courses/SYN101/Lecture 1.md']);
   });
 });
