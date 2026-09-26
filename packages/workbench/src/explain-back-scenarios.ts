@@ -134,6 +134,7 @@ function cleanGrading(): PendingExplainBackGrading {
     status: 'pending-review',
     overlap: ZERO_OVERLAP,
     grading: {
+      outcome: 'graded',
       verdict: 'correct',
       feedback: 'This names the mechanism and its target correctly.',
       missedPoints: [],
@@ -151,6 +152,7 @@ function flaggedGrading(): PendingExplainBackGrading {
     status: 'pending-review',
     overlap: ZERO_OVERLAP,
     grading: {
+      outcome: 'graded',
       verdict: 'partial',
       feedback: 'The mechanism is right, but the effect on half-life is missing.',
       missedPoints: ['How the synthetic rate constant changes the reaction half-life'],
@@ -191,7 +193,19 @@ function flaggedGrading(): PendingExplainBackGrading {
 }
 
 function acceptedFrom(pending: PendingExplainBackGrading): AcceptedExplainBackGrading {
-  return { status: 'accepted', ...pending.grading };
+  // Mirrors `../../core/src/grading/gradingPipeline.ts`'s own
+  // `acceptExplainBackGrading` (`[D-321]`): refuses rather than accepting an
+  // `outcome: 'unable-to-assess'` grading — `AcceptedExplainBackGrading`
+  // deliberately stays flat and graded-only, with no `verdict` an
+  // unassessable attempt could honestly report. Every caller in this file
+  // only ever reaches `acceptWithObservation` (and therefore this function)
+  // on the graded branch, exactly as the real modal's own flow does, so
+  // reaching this guard would be a fixture bug, not a possible scenario.
+  if (pending.grading.outcome === 'unable-to-assess') {
+    throw new Error('workbench fixture: acceptedFrom called on an unable-to-assess grading');
+  }
+  const { outcome: _outcome, ...graded } = pending.grading;
+  return { status: 'accepted', ...graded };
 }
 
 export interface ExplainBackScenario {

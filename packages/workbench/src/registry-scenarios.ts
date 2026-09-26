@@ -41,6 +41,7 @@ import type {
   RegistrySourceLocation,
   RegistryViewDeps,
   RegistryViewState,
+  RegistryWithheldItem,
 } from './registry-bridge.js';
 import {
   buildRegistryModel,
@@ -780,7 +781,13 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
       // section yet, so an empty array is the honest fixture value — same
       // "nothing proposed" posture `./same-as-identity.ts`'s own doc names,
       // not a stubbed-out feature.
-      return { kind: 'model', model: buildModel(), identityProposals: [] };
+      //
+      // `[D-334]`: same posture for `withheldInstruments` — no scenario here
+      // drives a structurally-broken block either, so an empty array is the
+      // honest fixture value, matching `RegistryViewState.withheldInstruments`'s
+      // own doc ("empty is the honest, expected value on a vault with no
+      // structurally-broken block").
+      return { kind: 'model', model: buildModel(), identityProposals: [], withheldInstruments: [] };
     },
     async rename(entry: RegistryConceptEntry, newDisplayName: string): Promise<void> {
       overrides = renameConcept(overrides, entry.key, entry.originalName, newDisplayName);
@@ -805,6 +812,16 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     },
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       sourceOpens.push(location);
+    },
+    /**
+     * `[D-334]`'s "edit it" action, mirroring `../../plugin/src/registry/provider.ts`'s own
+     * `editWithheldItem` exactly: opens the withheld block's note through the same
+     * `sourceOpens` recording `openSourceLocation` above uses, at the note alone (no
+     * heading/blockId — a block this defective never reached the anchor-derivation step that
+     * would compute either).
+     */
+    async editWithheldItem(item: RegistryWithheldItem): Promise<void> {
+      sourceOpens.push({ sourcePath: item.notePath });
     },
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
       noteOfferAccepts.push(entry);

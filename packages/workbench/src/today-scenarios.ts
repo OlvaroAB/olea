@@ -98,7 +98,12 @@ import type {
   TodayPanelInput,
   VaultSource,
 } from 'olea-core';
-import { appendReviewLogRecord, buildTodayPanel, createFsrsScheduler, HOLDING_CUT } from 'olea-core';
+import {
+  appendReviewLogRecord,
+  buildTodayPanel,
+  createFsrsScheduler,
+  HOLDING_CUT,
+} from 'olea-core';
 import { WORKBENCH_NOW } from './clock.js';
 import { Notice } from './obsidian-shim/index.js';
 import type { PersonaHistory } from './persona/history.js';

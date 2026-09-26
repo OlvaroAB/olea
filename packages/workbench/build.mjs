@@ -163,7 +163,11 @@ const nodeBuiltinGuard = {
         // from the virtiofs races this bead is scoped to. `unlink` added
         // the same way when `ol-ppxj.15` promoted delete onto VaultSource
         // and gave `folder-source.ts` the identical new import shape.
-        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, stat = unreachable, unlink = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
+        // `rmdir` added the same way again when `ol-egov.141.8.9` promoted
+        // an optional `removeEmptyFolder` onto VaultSource, giving
+        // `folder-source.ts` a `node:fs/promises` `rmdir` import this stub
+        // had not been told about — same missing-export failure, same fix.
+        'const unreachable = new Proxy({}, { get() { throw new Error("workbench: Node built-ins are unreachable in the browser bundle"); } });\nexport default unreachable;\nexport const watch = unreachable, mkdir = unreachable, readdir = unreachable, readFile = unreachable, rmdir = unreachable, stat = unreachable, unlink = unreachable, writeFile = unreachable;\nexport const dirname = unreachable, join = unreachable, posix = unreachable, relative = unreachable, resolve = unreachable, sep = "/";',
       loader: 'js',
     }));
   },

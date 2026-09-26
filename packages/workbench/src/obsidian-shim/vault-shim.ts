@@ -250,6 +250,36 @@ class VaultAdapterShim {
     await this.source.delete(path);
   }
 
+  /**
+   * Obsidian's raw `DataAdapter.rmdir(normalizedPath, recursive)` — reached
+   * by `ObsidianSource.removeEmptyFolder` (`ol-egov.141.8.9`) as
+   * `this.vault.adapter.rmdir(path, false)`. Folders are implicit over this
+   * shim's flat path map (this class's own module doc above): there is no
+   * folder object to delete, so "removing" one is really just confirming it
+   * holds nothing, matching real Obsidian's own non-recursive `rmdir` and
+   * `FolderSource.removeEmptyFolder`'s identical refusal — a non-empty
+   * folder throws and nothing under it is touched. `recursive: true`
+   * removes every file this shim finds under the folder first (deepest
+   * folders never need their own removal here, again because folders are
+   * not real objects); nothing in this workspace currently calls it that
+   * way, but the real adapter supports it and this shim should not diverge.
+   * A no-op, never a throw, on a folder that does not exist, matching
+   * `removeEmptyFolder`'s contract.
+   */
+  async rmdir(path: string, recursive: boolean): Promise<void> {
+    const { files, folders } = await this.list(path);
+    if (files.length === 0 && folders.length === 0) return;
+    if (!recursive) {
+      throw new Error(`obsidian-shim: rmdir: folder not empty: ${path}`);
+    }
+    for (const file of files) {
+      await this.source.delete(file);
+    }
+    for (const folder of folders) {
+      await this.rmdir(folder, true);
+    }
+  }
+
   /** One level of `path`'s children, split into files and folders — exactly the shape `DotFolderAdapter.list` and `dot-folder-walk.ts`'s recursive walk need. */
   async list(path: string): Promise<{ files: string[]; folders: string[] }> {
     const normalized = path.replace(/\/+$/, '');

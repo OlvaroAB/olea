@@ -28,5 +28,9 @@ export {
   renameConcept,
   unpruneConcept,
 } from 'olea-core';
-export type { RegistryViewDeps, RegistryViewState } from '../../plugin/src/registry/view.js';
+export type {
+  RegistryViewDeps,
+  RegistryViewState,
+  RegistryWithheldItem,
+} from '../../plugin/src/registry/view.js';
 export { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from '../../plugin/src/registry/view.js';
