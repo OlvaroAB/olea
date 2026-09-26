@@ -125,12 +125,53 @@ export type {
   ConfusionPairingConcept,
   ConfusionPairingResult,
 } from './concept/confusion-pairing/types.js';
+export type { BacklogEntry, MergeWithBacklogResult } from './concept/corpus-relations/backlog.js';
+export { mergeWithBacklog } from './concept/corpus-relations/backlog.js';
 export type {
   PassageTextLookup,
   RunCorpusRelationBatchInput,
 } from './concept/corpus-relations/batch.js';
 export { runCorpusRelationBatch, totalCorpusDropped } from './concept/corpus-relations/batch.js';
+export type {
+  EligibilityVerdict,
+  EndpointFreshness,
+  EndpointRevisionLookup,
+  JudgedEndpointRevision,
+  PropositionFreshness,
+} from './concept/corpus-relations/eligibility.js';
+export {
+  evaluateEligibility,
+  evaluateEndpointFreshness,
+  evaluatePropositionFreshness,
+  evaluatePropositionFreshnessWithLookup,
+} from './concept/corpus-relations/eligibility.js';
+export type {
+  PrerequisiteCycleReport,
+  PrerequisiteEdge,
+} from './concept/corpus-relations/graph-checks.js';
+export {
+  findPrerequisiteCycles,
+  isEdgeBlockedByCycle,
+  violatesPredicateContract,
+} from './concept/corpus-relations/graph-checks.js';
 export { nominateCorpusRelationCandidates } from './concept/corpus-relations/nominate.js';
+export type {
+  PropositionCandidate,
+  PropositionFailureReason,
+  PropositionOutcome,
+  PropositionVerdictWire,
+} from './concept/corpus-relations/proposition.js';
+export {
+  classifyPropositionVerdict,
+  propositionsForCandidates,
+} from './concept/corpus-relations/proposition.js';
+export type { RememberedPropositionRecord } from './concept/corpus-relations/remember.js';
+export {
+  indexRememberedRecords,
+  recordNegativeResult,
+  rememberedPropositionIdentity,
+  shouldReaskProposition,
+} from './concept/corpus-relations/remember.js';
 export type {
   CorpusRelationBatchTriggerInput,
   CorpusRelationBatchTriggerReason,
@@ -151,6 +192,8 @@ export type {
   CorpusRelationBatchResult,
   CorpusRelationCandidate,
   CorpusRelationDropReason,
+  EvidenceDigestPair,
+  JudgePolicyKey,
   NominationSignal,
   NominationSignalKind,
 } from './concept/corpus-relations/types.js';
@@ -158,7 +201,9 @@ export {
   CORPUS_RELATION_DROP_REASONS,
   CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
   CORPUS_STAGE_EMITTABLE_TYPES,
+  corpusEligiblePredicates,
   emptyCorpusDropCounts,
+  judgePolicyKeysEqual,
 } from './concept/corpus-relations/types.js';
 export type {
   CorpusRelationVerdictPort,
@@ -358,6 +403,7 @@ export type {
   WriteRelationCacheOptions,
 } from './concept/relation-cache.js';
 export {
+  evaluateRelationCacheRecordFreshness,
   isRelationCacheRecord,
   listRelationCacheRecords,
   propositionKey,
@@ -365,6 +411,7 @@ export {
   RELATION_CACHE_RECORD_SCHEMA_VERSION,
   relationCacheRecordPath,
   relationCacheRecordsAsConceptRelations,
+  relationCacheRecordsWithFreshness,
   writeRelationCache,
 } from './concept/relation-cache.js';
 // `[CORP-3]` (`ol-2zfj.2`) — citation-grain material-change detection and the
