@@ -252,9 +252,17 @@ export const TALL_STATE_VIEWPORTS: Partial<Record<string, { width: number; heigh
   'timeline-struggler': { width: 1280, height: 1720 },
   'timeline-lapsed-returner': { width: 1280, height: 1720 },
   'timeline-crammer': { width: 1280, height: 1720 },
-  // Trends — 908/1310/705px real content; `trends-healthy`,
-  // `trends-course-behind-neutralised` and `trends-cramming-neutralised` fit
-  // the default pane unaided and are deliberately absent.
+  // Trends — 621/686/610/672/610/637px real content (RE-MEASURED
+  // 2026-09-26, `ol-egov.141.89.45`, at the default viewport: the effort
+  // insight (`ol-egov.141.89.11.7`, D-092/F6.5, closed) now fires for
+  // `trends-healthy`, `trends-course-behind` and its neutralised twin,
+  // where before the windowed-only sufficiency gate suppressed it —
+  // `trends-scenarios.ts`'s own history was widened to match, per `ol-wyqk`).
+  // `trends-healthy` crossed the default 612px pane by 9px and is added
+  // below for the first time; `trends-course-behind-neutralised` and
+  // `trends-cramming-neutralised` still fit the default pane unaided
+  // (610px measured) and are deliberately absent.
+  'trends-healthy': { width: 1280, height: 960 },
   'trends-course-behind': { width: 1280, height: 1240 },
   'trends-cramming': { width: 1280, height: 1640 },
   'trends-too-early': { width: 1280, height: 1040 },
