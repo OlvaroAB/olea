@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
 import type { VaultPath } from '../../vault/types.js';
 import type { CorpusConcept, CorpusRelationCandidate } from './types.js';
-import type { CorpusVerdict } from './verdict.js';
+import type { CorpusVerdict, EndpointRevisionStampingOptions } from './verdict.js';
 import { reconcileCorpusVerdicts } from './verdict.js';
 
 function anchor(sourcePath: VaultPath, start = 0, end = 10): Provenance {
@@ -303,5 +303,80 @@ describe('reconcileCorpusVerdicts — key-based join (`ol-l40p` [REL-9])', () =>
     expect(result.relations).toHaveLength(1);
     expect(result.relations[0]?.toKey).toBe('key-osmosis'); // a -> to, per default b-to-a direction
     expect(result.relations[0]?.fromKey).toBe('key-diffusion'); // resolved by name, but the candidate DOES have a key
+  });
+});
+
+describe('reconcileCorpusVerdicts — endpointRevisions stamping at judgment time (ol-egov.141.89.4.14)', () => {
+  function stampingOver(
+    pathsByConceptName: Record<string, readonly VaultPath[]>,
+    revisionsByPath: Record<string, string>,
+  ): EndpointRevisionStampingOptions {
+    return {
+      introducingPaths: (concept) => pathsByConceptName[concept.name] ?? [],
+      pathRevision: (path) => revisionsByPath[path],
+    };
+  }
+
+  it('stamps endpointRevisions over the WIDER introducing-path set, not just introducingPassages’ one anchor passage', () => {
+    // Diffusion basics is a topic-only concept with TWO introducing paths — wider than the one
+    // passage `anchorOf` stamps onto `introducingPassages`.
+    const osmosis = concept('Osmosis', { anchor: anchor('Lecture 1.md', 0, 5) });
+    const diffusion = concept('Diffusion basics', { anchor: anchor('Lecture 2.md', 10, 20) });
+    const stamping = stampingOver(
+      { Osmosis: ['Lecture 1.md'], 'Diffusion basics': ['Lecture 2.md', 'Lecture 3.md'] },
+      { 'Lecture 1.md': 'rev-1', 'Lecture 2.md': 'rev-1', 'Lecture 3.md': 'rev-1' },
+    );
+
+    const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)], stamping);
+
+    expect(result.relations).toHaveLength(1);
+    // b-to-a direction (default `verdict()`): from = diffusion, to = osmosis.
+    expect(result.relations[0]?.endpointRevisions).toBeDefined();
+    expect(result.relations[0]?.endpointRevisions?.to).toBeDefined(); // osmosis: one path
+    const diffusionRevisionOverBothPaths = result.relations[0]?.endpointRevisions?.from;
+    // Changing ONLY the second path (outside `introducingPassages`' one anchor) must move this
+    // concept's revision — proving the wider set, not the one passage, was hashed.
+    const stampingWithChangedSecondPath = stampingOver(
+      { Osmosis: ['Lecture 1.md'], 'Diffusion basics': ['Lecture 2.md', 'Lecture 3.md'] },
+      { 'Lecture 1.md': 'rev-1', 'Lecture 2.md': 'rev-1', 'Lecture 3.md': 'rev-CHANGED' },
+    );
+    const changedResult = reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion)],
+      stampingWithChangedSecondPath,
+    );
+    expect(changedResult.relations[0]?.endpointRevisions?.from).not.toBe(
+      diffusionRevisionOverBothPaths,
+    );
+  });
+
+  it('omits endpointRevisions entirely when no stamping option is given — unchanged, existing behaviour', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)]);
+    expect(result.relations[0]?.endpointRevisions).toBeUndefined();
+  });
+
+  it('never a guess: omits endpointRevisions entirely when one endpoint’s path has no revision on record', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const stamping = stampingOver(
+      { Osmosis: ['Lecture 1.md'], 'Diffusion basics': ['Lecture 2.md'] },
+      { 'Lecture 1.md': 'rev-1' }, // Lecture 2.md: no revision on record
+    );
+    const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)], stamping);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.endpointRevisions).toBeUndefined();
+  });
+
+  it('never a guess: omits endpointRevisions when a concept has zero introducing paths on record', () => {
+    const osmosis = concept('Osmosis');
+    const diffusion = concept('Diffusion basics');
+    const stamping = stampingOver(
+      { Osmosis: [], 'Diffusion basics': ['Lecture 2.md'] },
+      { 'Lecture 2.md': 'rev-1' },
+    );
+    const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)], stamping);
+    expect(result.relations[0]?.endpointRevisions).toBeUndefined();
   });
 });

@@ -10,13 +10,14 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyPropositionVerdict,
   corpusEligiblePredicates,
+  type PropositionEndpointRevisionStampingOptions,
   propositionsForCandidates,
 } from './proposition.js';
 
 const candidate = { pairId: 'RLP-1', aKey: 'ck-a', bKey: 'ck-b' };
 
 describe('classifyPropositionVerdict', () => {
-  it('classifies a well-formed related verdict, resolving direction through the candidate\'s own keys', () => {
+  it("classifies a well-formed related verdict, resolving direction through the candidate's own keys", () => {
     const outcome = classifyPropositionVerdict(candidate, {
       pairId: 'RLP-1',
       predicate: 'prerequisite',
@@ -127,6 +128,65 @@ describe('classifyPropositionVerdict', () => {
       bKey: 'ck-b',
     });
     expect(outcome).toEqual({ kind: 'related', fromKey: 'ck-a', toKey: 'ck-b', confidence: 0.5 });
+  });
+});
+
+describe('classifyPropositionVerdict — endpointRevisions stamping at judgment time (ol-egov.141.89.4.14)', () => {
+  function stampingOver(
+    pathsByKey: Record<string, readonly string[]>,
+    revisionsByPath: Record<string, string>,
+  ): PropositionEndpointRevisionStampingOptions {
+    return {
+      introducingPaths: (key) => pathsByKey[key] ?? [],
+      pathRevision: (path) => revisionsByPath[path],
+    };
+  }
+
+  const relatedVerdict = {
+    pairId: 'RLP-1',
+    predicate: 'prerequisite' as const,
+    outcome: 'related' as const,
+    direction: 'a-to-b' as const,
+    confidence: 0.9,
+    aKey: 'ck-a',
+    bKey: 'ck-b',
+  };
+
+  it('stamps endpointRevisions when a stamping port is given and both endpoints resolve', () => {
+    const stamping = stampingOver(
+      { 'ck-a': ['notes/a.md'], 'ck-b': ['notes/b.md'] },
+      { 'notes/a.md': 'rev-1', 'notes/b.md': 'rev-1' },
+    );
+    const outcome = classifyPropositionVerdict(candidate, relatedVerdict, stamping);
+    expect(outcome.kind).toBe('related');
+    expect(outcome.kind === 'related' ? outcome.endpointRevisions : undefined).toEqual({
+      from: expect.any(String),
+      to: expect.any(String),
+    });
+  });
+
+  it('omits endpointRevisions when no stamping port is given — unchanged, existing behaviour', () => {
+    const outcome = classifyPropositionVerdict(candidate, relatedVerdict);
+    expect(outcome).toEqual({ kind: 'related', fromKey: 'ck-a', toKey: 'ck-b', confidence: 0.9 });
+  });
+
+  it('never a guess: omits endpointRevisions when one endpoint has no revision on record', () => {
+    const stamping = stampingOver(
+      { 'ck-a': ['notes/a.md'], 'ck-b': ['notes/b.md'] },
+      { 'notes/a.md': 'rev-1' }, // notes/b.md: unknown
+    );
+    const outcome = classifyPropositionVerdict(candidate, relatedVerdict, stamping);
+    expect(outcome.kind === 'related' ? outcome.endpointRevisions : 'not-related').toBeUndefined();
+  });
+
+  it('never stamps a non-related outcome (none/insufficient-evidence/failed carry no endpointRevisions field at all)', () => {
+    const stamping = stampingOver({ 'ck-a': ['notes/a.md'] }, { 'notes/a.md': 'rev-1' });
+    const outcome = classifyPropositionVerdict(
+      candidate,
+      { pairId: 'RLP-1', predicate: 'prerequisite', outcome: 'none' },
+      stamping,
+    );
+    expect(outcome).toEqual({ kind: 'none' });
   });
 });
 

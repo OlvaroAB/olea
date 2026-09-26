@@ -19,12 +19,54 @@
  * universally threads keys would silently drop every edge in production.
  *
  * Pure: no I/O, no clock, no identity minting.
+ *
+ * **Also stamps `endpointRevisions` at judgment time (`ol-egov.141.89.4.14`), the same computation
+ * `./verdict.ts`'s `reconcileCorpusVerdicts` does for today's production path.** This module never
+ * holds a `CorpusConcept` — only opaque `aKey`/`bKey` strings — so its stamping port is keyed by
+ * string rather than by concept object; see `EndpointRevisionStampingOptions` below. `./verdict.ts`'s
+ * own module doc has the full argument for why the SAME `computeConceptRevision`
+ * (`./endpoint-revision-lookup.ts`) must be used on both the judgment side (here) and the read side
+ * (`buildEndpointRevisionLookup`) for a later comparison to ever read `'current'`; that argument
+ * applies to this module identically and is not restated.
  */
 
+import type { VaultPath } from '../../vault/types.js';
 import type { RelationType } from '../relation.js';
+import { computeConceptRevision, type PathRevisionLookup } from './endpoint-revision-lookup.js';
 import { corpusEligiblePredicates } from './types.js';
 
 export { corpusEligiblePredicates };
+
+/**
+ * Resolves the full introducing-path set for one endpoint, by its opaque concept key — the
+ * key-shaped counterpart to `./verdict.ts`'s `IntroducingPathsLookup` (that one takes a
+ * `CorpusConcept`; this module has no such object, only `aKey`/`bKey`, module doc).
+ */
+export type KeyIntroducingPathsLookup = (key: string) => readonly VaultPath[];
+
+/** Judgment-time stamping port — same two-part shape as `./verdict.ts`'s `EndpointRevisionStampingOptions`, restated over keys (module doc). */
+export interface PropositionEndpointRevisionStampingOptions {
+  readonly introducingPaths: KeyIntroducingPathsLookup;
+  readonly pathRevision: PathRevisionLookup;
+}
+
+/** One related proposition's `endpointRevisions`, or `undefined` when either endpoint's revision cannot be computed — never a partial pair, same discipline `./verdict.ts`'s `computeEndpointRevisions` uses. */
+function computeEndpointRevisionsForKeys(
+  fromKey: string,
+  toKey: string,
+  stamping: PropositionEndpointRevisionStampingOptions,
+): { readonly from: string; readonly to: string } | undefined {
+  const fromRevision = computeConceptRevision(
+    stamping.introducingPaths(fromKey),
+    stamping.pathRevision,
+  );
+  const toRevision = computeConceptRevision(
+    stamping.introducingPaths(toKey),
+    stamping.pathRevision,
+  );
+  if (fromRevision === undefined || toRevision === undefined) return undefined;
+  return { from: fromRevision, to: toRevision };
+}
 
 /** One candidate pair, identified by both endpoints' opaque keys — the target nomination shape (rel.md §2). */
 export interface PropositionCandidate {
@@ -60,7 +102,14 @@ export type PropositionFailureReason =
   | 'malformed';
 
 export type PropositionOutcome =
-  | { readonly kind: 'related'; readonly fromKey: string; readonly toKey: string; readonly confidence: number }
+  | {
+      readonly kind: 'related';
+      readonly fromKey: string;
+      readonly toKey: string;
+      readonly confidence: number;
+      /** Module doc: present only when a stamping port was given AND both endpoints' revisions could be computed. Never a partial pair. */
+      readonly endpointRevisions?: { readonly from: string; readonly to: string };
+    }
   | { readonly kind: 'none' }
   | { readonly kind: 'insufficient-evidence' }
   | { readonly kind: 'failed'; readonly reason: PropositionFailureReason };
@@ -80,6 +129,7 @@ const DIRECTED_PREDICATES: ReadonlySet<RelationType> = new Set(['prerequisite'])
 export function classifyPropositionVerdict(
   candidate: PropositionCandidate,
   verdict: PropositionVerdictWire | undefined,
+  stamping?: PropositionEndpointRevisionStampingOptions,
 ): PropositionOutcome {
   if (verdict === undefined) return { kind: 'failed', reason: 'no-response' };
   if (verdict.pairId !== candidate.pairId) return { kind: 'failed', reason: 'unknown-pair' };
@@ -97,15 +147,29 @@ export function classifyPropositionVerdict(
   if (!keysMatch) return { kind: 'failed', reason: 'keyless-verdict' };
 
   if (verdict.confidence === undefined) return { kind: 'failed', reason: 'malformed' };
-  const directed = DIRECTED_PREDICATES.has(verdict.predicate) || verdict.predicate === 'causes' ||
-    verdict.predicate === 'is-a' || verdict.predicate === 'part-of';
+  const directed =
+    DIRECTED_PREDICATES.has(verdict.predicate) ||
+    verdict.predicate === 'causes' ||
+    verdict.predicate === 'is-a' ||
+    verdict.predicate === 'part-of';
   if (directed && verdict.direction === undefined) return { kind: 'failed', reason: 'malformed' };
 
   const [fromKey, toKey] =
     !directed || verdict.direction === 'a-to-b'
       ? [candidate.aKey, candidate.bKey]
       : [candidate.bKey, candidate.aKey];
-  return { kind: 'related', fromKey, toKey, confidence: verdict.confidence };
+  // `ol-egov.141.89.4.14` (module doc): computed over the WIDER path set a
+  // stamping port resolves for each key — `undefined` when no port was given,
+  // or when either endpoint's revision cannot be computed (never a guess).
+  const endpointRevisions =
+    stamping === undefined ? undefined : computeEndpointRevisionsForKeys(fromKey, toKey, stamping);
+  return {
+    kind: 'related',
+    fromKey,
+    toKey,
+    confidence: verdict.confidence,
+    ...(endpointRevisions !== undefined ? { endpointRevisions } : {}),
+  };
 }
 
 /**

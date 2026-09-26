@@ -69,10 +69,49 @@
  * see `findings/relations-join-2026-09.md` (`olea-service`) for what that
  * name-only join was measured failing on. Falls back to the exact-name join
  * when a key is absent, so this is additive, not a replacement.
+ *
+ * **Stamps `RelationCacheAttestation.endpointRevisions` at judgment time
+ * (`ol-egov.141.89.4.14`, rel.md §3 Default 4), over the SAME introducing-path
+ * set `./endpoint-revision-lookup.ts`'s lookup reads later -- not `anchorOf`'s
+ * one passage below.** `anchorOf` (just below) stamps
+ * `introducingPassages.from`/`.to` from a `CorpusConcept`'s single `Provenance`
+ * -- the one passage a given verdict call happened to read. That is narrower
+ * than a topic-only concept's full `TopicAnchor.introducingPaths`
+ * (`../key-store.ts`), which is what `buildEndpointRevisionLookup` composes a
+ * CURRENT revision over. If judgment time hashed only the one passage while
+ * read time hashes every introducing path, an unchanged concept could still
+ * compare unequal -- the exact failure `computeConceptRevision`'s own doc
+ * warns two independent callers must avoid by agreeing bit-for-bit. So
+ * `reconcileCorpusVerdicts` takes an optional `EndpointRevisionStampingOptions`
+ * whose `introducingPaths` resolves the WIDER set for a `CorpusConcept` (a
+ * caller's own bridge to `ConceptKeyRecord.anchor`, mirroring
+ * `introducingPathsOfAnchor`, never invented here -- this module has no
+ * `ConceptKeyRecord` in hand, only whatever `CorpusConcept` the caller built),
+ * and calls the SAME `computeConceptRevision` the lookup uses. Omitted
+ * (the default), nothing is stamped -- every existing caller and test keeps
+ * today's behaviour (no `endpointRevisions`, reads `'unverified'` downstream).
+ *
+ * **Never a guess, at the whole-attestation grain.** `RelationCacheAttestation.
+ * endpointRevisions` (`../relation-cache.ts`, REL-4) is `{ from: string; to:
+ * string }` -- both sides required together once the field is present at all;
+ * it does not yet support recording one endpoint's revision while leaving the
+ * other's a genuine unknown. `computeEndpointRevisions` below honours that:
+ * when EITHER endpoint's revision cannot be computed (an unknown path, or
+ * zero introducing paths), it omits the field entirely rather than write a
+ * half-fabricated pair -- both endpoints then read `'unverified'` on the next
+ * comparison, never `'current'`. This is coarser than per-endpoint omission
+ * would be (a concept whose own paths ARE all known still loses its
+ * verifiable revision when its partner's are not), and widening the shape to
+ * `{ from?: string; to?: string }` would recover that precision -- a
+ * persisted-schema change beyond what REL-4 ruled, so it is not made here;
+ * see this bead's close notes for the proposed decision.
  */
 
 import type { Provenance } from '../../extract/types.js';
+import type { VaultPath } from '../../vault/types.js';
 import type { RelationProvenanceKind, RelationType } from '../relation.js';
+import type { PathRevisionLookup } from './endpoint-revision-lookup.js';
+import { computeConceptRevision } from './endpoint-revision-lookup.js';
 import type {
   CorpusConcept,
   CorpusReconciledRelation,
@@ -80,6 +119,65 @@ import type {
   CorpusRelationDropReason,
 } from './types.js';
 import { CORPUS_STAGE_EMITTABLE_TYPES } from './types.js';
+
+/**
+ * Resolves the FULL introducing-path set for one `CorpusConcept` -- the same
+ * set `./endpoint-revision-lookup.ts`'s `introducingPathsOfAnchor` would read
+ * from that concept's `ConceptKeyRecord.anchor`, had this module a
+ * `ConceptKeyRecord` in hand (it does not: `CorpusConcept.anchor` is one
+ * `Provenance` passage, module doc above). An injected function, the same
+ * "caller already holds the wider context" discipline `./batch.ts`'s
+ * `PassageTextLookup` already uses, so this module gains no vault or
+ * key-store dependency of its own.
+ */
+export type IntroducingPathsLookup = (concept: CorpusConcept) => readonly VaultPath[];
+
+/**
+ * The judgment-time stamping port (module doc): `introducingPaths` resolves
+ * each endpoint's full path set, `pathRevision` reads one path's CURRENT
+ * revision -- the exact `PathRevisionLookup` shape `buildEndpointRevisionLookup`
+ * (`./endpoint-revision-lookup.ts`) also takes, so a caller wires one revision
+ * reader to both the write side (here) and the read side (that module) and the
+ * two are guaranteed to agree.
+ */
+export interface EndpointRevisionStampingOptions {
+  readonly introducingPaths: IntroducingPathsLookup;
+  readonly pathRevision: PathRevisionLookup;
+}
+
+/**
+ * A reconciled corpus relation additionally carrying `endpointRevisions` --
+ * the same optional field `../relation-cache.ts`'s `KeyedConceptRelation`
+ * already defines (REL-4), attached here rather than widening
+ * `CorpusReconciledRelation` itself (`./types.ts`, outside this bead's owns):
+ * every field below is optional, so this is a strict superset -- anything
+ * that only knows `CorpusReconciledRelation` (`./batch.ts`'s own return type)
+ * keeps working unchanged, and `writeRelationCache` (`../relation-cache.ts`),
+ * which already reads `edge.endpointRevisions` off its `KeyedConceptRelation`
+ * parameter type, picks the field up with no further change on that side.
+ */
+export interface CorpusReconciledRelationWithEndpointRevisions extends CorpusReconciledRelation {
+  readonly endpointRevisions?: { readonly from: string; readonly to: string };
+}
+
+/**
+ * One proposition's `endpointRevisions`, or `undefined` when either
+ * endpoint's revision cannot be computed -- never a partial pair (module doc:
+ * "never a guess, at the whole-attestation grain").
+ */
+function computeEndpointRevisions(
+  from: CorpusConcept,
+  to: CorpusConcept,
+  stamping: EndpointRevisionStampingOptions,
+): { readonly from: string; readonly to: string } | undefined {
+  const fromRevision = computeConceptRevision(
+    stamping.introducingPaths(from),
+    stamping.pathRevision,
+  );
+  const toRevision = computeConceptRevision(stamping.introducingPaths(to), stamping.pathRevision);
+  if (fromRevision === undefined || toRevision === undefined) return undefined;
+  return { from: fromRevision, to: toRevision };
+}
 
 /**
  * One candidate, with both endpoints' introducing passage TEXT attached —
@@ -156,7 +254,7 @@ export interface CorpusRelationVerdictPort {
 }
 
 export interface ReconcileCorpusVerdictsResult {
-  readonly relations: readonly CorpusReconciledRelation[];
+  readonly relations: readonly CorpusReconciledRelationWithEndpointRevisions[];
   readonly dropped: Readonly<Partial<Record<CorpusRelationDropReason, number>>>;
 }
 
@@ -253,6 +351,7 @@ function provenanceFor(signals: CorpusRelationCandidate['signals']): RelationPro
 export function reconcileCorpusVerdicts(
   verdicts: readonly CorpusVerdict[],
   candidates: readonly CorpusRelationCandidate[],
+  stamping?: EndpointRevisionStampingOptions,
 ): ReconcileCorpusVerdictsResult {
   const known = byName(candidates);
   const knownByKey = byKey(candidates);
@@ -261,7 +360,7 @@ export function reconcileCorpusVerdicts(
   const bump = (reason: CorpusRelationDropReason) => {
     dropped[reason] = (dropped[reason] ?? 0) + 1;
   };
-  const relations: CorpusReconciledRelation[] = [];
+  const relations: CorpusReconciledRelationWithEndpointRevisions[] = [];
 
   for (const verdict of verdicts) {
     if (!CORPUS_STAGE_EMITTABLE_TYPES.has(verdict.type)) {
@@ -306,6 +405,15 @@ export function reconcileCorpusVerdicts(
     // signal kind belongs to the CANDIDATE, not to either concept alone.
     const signals = signalsIndex.get(pairKey(a.name, b.name)) ?? [];
 
+    // `ol-egov.141.89.4.14` (module doc): computed over the WIDER
+    // introducing-path set `stamping.introducingPaths` resolves for `from`/`to`
+    // — never `anchorOf`'s one passage — so a later read through
+    // `buildEndpointRevisionLookup` (`./endpoint-revision-lookup.ts`) can ever
+    // compare equal. `undefined` when `stamping` is omitted, or when either
+    // endpoint's revision cannot be computed (module doc: never a guess).
+    const endpointRevisions =
+      stamping === undefined ? undefined : computeEndpointRevisions(from, to, stamping);
+
     relations.push({
       type: verdict.type,
       from: from.name,
@@ -320,6 +428,7 @@ export function reconcileCorpusVerdicts(
       // discipline in this file family.
       ...(from.key !== undefined ? { fromKey: from.key } : {}),
       ...(to.key !== undefined ? { toKey: to.key } : {}),
+      ...(endpointRevisions !== undefined ? { endpointRevisions } : {}),
     });
   }
 

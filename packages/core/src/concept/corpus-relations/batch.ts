@@ -36,6 +36,7 @@ import {
 import {
   type CorpusRelationVerdictPort,
   type CorpusVerdictRequestCandidate,
+  type EndpointRevisionStampingOptions,
   reconcileCorpusVerdicts,
 } from './verdict.js';
 
@@ -56,6 +57,16 @@ export interface RunCorpusRelationBatchInput {
   /** Cheap nomination signals — see `./types.js`'s `NominationSignal`. */
   readonly signals: readonly NominationSignal[];
   readonly passageText: PassageTextLookup;
+  /**
+   * Optional (`ol-egov.141.89.4.14`): when supplied, every reconciled relation
+   * this batch emits is stamped with `endpointRevisions` (`./verdict.js`'s
+   * `reconcileCorpusVerdicts`, threaded straight through), computed over the
+   * SAME introducing-path set `./endpoint-revision-lookup.ts`'s
+   * `buildEndpointRevisionLookup` reads later — never `anchorOf`'s one
+   * passage. Omitted (the default), relations carry no `endpointRevisions` —
+   * today's behaviour, read as `'unverified'` downstream.
+   */
+  readonly endpointRevisionStamping?: EndpointRevisionStampingOptions;
 }
 
 /**
@@ -107,7 +118,11 @@ export async function runCorpusRelationBatch(
   }));
 
   const response = await port.verdict({ candidates: requestCandidates });
-  const { relations, dropped } = reconcileCorpusVerdicts(response.verdicts, candidates);
+  const { relations, dropped } = reconcileCorpusVerdicts(
+    response.verdicts,
+    candidates,
+    input.endpointRevisionStamping,
+  );
 
   const fullDropped = emptyCorpusDropCounts();
   for (const [reason, count] of Object.entries(dropped)) {
