@@ -28,7 +28,7 @@ function configuredHost(config: PersistedWorkerConfig): FakeDataHost {
   return host;
 }
 
-function bodyEnvelope() {
+function bodyEnvelope(overrides: Record<string, unknown> = {}) {
   return {
     envelopeVersion: 1,
     kind: 'rank-weights',
@@ -42,6 +42,7 @@ function bodyEnvelope() {
       assessmentWeightDivisor: 100,
       masteryNeedWeight: { seed: 1, sprout: 0.7, sapling: 0.35, tree: 0.15, unknown: 1 },
     },
+    ...overrides,
   };
 }
 
@@ -91,7 +92,26 @@ describe('buildRankWeightsWiring — a configured Worker builds a real, usable r
     const options = await wiring.readRankWeights?.();
     expect(calls).toHaveLength(1);
     expect(calls[0]?.headers.authorization).toBe('Bearer secret-token');
-    expect(options).toEqual(bodyEnvelope().body);
+    expect(options).toEqual({
+      ...bodyEnvelope().body,
+      policyVersion: bodyEnvelope().policyVersion,
+    });
+  });
+
+  it("threads the envelope's own policyVersion through the wiring's result, unchanged (`ol-egov.141.89.10.4`), so a caller building a composition record can read it without a second fetch", async () => {
+    const host = configuredHost({
+      version: 1,
+      baseUrl: 'https://worker.example',
+      token: 'secret-token',
+    });
+    const httpGet: RankWeightsHttpGet = async () => ({
+      status: 200,
+      text: JSON.stringify(bodyEnvelope({ policyVersion: 'rw1-wiring-test-999' })),
+    });
+
+    const wiring = await buildRankWeightsWiring({ dataHost: host, httpGet });
+    const options = await wiring.readRankWeights?.();
+    expect(options?.policyVersion).toBe('rw1-wiring-test-999');
   });
 
   it('re-fetches on every call, unlike the once-resolved wiring shape used elsewhere', async () => {

@@ -78,6 +78,25 @@ function toRankOracleOptions(body: RankWeightsBody): RankOracleOptions {
 }
 
 /**
+ * {@link fetchRankWeightsOptions}'s result — `RankOracleOptions` widened
+ * with the envelope's own `policyVersion` (a `[D-331]` phase-1 follow-up,
+ * `ol-egov.141.89.10.4`), so a caller building a composition record can
+ * name which ranking policy version fed the session it composed, without a
+ * second fetch. **Purely additive**: every field `RankOracleOptions` already
+ * declares is unchanged, so a caller that destructures only those three
+ * fields, or that types its own `readRankWeights` as
+ * `() => Promise<RankOracleOptions | undefined>` (every caller today), is
+ * untouched — the extra field is simply there to be read once a caller
+ * wants it. Never `undefined` when the rest of the result is present: the
+ * envelope schema requires `policyVersion` (`packages/contracts/src/artifact-envelope.ts`),
+ * so anything that reached `readArtifactEnvelope`'s `'ok'` status already
+ * carries one.
+ */
+export interface RankWeightsResult extends RankOracleOptions {
+  readonly policyVersion: string;
+}
+
+/**
  * Fetch and decode the delivered ranking-weights artifact. Returns
  * `undefined` on every failure path — see the module doc for why that is
  * the correct behaviour here rather than a caller-visible error.
@@ -86,7 +105,7 @@ export async function fetchRankWeightsOptions(
   httpGet: RankWeightsHttpGet,
   config: WorkerConfig,
   now: Date = new Date(),
-): Promise<RankOracleOptions | undefined> {
+): Promise<RankWeightsResult | undefined> {
   let response: HttpResponseLike;
   try {
     response = await httpGet({
@@ -124,5 +143,5 @@ export async function fetchRankWeightsOptions(
   const freshness = envelopeFreshness(read.artifact, now);
   if (freshness.state === 'expired') return undefined;
 
-  return toRankOracleOptions(read.artifact.body);
+  return { ...toRankOracleOptions(read.artifact.body), policyVersion: read.artifact.policyVersion };
 }

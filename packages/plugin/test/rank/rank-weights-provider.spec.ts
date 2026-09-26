@@ -58,7 +58,7 @@ describe('buildRankWeightsUrl', () => {
 });
 
 describe('fetchRankWeightsOptions — the delivered path', () => {
-  it('decodes a fresh envelope into RankOracleOptions, field-for-field', async () => {
+  it("decodes a fresh envelope into RankOracleOptions, field-for-field, plus the envelope's own policyVersion (`ol-egov.141.89.10.4`)", async () => {
     const httpGet: RankWeightsHttpGet = async ({ url, headers }) => {
       expect(url).toBe(buildRankWeightsUrl(CONFIG.baseUrl));
       expect(headers.authorization).toBe(`Bearer ${CONFIG.token}`);
@@ -66,7 +66,7 @@ describe('fetchRankWeightsOptions — the delivered path', () => {
     };
 
     const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
-    expect(options).toEqual(validBody());
+    expect(options).toEqual({ ...validBody(), policyVersion: 'rw1-test0123456789' });
   });
 
   it('still applies a STALE-but-governing envelope — only expired degrades', async () => {
@@ -79,7 +79,17 @@ describe('fetchRankWeightsOptions — the delivered path', () => {
     });
 
     const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
-    expect(options).toEqual(validBody());
+    expect(options).toEqual({ ...validBody(), policyVersion: 'rw1-test0123456789' });
+  });
+
+  it("carries the envelope's own opaque policyVersion verbatim, distinct from another envelope's", async () => {
+    const httpGet: RankWeightsHttpGet = async () => ({
+      status: 200,
+      text: JSON.stringify(validEnvelope({ policyVersion: 'rw1-a-different-one-9876' })),
+    });
+
+    const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
+    expect(options?.policyVersion).toBe('rw1-a-different-one-9876');
   });
 });
 

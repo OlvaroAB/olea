@@ -301,6 +301,20 @@ export interface StudySessionItem {
   readonly noteTitle: string;
   /** The gap row that selected it. An instrument naming several concepts is attributed to the highest-ranked one that reached it. */
   readonly conceptName: string;
+  /**
+   * `queue.row.conceptKey` for the same row `conceptName` above is read from
+   * (`ol-egov.141.89.10.4`, a `[D-331]` phase-1 follow-up) — the opaque join
+   * key, never `conceptName` itself (`ol-63e1`). This fill always knows a
+   * definite single row for every item it pushes, so the field is populated
+   * on every item this module ever builds; it is declared optional only so a
+   * hand-built `StudySessionItem` fixture predating this field, or any future
+   * caller that cannot resolve one, stays valid without carrying a
+   * fabricated key. An instrument naming several concepts still carries only
+   * ONE key here, exactly the one whose row actually claimed the slot — the
+   * same row {@link conceptName} already names, restated as its key rather
+   * than its display name.
+   */
+  readonly conceptKey?: string;
   readonly course: string;
   readonly gapClass: GapClass;
   /** `GapRow.rank` — its position within its own course's gap view, so "why is this here" is answerable against the screen she came from. */
@@ -1256,6 +1270,7 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
             notePath: record.notePath,
             noteTitle: record.noteTitle,
             conceptName: queue.row.conceptName,
+            conceptKey: queue.row.conceptKey,
             course: queue.row.course,
             gapClass: queue.row.gapClass,
             gapRank: queue.row.rank,

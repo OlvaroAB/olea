@@ -42,6 +42,14 @@ export interface RankWeightsWiring {
    * this once. When present, calling it fetches fresh every time; see the
    * module doc for why this shape differs from the other `buildXWiring`
    * results in this plugin.
+   *
+   * Its resolved value is `RankWeightsResult`, `RankOracleOptions` widened
+   * with the envelope's own `policyVersion` (`ol-egov.141.89.10.4`) —
+   * carried through automatically because this type is expressed as
+   * `ReturnType<typeof fetchRankWeightsOptions>` rather than restated; see
+   * that function's doc. A caller typed against the narrower
+   * `() => Promise<RankOracleOptions | undefined>` (every caller today)
+   * still type-checks unchanged, since the wider result is a supertype.
    */
   readonly readRankWeights: (() => ReturnType<typeof fetchRankWeightsOptions>) | null;
 }

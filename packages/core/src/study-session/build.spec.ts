@@ -52,6 +52,8 @@ interface RowSpec {
   readonly assessmentFormat?: AssessmentFormat;
   /** `ol-urvq` [SIZE-2] — omitted means no size reading, which prices as `'fine'`. */
   readonly conceptSize?: ConceptSize;
+  /** Defaults to `conceptName`, matching every other fixture in this file; set explicitly to prove a test reads the key, not the name. */
+  readonly conceptKey?: string;
 }
 
 function row(spec: RowSpec): GapRow {
@@ -62,7 +64,7 @@ function row(spec: RowSpec): GapRow {
     // matching the `qa(...)`/`mcq(...)` fixtures' own `conceptIds`, which are
     // plain letters like `'A'` throughout this suite. This file is about the
     // fill algorithm, not the name/key split.
-    conceptKey: spec.conceptName,
+    conceptKey: spec.conceptKey ?? spec.conceptName,
     course: spec.course ?? 'CRS101',
     gapClass: spec.gapClass ?? 'mastery-gap',
     rank: spec.rank ?? 1,
@@ -1675,6 +1677,83 @@ describe('rankedReasons threaded onto each StudySessionItem (`ol-3ux7.5.57.14.53
 
     expect(session.items).toHaveLength(1);
     expect(Object.hasOwn(session.items[0] ?? {}, 'rankedReason')).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `conceptKey` on each `StudySessionItem` — the fill's own attribution,
+// exposed (`ol-egov.141.89.10.4`, a `[D-331]` phase-1 follow-up). Before this,
+// a caller that needed the concept key of a served item had to reconstruct it
+// after the fact by matching on (course, conceptName), which the fill already
+// resolves unambiguously here.
+// ---------------------------------------------------------------------------
+
+describe("conceptKey on each StudySessionItem, read from the selecting row's own queue", () => {
+  it("carries the selecting row's conceptKey verbatim — never conceptName restated", () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'Photosynthesis', conceptKey: 'concept-key-1', gapScore: 9 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['concept-key-1'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(1);
+    expect(session.items[0]?.conceptKey).toBe('concept-key-1');
+    expect(session.items[0]?.conceptName).toBe('Photosynthesis');
+  });
+
+  it('an instrument naming several concepts carries the key of whichever row actually claimed the slot, not the other concept it also names', () => {
+    const rows = rankedRows([
+      { conceptName: 'Top', conceptKey: 'top-key', gapScore: 9 },
+      { conceptName: 'Other', conceptKey: 'other-key', gapScore: 1 },
+    ]);
+    const index = buildConceptInstrumentIndex([qa('shared1', ['top-key', 'other-key'])]);
+
+    const session = buildStudySession({
+      rows,
+      instruments: index,
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    // Top's queue reaches `shared1` first (higher gapScore), so it is the
+    // row that claims the slot; Other's queue then skips it as
+    // already-in-session. `conceptKey` names the row that actually won,
+    // never the other concept the same instrument also names.
+    expect(session.items).toHaveLength(1);
+    expect(session.items[0]?.conceptKey).toBe('top-key');
+    expect(session.leftOut).toEqual([
+      {
+        conceptName: 'Other',
+        course: 'CRS101',
+        gapClass: 'mastery-gap',
+        gapRank: 2,
+        reason: 'already-in-session',
+      },
+    ]);
+  });
+
+  it('is present on every item this fill builds — never omitted the way a caller-dependent field is', () => {
+    const session = buildStudySession({
+      rows: rankedRows([
+        { conceptName: 'A', gapScore: 9 },
+        { conceptName: 'B', gapScore: 8 },
+      ]),
+      instruments: buildConceptInstrumentIndex([qa('a1', ['A']), qa('b1', ['B'])]),
+      budgetMinutes: 5,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+
+    expect(session.items).toHaveLength(2);
+    for (const item of session.items) {
+      expect(Object.hasOwn(item, 'conceptKey')).toBe(true);
+      expect(item.conceptKey).toBe(item.conceptName);
+    }
   });
 });
 
