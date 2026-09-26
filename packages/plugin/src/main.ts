@@ -55,6 +55,7 @@ import {
   type RegistryOverrides,
   type RelationSet,
   readAssessments,
+  readConceptKeyCanonicalIndex,
   readList,
   readReviewLogFile,
   readReviewLogHistory,
@@ -1338,7 +1339,24 @@ export default class OleaPlugin extends Plugin {
             // F6.2's cross-course scope reading (`ol-4qvc`): one grove model
             // per running course, placed side by side — counts never summed
             // or ranked (F8.3/C5.7).
-            scope: createVaultScopeSource({ vault, deviceId, now: this.now }),
+            //
+            // `ol-egov.141.89.11.12` (`docs/dev/intelligence-build/vew.md`
+            // item 3): `settingsHost`/`relations` are threaded here so this
+            // reading shares the grove's own F8.5 withdrawal filter, its
+            // `ol-2zfj.157` [DOS-I15] read-completeness row and its C7.9
+            // part-of fold — the same pair `../grove/provider.ts` already
+            // takes (`CreateLocalGroveProviderDeps.settingsHost`/`.relations`)
+            // and the same thunk this file already passes to
+            // `createLocalSessionBuilderProvider` a few lines above, so a
+            // later ingestion tick's fresh relation batch reaches this
+            // reading too, not just the one at hand when the panel opened.
+            scope: createVaultScopeSource({
+              vault,
+              deviceId,
+              now: this.now,
+              settingsHost: this,
+              relations: () => this.servedRelationEdges(),
+            }),
             // F6.9's rhythm reading (`ol-v7r5.6`): both stores are built
             // unconditionally in `onload`, same as `materiality` itself, so
             // this is absent only before `onload` has run — never in a
@@ -1985,8 +2003,17 @@ export default class OleaPlugin extends Plugin {
     // A read failure leaves the cache at `EMPTY_REGISTRY_OVERRIDES` (no
     // expansion), never crashes `onload` — same posture every other
     // best-effort load in this method already takes.
-    this.registryOverridesCache = await new ObsidianRegistryOverridesStore(this)
-      .load()
+    //
+    // `ol-egov.141.89.9.56`: resolved through the canonical-key read
+    // (`readConceptKeyCanonicalIndex`) the same way every other identity-
+    // sensitive overrides read in this plugin already is
+    // (`registry/same-as-identity.ts`, `registry/provider.ts`), so a stored
+    // override keyed on a since-merged concept key still resolves to the
+    // surviving canonical one — the same "recognise a stale key" posture
+    // `ObsidianRegistryOverridesStore.load`'s own `canonicalKeys` option
+    // exists for.
+    this.registryOverridesCache = await readConceptKeyCanonicalIndex(new ObsidianSource(this.app))
+      .then((canonicalKeys) => new ObsidianRegistryOverridesStore(this).load({ canonicalKeys }))
       .catch((error: unknown) => {
         console.error('Olea: could not load registry overrides', error);
         return EMPTY_REGISTRY_OVERRIDES;
@@ -2032,7 +2059,23 @@ export default class OleaPlugin extends Plugin {
 
     this.register(
       vault.watch((event) => {
-        if (event.kind !== 'modify') return;
+        // `ol-egov.141.89.11.13`: `'create'` is accepted alongside
+        // `'modify'` — the same two events the course-setup watch six lines
+        // below already reads — so a newly-created file reaches
+        // `evaluateMaterialityChange` (and, through it, F6.9's rhythm
+        // arrival) on its very first save, not only from whichever edit
+        // happens to be its second. `evaluateMaterialityChange`'s own doc
+        // covers why a first sighting (`materialityPreviousText` has no
+        // entry yet for this path) is safe to feed through unconditionally:
+        // `MaterialityTrigger.evaluate` never dispatches a paid judge call
+        // without a `previousText` to send it (`ingestion/materiality/
+        // wiring.ts`'s `evaluateUnderLock`), so a created file's first
+        // evaluation resolves to `'judge-unavailable'` (or, for a genuinely
+        // empty new note, `'no-groundable-content'`) rather than a call —
+        // `observedMaterialChange` already treats `'judge-unavailable'` the
+        // same as a real verdict, which is what lets F6.9 record the arrival
+        // at all.
+        if (event.kind !== 'modify' && event.kind !== 'create') return;
         void this.evaluateMaterialityChange(vault, event.path);
       }),
     );
@@ -2084,13 +2127,18 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * Feeds one observed `'modify'` event into the materiality trigger
-   * (register row 1.4, `TRG-1`). `VaultEvent` carries only a path — no text
-   * payload — so this reads the file fresh, then evaluates it against
-   * whatever text this session last saw for that path
-   * (`materialityPreviousText`), which is `undefined` on the first modify
-   * event ever observed for a path this session (a safe "first sighting",
-   * per `MaterialityTrigger.evaluate`'s own doc — never a guess).
+   * Feeds one observed `'modify'` OR `'create'` event into the materiality
+   * trigger (register row 1.4, `TRG-1`). `VaultEvent` carries only a path —
+   * no text payload — so this reads the file fresh, then evaluates it
+   * against whatever text this session last saw for that path
+   * (`materialityPreviousText`), which is `undefined` on the first event —
+   * modify or create — ever observed for a path this session (a safe
+   * "first sighting", per `MaterialityTrigger.evaluate`'s own doc — never a
+   * guess).
+   *
+   * `ol-egov.141.89.11.13`: `'create'` reaches here too now, not only
+   * `'modify'` — see the caller's own comment for why a created file's
+   * first sighting cannot itself trigger a paid judge call.
    *
    * TRG-1's verdict has **two** consumers from this one evaluation: F6.9's
    * material-arrival timestamp (`recordMaterialArrivalIfObserved`, original),

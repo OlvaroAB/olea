@@ -917,9 +917,9 @@ describe('the materiality trigger is actually constructed and fed (ol-2zfj.15)',
     );
   });
 
-  it('wires the real vault event stream into it, filtered to modify events', () => {
+  it('wires the real vault event stream into it, filtered to modify and create events (ol-egov.141.89.11.13: a created file must reach the trigger too)', () => {
     expect(main).toMatch(
-      /vault\.watch\(\(event\)\s*=>\s*\{\s*if\s*\(event\.kind\s*!==\s*'modify'\)\s*return;\s*void this\.evaluateMaterialityChange\(vault,\s*event\.path\);/,
+      /vault\.watch\(\(event\)\s*=>\s*\{\s*if\s*\(event\.kind\s*!==\s*'modify'\s*&&\s*event\.kind\s*!==\s*'create'\)\s*return;\s*void this\.evaluateMaterialityChange\(vault,\s*event\.path\);/,
     );
   });
 
@@ -1033,6 +1033,22 @@ describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
       /import\s*\{\s*ObsidianTermWindowStore\s*\}\s*from\s*'\.\/today\/term-window-store\.js'/,
     );
     expect(main).toMatch(/createRhythmSource,/);
+  });
+});
+
+describe("Today's scope reading shares the grove's own population (ol-egov.141.89.11.12, docs/dev/intelligence-build/vew.md item 3)", () => {
+  // `today/data-source.ts`'s own module doc named the gap: `createVaultScopeSource`
+  // took no `settingsHost`/`relations`, so Today's cross-course scope reading had
+  // no F8.5 withdrawal filter, no `ol-2zfj.157` [DOS-I15] read-completeness row and
+  // no C7.9 part-of fold — the same three inputs `../grove/provider.ts` already
+  // threads — so the two readers could disagree on the very same course. The fix
+  // (both fields are optional on `VaultScopeSourceDeps`) stayed dormant until this
+  // call site actually passed them; this is the source-level proof that it does.
+
+  it('createVaultScopeSource is given settingsHost and a relations thunk, not called bare', () => {
+    expect(main).toMatch(
+      /scope:\s*createVaultScopeSource\(\{\s*vault,\s*deviceId,\s*now:\s*this\.now,\s*settingsHost:\s*this,\s*relations:\s*\(\)\s*=>\s*this\.servedRelationEdges\(\),\s*\}\),/,
+    );
   });
 });
 
@@ -1276,10 +1292,22 @@ describe("retrieve()'s two production callers supply registryOverrides, so alias
   // call site's synchronous deps assembly. These are the source-level
   // checks that a cached snapshot now closes both gaps.
 
-  it('loads a cached RegistryOverrides snapshot once in onload, defaulting honestly on a read failure', () => {
+  // `ol-egov.141.89.9.56`: the cache primed here is resolved through the
+  // canonical-key read, the same way `registry/same-as-identity.ts` and
+  // `registry/provider.ts` already read identity-sensitive overrides —
+  // otherwise an override keyed on a since-merged concept key would never
+  // resolve to the surviving canonical one for this cache's two readers.
+  // Supersedes the prior "bare `.load()`" pin: the read now goes through
+  // `readConceptKeyCanonicalIndex` first, defaulting honestly (to
+  // `EMPTY_REGISTRY_OVERRIDES`) on either step's failure.
+  it('primes the cache through readConceptKeyCanonicalIndex, not a bare load()', () => {
     expect(main).toMatch(
-      /this\.registryOverridesCache\s*=\s*await new ObsidianRegistryOverridesStore\(this\)\s*\.load\(\)\s*\.catch\(/,
+      /this\.registryOverridesCache\s*=\s*await readConceptKeyCanonicalIndex\(new ObsidianSource\(this\.app\)\)\s*\.then\(\(canonicalKeys\)\s*=>\s*new ObsidianRegistryOverridesStore\(this\)\.load\(\{\s*canonicalKeys\s*\}\)\)\s*\.catch\(/,
     );
+  });
+
+  it('imports readConceptKeyCanonicalIndex from olea-core, not a local reimplementation', () => {
+    expect(main).toMatch(/readConceptKeyCanonicalIndex,/);
   });
 
   it('the registry view refreshes the cache the instant she renames, withdraws or restores a concept', () => {
