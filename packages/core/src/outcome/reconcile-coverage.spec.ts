@@ -61,6 +61,32 @@ describe('outcomeConceptCoverage', () => {
     expect(coverage.conceptCoverageShare).toBe(0);
   });
 
+  // Regression, ol-egov.141.89.11.15: a course with no active Outcome declarations at all has
+  // UNKNOWN material coverage, not a measured 0% — the previous behaviour (0/0 read as the same
+  // 0 share as a course that HAS declared scope with nothing covered) fed F4.11's practice-paper
+  // unlock a fabricated measurement rather than an honest "cannot measure yet". The numeric share
+  // stays 0 for every existing typed reader (paper-unlock.ts's coverage gate never fires on 0
+  // either way), but the new flag lets a reader distinguish the two cases.
+  it('flags outcomeCoverageShare as unknown, not a measured zero, when there are no active outcomes to divide by', () => {
+    const coverage = outcomeConceptCoverage([], ['concept-key1:a']);
+    expect(coverage.outcomeCoverageShare).toBe(0);
+    expect(coverage.outcomeCoverageKnown).toBe(false);
+  });
+
+  it('flags outcomeCoverageShare as known (even at 0) when active outcomes exist but none are attached', () => {
+    const outcomes: OutcomeRecord[] = [outcome({ id: 'o1', conceptKeys: [] })];
+    const coverage = outcomeConceptCoverage(outcomes, ['concept-key1:a']);
+    expect(coverage.outcomeCoverageShare).toBe(0);
+    expect(coverage.outcomeCoverageKnown).toBe(true);
+  });
+
+  it('flags conceptCoverageShare as unknown, not a measured zero, when the course has no concepts to divide by', () => {
+    const outcomes: OutcomeRecord[] = [outcome({ id: 'o1', conceptKeys: [] })];
+    const coverage = outcomeConceptCoverage(outcomes, []);
+    expect(coverage.conceptCoverageShare).toBe(0);
+    expect(coverage.conceptCoverageKnown).toBe(false);
+  });
+
   it('deduplicates a concept key listed more than once in the registry input', () => {
     const outcomes: OutcomeRecord[] = [outcome({ id: 'o1', conceptKeys: ['concept-key1:a'] })];
     const coverage = outcomeConceptCoverage(outcomes, [
