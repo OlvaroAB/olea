@@ -34,11 +34,43 @@ import type {
   NominationSignalKind,
 } from './types.js';
 
-/** Case-sensitive, exact-string identity — the same match discipline `../read.js` and `../reconcile.js` use throughout. */
-function byName(concepts: readonly CorpusConcept[]): ReadonlyMap<string, CorpusConcept> {
-  const index = new Map<string, CorpusConcept>();
+/**
+ * A concept's own identity for pairing purposes — its opaque
+ * `CorpusConcept.key` (`[D-088]`) when the caller supplied one, the `name`
+ * only as a fallback for a keyless concept. `[ONT-R8]`'s opaque-key
+ * identity ("keyed to a stable proposition identity ... rather than to two
+ * names") is applied here for the same reason it is applied to disposition
+ * identity: two distinct concepts can share one `name` (her real
+ * cross-course "Glaze" in ceramics and in cooking, say), and only the key
+ * tells them apart. A keyless concept has no other handle, so `name` is the
+ * correct — and only — fallback for it (`ol-egov.141.89.4.16`).
+ */
+function identityOf(concept: CorpusConcept): string {
+  return concept.key ?? concept.name;
+}
+
+/**
+ * Every concept sharing a given `name`, keyed by that name. **More than one
+ * entry per name is expected and load-bearing**: two distinct, differently-
+ * keyed concepts can legitimately share a name, and a name-only index that
+ * kept just the first-seen one would make every other same-named concept
+ * permanently invisible to nomination — the exact defect dev scenario
+ * REL-a09fac8ff10e5736 measured (`ol-egov.141.89.4.16`). Concepts are
+ * deduplicated by {@link identityOf} on the way in, since `allConcepts` and
+ * `newConcepts` are expected to overlap (the caller's "new-concept x
+ * all-concepts" scope, this module's own doc above) and the same real
+ * concept must not occupy two slots in its own name's bucket.
+ */
+function byName(concepts: readonly CorpusConcept[]): ReadonlyMap<string, readonly CorpusConcept[]> {
+  const index = new Map<string, CorpusConcept[]>();
+  const seen = new Set<string>();
   for (const concept of concepts) {
-    if (!index.has(concept.name)) index.set(concept.name, concept);
+    const identity = identityOf(concept);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    const bucket = index.get(concept.name);
+    if (bucket === undefined) index.set(concept.name, [concept]);
+    else bucket.push(concept);
   }
   return index;
 }
@@ -83,16 +115,20 @@ function shareACourse(a: CorpusConcept, b: CorpusConcept): boolean {
  *   "all-concepts" half) — used only to resolve the OTHER endpoint of a
  *   pair a signal names; a concept present here but absent from
  *   `newConcepts` never generates a candidate on its own.
- * @param signals Cheap-signal occurrences, from any source. A pair backed
- *   by more than one signal kind is still one candidate, carrying every
- *   kind that nominated it.
+ * @param signals Cheap-signal occurrences, from any source. `NominationSignal.a`/`.b`
+ *   are concept names (that type's own doc) — every same-named concept is
+ *   tried as a resolution of the name, and {@link identityOf} (key-first)
+ *   decides self-pairs and candidate identity once resolved, so two
+ *   distinct concepts sharing a name are never collapsed into each other. A
+ *   pair backed by more than one signal kind is still one candidate,
+ *   carrying every kind that nominated it.
  */
 export function nominateCorpusRelationCandidates(
   newConcepts: readonly CorpusConcept[],
   allConcepts: readonly CorpusConcept[],
   signals: readonly NominationSignal[],
 ): readonly CorpusRelationCandidate[] {
-  const newNames = new Set(newConcepts.map((c) => c.name));
+  const newIdentities = new Set(newConcepts.map(identityOf));
   // `allConcepts` is the resolution index; `newConcepts` is folded in too so
   // a signal naming two NEW concepts (neither yet in what the caller passed
   // as "all") still resolves both sides.
@@ -104,29 +140,42 @@ export function nominateCorpusRelationCandidates(
   >();
 
   for (const signal of signals) {
-    // Scope discipline: at least one endpoint must be new. A signal linking
-    // two concepts that were both already part of the corpus before this
-    // run is exactly the full-recomputation case `[D-082]` rules out.
-    if (!newNames.has(signal.a) && !newNames.has(signal.b)) continue;
+    // A signal names two concepts by name, but the same name can resolve to
+    // more than one real concept (`./byName`'s own doc) — try every
+    // combination the two names could mean, rather than assuming whichever
+    // same-named concept was seen first is the one the signal is about.
+    const aOptions = byNameIndex.get(signal.a) ?? [];
+    const bOptions = byNameIndex.get(signal.b) ?? [];
 
-    const a = byNameIndex.get(signal.a);
-    const b = byNameIndex.get(signal.b);
-    // A signal naming a concept this run doesn't recognise at all (neither
-    // new nor in the existing set) nominates nothing — there is no
-    // introducing passage to verdict against, so surfacing it as a
-    // candidate would only be dropped downstream for no reason to log.
-    if (a === undefined || b === undefined || a.name === b.name) continue;
-    // Scope discipline, the other half: C7.10 / `[D-082]` — the corpus
-    // stage runs over a course's concept set, so a pair spanning two
-    // concepts that share no course is never a candidate.
-    if (!shareACourse(a, b)) continue;
+    for (const a of aOptions) {
+      for (const b of bOptions) {
+        // A self-pair is decided by IDENTITY (key-first), never by name —
+        // two distinct, differently-keyed concepts sharing a name are not
+        // the same concept, however the names alone read (`[ONT-R8]`). A
+        // signal naming a concept this run doesn't recognise at all
+        // resolves to no options at all, so this loop simply does not run
+        // for it — there is no introducing passage to verdict against, so
+        // surfacing it as a candidate would only be dropped downstream for
+        // no reason to log.
+        if (identityOf(a) === identityOf(b)) continue;
+        // Scope discipline: at least one endpoint must be new. A signal
+        // linking two concepts that were both already part of the corpus
+        // before this run is exactly the full-recomputation case `[D-082]`
+        // rules out.
+        if (!newIdentities.has(identityOf(a)) && !newIdentities.has(identityOf(b))) continue;
+        // Scope discipline, the other half: C7.10 / `[D-082]` — the corpus
+        // stage runs over a course's concept set, so a pair spanning two
+        // concepts that share no course is never a candidate.
+        if (!shareACourse(a, b)) continue;
 
-    const key = pairKey(a.name, b.name);
-    const existing = candidates.get(key);
-    if (existing === undefined) {
-      candidates.set(key, { a, b, signals: new Set([signal.kind]) });
-    } else {
-      existing.signals.add(signal.kind);
+        const key = pairKey(identityOf(a), identityOf(b));
+        const existing = candidates.get(key);
+        if (existing === undefined) {
+          candidates.set(key, { a, b, signals: new Set([signal.kind]) });
+        } else {
+          existing.signals.add(signal.kind);
+        }
+      }
     }
   }
 
