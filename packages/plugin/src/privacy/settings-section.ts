@@ -10,12 +10,7 @@
  * and Obsidian's `Setting` API. See `features/F7-plugin-surface.md`'s
  * `@manual` scenarios for how the rendered section is actually checked.
  *
- * **Not wired into `settings-tab.ts` by this bead** — that file is outside
- * `ol-p6t01`'s owned paths (`privacy/`, `privacy/test`, this feature file,
- * and `olea-service`'s `src/`/`test/` only). See this bead's report for the
- * exact call to add to `OleaSettingTab.display()`, following the same
- * pattern `renderUsageSection`'s own module doc already documents for
- * itself.
+ * Rendered by `OleaSettingTab.display()` (`../settings/settings-tab.ts`).
  *
  * **Export saves into the vault, not through an OS save dialog.** Obsidian
  * gives a plugin no cross-platform "save file" prompt; writing a new file
@@ -41,9 +36,9 @@ import { ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import {
   DELETE_DESCRIPTION,
-  DELETE_DONE_MESSAGE,
   type DeleteConfirmState,
   deleteButtonLabel,
+  deleteCompletionMessage,
   EXPORT_BUTTON_LABEL,
   EXPORT_DESCRIPTION,
   EXPORT_DONE_MESSAGE,
@@ -131,7 +126,7 @@ export function renderPrivacySection(
               baseUrl: persisted.baseUrl,
               token: persisted.token,
             };
-            await runFullDelete({
+            const result = await runFullDelete({
               dataHost: deps.dataHost,
               vault: deps.vault,
               deviceId: deps.deviceId,
@@ -139,7 +134,11 @@ export function renderPrivacySection(
               workerConfig,
               httpRequest: obsidianDeleteHttpRequest,
             });
-            new Notice(DELETE_DONE_MESSAGE);
+            // `ol-egov.141.8.7`: `result.remainingOleaPaths` is the widened full
+            // delete's own honest discovery pass — never assume it emptied just
+            // because every step ran; a discovery-limited host can still leave
+            // something under `.olea/` (see `full-delete.ts`'s module doc).
+            new Notice(deleteCompletionMessage(result.remainingOleaPaths.length));
             // `ol-ppxj.26`: `runFullDelete` just minted a fresh device id, but
             // every port built once at `onload` (`main.ts`) already captured
             // the OLD one by closure. Reloading the plugin here — rather than
