@@ -62,6 +62,7 @@ import {
   listFolder,
   MISCONCEPTION_LOG_FOLDER,
   misconceptionLogPath,
+  OUTCOME_CONCEPT_NEAR_MATCH_FOLDER,
   OUTCOME_STORE_FOLDER,
   PAPER_STORE_FOLDER,
   RELATION_CACHE_FOLDER,
@@ -75,14 +76,6 @@ import { DUPLICATION_CONFIRMATION_FOLDER } from '../review/duplication-confirmat
 
 /** Olea's own directory inside her vault (C6.2). Every path `discoverOleaLayerPaths` returns sits under it. */
 export const OLEA_LAYER_ROOT: VaultPath = '.olea';
-
-/**
- * `core/src/outcome/near-match.ts`'s `OUTCOME_CONCEPT_NEAR_MATCH_FOLDER`, typed again here only
- * because `olea-core`'s index does not export it (its writer is reached through
- * `outcome/reconcile.ts`). The coverage guard reads the literal in `near-match.ts` as a writer,
- * so a rename there fails the guard rather than drifting past it.
- */
-const OUTCOME_CONCEPT_NEAR_MATCH_FOLDER: VaultPath = '.olea/outcome-near-match';
 
 /**
  * How F7.4 carries one folder:

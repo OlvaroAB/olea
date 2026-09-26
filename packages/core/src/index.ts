@@ -958,7 +958,9 @@ export type {
   CardInvalidReason,
   ClozeCardInstrument,
   ClozeDelimiter,
+  ClozeInvalidReason,
   InvalidCardBlock,
+  InvalidClozeBlock,
   InvalidMcqBlock,
   McqInstrument,
   McqInvalidReason,
@@ -1467,6 +1469,10 @@ export type {
   OutcomeEvent,
   OutcomeRetiredEvent,
 } from './outcome/events.js';
+// The outcome-to-concept near-match folder (`[D-256]`, `ol-2zfj.129`) — additive so
+// `packages/plugin/src/privacy/log-discovery.ts` can name the real constant instead of
+// retyping the vault path literal (`ol-egov.141.8.7`, `ol-v7r5.94`).
+export { OUTCOME_CONCEPT_NEAR_MATCH_FOLDER } from './outcome/near-match.js';
 export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
 // `[OUT-3]` (F4.1, ONT-R1 `ol-2zfj.86`): the outcome→concept containment reconciliation and its
 // two coverage reads. See `./outcome/reconcile.js`'s own module doc for the three-bucket match
@@ -2065,6 +2071,7 @@ export {
 export type {
   ClozeInstrumentRecord,
   InvalidCardReport,
+  InvalidClozeReport,
   InvalidMcqReport,
   McqInstrumentRecord,
   QaInstrumentRecord,

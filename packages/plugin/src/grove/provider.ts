@@ -185,6 +185,9 @@ import {
   findUnreadableFiles,
   type GroveCourseModel,
   HOLDING_CUT,
+  type InvalidCardReport,
+  type InvalidClozeReport,
+  type InvalidMcqReport,
   isRegisterableDocument,
   projectRegisteredFiles,
   readAssessments,
@@ -305,28 +308,18 @@ async function disputesFromFiles(
  * `.invalidCardBlocks` and `.invalidClozeBlocks` into the one flat list
  * `./view.ts#GroveWithheldItem` renders — see that type's own doc for why
  * this is not nested per course. `reason` is read off each report as a
- * plain string, never a named per-kind reason type: `InvalidClozeReport`
- * (`packages/core/src/session/types.ts`) is not exported from `olea-core`'s
- * barrel today (`ol-v7r5.90`'s own bead names the gap; widening
- * `packages/core/src/index.ts` sits outside this bead's `owns`), and typing
- * this function's `enumeration` parameter loosely — reading the three
- * fields structurally off whatever `enumerateVaultInstruments` returns,
- * rather than naming `InvalidMcqReport`/`InvalidCardReport`/
- * `InvalidClozeReport` — is what lets this compile without that export.
+ * plain string, never a named per-kind reason type: `InvalidMcqReport`/
+ * `InvalidCardReport`/`InvalidClozeReport` name each report's shape (all
+ * three now exported from `olea-core`'s barrel, `ol-v7r5.94`), but the
+ * per-kind `reason` unions (`McqInvalidReason`/`CardInvalidReason`/
+ * `ClozeInvalidReason`) stay untyped here on purpose — this function only
+ * ever reads `reason` back out as the plain string `GroveWithheldItem`
+ * carries, never branches on which value it is.
  */
 function withheldInstrumentsFromEnumeration(enumeration: {
-  readonly invalidMcqBlocks: readonly {
-    readonly notePath: VaultPath;
-    readonly block: { readonly reason: string };
-  }[];
-  readonly invalidCardBlocks: readonly {
-    readonly notePath: VaultPath;
-    readonly block: { readonly reason: string };
-  }[];
-  readonly invalidClozeBlocks: readonly {
-    readonly notePath: VaultPath;
-    readonly block: { readonly reason: string };
-  }[];
+  readonly invalidMcqBlocks: readonly InvalidMcqReport[];
+  readonly invalidCardBlocks: readonly InvalidCardReport[];
+  readonly invalidClozeBlocks: readonly InvalidClozeReport[];
 }): readonly GroveWithheldItem[] {
   return [
     ...enumeration.invalidMcqBlocks.map(
