@@ -76,6 +76,22 @@ export const EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE =
   "Olea couldn't tell whether this was a real attempt at an answer, so nothing was graded.";
 
 /**
+ * `[D-322]` (vocabulary registry §19, "Practice-only"): shown before she answers a freeform
+ * explain-back prompt (command palette or Home, naming no subject) whose topic did not resolve to
+ * one concept — an ambiguous match, or no match at all (`./request.ts`'s
+ * `matchFreeformTopicToConcept`). The registry ratifies the SHAPE only ("an upfront designation,
+ * offered before grading") and explicitly leaves the wording open: *"The exact copy is a design
+ * question this ruling does not settle."*
+ *
+ * **PLACEHOLDER COPY — no ruled string exists for this outcome**, the same posture
+ * `EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE` above states for itself and for the same reason:
+ * flagged in this bead's report, swept by `copy.spec.ts`'s voice-charter checks like every other
+ * string in this file, but not itself a ratified sentence.
+ */
+export const EXPLAIN_BACK_PRACTICE_ONLY_NOTICE =
+  "This one's for practice — it won't count as scored evidence.";
+
+/**
  * `[D-171]`'s one-step affordance, worded for this surface: F8.4 asks every
  * instrument-rendering surface for a single pointer to that instrument's
  * registry entry, never a printed source path, heading or page here. One

@@ -147,10 +147,17 @@ describe('non-attempt conceptIds: the full instrument list for an instrument pro
     expect(body).toMatch(/conceptIds: instrument\.conceptIds,/);
   });
 
-  it('both ResolvedPrompt constructions in resolveTopicPrompt set conceptIds to an empty array', () => {
+  it('both ResolvedPrompt constructions in resolveTopicPrompt share the same computed conceptIds — `[D-322]` (`ol-egov.141.89.6.4`) narrowed the old "always []" to "[] unless the topic matched one concept uniquely"', () => {
     const body = bodyBetween('private async resolveTopicPrompt(', 'private async submitAnswer(');
-    const emptyConceptIds = body.match(/conceptIds: \[\],/g) ?? [];
-    expect(emptyConceptIds).toHaveLength(2);
+    const sharedConceptIds = body.match(/conceptIds,/g) ?? [];
+    // Once per ResolvedPrompt construction (the refused/insufficient-notes early return, and the
+    // ordinary answering-phase prompt) — both reading the SAME computed `conceptIds` local, never
+    // a literal `[]` reintroduced at either site.
+    expect(sharedConceptIds).toHaveLength(2);
+    expect(body).not.toMatch(/conceptIds: \[\],/);
+    expect(body).toMatch(
+      /const conceptIds = topicMatch\.kind === 'unique' \? \[topicMatch\.conceptId\] : \[\];/,
+    );
   });
 });
 

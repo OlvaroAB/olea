@@ -202,6 +202,7 @@ import {
   type ExplainBackCorrectnessDecision,
   type ExplainBackDepthDecision,
   evaluateConfusionRouting as evaluateConfusionRoutingCore,
+  evaluateRepeatedFailureStandingCheck as evaluateRepeatedFailureStandingCheckCore,
   evaluateSchedulingObservationRouting as evaluateSchedulingObservationRoutingCore,
   failedCallProvenance,
   type GradeExplainBackInput,
@@ -218,6 +219,8 @@ import {
   type ModelStamp,
   type PendingExplainBackGrading,
   type PendingSoloGrading,
+  type RepeatedFailureStandingCheckInput,
+  type RepeatedFailureStandingOutcome,
   type SchedulingObservationDecision,
   type SchedulingObservationRoutingInput,
   type SoloArtifactProvenance,
@@ -960,6 +963,22 @@ export async function gradeSoloAttemptDecision(
  */
 export function evaluateConfusionRouting(input: ConfusionRoutingInput): ConfusionRoutingDecision {
   return evaluateConfusionRoutingCore(input);
+}
+
+/**
+ * `[D-323]`'s repeated-failure instrument-standing check, composed at this
+ * plugin's wiring layer. Delegates entirely to `olea-core`'s
+ * `evaluateRepeatedFailureStandingCheck` (`../generation/decision-records/
+ * instrument-standing.js`) — pure and synchronous, no `GradingWiring`/
+ * Worker dependency, exactly like `evaluateConfusionRouting` immediately
+ * above, and for the same reason: this decision rides F2.12's existing
+ * trigger rather than adding one of its own (see that module's own doc).
+ * `../review/session.ts`'s `logAndAdvance` is the call site.
+ */
+export function evaluateInstrumentStanding(
+  input: RepeatedFailureStandingCheckInput,
+): RepeatedFailureStandingOutcome {
+  return evaluateRepeatedFailureStandingCheckCore(input);
 }
 
 /**

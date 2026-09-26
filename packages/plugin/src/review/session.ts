@@ -22,13 +22,23 @@ import type {
   ConfusionRoutingOfferKind,
   DirectPrerequisiteEvidence,
   DisputeLogRecord,
+  InstrumentStanding,
+  InstrumentStandingConcern,
   McqRating,
   QueueItemReason,
+  RepeatedFailureStandingCheckInput,
+  RepeatedFailureStandingOutcome,
   Scheduler,
   SchedulingObservationDecision,
   StrongRecallProposalDecision,
 } from 'olea-core';
-import { buildResolutionEvidenceEvent, mapMcqRating, STRONG_RECALL_PROPOSAL_TRIGGER } from 'olea-core';
+import {
+  buildResolutionEvidenceEvent,
+  CLEAN_INSTRUMENT_STANDING,
+  evaluateRepeatedFailureStandingCheck,
+  mapMcqRating,
+  STRONG_RECALL_PROPOSAL_TRIGGER,
+} from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
@@ -225,6 +235,58 @@ export interface ReviewSessionDeps {
     conceptIds: readonly string[],
   ) => DirectPrerequisiteEvidence | undefined;
   /**
+   * `[D-323]` (`ol-egov.141.89.6.4`): the just-graded instrument's own
+   * recorded standing — a changed cited passage, flagged, contested,
+   * rejected, pending revalidation, or safety information currently
+   * unavailable (`evaluateRepeatedFailureStandingCheck`'s own six named
+   * concerns, `olea-core`). Read ONLY when `evaluateConfusionRouting` has
+   * already decided `shouldOffer: true` for this rating — the ruling's own
+   * "it only ever triggers this standing check," never a lapse alone, and
+   * never for an instrument that never reached F2.12's gate.
+   *
+   * **Same "reads the local projection, not the whole log" shape
+   * `resolvePrerequisiteEvidence` just above documents, and the same
+   * reachability gap.** A real production resolver needs the citation
+   * store's freshness reading (`packages/core/src/instrument/
+   * citation-store.ts`, `'stale'` → `changed-source-passage`) and the
+   * mastery package's validity projection (`packages/core/src/mastery/
+   * validity.ts`'s `projectInstrumentValidity` → `contested`/`rejected`) —
+   * both fold the whole review log, which this presentation-layer class
+   * neither holds nor should learn to compute, the same reason
+   * `evaluateStrongRecallProposal`'s own doc gives. `flagged` and
+   * `safety-information-unavailable` have no reader anywhere in the
+   * codebase yet (searched; none exists) — an honest gap, not a guessed
+   * `false`, left for whichever caller first has a concrete source for
+   * either.
+   *
+   * **No production composer wires this yet** — same "outside this port's
+   * owning bead's file ownership, filed as a follow-up" posture
+   * `resolvePrerequisiteEvidence` states for itself, for the same reason:
+   * the real reader composes where the whole log is already in hand
+   * (`../review/open-session.ts`), not here. Optional and absent by
+   * default; an absent resolver reads as `CLEAN_INSTRUMENT_STANDING` (the
+   * ordinary offer stands, unchanged from before this bead) — see the call
+   * site in `logAndAdvance` below.
+   */
+  readonly resolveInstrumentStanding?: (instrumentId: string) => InstrumentStanding | undefined;
+  /**
+   * `[D-323]`'s decision itself — composed at `../grading/wiring.ts`'s
+   * `evaluateInstrumentStanding`, a pure delegate to `olea-core`'s
+   * `evaluateRepeatedFailureStandingCheck` — mirroring
+   * `evaluateConfusionRouting` just above exactly (same reason: the
+   * decision is local, synchronous and needs no `GradingWiring`/Worker
+   * dependency, so injecting it keeps this class swappable in a test the
+   * same way). Optional and absent by default: when not wired,
+   * `logAndAdvance` below calls `evaluateRepeatedFailureStandingCheck`
+   * directly with `CLEAN_INSTRUMENT_STANDING`, which reproduces
+   * `decision` verbatim as `standing-clear` — byte-identical to this
+   * bead's pre-existing behaviour for every fixture that does not know
+   * this field exists.
+   */
+  readonly evaluateInstrumentStanding?: (
+    input: RepeatedFailureStandingCheckInput,
+  ) => RepeatedFailureStandingOutcome;
+  /**
    * F5.3a / R7's third trigger for the SAME on-demand offer (`ol-0r92.11`,
    * `[D-083]`/`[D-087]`): an unconsumed scheduling observation naming the
    * just-graded instrument's concept as a neighbour. Composed at
@@ -404,6 +466,26 @@ export interface PendingConfusionRoutingOffer {
 }
 
 /**
+ * `[D-323]` (`ol-egov.141.89.6.4`): set by `logAndAdvance` instead of
+ * `PendingConfusionRoutingOffer` when the just-graded instrument's own
+ * recorded standing is suspect — never both. `concerns` is
+ * `evaluateRepeatedFailureStandingCheck`'s own non-empty list, never
+ * collapsed to a boolean, so a reader can name which of `[D-323]`'s six
+ * grounds applied.
+ *
+ * **Data only — no view reads this field yet.** `[D-072]` clause 5: there
+ * is deliberately no user-visible referral surface in this bead's `owns`
+ * (`review/view.ts` is another bead's), so this is reachable-by-type only,
+ * the same posture `resolvePrerequisiteEvidence`'s own doc takes for its
+ * still-unwired real resolver. Filed as a follow-up: a view that reads this
+ * and routes to item validation (F2.23).
+ */
+export interface PendingItemRepairReferral {
+  readonly instrumentId: string;
+  readonly concerns: readonly InstrumentStandingConcern[];
+}
+
+/**
  * F5.3a / R7's third-trigger pending offer (`ol-0r92.11`) — the instrument
  * that was JUST rated (same "not necessarily the one the view is currently
  * showing" caveat as `PendingConfusionRoutingOffer`), which concept the
@@ -463,6 +545,13 @@ export class ReviewSession {
   private dueSoonCount = 0;
   /** F2.12 (`ol-h2bx`) — set by `logAndAdvance` after every graded review, cleared by `acceptConfusionRoutingOffer`. */
   private pendingConfusionOffer: PendingConfusionRoutingOffer | null = null;
+  /**
+   * `[D-323]` (`ol-egov.141.89.6.4`) — set by `logAndAdvance` instead of
+   * `pendingConfusionOffer` when the standing check routes to item repair.
+   * No `resolve*` method clears it (yet): see `PendingItemRepairReferral`'s
+   * own doc for why there is no consumer to clear it for.
+   */
+  private pendingItemRepairReferral: PendingItemRepairReferral | null = null;
   /** F5.3a / R7's third trigger (`ol-0r92.11`) — set by `logAndAdvance` after every graded review, cleared by `resolveSchedulingObservationOffer`. */
   private pendingSchedulingObservationOffer: PendingSchedulingObservationOffer | null = null;
   /** F2.21's third trigger (`ol-v7r5.40`) — set by `logAndAdvance` after every graded review, cleared by `resolveStrongRecallOffer`. */
@@ -857,6 +946,17 @@ export class ReviewSession {
    */
   getConfusionRoutingOffer(): PendingConfusionRoutingOffer | null {
     return this.pendingConfusionOffer;
+  }
+
+  /**
+   * `[D-323]`'s referral for the caller to route, or `null` when none is
+   * pending. Mutually exclusive with {@link getConfusionRoutingOffer}: the
+   * same graded review sets at most one of the two, never both — see
+   * `PendingItemRepairReferral`'s own doc for the reachability gap (no
+   * caller reads this yet).
+   */
+  getPendingItemRepairReferral(): PendingItemRepairReferral | null {
+    return this.pendingItemRepairReferral;
   }
 
   /**
@@ -1418,23 +1518,63 @@ export class ReviewSession {
       lapses: scheduled.state.lapses,
       ...(directPrerequisite !== undefined ? { directPrerequisite } : {}),
     });
-    this.pendingConfusionOffer = decision?.shouldOffer
-      ? {
-          instrument: stamped.instrument,
-          promptText: decision.promptText,
-          ...(decision.offerKind !== undefined ? { offerKind: decision.offerKind } : {}),
-          ...(decision.prerequisiteConceptId !== undefined
-            ? { prerequisiteConceptId: decision.prerequisiteConceptId }
-            : {}),
-        }
-      : null;
+
+    // `[D-323]` (`ol-egov.141.89.6.4`): before an F2.12 offer is allowed to
+    // stand, check the instrument's own recorded standing. `standing` is
+    // read only when `decision.shouldOffer` is true — the ruling's own "it
+    // only ever triggers this standing check," never a lapse alone — and an
+    // absent resolver reads as clean standing (the ordinary offer stands,
+    // unchanged from before this bead). `evaluateInstrumentStanding`, when
+    // wired, replaces the direct core call the same way every other
+    // decision point in this method is replaceable; when it is not wired,
+    // calling `evaluateRepeatedFailureStandingCheck` here directly with
+    // `decision` undefined or with clean standing reproduces `decision`
+    // verbatim (see that function's own `standing-clear` branch), so this
+    // is byte-identical to the pre-`[D-323]` behaviour for every existing
+    // fixture.
+    const standing =
+      decision?.shouldOffer === true
+        ? (this.deps.resolveInstrumentStanding?.(stamped.instrument.instrumentId) ??
+          CLEAN_INSTRUMENT_STANDING)
+        : CLEAN_INSTRUMENT_STANDING;
+    const standingCheck: RepeatedFailureStandingCheckInput = {
+      confusionRouting: decision ?? { shouldOffer: false },
+      standing,
+    };
+    const standingOutcome = (
+      this.deps.evaluateInstrumentStanding ?? evaluateRepeatedFailureStandingCheck
+    )(standingCheck);
+
+    this.pendingConfusionOffer =
+      standingOutcome.kind === 'standing-clear'
+        ? {
+            instrument: stamped.instrument,
+            promptText: standingOutcome.offer.promptText,
+            ...(standingOutcome.offer.offerKind !== undefined
+              ? { offerKind: standingOutcome.offer.offerKind }
+              : {}),
+            ...(standingOutcome.offer.prerequisiteConceptId !== undefined
+              ? { prerequisiteConceptId: standingOutcome.offer.prerequisiteConceptId }
+              : {}),
+          }
+        : null;
+    // `[D-323]`: a suspect instrument gets no explain-back offer — referred
+    // to item repair instead. See `PendingItemRepairReferral`'s own doc for
+    // why nothing consumes this yet.
+    this.pendingItemRepairReferral =
+      standingOutcome.kind === 'route-to-item-repair'
+        ? { instrumentId: stamped.instrument.instrumentId, concerns: standingOutcome.concerns }
+        : null;
     // Recorded under the instrument's own id, session-lifetime — see
     // `confusionOfferPrerequisiteByInstrumentId`'s own doc for why the
     // D7.1 write pair below cannot rely on `pendingConfusionOffer` alone.
-    if (decision?.shouldOffer && decision.prerequisiteConceptId !== undefined) {
+    if (
+      standingOutcome.kind === 'standing-clear' &&
+      standingOutcome.offer.prerequisiteConceptId !== undefined
+    ) {
       this.confusionOfferPrerequisiteByInstrumentId.set(
         stamped.instrument.instrumentId,
-        decision.prerequisiteConceptId,
+        standingOutcome.offer.prerequisiteConceptId,
       );
     }
 

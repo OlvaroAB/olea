@@ -165,12 +165,13 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     );
     // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
     // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
-    // `sourceMaterial`/`relationExpected`, carried to accept time — matched
-    // by name here rather than wildcarded, so an unrelated future field
-    // slipping in unnoticed still fails this assertion instead of silently
-    // passing through a loose wildcard.
+    // `sourceMaterial`/`relationExpected`, carried to accept time;
+    // `ol-egov.141.89.6.4` (`[D-322]`) added `practiceOnly`, always `false`
+    // here — matched by name here rather than wildcarded, so an unrelated
+    // future field slipping in unnoticed still fails this assertion instead
+    // of silently passing through a loose wildcard.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*\};/,
     );
   });
 

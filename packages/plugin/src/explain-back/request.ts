@@ -207,6 +207,74 @@ export function buildExplainBackPromptContextFromTopic(
 }
 
 /**
+ * `[D-322]`: one course-scoped candidate concept a freeform topic prompt can be matched against —
+ * the caller's own local projection, never fetched or embedded here (this module never reads the
+ * vault; see the module doc's own "pure, no I/O" posture, applied to matching the way it already
+ * applies to retrieval assembly). `conceptId` is the permanent key (`[D-322]`'s binding
+ * clarification: "must store the concept's permanent id … as the subject" — never a display name
+ * or alias string); `names` is every string a caller's own typed topic could honestly be compared
+ * against — display name, prior names, aliases — never re-derived here from a wider registry
+ * shape this module has no reason to know about.
+ */
+export interface FreeformTopicConceptCandidate {
+  readonly conceptId: string;
+  readonly names: readonly string[];
+  /** Course codes this concept belongs to (C7.2, M:N) — verbatim, never nested under one course. */
+  readonly courses: readonly string[];
+}
+
+/**
+ * `[D-322]`'s three outcomes for resolving a freeform topic to one subject concept, at
+ * composition time, before she answers:
+ * - `unique`: exactly one candidate's name matched (after course scoping, when a course is
+ *   known) — the permanent id to fix as the subject.
+ * - `ambiguous`: more than one candidate matched — the ruling's own "an ambiguous match gets the
+ *   practice-only designation," never a guess at which one she meant.
+ * - `no-match`: nothing matched — today's behaviour (`subjectConceptId: null`), now ALSO carrying
+ *   the practice-only designation per this same ruling, rather than a silent, undesignated
+ *   freeform attempt.
+ */
+export type FreeformTopicConceptMatch =
+  | { readonly kind: 'unique'; readonly conceptId: string }
+  | { readonly kind: 'ambiguous'; readonly conceptIds: readonly string[] }
+  | { readonly kind: 'no-match' };
+
+/**
+ * `[D-322]`'s matching rule, applied here rather than left to `modal.ts`'s `resolveTopicPrompt` —
+ * pure and synchronous, the same "logic here, DOM/state glue at the call site" split this file's
+ * other builders keep. **Exact, case- and whitespace-insensitive name matching only** — never a
+ * fuzzy or partial match: the ruling requires the match be UNIQUE, and a partial-match rule would
+ * manufacture false uniqueness (a topic that is a strict substring of exactly one candidate's name
+ * today might match a second candidate added tomorrow, silently changing which concept a past
+ * phrasing resolves to). **Course-aware, per the ruling's own word**: when `courseCode` is known,
+ * a candidate not teaching that course is not a candidate at all for this call — matching among
+ * the narrower, in-course set first is what lets an ordinary same-named-elsewhere concept resolve
+ * uniquely; when `courseCode` is `null` (no current-course context available), every candidate is
+ * in scope, and a same-named concept in two different courses is correctly `ambiguous`.
+ */
+export function matchFreeformTopicToConcept(
+  topic: string,
+  candidates: readonly FreeformTopicConceptCandidate[],
+  courseCode: string | null,
+): FreeformTopicConceptMatch {
+  const normalizedTopic = topic.trim().toLowerCase();
+  const inScope =
+    courseCode === null
+      ? candidates
+      : candidates.filter((candidate) => candidate.courses.includes(courseCode));
+  const matches = inScope.filter((candidate) =>
+    candidate.names.some((name) => name.trim().toLowerCase() === normalizedTopic),
+  );
+  if (matches.length === 0) return { kind: 'no-match' };
+  // Two candidate rows naming the SAME concept id (a course-spanning concept whose `courses`
+  // includes several codes, matched once per row by a caller that expanded rather than
+  // deduplicated) is not ambiguity about WHICH concept — dedupe by id before counting.
+  const uniqueIds = [...new Set(matches.map((candidate) => candidate.conceptId))];
+  if (uniqueIds.length === 1) return { kind: 'unique', conceptId: uniqueIds[0] as string };
+  return { kind: 'ambiguous', conceptIds: uniqueIds };
+}
+
+/**
  * Turns a typed answer into the exact input `gradeExplainBack` accepts —
  * typed input's counterpart to `transcription/transcribe.ts`'s
  * `buildGradeExplainBackInputFromTranscript`, named and shaped identically

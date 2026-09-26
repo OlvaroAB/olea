@@ -562,6 +562,26 @@ export type {
   VoiceExemplars,
 } from './generate/voice-sources.js';
 export { assembleVoiceExemplars } from './generate/voice-sources.js';
+// `[D-323]`'s repeated-failure instrument-standing check (`ol-egov.141.89.6.4`): rides
+// `misconception/confusion-routing.js`'s own `evaluateConfusionRouting` decision rather than
+// adding a second trigger — see `instrument-standing.ts`'s own module doc. Re-exported so the
+// review-side caller (`packages/plugin/src/review/session.ts`) can build the check's input and
+// read its outcome by name, the same reason `ConfusionRoutingInput`/`ConfusionRoutingOfferKind`
+// are re-exported alongside `confusion-routing.js` below.
+export type {
+  InstrumentStanding,
+  InstrumentStandingConcern,
+  NotRepeatedFailureOutcome,
+  RepeatedFailureStandingCheckInput,
+  RepeatedFailureStandingOutcome,
+  RouteToItemRepairOutcome,
+  StandingClearOutcome,
+} from './generation/decision-records/instrument-standing.js';
+export {
+  CLEAN_INSTRUMENT_STANDING,
+  evaluateRepeatedFailureStandingCheck,
+  INSTRUMENT_STANDING_CONCERNS,
+} from './generation/decision-records/instrument-standing.js';
 // `[D-238]`/GEN-3's generation-call policy (`ol-egov.127`, `ol-2zfj.63`
 // [GEN-3.1]): which kind is primary (F4.8's format match else F2.14's
 // recorded preference), the ingestion-queue job payload shape and its

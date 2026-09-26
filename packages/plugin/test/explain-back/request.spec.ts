@@ -21,6 +21,8 @@ import {
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
   buildGradeSoloInputFromTypedAnswer,
+  type FreeformTopicConceptCandidate,
+  matchFreeformTopicToConcept,
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
 } from '../../src/explain-back/request.js';
@@ -414,5 +416,99 @@ describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partne
 
   it('a null RelationSet (no corpus-relation batch has folded one in yet) resolves to undefined', () => {
     expect(resolveExplainBackRelationEdge({ relations: () => null }, 'a', 'b')).toBeUndefined();
+  });
+});
+
+describe('matchFreeformTopicToConcept ([D-322])', () => {
+  function candidate(
+    overrides: Partial<FreeformTopicConceptCandidate> = {},
+  ): FreeformTopicConceptCandidate {
+    return { conceptId: 'concept-a', names: ['Mitosis'], courses: ['BIO101'], ...overrides };
+  }
+
+  it('a unique exact match (case- and whitespace-insensitive) resolves to that concept id', () => {
+    const result = matchFreeformTopicToConcept(
+      '  mitosis  ',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis'] })],
+      null,
+    );
+    expect(result).toEqual({ kind: 'unique', conceptId: 'concept-a' });
+  });
+
+  it('matches against any of a candidate’s names — display name, prior names or aliases alike', () => {
+    const result = matchFreeformTopicToConcept(
+      'cell division',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis', 'Cell division'] })],
+      null,
+    );
+    expect(result).toEqual({ kind: 'unique', conceptId: 'concept-a' });
+  });
+
+  it('nothing matches: no-match, never a guess', () => {
+    const result = matchFreeformTopicToConcept(
+      'photosynthesis',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis'] })],
+      null,
+    );
+    expect(result).toEqual({ kind: 'no-match' });
+  });
+
+  it('never a fuzzy or partial match — a substring of a candidate’s name does not resolve', () => {
+    const result = matchFreeformTopicToConcept(
+      'mito',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis'] })],
+      null,
+    );
+    expect(result).toEqual({ kind: 'no-match' });
+  });
+
+  it('two different concepts sharing one name, with no course known: ambiguous, never a guess', () => {
+    const result = matchFreeformTopicToConcept(
+      'polymer',
+      [
+        candidate({ conceptId: 'concept-chem', names: ['Polymer'], courses: ['CHEM101'] }),
+        candidate({ conceptId: 'concept-bio', names: ['Polymer'], courses: ['BIO101'] }),
+      ],
+      null,
+    );
+    expect(result).toEqual({ kind: 'ambiguous', conceptIds: ['concept-chem', 'concept-bio'] });
+  });
+
+  it('course-aware: knowing the course narrows a same-named pair to a unique match', () => {
+    const candidates = [
+      candidate({ conceptId: 'concept-chem', names: ['Polymer'], courses: ['CHEM101'] }),
+      candidate({ conceptId: 'concept-bio', names: ['Polymer'], courses: ['BIO101'] }),
+    ];
+
+    expect(matchFreeformTopicToConcept('polymer', candidates, 'BIO101')).toEqual({
+      kind: 'unique',
+      conceptId: 'concept-bio',
+    });
+    expect(matchFreeformTopicToConcept('polymer', candidates, 'CHEM101')).toEqual({
+      kind: 'unique',
+      conceptId: 'concept-chem',
+    });
+  });
+
+  it('a course code that matches no candidate at all is no-match, not a fallback to the wider set', () => {
+    const result = matchFreeformTopicToConcept(
+      'mitosis',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis'], courses: ['BIO101'] })],
+      'CHEM101',
+    );
+    expect(result).toEqual({ kind: 'no-match' });
+  });
+
+  it('a concept taught in several courses matches once, by id, not once per course row', () => {
+    const result = matchFreeformTopicToConcept(
+      'mitosis',
+      [candidate({ conceptId: 'concept-a', names: ['Mitosis'], courses: ['BIO101', 'BIO102'] })],
+      null,
+    );
+    expect(result).toEqual({ kind: 'unique', conceptId: 'concept-a' });
+  });
+
+  it('an empty candidate list is no-match, never throws', () => {
+    expect(matchFreeformTopicToConcept('mitosis', [], null)).toEqual({ kind: 'no-match' });
   });
 });

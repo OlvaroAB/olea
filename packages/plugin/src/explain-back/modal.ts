@@ -120,6 +120,7 @@ import {
   EXPLAIN_BACK_MISSED_HEADING,
   EXPLAIN_BACK_MODAL_TITLE,
   EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW,
+  EXPLAIN_BACK_PRACTICE_ONLY_NOTICE,
   EXPLAIN_BACK_QUESTION_LABEL,
   EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
@@ -134,6 +135,7 @@ import {
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackSourceBlock,
+  type FreeformTopicConceptMatch,
 } from './request.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
 import { type ExplainBackSupportShown, supportLevelShownForExplainBack } from './solo-review.js';
@@ -186,6 +188,26 @@ export interface ExplainBackModalDeps {
     context: AcceptExplainBackGradingWithObservationContext,
   ) => Promise<AcceptExplainBackGradingWithObservationResult | null>;
   readonly retrieveSourceBlocks: (query: string) => Promise<readonly ExplainBackSourceBlock[]>;
+  /**
+   * `[D-322]` (`ol-egov.141.89.6.4`): resolves a freeform topic prompt (command palette or Home,
+   * naming no subject) to one concept at composition time, BEFORE she answers — never left
+   * silently unset the way `resolveTopicPrompt` did before this bead. Delegates entirely to
+   * `./request.ts`'s pure `matchFreeformTopicToConcept`, given the current course code (when
+   * known) and whatever candidate concepts the caller's own local projection holds — this class
+   * never reads a concept registry itself, the same "logic elsewhere, DOM/state glue here" split
+   * `resolveCausesPartner` just below already keeps.
+   *
+   * **No production composer wires this yet — a disclosed follow-up, same posture
+   * `resolveIntroducingPassage` below states for itself.** A real caller needs the registry's own
+   * course-scoped concept list (`packages/core/src/registry/build.ts`'s `RegistryModel`, or
+   * `packages/plugin/src/registry/provider.ts`'s live projection of it), which this
+   * presentation-layer modal neither holds nor should learn to compute. Optional and absent by
+   * default: `resolveTopicPrompt` below reads an absent resolver, or one that returns `undefined`,
+   * as `{ kind: 'no-match' }` — `subjectConceptId` stays `null` exactly as before this bead, and
+   * the prompt is marked practice-only (see `ResolvedPrompt.practiceOnly`'s own doc), never
+   * silently unset with no designation the way it read pre-`[D-322]`.
+   */
+  readonly matchFreeformTopicConcept?: (topic: string) => FreeformTopicConceptMatch | undefined;
   /**
    * `ol-egov.141.89.6.33`: resolves the subject concept's live "causes"
    * partner (rel.md section 1's "Explain-back partner (causes)" row) from
@@ -616,6 +638,20 @@ export async function resolveGradingSourceBlocks(
 interface ResolvedPrompt {
   readonly context: ExplainBackPromptContext;
   readonly subjectConceptId: string | null;
+  /**
+   * `[D-322]`: true exactly when this prompt is designated practice-only — a freeform topic whose
+   * concept match was ambiguous or absent (`vocabulary registry §19`'s "Practice-only": shown to
+   * her before she answers, and the answer, if she gives one, is never resolved to the ambiguous
+   * concept as scored evidence). Always `false` for an instrument-seeded prompt
+   * (`resolveInstrumentPrompt`'s subject is already a real, resolved concept — this designation is
+   * a freeform-topic-only concern) and for a freeform topic that DID resolve uniquely. Read by
+   * `renderQuestion` to show `EXPLAIN_BACK_PRACTICE_ONLY_NOTICE`, and — reachability gap, disclosed
+   * — not yet read anywhere that would change what is written at accept time: `subjectConceptId`
+   * staying `null` already keeps an ambiguous or unmatched topic out of scored evidence
+   * structurally (see `resolveTopicPrompt`'s own doc), so this field's only job today is the
+   * upfront designation the ruling requires her to see.
+   */
+  readonly practiceOnly: boolean;
   readonly originInstrumentId: string;
   readonly sourceBlocks: readonly ExplainBackSourceBlock[];
   /**
@@ -893,6 +929,10 @@ export class ExplainBackModal extends Modal {
     const prompt: ResolvedPrompt = {
       context,
       subjectConceptId,
+      // An instrument-seeded prompt's subject is already a real, resolved concept — `[D-322]`'s
+      // designation is a freeform-topic-only concern (see `ResolvedPrompt.practiceOnly`'s own
+      // doc).
+      practiceOnly: false,
       originInstrumentId: instrument.instrumentId,
       sourceBlocks,
       conceptIds: instrument.conceptIds,
@@ -921,14 +961,27 @@ export class ExplainBackModal extends Modal {
     const resolvedGrading = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
     const gradingSourceBlocks = resolvedGrading.sourceBlocks;
     const context = buildExplainBackPromptContextFromTopic(topic, gradingSourceBlocks);
+    // `[D-322]` (`ol-egov.141.89.6.4`): resolve the freeform topic to one subject concept HERE, at
+    // composition time, before she ever sees an answer box — never left for later, and never
+    // silently unset. `matchFreeformTopicConcept` absent (no production composer wires it yet —
+    // see that dep's own doc), or one that returns `undefined`, reads as `'no-match'`: the SAME
+    // `subjectConceptId: null` this bead found here, now carrying the practice-only designation
+    // the ruling requires rather than silently omitting one.
+    const topicMatch: FreeformTopicConceptMatch = this.deps.matchFreeformTopicConcept?.(topic) ?? {
+      kind: 'no-match',
+    };
+    const subjectConceptId = topicMatch.kind === 'unique' ? topicMatch.conceptId : null;
+    const practiceOnly = topicMatch.kind !== 'unique';
+    const conceptIds = topicMatch.kind === 'unique' ? [topicMatch.conceptId] : [];
     if (context.referenceAnswer.trim() === '') {
       const prompt: ResolvedPrompt = {
         context,
-        subjectConceptId: null,
+        subjectConceptId,
+        practiceOnly,
         originInstrumentId: this.deps.generateInstrumentId(),
         sourceBlocks,
         query: topic,
-        conceptIds: [],
+        conceptIds,
         sourceMaterial: resolvedGrading.sourceMaterial,
         relationExpected: resolvedGrading.relationExpected,
       };
@@ -950,11 +1003,12 @@ export class ExplainBackModal extends Modal {
     }
     const prompt: ResolvedPrompt = {
       context,
-      subjectConceptId: null,
+      subjectConceptId,
+      practiceOnly,
       originInstrumentId: this.deps.generateInstrumentId(),
       sourceBlocks,
       query: topic,
-      conceptIds: [],
+      conceptIds,
       sourceMaterial: resolvedGrading.sourceMaterial,
       relationExpected: resolvedGrading.relationExpected,
     };
@@ -1335,6 +1389,21 @@ export class ExplainBackModal extends Modal {
     });
     this.renderMasteryTag(header, prompt.subjectConceptId);
     root.createDiv({ cls: 'olea-explain-back-question', text: prompt.context.question });
+    this.renderPracticeOnlyNotice(root, prompt);
+  }
+
+  /**
+   * `[D-322]` (vocabulary registry §19): the upfront designation the ruling requires when a
+   * freeform topic's concept match is ambiguous or absent — shown BEFORE she answers (this method
+   * is called from `renderQuestion`, which every phase's render calls first), never only after she
+   * has already written something. No `cls` — same "not owned by `styles.css`, a bare unstyled
+   * element is exactly what this bead's other new affordance (the skip button) already renders as"
+   * posture `renderAnsweringPhase`'s own skip-button comment states, so this stays out of the
+   * drift guard's reach without a second bead touching `styles.css`.
+   */
+  private renderPracticeOnlyNotice(root: HTMLElement, prompt: ResolvedPrompt): void {
+    if (!prompt.practiceOnly) return;
+    root.createDiv({ text: EXPLAIN_BACK_PRACTICE_ONLY_NOTICE });
   }
 
   /**

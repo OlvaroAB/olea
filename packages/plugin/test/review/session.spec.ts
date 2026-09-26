@@ -958,6 +958,150 @@ describe('F2.12 — confusion routing wired into the review flow (ol-h2bx)', () 
   });
 });
 
+describe('[D-323] — the repeated-failure instrument-standing check wired into the review flow (ol-egov.141.89.6.4)', () => {
+  it('with no standing resolver wired, a clean-standing offer stands exactly as before this bead', async () => {
+    const instrument = qaFixture();
+    const item = queueItem(instrument);
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toEqual({ instrument, promptText: 'offer text' });
+    expect(session.getPendingItemRepairReferral()).toBeNull();
+  });
+
+  it('never asks for standing when shouldOffer is false — repeated failure is the only trigger', async () => {
+    const item = queueItem(qaFixture());
+    let standingCalls = 0;
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(1),
+        evaluateConfusionRouting: () => ({ shouldOffer: false }),
+        resolveInstrumentStanding: () => {
+          standingCalls += 1;
+          return { concerns: ['rejected'] };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(standingCalls).toBe(0);
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+    expect(session.getPendingItemRepairReferral()).toBeNull();
+  });
+
+  it('a suspect instrument gets no explain-back offer — routed to item repair instead, never a model call', async () => {
+    const instrument = qaFixture();
+    const item = queueItem(instrument);
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+        resolveInstrumentStanding: (instrumentId) => {
+          expect(instrumentId).toBe(instrument.instrumentId);
+          return { concerns: ['changed-source-passage', 'contested'] };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+    expect(session.getPendingItemRepairReferral()).toEqual({
+      instrumentId: instrument.instrumentId,
+      concerns: ['changed-source-passage', 'contested'],
+    });
+  });
+
+  it('the two named clarification concerns (pending revalidation, safety information unavailable) are treated as suspect, never a clean pass', async () => {
+    const item = queueItem(qaFixture());
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+        resolveInstrumentStanding: () => ({
+          concerns: ['pending-revalidation', 'safety-information-unavailable'],
+        }),
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+    expect(session.getPendingItemRepairReferral()?.concerns).toEqual([
+      'pending-revalidation',
+      'safety-information-unavailable',
+    ]);
+  });
+
+  it('evaluateInstrumentStanding, when wired, replaces the direct core call and is handed the confusion-routing decision and the resolved standing', async () => {
+    const item = queueItem(qaFixture());
+    const calls: unknown[] = [];
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [item],
+        scheduler: fakeScheduler(4),
+        evaluateConfusionRouting: (input) => ({
+          shouldOffer: true,
+          lapses: input.lapses,
+          promptText: 'offer text',
+        }),
+        resolveInstrumentStanding: () => ({ concerns: [] }),
+        evaluateInstrumentStanding: (input) => {
+          calls.push(input);
+          return { kind: 'route-to-item-repair', concerns: ['flagged'] };
+        },
+      }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('again');
+
+    expect(calls).toEqual([
+      {
+        confusionRouting: { shouldOffer: true, lapses: 4, promptText: 'offer text' },
+        standing: { concerns: [] },
+      },
+    ]);
+    expect(session.getConfusionRoutingOffer()).toBeNull();
+    expect(session.getPendingItemRepairReferral()).toEqual({
+      instrumentId: item.instrument.instrumentId,
+      concerns: ['flagged'],
+    });
+  });
+});
+
 describe('F2.12 — the prerequisite-aware offer wired into the review flow ([D-265] ruling 2, ol-egov.141.51.1)', () => {
   it('resolvePrerequisiteEvidence is called with the failing instrument’s conceptIds, and its result is threaded onto directPrerequisite', async () => {
     const instrument = qaFixture({ conceptIds: ['concept-b'] });
