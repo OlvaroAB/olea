@@ -429,8 +429,8 @@ describe('[D-331] setAside — what the composition weighed and did not serve, w
   });
 });
 
-describe('[D-331] itemConceptKeys — the concept each served item was composed under', () => {
-  it('maps every item to its row key, narrowing two concepts that share a display name by their instruments', () => {
+describe("[D-331] each item's own conceptKey — a plain read off StudySessionItem, no reconstruction (ol-egov.141.89.10.4/.65)", () => {
+  it('is read straight off the served item, for two same-named concepts each with their own instrument', () => {
     const theRows = rows([
       { conceptName: 'Alpha', conceptKey: 'key-alpha-one' },
       { conceptName: 'Alpha', conceptKey: 'key-alpha-two' },
@@ -440,15 +440,13 @@ describe('[D-331] itemConceptKeys — the concept each served item was composed 
       qa('i-two', ['key-alpha-two']),
     ]);
     const composed = buildComposedStudySession(baseInput(theRows, instruments));
-    expect(composed.itemConceptKeys).toEqual(
-      new Map([
-        ['i-one', 'key-alpha-one'],
-        ['i-two', 'key-alpha-two'],
-      ]),
-    );
+    expect(composed.model.items.map((item) => [item.instrumentId, item.conceptKey])).toEqual([
+      ['i-one', 'key-alpha-one'],
+      ['i-two', 'key-alpha-two'],
+    ]);
   });
 
-  it('leaves an item out, never guessing, when two same-named concepts share it', () => {
+  it("an instrument naming two concepts is claimed by whichever row's queue reaches it first — never left unattributed (build.ts's fill, ol-egov.141.89.10.4)", () => {
     const theRows = rows([
       { conceptName: 'Alpha', conceptKey: 'key-alpha-one' },
       { conceptName: 'Alpha', conceptKey: 'key-alpha-two' },
@@ -458,7 +456,25 @@ describe('[D-331] itemConceptKeys — the concept each served item was composed 
     ]);
     const composed = buildComposedStudySession(baseInput(theRows, instruments));
     expect(composed.model.items.map((i) => i.instrumentId)).toEqual(['i-shared']);
-    expect(composed.itemConceptKeys?.has('i-shared')).toBe(false);
+    expect(['key-alpha-one', 'key-alpha-two']).toContain(composed.model.items[0]?.conceptKey);
+  });
+
+  it('maps a chosen item with no conceptKey of its own to null in the record, never guessing one', () => {
+    const { session } = composedFixture();
+    const [firstItem, ...restItems] = session.model.items;
+    if (firstItem === undefined) throw new Error('fixture has no items');
+    const { conceptKey: _k, ...itemWithoutKey } = firstItem;
+    const strippedSession = {
+      ...session,
+      model: { ...session.model, items: [itemWithoutKey, ...restItems] },
+    };
+    const record = buildCompositionRecord(strippedSession, {
+      compositionId: 'composition-key1:nonce-null-concept-key',
+      composedAt: COMPOSED_AT,
+      planVersion: null,
+      reentry: false,
+    });
+    expect(record.chosen[0]?.conceptKey).toBeNull();
   });
 });
 
@@ -495,13 +511,16 @@ describe('[D-331] extendComposedStudySessionWithAccount', () => {
       'Epsilon',
     ]);
     // What main.ts builds today from the item list, plus the account and nothing else.
-    const { setAside, itemConceptKeys, ...rest } = extended;
-    const { setAside: _s, itemConceptKeys: _k, ...previousRest } = previous;
+    const { setAside, ...rest } = extended;
+    const { setAside: _s, ...previousRest } = previous;
     expect(rest).toEqual({
       ...previousRest,
       model: { ...previous.model, items: extended.model.items },
     });
-    expect(itemConceptKeys?.get('i-delta')).toBe('key-delta');
+    // Each item's own conceptKey travelled with it — no separate map to read.
+    expect(extended.model.items.find((i) => i.instrumentId === 'i-delta')?.conceptKey).toBe(
+      'key-delta',
+    );
     expect(setAside?.concepts).toEqual([
       { conceptKey: 'key-gamma', reason: 'did-not-fit' },
       { conceptKey: 'key-zeta', reason: 'did-not-fit' },

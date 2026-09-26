@@ -398,6 +398,8 @@ describe('createLocalHomeProvider — Home composes with the same windowDeficit 
     // steering suite above.
     const readRankWeights = async () => ({
       masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+      // `[D-331]` follow-up: `RankWeightsResult`'s own required field, not read by this test.
+      policyVersion: 'rw-v-test',
     });
 
     const homeState = await createLocalHomeProvider({

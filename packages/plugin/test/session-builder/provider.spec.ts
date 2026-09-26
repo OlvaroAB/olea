@@ -363,6 +363,8 @@ describe('createLocalSessionBuilderProvider — threads the delivered rank weigh
       calls += 1;
       return {
         masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+        // `[D-331]` follow-up: `RankWeightsResult`'s own required field, not read by this test.
+        policyVersion: 'rw-v-test',
       };
     };
 

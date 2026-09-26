@@ -109,7 +109,7 @@ export type CompositionKind = (typeof COMPOSITION_KINDS)[number];
 /** One served instrument, in session order, with the reasons the composition recorded for it. */
 export interface CompositionChosenItem {
   readonly instrumentId: string;
-  /** The concept it was composed under; `null` only when that could not be told apart (`./compose.ts`'s module doc, "`[D-331]`"). */
+  /** The concept it was composed under, read off `StudySessionItem.conceptKey`; `null` only when the item itself carries none (a hand-built fixture predating that field, or a future caller with no resolvable key — `./build.ts`'s fill sets it on every production item). */
   readonly conceptKey: string | null;
   /** Which obligation put its concept in front of her today (F6.7); `null` when the composer supplied none. */
   readonly obligationClass: ObligationClass | null;
@@ -596,27 +596,24 @@ export function parseCompositionLog(content: string): ParseCompositionLogResult 
 interface CompositionAccount {
   readonly groupingSignal: GroupingSignal;
   readonly setAside: CompositionSetAside;
-  readonly itemConceptKeys: ReadonlyMap<string, string>;
 }
 
 /** The session's `[D-331]` account, required: a session without one was not built by the composer, and a record of it would state facts nobody computed. */
 function requireAccount(session: ComposedStudySession, caller: string): CompositionAccount {
-  const { groupingSignal, setAside, itemConceptKeys } = session;
-  if (groupingSignal === undefined || setAside === undefined || itemConceptKeys === undefined) {
+  const { groupingSignal, setAside } = session;
+  if (groupingSignal === undefined || setAside === undefined) {
     throw new Error(
       `${caller}: the session carries no composition account; compose it with buildComposedStudySession or extendComposedStudySessionWithAccount`,
     );
   }
-  return { groupingSignal, setAside, itemConceptKeys };
+  return { groupingSignal, setAside };
 }
 
-function chosenItems(
-  items: readonly StudySessionItem[],
-  itemConceptKeys: ReadonlyMap<string, string>,
-): readonly CompositionChosenItem[] {
+/** Each item's `conceptKey` is a plain read off `StudySessionItem` itself (`./build.ts`'s fill), not a separate lookup. */
+function chosenItems(items: readonly StudySessionItem[]): readonly CompositionChosenItem[] {
   return items.map((item) => ({
     instrumentId: item.instrumentId,
-    conceptKey: itemConceptKeys.get(item.instrumentId) ?? null,
+    conceptKey: item.conceptKey ?? null,
     obligationClass: item.obligationClass ?? null,
     formatMatch: item.formatMatch,
     dedupeReason: item.dedupeReason ?? null,
@@ -678,7 +675,7 @@ export function buildCompositionRecord(
       policyVersions: context.policyVersions ?? {},
       planAllocation: frozenAllocation(context.allocation),
       declaredConstants: currentDeclaredConstants(),
-      chosen: chosenItems(session.model.items, account.itemConceptKeys),
+      chosen: chosenItems(session.model.items),
       setAside: account.setAside,
     }),
     'buildCompositionRecord',
@@ -717,7 +714,7 @@ export function buildExtendedCompositionRecord(
       composedAt: context.composedAt,
       asOf: context.asOf,
       budgetMinutes: context.budgetMinutes,
-      chosen: chosenItems(session.model.items, account.itemConceptKeys),
+      chosen: chosenItems(session.model.items),
       setAside: account.setAside,
     }),
     'buildExtendedCompositionRecord',

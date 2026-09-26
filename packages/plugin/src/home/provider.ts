@@ -69,7 +69,6 @@ import type {
   ConceptRecord,
   ConceptRelation,
   GroveCourseModel,
-  RankOracleOptions,
   Scheduler,
   VaultPath,
   VaultSource,
@@ -83,6 +82,11 @@ import type { GroveCourseSection } from '../grove/view.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import type { FirstReadFolderView } from '../ingestion/wiring.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
+// `[D-331]` follow-up (`ol-egov.141.89.10.4`/`.65`): the same widened result
+// `../session-builder/provider.ts`'s own `readRankWeights` field now declares — see that field's
+// doc for why the narrower `RankOracleOptions` this file used to declare stayed a valid pass-
+// through regardless.
+import type { RankWeightsResult } from '../rank/rank-weights-provider.js';
 import type { RetrospectiveOfferCard } from '../retrospective/offer-card.js';
 import {
   createRetrospectiveOfferEventLog,
@@ -170,7 +174,7 @@ export interface CreateLocalHomeProviderDeps {
    * already documents: `rank.ts`'s declared fallback constants apply, F7.8's
    * degrade-not-half-work posture, nothing surfaced to her as an error.
    */
-  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  readonly readRankWeights?: () => Promise<RankWeightsResult | undefined>;
   /**
    * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded through
    * for the same reason {@link windowDeficit}/{@link readRankWeights} are —

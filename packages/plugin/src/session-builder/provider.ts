@@ -228,7 +228,6 @@ import type {
   ConceptRelation,
   InstrumentCitation,
   OracleMasteryState,
-  RankOracleOptions,
   ReplayResult,
   Scheduler,
   SittingScopeSnapshot,
@@ -284,6 +283,10 @@ import {
   type ObsidianDataHost,
   ObsidianStudyPlanSettingsStore,
 } from '../plan/settings-store.js';
+// `[D-331]` follow-up (`ol-egov.141.89.10.4`/`.65`): the widened result `fetchRankWeightsOptions`
+// already returns — see `deps.readRankWeights`'s own doc below for why the narrower
+// `RankOracleOptions` this file used to declare stayed a valid assignment target regardless.
+import type { RankWeightsResult } from '../rank/rank-weights-provider.js';
 // Row 3.9's chooser input ([SUPP-3], `ol-lpl4`): the same history-lookup
 // builder the live review queue needs (`queue-adapter.ts`'s module doc
 // explains why it lives there rather than in `packages/core`), reused here so
@@ -415,8 +418,16 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * back to the declared defaults even when `main.ts` already held a
    * delivered artifact, because nothing here read it — this field, and the
    * `main.ts` wiring that passes it, close that gap.
+   *
+   * Declared as `RankWeightsResult` (`ol-egov.141.89.10.4`/`.65`, a `[D-331]` follow-up), the
+   * envelope-widened result `rank/rank-weights-provider.ts`'s `fetchRankWeightsOptions` returns
+   * (structurally a `RankOracleOptions` plus its own required `policyVersion`) — every existing
+   * caller wiring this field in still type-checks unchanged, since a wider result is a structural
+   * subtype of the narrower one this field used to declare. `composeStudySessionForRequest` below
+   * reads `.policyVersion` off it onto {@link ComposeStudySessionForRequestResult.rankWeightsPolicyVersion};
+   * nothing else here reads it yet.
    */
-  readonly readRankWeights?: () => Promise<RankOracleOptions | undefined>;
+  readonly readRankWeights?: () => Promise<RankWeightsResult | undefined>;
   /**
    * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own citation pending-revalidation
    * store (`../ingestion/materiality/citation-hash-store.js`'s `ObsidianCitationHashStore`) —
@@ -821,6 +832,16 @@ export interface ComposeStudySessionForRequestResult {
    * assignment above for why it is built once, not twice.
    */
   readonly composedInput: Omit<BuildComposedStudySessionInput, 'budgetMinutes'>;
+  /**
+   * `[D-331]` follow-up (`ol-egov.141.89.10.4`/`.65`): the `rank-weights` envelope's own
+   * `policyVersion`, read off `deps.readRankWeights`'s widened `RankWeightsResult` when a delivered
+   * artifact was read this call — `undefined` when `deps.readRankWeights` is absent or resolved
+   * `undefined` (unconfigured, offline, no envelope), the same absence-reads-as-absence posture
+   * `options` itself already has above. Additive: no caller reads this yet — a future composition
+   * record's `policyVersions` map is the intended reader (`study-session/composition-record.ts`'s
+   * `CompositionRecordContext.policyVersions`), gated on that bead's own phase-2 write path.
+   */
+  readonly rankWeightsPolicyVersion?: string;
 }
 
 /**
@@ -1250,7 +1271,16 @@ export async function composeStudySessionForRequest(
     ordinaryBudgetMinutes: request.budgetMinutes,
   });
 
-  return { composed, courseOrTopicOptions, frozenScope: nextFrozenScope, composedInput };
+  return {
+    composed,
+    courseOrTopicOptions,
+    frozenScope: nextFrozenScope,
+    composedInput,
+    // `[D-331]` follow-up: see `ComposeStudySessionForRequestResult.rankWeightsPolicyVersion`'s
+    // own doc. `exactOptionalPropertyTypes`: omitted, never `undefined`, matching `options` itself
+    // a few lines above.
+    ...(options !== undefined ? { rankWeightsPolicyVersion: options.policyVersion } : {}),
+  };
 }
 
 /**

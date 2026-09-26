@@ -1750,11 +1750,12 @@ describe('buildComposedStudySession', () => {
         'focusPolicy',
         'forcedCourses',
         // `[D-331]` (`ol-egov.141.89.10.65`): the composition's own account — a discrete
-        // grouping signal, set-aside ids with enum reasons, and an instrument→concept key map.
-        // Structural, never prose: the grouping sentence is still rendered elsewhere, from
-        // `groupingSignal`, exactly as the course sentence is rendered from `focusBranch`.
+        // grouping signal and set-aside ids with enum reasons. Structural, never prose: the
+        // grouping sentence is still rendered elsewhere, from `groupingSignal`, exactly as the
+        // course sentence is rendered from `focusBranch`. No separate instrument→concept key map:
+        // each item's own `conceptKey` (`./build.ts`'s fill, `ol-egov.141.89.10.4`) is inside
+        // `model` already.
         'groupingSignal',
-        'itemConceptKeys',
         'model',
         'obligationClasses',
         'overflow',

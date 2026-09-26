@@ -361,11 +361,14 @@
  *   is fixed, so no floating-point rewrite of the score can reach the sort.
  * - **`setAside`**: what the composition weighed and did not serve, each with why, by id, at the
  *   grain the composer decided at (a course, a concept, an instrument; see `./types.ts`).
- * - **`itemConceptKeys`**: the concept key each served instrument was composed under.
- *   `StudySessionItem` names its concept only by display name (`./build.ts`, not this module's
- *   file), so the key is recovered from the fill's own attribution rule: the ordered row with that
- *   course and name, narrowed by which row's instruments contain the item when two rows share a
- *   name. A still-ambiguous item is left out of the map (unknown), never guessed.
+ *
+ * The concept key each served instrument was composed under is no longer a fact this module
+ * recovers from the outside: `./build.ts`'s fill now stamps it directly onto
+ * `StudySessionItem.conceptKey` at the one place that ever chose it (`ol-egov.141.89.10.4`), so
+ * `./composition-record.ts`'s `chosenItems` reads `item.conceptKey` off `model.items` itself —
+ * `null` only when the item itself carries none (a hand-built fixture predating the field, or a
+ * future caller with no resolvable key). There is no separate `itemConceptKeys` map to keep true
+ * alongside the items it describes.
  *
  * {@link extendComposedStudySessionWithAccount} carries the same account through an outrun
  * extension; {@link extendComposedStudySession} is now that function's item list, byte-identical
@@ -2305,13 +2308,6 @@ export interface ComposedStudySession {
    * fixture reason; `buildComposedStudySession` always sets it.
    */
   readonly setAside?: CompositionSetAside;
-  /**
-   * `[D-331]`: `instrumentId` → the concept key each item of `model.items` was composed under —
-   * see the module doc's "`[D-331]`" section for how it is recovered and why an ambiguous item
-   * is absent rather than guessed. Optional for the same fixture reason;
-   * `buildComposedStudySession` always sets it.
-   */
-  readonly itemConceptKeys?: ReadonlyMap<string, string>;
 }
 
 /**
@@ -2361,55 +2357,21 @@ function withholdInstruments(
 }
 
 /**
- * `[D-331]`: the concept key each served item was composed under — see the module doc's
- * "`[D-331]`" section. `build.ts`'s fill attributes an instrument naming several concepts to the
- * row whose queue took it and stamps that row's display name and course on the item, so the
- * rows sharing the item's course and name are the only candidates; when two share them, the ones
- * whose own instruments contain the item narrow it; anything still ambiguous is left out.
- */
-function attributeItemConceptKeys(
-  items: readonly StudySessionItem[],
-  orderedRows: readonly GapRow[],
-  instruments: ConceptInstrumentIndex,
-): ReadonlyMap<string, string> {
-  const rowsByCourseAndName = new Map<string, GapRow[]>();
-  for (const row of orderedRows) {
-    const key = JSON.stringify([row.course, row.conceptName]);
-    const bucket = rowsByCourseAndName.get(key);
-    if (bucket === undefined) rowsByCourseAndName.set(key, [row]);
-    else bucket.push(row);
-  }
-  const keys = new Map<string, string>();
-  for (const item of items) {
-    const candidates = rowsByCourseAndName.get(JSON.stringify([item.course, item.conceptName]));
-    if (candidates === undefined) continue;
-    const narrowed =
-      candidates.length === 1
-        ? candidates
-        : candidates.filter((row) =>
-            instruments
-              .instrumentsFor(row.conceptKey)
-              .some((record) => record.instrumentId === item.instrumentId),
-          );
-    const only = narrowed.length === 1 ? narrowed[0] : undefined;
-    if (only !== undefined) keys.set(item.instrumentId, only.conceptKey);
-  }
-  return keys;
-}
-
-/**
  * `[D-331]`: the fill's own set-asides, over the selection's rows in session order — see
- * `ComposedStudySession.setAside`'s doc for what is and is not listed, and why.
+ * `ComposedStudySession.setAside`'s doc for what is and is not listed, and why. `servedConceptKeys`
+ * is read straight off `items`' own `conceptKey` (`./build.ts`'s fill stamps it there directly,
+ * `ol-egov.141.89.10.4`) — a plain read, not a reconstruction from `orderedRows`/`instruments`.
  */
 function fillSetAsideConcepts(
   orderedRows: readonly GapRow[],
   instruments: ConceptInstrumentIndex,
   withheld: ReadonlySet<string>,
   items: readonly StudySessionItem[],
-  itemConceptKeys: ReadonlyMap<string, string>,
 ): readonly SetAsideConcept[] {
   const servedInstrumentIds = new Set(items.map((item) => item.instrumentId));
-  const servedConceptKeys = new Set(itemConceptKeys.values());
+  const servedConceptKeys = new Set(
+    items.map((item) => item.conceptKey).filter((key): key is string => key !== undefined),
+  );
   const out: SetAsideConcept[] = [];
   for (const row of orderedRows) {
     if (servedConceptKeys.has(row.conceptKey)) continue;
@@ -2508,11 +2470,6 @@ export function buildComposedStudySession(
 
   // `[D-331]`: the composition's own account, read off the fill just run — see the module doc's
   // "`[D-331]`" section. Nothing below feeds `model`.
-  const itemConceptKeys = attributeItemConceptKeys(
-    model.items,
-    composed.orderedRows,
-    input.instruments,
-  );
   const selectionSetAside = composed.setAside ?? { courses: [], concepts: [], instruments: [] };
   const setAside: CompositionSetAside = {
     courses: selectionSetAside.courses,
@@ -2522,7 +2479,6 @@ export function buildComposedStudySession(
         input.instruments,
         composed.citationRevalidationPending,
         model.items,
-        itemConceptKeys,
       ),
       ...selectionSetAside.concepts,
     ],
@@ -2539,7 +2495,6 @@ export function buildComposedStudySession(
     citationRevalidationPending: composed.citationRevalidationPending,
     groupingSignal: composed.groupingSignal ?? 'none',
     setAside,
-    itemConceptKeys,
     ...(composed.containmentDropped !== undefined
       ? { containmentDropped: composed.containmentDropped }
       : {}),
@@ -2626,8 +2581,9 @@ export function extendComposedStudySession(
  * spread, which would carry `previous`'s account unchanged and leave every appended item without
  * a concept key:
  *
- * - `itemConceptKeys`: each item's key as `previous` recorded it, else as the wider composition
- *   recorded it (appended items);
+ * - each item's own `conceptKey` needs no carrying at all: it travels with the item object
+ *   itself (`previous`'s retained items keep theirs, `widened`'s appended items already carry
+ *   theirs from the fill that built them), so there is no separate map to keep true here;
  * - `setAside`: the other courses as `previous` set them aside (the extension is pinned to the
  *   same course and does not re-weigh them); the wider composition's concepts and withheld
  *   instruments, less anything now in the session; plus every `previous` item this extension
@@ -2675,22 +2631,18 @@ export function extendComposedStudySessionWithAccount(
   ];
 
   // `[D-331]`: the account, carried through — see this function's own doc. Nothing below feeds
-  // `items`.
-  const itemConceptKeys = new Map<string, string>();
-  for (const item of items) {
-    const key =
-      previous.itemConceptKeys?.get(item.instrumentId) ??
-      widened.itemConceptKeys?.get(item.instrumentId);
-    if (key !== undefined) itemConceptKeys.set(item.instrumentId, key);
-  }
+  // `items`. Each item's own `conceptKey` already travelled with it into `items` above; no map
+  // is built to restate that.
   const inSession = new Set(items.map((item) => item.instrumentId));
-  const conceptsInSession = new Set(itemConceptKeys.values());
+  const conceptsInSession = new Set(
+    items.map((item) => item.conceptKey).filter((key): key is string => key !== undefined),
+  );
   const widenedSetAside = widened.setAside ?? { courses: [], concepts: [], instruments: [] };
   const removed: SetAsideInstrument[] = [];
   for (const item of previous.model.items) {
     if (alreadyServed.has(item.instrumentId)) continue;
     const conceptKey =
-      previous.itemConceptKeys?.get(item.instrumentId) ??
+      item.conceptKey ??
       widenedSetAside.instruments.find((entry) => entry.instrumentId === item.instrumentId)
         ?.conceptKey;
     if (conceptKey !== undefined) {
@@ -2714,5 +2666,5 @@ export function extendComposedStudySessionWithAccount(
     instruments: setAsideInstruments,
   };
 
-  return { ...previous, model: { ...previous.model, items }, setAside, itemConceptKeys };
+  return { ...previous, model: { ...previous.model, items }, setAside };
 }
