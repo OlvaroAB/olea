@@ -666,6 +666,46 @@ function compareVetoedEdges(a: OracleVetoedEdge, b: OracleVetoedEdge): number {
   return a.assessmentPath < b.assessmentPath ? -1 : a.assessmentPath > b.assessmentPath ? 1 : 0;
 }
 
+/**
+ * `(assessmentPath, basis)` — `./types.js`'s own words for `assessmentPath`
+ * ("the natural key, matching how the rest of this package identifies a
+ * note-backed record"), paired with `basis` because `evidence-edge/build.ts`
+ * deliberately gives one concept TWO edges on the SAME assessment when both
+ * a past-paper and an objectives source cite it (`[D-226]` ruling 2) — those
+ * are genuinely different evidence and must both survive. `basis` defaults
+ * to `'past-paper'` exactly as `ConceptAssessmentEdge.basis`'s own doc states,
+ * so an edge that never set the field still gets a stable identity.
+ */
+function edgeIdentity(edge: ConceptAssessmentEdge): string {
+  return `${edge.assessmentPath}\u0000${edge.basis ?? 'past-paper'}`;
+}
+
+/**
+ * R5 (`pln.md` §5, `ol-egov.141.89.10.4` part 3) — a verbatim-duplicate edge
+ * (same concept, same {@link edgeIdentity}) is dropped rather than counted
+ * twice toward `preMasteryScore`. **This is deduplication of an accidental
+ * repeat, never a combination rule for genuinely distinct evidence**: two
+ * edges that name different assessments (or the same assessment under
+ * different bases) keep their own separate contributions and still sum, per
+ * this file's "accumulation across multiple assessments" section — only an
+ * exact repeat of the same edge identity is collapsed, keeping the first
+ * occurrence (repeats are byte-identical by construction, so which copy
+ * survives is never observable).
+ */
+function dedupeVerbatimEdges(
+  edges: readonly ConceptAssessmentEdge[],
+): readonly ConceptAssessmentEdge[] {
+  const seen = new Set<string>();
+  const deduped: ConceptAssessmentEdge[] = [];
+  for (const edge of edges) {
+    const identity = edgeIdentity(edge);
+    if (seen.has(identity)) continue;
+    seen.add(identity);
+    deduped.push(edge);
+  }
+  return deduped;
+}
+
 /** One edge's outcome: REMOVED by a veto, or a surviving contribution to the blend — never both, matching C5.10's "a veto removes... and is not a weight." */
 type EdgeOutcome =
   | { readonly kind: 'vetoed'; readonly vetoedEdge: OracleVetoedEdge }
@@ -910,6 +950,12 @@ function rankOneCourse(
     const list = edgesByConcept.get(edge.conceptKey);
     if (list === undefined) edgesByConcept.set(edge.conceptKey, [edge]);
     else list.push(edge);
+  }
+  // R5: a verbatim-duplicate edge (same concept, same edgeIdentity) is
+  // dropped here, before veto-checking or contribution-building ever sees
+  // it — see dedupeVerbatimEdges's doc.
+  for (const [conceptKey, edgesForConcept] of edgesByConcept) {
+    edgesByConcept.set(conceptKey, [...dedupeVerbatimEdges(edgesForConcept)]);
   }
 
   const entries: ConceptPriority[] = [];

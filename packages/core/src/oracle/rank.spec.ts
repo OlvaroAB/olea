@@ -292,6 +292,159 @@ describe('rankOracle — accumulation across multiple assessments', () => {
   });
 });
 
+describe('rankOracle — verbatim-duplicate assessment edges are deduplicated (R5, pln.md §5, ol-egov.141.89.10.4 part 3)', () => {
+  it('a literal duplicate of an existing edge (same assessment, same basis) does not double-count toward preMasteryScore', () => {
+    const original = edge({
+      assessmentPath: 'Assessments/Quiz1.md',
+      yieldRank: 1,
+      confidence: 0.8,
+    });
+    const verbatimDuplicate = { ...original };
+
+    const single: RankOracleInput = {
+      evidence: {
+        edges: [original],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const withDuplicate: RankOracleInput = {
+      evidence: {
+        edges: [original, verbatimDuplicate],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+
+    const singleResult = rankOracle(single);
+    const duplicatedResult = rankOracle(withDuplicate);
+    const singleCourse = singleResult.courses[0];
+    const duplicatedCourse = duplicatedResult.courses[0];
+    if (singleCourse?.status !== 'ranked' || duplicatedCourse?.status !== 'ranked') {
+      throw new Error('expected ranked');
+    }
+    const singleEntry = singleCourse.ranked[0];
+    const duplicatedEntry = duplicatedCourse.ranked[0];
+    expect(singleEntry).toBeDefined();
+    expect(duplicatedEntry).toBeDefined();
+    if (singleEntry === undefined || duplicatedEntry === undefined) return;
+
+    // The defect this bead fixes: before the fix, a verbatim-duplicate edge
+    // doubled `contributions.length` and `preMasteryScore`.
+    expect(duplicatedEntry.factors.contributions).toHaveLength(1);
+    expect(duplicatedEntry.factors.preMasteryScore).toBeCloseTo(
+      singleEntry.factors.preMasteryScore,
+      9,
+    );
+  });
+
+  it('two edges on the same assessment but different bases are never merged — each basis still counts (control for the fix above)', () => {
+    const pastPaperEdge = edge({ assessmentPath: 'Assessments/Quiz1.md', citations: [citation()] });
+    const objectivesEdge = edge({
+      assessmentPath: 'Assessments/Quiz1.md',
+      citations: [],
+      basis: 'objectives',
+      objectivesCitations: [objectivesCitation()],
+    });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [pastPaperEdge, objectivesEdge],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked[0]?.factors.contributions).toHaveLength(2);
+  });
+
+  it('a real repeat assessment (same assessmentPath, distinct concept) is unaffected — dedup is scoped per concept', () => {
+    const a = edge({ conceptName: 'concept-a', assessmentPath: 'Assessments/Quiz1.md' });
+    const b = edge({ conceptName: 'concept-b', assessmentPath: 'Assessments/Quiz1.md' });
+    const input: RankOracleInput = {
+      evidence: {
+        edges: [a, b],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.ranked).toHaveLength(2);
+    expect(course.ranked.map((r) => r.factors.contributions.length)).toEqual([1, 1]);
+  });
+});
+
+describe('rankOracle — R6 (pln.md §5): distinct, identically-scored dated edges still sum by count — UNRESOLVED, ol-egov.141.89.10.4 part 3', () => {
+  // The frozen target (`eval/data/ilb/pln/targets.dev.json`, case
+  // PLN-cc6e4c20b6fb639a, assertion r6-count) requires a concept's relevance
+  // AND priority score to be numerically UNCHANGED whether it carries one
+  // dated edge or four edges that are individually indistinguishable in
+  // score (same yieldRank, confidence, weight and days-to-assessment, on
+  // four DIFFERENT real assessments). Today `preMasteryScore` is `sum of
+  // contributions`, so four identical contributions score 4x one — this
+  // test pins that current, failing behaviour (`it.fails`, not `it`) rather
+  // than silently going red, because no ruling settles HOW multiple edges
+  // should combine once they are not verbatim duplicates (R5's fix, above,
+  // dedupes an accidental REPEAT of the same real assessment; these are
+  // four DISTINCT real assessments that only coincide in score). Collapsing
+  // them the way R5 collapses a repeat would mean "she has four upcoming
+  // exams that happen to be equally weighted" scores the same as "she has
+  // one" — which contradicts this file's own documented reading of F4.2
+  // ("a concept examined by three assessments accumulates more priority
+  // than one examined by a single low-weight quiz") for every case where
+  // the accumulating edges are not literal repeats. A general fix here
+  // requires deciding a combination rule (see this bead's proposed decision
+  // in its close evidence) — max, a saturating sum, or some other function
+  // — none of which pln.md or a ruling names; changing it changes what she
+  // is shown first, so this bead reports rather than picks one.
+  it.fails('preMasteryScore and priorityScore are unchanged between one edge and four identically-scored edges (currently fails — see note above)', () => {
+    const asOf = '2026-01-01';
+    const manydatesEdges = [0, 1, 2, 3].map((i) =>
+      edge({
+        conceptName: 'dev-cpt-manydates',
+        assessmentPath: `Assessments/Dup${i}.md`,
+        yieldRank: 1,
+        confidence: 0.7,
+        citations: [],
+      }),
+    );
+    const dueDay = '2026-01-06'; // 5 days after asOf, matching daysToAssessment: 5
+
+    const buildInput = (edges: readonly ConceptAssessmentEdge[]): RankOracleInput => ({
+      evidence: {
+        edges,
+        assessmentsRead: readReport(
+          edges.map((e) => assessment({ path: e.assessmentPath, due: dueDay, weight: undefined })),
+        ),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf,
+    });
+
+    const four = rankOracle(buildInput(manydatesEdges));
+    const one = rankOracle(buildInput([manydatesEdges[0] as ConceptAssessmentEdge]));
+    const fourCourse = four.courses[0];
+    const oneCourse = one.courses[0];
+    if (fourCourse?.status !== 'ranked' || oneCourse?.status !== 'ranked') {
+      throw new Error('expected ranked');
+    }
+    const fourEntry = fourCourse.ranked.find((r) => r.conceptName === 'dev-cpt-manydates');
+    const oneEntry = oneCourse.ranked.find((r) => r.conceptName === 'dev-cpt-manydates');
+    expect(fourEntry?.factors.preMasteryScore).toBeCloseTo(
+      oneEntry?.factors.preMasteryScore ?? -1,
+      9,
+    );
+    expect(fourEntry?.priorityScore).toBeCloseTo(oneEntry?.priorityScore ?? -1, 9);
+  });
+});
+
 describe('rankOracle — the past-paper yield signal is load-bearing, not decoration (ol-evr1 / [YIELD-1])', () => {
   it('a concept with stronger past-paper salience outranks an otherwise-identical one, and flattening yieldRank collapses that order', () => {
     // Both concepts share the SAME single assessment, so weight, exam

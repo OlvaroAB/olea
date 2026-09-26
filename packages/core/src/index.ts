@@ -821,6 +821,7 @@ export {
   classifyHeadroom,
   EXHAUSTED_HEADROOM_THRESHOLD,
   type HeadroomBand,
+  MAX_ATTEMPTS,
   MAX_BACKOFF_MS,
   MAX_PACING_DELAY_MS,
   MIN_BACKOFF_MS,
@@ -828,6 +829,8 @@ export {
   nextUtcMidnightMs,
   PACING_HEADROOM_THRESHOLD,
   pacingDelayMs,
+  spendFromWorkflowAllowance,
+  workflowAllowanceExhausted,
 } from './ingestion/budget.js';
 export { type EngineDeps, IngestionQueueEngine, type TickResult } from './ingestion/engine.js';
 export {
