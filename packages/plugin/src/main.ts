@@ -104,6 +104,7 @@ import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js'
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
 import {
   type ExplainBackSourceBlock,
+  type FreeformTopicConceptMatch,
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
@@ -201,6 +202,7 @@ import {
 } from './registry/obsidian-ports.js';
 import { ObsidianRegistryOverridesStore } from './registry/overrides-store.js';
 import { createLocalRegistryProvider } from './registry/provider.js';
+import { createFreeformTopicMatcher } from './registry/topic-matcher-provider.js';
 import { RegistryView, VIEW_TYPE_OLEA_REGISTRY } from './registry/view.js';
 import { buildClassifyPassageHook } from './retrieval/classify-passage.js';
 import type { DraftQuizCardsDeps } from './retrieval/draft-quiz-cards.js';
@@ -4068,6 +4070,31 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * `[D-322]` (`ol-egov.141.89.6.4`): the production `ExplainBackModalDeps.matchFreeformTopicConcept`
+   * — `explain-back/modal.ts`'s `resolveTopicPrompt` was already written against this dep and
+   * degraded to `'no-match'` when no composer supplied one (see that method's own doc); this is
+   * the composer. `registry/topic-matcher-provider.ts`'s `createFreeformTopicMatcher` does the
+   * real work — reading `this.conceptRecords` and `this.registryOverridesCache`, the SAME two
+   * already-cached, synchronous sources this file keeps for other same-tick registry reads, never
+   * a fresh vault walk (see that module's own doc for why this is deliberately not a
+   * `registry/provider.ts` change: that provider's `load()` is async and re-walks the whole vault
+   * on every call, which cannot serve this dep's synchronous signature).
+   *
+   * `courseCode` is omitted here, honestly: none of `openExplainBackModal`'s three freeform call
+   * sites (the command palette, the session-builder screen, Home) carries a course signal today —
+   * each opens with `{ kind: 'freeform' }` and no active-file context to derive one from — so
+   * every match runs with `courseCode: null`, `[D-322]`'s own "every candidate is in scope" branch,
+   * never a guessed course. A later caller that does have one can supply it without changing this
+   * method's shape.
+   */
+  private matchFreeformTopicConcept(topic: string): FreeformTopicConceptMatch {
+    return createFreeformTopicMatcher({
+      conceptRecords: () => this.conceptRecords,
+      overrides: () => this.registryOverridesCache,
+    })(topic);
+  }
+
+  /**
    * Builds the `AcceptExplainBackGradingWithObservationContext` the accept
    * step needs — a fresh misconception-store read every call, same
    * "load fresh, never cache" discipline `ingestSessionJustClosed`'s own
@@ -4382,6 +4409,9 @@ export default class OleaPlugin extends Plugin {
         // it through `resolveGradingRelationContext`/`buildGradingSourceMaterial`.
         resolveCausesPartner: (subjectConceptId) =>
           this.resolveExplainBackCausesPartner(subjectConceptId),
+        // `[D-322]` (`ol-egov.141.89.6.4`): resolves a freeform topic to one subject concept at
+        // composition time — see `matchFreeformTopicConcept`'s own doc.
+        matchFreeformTopicConcept: (topic) => this.matchFreeformTopicConcept(topic),
         // `ol-egov.141.89.6.49`: the targeted vault read behind the edge's
         // own introducing-passage endpoints — see
         // `resolve-introducing-passage.ts`'s own doc for the grain it can

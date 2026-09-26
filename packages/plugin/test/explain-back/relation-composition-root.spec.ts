@@ -49,7 +49,7 @@ const modal = codeOf('explain-back/modal.ts');
 describe('main.ts: resolveExplainBackCausesPartner (rel.md section 1, "Explain-back partner (causes)")', () => {
   it('imports resolveExplainBackRelationEdge alongside the existing retrieveExplainBackSourceBlocks', () => {
     expect(main).toMatch(
-      /import \{\s*type ExplainBackSourceBlock,\s*resolveExplainBackRelationEdge,\s*retrieveExplainBackSourceBlocks,\s*\} from '\.\/explain-back\/request\.js';/,
+      /import \{\s*type ExplainBackSourceBlock,\s*type FreeformTopicConceptMatch,\s*resolveExplainBackRelationEdge,\s*retrieveExplainBackSourceBlocks,\s*\} from '\.\/explain-back\/request\.js';/,
     );
   });
 

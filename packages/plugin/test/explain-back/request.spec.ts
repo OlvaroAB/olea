@@ -25,6 +25,7 @@ import {
   matchFreeformTopicToConcept,
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
+  shouldRunExplainBackDepthPass,
 } from '../../src/explain-back/request.js';
 import { clozeFixture, mcqFixture, qaFixture } from '../review/fixtures.js';
 
@@ -510,5 +511,19 @@ describe('matchFreeformTopicToConcept ([D-322])', () => {
 
   it('an empty candidate list is no-match, never throws', () => {
     expect(matchFreeformTopicToConcept('mitosis', [], null)).toEqual({ kind: 'no-match' });
+  });
+});
+
+describe('shouldRunExplainBackDepthPass ([D-286])', () => {
+  it('runs the depth pass for a correct verdict', () => {
+    expect(shouldRunExplainBackDepthPass('correct')).toBe(true);
+  });
+
+  it("runs the depth pass for a partial verdict too, per the ruling's own carve-out", () => {
+    expect(shouldRunExplainBackDepthPass('partial')).toBe(true);
+  });
+
+  it('skips the depth pass for a clearly incorrect verdict', () => {
+    expect(shouldRunExplainBackDepthPass('incorrect')).toBe(false);
   });
 });

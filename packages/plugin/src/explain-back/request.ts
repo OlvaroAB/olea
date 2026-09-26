@@ -401,3 +401,26 @@ function questionAndReferenceAnswerForMcq(instrument: McqItem) {
     referenceAnswer: correct?.label ?? '(no correct option recorded)',
   };
 }
+
+/**
+ * `[D-286]`'s pass-two gate — a discovered gap, not this bead's assigned scope, found while
+ * surveying the chain for `ol-egov.141.89.6.4`'s gap table: the ruling's own acceptance line is "a
+ * clearly incorrect answer makes exactly one call and a partial makes two," but before this
+ * function existed nothing in `modal.ts`'s accept path read the correctness verdict at all before
+ * deciding whether to run the depth (SOLO) pass — every accepted attempt ran it, incorrect ones
+ * included. Pulled out as a pure, one-line predicate (this file's established split: logic here,
+ * DOM/state glue in `./modal.ts`) so the gate itself is unit-testable without the `obsidian` import
+ * that makes `modal.ts` untestable directly (see that file's own module doc, and
+ * `topic-match-composition-root.spec.ts`'s doc, for why).
+ *
+ * Only "clearly incorrect" is excluded, per the ruling's own words (David, 2026-09-22): "a partial
+ * answer still gets the depth pass … the growth stage already requires correctness on its own, so
+ * measuring depth there costs a call and loses no rigour," and it "keeps the depth record
+ * continuous during exactly the period she is learning the concept." Pass one's own outcome is
+ * unaffected either way — this decides only whether a SECOND call/record happens.
+ */
+export function shouldRunExplainBackDepthPass(
+  verdict: 'correct' | 'partial' | 'incorrect',
+): boolean {
+  return verdict !== 'incorrect';
+}

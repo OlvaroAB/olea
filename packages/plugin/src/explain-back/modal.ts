@@ -136,6 +136,7 @@ import {
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
+  shouldRunExplainBackDepthPass,
 } from './request.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
 import { type ExplainBackSupportShown, supportLevelShownForExplainBack } from './solo-review.js';
@@ -1188,7 +1189,28 @@ export class ExplainBackModal extends Modal {
     // condition rather than running unconditionally and leaving a
     // depth-only event as the sole trace of a source that had already
     // changed underneath her.
-    if (result !== null && result.status === 'accepted' && this.deps.recordSoloGradeAndReview) {
+    //
+    // `[D-286]` (`ol-egov.141.89.6.4`'s gap table — a discovered gap, not
+    // this ruling's original wiring): "a clearly incorrect answer makes
+    // exactly one call and a partial makes two" — this method used to read
+    // no verdict at all before deciding whether to run the depth pass,
+    // so an accepted-but-incorrect attempt still made the second call.
+    // `grading.outcome === 'graded'` is always true here in production
+    // (the only path into `acceptGrading`/`computeAcceptGrading` is
+    // `renderGradedPhase`'s Accept button, never reached for the
+    // `'unable-to-assess'` branch — see `renderGradedPhase`'s own early
+    // return above); still checked explicitly, never asserted past the
+    // type, so a future caller of this method cannot silently skip it.
+    // `./request.ts`'s pure `shouldRunExplainBackDepthPass` carries the
+    // rule itself, unit-tested there for both branches.
+    const grading = pending.grading;
+    if (
+      result !== null &&
+      result.status === 'accepted' &&
+      this.deps.recordSoloGradeAndReview &&
+      grading.outcome === 'graded' &&
+      shouldRunExplainBackDepthPass(grading.verdict)
+    ) {
       // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
       // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
       const supportLevelShown = supportLevelShownForExplainBack(
