@@ -631,6 +631,21 @@ export default class OleaPlugin extends Plugin {
    */
   private citationRevision: CitationRevisionTrigger | null = null;
   /**
+   * `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the SAME `ObsidianCitationHashStore`
+   * `citationRevision` above writes pending-revalidation facts to
+   * (`buildCitationRevisionWiring`'s `store`), held here so
+   * `session-builder/provider.ts`'s `citationHashStore` dep — its own field doc names this exact
+   * field as the one-line follow-up outside that file's `owns` — can read the same facts, at all
+   * three of its call sites below (`createLocalSessionBuilderProvider`'s `registerView`,
+   * `composeDefaultStudySession`, `extendDefaultStudySession`). One instance for the plugin's
+   * lifetime, not one per call: `ObsidianCitationHashStore` is a stateless `data.json` projection
+   * over `this` with no per-instance cache (`citation-hash-store.ts`'s own doc — every method
+   * re-reads), so a second instance would answer identically; this reuses rather than duplicates.
+   * Assigned unconditionally in `onload` below, the same posture as `citationRevision` itself —
+   * no Worker token needed for the free hash read.
+   */
+  private citationHashStore: ObsidianCitationHashStore | null = null;
+  /**
    * F6.9's per-course material-arrival timestamps (`ol-v7r5.6`) — a local
    * `data.json` projection, fed by `recordMaterialArrivalIfObserved` below on
    * the same materiality trigger path as `this.materiality`. Built
@@ -1055,20 +1070,17 @@ export default class OleaPlugin extends Plugin {
         // carries. Absent means the gesture is not drawn at all — never
         // drawn and inert.
         gradeContestPort,
-        // `[D-360]` STOPS HERE, NAMED RATHER THAN FORCED: this file cannot
-        // thread `enqueueContestRegradeJobOnDisputeBestEffort` (below) onto
-        // `ReviewSession` through this object, because `ports`'s type,
-        // `ReviewSessionPorts`, is declared in `./review/open-session.js`
-        // — outside this bead's `owns` — and that module also performs the
-        // actual `new ReviewSession({...})` construction with each
-        // `ReviewSessionPorts` field named individually (no wholesale
-        // spread), so BOTH a type addition there AND one more line at that
-        // call site are needed before this reaches production. See this
-        // bead's report for the exact two edits (mirroring
-        // `gradeContestPort` just above, field-for-field, in both places).
-        // `enqueueContestRegradeJobOnDisputeBestEffort` and
-        // `this.contestRegradeEngine` are real and tested; only this one
-        // wire is missing.
+        // `[D-360]`'s moment-of-dispute trigger, restored: `open-session.ts`'s
+        // `ReviewSessionPorts.contestRegradeEnqueuer` and its own field-for-field
+        // `new ReviewSession({...})` thread (both outside this bead's `owns`) now carry it —
+        // this is the one remaining wire, mirroring `gradeContestPort` just above.
+        // `enqueueContestRegradeJobOnDisputeBestEffort` (below) is real and tested; activation
+        // stays off (`this.contestRegradeEngine` is `null` until that ships), so no paid call is
+        // reachable through this yet.
+        contestRegradeEnqueuer: {
+          enqueueOnDispute: (dispute) =>
+            this.enqueueContestRegradeJobOnDisputeBestEffort(vault, dispute),
+        },
       },
     };
 
@@ -1525,6 +1537,11 @@ export default class OleaPlugin extends Plugin {
             // and the composed session she sits cannot disagree about how far
             // behind a course is — see `windowDeficitFromReviewLog` below.
             windowDeficit: (deficitInput) => this.windowDeficitFromReviewLog(deficitInput),
+            // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the same store `citationRevision`
+            // writes pending-revalidation facts to (see that field's own doc) — omitted, same
+            // `exactOptionalPropertyTypes` posture as `readRankWeights` above, only in the window
+            // before `onload` assigns it (never reached once a leaf actually opens).
+            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
           }),
         ),
     );
@@ -1986,8 +2003,12 @@ export default class OleaPlugin extends Plugin {
     // above (`RevisionJudgePort` is shape-identical to `MaterialityJudge` —
     // `concept/revision/types.ts`'s own doc), adapted rather than relied on
     // via TS method bivariance (`adaptMaterialityJudgeAsRevisionJudge`).
+    // `ol-egov.141.89.5.19`: held on `this.citationHashStore` too, so the session-builder deps
+    // below (and `composeDefaultStudySession`/`extendDefaultStudySession`) read the SAME store
+    // this trigger writes pending-revalidation facts to — see that field's own doc.
+    this.citationHashStore = new ObsidianCitationHashStore(this);
     this.citationRevision = buildCitationRevisionWiring({
-      store: new ObsidianCitationHashStore(this),
+      store: this.citationHashStore,
       clock: { now: () => this.now().getTime() },
       judge: adaptMaterialityJudgeAsRevisionJudge(this.buildMaterialityJudge()),
     });
@@ -3334,6 +3355,10 @@ export default class OleaPlugin extends Plugin {
         ...(this.rankWeights?.readRankWeights
           ? { readRankWeights: this.rankWeights.readRankWeights }
           : {}),
+        // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): same store, same reasoning as the
+        // `registerView` call site above — this door onto the composer withholds a pending
+        // instrument too, not only the session-builder leaf.
+        ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
       },
       { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
@@ -3431,6 +3456,10 @@ export default class OleaPlugin extends Plugin {
         ...(this.rankWeights?.readRankWeights
           ? { readRankWeights: this.rankWeights.readRankWeights }
           : {}),
+        // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): same store, same reasoning as
+        // `composeDefaultStudySession` above — an outrun-the-target extend must withhold a
+        // pending instrument too, not only the fresh compose it re-derives from.
+        ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
       },
       {
         budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,

@@ -1599,7 +1599,10 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
         // between the call and the `return`, so this pin no longer requires
         // them to be adjacent — see the `ol-egov.141.89.10.14` describe block
         // below for the pin on those two statements themselves.
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
+        // `ol-egov.141.89.5.19` added a `citationHashStore` spread after this
+        // one (its own describe block below pins it), so the gap to the
+        // closing `},` is no longer immediate.
+        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
       ),
     );
   });
@@ -1609,9 +1612,12 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     // multi-line, so this pattern matches `budgetMinutes` inside that object
     // rather than the old single-line `{ budgetMinutes: ... }` — the
     // `readRankWeights` spread and the overall call shape are unaffected.
+    // `ol-egov.141.89.5.19` added a `citationHashStore` spread after this one
+    // (its own describe block below pins it), so the gap to the closing
+    // `},` is no longer immediate.
     expect(main).toMatch(
       new RegExp(
-        `private async extendDefaultStudySession\\([\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},\\s*\\},\\s*\\{\\s*budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,[\\s\\S]{0,200}?\\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
+        `private async extendDefaultStudySession\\([\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*\\{\\s*budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,[\\s\\S]{0,200}?\\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
       ),
     );
   });
@@ -1622,6 +1628,63 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
     // the five sites `ol-v7r5.61` added, plus the Home construction site
     // `ol-egov.141.89.10.40` adds: 1 + 5 + 1 = 7.
     expect(occurrences.length).toBe(7);
+  });
+});
+
+describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store reaches every direct compose call, so a cited passage awaiting a judge verdict withholds its instrument in production', () => {
+  // `session-builder/provider.ts`'s `CreateLocalSessionBuilderProviderDeps
+  // .citationHashStore` field doc (added by the same bead this describe
+  // block names) says `main.ts` built an `ObsidianCitationHashStore(this)`
+  // for a different consumer (`citationRevision`'s wiring) but did not yet
+  // thread it into `composeStudySessionForRequest`/
+  // `createLocalSessionBuilderProvider` — so `resolveCitationPendingRevalidation`
+  // stayed dormant everywhere `main.ts` calls the composer directly. This
+  // held the SAME store on `this.citationHashStore` and threaded it into
+  // all three of those call sites, the identical `readRankWeights`-shaped
+  // ternary the describe block above already pins for a different optional
+  // dep, so a caller before `onload` finishes omits the key rather than
+  // passing an unassigned value.
+
+  const citationSpread =
+    '\\.\\.\\.\\(this\\.citationHashStore \\? \\{ citationHashStore: this\\.citationHashStore \\} : \\{\\}\\)';
+
+  it('this.citationHashStore is the SAME instance buildCitationRevisionWiring receives, constructed once', () => {
+    expect(main).toMatch(
+      /this\.citationHashStore = new ObsidianCitationHashStore\(this\);\s*this\.citationRevision = buildCitationRevisionWiring\(\{\s*store: this\.citationHashStore,/,
+    );
+    // One construction, not a second instance built for the session-builder
+    // deps — see this file's field doc on why a second instance would be
+    // safe but pointless (no per-instance cache to miss).
+    expect(main.match(/new ObsidianCitationHashStore\(/g)?.length).toBe(1);
+  });
+
+  it('the session builder view’s createLocalSessionBuilderProvider receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalSessionBuilderProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,[\\s\\S]{0,900}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${citationSpread},\\s*\\}\\),`,
+      ),
+    );
+  });
+
+  it('composeDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,1100}?${citationSpread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);`,
+      ),
+    );
+  });
+
+  it('extendDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
+    expect(main).toMatch(
+      new RegExp(
+        `private async extendDefaultStudySession\\([\\s\\S]{0,1200}?${citationSpread},\\s*\\},\\s*\\{\\s*budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES,[\\s\\S]{0,200}?\\},\\s*now,\\s*\\);\\s*if \\(result === null\\) return null;`,
+      ),
+    );
+  });
+
+  it('all three direct-compose call sites receive it — exactly three occurrences', () => {
+    const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
+    expect(occurrences.length).toBe(3);
   });
 });
 
@@ -1942,18 +2005,19 @@ describe('[D-360]: the enqueue-on-dispute helper is real and reuses enqueueConte
     );
   });
 
-  // This is the one wire `main.ts` cannot complete on its own: `ports`'s
-  // type (`ReviewSessionPorts`) and the `new ReviewSession({...})`
-  // construction site both live in `review/open-session.ts`, outside this
-  // bead's `owns`. This test reads the RAW source (comments included,
-  // unlike `main` above) because the honest reason is stated in a comment
-  // right where `gradeContestPort` is threaded — pinning it here means a
-  // silent, incomplete "fix" (removing the comment without actually wiring
-  // open-session.ts) fails this test rather than going unnoticed.
-  it('names the exact open-session.ts gap in a comment beside gradeContestPort, and does not silently claim contestRegradeEnqueuer is wired into ports', () => {
-    const rawMain = readFileSync(`${srcDir}main.ts`, 'utf8');
-    expect(rawMain).toMatch(/ReviewSessionPorts`, is declared in `\.\/review\/open-session\.js`/);
-    expect(rawMain).toMatch(/outside this bead's `owns`/);
-    expect(main).not.toMatch(/contestRegradeEnqueuer:\s*\{/);
+  // `open-session.ts`'s `ReviewSessionPorts.contestRegradeEnqueuer` and its
+  // own field-for-field `new ReviewSession({...})` thread now exist (client
+  // commit `d75d3ee`), so the one remaining wire — this file's own `ports`
+  // object — is restored here, beside `gradeContestPort`. Activation itself
+  // stays off regardless (`this.contestRegradeEngine`'s own
+  // `DEFAULT_CONTEST_REGRADE_ACTIVATION` doc above): no paid call is
+  // reachable through this yet, only the trigger that will call it once
+  // activation flips.
+  it('contestRegradeEnqueuer is threaded into ports, beside gradeContestPort, calling the best-effort helper with the same vault', () => {
+    // `main` (`codeOf`) strips comments, so this pins the code shape only —
+    // not the restored `[D-360]` comment, which stays in the raw source.
+    expect(main).toMatch(
+      /gradeContestPort,\s*contestRegradeEnqueuer:\s*\{\s*enqueueOnDispute:\s*\(dispute\)\s*=>\s*this\.enqueueContestRegradeJobOnDisputeBestEffort\(vault,\s*dispute\),\s*\},\s*\},/,
+    );
   });
 });
