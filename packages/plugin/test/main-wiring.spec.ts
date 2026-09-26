@@ -460,9 +460,7 @@ describe("component 3.1's delivered growth-stage depth gate has a real productio
   });
 
   it('resolves the delivered value once, fresh, alongside the review-log snapshot — the same "open time, read fresh per call" shape as snapshot', () => {
-    expect(main).toMatch(
-      /let depthGateValue: SoloLevel \| undefined;/,
-    );
+    expect(main).toMatch(/let depthGateValue: SoloLevel \| undefined;/);
     expect(main).toMatch(
       /void \(this\.depthGate\?\.readDepthGate\?\.\(\) \?\? Promise\.resolve\(undefined\)\)\.then\(\(value\) => \{\s*depthGateValue = value;\s*\}\);/,
     );
@@ -2206,7 +2204,9 @@ describe('the plugin clock reaches diagnostics and the relation-cache sync', () 
 // reasoning as every other block in this file.
 describe('[D-360]: the contest-regrade engine is built at startup with judge omitted', () => {
   it('builds this.contestRegradeEngine via createContestRegradeEngine before this.review is assigned', () => {
-    const engineIndex = main.indexOf('this.contestRegradeEngine = await createContestRegradeEngine(');
+    const engineIndex = main.indexOf(
+      'this.contestRegradeEngine = await createContestRegradeEngine(',
+    );
     const reviewIndex = main.indexOf('this.review = {');
     expect(engineIndex).toBeGreaterThan(-1);
     expect(reviewIndex).toBeGreaterThan(-1);
@@ -2220,8 +2220,12 @@ describe('[D-360]: the contest-regrade engine is built at startup with judge omi
     expect(end).toBeGreaterThan(start);
     const call = main.slice(start, end);
     expect(call).toMatch(/port: gradeContestPort,/);
-    expect(call).toMatch(/loadDispute: \(disputeEventId\) =>\s*this\.findDisputeForContestRegrade\(vault, disputeEventId\),/);
-    expect(call).toMatch(/loadRecords: \(\) => this\.loadReviewLogEntriesForContestRegrade\(vault\),/);
+    expect(call).toMatch(
+      /loadDispute: \(disputeEventId\) =>\s*this\.findDisputeForContestRegrade\(vault, disputeEventId\),/,
+    );
+    expect(call).toMatch(
+      /loadRecords: \(\) => this\.loadReviewLogEntriesForContestRegrade\(vault\),/,
+    );
     expect(call).toMatch(/appendCorrectiveRegrade: \(\) =>/);
     // The one thing this round deliberately omits — see the doc this test
     // cannot read (comments are stripped), and this bead's report.

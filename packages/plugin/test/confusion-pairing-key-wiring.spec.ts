@@ -30,7 +30,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { ConceptRelation, MisconceptionRecord, ReadConcept } from 'olea-core';
-import { corroborateConfusionPairings, deriveRelationSet, OPAQUE_CONCEPT_KEY_PREFIX } from 'olea-core';
+import {
+  corroborateConfusionPairings,
+  deriveRelationSet,
+  OPAQUE_CONCEPT_KEY_PREFIX,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 
 const srcDir = fileURLToPath(new URL('../src/', import.meta.url));
@@ -44,9 +48,11 @@ function codeOf(relativePath: string): string {
 
 const main = codeOf('main.ts');
 
-describe('main.ts passes each concept\'s opaque key into confusion-pair corroboration (ol-2zfj.164)', () => {
+describe("main.ts passes each concept's opaque key into confusion-pair corroboration (ol-2zfj.164)", () => {
   it('the corroborateConfusionPairings call site maps concept.key, not just name/aliases', () => {
-    expect(main).toMatch(/corroborateConfusionPairings\(\s*pass\.relations,\s*records,\s*pass\.read\.concepts\.map/);
+    expect(main).toMatch(
+      /corroborateConfusionPairings\(\s*pass\.relations,\s*records,\s*pass\.read\.concepts\.map/,
+    );
     expect(main).toMatch(
       /pass\.read\.concepts\.map\(\(concept\)\s*=>\s*\(\{\s*name:\s*concept\.name,\s*aliases:\s*concept\.aliases,\s*key:\s*concept\.key,?\s*\}\)\)/,
     );
@@ -109,7 +115,11 @@ function record(overrides: Partial<MisconceptionRecord>): MisconceptionRecord {
 
 /** Mirrors main.ts's call-site mapping exactly (`pass.read.concepts.map(...)`), from `ReadConcept`-shaped inputs. */
 function toConfusionPairingConcepts(concepts: readonly ReadConcept[]) {
-  return concepts.map((concept) => ({ name: concept.name, aliases: concept.aliases, key: concept.key }));
+  return concepts.map((concept) => ({
+    name: concept.name,
+    aliases: concept.aliases,
+    key: concept.key,
+  }));
 }
 
 describe('the production call shape resolves an opaque-keyed record through the key index', () => {
@@ -151,7 +161,10 @@ describe('the production call shape resolves an opaque-keyed record through the 
     ];
 
     // The pre-fix shape: name/aliases only, no key — what main.ts passed before this bead.
-    const preFixShape = readConcepts.map((concept) => ({ name: concept.name, aliases: concept.aliases }));
+    const preFixShape = readConcepts.map((concept) => ({
+      name: concept.name,
+      aliases: concept.aliases,
+    }));
 
     const verdicts = corroborateConfusionPairings(relations, records, preFixShape);
 

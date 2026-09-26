@@ -90,8 +90,15 @@ export interface EvaluateMaterialityGateInput {
 export function evaluateMaterialityGate(
   input: EvaluateMaterialityGateInput,
 ): MaterialityGateOutcome {
-  const { previous, current, canonicalCharDelta, lastChangedAt, now, constants, currentCanonicalLength } =
-    input;
+  const {
+    previous,
+    current,
+    canonicalCharDelta,
+    lastChangedAt,
+    now,
+    constants,
+    currentCanonicalLength,
+  } = input;
 
   if (previous !== null && previous.rawHash === current.rawHash) {
     return { kind: 'unchanged' };

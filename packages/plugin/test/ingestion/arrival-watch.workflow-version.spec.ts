@@ -15,11 +15,11 @@ import type {
   VaultSource,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { EXTRACTION_WORKFLOW_VERSION } from '../../src/ingestion/extraction-workflow-version.js';
 import {
   buildIngestionArrivalWatch,
   createInMemoryLastChangedTracker,
 } from '../../src/ingestion/arrival-watch.js';
+import { EXTRACTION_WORKFLOW_VERSION } from '../../src/ingestion/extraction-workflow-version.js';
 
 class MemoryVaultSource implements VaultSource {
   private readonly binary = new Map<string, Uint8Array>();

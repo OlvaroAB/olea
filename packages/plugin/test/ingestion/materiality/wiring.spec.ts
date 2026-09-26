@@ -540,8 +540,7 @@ describe('buildRegionAwareMaterialityRequest', () => {
     // A coined, moderate-length note (five short sections) with exactly one
     // sentence changed in the fourth section — the common case row 1.4
     // exists for: one real edit inside an otherwise-unchanged file.
-    const section = (heading: string, body: string) =>
-      `## ${heading}\n\n${body}\n`;
+    const section = (heading: string, body: string) => `## ${heading}\n\n${body}\n`;
     const unchangedBody =
       'This section restates settled background material at some length ' +
       'so the fixture reads like a realistic study note rather than a toy ' +

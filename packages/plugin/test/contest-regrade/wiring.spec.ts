@@ -10,7 +10,6 @@
  */
 import { IngestionQueueEngine } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
-import type { ObsidianDataHost } from '../../src/ingestion/queue-store.js';
 import { CONTEST_REGRADE_QUEUE_STORAGE_KEY } from '../../src/contest-regrade/queue-store.js';
 import { CONTEST_REGRADE_JOB_KIND } from '../../src/contest-regrade/types.js';
 import {
@@ -18,6 +17,7 @@ import {
   DEFAULT_CONTEST_REGRADE_ACTIVATION,
   drainContestRegradeQueue,
 } from '../../src/contest-regrade/wiring.js';
+import type { ObsidianDataHost } from '../../src/ingestion/queue-store.js';
 
 class FakeDataHost implements ObsidianDataHost {
   blob: unknown = null;
@@ -78,10 +78,7 @@ describe('buildContestRegradeEngineDeps + drainContestRegradeQueue — end to en
 
       // Simulate several reconnects while activation stays off.
       for (let i = 0; i < 5; i++) {
-        const result = await drainContestRegradeQueue(
-          engine,
-          DEFAULT_CONTEST_REGRADE_ACTIVATION,
-        );
+        const result = await drainContestRegradeQueue(engine, DEFAULT_CONTEST_REGRADE_ACTIVATION);
         expect(result).toEqual({ kind: 'blocked', reason: 'activation-off' });
       }
 

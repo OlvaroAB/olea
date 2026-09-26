@@ -450,7 +450,11 @@ export async function runGenerationSweep(
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
       if (!candidate.courses.includes(courseCode)) continue;
 
-      const existing = await deps.cache.findByKey(courseCode, candidate.name, courseVersionExpectation);
+      const existing = await deps.cache.findByKey(
+        courseCode,
+        candidate.name,
+        courseVersionExpectation,
+      );
       if (existing !== null) {
         skippedDuplicate += 1;
         continue;

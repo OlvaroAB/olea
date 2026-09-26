@@ -36,9 +36,7 @@ describe('isContestRegradeJobPayload', () => {
   });
 
   it('rejects a payload whose conceptIds is not an array of strings', () => {
-    expect(
-      isContestRegradeJobPayload({ ...payload(), conceptIds: ['ok', 42] }),
-    ).toBe(false);
+    expect(isContestRegradeJobPayload({ ...payload(), conceptIds: ['ok', 42] })).toBe(false);
   });
 
   it('rejects null, a primitive, and an unrelated object', () => {

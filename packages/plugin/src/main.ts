@@ -30,8 +30,8 @@ import {
   createFsrsScheduler,
   DEFAULT_COURSES_FOLDER,
   type DeviceCapability,
-  detectCourseProposals,
   type DisputeLogRecord,
+  detectCourseProposals,
   EMPTY_REGISTRY_OVERRIDES,
   type ExplainBackPromptContext,
   type ExtractedUnit,
@@ -1032,8 +1032,7 @@ export default class OleaPlugin extends Plugin {
       this,
       {
         port: gradeContestPort,
-        loadDispute: (disputeEventId) =>
-          this.findDisputeForContestRegrade(vault, disputeEventId),
+        loadDispute: (disputeEventId) => this.findDisputeForContestRegrade(vault, disputeEventId),
         loadRecords: () => this.loadReviewLogEntriesForContestRegrade(vault),
         // Unreachable today: `runner.ts` returns before ever calling this —
         // both because `judge` above is omitted, and (independently)
@@ -2666,7 +2665,10 @@ export default class OleaPlugin extends Plugin {
       const records = await this.loadReviewLogEntriesForContestRegrade(vault);
       await enqueueContestRegradeJobOnDispute(engine, dispute, records);
     } catch (error) {
-      console.error('Olea: contest-regrade enqueue failed (the contest itself is unaffected)', error);
+      console.error(
+        'Olea: contest-regrade enqueue failed (the contest itself is unaffected)',
+        error,
+      );
     }
   }
 

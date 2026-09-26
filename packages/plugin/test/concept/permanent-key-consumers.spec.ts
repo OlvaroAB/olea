@@ -130,10 +130,14 @@ function ports(
     clock,
     draftAcceptPort: {
       accept() {
-        throw new Error('permanent-key-consumers.spec: no draft item in this suite should call accept');
+        throw new Error(
+          'permanent-key-consumers.spec: no draft item in this suite should call accept',
+        );
       },
       reject() {
-        throw new Error('permanent-key-consumers.spec: no draft item in this suite should call reject');
+        throw new Error(
+          'permanent-key-consumers.spec: no draft item in this suite should call reject',
+        );
       },
     },
   };

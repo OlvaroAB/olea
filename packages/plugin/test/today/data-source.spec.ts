@@ -46,8 +46,8 @@ import {
   createFsrsScheduler,
   EMPTY_REGISTRY_OVERRIDES,
   enumerateVaultInstruments,
-  pruneConcept,
   provisionalConceptKey,
+  pruneConcept,
   readReviewLogHistory,
   resolveDispute,
 } from 'olea-core';
@@ -2188,9 +2188,7 @@ describe('createVaultScopeSource reads the same population the grove does (ol-eg
     });
     const groveState = await grove.load();
     if (groveState.kind !== 'model') throw new Error('expected the grove to read a model');
-    const groveCourse = groveState.courses.find(
-      (section) => section.course === 'TESTC101',
-    )?.model;
+    const groveCourse = groveState.courses.find((section) => section.course === 'TESTC101')?.model;
     if (groveCourse === undefined || groveCourse.status !== 'declared') {
       throw new Error(`expected the grove to read TESTC101 declared, got ${groveCourse?.status}`);
     }

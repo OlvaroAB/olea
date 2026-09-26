@@ -130,7 +130,7 @@ describe('createDraftAcceptPort — generalized dispatch (ol-0r92.88)', () => {
     expect(verdicts).toHaveLength(1); // no second verdict appended
   });
 
-  it('a materializer throwing StaleSourceRevisionError leaves the record rejected, appends a rejected verdict naming the draft id and the draft\'s own instrument type, and a retry still refuses', async () => {
+  it("a materializer throwing StaleSourceRevisionError leaves the record rejected, appends a rejected verdict naming the draft id and the draft's own instrument type, and a retry still refuses", async () => {
     const staleMaterializer: DraftMaterializeFn = async () => {
       throw new StaleSourceRevisionError('the source note changed since this draft was cached');
     };

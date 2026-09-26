@@ -24,7 +24,12 @@
  */
 
 import { TASK_IDS } from 'olea-contracts';
-import type { DraftCardContent, DraftDistractorGrounding, DraftProvenance, DraftQuestion } from './types.js';
+import type {
+  DraftCardContent,
+  DraftDistractorGrounding,
+  DraftProvenance,
+  DraftQuestion,
+} from './types.js';
 
 /**
  * A distractor as `quiz.generate.v1` v2.0.0 emits it (`[D-195]`) — `{ text,

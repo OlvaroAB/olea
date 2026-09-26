@@ -6,12 +6,15 @@
  */
 import type { PersistedQueue } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import type { ObsidianDataHost } from '../../src/ingestion/queue-store.js';
-import { INGESTION_QUEUE_STORAGE_KEY, ObsidianQueueStore } from '../../src/ingestion/queue-store.js';
 import {
   CONTEST_REGRADE_QUEUE_STORAGE_KEY,
   ContestRegradeQueueStore,
 } from '../../src/contest-regrade/queue-store.js';
+import type { ObsidianDataHost } from '../../src/ingestion/queue-store.js';
+import {
+  INGESTION_QUEUE_STORAGE_KEY,
+  ObsidianQueueStore,
+} from '../../src/ingestion/queue-store.js';
 
 class FakeDataHost implements ObsidianDataHost {
   blob: unknown = null;
@@ -83,7 +86,9 @@ describe('ContestRegradeQueueStore.save — read-modify-write', () => {
 
   it('uses readModifyWrite when the host supports it', async () => {
     const calls: unknown[] = [];
-    const host: ObsidianDataHost & { readModifyWrite(mutate: (c: unknown) => unknown): Promise<void> } = {
+    const host: ObsidianDataHost & {
+      readModifyWrite(mutate: (c: unknown) => unknown): Promise<void>;
+    } = {
       async loadData() {
         return { someOtherPluginSetting: true };
       },

@@ -142,7 +142,9 @@ describe('originalGradeEventIdFor — the revisionOf target for a corrected cont
 
   it('is null when the instrument has no graded explain-back event on the log', () => {
     expect(originalGradeEventIdFor(INSTRUMENT, [])).toBeNull();
-    expect(originalGradeEventIdFor('some-other-instrument', [gradedExplainBackReview()])).toBeNull();
+    expect(
+      originalGradeEventIdFor('some-other-instrument', [gradedExplainBackReview()]),
+    ).toBeNull();
   });
 
   it('names the MOST RECENT grade when the instrument has been re-graded before', () => {

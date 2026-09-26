@@ -18,8 +18,8 @@
  * reason among others — see `cache-store.ts`).
  */
 
-import type { InstrumentCitation } from 'olea-core';
 import type { InstrumentType } from 'olea-contracts';
+import type { InstrumentCitation } from 'olea-core';
 
 /**
  * `[D-195]` (`ol-0r92.40`): a grounded distractor's provenance — the wrong
@@ -252,7 +252,12 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   }
   if (v.instrumentType === 'qa') {
     const c = v.card as Record<string, unknown> | undefined;
-    if (typeof c !== 'object' || c === null || typeof c.front !== 'string' || typeof c.back !== 'string') {
+    if (
+      typeof c !== 'object' ||
+      c === null ||
+      typeof c.front !== 'string' ||
+      typeof c.back !== 'string'
+    ) {
       return false;
     }
     if (v.question !== undefined) return false; // mutually exclusive with `question` — see the field's own doc

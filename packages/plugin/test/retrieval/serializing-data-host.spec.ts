@@ -110,7 +110,8 @@ describe('SerializingDataHost', () => {
 
     const atomicWriteKey = (key: string, value: unknown) =>
       host.readModifyWrite((current) => {
-        const blob = typeof current === 'object' && current !== null ? { ...(current as object) } : {};
+        const blob =
+          typeof current === 'object' && current !== null ? { ...(current as object) } : {};
         return { ...blob, [key]: value };
       });
 
@@ -133,7 +134,8 @@ describe('SerializingDataHost', () => {
       throw new Error('mutate blew up');
     });
     const succeeding = host.readModifyWrite((current) => {
-      const blob = typeof current === 'object' && current !== null ? { ...(current as object) } : {};
+      const blob =
+        typeof current === 'object' && current !== null ? { ...(current as object) } : {};
       return { ...blob, ok: true };
     });
     const thirdCall = host.loadData();

@@ -83,19 +83,26 @@ describe('materializeAcceptedCardDraft', () => {
     const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
 
     await expect(
-      materializeAcceptedCardDraft(vault, { sourcePath: notePath, card: { front: '   ', back: 'x' } }),
+      materializeAcceptedCardDraft(vault, {
+        sourcePath: notePath,
+        card: { front: '   ', back: 'x' },
+      }),
     ).rejects.toThrow(/front and a back/);
     expect(vault.raw(notePath)).toBe('prose\n');
 
     await expect(
-      materializeAcceptedCardDraft(vault, { sourcePath: notePath, card: { front: 'x', back: '  ' } }),
+      materializeAcceptedCardDraft(vault, {
+        sourcePath: notePath,
+        card: { front: 'x', back: '  ' },
+      }),
     ).rejects.toThrow(/front and a back/);
     expect(vault.raw(notePath)).toBe('prose\n');
   });
 
   it('a leading frontmatter block: the card lands after it, never before (ol-p3t07b, same fact materialize-mcq.ts pins)', async () => {
     const notePath = '01 Courses/COGS214/Week 2.md';
-    const original = '---\ncourse: COGS214\ntopic: "[[Working memory]]"\n---\n\n# Week 2\n\nSome prose.\n';
+    const original =
+      '---\ncourse: COGS214\ntopic: "[[Working memory]]"\n---\n\n# Week 2\n\nSome prose.\n';
     const vault = new MemoryVaultSource({ [notePath]: original });
 
     await materializeAcceptedCardDraft(vault, { sourcePath: notePath, card: CARD });

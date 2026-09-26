@@ -46,7 +46,12 @@ const groundedResponse = (stem: string): DraftQuizCardsResult => ({
     stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'test-model' },
     result: {
       questions: [
-        { stem: `${stem} (redrafted)`, correctAnswer: 'A', distractors: ['B', 'C', 'D'], feedback: 'because' },
+        {
+          stem: `${stem} (redrafted)`,
+          correctAnswer: 'A',
+          distractors: ['B', 'C', 'D'],
+          feedback: 'because',
+        },
       ],
     },
   },

@@ -40,6 +40,7 @@
  * `GET /v1/depth-gate` for the route this reads.
  */
 
+import type { SoloLevel } from 'olea-contracts';
 import {
   DEPTH_GATE_ENDPOINT_PATH,
   DEPTH_GATE_KIND,
@@ -48,7 +49,6 @@ import {
   envelopeFreshness,
   readArtifactEnvelope,
 } from 'olea-contracts';
-import type { SoloLevel } from 'olea-contracts';
 import type { HttpResponseLike, WorkerConfig } from '../worker/transport.js';
 
 /**

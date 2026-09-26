@@ -12,8 +12,11 @@
  */
 import type { MisconceptionResolutionEvidenceEvent } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import type {
+  MisconceptionLookupPort,
+  ResolutionEvidenceAppendPort,
+} from '../../src/review/ports.js';
 import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
-import type { MisconceptionLookupPort, ResolutionEvidenceAppendPort } from '../../src/review/ports.js';
 import {
   clozeFixture,
   fakeDraftAcceptPort,

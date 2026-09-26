@@ -27,8 +27,11 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import type {
+  MaterialityJudge,
+  MaterialityJudgeVerdict,
+} from '../src/ingestion/materiality/types.js';
 import { buildMaterialityWiring } from '../src/ingestion/materiality/wiring.js';
-import type { MaterialityJudge, MaterialityJudgeVerdict } from '../src/ingestion/materiality/types.js';
 
 const srcDir = fileURLToPath(new URL('../src/', import.meta.url));
 
@@ -106,7 +109,10 @@ describe('a first sighting can never itself dispatch a paid materiality judge ca
     // logic rather than importing it: main.ts cannot be imported at all
     // under Vitest. Kept honest by the source-level pin in main-wiring.spec.ts
     // ("records an arrival from the real materiality-evaluation result").
-    function observedMaterialChange(result: { readonly kind: string; readonly verdict?: { readonly material: boolean } }): boolean {
+    function observedMaterialChange(result: {
+      readonly kind: string;
+      readonly verdict?: { readonly material: boolean };
+    }): boolean {
       return (
         result.kind === 'judge-unavailable' ||
         (result.kind === 'verdict' && result.verdict?.material === true)

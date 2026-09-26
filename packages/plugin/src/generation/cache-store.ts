@@ -214,7 +214,10 @@ function matchesVersionExpectation(
   expected: FindByKeyVersionExpectation | undefined,
 ): boolean {
   if (expected === undefined) return true;
-  if (expected.sourceContentHash !== undefined && record.sourceContentHash !== expected.sourceContentHash) {
+  if (
+    expected.sourceContentHash !== undefined &&
+    record.sourceContentHash !== expected.sourceContentHash
+  ) {
     return false;
   }
   if (

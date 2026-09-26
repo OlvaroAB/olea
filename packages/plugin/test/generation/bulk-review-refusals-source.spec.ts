@@ -40,9 +40,7 @@ describe('BulkReviewView renders a classified refusal ([H-1.8a])', () => {
   });
 
   it('the two states get distinct modifier classes keyed on the transient flag', () => {
-    expect(viewCode).toMatch(
-      /notice\.copy\.transient\s*\?\s*'transient'\s*:\s*'insufficient'/,
-    );
+    expect(viewCode).toMatch(/notice\.copy\.transient\s*\?\s*'transient'\s*:\s*'insufficient'/);
     expect(viewCode).toMatch(/olea-bulk-review-refusal-row--\$\{stateModifier\}/);
   });
 

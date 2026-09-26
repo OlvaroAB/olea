@@ -38,10 +38,7 @@ import {
   type WorkerTaskRequest,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import {
-  type DraftCardsDeps,
-  draftCardsForConcept,
-} from '../../src/generation/draft-cards.js';
+import { type DraftCardsDeps, draftCardsForConcept } from '../../src/generation/draft-cards.js';
 
 class MemoryEmbeddingCacheStore implements EmbeddingCacheStore {
   private saved: PersistedEmbeddingCache | null = null;
@@ -158,7 +155,10 @@ function buildFixture(targetCosine: number): {
   return { keywordIndex, provider };
 }
 
-async function makeRetrieveDeps(keywordIndex: PersistedKeywordIndex, provider: LookupEmbeddingProvider) {
+async function makeRetrieveDeps(
+  keywordIndex: PersistedKeywordIndex,
+  provider: LookupEmbeddingProvider,
+) {
   const embeddingCache = await EmbeddingCacheEngine.create({
     store: new MemoryEmbeddingCacheStore(),
     provider,

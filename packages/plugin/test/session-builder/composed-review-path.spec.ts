@@ -128,8 +128,8 @@ import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import {
-  openReviewSession,
   type OpenReviewSessionInput,
+  openReviewSession,
   type ReviewSessionPorts,
 } from '../../src/review/open-session.js';
 import {
@@ -309,10 +309,14 @@ function reviewPorts(vault: ReturnType<typeof memoryVault>): ReviewSessionPorts 
     clock: { now: () => NOW } satisfies Clock,
     draftAcceptPort: {
       accept() {
-        throw new Error('composed-review-path.spec: no draft item in this suite should call accept');
+        throw new Error(
+          'composed-review-path.spec: no draft item in this suite should call accept',
+        );
       },
       reject() {
-        throw new Error('composed-review-path.spec: no draft item in this suite should call reject');
+        throw new Error(
+          'composed-review-path.spec: no draft item in this suite should call reject',
+        );
       },
     },
   };
@@ -411,7 +415,8 @@ describe('case 1 (ol-egov.141.6.16 acceptance criterion 1) — non-suspended ins
     const byCourse = new Map<string, string>();
     for (const record of enumeration.records) {
       const course = record.courses[0];
-      if (course === undefined) throw new Error('expected every enumerated record to carry a course');
+      if (course === undefined)
+        throw new Error('expected every enumerated record to carry a course');
       byCourse.set(course, record.instrumentId);
     }
     expect(byCourse.size).toBe(2);

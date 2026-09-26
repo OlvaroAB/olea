@@ -196,7 +196,7 @@ describe("materialChangedInScopeSinceFreeze — [ILB-CHG-4]'s 3.6 staleness fact
     expect(holder.materialChangedInScopeSinceFreeze(new Set(['inst-1']))).toBe(false);
   });
 
-  it('a fresh enter() resets the frozen comparison point to the new sitting\'s own pending set', () => {
+  it("a fresh enter() resets the frozen comparison point to the new sitting's own pending set", () => {
     const holder = createStudySessionHolder();
     holder.enter(
       NOW,

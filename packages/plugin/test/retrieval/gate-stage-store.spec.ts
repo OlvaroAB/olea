@@ -5,15 +5,16 @@
  * doc's own privacy argument — so there is no INV-3 fixture to invent
  * around; every value below is a bare integer count or an ISO timestamp.
  */
-import { describe, expect, it } from 'vitest';
+
 import type { GateStage } from 'olea-core';
+import { describe, expect, it } from 'vitest';
+import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import {
   GATE_STAGE_STORAGE_KEY,
   ObsidianGateStageStore,
   zeroGateStageCounts,
 } from '../../src/retrieval/gate-stage-store.js';
 import { SerializingDataHost } from '../../src/retrieval/serializing-data-host.js';
-import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 
 class FakeDataHost implements ObsidianDataHost {
   blob: unknown = null;
@@ -41,7 +42,10 @@ describe('ObsidianGateStageStore', () => {
     const host = new FakeDataHost();
     const store = new ObsidianGateStageStore(host);
 
-    await store.save(counts({ 'below-band': 3, 'escalated-to-judge': 1 }), '2026-01-01T00:00:00.000Z');
+    await store.save(
+      counts({ 'below-band': 3, 'escalated-to-judge': 1 }),
+      '2026-01-01T00:00:00.000Z',
+    );
 
     const reloaded = await store.load();
     expect(reloaded).toEqual({

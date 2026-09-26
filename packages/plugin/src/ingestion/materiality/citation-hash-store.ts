@@ -136,7 +136,11 @@ export interface CitationHashStore {
    * compare-and-check guard, because resolving acts on a verdict computed
    * earlier, against a specific hash, which may since have gone stale).
    */
-  setPendingRevalidation(instrumentId: string, sourceContentHash: string, since: number): Promise<void>;
+  setPendingRevalidation(
+    instrumentId: string,
+    sourceContentHash: string,
+    since: number,
+  ): Promise<void>;
   /**
    * `[D-351]`: true when this instrument's PERSISTED `pendingRevalidation`
    * fact still carries `expectedSourceContentHash` — read fresh, never
@@ -178,7 +182,10 @@ function isCitationAnchorRecord(value: unknown): value is CitationAnchorRecord {
   // reads — but if present, it must be well-formed, same "corrupted or
   // unrecognised entries are dropped" posture this validator already takes
   // for the record as a whole.
-  if (candidate.pendingRevalidation !== undefined && !isPendingRevalidation(candidate.pendingRevalidation)) {
+  if (
+    candidate.pendingRevalidation !== undefined &&
+    !isPendingRevalidation(candidate.pendingRevalidation)
+  ) {
     return false;
   }
   return true;
@@ -316,6 +323,8 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     expectedSourceContentHash: string,
   ): Promise<boolean> {
     const all = await this.loadAll();
-    return all.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash;
+    return (
+      all.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash
+    );
   }
 }

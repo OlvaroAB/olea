@@ -29,11 +29,18 @@
  * question, named rather than guessed at.
  */
 
-import type { JobRunner, JobRunnerView, JobRunOutcome } from 'olea-core';
 import type { ReviewLogEntry } from 'olea-contracts';
-import type { DisputeLogRecord } from 'olea-core';
-import { type GradeContestOutcome, type GradeContestPort, resolveContestedGradeAndRegrade } from '../review/contest.js';
-import { type ContestRegradeActivation, type ContestRegradeJobPayload, isContestRegradeJobPayload } from './types.js';
+import type { DisputeLogRecord, JobRunner, JobRunnerView, JobRunOutcome } from 'olea-core';
+import {
+  type GradeContestOutcome,
+  type GradeContestPort,
+  resolveContestedGradeAndRegrade,
+} from '../review/contest.js';
+import {
+  type ContestRegradeActivation,
+  type ContestRegradeJobPayload,
+  isContestRegradeJobPayload,
+} from './types.js';
 
 /** The re-derivation itself — supplied once a real, heavier Worker judge caller is wired (`ol-egov.141.89.38`); absent today. */
 export interface ContestRegradeJudge {

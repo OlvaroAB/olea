@@ -14,9 +14,9 @@
  * never a guess.
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import type { DisputeLogRecord, EnqueueResult } from 'olea-core';
 import { hashContent } from 'olea-core';
-import type { ReviewLogEntry } from 'olea-contracts';
 import { originalGradeEventIdFor } from '../review/contest.js';
 import { CONTEST_REGRADE_JOB_KIND, type ContestRegradeJobPayload } from './types.js';
 

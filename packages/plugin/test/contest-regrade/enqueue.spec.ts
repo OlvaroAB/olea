@@ -5,16 +5,16 @@
 import type { ReviewLogRecord } from 'olea-contracts';
 import type { EnqueueResult } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { createVaultGradeContestPort } from '../../src/review/contest.js';
-import {
-  CONTEST_REGRADE_JOB_KIND,
-  type ContestRegradeJobPayload,
-} from '../../src/contest-regrade/types.js';
 import {
   type ContestRegradeJobEnqueuer,
   contestRegradeContentHash,
   enqueueContestRegradeJobOnDispute,
 } from '../../src/contest-regrade/enqueue.js';
+import {
+  CONTEST_REGRADE_JOB_KIND,
+  type ContestRegradeJobPayload,
+} from '../../src/contest-regrade/types.js';
+import { createVaultGradeContestPort } from '../../src/review/contest.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 // Synthetic fixtures only (INV-3).
@@ -126,7 +126,7 @@ describe('enqueueContestRegradeJobOnDispute', () => {
     expect(enqueuer.calls).toEqual([]);
   });
 
-  it('a second dispute on the same evidence produces the identical contentHash — idempotent under the engine\'s own dedup', async () => {
+  it("a second dispute on the same evidence produces the identical contentHash — idempotent under the engine's own dedup", async () => {
     const vault = memoryVault();
     const port = createVaultGradeContestPort(vault, 'device-1', () => '2026-08-21T09:00:00+02:00');
     const opening = await port.contestGrade({

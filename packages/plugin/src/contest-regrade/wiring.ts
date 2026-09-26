@@ -18,11 +18,11 @@
  * report for the exact two-line addition that file needs.
  */
 
-import { IngestionQueueEngine } from 'olea-core';
 import type { EngineDeps, TickResult } from 'olea-core';
+import { IngestionQueueEngine } from 'olea-core';
 import type { ObsidianDataHost } from '../ingestion/queue-store.js';
 import { ContestRegradeQueueStore } from './queue-store.js';
-import { createContestRegradeJobRunner, type ContestRegradeRunnerDeps } from './runner.js';
+import { type ContestRegradeRunnerDeps, createContestRegradeJobRunner } from './runner.js';
 import type { ContestRegradeActivation } from './types.js';
 
 /**

@@ -423,9 +423,14 @@ describe('the format line explains a preference only when one actually fired', (
   it('explains multiple-choice-first when the preference applied to a chosen item', () => {
     expect(
       formatPreferenceLine(
-        model({ formatPreference: 'recall-style', items: [item({ formatMatch: 'preferred-format' })] }),
+        model({
+          formatPreference: 'recall-style',
+          items: [item({ formatMatch: 'preferred-format' })],
+        }),
       ),
-    ).toBe('Multiple-choice questions come first here, to match the format of your next assessment.');
+    ).toBe(
+      'Multiple-choice questions come first here, to match the format of your next assessment.',
+    );
   });
 
   it('is silent with no preference — a reason is never offered for something that did not happen', () => {

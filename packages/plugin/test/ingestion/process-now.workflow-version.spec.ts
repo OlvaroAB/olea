@@ -18,8 +18,8 @@ import type {
   VaultSource,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { createProcessNowAction } from '../../src/ingestion/process-now.js';
 import { EXTRACTION_WORKFLOW_VERSION } from '../../src/ingestion/extraction-workflow-version.js';
+import { createProcessNowAction } from '../../src/ingestion/process-now.js';
 
 class MemoryVaultSource implements VaultSource {
   private readonly binary = new Map<string, Uint8Array>();

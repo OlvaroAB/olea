@@ -70,11 +70,7 @@ async function nonAtomicReadModifyWriteKey(
 }
 
 /** The atomic shape production actually uses (`gate-stage-store.ts`'s `save`, when given a host with `readModifyWrite`). */
-function atomicWriteKey(
-  host: SerializingDataHost,
-  key: string,
-  value: unknown,
-): Promise<void> {
+function atomicWriteKey(host: SerializingDataHost, key: string, value: unknown): Promise<void> {
   return host.readModifyWrite((current) => {
     const blob = typeof current === 'object' && current !== null ? { ...(current as object) } : {};
     return { ...blob, [key]: value };
@@ -90,7 +86,8 @@ describe('GateStagePersistence — serialization and coalescing of its OWN write
       const persistence = new GateStagePersistence<{ n: number }>({
         now: () => 'fixed-timestamp',
         getCounts: () => ({ n: recorded }),
-        save: (counts, now) => nonAtomicReadModifyWriteKey(file.raw, 'gateStagePeriod', { counts, lastRecordedAt: now }),
+        save: (counts, now) =>
+          nonAtomicReadModifyWriteKey(file.raw, 'gateStagePeriod', { counts, lastRecordedAt: now }),
         debounceMs: 50,
       });
 
@@ -116,7 +113,8 @@ describe('GateStagePersistence — serialization and coalescing of its OWN write
     const persistence = new GateStagePersistence<{ n: number }>({
       now: () => 'fixed-timestamp',
       getCounts: () => ({ n: recorded }),
-      save: (counts, now) => nonAtomicReadModifyWriteKey(file.raw, 'gateStagePeriod', { counts, lastRecordedAt: now }),
+      save: (counts, now) =>
+        nonAtomicReadModifyWriteKey(file.raw, 'gateStagePeriod', { counts, lastRecordedAt: now }),
       debounceMs: 10_000, // long enough that only flush(), not the timer, could produce a write inside this test
     });
 
@@ -172,7 +170,8 @@ describe('SerializingDataHost — closes the cross-store overlap GateStagePersis
     const persistence = new GateStagePersistence<{ n: number }>({
       now: () => new Date().toISOString(),
       getCounts: () => ({ n: recorded }),
-      save: (counts, now) => atomicWriteKey(host, 'gateStagePeriod', { counts, lastRecordedAt: now }),
+      save: (counts, now) =>
+        atomicWriteKey(host, 'gateStagePeriod', { counts, lastRecordedAt: now }),
       debounceMs: 5,
     });
 

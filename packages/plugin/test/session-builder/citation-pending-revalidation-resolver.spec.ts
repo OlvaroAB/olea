@@ -130,7 +130,8 @@ describe('resolveCitationPendingRevalidation', () => {
             },
           ],
         ]),
-      isPendingRevalidationCurrent: async (id, hash) => id === 'instrument-pending' && hash === 'hash-1',
+      isPendingRevalidationCurrent: async (id, hash) =>
+        id === 'instrument-pending' && hash === 'hash-1',
     };
 
     const result = await resolveCitationPendingRevalidation(store, ['instrument-pending']);
@@ -156,7 +157,7 @@ describe('resolveCitationPendingRevalidation', () => {
     expect(result.has('instrument-untracked')).toBe(false);
   });
 
-  it('[D-351] defers to the store\'s OWN currency check, not the mere presence of a pendingRevalidation field — a structurally-present fact the store says is no longer current (superseded by a newer edit) is not honoured', async () => {
+  it("[D-351] defers to the store's OWN currency check, not the mere presence of a pendingRevalidation field — a structurally-present fact the store says is no longer current (superseded by a newer edit) is not honoured", async () => {
     const store: CitationHashStore = {
       ...NO_ANCHORS,
       loadAll: async () =>
@@ -182,7 +183,7 @@ describe('resolveCitationPendingRevalidation', () => {
     expect(result.has('instrument-superseded')).toBe(false);
   });
 
-  it('resolves each instrument independently, never leaking one instrument\'s pending state onto another', async () => {
+  it("resolves each instrument independently, never leaking one instrument's pending state onto another", async () => {
     const store: CitationHashStore = {
       ...NO_ANCHORS,
       loadAll: async () =>
@@ -201,7 +202,10 @@ describe('resolveCitationPendingRevalidation', () => {
       isPendingRevalidationCurrent: async (id) => id === 'instrument-a',
     };
 
-    const result = await resolveCitationPendingRevalidation(store, ['instrument-a', 'instrument-b']);
+    const result = await resolveCitationPendingRevalidation(store, [
+      'instrument-a',
+      'instrument-b',
+    ]);
 
     expect(result.has('instrument-a')).toBe(true);
     expect(result.has('instrument-b')).toBe(false);
@@ -238,7 +242,13 @@ describe('composeStudySessionForRequest — [D-351]/[D-330] pending-revalidation
     const vault = memoryVault(BASE_FILES);
 
     const withoutStore = await composeStudySessionForRequest(
-      { vault, deviceId: DEVICE, settingsHost: hostWithBasePath(BASE_PATH), now: () => NOW, scheduler },
+      {
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler,
+      },
       { budgetMinutes: 60 },
       NOW,
     );
@@ -282,7 +292,7 @@ describe('composeStudySessionForRequest — [D-351]/[D-330] pending-revalidation
     expect(withStore.composedInput.citationPendingRevalidation?.has(instrumentId)).toBe(true);
   });
 
-  it('[D-351] end to end through the provider: a late resolution against an earlier edit\'s hash cannot clear a newer pending state, so the instrument stays withheld', async () => {
+  it("[D-351] end to end through the provider: a late resolution against an earlier edit's hash cannot clear a newer pending state, so the instrument stays withheld", async () => {
     const instrumentId = await widgetInstrumentId();
     const citationHashStore = new ObsidianCitationHashStore(new FakeDataHost());
     await citationHashStore.save(instrumentId, {
@@ -300,8 +310,12 @@ describe('composeStudySessionForRequest — [D-351]/[D-330] pending-revalidation
     // A verdict computed against the now-superseded hash-v1 (a "late result for an earlier
     // edit") must not read as current — this is the exact guard `citation-revision-wiring.ts`'s
     // `applyOutcome` relies on before it would clear anything.
-    expect(await citationHashStore.isPendingRevalidationCurrent(instrumentId, 'hash-v1')).toBe(false);
-    expect(await citationHashStore.isPendingRevalidationCurrent(instrumentId, 'hash-v2')).toBe(true);
+    expect(await citationHashStore.isPendingRevalidationCurrent(instrumentId, 'hash-v1')).toBe(
+      false,
+    );
+    expect(await citationHashStore.isPendingRevalidationCurrent(instrumentId, 'hash-v2')).toBe(
+      true,
+    );
 
     const result = await composeStudySessionForRequest(
       {
@@ -320,8 +334,8 @@ describe('composeStudySessionForRequest — [D-351]/[D-330] pending-revalidation
     // The newer pending state (hash-v2) still withholds the instrument end to end — a late
     // result for the earlier edit never cleared it.
     expect(result.composed.full.citationRevalidationPending.has(instrumentId)).toBe(true);
-    expect(result.composed.full.model.items.some((item) => item.conceptName === 'Widget theory')).toBe(
-      false,
-    );
+    expect(
+      result.composed.full.model.items.some((item) => item.conceptName === 'Widget theory'),
+    ).toBe(false);
   });
 });

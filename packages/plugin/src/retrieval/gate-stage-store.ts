@@ -105,7 +105,10 @@ function isPersistedGateStagePeriod(value: unknown): value is PersistedGateStage
   if (typeof candidate.counts !== 'object' || candidate.counts === null) return false;
   const counts = candidate.counts as Record<string, unknown>;
   return ALL_STAGES.every(
-    (stage) => typeof counts[stage] === 'number' && Number.isInteger(counts[stage]) && (counts[stage] as number) >= 0,
+    (stage) =>
+      typeof counts[stage] === 'number' &&
+      Number.isInteger(counts[stage]) &&
+      (counts[stage] as number) >= 0,
   );
 }
 

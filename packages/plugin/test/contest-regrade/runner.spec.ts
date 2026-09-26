@@ -3,11 +3,18 @@
  * regrading workflow. The load-bearing test in this file is the first one:
  * proof that no paid call is reachable while activation is off.
  */
-import type { DisputeLogRecord, JobRunnerView } from 'olea-core';
+
 import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, JobRunnerView } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
-import { createContestRegradeJobRunner, type ContestRegradeJudge } from '../../src/contest-regrade/runner.js';
-import { CONTEST_REGRADE_JOB_KIND, type ContestRegradeJobPayload } from '../../src/contest-regrade/types.js';
+import {
+  type ContestRegradeJudge,
+  createContestRegradeJobRunner,
+} from '../../src/contest-regrade/runner.js';
+import {
+  CONTEST_REGRADE_JOB_KIND,
+  type ContestRegradeJobPayload,
+} from '../../src/contest-regrade/types.js';
 import type { GradeContestPort } from '../../src/review/contest.js';
 
 // Synthetic fixtures only (INV-3).
@@ -156,8 +163,14 @@ describe('createContestRegradeJobRunner — activation ON, judge wired', () => {
   };
 
   it('calls the judge with the frozen payload, then resolveContestedGradeAndRegrade via the injected port and appendCorrectiveRegrade, on a corrected outcome', async () => {
-    const judge: ContestRegradeJudge = { regrade: vi.fn().mockResolvedValue({ outcome: 'corrected' }) };
-    const resolution: DisputeLogRecord = { ...DISPUTE, resolves: DISPUTE.eventId, outcome: 'corrected' };
+    const judge: ContestRegradeJudge = {
+      regrade: vi.fn().mockResolvedValue({ outcome: 'corrected' }),
+    };
+    const resolution: DisputeLogRecord = {
+      ...DISPUTE,
+      resolves: DISPUTE.eventId,
+      outcome: 'corrected',
+    };
     const port: GradeContestPort = {
       contestGrade: vi.fn(),
       resolveContestedGrade: vi.fn().mockResolvedValue(resolution),
@@ -180,7 +193,10 @@ describe('createContestRegradeJobRunner — activation ON, judge wired', () => {
 
     expect(judge.regrade).toHaveBeenCalledWith(PAYLOAD);
     expect(loadDispute).toHaveBeenCalledWith('dispute-1');
-    expect(port.resolveContestedGrade).toHaveBeenCalledWith({ dispute: DISPUTE, outcome: 'corrected' });
+    expect(port.resolveContestedGrade).toHaveBeenCalledWith({
+      dispute: DISPUTE,
+      outcome: 'corrected',
+    });
     // No standing grade in `records` above — `originalGradeEventIdFor` finds
     // none, so `resolveContestedGradeAndRegrade` itself never calls
     // `appendCorrectiveRegrade` (see `../../src/review/contest.js`'s own
@@ -192,8 +208,14 @@ describe('createContestRegradeJobRunner — activation ON, judge wired', () => {
   });
 
   it('appends the corrective re-grade, naming the standing grade event as revisionOf, when one exists (D-360 criterion 5)', async () => {
-    const judge: ContestRegradeJudge = { regrade: vi.fn().mockResolvedValue({ outcome: 'corrected' }) };
-    const resolution: DisputeLogRecord = { ...DISPUTE, resolves: DISPUTE.eventId, outcome: 'corrected' };
+    const judge: ContestRegradeJudge = {
+      regrade: vi.fn().mockResolvedValue({ outcome: 'corrected' }),
+    };
+    const resolution: DisputeLogRecord = {
+      ...DISPUTE,
+      resolves: DISPUTE.eventId,
+      outcome: 'corrected',
+    };
     const port: GradeContestPort = {
       contestGrade: vi.fn(),
       resolveContestedGrade: vi.fn().mockResolvedValue(resolution),

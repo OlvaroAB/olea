@@ -792,8 +792,11 @@ function withFrozenSupport(
   input: AdaptExecutedReviewQueueInput,
   frozen: FrozenSupportInputs,
 ): AdaptExecutedReviewQueueInput {
-  const { supportHistory: _liveSupportHistory, supportSelfAssessment: _liveSupportSelfAssessment, ...rest } =
-    input;
+  const {
+    supportHistory: _liveSupportHistory,
+    supportSelfAssessment: _liveSupportSelfAssessment,
+    ...rest
+  } = input;
   return { ...rest, ...frozen };
 }
 

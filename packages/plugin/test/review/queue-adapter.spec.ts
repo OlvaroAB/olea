@@ -775,7 +775,12 @@ function reviewLogEntry(overrides: {
   readonly rating: 'again' | 'hard' | 'good' | 'easy' | null;
   readonly conceptIds: readonly string[];
   readonly explainBackGrade?: {
-    readonly soloLevel: 'prestructural' | 'unistructural' | 'multistructural' | 'relational' | 'extended-abstract';
+    readonly soloLevel:
+      | 'prestructural'
+      | 'unistructural'
+      | 'multistructural'
+      | 'relational'
+      | 'extended-abstract';
     readonly correctness?: 'correct' | 'partial' | 'incorrect';
   };
 }) {
@@ -1393,7 +1398,10 @@ describe('createFrozenReviewQueue — C5.8’s freeze, held across calls', () =>
       const cloze = extended.find((i) => i.instrument.type === 'cloze');
       // Fixed at composition: still the cold-start 'prompted', never the
       // 'guided' a fresh fold of `historyAtExtension` would produce.
-      expect(cloze?.instrument.supportLevel).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
+      expect(cloze?.instrument.supportLevel).toEqual({
+        level: 'prompted',
+        provenance: 'evidence-thin',
+      });
     });
   });
 });

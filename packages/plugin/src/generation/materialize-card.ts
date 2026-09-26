@@ -375,7 +375,13 @@ export async function materializeAcceptedCardDraft(
   const insertAt = anchor === null ? 0 : followsBlank && next ? next.end : anchor.end;
   const endsWithNewline = insertAt === 0 || source.slice(0, insertAt).endsWith('\n');
   const lead =
-    insertAt === 0 ? '' : endsWithNewline ? (followsBlank ? '' : terminator) : `${terminator}${terminator}`;
+    insertAt === 0
+      ? ''
+      : endsWithNewline
+        ? followsBlank
+          ? ''
+          : terminator
+        : `${terminator}${terminator}`;
   const trail = insertAt < source.length ? terminator : '';
   const text = `${lead}${cardText}${trail}`;
 
