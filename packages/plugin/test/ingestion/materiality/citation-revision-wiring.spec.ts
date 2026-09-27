@@ -22,6 +22,17 @@
  * suspended exactly like MCQ already was. A dedicated MCQ case proves that
  * path is untouched: a self-contained MCQ (the pre-existing, unchanged
  * behaviour) still suspends, unlike its Q&A/cloze counterpart now does not.
+ *
+ * The fourth `describe` block (`[D-400]`, ruled 2026-09-27, gate case
+ * `CHG-57f55b30941e3290`) simulates an app restart by constructing a FRESH
+ * `CitationRevisionTrigger` against the SAME persisted store between ticks —
+ * a process that has actually closed and reopened has no more state than
+ * that. Proves: exactly one automatic retry fires across any number of
+ * restarts (never a fresh allowance per restart); a dispatch still inside
+ * its recovery window is left to resolve, not duplicated; a successful retry
+ * resolves normally through the ordinary outcome/write path; and a retry's
+ * own late answer is discarded under the same D-311 obsolete-answer guard an
+ * original dispatch's late answer already is.
  */
 import {
   citationStorePath,
@@ -89,8 +100,12 @@ class FakeCitationHashStore implements CitationHashStore {
   async remove(instrumentId: string): Promise<void> {
     this.byId.delete(instrumentId);
   }
-  // [D-351] — same semantics as `ObsidianCitationHashStore`: a no-op when
-  // nothing is tracked yet; overwrites whatever hash was pending before.
+  // [D-351]/[D-400] — same semantics as `ObsidianCitationHashStore`: a
+  // no-op when nothing is tracked yet; a genuinely NEW hash supersedes with
+  // fresh state, but the SAME hash already pending leaves dispatch/retry
+  // state exactly as it was (real `recordPending` fires unconditionally
+  // every tick, including ones this trigger's own [D-400] gate deliberately
+  // does not re-dispatch for).
   async setPendingRevalidation(
     instrumentId: string,
     sourceContentHash: string,
@@ -98,9 +113,13 @@ class FakeCitationHashStore implements CitationHashStore {
   ): Promise<void> {
     const existing = this.byId.get(instrumentId);
     if (existing === undefined) return;
+    const existingPending = existing.pendingRevalidation;
     this.byId.set(instrumentId, {
       ...existing,
-      pendingRevalidation: { sinceContentHash: sourceContentHash, since },
+      pendingRevalidation:
+        existingPending?.sinceContentHash === sourceContentHash
+          ? existingPending
+          : { sinceContentHash: sourceContentHash, since },
     });
   }
   async isPendingRevalidationCurrent(
@@ -111,6 +130,33 @@ class FakeCitationHashStore implements CitationHashStore {
       this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash ===
       expectedSourceContentHash
     );
+  }
+  // [D-400]
+  async recordDispatch(
+    instrumentId: string,
+    sourceContentHash: string,
+    dispatchedAt: number,
+    retry: boolean,
+  ): Promise<void> {
+    const existing = this.byId.get(instrumentId);
+    if (existing === undefined) return;
+    const existingPending = existing.pendingRevalidation;
+    const forSameDifference = existingPending?.sinceContentHash === sourceContentHash;
+    const since = forSameDifference ? existingPending.since : dispatchedAt;
+    const carriedRetriedAt = forSameDifference ? existingPending.retriedAt : undefined;
+    this.byId.set(instrumentId, {
+      ...existing,
+      pendingRevalidation: {
+        sinceContentHash: sourceContentHash,
+        since,
+        dispatchedAt,
+        ...(retry
+          ? { retriedAt: dispatchedAt }
+          : carriedRetriedAt !== undefined
+            ? { retriedAt: carriedRetriedAt }
+            : {}),
+      },
+    });
   }
 }
 
@@ -850,6 +896,186 @@ describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
         }),
       );
     });
+  });
+});
+
+/**
+ * `[D-400]` (ruled 2026-09-27) — recovering a check lost to an app restart,
+ * bounded to one automatic retry per original check. Gate case
+ * `CHG-57f55b30941e3290` ("restart with an escalation pending").
+ *
+ * A restart is simulated by building a FRESH `CitationRevisionTrigger`
+ * against the SAME `FakeCitationHashStore` instance between ticks — a real
+ * restart leaves nothing else behind either. A dispatch "lost" to that
+ * restart is modelled with a judge that throws (a real crash mid-`await`
+ * and a swallowed provider failure are indistinguishable from this trigger's
+ * own vantage point — both leave the persisted dispatch fact unresolved, per
+ * this module's own `[D-400]` doc section: no age/timeout check gates the
+ * retry, since every step here is fully `await`ed before the next tick can
+ * even start).
+ */
+describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
+  it('gate case CHG-57f55b30941e3290: fires exactly one automatic retry across two restarts, never a fresh allowance per restart', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        throw new Error('provider unavailable');
+      }),
+    };
+
+    // Baseline (t=0) — no judge call yet.
+    const trigger0 = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger0.tick(vault, actions());
+    expect(judge.judge).not.toHaveBeenCalled();
+
+    // She edits the cited passage — a real difference, escalation pending.
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+
+    // Original check: dispatched, lost (the process closes mid-call).
+    const original = await trigger0.tick(vault, actions());
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(original.retryExhausted).toBe(0);
+    const afterOriginal = await store.loadAll();
+    expect(afterOriginal.get(MCQ_ID)?.pendingRevalidation?.dispatchedAt).toBe(0);
+    expect(afterOriginal.get(MCQ_ID)?.pendingRevalidation?.retriedAt).toBeUndefined();
+
+    // Restart 1: a FRESH trigger instance (as a real restart would
+    // produce), same store. The one permitted retry fires.
+    const trigger1 = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1_000) });
+    const retry = await trigger1.tick(vault, actions());
+    expect(judge.judge).toHaveBeenCalledTimes(2);
+    expect(retry.retryExhausted).toBe(0);
+    const afterRetry = await store.loadAll();
+    expect(afterRetry.get(MCQ_ID)?.pendingRevalidation?.dispatchedAt).toBe(1_000);
+    expect(afterRetry.get(MCQ_ID)?.pendingRevalidation?.retriedAt).toBe(1_000);
+
+    // Restart 2: the retry ALSO went unanswered. Never a further automatic
+    // dispatch — the item reports a recoverable deferred state instead.
+    const trigger2 = new CitationRevisionTrigger({ store, judge, clock: fakeClock(5_000) });
+    const secondRestart = await trigger2.tick(vault, actions());
+    expect(judge.judge).toHaveBeenCalledTimes(2); // unchanged — no third call
+    expect(secondRestart.retryExhausted).toBe(1);
+
+    // A third restart changes nothing further — the retry budget stays
+    // spent, permanently, for this exact difference.
+    const trigger3 = new CitationRevisionTrigger({ store, judge, clock: fakeClock(50_000) });
+    const thirdRestart = await trigger3.tick(vault, actions());
+    expect(judge.judge).toHaveBeenCalledTimes(2);
+    expect(thirdRestart.retryExhausted).toBe(1);
+  });
+
+  it("a successful retry resolves normally — the same real judge call any original check would make, so its spend is logged wherever every other call's already is", async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const failingJudge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        throw new Error('provider unavailable');
+      }),
+    };
+    const trigger0 = new CitationRevisionTrigger({
+      store,
+      judge: failingJudge,
+      clock: fakeClock(0),
+    });
+    await trigger0.tick(vault, actions());
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    await trigger0.tick(vault, actions()); // original dispatch, lost
+
+    // Restart with a working judge — the retry itself goes through the
+    // identical `judge.judge()` seam any other check uses.
+    const workingJudge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const trigger1 = new CitationRevisionTrigger({
+      store,
+      judge: workingJudge,
+      clock: fakeClock(1_000),
+    });
+    const act = actions();
+    const report = await trigger1.tick(vault, act);
+
+    expect(workingJudge.judge).toHaveBeenCalledTimes(1);
+    expect(report.refreshed).toBe(1);
+    expect(report.retryExhausted).toBe(0);
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+  });
+
+  it("[D-311] a retry's own answer is discarded once a newer edit has raised its own pending state — the same obsolete-answer guard an original dispatch already gets", async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const failingJudge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        throw new Error('provider unavailable');
+      }),
+    };
+    const trigger0 = new CitationRevisionTrigger({
+      store,
+      judge: failingJudge,
+      clock: fakeClock(0),
+    });
+    await trigger0.tick(vault, actions());
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    await trigger0.tick(vault, actions()); // original dispatch, lost
+
+    // The retry's own call is slow: WHILE it is in flight, an overlapping
+    // tick raises its own, newer pending state (same modelling the
+    // pre-existing [D-351] "late result" tests already use).
+    const overlappingJudge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        await store.setPendingRevalidation(MCQ_ID, 'a-newer-hash-from-an-overlapping-tick', 9_000);
+        return { material: false };
+      }),
+    };
+    const trigger1 = new CitationRevisionTrigger({
+      store,
+      judge: overlappingJudge,
+      clock: fakeClock(1_000),
+    });
+    const act = actions();
+    const report = await trigger1.tick(vault, act);
+
+    expect(overlappingJudge.judge).toHaveBeenCalledTimes(1); // the retry itself fired
+    expect(report.refreshed).toBe(1);
+    expect(report.staleResultDiscarded).toBe(1);
+    expect(act.suspend).not.toHaveBeenCalled();
+    expect(act.enqueue).not.toHaveBeenCalled();
+    // The newer pending state is left completely untouched by the retry's
+    // own, now-obsolete answer.
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash).toBe(
+      'a-newer-hash-from-an-overlapping-tick',
+    );
+  });
+
+  it('a genuinely new edit gets its own fresh retry budget, never blocked by an older, already-spent one', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const store = new FakeCitationHashStore();
+    const failingJudge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        throw new Error('provider unavailable');
+      }),
+    };
+    const t0 = new CitationRevisionTrigger({ store, judge: failingJudge, clock: fakeClock(0) });
+    await t0.tick(vault, actions());
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    await t0.tick(vault, actions()); // original dispatch for PARAGRAPH_B, lost
+    const t1 = new CitationRevisionTrigger({ store, judge: failingJudge, clock: fakeClock(1_000) });
+    await t1.tick(vault, actions()); // the one retry for PARAGRAPH_B, also lost
+    expect(failingJudge.judge).toHaveBeenCalledTimes(2);
+
+    // A further, genuinely different edit — its own difference, its own
+    // budget, even though the OLD difference's retry is already spent.
+    const PARAGRAPH_C = 'Basalt weathers at a moderate rate in temperate climates.';
+    await vault.write(NOTE_PATH, note(PARAGRAPH_C));
+    const workingJudge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const t2 = new CitationRevisionTrigger({ store, judge: workingJudge, clock: fakeClock(2_000) });
+    const report = await t2.tick(vault, actions());
+
+    expect(workingJudge.judge).toHaveBeenCalledTimes(1);
+    expect(report.refreshed).toBe(1);
+    expect(report.retryExhausted).toBe(0);
   });
 });
 

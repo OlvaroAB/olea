@@ -79,6 +79,11 @@ class FakeCitationHashStore implements CitationHashStore {
   async remove(instrumentId: string): Promise<void> {
     this.byId.delete(instrumentId);
   }
+  // [D-351]/[D-400] — same semantics as `ObsidianCitationHashStore` (see
+  // `citation-revision-wiring.spec.ts`'s own copy of this fake, which this
+  // mirrors): a no-op when nothing is tracked yet; the SAME hash already
+  // pending leaves dispatch/retry state untouched, a genuinely new hash
+  // supersedes with fresh state.
   async setPendingRevalidation(
     instrumentId: string,
     sourceContentHash: string,
@@ -86,9 +91,13 @@ class FakeCitationHashStore implements CitationHashStore {
   ): Promise<void> {
     const existing = this.byId.get(instrumentId);
     if (existing === undefined) return;
+    const existingPending = existing.pendingRevalidation;
     this.byId.set(instrumentId, {
       ...existing,
-      pendingRevalidation: { sinceContentHash: sourceContentHash, since },
+      pendingRevalidation:
+        existingPending?.sinceContentHash === sourceContentHash
+          ? existingPending
+          : { sinceContentHash: sourceContentHash, since },
     });
   }
   async isPendingRevalidationCurrent(
@@ -99,6 +108,33 @@ class FakeCitationHashStore implements CitationHashStore {
       this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash ===
       expectedSourceContentHash
     );
+  }
+  // [D-400]
+  async recordDispatch(
+    instrumentId: string,
+    sourceContentHash: string,
+    dispatchedAt: number,
+    retry: boolean,
+  ): Promise<void> {
+    const existing = this.byId.get(instrumentId);
+    if (existing === undefined) return;
+    const existingPending = existing.pendingRevalidation;
+    const forSameDifference = existingPending?.sinceContentHash === sourceContentHash;
+    const since = forSameDifference ? existingPending.since : dispatchedAt;
+    const carriedRetriedAt = forSameDifference ? existingPending.retriedAt : undefined;
+    this.byId.set(instrumentId, {
+      ...existing,
+      pendingRevalidation: {
+        sinceContentHash: sourceContentHash,
+        since,
+        dispatchedAt,
+        ...(retry
+          ? { retriedAt: dispatchedAt }
+          : carriedRetriedAt !== undefined
+            ? { retriedAt: carriedRetriedAt }
+            : {}),
+      },
+    });
   }
 }
 

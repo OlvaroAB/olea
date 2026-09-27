@@ -208,9 +208,10 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
     // Call #1: baseline (tick 1). `citation-revision-wiring.ts` has no floor or debounce at this
     // grain (`material-change.ts`'s own doc: "any hash difference... reaches the judge, once
-    // relocation has been ruled out"), so the SETTING write (call #2) and the RESOLVING write
-    // (call #3) both happen inside the SAME tick, one after the other -- fail exactly the second.
-    const host = new FlakyDataHost(new Set([3]));
+    // relocation has been ruled out"), so tick 2 makes three more calls, in order: the `[D-400]`
+    // dispatch-tracking write (call #2), the SETTING write (call #3), and the RESOLVING write
+    // (call #4) -- fail exactly the last of those.
+    const host = new FlakyDataHost(new Set([4]));
     const store = new ObsidianCitationHashStore(host);
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) }; // same claim -> 'refreshed'
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(2_000) });
@@ -218,14 +219,15 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     await trigger.tick(vault, actions()); // tick 1: baseline (call #1)
     await vault.write(NOTE_PATH, note(PARAGRAPH_B));
 
-    // Tick 2: `setPendingRevalidation` (call #2, succeeds) is followed, in the same pass, by the
-    // judge's answer and `applyOutcome`'s resolving `store.save` (call #3) -- the one set up to fail.
+    // Tick 2: the `[D-400]` dispatch record (call #2) and `setPendingRevalidation` (call #3) both
+    // succeed, followed, in the same pass, by the judge's answer and `applyOutcome`'s resolving
+    // `store.save` (call #4) -- the one set up to fail.
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const secondTick = await trigger.tick(vault, actions());
     consoleError.mockRestore();
     expect(judge.judge).toHaveBeenCalledOnce();
     expect(secondTick.refreshed).toBe(1); // the outcome was decided...
-    expect(host.saveDataCallCount).toBe(3); // ...set (call #2) succeeded, resolve (call #3) failed
+    expect(host.saveDataCallCount).toBe(4); // ...dispatch (#2) and set (#3) succeeded, resolve (#4) failed
 
     // Never half-applied: the pending fact is untouched (never lost -- it is not silently read as
     // current) AND the anchor's `text` is untouched (never a split state where the flag clears but
@@ -237,17 +239,19 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
 
     // Tick 3 (the retry -- the SAME periodic tick main.ts already drives this from): the same real
     // difference is still there (the failed write never advanced `text`), so it is recognised again
-    // -- `setPendingRevalidation` re-sets the SAME hash (call #4, a no-op in effect: `[D-351]`'s "the
-    // SETTING half always wins with the newest known real difference") -- the judge answers the same
-    // way, and this time the resolving write (call #5) succeeds.
+    // -- `[D-400]`'s own dispatch record fires this instrument's one permitted retry (call #5,
+    // recording `retriedAt`), `setPendingRevalidation` re-sets the SAME hash (call #6, a no-op in
+    // effect: `[D-351]`'s "the SETTING half always wins with the newest known real difference") --
+    // the judge answers the same way, and this time the resolving write (call #7) succeeds.
     const thirdTick = await trigger.tick(vault, actions());
-    expect(host.saveDataCallCount).toBe(5);
+    expect(host.saveDataCallCount).toBe(7);
     const afterRetry = await store.loadAll();
     const record = afterRetry.get(MCQ_ID);
     expect(record?.pendingRevalidation).toBeUndefined(); // resolved -- cleared exactly once
     expect(record?.text).toContain('cold, dry climates'); // and the text landed in the SAME write
     expect(afterRetry.size).toBe(1); // never duplicated
     expect(thirdTick.staleResultDiscarded).toBe(0); // a genuine retry, never mistaken for a stale one
+    expect(thirdTick.retryExhausted).toBe(0); // resolved before the retry itself could go unanswered
   });
 
   it('sanity check: the store key this all lives under is exactly CITATION_ANCHOR_STORAGE_KEY, one entry per instrument, on the real host', async () => {

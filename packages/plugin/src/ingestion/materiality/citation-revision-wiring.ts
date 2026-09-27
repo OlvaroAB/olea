@@ -91,6 +91,63 @@
  * `sourceProvenance.sourcePath` names a binary this module cannot diff as
  * text — keeps the pre-existing home-note-minus-spans behaviour unchanged;
  * only an authored note's own source note is ever substituted in.
+ *
+ * ===========================================================================
+ * `[D-400]` — ONE AUTOMATIC RETRY PER ORIGINAL CHECK, NEVER A FRESH
+ * ALLOWANCE ON RESTART; A PROVIDER ERROR IS RECOVERED THE SAME WAY
+ * ===========================================================================
+ * Without this section, `evaluateCitedPassageRevision` dispatches to the
+ * judge on EVERY tick for as long as a real difference sits unresolved
+ * (`material-change.ts`'s own doc: its pending-fact recording is
+ * unconditional, and so, once a judge is configured, is the dispatch right
+ * after it) — whether the previous dispatch was lost to the app closing
+ * mid-`await`, or a provider failure this loop's own outer `catch` below
+ * swallowed and `continue`d past. Unbounded, silent, unmetered retries
+ * either way. `[D-400]` (ruled 2026-09-27, gate case `CHG-57f55b30941e3290`,
+ * "restart with an escalation pending") bounds this to exactly ONE automatic
+ * retry per original check, tracked on the SAME `PendingRevalidation` record
+ * `[D-351]` already keys to the difference being checked
+ * (`citation-hash-store.ts`'s own `[D-400]` doc: `dispatchedAt`/`retriedAt`).
+ *
+ * The gate below runs right before the step that would dispatch: if the
+ * PERSISTED fact for this exact difference already carries a spent retry
+ * (`retriedAt` set), no further dispatch fires — ever, no matter how many
+ * more restarts happen — and the tick counts it under `report.retryExhausted`
+ * instead. Otherwise it dispatches — recording the attempt BEFORE the
+ * (re-)dispatch itself, so the budget is spent even if this attempt ALSO
+ * throws or is itself lost — as the original check when nothing has been
+ * dispatched yet for this exact difference, or as the one permitted retry
+ * when a dispatch is already recorded and still unresolved.
+ *
+ * **No age/timeout check gates the retry.** Every step in this trigger's own
+ * per-instrument loop is fully `await`ed before the next one starts, so the
+ * only way a NEW `tick()` call ever observes a still-unresolved dispatch
+ * from an EARLIER one is that the earlier attempt has already concluded one
+ * way or another by the time it did — a lost call (a restart mid-`await`, or
+ * a provider failure this loop's own `catch` swallowed), or a genuine answer
+ * whose RESOLVING write itself failed (`applyOutcome`'s own per-write
+ * `catch` blocks). Retrying immediately is correct in every one of those
+ * cases; artificially waiting would only delay an ordinary write-retry that
+ * has nothing to do with the judge at all. The one theoretical exception —
+ * two `tick()` calls truly overlapping in execution, `main.ts`'s own fixed
+ * interval firing before the previous pass resolved — is the SAME accepted,
+ * rare, at-least-once cost this file's `'revised'` outcome already takes for
+ * a duplicate suspend/enqueue attempt; it is not a correctness failure here
+ * either, since the retry budget still bounds the total to two attempts.
+ *
+ * **This supersedes `[D-343]`'s "an unavailable verdict counts as confirmed
+ * changed" for exactly this lost-call case**: instead of confirming the
+ * change once the retry also goes unanswered, the item stays pending and
+ * `[D-400]` calls for a recoverable deferred state rather than a silent
+ * withholding — `report.retryExhausted` is the only signal this file raises
+ * for that; the wording, its registered term, and any new persisted or
+ * served shape for actually SHOWING that state to her are not settled by
+ * `[D-400]` and are not built here (see this bead's hand-back notes).
+ * `[D-343]` is otherwise unchanged: a real `material`/`uncertain`/judge-
+ * returned-`unavailable` verdict still confirms the change exactly as
+ * before, and the D-311 obsolete-answer guard (`isPendingRevalidationCurrent`)
+ * applies to a retry's own late answer exactly as it already does to an
+ * original one — no changes needed there.
  */
 
 import {
@@ -166,6 +223,16 @@ export interface CitationRevisionTickReport {
    * scope).
    */
   readonly exemptSelfContained: number;
+  /**
+   * `[D-400]`: how many tracked instruments THIS PASS found with a real,
+   * still-unresolved difference whose one permitted automatic retry has
+   * already fired and also gone unanswered — never a further automatic
+   * dispatch for these. See this module's own `[D-400]` doc section: the
+   * wording, registered term and any served shape for showing this to her
+   * are not built here; this count is the hook a presentation-side lane can
+   * read.
+   */
+  readonly retryExhausted: number;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -252,6 +319,7 @@ interface MutableTickReport {
   formattingOnly: number;
   staleResultDiscarded: number;
   exemptSelfContained: number;
+  retryExhausted: number;
 }
 
 export class CitationRevisionTrigger {
@@ -277,6 +345,7 @@ export class CitationRevisionTrigger {
       formattingOnly: 0,
       staleResultDiscarded: 0,
       exemptSelfContained: 0,
+      retryExhausted: 0,
     };
 
     // `[D-351]`: the moment `evaluateCitedPassageRevision` confirms a real
@@ -409,6 +478,54 @@ export class CitationRevisionTrigger {
 
       let outcome: CitedPassageRevisionOutcome;
       try {
+        // `[D-400]`: past the formatting-only exit above, reaching here with
+        // `current.text !== previous.text` means a REAL, unresolved
+        // difference (the only other outcome of that check is `current.text
+        // === previous.text`, i.e. genuinely unchanged, which needs no
+        // gating — `evaluateCitedPassageRevision` below reports `'unchanged'`
+        // for that on its own, with no dispatch). Gate the JUDGE DISPATCH
+        // itself here; `evaluateCitedPassageRevision`'s own pending-fact
+        // recording stays unconditional per `[D-351]` either way. Inside the
+        // SAME `try` as the evaluation below — never swallowed, same posture
+        // `[D-351]`'s own `pendingRecorder` call takes — so this tick never
+        // dispatches without having durably recorded that it did, and a
+        // failed dispatch-tracking write is simply retried next tick like
+        // any other evaluation failure. See this module's own `[D-400]` doc
+        // section above for the full reasoning, including why no age/timeout
+        // check is needed.
+        if (
+          currentRecord !== undefined &&
+          current.kind === 'found-at-anchor' &&
+          current.text !== previous.text &&
+          this.deps.judge !== null
+        ) {
+          const newContentHash = await hashText(current.text);
+          const pending = previous.pendingRevalidation;
+          const priorForThisDifference =
+            pending !== undefined && pending.sinceContentHash === newContentHash
+              ? pending
+              : undefined;
+          if (priorForThisDifference?.retriedAt !== undefined) {
+            // The one permitted automatic retry already fired for this
+            // exact difference and it is STILL unresolved — never retry
+            // again, no matter how many further restarts or provider
+            // failures happen.
+            report.retryExhausted += 1;
+            continue;
+          }
+          // The original check when nothing has been dispatched yet for
+          // this exact difference; the one permitted automatic retry when a
+          // dispatch is already recorded and still unresolved (lost to a
+          // restart, a provider failure this same `catch` swallowed, or a
+          // genuine answer whose resolving write itself failed).
+          await this.deps.store.recordDispatch(
+            instrumentId,
+            newContentHash,
+            this.deps.clock.now(),
+            priorForThisDifference?.dispatchedAt !== undefined,
+          );
+        }
+
         outcome = await evaluateCitedPassageRevision(
           {
             instrumentId,

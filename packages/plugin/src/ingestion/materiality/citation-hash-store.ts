@@ -88,12 +88,54 @@ export interface ObsidianDataHost {
  * RAISED this pending state. A resolution is only ever applied when it was
  * computed against this exact hash — see `CitationHashStore.isPendingRevalidationCurrent`
  * and its callers in `citation-revision-wiring.ts`'s `applyOutcome`.
+ *
+ * **`[D-400]` (ruled 2026-09-27), extending the same record: recovering a
+ * check lost to an app restart, bounded to one automatic retry.** A call
+ * dispatched to the judge and never resolved — the process closed mid-await,
+ * or a provider failure this trigger's own catch swallowed — left this
+ * pending fact stuck forever under `[D-351]` alone, retried on every single
+ * tick with no bound (`material-change.ts`'s own recording call fires
+ * unconditionally for as long as the difference is unresolved). `[D-400]`
+ * supersedes `[D-343]`'s "unavailable counts as confirmed changed" for
+ * exactly this case: instead of resolving the pending fact to confirmed
+ * changed, an exhausted retry leaves it pending and reports a recoverable
+ * deferred state (see `citation-revision-wiring.ts`'s `retryExhausted`
+ * count) — `[D-343]` is otherwise unchanged (a genuine `material`/
+ * `uncertain`/judge-returned-unavailable verdict still confirms changed
+ * exactly as before). `dispatchedAt`/`retriedAt` below are the persisted
+ * facts that bound it: never a fresh allowance just because the app
+ * restarted again. The wording, registered term and any student-facing
+ * shape for SHOWING that deferred state are not settled by `[D-400]` and are
+ * not built here — see this bead's hand-back notes.
  */
 export interface PendingRevalidation {
   /** The content hash this pending state was raised against — [D-351]'s "the particular source revision being checked." */
   readonly sinceContentHash: string;
   /** Epoch ms this pending state was first recorded — reporting only, never gating logic (the key above is what gates). */
   readonly since: number;
+  /**
+   * `[D-400]` (ruled 2026-09-27): epoch ms the check for THIS
+   * `sinceContentHash` was last actually dispatched to the judge — the
+   * original check when {@link retriedAt} is absent, the one permitted
+   * retry's own dispatch time once it is present. Absent means nothing has
+   * been dispatched yet for this difference (e.g. no judge configured at
+   * all — `citation-revision-wiring.ts`'s existing unlimited-wait posture
+   * for that case is untouched by this field). Set by
+   * `CitationHashStore.recordDispatch`, never by `setPendingRevalidation`
+   * itself, which leaves it (and {@link retriedAt}) exactly as they were
+   * whenever the observed difference is the SAME one already pending —
+   * see that method's own doc.
+   */
+  readonly dispatchedAt?: number;
+  /**
+   * `[D-400]`: epoch ms the one additional automatic retry this pending
+   * state is ever granted was dispatched. Present means that retry's budget
+   * is already spent for `sinceContentHash` — a later restart, or a further
+   * provider failure, must never grant another one; the caller reports a
+   * recoverable deferred state instead (`citation-revision-wiring.ts`'s
+   * `retryExhausted` count). Absent means the retry has not fired yet.
+   */
+  readonly retriedAt?: number;
 }
 
 /** One instrument's last-observed citation anchor. */
@@ -154,6 +196,35 @@ export interface CitationHashStore {
     instrumentId: string,
     expectedSourceContentHash: string,
   ): Promise<boolean>;
+  /**
+   * `[D-400]`: records that a check was just dispatched to the judge for
+   * THIS instrument's pending difference (`sourceContentHash`) — the
+   * original check when `retry` is `false`, the one permitted automatic
+   * retry when `retry` is `true` (sets {@link PendingRevalidation.retriedAt}
+   * to `dispatchedAt` in that case, in addition to
+   * {@link PendingRevalidation.dispatchedAt} itself).
+   *
+   * Creates the pending-revalidation fact when none is persisted yet for
+   * `instrumentId` at all (the very first dispatch this store has seen for
+   * a difference it has not yet recorded as pending — `setPendingRevalidation`
+   * has not necessarily run first; a caller may dispatch and record pending
+   * in either order). Supersedes — fresh `since`, no carried-over retry
+   * state — a persisted fact for a DIFFERENT, older `sinceContentHash`,
+   * exactly as `setPendingRevalidation` already does: a newer edit gets its
+   * own retry budget. Read back, keyed to the given hash, by the caller
+   * BEFORE deciding whether to dispatch at all — this method only ever
+   * records that a dispatch happened, it never decides on its own whether
+   * one should.
+   *
+   * A no-op when nothing is tracked at all yet for `instrumentId` — same
+   * posture as `setPendingRevalidation`.
+   */
+  recordDispatch(
+    instrumentId: string,
+    sourceContentHash: string,
+    dispatchedAt: number,
+    retry: boolean,
+  ): Promise<void>;
 }
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob — distinct from `MATERIALITY_HASH_STORAGE_KEY`, same blob, same read-modify-write discipline. */
@@ -162,7 +233,19 @@ export const CITATION_ANCHOR_STORAGE_KEY = 'citationRevisionAnchors';
 function isPendingRevalidation(value: unknown): value is PendingRevalidation {
   if (typeof value !== 'object' || value === null) return false;
   const candidate = value as Record<string, unknown>;
-  return typeof candidate.sinceContentHash === 'string' && typeof candidate.since === 'number';
+  if (typeof candidate.sinceContentHash !== 'string' || typeof candidate.since !== 'number') {
+    return false;
+  }
+  // [D-400]: both optional, same "predates this field, still reads" INV-2
+  // posture the rest of this record already takes for pendingRevalidation
+  // itself — but if present, well-formed.
+  if (candidate.dispatchedAt !== undefined && typeof candidate.dispatchedAt !== 'number') {
+    return false;
+  }
+  if (candidate.retriedAt !== undefined && typeof candidate.retriedAt !== 'number') {
+    return false;
+  }
+  return true;
 }
 
 function isCitationAnchorRecord(value: unknown): value is CitationAnchorRecord {
@@ -297,9 +380,81 @@ export class ObsidianCitationHashStore implements CitationHashStore {
         // to — a no-op, per this method's own interface doc.
         return blob;
       }
+      const existingPending = currentEntry.pendingRevalidation;
+      // [D-400]: recordPending fires unconditionally, every tick, for as
+      // long as a real difference is unresolved (`material-change.ts`'s own
+      // doc) — including on ticks this trigger's own [D-400] dispatch gate
+      // deliberately does not re-dispatch for. If the observed difference
+      // is the SAME one already pending, this write must be a true no-op on
+      // dispatch/retry state, or every such tick would silently erase the
+      // retry budget this record exists to bound. Only a genuinely NEW
+      // difference (a different hash) gets a fresh pending fact with no
+      // carried-over dispatch/retry state — the same "SETTING half always
+      // wins with the newest known real difference" rule this method's own
+      // interface doc already gives for `sinceContentHash`/`since`.
+      const pendingRevalidation: PendingRevalidation =
+        existingPending?.sinceContentHash === sourceContentHash
+          ? existingPending
+          : { sinceContentHash: sourceContentHash, since };
+      table[instrumentId] = { ...currentEntry, pendingRevalidation };
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    const existing = await this.host.loadData();
+    await this.host.saveData(merge(existing));
+  }
+
+  /**
+   * `[D-400]`. Read-modify-write, same reason `save`/`setPendingRevalidation`
+   * above give. Creates the pending-revalidation fact if none is persisted
+   * yet (a dispatch may be recorded before or after `setPendingRevalidation`
+   * itself runs for the same difference — see this method's own interface
+   * doc); supersedes a fact for a different, older hash the same way
+   * `setPendingRevalidation` does. A no-op when nothing is tracked at all
+   * for `instrumentId`.
+   */
+  async recordDispatch(
+    instrumentId: string,
+    sourceContentHash: string,
+    dispatchedAt: number,
+    retry: boolean,
+  ): Promise<void> {
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      const currentEntry = table[instrumentId];
+      if (!isCitationAnchorRecord(currentEntry)) {
+        // Nothing tracked for this instrument at all yet — a no-op, same
+        // posture as `setPendingRevalidation`.
+        return blob;
+      }
+      const existingPending = currentEntry.pendingRevalidation;
+      const forSameDifference = existingPending?.sinceContentHash === sourceContentHash;
+      const since = forSameDifference ? existingPending.since : dispatchedAt;
+      const carriedRetriedAt = forSameDifference ? existingPending.retriedAt : undefined;
       table[instrumentId] = {
         ...currentEntry,
-        pendingRevalidation: { sinceContentHash: sourceContentHash, since },
+        pendingRevalidation: {
+          sinceContentHash: sourceContentHash,
+          since,
+          dispatchedAt,
+          ...(retry
+            ? { retriedAt: dispatchedAt }
+            : carriedRetriedAt !== undefined
+              ? { retriedAt: carriedRetriedAt }
+              : {}),
+        },
       };
       blob[CITATION_ANCHOR_STORAGE_KEY] = table;
       return blob;

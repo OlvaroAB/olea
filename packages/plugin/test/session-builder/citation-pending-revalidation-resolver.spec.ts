@@ -112,6 +112,10 @@ const NO_ANCHORS: CitationHashStore = {
   remove: async () => {},
   setPendingRevalidation: async () => {},
   isPendingRevalidationCurrent: async () => false,
+  // [D-400] — not exercised by this file's own resolver tests (they read
+  // `pendingRevalidation` off `loadAll`, never dispatch), but required by
+  // the `CitationHashStore` port.
+  recordDispatch: async () => {},
 };
 
 describe('resolveCitationPendingRevalidation', () => {
