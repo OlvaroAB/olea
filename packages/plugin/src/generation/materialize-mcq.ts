@@ -94,19 +94,38 @@
  * at the job-composition and revision-detection boundary, not in this
  * function's own call chain.
  *
- * ## The `[D-181]` citation sidecar (`ol-2zfj.52`)
+ * ## The `[D-181]` citation sidecar (`ol-2zfj.52`), now ALWAYS written (`ol-v7r5.106`, Class B)
  *
  * Immediately after `stampMcqId` mints the frozen instrument id, and before
- * either write branch above, this writes `input.sourceCitation` — when
- * supplied — to the citation sidecar (`writeInstrumentCitation`,
- * `olea-core`'s `instrument/citation-store.ts`) keyed by that same id. This
- * is the one write neither branch above needs to know about: it never
- * touches `stamped.content`, never lands in her note (`[D-181]`'s own
- * ruling — the sidecar, never text written into her notes), and happens
- * exactly once regardless of which branch runs next. `accept.ts` forwards
- * `DraftRecord.sourceCitation` here verbatim; omitted (never fabricated)
- * when the pipeline had none to record — see that field's own doc
- * (`generation/types.ts`) for why that can happen.
+ * either write branch above, this writes a citation to the citation sidecar
+ * (`writeInstrumentCitation`, `olea-core`'s `instrument/citation-store.ts`)
+ * keyed by that same id. This is the one write neither branch above needs to
+ * know about: it never touches `stamped.content`, never lands in her note
+ * (`[D-181]`'s own ruling — the sidecar, never text written into her notes),
+ * and happens exactly once regardless of which branch runs next.
+ *
+ * **Before `ol-v7r5.106`, an absent `input.sourceCitation` meant no sidecar
+ * at all** — the same gap `materialize-card.ts`'s own module doc describes
+ * for cards before `ol-v7r5.68` closed it there. That made a generated MCQ
+ * whose citation happened to be absent byte-for-byte indistinguishable, to
+ * any reader of `.olea/citations/`, from a hand-authored one — exactly the
+ * signal `ol-v7r5.102`'s `citation-revision-wiring.ts` rewrite (`[D-398]`)
+ * needs to decide authorship, and exactly why that lane had to count an
+ * exempt MCQ with no sidecar apart, as `authorshipUnverified`, rather than
+ * trust the absence. This closes that gap the same way `materialize-card.ts`
+ * already does: `input.sourceCitation` is written verbatim when supplied,
+ * same as before; when it is `undefined`, this now writes a SELF-REFERENTIAL
+ * citation — `{ sourcePath: input.sourcePath }`, the note this MCQ was
+ * inserted into — never fabricating a `page`/`section` it does not have.
+ * `accept.ts` forwards `DraftRecord.sourceCitation` here verbatim; an
+ * `undefined` reaching this far is the pipeline's defensive "no matching
+ * unit" fallback firing (see `materialize-card.ts`'s own doc for the
+ * identical argument, restated there for cards), never a legitimate "no
+ * source" fact for a real generated item — every generated MCQ was grounded
+ * against retrieved material before the generative call ever ran. **Existing
+ * sidecars are never rewritten**: guarded by the same `vault.exists` check as
+ * before, so a retry that already wrote this exact sidecar under the SAME
+ * derived id is left untouched.
  *
  * ## The `[D-220 / DIST-3]` distractor-provenance sidecar (`ol-egov.109`, `ol-0r92.52`)
  *
@@ -246,8 +265,11 @@ export interface MaterializeAcceptedDraftInput {
    * `[D-181]`/`ol-2zfj.52`: the passage this draft was generated from
    * (`DraftRecord.sourceCitation`, `generation/types.ts`) — written to the
    * citation sidecar keyed by the frozen instrument id this call mints. See
-   * the module doc's own section. `undefined` when the pipeline had none —
-   * the sidecar write is skipped entirely rather than guessing one.
+   * the module doc's own section. **`undefined` no longer skips the sidecar
+   * write** (`ol-v7r5.106`, Class B) — a self-referential citation
+   * (`sourcePath` = this MCQ's own note) is written instead, mirroring
+   * `materialize-card.ts`'s identical `MaterializeAcceptedCardDraftInput.sourceCitation`
+   * fallback.
    */
   readonly sourceCitation?: InstrumentCitation;
   /**
@@ -399,17 +421,19 @@ export async function materializeAcceptedDraft(
   const stamped = stampMcqId(content, inserted.span, { generateId: () => derivedId });
 
   // `[D-181]`: the sidecar, never text written into her notes — see the
-  // module doc's own section. Skipped, not fabricated, when the pipeline
-  // had no citation to record for this draft. Also skipped — rather than
-  // calling the write-once store and taking its "already has a record"
-  // throw — when a prior, interrupted attempt already wrote this exact
-  // sidecar under the SAME derived id (the module doc's "retry-orphan fix"
-  // section): a retry must converge cleanly, not fail on the half of the
-  // work an earlier attempt already finished.
-  if (input.sourceCitation !== undefined) {
-    if (!(await vault.exists(citationStorePath(stamped.id)))) {
-      await writeInstrumentCitation(vault, stamped.id, input.sourceCitation);
-    }
+  // module doc's own section. `ol-v7r5.106`, Class B: never skipped any
+  // more — a supplied citation is written verbatim, an absent one falls
+  // back to a self-referential citation naming this MCQ's own note, so an
+  // absent sidecar never again means "authorship unknown" for a real
+  // materialized item. Skipped only when a prior, interrupted attempt
+  // already wrote this exact sidecar under the SAME derived id (the module
+  // doc's "retry-orphan fix" section) — rather than calling the write-once
+  // store and taking its "already has a record" throw — so a retry
+  // converges cleanly instead of failing on work an earlier attempt already
+  // finished.
+  const citation: InstrumentCitation = input.sourceCitation ?? { sourcePath: input.sourcePath };
+  if (!(await vault.exists(citationStorePath(stamped.id)))) {
+    await writeInstrumentCitation(vault, stamped.id, citation);
   }
 
   // `[D-220 / DIST-3]`: the distractor-provenance sidecar — see the module doc's own section.

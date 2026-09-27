@@ -16,13 +16,14 @@
  * end to end); this suite stays as the direct, unit-level proof of the
  * stamping/append mechanics themselves.
  *
- * The third `describe` below (`[D-181]`, `ol-2zfj.52`) covers the citation
- * sidecar: a supplied `sourceCitation` is written keyed by the frozen
- * instrument id, an absent one writes no sidecar file at all (omitted,
- * never fabricated), and the last test proves the round trip end to end
- * through `enumerateVaultInstruments` — the same reader
- * `session/enumerate.spec.ts` unit-tests directly against a pre-written
- * sidecar record.
+ * The third `describe` below (`[D-181]`, `ol-2zfj.52`, `ol-v7r5.106`) covers
+ * the citation sidecar: a supplied `sourceCitation` is written keyed by the
+ * frozen instrument id; an absent one now writes a SELF-REFERENTIAL citation
+ * (this MCQ's own note) rather than no sidecar at all (`ol-v7r5.106`, Class
+ * B — mirrors `materialize-card.ts`'s identical `ol-v7r5.68` fix), and the
+ * last test proves the round trip end to end through
+ * `enumerateVaultInstruments` — the same reader `session/enumerate.spec.ts`
+ * unit-tests directly against a pre-written sidecar record.
  *
  * The fourth `describe` below (`[D-220 / DIST-3]`, `ol-egov.109`,
  * `ol-0r92.52`) covers the distractor-provenance sidecar beside it: one
@@ -184,7 +185,10 @@ describe('materializeAcceptedDraft', () => {
     const { instruments } = parseMcqBlocks(vault.raw(notePath) ?? '');
     expect(instruments[0]?.predecessor).toBeNull();
     // No daily review-log file was ever created — nothing appended at all.
-    expect(await vault.list({ under: '.olea' })).toEqual([]);
+    // (Scoped to `.olea/reviews`, not the whole `.olea` tree: `ol-v7r5.106`
+    // means a self-referential citation sidecar now legitimately exists
+    // under `.olea/citations` even with no predecessor supplied.)
+    expect(await vault.list({ under: '.olea/reviews' })).toEqual([]);
   });
 });
 
@@ -220,7 +224,7 @@ describe('materializeAcceptedDraft — [D-181] citation sidecar', () => {
     });
   });
 
-  it('writes no sidecar file at all when the draft carries no citation — omitted, never fabricated', async () => {
+  it("an omitted sourceCitation now writes a self-referential citation (this MCQ's own note) rather than no sidecar at all (ol-v7r5.106, Class B)", async () => {
     const notePath = 'note-no-citation.md';
     const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
 
@@ -229,8 +233,41 @@ describe('materializeAcceptedDraft — [D-181] citation sidecar', () => {
       question: question(),
     });
 
-    expect(await readInstrumentCitation(vault, result.instrumentId)).toBeUndefined();
-    expect(await vault.list({ under: '.olea/citations' })).toEqual([]);
+    expect(await readInstrumentCitation(vault, result.instrumentId)).toEqual({
+      sourcePath: notePath,
+    });
+    const citationFiles = await vault.list({ under: '.olea/citations' });
+    expect(citationFiles).toHaveLength(1);
+  });
+
+  it('the self-referential sidecar is guarded by vault.exists too — a re-call for a different draft against the same note does not collide with it', async () => {
+    // Mirrors materialize-card.spec.ts's identical guard test for the
+    // ol-v7r5.68 fix: two distinct drafts (different draftId, so distinct
+    // derived ids) against the same note each get their own self-referential
+    // sidecar rather than one skipping or clobbering the other's.
+    const notePath = 'note-two-drafts.md';
+    const vault = new MemoryVaultSource({ [notePath]: 'prose\n' });
+
+    const first = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+      draftId: 'draft-self-ref-1',
+    });
+    const second = await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question(),
+      draftId: 'draft-self-ref-2',
+    });
+
+    expect(first.instrumentId).not.toBe(second.instrumentId);
+    const citationFiles = await vault.list({ under: '.olea/citations' });
+    expect(citationFiles).toHaveLength(2);
+    expect(await readInstrumentCitation(vault, first.instrumentId)).toEqual({
+      sourcePath: notePath,
+    });
+    expect(await readInstrumentCitation(vault, second.instrumentId)).toEqual({
+      sourcePath: notePath,
+    });
   });
 
   it('end to end: enumerateVaultInstruments reads the freshly-written citation back as sourceProvenance', async () => {
