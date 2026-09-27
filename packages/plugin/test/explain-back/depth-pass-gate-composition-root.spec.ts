@@ -33,7 +33,7 @@ describe('explain-back/modal.ts: computeAcceptGrading gates the depth pass on th
     expect(modal).toMatch(/shouldRunExplainBackDepthPass/);
   });
 
-  it("the recordSoloGradeAndReview call is guarded by grading.outcome === 'graded' && shouldRunExplainBackDepthPass(grading.verdict), never run unconditionally on result.status alone", () => {
+  it("the depth pass is chosen by grading.outcome === 'graded' and shouldRunExplainBackDepthPass(grading.verdict), never run unconditionally on result.status alone", () => {
     const start = modal.indexOf('private async computeAcceptGrading(');
     expect(start).toBeGreaterThan(-1);
     const end = modal.indexOf('private discardGrading(', start);
@@ -45,6 +45,21 @@ describe('explain-back/modal.ts: computeAcceptGrading gates the depth pass on th
     // with no verdict read at all.
     expect(body).not.toMatch(
       /if \(result !== null && result\.status === 'accepted' && this\.deps\.recordSoloGradeAndReview\)\s*\{/,
+    );
+  });
+
+  it('ol-ryrh: the verdict gate decides depthPass, not whether the accepted verdict is recorded', () => {
+    const start = modal.indexOf('private async computeAcceptGrading(');
+    const end = modal.indexOf('private discardGrading(', start);
+    const body = modal.slice(start, end);
+    // A clearly-incorrect verdict still reaches `recordSoloGradeAndReview` (which records the
+    // correctness verdict alone and makes no depth call); the gate now only chooses the pass.
+    expect(body).toMatch(
+      /const depthPass = shouldRunExplainBackDepthPass\(grading\.verdict\) \? 'run' : 'skipped';/,
+    );
+    expect(body).toMatch(/recordSoloGradeAndReview\(\{[\s\S]*?\bdepthPass,[\s\S]*?\}\)/);
+    expect(body).not.toMatch(
+      /'graded' &&\s*shouldRunExplainBackDepthPass\(grading\.verdict\)\s*\)\s*\{/,
     );
   });
 });
