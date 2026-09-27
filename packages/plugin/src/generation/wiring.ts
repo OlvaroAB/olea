@@ -37,8 +37,13 @@
  * `ol-v7r5.37` behaviour exactly, the same as `routing` above.
  */
 
-import type { ConceptRecord, ExtractedUnit, VaultSource } from 'olea-core';
-import { DEFAULT_COURSES_FOLDER } from 'olea-core';
+import type {
+  ConceptRecord,
+  ExtractedUnit,
+  SchedulableInstrumentType,
+  VaultSource,
+} from 'olea-core';
+import { DEFAULT_COURSES_FOLDER, hashText } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
@@ -47,6 +52,7 @@ import { createVaultDraftCacheStore, type DraftCacheStore } from './cache-store.
 import type { FormatMatchDecision } from './pipeline.js';
 import { type GenerationSweepReport, runGenerationSweep } from './pipeline.js';
 import type { GenerationRoutingDeps } from './routing.js';
+import type { DraftRecord } from './types.js';
 
 export interface GenerationWiringDeps {
   readonly vault: VaultSource;
@@ -65,6 +71,45 @@ export interface GenerationWiringDeps {
 export interface GenerationWiring {
   readonly cache: DraftCacheStore;
   readonly acceptPort: DraftAcceptPort;
+  /**
+   * `GenerationArrivalDeps.sourceContentHashFor`'s real, local-state-only
+   * implementation (`ol-egov.141.89.5.25`, D-381) — `packages/plugin/src
+   * /ingestion/generation-queue.ts`'s own doc named this the disclosed gap
+   * `ol-egov.141.89.5.24` left open ("composing the real lookup... is a
+   * named follow-up"). Resolves `conceptKey` through this same wiring's own
+   * `listConceptsForCourse` (a real vault walk, `[D-357]`'s stamped
+   * permanent key — the identical derivation `buildGenerationArrivalDeps`'s
+   * own default uses, so a caller composing both from the same `vault`
+   * agrees on the key) and hashes `sourcePaths[0]`'s CURRENT content with
+   * `hashText` — the same algorithm `cache-store.ts`'s own
+   * `sourceContentHash` field and `generation-job-runner.ts`'s
+   * `runGenerationDraftJob` already use for this exact "concept's current
+   * source digest" shape. A vault read, never a network call. `undefined`
+   * when the concept or its source cannot be resolved at call time (renamed,
+   * removed, or no matching key) — absent, never thrown, matching every
+   * other optional `GenerationArrivalDeps` lookup's own failure posture.
+   */
+  readonly sourceContentHashFor: (
+    courseCode: string,
+    conceptKey: string,
+  ) => Promise<string | undefined>;
+  /**
+   * Builds `GenerationArrivalDeps.promptVersionFor`'s real, local-state-only
+   * implementation (`ol-egov.141.89.5.25`, D-385) — returns a Promise
+   * because the source of truth (the draft cache's stamped
+   * `DraftRecord.provenance.promptVersion`, D7.3) only answers async (a
+   * vault read via `cache.list()`), while `promptVersionFor` itself is
+   * declared synchronous (`generation-queue.ts`). A caller `await`s this
+   * ONCE per arrival sweep (one `cache.list()`, matching `hasAnyBuiltKind`'s
+   * own disclosed per-sweep cost, not once per candidate concept) and hands
+   * the resolved closure to `GenerationArrivalDeps.promptVersionFor`
+   * directly. Never a network probe — see that field's own doc ("a version
+   * bump becomes visible only once some later draft response stamps a new
+   * value, not by asking the service what today's version is").
+   */
+  buildPromptVersionFor(): Promise<
+    (instrumentKind: SchedulableInstrumentType) => string | undefined
+  >;
   /**
    * Runs one sweep over `units` against `draftDeps` (assembled by the caller
    * from `RetrievalWiring`, `null` when the Worker isn't configured — F7.8;
@@ -95,6 +140,57 @@ function listConceptsForCourseFactory(
     extractConceptsFromVault(vault, { under: `${coursesFolder}/${courseCode}` });
 }
 
+/** `GenerationWiring.sourceContentHashFor`'s implementation — see that field's own doc. */
+function createSourceContentHashFor(
+  vault: VaultSource,
+  listConceptsForCourse: (courseCode: string) => Promise<readonly ConceptRecord[]>,
+): (courseCode: string, conceptKey: string) => Promise<string | undefined> {
+  return async (courseCode, conceptKey) => {
+    let concepts: readonly ConceptRecord[];
+    try {
+      concepts = await listConceptsForCourse(courseCode);
+    } catch {
+      return undefined;
+    }
+    const concept = concepts.find((c) => c.key === conceptKey);
+    const sourcePath = concept?.sourcePaths[0];
+    if (sourcePath === undefined) return undefined;
+    try {
+      if (!(await vault.exists(sourcePath))) return undefined;
+      return await hashText(await vault.read(sourcePath));
+    } catch {
+      return undefined;
+    }
+  };
+}
+
+/**
+ * `GenerationWiring.buildPromptVersionFor`'s implementation — snapshots
+ * `cache.list()` once and answers, per `instrumentKind`, the most recently
+ * CREATED matching `DraftRecord`'s `provenance.promptVersion` ("the version
+ * last seen stamped," `GenerationArrivalDeps.promptVersionFor`'s own doc) —
+ * never the most recently resolved one, so a rejected-but-newer draft still
+ * counts (a reject reflects on the drafted CONTENT, not on which prompt
+ * version produced it). `record.instrumentType` is matched directly:
+ * `undefined` reads as `'mcq'` (`types.ts`'s own documented default, every
+ * draft cached before that field existed). `undefined` when no cached draft
+ * of that kind exists yet.
+ */
+async function createPromptVersionFor(
+  cache: DraftCacheStore,
+): Promise<(instrumentKind: SchedulableInstrumentType) => string | undefined> {
+  const records = await cache.list();
+  const latestByKind = new Map<string, DraftRecord>();
+  for (const record of records) {
+    const kind = record.instrumentType ?? 'mcq';
+    const existing = latestByKind.get(kind);
+    if (existing === undefined || record.createdAt > existing.createdAt) {
+      latestByKind.set(kind, record);
+    }
+  }
+  return (instrumentKind) => latestByKind.get(instrumentKind)?.provenance.promptVersion;
+}
+
 export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWiring {
   const coursesFolder = deps.coursesFolder ?? DEFAULT_COURSES_FOLDER;
   const cache = createVaultDraftCacheStore(deps.vault);
@@ -109,6 +205,8 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
   return {
     cache,
     acceptPort,
+    sourceContentHashFor: createSourceContentHashFor(deps.vault, listConceptsForCourse),
+    buildPromptVersionFor: () => createPromptVersionFor(cache),
     async sweep(units, draftDeps, routing, formatMatch) {
       if (draftDeps === null) return null;
       if (units.length === 0) return null;
