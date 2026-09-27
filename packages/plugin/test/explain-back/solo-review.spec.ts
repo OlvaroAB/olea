@@ -7,7 +7,7 @@
  */
 
 import type { ExplainBackPromptContext, WorkerTaskRequest } from 'olea-core';
-import { readContentRecord } from 'olea-core';
+import { readContentRecord, readReviewLogFile, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   type RecordSoloGradeAndReviewOutcome,
@@ -533,5 +533,180 @@ describe('recordSoloGradeAndReview — answerEdits (ol-0r92.123, [D-228 / SIG-3]
 
     if (!outcome) throw new Error('expected a written review-log record');
     expect(outcome.result.record.answerEdits).toEqual({ firstEditMs: 12_000, editBursts: 3 });
+  });
+});
+
+describe('recordSoloGradeAndReview — ol-ryrh: the accepted correctness verdict is recorded when depth is unavailable or skipped ([D-303], [D-320])', () => {
+  const JUDGE_STAMP = { promptVersion: 'judge-7', modelId: 'judge-model' };
+
+  function acceptedVerdict(verdict: 'correct' | 'partial' | 'incorrect') {
+    return Promise.resolve({
+      status: 'accepted' as const,
+      accepted: {
+        status: 'accepted' as const,
+        verdict,
+        feedback: 'Clear on both halves.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [],
+        stamp: JUDGE_STAMP,
+      },
+      observations: [],
+    });
+  }
+
+  /** The three ways `gradeSoloAttempt` gives no grading, plus a call that throws. */
+  const UNAVAILABLE_DEPTH: readonly (readonly [string, () => GradingWiring])[] = [
+    [
+      'the Worker is not configured',
+      () => ({ ...UNCONFIGURED_WIRING, acceptedObservationsByAttempt: new Map() }),
+    ],
+    [
+      'the kill switch has tripped',
+      () => ({ ...wiringWithSoloReply(), killedBySustainedAuditFailure: true }),
+    ],
+    [
+      'the depth reply carries no D7.3 stamp',
+      () =>
+        wiringWithSoloReply(() => ({
+          ok: true,
+          result: { soloLevel: 'relational', rationale: 'Connects both ideas.' },
+        })),
+    ],
+    [
+      'the depth call itself fails',
+      () =>
+        wiringWithSoloReply(() => {
+          throw new Error('network down');
+        }),
+    ],
+  ];
+
+  async function accept(
+    wiring: GradingWiring,
+    verdict: 'correct' | 'partial' | 'incorrect',
+    depthPass?: 'run' | 'skipped',
+  ) {
+    const vault = memoryVault();
+    let depthCalls = 0;
+    const transport = wiring.soloTransport;
+    const counted: GradingWiring = {
+      ...wiring,
+      soloTransport:
+        transport === null
+          ? null
+          : {
+              send: async (request) => {
+                depthCalls += 1;
+                return transport.send(request);
+              },
+            },
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: the memo's value type is the accept result this test scripts.
+    counted.acceptedObservationsByAttempt.set('attempt-1', acceptedVerdict(verdict) as any);
+    const outcome = await recordSoloGradeAndReview(
+      {
+        grading: counted,
+        vault,
+        deviceId: 'device-a',
+        now: () => new Date('2026-08-31T09:00:00Z'),
+      },
+      {
+        instrumentId: 'explain-back:concept-a:1',
+        attemptId: 'attempt-1',
+        subjectConceptId: 'concept-a',
+        context: CONTEXT,
+        answer: 'her explanation',
+        durationMs: 42_000,
+        supportLevelShown: 'independent',
+        ...(depthPass !== undefined ? { depthPass } : {}),
+      },
+    );
+    const file = await readReviewLogFile(vault, reviewLogPath('2026-08-31', 'device-a'));
+    return { outcome, records: file.records, writes: vault.writes, depthCalls };
+  }
+
+  for (const [reason, makeWiring] of UNAVAILABLE_DEPTH) {
+    it(`when ${reason}: exactly one review-log event, carrying the verdict and no depth field`, async () => {
+      const { outcome, records, writes } = await accept(makeWiring(), 'partial');
+
+      expect(records).toHaveLength(1);
+      const [record] = records;
+      expect(record).toMatchObject({
+        kind: 'review',
+        instrumentType: 'explain-back',
+        instrumentId: 'explain-back:concept-a:1',
+        conceptIds: ['concept-a'],
+        rating: null,
+        durationMs: 42_000,
+        supportLevelShown: 'independent',
+        explainBackCorrectness: {
+          verdict: 'partial',
+          artifactProvenance: {
+            taskId: 'explain-back.judge.v1',
+            promptVersion: 'judge-7',
+            modelId: 'judge-model',
+          },
+        },
+      });
+      expect(record).not.toHaveProperty('explainBackGrade');
+      expect(record).not.toHaveProperty('schedulingObservation');
+      // One review-log write, and no content-store write: there is no depth grade to file.
+      expect(writes).toHaveLength(1);
+
+      expect(outcome?.depth).toBe('unavailable');
+      expect(outcome).not.toHaveProperty('soloLevel');
+      expect(outcome?.result.record).toEqual(record);
+    });
+  }
+
+  it("a skipped depth pass ([D-286]'s incorrect verdict): the verdict is recorded and no depth call is made", async () => {
+    const { outcome, records, writes, depthCalls } = await accept(
+      wiringWithSoloReply(),
+      'incorrect',
+      'skipped',
+    );
+
+    expect(depthCalls).toBe(0);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ explainBackCorrectness: { verdict: 'incorrect' } });
+    expect(records[0]).not.toHaveProperty('explainBackGrade');
+    expect(writes).toHaveLength(1);
+    expect(outcome?.depth).toBe('skipped');
+    expect(outcome).not.toHaveProperty('soloLevel');
+  });
+
+  it('a depth pass that succeeds still writes the one event with both, and reports depth graded', async () => {
+    const { outcome, records, depthCalls } = await accept(wiringWithSoloReply(), 'correct', 'run');
+
+    expect(depthCalls).toBe(1);
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({
+      explainBackCorrectness: { verdict: 'correct' },
+      explainBackGrade: { soloLevel: 'relational' },
+    });
+    expect(outcome).toMatchObject({ depth: 'graded', soloLevel: 'relational' });
+  });
+
+  it('writes nothing when depth is unavailable AND no stamped verdict exists — never an empty event', async () => {
+    const vault = memoryVault();
+    const outcome = await recordSoloGradeAndReview(
+      {
+        grading: { ...UNCONFIGURED_WIRING, acceptedObservationsByAttempt: new Map() },
+        vault,
+        deviceId: 'device-a',
+        now: () => new Date('2026-08-31T09:00:00Z'),
+      },
+      {
+        instrumentId: 'explain-back:concept-a:1',
+        attemptId: 'attempt-1',
+        subjectConceptId: 'concept-a',
+        context: CONTEXT,
+        answer: 'her explanation',
+        depthPass: 'skipped',
+      },
+    );
+    expect(outcome).toBeUndefined();
+    expect(vault.writes).toEqual([]);
   });
 });

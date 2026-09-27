@@ -349,6 +349,15 @@ export interface ExplainBackModalDeps {
      * when no causes partner resolved or the prompt has no subject concept.
      */
     readonly relationExpected?: boolean;
+    /**
+     * `ol-ryrh` (`[D-286]`, `[D-320]`): `'skipped'` when the accepted verdict
+     * means no depth pass runs (`./request.ts`'s
+     * `shouldRunExplainBackDepthPass`), forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.depthPass` so the correctness verdict
+     * is still recorded without a depth call. Optional, same structural-typing
+     * accommodation `attemptId` above takes; absent means `'run'`.
+     */
+    readonly depthPass?: 'run' | 'skipped';
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -1233,14 +1242,21 @@ export class ExplainBackModal extends Modal {
     // type, so a future caller of this method cannot silently skip it.
     // `./request.ts`'s pure `shouldRunExplainBackDepthPass` carries the
     // rule itself, unit-tested there for both branches.
+    //
+    // `ol-ryrh` (`[D-303]`, `[D-320]`): the depth gate no longer decides
+    // whether `recordSoloGradeAndReview` is called — only whether it runs
+    // the depth pass (`depthPass`). The correctness verdict she accepted is
+    // recorded on the one event either way; a skipped depth pass still makes
+    // no second Worker call (`solo-review.ts` never calls `gradeSoloAttempt`
+    // for `'skipped'`), so `[D-286]`'s one-call rule is unchanged.
     const grading = pending.grading;
     if (
       result !== null &&
       result.status === 'accepted' &&
       this.deps.recordSoloGradeAndReview &&
-      grading.outcome === 'graded' &&
-      shouldRunExplainBackDepthPass(grading.verdict)
+      grading.outcome === 'graded'
     ) {
+      const depthPass = shouldRunExplainBackDepthPass(grading.verdict) ? 'run' : 'skipped';
       // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
       // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
       const supportLevelShown = supportLevelShownForExplainBack(
@@ -1280,6 +1296,7 @@ export class ExplainBackModal extends Modal {
           // Always a real boolean on `prompt` (never itself `undefined`) —
           // always sent, same posture `answerEdits` takes.
           relationExpected: prompt.relationExpected,
+          depthPass,
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {

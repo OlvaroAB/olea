@@ -194,10 +194,12 @@ import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
   acceptSoloGrading,
+  appendReviewLogRecord,
   EXPLAIN_BACK_JUDGE_TASK_ID,
   type ExplainBackPromptContext,
   type GradedExplainBackReviewSubject,
   type GradingSourceMaterial,
+  type ReviewLogRecordInput,
   recordGradedExplainBackReview,
   type VaultSource,
   type WriteContentOptions,
@@ -340,12 +342,41 @@ export interface RecordSoloGradeAndReviewParams {
    * existed.
    */
   readonly relationExpected?: boolean;
+  /**
+   * **`ol-ryrh` (`[D-286]`, `[D-320]`): whether the depth pass runs for this
+   * attempt at all.** `'skipped'` when the caller has already decided, from
+   * the correctness verdict she accepted, that no depth call is made
+   * (`./request.ts`'s `shouldRunExplainBackDepthPass`) — no Worker call is
+   * made here, and the accepted correctness verdict is still recorded, on its
+   * own (see {@link recordSoloGradeAndReview}).
+   *
+   * Optional, same structural-typing accommodation `durationMs` above
+   * documents: `main.ts`'s inline params type does not name it, and the
+   * object reaches this function unreconstructed. Absent means `'run'`, the
+   * behaviour every caller had before this field existed.
+   */
+  readonly depthPass?: 'run' | 'skipped';
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
 export interface RecordSoloGradeAndReviewOutcome {
   readonly result: AppendReviewLogResult;
-  readonly soloLevel: SoloLevel;
+  /**
+   * Present exactly when `depth` is `'graded'`. Absent — never a default
+   * level — when the record carries the correctness verdict alone
+   * (`ol-ryrh`, `[D-320]`), so `main.ts`'s `outcome?.soloLevel` still reads
+   * `undefined` and the modal renders no depth heading.
+   */
+  readonly soloLevel?: SoloLevel;
+  /**
+   * `ol-ryrh` (`[D-320]`): why the record does or does not carry a depth
+   * grade. `'unavailable'` covers every reason `gradeSoloAttempt` gives no
+   * grading (Worker not configured, kill switch tripped, no usable D7.3
+   * stamp, or the call itself failing); `'skipped'` is the caller's
+   * deliberate `depthPass: 'skipped'`. The two are kept apart because the
+   * ruling keeps them apart; neither is ever a complete assessment.
+   */
+  readonly depth: 'graded' | 'unavailable' | 'skipped';
 }
 
 /**
@@ -391,42 +422,36 @@ export function supportLevelShownForExplainBack(
 
 /**
  * Runs the SOLO pipeline and appends the one review-log event this module's
- * header settles is the correct shape — `undefined` (nothing written) when:
- * `subjectConceptId` is `null` (no concept to attribute evidence to), the
- * Worker isn't configured or the kill-switch has tripped (`gradeSoloAttempt`
- * returns `null`), or the Worker response carried no usable D7.3 stamp.
- * Every one of these is an honest skip, never a fabricated write. Returns the
- * real write outcome on success (`ol-iti2`: `main.ts`'s wrapper forwards
- * `.soloLevel` on to `modal.ts`'s `[D-217]` depth heading; a test can still
- * reach the full `AppendReviewLogResult` at `.result`).
+ * header settles is the correct shape.
+ *
+ * **`ol-ryrh` (`[D-303]`, `[D-320]`): the correctness verdict she accepted
+ * is recorded whether or not depth grading succeeds.** When the depth pass
+ * is skipped (`params.depthPass === 'skipped'`) or unavailable
+ * (`gradeSoloAttempt` returns `null`, or the call fails), the one event is
+ * still appended, carrying the top-level `explainBackCorrectness` and no
+ * `explainBackGrade` at all — depth is simply absent from the record, never
+ * a default level. Before this, the only write required a depth grade, so an
+ * accept she had already seen left no trace whenever depth failed.
+ *
+ * `undefined` (nothing written) only when there is nothing honest to write:
+ * `subjectConceptId` is `null` (no concept to attribute evidence to), or no
+ * depth grade came back AND no stamped correctness verdict exists for this
+ * attempt (`resolveIndependentCorrectness`'s own list). Never a fabricated
+ * write. Returns the real write outcome otherwise (`ol-iti2`: `main.ts`'s
+ * wrapper forwards `.soloLevel` on to `modal.ts`'s `[D-217]` depth heading; a
+ * test can still reach the full `AppendReviewLogResult` at `.result`).
  */
 export async function recordSoloGradeAndReview(
   deps: RecordSoloGradeAndReviewDeps,
   params: RecordSoloGradeAndReviewParams,
 ): Promise<RecordSoloGradeAndReviewOutcome | undefined> {
-  if (params.subjectConceptId === null) return undefined;
+  const subjectConceptId = params.subjectConceptId;
+  if (subjectConceptId === null) return undefined;
 
-  // `ol-egov.141.89.6.50`: `resolved` is genuinely absent-field-vs-undefined
-  // sensitive under `exactOptionalPropertyTypes` (`request.ts`'s own
-  // `resolved?` param doc) — each key spread only when the caller actually
-  // supplied it, so an older or partner-less call still resolves
-  // `buildGradeSoloInputFromTypedAnswer`'s pre-existing concept-only
-  // default exactly as before this bead.
-  const soloInput = buildGradeSoloInputFromTypedAnswer(params.answer, params.context, {
-    ...(params.sourceMaterial !== undefined ? { sourceMaterial: params.sourceMaterial } : {}),
-    ...(params.relationExpected !== undefined ? { relationExpected: params.relationExpected } : {}),
-  });
-  const outcome = await gradeSoloAttempt(deps.grading, soloInput);
-  if (outcome === null) return undefined;
-
-  const accepted = acceptSoloGrading(outcome.pending);
-  const timestamp = isoWithLocalOffset(deps.now());
   const attemptId = params.attemptId ?? params.instrumentId;
-  const explainBackCorrectness = await resolveIndependentCorrectness(deps.grading, attemptId);
-
-  const subject: GradedExplainBackReviewSubject = {
+  const subject = (timestamp: string): GradedExplainBackReviewSubject => ({
     instrumentId: params.instrumentId,
-    conceptIds: [params.subjectConceptId],
+    conceptIds: [subjectConceptId],
     timestamp,
     wasUnsure: false,
     durationMs: params.durationMs ?? null,
@@ -441,14 +466,48 @@ export async function recordSoloGradeAndReview(
       instrumentTypesOffered: ['explain-back'],
       planVersion: null,
     },
-  };
-
+  });
   const options: AppendReviewLogOptions & WriteContentOptions = { deviceId: deps.deviceId };
+
+  if (params.depthPass === 'skipped') {
+    return recordCorrectnessOnly(deps, attemptId, subject, options, 'skipped');
+  }
+
+  // `ol-egov.141.89.6.50`: `resolved` is genuinely absent-field-vs-undefined
+  // sensitive under `exactOptionalPropertyTypes` (`request.ts`'s own
+  // `resolved?` param doc) — each key spread only when the caller actually
+  // supplied it, so an older or partner-less call still resolves
+  // `buildGradeSoloInputFromTypedAnswer`'s pre-existing concept-only
+  // default exactly as before this bead.
+  const soloInput = buildGradeSoloInputFromTypedAnswer(params.answer, params.context, {
+    ...(params.sourceMaterial !== undefined ? { sourceMaterial: params.sourceMaterial } : {}),
+    ...(params.relationExpected !== undefined ? { relationExpected: params.relationExpected } : {}),
+  });
+  // `ol-ryrh`: a depth call that throws is unavailable depth, exactly as a
+  // `null` is — never a reason to lose the correctness verdict she accepted.
+  let outcome: Awaited<ReturnType<typeof gradeSoloAttempt>>;
+  try {
+    outcome = await gradeSoloAttempt(deps.grading, soloInput);
+  } catch (error) {
+    // D-005: a content-free line only, the same one `modal.ts` used to print
+    // when this failure escaped to it.
+    console.error('Olea: SOLO depth grading failed (correctness verdict still recorded)', {
+      error,
+    });
+    outcome = null;
+  }
+  if (outcome === null) {
+    return recordCorrectnessOnly(deps, attemptId, subject, options, 'unavailable');
+  }
+
+  const accepted = acceptSoloGrading(outcome.pending);
+  const timestamp = isoWithLocalOffset(deps.now());
+  const explainBackCorrectness = await resolveIndependentCorrectness(deps.grading, attemptId);
 
   const result = await recordGradedExplainBackReview(
     deps.vault,
     {
-      subject,
+      subject: subject(timestamp),
       accepted,
       revisionOf: params.revisionOf ?? null,
       artifactProvenance: outcome.artifactProvenance,
@@ -459,7 +518,55 @@ export async function recordSoloGradeAndReview(
     options,
   );
 
-  return { result, soloLevel: accepted.soloLevel };
+  return { result, soloLevel: accepted.soloLevel, depth: 'graded' };
+}
+
+/**
+ * **`ol-ryrh`: the one event, when no depth grade exists for this attempt**
+ * — the subject's own review fields plus the top-level
+ * `explainBackCorrectness` (`[D-303]`: its own place, its own stamp), and no
+ * `explainBackGrade`, `contentRef` or `schedulingObservation`: each of those
+ * is produced by the depth pass alone, so each is simply absent.
+ *
+ * Nothing is written when no stamped verdict resolves for this attempt: an
+ * explain-back review with neither a depth grade nor a verdict would say
+ * nothing about the attempt, and the verdict is never guessed.
+ *
+ * **Idempotency.** `recordGradedExplainBackReview`'s durable check keys on
+ * the depth grade's `contentRef`, which this record has none of. A double
+ * accept is already shared in memory by `modal.ts`'s per-attempt in-flight
+ * memo, and a restart leaves no pending grading to accept again — the
+ * correctness verdict lives only in `wiring.acceptedObservationsByAttempt`'s
+ * in-memory memo — so no second write for the same attempt is reachable.
+ */
+async function recordCorrectnessOnly(
+  deps: RecordSoloGradeAndReviewDeps,
+  attemptId: string,
+  subject: (timestamp: string) => GradedExplainBackReviewSubject,
+  options: AppendReviewLogOptions,
+  depth: 'unavailable' | 'skipped',
+): Promise<RecordSoloGradeAndReviewOutcome | undefined> {
+  const explainBackCorrectness = await resolveIndependentCorrectness(deps.grading, attemptId);
+  if (explainBackCorrectness === undefined) return undefined;
+  const fields = subject(isoWithLocalOffset(deps.now()));
+  const record: ReviewLogRecordInput = {
+    timestamp: fields.timestamp,
+    instrumentId: fields.instrumentId,
+    instrumentType: 'explain-back',
+    conceptIds: [...fields.conceptIds],
+    // F2.16: explain-back produces no FSRS rating.
+    rating: null,
+    wasUnsure: fields.wasUnsure,
+    durationMs: fields.durationMs,
+    selectionContext: fields.selectionContext,
+    ...(fields.supportLevelShown !== undefined
+      ? { supportLevelShown: fields.supportLevelShown }
+      : {}),
+    ...(fields.answerEdits !== undefined ? { answerEdits: fields.answerEdits } : {}),
+    explainBackCorrectness,
+  };
+  const result = await appendReviewLogRecord(deps.vault, record, options);
+  return { result, depth };
 }
 
 /**
