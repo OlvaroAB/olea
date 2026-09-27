@@ -334,7 +334,7 @@ describe('same-anchor duplicates resolve to one canonical, earliest-minted key (
 });
 
 describe('a subtree pass keys each concept by its vault-wide identity ([D-357], ol-egov.141.89.9.30)', () => {
-  it('a topic-only concept named in two courses gets one key from a whole-vault pass and from either course subtree', async () => {
+  it('a topic-only wording named in two courses keys each course identity the same from a whole-vault pass and from its course subtree ([D-402])', async () => {
     await write(
       '01 Courses/TESTA1/Week one.md',
       '---\ntopic: [Widget theory]\ncourse: TESTA1\n---\n\nFront a::Back a\n',
@@ -354,12 +354,16 @@ describe('a subtree pass keys each concept by its vault-wide identity ([D-357], 
       under: '01 Courses/TESTB2',
     });
 
-    const key = whole.find((c) => c.name === 'Widget theory')?.key;
-    expect(key).toBeDefined();
-    expect(inA.find((c) => c.name === 'Widget theory')?.key).toBe(key);
-    expect(inB.find((c) => c.name === 'Widget theory')?.key).toBe(key);
+    // `[D-402]`: one identity per course, never one key for both.
+    const keyA = whole.find((c) => c.name === 'Widget theory' && c.courses.includes('TESTA1'))?.key;
+    const keyB = whole.find((c) => c.name === 'Widget theory' && c.courses.includes('TESTB2'))?.key;
+    expect(keyA).toBeDefined();
+    expect(keyB).toBeDefined();
+    expect(keyA).not.toBe(keyB);
+    expect(inA.find((c) => c.name === 'Widget theory')?.key).toBe(keyA);
+    expect(inB.find((c) => c.name === 'Widget theory')?.key).toBe(keyB);
     // The subtree passes minted nothing of their own.
-    expect(await listConceptKeyRecords(source)).toHaveLength(1);
+    expect(await listConceptKeyRecords(source)).toHaveLength(2);
     // Everything else on a subtree record is still the subtree's own.
     expect(inB.find((c) => c.name === 'Widget theory')?.sourcePaths).toEqual([
       '01 Courses/TESTB2/Week one.md',
@@ -383,8 +387,9 @@ describe('a subtree pass keys each concept by its vault-wide identity ([D-357], 
     const whole = await extractConcepts(source, { stampConceptKeys: true });
 
     expect(inB.find((c) => c.name === 'Widget theory')?.key).toBe(
-      whole.find((c) => c.name === 'Widget theory')?.key,
+      whole.find((c) => c.name === 'Widget theory' && c.courses.includes('TESTB2'))?.key,
     );
-    expect(await listConceptKeyRecords(source)).toHaveLength(1);
+    // `[D-402]`: TESTB2's identity and TESTA1's, and nothing more.
+    expect(await listConceptKeyRecords(source)).toHaveLength(2);
   });
 });

@@ -479,13 +479,24 @@ describe('the concept binding follows her `topic:` property', () => {
   it('carries the concept course list verbatim, and it is the concept’s, not the note’s', async () => {
     const vault = memoryVault({
       'Notes/one.md': [FRONTMATTER('[Alpha]', 'geol204'), 'Front::Back', ''].join('\n'),
-      'Notes/two.md': [FRONTMATTER('[Alpha]', 'MUSTH104'), 'Other::Back', ''].join('\n'),
+      'Notes/two.md': [FRONTMATTER('[Alpha]', '[MUSTH104, geol204]'), 'Other::Back', ''].join('\n'),
     });
     const found = await enumerateVaultInstruments(vault);
     // R1/R2: never case-folded, and both courses reach both instruments because
-    // course membership is an attribute of the concept, not of the note.
+    // course membership is an attribute of the concept, not of the note: her
+    // cross-listed note makes Alpha one concept in both courses (`[D-402]`).
     expect(found.records[0]?.courses).toEqual(['MUSTH104', 'geol204']);
     expect(found.records[1]?.courses).toEqual(['MUSTH104', 'geol204']);
+  });
+
+  it('the same wording in two courses is two concepts, and neither course’s instruments reach the other ([D-402])', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Alpha]', 'geol204'), 'Front::Back', ''].join('\n'),
+      'Notes/two.md': [FRONTMATTER('[Alpha]', 'MUSTH104'), 'Other::Back', ''].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records.map((r) => r.courses)).toEqual([['geol204'], ['MUSTH104']]);
+    expect(found.records[0]?.conceptIds).not.toEqual(found.records[1]?.conceptIds);
   });
 
   it('a note naming two topics binds its instruments to BOTH, in her order', async () => {
@@ -544,10 +555,11 @@ describe('the concept binding follows her `topic:` property', () => {
 
   it('courses span every concept the instrument names, deduplicated and sorted', async () => {
     // F2.5 course membership follows concept membership. Beta is only in one
-    // course, Alpha in another; the instrument belongs to both sessions.
+    // course, Alpha in two (her cross-listed note joins them, `[D-402]`); the
+    // instrument belongs to both sessions.
     const vault = memoryVault({
       'Notes/one.md': [FRONTMATTER('[Beta, Alpha]', 'geol204'), 'Front::Back', ''].join('\n'),
-      'Notes/two.md': [FRONTMATTER('[Alpha]', 'MUSTH104'), 'Other::Back', ''].join('\n'),
+      'Notes/two.md': [FRONTMATTER('[Alpha]', '[MUSTH104, geol204]'), 'Other::Back', ''].join('\n'),
     });
     const found = await enumerateVaultInstruments(vault);
     const multi = found.records.find((r) => r.notePath === 'Notes/one.md');

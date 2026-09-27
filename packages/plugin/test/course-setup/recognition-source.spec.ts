@@ -4,10 +4,12 @@
  * concept-to-course join (F1.3) and folds them through `olea-core`'s
  * `buildEarlierCourseRecognitions`.
  *
- * Fixture shape follows `packages/core/src/concept/extract.spec.ts`'s "course
- * association is M:N" case: two notes under `01 Courses/<CODE>/` sharing one
- * `topic:` give a single concept whose `courses` names both. INV-3: every
- * course code and concept name below is invented for this suite.
+ * Fixture shape: two notes under `01 Courses/<CODE>/` whose `topic:` links one
+ * concept note she wrote give a single concept whose `courses` names both —
+ * the note, not the shared wording, is what makes it one concept (`[D-402]`:
+ * identical wording alone in two courses is two concepts until she confirms a
+ * same-as link; the last case below). INV-3: every course code and concept
+ * name below is invented for this suite.
  */
 
 import { appendReviewLogRecord, type CalendarDay, calendarDayFromLocalDate } from 'olea-core';
@@ -19,11 +21,14 @@ import { memoryVault, unreadableVault } from '../review/memory-vault.js';
 const DEVICE = 'olea-testdevice1';
 const TODAY: CalendarDay = calendarDayFromLocalDate(new Date('2026-09-25T12:00:00-04:00'));
 
-function twoCourseVault() {
+function twoCourseVault(topic = '[[Shared concept]]') {
   return memoryVault({
+    'Concepts/Shared concept.md': ['---', 'type: concept', '---', '', '# Shared concept', ''].join(
+      '\n',
+    ),
     '01 Courses/TESTCA1/Note A.md': [
       '---',
-      'topic: [Shared concept]',
+      `topic: ${topic}`,
       'course: TESTCA1',
       '---',
       '',
@@ -32,7 +37,7 @@ function twoCourseVault() {
     ].join('\n'),
     '01 Courses/TESTCB2/Note B.md': [
       '---',
-      'topic: [Shared concept]',
+      `topic: ${topic}`,
       'course: TESTCB2',
       '---',
       '',
@@ -117,6 +122,44 @@ describe('readCourseSetupRecognitions', () => {
     });
 
     const recognitions = await readCourseSetupRecognitions('TESTCA1', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+    });
+
+    expect(recognitions).toEqual([]);
+  });
+
+  it('does not recognise identical wording alone across two courses ([D-402]): two concepts until she confirms a same-as link', async () => {
+    // Bare wording, no concept note: one identity per course.
+    const vault = twoCourseVault('[Shared concept]');
+    const extracted = await extractConceptsFromVault(vault, {});
+    const inA = extracted.find((r) => r.name === 'Shared concept' && r.courses.includes('TESTCA1'));
+    if (inA === undefined) throw new Error('expected the TESTCA1 concept to be extracted');
+    expect(inA.courses).toEqual(['TESTCA1']);
+
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-08-01T09:00:00-04:00',
+        instrumentId: `qa:${inA.key}:1`,
+        instrumentType: 'qa',
+        conceptIds: [inA.key],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 4000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'evt-1' },
+    );
+
+    const recognitions = await readCourseSetupRecognitions('TESTCB2', {
       vault,
       deviceId: DEVICE,
       today: TODAY,

@@ -343,7 +343,7 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     expect(wm?.boundNotePath).toBeUndefined();
   });
 
-  it('course association is M:N — one concept spans two courses, one course has several concepts', async () => {
+  it('course association is M:N — one course has several concepts; one topic wording in two courses is one identity per course ([D-402])', async () => {
     await write(
       '01 Courses/COURSEA/Note A.md',
       '---\ntopic: [Shared concept, Only in A]\ncourse: COURSEA\n---\n\n# A\n',
@@ -354,11 +354,14 @@ describe('extractConcepts — R1/R2 verbatim names, tier-1 binding, and M:N cour
     );
 
     const concepts = await extractConcepts(source);
-    const shared = concepts.find((c) => c.name === 'Shared concept');
-    expect(shared?.courses).toEqual(['COURSEA', 'COURSEB']);
-    expect(shared?.sourcePaths).toEqual(
-      ['01 Courses/COURSEA/Note A.md', '01 Courses/COURSEB/Note B.md'].sort(),
-    );
+    // Identical wording alone never joins two courses: two identities, each with its own
+    // course and its own introducing note (`[D-402]`; she confirms any same-as link).
+    const shared = concepts.filter((c) => c.name === 'Shared concept');
+    expect(shared.map((c) => c.courses)).toEqual([['COURSEA'], ['COURSEB']]);
+    expect(shared.map((c) => c.sourcePaths)).toEqual([
+      ['01 Courses/COURSEA/Note A.md'],
+      ['01 Courses/COURSEB/Note B.md'],
+    ]);
 
     const onlyInA = concepts.find((c) => c.name === 'Only in A');
     expect(onlyInA?.courses).toEqual(['COURSEA']);
@@ -918,9 +921,11 @@ describe('extractConcepts — course association derives from folder structure (
     );
 
     const concepts = await extractConcepts(source);
-    expect(concepts.find((c) => c.name === 'Shared concept')?.courses).toEqual([
-      'COURSEA',
-      'COURSEB',
+    // Both structures derive their course; the shared wording is one identity per course
+    // (`[D-402]`).
+    expect(concepts.filter((c) => c.name === 'Shared concept').map((c) => c.courses)).toEqual([
+      ['COURSEA'],
+      ['COURSEB'],
     ]);
   });
 

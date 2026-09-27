@@ -58,8 +58,9 @@
  * `topic:`, so only the rest of the note is new work) for a `[[...]]` whose
  * target matches a Zettelkasten title exactly, and folds the citing note's
  * course into that record the same way a `topic:` citation would. The two
- * sources merge into one `courses` set per name; a concept named by both
- * carries the union, never a preference between them. **This is a course
+ * sources merge into one `courses` set per identity; a concept named by both
+ * carries the union, never a preference between them (which courses one
+ * wording's identities span is the next section's rule). **This is a course
  * fact, not a concept-identity one** — it does not touch tier's meaning
  * (`tier` still means "does the name match a Zettelkasten note exactly",
  * regardless of which of the two sources supplied it), and it does not widen
@@ -110,6 +111,35 @@
  * `[EXT-2]`), which is that module's own mechanism and outside `[D-248]`'s
  * scope.
  *
+ * **One wording, two courses (`[D-402]`).** Identical wording is never enough
+ * on its own to say two courses mean one concept: a homonym (a different idea
+ * sharing a name across courses) and a genuine recurrence (one concept, many
+ * memberships) read the same to code, so citations are kept per wording and
+ * course (`NameAccumulator`), and a topic-only wording cited in two courses
+ * becomes two identities, one per course, each carrying only its own course
+ * and its own introducing notes (`identityGroups`). Nothing is unioned across
+ * the pair: neither course's material, membership or assessment evidence
+ * reaches the other's identity, here or in `foldReadAnchors`. Whether the two
+ * are one concept is hers to say: the second identity's mint records the
+ * shared wording as a normalisation collision (`./key-store.js`), and the
+ * ingestion tick's `proposeSameAsFromMintCollisions` (`./same-as.js`) turns it
+ * into one proposed same-as link, never confirmed automatically, even on an
+ * exact match (`[D-295]`). Keys already minted are never rewritten (`[D-088]`):
+ * the store's anchor match is course-scoped, so the identity whose course an
+ * earlier merged record anchored on keeps that key, and only the other course
+ * mints. Auditing identities the old cross-course merge already formed is
+ * `ol-egov.141.89.3.18`'s, not this module's.
+ *
+ * Three things stay one identity, each because something other than the
+ * wording joins it: a concept **bound to her note** (the note is the
+ * identity, and the key store matches it regardless of course); courses
+ * joined by **one citing note filed under both** (her own cross-listing, not a
+ * coincidence of wording, so a proposal would show her the same note twice);
+ * and **citations from notes in no course**, which belong to no course's
+ * material and stay with every identity of the wording (with its only
+ * identity, exactly as before, when there is one), forming their own identity
+ * only when no course cites the wording at all.
+ *
  * **Definition capture at bind time (`[DF-13]`).** Knowledge model §3 says a
  * bound concept note is canonical because it "adopts her name, her
  * definition, and binds to that note" — the name and the binding shipped
@@ -148,9 +178,147 @@ import { DEFAULT_ZETTELKASTEN_FOLDER, noteTitle } from './zettelkasten.js';
 
 export { DEFAULT_COURSES_FOLDER, DEFAULT_ZETTELKASTEN_FOLDER };
 
-interface Accumulator {
-  readonly courses: Set<string>;
-  readonly sourcePaths: Set<VaultPath>;
+/**
+ * Every citation of one wording, kept per course (`[D-402]`, module doc "One wording, two
+ * courses"). `bySlot` maps a course to the notes that cited the wording in it; the slot `''`
+ * holds citations from notes that belong to no course at all. `joins` records each citing note
+ * filed under several courses at once, the one thing that joins two courses' slots into one
+ * identity.
+ */
+interface NameAccumulator {
+  readonly bySlot: Map<string, Set<VaultPath>>;
+  readonly joins: (readonly string[])[];
+}
+
+/** The slot a citation from a note in no course lands in. */
+const NO_COURSE = '';
+
+/**
+ * One concept identity about to be keyed: a wording, the courses it is scoped to, and the
+ * notes that introduced it there.
+ */
+interface IdentityGroup {
+  /** This pass's own courses for the identity, sorted. Empty for a course-less identity. */
+  readonly courses: readonly string[];
+  /** Its introducing notes, sorted: its own courses' citations plus any course-less ones. */
+  readonly sourcePaths: readonly VaultPath[];
+  /** A stamped subtree pass only: the vault-wide identity's key this group takes (`[D-357]`). */
+  readonly vaultWideKey?: string;
+}
+
+/**
+ * The vault-wide pass's identities for one wording, as a stamped subtree pass looks them up
+ * (`[D-357]`, `[D-402]`): every key the wording has vault-wide, which of them each course
+ * belongs to, and each identity's introducing notes.
+ */
+interface VaultWideIdentities {
+  readonly keys: readonly string[];
+  readonly byCourse: ReadonlyMap<string, string>;
+  readonly records: readonly { readonly key: string; readonly sourcePaths: readonly VaultPath[] }[];
+}
+
+/**
+ * Course slots joined into connected groups: two courses are one group when a single citing
+ * note is filed under both (directly or through a chain of such notes). Groups and their
+ * members are sorted, so the result does not depend on the order the vault was walked in.
+ */
+function joinedCourseGroups(
+  courses: readonly string[],
+  joins: readonly (readonly string[])[],
+): string[][] {
+  const parent = new Map<string, string>(courses.map((course) => [course, course]));
+  const find = (course: string): string => {
+    let root = course;
+    while (parent.get(root) !== root) root = parent.get(root) as string;
+    return root;
+  };
+  for (const join of joins) {
+    const members = join.filter((course) => parent.has(course));
+    for (const other of members.slice(1)) {
+      const a = find(members[0] as string);
+      const b = find(other);
+      if (a !== b) parent.set(a < b ? b : a, a < b ? a : b);
+    }
+  }
+  const byRoot = new Map<string, string[]>();
+  for (const course of courses) {
+    const root = find(course);
+    const group = byRoot.get(root);
+    if (group === undefined) byRoot.set(root, [course]);
+    else group.push(course);
+  }
+  return [...byRoot.values()]
+    .map((group) => group.sort(byCodeUnit))
+    .sort((a, b) => byCodeUnit(a[0] as string, b[0] as string));
+}
+
+/**
+ * How one wording's citations become concept identities (`[D-402]`, module doc "One wording,
+ * two courses").
+ *
+ * - **Bound to her note** (`bound`): one identity, every course unioned. The identity is the
+ *   note she wrote, which the key store already matches regardless of course; the wording is
+ *   not what joins it.
+ * - **Otherwise, one identity per group of joined courses** (`joinedCourseGroups`). Identical
+ *   wording in two courses is two identities, one per course, whose course lists never
+ *   overlap. Citations from notes in no course belong to no course's material in particular,
+ *   so they stay with every identity of the wording (with the only identity when there is
+ *   one, which is exactly the behaviour before the split), and form an identity of their own
+ *   only when no course cites the wording at all.
+ * - **A stamped subtree pass** (`vaultWide` given) groups by the vault-wide identities
+ *   instead, so it never keys a concept differently from the whole-vault readers (`[D-357]`):
+ *   a wording with one vault-wide key stays one group; a wording split vault-wide groups its
+ *   courses by the key each course has there.
+ */
+function identityGroups(
+  acc: NameAccumulator,
+  bound: boolean,
+  vaultWide: VaultWideIdentities | undefined,
+): IdentityGroup[] {
+  const courseSlots = [...acc.bySlot.keys()].filter((slot) => slot !== NO_COURSE).sort(byCodeUnit);
+  const loose = acc.bySlot.get(NO_COURSE) ?? new Set<VaultPath>();
+  const pathsOf = (courses: readonly string[]): VaultPath[] => {
+    const paths = new Set<VaultPath>(loose);
+    for (const course of courses) for (const path of acc.bySlot.get(course) ?? []) paths.add(path);
+    return [...paths].sort(byCodeUnit);
+  };
+  const group = (courses: readonly string[], vaultWideKey?: string): IdentityGroup => ({
+    courses,
+    sourcePaths: pathsOf(courses),
+    ...(vaultWideKey !== undefined ? { vaultWideKey } : {}),
+  });
+  const localGroups = (courses: readonly string[]): IdentityGroup[] => {
+    if (bound || courses.length <= 1) return [group(courses)];
+    return joinedCourseGroups(courses, acc.joins).map((courses) => group(courses));
+  };
+
+  if (vaultWide === undefined || vaultWide.keys.length === 0) return localGroups(courseSlots);
+  if (vaultWide.keys.length === 1) return [group(courseSlots, vaultWide.keys[0])];
+
+  // Split vault-wide: each course takes the identity it has there.
+  const byKey = new Map<string, string[]>();
+  const unmapped: string[] = [];
+  for (const course of courseSlots) {
+    const key = vaultWide.byCourse.get(course);
+    if (key === undefined) {
+      unmapped.push(course);
+      continue;
+    }
+    const courses = byKey.get(key);
+    if (courses === undefined) byKey.set(key, [course]);
+    else courses.push(course);
+  }
+  const groups = [...byKey].map(([key, courses]) => group(courses, key));
+  if (unmapped.length > 0) groups.push(...localGroups(unmapped));
+  if (groups.length > 0) return groups;
+  // Only course-less citations here, of a wording split vault-wide: they stay with each
+  // vault-wide identity that carries them, exactly as the vault-wide pass attached them.
+  const carrying = vaultWide.records.filter((record) =>
+    record.sourcePaths.some((path) => loose.has(path)),
+  );
+  return (carrying.length > 0 ? carrying : vaultWide.records).map((record) =>
+    group([], record.key),
+  );
 }
 
 /**
@@ -451,15 +619,23 @@ export async function extractConcepts(
   // path is an ambiguity to record, never a race to resolve — `resolveTitle`.
   const reachableByTitle = closure.byTitle;
 
-  const byName = new Map<string, Accumulator>();
+  // `[D-402]`: every citation is kept per wording AND course — never pooled by wording alone —
+  // so identical wording in two courses can become two identities (`identityGroups`).
+  const byName = new Map<string, NameAccumulator>();
 
-  function accumulatorFor(name: string): Accumulator {
+  /** Record that `path` cites `name` in each of `courses` (the no-course slot when empty). */
+  function cite(name: string, path: VaultPath, courses: readonly string[]): void {
     let acc = byName.get(name);
     if (acc === undefined) {
-      acc = { courses: new Set(), sourcePaths: new Set() };
+      acc = { bySlot: new Map(), joins: [] };
       byName.set(name, acc);
     }
-    return acc;
+    for (const slot of courses.length > 0 ? courses : [NO_COURSE]) {
+      const paths = acc.bySlot.get(slot);
+      if (paths === undefined) acc.bySlot.set(slot, new Set([path]));
+      else paths.add(path);
+    }
+    if (courses.length > 1) acc.joins.push(courses);
   }
 
   for (const path of notePaths) {
@@ -505,11 +681,7 @@ export async function extractConcepts(
     // and whose instruments it supplies — all of them, not the first one with
     // the rest recorded as losses. Her order still matters and is carried
     // through `session/enumerate.ts`; it just no longer *selects*.
-    for (const topic of topics) {
-      const acc = accumulatorFor(topic);
-      acc.sourcePaths.add(path);
-      for (const course of courses) acc.courses.add(course);
-    }
+    for (const topic of topics) cite(topic, path, courses);
 
     // F1.3 widened — course-reference (`ol-2zfj.33`, module doc above).
     // Eligibility is path-based, same test `./course.js`'s `courseFromPath`
@@ -546,9 +718,7 @@ export async function extractConcepts(
           (course) => closure.titlesByCourse.get(course)?.has(target) === true,
         );
         if (reaching.length === 0) continue;
-        const acc = accumulatorFor(target);
-        acc.sourcePaths.add(path);
-        for (const course of reaching) acc.courses.add(course);
+        cite(target, path, reaching);
       }
     }
   }
@@ -585,6 +755,10 @@ export async function extractConcepts(
     readonly boundNotePath: VaultPath | undefined;
     readonly courses: readonly string[];
     readonly sourcePaths: readonly VaultPath[];
+    /** A stamped subtree pass: the vault-wide identity's key, taken as-is (`[D-357]`). */
+    readonly vaultWideKey?: string;
+    /** Set when the wording has several identities in this pass (`[D-402]`); see `keysFor`. */
+    readonly courseScoped?: boolean;
   }
 
   /**
@@ -594,6 +768,15 @@ export async function extractConcepts(
    * topic anchor's single `course` field — a concept may belong to several (M:N, see
    * `ConceptRecord.courses`'s doc), and the anchor is a lookup signal, not identity, so this is a
    * deliberate simplification rather than a claim that only one course applies.
+   *
+   * **One wording, two courses (`[D-402]`).** A wording split by course (`identityGroups`) sends
+   * one candidate per identity, each carrying only its own courses, so each anchors on its own
+   * course. The key store's anchor match is already course-scoped, so the identity whose first
+   * course is the one an earlier, merged record anchored on resolves to that record's key
+   * unchanged; every other course's identity finds no match and mints, and the store records
+   * the shared wording as a normalisation collision on the new record — which the ingestion
+   * tick's `proposeSameAsFromMintCollisions` turns into one proposed same-as link she confirms.
+   * Nothing here confirms or merges anything.
    *
    * `sourcePaths` (`[D-180]`) becomes the topic anchor's `introducingPaths`, sorted — the
    * candidate's own introducing material, threaded through so a topic-only concept surviving a
@@ -608,20 +791,22 @@ export async function extractConcepts(
    *
    * Gated on `options.stampConceptKeys` (see `ExtractConceptsOptions`'s doc) — off by default so
    * a call against a shared, tracked fixture vault never writes into it; falls back to the
-   * pre-`[D-174]` `provisionalConceptKey` derivation when off.
+   * pre-`[D-174]` `provisionalConceptKey` derivation when off. That derivation roots on the
+   * wording alone, so a wording split by course would hand its identities one shared stand-in;
+   * each is qualified by its own courses instead (`courseScoped`), and a wording with a single
+   * identity keeps exactly the stand-in it always had.
    */
   async function keysFor(candidates: readonly KeyCandidate[]): Promise<readonly string[]> {
     if (options.stampConceptKeys !== true) {
-      return candidates.map(({ name, boundNotePath }) =>
-        provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null }),
-      );
+      return candidates.map(({ name, boundNotePath, courses, courseScoped }) => {
+        const standIn = provisionalConceptKey({ name, boundNotePath: boundNotePath ?? null });
+        return courseScoped === true ? `${standIn}@${[...courses].sort().join(',')}` : standIn;
+      });
     }
-    // A subtree pass takes each concept's key from the vault-wide pass (see `vaultWideKeyByName`)
-    // and resolves its own anchor only for a name that pass did not produce — never minting a
-    // second record for a concept the vault-wide pass already keyed.
-    const keys: (string | undefined)[] = candidates.map(({ name }) =>
-      vaultWideKeyByName?.get(name),
-    );
+    // A subtree pass takes each concept's key from the vault-wide pass (see `vaultWideByName`)
+    // and resolves its own anchor only for an identity that pass did not produce — never minting
+    // a second record for a concept the vault-wide pass already keyed.
+    const keys: (string | undefined)[] = candidates.map(({ vaultWideKey }) => vaultWideKey);
     const unresolved = candidates.flatMap((candidate, i) =>
       keys[i] === undefined ? [{ candidate, i }] : [],
     );
@@ -654,51 +839,83 @@ export async function extractConcepts(
   /**
    * **A subtree pass keys by the vault-wide identity (`[D-357]`, `ol-egov.141.89.9.30`).** With
    * `under` set, this walk sees only part of a concept's evidence: a topic-only concept named in
-   * two courses anchors on the first of its courses vault-wide, but on the subtree's own course
-   * here, and a note reachable from another course may bind (or turn ambiguous) differently. A
-   * stamped subtree pass that resolved its own anchors would therefore mint a second permanent key
-   * for a concept the whole-vault readers (Today, the registry, the plan) already key — two keys
-   * for one concept, the split `[D-357]` closes. So a stamped subtree pass first runs the same
-   * extraction over the whole vault (stamped, every other option unchanged) and takes each
-   * concept's key from there by name, the identity `byName` itself uses; everything else on the
-   * returned records (`courses`, `sourcePaths`, `tier`, binding) stays this subtree's own.
+   * two joined courses anchors on the first of its courses vault-wide, but on the subtree's own
+   * course here, and a note reachable from another course may bind (or turn ambiguous)
+   * differently. A stamped subtree pass that resolved its own anchors would therefore mint a
+   * second permanent key for a concept the whole-vault readers (Today, the registry, the plan)
+   * already key — two keys for one concept, the split `[D-357]` closes. So a stamped subtree pass
+   * first runs the same extraction over the whole vault (stamped, every other option unchanged)
+   * and takes each identity's key from there: by wording when the wording has one identity
+   * vault-wide, and by wording and course when `[D-402]` split it (`identityGroups`); everything
+   * else on the returned records (`courses`, `sourcePaths`, `tier`, binding) stays this
+   * subtree's own.
    */
-  let vaultWideKeyByName: ReadonlyMap<string, string> | undefined;
+  let vaultWideByName: ReadonlyMap<string, VaultWideIdentities> | undefined;
   if (options.stampConceptKeys === true && options.under !== undefined) {
     const { under: _subtree, ...vaultWideOptions } = options;
     const vaultWide = await extractConcepts(vault, vaultWideOptions);
-    vaultWideKeyByName = new Map(vaultWide.map((record) => [record.name, record.key]));
+    const index = new Map<
+      string,
+      {
+        keys: string[];
+        byCourse: Map<string, string>;
+        records: { key: string; sourcePaths: readonly VaultPath[] }[];
+      }
+    >();
+    for (const record of vaultWide) {
+      let entry = index.get(record.name);
+      if (entry === undefined) {
+        entry = { keys: [], byCourse: new Map(), records: [] };
+        index.set(record.name, entry);
+      }
+      if (!entry.keys.includes(record.key)) entry.keys.push(record.key);
+      for (const course of record.courses) entry.byCourse.set(course, record.key);
+      entry.records.push({ key: record.key, sourcePaths: record.sourcePaths });
+    }
+    vaultWideByName = index;
   }
 
-  const drafts = await Promise.all(
-    [...byName].map(async ([name, acc]) => {
-      const { bound, ambiguous } = resolveTitle(reachableByTitle, name);
-      const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
-      const sourcePaths = [...acc.sourcePaths].sort();
-      const tier: ConceptTier = bound !== undefined ? 1 : 2;
-      return { name, acc, bound, ambiguous, definition, sourcePaths, tier };
-    }),
-  );
+  const drafts = (
+    await Promise.all(
+      [...byName].map(async ([name, acc]) => {
+        const { bound, ambiguous } = resolveTitle(reachableByTitle, name);
+        const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
+        const tier: ConceptTier = bound !== undefined ? 1 : 2;
+        const groups = identityGroups(acc, bound !== undefined, vaultWideByName?.get(name));
+        return groups.map((group) => ({
+          name,
+          group,
+          courseScoped: groups.length > 1,
+          bound,
+          ambiguous,
+          definition,
+          tier,
+        }));
+      }),
+    )
+  ).flat();
   const draftKeys = await keysFor(
     drafts.map((draft) => ({
       tier: draft.tier,
       name: draft.name,
       boundNotePath: draft.bound,
-      courses: [...draft.acc.courses],
-      sourcePaths: draft.sourcePaths,
+      courses: draft.group.courses,
+      sourcePaths: draft.group.sourcePaths,
+      ...(draft.group.vaultWideKey !== undefined ? { vaultWideKey: draft.group.vaultWideKey } : {}),
+      ...(draft.courseScoped ? { courseScoped: true } : {}),
     })),
   );
   const records: ConceptRecord[] = drafts.map(
-    ({ name, acc, bound, ambiguous, definition, sourcePaths, tier }, i) => ({
+    ({ name, group, bound, ambiguous, definition, tier }, i) => ({
       key: draftKeys[i] as string,
       name,
       tier,
-      courses: [...acc.courses].sort(),
-      sourcePaths,
+      courses: [...group.courses],
+      sourcePaths: [...group.sourcePaths],
       ...(bound !== undefined ? { boundNotePath: bound } : {}),
       ...(definition !== undefined ? { definition } : {}),
       ...(ambiguous !== undefined ? { ambiguousNotePaths: ambiguous } : {}),
-      size: conceptRecordSize({ sourcePaths, boundNotePath: bound }),
+      size: conceptRecordSize({ sourcePaths: group.sourcePaths, boundNotePath: bound }),
     }),
   );
 
@@ -778,13 +995,20 @@ export async function extractConcepts(
     }
     // Resolved after, and apart from, tiers 1/2 — the order this pass has always minted in.
     const tier3Keys = await keysFor(
-      tier3Drafts.map(({ name, courses, boundNotePath }) => ({
-        tier: 3 as const,
-        name,
-        boundNotePath,
-        courses: [...courses],
-        sourcePaths: [boundNotePath],
-      })),
+      tier3Drafts.map(({ name, courses, boundNotePath }) => {
+        // A tier-3 identity is its bound note, one per wording: it takes the vault-wide key
+        // only when that wording has exactly one identity there.
+        const vaultWide = vaultWideByName?.get(name);
+        const vaultWideKey = vaultWide?.keys.length === 1 ? vaultWide.keys[0] : undefined;
+        return {
+          tier: 3 as const,
+          name,
+          boundNotePath,
+          courses: [...courses],
+          sourcePaths: [boundNotePath],
+          ...(vaultWideKey !== undefined ? { vaultWideKey } : {}),
+        };
+      }),
     );
     tier3Drafts.forEach(({ name, courses, boundNotePath, definition }, i) => {
       records.push({
@@ -802,8 +1026,12 @@ export async function extractConcepts(
 
   // Plain code-unit ordering (matches FolderSource.list's convention),
   // deliberately not `localeCompare` — a locale-aware sort is one more way
-  // for verbatim names to be treated as "the same, roughly" (R1/R2).
-  records.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  // for verbatim names to be treated as "the same, roughly" (R1/R2). A
+  // wording split by course (`[D-402]`) sorts its identities by their
+  // courses, so the order never depends on which note the walk met first.
+  records.sort(
+    (a, b) => byCodeUnit(a.name, b.name) || byCodeUnit(a.courses.join('\n'), b.courses.join('\n')),
+  );
   return records;
 }
 
@@ -865,6 +1093,13 @@ function dedupeProvenance(passages: readonly Provenance[]): readonly Provenance[
  * unchanged (the same object reference, no new allocation) — most callers of `extractConcepts`
  * pass no `readConcepts` at all, and this function must be a no-op for every record in that case.
  *
+ * **A wording split by course folds per course (`[D-402]`).** When `records` holds several
+ * identities for one wording (module doc, "One wording, two courses"), each passage folds only
+ * onto the identity of the course its document sits in (`coursesFolder`, the same folder rule
+ * `./course.js`'s `courseFromPath` applies); a passage from a document in no course folds onto
+ * each, and one from a course none of them is in folds nowhere. A wording with one identity folds
+ * exactly as before.
+ *
  * **Every passage counted once.** More than one `ReadConcept` can carry the same `name` — two
  * distinct proposals across separate reader calls, both corroborating to the same convention. This
  * function pools every anchor and `alsoIn` entry across all of them, de-duplicates identical
@@ -874,6 +1109,7 @@ function dedupeProvenance(passages: readonly Provenance[]): readonly Provenance[
 export function foldReadAnchors(
   records: readonly ConceptRecord[],
   readConcepts: readonly ReadConcept[],
+  options: { readonly coursesFolder?: VaultPath } = {},
 ): readonly ConceptRecord[] {
   const passagesByName = new Map<string, Provenance[]>();
   for (const concept of readConcepts) {
@@ -885,11 +1121,31 @@ export function foldReadAnchors(
   }
   if (passagesByName.size === 0) return records;
 
+  const identitiesByName = new Map<string, number>();
+  for (const record of records) {
+    identitiesByName.set(record.name, (identitiesByName.get(record.name) ?? 0) + 1);
+  }
+  const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
+
   return records.map((record) => {
-    const passages = passagesByName.get(record.name);
-    if (passages === undefined) return record;
+    const pooled = passagesByName.get(record.name);
+    if (pooled === undefined) return record;
+    // `[D-402]`: a wording with several identities (one per course) folds each passage onto the
+    // identity of the course its document sits in, never onto the others; a passage from a
+    // document in no course belongs to no course's material in particular and stays with each,
+    // the same rule `identityGroups` applies to course-less citations. A passage from a course
+    // none of this wording's identities is in folds nowhere — omitted, never guessed.
+    const passages =
+      (identitiesByName.get(record.name) ?? 0) > 1
+        ? pooled.filter((passage) => {
+            const course = courseFromPath(passage.sourcePath, coursesFolder);
+            return course === undefined || record.courses.includes(course);
+          })
+        : pooled;
     const [anchor, ...alsoIn] = dedupeProvenance(passages);
-    if (anchor === undefined) return record; // unreachable given the `continue` above, kept honest
+    // Unreachable for a wording with one identity (the `continue` above); for a split wording,
+    // every passage may sit in another course's documents, and the record stays as it was.
+    if (anchor === undefined) return record;
     return { ...record, anchor, ...(alsoIn.length > 0 ? { alsoIn } : {}) };
   });
 }
