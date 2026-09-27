@@ -832,7 +832,7 @@ describe('createWorkerVisionPageRunner — a PDF page, rendered via the injected
     expect(outcome.retryable ? '' : outcome.reason).toContain('ol-9cle');
   });
 
-  it('a pageRenderer supplied does not extend to pptx/docx — still the named gap, per the still-open embedded-image selection policy', async () => {
+  it('a pageRenderer supplied does not extend to pptx/docx — still the named gap; the combine selection policy is decided but sending several images in one call is not yet wired', async () => {
     const vault = new MemoryVaultSource();
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => completeResult('x'));

@@ -46,14 +46,30 @@
  * `createObsidianPageRenderer` (`./page-renderer.ts`) still gets today's
  * honest gap, unchanged — see the still-open PPTX/DOCX note just below.
  *
- * **PPTX and DOCX stay the honest gap.** Their pages already carry embedded
- * raster image PARTS (`../extract/embedded-image.ts`, `ol-egov.141.89.8.20`)
- * rather than needing a render step, but per that file's own module doc, a
- * slide or region can carry zero, one or several such images, and which to
- * send — "send all, pick the largest, or combine" — is a selection policy
- * this bead's own notes say to "decide ... with evidence before wiring,"
- * not something to pick unilaterally under this bead's remaining time. Left
- * as a named follow-up (see this bead's report) rather than wired here.
+ * **PPTX and DOCX stay the honest gap — the selection policy is now
+ * decided, but sending is not yet wired.** Their pages already carry
+ * embedded raster image PARTS (`../extract/embedded-image.ts`,
+ * `ol-egov.141.89.8.20`) rather than needing a render step, and which of
+ * several such images to send — "send all, pick the largest, or combine" —
+ * was this bead's own open question. The orchestrator self-ratified
+ * **combine** as Class B (2026-09-27, `findings/office-image-selection.md`
+ * in the service repo), and `../extract/pptx.ts`'s `pptxFigureCue` /
+ * `../extract/docx.ts`'s `docxFigureCue` implement and test that trigger:
+ * a slide/region qualifies when its non-recurring candidate images, summed,
+ * clear the same `FIGURE_CUE_MIN_SHARE` `figure-cue.ts` uses for PDF (DOCX's
+ * own denominator is its declared `w:sectPr`/`w:pgSz`, never guessed when
+ * absent). **What remains unbuilt is turning a qualifying slide/region's
+ * several candidate images into the single call `vision.extract.v2`'s wire
+ * request accepts** (`olea-service/src/tasks/visionExtract.ts`, outside
+ * this bead's `owns`, takes exactly one `pageImageBase64`) — either a
+ * contract change (an interface change, escalated rather than made here)
+ * or a client-side composite image, which would need a real DOM `canvas`
+ * this repo's test environment does not have (the same "nothing to fake a
+ * real canvas against" gap `page-renderer.ts`'s own module doc already
+ * names for PDF rendering). So this runner still returns the same named,
+ * non-retryable gap for every `'pptx'`/`'docx'` page below, regardless of
+ * `pptxFigureCue`/`docxFigureCue`'s answer — reported as the still-open
+ * follow-up, not built unilaterally.
  *
  * **`[D-326]` producer provenance, wired from the wire's own stamp.** Every
  * `SuccessResponse` this file's transport receives already carries a
@@ -871,16 +887,20 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
       // A page INSIDE a pptx/docx (or a pdf with no pageRenderer wired)
       // needs a rendered/selected page image this runner does not have a
       // way to obtain yet. Named, non-retryable gap — never silently doing
-      // nothing, never crashing. See the module doc's PPTX/DOCX note for
-      // why that half stays a gap rather than being wired unilaterally.
+      // nothing, never crashing. See the module doc's PPTX/DOCX note: the
+      // combine selection policy is decided (Class B) and its trigger is
+      // built and tested (`pptxFigureCue`/`docxFigureCue`), but turning a
+      // qualifying slide/region's several images into vision.extract.v2's
+      // one-image call is still unbuilt, so this stays a gap regardless.
       return {
         ok: false,
         retryable: false,
         reason:
           `WorkerVisionPageRunner: job ${job.contentHash} needs a rendered page image for a ` +
           `'${format}' document, and no page renderer is wired for it in this run (ol-9cle's ` +
-          "renderer exists for 'pdf'; PPTX/DOCX embedded-image selection is a separate, " +
-          "still-open policy) — only standalone image sources (format 'image') are unconditionally wired today.",
+          "renderer exists for 'pdf'; PPTX/DOCX embedded-image selection is decided (combine) but " +
+          'sending several images in one vision.extract.v2 call is not yet wired) — only standalone ' +
+          "image sources (format 'image') are unconditionally wired today.",
       };
     }
 

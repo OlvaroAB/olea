@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { extractPptxEmbeddedImages, pptxExtractor } from './pptx.js';
+import { extractPptxEmbeddedImages, pptxExtractor, pptxFigureCue } from './pptx.js';
 import { DEFAULT_TEXT_LAYER_CHAR_THRESHOLD } from './threshold.js';
 
 function slideXml(paragraphs: readonly string[]): string {
@@ -302,5 +302,126 @@ describe('extractPptxEmbeddedImages — embedded raster images per slide (ol-ego
     expect(Object.keys(result.pages[0] ?? {}).sort()).toEqual(
       ['charCount', 'furniture', 'page', 'route', 'textLayer', 'units'].sort(),
     );
+  });
+});
+
+/** A `<p:pic>` block naming `rId` and placed at `cx` x `cy` EMU — the minimal shape `pptxFigureCue` reads (`r:embed`, `<a:xfrm><a:ext>`). */
+function pictureXml(rId: string, cx: number, cy: number): string {
+  return (
+    '<p:pic><p:blipFill><a:blip r:embed="' +
+    rId +
+    '"/></p:blipFill><p:spPr><a:xfrm><a:ext cx="' +
+    cx +
+    '" cy="' +
+    cy +
+    '"/></a:xfrm></p:spPr></p:pic>'
+  );
+}
+
+/** A slide carrying zero or more `<p:pic>` placements, no text — `pptxFigureCue` only reads pictures, so this omits the text-paragraph shape `slideXml` builds. */
+function slideXmlWithPictures(pictures: readonly string[]): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+    'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+    `<p:cSld><p:spTree>${pictures.join('')}</p:spTree></p:cSld></p:sld>`
+  );
+}
+
+/** `ppt/presentation.xml` carrying a `<p:sldSz>` — `pptxFigureCue`'s slide-area denominator. No `.rels` is built alongside this in the tests below, so slide order falls back to filename order (`fallbackSlideOrder`); none of these tests depend on presentation order. */
+function presentationXmlWithSize(cx: number, cy: number): string {
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+    `<p:sldSz cx="${cx}" cy="${cy}"/></p:presentation>`
+  );
+}
+
+describe('pptxFigureCue — D-324 combine policy (ol-egov.141.89.8.26, findings/office-image-selection.md)', () => {
+  it('a single image alone clearing the share qualifies the slide', () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000 EMU^2
+      'ppt/slides/slide1.xml': slideXmlWithPictures([pictureXml('rId1', 500, 500)]), // 25%
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = pptxFigureCue({ path: 'deck.pptx', bytes });
+
+    expect(result).toHaveLength(1);
+    expect(result[0]?.page).toBe(1);
+    expect(result[0]?.qualifies).toBe(true);
+    expect(result[0]?.images).toHaveLength(1);
+  });
+
+  it('two images each under the floor, summed, qualify the slide — the combine policy over largest/all', () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000
+      'ppt/slides/slide1.xml': slideXmlWithPictures([
+        pictureXml('rId1', 100, 200), // 20,000 / 1,000,000 = 2%
+        pictureXml('rId2', 200, 200), // 40,000 / 1,000,000 = 4%
+      ]),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+        ['rId2', IMAGE_REL_TYPE, '../media/image2.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1]),
+      'ppt/media/image2.png': new Uint8Array([2]),
+    });
+
+    const result = pptxFigureCue({ path: 'deck.pptx', bytes });
+
+    // Neither image alone clears 5% (2% and 4%); their sum, 6%, does.
+    expect(result[0]?.qualifies).toBe(true);
+    expect(result[0]?.images).toHaveLength(2);
+  });
+
+  it('excludes a recurring image (majority of slides) from every slide it is on, even when it alone would clear the share', () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000
+      'ppt/slides/slide1.xml': slideXmlWithPictures([pictureXml('rId1', 500, 500)]), // 25%
+      'ppt/slides/slide2.xml': slideXmlWithPictures([pictureXml('rId1', 500, 500)]),
+      'ppt/slides/slide3.xml': slideXmlWithPictures([pictureXml('rId1', 500, 500)]),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/logo.png'],
+      ]),
+      'ppt/slides/_rels/slide2.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/logo.png'],
+      ]),
+      'ppt/slides/_rels/slide3.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/logo.png'],
+      ]),
+      'ppt/media/logo.png': new Uint8Array([9]),
+    });
+
+    const result = pptxFigureCue({ path: 'deck.pptx', bytes });
+
+    expect(result).toHaveLength(3);
+    for (const slide of result) {
+      expect(slide.qualifies).toBe(false);
+      expect(slide.images).toEqual([]);
+    }
+  });
+
+  it('a slide with no resolvable slide size never qualifies — no guessing', () => {
+    const bytes = buildPptxBytesMixed({
+      // No `ppt/presentation.xml` at all: `pptxSlideAreaEmu` returns `null`.
+      'ppt/slides/slide1.xml': slideXmlWithPictures([pictureXml('rId1', 900, 900)]),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1]),
+    });
+
+    const result = pptxFigureCue({ path: 'deck.pptx', bytes });
+    expect(result[0]?.qualifies).toBe(false);
+    expect(result[0]?.images).toEqual([]);
+  });
+
+  it('does not throw on bytes that are not a zip at all', () => {
+    const bytes = new TextEncoder().encode('not a zip');
+    expect(pptxFigureCue({ path: 'garbage.pptx', bytes })).toEqual([]);
   });
 });

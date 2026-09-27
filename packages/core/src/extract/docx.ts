@@ -47,11 +47,33 @@
  * `page: 1` region's images, not per-paragraph. See `embedded-image.ts`'s
  * module doc for why this stays a sibling function and how a future
  * vision-page caller would consume it.
+ *
+ * **`docxFigureCue` (`ol-egov.141.89.8.26`) is the combine-policy trigger,
+ * a second sibling function beside `extractDocxEmbeddedImages` — see
+ * `pptx.ts`'s own `pptxFigureCue` doc for the shared D-324 combine ruling
+ * this implements (Class B, self-ratified 2026-09-27,
+ * `findings/office-image-selection.md`). This format's own denominator is
+ * the **document's declared page size**, `<w:sectPr>`'s `<w:pgSz w:w=""
+ * w:h=""/>` in twips (1 twip = 1/1440 inch = 635 EMU), against each
+ * `<w:drawing>`'s own `<wp:extent cx="" cy=""/>` in EMU — the same
+ * placement-geometry, no-pixel-decoding reading `pptxFigureCue` takes,
+ * `findings/office-image-selection.md`'s own method section for both
+ * formats. **No recurrence rule applies here** — this file's own "whole
+ * document is one logical page" convention (above) gives DOCX no second
+ * region to be a majority of, exactly as that finding's document says.
+ *
+ * **No guessing when the page size cannot be resolved (the ratified
+ * ruling's own words).** A document with no `<w:pgSz>` at all, or one whose
+ * `w:w`/`w:h` do not parse, has no page-area denominator: its images never
+ * trigger this cue, and `qualifies` is `false` — never a share computed
+ * against an invented default page size. Sending is not wired here either —
+ * see `pptx.ts`'s own module doc for why.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
-import type { PageEmbeddedImages } from './embedded-image.js';
+import type { EmbeddedRasterImage, PageEmbeddedImages } from './embedded-image.js';
 import { readEmbeddedRasterImages } from './embedded-image.js';
+import { FIGURE_CUE_MIN_SHARE } from './figure-cue.js';
 import { classifyPageText } from './plausibility.js';
 import { routePage } from './threshold.js';
 import type {
@@ -207,4 +229,181 @@ export function extractDocxEmbeddedImages(input: ExtractorInput): PageEmbeddedIm
   const relsXml = relsBytes ? strFromU8(relsBytes) : undefined;
   const images = readEmbeddedRasterImages(files, relsXml, 'word');
   return [{ page: 1, images }];
+}
+
+// ---------------------------------------------------------------------------
+// `docxFigureCue` — D-324's combine policy for DOCX (`ol-egov.141.89.8.26`,
+// Class B, self-ratified 2026-09-27, `findings/office-image-selection.md`).
+// See this file's module doc for the ruling and the "no guessing when
+// absent" denominator rule.
+// ---------------------------------------------------------------------------
+
+/** Mirrors `embedded-image.ts`'s `RASTER_EXTENSION_MIME` (private there) — duplicated for the same "target path must stay visible to the caller" reason `pptx.ts`'s own copy gives. */
+const RASTER_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  webp: 'image/webp',
+};
+
+/** `undefined` for a non-raster or unrecognised extension (vector metafiles included). */
+function rasterMimeTypeForTarget(target: string): string | undefined {
+  const dot = target.lastIndexOf('.');
+  if (dot < 0) return undefined;
+  return RASTER_MIME_BY_EXTENSION[target.slice(dot + 1).toLowerCase()];
+}
+
+const RELATIONSHIP_RE = /<Relationship\b[^>]*\/>/g;
+const ATTR_ID_RE = /\bId="([^"]+)"/;
+const ATTR_TYPE_RE = /\bType="([^"]+)"/;
+const ATTR_TARGET_RE = /\bTarget="([^"]+)"/;
+const IMAGE_REL_TYPE_RE = /\/relationships\/image$/;
+const DRAWING_RE = /<w:drawing>[\s\S]*?<\/w:drawing>/g;
+const DRAWING_EMBED_RE = /r:embed="([^"]+)"/;
+const WP_EXTENT_RE = /<wp:extent\b([^>]*)\/>/;
+const ATTR_EXT_CX_RE = /\bcx="(\d+)"/;
+const ATTR_EXT_CY_RE = /\bcy="(\d+)"/;
+const PG_SZ_RE = /<w:pgSz\b([^>]*)\/>/;
+const ATTR_PGSZ_W_RE = /\bw:w="(\d+)"/;
+const ATTR_PGSZ_H_RE = /\bw:h="(\d+)"/;
+
+/** 1 twip = 1/1440 inch; 1 inch = 914400 EMU; 914400 / 1440 = 635 — the fixed conversion `findings/office-image-selection.md`'s method section names for `<w:pgSz>`, which is declared in twips, not EMU like `<wp:extent>` already is. */
+const TWIP_TO_EMU = 635;
+
+/**
+ * Resolves a `word/_rels/document.xml.rels` `Target` against `word` (the
+ * folder that `.rels` file itself describes), walking `../` segments —
+ * mirrors `embedded-image.ts`'s own general `resolveRelsTarget(baseDir,
+ * target)` (private there) and `pptx.ts`'s `resolveSlideRelsTarget`. A
+ * DOCX media `Target` is ordinarily `media/imageN.*` (no climbing needed),
+ * but this walks `..` anyway rather than assuming that shape.
+ */
+function resolveDocumentRelsTarget(target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = ['word'];
+  for (const segment of target.split('/')) {
+    if (segment === '..') parts.pop();
+    else if (segment !== '.' && segment.length > 0) parts.push(segment);
+  }
+  return parts.join('/');
+}
+
+/** Every image-type relationship in `word/_rels/document.xml.rels`, `Id` -> resolved zip-entry path. */
+function documentImageRelationshipTargets(relsXml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  let match = RELATIONSHIP_RE.exec(relsXml);
+  while (match !== null) {
+    const tag = match[0];
+    const id = ATTR_ID_RE.exec(tag)?.[1];
+    const type = ATTR_TYPE_RE.exec(tag)?.[1];
+    const target = ATTR_TARGET_RE.exec(tag)?.[1];
+    if (
+      id !== undefined &&
+      type !== undefined &&
+      target !== undefined &&
+      IMAGE_REL_TYPE_RE.test(type)
+    ) {
+      map.set(id, resolveDocumentRelsTarget(target));
+    }
+    match = RELATIONSHIP_RE.exec(relsXml);
+  }
+  return map;
+}
+
+/**
+ * The document's own declared page area in EMU, from the first `<w:pgSz>`
+ * found anywhere in `word/document.xml` (that tag only ever appears inside
+ * a `<w:sectPr>`, so a direct search is equivalent to, and simpler than,
+ * first locating the enclosing section). `null` when no `<w:pgSz>` is
+ * present, or its `w:w`/`w:h` do not parse to positive numbers — this
+ * file's module doc's "no guessing when absent" rule; a multi-section
+ * document with differing page sizes uses whichever section's `<w:pgSz>`
+ * appears first, a real declared size, never an invented default.
+ */
+function docxPageAreaEmu(documentXml: string): number | null {
+  const match = PG_SZ_RE.exec(documentXml);
+  if (!match) return null;
+  const w = Number(ATTR_PGSZ_W_RE.exec(match[0])?.[1]);
+  const h = Number(ATTR_PGSZ_H_RE.exec(match[0])?.[1]);
+  if (!Number.isFinite(w) || !Number.isFinite(h) || w <= 0 || h <= 0) return null;
+  return w * TWIP_TO_EMU * (h * TWIP_TO_EMU);
+}
+
+/** D-324's combine-cue result for a DOCX — see this file's module doc's `docxFigureCue` section. Exactly one (this format has exactly one logical page/region), unlike `pptxFigureCue`'s per-slide array. */
+export interface DocxFigureCueResult {
+  /** `true` when the document's candidate images (non-vector, resolvable placement, a resolvable page-area denominator), summed, cover at least `minShare` of the declared page area. Always `false` when the page size cannot be resolved — see the module doc. */
+  readonly qualifies: boolean;
+  /** The exact candidate images that were summed to reach `qualifies` — empty when `qualifies` is `false`. Sending is not wired here — see `pptx.ts`'s own module doc. */
+  readonly images: readonly EmbeddedRasterImage[];
+}
+
+/**
+ * D-324's figure cue, combine policy, for a DOCX — see this file's module
+ * doc for the ruling this implements (`ol-egov.141.89.8.26`,
+ * `findings/office-image-selection.md`) and the "no guessing when absent"
+ * page-size rule. `minShare` defaults to the same declared
+ * `FIGURE_CUE_MIN_SHARE` `figure-cue.ts`/`pptx.ts`'s `pptxFigureCue` use —
+ * the same named constant, cited rather than re-declared.
+ *
+ * Mirrors `extractDocxEmbeddedImages`'s own `'unreadable'` handling: a
+ * buffer that does not unzip, or has no `word/document.xml`, yields
+ * `{ qualifies: false, images: [] }` — never guessed, never thrown.
+ */
+export function docxFigureCue(
+  input: ExtractorInput,
+  minShare: number = FIGURE_CUE_MIN_SHARE,
+): DocxFigureCueResult {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(input.bytes);
+  } catch {
+    return { qualifies: false, images: [] };
+  }
+
+  const documentBytes = files['word/document.xml'];
+  if (!documentBytes) return { qualifies: false, images: [] };
+  const documentXml = strFromU8(documentBytes);
+
+  const pageAreaEmu = docxPageAreaEmu(documentXml);
+  if (pageAreaEmu === null) {
+    // No guessing when absent (this file's module doc, the ratified
+    // ruling's own words): no page-area denominator means this document's
+    // images never trigger the cue.
+    return { qualifies: false, images: [] };
+  }
+
+  const relsBytes = files['word/_rels/document.xml.rels'];
+  const relsXml = relsBytes ? strFromU8(relsBytes) : '';
+  const relTargets = relsXml
+    ? documentImageRelationshipTargets(relsXml)
+    : new Map<string, string>();
+
+  const candidates: { readonly areaShare: number; readonly image: EmbeddedRasterImage }[] = [];
+  let drawingMatch = DRAWING_RE.exec(documentXml);
+  while (drawingMatch !== null) {
+    const block = drawingMatch[0];
+    const embedId = DRAWING_EMBED_RE.exec(block)?.[1];
+    const target = embedId !== undefined ? relTargets.get(embedId) : undefined;
+    const mimeType = target !== undefined ? rasterMimeTypeForTarget(target) : undefined;
+    const bytes = target !== undefined ? files[target] : undefined;
+    if (target !== undefined && mimeType !== undefined && bytes !== undefined) {
+      const extentMatch = WP_EXTENT_RE.exec(block);
+      if (extentMatch) {
+        const cx = Number(ATTR_EXT_CX_RE.exec(extentMatch[0])?.[1]);
+        const cy = Number(ATTR_EXT_CY_RE.exec(extentMatch[0])?.[1]);
+        if (Number.isFinite(cx) && Number.isFinite(cy)) {
+          candidates.push({ areaShare: (cx * cy) / pageAreaEmu, image: { bytes, mimeType } });
+        }
+      }
+    }
+    drawingMatch = DRAWING_RE.exec(documentXml);
+  }
+
+  const combinedShare = candidates.reduce((sum, c) => sum + c.areaShare, 0);
+  const qualifies = combinedShare >= minShare;
+  return { qualifies, images: qualifies ? candidates.map((c) => c.image) : [] };
 }

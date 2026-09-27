@@ -46,12 +46,47 @@
  * `embedded-image.ts`'s module doc for why this stays a sibling function
  * (the shared `PageExtraction`/`ExtractionResult` types are outside this
  * bead's `owns`) and how a future vision-page caller would consume it.
+ *
+ * **`pptxFigureCue` (`ol-egov.141.89.8.26`) is the combine-policy trigger,
+ * a second sibling function again beside `extractPptxEmbeddedImages`.**
+ * `extractPptxEmbeddedImages` reports every raster relationship a slide
+ * declares, honestly, whether or not it turns out to matter; this function
+ * answers the different, D-324-shaped question `figure-cue.ts` already asks
+ * of a PDF page — does this slide's picture content clear the same
+ * `FIGURE_CUE_MIN_SHARE` floor — under the **combine** selection policy the
+ * orchestrator self-ratified as Class B on this bead (2026-09-27, citing
+ * `findings/office-image-selection.md`): a slide qualifies when its
+ * *non-recurring* raster images, **summed**, cover at least that share,
+ * which can fire even when no single image does — and the images that
+ * counted toward the sum are exactly what the eventual caller would send in
+ * one combined vision call, per that finding's recommendation. "Non-
+ * recurring" mirrors `figure-cue.ts`'s own majority rule
+ * (`RUNNING_HEAD_MIN_PAGES`), with identity taken as the resolved media
+ * zip-path (`ppt/media/imageN.*`) — the OOXML analogue of a shared PDF
+ * `/XObject` — the same identity `findings/office-image-selection.md`'s
+ * census script used.
+ *
+ * **Area share is read straight out of OOXML placement geometry, never
+ * decoded pixels** — `<p:pic>`'s own `<a:xfrm><a:ext cx="" cy=""/></a:xfrm>`
+ * against the deck's `<p:sldSz cx="" cy=""/>` (`ppt/presentation.xml`), both
+ * already in EMU, the exact quantity `figure-cue.ts`'s PDF `areaShare` is
+ * for a page. A picture with no resolvable `<a:xfrm>` (inherits a
+ * placeholder's size) or a slide with no resolvable `<p:sldSz>` contributes
+ * nothing to the sum — never guessed — matching
+ * `findings/office-image-selection.md`'s own candidate-set scope note.
+ *
+ * **Sending is not wired here.** `vision.extract.v2`'s wire request
+ * (`olea-service/src/tasks/visionExtract.ts`, outside this bead's `owns`)
+ * carries exactly one image per call; turning several qualifying images
+ * into that one call (a stitched composite, or a schema change) is left as
+ * a follow-up — see `vision-page-runner.ts`'s own module doc.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
-import type { PageEmbeddedImages } from './embedded-image.js';
+import type { EmbeddedRasterImage, PageEmbeddedImages } from './embedded-image.js';
 import { readEmbeddedRasterImages } from './embedded-image.js';
-import { applyFurnitureDetection } from './furniture.js';
+import { FIGURE_CUE_MIN_SHARE } from './figure-cue.js';
+import { applyFurnitureDetection, RUNNING_HEAD_MIN_PAGES } from './furniture.js';
 import { classifyPageText, isReachedButUnreadable } from './plausibility.js';
 import { routePage } from './threshold.js';
 import type {
@@ -319,5 +354,206 @@ export function extractPptxEmbeddedImages(input: ExtractorInput): PageEmbeddedIm
     const relsXml = relsBytes ? strFromU8(relsBytes) : undefined;
     const images = readEmbeddedRasterImages(files, relsXml, 'ppt/slides');
     return { page: idx + 1, images };
+  });
+}
+
+// ---------------------------------------------------------------------------
+// `pptxFigureCue` — D-324's combine policy (`ol-egov.141.89.8.26`, Class B,
+// self-ratified 2026-09-27, `findings/office-image-selection.md`). See the
+// module doc's own section for what this answers and why area share is read
+// from placement geometry, not decoded pixels.
+// ---------------------------------------------------------------------------
+
+/** Mirrors `embedded-image.ts`'s `RASTER_EXTENSION_MIME` (private there). Duplicated rather than imported: this cue needs each candidate's resolved target path threaded through its own geometry match and through slide-to-slide recurrence, which `readEmbeddedRasterImages`'s return value (bytes + mimeType only) does not carry. Same small, stable OOXML vocabulary, same reasoning `findings/office-image-selection.md`'s census script already gives for its own duplicate of this list. */
+const RASTER_MIME_BY_EXTENSION: Readonly<Record<string, string>> = {
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  bmp: 'image/bmp',
+  tif: 'image/tiff',
+  tiff: 'image/tiff',
+  webp: 'image/webp',
+};
+
+/** `undefined` for a non-raster or unrecognised extension (vector metafiles included). */
+function rasterMimeTypeForTarget(target: string): string | undefined {
+  const dot = target.lastIndexOf('.');
+  if (dot < 0) return undefined;
+  return RASTER_MIME_BY_EXTENSION[target.slice(dot + 1).toLowerCase()];
+}
+
+const PIC_RE = /<p:pic>[\s\S]*?<\/p:pic>/g;
+const PIC_EMBED_RE = /r:embed="([^"]+)"/;
+const EXT_TAG_RE = /<a:ext\b([^>]*)\/>/;
+const ATTR_TYPE_RE = /\bType="([^"]+)"/;
+const IMAGE_REL_TYPE_RE = /\/relationships\/image$/;
+const ATTR_CX_RE = /\bcx="(\d+)"/;
+const ATTR_CY_RE = /\bcy="(\d+)"/;
+const SLD_SZ_RE = /<p:sldSz\b([^>]*)\/>/;
+
+/** Resolves a slide's own `.rels` `Target` against `ppt/slides` (the folder the `.rels` file itself describes), walking `../` segments — mirrors `embedded-image.ts`'s own general `resolveRelsTarget(baseDir, target)` (private there): a slide's picture `Target` is typically `../media/imageN.*`, which must climb OUT of `ppt/slides` into `ppt/media`. **Not** this file's own top-level `resolveRelsTarget` (used only for `presentation.xml.rels`, whose targets are `slides/slideN.xml` and never need to climb) — reusing that simpler one here would literally join `ppt/../media/...`, wrong. */
+function resolveSlideRelsTarget(target: string): string {
+  if (target.startsWith('/')) return target.slice(1);
+  const parts = ['ppt', 'slides'];
+  for (const segment of target.split('/')) {
+    if (segment === '..') parts.pop();
+    else if (segment !== '.' && segment.length > 0) parts.push(segment);
+  }
+  return parts.join('/');
+}
+
+/** Every image-type relationship in a slide's own `.rels` XML, `Id` -> resolved zip-entry path (`resolveSlideRelsTarget`, above). Unlike `extractImageRelationshipTargets` (`embedded-image.ts`, private there), this is duplicated for the same "target path must stay visible to the caller" reason `rasterMimeTypeForTarget`'s own doc gives. */
+function slideImageRelationshipTargets(relsXml: string): Map<string, string> {
+  const map = new Map<string, string>();
+  let match = RELATIONSHIP_RE.exec(relsXml);
+  while (match !== null) {
+    const tag = match[0];
+    const id = ATTR_ID_RE.exec(tag)?.[1];
+    const type = ATTR_TYPE_RE.exec(tag)?.[1];
+    const target = ATTR_TARGET_RE.exec(tag)?.[1];
+    if (
+      id !== undefined &&
+      type !== undefined &&
+      target !== undefined &&
+      IMAGE_REL_TYPE_RE.test(type)
+    ) {
+      map.set(id, resolveSlideRelsTarget(target));
+    }
+    match = RELATIONSHIP_RE.exec(relsXml);
+  }
+  return map;
+}
+
+/** The deck's own `<p:sldSz>` area in EMU, or `null` when `ppt/presentation.xml` is missing or the tag does not resolve to two positive numbers — never guessed (mirrors this file's own `resolvePresentationOrder` "`null` when either part is missing or yields nothing usable" posture). */
+function pptxSlideAreaEmu(files: Record<string, Uint8Array>): number | null {
+  const presBytes = files['ppt/presentation.xml'];
+  if (!presBytes) return null;
+  const match = SLD_SZ_RE.exec(strFromU8(presBytes));
+  if (!match) return null;
+  const cx = Number(ATTR_CX_RE.exec(match[0])?.[1]);
+  const cy = Number(ATTR_CY_RE.exec(match[0])?.[1]);
+  if (!Number.isFinite(cx) || !Number.isFinite(cy) || cx <= 0 || cy <= 0) return null;
+  return cx * cy;
+}
+
+/** One `<p:pic>` placement this cue could resolve to a raster image and an area share — `identity` is the resolved media zip-path (this cue's recurrence key), `areaShare` is `null` when the picture's own `<a:xfrm><a:ext>` did not resolve or the slide's own area could not be (never guessed, never zero-filled). */
+interface PptxImagePlacement {
+  readonly identity: string;
+  readonly areaShare: number | null;
+  readonly image: EmbeddedRasterImage;
+}
+
+/** Every raster `<p:pic>` placement on one slide, in document order — vector-metafile and non-picture relationships are silently excluded (same as `extractPptxEmbeddedImages`), and a target the `.rels` names but the zip does not actually contain is skipped, never thrown. */
+function pptxSlideImagePlacements(
+  files: Record<string, Uint8Array>,
+  slideXml: string,
+  relTargets: ReadonlyMap<string, string>,
+  slideAreaEmu: number | null,
+): PptxImagePlacement[] {
+  const placements: PptxImagePlacement[] = [];
+  let picMatch = PIC_RE.exec(slideXml);
+  while (picMatch !== null) {
+    const block = picMatch[0];
+    const embedId = PIC_EMBED_RE.exec(block)?.[1];
+    const target = embedId !== undefined ? relTargets.get(embedId) : undefined;
+    const mimeType = target !== undefined ? rasterMimeTypeForTarget(target) : undefined;
+    const bytes = target !== undefined ? files[target] : undefined;
+    if (target !== undefined && mimeType !== undefined && bytes !== undefined) {
+      const extMatch = EXT_TAG_RE.exec(block);
+      let areaShare: number | null = null;
+      if (extMatch && slideAreaEmu !== null) {
+        const cx = Number(ATTR_CX_RE.exec(extMatch[0])?.[1]);
+        const cy = Number(ATTR_CY_RE.exec(extMatch[0])?.[1]);
+        if (Number.isFinite(cx) && Number.isFinite(cy)) areaShare = (cx * cy) / slideAreaEmu;
+      }
+      placements.push({ identity: target, areaShare, image: { bytes, mimeType } });
+    }
+    picMatch = PIC_RE.exec(slideXml);
+  }
+  return placements;
+}
+
+/** Majority-rule recurrence over the deck's slides, mirroring `figure-cue.ts`'s `findRecurringImages` with identity taken as the resolved media zip-path instead of a PDF object number — see the module doc. Needs at least `RUNNING_HEAD_MIN_PAGES` slides before "more than half" is even a meaningful question, same guard `figure-cue.ts` and `furniture.ts` both apply. */
+function findRecurringPptxImages(
+  slidePlacements: readonly (readonly PptxImagePlacement[])[],
+): ReadonlySet<string> {
+  if (slidePlacements.length < RUNNING_HEAD_MIN_PAGES) return new Set();
+
+  const slidesContaining = new Map<string, number>();
+  for (const placements of slidePlacements) {
+    const onThisSlide = new Set(placements.map((p) => p.identity));
+    for (const identity of onThisSlide) {
+      slidesContaining.set(identity, (slidesContaining.get(identity) ?? 0) + 1);
+    }
+  }
+
+  const majority = Math.floor(slidePlacements.length / 2) + 1;
+  const recurring = new Set<string>();
+  for (const [identity, count] of slidesContaining) {
+    if (count >= majority) recurring.add(identity);
+  }
+  return recurring;
+}
+
+/** One slide's D-324 combine-cue result — see the module doc's `pptxFigureCue` section. */
+export interface PptxFigureCueSlide {
+  readonly page: number;
+  /** `true` when this slide's non-recurring candidate images, summed, cover at least `minShare` of the slide's own declared area. */
+  readonly qualifies: boolean;
+  /** The exact non-recurring, resolvable-area-share images that were summed to reach `qualifies` — empty when `qualifies` is `false`. This is the candidate set a combined vision call would send (sending itself is not wired here — see the module doc). */
+  readonly images: readonly EmbeddedRasterImage[];
+}
+
+/**
+ * D-324's figure cue, combine policy, for a PPTX deck — see the module
+ * doc's `pptxFigureCue` section for the ruling this implements
+ * (`ol-egov.141.89.8.26`, `findings/office-image-selection.md`) and for why
+ * area share is read from placement geometry rather than decoded pixels.
+ * `minShare` defaults to the same declared `FIGURE_CUE_MIN_SHARE`
+ * `figure-cue.ts` uses for PDF — this is the *same* named constant, not a
+ * second one, per the finding's own instruction to cite it rather than
+ * re-declare it.
+ *
+ * Returns `[]` for a buffer that does not unzip at all — mirrors
+ * `extractPptxEmbeddedImages`'s own `'unreadable'` handling.
+ */
+export function pptxFigureCue(
+  input: ExtractorInput,
+  minShare: number = FIGURE_CUE_MIN_SHARE,
+): PptxFigureCueSlide[] {
+  let files: Record<string, Uint8Array>;
+  try {
+    files = unzipSync(input.bytes);
+  } catch {
+    return [];
+  }
+
+  const order = resolvePresentationOrder(files) ?? fallbackSlideOrder(files);
+  const slideAreaEmu = pptxSlideAreaEmu(files);
+
+  const perSlide = order.map((key) => {
+    const slideBytes = files[key];
+    const slideXml = slideBytes ? strFromU8(slideBytes) : '';
+    const relsBytes = files[slideRelsPath(key)];
+    const relsXml = relsBytes ? strFromU8(relsBytes) : '';
+    const relTargets = relsXml ? slideImageRelationshipTargets(relsXml) : new Map<string, string>();
+    return pptxSlideImagePlacements(files, slideXml, relTargets, slideAreaEmu);
+  });
+
+  const recurring = findRecurringPptxImages(perSlide);
+
+  return perSlide.map((placements, idx) => {
+    const candidates = placements.filter(
+      (p): p is PptxImagePlacement & { areaShare: number } =>
+        p.areaShare !== null && !recurring.has(p.identity),
+    );
+    const combinedShare = candidates.reduce((sum, c) => sum + c.areaShare, 0);
+    const qualifies = combinedShare >= minShare;
+    return {
+      page: idx + 1,
+      qualifies,
+      images: qualifies ? candidates.map((c) => c.image) : [],
+    };
   });
 }

@@ -1,6 +1,6 @@
 import { strToU8, zipSync } from 'fflate';
 import { describe, expect, it } from 'vitest';
-import { docxExtractor, extractDocxEmbeddedImages } from './docx.js';
+import { docxExtractor, docxFigureCue, extractDocxEmbeddedImages } from './docx.js';
 import { DEFAULT_TEXT_LAYER_CHAR_THRESHOLD } from './threshold.js';
 
 function documentXml(paragraphs: readonly string[]): string {
@@ -272,5 +272,86 @@ describe('extractDocxEmbeddedImages — embedded raster images for the one page 
     expect(Object.keys(result.pages[0] ?? {}).sort()).toEqual(
       ['charCount', 'furniture', 'page', 'route', 'textLayer', 'units'].sort(),
     );
+  });
+});
+
+/** A `<w:drawing>` block naming `rId` and placed at `cx` x `cy` EMU (`<wp:extent>`) — the minimal shape `docxFigureCue` reads (`r:embed`, `<wp:extent>`). */
+function drawingXml(rId: string, cx: number, cy: number): string {
+  return (
+    '<w:p><w:r><w:drawing><wp:inline><wp:extent cx="' +
+    cx +
+    '" cy="' +
+    cy +
+    '"/><a:graphic><a:graphicData><pic:pic><pic:blipFill><a:blip r:embed="' +
+    rId +
+    '"/></pic:blipFill></pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r></w:p>'
+  );
+}
+
+/** `documentXml`'s shape, with `<w:drawing>` blocks appended and an optional declared `<w:pgSz>` on the section — `docxFigureCue`'s page-area denominator. Omitting `pgSz` yields `<w:sectPr/>`, the same empty section every other test's `documentXml` already builds. */
+function documentXmlWithDrawings(
+  drawings: readonly string[],
+  pgSz?: { readonly w: number; readonly h: number },
+): string {
+  const sectPr =
+    pgSz !== undefined
+      ? `<w:sectPr><w:pgSz w:w="${pgSz.w}" w:h="${pgSz.h}"/></w:sectPr>`
+      : '<w:sectPr/>';
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">' +
+    `<w:body>${drawings.join('')}${sectPr}</w:body></w:document>`
+  );
+}
+
+describe('docxFigureCue — D-324 combine policy (ol-egov.141.89.8.26, findings/office-image-selection.md)', () => {
+  it('two images each under the floor, summed against the declared w:pgSz, qualify the document', () => {
+    const bytes = buildDocxBytesMixed({
+      // w:pgSz in twips: 12240 x 15840 (US Letter) -> EMU area = (12240*635) * (15840*635).
+      'word/document.xml': documentXmlWithDrawings(
+        [drawingXml('rId1', 1_300_000, 1_300_000), drawingXml('rId2', 1_600_000, 1_600_000)],
+        { w: 12240, h: 15840 },
+      ),
+      'word/_rels/document.xml.rels': documentRels([
+        ['rId1', IMAGE_REL_TYPE, 'media/image1.png'],
+        ['rId2', IMAGE_REL_TYPE, 'media/image2.png'],
+      ]),
+      'word/media/image1.png': new Uint8Array([1]),
+      'word/media/image2.png': new Uint8Array([2]),
+    });
+
+    const pageAreaEmu = 12240 * 635 * (15840 * 635);
+    const share1 = (1_300_000 * 1_300_000) / pageAreaEmu;
+    const share2 = (1_600_000 * 1_600_000) / pageAreaEmu;
+    expect(share1).toBeLessThan(0.05);
+    expect(share1 + share2).toBeGreaterThanOrEqual(0.05); // sanity on the fixture's own numbers
+
+    const result = docxFigureCue({ path: 'paper.docx', bytes });
+
+    expect(result.qualifies).toBe(true);
+    expect(result.images).toHaveLength(2);
+  });
+
+  it('never guesses a page size when w:pgSz is absent — the images do not trigger the cue', () => {
+    const bytes = buildDocxBytesMixed({
+      // `documentXmlWithDrawings` with no `pgSz` argument emits a bare
+      // `<w:sectPr/>`, same as every other test file's `documentXml`.
+      'word/document.xml': documentXmlWithDrawings([drawingXml('rId1', 9_000_000, 9_000_000)]),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.png']]),
+      'word/media/image1.png': new Uint8Array([1]),
+    });
+
+    const result = docxFigureCue({ path: 'paper.docx', bytes });
+
+    expect(result.qualifies).toBe(false);
+    expect(result.images).toEqual([]);
+  });
+
+  it('does not throw on bytes that are not a zip at all', () => {
+    const bytes = new TextEncoder().encode('not a zip');
+    expect(docxFigureCue({ path: 'garbage.docx', bytes })).toEqual({
+      qualifies: false,
+      images: [],
+    });
   });
 });
