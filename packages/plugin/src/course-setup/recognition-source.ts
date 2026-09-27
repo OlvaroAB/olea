@@ -33,6 +33,19 @@
  * honest "not read" every other caller that omits the option gets, never a
  * fabricated default.
  *
+ * ## Confirmed same-as links are followed (`[D-402]`, `ol-egov.141.89.3.20`)
+ *
+ * Identical topic wording in two courses is two identities since `[D-402]`,
+ * joined only by a same-as link she confirms. This seam therefore also reads
+ * the persisted links (`listSameAsLinkRecords`) and the key store's
+ * canonical-key index (`readConceptKeyCanonicalIndex`, `[D-378]`) and hands
+ * both to `buildEarlierCourseRecognitions`, which folds a CONFIRMED link into
+ * one identity and ignores every other status — so a concept that recurs
+ * across courses is recognised again once she confirms the link, and an
+ * unconfirmed proposal changes nothing. A failed read of either degrades to
+ * "no links": every recognition by an identical key still shows, and only a
+ * linked pair goes unrecognised this time, never a crash.
+ *
  * ## Both reads fail closed to `[]`
  *
  * A vault walk or log read that throws mid-way must not crash course
@@ -49,8 +62,12 @@ import {
   buildEarlierCourseRecognitions,
   type CalendarDay,
   type ConceptCourses,
+  type ConceptKeyCanonicalIndex,
   type EarlierCourseRecognition,
   type ExtractConceptsOptions,
+  listSameAsLinkRecords,
+  readConceptKeyCanonicalIndex,
+  type SameAsLinkRecord,
   type VaultSource,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
@@ -94,5 +111,21 @@ export async function readCourseSetupRecognitions(
     concepts = [];
   }
 
-  return buildEarlierCourseRecognitions({ newCourse, entries, concepts });
+  let sameAsLinks: readonly SameAsLinkRecord[];
+  let canonicalKeys: ConceptKeyCanonicalIndex | undefined;
+  try {
+    sameAsLinks = (await listSameAsLinkRecords(deps.vault)).map((entry) => entry.record);
+    canonicalKeys = await readConceptKeyCanonicalIndex(deps.vault);
+  } catch {
+    sameAsLinks = [];
+    canonicalKeys = undefined;
+  }
+
+  return buildEarlierCourseRecognitions({
+    newCourse,
+    entries,
+    concepts,
+    sameAsLinks,
+    ...(canonicalKeys !== undefined ? { canonicalKeys } : {}),
+  });
 }

@@ -71,17 +71,38 @@
  * every recognition is `null`, an honest "not read" rather than a fabricated
  * `holding`.
  *
- * ## The practical ceiling (register row 4.5): exact concept-id match only
+ * ## The practical ceiling (register row 4.5): one identity, never one wording
  *
  * Cross-course concept MERGE is out of scope (F8.6's merge proposal is the
  * separate surface for two records that MAY be one concept). This module
- * never compares names, wording or embeddings — it fires only where
- * extraction already assigned the identical `conceptId` in both courses'
- * scope. Concept-identity fuzziness is therefore upstream risk (extraction),
- * never a threshold to tune here — see `../checks/earlier-course-recognition.ts`.
+ * never compares names, wording or embeddings — it fires only where both
+ * courses' scope holds ONE identity: extraction already assigned the
+ * identical `conceptId` in both, or she has CONFIRMED a same-as link joining
+ * the two courses' identities. Concept-identity fuzziness is therefore
+ * upstream risk (extraction), never a threshold to tune here — see
+ * `../checks/earlier-course-recognition.ts`.
+ *
+ * ## A confirmed same-as link is one identity here (`[D-402]`, `ol-egov.141.89.3.20`)
+ *
+ * Since `[D-402]`, identical topic wording in two courses is two identities,
+ * one per course, until she confirms a same-as link between them — so a
+ * concept that genuinely recurs across courses no longer shares one
+ * `conceptId`. Given `sameAsLinks`, this module reads every key through
+ * `../concept/same-as-consumer.js`'s `buildSameAsKeyRedirect`, the one seam
+ * that folds a CONFIRMED link and nothing else: both identities' course
+ * memberships join under the link's surviving key, and the evidence and stage
+ * are read over the log with each entry's `conceptIds` read the same way (a
+ * view in memory; nothing on disk is rewritten). A `'proposed'`, `'declined'`
+ * or `'severed'` link folds nothing, so an unconfirmed proposal leaves the two
+ * courses exactly as unrelated as they were. `canonicalKeys` (`[D-378]`)
+ * resolves a superseded duplicate key to its identity first, as every other
+ * same-as reader does.
  */
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
+import type { ConceptKeyCanonicalIndex } from '../concept/key-store.js';
+import type { SameAsLinkRecord } from '../concept/same-as.js';
+import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
 import type { ConceptCourses } from '../insights/types.js';
 import { computeConceptMastery, type MasteryRollupOptions } from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
@@ -141,9 +162,19 @@ export interface EarlierCourseRecognitionInput {
   readonly options?: MasteryRollupOptions;
   /**
    * Pre-computed vitality readings, keyed by concept id — typically
-   * `readAllConceptVitality`'s result. Optional; see this module's doc.
+   * `readAllConceptVitality`'s result. Optional; see this module's doc. Where
+   * `sameAsLinks` folds two identities, the reading is looked up under the
+   * link's surviving key.
    */
   readonly vitality?: ReadonlyMap<string, VitalityReading>;
+  /**
+   * The persisted same-as links (`../concept/same-as.js`), every status. Only a
+   * `'confirmed'` one joins two identities; see this module's doc. Omitted,
+   * identity is exactly `conceptId`, as before.
+   */
+  readonly sameAsLinks?: readonly SameAsLinkRecord[];
+  /** The key store's canonical-key index (`[D-378]`), read with `sameAsLinks`. Optional. */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
 }
 
 /**
@@ -182,17 +213,41 @@ function evidenceFor(entries: readonly ReviewLogEntry[], conceptId: string): Ear
   return { reviewCount, explainedBack, lastCorrectAt };
 }
 
-/** Merges every `ConceptCourses` row into one course set per concept id — a concept can be named more than once across the input. */
-function courseSetsByConcept(concepts: readonly ConceptCourses[]): Map<string, Set<string>> {
+/** Merges every `ConceptCourses` row into one course set per identity — a concept can be named more than once across the input, and a confirmed same-as link names one identity by two ids (`identityOf`). */
+function courseSetsByConcept(
+  concepts: readonly ConceptCourses[],
+  identityOf: (conceptId: string) => string,
+): Map<string, Set<string>> {
   const byConcept = new Map<string, Set<string>>();
   for (const concept of concepts) {
-    const courses = byConcept.get(concept.conceptId) ?? new Set<string>();
+    const identity = identityOf(concept.conceptId);
+    const courses = byConcept.get(identity) ?? new Set<string>();
     for (const course of concept.courses) {
       if (course !== '') courses.add(course);
     }
-    byConcept.set(concept.conceptId, courses);
+    byConcept.set(identity, courses);
   }
   return byConcept;
+}
+
+/**
+ * The log as read under the confirmed same-as links (this module's doc): each
+ * entry's `conceptIds` resolved to identities, deduplicated in her order. An
+ * entry no link touches is returned as-is, by reference; so is the whole log
+ * when there is nothing to resolve. In memory only — nothing is written.
+ */
+function entriesByIdentity(
+  entries: readonly ReviewLogEntry[],
+  redirect: ReadonlyMap<string, string>,
+): readonly ReviewLogEntry[] {
+  if (redirect.size === 0) return entries;
+  return entries.map((entry) => {
+    if (!('conceptIds' in entry) || !Array.isArray(entry.conceptIds)) return entry;
+    const ids: readonly string[] = entry.conceptIds;
+    if (!ids.some((id) => redirect.has(id))) return entry;
+    const resolved = [...new Set(ids.map((id) => redirect.get(id) ?? id))];
+    return { ...entry, conceptIds: resolved } as ReviewLogEntry;
+  });
 }
 
 /**
@@ -200,15 +255,23 @@ function courseSetsByConcept(concepts: readonly ConceptCourses[]): Map<string, S
  * nothing, and computes nothing `../mastery/` does not already compute.
  *
  * Fires only where `newCourse` and at least one other course currently share
- * the identical `conceptId` (the practical ceiling this module's doc names),
+ * one identity — the identical `conceptId`, or two joined by a confirmed
+ * same-as link (the practical ceiling this module's doc names),
  * AND that concept has at least one scored review or explain-back attempt —
  * "already carries history" is not satisfied by an empty evidence set.
  */
 export function buildEarlierCourseRecognitions(
   input: EarlierCourseRecognitionInput,
 ): readonly EarlierCourseRecognition[] {
-  const { newCourse, entries, concepts, options, vitality } = input;
-  const byConcept = courseSetsByConcept(concepts);
+  const { newCourse, concepts, options, vitality } = input;
+  // `[D-402]`: a confirmed same-as link is one identity (module doc); with no
+  // links, or none confirmed, the redirect is empty and every id is its own.
+  const redirect =
+    input.sameAsLinks !== undefined
+      ? buildSameAsKeyRedirect(input.sameAsLinks, input.canonicalKeys)
+      : new Map<string, string>();
+  const entries = entriesByIdentity(input.entries, redirect);
+  const byConcept = courseSetsByConcept(concepts, (id) => redirect.get(id) ?? id);
   // `ol-egov.141.89.9.47` (`[D-281]` item 4, `ol-a07q`): the same proven-
   // invalid projection `oracle/compose.ts` and `retrospective/build.ts` fold
   // is folded here too, once over the whole input log — a rejected verdict

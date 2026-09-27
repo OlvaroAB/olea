@@ -318,7 +318,13 @@ export async function extractConceptsWithAnchors(
   options: ExtractConceptsOptions = {},
 ): Promise<readonly ConceptRecord[]> {
   const records = await extractConceptsFromVault(vault, options);
-  return foldReadAnchors(records, readConcepts);
+  // `[D-402]`: a wording split by course folds each passage by the course folder its document
+  // sits in, so the fold must read the same courses folder the extraction did.
+  return foldReadAnchors(
+    records,
+    readConcepts,
+    options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {},
+  );
 }
 
 // =============================================================================

@@ -108,6 +108,21 @@
  * call is added. `ConceptReaderPort` still sees exactly the calls
  * `batchesByDocument` produces; reconciliation happens only on what already
  * came back.
+ *
+ * **One wording, several course identities (`[D-402]`, `ol-egov.141.89.3.20`).**
+ * `./extract.js` keeps a topic-only wording cited in two courses as two
+ * identities, one per course, and only a same-as link she confirms joins
+ * them. Corroboration honours that split rather than undoing it: a proposal
+ * whose wording matches several of her records corroborates only the record
+ * of the course its passages sit in (`corroborateSplit`), so neither course's
+ * record is replaced by the other's and nothing is unioned across the pair. A
+ * passage from a document in no course stays with every identity of the
+ * wording (the rule `./extract.js` applies to course-less citations); one from
+ * a course none of the identities is in corroborates none of them and is read
+ * as that course's own concept, keyed like any concept her conventions do not
+ * name. Her records are claimed by key for a split wording, so every course's
+ * record survives the read. A wording with one identity corroborates exactly
+ * as it always has.
  */
 
 import { buildOutline } from '../block/outline.js';
@@ -878,14 +893,26 @@ export async function gatherPassages(
   return [...passages, ...derived];
 }
 
-/** Her wording, indexed for exact-match corroboration. */
-function conventionIndex(records: readonly ConceptRecord[]): ReadonlyMap<string, ConceptRecord> {
-  const index = new Map<string, ConceptRecord>();
+/**
+ * Her wording, indexed for exact-match corroboration: every record of the
+ * best tier that carries the wording. One record for almost every wording;
+ * several when `./extract.js` split a wording by course (`[D-402]`, module
+ * doc), in its own order (by course).
+ */
+function conventionIndex(
+  records: readonly ConceptRecord[],
+): ReadonlyMap<string, readonly ConceptRecord[]> {
+  const index = new Map<string, ConceptRecord[]>();
   for (const record of records) {
     // Tier 1 (her concept note) outranks tier 2 (her `topic` property) on the
     // same wording — knowledge model §3's match precedence.
     const existing = index.get(record.name);
-    if (existing === undefined || record.tier < existing.tier) index.set(record.name, record);
+    const best = existing?.[0];
+    if (existing === undefined || best === undefined || record.tier < best.tier) {
+      index.set(record.name, [record]);
+    } else if (record.tier === best.tier) {
+      existing.push(record);
+    }
   }
   return index;
 }
@@ -910,14 +937,95 @@ function dedupe(values: readonly string[], exclude: string): readonly string[] {
  * match is what lets her name win when the reader called the concept
  * something else in the passage it read.
  */
-/** Her record for this proposal — by its name first, then each alias — or none. */
+/**
+ * Her records for this proposal's wording — by its name first, then each
+ * alias — or none. More than one only for a wording split by course
+ * (`[D-402]`); `corroborateSplit` then picks by course.
+ */
 function conventionFor(
   proposal: ProposedConcept,
-  conventions: ReadonlyMap<string, ConceptRecord>,
-): ConceptRecord | undefined {
+  conventions: ReadonlyMap<string, readonly ConceptRecord[]>,
+): readonly ConceptRecord[] | undefined {
   return [proposal.name, ...proposal.aliases]
     .map((w) => conventions.get(w))
-    .find((r) => r !== undefined);
+    .find((r) => r !== undefined && r.length > 0);
+}
+
+/** One part of a proposal whose wording is split by course: the record it corroborates (none for a course no identity is in), its passages and their courses. */
+interface SplitPart {
+  readonly hers: ConceptRecord | undefined;
+  readonly proposal: ProposedConcept;
+  readonly courses: ReadonlySet<string>;
+}
+
+/**
+ * A proposal whose wording `./extract.js` split by course (`[D-402]`, module
+ * doc), divided by the course each of its passages sits in: the passages of
+ * a course one identity is in go to that identity, and never to another; a
+ * passage from a document in no course goes to every part (every identity,
+ * when no passage names a course at all); passages from courses no identity
+ * is in form one part of their own, corroborating none. Proposal order is
+ * kept inside each part, so a part's anchor is its earliest passage. Pure.
+ *
+ * In practice a proposal's passages come from one document (`[D-210]`: a call
+ * never mixes documents), so this yields one part, or one per identity for a
+ * document in no course; the general case is handled the same way rather than
+ * assumed away.
+ */
+function corroborateSplit(
+  proposal: ProposedConcept,
+  identities: readonly ConceptRecord[],
+  courseByPath: ReadonlyMap<VaultPath, string>,
+): readonly SplitPart[] {
+  const passages = [proposal.anchor, ...proposal.alsoIn];
+  const identityOf = (course: string): ConceptRecord | undefined =>
+    identities.find((record) => record.courses.includes(course));
+
+  const loose = new Set<number>();
+  const byIdentity = new Map<ConceptRecord, number[]>();
+  const residual: number[] = [];
+  passages.forEach((passage, i) => {
+    const course = courseByPath.get(passage.sourcePath);
+    if (course === undefined) {
+      loose.add(i);
+      return;
+    }
+    const hers = identityOf(course);
+    if (hers === undefined) {
+      residual.push(i);
+      return;
+    }
+    const indices = byIdentity.get(hers);
+    if (indices === undefined) byIdentity.set(hers, [i]);
+    else indices.push(i);
+  });
+
+  const targets: { hers: ConceptRecord | undefined; indices: number[] }[] =
+    byIdentity.size === 0 && residual.length === 0
+      ? identities.map((hers) => ({ hers, indices: [] }))
+      : [
+          ...identities.flatMap((hers) => {
+            const indices = byIdentity.get(hers);
+            return indices === undefined ? [] : [{ hers, indices }];
+          }),
+          ...(residual.length > 0 ? [{ hers: undefined, indices: residual }] : []),
+        ];
+
+  return targets.map(({ hers, indices }) => {
+    const own = new Set([...indices, ...loose]);
+    const [anchor, ...alsoIn] = passages.filter((_, i) => own.has(i));
+    const courses = new Set<string>();
+    for (const i of indices) {
+      const course = courseByPath.get((passages[i] as Provenance).sourcePath);
+      if (course !== undefined) courses.add(course);
+    }
+    return {
+      hers,
+      // `anchor` is defined: every target holds at least one passage (its own, or the loose ones).
+      proposal: { ...proposal, anchor: anchor as Provenance, alsoIn },
+      courses,
+    };
+  });
 }
 
 /**
@@ -949,11 +1057,10 @@ function uncorroboratedKeyRequest(
 
 function corroborate(
   proposal: ProposedConcept,
-  conventions: ReadonlyMap<string, ConceptRecord>,
+  hers: ConceptRecord | undefined,
   coursesFromPassages: ReadonlySet<string>,
 ): ReadConcept {
   const wordings = [proposal.name, ...proposal.aliases];
-  const hers = conventionFor(proposal, conventions);
 
   if (hers === undefined) {
     const sourcePaths: readonly VaultPath[] = [];
@@ -1438,23 +1545,42 @@ export async function readConcepts(
   const mergedProposals = mergeProposalsWithinDocument(proposals);
 
   const concepts: ReadConcept[] = [];
-  const claimed = new Set<string>();
+  // Her records the read accounted for: by wording for a wording with one
+  // identity (as always), by key for a wording split by course (`[D-402]`,
+  // module doc) — so one course's corroboration never hides the other's record.
+  const claimedNames = new Set<string>();
+  const claimedKeys = new Set<string>();
   const uncorroborated: { readonly index: number; readonly request: ConceptKeyRequest }[] = [];
-  for (const proposal of mergedProposals) {
-    const courses = new Set<string>();
-    for (const anchor of [proposal.anchor, ...proposal.alsoIn]) {
-      const course = courseByPath.get(anchor.sourcePath);
-      if (course !== undefined) courses.add(course);
-    }
-    const concept = corroborate(proposal, conventions, courses);
-    if (options.stampConceptKeys === true && conventionFor(proposal, conventions) === undefined) {
+  const push = (
+    proposal: ProposedConcept,
+    hers: ConceptRecord | undefined,
+    courses: ReadonlySet<string>,
+  ): ReadConcept => {
+    const concept = corroborate(proposal, hers, courses);
+    if (options.stampConceptKeys === true && hers === undefined) {
       uncorroborated.push({
         index: concepts.length,
         request: uncorroboratedKeyRequest(proposal, courses),
       });
     }
-    claimed.add(concept.name);
     concepts.push(concept);
+    return concept;
+  };
+  for (const proposal of mergedProposals) {
+    const identities = conventionFor(proposal, conventions);
+    if (identities !== undefined && identities.length > 1) {
+      for (const part of corroborateSplit(proposal, identities, courseByPath)) {
+        push(part.proposal, part.hers, part.courses);
+        if (part.hers !== undefined) claimedKeys.add(part.hers.key);
+      }
+      continue;
+    }
+    const courses = new Set<string>();
+    for (const anchor of [proposal.anchor, ...proposal.alsoIn]) {
+      const course = courseByPath.get(anchor.sourcePath);
+      if (course !== undefined) courses.add(course);
+    }
+    claimedNames.add(push(proposal, identities?.[0], courses).name);
   }
 
   // `[D-357]`: every uncorroborated concept's permanent key, in one turn of the
@@ -1478,7 +1604,7 @@ export async function readConcepts(
   // `ReadConcept.anchor` for why an un-anchored concept is the correct
   // answer here rather than a file path.
   for (const record of records) {
-    if (claimed.has(record.name)) continue;
+    if (claimedNames.has(record.name) || claimedKeys.has(record.key)) continue;
     concepts.push({
       // Same carry as `corroborate`'s corroborated branch: this concept IS a
       // record, so its key comes straight off the record.
@@ -1517,7 +1643,11 @@ export async function readConcepts(
   const reconciled = reconcileRelations(proposedRelations, concepts);
   const withContainment = applyContainmentEvidence(concepts, reconciled.relations);
 
-  const sorted = [...withContainment].sort((a, b) => byCodeUnit(a.name, b.name));
+  // A wording split by course (`[D-402]`) orders its identities by their
+  // courses, as `./extract.js` does, so the order never depends on read order.
+  const sorted = [...withContainment].sort(
+    (a, b) => byCodeUnit(a.name, b.name) || byCodeUnit(a.courses.join('\n'), b.courses.join('\n')),
+  );
   return {
     outcome: 'read',
     concepts: sorted,
