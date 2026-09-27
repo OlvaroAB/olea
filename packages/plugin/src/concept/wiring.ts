@@ -89,6 +89,7 @@ import {
   type ExtractConceptsOptions,
   extractConcepts,
   foldReadAnchors,
+  introducingPathsOfAnchor,
   type KnowledgeKindClassifierPort,
   listConceptKeyRecords,
   type Provenance,
@@ -104,6 +105,12 @@ import {
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+// `[D-402]` binding condition 3's old-merge audit persistence (`ol-egov.141.89.3.19`) — imported
+// by source path rather than added to `olea-core`'s barrel (`src/index.ts`), which several other
+// lanes are concurrently landing exports into today; a deep import avoids that shared-file
+// contention for a single function this file alone calls in production.
+import { proposeAndPersistMergeAudits } from 'olea-core/src/concept/merge-audit-store.js';
+import type { MaterialityHashStore } from '../ingestion/materiality/types.js';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import {
@@ -646,6 +653,54 @@ export interface RunCorpusRelationBatchIfDueOptions {
    * `embeddingProximity`: absent means the signal contributes nothing.
    */
   readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
+  /**
+   * `ol-egov.141.89.4.15` (rel.md §3 Default 4, write side): stamps every relation this batch
+   * emits with `endpointRevisions`, computed at judgment time so the read side
+   * (`relation-wiring.ts`'s `buildHashStoreRevisionLookup`) can later compare against the SAME
+   * digest. `keyRecords` is this tick's own `.olea/concepts/` listing — the caller
+   * (`readConceptsAndRelations` below) already holds it (`[D-378]`), so this never re-reads the
+   * vault for it. Omitted, relations carry no `endpointRevisions` — unchanged production
+   * behaviour (`ol-egov.141.89.4.14`'s own close notes: no caller threaded this yet).
+   */
+  readonly endpointRevisionStamping?: {
+    readonly keyRecords: readonly { readonly record: ConceptKeyRecord }[];
+    readonly hashStore: MaterialityHashStore;
+  };
+}
+
+/**
+ * The judged-at half of Default 4's freshness gate (`ol-egov.141.89.4.15`): builds
+ * `runCorpusRelationBatch`'s `endpointRevisionStamping` input from this tick's own
+ * `.olea/concepts/` listing and a batch-loaded per-path revision map read from the plugin's
+ * materiality hash store — the SAME `MaterialityRecord.hashes.rawHash` `relation-wiring.ts`'s
+ * `buildHashStoreRevisionLookup` reads on the read side, so an unchanged source compares equal on
+ * both sides of a later freshness check. Each distinct introducing path is loaded from the store
+ * ONCE, not once per concept that shares it.
+ */
+async function buildEndpointRevisionStamping(input: {
+  readonly keyRecords: readonly { readonly record: ConceptKeyRecord }[];
+  readonly hashStore: MaterialityHashStore;
+}): Promise<{
+  readonly introducingPaths: (concept: CorpusConcept) => readonly VaultPath[];
+  readonly pathRevision: (path: VaultPath) => string | undefined;
+}> {
+  const pathsByKey = new Map<string, readonly VaultPath[]>(
+    input.keyRecords.map(({ record }) => [record.key, introducingPathsOfAnchor(record.anchor)]),
+  );
+  const paths = new Set<VaultPath>();
+  for (const recordPaths of pathsByKey.values()) {
+    for (const path of recordPaths) paths.add(path);
+  }
+  const revisionByPath = new Map<VaultPath, string>();
+  for (const path of paths) {
+    const stored = await input.hashStore.load(path);
+    if (stored !== null) revisionByPath.set(path, stored.hashes.rawHash);
+  }
+  return {
+    introducingPaths: (concept) =>
+      concept.key !== undefined ? (pathsByKey.get(concept.key) ?? []) : [],
+    pathRevision: (path) => revisionByPath.get(path),
+  };
 }
 
 export interface CorpusRelationBatchRunOutcome {
@@ -729,11 +784,17 @@ export async function runCorpusRelationBatchIfDue(
     },
   );
 
+  const endpointRevisionStamping =
+    options.endpointRevisionStamping === undefined
+      ? undefined
+      : await buildEndpointRevisionStamping(options.endpointRevisionStamping);
+
   const result = await runCorpusRelationBatch(wiring.verdictPort, {
     newConcepts,
     allConcepts: options.allConcepts,
     signals,
     passageText: (concept) => passageTextByName.get(concept.name) ?? '',
+    ...(endpointRevisionStamping !== undefined ? { endpointRevisionStamping } : {}),
   });
 
   await stateStore.save({
@@ -808,6 +869,18 @@ export interface ReadConceptsAndRelationsOptions {
    * production behaviour for any caller that does not pass it.
    */
   readonly now?: () => Date;
+  /**
+   * `ol-egov.141.89.4.15`: the plugin's materiality-tracking store, threaded to BOTH sides of
+   * Default 4's freshness gate (rel.md §3) — `runCorpusRelationBatchIfDue`'s judgment-time
+   * `endpointRevisionStamping` (that function's own doc, above) and `readRelationSetWithCache`'s
+   * read-time lookup (`relation-wiring.ts`'s `RelationSetReadOptions.hashStore`), over the SAME
+   * `.olea/concepts/` listing (`keyRecords`, read once for the tick) so the two sides' digests
+   * agree. Omitted, both sides keep their documented safe fallback: no relation this tick emits
+   * carries an `endpointRevisions` stamp, and the read serves every cached edge unconditionally —
+   * unchanged production behaviour for a caller that does not pass it (`main.ts`'s call site
+   * before this splice).
+   */
+  readonly hashStore?: MaterialityHashStore;
 }
 
 /**
@@ -880,6 +953,15 @@ export interface ReadConceptsAndRelationsOptions {
  * `canonicalKeys` (below) is now read once here rather than after the corpus stage: the same
  * "one canonical-key index for the whole tick" contract (`[D-378]`/`ol-egov.141.89.9.57`) now
  * covers these two calls as well, not only the three it originally named.
+ *
+ * **`[D-402]` binding condition 3's old-merge audit, wired in here too (`ol-egov.141.89.3.19`).**
+ * Right after the collision-to-proposal calls above, this function calls `olea-core`'s
+ * `proposeAndPersistMergeAudits` over the SAME `keyRecords` listing — this is that function's
+ * production caller, closing the "no production caller yet" gap
+ * `ol-egov.141.89.3.18`'s own close notes named. Same posture as the collision-to-proposal step:
+ * only ever *proposes*, never confirms or repairs anything on its own, and lands on the same
+ * F8.4a triage list (`packages/plugin/src/registry/merge-audit-identity.ts` is the read/
+ * confirm/decline side; `main.ts` needs no change — this function is already its caller).
  */
 export async function readConceptsAndRelations(
   conceptWiring: ConceptWiring,
@@ -909,6 +991,16 @@ export async function readConceptsAndRelations(
     { records: keyRecords },
   );
 
+  // `[D-402]` binding condition 3's old-merge audit, wired into the real ingestion tick
+  // (`ol-egov.141.89.3.19`, discovered from `ol-egov.141.89.3.18` which built the pure detection
+  // and propose/confirm/decline unit with no production caller). Reads this SAME `keyRecords`
+  // listing — no second vault scan — and only ever writes a fresh `'proposed'`
+  // `MergeAuditProposalRecord` for a key with no existing merge-audit decision yet
+  // (`olea-core`'s `proposeAndPersistMergeAudits` own doc: "never re-proposes and never overwrites
+  // a decision"). Lands on the SAME F8.4a triage list the same-as proposals above already reach —
+  // no new affordance — via `packages/plugin/src/registry/merge-audit-identity.ts`.
+  await proposeAndPersistMergeAudits(options.vault, keyRecords);
+
   const corpus = await runCorpusRelationBatchIfDue(corpusWiring, stateStore, {
     vault: options.vault,
     ingestionSessionClosed: options.ingestionSessionClosed,
@@ -920,6 +1012,9 @@ export async function readConceptsAndRelations(
       : {}),
     ...(options.assessmentErrorAdjacency !== undefined
       ? { assessmentErrorAdjacency: options.assessmentErrorAdjacency }
+      : {}),
+    ...(options.hashStore !== undefined
+      ? { endpointRevisionStamping: { keyRecords, hashStore: options.hashStore } }
       : {}),
   });
 
@@ -941,7 +1036,10 @@ export async function readConceptsAndRelations(
     ...(options.now !== undefined ? { now: options.now } : {}),
   };
   await persistRelationCacheFromPass(options.vault, passSoFar, cacheSyncOptions);
-  const relations = await readRelationSetWithCache(options.vault, passSoFar, { canonicalKeys });
+  const relations = await readRelationSetWithCache(options.vault, passSoFar, {
+    canonicalKeys,
+    ...(options.hashStore !== undefined ? { hashStore: options.hashStore } : {}),
+  });
 
   // The confirmed same-as link's first read consumer (`ol-2zfj.86` ONT-R1, F8.6) — see this
   // function's own doc and `./same-as-wiring.ts`'s module doc. A `'proposed'`/`'severed'` link,

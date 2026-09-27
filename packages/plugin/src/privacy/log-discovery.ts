@@ -71,6 +71,13 @@ import {
   reviewLogPath,
   SAME_AS_LINK_FOLDER,
 } from 'olea-core';
+// `[D-402]` binding condition 3's old-merge audit persistence (`ol-egov.141.89.3.19`) — same
+// reasoning as `COMPOSITION_LOG_FOLDER` immediately above: imported by module path, not the
+// `olea-core` barrel, which several lanes are concurrently landing exports into today.
+import {
+  MERGE_AUDIT_PROPOSAL_FOLDER,
+  MERGE_REPAIR_PROPOSAL_FOLDER,
+} from '../../../core/src/concept/merge-audit-store.js';
 // `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path, never the `olea-core`
 // barrel, which is another live lane's file this round (`session/holder.ts`'s stance).
 import {
@@ -128,6 +135,11 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // review log and never pruned. Probed by exact path for this device too
   // (`OLEA_PROBED_DAILY_STREAMS`), since its files are named by day like the logs'.
   { folder: COMPOSITION_LOG_FOLDER, role: 'record' },
+  // `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old-merge audit's own proposal and
+  // repair-proposal records — data only, never applied, but exported/deleted like every other
+  // record folder so a full delete does not leave them behind.
+  { folder: MERGE_AUDIT_PROPOSAL_FOLDER, role: 'record' },
+  { folder: MERGE_REPAIR_PROPOSAL_FOLDER, role: 'record' },
 ];
 
 /**
