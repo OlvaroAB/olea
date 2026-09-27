@@ -1960,11 +1960,27 @@ describe('ol-egov.141.89.10.4 (bug, fixed): a second outrun-the-target extend no
   // `main.ts` cannot be imported under Vitest (this file's own module doc)
   // — this is the source-level pin that a future edit dropping the
   // `budgetMinutes` update, or reintroducing the old spread, still fails.
-  it('persists the widened budget onto the returned session, not only the wider item list', () => {
+  //
+  // **Updated for `ol-egov.141.89.10.65`'s splice.** The returned session is
+  // now built off `extended` (`extendComposedStudySessionWithAccount`'s
+  // result), not `previous` — carrying the extension's own `setAside`
+  // through, which `session/composition-recorder.ts`'s `recordExtension`
+  // needs to tell an actual account change from a plain, account-dropping
+  // spread (see `test/session/composition-recorder.spec.ts` and
+  // `test/session-builder/extend-with-account-progression.spec.ts`). The
+  // widened-budget pin below still holds: `budgetMinutes` still carries
+  // `widerBudgetMinutes` forward onto the returned session, now spread off
+  // `extended.model` rather than `previous.model`.
+  it('persists the widened budget onto the returned session, off the account-carrying `extended` session rather than a plain spread of `previous`', () => {
     const extendBody = main.slice(main.indexOf('private async extendDefaultStudySession('));
     expect(extendBody).toMatch(
-      /return \{ \.\.\.previous, model: \{ \.\.\.previous\.model, budgetMinutes: widerBudgetMinutes, items \} \};/,
+      /const extended = extendComposedStudySessionWithAccount\(\s*\{ \.\.\.result\.composedInput, budgetMinutes: widerBudgetMinutes \},\s*previous,\s*\);/,
     );
+    expect(extendBody).toMatch(
+      /return \{ \.\.\.extended, model: \{ \.\.\.extended\.model, budgetMinutes: widerBudgetMinutes \} \};/,
+    );
+    // The old, account-dropping shape must be gone, not merely superseded.
+    expect(extendBody).not.toMatch(/extendComposedStudySession\(/);
   });
 });
 
