@@ -18,6 +18,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { App } from 'obsidian';
+import type { VaultPath, VaultSource } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 
 interface FakeButton {
@@ -80,6 +81,7 @@ vi.mock('obsidian', () => {
 import { DEVICE_ID_STORAGE_KEY } from '../../src/device/device-id.js';
 import { CONTENT_DERIVED_SETTINGS_KEYS } from '../../src/privacy/data-manifest.js';
 import type { PrivacyExportBundle } from '../../src/privacy/export-bundle.js';
+import { OleaLayerWriteSeal } from '../../src/privacy/olea-layer-write-seal.js';
 import {
   FullDeleteWriteSeal,
   PRIVACY_EXPORT_FOLDER,
@@ -125,10 +127,16 @@ function seededSettings(): Record<string, unknown> {
  */
 class FakePluginInstance implements ObsidianDataHost {
   readonly file = new FakeDataHost();
-  readonly host = new FullDeleteWriteSeal(new SerializingDataHost(this.file));
-  readonly gateStageStore = new ObsidianGateStageStore(this.host);
+  readonly host: FullDeleteWriteSeal;
+  readonly gateStageStore: ObsidianGateStageStore;
   pendingFlush: Record<string, number> | null = null;
   flushes: Promise<void>[] = [];
+
+  /** `vaultSeal`: `main.ts`'s `vaultSource` (`ol-egov.141.8.14`); `null` builds the host without it. */
+  constructor(vaultSeal: OleaLayerWriteSeal | null = null) {
+    this.host = new FullDeleteWriteSeal(new SerializingDataHost(this.file), vaultSeal);
+    this.gateStageStore = new ObsidianGateStageStore(this.host);
+  }
 
   loadData(): Promise<unknown> {
     return this.host.loadData();
@@ -162,7 +170,7 @@ function fakeApp(onDisable: (() => void) | null): App {
   } as unknown as App;
 }
 
-function render(deps: { app: App; vault: MemoryVaultSource; dataHost: ObsidianDataHost }): void {
+function render(deps: { app: App; vault: VaultSource; dataHost: ObsidianDataHost }): void {
   ui.buttons.clear();
   ui.notices.length = 0;
   const containerEl = { createEl: () => ({}) } as unknown as HTMLElement;
@@ -309,6 +317,107 @@ describe('a full delete stays deleted (ol-egov.141.8.12)', () => {
     plugin.pendingFlush = { 'no-hits': 1 };
     plugin.unload();
     expect(plugin.flushes).toHaveLength(1);
+  });
+});
+
+/** A memory vault whose writes to one path wait until the test lets them land. */
+class HeldWriteVault extends MemoryVaultSource {
+  private readonly holds = new Map<VaultPath, Promise<void>>();
+
+  hold(path: VaultPath): () => void {
+    const gate = deferred();
+    this.holds.set(path, gate.promise);
+    return gate.resolve;
+  }
+
+  override async write(path: VaultPath, content: string): Promise<void> {
+    await this.holds.get(path);
+    await super.write(path, content);
+  }
+}
+
+/** Olea's layer as a full delete finds it, beside one note of hers the delete never touches. */
+function seededOleaVault(): HeldWriteVault {
+  return new HeldWriteVault({
+    '.olea/concepts/c1.json': '{"key":"c1"}',
+    '.olea/relations/r1.json': '{"pair":1}',
+    [`.olea/reviews/${DEVICE_ID}/2026-09-27.jsonl`]: '{"e":1}\n',
+    'Notes/her-note.md': 'hers',
+  });
+}
+
+const oleaPaths = (vault: MemoryVaultSource): VaultPath[] =>
+  vault.paths().filter((path) => path.startsWith('.olea/'));
+
+describe('a full delete leaves nothing under .olea/ (ol-egov.141.8.14)', () => {
+  it('a job in flight at delete time cannot recreate a file after the delete and the reload', async () => {
+    const vault = seededOleaVault();
+    const vaultSeal = new OleaLayerWriteSeal(vault);
+    const plugin = new FakePluginInstance(vaultSeal);
+    plugin.file.blob = seededSettings();
+
+    // A background job of the old instance: it read a record before the delete and writes it,
+    // a log line and an item she accepted into her note once it finishes, after the reload.
+    const jobMayFinish = deferred();
+    const staleRecord = await vaultSeal.read('.olea/concepts/c1.json');
+    const job = jobMayFinish.promise.then(async () => {
+      await vaultSeal.write('.olea/concepts/c1.json', staleRecord);
+      await vaultSeal.write(`.olea/reviews/${DEVICE_ID}/2026-09-27.jsonl`, '{"e":2}\n');
+      await vaultSeal.write('.olea/drafts/late.json', '{}');
+      await vaultSeal.write('Notes/her-note.md', 'hers, with the item she accepted');
+    });
+    // A write already on its way to disk when she confirms: it lands first, then goes.
+    const letInFlightLand = vault.hold('.olea/concepts/c2.json');
+    const inFlight = vaultSeal.write('.olea/concepts/c2.json', '{"key":"c2"}');
+
+    render({ app: fakeApp(() => plugin.unload()), vault: vaultSeal, dataHost: plugin });
+    const del = button('Delete everything');
+    del.click();
+    del.click();
+    letInFlightLand();
+    await inFlight;
+    await vi.waitFor(() => expect(ui.notices.length).toBe(1));
+    await vi.waitFor(() => expect(del.disabled).toBe(false));
+    expect(oleaPaths(vault)).toEqual([]);
+
+    jobMayFinish.resolve();
+    await job;
+
+    expect(oleaPaths(vault)).toEqual([]);
+    expect(vault.raw('Notes/her-note.md')).toBe('hers, with the item she accepted');
+    const after = plugin.file.blob as Record<string, unknown>;
+    for (const key of CONTENT_DERIVED_SETTINGS_KEYS) expect(after).not.toHaveProperty(key);
+  });
+
+  it('control: without the vault seal, the same job recreates the files', async () => {
+    const vault = seededOleaVault();
+    const plugin = new FakePluginInstance(null);
+    plugin.file.blob = seededSettings();
+
+    const jobMayFinish = deferred();
+    const staleRecord = await vault.read('.olea/concepts/c1.json');
+    const job = jobMayFinish.promise.then(() => vault.write('.olea/concepts/c1.json', staleRecord));
+
+    render({ app: fakeApp(() => plugin.unload()), vault, dataHost: plugin });
+    await clickDeleteTwiceAndWait();
+    expect(oleaPaths(vault)).toEqual([]);
+    jobMayFinish.resolve();
+    await job;
+
+    expect(oleaPaths(vault)).toEqual(['.olea/concepts/c1.json']);
+  });
+
+  it('when no reload happened, the vault seal lifts with the settings seal', async () => {
+    const vault = seededOleaVault();
+    const vaultSeal = new OleaLayerWriteSeal(vault);
+    const plugin = new FakePluginInstance(vaultSeal);
+    plugin.file.blob = seededSettings();
+    render({ app: fakeApp(null), vault: vaultSeal, dataHost: plugin });
+    await clickDeleteTwiceAndWait();
+    expect(oleaPaths(vault)).toEqual([]);
+
+    await vaultSeal.write('.olea/concepts/new.json', '{}');
+    expect(oleaPaths(vault)).toEqual(['.olea/concepts/new.json']);
   });
 });
 

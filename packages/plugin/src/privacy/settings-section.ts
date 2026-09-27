@@ -26,8 +26,17 @@
  * when no reload happened (the delete threw, or the host has no reload
  * API) the seal is lifted and the instance runs on as it did before this
  * bead. What the plugin does after the reload is not decided here
- * (`[D-406]`). Out of reach, and so not claimed: files a still-running job
- * of the old instance writes into the vault after the delete.
+ * (`[D-406]`).
+ *
+ * **The same seal closes the `.olea/` folder** (`ol-egov.141.8.14`). A job of
+ * the old instance still running at delete time would otherwise write its
+ * store or log file back under `.olea/` after the delete removed it. The
+ * plugin's one vault source is an `OleaLayerWriteSeal`
+ * (`./olea-layer-write-seal.ts`), and `FullDeleteWriteSeal` seals it in the
+ * same step as the settings host: `.olea/` writes issued before the seal
+ * land first, later ones are dropped, and the delete removes files through
+ * the unsealed source underneath. Writes outside `.olea/` are not sealed;
+ * that module's doc says why.
  *
  * Rendered by `OleaSettingTab.display()` (`../settings/settings-tab.ts`).
  *
@@ -68,6 +77,7 @@ import {
 import { buildPrivacyExportBundle } from './export-bundle.js';
 import { runFullDelete } from './full-delete.js';
 import { obsidianDeleteHttpRequest } from './obsidian-adapters.js';
+import type { OleaLayerWriteSeal } from './olea-layer-write-seal.js';
 import { reloadPluginAfterFullDelete } from './reload-plugin.js';
 import type { ObsidianDataHost } from './types.js';
 
@@ -77,6 +87,11 @@ export const PRIVACY_EXPORT_FOLDER = 'Olea exports';
 export interface SealedFullDeleteHost {
   /** The unsealed queue: ordered after every write issued before the seal. The delete's reads and writes go here. */
   readonly dataHost: AtomicDataHost;
+  /**
+   * The unsealed vault source, when the plugin's `.olea/` writers are sealed too
+   * (`ol-egov.141.8.14`). The delete's vault steps go here; `null` on a seal without one.
+   */
+  readonly vault: VaultSource | null;
   /** Lifts this seal, unless the plugin instance was unloaded meanwhile — a retired instance stays sealed. */
   release(): void;
 }
@@ -99,12 +114,19 @@ function hasFullDeleteWriterSeal(
  * dropped before it reaches the queue, so a write issued earlier still lands in order and nothing
  * issued later can overtake the delete. `retire` is `onunload`'s call: it answers whether an
  * unload-time flush may run, and a sealed instance that retires stays sealed.
+ *
+ * `ol-egov.141.8.14`: given the plugin's `OleaLayerWriteSeal`, it seals, releases and retires
+ * that one in the same step, so one call closes every writer of the instance, in the settings file
+ * and under `.olea/` alike.
  */
 export class FullDeleteWriteSeal implements AtomicDataHost {
   private sealDepth = 0;
   private retired = false;
 
-  constructor(private readonly queue: AtomicDataHost) {}
+  constructor(
+    private readonly queue: AtomicDataHost,
+    private readonly oleaLayer: OleaLayerWriteSeal | null = null,
+  ) {}
 
   loadData(): Promise<unknown> {
     return this.queue.loadData();
@@ -118,29 +140,36 @@ export class FullDeleteWriteSeal implements AtomicDataHost {
     return this.sealDepth > 0 ? Promise.resolve() : this.queue.readModifyWrite(mutate);
   }
 
-  /** Seals, then resolves once every write issued before the seal has landed. */
+  /** Seals, then resolves once every write issued before the seal has landed, in both places. */
   async seal(): Promise<SealedFullDeleteHost> {
     this.sealDepth += 1;
+    // Both close before the first await: no write can slip between the two seals.
+    const layer = this.oleaLayer?.seal() ?? null;
     let released = false;
     try {
       await this.queue.loadData();
     } catch (error) {
       // No delete follows a failed seal, so nothing stays sealed.
       this.sealDepth -= 1;
+      (await layer)?.release();
       throw error;
     }
+    const sealedLayer = await layer;
     return {
       dataHost: this.queue,
+      vault: sealedLayer?.vault ?? null,
       release: () => {
         if (released || this.retired) return;
         released = true;
         this.sealDepth -= 1;
+        sealedLayer?.release();
       },
     };
   }
 
   /** `onunload`: marks the instance done. `true` when unsealed, so an unload-time flush may write. */
   retire(): boolean {
+    this.oleaLayer?.retire();
     this.retired = true;
     return this.sealDepth === 0;
   }
@@ -221,6 +250,8 @@ export function renderPrivacySection(
               ? await deps.dataHost.sealForFullDelete()
               : null;
             const deleteHost: ObsidianDataHost = seal?.dataHost ?? deps.dataHost;
+            // `ol-egov.141.8.14`: the delete removes files through the unsealed source.
+            const deleteVault: VaultSource = seal?.vault ?? deps.vault;
             const workerConfigStore = new ObsidianWorkerConfigStore(deleteHost);
             const persisted = await workerConfigStore.load();
             const workerConfig: WorkerConfig = {
@@ -229,7 +260,7 @@ export function renderPrivacySection(
             };
             const result = await runFullDelete({
               dataHost: deleteHost,
-              vault: deps.vault,
+              vault: deleteVault,
               deviceId: deps.deviceId,
               today: calendarDayFromLocalDate(readNow()),
               workerConfig,

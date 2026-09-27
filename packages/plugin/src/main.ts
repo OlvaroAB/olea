@@ -192,6 +192,7 @@ import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { studyPlanRefreshDue } from './plan/refresh-schedule.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
+import { OleaLayerWriteSeal } from './privacy/olea-layer-write-seal.js';
 import { FullDeleteWriteSeal, type SealedFullDeleteHost } from './privacy/settings-section.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
@@ -366,6 +367,12 @@ interface ReviewWiring {
 // because a `WorkspaceLeaf` has no runtime outside Obsidian.
 export default class OleaPlugin extends Plugin {
   /**
+   * `ol-egov.141.8.14`: the plugin's one vault source, and so the one gate every write under
+   * `.olea/` passes through; `dataFileHost` seals it with the settings file for a full delete
+   * (`./privacy/olea-layer-write-seal.ts`'s module doc). Build no other `ObsidianSource`.
+   */
+  private readonly vaultSource = new OleaLayerWriteSeal(new ObsidianSource(this.app));
+  /**
    * `[JEV-11]` (`ol-3ux7.96`) — serializes EVERY `data.json` read/write this
    * plugin instance issues, closing the exposure `GateStagePersistence`
    * alone cannot: every `ObsidianDataHost`-pattern store in this plugin
@@ -386,6 +393,7 @@ export default class OleaPlugin extends Plugin {
       loadData: () => super.loadData(),
       saveData: (data) => super.saveData(data),
     }),
+    this.vaultSource,
   );
   /**
    * `ol-3ux7.64.9` [WBX-8] (`docs/dev/simulator-design.md` §3): the one clock
@@ -940,7 +948,7 @@ export default class OleaPlugin extends Plugin {
         },
       );
 
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     // The queue and the panel must agree about what "due" means, so both read
     // the same walk and the same replay. One `Scheduler`, built here, is what
     // makes that literally the same computation rather than two that match.
@@ -2133,7 +2141,7 @@ export default class OleaPlugin extends Plugin {
     // surviving canonical one — the same "recognise a stale key" posture
     // `ObsidianRegistryOverridesStore.load`'s own `canonicalKeys` option
     // exists for.
-    this.registryOverridesCache = await readConceptKeyCanonicalIndex(new ObsidianSource(this.app))
+    this.registryOverridesCache = await readConceptKeyCanonicalIndex(this.vaultSource)
       .then((canonicalKeys) => new ObsidianRegistryOverridesStore(this).load({ canonicalKeys }))
       .catch((error: unknown) => {
         console.error('Olea: could not load registry overrides', error);
@@ -2803,7 +2811,7 @@ export default class OleaPlugin extends Plugin {
       // against a threshold measured under the OLD, unscoped candidate
       // space, pending `ol-3ux7.26`'s re-derivation (zero spend, already
       // filed and running concurrently) and its ratification.
-      const vault = new ObsidianSource(this.app);
+      const vault = this.vaultSource;
       const deviceId = await ensureDeviceId(this);
       const misconceptionStore = createVaultMisconceptionStore({
         vault,
@@ -2923,8 +2931,8 @@ export default class OleaPlugin extends Plugin {
    * `evaluateCitedPassageRevision`... to produce a real `'instrument-revision'`
    * job in the first place").
    *
-   * A fresh `ObsidianSource`/`deviceId` per call, not the `onload`-scoped
-   * ones — same posture `tickIngestionAndMaybeRunCorpusRelations` above
+   * The plugin's `vaultSource` and a fresh `deviceId` per call, not the
+   * `onload`-scoped ones — same posture `tickIngestionAndMaybeRunCorpusRelations` above
    * takes, and for the same reason: this method stands alone rather than
    * depending on `onload`'s closure. Never lets a failure propagate into the
    * interval, same posture every tick in this file takes.
@@ -2932,7 +2940,7 @@ export default class OleaPlugin extends Plugin {
   private async tickCitationRevisions(): Promise<void> {
     if (this.citationRevision === null) return;
     try {
-      const vault = new ObsidianSource(this.app);
+      const vault = this.vaultSource;
       const deviceId = await ensureDeviceId(this);
       const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
       await this.citationRevision.tick(vault, {
@@ -3200,7 +3208,7 @@ export default class OleaPlugin extends Plugin {
   private async buildFormatMatchProducer(): Promise<
     (courseCode: string) => FormatMatchDecision | undefined
   > {
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     const assignmentsConfig = await new ObsidianStudyPlanSettingsStore(this).load();
     const assessments = (await resolveAssessments(vault, assignmentsConfig.assignmentsBasePath))
       .records;
@@ -3981,7 +3989,7 @@ export default class OleaPlugin extends Plugin {
     const existing = this.persistedMisconceptionObservationsByAttempt.get(attemptKey);
     if (existing !== undefined) return existing;
     const promise = (async () => {
-      const vault = new ObsidianSource(this.app);
+      const vault = this.vaultSource;
       const deviceId = await ensureDeviceId(this);
       for (const outcome of outcomes) {
         if (outcome.skipped) continue;
@@ -4150,7 +4158,7 @@ export default class OleaPlugin extends Plugin {
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
     readonly query: string;
   }): Promise<AcceptExplainBackGradingWithObservationContext> {
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     const deviceId = await ensureDeviceId(this);
     const store = createVaultMisconceptionStore({ vault, deviceId, now: this.now });
     const records = (await store.load()) ?? [];
@@ -4178,7 +4186,7 @@ export default class OleaPlugin extends Plugin {
   /**
    * `ol-38kp`: the last reachability hop for `ol-cqz8`'s SOLO review-log
    * write. Builds a real `RecordSoloGradeAndReviewDeps` — `this.grading`
-   * plus a fresh `ObsidianSource`/device id, mirroring
+   * plus the plugin's `vaultSource` and a fresh device id, mirroring
    * `buildExplainBackObservationContextFor`'s own vault/deviceId
    * construction just above — and calls `recordSoloGradeAndReview`
    * (`./explain-back/solo-review.js`). No-op when `this.grading` is `null`,
@@ -4205,7 +4213,7 @@ export default class OleaPlugin extends Plugin {
     const outcome = await recordSoloGradeAndReview(
       {
         grading: this.grading,
-        vault: new ObsidianSource(this.app),
+        vault: this.vaultSource,
         deviceId: await ensureDeviceId(this),
         now: this.now,
       },
@@ -4226,7 +4234,7 @@ export default class OleaPlugin extends Plugin {
   private async buildExplainBackMisconceptionDigestFor(
     conceptIds: readonly string[],
   ): Promise<GradeExplainBackInput['misconceptionDigest']> {
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     const deviceId = await ensureDeviceId(this);
     const store = createVaultMisconceptionStore({ vault, deviceId, now: this.now });
     const records = (await store.load()) ?? [];
@@ -4276,7 +4284,7 @@ export default class OleaPlugin extends Plugin {
    * would.
    */
   private explainBackMasteryStateReader(): (conceptId: string) => MasteryState | null {
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     let snapshot: readonly ReviewLogEntry[] | null = null;
     let depthGateValue: SoloLevel | undefined;
     void readReviewLogHistory(vault)
@@ -4325,7 +4333,7 @@ export default class OleaPlugin extends Plugin {
     offerEventId: string | undefined,
     params: { readonly conceptIds: readonly string[]; readonly timestamp: string },
   ): Promise<void> {
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     const deviceId = await ensureDeviceId(this);
     await appendNonAttemptRecord(
       vault,
@@ -4407,7 +4415,7 @@ export default class OleaPlugin extends Plugin {
       nonAttemptTrigger === 'on-demand' || nonAttemptTrigger === undefined
         ? undefined
         : (offerEventId ?? undefined);
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     new ExplainBackModal(
       this.app,
       {
@@ -4515,7 +4523,7 @@ export default class OleaPlugin extends Plugin {
    */
   async readConceptsFromVault(options: ReadConceptsFromVaultOptions = {}) {
     if (this.concept === null) return null;
-    return readConceptsFromVault(this.concept, new ObsidianSource(this.app), options);
+    return readConceptsFromVault(this.concept, this.vaultSource, options);
   }
 
   /**
@@ -4606,9 +4614,9 @@ export default class OleaPlugin extends Plugin {
    * `OLEA_COMMAND_CREATE_CARD`'s real destination (F2.1, C1.4, `ol-0r92.76`;
    * Q&A half `[D-268]`/`ol-0r92.77` [H-qa-card-modal]) —
    * `commands/create-card.ts`'s own module doc explains the split. Reads the
-   * active note fresh through a throwaway `ObsidianSource`, the same
-   * "construct one per call, never cache" shape every other command handler
-   * in this file uses. A `'no-selection'` outcome now opens `QaCardModal`
+   * active note fresh through the plugin's `vaultSource` on every call,
+   * never a cached copy, the same shape every other command handler in this
+   * file uses. A `'no-selection'` outcome now opens `QaCardModal`
    * (`[D-268]`'s entry surface) in place of the honest "not yet" notice this
    * branch used to give — `completeQaCardEntry` below is its confirm
    * callback's destination.
@@ -4625,7 +4633,7 @@ export default class OleaPlugin extends Plugin {
     const start = editor.posToOffset(editor.getCursor('from'));
     const end = editor.posToOffset(editor.getCursor('to'));
 
-    const vault = new ObsidianSource(this.app);
+    const vault = this.vaultSource;
     const source = await vault.read(file.path);
     const outcome = resolveCreateCardOutcome(source, { start, end });
 

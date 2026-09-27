@@ -36,15 +36,18 @@
  * could hold anything). `clearContentDerivedSettings` reports such keys by name so the asymmetry
  * is visible, never silent.
  *
- * **Out of this file's reach, and named so it is not assumed:** values held in memory by a
+ * **Out of this file's reach, and handled where the writers are:** values held in memory by a
  * running plugin instance and written back later. A full delete clears what is on disk; a store
- * that later saves an in-memory copy it loaded before the delete would write that copy back. The
- * settings pane reloads the plugin straight after a delete (`reload-plugin.ts`), which drops those
- * copies, but a write-back that runs during the unload itself, or an in-flight job of the old
- * instance that finishes after the delete, is not prevented here. One is known: `main.ts`'s
- * `onunload` flushes the retrieval gate-stage counts unconditionally, so the reload that follows
- * a delete writes the pre-delete counts back under `gateStagePeriod`. The fix belongs to the
- * plugin's composition root, not to this file (`ol-egov.141.8.11`'s notes).
+ * that later saved an in-memory copy it loaded before the delete would write that copy back, and
+ * `main.ts`'s `onunload` flush of the retrieval gate-stage counts would write the pre-delete counts
+ * back under `gateStagePeriod` during the reload that follows. Neither can: the settings pane seals
+ * the plugin's one settings host before the delete starts (`FullDeleteWriteSeal`,
+ * `settings-section.ts`, `ol-egov.141.8.12`), so every later write from that instance is dropped,
+ * and the unload flush runs only when the instance was not sealed. The same seal closes the
+ * instance's writes under `.olea/` (`olea-layer-write-seal.ts`, `ol-egov.141.8.14`). When no reload
+ * follows (the delete threw, or the host has no reload API) the seal lifts and the instance writes
+ * as before; that case stays open beside `[D-406]`. This file still names only which keys a delete
+ * clears and an export carries; it holds no writer.
  */
 
 import { CORPUS_RELATION_STATE_STORAGE_KEY } from '../concept/corpusRelationStateStore.js';

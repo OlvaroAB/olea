@@ -353,7 +353,7 @@ describe('the SOLO review-log write has a real production caller (ol-38kp)', () 
 
   it('exposes a production entry point that reaches recordSoloGradeAndReview through the composed grading wiring, guarded on this.grading', () => {
     expect(main).toMatch(
-      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| undefined> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*new ObsidianSource\(this\.app\),\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*this\.now,\s*\},\s*params,\s*\);/,
+      /async recordExplainBackSoloGradeAndReview\(params:\s*\{[\s\S]*?\}\):\s*Promise<SoloLevel \| undefined> \{\s*if \(this\.grading === null\) return;\s*const outcome = await recordSoloGradeAndReview\(\s*\{\s*grading:\s*this\.grading,\s*vault:\s*this\.vaultSource,\s*deviceId:\s*await ensureDeviceId\(this\),\s*now:\s*this\.now,\s*\},\s*params,\s*\);/,
     );
   });
 
@@ -389,7 +389,7 @@ describe('the explain-back judge digest has a real production caller (ol-2zfj.75
 
   it('exposes a production entry point that loads a real digest off a fresh misconception-store read', () => {
     expect(main).toMatch(
-      /async buildExplainBackMisconceptionDigestFor\(\s*conceptIds:\s*readonly string\[\],\s*\):\s*Promise<GradeExplainBackInput\['misconceptionDigest'\]> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*const store = createVaultMisconceptionStore\(\{ vault, deviceId, now: this\.now \}\);\s*const records = \(await store\.load\(\)\) \?\? \[\];\s*return buildMisconceptionDigest\(records, \{ conceptIds: \[\.\.\.conceptIds\] \}\);/,
+      /async buildExplainBackMisconceptionDigestFor\(\s*conceptIds:\s*readonly string\[\],\s*\):\s*Promise<GradeExplainBackInput\['misconceptionDigest'\]> \{\s*const vault = this\.vaultSource;\s*const deviceId = await ensureDeviceId\(this\);\s*const store = createVaultMisconceptionStore\(\{ vault, deviceId, now: this\.now \}\);\s*const records = \(await store\.load\(\)\) \?\? \[\];\s*return buildMisconceptionDigest\(records, \{ conceptIds: \[\.\.\.conceptIds\] \}\);/,
     );
   });
 
@@ -416,7 +416,7 @@ describe('the explain-back full-depth encouragement has a real mastery-state rea
 
   it('exposes a mastery-state reader that snapshots the review log once, fresh, per modal', () => {
     expect(main).toMatch(
-      /private explainBackMasteryStateReader\(\):\s*\(conceptId: string\) => MasteryState \| null \{\s*const vault = new ObsidianSource\(this\.app\);\s*let snapshot: readonly ReviewLogEntry\[\] \| null = null;\s*let depthGateValue: SoloLevel \| undefined;\s*void readReviewLogHistory\(vault\)\s*\.then\(\(\{ entries \}\) => \{\s*snapshot = entries;\s*\}\)/,
+      /private explainBackMasteryStateReader\(\):\s*\(conceptId: string\) => MasteryState \| null \{\s*const vault = this\.vaultSource;\s*let snapshot: readonly ReviewLogEntry\[\] \| null = null;\s*let depthGateValue: SoloLevel \| undefined;\s*void readReviewLogHistory\(vault\)\s*\.then\(\(\{ entries \}\) => \{\s*snapshot = entries;\s*\}\)/,
     );
   });
 
@@ -483,9 +483,9 @@ describe("a live causes edge's introducing passages now resolve through a real v
   // is now supplied, off the SAME `ObsidianSource` instance this modal's
   // other ports share.
 
-  it('builds one ObsidianSource for the modal and supplies resolveIntroducingPassage from it', () => {
+  it("uses the plugin's one vault source for the modal and supplies resolveIntroducingPassage from it", () => {
     expect(main).toMatch(
-      /const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;\s*const nonAttemptOfferEventId: string \| undefined =[\s\S]*?const vault = new ObsidianSource\(this\.app\);\s*new ExplainBackModal\(/,
+      /const nonAttemptTrigger: ExplainBackOfferTrigger \| undefined =\s*seed\.kind === 'freeform' \? 'on-demand' : trigger;\s*const nonAttemptOfferEventId: string \| undefined =[\s\S]*?const vault = this\.vaultSource;\s*new ExplainBackModal\(/,
     );
     expect(main).toMatch(
       /resolveIntroducingPassage: \(provenance\) =>\s*resolveIntroducingPassageFromVault\(vault, provenance\),/,
@@ -513,7 +513,7 @@ describe('the explain-back non-attempt record has a real production caller for e
 
   it('exposes a production entry point that appends a non-attempt record with the given trigger and offer reference', () => {
     expect(main).toMatch(
-      /private async recordExplainBackNonAttempt\(\s*trigger: NonAttemptLogRecordInput\['trigger'\],\s*offerEventId: string \| undefined,\s*params: \{ readonly conceptIds: readonly string\[\]; readonly timestamp: string \},\s*\): Promise<void> \{\s*const vault = new ObsidianSource\(this\.app\);\s*const deviceId = await ensureDeviceId\(this\);\s*await appendNonAttemptRecord\(\s*vault,\s*\{\s*conceptIds: \[\.\.\.params\.conceptIds\],\s*timestamp: params\.timestamp,\s*trigger,\s*\.\.\.\(offerEventId !== undefined \? \{ offerEventId \} : \{\}\),\s*\},\s*\{ deviceId \},\s*\);/,
+      /private async recordExplainBackNonAttempt\(\s*trigger: NonAttemptLogRecordInput\['trigger'\],\s*offerEventId: string \| undefined,\s*params: \{ readonly conceptIds: readonly string\[\]; readonly timestamp: string \},\s*\): Promise<void> \{\s*const vault = this\.vaultSource;\s*const deviceId = await ensureDeviceId\(this\);\s*await appendNonAttemptRecord\(\s*vault,\s*\{\s*conceptIds: \[\.\.\.params\.conceptIds\],\s*timestamp: params\.timestamp,\s*trigger,\s*\.\.\.\(offerEventId !== undefined \? \{ offerEventId \} : \{\}\),\s*\},\s*\{ deviceId \},\s*\);/,
     );
   });
 
@@ -725,7 +725,7 @@ describe('the concept-reading stage has a real production caller (EXT-7, ol-5nle
 
   it('exposes a production entry point that reaches readConcepts through the composed wiring', () => {
     expect(main).toMatch(
-      /async readConceptsFromVault\(options:\s*ReadConceptsFromVaultOptions\s*=\s*\{\}\)\s*\{\s*if \(this\.concept === null\) return null;\s*return readConceptsFromVault\(this\.concept, new ObsidianSource\(this\.app\), options\);/,
+      /async readConceptsFromVault\(options:\s*ReadConceptsFromVaultOptions\s*=\s*\{\}\)\s*\{\s*if \(this\.concept === null\) return null;\s*return readConceptsFromVault\(this\.concept, this\.vaultSource, options\);/,
     );
   });
 });
@@ -1424,7 +1424,7 @@ describe("retrieve()'s two production callers supply registryOverrides, so alias
   // `EMPTY_REGISTRY_OVERRIDES`) on either step's failure.
   it('primes the cache through readConceptKeyCanonicalIndex, not a bare load()', () => {
     expect(main).toMatch(
-      /this\.registryOverridesCache\s*=\s*await readConceptKeyCanonicalIndex\(new ObsidianSource\(this\.app\)\)\s*\.then\(\(canonicalKeys\)\s*=>\s*new ObsidianRegistryOverridesStore\(this\)\.load\(\{\s*canonicalKeys\s*\}\)\)\s*\.catch\(/,
+      /this\.registryOverridesCache\s*=\s*await readConceptKeyCanonicalIndex\(this\.vaultSource\)\s*\.then\(\(canonicalKeys\)\s*=>\s*new ObsidianRegistryOverridesStore\(this\)\.load\(\{\s*canonicalKeys\s*\}\)\)\s*\.catch\(/,
     );
   });
 
@@ -2172,10 +2172,12 @@ describe("the plugin exposes dataFileHost's atomic readModifyWrite on itself (ol
     );
   });
 
-  it('dataFileHost is the first field declared on the class, so every store construction site — later fields and every onload()-time site alike — sees it already built: no ordering gap for this method to guard', () => {
+  it('dataFileHost is declared ahead of every store field, after only the vault seal it composes, so every store construction site — later fields and every onload()-time site alike — sees it already built: no ordering gap for this method to guard', () => {
     expect(main).toMatch(
       // `ol-egov.141.8.12`: the serializing queue now sits inside the full delete's write seal.
-      /class OleaPlugin extends Plugin \{[\s\S]{0,700}?private readonly dataFileHost = new FullDeleteWriteSeal\(\s*new SerializingDataHost\(\{\s*loadData: \(\) => super\.loadData\(\),\s*saveData: \(data\) => super\.saveData\(data\),\s*\}\),\s*\);/,
+      // `ol-egov.141.8.14`: the seal also closes the plugin's one vault source, declared just
+      // before it; that field builds no store.
+      /class OleaPlugin extends Plugin \{[\s\S]{0,700}?private readonly vaultSource = new OleaLayerWriteSeal\(new ObsidianSource\(this\.app\)\);[\s\S]{0,1400}?private readonly dataFileHost = new FullDeleteWriteSeal\(\s*new SerializingDataHost\(\{\s*loadData: \(\) => super\.loadData\(\),\s*saveData: \(data\) => super\.saveData\(data\),\s*\}\),\s*this\.vaultSource,\s*\);/,
     );
   });
 });
