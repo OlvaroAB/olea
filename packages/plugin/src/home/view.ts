@@ -141,6 +141,37 @@
  * shared computation, which stays exactly what F8.8 and the grove's own
  * per-course filter need it to be.
  *
+ * **`[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22) — the frozen explanation while a
+ * session is active.** `[D-382]` names two ways Home's own live preview (this file's `session`/
+ * `focusReason`, always a fresh read of `../session-builder/provider.ts`'s own composer) can
+ * diverge from the shared holder's actually-frozen session: steering already active at Start, so
+ * the frozen session's explanation differs from Home's preview from the instant it is composed;
+ * and Home recomposing after Start, so its preview keeps moving while the held session stays
+ * frozen (C5.8, `[D-193]`). The ruling settles both the same way rather than picking between
+ * them: while a session is active, `renderActiveSession` below states that session's own frozen
+ * explanation, read from the persisted composition snapshot (`[D-331]`,
+ * `study-session/composition-record.ts`) — never a second call into Home's own live composer —
+ * and `renderOffer`'s eyebrow moves from `HOME_OFFER_EYEBROW` to `HOME_NEXT_SESSION_EYEBROW` for
+ * exactly as long as that block is showing, so whatever live preview Home still draws beside it
+ * reads honestly as a preview of what comes next, not of what is running now.
+ *
+ * **Reachability, corrected — the read this needs does not exist yet.** `HomeViewState`'s new
+ * `activeSession` field (below) is this view's whole contract for that read: `undefined` means
+ * "no session active," `{ reason: undefined }` means "active, with nothing to state" (the
+ * harness's course-less baseline, matching `focusReason`'s own honest-absence rule), and
+ * `{ reason: string }` carries the frozen fragment `sessionCompositionSentence` renders exactly
+ * as it already renders `focusReason`. **`./provider.ts` does not populate it yet** — that
+ * module's `load()` has no read of `session/holder.ts`'s shared `StudySessionHolder` at all, and
+ * threading one in (reading `getSitting()`, and when `status === 'active'`, the held
+ * `ComposedStudySession`'s own `compositionRecord.branch` resolved through core's
+ * `FOCUS_BRANCH_SENTENCE` — never re-entering, extending or otherwise touching the sitting) is
+ * `provider.ts`'s own change, outside this bead's `owns`; `main.ts`'s `HomeView` construction
+ * site (the `VIEW_TYPE_OLEA_HOME` registration) would need the same shared `studySessionHolder`
+ * instance passed through, matching how `main.ts` already threads it to `session-builder/
+ * provider.ts` and `review/open-session.ts`. Until one of those lands, `activeSession` stays
+ * `undefined` on every real `HomeViewState`, and this file's own new code below sits ready but
+ * inert — see this bead's close evidence for the exact call this names as still needed.
+ *
  * **Widened once, deliberately, by `[D-213]` (`ol-0r92.47`), unchanged by
  * this bead.** The first-read readout — per-folder honest counts plus
  * streaming concepts, F1.4's amended clause — still needs a host that
@@ -199,6 +230,7 @@ import {
   HOME_CLEAR_FOCUS_ACTION,
   HOME_COURSES_PANEL_NOTE,
   HOME_COURSES_PANEL_TITLE,
+  HOME_NEXT_SESSION_EYEBROW,
   HOME_NO_MAP_DRAWN,
   HOME_OFFER_EYEBROW,
   HOME_OPEN_TERM_ACTION,
@@ -267,6 +299,25 @@ export interface HomeAvoidanceQuestion {
   readonly onAnswer: (answer: CourseAvoidanceAnswer) => Promise<void>;
 }
 
+/**
+ * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22) — the shared holder's active session,
+ * described from its own frozen composition snapshot, never from Home's live composer. Presence
+ * of this object (as opposed to `undefined`) is itself the "is a session active" fact: see
+ * `HomeViewState.activeSession`'s own doc for what each of its three possible readings (absent,
+ * present with no reason, present with a reason) means.
+ */
+export interface HomeActiveSession {
+  /**
+   * The frozen session's own composition-sentence fragment (the same shape `HomeViewState.
+   * focusReason` already carries for a live preview), read from the persisted record's `branch`
+   * (`study-session/composition-record.ts`'s `CompositionRecord`) — never regenerated.
+   * `undefined` exactly when that record's own `branch` is `null` (the harness's course-less
+   * baseline has no reason to state), the identical honest-absence rule `focusReason` already
+   * takes for the live case.
+   */
+  readonly reason?: string;
+}
+
 export type HomeViewState =
   | { readonly kind: 'first-read'; readonly folders: readonly FirstReadFolderView[] }
   | {
@@ -290,6 +341,18 @@ export type HomeViewState =
        * takes — never a placeholder sentence of this view's own invention.
        */
       readonly focusReason?: string;
+      /**
+       * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the shared holder's active session,
+       * described from its own frozen snapshot — see `HomeActiveSession`'s own doc. `undefined`
+       * exactly when no session is active in `session/holder.ts`'s shared `StudySessionHolder`;
+       * present (whether or not it carries a `reason`) exactly when one is. `./view.ts` renders
+       * this above the ordinary offer card and relabels that card's own eyebrow while it is
+       * present — see `renderActiveSession`'s own doc. `./provider.ts` does not populate this
+       * field yet (this module's own doc, "Reachability, corrected"); every real `HomeViewState`
+       * today carries `activeSession: undefined`, so `renderActiveSession` renders nothing and
+       * `renderOffer`'s eyebrow reads exactly as it did before this bead.
+       */
+      readonly activeSession?: HomeActiveSession;
     }
   | { readonly kind: 'unavailable' };
 
@@ -430,8 +493,43 @@ export class HomeView extends ItemView {
       this.renderAvoidanceQuestion(root, this.activeAvoidanceQuestion);
     }
 
-    this.renderOffer(root, state.session, state.focusReason);
+    // `[D-382]`/`[D-331]`: the active session's own frozen explanation, read from the persisted
+    // snapshot — rendered ABOVE the ordinary offer card, and never itself a call into this file's
+    // own live composer (`renderActiveSession` reads only `state.activeSession`, never touches
+    // `session/holder.ts`, and calls nothing that could enter, extend, exit or recompose a
+    // sitting). See this file's own module doc, "the frozen explanation while a session is
+    // active."
+    this.renderActiveSession(root, state.activeSession);
+    this.renderOffer(root, state.session, state.focusReason, state.activeSession !== undefined);
     this.renderCourses(root, state.courses);
+  }
+
+  /**
+   * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the shared holder's active session,
+   * stated from its own frozen composition record — never Home's own live composer, and never a
+   * call that could touch the sitting (see this method's own call site for the reachability
+   * argument). Renders nothing when no session is active (`activeSession === undefined`) or when
+   * the active session's own record carries no course to state (`reason === undefined`, the
+   * harness's course-less baseline) — the identical honest-absence rule `renderOffer` already
+   * takes for `focusReason` below, applied to the frozen case instead of the live one.
+   */
+  private renderActiveSession(
+    root: HTMLElement,
+    activeSession: HomeActiveSession | undefined,
+  ): void {
+    if (activeSession === undefined || activeSession.reason === undefined) return;
+    // `.olea-card`/`.olea-eyebrow`/`.olea-prose`: the same primitives `renderOffer` already
+    // reuses below — no new class, matching this file's own "no new styles.css rule" convention
+    // for a bead that adds no new visual vocabulary.
+    const card = root.createDiv({ cls: 'olea-card' });
+    card.createDiv({
+      cls: 'olea-eyebrow olea-eyebrow-brand olea-home-offer-eyebrow',
+      text: HOME_OFFER_EYEBROW,
+    });
+    card.createDiv({
+      cls: 'olea-prose olea-home-offer-reason-line',
+      text: sessionCompositionSentence(activeSession.reason),
+    });
   }
 
   /**
@@ -490,11 +588,19 @@ export class HomeView extends ItemView {
    * the composed session directly; there is no second button pointing at a
    * builder screen any more (F4.6: "there is no builder screen to pass
    * through").
+   *
+   * `[D-382]`/`[D-331]`: `sessionIsActive` is exactly `state.activeSession !== undefined` at the
+   * call site — presence, never a divergence check Home would have to compute. While it is true,
+   * this card's own eyebrow reads `HOME_NEXT_SESSION_EYEBROW` rather than `HOME_OFFER_EYEBROW`,
+   * since `renderActiveSession` above has already claimed that label for the session actually
+   * running; everything else this method draws (the headline, the steering inputs, the reasoning)
+   * is unchanged — this bead relabels the card, it does not hide or alter what it composes.
    */
   private renderOffer(
     root: HTMLElement,
     session: SessionBuilderState,
     focusReason: string | undefined,
+    sessionIsActive: boolean,
   ): void {
     // `.olea-card`: the shared panel primitive (border, radius, elevated
     // ground, padding) — see this file's own module doc for why this reuses
@@ -505,7 +611,7 @@ export class HomeView extends ItemView {
     const card = root.createDiv({ cls: 'olea-card' });
     card.createDiv({
       cls: 'olea-eyebrow olea-eyebrow-brand olea-home-offer-eyebrow',
-      text: HOME_OFFER_EYEBROW,
+      text: sessionIsActive ? HOME_NEXT_SESSION_EYEBROW : HOME_OFFER_EYEBROW,
     });
 
     // Plain, unclassed wrapper `div`s — every visible chrome here comes from

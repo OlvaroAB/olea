@@ -40,6 +40,13 @@
  * is exactly the trap this view's own predecessor module doc named and
  * refused — so both are left out here and named on this bead's close
  * evidence as follow-up work, rather than approximated with a guess.
+ *
+ * **`[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22).** While a session is active in the
+ * shared holder, `HOME_OFFER_EYEBROW` moves onto a new active-session block above the ordinary
+ * offer card (`./view.ts`'s `renderActiveSession`) — see that eyebrow's own doc for why, and
+ * `HOME_NEXT_SESSION_EYEBROW`'s doc for what replaces it on the ordinary card. Both blocks render
+ * their sentence through the SAME `sessionCompositionSentence` below; this bead adds no second
+ * wording rule, only a second caller of the one function F2.22 already governs.
  */
 
 import type { VaultPath } from 'olea-core';
@@ -61,6 +68,20 @@ export const DISMISS_OFFER_ACTION = 'Not now';
  * its own eyebrow.
  */
 export const HOME_OFFER_EYEBROW = "Today's session";
+
+/**
+ * `[D-382]` (ruled 2026-09-25; `ol-egov.141.89.10.64`, `F2.22`). While a session is active in
+ * the shared holder, `HOME_OFFER_EYEBROW` moves to the new active-session block above (`./
+ * view.ts`'s `renderActiveSession`) — that block states the frozen session's own explanation,
+ * read from the persisted composition snapshot (`[D-331]`), never Home's own live recompute.
+ * This eyebrow then labels the ordinary offer card instead, since what it still shows (Home's
+ * own live preview, driven by the steering inputs) is no longer today's already-frozen session —
+ * it is a preview of what pressing Start now would compose next, and D-382's own ruling is that
+ * it "may differ" from the active session's frozen explanation. Plain language throughout
+ * (vocabulary registry §8: `session` is the ratified word, `next` is ordinary English); no olive
+ * noun is coined, matching this module's own restraint elsewhere.
+ */
+export const HOME_NEXT_SESSION_EYEBROW = 'Next session';
 
 /**
  * The composed-session card's one action. **Amended by `[D-243]`
@@ -181,6 +202,7 @@ export function allHomeStrings(): readonly string[] {
     OPEN_RETROSPECTIVE_ACTION,
     DISMISS_OFFER_ACTION,
     HOME_OFFER_EYEBROW,
+    HOME_NEXT_SESSION_EYEBROW,
     HOME_START_ACTION,
     HOME_CLEAR_FOCUS_ACTION,
     HOME_COURSES_PANEL_TITLE,

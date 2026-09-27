@@ -34,22 +34,43 @@ if (RENDER_OFFER_START === -1) {
 }
 const RENDER_OFFER_BODY = VIEW.slice(RENDER_OFFER_START, RENDER_OFFER_START + 3600);
 
+/** `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22) — `renderActiveSession`'s own source, for the honest-absence and no-recompute assertions below. */
+const ACTIVE_SESSION_START = VIEW.indexOf('private renderActiveSession(');
+if (ACTIVE_SESSION_START === -1) {
+  throw new Error('view.spec.ts: renderActiveSession marker moved in home/view.ts');
+}
+const ACTIVE_SESSION_BODY = VIEW.slice(
+  ACTIVE_SESSION_START,
+  VIEW.indexOf('): void {', ACTIVE_SESSION_START) + 900,
+);
+
 describe('HomeView — imports sessionCompositionSentence (F2.22, F6.4)', () => {
   it('imports it from ./copy.js — the same function review/view.ts imports from ../home/copy.js', () => {
     expect(VIEW).toMatch(/sessionCompositionSentence,?\s*\n?\} from '\.\/copy\.js';/);
   });
 });
 
-describe('HomeView.render — threads HomeViewState.focusReason into renderOffer', () => {
-  it('passes state.focusReason as renderOffer’s third argument', () => {
-    expect(VIEW).toMatch(/this\.renderOffer\(root, state\.session, state\.focusReason\);/);
+describe('HomeView.render — threads HomeViewState.focusReason and activeSession into renderOffer (D-382, D-331)', () => {
+  it('passes state.focusReason and whether a session is active as renderOffer’s third and fourth arguments', () => {
+    expect(VIEW).toMatch(
+      /this\.renderOffer\(root, state\.session, state\.focusReason, state\.activeSession !== undefined\);/,
+    );
+  });
+
+  it('calls renderActiveSession with state.activeSession, before renderOffer', () => {
+    const activeCallIndex = VIEW.indexOf('this.renderActiveSession(root, state.activeSession)');
+    const offerCallIndex = VIEW.indexOf('this.renderOffer(root, state.session,');
+    expect(activeCallIndex).toBeGreaterThan(-1);
+    expect(offerCallIndex).toBeGreaterThan(-1);
+    expect(activeCallIndex).toBeLessThan(offerCallIndex);
   });
 });
 
 describe('HomeView.renderOffer — the composition sentence, said once (F2.22)', () => {
-  it('accepts focusReason as an explicit parameter', () => {
+  it('accepts focusReason and sessionIsActive as explicit parameters', () => {
     const signature = VIEW.slice(RENDER_OFFER_START, VIEW.indexOf('): void {', RENDER_OFFER_START));
     expect(signature).toMatch(/focusReason: string \| undefined/);
+    expect(signature).toMatch(/sessionIsActive: boolean/);
   });
 
   it('renders through sessionCompositionSentence exactly once — never a hand-typed paraphrase', () => {
@@ -79,5 +100,59 @@ describe('HomeView.renderOffer — the composition sentence, said once (F2.22)',
 describe('HomeViewState — dashboard variant carries an optional focusReason (F2.22, F6.4)', () => {
   it('declares the field', () => {
     expect(VIEW).toMatch(/readonly focusReason\?: string;/);
+  });
+});
+
+/**
+ * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22) — while a session is active, Home shows its
+ * frozen explanation, read from the persisted composition snapshot, never a live recompute.
+ */
+describe('HomeViewState — dashboard variant carries an optional activeSession (D-382, D-331)', () => {
+  it('declares HomeActiveSession with an optional reason field', () => {
+    expect(VIEW).toMatch(
+      /export interface HomeActiveSession \{[\s\S]{0,300}readonly reason\?: string;/,
+    );
+  });
+
+  it('declares the activeSession field on the dashboard variant', () => {
+    expect(VIEW).toMatch(/readonly activeSession\?: HomeActiveSession;/);
+  });
+});
+
+describe('HomeView.renderOffer — the eyebrow is relabelled while a session is active (D-382, D-331)', () => {
+  it('reads HOME_NEXT_SESSION_EYEBROW when sessionIsActive, HOME_OFFER_EYEBROW otherwise — never a hand-typed third label', () => {
+    expect(RENDER_OFFER_BODY).toMatch(
+      /text: sessionIsActive \? HOME_NEXT_SESSION_EYEBROW : HOME_OFFER_EYEBROW,/,
+    );
+  });
+
+  it('imports HOME_NEXT_SESSION_EYEBROW from ./copy.js', () => {
+    expect(VIEW).toMatch(/HOME_NEXT_SESSION_EYEBROW/);
+    expect(VIEW).toMatch(/\} from '\.\/copy\.js';/);
+  });
+});
+
+describe('HomeView.renderActiveSession — the frozen explanation, never a live recompute (D-382, D-331)', () => {
+  it('renders nothing when no session is active, or when the frozen record carries no reason — honest absence', () => {
+    expect(ACTIVE_SESSION_BODY).toMatch(
+      /if \(activeSession === undefined \|\| activeSession\.reason === undefined\) return;/,
+    );
+  });
+
+  it('renders the frozen reason through sessionCompositionSentence — the same function the live preview uses, never a second wording rule', () => {
+    const calls = ACTIVE_SESSION_BODY.match(/sessionCompositionSentence\(/g) ?? [];
+    expect(calls).toHaveLength(1);
+    expect(ACTIVE_SESSION_BODY).toMatch(/sessionCompositionSentence\(activeSession\.reason\)/);
+  });
+
+  it('labels the active-session block HOME_OFFER_EYEBROW — the label the ordinary card carries when nothing is active', () => {
+    expect(ACTIVE_SESSION_BODY).toMatch(/text: HOME_OFFER_EYEBROW,/);
+  });
+
+  it('never imports or references session/holder.ts, or any sitting-mutating call (enter, growActiveSitting, exit, decide) — reading the snapshot cannot unfreeze or recompose the active session', () => {
+    expect(VIEW).not.toMatch(/session\/holder\.js/);
+    for (const mutator of ['.enter(', '.growActiveSitting(', '.exit(', '.decide(']) {
+      expect(VIEW.includes(mutator)).toBe(false);
+    }
   });
 });

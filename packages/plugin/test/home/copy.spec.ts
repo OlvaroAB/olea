@@ -6,6 +6,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   allHomeStrings,
+  HOME_NEXT_SESSION_EYEBROW,
+  HOME_OFFER_EYEBROW,
   HOME_VIEW_TITLE,
   sessionCompositionSentence,
 } from '../../src/home/copy.js';
@@ -72,5 +74,23 @@ describe('home copy — sessionCompositionSentence (F2.22, F6.4)', () => {
       expect(sentence).not.toMatch(/%/);
       expect(sentence).not.toMatch(/\d+\s*\/\s*\d+/);
     }
+  });
+});
+
+/**
+ * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22) — the label that distinguishes the active
+ * session's own frozen explanation (`HOME_OFFER_EYEBROW`, unchanged) from a live preview Home
+ * still shows beside it (`HOME_NEXT_SESSION_EYEBROW`, new). Both are rendered through the same
+ * `sessionCompositionSentence` pinned above; this module adds no second wording rule.
+ */
+describe('home copy — HOME_NEXT_SESSION_EYEBROW (D-382, D-331)', () => {
+  it('is a distinct, non-empty label from the active-session eyebrow', () => {
+    expect(HOME_NEXT_SESSION_EYEBROW.length).toBeGreaterThan(0);
+    expect(HOME_NEXT_SESSION_EYEBROW).not.toBe(HOME_OFFER_EYEBROW);
+  });
+
+  it('names the session plainly — no percentage, ratio or fraction (F8.3)', () => {
+    expect(HOME_NEXT_SESSION_EYEBROW).not.toMatch(/%/);
+    expect(HOME_NEXT_SESSION_EYEBROW).not.toMatch(/\d+\s*\/\s*\d+/);
   });
 });
