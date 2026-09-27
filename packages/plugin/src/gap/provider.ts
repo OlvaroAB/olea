@@ -80,6 +80,7 @@ import {
   ObsidianStudyPlanSettingsStore,
 } from '../plan/settings-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import { gapRowEvidenceBases } from './copy.js';
 import type { GapViewDeps, GapViewState } from './view.js';
 
 export interface CreateLocalGapProviderDeps {
@@ -231,7 +232,17 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           sourceCoverage: edges.tier3.sourceCoverage,
         });
 
-        return { kind: 'model', model };
+        // `[D-399]`/`ol-egov.141.89.10.74`: the same edges the ranking was
+        // composed from name each row's evidence basis — past-paper,
+        // objectives or assessment-brief. Threaded through so `GapView`'s
+        // course framing can tell a brief-only row from an objectives-only
+        // one (both carry an empty `citations` array on `GapRow`); without
+        // this, `copy.ts#rankingAttribution`'s unsupplied-`bases` inference
+        // reads every citation-less row as objectives-based, which a
+        // brief-only row (once she declares a scope) would wrongly share.
+        const bases = gapRowEvidenceBases(edges.edges);
+
+        return { kind: 'model', model, bases };
       } catch (error) {
         console.error('Olea: could not compose the gap view', error);
         return { kind: 'unavailable' };

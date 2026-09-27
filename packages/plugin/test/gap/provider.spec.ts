@@ -19,6 +19,12 @@ import {
   type RetrievabilityOutput,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import {
+  ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE,
+  gapRowBasisKey,
+  OBJECTIVES_ATTRIBUTION_CLAUSE,
+  rankedCourseFraming,
+} from '../../src/gap/copy.js';
 import { createLocalGapProvider } from '../../src/gap/provider.js';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -828,5 +834,119 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
         ? 0
         : 1;
     expect(orderChangedCount).toBe(1);
+  });
+});
+
+/**
+ * `ol-egov.141.89.10.74` (`[D-399]`, F4.2): the copy and the per-row basis
+ * map (`gap/copy.ts#gapRowEvidenceBases`) landed in olea PR 4 (9460d6d), but
+ * nothing wired the map from the provider through to the view's own
+ * `rankedCourseFraming` call (`gap/view.ts`'s `renderCourse`) — so a
+ * brief-only concept, once she declares a scope, was unreachable and would
+ * have read as objectives-based. This proves the WIRING: `createLocalGapProvider`
+ * (the production `GapViewDeps`, mounted by `gap/view.ts`'s `GapView`) must
+ * hand back the same edges' bases the ranking was composed from, keyed
+ * exactly as `GapView.renderCourse` reads them before calling
+ * `rankedCourseFraming` — reproduced here since `view.ts` itself has no test
+ * file (no `obsidian` runtime under Vitest; see that module's own doc).
+ */
+describe("createLocalGapProvider — threads the ranking edges' evidence bases through to GapViewState ([D-399], ol-egov.141.89.10.74)", () => {
+  /**
+   * One course that ALREADY has a past-paper-cited concept ("Widget theory",
+   * the base fixture's own row), plus a second assignment note that DECLARES
+   * a scope (a `scope:` frontmatter property, F1.7/D-399) naming a concept
+   * ("Gadget theory") no past paper or objectives document ever mentions.
+   * That concept's only evidence-edge basis is `'assessment-brief'`, so its
+   * `GapRow` reaches the view with an empty `citations` array — the exact
+   * shape an objectives-only row has, which is why the bead exists.
+   */
+  function vaultWithBriefOnlyConcept() {
+    return memoryVault({
+      '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+      '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      // Binds Gadget theory to TESTC101 (a topic-bound note with its own
+      // card), same as `Notes/one.md` does for Widget theory — otherwise the
+      // concept has no course to rank under at all. No past paper below ever
+      // mentions Gadget theory, so its only evidence-edge basis is the
+      // declared-scope brief further down.
+      'Notes/two.md': [
+        '---',
+        'topic: [Gadget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2023.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': QUIZ,
+      // The declared-scope leg ([D-399]): a scope-aliased frontmatter
+      // property naming Gadget theory, on an assignment no past paper cites.
+      '02 Assignments/Essay 1.md':
+        '---\nclass: TESTC101\ntype: Assignment\nweight: 20\ndue: 2026-10-01\nstatus: upcoming\n' +
+        'scope: Covers Gadget theory in depth.\n---\n\n# Essay 1\n',
+    });
+  }
+
+  it('a brief-only row (empty citations, an assessment-brief edge) is named as the brief in the framing the provider hands the view, never objectives', async () => {
+    const provider = createLocalGapProvider({
+      vault: vaultWithBriefOnlyConcept(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+
+    const state = await provider.load();
+    expect(state.kind).toBe('model');
+    if (state.kind !== 'model') throw new Error('expected a model');
+
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+
+    const briefRow = course.rows.find((r) => r.conceptName === 'Gadget theory');
+    expect(briefRow).toBeDefined();
+    if (briefRow === undefined) throw new Error('expected a Gadget theory row');
+    // The exact shape the bead's description warns about: no citations at all.
+    expect(briefRow.citations).toEqual([]);
+
+    // The wiring itself: the provider's returned state carries the edges'
+    // bases (`GapViewState.bases`), and this row's own basis is named as
+    // the brief — not silently absent, and not defaulted to objectives.
+    expect(state.bases).toBeDefined();
+    const rowBases = state.bases?.get(gapRowBasisKey(briefRow.course, briefRow.conceptKey));
+    expect(rowBases?.has('assessment-brief')).toBe(true);
+    expect(rowBases?.has('objectives')).toBe(false);
+
+    // The reachability proof: reproducing exactly what `GapView.renderCourse`
+    // does with `state.bases` (`gap/view.ts`) must read the brief basis, not
+    // the unsupplied-`bases` inference that reads every empty-citations row
+    // as objectives-based. Before this bead's wiring, `state.bases` was
+    // `undefined` here, and this assertion read the OBJECTIVES clause.
+    const framing = rankedCourseFraming(course.rows, state.bases);
+    const sentence = framing.join(' ');
+    expect(sentence).toContain(ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE);
+    expect(sentence).not.toContain(OBJECTIVES_ATTRIBUTION_CLAUSE);
   });
 });

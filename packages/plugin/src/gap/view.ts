@@ -61,6 +61,7 @@ import {
   GAP_UNAVAILABLE_TITLE,
   GAP_VIEW_TITLE,
   type GapDetailClass,
+  type GapRowEvidenceBases,
   gapDetailEyebrow,
   gapRowLine,
   MATERIAL_GAP_HEADING,
@@ -122,7 +123,18 @@ function renderRetryGlyph(container: HTMLElement): void {
  * nullable model invites a caller to render the second when it means the first.
  */
 export type GapViewState =
-  | { readonly kind: 'model'; readonly model: GapViewModel }
+  | {
+      readonly kind: 'model';
+      readonly model: GapViewModel;
+      /**
+       * The ranking's own evidence bases (`copy.ts#gapRowEvidenceBases`),
+       * built from `ComposeOracleRankingResult.edges` — `[D-399]`/
+       * `ol-egov.141.89.10.74`. Optional so a caller that has not threaded
+       * the edges through yet (there is none in production today; see
+       * `provider.ts`) still renders the pre-`[D-399]` inference unchanged.
+       */
+      readonly bases?: GapRowEvidenceBases;
+    }
   | { readonly kind: 'unavailable' };
 
 export interface GapViewDeps {
@@ -180,7 +192,7 @@ function findDetailRow(
 export class GapView extends ItemView {
   private readonly deps: GapViewDeps;
   /** The last `'model'` state rendered — navigating (open/close a detail page) redraws from this rather than re-running `load()`, which reads the vault. */
-  private lastModelState: { readonly kind: 'model'; readonly model: GapViewModel } | null = null;
+  private lastModelState: Extract<GapViewState, { kind: 'model' }> | null = null;
   /** Set by {@link openDetail}, cleared by {@link closeDetail} or when the target no longer resolves. */
   private detail: GapDetailTarget | null = null;
 
@@ -225,7 +237,7 @@ export class GapView extends ItemView {
       return;
     }
 
-    const { model } = state;
+    const { model, bases } = state;
     const opened = this.detail !== null ? findDetailRow(model, this.detail) : null;
     if (this.detail !== null && opened === null) {
       // The row this page was open on is gone from a fresh read (or was
@@ -238,7 +250,7 @@ export class GapView extends ItemView {
       return;
     }
 
-    for (const course of model.courses) this.renderCourse(root, course);
+    for (const course of model.courses) this.renderCourse(root, course, bases);
     this.renderCoverage(root, model);
   }
 
@@ -304,7 +316,11 @@ export class GapView extends ItemView {
     });
   }
 
-  private renderCourse(parent: HTMLElement, course: GapCourseView): void {
+  private renderCourse(
+    parent: HTMLElement,
+    course: GapCourseView,
+    bases?: GapRowEvidenceBases,
+  ): void {
     const section = parent.createDiv({ cls: 'olea-gap-course' });
     section.createDiv({ cls: 'olea-gap-course-name', text: course.course });
 
@@ -317,7 +333,9 @@ export class GapView extends ItemView {
 
     // F4.9, structurally: the framing (including the full-syllabus advice) is
     // produced from the ranked state, so a ranking cannot be drawn without it.
-    for (const line of rankedCourseFraming(course.rows)) {
+    // `bases` ([D-399]/ol-egov.141.89.10.74): so a brief-only row (once she
+    // declares a scope) is named as the brief here, never as objectives.
+    for (const line of rankedCourseFraming(course.rows, bases)) {
       section.createDiv({ cls: 'olea-gap-framing', text: line });
     }
 
