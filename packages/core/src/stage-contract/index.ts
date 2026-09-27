@@ -81,6 +81,16 @@ export {
   decisionFromRevisionJudge,
   MATERIALITY_VOCABULARY,
 } from './adapters/revision-judge.js';
+export type {
+  VisionPageCallFailure,
+  VisionPageDraft,
+  VisionPageExtractResultShape,
+  VisionPageSeamContext,
+} from './adapters/vision-page.js';
+export {
+  writingFromVisionPageCallFailure,
+  writingFromVisionPageExtract,
+} from './adapters/vision-page.js';
 export type { WorkerErrorReading } from './adapters/worker-failure.js';
 export { GROUNDING_REFUSED_CODE, readWorkerErrorCode } from './adapters/worker-failure.js';
 export type {

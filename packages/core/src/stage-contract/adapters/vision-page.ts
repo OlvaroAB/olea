@@ -12,14 +12,18 @@
  * the same shape field for field ... so this adapter reads its results too,
  * structurally, without core importing the plugin").
  *
- * **No production caller yet** — same posture `ol-egov.141.89.20`'s own close
- * notes record for every adapter it shipped ("production caller: none yet;
- * each chain's wire bead adopts its adapter"). Wiring `vision-page-runner.ts`
- * to actually call this adapter (for example, widening `deps.onManifestEntry`
- * into a `deps.onWritingOutcome`-shaped hook) is a further, separate step —
- * a new consumer surface, not something this adapter's own existence
- * decides — left as a named follow-up (see this bead's report) rather than
- * built unilaterally.
+ * **Production caller (`ol-egov.141.89.8.31`).** `../../../plugin/src/
+ * ingestion/vision-page-runner.ts`'s `readAndLandPage`/`writingOutcomeFor`/
+ * `writingOutcomeForFailure` call `writingFromVisionPageExtract`/
+ * `writingFromVisionPageCallFailure` unconditionally on every real
+ * `vision.extract.v2` reading that runner makes — not gated behind whether a
+ * consumer is wired, so the call itself is a real production caller per
+ * `[D-072]`, distinct from `deps.onManifestEntry`'s "absent by default, pays
+ * nothing when unwired" posture. The resulting `WritingOutcome` is handed to
+ * `deps.onWritingOutcome` when the host supplies one; **no host persists or
+ * otherwise consumes it yet** — that consumer, and where a receipt would
+ * live, is a further, separate step, reported rather than built here (see
+ * this bead's report).
  *
  * **The mapping — a reading, not a check, so most readings are `unverified`,
  * never `checks-passed`.** `vision-page-runner.ts` runs no code checks over

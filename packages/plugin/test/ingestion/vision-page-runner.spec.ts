@@ -24,7 +24,9 @@ import type {
   VaultEvent,
   VaultPath,
   VaultSource,
+  VisionPageDraft,
   WorkerTaskRequest,
+  WritingOutcome,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { PageRenderError } from '../../src/ingestion/page-render/errors.js';
@@ -1298,5 +1300,388 @@ describe('createWorkerVisionPageRunner — [D-326] onManifestEntry: producer pro
     const outcome = await runner(visionPageJob());
 
     expect(outcome).toEqual({ ok: true });
+  });
+});
+
+/** Records every outcome `onWritingOutcome` is called with, in order. */
+class RecordingWritingOutcomes {
+  readonly outcomes: WritingOutcome<VisionPageDraft>[] = [];
+  readonly handler = (outcome: WritingOutcome<VisionPageDraft>): void => {
+    this.outcomes.push(outcome);
+  };
+}
+
+describe('createWorkerVisionPageRunner — onWritingOutcome: the Writing-contract adapter production caller (ol-egov.141.89.8.31)', () => {
+  it('a complete reading with text is written, carrying the draft and an unverified receipt from the candidate seat', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'complete',
+      extractedText: 'Figure 3: the rock cycle',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: null,
+      modelId: '@cf/meta/llama-4-scout-17b-16e-instruct',
+      promptVersion: '3',
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(visionPageJob());
+
+    expect(writing.outcomes).toHaveLength(1);
+    const outcome = writing.outcomes[0];
+    expect(outcome?.kind).toBe('written');
+    if (outcome?.kind !== 'written') return expect.unreachable();
+    expect(outcome.draft).toEqual({
+      text: 'Figure 3: the rock cycle',
+      figureDescription: null,
+    });
+    expect(outcome.receipt.disposition).toBe('unverified');
+    expect(outcome.receipt.provenance.producer).toEqual({
+      kind: 'model',
+      seat: 'candidate',
+      taskId: 'vision.extract.v2',
+      stamp: { modelId: '@cf/meta/llama-4-scout-17b-16e-instruct', promptVersion: '3' },
+    });
+    expect(outcome.receipt.provenance.evidenceDigests).toEqual([
+      expect.stringMatching(/^[0-9a-f]{64}$/),
+    ]);
+  });
+
+  it('a partial reading with text is also written, the coverage note never landing on the draft', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/dense.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'partial',
+      extractedText: 'the top half',
+      figureDescription: null,
+      coverage: 'the top half of the page',
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/dense.png', format: 'image', page: 1 },
+      }),
+    );
+
+    const outcome = writing.outcomes[0];
+    expect(outcome?.kind).toBe('written');
+    if (outcome?.kind !== 'written') return expect.unreachable();
+    expect(outcome.draft.text).toBe('the top half');
+    expect('coverage' in outcome.draft).toBe(false);
+  });
+
+  it('an unreadable reading is declined, nothing-to-write-from — never a draft, never unavailable', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/blank.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'unreadable',
+      extractedText: '',
+      figureDescription: null,
+      coverage: null,
+      unreadableReason: 'blank-page',
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Slides/blank.png', format: 'image', page: 1 },
+      }),
+    );
+
+    expect(writing.outcomes[0]).toMatchObject({ kind: 'declined', basis: 'nothing-to-write-from' });
+    expect('draft' in (writing.outcomes[0] ?? {})).toBe(false);
+  });
+
+  it("[D-325] a figure-only complete reading (empty text, a figure description) is declined too — the figure description never reaches the writing outcome as her material's text", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/figure-only.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => ({
+      outcome: 'complete',
+      extractedText: '',
+      figureDescription: 'A bare full-bleed diagram with no surrounding text.',
+      coverage: null,
+      unreadableReason: null,
+    }));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: {
+          kind: 'vision-page',
+          sourcePath: 'Slides/figure-only.png',
+          format: 'image',
+          page: 1,
+        },
+      }),
+    );
+
+    const outcome = writing.outcomes[0];
+    expect(outcome).toMatchObject({ kind: 'declined', basis: 'nothing-to-write-from' });
+    expect(JSON.stringify(outcome)).not.toContain('full-bleed');
+  });
+
+  it('a raw transport failure (no response ever arrived) is unavailable, call-failed — never a judgement about the page', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor: VisionPageExtractPort = {
+      async extract() {
+        throw new TypeError('fetch failed: network unreachable');
+      },
+    };
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({ ok: false, retryable: true }); // job-level classification unchanged
+    expect(writing.outcomes[0]).toMatchObject({ kind: 'unavailable', cause: 'call-failed' });
+  });
+
+  it("the Worker's own grounding-refused reads as declined, nothing-to-write-from — INV-5's honest refusal, never an outage", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => {
+      throw new WorkerVisionPageExtractorError(
+        'the Worker refused the request',
+        'grounding-refused',
+      );
+    });
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({
+      ok: false,
+      retryable: false,
+      reason: expect.stringContaining('hash-abc123'),
+    });
+    expect(writing.outcomes[0]).toMatchObject({ kind: 'declined', basis: 'nothing-to-write-from' });
+  });
+
+  it.each(['invalid-request', 'quota-exceeded', 'internal-error', 'unauthenticated'])(
+    'every other named Worker refusal (%s) is unavailable, service-refused, carrying the code — even where the job-level classification stays non-retryable',
+    async (code) => {
+      const vault = new MemoryVaultSource();
+      vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+      const sink = new RecordingSink();
+      const writing = new RecordingWritingOutcomes();
+      const extractor = new FakeExtractor(() => {
+        throw new WorkerVisionPageExtractorError('the Worker refused the request', code);
+      });
+      const runner = createWorkerVisionPageRunner({
+        vault,
+        extractor,
+        sink,
+        onWritingOutcome: writing.handler,
+      });
+
+      await runner(visionPageJob());
+
+      expect(writing.outcomes[0]).toMatchObject({
+        kind: 'unavailable',
+        cause: 'service-refused',
+        serviceCode: code,
+      });
+    },
+  );
+
+  it("upstream-error is unavailable per the writing outcome (service-refused) even though the job-level classification is retryable — DF-21's fix and D-300's outcome are separate concerns", async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => {
+      throw new WorkerVisionPageExtractorError('the Worker refused the request', 'upstream-error');
+    });
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    const outcome = await runner(visionPageJob());
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(writing.outcomes[0]).toMatchObject({
+      kind: 'unavailable',
+      cause: 'service-refused',
+      serviceCode: 'upstream-error',
+    });
+  });
+
+  it('a malformed/unusable response body (no usable code at all) is unavailable, malformed', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => {
+      throw new WorkerVisionPageExtractorError(
+        'WorkerVisionPageExtractor: the Worker response carried no `ok` discriminant.',
+      );
+    });
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(visionPageJob());
+
+    expect(writing.outcomes[0]).toMatchObject({ kind: 'unavailable', cause: 'malformed' });
+  });
+
+  it('fires for a rendered PDF page too, the same shared readAndLandPage path a standalone image uses', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/deck.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => completeResult('Figure 3: the rock cycle'));
+    const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      pageRenderer,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 3 },
+      }),
+    );
+
+    expect(writing.outcomes).toHaveLength(1);
+    expect(writing.outcomes[0]?.kind).toBe('written');
+  });
+
+  it('is never called for a pdf render failure (no call to vision.extract.v2 was ever made)', async () => {
+    const vault = new MemoryVaultSource();
+    const pdfPath = 'Lectures/corrupt.pdf' as VaultPath;
+    vault.setBinary(pdfPath, new Uint8Array([1, 2, 3]));
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const pageRenderer = new FakePageRenderer(() => {
+      throw new PageRenderError('render failed', 'render-failed');
+    });
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      pageRenderer,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: pdfPath, format: 'pdf', page: 1 },
+      }),
+    );
+
+    expect(writing.outcomes).toHaveLength(0);
+  });
+
+  it('is never called for a non-vision-page payload or an unsupported shape (nothing was ever sent to vision.extract.v2)', async () => {
+    const vault = new MemoryVaultSource();
+    const sink = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractor = new FakeExtractor(() => completeResult('x'));
+    const runner = createWorkerVisionPageRunner({
+      vault,
+      extractor,
+      sink,
+      onWritingOutcome: writing.handler,
+    });
+
+    await runner(
+      visionPageJob({ payload: { kind: 'source', sourcePath: 'x.pdf', format: 'pdf' } }),
+    );
+    await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: 'Lectures/deck.pdf', format: 'pdf', page: 3 },
+      }),
+    );
+
+    expect(writing.outcomes).toHaveLength(0);
+  });
+
+  it('behaviour of the read itself is unaffected: the same request is sent and the same unit lands, with or without onWritingOutcome supplied', async () => {
+    const vaultWith = new MemoryVaultSource();
+    vaultWith.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sinkWith = new RecordingSink();
+    const writing = new RecordingWritingOutcomes();
+    const extractorWith = new FakeExtractor(() => completeResult('Figure 3: the rock cycle'));
+    const runnerWith = createWorkerVisionPageRunner({
+      vault: vaultWith,
+      extractor: extractorWith,
+      sink: sinkWith,
+      onWritingOutcome: writing.handler,
+    });
+
+    const vaultWithout = new MemoryVaultSource();
+    vaultWithout.setBinary('Slides/diagram.png', FAKE_PNG_BYTES);
+    const sinkWithout = new RecordingSink();
+    const extractorWithout = new FakeExtractor(() => completeResult('Figure 3: the rock cycle'));
+    const runnerWithout = createWorkerVisionPageRunner({
+      vault: vaultWithout,
+      extractor: extractorWithout,
+      sink: sinkWithout,
+    }); // no onWritingOutcome
+
+    const outcomeWith = await runnerWith(visionPageJob());
+    const outcomeWithout = await runnerWithout(visionPageJob());
+
+    expect(outcomeWith).toEqual(outcomeWithout);
+    expect(extractorWith.requests).toEqual(extractorWithout.requests);
+    expect(sinkWith.calls).toEqual(sinkWithout.calls);
+    expect(writing.outcomes).toHaveLength(1); // still produced, whether or not a consumer is wired
   });
 });
