@@ -231,3 +231,85 @@ describe('createVaultScopeSource — [D-338]: suspension alone never retracts th
     expect(afterUpheld.state).toBe('tree');
   });
 });
+
+/**
+ * `[D-396]` (`ol-v7r5.101` follow-up): this module's own `provenInvalidInstrumentIds` used to
+ * read the LATEST verdict's own `verdict` field ("latest verdict wins") — correct only because no
+ * writer before `[D-396]` ever appended a plain accept/edit after a rejection. `[D-396]` makes a
+ * rejection stand until a DELIBERATE restore names it, so this file's own reject test above (line
+ * 185) is no longer the whole story: these two prove the fix end to end, over a real vault walk
+ * plus a real review-log read, exactly as the suite above does for suspend/reject/dispute.
+ */
+describe('createVaultScopeSource — a rejection stands until a deliberate restore ([D-396])', () => {
+  it('a plain accept with no `restores` never lifts a standing rejection — under the old "latest verdict wins" logic this would have wrongly restored `tree`', async () => {
+    const vault = fixtureVault();
+    const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
+
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId,
+        instrumentType: 'explain-back',
+        conceptIds,
+        timestamp: '2026-08-15T09:00:00-04:00',
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-1' },
+    );
+    const afterReject = await conceptACell(vault);
+    expect(afterReject.state).toBe('sprout');
+
+    // A later plain accept, naming nothing in `restores` (condition 3) — this must lift
+    // nothing. The LATEST verdict here is `accepted`, which is exactly what the old
+    // "latest verdict wins" logic would have read as no-longer-rejected.
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId,
+        instrumentType: 'explain-back',
+        conceptIds,
+        timestamp: '2026-08-16T09:00:00-04:00',
+        verdict: 'accepted',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-2' },
+    );
+    const afterPlainAccept = await conceptACell(vault);
+    expect(afterPlainAccept.state).toBe('sprout');
+  });
+
+  it('a deliberate restore (an accepted verdict naming the rejection in `restores`) lifts exactly that rejection, back to `tree`', async () => {
+    const vault = fixtureVault();
+    const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
+
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId,
+        instrumentType: 'explain-back',
+        conceptIds,
+        timestamp: '2026-08-15T09:00:00-04:00',
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-1' },
+    );
+    expect((await conceptACell(vault)).state).toBe('sprout');
+
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId,
+        instrumentType: 'explain-back',
+        conceptIds,
+        timestamp: '2026-08-16T09:00:00-04:00',
+        verdict: 'accepted',
+        restores: 'verdict-1',
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-2' },
+    );
+    const afterRestore = await conceptACell(vault);
+    expect(afterRestore.state).toBe('tree');
+  });
+});

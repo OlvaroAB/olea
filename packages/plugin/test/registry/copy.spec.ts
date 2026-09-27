@@ -43,6 +43,8 @@ import {
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
   WITHHELD_EDIT_ACTION,
+  WITHHELD_REJECT_ACTION,
+  WITHHELD_RESTORE_ACTION,
   WITHHELD_SECTION_HEADING,
   withheldItemLine,
 } from '../../src/registry/copy.js';
@@ -133,6 +135,10 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     instrumentMixLine([]),
     instrumentMixLine([instrument('qa', true)]),
     instrumentMixLine([instrument('qa'), instrument('qa'), instrument('cloze'), instrument('mcq')]),
+    WITHHELD_SECTION_HEADING,
+    WITHHELD_EDIT_ACTION,
+    WITHHELD_REJECT_ACTION,
+    WITHHELD_RESTORE_ACTION,
   ];
 }
 
@@ -472,5 +478,16 @@ describe('withheldItemLine ([D-334])', () => {
 
   it("WITHHELD_EDIT_ACTION is a plain verb, matching every other registry action label's register", () => {
     expect(WITHHELD_EDIT_ACTION).toBe('Edit it');
+  });
+
+  it('[D-396] reject it / restore it are plain verbs, distinct from edit it and from each other, and never say "withheld" or "delete"', () => {
+    expect(WITHHELD_REJECT_ACTION).toBe('Reject it');
+    expect(WITHHELD_RESTORE_ACTION).toBe('Restore it');
+    expect(WITHHELD_REJECT_ACTION).not.toBe(WITHHELD_EDIT_ACTION);
+    expect(WITHHELD_RESTORE_ACTION).not.toBe(WITHHELD_REJECT_ACTION);
+    for (const label of [WITHHELD_REJECT_ACTION, WITHHELD_RESTORE_ACTION]) {
+      expect(label.toLowerCase()).not.toContain('withheld');
+      expect(label.toLowerCase()).not.toContain('delete');
+    }
   });
 });

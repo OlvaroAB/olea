@@ -1,5 +1,10 @@
+import type { VerdictLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
-import { foldDocumentLedger, ledgerInstrumentId } from './document-ledger.js';
+import {
+  foldDocumentLedger,
+  isDocumentLedgerRestore,
+  ledgerInstrumentId,
+} from './document-ledger.js';
 import {
   disputeAt,
   misconceptionAt,
@@ -120,5 +125,42 @@ describe('foldDocumentLedger', () => {
     );
 
     expect(ledger.rows.map((row) => row.entry.kind)).toEqual(['verdict']);
+  });
+});
+
+// Scenario: olea-service/features/F2-review.md — "F2.23 / [D-396] — a
+// document-ledger row can tell a deliberate restore apart from a plain
+// accept/edit", tagged `@auto:core/history/document-ledger.spec`.
+describe('isDocumentLedgerRestore ([D-396] follow-up, ol-v7r5.101)', () => {
+  it('is true only for an accepted verdict naming a rejection in `restores`', () => {
+    const restore: VerdictLogRecord = {
+      schemaVersion: 6,
+      kind: 'verdict',
+      eventId: 'e2',
+      timestamp: '2026-05-13T19:03:00Z',
+      instrumentId: 'i1',
+      instrumentType: 'qa',
+      conceptIds: ['concept-a'],
+      verdict: 'accepted',
+      restores: 'e1',
+    };
+    expect(isDocumentLedgerRestore(restore)).toBe(true);
+  });
+
+  it('is false for a plain accepted verdict with no `restores`, an edit, and a rejection itself', () => {
+    expect(isDocumentLedgerRestore(verdictAt('e1', '2026-05-13T19:03:00Z', 'i1', 'accepted'))).toBe(
+      false,
+    );
+    expect(isDocumentLedgerRestore(verdictAt('e2', '2026-05-13T19:03:00Z', 'i1', 'edited'))).toBe(
+      false,
+    );
+    expect(isDocumentLedgerRestore(verdictAt('e3', '2026-05-13T19:03:00Z', 'i1', 'rejected'))).toBe(
+      false,
+    );
+  });
+
+  it('is false for every non-verdict kind', () => {
+    expect(isDocumentLedgerRestore(reviewAt('e1', '2026-05-13T19:03:00Z', 'i1'))).toBe(false);
+    expect(isDocumentLedgerRestore(suspendAt('e2', '2026-05-13T19:03:00Z', 'i1'))).toBe(false);
   });
 });

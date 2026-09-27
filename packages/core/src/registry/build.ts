@@ -99,6 +99,7 @@ import {
   conceptIdsInLog,
   readAllConceptVitality,
 } from '../mastery/rollup.js';
+import { rejectedInstrumentIds } from '../mastery/validity.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
 import {
   correctedGradeInstrumentIds,
@@ -109,7 +110,6 @@ import {
   type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
 } from '../review-log/explain-back-history.js';
-import { latestVerdictByInstrument } from '../review-log/verdicts.js';
 import { aliasesFor, isConceptPruned, resolvedDisplayName } from './overrides.js';
 import type {
   BuildRegistryModelInput,
@@ -496,10 +496,9 @@ function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): numbe
  *
  * A `verdict` record is a different, already-unambiguous signal:
  * `../review-log/verdicts.ts`'s own doc calls `rejected` "a real refusal",
- * never a mere pause, so an instrument whose LATEST verdict is `rejected`
- * proves itself invalid today, with no reason field needed. A corrective
- * re-grade (`explainBackGrade.revisionOf`) is already read unconditionally
- * inside `../mastery/rollup.ts` itself and needs no entry here.
+ * never a mere pause. A corrective re-grade (`explainBackGrade.revisionOf`)
+ * is already read unconditionally inside `../mastery/rollup.ts` itself and
+ * needs no entry here.
  *
  * **Widened by `ol-egov.141.89.9.23`** to close the reachability gap
  * `correctedGradeInstrumentIds`'s own doc names: a contest resolved
@@ -507,15 +506,27 @@ function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): numbe
  * `rejected` verdict already is (`[D-338]` item 2), so it now joins the
  * proven-invalid set here too. `upheld` stays excluded — that function's own
  * doc says why (nothing was found defective there).
+ *
+ * **`rejectedInstrumentIds` (`ol-v7r5.101` follow-up), not "latest verdict is
+ * `rejected`".** This used to read `../review-log/verdicts.ts`'s
+ * `latestVerdictByInstrument` and test the LATEST verdict's own `verdict`
+ * field — correct only because no writer in this codebase, before `[D-396]`,
+ * ever appended a plain `accepted`/`edited` verdict for an instrument that
+ * already had a `rejected` one. `[D-396]` makes that no longer safe to
+ * assume: a rejection now stands until a DELIBERATE restore (an `accepted`
+ * verdict naming it in `restores`) lifts it, and a later plain accept or edit
+ * with no `restores` must lift nothing (condition 3) — which "latest verdict
+ * wins" gets wrong the instant such a write exists. `../mastery/validity.ts`'s
+ * `rejectedInstrumentIds` is the one fold every other reader of rejection
+ * standing in this codebase already reads (`./provider.ts`'s reject/restore
+ * actions included, once wired — `ol-v7r5.93`), so this reads the same
+ * answer rather than a second, now-provably-divergent one.
  */
 function provenInvalidInstrumentIds(
   entries: readonly ReviewLogEntry[],
   disputes: readonly DisputeLogRecord[],
 ): ReadonlySet<string> {
-  const invalid = new Set<string>();
-  for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
-    if (verdict.verdict === 'rejected') invalid.add(instrumentId);
-  }
+  const invalid = new Set(rejectedInstrumentIds(entries));
   for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
   return invalid;
 }

@@ -161,10 +161,22 @@
  * A concept that shares only an introducing passage is its own identity in the index; its
  * overrides are never touched. When the concept store cannot be read, every key reads as stored,
  * which is exactly the behaviour before this section existed.
+ *
+ * ## `[D-396]`'s reject/restore for a withheld item (`ol-v7r5.101`, `ol-v7r5.96`)
+ *
+ * `[D-334]`'s "reject it" was not buildable before `ol-v7r5.101` landed the review-log's v6
+ * rejection record: `withheldIdentityFor` and `withheldItemsFromEnumeration` below now derive,
+ * for each withheld item, whether its instrument id and concept binding can be established safely
+ * (never guessed — condition 1), and whether it currently stands rejected (`../../core/mastery/
+ * validity.ts`'s fold, the SAME one every other reader of rejection standing in this codebase
+ * reads). `rejectWithheldItem`/`restoreWithheldItem` below write through `appendVerdictRecord`,
+ * the SAME writer `../generation/accept.ts`'s draft-reject path already uses — one rejection
+ * shape, not a second one for this surface. See each function's own doc for the exact rule.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
+  appendVerdictRecord,
   buildRegistryModel,
   type ConceptKeyCanonicalIndex,
   type ConceptRecord,
@@ -181,6 +193,8 @@ import {
   type InvalidClozeReport,
   type InvalidMcqReport,
   listSameAsLinkRecords,
+  type ProvenInvalidFact,
+  projectInstrumentValidity,
   pruneConcept as pruneConceptOverride,
   type RankOracleOptions,
   type RegistryConceptEntry,
@@ -198,11 +212,13 @@ import {
   type Scheduler,
   suspendedInstrumentIds,
   unpruneConcept as unpruneConceptOverride,
+  type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
+import { isoWithLocalOffset } from '../review/ports.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { ObsidianDataHost } from './overrides-store.js';
 import {
@@ -652,6 +668,37 @@ async function courseRankingsForNoteOffer(
 }
 
 /**
+ * `[D-396]` (`ol-v7r5.101`, `ol-v7r5.96` condition 1: "missing provenance never leads to a guessed
+ * identity"): a withheld item's instrument id and concept binding, derived only where BOTH are
+ * safe — `undefined` otherwise, which is `./view.ts`'s own signal to offer edit only, no id
+ * guessed.
+ *
+ * `instrumentId` is present on an `InvalidMcqReport`/`InvalidCardReport` only for the M5
+ * (`unresolved-asset`) reason (`../../core/session/types.ts`'s own doc on that field: every other
+ * `McqInvalidReason`/`CardInvalidReason` fails inside `mcq-format.ts`, which has nothing to derive
+ * one from); `InvalidClozeReport` carries none at all, so a cloze item never gets an identity here.
+ *
+ * **`conceptIds` is never carried on any of these reports, and it does not need to be.**
+ * `../../core/session/enumerate.ts` computes one `conceptIds` array per NOTE (from her `topic:`
+ * order) and stamps it onto every instrument the walk finds there, valid or not — so a VALID
+ * sibling record in the same note already carries the exact value this withheld one would get
+ * were it to parse. Borrowing it is not a guess: it is the one value `enumerate.ts`'s own
+ * invariant guarantees this block would receive. Absent a sibling (every instrument in the note is
+ * itself withheld or unbound), there is nothing to borrow and no id is guessed — `identity` stays
+ * `undefined` for that item, exactly as it does when `instrumentId` itself is absent.
+ */
+function withheldIdentityFor(
+  instrumentId: string | undefined,
+  notePath: VaultPath,
+  records: readonly VaultInstrumentRecord[],
+): { readonly instrumentId: string; readonly conceptIds: readonly string[] } | undefined {
+  if (instrumentId === undefined) return undefined;
+  const sibling = records.find((record) => record.notePath === notePath);
+  if (sibling === undefined) return undefined;
+  return { instrumentId, conceptIds: sibling.conceptIds };
+}
+
+/**
  * `[D-334]` (functional scope C5.3, knowledge model R11): merges
  * `enumeration.invalidMcqBlocks`/`.invalidCardBlocks`/`.invalidClozeBlocks` into the
  * `RegistryWithheldItem[]` `./view.ts` renders on the registry's own withheld-items section — off
@@ -661,40 +708,49 @@ async function courseRankingsForNoteOffer(
  * this codebase already documents for its other small cross-bead duplicates (e.g. this file's own
  * `disputesFromFiles`, mirroring `../grove/provider.ts`'s twin of the same name).
  *
- * **No `instrumentId`, no `conceptIds` here, on purpose.** Every one of these reports is a block
- * that never reached `../../core/session/enumerate.ts`'s id-derivation or concept-binding step —
- * see that module's own doc ("filtered out before... id derivation... ever sees it"). `[D-097]`'s
- * reject action writes a `VerdictLogRecord`, which requires both fields plus `artifactProvenance`
- * (a machine-generated artifact's task/prompt/model — absent by construction for a hand-authored
- * item, which `[D-334]`/INV-6 also withholds this same way). This bead's report names the exact
- * gap and proposes how to close it; nothing here fabricates either field to route around it.
+ * **`[D-396]` (`ol-v7r5.101`) adds `identity`/`rejectedAs` per item**, via `withheldIdentityFor`
+ * above and `provenInvalid` (the SAME `projectInstrumentValidity` fold `./view.ts`'s reject/restore
+ * actions are keyed against everywhere else in this codebase — `../../core/mastery/validity.ts`'s
+ * own module doc, "one answer... read by every attainment reading"). `rejectedAs` is set exactly
+ * when that fold currently reads the item's identity as standing-rejected, naming the rejection's
+ * own `eventId` for `deps.restoreWithheldItem` to lift.
  */
-function withheldItemsFromEnumeration(enumeration: {
-  readonly invalidMcqBlocks: readonly InvalidMcqReport[];
-  readonly invalidCardBlocks: readonly InvalidCardReport[];
-  readonly invalidClozeBlocks: readonly InvalidClozeReport[];
-}): readonly RegistryWithheldItem[] {
+function withheldItemsFromEnumeration(
+  enumeration: {
+    readonly records: readonly VaultInstrumentRecord[];
+    readonly invalidMcqBlocks: readonly InvalidMcqReport[];
+    readonly invalidCardBlocks: readonly InvalidCardReport[];
+    readonly invalidClozeBlocks: readonly InvalidClozeReport[];
+  },
+  provenInvalid: ReadonlyMap<string, ProvenInvalidFact>,
+): readonly RegistryWithheldItem[] {
+  const withheldItem = (
+    notePath: VaultPath,
+    kind: RegistryWithheldItem['kind'],
+    reason: string,
+    instrumentId: string | undefined,
+  ): RegistryWithheldItem => {
+    const identity = withheldIdentityFor(instrumentId, notePath, enumeration.records);
+    const rejection = identity === undefined ? undefined : provenInvalid.get(identity.instrumentId);
+    const rejectedAs = rejection?.reason === 'rejected' ? rejection.eventId : undefined;
+    return {
+      notePath,
+      kind,
+      reason,
+      ...(identity !== undefined ? { identity } : {}),
+      ...(rejectedAs !== undefined ? { rejectedAs } : {}),
+    };
+  };
+
   return [
-    ...enumeration.invalidMcqBlocks.map(
-      (report): RegistryWithheldItem => ({
-        notePath: report.notePath,
-        kind: 'mcq',
-        reason: report.block.reason,
-      }),
+    ...enumeration.invalidMcqBlocks.map((report) =>
+      withheldItem(report.notePath, 'mcq', report.block.reason, report.instrumentId),
     ),
-    ...enumeration.invalidCardBlocks.map(
-      (report): RegistryWithheldItem => ({
-        notePath: report.notePath,
-        kind: 'qa',
-        reason: report.block.reason,
-      }),
+    ...enumeration.invalidCardBlocks.map((report) =>
+      withheldItem(report.notePath, 'qa', report.block.reason, report.instrumentId),
     ),
-    ...enumeration.invalidClozeBlocks.map(
-      (report): RegistryWithheldItem => ({
-        notePath: report.notePath,
-        kind: 'cloze',
-        reason: report.block.reason,
-      }),
+    ...enumeration.invalidClozeBlocks.map((report) =>
+      withheldItem(report.notePath, 'cloze', report.block.reason, undefined),
     ),
   ];
 }
@@ -864,10 +920,14 @@ function createLoadModel(
         kind: 'model',
         model: gatedModel,
         identityProposals,
-        // `[D-334]`: computed off the same `enumeration` this call already walked above — no
-        // second vault pass. See `withheldItemsFromEnumeration`'s own doc for what this omits and
-        // why.
-        withheldInstruments: withheldItemsFromEnumeration(enumeration),
+        // `[D-334]`/`[D-396]`: computed off the same `enumeration` this call already walked
+        // above, plus the SAME validity fold (`entries`, `disputes`) `./view.ts`'s reject/restore
+        // actions are keyed against everywhere else — no second vault pass, no second fold. See
+        // `withheldItemsFromEnumeration`'s own doc for what this omits and why.
+        withheldInstruments: withheldItemsFromEnumeration(
+          enumeration,
+          projectInstrumentValidity(entries, disputes).provenInvalid,
+        ),
         // `[D-397]`: same `enumeration.records` ids, plus the `pendingRevalidationInstrumentIds`
         // just resolved above — see `suspectSectionFrom`'s own doc.
         suspectInstruments: suspectSectionFrom(
@@ -1006,6 +1066,74 @@ export function createLocalRegistryProvider(
      */
     async editWithheldItem(item: RegistryWithheldItem): Promise<void> {
       await openSourceLocationPort.open({ sourcePath: item.notePath });
+    },
+
+    /**
+     * `[D-396]`'s reject action for a withheld item (`ol-v7r5.101`, `ol-v7r5.96`): the SAME
+     * `VerdictLogRecord` shape `../generation/accept.ts`'s `DraftAcceptPort.reject` already
+     * appends for an AI-drafted item, via the SAME `appendVerdictRecord` writer, with no
+     * `artifactProvenance` (v6 permits it absent on a rejection) since a structurally-broken
+     * block — or one she wrote herself — has no generating call to name. `item.identity` is
+     * `./view.ts`'s own signal for whether this is safe (`withheldIdentityFor`'s doc): a click on
+     * an item with none never reaches this method, because `./view.ts` renders no reject button
+     * for one — this early return is the same defensive belt-and-braces `renderNoteOffer`'s own
+     * `tier !== 1` check states for itself, not the only thing standing between a guess and this
+     * write.
+     */
+    async rejectWithheldItem(item: RegistryWithheldItem): Promise<void> {
+      const identity = item.identity;
+      if (identity === undefined) {
+        console.error(
+          'Olea: reject was called on a withheld item with no safely-derived identity ([D-396]) — nothing was written',
+          item.notePath,
+        );
+        return;
+      }
+      await appendVerdictRecord(
+        deps.vault,
+        {
+          timestamp: isoWithLocalOffset(deps.now()),
+          instrumentId: identity.instrumentId,
+          instrumentType: item.kind,
+          conceptIds: [...identity.conceptIds],
+          verdict: 'rejected',
+        },
+        { deviceId: deps.deviceId },
+      );
+    },
+
+    /**
+     * `[D-396]`'s deliberate restore (condition 4): an `accepted` verdict naming the standing
+     * rejection it lifts in `restores`. `item.rejectedAs` is `./view.ts`'s own signal that this
+     * instrument currently stands rejected — see `withheldItemsFromEnumeration`'s own doc for how
+     * it is read off the SAME `../../core/mastery/validity.ts` fold every other reader of
+     * rejection standing in this codebase already goes through, so a restore written here reads
+     * back the identical way everywhere else it is asked. The early return mirrors
+     * `rejectWithheldItem`'s: `./view.ts` renders no restore button without both fields set, so
+     * this only guards against calling this method directly with a stale item.
+     */
+    async restoreWithheldItem(item: RegistryWithheldItem): Promise<void> {
+      const identity = item.identity;
+      const rejectedAs = item.rejectedAs;
+      if (identity === undefined || rejectedAs === undefined) {
+        console.error(
+          'Olea: restore was called on a withheld item with no standing rejection to lift ([D-396]) — nothing was written',
+          item.notePath,
+        );
+        return;
+      }
+      await appendVerdictRecord(
+        deps.vault,
+        {
+          timestamp: isoWithLocalOffset(deps.now()),
+          instrumentId: identity.instrumentId,
+          instrumentType: item.kind,
+          conceptIds: [...identity.conceptIds],
+          verdict: 'accepted',
+          restores: rejectedAs,
+        },
+        { deviceId: deps.deviceId },
+      );
     },
 
     /**

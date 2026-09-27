@@ -207,6 +207,104 @@ describe('buildRegistryModel — browse (F8.4)', () => {
   });
 });
 
+/**
+ * `[D-396]` (`ol-v7r5.101` follow-up): `provenInvalidInstrumentIds` used to read the LATEST
+ * verdict's own `verdict` field ("latest verdict wins"), correct only because no writer before
+ * `[D-396]` ever appended a plain accept/edit after a rejection. `[D-396]` makes a rejection stand
+ * until a DELIBERATE restore names it — these tests are the wiring proof that `buildRegistryModel`
+ * reads the same fold every other reader of rejection standing now reads (`../mastery/
+ * validity.ts`'s `rejectedInstrumentIds`), not the stale one.
+ *
+ * **Why `mastery.state` (`tree` vs `sprout`), not `scoredEventCount`.** `invalidInstrumentIds`
+ * only gates `../mastery/rollup.ts`'s `qualifiesForTopStage` — an explain-back attempt's own path
+ * to the top growth stage (`[D-338]` item 4's own doc on this option) — it does not exclude an
+ * ordinary qa/mcq review from the evidence count at all. So the observable this suite already
+ * uses for the identical fold at `../mastery/rollup.spec.ts`'s `@auto:MAT-C5-instrument-validity`
+ * is the one to reuse here: a graded, qualifying explain-back attempt reaches `tree`; the same
+ * attempt on a proven-invalid instrument caps at `sprout`.
+ */
+describe('buildRegistryModel — a rejection stands until a deliberate restore ([D-396])', () => {
+  function gradedExplainBack(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
+    return review({
+      eventId: 'eb-relational',
+      instrumentId: 'explain-back:concept-a',
+      instrumentType: 'explain-back',
+      rating: null,
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: null,
+        artifactProvenance: {
+          taskId: 'explain-back-grade',
+          promptVersion: 'v0',
+          modelId: 'model-placeholder',
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  function verdict(overrides: Partial<Record<string, unknown>> = {}): ReviewLogEntry {
+    return {
+      schemaVersion: 6,
+      kind: 'verdict',
+      eventId: `v-${Math.random().toString(36).slice(2)}`,
+      timestamp: '2026-01-15T09:00:00-04:00',
+      instrumentId: 'explain-back:concept-a',
+      instrumentType: 'explain-back',
+      conceptIds: ['concept-a'],
+      verdict: 'rejected',
+      ...overrides,
+    } as ReviewLogEntry;
+  }
+
+  it('baseline: a qualifying explain-back attempt on a never-verdicted instrument reaches `tree`', () => {
+    const model = buildFor({ entries: [gradedExplainBack()], instrumentRecords: [] });
+    expect(model.concepts[0]?.mastery.state).toBe('tree');
+  });
+
+  it('a rejected instrument never qualifies `tree`, with no `artifactProvenance` on the rejection ([D-396])', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      gradedExplainBack(),
+      verdict({ eventId: 'v-reject' }),
+    ];
+    const model = buildFor({ entries, instrumentRecords: [] });
+    expect(model.concepts[0]?.mastery.state).toBe('sprout');
+  });
+
+  it('a plain accept with no `restores` never lifts a standing rejection (condition 3) — under the old "latest verdict wins" logic this would have wrongly cleared it', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      gradedExplainBack(),
+      verdict({ eventId: 'v-reject' }),
+      verdict({
+        eventId: 'v-plain-accept',
+        verdict: 'accepted',
+        timestamp: '2026-01-16T09:00:00-04:00',
+        artifactProvenance: { taskId: 't-1', promptVersion: 'v1', modelId: 'm-1' },
+      }),
+    ];
+    const model = buildFor({ entries, instrumentRecords: [] });
+    expect(model.concepts[0]?.mastery.state).toBe('sprout');
+  });
+
+  it('a deliberate restore (an accepted verdict naming the rejection in `restores`) lifts exactly that rejection', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      gradedExplainBack(),
+      verdict({ eventId: 'v-reject' }),
+      verdict({
+        eventId: 'v-restore',
+        verdict: 'accepted',
+        restores: 'v-reject',
+        timestamp: '2026-01-16T09:00:00-04:00',
+      }),
+    ];
+    const model = buildFor({ entries, instrumentRecords: [] });
+    expect(model.concepts[0]?.mastery.state).toBe('tree');
+  });
+});
+
 describe('buildRegistryModel — rename overlay (F8.4)', () => {
   it('a rename override changes displayName without touching the underlying key or evidence', () => {
     const renamed = renameConcept(EMPTY_REGISTRY_OVERRIDES, 'concept-a', 'Concept A', 'Renamed A');

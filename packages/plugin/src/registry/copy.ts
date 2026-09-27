@@ -437,19 +437,25 @@ export function instrumentLabel(instrumentType: 'qa' | 'cloze' | 'mcq'): string 
  * actually known — "can't currently find" — and deliberately never says "permanently", "deleted"
  * or "broken", so it does not overclaim a permanence the underlying check cannot establish.
  *
- * **No "reject it" action is offered here (yet).** `[D-334]` names it as the withheld item's
- * second action, alongside edit — see this bead's report for exactly why: none of these reports
- * carries an `instrumentId` or `conceptIds` (both required by `VerdictLogRecord`, the schema
- * `[D-097]`'s reject action writes through — `../../core/session/enumerate.ts` filters every
- * invalid block out before its id-derivation and concept-binding steps ever run), and a
- * machine-generated artifact's `artifactProvenance` is required on that same schema where a
- * hand-authored withheld item — which `[D-334]`/INV-6 explicitly also covers — has none to give.
- * Inventing either would be exactly the guess D-005 and this codebase's "never invent" discipline
- * forbid, so this file renders the one-sentence reason and the edit action only.
+ * **`[D-396]` (`ol-v7r5.101`, `ol-v7r5.96`) adds reject it and restore it.** Review-log v6 lets a
+ * rejection omit `artifactProvenance` — a structurally-broken block, or one she wrote herself, has
+ * no generating call to name — so the schema gap this section used to cite is closed. Both verbs
+ * are offered only where `./provider.ts`'s `withheldIdentityFor` derives the item's instrument id
+ * and concept binding safely, never guessed (condition 1); where it cannot, `./view.ts` renders
+ * edit it alone. `WITHHELD_REJECT_ACTION`/`WITHHELD_RESTORE_ACTION` are genuinely NEW copy, coined
+ * for the same reason `WITHHELD_EDIT_ACTION` was: `[D-334]`/`[D-396]` name the shape and leave the
+ * exact wording to this Class B pass, matching registry §23's own words ("the shape this ruling
+ * settles, never the wording").
  */
 export const WITHHELD_SECTION_HEADING = 'Not shown right now';
 
 export const WITHHELD_EDIT_ACTION = 'Edit it';
+
+/** `[D-396]`'s reject action, offered only for a withheld item whose identity is derived safely. */
+export const WITHHELD_REJECT_ACTION = 'Reject it';
+
+/** `[D-396]`'s deliberate restore, replacing `WITHHELD_REJECT_ACTION` in the same slot exactly when the item currently stands rejected. */
+export const WITHHELD_RESTORE_ACTION = 'Restore it';
 
 const WITHHELD_ITEM_LINE_FALLBACK =
   "Olea found a problem with this item it can't describe further, so Olea isn't showing it.";

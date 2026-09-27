@@ -119,10 +119,10 @@ import {
   type GroveCourseModel,
   HOLDING_CUT,
   isConceptPruned,
-  latestVerdictByInstrument,
   listFolder,
   loadCachedStudyPlan,
   parseReviewLog,
+  projectInstrumentValidity,
   REVIEW_LOG_FOLDER,
   type RegistryOverrides,
   type RhythmCourseInput,
@@ -1066,8 +1066,7 @@ function instrumentCountsByNotePath(
  *
  * A `verdict` record is a different, already-unambiguous signal:
  * `olea-core`'s `../review-log/verdicts.ts` doc calls `rejected` "a real
- * refusal", never a mere pause, so an instrument whose LATEST verdict is
- * `rejected` still proves itself invalid today. A corrective re-grade
+ * refusal", never a mere pause. A corrective re-grade
  * (`explainBackGrade.revisionOf`) is already read unconditionally inside
  * `olea-core`'s mastery fold and needs no entry here. Matches
  * `../registry/build.ts` (olea-core)'s own `provenInvalidInstrumentIds`.
@@ -1081,14 +1080,31 @@ function instrumentCountsByNotePath(
  * `olea-core`'s barrel — widening `packages/core/src/index.ts` is outside
  * this bead's `owns`, the named reachability gap `../review-log/
  * contest.ts#correctedGradeInstrumentIds`'s own doc flags).
+ *
+ * **`projectInstrumentValidity`'s `provenInvalid`, not "latest verdict is
+ * `rejected`" (`ol-v7r5.101` follow-up, matching `../registry/build.ts`
+ * (olea-core)'s identical fix).** This used to read `latestVerdictByInstrument`
+ * and test the LATEST verdict's own `verdict` field — correct only because no
+ * writer in this codebase, before `[D-396]`, ever appended a plain
+ * `accepted`/`edited` verdict for an instrument that already had a `rejected`
+ * one. `[D-396]` makes that unsafe to assume: a rejection now stands until a
+ * DELIBERATE restore (an `accepted` verdict naming it in `restores`) lifts
+ * it, and a later plain accept or edit with no `restores` must lift nothing
+ * (condition 3) — which "latest verdict wins" gets wrong the instant such a
+ * write exists. `olea-core`'s `rejectedInstrumentIds` (`../mastery/
+ * validity.ts`) is the canonical answer, but it is not itself exported from
+ * `olea-core`'s barrel — the same reachability gap this function's own doc
+ * already names for `correctedGradeInstrumentIds` above — so this reads the
+ * IDENTICAL projection via `projectInstrumentValidity` (exported) and filters
+ * for `reason === 'rejected'` itself, rather than a guessed re-derivation.
  */
 function provenInvalidInstrumentIds(
   entries: readonly ReviewLogEntry[],
   disputes: readonly DisputeLogRecord[],
 ): ReadonlySet<string> {
   const invalid = new Set<string>();
-  for (const [instrumentId, verdict] of latestVerdictByInstrument(entries)) {
-    if (verdict.verdict === 'rejected') invalid.add(instrumentId);
+  for (const [instrumentId, fact] of projectInstrumentValidity(entries).provenInvalid) {
+    if (fact.reason === 'rejected') invalid.add(instrumentId);
   }
   for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
   return invalid;

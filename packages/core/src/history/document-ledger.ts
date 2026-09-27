@@ -96,6 +96,34 @@ export function documentPathOf(
   return { path: located, instrumentId };
 }
 
+/**
+ * A verdict row is a **deliberate restore** (`[D-396]`, `ol-v7r5.101` follow-up) when it is an
+ * `accepted` verdict naming a prior rejection in `restores` — a fact this fold's own module doc
+ * did not yet distinguish from a plain accept/edit when it was written. `foldDocumentLedger`
+ * above does not itself render prose (this file has no production caller yet — `[D-072]`; see the
+ * module doc's "not derivable" list), so there is nothing here to test against a rendered string;
+ * this predicate exists so the FACT a future ledger view needs is derived once, in the one place
+ * that already reads `ReviewLogEntry` shapes, rather than re-guessed per consumer.
+ *
+ * **Wording — Class B, proposed, not ratified (flag for David's review).** A future ledger row
+ * for this case should read as a plain past-tense fact — for example "A rejection was lifted, and
+ * this instrument returned to circulation" — never the bare noun *Restored* alone: that word is
+ * already `[D-197]`'s ratified verb for F8.5's withdraw/restore PRUNING (a different mechanism —
+ * circulation, not evidence validity), and reusing it bare for this different fact would be
+ * exactly the "a listed word in another sense" conflict the vocabulary registry's authority order
+ * flags (`docs/Olea_vocabulary_registry.md`'s own "Pruning" entry names `Restore` as pruning's
+ * shown verb). `[D-396]`'s own registry §23 sibling entry is worded "restore it" for the LIVE
+ * action (`./copy.ts`'s `WITHHELD_RESTORE_ACTION`, `ol-v7r5.93`) — the same verb is fine THERE
+ * because it names the identical mechanism from its own live surface; a HISTORY row naming the
+ * same fact after it happened is a different sentence shape and should not collapse to the same
+ * bare word `[D-197]` already claims. `check:vocabulary`'s own word lists do not yet name a
+ * conflict for this exact phrase, so it passes today; ratifying the exact sentence, whenever a
+ * ledger view is built, is a copy pass's to make, not this fold's.
+ */
+export function isDocumentLedgerRestore(entry: ReviewLogEntry): boolean {
+  return entry.kind === 'verdict' && entry.verdict === 'accepted' && entry.restores !== undefined;
+}
+
 /** Newest first, tie-broken by descending `eventId` so the order is device-independent. */
 function byNewestFirst(a: DocumentLedgerRow, b: DocumentLedgerRow): number {
   const left = Date.parse(a.timestamp);

@@ -188,6 +188,8 @@ import {
   WITHDRAWN_LABEL,
   WITHDRAWN_NOTE,
   WITHHELD_EDIT_ACTION,
+  WITHHELD_REJECT_ACTION,
+  WITHHELD_RESTORE_ACTION,
   WITHHELD_SECTION_HEADING,
   withheldItemLine,
 } from './copy.js';
@@ -308,6 +310,20 @@ export interface RegistryWithheldItem {
   readonly notePath: VaultPath;
   readonly kind: 'mcq' | 'qa' | 'cloze';
   readonly reason: string;
+  /**
+   * `[D-396]` (`ol-v7r5.101`): this item's instrument id and concept binding, present only where
+   * `./provider.ts`'s `withheldIdentityFor` could derive both safely — never guessed. `undefined`
+   * means reject/restore cannot be offered for this item, and `renderWithheldItem` below draws
+   * edit it alone, exactly as before this bead.
+   */
+  readonly identity?: { readonly instrumentId: string; readonly conceptIds: readonly string[] };
+  /**
+   * `[D-396]`: present, naming the standing rejection's own event id, exactly when this item's
+   * `identity.instrumentId` currently stands rejected (`./provider.ts`'s doc names the fold this
+   * is read from). Its presence is `renderWithheldItem`'s own switch between offering reject it
+   * and offering restore it — never both at once.
+   */
+  readonly rejectedAs?: string;
 }
 
 export type RegistryViewState =
@@ -367,12 +383,24 @@ export interface RegistryViewDeps {
    * `deps.openSourceLocation` already gives a concept or instrument row — Olea never edits her
    * note itself (INV-6); once the block parses cleanly the withholding clears on its own at the
    * next `load()` (R11: a read-time projection, never stored), with no action from this view.
-   *
-   * **No `rejectWithheldItem` alongside it.** `[D-334]` names reject as the withheld item's other
-   * action; this bead's report explains why it is not built this round — a schema gap in files
-   * outside this bead's `owns`, not an oversight here.
+   * Always offered, regardless of `item.identity`.
    */
   readonly editWithheldItem: (item: RegistryWithheldItem) => Promise<void>;
+  /**
+   * `[D-396]`'s reject action for a withheld item (`ol-v7r5.101`, `ol-v7r5.96`) — offered by
+   * `renderWithheldItem` only when `item.identity` is set (her block's instrument id and concept
+   * binding could be derived safely); never guessed otherwise. Writes the ordinary rejection
+   * record, with no generating provenance for a structurally-broken block or one she wrote
+   * herself.
+   */
+  readonly rejectWithheldItem: (item: RegistryWithheldItem) => Promise<void>;
+  /**
+   * `[D-396]`'s deliberate restore (condition 4) — offered by `renderWithheldItem` in place of
+   * reject exactly when `item.rejectedAs` is set (this instrument currently stands rejected).
+   * Lifts that rejection and every earlier one of the same instrument, never a later one and
+   * never another instrument's.
+   */
+  readonly restoreWithheldItem: (item: RegistryWithheldItem) => Promise<void>;
 }
 
 export class RegistryView extends ItemView {
@@ -726,15 +754,18 @@ export class RegistryView extends ItemView {
 
   /**
    * One withheld item: `[D-334]`'s one required sentence naming the defect (`./copy.ts`'s
-   * `withheldItemLine`, never the internal word itself), plus its one built action today, edit
-   * it — `deps.editWithheldItem`, the same click-through every other registry action uses to
-   * navigate rather than edit anything itself (INV-6). No refresh after the click: she is leaving
-   * to edit the note in Obsidian, and the withholding will not have cleared yet — the next
-   * `refresh()` (opening the tab again, or any other action that already triggers one) is what
-   * picks up a since-fixed block, exactly as `renderSourceLocations`' buttons already behave.
+   * `withheldItemLine`, never the internal word itself), plus edit it — `deps.editWithheldItem`,
+   * the same click-through every other registry action uses to navigate rather than edit anything
+   * itself (INV-6). No refresh after that click: she is leaving to edit the note in Obsidian, and
+   * the withholding will not have cleared yet — the next `refresh()` (opening the tab again, or
+   * any other action that already triggers one) is what picks up a since-fixed block, exactly as
+   * `renderSourceLocations`' buttons already behave.
    *
-   * **No reject-it button here** — see `RegistryViewDeps.editWithheldItem`'s own doc and this
-   * bead's report for exactly why.
+   * **`[D-396]`'s reject/restore sits right beside edit it, in the same slot, toggling on
+   * `item.rejectedAs`** — never both buttons at once. Present only when `item.identity` is set
+   * (`./provider.ts`'s own doc: her block's instrument id and concept binding could be derived
+   * safely); absent, this item offers edit it alone, exactly as before this bead. Unlike edit,
+   * both DO refresh — the click itself is what changes standing, so the next render must show it.
    */
   private renderWithheldItem(root: HTMLElement, item: RegistryWithheldItem): void {
     const row = root.createDiv({ cls: 'olea-registry-withheld-item' });
@@ -747,6 +778,20 @@ export class RegistryView extends ItemView {
     editButton.addEventListener('click', () => {
       void this.deps.editWithheldItem(item);
     });
+
+    if (item.identity !== undefined) {
+      const isRejected = item.rejectedAs !== undefined;
+      const rejectOrRestoreButton = actions.createEl('button', {
+        cls: 'olea-button-quiet',
+        text: isRejected ? WITHHELD_RESTORE_ACTION : WITHHELD_REJECT_ACTION,
+      });
+      rejectOrRestoreButton.addEventListener('click', () => {
+        const action = isRejected
+          ? this.deps.restoreWithheldItem(item)
+          : this.deps.rejectWithheldItem(item);
+        void action.then(() => this.refresh());
+      });
+    }
   }
 
   /**

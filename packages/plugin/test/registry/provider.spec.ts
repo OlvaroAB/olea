@@ -15,6 +15,7 @@ import {
   type ConceptRecord,
   contestClaim,
   createFsrsScheduler,
+  enumerateVaultInstruments,
   listSameAsLinkRecords,
   proposeSameAsLink,
   type RegistryConceptEntry,
@@ -1726,5 +1727,173 @@ describe('createLocalRegistryProvider — withheld items ([D-334])', () => {
     expect(after.withheldInstruments).toEqual([]);
     const brokenAfter = after.model.concepts.find((c) => c.displayName === 'Concept A');
     expect(brokenAfter?.instruments).toHaveLength(2);
+  });
+});
+
+// Scenario: olea-service/features/F2-review.md — "F2.23 / [D-396] — reject it
+// and restore it on a withheld item whose identity is derived safely", tagged
+// `@auto:plugin/registry/provider.spec`.
+describe('createLocalRegistryProvider — withheld-item reject/restore ([D-396])', () => {
+  /** A note with one VALID sibling instrument (so `conceptIds` is derivable) plus one M5-broken
+   * MCQ that embeds an asset resolving nowhere in the vault — the one case
+   * `InvalidMcqReport.instrumentId` is present for (`../../core/session/types.ts`'s own doc). */
+  function m5VaultWithValidSibling() {
+    return memoryVault({
+      'Notes/mixed.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+        '```olea-mcq',
+        'stem: What does this diagram show? ![[missing.png]]',
+        'answer: the right one',
+        'distractor: d1',
+        'distractor: d2',
+        '```',
+        '',
+      ].join('\n'),
+    });
+  }
+
+  it('derives instrumentId/conceptIds for an M5 item from its valid sibling in the same note, and offers no identity for an M1-M4 item with no sibling to borrow from', async () => {
+    const vault = m5VaultWithValidSibling();
+    // Same options `./provider.ts`'s own `load()` calls `enumerateVaultInstruments` with
+    // (`{ concepts: { stampConceptKeys: true } }`) — this call stamps the permanent concept key
+    // into the vault's `.olea/concepts/` store, so `provider.load()` below reads that SAME
+    // stamped key back rather than minting a second, different one for the same concept.
+    const found = await enumerateVaultInstruments(vault, { concepts: { stampConceptKeys: true } });
+    const expectedInstrumentId = found.invalidMcqBlocks[0]?.instrumentId;
+    if (expectedInstrumentId === undefined) throw new Error('expected an M5 instrumentId');
+    const expectedConceptIds = found.records[0]?.conceptIds;
+    if (expectedConceptIds === undefined) throw new Error('expected the sibling record');
+
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.withheldInstruments).toEqual([
+      {
+        notePath: 'Notes/mixed.md',
+        kind: 'mcq',
+        reason: 'unresolved-asset',
+        identity: { instrumentId: expectedInstrumentId, conceptIds: expectedConceptIds },
+      },
+    ]);
+  });
+
+  it('offers no identity for an M1-M4 item, which never carries an instrumentId to derive from', async () => {
+    const vault = fixtureVault();
+    await vault.write(
+      'Notes/broken.md',
+      [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const item = state.withheldInstruments.find(
+      (candidate) => candidate.notePath === 'Notes/broken.md',
+    );
+    if (item === undefined) throw new Error('expected a withheld item');
+    expect(item.identity).toBeUndefined();
+    expect(item.rejectedAs).toBeUndefined();
+  });
+
+  it('rejectWithheldItem appends a rejected verdict with no artifactProvenance, and the next load reads it back as rejectedAs', async () => {
+    const vault = m5VaultWithValidSibling();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+
+    const before = await provider.load();
+    if (before.kind !== 'model') throw new Error(`expected a model, got ${before.kind}`);
+    const item = before.withheldInstruments[0];
+    if (item === undefined || item.identity === undefined) {
+      throw new Error('expected a withheld item with a derived identity');
+    }
+    expect(item.rejectedAs).toBeUndefined();
+
+    await provider.rejectWithheldItem(item);
+
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    const rejected = after.withheldInstruments[0];
+    if (rejected === undefined) throw new Error('expected the item to still be withheld');
+    expect(rejected.identity).toEqual(item.identity);
+    expect(rejected.rejectedAs).toBeTypeOf('string');
+    expect(rejected.rejectedAs).not.toBe('');
+  });
+
+  it('restoreWithheldItem lifts exactly the rejection it names, and offers reject again afterward', async () => {
+    const vault = m5VaultWithValidSibling();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+
+    const before = await provider.load();
+    if (before.kind !== 'model') throw new Error(`expected a model, got ${before.kind}`);
+    const item = before.withheldInstruments[0];
+    if (item === undefined) throw new Error('expected a withheld item');
+    await provider.rejectWithheldItem(item);
+
+    const rejectedState = await provider.load();
+    if (rejectedState.kind !== 'model')
+      throw new Error(`expected a model, got ${rejectedState.kind}`);
+    const rejectedItem = rejectedState.withheldInstruments[0];
+    if (rejectedItem === undefined || rejectedItem.rejectedAs === undefined) {
+      throw new Error('expected a standing rejection to restore');
+    }
+
+    await provider.restoreWithheldItem(rejectedItem);
+
+    const restoredState = await provider.load();
+    if (restoredState.kind !== 'model')
+      throw new Error(`expected a model, got ${restoredState.kind}`);
+    const restoredItem = restoredState.withheldInstruments[0];
+    if (restoredItem === undefined) throw new Error('expected the item to still be withheld');
+    expect(restoredItem.rejectedAs).toBeUndefined();
+    expect(restoredItem.identity).toEqual(rejectedItem.identity);
+  });
+
+  it('rejectWithheldItem and restoreWithheldItem write nothing when the item carries no derived identity ([D-396] condition 1: never a guessed identity)', async () => {
+    const vault = fixtureVault();
+    await vault.write(
+      'Notes/broken.md',
+      [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        '```olea-mcq',
+        'stem: Which structure is it?',
+        'answer: The right one',
+        'distractor: d1',
+        '```',
+        '',
+      ].join('\n'),
+    );
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const item = state.withheldInstruments.find(
+      (candidate) => candidate.notePath === 'Notes/broken.md',
+    );
+    if (item === undefined) throw new Error('expected a withheld item');
+    expect(item.identity).toBeUndefined();
+
+    const writesBefore = vault.writes.length;
+    await provider.rejectWithheldItem(item);
+    await provider.restoreWithheldItem(item);
+    expect(vault.writes.length).toBe(writesBefore);
   });
 });
