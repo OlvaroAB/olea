@@ -525,13 +525,36 @@ export type MisconceptionMergeEnvelope = z.infer<typeof misconceptionMergeEnvelo
  * vendored and out of that bead's ownership — `ol-v7r5.3` is that
  * promotion. The service module re-vendors this export rather than
  * redefining it once `scripts/vendor-contracts.sh` runs.
+ *
+ * **`blendWeights` added additively (`[D-332]`, `ol-egov.141.89.10.81`).**
+ * `[D-332]` retired the stage-keyed ladder FROM THE BLEND (need now reads
+ * current recall or demand-aware readiness, never `masteryNeedWeight`), but
+ * this envelope keeps shipping `masteryNeedWeight` unchanged: it is still
+ * mirrored onto `OracleConceptFactors.masteryNeedWeight` for reporting
+ * (`packages/core/src/oracle/rank.ts`'s module doc, "the delivered envelope
+ * still carries the ladder"), and a field is retired here only once no
+ * deployed client reads it — not yet true. `blendWeights` is `.optional()`
+ * for the same additive reason in the other direction: a client built
+ * against this schema must still decode an envelope from a service that
+ * has not yet deployed this change, and a service ahead of an older
+ * deployed client must not break it either (an old client's narrower
+ * `rankWeightsBody` simply never reads the extra key). See
+ * `RankBlendWeights` (`packages/core/src/oracle/types.ts`) for the
+ * two-weight shape this mirrors field-for-field — never the three-term
+ * `RankBlendWeightsWithProximity` `[D-410]` adds internally to `rank.ts`,
+ * which is not derived/delivered and has no envelope field.
  */
 export const rankWeightsBody = z.object({
   /** Days at which exam proximity's contribution decays to half its value. */
   proximityHalfLifeDays: z.number().positive(),
   /** Divides an assessment's weight onto `[0, 1]` before it composes with proximity. */
   assessmentWeightDivisor: z.number().positive(),
-  /** One multiplier per growth stage (`VOC-1`'s four-stage vocabulary, plus `unknown` for a skipped mastery join). */
+  /**
+   * One multiplier per growth stage (`VOC-1`'s four-stage vocabulary, plus
+   * `unknown` for a skipped mastery join). **Reporting-only since `[D-332]`**
+   * — kept for a reader that still displays or logs it; it no longer enters
+   * the ranking blend. Retire only once no deployed client reads it.
+   */
   masteryNeedWeight: z.object({
     seed: z.number().min(0),
     sprout: z.number().min(0),
@@ -539,6 +562,23 @@ export const rankWeightsBody = z.object({
     tree: z.number().min(0),
     unknown: z.number().min(0),
   }),
+  /**
+   * `[D-332]`'s two ranking-blend weights — `RankOracleOptions.blendWeights`
+   * field-for-field (`packages/core/src/oracle/types.ts`'s `RankBlendWeights`).
+   * Both finite and strictly positive: a zero weight turns its term into
+   * decoration (`rank.ts`'s `resolveOptions` throws on exactly that).
+   * Optional so an envelope from a not-yet-updated service, or a decode by
+   * a not-yet-updated client, both still validate — see this block's own
+   * doc above. Absent here means `rank.ts`'s declared fallback (currently
+   * the `[D-332]` pin, equal weights) applies, same as any other absent
+   * `RankOracleOptions` field.
+   */
+  blendWeights: z
+    .object({
+      relevance: z.number().finite().positive(),
+      need: z.number().finite().positive(),
+    })
+    .optional(),
 });
 export type RankWeightsBody = z.infer<typeof rankWeightsBody>;
 

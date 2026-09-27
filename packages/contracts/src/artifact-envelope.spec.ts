@@ -351,7 +351,10 @@ describe('the delivered-threshold surfaces share this envelope', () => {
     expect(parsed.success).toBe(true);
   });
 
-  it('carries the ranking-weights policy', () => {
+  it('carries the ranking-weights policy without blendWeights (a not-yet-updated service)', () => {
+    // [D-332] / ol-egov.141.89.10.81: blendWeights is additive and optional —
+    // an envelope from a service that has not deployed the change yet must
+    // still validate, with the stage ladder alone.
     const parsed = rankWeightsEnvelope.safeParse({
       envelopeVersion: 1,
       kind: 'rank-weights',
@@ -367,6 +370,45 @@ describe('the delivered-threshold surfaces share this envelope', () => {
       },
     });
     expect(parsed.success).toBe(true);
+  });
+
+  it('carries the ranking-weights policy with the [D-332] blend weights alongside the retired-from-the-blend ladder', () => {
+    const parsed = rankWeightsEnvelope.safeParse({
+      envelopeVersion: 1,
+      kind: 'rank-weights',
+      bodyVersion: 1,
+      policyVersion: 'rw1-abc',
+      computedAt: '2026-08-16T09:00:00.000Z',
+      freshForSeconds: OPERATING_FRESH_FOR_SECONDS,
+      governsForSeconds: OPERATING_GOVERNS_FOR_SECONDS,
+      body: {
+        proximityHalfLifeDays: 14,
+        assessmentWeightDivisor: 1,
+        masteryNeedWeight: { seed: 1, sprout: 0.7, sapling: 0.35, tree: 0.15, unknown: 1 },
+        blendWeights: { relevance: 1, need: 1 },
+      },
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('rejects a zero or negative blend weight', () => {
+    const bodyWith = (blendWeights: { relevance: number; need: number }) => ({
+      envelopeVersion: 1,
+      kind: 'rank-weights',
+      bodyVersion: 1,
+      policyVersion: 'rw1-abc',
+      computedAt: '2026-08-16T09:00:00.000Z',
+      freshForSeconds: OPERATING_FRESH_FOR_SECONDS,
+      governsForSeconds: OPERATING_GOVERNS_FOR_SECONDS,
+      body: {
+        proximityHalfLifeDays: 14,
+        assessmentWeightDivisor: 1,
+        masteryNeedWeight: { seed: 1, sprout: 0.7, sapling: 0.35, tree: 0.15, unknown: 1 },
+        blendWeights,
+      },
+    });
+    expect(rankWeightsEnvelope.safeParse(bodyWith({ relevance: 0, need: 1 })).success).toBe(false);
+    expect(rankWeightsEnvelope.safeParse(bodyWith({ relevance: 1, need: -1 })).success).toBe(false);
   });
 
   it('names a fixed GET endpoint for the ranking-weights artifact', () => {

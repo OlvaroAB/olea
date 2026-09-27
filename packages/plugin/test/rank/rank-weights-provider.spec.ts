@@ -91,6 +91,30 @@ describe('fetchRankWeightsOptions — the delivered path', () => {
     const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
     expect(options?.policyVersion).toBe('rw1-a-different-one-9876');
   });
+
+  it('carries the [D-332] blendWeights through onto RankOracleOptions when the body has them (`ol-egov.141.89.10.81`)', async () => {
+    const bodyWithBlend = { ...validBody(), blendWeights: { relevance: 1, need: 1 } };
+    const httpGet: RankWeightsHttpGet = async () => ({
+      status: 200,
+      text: JSON.stringify(validEnvelope({ body: bodyWithBlend })),
+    });
+
+    const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
+    expect(options?.blendWeights).toEqual({ relevance: 1, need: 1 });
+    // Still carries the stage ladder too — [D-332] retired it from the
+    // blend, not from the envelope.
+    expect(options?.masteryNeedWeight).toEqual(validBody().masteryNeedWeight);
+  });
+
+  it('omits blendWeights on RankOracleOptions (falls to the declared fallback) when a not-yet-updated service omits it', async () => {
+    const httpGet: RankWeightsHttpGet = async () => ({
+      status: 200,
+      text: JSON.stringify(validEnvelope()),
+    });
+
+    const options = await fetchRankWeightsOptions(httpGet, CONFIG, NOW);
+    expect(options).not.toHaveProperty('blendWeights');
+  });
 });
 
 describe('fetchRankWeightsOptions — every failure collapses to undefined (F7.8)', () => {

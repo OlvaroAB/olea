@@ -68,12 +68,27 @@ export function buildRankWeightsUrl(baseUrl: string): string {
   return `${baseUrl.replace(/\/+$/, '')}${RANK_WEIGHTS_ENDPOINT_PATH}`;
 }
 
-/** `RankWeightsBody` mirrors `RankOracleOptions` field-for-field (see `artifact-envelope.ts`'s doc) — this is that mapping, made total by both sides being fully required. */
+/**
+ * `RankWeightsBody` mirrors `RankOracleOptions` field-for-field (see
+ * `artifact-envelope.ts`'s doc) — this is that mapping.
+ *
+ * **`blendWeights` since `[D-332]` (`ol-egov.141.89.10.81`).** The field is
+ * optional on the wire (a not-yet-updated service omits it), so it is
+ * carried through only when present rather than defaulted here — an absent
+ * `blendWeights` on `RankOracleOptions` already means "use `rank.ts`'s own
+ * declared fallback" (the same rule every other optional field on that
+ * interface follows), and restating that fallback's numbers in this module
+ * would be a second place for them to drift out of sync. `masteryNeedWeight`
+ * (the stage ladder) is still mapped unconditionally: `[D-332]` retired it
+ * from the blend, not from the envelope — see `artifact-envelope.ts`'s doc
+ * for why it still ships.
+ */
 function toRankOracleOptions(body: RankWeightsBody): RankOracleOptions {
   return {
     proximityHalfLifeDays: body.proximityHalfLifeDays,
     assessmentWeightDivisor: body.assessmentWeightDivisor,
     masteryNeedWeight: body.masteryNeedWeight,
+    ...(body.blendWeights === undefined ? {} : { blendWeights: body.blendWeights }),
   };
 }
 
