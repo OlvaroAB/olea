@@ -73,23 +73,38 @@
  * ## The scoring shape, and where its weights actually come from
  *
  * For each SURVIVING (non-vetoed) concept↔assessment edge, this module
- * computes a `contribution` — how much that one assessment's evidence should
- * weigh in the concept's overall priority — from four signals, each
- * normalized to roughly `[0, 1]` so they combine by multiplication without
- * one signal silently dominating by scale:
+ * computes a `contribution` — how strongly that one assessment's evidence
+ * says the concept will be examined — from three signals, each normalized to
+ * roughly `[0, 1]`:
  *
- *   contribution = yieldScore * confidence * assessmentWeightScore * examProximityScore
+ *   contribution = yieldScore * confidence * assessmentWeightScore
  *
  * A concept's `preMasteryScore` is the **sum** of its contributions across
  * every surviving assessment that has an edge to it in the same course — a
- * concept examined by three assessments accumulates more priority than one
+ * concept examined by three assessments accumulates more relevance than one
  * examined by a single low-weight quiz, which is the plain reading of
- * "likelihood and weight of examination" (F4.2). The final `priorityScore`
- * is `[D-332]`'s blend, described in the next section.
+ * "likelihood and weight of examination" (F4.2).
+ *
+ * **Proximity is not in that product (`[D-410]`, `ol-egov.141.89.10.82`).**
+ * It used to be a fourth factor inside every edge's contribution, so an
+ * assessment with no date (proximity 0) took that edge's whole evidence to
+ * zero, and a concept whose evidence sat only on undated assessments ranked
+ * at relevance exactly 0 — below a concept with no evidence at all. C5.10
+ * ("no factor takes another to zero") and `[D-329]` rule that out. Each
+ * edge still reports its own `examProximityScore`; the concept's
+ * {@link OracleProximityFactors.proximityScore} is the HIGHEST of those
+ * across its surviving edges — how soon the soonest dated assessment that
+ * examines it falls — and it enters the blend as its own term. A missing or
+ * unreadable date scores 0 on that edge and so adds nothing to the term (it
+ * can never outrank a real deadline, `pln.md` §2.1), while the edge's
+ * evidence still counts in full toward relevance. A concept with no dated
+ * edge, and a `[D-329]` concept with no edge at all, has proximity 0. The
+ * final `priorityScore` is the blend, described in the next section.
  *
  * ## The `[D-332]` blend (`ol-egov.141.89.10.78`)
  *
  *   priorityScore = w_relevance * preMasteryScore + w_need * needOrderingInput
+ *                 + w_proximity * proximityScore          (`[D-410]`)
  *
  * **The terms add; nothing multiplies them.** C5.10 names the
  * all-multiplying formula as the shape it rules out, and the one this
@@ -120,12 +135,14 @@
  *    still carries the ladder, and move nothing.
  *
  * The weights are `RankOracleOptions.blendWeights`, or
- * {@link DECLARED_FALLBACK_BLEND_WEIGHTS}. Only their ratio changes the
- * order. **How the uncertainty factor enters** (`pln.md` §2.1's fourth
- * term, the evidence volume behind relevance and need): it does not — no
- * ruling states it, and the shipped ranking never had one; recorded as such
- * in the planning targets manifest before any held-out read. Proximity
- * still rides inside each edge's relevance contribution, as before.
+ * {@link DECLARED_FALLBACK_BLEND_WEIGHTS}; a supplied object without a
+ * `proximity` weight (the `[D-332]` two-weight shape, see
+ * {@link RankBlendWeightsWithProximity}) takes the declared proximity weight.
+ * Only their ratios change the order. **How the uncertainty factor enters**
+ * (`pln.md` §2.1's remaining term, the evidence volume behind relevance and
+ * need): it does not — no ruling states it, and the shipped ranking never
+ * had one; recorded as such in the planning targets manifest before any
+ * held-out read.
  *
  * **Two outputs, named apart (`ol-v7r5.55` [IL-D7]; see `./types.ts`'s own
  * section of that name for the full argument).** `preMasteryScore` IS
@@ -387,39 +404,81 @@ const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState,
  * DECLARED (`[D-329]`, `ol-egov.141.89.10.8`) — the relevance
  * ({@link OracleConceptFactors.preMasteryScore}) a concept reads when the
  * caller knows it belongs to the course but no assessment edge names it at
- * all, or the course has no assessment evidence anywhere. **Plain-English
- * defense:** one edge's own `contribution` is normalised to roughly `[0,1]`
- * (this file's module doc, "The scoring shape"); half of that range is a
- * deliberately unremarkable middle — high enough that "no evidence yet" is
- * never read as "nothing to examine here" (the `0` proposal 2 itself names
- * a defect for), low enough that it can never let the ABSENCE of evidence
- * outrank a concept with real, weighted evidence (the mirror defect the
- * same proposal also rules out). It needs no corpus to defend, which is
- * what makes it declared rather than derived. **`ol-egov.141.89.10.4`'s
- * targets manifest marks the exact placement of this constant PENDING**
- * (assertion `r2-noedge-middle`, `eval/data/ilb/pln/targets.dev.json`)
- * until the frozen blend weights (`[D-332]`) let it be checked against
- * every invariant of `pln.md` §5; nothing below depends on 0.5 being final,
- * only on it being neither `0` nor unboundedly large.
+ * all, or the course has no assessment evidence anywhere.
+ *
+ * **Plain-English defense of 1/8 (`[D-410]`, `ol-egov.141.89.10.82`):** a
+ * concept with no evidence yet is placed as if one assessment examined it at
+ * the middle of each of relevance's three factors — a yield score of 1/2
+ * (the second most salient concept), confidence 1/2, and half the course
+ * grade — so `(1/2)³`. Not `0`, which would read "no evidence yet" as
+ * "nothing to examine here" (`[D-329]` names that defect); low enough that
+ * the ABSENCE of evidence does not outrank middling real evidence at equal
+ * need (the mirror defect). It is a pin, not a fit: the development-set sweep
+ * of this constant jointly with the three blend weights (`olea-service`,
+ * `findings/ilb-pln-blend-sweep.md`) found every invariant holding for any
+ * value strictly between 0 and the relevance its constructed evidenced
+ * concepts carry (0.3), at every weight tried, and cannot choose inside that
+ * band. It was 0.5, which outranked that evidence at every weight. Frozen in
+ * the planning targets manifest before the held-out set is read; a
+ * provisional baseline, revisited when her assessment records carry grade
+ * weights into the ranking (the scale a real edge's relevance then runs on).
  */
-const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.5;
+const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
 
 /**
- * DECLARED FALLBACK (`[D-332]`, `ol-egov.141.89.10.78`) — the blend weights
- * used when `options.blendWeights` is absent, which is every caller until
- * the `rank-weights` envelope carries them. **Plain-English defense:** equal
- * weights on two terms that each run over roughly `[0, 1]` — one edge's
- * contribution and need — so neither the evidence that a concept will be
- * examined nor how much of it she currently owes counts for more than the
- * other, and nothing of hers yet says otherwise. It is a pin, not a fit:
- * the development-set sweep (`olea-service`, `findings/ilb-pln-blend-sweep.md`)
- * found every invariant holding across the whole open range of the ratio
- * and failing only at its two ends, so the data rules those out and cannot
- * choose inside. Frozen in the planning targets manifest before the
- * held-out set is read; a provisional baseline, revisited when one term of
- * her review log exists (`[D-332]`).
+ * DECLARED FALLBACK (`[D-332]`, `ol-egov.141.89.10.78`; the proximity weight
+ * `[D-410]`, `ol-egov.141.89.10.82`) — the blend weights used when
+ * `options.blendWeights` is absent, which is every caller until the
+ * `rank-weights` envelope carries them. **Plain-English defense:** equal
+ * weights on three terms that each run over roughly `[0, 1]` — one edge's
+ * contribution, need, and proximity — so neither the evidence that a concept
+ * will be examined, nor how much of it she currently owes, nor how soon it
+ * is examined counts for more than the others, and nothing of hers yet says
+ * otherwise. It is a pin, not a fit: the development-set sweep (`olea-service`,
+ * `findings/ilb-pln-blend-sweep.md`), run jointly with the declared middle
+ * relevance, found every invariant holding across the whole grid of both
+ * weight ratios (four orders of magnitude either side of equal) and failing
+ * only where a term becomes numerically invisible, so the data rules those
+ * ends out and cannot choose inside. Frozen in the planning targets manifest
+ * before the held-out set is read; a provisional baseline, revisited when one
+ * term of her review log exists (`[D-332]`).
  */
-const DECLARED_FALLBACK_BLEND_WEIGHTS: RankBlendWeights = { relevance: 1, need: 1 };
+const DECLARED_FALLBACK_BLEND_WEIGHTS: RankBlendWeightsWithProximity = {
+  relevance: 1,
+  need: 1,
+  proximity: 1,
+};
+
+/**
+ * `[D-410]` — the blend's three weights. `./types.js`'s `RankBlendWeights`
+ * carries the `[D-332]` two; the proximity weight is typed HERE, for the
+ * same one-owned-file reason as the additive inputs below, and is optional
+ * on input so a two-weight object (the `rank-weights` envelope's future
+ * shape, every existing caller) still resolves: its proximity weight is the
+ * declared one. `rankOracle` always reports all three on
+ * `factors.blendWeights`.
+ */
+export interface RankBlendWeightsWithProximity extends RankBlendWeights {
+  /** Weight on {@link OracleProximityFactors.proximityScore}. Finite and above 0. */
+  readonly proximity: number;
+}
+
+/**
+ * `[D-410]` — the per-concept proximity term, reported on every ranked
+ * entry's `factors` (typed HERE; see {@link RankBlendWeightsWithProximity}).
+ */
+export interface OracleProximityFactors {
+  /**
+   * The highest `examProximityScore` across the concept's SURVIVING edges —
+   * how soon the soonest dated assessment that examines it falls, in
+   * `[0, 1]`. `0` when no surviving edge has a readable date, and for a
+   * `[D-329]` concept with no edge at all: a missing date adds nothing to
+   * this term and takes nothing from relevance.
+   */
+  readonly proximityScore: number;
+  /** All three weights `priorityScore` was computed with (`[D-410]`). */
+  readonly blendWeights: RankBlendWeightsWithProximity;
+}
 
 /**
  * `[D-329]` — additive to `RankOracleInput`, typed HERE (not `./types.js`)
@@ -545,7 +604,7 @@ interface ResolvedOptions {
   readonly proximityHalfLifeDays: number;
   readonly assessmentWeightDivisor: number;
   readonly masteryNeedWeight: Readonly<Record<OracleMasteryState, number>>;
-  readonly blendWeights: RankBlendWeights;
+  readonly blendWeights: RankBlendWeightsWithProximity;
 }
 
 /**
@@ -577,8 +636,16 @@ function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions
   const assessmentWeightDivisor =
     options?.assessmentWeightDivisor ?? DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR;
   const masteryNeedWeight = options?.masteryNeedWeight ?? DECLARED_FALLBACK_MASTERY_NEED_WEIGHT;
-  const blendWeights = options?.blendWeights ?? DECLARED_FALLBACK_BLEND_WEIGHTS;
-  for (const term of ['relevance', 'need'] as const) {
+  const supplied = options?.blendWeights as Partial<RankBlendWeightsWithProximity> | undefined;
+  const blendWeights: RankBlendWeightsWithProximity =
+    supplied === undefined
+      ? DECLARED_FALLBACK_BLEND_WEIGHTS
+      : {
+          relevance: supplied.relevance as number,
+          need: supplied.need as number,
+          proximity: supplied.proximity ?? DECLARED_FALLBACK_BLEND_WEIGHTS.proximity,
+        };
+  for (const term of ['relevance', 'need', 'proximity'] as const) {
     const value = blendWeights[term];
     // Above zero, and finite: a zero weight makes its term decoration, which
     // is exactly the endpoint the development-set sweep rules out.
@@ -749,10 +816,11 @@ export function conceptEligibilityVeto(
  * **This is a SIGNAL, never a gate** — the edge is NOT removed, unlike an
  * `'assessment-passed'` veto. It stays in `contributions`, fully reported
  * (`daysUntilDue: null`, `dueDateIssue` when the value was outright
- * unparseable rather than merely absent), and the concept it belongs to can
- * still rank on its other evidence, or even on this edge alone if it has no
- * other — scoring 0 discounts this one edge's share, it does not disqualify
- * the concept.
+ * unparseable rather than merely absent). Since `[D-410]` this score is no
+ * longer a factor of the edge's `contribution`: it feeds only the concept's
+ * own proximity term (the highest across its edges, `conceptProximityScore`),
+ * so scoring 0 adds nothing to that term and leaves the edge's evidence
+ * counting in full toward relevance.
  */
 function computeExamProximityScore(daysUntilDue: number | null, halfLifeDays: number): number {
   if (daysUntilDue === null) return 0;
@@ -899,13 +967,28 @@ function resolveNeed(
   return { needBasis: 'unknown', needOrderingInput: UNKNOWN_NEED_VALUE };
 }
 
-/** `[D-332]`'s blend: the two terms add, weighted; see the module doc. */
+/** `[D-332]`'s blend with `[D-410]`'s proximity term: the three terms add, weighted; see the module doc. */
 function blendPriority(
   relevance: number,
   needOrderingInput: number,
-  weights: RankBlendWeights,
+  proximityScore: number,
+  weights: RankBlendWeightsWithProximity,
 ): number {
-  return weights.relevance * relevance + weights.need * needOrderingInput;
+  return (
+    weights.relevance * relevance +
+    weights.need * needOrderingInput +
+    weights.proximity * proximityScore
+  );
+}
+
+/**
+ * `[D-410]` — the concept's proximity term: the highest `examProximityScore`
+ * across its surviving contributions (see {@link OracleProximityFactors}).
+ * The soonest dated assessment, not a sum: how many assessments examine the
+ * concept is already counted once, by relevance.
+ */
+function conceptProximityScore(contributions: readonly OracleEdgeContribution[]): number {
+  return contributions.reduce((max, c) => Math.max(max, c.examProximityScore), 0);
 }
 
 /**
@@ -913,11 +996,11 @@ function blendPriority(
  * as unknown and nothing else (registry §22, `[D-348]`): no deficit word,
  * no number standing in for a reading of her knowledge.
  */
-function buildNeedClause(factors: OracleConceptFactors): string {
-  const weights = factors.blendWeights ?? DECLARED_FALLBACK_BLEND_WEIGHTS;
+function buildNeedClause(factors: OracleConceptFactors & OracleProximityFactors): string {
+  const weights = factors.blendWeights;
   const weightsClause =
     `(relevance weight ${weights.relevance.toFixed(2)}, need weight ` +
-    `${weights.need.toFixed(2)})`;
+    `${weights.need.toFixed(2)}, proximity weight ${weights.proximity.toFixed(2)})`;
   const needClause =
     factors.needBasis === 'estimated' && factors.need !== undefined
       ? `Need ${factors.need.toFixed(2)}, from ${
@@ -927,7 +1010,11 @@ function buildNeedClause(factors: OracleConceptFactors): string {
         }.`
       : 'Need unknown: no current evidence on this concept yet, so it is ordered at the ' +
         `declared provisional value ${(factors.needOrderingInput ?? UNKNOWN_NEED_VALUE).toFixed(2)} ([D-348]).`;
-  return `${needClause} Priority score ${factors.priorityScore.toFixed(3)} ${weightsClause}.`;
+  const proximityClause =
+    factors.proximityScore > 0
+      ? `Proximity ${factors.proximityScore.toFixed(2)}, from the soonest dated assessment.`
+      : 'Proximity 0: no dated assessment, which adds nothing here and takes nothing from relevance.';
+  return `${needClause} ${proximityClause} Priority score ${factors.priorityScore.toFixed(3)} ${weightsClause}.`;
 }
 
 /** Deterministic order for `vetoedEdges`, matching `compareContributions`'s tie-break so purity/rebuild equivalence holds regardless of `Map` iteration order. */
@@ -1010,7 +1097,10 @@ function buildEdgeOutcome(
     resolved.proximityHalfLifeDays,
   );
   const evidenceStrength = yieldScore * edge.confidence;
-  const contribution = evidenceStrength * weight.score * examProximityScore;
+  // `[D-410]`: proximity is reported on the edge and blended as its own
+  // term (`conceptProximityScore`), never multiplied in here — an undated
+  // assessment's evidence counts in full.
+  const contribution = evidenceStrength * weight.score;
   return {
     kind: 'contribution',
     contribution: {
@@ -1088,7 +1178,7 @@ function buildEvidenceClause(factors: OracleConceptFactors): string {
 function buildReasoning(
   conceptName: string,
   course: string,
-  factors: OracleConceptFactors,
+  factors: OracleConceptFactors & OracleProximityFactors,
 ): string {
   const top = factors.contributions[0];
   if (top === undefined) {
@@ -1129,8 +1219,8 @@ function buildAbstainDetail(course: string, assessmentPaths: readonly VaultPath[
  * but that has no real assessment edge at all. See the module doc's "The
  * abstain path, and `[D-329]`'s 'unknown relevance' exception" for the
  * `contributions`/`citations`-both-empty signal this deliberately produces,
- * and why `0.5` is safe to use before its exact placement is checked
- * (`DECLARED_FALLBACK_UNKNOWN_RELEVANCE`'s own doc).
+ * and `DECLARED_FALLBACK_UNKNOWN_RELEVANCE`'s own doc for the value and its
+ * pin. Its proximity is 0: no edge, so no dated assessment (`[D-410]`).
  */
 function buildUnknownRelevanceEntry(
   conceptKey: string,
@@ -1146,7 +1236,9 @@ function buildUnknownRelevanceEntry(
   const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
   const need = resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey);
   const preMasteryScore = DECLARED_FALLBACK_UNKNOWN_RELEVANCE;
-  const factors: OracleConceptFactors = {
+  // No edge, so no dated assessment: proximity adds nothing ([D-410]).
+  const proximityScore = 0;
+  const factors: OracleConceptFactors & OracleProximityFactors = {
     citations: [],
     distinctSourceCount: 0,
     objectivesCitations: [],
@@ -1158,8 +1250,14 @@ function buildUnknownRelevanceEntry(
     masteryNeedWeight,
     ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
     ...need,
+    proximityScore,
     blendWeights: resolved.blendWeights,
-    priorityScore: blendPriority(preMasteryScore, need.needOrderingInput, resolved.blendWeights),
+    priorityScore: blendPriority(
+      preMasteryScore,
+      need.needOrderingInput,
+      proximityScore,
+      resolved.blendWeights,
+    ),
   };
   return {
     conceptName,
@@ -1182,7 +1280,7 @@ function buildUnknownRelevanceEntry(
 function buildUnknownRelevanceReasoning(
   conceptName: string,
   course: string,
-  factors: OracleConceptFactors,
+  factors: OracleConceptFactors & OracleProximityFactors,
 ): string {
   return (
     `${conceptName} (${course}): no assessment evidence recorded yet. Relevance unknown, scored ` +
@@ -1286,6 +1384,7 @@ function rankOneCourse(
     }
 
     const preMasteryScore = contributions.reduce((sum, c) => sum + c.contribution, 0);
+    const proximityScore = conceptProximityScore(contributions);
     const masteryState = resolveMasteryState(mastery, conceptKey);
     const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
     const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
@@ -1301,7 +1400,7 @@ function rankOneCourse(
     const distinctObjectivesSourceCount = new Set(objectivesCitations.map((c) => c.sourcePath))
       .size;
 
-    const factors: OracleConceptFactors = {
+    const factors: OracleConceptFactors & OracleProximityFactors = {
       citations,
       distinctSourceCount,
       objectivesCitations,
@@ -1317,10 +1416,17 @@ function rankOneCourse(
       ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
       // `[D-332]`: need (unknown ordered at the declared provisional
       // maximum, `[D-348]`) ADDED to relevance, never multiplied into it;
-      // the stage ladder above is reported and moves nothing.
+      // the stage ladder above is reported and moves nothing. `[D-410]`:
+      // proximity added the same way, as its own term.
       ...need,
+      proximityScore,
       blendWeights: resolved.blendWeights,
-      priorityScore: blendPriority(preMasteryScore, need.needOrderingInput, resolved.blendWeights),
+      priorityScore: blendPriority(
+        preMasteryScore,
+        need.needOrderingInput,
+        proximityScore,
+        resolved.blendWeights,
+      ),
     };
 
     entries.push({
