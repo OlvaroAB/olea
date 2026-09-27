@@ -56,6 +56,19 @@
  * key). `options.canonicalKeys` lets a caller hand in the one it already read; omitted, this
  * function reads it itself exactly as before, so a caller that does not thread it through sees
  * unchanged behaviour.
+ *
+ * **Only what the baseline already served is re-merged (`ol-egov.141.89.4.22`).** Since
+ * `ol-egov.141.89.4.15`, `readRelationSetWithCache` withholds a cached edge whose endpoint has
+ * moved since it was judged (rel.md §3 Default 4's freshness gate, given a `hashStore`). This
+ * function used to re-read EVERY non-disposed `.olea/relations/` record and fold it back on top of
+ * `pass.relations`, so a stale edge the baseline had just withheld came back downstream. It now
+ * re-merges only the records whose canonical proposition `pass.relations` already served — read
+ * off the baseline itself rather than by re-running the gate, because that gate's revision lookup
+ * is built from the hash store, which this function's caller does not hand it, and one decision
+ * about what is servable is safer than two that could drift. Without a `hashStore` the baseline
+ * serves every non-disposed record, so every record still qualifies and the fold is unchanged.
+ * Freshness is decided per record BEFORE same-as resolution (on each record's own stored keys),
+ * which is what the stored judged-at revisions refer to.
  */
 
 import {
@@ -66,6 +79,7 @@ import {
   listEdgeDispositionLogs,
   listRelationCacheRecords,
   listSameAsLinkRecords,
+  propositionKey,
   type ReadConcept,
   type RelationCacheRecord,
   type RelationSet,
@@ -111,6 +125,66 @@ function bestAttestationAsConceptRelation(
   };
 }
 
+/** The fields a served attestation carries, as one comparable string (object keys sorted, so a record read back from JSON in any key order compares equal to the edge built from it). */
+function attestationSignature(relation: ConceptRelation): string {
+  return JSON.stringify(
+    {
+      type: relation.type,
+      from: relation.from,
+      to: relation.to,
+      provenance: relation.provenance,
+      confidence: relation.confidence,
+      introducingPassages: relation.introducingPassages,
+    },
+    (_key, value: unknown) =>
+      value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? Object.fromEntries(
+            Object.entries(value as Record<string, unknown>).sort(([a], [b]) =>
+              a < b ? -1 : a > b ? 1 : 0,
+            ),
+          )
+        : value,
+  );
+}
+
+/**
+ * The cache records `pass.relations` already served (module doc, `ol-egov.141.89.4.22`).
+ * Records are grouped by the proposition their endpoints' canonical keys make — the same grouping
+ * `readRelationSetWithCache` serves by — and a group is kept whole when any record's best
+ * attestation appears among the baseline's attestations. A group the baseline withheld (stale, an
+ * unverified endpoint, or disposed) has no attestation there, so none of its records is re-merged.
+ */
+function recordsServedByBaseline(
+  records: readonly RelationCacheRecord[],
+  baseline: RelationSet,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): RelationCacheRecord[] {
+  const served = new Set<string>();
+  for (const entry of baseline.entries) {
+    for (const attestation of entry.attestations) served.add(attestationSignature(attestation));
+  }
+  const groups = new Map<string, RelationCacheRecord[]>();
+  for (const record of records) {
+    const key = propositionKey(
+      record.type,
+      canonicalKeys.canonicalOf(record.fromKey),
+      canonicalKeys.canonicalOf(record.toKey),
+    );
+    const group = groups.get(key);
+    if (group === undefined) groups.set(key, [record]);
+    else group.push(record);
+  }
+  const kept: RelationCacheRecord[] = [];
+  for (const group of groups.values()) {
+    const wasServed = group.some((record) => {
+      const best = bestAttestationAsConceptRelation(record);
+      return best !== undefined && served.has(attestationSignature(best));
+    });
+    if (wasServed) kept.push(...group);
+  }
+  return kept;
+}
+
 /**
  * Fold one pass's concepts and relations through the currently confirmed same-as links.
  *
@@ -119,7 +193,9 @@ function bestAttestationAsConceptRelation(
  * with the same arguments it always was — its own reachability claim is untouched. This function
  * only adds one more group: the same-as-resolved, disposition-excluded relation-cache records,
  * which can carry a merged attestation set `pass.relations`'s own fold never saw (two records
- * that only collide onto one proposition identity AFTER same-as resolution).
+ * that only collide onto one proposition identity AFTER same-as resolution). Only records the
+ * baseline already served enter that group (`ol-egov.141.89.4.22`, module doc), so an edge the
+ * baseline withheld as stale stays withheld.
  *
  * `options.canonicalKeys` (`ol-egov.141.89.9.57`): a caller already holding this tick's
  * canonical-key index passes it through rather than making this function read a third copy of
@@ -142,7 +218,11 @@ export async function resolveSameAsForPass(
   ]);
   const dispositionLogs = dispositionLogEntries.map((entry) => entry.log);
   const resolvedCacheRecords = resolveRelationCacheRecordsWithSameAsLinks(
-    cacheRecordEntries.map((entry) => entry.record),
+    recordsServedByBaseline(
+      cacheRecordEntries.map((entry) => entry.record),
+      pass.relations,
+      canonicalKeys,
+    ),
     links,
     canonicalKeys,
   );

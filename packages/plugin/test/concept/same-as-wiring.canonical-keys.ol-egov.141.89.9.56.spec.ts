@@ -23,6 +23,7 @@ import {
   writeRelationCache,
 } from 'olea-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readRelationSetWithCache } from '../../src/concept/relation-wiring.js';
 import { resolveSameAsForPass } from '../../src/concept/same-as-wiring.js';
 import type { ConceptAndRelationPass } from '../../src/concept/wiring.js';
 
@@ -148,7 +149,13 @@ describe('resolveSameAsForPass reads through the canonical-key index ([D-378], o
       'declined',
     );
 
-    const result = await resolveSameAsForPass(vault, passWith([]));
+    // The baseline production folds first (`readRelationSetWithCache`); since
+    // `ol-egov.141.89.4.22` only the records it served are re-merged here.
+    const pass = passWith([]);
+    const result = await resolveSameAsForPass(vault, {
+      ...pass,
+      relations: await readRelationSetWithCache(vault, pass),
+    });
 
     expect(servedRelations(result.relations).map((relation) => relation.from)).toEqual([
       'Sprocket theory',
