@@ -87,7 +87,7 @@ import {
   calendarDayOfTimestamp,
   shiftCalendarDay,
 } from '../today/calendar-day.js';
-import type { InsightResult } from './types.js';
+import type { ConceptCourses, InsightResult } from './types.js';
 
 /**
  * "The days before an assessment". Seven, because a week is the unit a student
@@ -410,4 +410,90 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
       ? `attendance ratio ${attendanceRatio.toFixed(2)} is below ${ATTENDANCE_RATIO} — a burst near an assessment, not a pull toward one`
       : `pre-assessment concentration ${concentration.toFixed(2)} is below ${CONCENTRATION_RATIO}`,
   };
+}
+
+/**
+ * One course's concentration reading (standing-views spec §2.3, `vew.md` in
+ * olea-service; review 4.2: "make the analysis window and assessment
+ * association clear").
+ *
+ * `detectSpacing` above pools every course: it unions every assessment day
+ * the log implies and counts any review on a day inside any course's
+ * pre-assessment week as near, so one course's steady practice during
+ * another course's exam week reads as concentration. This reading moves the
+ * association to the course: a review belongs to each course that holds one
+ * of the concepts it scored (the concept-to-course join, `ConceptCourses`),
+ * and the course's near days are the week before each of ITS OWN assessments
+ * as its own reviews recorded them (`examProximity` is the nearest future
+ * assessment among the concept's own ranked edges, `../plan/build.ts`, read
+ * as recorded when the review was selected, never from today's dates). Every
+ * constant, floor and condition is `detectSpacing`'s, unchanged: this is the
+ * same detector over one course's reviews.
+ *
+ * `reviewCount` and `span` state what was read, even when the detector
+ * abstains, so a line can name its course and its span rather than a span
+ * it did not read (the footer defect, spec §0 item 6).
+ */
+export interface CourseSpacingReading {
+  readonly course: string;
+  /** Dated reviews this course's reading was computed over. */
+  readonly reviewCount: number;
+  /** First and last calendar day of those reviews, or `null` when none is dated. */
+  readonly span: { readonly from: CalendarDay; readonly to: CalendarDay } | null;
+  readonly insight: SpacingInsight;
+}
+
+/**
+ * Per course, the concentration reading over that course's own reviews and
+ * assessments, sorted by course id (an order for determinism, never a
+ * ranking). A course with no review at all still gets a reading, abstaining,
+ * when the join names it; a review whose concepts no course holds belongs to
+ * no course's reading. Pure; reads no clock.
+ *
+ * Nothing calls this yet: Today still draws the pooled `detectSpacing` line.
+ * Moving Today to one line per course is the wiring bead's
+ * (`ol-egov.141.89.11.5`), with its copy (spec §7, Class B default: where two
+ * courses show the pattern, two lines can appear).
+ */
+export function detectSpacingByCourse(
+  entries: readonly ReviewLogEntry[],
+  concepts: readonly ConceptCourses[],
+): readonly CourseSpacingReading[] {
+  const coursesByConcept = new Map<string, Set<string>>();
+  const allCourses = new Set<string>();
+  for (const row of concepts) {
+    const set = coursesByConcept.get(row.conceptId) ?? new Set<string>();
+    for (const course of row.courses) {
+      if (course === '') continue;
+      set.add(course);
+      allCourses.add(course);
+    }
+    coursesByConcept.set(row.conceptId, set);
+  }
+
+  const reviewsByCourse = new Map<string, ReviewLogRecord[]>();
+  for (const course of allCourses) reviewsByCourse.set(course, []);
+  for (const record of reviewsOf(entries)) {
+    const courses = new Set<string>();
+    for (const conceptId of record.conceptIds) {
+      for (const course of coursesByConcept.get(conceptId) ?? []) courses.add(course);
+    }
+    for (const course of courses) reviewsByCourse.get(course)?.push(record);
+  }
+
+  return [...reviewsByCourse.keys()].sort().map((course) => {
+    const reviews = reviewsByCourse.get(course) ?? [];
+    const days = reviews
+      .map((record) => calendarDayOfTimestamp(record.timestamp))
+      .filter((day): day is CalendarDay => day !== null)
+      .sort();
+    const from = days[0];
+    const to = days[days.length - 1];
+    return {
+      course,
+      reviewCount: days.length,
+      span: from === undefined || to === undefined ? null : { from, to },
+      insight: detectSpacing(reviews),
+    };
+  });
 }

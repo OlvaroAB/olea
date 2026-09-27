@@ -134,12 +134,17 @@ describe('buildRetrospective', () => {
     ]);
   });
 
-  it('a too-early concept never appears in "carries" — no durable evidence for F8.7 to read', () => {
+  it('[D-388]: a too-early concept carries too, stays counted once in the too-early count, and says it has no qualifying practice', () => {
     const conceptCourses: readonly ConceptCourses[] = [
       { conceptId: 'c-early', courses: ['C1', 'C2'] },
     ];
     const result = buildRetrospective(baseInput({ conceptCourses }));
-    expect(result.carries.some((c) => c.conceptId === 'c-early')).toBe(false);
+    const entry = result.carries.find((c) => c.conceptId === 'c-early');
+    expect(entry?.otherCourses).toEqual(['C2']);
+    expect(entry?.hasQualifyingPractice).toBe(false);
+    expect(result.tooEarlyCount).toBe(1);
+    expect(result.held.some((c) => c.conceptId === 'c-early')).toBe(false);
+    expect(result.faded.some((c) => c.conceptId === 'c-early')).toBe(false);
   });
 
   it("D-134 Q3: with no other course, falls back to the course's own final assessment scope", () => {

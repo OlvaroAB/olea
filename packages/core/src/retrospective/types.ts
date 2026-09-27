@@ -70,15 +70,18 @@ export interface RetrospectiveConceptLine {
 }
 
 /**
- * "What carries" (F8.7 reuse, `[D-058]`) — an OVERLAY on `held`/`faded`, never
- * a third grouping (DSN-2 `NOTES.md` §1, second finding). Two ways a concept
- * can carry, mirroring D-134 Q3/Q9:
+ * "What carries" (F8.7 reuse, `[D-058]`) — an OVERLAY on the held / faded /
+ * too-early partition, never a fourth grouping (DSN-2 `NOTES.md` §1, second
+ * finding), computed for every concept in scope, practised or not
+ * (`[D-388]`). Two ways a concept can carry, mirroring D-134 Q3/Q9:
  *
- * - **Cross-course** (the ordinary case): the concept is also associated with
- *   at least one OTHER course, read from the same concept-to-course join
- *   `../today/earlier-course-recognition.ts` reads — `otherCourses` is that
- *   module's own "every other course, never narrowed to one" rule, reused
- *   rather than re-derived.
+ * - **Cross-course** (the ordinary case): the concept's identity is also held
+ *   by at least one OTHER course, read from the same concept-to-course join
+ *   `../today/earlier-course-recognition.ts` reads, or named by another
+ *   course's declared scope — `otherCourses` is that module's own "every
+ *   other course, never narrowed to one" rule, reused rather than re-derived.
+ *   Identity is the same key or a confirmed same-as link, never a label
+ *   (`[D-388]` condition 4, `[D-402]`).
  * - **Same-course fallback** (D-134 Q3: "where the course has no later
  *   course, what carries reads against the term's last assessment"): fires
  *   only when `otherCourses` is empty AND the caller supplied a scope for the
@@ -93,6 +96,56 @@ export interface RetrospectiveCarriesLine {
   readonly conceptName: string;
   readonly otherCourses: readonly string[];
   readonly carriesToFinalAssessment: boolean;
+}
+
+/**
+ * `[D-388]` condition 3: on what ground a later scope holds the concept.
+ * `'declared-scope'` is the later course's examiner-declared units (or, for
+ * the same-course fallback, the final assessment's own recorded scope);
+ * `'olea-reading'` is Olea's labelled reading, never the examiner's
+ * authority. Where both hold, the declared scope is named: it is the
+ * stronger fact, and the reading adds nothing to it.
+ */
+export type RetrospectiveCarryBasis = 'declared-scope' | 'olea-reading';
+
+/** One later course a concept carries into, with the basis that places it there. */
+export interface RetrospectiveCarryDestination {
+  readonly course: string;
+  readonly basis: RetrospectiveCarryBasis;
+}
+
+/**
+ * One "what carries" entry as `buildRetrospective` returns it (`[D-388]`):
+ * the line above plus the two facts the ruling requires every entry to
+ * record. A renderer that takes the narrower `RetrospectiveCarriesLine`
+ * still compiles; one that draws the ruled line reads these.
+ *
+ * - `destinations`: one per `otherCourses` entry, same order, each with its
+ *   basis.
+ * - `finalAssessmentBasis`: the basis of the same-course fallback, `null`
+ *   exactly when `carriesToFinalAssessment` is false.
+ * - `hasQualifyingPractice`: whether the concept has qualifying practice
+ *   history, a completed review on a recall-tier instrument (the sufficiency
+ *   floor that separates `held`/`faded` from the too-early count). `false`
+ *   is a plain absence of evidence, never faded, weak or forgotten
+ *   (`[D-388]` conditions 1 and 2); it is stated, never inferred from the
+ *   entry being absent from `held` and `faded`.
+ */
+export interface RetrospectiveCarriesEntry extends RetrospectiveCarriesLine {
+  readonly destinations: readonly RetrospectiveCarryDestination[];
+  readonly finalAssessmentBasis: RetrospectiveCarryBasis | null;
+  readonly hasQualifyingPractice: boolean;
+}
+
+/**
+ * The concepts a course's examiner-declared units are aligned to (`SCP`'s
+ * active declarations, `[D-355]`), for `[D-388]`'s basis. A course absent
+ * here has no declared scope this reading knows of, so anything carrying
+ * into it does so on Olea's reading.
+ */
+export interface RetrospectiveDeclaredScope {
+  readonly course: string;
+  readonly conceptIds: readonly string[];
 }
 
 export interface RetrospectiveReading {
@@ -121,8 +174,12 @@ export interface RetrospectiveReading {
    * tooEarlyCount === scopeCount`, always.
    */
   readonly tooEarlyCount: number;
-  /** Overlay only — never counted into `scopeCount` a second time. */
-  readonly carries: readonly RetrospectiveCarriesLine[];
+  /**
+   * Overlay only — never counted into `scopeCount` a second time. Computed
+   * for every concept in scope, practised or not (`[D-388]`): a too-early
+   * concept can carry while staying counted once, in `tooEarlyCount`.
+   */
+  readonly carries: readonly RetrospectiveCarriesEntry[];
 }
 
 /** Everything `buildRetrospective` needs, all caller-resolved (see this file's module doc). */
@@ -150,4 +207,25 @@ export interface RetrospectiveInput {
    * never a guess.
    */
   readonly finalAssessmentScope?: readonly RetrospectiveConceptCoverage[];
+  /**
+   * Where `finalAssessmentScope` came from, for `[D-388]`'s basis:
+   * `'assessment-stated'` (the final assessment's own recorded scope) reads
+   * as the declared scope; `'evidenced'`, or omitted, reads as Olea's
+   * reading. Omitted never borrows the declared scope's authority.
+   */
+  readonly finalAssessmentScopeOrigin?: RetrospectiveScopeOrigin;
+  /** `[D-388]`'s basis input; see `RetrospectiveDeclaredScope`. Omitted, no later course has a declared scope. */
+  readonly declaredScopes?: readonly RetrospectiveDeclaredScope[];
+  /**
+   * The persisted same-as links (`../concept/same-as.js`), every status.
+   * `[D-388]` condition 4: history carries to another course only through
+   * one identity, the same key or a link she CONFIRMED (its reason and
+   * confirmation are the justifying evidence); a proposed, declined or
+   * severed link joins nothing, and a shared label never does. Read through
+   * `buildSameAsKeyRedirect`, the seam `../today/earlier-course-recognition.ts`
+   * reads. Omitted, identity is exactly `conceptId`.
+   */
+  readonly sameAsLinks?: readonly import('../concept/same-as.js').SameAsLinkRecord[];
+  /** The key store's canonical-key index (`[D-378]`), read with `sameAsLinks`. Optional. */
+  readonly canonicalKeys?: import('../concept/key-store.js').ConceptKeyCanonicalIndex;
 }

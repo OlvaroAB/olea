@@ -43,12 +43,41 @@
  *    extractor's **silence**, not its verdict, and reading silence as success
  *    is the same mistake in a different costume.
  *
+ * **`[D-326]`: the completeness record, where one exists, is read instead.**
+ * The ruling (`ol-egov.141.89.8.8`) has the coverage fold read the shared
+ * per-unit completeness record (`../ingestion/unit-manifest/`) rather than
+ * the text-layer re-extraction the tier-3 row carries, with three
+ * conditions this module holds for every source a caller supplies a record
+ * for (`SummariseCoverageScopeOptions.manifests`):
+ *
+ *  - **Reading and concept extraction are two facts.** Each row carries
+ *    `readingCompleteness` and `conceptExtraction` apart; neither is derived
+ *    from the other, and a reading that finished never makes extraction
+ *    finished.
+ *  - **An unread or partly read region is unknown, never absent.** A source
+ *    with any unit read only in part, failed, or still pending grounds no
+ *    claim that something is missing from it (`absenceGrounding:
+ *    'unknown'`), even when some of it was read and cited.
+ *  - **Nothing unfinished is shown as complete.** A partly read or
+ *    unsettled source, or unfinished extraction, withdraws
+ *    `canStateExhaustiveness`, beside the four read states' own gate.
+ *
+ * A source with no record keeps today's reading of the extractor verdict,
+ * unchanged, with both new facts `'not-recorded'`: the record has no durable
+ * store yet, so an absent record is the ordinary production case today, and
+ * treating it as unfinished would withdraw a claim she sees now on no new
+ * evidence. How a partly read source or unfinished extraction is WORDED is
+ * the view's to add with its copy; the four read states are unchanged, so no
+ * renderer keyed on them breaks.
+ *
  * **INV-1.** Pure computation over already-gathered inputs; no `obsidian`, no
  * vault I/O, no clock. §7.1: this is a local projection, deterministically
  * recomputable from the same inputs forever.
  */
 
 import type { ExtractionOutcome, SourceFormat } from '../extract/types.js';
+import type { AbsenceGrounding } from '../ingestion/unit-manifest/manifest.js';
+import type { UnitManifest, UnitManifestEntry } from '../ingestion/unit-manifest/types.js';
 import type { SourceKind, SourceRole } from '../source/types.js';
 import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -59,6 +88,29 @@ import type { VaultPath } from '../vault/types.js';
  * and not two.
  */
 export type SourceReadState = 'read' | 'read-yielded-nothing' | 'unreadable' | 'not-attempted';
+
+/**
+ * How far a source's pass reached, from its `[D-326]` completeness record:
+ * `'full'` every unit read in full (a blank page, or one with no text,
+ * counts: the read succeeded); `'partial'` the pass settled with at least
+ * one unit read only in part, failed, or not legible; `'unsettled'` a unit
+ * is still pending or awaiting a retry; `'not-recorded'` no record was
+ * supplied, and the read state is the extractor verdict's, as before.
+ */
+export type SourceReadingCompleteness = 'full' | 'partial' | 'unsettled' | 'not-recorded';
+
+/**
+ * Whether concept extraction has run over the source's read material, from
+ * the same record and never from the reading (`[D-326]`): `'complete'` over
+ * every unit that was read; `'unfinished'` any read unit not yet extracted,
+ * or reading itself unsettled; `'nothing-to-extract'` the pass settled and no
+ * unit held readable material; `'not-recorded'` no record was supplied.
+ */
+export type SourceConceptExtraction =
+  | 'complete'
+  | 'unfinished'
+  | 'nothing-to-extract'
+  | 'not-recorded';
 
 /** One source's row on the coverage surface — the denominator, made visible. */
 export interface CoverageScopeSource {
@@ -72,6 +124,18 @@ export interface CoverageScopeSource {
   readonly outcome: ExtractionOutcome | null;
   readonly citations: number;
   readonly units: number;
+  /** `[D-326]`: how far the reading reached (module doc). */
+  readonly readingCompleteness: SourceReadingCompleteness;
+  /** `[D-326]`: whether concept extraction finished, apart from the reading (module doc). */
+  readonly conceptExtraction: SourceConceptExtraction;
+  /**
+   * Whether this source's silence may ground a claim that something is
+   * absent from it (`[D-326]`, the same two values as the record's own
+   * `absenceGroundingFor`): `'groundable'` only for a source read in full
+   * (or read, with no record to say otherwise); every other source is
+   * `'unknown'`, never absent.
+   */
+  readonly absenceGrounding: AbsenceGrounding;
 }
 
 /**
@@ -89,9 +153,18 @@ export interface CoverageScope {
   readonly yieldedNothingCount: number;
   readonly unreadableCount: number;
   readonly notAttemptedCount: number;
+  /** Sources whose record says the pass settled with a unit read only in part, failed or not legible (`[D-326]`). */
+  readonly partlyReadCount: number;
+  /** Sources whose record has a unit still pending or awaiting a retry (`[D-326]`). */
+  readonly unsettledCount: number;
+  /** Sources whose record says concept extraction has not finished over what was read (`[D-326]`). */
+  readonly extractionUnfinishedCount: number;
   /**
    * Every source read successfully — and therefore the *only* state in which
-   * an exhaustiveness claim over the read set is even eligible.
+   * an exhaustiveness claim over the read set is even eligible. Where a
+   * `[D-326]` record exists, that also means read in full with concept
+   * extraction finished: a partly read or unsettled source, or unfinished
+   * extraction, withdraws it.
    *
    * **Note what this still is not.** It says the read path completed, not that
    * concept resolution was complete or that her material was checked
@@ -152,25 +225,113 @@ export function readStateOf(row: SourceCoverage): SourceReadState {
   return readStateOfOutcome(row.outcome, row.units);
 }
 
+/** The three `[D-326]` facts one completeness record gives a source, and the read state it implies. */
+export interface SourceRecordReading {
+  readonly readState: SourceReadState;
+  readonly readingCompleteness: Exclude<SourceReadingCompleteness, 'not-recorded'>;
+  readonly conceptExtraction: Exclude<SourceConceptExtraction, 'not-recorded'>;
+}
+
+/** A unit the pass settled on having read nothing usable from, as the census reads it: failed, or not legible. */
+function isFailingUnit(entry: UnitManifestEntry): boolean {
+  const state = entry.readingState;
+  return state.kind === 'failed' || (state.kind === 'unreadable' && state.reason === 'not-legible');
+}
+
+/**
+ * Read one source's `[D-326]` completeness record into the coverage
+ * surface's terms, or `null` for a record with no units (nothing recorded;
+ * the caller keeps the extractor verdict).
+ *
+ * - **Read state**, from the record rather than the re-extraction: any unit
+ *   with readable material (read or partial) → `'read'`; else any unit
+ *   failed or not legible → `'unreadable'`; else any unit still pending or
+ *   unavailable → `'not-attempted'` (no reading has happened yet); else every
+ *   unit was blank or held no text → `'read-yielded-nothing'`. A blank page
+ *   or one with no text is a read that found nothing, never a failure (the
+ *   census's own reading of `[D-325]`, `../source/unreadable.ts`).
+ * - **Reading completeness** and **concept extraction** as their types say,
+ *   each from its own field of the record.
+ *
+ * Exported because the fold is the honesty property, asserted directly.
+ */
+export function readRecordOf(manifest: UnitManifest): SourceRecordReading | null {
+  const units = manifest.entries;
+  if (units.length === 0) return null;
+  const withMaterial = units.filter(
+    (u) => u.readingState.kind === 'read' || u.readingState.kind === 'partial',
+  );
+  const unsettled = units.some(
+    (u) => u.readingState.kind === 'pending' || u.readingState.kind === 'unavailable',
+  );
+  const failing = units.some(isFailingUnit);
+  const partial = units.some((u) => u.readingState.kind === 'partial');
+
+  const readState: SourceReadState =
+    withMaterial.length > 0
+      ? 'read'
+      : failing
+        ? 'unreadable'
+        : unsettled
+          ? 'not-attempted'
+          : 'read-yielded-nothing';
+  const readingCompleteness = unsettled ? 'unsettled' : partial || failing ? 'partial' : 'full';
+  const conceptExtraction = unsettled
+    ? 'unfinished'
+    : withMaterial.length === 0
+      ? 'nothing-to-extract'
+      : withMaterial.every((u) => u.conceptExtractionState === 'complete')
+        ? 'complete'
+        : 'unfinished';
+  return { readState, readingCompleteness, conceptExtraction };
+}
+
+/** Options for `summariseCoverageScope`. */
+export interface SummariseCoverageScopeOptions {
+  /**
+   * `[D-326]`'s completeness records, keyed by source path, where the caller
+   * has them. A record is authoritative for its source (module doc); a path
+   * with no record, or a record with no units, keeps the extractor verdict.
+   */
+  readonly manifests?: ReadonlyMap<VaultPath, UnitManifest>;
+}
+
 /**
  * Summarise what a tier-3 pass actually read.
  *
  * Takes `extractTier3Evidence`'s own `sourceCoverage` unmodified — composing
  * its output rather than re-deriving a second answer to "what did we read?",
- * for the reason `evidence.ts` gives about denominators computed twice.
+ * for the reason `evidence.ts` gives about denominators computed twice — and,
+ * per `[D-326]`, each source's completeness record where one is supplied.
  */
-export function summariseCoverageScope(sourceCoverage: readonly SourceCoverage[]): CoverageScope {
+export function summariseCoverageScope(
+  sourceCoverage: readonly SourceCoverage[],
+  options: SummariseCoverageScopeOptions = {},
+): CoverageScope {
   const sources: CoverageScopeSource[] = sourceCoverage
-    .map((row) => ({
-      sourcePath: row.sourcePath,
-      readState: readStateOf(row),
-      role: row.role,
-      kinds: row.kinds,
-      format: row.format,
-      outcome: row.outcome,
-      citations: row.citations,
-      units: row.units,
-    }))
+    .map((row): CoverageScopeSource => {
+      const manifest = options.manifests?.get(row.sourcePath);
+      const recorded = manifest === undefined ? null : readRecordOf(manifest);
+      const readState = recorded?.readState ?? readStateOf(row);
+      const readingCompleteness = recorded?.readingCompleteness ?? 'not-recorded';
+      return {
+        sourcePath: row.sourcePath,
+        readState,
+        role: row.role,
+        kinds: row.kinds,
+        format: row.format,
+        outcome: row.outcome,
+        citations: row.citations,
+        units: row.units,
+        readingCompleteness,
+        conceptExtraction: recorded?.conceptExtraction ?? 'not-recorded',
+        absenceGrounding:
+          readState === 'read' &&
+          (readingCompleteness === 'full' || readingCompleteness === 'not-recorded')
+            ? 'groundable'
+            : 'unknown',
+      };
+    })
     .sort((a, b) => (a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0));
 
   const count = (state: SourceReadState): number =>
@@ -180,6 +341,11 @@ export function summariseCoverageScope(sourceCoverage: readonly SourceCoverage[]
   const yieldedNothingCount = count('read-yielded-nothing');
   const unreadableCount = count('unreadable');
   const notAttemptedCount = count('not-attempted');
+  const partlyReadCount = sources.filter((s) => s.readingCompleteness === 'partial').length;
+  const unsettledCount = sources.filter((s) => s.readingCompleteness === 'unsettled').length;
+  const extractionUnfinishedCount = sources.filter(
+    (s) => s.conceptExtraction === 'unfinished',
+  ).length;
 
   return {
     sources,
@@ -187,14 +353,21 @@ export function summariseCoverageScope(sourceCoverage: readonly SourceCoverage[]
     yieldedNothingCount,
     unreadableCount,
     notAttemptedCount,
+    partlyReadCount,
+    unsettledCount,
+    extractionUnfinishedCount,
     // Every source read, and at least one source to have read. An empty scope
     // is NOT exhaustive over anything: "we checked all zero of your sources"
-    // is the purest form of the sentence this bead rejects.
+    // is the purest form of the sentence this bead rejects. `[D-326]`: and
+    // nothing recorded as partly read, unsettled or not yet extracted.
     canStateExhaustiveness:
       sources.length > 0 &&
       yieldedNothingCount === 0 &&
       unreadableCount === 0 &&
-      notAttemptedCount === 0,
+      notAttemptedCount === 0 &&
+      partlyReadCount === 0 &&
+      unsettledCount === 0 &&
+      extractionUnfinishedCount === 0,
   };
 }
 

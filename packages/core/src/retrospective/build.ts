@@ -14,10 +14,24 @@
  * `faded` (vitality `tending`) partition the scope together with
  * `tooEarlyCount` (vitality `early`, STATED as a count rather than filed
  * under either list) — every concept in scope lands in exactly one of the
- * three. `carries` is computed independently, over `held` and `faded` only
- * (never over the too-early set, which has no durable evidence for F8.7's
- * derivation to read), and a concept can appear in `carries` AND in `held`
- * or `faded` at once — it is a cross-cutting reading, not a fourth bucket.
+ * three. `carries` is computed independently, for EVERY concept in scope,
+ * practised or not (`[D-388]`, ruled 2026-09-27: option (a); the earlier
+ * skip of too-early concepts, the review's "early-continue branch", is
+ * removed rather than kept behind an option). A concept can appear in
+ * `carries` AND in `held`, `faded` or the too-early count at once — it is a
+ * cross-cutting reading, never a fourth bucket, and it never changes which
+ * of the three a concept is counted in.
+ *
+ * ## What carries records, per `[D-388]`
+ *
+ * Each entry names its basis per later course (that course's declared scope,
+ * or Olea's labelled reading of it; condition 3) and whether the concept has
+ * qualifying practice history (condition 1): the same sufficiency floor that
+ * separates held and faded from too early, so an entry whose concept is
+ * counted too early always says it has none, and nothing here words, counts
+ * or files it as faded (condition 2). History crosses courses only through
+ * one identity: the same key, or a same-as link she confirmed (condition 4,
+ * `[D-402]`); two concepts sharing only a label stay two concepts.
  *
  * ## Not a score, not a verdict
  *
@@ -28,10 +42,12 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
 import { computeConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
 import type {
-  RetrospectiveCarriesLine,
+  RetrospectiveCarriesEntry,
+  RetrospectiveCarryBasis,
   RetrospectiveConceptLine,
   RetrospectiveInput,
   RetrospectiveReading,
@@ -44,36 +60,76 @@ function compareByConceptName(
   return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
 }
 
-/** Merges every `ConceptCourses` row into one course set per concept id — a concept can be named more than once across the input, matching `earlier-course-recognition.ts`'s own helper. */
-function courseSetsByConcept(
-  conceptCourses: RetrospectiveInput['conceptCourses'],
+/**
+ * Merges rows of `(conceptId, courses)` into one course set per IDENTITY —
+ * a concept can be named more than once across the input, and a confirmed
+ * same-as link names one identity by two ids (`identityOf`), matching
+ * `earlier-course-recognition.ts`'s own helper. A blank course name is
+ * never a course.
+ */
+function courseSetsByIdentity(
+  rows: readonly { readonly conceptId: string; readonly courses: readonly string[] }[],
+  identityOf: (conceptId: string) => string,
 ): Map<string, Set<string>> {
-  const byConcept = new Map<string, Set<string>>();
-  for (const row of conceptCourses) {
-    const set = byConcept.get(row.conceptId) ?? new Set<string>();
-    for (const course of row.courses) set.add(course);
-    byConcept.set(row.conceptId, set);
+  const byIdentity = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const identity = identityOf(row.conceptId);
+    const set = byIdentity.get(identity) ?? new Set<string>();
+    for (const course of row.courses) if (course !== '') set.add(course);
+    byIdentity.set(identity, set);
   }
-  return byConcept;
+  return byIdentity;
 }
 
-function buildCarriesLine(
+interface CarriesContext {
+  readonly course: string;
+  readonly identityOf: (conceptId: string) => string;
+  /** Courses whose material holds each identity: Olea's reading of their scope. */
+  readonly readingCourses: ReadonlyMap<string, ReadonlySet<string>>;
+  /** Courses whose examiner-declared units are aligned to each identity. */
+  readonly declaredCourses: ReadonlyMap<string, ReadonlySet<string>>;
+  readonly finalAssessmentIdentities: ReadonlySet<string> | undefined;
+  readonly finalAssessmentBasis: RetrospectiveCarryBasis;
+}
+
+const NO_COURSES: ReadonlySet<string> = new Set<string>();
+
+function buildCarriesEntry(
   conceptId: string,
   conceptName: string,
-  course: string,
-  courseSets: Map<string, Set<string>>,
-  finalAssessmentScope: readonly { readonly conceptId: string }[] | undefined,
-): RetrospectiveCarriesLine | null {
-  const otherCourses = [...(courseSets.get(conceptId) ?? new Set<string>())]
-    .filter((c) => c !== course)
+  hasQualifyingPractice: boolean,
+  ctx: CarriesContext,
+): RetrospectiveCarriesEntry | null {
+  const identity = ctx.identityOf(conceptId);
+  const reading = ctx.readingCourses.get(identity) ?? NO_COURSES;
+  const declared = ctx.declaredCourses.get(identity) ?? NO_COURSES;
+  const otherCourses = [...new Set([...reading, ...declared])]
+    .filter((c) => c !== ctx.course)
     .sort();
   if (otherCourses.length > 0) {
-    return { conceptId, conceptName, otherCourses, carriesToFinalAssessment: false };
+    return {
+      conceptId,
+      conceptName,
+      otherCourses,
+      carriesToFinalAssessment: false,
+      destinations: otherCourses.map((course) => ({
+        course,
+        basis: declared.has(course) ? 'declared-scope' : 'olea-reading',
+      })),
+      finalAssessmentBasis: null,
+      hasQualifyingPractice,
+    };
   }
-  const carriesToFinalAssessment =
-    finalAssessmentScope?.some((c) => c.conceptId === conceptId) ?? false;
-  if (carriesToFinalAssessment) {
-    return { conceptId, conceptName, otherCourses: [], carriesToFinalAssessment: true };
+  if (ctx.finalAssessmentIdentities?.has(identity) === true) {
+    return {
+      conceptId,
+      conceptName,
+      otherCourses: [],
+      carriesToFinalAssessment: true,
+      destinations: [],
+      finalAssessmentBasis: ctx.finalAssessmentBasis,
+      hasQualifyingPractice,
+    };
   }
   return null;
 }
@@ -94,7 +150,32 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     input.now,
     input.holdingCut,
   );
-  const courseSets = courseSetsByConcept(input.conceptCourses);
+  // `[D-388]` condition 4 / `[D-402]`: one identity is the same key or a
+  // CONFIRMED same-as link, nothing weaker; with no links the redirect is
+  // empty and every id is its own identity. Used for what carries only: the
+  // partition reads each concept's own evidence, exactly as before.
+  const redirect =
+    input.sameAsLinks !== undefined
+      ? buildSameAsKeyRedirect(input.sameAsLinks, input.canonicalKeys)
+      : new Map<string, string>();
+  const identityOf = (id: string): string => redirect.get(id) ?? id;
+  const carriesContext: CarriesContext = {
+    course: input.course,
+    identityOf,
+    readingCourses: courseSetsByIdentity(input.conceptCourses, identityOf),
+    declaredCourses: courseSetsByIdentity(
+      (input.declaredScopes ?? []).flatMap((scope) =>
+        scope.conceptIds.map((conceptId) => ({ conceptId, courses: [scope.course] })),
+      ),
+      identityOf,
+    ),
+    finalAssessmentIdentities:
+      input.finalAssessmentScope === undefined
+        ? undefined
+        : new Set(input.finalAssessmentScope.map((c) => identityOf(c.conceptId))),
+    finalAssessmentBasis:
+      input.finalAssessmentScopeOrigin === 'assessment-stated' ? 'declared-scope' : 'olea-reading',
+  };
   // `ol-a07q` (`[D-281]` item 4): the displayed stage must exclude evidence
   // from an instrument proven invalid — a `rejected` verdict or a contest
   // resolved `corrected` (`../mastery/validity.ts`, `ol-v7r5.69`'s close
@@ -106,7 +187,7 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
   const held: RetrospectiveConceptLine[] = [];
   const faded: RetrospectiveConceptLine[] = [];
   let tooEarlyCount = 0;
-  const carries: RetrospectiveCarriesLine[] = [];
+  const carries: RetrospectiveCarriesEntry[] = [];
 
   for (const { conceptId, conceptName } of input.scope) {
     const vitality = vitalityByConceptId.get(conceptId);
@@ -117,9 +198,20 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     // (`oracle/rank.ts`'s `resolveMasteryState`, `resolveRetrievabilityWeight`).
     const value = vitality?.value ?? 'early';
 
+    // `[D-388]`: what carries is computed for every concept in scope, before
+    // and apart from the partition, so a too-early concept can carry while
+    // staying counted once, in `tooEarlyCount`.
+    const carriesEntry = buildCarriesEntry(
+      conceptId,
+      conceptName,
+      value !== 'early',
+      carriesContext,
+    );
+    if (carriesEntry !== null) carries.push(carriesEntry);
+
     if (value === 'early') {
       tooEarlyCount += 1;
-      continue; // too-early concepts carry no durable evidence for `carries` to read.
+      continue;
     }
 
     const { state } = computeConceptMastery(entries, conceptId, { invalidInstrumentIds });
@@ -131,15 +223,6 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     };
     if (value === 'holding') held.push(line);
     else faded.push(line);
-
-    const carriesLine = buildCarriesLine(
-      conceptId,
-      conceptName,
-      input.course,
-      courseSets,
-      input.finalAssessmentScope,
-    );
-    if (carriesLine !== null) carries.push(carriesLine);
   }
 
   held.sort(compareByConceptName);
