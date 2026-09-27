@@ -35,7 +35,6 @@ import {
   EMPTY_REGISTRY_OVERRIDES,
   type ExplainBackPromptContext,
   type ExtractedUnit,
-  extendComposedStudySession,
   type FirstInvitationCandidate,
   type GateStage,
   GateStageRecorder,
@@ -67,6 +66,11 @@ import {
   type VaultSource,
   type WindowDeficitEntry,
 } from 'olea-core';
+// `[D-395]`/`[D-331]` (`ol-egov.141.89.10.65`): imported by source path rather than added to
+// `olea-core`'s barrel (`src/index.ts`), which several other lanes are concurrently landing
+// exports into today — the same stance `./concept/wiring.ts`'s own deep import of
+// `proposeAndPersistMergeAudits` takes, for the same shared-file-contention reason.
+import { extendComposedStudySessionWithAccount } from 'olea-core/src/study-session/compose.js';
 import {
   createCardNoticeText,
   createQaCardFromEntry,
@@ -141,6 +145,7 @@ import {
   buildCitationRevisionWiring,
   type CitationRevisionTrigger,
 } from './ingestion/materiality/citation-revision-wiring.js';
+import { ObsidianMaterialityHashStore } from './ingestion/materiality/hash-store.js';
 import {
   createInMemoryPreviousTextTracker,
   type PreviousTextTracker,
@@ -2851,6 +2856,12 @@ export default class OleaPlugin extends Plugin {
           vault,
           ingestionSessionClosed: true,
           now: this.now,
+          // `ol-egov.141.89.4.15`: a fresh, stateless `data.json` projection (same idiom as
+          // `this.citationHashStore` above) — threads a REAL materiality hash store to both
+          // sides of Default 4's freshness gate (rel.md §3), so a cached relation whose endpoint
+          // has since changed stops being served, and every relation this tick's corpus batch
+          // emits is stamped with its judged-at revision for a later comparison to read.
+          hashStore: new ObsidianMaterialityHashStore(this),
           ...(records !== null ? { assessmentErrorAdjacency: { records } } : {}),
           ...(embeddingCache !== null && embeddingCache !== undefined
             ? {
@@ -3575,10 +3586,10 @@ export default class OleaPlugin extends Plugin {
    * {@link composeDefaultStudySession} already reports — `open-session.ts`
    * reads that as "nothing new to append," never a failure. If the frozen
    * course itself has nothing left to serve, no ruled clause decides that
-   * case specially: `extendComposedStudySession` (`olea-core`) already
-   * returns `previous.model.items` unchanged when nothing new was appended —
-   * today's existing empty-extend behaviour, preserved as-is (see this
-   * bead's close evidence).
+   * case specially: `extendComposedStudySessionWithAccount` (`olea-core`,
+   * `ol-egov.141.89.10.65`) already returns `previous` itself, unchanged,
+   * when nothing new was appended or removed — today's existing empty-extend
+   * behaviour, preserved as-is (see this bead's close evidence).
    */
   private async extendDefaultStudySession(
     previous: ComposedStudySession,
@@ -3623,7 +3634,19 @@ export default class OleaPlugin extends Plugin {
     if (result === null) return null;
 
     const widerBudgetMinutes = previous.model.budgetMinutes + DEFAULT_SESSION_BUDGET_MINUTES;
-    const items = extendComposedStudySession(
+    // `[D-395]`/`[D-331]` (`ol-egov.141.89.10.65`): `extendComposedStudySessionWithAccount`
+    // replaces the plain `extendComposedStudySession` item-list call — it also carries the
+    // composition's own account (`setAside`) through the extension, building a FRESH `setAside`
+    // object whenever something was actually appended or removed. `session/composition-
+    // recorder.ts`'s `recordExtension` tells "the account was carried" from "it was not" by
+    // reference identity (`extended.setAside === previous.setAside`); returning a plain
+    // `{ ...previous, model: { ...previous.model, items } }` spread, as this method did before,
+    // left `setAside` pointing at `previous`'s own object, so every list-changing keep going read
+    // as `'account-not-carried'` and wrote no extension record (D-395 condition 2 unmet in
+    // production; see this bead's close notes). When nothing was appended or removed,
+    // `extendComposedStudySessionWithAccount` returns `previous` itself unchanged, so `extended`
+    // below aliases `previous` and this still degrades to today's plain spread.
+    const extended = extendComposedStudySessionWithAccount(
       { ...result.composedInput, budgetMinutes: widerBudgetMinutes },
       previous,
     );
@@ -3633,8 +3656,9 @@ export default class OleaPlugin extends Plugin {
     // `previous.model.budgetMinutes` above, recomputes the IDENTICAL
     // `widerBudgetMinutes` the first extend already used, and appends
     // nothing (every instrument up to that budget was already served). See
-    // `test/session-builder/outrun-extend-budget-progression.spec.ts`.
-    return { ...previous, model: { ...previous.model, budgetMinutes: widerBudgetMinutes, items } };
+    // `test/session-builder/outrun-extend-budget-progression.spec.ts`. Carried forward here off
+    // `extended` (not `previous`), so a genuine extension's own `model.items`/`setAside` survive.
+    return { ...extended, model: { ...extended.model, budgetMinutes: widerBudgetMinutes } };
   }
 
   /**

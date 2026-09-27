@@ -130,16 +130,13 @@ export interface RelationSetReadOptions {
    * **Omitted, this read falls back to `relationCacheRecordsAsConceptRelations`** — every cached
    * edge served unconditionally, the pre-Default-4 behaviour this splice replaces — rather than
    * gating through a lookup that would read every endpoint `'unverified'` (no store to ask) and so
-   * silently stop serving every cached edge. That fallback is deliberate, not a shortcut: no
-   * production caller threads a real store yet (`./wiring.ts`'s `readConceptsAndRelations` calls
-   * this with no `hashStore`, `./wiring.ts` is outside this bead's `owns`), and the endpoint-
-   * revision STAMP this gate compares against is also not yet written in production
-   * (`ol-egov.141.89.4.14`'s own close notes: `./wiring.ts`'s `runCorpusRelationBatchIfDue` calls
-   * `runCorpusRelationBatch` with no `endpointRevisionStamping`). Landing this splice ungated by
-   * that fallback, before both the store and the stamp are threaded through, would make every
-   * cached relation read `'unverified'` and stop being served — a real regression to what she
-   * sees, not the "stale ones stop serving" this bead's brief describes. See this bead's close
-   * notes for the exact composition points still open.
+   * silently stop serving every cached edge. That fallback stays deliberate for any OTHER caller
+   * that omits it (a test, a workbench harness), but it is no longer the production path:
+   * `./wiring.ts`'s `readConceptsAndRelations` now threads a real `hashStore` through to both this
+   * read and `runCorpusRelationBatchIfDue`'s judgment-time `endpointRevisionStamping`
+   * (`ol-egov.141.89.4.15`), and `main.ts`'s call site supplies a real
+   * `ObsidianMaterialityHashStore` — so a cached edge whose endpoint has since changed now stops
+   * being served in production, not merely in tests.
    */
   readonly hashStore?: MaterialityHashStore;
 }

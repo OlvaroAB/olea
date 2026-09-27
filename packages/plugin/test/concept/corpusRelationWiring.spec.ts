@@ -10,6 +10,7 @@ import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type {
+  ConceptKeyRecord,
   ConceptRelation,
   CorpusConcept,
   EmbeddingCacheStore,
@@ -35,7 +36,10 @@ import {
 } from 'olea-core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ObsidianCorpusRelationStateStore } from '../../src/concept/corpusRelationStateStore.js';
-import type { CorpusConceptSource } from '../../src/concept/wiring.js';
+import type {
+  CorpusConceptSource,
+  CorpusRelationBatchRunOutcome,
+} from '../../src/concept/wiring.js';
 import {
   buildConceptWiring,
   buildCorpusRelationWiring,
@@ -44,6 +48,10 @@ import {
   readConceptsFromVault,
   runCorpusRelationBatchIfDue,
 } from '../../src/concept/wiring.js';
+import type {
+  MaterialityHashStore,
+  MaterialityRecord,
+} from '../../src/ingestion/materiality/types.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
 
@@ -193,6 +201,40 @@ const READY_CONFIG: PersistedWorkerConfig = {
   baseUrl: 'https://worker.example',
   token: 'secret-token',
 };
+
+/**
+ * A minimal `MaterialityRecord`, revision carried entirely in `hashes.rawHash` — the field the
+ * Default-4 freshness gate reads on both the write side (`buildEndpointRevisionStamping`, this
+ * file's `endpointRevisionStamping` tests) and the read side (`relation-wiring.ts`'s
+ * `buildHashStoreRevisionLookup`). Mirrors `relation-wiring.spec.ts`'s own helper of the same name.
+ */
+function materialityRecord(path: string, rawHash: string): MaterialityRecord {
+  return {
+    path,
+    hashes: { rawHash, canonicalHash: rawHash },
+    canonicalLength: 0,
+    lastChangedAt: 0,
+    lastVerdictAt: null,
+  };
+}
+
+/** A fake `MaterialityHashStore` over a plain map — mirrors `relation-wiring.spec.ts`'s helper. */
+function fakeHashStore(revisions: Readonly<Record<string, string>>): MaterialityHashStore & {
+  readonly loadCallsByPath: Map<string, number>;
+} {
+  const loadCallsByPath = new Map<string, number>();
+  return {
+    loadCallsByPath,
+    async load(path: string) {
+      loadCallsByPath.set(path, (loadCallsByPath.get(path) ?? 0) + 1);
+      const rawHash = revisions[path];
+      return rawHash === undefined ? null : materialityRecord(path, rawHash);
+    },
+    async save() {
+      throw new Error('fakeHashStore.save is not used by these tests');
+    },
+  };
+}
 
 // ---- buildCorpusRelationWiring --------------------------------------------
 
@@ -533,6 +575,215 @@ describe('runCorpusRelationBatchIfDue — trigger discipline', () => {
   });
 });
 
+// ---- runCorpusRelationBatchIfDue's `endpointRevisionStamping` (`ol-egov.141.89.4.15`, write side)
+//
+// The judged-at half of Default 4 (rel.md §3): every relation this batch emits should carry the
+// SAME `endpointRevisions` digest the read side (`relation-wiring.ts`'s
+// `buildHashStoreRevisionLookup`) later compares against, computed over the concept's introducing
+// paths from `.olea/concepts/`, not the one passage `CorpusConcept.anchor` names.
+
+describe('runCorpusRelationBatchIfDue — endpointRevisionStamping (ol-egov.141.89.4.15, write side)', () => {
+  function twoConceptKeyRecords(): readonly { readonly record: ConceptKeyRecord }[] {
+    return [
+      {
+        record: {
+          key: 'key-a',
+          tier: 1,
+          anchor: { kind: 'note', noteUid: null, notePath: 'A.md' as VaultPath },
+          mintedAt: '2026-01-01T00:00:00.000Z',
+          schemaVersion: 1,
+        },
+      },
+      {
+        record: {
+          key: 'key-b',
+          tier: 1,
+          anchor: { kind: 'note', noteUid: null, notePath: 'B.md' as VaultPath },
+          mintedAt: '2026-01-01T00:00:00.000Z',
+          schemaVersion: 1,
+        },
+      },
+    ];
+  }
+
+  async function runBatchWithStamping(
+    hashStore: MaterialityHashStore,
+  ): Promise<CorpusRelationBatchRunOutcome> {
+    const transport = fakeTransport(() => ({
+      ok: true,
+      result: {
+        verdicts: [{ a: 'A', b: 'B', type: 'contrasts-with' as const, confidence: 0.9 }],
+      },
+    }));
+    const wiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const stateStore = new ObsidianCorpusRelationStateStore(new FakeDataHost());
+    const concepts: readonly CorpusConcept[] = [
+      {
+        key: 'key-a',
+        name: 'A',
+        aliases: [],
+        anchor: { sourcePath: 'A.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+      {
+        key: 'key-b',
+        name: 'B',
+        aliases: [],
+        anchor: { sourcePath: 'B.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+    ];
+
+    return runCorpusRelationBatchIfDue(wiring, stateStore, {
+      // A her-link wikilink is what nominates the pair at all (`corpusRelationSignals.ts`'s
+      // always-on `her-link` scan of each concept's own anchor passage) — plain, unlinked prose
+      // nominates nothing, which is orthogonal to what this describe block tests.
+      vault: new MemoryVault({ 'A.md': 'A note that links to [[B]].', 'B.md': 'A note about B.' }),
+      ingestionSessionClosed: true,
+      allConcepts: concepts,
+      endpointRevisionStamping: { keyRecords: twoConceptKeyRecords(), hashStore },
+    });
+  }
+
+  it('stamps a reconciled relation with a non-empty endpointRevisions pair when both endpoints have a recorded revision', async () => {
+    const outcome = await runBatchWithStamping(fakeHashStore({ 'A.md': 'rev-a', 'B.md': 'rev-b' }));
+
+    expect(outcome.ran).toBe(true);
+    const relation = outcome.relations?.[0] as
+      | (ConceptRelation & { endpointRevisions?: { readonly from: string; readonly to: string } })
+      | undefined;
+    expect(relation?.endpointRevisions?.from).toBeTypeOf('string');
+    expect(relation?.endpointRevisions?.to).toBeTypeOf('string');
+    expect(relation?.endpointRevisions?.from).not.toBe('');
+    expect(relation?.endpointRevisions?.to).not.toBe('');
+  });
+
+  it('two revision digests computed from the SAME recorded hashes agree bit-for-bit (what the read side must later match)', async () => {
+    const revisions = { 'A.md': 'rev-a', 'B.md': 'rev-b' };
+    const first = await runBatchWithStamping(fakeHashStore(revisions));
+    const second = await runBatchWithStamping(fakeHashStore(revisions));
+
+    const revisionsOf = (outcome: CorpusRelationBatchRunOutcome) =>
+      (
+        outcome.relations?.[0] as {
+          endpointRevisions?: { readonly from: string; readonly to: string };
+        }
+      )?.endpointRevisions;
+
+    expect(revisionsOf(first)).toEqual(revisionsOf(second));
+  });
+
+  it("never blocks the batch and omits `endpointRevisions` (never a partial pair) when an endpoint's path has no recorded revision yet", async () => {
+    // Neither path has ever been hashed — the first-run case: the store returns `null` for both.
+    const outcome = await runBatchWithStamping(fakeHashStore({}));
+
+    expect(outcome.ran).toBe(true);
+    expect(outcome.relations).toHaveLength(1);
+    const relation = outcome.relations?.[0] as { endpointRevisions?: unknown } | undefined;
+    expect(relation).not.toHaveProperty('endpointRevisions');
+  });
+
+  it('loads each distinct introducing path from the hash store ONCE, not once per concept that shares it', async () => {
+    const transport = fakeTransport(() => ({
+      ok: true,
+      result: {
+        verdicts: [{ a: 'A', b: 'B', type: 'contrasts-with' as const, confidence: 0.9 }],
+      },
+    }));
+    const wiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const stateStore = new ObsidianCorpusRelationStateStore(new FakeDataHost());
+    // Both endpoints anchor to the SAME note — the batching property under test.
+    const keyRecords: readonly { readonly record: ConceptKeyRecord }[] = [
+      {
+        record: {
+          key: 'key-a',
+          tier: 1,
+          anchor: { kind: 'note', noteUid: null, notePath: 'Shared.md' as VaultPath },
+          mintedAt: '2026-01-01T00:00:00.000Z',
+          schemaVersion: 1,
+        },
+      },
+      {
+        record: {
+          key: 'key-b',
+          tier: 1,
+          anchor: { kind: 'note', noteUid: null, notePath: 'Shared.md' as VaultPath },
+          mintedAt: '2026-01-01T00:00:00.000Z',
+          schemaVersion: 1,
+        },
+      },
+    ];
+    const concepts: readonly CorpusConcept[] = [
+      {
+        key: 'key-a',
+        name: 'A',
+        aliases: [],
+        anchor: { sourcePath: 'Shared.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+      {
+        key: 'key-b',
+        name: 'B',
+        aliases: [],
+        anchor: { sourcePath: 'Shared.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+    ];
+    const hashStore = fakeHashStore({ 'Shared.md': 'rev-1' });
+
+    await runCorpusRelationBatchIfDue(wiring, stateStore, {
+      // The her-link wikilink to BOTH is what nominates the pair (see `runBatchWithStamping`'s own
+      // comment above).
+      vault: new MemoryVault({ 'Shared.md': 'This note discusses [[A]] and [[B]] together.' }),
+      ingestionSessionClosed: true,
+      allConcepts: concepts,
+      endpointRevisionStamping: { keyRecords, hashStore },
+    });
+
+    expect(hashStore.loadCallsByPath.get('Shared.md')).toBe(1);
+  });
+
+  it('is entirely unchanged (no `endpointRevisions` on any emitted relation) when `endpointRevisionStamping` is omitted', async () => {
+    const transport = fakeTransport(() => ({
+      ok: true,
+      result: {
+        verdicts: [{ a: 'A', b: 'B', type: 'contrasts-with' as const, confidence: 0.9 }],
+      },
+    }));
+    const wiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const stateStore = new ObsidianCorpusRelationStateStore(new FakeDataHost());
+    const concepts: readonly CorpusConcept[] = [
+      {
+        key: 'key-a',
+        name: 'A',
+        aliases: [],
+        anchor: { sourcePath: 'A.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+      {
+        key: 'key-b',
+        name: 'B',
+        aliases: [],
+        anchor: { sourcePath: 'B.md', location: { page: 1, charRange: { start: 0, end: 1 } } },
+      },
+    ];
+
+    const outcome = await runCorpusRelationBatchIfDue(wiring, stateStore, {
+      vault: new MemoryVault({ 'A.md': 'A note that links to [[B]].', 'B.md': 'A note about B.' }),
+      ingestionSessionClosed: true,
+      allConcepts: concepts,
+    });
+
+    expect(outcome.ran).toBe(true);
+    const relation = outcome.relations?.[0] as { endpointRevisions?: unknown } | undefined;
+    expect(relation).not.toHaveProperty('endpointRevisions');
+  });
+});
+
 // ---- readConceptsAndRelations ---------------------------------------------
 //
 // The landing seam (`ol-2zfj.12`). Before it, BOTH producers' edges were
@@ -811,6 +1062,102 @@ describe('readConceptsAndRelations — both producers land in one fold', () => {
     expect(pass).not.toBeNull();
     expect(pass?.read.outcome).toBe('read');
     expect(conceptKeyListCalls).toBe(1);
+  });
+});
+
+// ---- Default-4 freshness gate, threaded end to end via `readConceptsAndRelations`'s
+// `hashStore` option (`ol-egov.141.89.4.15`) -------------------------------------------
+//
+// Everything above proves the write side (`endpointRevisionStamping`) and `relation-wiring.spec.ts`
+// proves the read side (`readRelationSetWithCache`) in isolation. This describe block is the one
+// caller both sides now share in production (`main.ts`'s call site): a real `hashStore` threaded
+// through `readConceptsAndRelations` to BOTH `runCorpusRelationBatchIfDue`'s judgment-time stamp
+// and the cache read, across several ticks of the SAME `stateStore`/vault, the shape a real
+// ingestion session runs in.
+
+describe('readConceptsAndRelations — Default-4 freshness gate threaded end to end via `hashStore` (ol-egov.141.89.4.15)', () => {
+  const NOTE_PATH = '01 Courses/CourseA/Concepts.md';
+
+  function contrastsWithEdge(pass: Awaited<ReturnType<typeof readConceptsAndRelations>>) {
+    return pass?.relations.entries.find((entry) => entry.edge.type === 'contrasts-with');
+  }
+
+  it("a first run, over a hash store that has never seen this note, does not blank the fold — freshness only ever gates a PRIOR tick's cached edge, never this tick's own fresh one", async () => {
+    const transport = twoStageTransport();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const vault = new MemoryVault(TWO_CONCEPT_VAULT);
+
+    const pass = await readConceptsAndRelations(
+      conceptWiring,
+      corpusWiring,
+      new ObsidianCorpusRelationStateStore(new FakeDataHost()),
+      { vault, ingestionSessionClosed: true, hashStore: fakeHashStore({}) },
+    );
+
+    expect(pass?.corpus.ran).toBe(true);
+    expect(pass?.relations.entries.map((entry) => entry.edge.type).sort()).toEqual([
+      'contrasts-with',
+      'is-a',
+    ]);
+  });
+
+  it('a fresh cached relation still serves on a later tick with an unchanged store', async () => {
+    const transport = twoStageTransport();
+    const conceptWiring = await buildConceptWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    const corpusWiring = await buildCorpusRelationWiring({
+      dataHost: configuredHost(READY_CONFIG),
+      createTransport: () => transport,
+    });
+    // One `stateStore` across every tick below — the same object a real ingestion session's
+    // repeated calls would share (`main.ts`'s `this.corpusRelationStateStore`).
+    const stateStore = new ObsidianCorpusRelationStateStore(new FakeDataHost());
+    const vault = new MemoryVault(TWO_CONCEPT_VAULT);
+
+    // Tick 1: the note's revision is already on record (row 1.4's free hashing having already
+    // run) when the corpus batch first judges the pair — the judged-at stamp is `rev-1`/`rev-1`.
+    const pass1 = await readConceptsAndRelations(conceptWiring, corpusWiring, stateStore, {
+      vault,
+      ingestionSessionClosed: true,
+      hashStore: fakeHashStore({ [NOTE_PATH]: 'rev-1' }),
+    });
+    expect(pass1?.corpus.ran).toBe(true);
+    expect(contrastsWithEdge(pass1)).toBeDefined();
+
+    // Tick 2: nothing new to nominate, so the corpus stage declines to run this time — the
+    // `contrasts-with` edge can ONLY be reaching `pass2` through the persisted cache. The note's
+    // revision is unchanged (`rev-1`), so the cached edge reads `'current'` and keeps serving.
+    const pass2 = await readConceptsAndRelations(conceptWiring, corpusWiring, stateStore, {
+      vault,
+      ingestionSessionClosed: true,
+      hashStore: fakeHashStore({ [NOTE_PATH]: 'rev-1' }),
+    });
+    expect(pass2?.corpus.ran).toBe(false);
+    expect(contrastsWithEdge(pass2)).toBeDefined();
+
+    // The stale-endpoint half of Default 4 ("a stale one is withheld") is proven directly at the
+    // layer this bead owns — `relation-wiring.ts`'s own `readRelationSetWithCache`
+    // ("withholds a cached edge once one endpoint has moved", `relation-wiring.spec.ts`) — rather
+    // than repeated here. **Discovered, out of this bead's `owns` (reported, not fixed here):**
+    // taking a THIRD tick through this same `readConceptsAndRelations` call with a changed
+    // revision does NOT withhold the edge end to end, because `./same-as-wiring.ts`'s
+    // `resolveSameAsForPass` (spliced in by the already-closed `ol-egov.141.89.9.57`/`ol-2zfj.86`,
+    // outside this bead's `owns`) unconditionally re-derives `sameAsCachedRelations` from EVERY
+    // non-disposed `.olea/relations/` record — freshness-unaware — and folds it back on top of
+    // this function's own freshness-filtered result via `deriveRelationSet`, undoing the
+    // exclusion this bead just applied. Before this bead, `readRelationSetWithCache` served every
+    // cached edge unconditionally anyway, so that re-fold was an unobservable no-op; Default 4
+    // gives it a real effect for the first time. See this bead's close notes for the filed
+    // follow-up.
   });
 });
 
