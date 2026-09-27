@@ -43,6 +43,7 @@ import type {
 } from 'olea-core';
 import {
   computeWindowDeficit,
+  createFsrsScheduler,
   enumerateVaultInstruments,
   pastSessionsFromReviewLog,
   reviewLogPath,
@@ -53,6 +54,9 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
+// `ol-egov.141.89.10.30`'s own port — the real F2.6/F8.5 write path, the
+// same one `test/session-builder/provider-suspended-instruments.spec.ts` uses.
+import { createVaultSuspendPort } from '../../src/review/ports.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
 import {
   composeStudySessionForRequest,
@@ -1564,5 +1568,183 @@ describe('createLocalSessionBuilderProvider — C5.5 clustering feeds the D-092 
     expect(deficit.get('TESTC202')?.deficit).toBeGreaterThan(0);
     expect(deficit.get('TESTC202')?.sessionsSinceLastServed).toBe(1);
     expect(deficit.get('TESTC101')?.sessionsSinceLastServed).toBe(0);
+  });
+});
+
+// `[D-404]` (`ol-egov.141.89.10.5`): the session builder's own splice —
+// `composeStudySessionForRequest` now passes `instrumentInventory:
+// enumeration.records` into `composeOracleRanking`, so a concept whose
+// every instrument is ineligible (suspended, withdrawn — the review log's
+// own suspension projection) is vetoed by the oracle itself
+// (`rank.ts`'s `conceptEligibilityVeto`) and drops out of `ranking.courses[
+// ].ranked` — a DIFFERENT, earlier mechanism than `ol-egov.141.89.10.30`'s
+// concept-instrument-index filter just below it in this file's own
+// `provider.ts`: that one only keeps a suspended instrument out of
+// `instrumentsFor()`; this one keeps the whole concept out of the gap
+// view's rows in the first place, so nothing tries to serve it at all.
+// Before this splice `instrumentInventory` was omitted and the veto never
+// fired in production, byte-identical to before — see `compose.ts`'s own
+// doc on that field. Fixture content is invented throughout (INV-3).
+function oneConceptBaseFiles(): Readonly<Record<string, string>> {
+  return {
+    '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+    'Notes/one.md': [
+      '---',
+      'topic: [Widget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'Front::Back',
+      '',
+    ].join('\n'),
+    '03 Research/TESTC101 Past Paper 2023.md': [
+      '---',
+      'role: past-paper',
+      'course: TESTC101',
+      '---',
+      '',
+      '# TESTC101 Past Paper — 2023',
+      '',
+      '## Question 1 (10 marks)',
+      '',
+      'Explain the core mechanism behind Widget theory and why it matters.',
+      '',
+    ].join('\n'),
+    [BASE_PATH]: BASE_FILE,
+    '02 Assignments/Quiz 1.md': QUIZ_NO_SCOPE,
+  };
+}
+
+/**
+ * `twoConceptBaseFiles`'s own two concepts, plus a SECOND instrument for
+ * Widget theory (`Notes/one-b.md`) — so that concept can be tested with one
+ * suspended and one eligible instrument left, while Gadget theory keeps its
+ * single instrument for the "every instrument suspended" case.
+ */
+function widgetTwoInstrumentBaseFiles(): Readonly<Record<string, string>> {
+  return {
+    ...twoConceptBaseFiles(QUIZ_NO_SCOPE),
+    'Notes/one-b.md': [
+      '---',
+      'topic: [Widget theory]',
+      'course: TESTC101',
+      '---',
+      '',
+      'FrontB::BackB',
+      '',
+    ].join('\n'),
+  };
+}
+
+describe('createLocalSessionBuilderProvider — [D-404] instrument-inventory eligibility reaches the session path (ol-egov.141.89.10.5)', () => {
+  it('a course whose only concept has every instrument suspended does not throw building the session', async () => {
+    const vault = memoryVault(oneConceptBaseFiles());
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const widget = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
+    if (widget === undefined) {
+      throw new Error('expected the Widget theory instrument enumerated');
+    }
+    await createVaultSuspendPort(vault, DEVICE).suspend(widget.instrumentId, widget.conceptIds);
+
+    const result = await composeStudySessionForRequest(
+      {
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) {
+      throw new Error('expected a composed result, got null (plan not configured)');
+    }
+
+    // The vetoed concept is simply absent from this sitting's own frozen
+    // scope and from the composed items — never a thrown error.
+    expect(result.frozenScope.concepts).toHaveLength(0);
+    expect(conceptNamesOf(result.composed.full.model)).not.toContain('Widget theory');
+  });
+
+  it('a concept with one suspended instrument and one eligible instrument is still served', async () => {
+    const vault = memoryVault(widgetTwoInstrumentBaseFiles());
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const suspended = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
+    const eligible = enumeration.records.find((r) => r.notePath === 'Notes/one-b.md');
+    if (suspended === undefined || eligible === undefined) {
+      throw new Error('expected both Widget theory instruments enumerated');
+    }
+    await createVaultSuspendPort(vault, DEVICE).suspend(
+      suspended.instrumentId,
+      suspended.conceptIds,
+    );
+
+    const result = await composeStudySessionForRequest(
+      {
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) {
+      throw new Error('expected a composed result, got null (plan not configured)');
+    }
+
+    expect(conceptNamesOf(result.composed.full.model)).toContain('Widget theory');
+    const item = result.composed.full.model.items.find((i) => i.conceptName === 'Widget theory');
+    if (item === undefined)
+      throw new Error('expected a Widget theory item in the composed session');
+    // The eligible instrument fills the slot; the suspended one never does.
+    expect(item.instrumentId).toBe(eligible.instrumentId);
+    expect(item.instrumentId).not.toBe(suspended.instrumentId);
+  });
+
+  it('a concept with every instrument suspended is not served, while its course sibling still is', async () => {
+    const vault = memoryVault(twoConceptBaseFiles(QUIZ_NO_SCOPE));
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const widget = enumeration.records.find((r) => r.notePath === 'Notes/one.md');
+    const gadget = enumeration.records.find((r) => r.notePath === 'Notes/two.md');
+    if (widget === undefined || gadget === undefined) {
+      throw new Error('expected both Widget theory and Gadget theory instruments enumerated');
+    }
+    await createVaultSuspendPort(vault, DEVICE).suspend(gadget.instrumentId, gadget.conceptIds);
+
+    const result = await composeStudySessionForRequest(
+      {
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+      },
+      { budgetMinutes: 60 },
+      NOW,
+    );
+    if (result === null) {
+      throw new Error('expected a composed result, got null (plan not configured)');
+    }
+
+    const gadgetConceptId = gadget.conceptIds[0];
+    if (gadgetConceptId === undefined)
+      throw new Error('expected Gadget theory to carry a concept id');
+
+    // Vetoed at the oracle: no row in this sitting's own frozen scope for
+    // Gadget theory at all — the concept-level exclusion this bead adds,
+    // not merely an empty instrument list for it.
+    expect(result.frozenScope.concepts.some((c) => c.conceptKey === gadgetConceptId)).toBe(false);
+    const names = conceptNamesOf(result.composed.full.model);
+    expect(names).not.toContain('Gadget theory');
+    expect(names).toContain('Widget theory');
   });
 });
