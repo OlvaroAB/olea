@@ -75,11 +75,30 @@
  * nothing to the sum — never guessed — matching
  * `findings/office-image-selection.md`'s own candidate-set scope note.
  *
- * **Sending is not wired here.** `vision.extract.v2`'s wire request
- * (`olea-service/src/tasks/visionExtract.ts`, outside this bead's `owns`)
- * carries exactly one image per call; turning several qualifying images
- * into that one call (a stitched composite, or a schema change) is left as
- * a follow-up — see `vision-page-runner.ts`'s own module doc.
+ * **`pptxExtractor.extract` now calls `pptxFigureCue` itself, last, over the
+ * furniture-checked pages — the send-wiring half of `ol-egov.141.89.8.26`.**
+ * Mirrors `pdf.ts`'s own `applyFigureCue` call exactly: a slide still
+ * honestly `'text-layer'` after furniture detection, whose `pptxFigureCue`
+ * entry `qualifies`, is widened to route `'both'`; a slide already
+ * `'vision'` is untouched (it already gets a vision-page job). Without this
+ * upgrade a qualifying slide's images would never reach a `'vision-page'`
+ * job at all — `extraction-runner.ts` (outside this bead's `owns`) enqueues
+ * one only for a `'vision'`/`'both'` page — so this is the actual routing
+ * fix, not just a cue computed and left unread. This re-derives its own
+ * slide/placement data from `input.bytes` via a second `pptxFigureCue` call
+ * rather than reusing `extract`'s own walk — a second, independent
+ * unzip/scan of the same small package, the same "separate sibling, not
+ * merged" duplication this file's module doc already accepts for
+ * `extractPptxEmbeddedImages`.
+ *
+ * **Sending itself is wired in `vision-page-runner.ts`, not here.** Once a
+ * slide reaches a `'vision-page'` job (via the upgrade above, or via a
+ * genuinely low text yield), that file re-derives `pptxFigureCue`'s answer
+ * a *third* time — against the vault bytes it reads at drain time, not the
+ * bytes this extraction pass saw — and sends the qualifying images as one
+ * `vision.extract.v2` call (`ol-egov.141.89.8.36`'s ordered-list request).
+ * See that file's own module doc for the two named client-side bounds and
+ * why an over-bound region is refused rather than split.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
@@ -307,11 +326,33 @@ export const pptxExtractor: Extractor = {
 
     const finalPages = applyFurnitureDetection(pages);
 
+    // D-324 combine-cue upgrade (`ol-egov.141.89.8.26`) — mirrors `pdf.ts`'s
+    // own call to `figure-cue.ts`'s `applyFigureCue`, run last, over the
+    // furniture-checked pages, for the identical reason: a page furniture
+    // already demoted to `'vision'` has nothing left to widen, and only a
+    // slide still honestly `'text-layer'` at this point is a candidate for
+    // `'both'`. Without this step a slide's images never reach a
+    // `'vision-page'` job at all — `extraction-runner.ts` enqueues one only
+    // for a `'vision'`/`'both'` page, so this is what actually closes the
+    // PDF/PPTX parity gap this bead exists to fix, not just a cue computed
+    // and left unread. `pptxFigureCue` re-derives its own slide/placement
+    // data from `input.bytes` rather than reusing this function's own walk
+    // — a second, independent unzip/scan of the same small package, the
+    // same "separate sibling, not merged" duplication this file's module
+    // doc already accepts for `extractPptxEmbeddedImages`.
+    const cue = pptxFigureCue(input);
+    const withFigureCue = finalPages.map((page): PageExtraction => {
+      if (page.route !== 'text-layer') return page;
+      const slideCue = cue.find((c) => c.page === page.page);
+      if (!slideCue?.qualifies) return page;
+      return { ...page, route: 'both' };
+    });
+
     return {
       sourcePath: input.path,
       format: 'pptx',
-      outcome: pptxOutcome(files, finalPages),
-      pages: finalPages,
+      outcome: pptxOutcome(files, withFigureCue),
+      pages: withFigureCue,
     };
   },
 };

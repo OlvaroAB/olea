@@ -519,7 +519,11 @@ export type {
   ConceptAssessmentEdge,
   EvidenceQuestionCitation,
 } from './evidence-edge/types.js';
-export { docxExtractor } from './extract/docx.js';
+export type { DocxFigureCueResult } from './extract/docx.js';
+export { docxExtractor, docxFigureCue } from './extract/docx.js';
+// The office-image combine-cue's shared candidate shape (`ol-egov.141.89.8.26`,
+// `[D-324]`) — see `embedded-image.ts`'s own module doc.
+export type { EmbeddedRasterImage, PageEmbeddedImages } from './extract/embedded-image.js';
 export type {
   DiscoverEmbeddedSourcesResult,
   ResolvedEmbed,
@@ -553,7 +557,8 @@ export {
   isReachedButUnreadable,
   MAX_CONTROL_CHAR_SHARE,
 } from './extract/plausibility.js';
-export { pptxExtractor } from './extract/pptx.js';
+export type { PptxFigureCueSlide } from './extract/pptx.js';
+export { pptxExtractor, pptxFigureCue } from './extract/pptx.js';
 export { EXTRACTORS, extractFromVault, formatFromExtension } from './extract/registry.js';
 export {
   DEFAULT_TEXT_LAYER_CHAR_THRESHOLD,

@@ -355,3 +355,60 @@ describe('docxFigureCue — D-324 combine policy (ol-egov.141.89.8.26, findings/
     });
   });
 });
+
+describe('docxExtractor — D-324 combine-cue route upgrade (ol-egov.141.89.8.26, the send-wiring half)', () => {
+  it("upgrades a text-bearing document to 'both' when its images clear the combine floor, keeping its text-layer units unchanged", async () => {
+    const text = 'A real paragraph with real words on it.';
+    const bytes = buildDocxBytesMixed({
+      // w:pgSz in twips: 12240 x 15840 (US Letter) -> EMU area = (12240*635) * (15840*635).
+      'word/document.xml': documentXmlWithDrawings(
+        [paragraphXml(text), drawingXml('rId1', 4_000_000, 4_000_000)], // ~10.8%
+        { w: 12240, h: 15840 },
+      ),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.png']]),
+      'word/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await docxExtractor.extract({ path: 'paper.docx', bytes });
+
+    expect(result.pages[0]?.route).toBe('both');
+    // '"both"' keeps exactly the units '"text-layer"' would have carried —
+    // the image reading this route also owes the page is a SEPARATE job
+    // (`vision-page-runner.ts`'s `sendOfficeFigureCueImages`), never traded
+    // away here.
+    expect(result.pages[0]?.units[0]?.text).toBe(text);
+  });
+
+  it("a text-bearing document whose images do NOT clear the combine floor stays 'text-layer' — no guessed upgrade", async () => {
+    const text = 'A real paragraph with real words on it.';
+    const bytes = buildDocxBytesMixed({
+      'word/document.xml': documentXmlWithDrawings(
+        [paragraphXml(text), drawingXml('rId1', 100_000, 100_000)], // well under the floor
+        { w: 12240, h: 15840 },
+      ),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.png']]),
+      'word/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await docxExtractor.extract({ path: 'paper.docx', bytes });
+
+    expect(result.pages[0]?.route).toBe('text-layer');
+  });
+
+  it("never upgrades an already-'vision' document (no usable text layer) even when its images would otherwise clear the floor", async () => {
+    const bytes = buildDocxBytesMixed({
+      // No text paragraphs at all: charCount 0, route `'vision'` before the
+      // figure cue ever runs.
+      'word/document.xml': documentXmlWithDrawings([drawingXml('rId1', 9_000_000, 9_000_000)], {
+        w: 12240,
+        h: 15840,
+      }),
+      'word/_rels/document.xml.rels': documentRels([['rId1', IMAGE_REL_TYPE, 'media/image1.png']]),
+      'word/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await docxExtractor.extract({ path: 'paper.docx', bytes });
+
+    expect(result.pages[0]?.route).toBe('vision');
+  });
+});

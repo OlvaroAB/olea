@@ -66,8 +66,17 @@
  * ruling's own words).** A document with no `<w:pgSz>` at all, or one whose
  * `w:w`/`w:h` do not parse, has no page-area denominator: its images never
  * trigger this cue, and `qualifies` is `false` — never a share computed
- * against an invented default page size. Sending is not wired here either —
- * see `pptx.ts`'s own module doc for why.
+ * against an invented default page size.
+ *
+ * **`docxExtractor.extract` now calls `docxFigureCue` itself** — the
+ * send-wiring half of `ol-egov.141.89.8.26`. A document still honestly
+ * `'text-layer'` whose `docxFigureCue` answer `qualifies` is widened to
+ * route `'both'`, so it actually reaches a `'vision-page'` job
+ * (`extraction-runner.ts`, outside this bead's `owns`, enqueues one only for
+ * a `'vision'`/`'both'` page) — see `pptx.ts`'s own module doc for the
+ * identical PPTX-side wiring and why `docxFigureCue` is re-derived rather
+ * than reused. **Sending itself is wired in `vision-page-runner.ts`, not
+ * here** — see that file's own module doc.
  */
 
 import { strFromU8, unzipSync } from 'fflate';
@@ -157,6 +166,19 @@ export const docxExtractor: Extractor = {
     const route: RouteDecision =
       textLayer === 'unreadable' ? 'vision' : routePage(charCount, options?.textLayerCharThreshold);
 
+    // D-324 combine-cue upgrade (`ol-egov.141.89.8.26`) — mirrors `pptx.ts`'s
+    // own call, and `pdf.ts`'s `applyFigureCue`: a document still honestly
+    // `'text-layer'` whose `docxFigureCue` answer `qualifies` is widened to
+    // `'both'`, so it actually reaches a `'vision-page'` job
+    // (`extraction-runner.ts`, outside this bead's `owns`, enqueues one only
+    // for a `'vision'`/`'both'` page). A document already `'vision'` is
+    // untouched — it already gets one. `docxFigureCue` re-derives its own
+    // page-area and drawing data from `input.bytes` independently, the same
+    // "separate sibling, second unzip" duplication `pptx.ts`'s own doc
+    // accepts.
+    const finalRoute: RouteDecision =
+      route === 'text-layer' && docxFigureCue(input).qualifies ? 'both' : route;
+
     const units: ExtractedUnit[] = [];
     if (route === 'text-layer') {
       let offset = 0;
@@ -200,7 +222,7 @@ export const docxExtractor: Extractor = {
       // (SCAN-1, ol-738i; `furniture.ts`) needs a line to recur *across*
       // pages, and a DOCX is exactly one logical page by this format's own
       // convention above — there is no second page to compare against.
-      pages: [{ page: 1, charCount, textLayer, route, units, furniture: false }],
+      pages: [{ page: 1, charCount, textLayer, route: finalRoute, units, furniture: false }],
     };
   },
 };

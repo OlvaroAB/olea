@@ -11,9 +11,12 @@
  * here).
  *
  * A `'vision-page'` job for `pdf`/`pptx`/`docx` is a **page inside** a
- * multi-page document, which needs a rendered page image neither repo has a
- * renderer for yet (`ol-9cle`). This runner recognises that shape and
- * returns the same DF-21-style honest, non-retryable failure the module's
+ * multi-page document. A PDF page needs a rendered page image
+ * (`deps.pageRenderer`, see "PDF pages, rendered" below); a PPTX slide or
+ * DOCX region instead carries its own embedded raster image part(s) and is
+ * sent via the D-324 combine cue (see "PPTX and DOCX, sent" below). Whatever
+ * is still genuinely unresolvable — a PDF with no `pageRenderer` wired —
+ * gets the same DF-21-style honest, non-retryable failure the module's
  * default `visionRunner`-less path already returns — naming the missing
  * renderer, never crashing, never silently doing nothing.
  *
@@ -44,11 +47,11 @@
  * `JobRunOutcome`, never a fabricated empty reading. `pageRenderer` is
  * absent by default: a host that has not composed the real
  * `createObsidianPageRenderer` (`./page-renderer.ts`) still gets today's
- * honest gap, unchanged — see the still-open PPTX/DOCX note just below.
+ * honest gap, unchanged for PDF — PPTX/DOCX do not need this port at all
+ * (see "PPTX and DOCX, sent" just below).
  *
- * **PPTX and DOCX stay the honest gap — the selection policy is now
- * decided, but sending is not yet wired.** Their pages already carry
- * embedded raster image PARTS (`../extract/embedded-image.ts`,
+ * **PPTX and DOCX, sent — `ol-egov.141.89.8.26`'s send wiring.** Their pages
+ * carry embedded raster image PARTS (`../extract/embedded-image.ts`,
  * `ol-egov.141.89.8.20`) rather than needing a render step, and which of
  * several such images to send — "send all, pick the largest, or combine" —
  * was this bead's own open question. The orchestrator self-ratified
@@ -58,18 +61,25 @@
  * a slide/region qualifies when its non-recurring candidate images, summed,
  * clear the same `FIGURE_CUE_MIN_SHARE` `figure-cue.ts` uses for PDF (DOCX's
  * own denominator is its declared `w:sectPr`/`w:pgSz`, never guessed when
- * absent). **What remains unbuilt is turning a qualifying slide/region's
- * several candidate images into the single call `vision.extract.v2`'s wire
- * request accepts** (`olea-service/src/tasks/visionExtract.ts`, outside
- * this bead's `owns`, takes exactly one `pageImageBase64`) — either a
- * contract change (an interface change, escalated rather than made here)
- * or a client-side composite image, which would need a real DOM `canvas`
- * this repo's test environment does not have (the same "nothing to fake a
- * real canvas against" gap `page-renderer.ts`'s own module doc already
- * names for PDF rendering). So this runner still returns the same named,
- * non-retryable gap for every `'pptx'`/`'docx'` page below, regardless of
- * `pptxFigureCue`/`docxFigureCue`'s answer — reported as the still-open
- * follow-up, not built unilaterally.
+ * absent) — and that same call now also runs INSIDE `pptxExtractor.extract`/
+ * `docxExtractor.extract` themselves, widening a qualifying page's own
+ * `route` to `'both'` so it actually reaches a `'vision-page'` job in the
+ * first place (`extraction-runner.ts`, outside this bead's `owns`, enqueues
+ * one only for a `'vision'`/`'both'` page — see `pptx.ts`'s own module doc).
+ * **Turning a qualifying slide/region's several candidate images into ONE
+ * call is now wired**, over `ol-egov.141.89.8.36`'s widened
+ * `vision.extract.v2` request (`olea-service/src/tasks/visionExtract.ts`,
+ * `{ images: [{ pageImageBase64, mimeType }, ...] }`, resolving the interface
+ * gap this bead used to escalate rather than the client-side-composite path
+ * — no DOM `canvas` needed after all). `sendOfficeFigureCueImages` (below)
+ * re-derives `pptxFigureCue`/`docxFigureCue`'s own answer against the vault
+ * bytes at drain time, bounds the result client-side against
+ * `MAX_OFFICE_IMAGE_LIST_LENGTH`/`MAX_OFFICE_IMAGE_TOTAL_BYTES` (mirroring
+ * the wire's own bounds, refusing rather than splitting or truncating over
+ * either), and hands the ordered list to `readAndLandPage` exactly like a
+ * standalone image or a rendered PDF page. See that function's own doc for
+ * the three named, non-retryable refusals it can still return instead of a
+ * call.
  *
  * **`[D-326]` producer provenance, wired from the wire's own stamp.** Every
  * `SuccessResponse` this file's transport receives already carries a
@@ -222,12 +232,15 @@
  */
 
 import type {
+  DocxFigureCueResult,
   EmbeddedInNote,
+  EmbeddedRasterImage,
   ExtractedUnit,
   ExtractedUnitSink,
   JobRunner,
   JobRunnerView,
   JobRunOutcome,
+  PptxFigureCueSlide,
   UnitManifestEntry,
   UnitProducerProvenance,
   UnitReadingState,
@@ -241,7 +254,9 @@ import type {
   WritingOutcome,
 } from 'olea-core';
 import {
+  docxFigureCue,
   isExtractionJobPayload,
+  pptxFigureCue,
   stableUnitId,
   writingFromVisionPageCallFailure,
   writingFromVisionPageExtract,
@@ -292,6 +307,55 @@ function mimeTypeFromPath(path: VaultPath): SupportedVisionMimeType | null {
   return MIME_TYPE_BY_EXTENSION[ext] ?? null;
 }
 
+/**
+ * `null` for any of `embedded-image.ts`'s own raster media types
+ * `vision.extract.v2` does not accept — see `SUPPORTED_VISION_MIME_TYPES`'s
+ * doc. `EmbeddedRasterImage.mimeType` (`ol-egov.141.89.8.20`'s
+ * `RASTER_EXTENSION_MIME`, `packages/core/src/extract/embedded-image.ts`)
+ * recognises a wider raster vocabulary (`image/gif`, `image/bmp`,
+ * `image/tiff`) than this task's three-format allow-list — a slide or
+ * region whose *qualifying* image is one of those is a genuine, narrower
+ * gap than the two named send-side bounds below, and is refused the same
+ * "named, non-retryable, never a paid guess" way `mimeTypeFromPath`'s own
+ * unsupported-extension case already is (see
+ * `sendOfficeFigureCueImages`'s own doc).
+ */
+function supportedVisionMimeType(mimeType: string): SupportedVisionMimeType | null {
+  return (SUPPORTED_VISION_MIME_TYPES as readonly string[]).includes(mimeType)
+    ? (mimeType as SupportedVisionMimeType)
+    : null;
+}
+
+/**
+ * How many images an ordered list for one region may carry, checked
+ * client-side before a request is even built — mirrors
+ * `olea-service/src/tasks/visionExtract.ts`'s own
+ * `MAX_VISION_IMAGE_LIST_LENGTH` (`ol-egov.141.89.8.36`), which enforces the
+ * identical bound wire-side. Declared here rather than imported: the two
+ * repos are separate deployments (this package cannot depend on
+ * `olea-service`), so this is a deliberate, literal mirror — kept equal by a
+ * pinning test (`vision-page-runner.spec.ts`), the same "declared, mirrored,
+ * pinned by this file's own test" posture `VISION_EXTRACT_CONTRACT_VERSION`
+ * above already takes for a cross-file constant this package cannot import.
+ * Checking it here, before the wire call, is what lets a region over the
+ * bound be refused with a **client-side** named reason instead of reaching
+ * the Worker only to be refused there — see `sendOfficeFigureCueImages`'s
+ * own doc for why refused, never split into more than one call.
+ */
+export const MAX_OFFICE_IMAGE_LIST_LENGTH = 20;
+
+/**
+ * Combined decoded-byte ceiling across one region's candidate images,
+ * checked client-side before base64 is even built — mirrors
+ * `olea-service/src/tasks/visionExtract.ts`'s own
+ * `MAX_VISION_TOTAL_IMAGE_BYTES` (`ol-egov.141.89.8.36`). Same mirrored,
+ * pinned, cross-repo-constant posture as `MAX_OFFICE_IMAGE_LIST_LENGTH`
+ * above. Checked against each `EmbeddedRasterImage.bytes.length` — the
+ * DECODED size — the same quantity the wire-side bound is checked against,
+ * so a region that would pass here passes there too.
+ */
+export const MAX_OFFICE_IMAGE_TOTAL_BYTES = 24_000_000;
+
 /** Chunk size for the binary-string build below — large enough to be fast, small enough that `String.fromCharCode(...chunk)` never approaches a call-stack argument limit on a several-megabyte image. */
 const BASE64_CHUNK_BYTES = 0x8000;
 
@@ -313,9 +377,31 @@ export function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
-export interface VisionPageExtractRequest {
+/** One image's wire payload — the shape a single-image request has always had, and the shape of every element of an ordered-list request (below). */
+export interface VisionPageImage {
   readonly pageImageBase64: string;
   readonly mimeType: SupportedVisionMimeType;
+}
+
+/**
+ * The request `VisionPageExtractPort.extract` takes — one image (the
+ * pre-existing, byte-identical shape) OR an ordered list of images for one
+ * region (`ol-egov.141.89.8.26`'s send wiring, over
+ * `olea-service/src/tasks/visionExtract.ts`'s widened `vision.extract.v2`
+ * request, `ol-egov.141.89.8.36`). `WorkerVisionPageExtractor.extract`
+ * forwards this value as the wire payload UNCHANGED — the two shapes here
+ * are, field for field, the two branches of that file's own
+ * `visionExtractRequest` union, so no translation happens at the boundary
+ * and a single-image request stays byte-identical to before this bead (see
+ * that class's own doc).
+ */
+export type VisionPageExtractRequest =
+  | VisionPageImage
+  | { readonly images: readonly VisionPageImage[] };
+
+/** Every image in a request, in order — a single-image request becomes a one-element list. Mirrors `olea-service/src/tasks/visionExtract.ts`'s own `resolveVisionImages`. */
+function imagesOfRequest(request: VisionPageExtractRequest): readonly VisionPageImage[] {
+  return 'images' in request ? request.images : [request];
 }
 
 /** `vision.extract.v2`'s three named outcomes. Never `'unavailable'` — that is an operational failure (a thrown error), not a result value; see the module doc's DF-21 section. */
@@ -388,10 +474,16 @@ export class WorkerVisionPageExtractor implements VisionPageExtractPort {
   }
 
   async extract(request: VisionPageExtractRequest): Promise<VisionPageExtractResult> {
+    // `request` is forwarded verbatim as the payload — see
+    // `VisionPageExtractRequest`'s own doc: its two shapes are, field for
+    // field, `visionExtractRequest`'s two union branches
+    // (`olea-service/src/tasks/visionExtract.ts`), so a single-image request
+    // reaches the wire exactly as it always has, and an ordered-list request
+    // reaches it exactly as `ol-egov.141.89.8.36` defined it.
     const body = await this.transport.send({
       contractVersion: VISION_EXTRACT_CONTRACT_VERSION,
       taskId: VISION_EXTRACT_V2_TASK_ID,
-      payload: { pageImageBase64: request.pageImageBase64, mimeType: request.mimeType },
+      payload: request,
     });
     return readVisionResult(body);
   }
@@ -575,6 +667,30 @@ async function hashImagePayload(pageImageBase64: string): Promise<string> {
   return toHex(new Uint8Array(digest));
 }
 
+/**
+ * `[D-326]`'s `imageDigest` for a request that may carry SEVERAL images
+ * (`ol-egov.141.89.8.26`'s send wiring) — `UnitProducerProvenance.imageDigest`
+ * (`packages/core/src/ingestion/unit-manifest/types.ts`, outside this bead's
+ * `owns`) is a single string, so this stays a single digest rather than
+ * widening that persisted shape, which would be exactly the kind of
+ * persisted-shape call this file's own module doc already declines to make
+ * unilaterally. For a ONE-image request this is byte-identical to
+ * `hashImagePayload(image.pageImageBase64)` — `Array.prototype.join` inserts
+ * no separator around a single element, so this bead changes no existing
+ * manifest entry's digest. For two or more, every image's base64 is joined
+ * with `'\n'` (never a legal base64 character, so no ambiguity between "one
+ * image ending in the bytes that spell `\n`" and "a boundary") before
+ * hashing, in the SAME order they were sent — the digest is therefore
+ * sensitive to both content and order, matching the ordered-list request's
+ * own contract.
+ */
+async function hashRequestPayload(request: VisionPageExtractRequest): Promise<string> {
+  const joined = imagesOfRequest(request)
+    .map((image) => image.pageImageBase64)
+    .join('\n');
+  return hashImagePayload(joined);
+}
+
 export interface WorkerVisionPageRunnerDeps {
   readonly vault: VaultSource;
   readonly extractor: VisionPageExtractPort;
@@ -584,9 +700,10 @@ export interface WorkerVisionPageRunnerDeps {
    * (`ol-9cle`) for `format: 'pdf'` — see the module doc's "PDF pages,
    * rendered" section. Absent by default: a host that has not composed
    * `createObsidianPageRenderer` (`./page-renderer.ts`) still gets today's
-   * honest, named, non-retryable gap for a `'pdf'`/`'pptx'`/`'docx'` page.
-   * PPTX and DOCX stay unrendered here regardless of whether this is
-   * supplied — see the module doc for why.
+   * honest, named, non-retryable gap for a `'pdf'` page. PPTX and DOCX never
+   * need this port at all — they send their own embedded raster images
+   * instead (`sendOfficeFigureCueImages`, the module doc's "PPTX and DOCX,
+   * sent" section), regardless of whether this is supplied.
    */
   readonly pageRenderer?: PageRenderPort;
   /**
@@ -740,7 +857,7 @@ async function emitManifestEntry(
   deps: WorkerVisionPageRunnerDeps,
   sourcePath: VaultPath,
   page: number,
-  pageImageBase64: string,
+  request: VisionPageExtractRequest,
   result: VisionPageExtractResult,
 ): Promise<void> {
   if (!deps.onManifestEntry) return;
@@ -749,7 +866,7 @@ async function emitManifestEntry(
     task: VISION_EXTRACT_V2_TASK_ID,
     promptVersion: result.promptVersion ?? UNREPORTED_PROVENANCE_FIELD,
     modelIdentity: result.modelId ?? UNREPORTED_PROVENANCE_FIELD,
-    imageDigest: await hashImagePayload(pageImageBase64),
+    imageDigest: await hashRequestPayload(request),
   };
 
   const readingState: VisionUnitReadingState =
@@ -787,17 +904,25 @@ const VISION_PAGE_WRITING_SEAT: VisionPageSeamContext['seat'] = 'candidate';
 
 /**
  * The `[D-300]`/`ol-egov.141.89.20` Writing-contract context for one reading
- * or one failed call: the image actually sent is the only evidence this seam
- * reads, so its digest (the same algorithm `[D-326]`'s `hashImagePayload`
- * already computes for `emitManifestEntry`'s provenance, recomputed here
- * rather than threaded through so this function stays independently
- * callable) is `evidenceDigests`' one entry.
+ * or one failed call: the image(s) actually sent are the only evidence this
+ * seam reads. `evidenceDigests` carries one digest per image, in order — for
+ * a single-image request this is byte-identical to before this bead (one
+ * element, `hashImagePayload` on that one image's own base64); an
+ * ordered-list request (`ol-egov.141.89.8.26`'s send wiring) gets one entry
+ * per image rather than `hashRequestPayload`'s single joined digest, since
+ * `evidenceDigests` is already an array field
+ * (`packages/core/src/stage-contract/provenance.ts`) built for exactly this.
  */
-async function visionPageWritingContext(pageImageBase64: string): Promise<VisionPageSeamContext> {
+async function visionPageWritingContext(
+  request: VisionPageExtractRequest,
+): Promise<VisionPageSeamContext> {
+  const digests = await Promise.all(
+    imagesOfRequest(request).map((image) => hashImagePayload(image.pageImageBase64)),
+  );
   return {
     seat: VISION_PAGE_WRITING_SEAT,
     taskId: VISION_EXTRACT_V2_TASK_ID,
-    evidenceDigests: [await hashImagePayload(pageImageBase64)],
+    evidenceDigests: digests,
   };
 }
 
@@ -811,10 +936,10 @@ async function visionPageWritingContext(pageImageBase64: string): Promise<Vision
  * outcome goes, not whether the adapter runs.
  */
 async function writingOutcomeFor(
-  pageImageBase64: string,
+  request: VisionPageExtractRequest,
   result: VisionPageExtractResult,
 ): Promise<WritingOutcome<VisionPageDraft>> {
-  return writingFromVisionPageExtract(result, await visionPageWritingContext(pageImageBase64));
+  return writingFromVisionPageExtract(result, await visionPageWritingContext(request));
 }
 
 /**
@@ -826,50 +951,51 @@ async function writingOutcomeFor(
  * (`reachedWorker: true`, carrying the Worker's own `code`).
  */
 async function writingOutcomeForFailure(
-  pageImageBase64: string,
+  request: VisionPageExtractRequest,
   error: unknown,
 ): Promise<WritingOutcome<VisionPageDraft>> {
   const failure: VisionPageCallFailure =
     error instanceof WorkerVisionPageExtractorError
       ? { reachedWorker: true, ...(error.code !== undefined ? { code: error.code } : {}) }
       : { reachedWorker: false };
-  return writingFromVisionPageCallFailure(failure, await visionPageWritingContext(pageImageBase64));
+  return writingFromVisionPageCallFailure(failure, await visionPageWritingContext(request));
 }
 
 /**
- * Sends one already-obtained image (standalone-image bytes, or a rendered
- * PDF page) to `vision.extract.v2` and lands whatever comes back — the one
- * place either path turns a `VisionPageExtractResult` into a
- * `JobRunOutcome`, so the image-file path and the PDF-render path (below)
- * cannot drift apart on how a `'complete'`/`'partial'`/`'unreadable'`
- * reading is handled. Also the one place that builds this reading's
- * `[D-326]` manifest entry (`emitManifestEntry`, above) — every outcome
- * that reaches this far (`'complete'`, `'partial'`, `'unreadable'`) gets one,
- * even when it lands zero `ExtractedUnit`s (a figure-only or unreadable
- * page is still a completed reading, and `[D-326]`'s record exists
- * precisely to say so). Also, since `ol-egov.141.89.8.31`, the one place
- * that produces this reading's Writing-contract outcome
+ * Sends one already-obtained request (a single standalone-image/rendered-PDF
+ * image, or — since `ol-egov.141.89.8.26`'s send wiring — an ordered list of
+ * a PPTX/DOCX region's qualifying images) to `vision.extract.v2` and lands
+ * whatever comes back — the one place every caller turns a
+ * `VisionPageExtractResult` into a `JobRunOutcome`, so the image-file path,
+ * the PDF-render path and the office-image path (below) cannot drift apart
+ * on how a `'complete'`/`'partial'`/`'unreadable'` reading is handled. Also
+ * the one place that builds this reading's `[D-326]` manifest entry
+ * (`emitManifestEntry`, above) — every outcome that reaches this far
+ * (`'complete'`, `'partial'`, `'unreadable'`) gets one, even when it lands
+ * zero `ExtractedUnit`s (a figure-only or unreadable page is still a
+ * completed reading, and `[D-326]`'s record exists precisely to say so).
+ * Also, since `ol-egov.141.89.8.31`, the one place that produces this
+ * reading's Writing-contract outcome
  * (`writingOutcomeFor`/`writingOutcomeForFailure`, above) — unconditionally,
  * on every branch, before `deps.onWritingOutcome` (if any) is told about it.
  */
 async function readAndLandPage(
   deps: WorkerVisionPageRunnerDeps,
   job: JobRunnerView,
-  pageImageBase64: string,
-  mimeType: SupportedVisionMimeType,
+  request: VisionPageExtractRequest,
   sourcePath: VaultPath,
   page: number,
   embeddedIn: EmbeddedInNote | undefined,
 ): Promise<JobRunOutcome> {
   let result: VisionPageExtractResult;
   try {
-    result = await deps.extractor.extract({ pageImageBase64, mimeType });
+    result = await deps.extractor.extract(request);
   } catch (error) {
     // Computed unconditionally — not `deps.onWritingOutcome?.(await
     // writingOutcomeForFailure(...))`, which would never evaluate the
     // adapter call at all when no consumer is wired (optional-call argument
     // short-circuiting) and so would not be a real production caller.
-    const writingOutcome = await writingOutcomeForFailure(pageImageBase64, error);
+    const writingOutcome = await writingOutcomeForFailure(request, error);
     deps.onWritingOutcome?.(writingOutcome);
     if (isUnavailableVisionFailure(error)) {
       // `[D-325]`: an outage is never a judgement about the page — retried,
@@ -887,10 +1013,10 @@ async function readAndLandPage(
     };
   }
 
-  await emitManifestEntry(deps, sourcePath, page, pageImageBase64, result);
+  await emitManifestEntry(deps, sourcePath, page, request, result);
   // Same "computed first, handed off second" shape as the catch block above,
   // for the same reason.
-  const writingOutcome = await writingOutcomeFor(pageImageBase64, result);
+  const writingOutcome = await writingOutcomeFor(request, result);
   deps.onWritingOutcome?.(writingOutcome);
 
   if (result.outcome === 'unreadable') {
@@ -958,8 +1084,7 @@ async function renderAndLandPdfPage(
     return await readAndLandPage(
       deps,
       job,
-      dataUrlBase64(rendered.dataUrl),
-      rendered.mimeType,
+      { pageImageBase64: dataUrlBase64(rendered.dataUrl), mimeType: rendered.mimeType },
       sourcePath,
       page,
       embeddedIn,
@@ -975,6 +1100,152 @@ async function renderAndLandPdfPage(
         'the renderer itself changes, and never as a page with no content.',
     };
   }
+}
+
+/**
+ * The candidate images for one PPTX slide or DOCX region — re-derives
+ * `pptxFigureCue`/`docxFigureCue`'s own answer against the vault bytes read
+ * at DRAIN time (not the bytes the extraction pass that enqueued this job
+ * saw — see `pptx.ts`'s own module doc for why that is a third, independent
+ * re-derivation, the same "separate sibling" duplication this format's
+ * extractors already accept elsewhere). `[]` when the format/page combination
+ * has nothing (a DOCX page other than `1` — this format has exactly one
+ * logical region — or a slide/region `pptxFigureCue`/`docxFigureCue` itself
+ * says does not qualify).
+ */
+function officeFigureCueImages(
+  format: 'pptx' | 'docx',
+  sourcePath: VaultPath,
+  bytes: Uint8Array,
+  page: number,
+): readonly EmbeddedRasterImage[] {
+  if (format === 'docx') {
+    if (page !== 1) return [];
+    const cue: DocxFigureCueResult = docxFigureCue({ path: sourcePath, bytes });
+    return cue.qualifies ? cue.images : [];
+  }
+  const slides: readonly PptxFigureCueSlide[] = pptxFigureCue({ path: sourcePath, bytes });
+  const slide = slides.find((s) => s.page === page);
+  return slide?.qualifies ? slide.images : [];
+}
+
+/**
+ * `ol-egov.141.89.8.26`'s send wiring: a PPTX slide or DOCX region whose
+ * embedded images qualify (`pptxFigureCue`/`docxFigureCue`, the Class B
+ * combine policy the orchestrator self-ratified 2026-09-27, citing
+ * `findings/office-image-selection.md`) sent as ONE `vision.extract.v2` call
+ * carrying that region's qualifying images, in order — `ol-egov.141.89.8.36`'s
+ * widened request accepts exactly this shape.
+ *
+ * **Three named, non-retryable refusals, each stated here rather than left
+ * to silently truncate or guess** — mirroring this file's own DF-21 posture
+ * for every other named gap:
+ *  1. **No qualifying images at all.** Either the format/page has none
+ *     (`officeFigureCueImages` above), or every candidate a fresh
+ *     `pptxFigureCue`/`docxFigureCue` call names is one this job never
+ *     needed sent — nothing to call the Worker with. Distinct from every
+ *     `sendOfficeFigureCueImages` caller: `deps.extractor` is never touched.
+ *  2. **An unsupported raster mime type.** `EmbeddedRasterImage.mimeType`
+ *     (`embedded-image.ts`'s own `RASTER_EXTENSION_MIME`) recognises
+ *     `image/gif`/`image/bmp`/`image/tiff` alongside the three
+ *     `vision.extract.v2` accepts — see `supportedVisionMimeType`'s own doc.
+ *     A single unsupported image in an otherwise-qualifying region refuses
+ *     the WHOLE call rather than silently dropping just that one image,
+ *     which would silently change what the combine policy's own area sum
+ *     computed and sent.
+ *  3. **Over either named bound**
+ *     (`MAX_OFFICE_IMAGE_LIST_LENGTH`/`MAX_OFFICE_IMAGE_TOTAL_BYTES`).
+ *     **Refused, never split into more than one call.** A region this large
+ *     is, by both bounds' own declared provenance, far outside the one real
+ *     deck `findings/office-image-selection.md` measured (headroom of
+ *     >5x/~4x that census's own qualifying-slide average) — genuinely rare,
+ *     not a routine case this cue exists to serve. Splitting would need a
+ *     second, independent Class B call this bead does not make unilaterally:
+ *     how to merge several partial readings' `extractedText`/
+ *     `figureDescription`/`coverage` into one region's answer, with what
+ *     provenance/manifest-entry shape (`[D-326]`'s `imageDigest` is a single
+ *     string; `readAndLandPage` lands at most one `ExtractedUnit` per page).
+ *     Refusing is the same "named, honest gap, never guessed" answer this
+ *     file already gives an unsupported image extension or a missing PDF
+ *     renderer, and needs none of those unresolved merge questions.
+ */
+async function sendOfficeFigureCueImages(
+  deps: WorkerVisionPageRunnerDeps,
+  job: JobRunnerView,
+  format: 'pptx' | 'docx',
+  sourcePath: VaultPath,
+  page: number,
+  embeddedIn: EmbeddedInNote | undefined,
+): Promise<JobRunOutcome> {
+  let bytes: Uint8Array;
+  try {
+    bytes = await deps.vault.readBinary(sourcePath);
+  } catch {
+    // The ordinary transient-environment shape every other vault read in
+    // this file gets.
+    return { ok: false, retryable: true };
+  }
+
+  const images = officeFigureCueImages(format, sourcePath, bytes, page);
+  if (images.length === 0) {
+    return {
+      ok: false,
+      retryable: false,
+      reason:
+        `WorkerVisionPageRunner: job ${job.contentHash} is a '${format}' page whose embedded ` +
+        'images do not clear the D-324 combine-cue floor (or it has none) — nothing qualifying ' +
+        'to send to vision.extract.v2.',
+    };
+  }
+
+  if (images.length > MAX_OFFICE_IMAGE_LIST_LENGTH) {
+    return {
+      ok: false,
+      retryable: false,
+      reason:
+        `WorkerVisionPageRunner: job ${job.contentHash} names ${images.length} qualifying ` +
+        `images, over the declared MAX_OFFICE_IMAGE_LIST_LENGTH (${MAX_OFFICE_IMAGE_LIST_LENGTH}) ` +
+        '— refused, never truncated to the first N images.',
+    };
+  }
+
+  const totalBytes = images.reduce((sum, image) => sum + image.bytes.length, 0);
+  if (totalBytes > MAX_OFFICE_IMAGE_TOTAL_BYTES) {
+    return {
+      ok: false,
+      retryable: false,
+      reason:
+        `WorkerVisionPageRunner: job ${job.contentHash}'s qualifying images total ${totalBytes} ` +
+        `decoded bytes, over the declared MAX_OFFICE_IMAGE_TOTAL_BYTES (${MAX_OFFICE_IMAGE_TOTAL_BYTES}) ` +
+        '— refused, never truncated to fewer images or fewer bytes.',
+    };
+  }
+
+  const wireImages: VisionPageImage[] = [];
+  for (const image of images) {
+    const mimeType = supportedVisionMimeType(image.mimeType);
+    if (mimeType === null) {
+      return {
+        ok: false,
+        retryable: false,
+        reason:
+          `WorkerVisionPageRunner: job ${job.contentHash} has a qualifying image of mime type ` +
+          `'${image.mimeType}', which vision.extract.v2 does not accept (only ` +
+          `${SUPPORTED_VISION_MIME_TYPES.join('/')}) — refused, never a paid guess, and never ` +
+          'sent with just that one image silently dropped from the combine.',
+      };
+    }
+    wireImages.push({ pageImageBase64: bytesToBase64(image.bytes), mimeType });
+  }
+
+  // Single-image byte-identity (`ol-egov.141.89.8.36`'s own acceptance
+  // criterion): a region with exactly one qualifying image sends the plain
+  // single-image shape, not a one-element `images` list.
+  const firstImage = wireImages[0];
+  const request: VisionPageExtractRequest =
+    wireImages.length === 1 && firstImage !== undefined ? firstImage : { images: wireImages };
+
+  return readAndLandPage(deps, job, request, sourcePath, page, embeddedIn);
 }
 
 export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): JobRunner {
@@ -995,23 +1266,23 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
         // rendered" section.
         return renderAndLandPdfPage(deps, deps.pageRenderer, job, sourcePath, page, embeddedIn);
       }
-      // A page INSIDE a pptx/docx (or a pdf with no pageRenderer wired)
-      // needs a rendered/selected page image this runner does not have a
-      // way to obtain yet. Named, non-retryable gap — never silently doing
-      // nothing, never crashing. See the module doc's PPTX/DOCX note: the
-      // combine selection policy is decided (Class B) and its trigger is
-      // built and tested (`pptxFigureCue`/`docxFigureCue`), but turning a
-      // qualifying slide/region's several images into vision.extract.v2's
-      // one-image call is still unbuilt, so this stays a gap regardless.
+      if (format === 'pptx' || format === 'docx') {
+        // `ol-egov.141.89.8.26`'s send wiring — see
+        // `sendOfficeFigureCueImages`'s own doc for the three named refusals
+        // it can still return instead of a call.
+        return sendOfficeFigureCueImages(deps, job, format, sourcePath, page, embeddedIn);
+      }
+      // A PDF page with no pageRenderer wired needs a rendered page image
+      // this runner does not have a way to obtain without one. Named,
+      // non-retryable gap — never silently doing nothing, never crashing.
       return {
         ok: false,
         retryable: false,
         reason:
           `WorkerVisionPageRunner: job ${job.contentHash} needs a rendered page image for a ` +
           `'${format}' document, and no page renderer is wired for it in this run (ol-9cle's ` +
-          "renderer exists for 'pdf'; PPTX/DOCX embedded-image selection is decided (combine) but " +
-          'sending several images in one vision.extract.v2 call is not yet wired) — only standalone ' +
-          "image sources (format 'image') are unconditionally wired today.",
+          "renderer exists for 'pdf') — only standalone image sources (format 'image') and " +
+          "'pptx'/'docx' regions (via the D-324 combine cue) are unconditionally wired today.",
       };
     }
 
@@ -1036,6 +1307,13 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
       return { ok: false, retryable: true };
     }
 
-    return readAndLandPage(deps, job, bytesToBase64(bytes), mimeType, sourcePath, page, embeddedIn);
+    return readAndLandPage(
+      deps,
+      job,
+      { pageImageBase64: bytesToBase64(bytes), mimeType },
+      sourcePath,
+      page,
+      embeddedIn,
+    );
   };
 }

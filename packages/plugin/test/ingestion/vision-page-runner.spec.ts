@@ -17,9 +17,12 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { TASK_IDS } from 'olea-contracts';
 import type {
+  DocxFigureCueResult,
+  EmbeddedRasterImage,
   ExtractedUnit,
   JobRunnerView,
   ListOptions,
+  PptxFigureCueSlide,
   Unsubscribe,
   VaultEvent,
   VaultPath,
@@ -28,7 +31,8 @@ import type {
   WorkerTaskRequest,
   WritingOutcome,
 } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { docxFigureCue, pptxFigureCue } from 'olea-core';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { PageRenderError } from '../../src/ingestion/page-render/errors.js';
 import type {
   PageRenderPort,
@@ -38,6 +42,8 @@ import type {
 import {
   bytesToBase64,
   createWorkerVisionPageRunner,
+  MAX_OFFICE_IMAGE_LIST_LENGTH,
+  MAX_OFFICE_IMAGE_TOTAL_BYTES,
   PDF_PAGE_RENDER_SCALE,
   VISION_EXTRACT_CONTRACT_VERSION,
   VISION_EXTRACT_V2_TASK_ID,
@@ -48,6 +54,28 @@ import {
   WorkerVisionPageExtractor,
   WorkerVisionPageExtractorError,
 } from '../../src/ingestion/vision-page-runner.js';
+
+/**
+ * `pptxFigureCue`/`docxFigureCue` (`ol-egov.141.89.8.26`'s D-324 combine cue)
+ * are mocked here, not exercised against a real OOXML zip — `packages/core`
+ * (which owns `fflate`) already tests their own logic exhaustively
+ * (`pptx.spec.ts`/`docx.spec.ts`); `packages/plugin` does not depend on
+ * `fflate` at all, and adding it just to rebuild a zip fixture a second time
+ * in a different package would test the same logic twice while testing this
+ * file's actual job — does the RUNNER call the cue correctly, respect
+ * `qualifies`, bound the result, and build the right wire request — less
+ * directly. `vitest` hoists this call above every import in the file
+ * (including the `docxFigureCue`/`pptxFigureCue` import above), so the
+ * runner's own `import { docxFigureCue, pptxFigureCue } from 'olea-core'`
+ * (`vision-page-runner.ts`) resolves to these same mocks. `importOriginal`
+ * keeps every other `olea-core` export (`isExtractionJobPayload`,
+ * `stableUnitId`, the Writing-contract adapters) real; only the two cue
+ * functions are replaced.
+ */
+vi.mock('olea-core', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('olea-core')>();
+  return { ...actual, pptxFigureCue: vi.fn(), docxFigureCue: vi.fn() };
+});
 
 /** Records what was sent and answers with whatever the test scripted — same shape `workerGroundingJudge.spec.ts` uses. */
 class RecordingTransport {
@@ -402,6 +430,17 @@ class RecordingSink {
   }
 }
 
+/** Narrows a `VisionPageExtractRequest` to its single-image branch — throws (a real test failure, not a silent cast) if the request actually carries an `images` list, for the tests asserting the pre-existing single-image shape specifically. */
+function singleImageRequest(request: VisionPageExtractRequest | undefined): {
+  pageImageBase64: string;
+  mimeType: string;
+} {
+  if (!request || 'images' in request) {
+    throw new Error('expected a single-image VisionPageExtractRequest, got an images list');
+  }
+  return request;
+}
+
 /** A `VisionPageExtractPort` fake that records every request and answers with whatever the test scripts, or throws. */
 class FakeExtractor implements VisionPageExtractPort {
   readonly requests: VisionPageExtractRequest[] = [];
@@ -443,8 +482,10 @@ describe('createWorkerVisionPageRunner — a readable standalone image', () => {
 
     expect(outcome).toEqual({ ok: true });
     expect(extractor.requests).toHaveLength(1);
-    expect(extractor.requests[0]?.mimeType).toBe('image/png');
-    expect(extractor.requests[0]?.pageImageBase64).toBe(bytesToBase64(FAKE_PNG_BYTES));
+    expect(singleImageRequest(extractor.requests[0]).mimeType).toBe('image/png');
+    expect(singleImageRequest(extractor.requests[0]).pageImageBase64).toBe(
+      bytesToBase64(FAKE_PNG_BYTES),
+    );
 
     expect(sink.calls).toHaveLength(1);
     const units = sink.calls[0];
@@ -644,7 +685,7 @@ describe('createWorkerVisionPageRunner — DF-21 honest, named failures', () => 
     });
   });
 
-  it('a page inside a pdf/pptx/docx names the missing renderer (ol-9cle) and is non-retryable', async () => {
+  it('a pdf page with no pageRenderer wired names the missing renderer (ol-9cle) and is non-retryable — pptx/docx have their own path now (see below)', async () => {
     const vault = new MemoryVaultSource();
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => completeResult('x'));
@@ -739,8 +780,10 @@ describe('createWorkerVisionPageRunner — a PDF page, rendered via the injected
       { pdfBytes: new Uint8Array([1, 2, 3]), pageNumber: 3, scale: PDF_PAGE_RENDER_SCALE },
     ]);
     expect(extractor.requests).toHaveLength(1);
-    expect(extractor.requests[0]?.mimeType).toBe('image/png');
-    expect(extractor.requests[0]?.pageImageBase64).toBe(bytesToBase64(FAKE_PNG_BYTES));
+    expect(singleImageRequest(extractor.requests[0]).mimeType).toBe('image/png');
+    expect(singleImageRequest(extractor.requests[0]).pageImageBase64).toBe(
+      bytesToBase64(FAKE_PNG_BYTES),
+    );
     expect(sink.calls[0]?.[0]?.text).toBe('Figure 3: the rock cycle');
     expect(sink.calls[0]?.[0]?.provenance.location.page).toBe(3);
   });
@@ -834,16 +877,19 @@ describe('createWorkerVisionPageRunner — a PDF page, rendered via the injected
     expect(outcome.retryable ? '' : outcome.reason).toContain('ol-9cle');
   });
 
-  it('a pageRenderer supplied does not extend to pptx/docx — still the named gap; the combine selection policy is decided but sending several images in one call is not yet wired', async () => {
+  it('a pageRenderer supplied is irrelevant to pptx/docx — they never use this port, only the D-324 combine cue (see the describe block below)', async () => {
     const vault = new MemoryVaultSource();
+    const pptxPath = 'Lectures/deck.pptx' as VaultPath;
+    vault.setBinary(pptxPath, new Uint8Array([1, 2, 3]));
     const sink = new RecordingSink();
     const extractor = new FakeExtractor(() => completeResult('x'));
     const pageRenderer = new FakePageRenderer(() => FAKE_RENDERED_PAGE);
     const runner = createWorkerVisionPageRunner({ vault, extractor, sink, pageRenderer });
+    vi.mocked(pptxFigureCue).mockReturnValue([{ page: 1, qualifies: false, images: [] }]);
 
     const outcome = await runner(
       visionPageJob({
-        payload: { kind: 'vision-page', sourcePath: 'Lectures/deck.pptx', format: 'pptx', page: 1 },
+        payload: { kind: 'vision-page', sourcePath: pptxPath, format: 'pptx', page: 1 },
       }),
     );
 
@@ -851,6 +897,239 @@ describe('createWorkerVisionPageRunner — a PDF page, rendered via the injected
     if (outcome.ok) return;
     expect(outcome.retryable).toBe(false);
     expect(pageRenderer.requests).toHaveLength(0); // never invoked for a format it does not render
+  });
+});
+
+describe('createWorkerVisionPageRunner — PPTX/DOCX embedded images, sent via the D-324 combine cue (ol-egov.141.89.8.26)', () => {
+  const PPTX_PATH = 'Lectures/deck.pptx' as VaultPath;
+  const DOCX_PATH = 'Papers/paper.docx' as VaultPath;
+
+  // `pptxFigureCue`/`docxFigureCue` are one shared `vi.fn()` per the
+  // top-of-file `vi.mock` (module-level, not per-test) — without this, a
+  // later test's `.not.toHaveBeenCalled()` would see every earlier test's
+  // calls too.
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  function pptxVault(): MemoryVaultSource {
+    const vault = new MemoryVaultSource();
+    // Fake, deliberately-not-a-real-zip bytes: `pptxFigureCue` is mocked in
+    // this describe block (see the top-of-file `vi.mock`), so nothing here
+    // ever actually unzips them — only `deps.vault.readBinary` needs to
+    // resolve, and `pptxFigureCue` needs to be CALLED with them so the
+    // per-test assertions below can check what it was called with.
+    vault.setBinary(PPTX_PATH, new Uint8Array([1, 2, 3]));
+    return vault;
+  }
+
+  function docxVault(): MemoryVaultSource {
+    const vault = new MemoryVaultSource();
+    vault.setBinary(DOCX_PATH, new Uint8Array([4, 5, 6]));
+    return vault;
+  }
+
+  it('a pptx slide with exactly one qualifying image sends it as the plain single-image request, byte for byte — not a one-element images list', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('a diagram of the rock cycle'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const image: EmbeddedRasterImage = { bytes: new Uint8Array([9, 9, 9]), mimeType: 'image/png' };
+    const cueResult: PptxFigureCueSlide[] = [{ page: 1, qualifies: true, images: [image] }];
+    vi.mocked(pptxFigureCue).mockReturnValue(cueResult);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(pptxFigureCue).toHaveBeenCalledWith({ path: PPTX_PATH, bytes: expect.any(Uint8Array) });
+    expect(extractor.requests).toHaveLength(1);
+    const request = singleImageRequest(extractor.requests[0]);
+    expect(request.mimeType).toBe('image/png');
+    expect(request.pageImageBase64).toBe(bytesToBase64(image.bytes));
+    expect(sink.calls[0]?.[0]?.text).toBe('a diagram of the rock cycle');
+    expect(sink.calls[0]?.[0]?.provenance.location.page).toBe(1);
+  });
+
+  it('a pptx slide with several qualifying images sends them as one ordered images-list request, in order', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('read together'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const imageA: EmbeddedRasterImage = { bytes: new Uint8Array([1]), mimeType: 'image/png' };
+    const imageB: EmbeddedRasterImage = { bytes: new Uint8Array([2, 2]), mimeType: 'image/jpeg' };
+    vi.mocked(pptxFigureCue).mockReturnValue([
+      { page: 2, qualifies: true, images: [imageA, imageB] },
+    ]);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 2 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(extractor.requests).toHaveLength(1);
+    const request = extractor.requests[0];
+    if (!request || !('images' in request)) throw new Error('expected an images list');
+    expect(request.images).toEqual([
+      { pageImageBase64: bytesToBase64(imageA.bytes), mimeType: 'image/png' },
+      { pageImageBase64: bytesToBase64(imageB.bytes), mimeType: 'image/jpeg' },
+    ]);
+  });
+
+  it('a pptx slide the cue says does not qualify is a named, non-retryable gap — the Worker is never called', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    vi.mocked(pptxFigureCue).mockReturnValue([{ page: 1, qualifies: false, images: [] }]);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('combine-cue floor');
+    expect(extractor.requests).toHaveLength(0);
+  });
+
+  it('a docx region (page 1, the only region) with one qualifying image sends it', async () => {
+    const vault = docxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('a labelled diagram'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const image: EmbeddedRasterImage = { bytes: new Uint8Array([7]), mimeType: 'image/webp' };
+    const cueResult: DocxFigureCueResult = { qualifies: true, images: [image] };
+    vi.mocked(docxFigureCue).mockReturnValue(cueResult);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: DOCX_PATH, format: 'docx', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    expect(docxFigureCue).toHaveBeenCalledWith({ path: DOCX_PATH, bytes: expect.any(Uint8Array) });
+    expect(sink.calls[0]?.[0]?.text).toBe('a labelled diagram');
+  });
+
+  it('a docx job naming a page other than 1 has nothing to send — docx has exactly one logical region — and never calls docxFigureCue', async () => {
+    const vault = docxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    vi.mocked(docxFigureCue).mockReturnValue({ qualifies: true, images: [] }); // must not even be consulted
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: DOCX_PATH, format: 'docx', page: 2 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(docxFigureCue).not.toHaveBeenCalled();
+    expect(extractor.requests).toHaveLength(0);
+  });
+
+  it('more qualifying images than MAX_OFFICE_IMAGE_LIST_LENGTH is refused, never truncated to the first N', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const images: EmbeddedRasterImage[] = Array.from(
+      { length: MAX_OFFICE_IMAGE_LIST_LENGTH + 1 },
+      (_, i) => ({ bytes: new Uint8Array([i]), mimeType: 'image/png' as const }),
+    );
+    vi.mocked(pptxFigureCue).mockReturnValue([{ page: 1, qualifies: true, images }]);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('MAX_OFFICE_IMAGE_LIST_LENGTH');
+    expect(extractor.requests).toHaveLength(0);
+  });
+
+  it('qualifying images totalling more than MAX_OFFICE_IMAGE_TOTAL_BYTES is refused, never truncated to fewer bytes', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const halfPlusOne = Math.floor(MAX_OFFICE_IMAGE_TOTAL_BYTES / 2) + 1;
+    const images: EmbeddedRasterImage[] = [
+      { bytes: new Uint8Array(halfPlusOne), mimeType: 'image/png' },
+      { bytes: new Uint8Array(halfPlusOne), mimeType: 'image/png' },
+    ];
+    vi.mocked(pptxFigureCue).mockReturnValue([{ page: 1, qualifies: true, images }]);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('MAX_OFFICE_IMAGE_TOTAL_BYTES');
+    expect(extractor.requests).toHaveLength(0);
+  });
+
+  it('a qualifying image of an unsupported raster mime type (e.g. image/gif) refuses the whole call, never silently dropping just that one image from the combine', async () => {
+    const vault = pptxVault();
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+    const goodImage: EmbeddedRasterImage = { bytes: new Uint8Array([1]), mimeType: 'image/png' };
+    const gifImage: EmbeddedRasterImage = { bytes: new Uint8Array([2]), mimeType: 'image/gif' };
+    vi.mocked(pptxFigureCue).mockReturnValue([
+      { page: 1, qualifies: true, images: [goodImage, gifImage] },
+    ]);
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.retryable).toBe(false);
+    expect(outcome.retryable ? '' : outcome.reason).toContain('image/gif');
+    expect(extractor.requests).toHaveLength(0);
+  });
+
+  it('a vault read failure before the figure cue can even be computed is retryable — the ordinary transient shape', async () => {
+    const vault = pptxVault();
+    vault.failOn(PPTX_PATH);
+    const sink = new RecordingSink();
+    const extractor = new FakeExtractor(() => completeResult('should never be called'));
+    const runner = createWorkerVisionPageRunner({ vault, extractor, sink });
+
+    const outcome = await runner(
+      visionPageJob({
+        payload: { kind: 'vision-page', sourcePath: PPTX_PATH, format: 'pptx', page: 1 },
+      }),
+    );
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(pptxFigureCue).not.toHaveBeenCalled();
+    expect(extractor.requests).toHaveLength(0);
   });
 });
 

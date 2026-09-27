@@ -425,3 +425,78 @@ describe('pptxFigureCue — D-324 combine policy (ol-egov.141.89.8.26, findings/
     expect(pptxFigureCue({ path: 'garbage.pptx', bytes })).toEqual([]);
   });
 });
+
+/** A slide carrying both a text shape (`slideXml`'s own paragraph/run shape) and zero or more `<p:pic>` placements (`pictureXml`) — the route-upgrade tests below need a slide that is genuinely `'text-layer'` on its own AND carries pictures, which neither `slideXml` nor `slideXmlWithPictures` alone can express. */
+function slideXmlWithTextAndPictures(
+  paragraphs: readonly string[],
+  pictures: readonly string[],
+): string {
+  const body = paragraphs.map((p) => `<a:p><a:r><a:t>${p}</a:t></a:r></a:p>`).join('');
+  return (
+    '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
+    '<p:sld xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" ' +
+    'xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main">' +
+    `<p:cSld><p:spTree><p:sp><p:txBody>${body}</p:txBody></p:sp>${pictures.join('')}</p:spTree></p:cSld></p:sld>`
+  );
+}
+
+describe('pptxExtractor — D-324 combine-cue route upgrade (ol-egov.141.89.8.26, the send-wiring half)', () => {
+  it("upgrades a text-bearing slide to 'both' when its images clear the combine floor, keeping its text-layer units unchanged", async () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000
+      'ppt/slides/slide1.xml': slideXmlWithTextAndPictures(
+        ['A real bullet point with real words on it.'],
+        [pictureXml('rId1', 500, 500)], // 25% — clears FIGURE_CUE_MIN_SHARE (5%)
+      ),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+
+    expect(result.pages[0]?.route).toBe('both');
+    // '"both"' keeps exactly the units '"text-layer"' would have carried —
+    // the image reading this route also owes the page is a SEPARATE job
+    // (`vision-page-runner.ts`'s `sendOfficeFigureCueImages`), never traded
+    // away here.
+    expect(result.pages[0]?.units[0]?.text).toBe('A real bullet point with real words on it.');
+  });
+
+  it("a text-bearing slide whose images do NOT clear the combine floor stays 'text-layer' — no guessed upgrade", async () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000
+      'ppt/slides/slide1.xml': slideXmlWithTextAndPictures(
+        ['A real bullet point with real words on it.'],
+        [pictureXml('rId1', 50, 50)], // 2,500 / 1,000,000 = 0.25% — under the floor
+      ),
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+
+    expect(result.pages[0]?.route).toBe('text-layer');
+  });
+
+  it("never upgrades an already-'vision' slide (no usable text layer) even when its images would otherwise clear the floor — the upgrade only ever widens 'text-layer'", async () => {
+    const bytes = buildPptxBytesMixed({
+      'ppt/presentation.xml': presentationXmlWithSize(1000, 1000), // area 1,000,000
+      // No text paragraphs at all — `slideXmlWithPictures` omits the
+      // text-shape entirely, so this slide's own charCount is 0 and its
+      // route is `'vision'` before the figure cue ever runs.
+      'ppt/slides/slide1.xml': slideXmlWithPictures([pictureXml('rId1', 900, 900)]), // 81%
+      'ppt/slides/_rels/slide1.xml.rels': slideRels([
+        ['rId1', IMAGE_REL_TYPE, '../media/image1.png'],
+      ]),
+      'ppt/media/image1.png': new Uint8Array([1, 2, 3]),
+    });
+
+    const result = await pptxExtractor.extract({ path: 'deck.pptx', bytes });
+
+    expect(result.pages[0]?.route).toBe('vision');
+  });
+});
