@@ -13,7 +13,7 @@ import { daysSinceLastReview } from './absence.js';
 
 function review(timestamp: string, overrides: Partial<ReviewLogRecord> = {}): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${timestamp}`,
     timestamp,
@@ -36,7 +36,7 @@ function review(timestamp: string, overrides: Partial<ReviewLogRecord> = {}): Re
 
 function suspend(timestamp: string, overrides: Partial<SuspendLogRecord> = {}): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId: `s-${timestamp}`,
     timestamp,

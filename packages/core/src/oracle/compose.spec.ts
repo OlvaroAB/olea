@@ -68,7 +68,7 @@ const BASE_PATH = '02 Assignments/Assignments.base';
  */
 function review(conceptId: string, overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-01-10T09:00:00-04:00',
@@ -388,7 +388,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
 
   it("`[D-281]` item 4 (ol-a07q, ol-v7r5.69): a `rejected` verdict against the qualifying instrument excludes its evidence from the mastery this composition hands to the ranking — the fold this composition's own module doc names as `rankOracle`'s one mastery producer", async () => {
     const qualifyingExplainBack: ReviewLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: 'eb-1',
       timestamp: '2026-01-20T09:00:00-04:00',
@@ -417,7 +417,7 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // A real refusal (`../review-log/verdicts.ts`), not a mere suspend — the
     // proven-invalid signal D-281 item 4 and ol-v7r5.69 both require.
     const rejectedVerdict: ReviewLogEntry = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'verdict',
       eventId: 'verdict-1',
       timestamp: '2026-01-21T09:00:00-04:00',
@@ -865,7 +865,7 @@ describe("resolveTiebreakEligibleConcepts — C5.10 ruling 1's producer (`[D-265
         rating: 'good',
       }),
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'suspend',
         eventId: 'suspend-cloze-1',
         timestamp: '2026-08-06T09:00:00-04:00',

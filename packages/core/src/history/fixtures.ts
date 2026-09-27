@@ -9,10 +9,10 @@
 
 import type {
   DisputeLogRecord,
-  MisconceptionObservedLogRecordV5,
+  MisconceptionObservedLogRecord,
   ReviewLogRecord,
-  SuccessionLogRecordV5,
-  SuspendLogRecordV5,
+  SuccessionLogRecord,
+  SuspendLogRecord,
   VerdictLogRecord,
 } from 'olea-contracts';
 
@@ -29,7 +29,7 @@ export function reviewAt(
   overrides: Partial<ReviewLogRecord> = {},
 ): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp,
@@ -51,7 +51,7 @@ export function verdictAt(
   verdict: VerdictLogRecord['verdict'],
 ): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId,
     timestamp,
@@ -68,9 +68,9 @@ export function successionAt(
   timestamp: string,
   predecessorInstrumentId: string,
   successorInstrumentId: string,
-): SuccessionLogRecordV5 {
+): SuccessionLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'succession',
     eventId,
     timestamp,
@@ -83,9 +83,9 @@ export function suspendAt(
   eventId: string,
   timestamp: string,
   instrumentId: string,
-): SuspendLogRecordV5 {
+): SuspendLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId,
     timestamp,
@@ -100,7 +100,7 @@ export function disputeAt(
   instrumentId: string,
 ): DisputeLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId,
     timestamp,
@@ -118,9 +118,9 @@ export function misconceptionAt(
   timestamp: string,
   instrumentId: string,
   reviewEventId: string,
-): MisconceptionObservedLogRecordV5 {
+): MisconceptionObservedLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'misconception-observed',
     eventId,
     timestamp,
@@ -133,5 +133,5 @@ export function misconceptionAt(
       believes: 'synthetic-belief',
       source_says: 'synthetic-source',
     },
-  } as MisconceptionObservedLogRecordV5;
+  } as MisconceptionObservedLogRecord;
 }

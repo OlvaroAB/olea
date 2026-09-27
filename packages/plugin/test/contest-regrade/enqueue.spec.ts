@@ -23,7 +23,7 @@ const CONCEPTS = ['concept-a'];
 
 function gradedExplainBackReview(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'eb-1',
     timestamp: '2026-08-20T09:00:00+02:00',
@@ -109,7 +109,7 @@ describe('enqueueContestRegradeJobOnDispute', () => {
   it('reports not-a-grade-dispute, and enqueues nothing, when the dispute names no instrument', async () => {
     const enqueuer = new RecordingEnqueuer();
     const disputeWithNoInstrument = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'd-1',
       timestamp: '2026-08-21T09:00:00+02:00',

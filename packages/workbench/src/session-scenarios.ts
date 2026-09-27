@@ -336,7 +336,7 @@ function borrowedHistory(
   for (const record of records) {
     for (let n = 0; n < BORROWED_REVIEWS_PER_INSTRUMENT; n += 1) {
       entries.push({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'review',
         eventId: `workbench-session-${record.instrumentId}-${n}`,
         // A fixed hour on `asOf` with an explicit offset — the same anchoring

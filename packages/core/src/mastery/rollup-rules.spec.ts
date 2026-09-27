@@ -21,7 +21,7 @@ import {
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r-default',
     timestamp: '2026-01-10T09:00:00-04:00',
@@ -316,7 +316,7 @@ function verdict(
   eventId: string,
 ): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId,
     timestamp,

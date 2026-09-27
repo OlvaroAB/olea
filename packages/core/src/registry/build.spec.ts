@@ -56,7 +56,7 @@ function qaInstrument(overrides: Partial<VaultInstrumentRecord> = {}): VaultInst
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-01-10T09:00:00-04:00',
@@ -592,7 +592,7 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
       timestamp: '2026-01-20T09:00:00-04:00',
     });
     const disputeRecord: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'dispute-1',
       ...dispute.record,
@@ -612,7 +612,7 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
       timestamp: '2026-01-20T09:00:00-04:00',
     });
     const disputeRecord: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'dispute-1',
       ...dispute.record,
@@ -640,7 +640,7 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
       timestamp: '2026-01-20T09:00:00-04:00',
     });
     const openingRecord: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'dispute-1',
       ...opening.record,
@@ -651,7 +651,7 @@ describe('buildRegistryModel — per-instrument explain-back history (F8.4b, [D-
       timestamp: '2026-01-22T09:00:00-04:00',
     });
     const resolutionRecord: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'dispute-2',
       ...resolution,

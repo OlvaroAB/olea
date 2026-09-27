@@ -12,7 +12,7 @@ import {
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-08-10T09:00:00-04:00',
@@ -35,7 +35,7 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
 
 function suspend(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId: `s-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-08-11T09:00:00-04:00',
@@ -47,7 +47,7 @@ function suspend(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
 
 function verdict(overrides: Partial<VerdictLogRecord> = {}): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId: `v-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-08-11T09:00:00-04:00',

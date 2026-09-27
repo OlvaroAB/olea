@@ -172,6 +172,7 @@
  */
 
 import type { MisconceptionDigestEntry } from '../misconception/digest.js';
+import type { ModelStamp } from '../stage-contract/provenance.js';
 import {
   type OverlapMeasurement,
   precheckRestatement,
@@ -291,10 +292,17 @@ export function toWireMisconceptionDigest(
   return entries.map((entry) => ({ concept: entry.conceptId, statement: entry.statement }));
 }
 
-/** Performs the actual model call. Not implemented here — see header. */
+/**
+ * Performs the actual model call. Not implemented here — see header.
+ *
+ * `stamp` (`ol-95vv.8`, `[D-386]`): the Worker's D7.3 prompt-and-model stamp
+ * when the caller surfaces one (`workerJudgeCaller.ts` does). Optional so a
+ * caller that surfaces none still type-checks; absent or `null` means no
+ * usable stamp arrived, and nothing downstream invents one.
+ */
 export type JudgeCaller = (
   input: ExplainBackJudgeWireRequest,
-) => Promise<ExplainBackGradingWireResponse>;
+) => Promise<ExplainBackGradingWireResponse & { readonly stamp?: ModelStamp | null }>;
 
 /** Raised instead of calling the model on input this pipeline cannot honestly grade. */
 export class UnusableGradingInputError extends Error {
@@ -443,6 +451,14 @@ export interface PendingExplainBackGrading {
   readonly grading: GroundedGrading;
   /** Record-only (`ol-nvdk`, `[D-138]`) — never gates the model call below. */
   readonly overlap: OverlapMeasurement;
+  /**
+   * The correctness call's D7.3 stamp (`ol-95vv.8`, `[D-303]`, `[D-386]`),
+   * present exactly when the judge caller surfaced a usable one. It is what
+   * lets an accepted verdict be recorded in the review log's top-level
+   * `explainBackCorrectness`, whose stamp is mandatory; absent, the verdict
+   * has no honest stamp and is never given one.
+   */
+  readonly stamp?: ModelStamp;
 }
 
 /**
@@ -497,6 +513,7 @@ export async function gradeExplainBack(
     status: 'pending-review',
     overlap,
     grading: groundCitations(wire, input.sourceBlocks),
+    ...(wire.stamp !== undefined && wire.stamp !== null ? { stamp: wire.stamp } : {}),
   };
 }
 
@@ -511,6 +528,8 @@ export interface AcceptedExplainBackGrading {
   readonly missedPoints: readonly string[];
   readonly citedIssues: readonly CitedIssue[];
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
+  /** The correctness call's stamp, carried from `PendingExplainBackGrading.stamp`; absent when none arrived. */
+  readonly stamp?: ModelStamp;
 }
 
 /**
@@ -570,6 +589,7 @@ export function acceptExplainBackGrading(
     missedPoints: pending.grading.missedPoints,
     citedIssues: pending.grading.citedIssues,
     misconceptionCandidates: pending.grading.misconceptionCandidates,
+    ...(pending.stamp !== undefined ? { stamp: pending.stamp } : {}),
   };
 }
 

@@ -72,7 +72,7 @@ describe('appendReviewLogRecord', () => {
       generateEventId: () => 'fixed-event-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('review');
     expect(result.record.eventId).toBe('fixed-event-1');
     expect(result.path).toBe(reviewLogPath('2026-08-10', 'desktop'));
@@ -373,7 +373,7 @@ describe('appendSuspendRecord', () => {
       generateEventId: () => 'suspend-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('suspend');
     expect(result.record.eventId).toBe('suspend-1');
     expect(result.record.instrumentId).toBe('cloze:bioturbation:1');
@@ -496,7 +496,7 @@ describe('appendVerdictRecord (ol-548w, INV-6)', () => {
       generateEventId: () => 'verdict-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('verdict');
     expect(result.record.eventId).toBe('verdict-1');
     expect(result.record.verdict).toBe('accepted');
@@ -610,7 +610,7 @@ describe('appendSuccessionRecord ([D-133])', () => {
       generateEventId: () => 'succession-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('succession');
     expect(result.record.eventId).toBe('succession-1');
     expect(result.record.predecessorInstrumentId).toBe('mcq:appoggiatura:1');
@@ -711,7 +711,7 @@ describe('appendSourceRegisteredRecord ([D-226] ruling 1)', () => {
       generateEventId: () => 'source-registered-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('source-registered');
     expect(result.record.eventId).toBe('source-registered-1');
     expect(result.record.path).toBe('01 Courses/COURSEA/Past Paper 2024.pdf');
@@ -844,7 +844,7 @@ describe('appendRetrospectiveOfferRecord ([D-134] Q5)', () => {
       generateEventId: () => 'offer-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('retrospective-offered');
     expect(result.record.eventId).toBe('offer-1');
     expect(result.record.assessmentPath).toBe('Courses/TESTC101/Final.md');
@@ -1002,7 +1002,7 @@ describe('appendExplainBackOfferRecord ([D-178 / LOG-3] item 2)', () => {
       generateEventId: () => 'offer-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('explain-back-offered');
     expect(result.record.eventId).toBe('offer-1');
     expect(result.record.conceptIds).toEqual(['imbrication']);
@@ -1181,7 +1181,7 @@ describe('appendMisconceptionObservedRecord ([D-202], ol-egov.92)', () => {
       generateMisconceptionId: () => 'misconception-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('misconception-observed');
     expect(result.record.eventId).toBe('observed-1');
     expect(result.record.misconceptionId).toBe('misconception-1');
@@ -1340,7 +1340,7 @@ describe('appendNonAttemptRecord ([D-273], [D-306])', () => {
       generateEventId: () => 'non-attempt-1',
     });
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('non-attempt');
     expect(result.record.eventId).toBe('non-attempt-1');
     expect(result.record.conceptIds).toEqual(['concept-a']);
@@ -1547,5 +1547,86 @@ describe('appendNonAttemptRecord ([D-273], [D-306])', () => {
 
     expect(merged.duplicateEventIds).toEqual([]);
     expect(merged.records.map((r) => r.kind)).toEqual(['non-attempt', 'non-attempt']);
+  });
+});
+
+// `[D-386]` (`ol-95vv.8`): since v6, a verdict is written only to the
+// top-level `explainBackCorrectness`, with its own stamp. The nested field is
+// a legacy carry the v6 schema keeps for v5 history, and no writer produces it.
+describe('appendReviewLogRecord — explain-back correctness at v6 ([D-386])', () => {
+  let tempRoot: string;
+  const depthStamp = { taskId: 'grade.explain-back.v1', promptVersion: 'v', modelId: 'm' };
+  const judgeStamp = { taskId: 'explain-back.judge.v1', promptVersion: 'v', modelId: 'm' };
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-review-log-d386-'));
+  });
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  function explainBack(overrides: Partial<ReviewLogRecordInput> = {}): ReviewLogRecordInput {
+    return baseInput({
+      instrumentId: 'explain-back:imbrication:1',
+      instrumentType: 'explain-back',
+      rating: null,
+      ...overrides,
+    });
+  }
+
+  it('writes a top-level verdict with its own stamp, and reads it back unchanged', async () => {
+    const source = new FolderSource(tempRoot);
+    const { record, path } = await appendReviewLogRecord(
+      source,
+      explainBack({
+        explainBackCorrectness: { verdict: 'correct', artifactProvenance: judgeStamp },
+      }),
+      { deviceId: 'desktop' },
+    );
+    expect(record.schemaVersion).toBe(6);
+    const parsed = parseReviewLog(await readFile(join(tempRoot, path), 'utf8'));
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records).toEqual([record]);
+  });
+
+  it('refuses the nested verdict on a new record, and writes nothing', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendReviewLogRecord(
+        source,
+        explainBack({
+          explainBackGrade: {
+            soloLevel: 'relational',
+            correctness: 'correct',
+            contentRef: 'content-1',
+            revisionOf: null,
+            artifactProvenance: depthStamp,
+          },
+        }),
+        { deviceId: 'desktop' },
+      ),
+    ).rejects.toThrow(/D-386/);
+    const day = reviewLogPath('2026-08-10', 'desktop');
+    expect(await source.exists(day)).toBe(false);
+  });
+
+  it('refuses a record carrying both places at once — the schema, before anything is written', async () => {
+    const source = new FolderSource(tempRoot);
+    await expect(
+      appendReviewLogRecord(
+        source,
+        explainBack({
+          explainBackCorrectness: { verdict: 'correct', artifactProvenance: judgeStamp },
+          explainBackGrade: {
+            soloLevel: 'relational',
+            correctness: 'correct',
+            contentRef: 'content-1',
+            revisionOf: null,
+            artifactProvenance: depthStamp,
+          },
+        }),
+        { deviceId: 'desktop' },
+      ),
+    ).rejects.toThrow(/schema validation/);
   });
 });

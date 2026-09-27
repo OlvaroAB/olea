@@ -351,7 +351,13 @@ describe('recordSoloGradeAndReview — ol-0r92.94 [DOS-C1]: attemptId threading'
 // Scenario: features/F5-explain-it-back.md — "F5.8 — what the top growth
 // stage claims, and the evidence that qualifies it [D-281]".
 describe('recordSoloGradeAndReview — [D-281] the independent correctness verdict on the same attempt', () => {
-  function acceptedFor(verdict: 'correct' | 'partial' | 'incorrect') {
+  const JUDGE_STAMP = { promptVersion: 'judge-7', modelId: 'judge-model' };
+
+  function acceptedFor(
+    verdict: 'correct' | 'partial' | 'incorrect',
+    { withStamp = true }: { withStamp?: boolean } = {},
+  ) {
+    const stamp = withStamp ? JUDGE_STAMP : undefined;
     return Promise.resolve({
       status: 'accepted' as const,
       accepted: {
@@ -361,9 +367,15 @@ describe('recordSoloGradeAndReview — [D-281] the independent correctness verdi
         missedPoints: [],
         citedIssues: [],
         misconceptionCandidates: [],
+        ...(stamp !== undefined ? { stamp } : {}),
       },
       observations: [],
     });
+  }
+
+  /** `[D-386]`: since review-log v6 the verdict never lands in the nested field. */
+  function expectNoNestedVerdict(record: Awaited<ReturnType<typeof writeWith>>) {
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
   }
 
   async function writeWith(accept: Promise<unknown> | undefined) {
@@ -388,29 +400,50 @@ describe('recordSoloGradeAndReview — [D-281] the independent correctness verdi
     return outcome.result.record;
   }
 
-  it('persists the accepted correctness verdict for this attempt onto the grade record', async () => {
+  it('persists the accepted correctness verdict for this attempt in its own top-level place, with the correctness call’s stamp ([D-303], [D-386])', async () => {
     const record = await writeWith(acceptedFor('correct'));
-    expect(record.explainBackGrade?.correctness).toBe('correct');
+    expect(record.explainBackCorrectness).toEqual({
+      verdict: 'correct',
+      artifactProvenance: {
+        taskId: 'explain-back.judge.v1',
+        promptVersion: 'judge-7',
+        modelId: 'judge-model',
+      },
+    });
+    expectNoNestedVerdict(record);
+    // The depth grade keeps its own call's stamp; the verdict never borrows it.
+    expect(record.explainBackGrade?.artifactProvenance.modelId).not.toBe('judge-model');
   });
 
   it('persists a non-correct verdict just as faithfully — the fold decides, not the writer', async () => {
     const record = await writeWith(acceptedFor('partial'));
-    expect(record.explainBackGrade?.correctness).toBe('partial');
+    expect(record.explainBackCorrectness?.verdict).toBe('partial');
+    expectNoNestedVerdict(record);
+  });
+
+  it('records NO verdict when the correctness call surfaced no stamp — the stamp is never invented or borrowed', async () => {
+    const record = await writeWith(acceptedFor('correct', { withStamp: false }));
+    expect(record).not.toHaveProperty('explainBackCorrectness');
+    expectNoNestedVerdict(record);
+    expect(record.explainBackGrade?.soloLevel).toBe('relational');
   });
 
   it('records NO verdict when no accept for this attempt exists — unknown, never correct', async () => {
     const record = await writeWith(undefined);
-    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+    expect(record).not.toHaveProperty('explainBackCorrectness');
+    expectNoNestedVerdict(record);
   });
 
   it('records NO verdict when the accept came back stale (the cited source has since changed)', async () => {
     const record = await writeWith(Promise.resolve({ status: 'stale' as const }));
-    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+    expect(record).not.toHaveProperty('explainBackCorrectness');
+    expectNoNestedVerdict(record);
   });
 
   it('records NO verdict when the accept rejected, and still writes the depth evidence', async () => {
     const record = await writeWith(Promise.reject(new Error('ungrounded citation')));
-    expect(record.explainBackGrade).not.toHaveProperty('correctness');
+    expect(record).not.toHaveProperty('explainBackCorrectness');
+    expectNoNestedVerdict(record);
     expect(record.explainBackGrade?.soloLevel).toBe('relational');
   });
 

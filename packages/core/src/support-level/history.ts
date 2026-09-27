@@ -40,7 +40,12 @@
  * `ol-egov.141.89.9.5`'s; until then nothing calls it.
  */
 
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import {
+  type ExplainBackCorrectnessVerdict,
+  type ReviewLogEntry,
+  type ReviewLogRecord,
+  readExplainBackCorrectness,
+} from 'olea-contracts';
 import { clusterReviewSessions, SESSION_CLUSTERING_GAP_SECONDS } from '../session/cluster.js';
 import {
   deriveFailureShape,
@@ -124,7 +129,7 @@ function ladderEvidence(
         // fold and the signal's own spec do.
         rating: 'again',
         soloLevel: grade.soloLevel,
-        ...(grade.correctness !== undefined ? { correctness: grade.correctness } : {}),
+        ...correctnessEvidence(review),
       },
     };
   }
@@ -186,4 +191,16 @@ export function buildSupportLevelHistory(
       return byCell.get(`${conceptId}\u0000${tier}`) ?? [];
     },
   };
+}
+
+/**
+ * The independent correctness verdict as this signal's evidence field
+ * (`[D-386]`): the top-level `explainBackCorrectness` first, the legacy nested
+ * verdict second, and no field at all when neither is recorded (unknown).
+ */
+function correctnessEvidence(review: ReviewLogRecord): {
+  readonly correctness?: ExplainBackCorrectnessVerdict;
+} {
+  const verdict = readExplainBackCorrectness(review)?.verdict;
+  return verdict === undefined ? {} : { correctness: verdict };
 }

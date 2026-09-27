@@ -61,7 +61,7 @@ function generateLog(seed: number, length: number): ReviewLogEntry[] {
     const isExplainBack = instrumentType === 'explain-back';
     const day = String(1 + Math.floor(rand() * 25)).padStart(2, '0');
     const record: ReviewLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: `gen-${seed}-${i}`,
       timestamp: `2026-01-${day}T09:${String(i % 60).padStart(2, '0')}:00-04:00`,
@@ -99,7 +99,7 @@ function generateLog(seed: number, length: number): ReviewLogEntry[] {
     entries.push(record);
   }
   entries.push({
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId: `suspend-${seed}`,
     timestamp: '2026-01-20T12:00:00-04:00',
@@ -107,7 +107,7 @@ function generateLog(seed: number, length: number): ReviewLogEntry[] {
     conceptIds: ['concept-a'],
   });
   entries.push({
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId: `verdict-${seed}`,
     timestamp: '2026-01-21T12:00:00-04:00',

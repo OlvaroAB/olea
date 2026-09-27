@@ -87,13 +87,13 @@
  * that is a schema-shape change (optional → required-nullable), not a value
  * change, and belongs in its own version.
  *
- * **v6 (`ol-95vv.8`) is defined in this file but not yet current.** It is the
- * one migration carrying the fields ruled since v5 (the mastery stamp's
- * vitality and arithmetic version, explain-back correctness in its own place,
- * a suspension's reason, hint use, the presented source revision), and it is
- * an ordinary additive hop: v5 stays readable. It leaves `supportLevelShown`
- * optional. See the v6 block after `reviewLogEntryV5` for what is staged and
- * what the flip that makes it current has to move together.
+ * **v6 (`ol-95vv.8`) is current.** It is the one migration carrying the
+ * fields ruled since v5 (the mastery stamp's vitality and arithmetic version,
+ * explain-back correctness in its own place, a suspension's reason, hint use,
+ * the presented source revision, the composition link), and it is an ordinary
+ * additive hop: v5 stays readable, and core's `upgradeV5` restamps a v5 line
+ * to 6 and changes nothing else. It leaves `supportLevelShown` optional. See
+ * the v6 block after `reviewLogEntryV5`.
  *
  * **What v3's migration can and cannot do.** `upgradeV2` maps `conceptId` to
  * `[conceptId]` and nothing cleverer. A v2 record on disk names one concept
@@ -1952,7 +1952,7 @@ export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
 
 /*
  * ---------------------------------------------------------------------------
- * Schema version 6 (`ol-95vv.8`) — DEFINED HERE, NOT YET CURRENT.
+ * Schema version 6 (`ol-95vv.8`) — CURRENT.
  * ---------------------------------------------------------------------------
  */
 
@@ -1983,13 +1983,12 @@ export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
  * value. That is why each new field is `.optional()`, and why no v6 field is a
  * v5 field bolted on: a v5 parse strips all of them.
  *
- * **Staged: the shapes land before any line can be written.**
- * `REVIEW_LOG_SCHEMA_VERSION` is still 5, `REVIEW_LOG_READABLE_VERSIONS` does
- * not yet list 6, and every current alias below still names a v5 schema. No
- * writer may produce a v6 line until core's `parse.ts` reads 6 and
- * `upgrade.ts` gains the one v5 → v6 hop; those, the aliases, the version
- * constant and the writers move together in one change (the flip), because a
- * line this build's reader would refuse is a line lost.
+ * **Current since the flip.** `REVIEW_LOG_SCHEMA_VERSION` is 6,
+ * `REVIEW_LOG_READABLE_VERSIONS` lists 6 first, every current alias below
+ * names a v6 schema, core's `parse.ts` reads 6 natively and routes a v5 line
+ * through `upgrade.ts`'s one v5 → v6 hop (`upgradeV5`). The shapes were staged
+ * first and flipped in one change with their reader, because a line this
+ * build's reader would refuse is a line lost.
  *
  * **Key order.** Every v6 object spreads its v5 shape first and re-declares
  * `schemaVersion` (and, for the review, `masteryAtTime`) in place — an object
@@ -2239,8 +2238,8 @@ export function readExplainBackCorrectness(record: {
 }
 
 /**
- * One review event, **schema version 6** (`ol-95vv.8`) — defined, not yet
- * current (see the v6 block's opening doc).
+ * One review event, **schema version 6** (`ol-95vv.8`) — the current
+ * version (see the v6 block's opening doc).
  *
  * Every v5 field, by derivation, with `masteryAtTime` widened in place to
  * `masteryAtTimeV6`, plus four optional top-level fields
@@ -2426,8 +2425,8 @@ export type SourceRegisteredLogRecordV6 = z.infer<typeof sourceRegisteredLogReco
 
 /**
  * Every shape a **v6** review-log line can take, discriminated by `kind` —
- * the same ten members as `reviewLogEntryV5`, each at version 6. Not yet the
- * union readers parse current lines against (see the v6 block's opening doc).
+ * the same ten members as `reviewLogEntryV5`, each at version 6, and the
+ * union readers parse current lines against (`reviewLogEntry`).
  */
 export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   reviewLogRecordV6,
@@ -2448,31 +2447,31 @@ export type ReviewLogEntryV6 = z.infer<typeof reviewLogEntryV6>;
  * happened" keep reading naturally. These always point at the newest version;
  * code that needs a specific version names it explicitly.
  */
-export const reviewLogEntry = reviewLogEntryV5;
-export type ReviewLogEntry = z.infer<typeof reviewLogEntryV5>;
-export const reviewLogRecord = reviewLogRecordV5;
-export type ReviewLogRecord = z.infer<typeof reviewLogRecordV5>;
-export const suspendLogRecord = suspendLogRecordV5;
-export type SuspendLogRecord = z.infer<typeof suspendLogRecordV5>;
-export const verdictLogRecord = verdictLogRecordV5;
-export type VerdictLogRecord = z.infer<typeof verdictLogRecordV5>;
-export const successionLogRecord = successionLogRecordV5;
-export type SuccessionLogRecord = z.infer<typeof successionLogRecordV5>;
-export const disputeLogRecord = disputeLogRecordV5;
-export type DisputeLogRecord = z.infer<typeof disputeLogRecordV5>;
-export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV5;
-export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV5>;
-export const explainBackOfferLogRecord = explainBackOfferLogRecordV5;
-export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV5>;
-export const nonAttemptLogRecord = nonAttemptLogRecordV5;
-export type NonAttemptLogRecord = z.infer<typeof nonAttemptLogRecordV5>;
-export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV5;
-export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV5>;
-export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV5;
-export type SourceRegisteredLogRecord = z.infer<typeof sourceRegisteredLogRecordV5>;
+export const reviewLogEntry = reviewLogEntryV6;
+export type ReviewLogEntry = z.infer<typeof reviewLogEntryV6>;
+export const reviewLogRecord = reviewLogRecordV6;
+export type ReviewLogRecord = z.infer<typeof reviewLogRecordV6>;
+export const suspendLogRecord = suspendLogRecordV6;
+export type SuspendLogRecord = z.infer<typeof suspendLogRecordV6>;
+export const verdictLogRecord = verdictLogRecordV6;
+export type VerdictLogRecord = z.infer<typeof verdictLogRecordV6>;
+export const successionLogRecord = successionLogRecordV6;
+export type SuccessionLogRecord = z.infer<typeof successionLogRecordV6>;
+export const disputeLogRecord = disputeLogRecordV6;
+export type DisputeLogRecord = z.infer<typeof disputeLogRecordV6>;
+export const retrospectiveOfferLogRecord = retrospectiveOfferLogRecordV6;
+export type RetrospectiveOfferLogRecord = z.infer<typeof retrospectiveOfferLogRecordV6>;
+export const explainBackOfferLogRecord = explainBackOfferLogRecordV6;
+export type ExplainBackOfferLogRecord = z.infer<typeof explainBackOfferLogRecordV6>;
+export const nonAttemptLogRecord = nonAttemptLogRecordV6;
+export type NonAttemptLogRecord = z.infer<typeof nonAttemptLogRecordV6>;
+export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV6;
+export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV6>;
+export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV6;
+export type SourceRegisteredLogRecord = z.infer<typeof sourceRegisteredLogRecordV6>;
 
 /** Current schema version, for writers stamping new records. */
-export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;
+export const REVIEW_LOG_SCHEMA_VERSION = 6 as const;
 
 /**
  * Every version this build can *read*, newest first. `parse.ts` routes on it,
@@ -2485,4 +2484,4 @@ export const REVIEW_LOG_SCHEMA_VERSION = 5 as const;
  * somehow still wrote one takes the ordinary unknown-version path below,
  * indistinguishable from a version this build has never heard of.
  */
-export const REVIEW_LOG_READABLE_VERSIONS = [5, 3, 2, 1] as const;
+export const REVIEW_LOG_READABLE_VERSIONS = [6, 5, 3, 2, 1] as const;

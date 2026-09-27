@@ -61,6 +61,7 @@ import type {
   SoloLevel,
   SupportLevel,
 } from 'olea-contracts';
+import { readExplainBackCorrectness } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replaySchedulerStates } from '../session/replay.js';
 import {
@@ -308,7 +309,7 @@ function correctionFacts(
   }
   const correctAttempts = new Map<string, ReviewLogRecord>();
   for (const record of records) {
-    if (record.explainBackGrade?.correctness === 'correct') {
+    if (readExplainBackCorrectness(record)?.verdict === 'correct') {
       correctAttempts.set(record.eventId, record);
     }
   }

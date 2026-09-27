@@ -11,7 +11,7 @@
 //   5. a self-initiated prompt (`trigger: 'on-demand'`) carries no offer
 //      reference at all — there is no offer behind it to point at.
 import { describe, expect, it } from 'vitest';
-import { nonAttemptLogRecordV5, reviewLogEntry } from './review-log.js';
+import { nonAttemptLogRecordV5, reviewLogEntryV5 } from './review-log.js';
 
 function nonAttemptLine(over: Record<string, unknown> = {}) {
   return {
@@ -40,14 +40,14 @@ describe('nonAttemptLogRecordV5.offerEventId ([D-369])', () => {
   });
 
   it('read: the current union returns it as a non-attempt that still names its offer', () => {
-    const parsed = reviewLogEntry.parse(nonAttemptLine({ offerEventId: 'offer-event-7' }));
+    const parsed = reviewLogEntryV5.parse(nonAttemptLine({ offerEventId: 'offer-event-7' }));
     expect(parsed.kind).toBe('non-attempt');
     if (parsed.kind === 'non-attempt') expect(parsed.offerEventId).toBe('offer-event-7');
   });
 
   it('lands last on the line, so a record carrying it re-serialises byte-identically', () => {
     const line = JSON.stringify(nonAttemptLine({ offerEventId: 'offer-event-7' }));
-    expect(JSON.stringify(reviewLogEntry.parse(JSON.parse(line)))).toBe(line);
+    expect(JSON.stringify(reviewLogEntryV5.parse(JSON.parse(line)))).toBe(line);
   });
 
   it('legacy absent: a line written before the field existed parses with no such key', () => {
@@ -58,7 +58,7 @@ describe('nonAttemptLogRecordV5.offerEventId ([D-369])', () => {
 
   it('legacy absent: that line re-serialises byte-identically through the current union (INV-2)', () => {
     const line = JSON.stringify(nonAttemptLine());
-    expect(JSON.stringify(reviewLogEntry.parse(JSON.parse(line)))).toBe(line);
+    expect(JSON.stringify(reviewLogEntryV5.parse(JSON.parse(line)))).toBe(line);
   });
 
   it('never a placeholder: null and an empty string are refused', () => {
@@ -90,7 +90,7 @@ describe('nonAttemptLogRecordV5.offerEventId ([D-369])', () => {
 
   it('the union refuses the on-demand pairing too, so no reader path admits it', () => {
     expect(
-      reviewLogEntry.safeParse(nonAttemptLine({ trigger: 'on-demand', offerEventId: 'offer-1' }))
+      reviewLogEntryV5.safeParse(nonAttemptLine({ trigger: 'on-demand', offerEventId: 'offer-1' }))
         .success,
     ).toBe(false);
   });

@@ -1,10 +1,10 @@
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import { type ReviewLogEntry, type ReviewLogRecord, reviewLogRecordV5 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { parseReviewLog } from './parse.js';
 
 function record(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r1',
     timestamp: '2026-08-10T09:00:00-04:00',
@@ -207,7 +207,7 @@ describe('parseReviewLog — version first, never guess', () => {
     expect(result.records.map((r) => r.kind)).toEqual(['suspend', 'unsuspend']);
   });
 
-  it('a v5 line with no kind is invalid — the discriminator is required, never defaulted', () => {
+  it('a v6 line with no kind is invalid — the discriminator is required, never defaulted', () => {
     const { kind: _dropped, ...noKind } = record({ eventId: 'nokind' });
     const result = parseReviewLog(`${JSON.stringify(noKind)}\n`);
     expect(result.records).toEqual([]);
@@ -215,14 +215,15 @@ describe('parseReviewLog — version first, never guess', () => {
   });
 
   it('an unknown FUTURE version is reported, never reinterpreted as the newest one this build knows', () => {
-    // A newer device writing v6 into a synced vault must not have its records
-    // silently re-read as v5 by an older build — that is data loss disguised
+    // A newer device writing v7 into a synced vault must not have its records
+    // silently re-read as v6 by an older build — that is data loss disguised
     // as tolerance, and the log cannot be backfilled to undo it.
-    const future = { ...record({ eventId: 'future' }), schemaVersion: 6 };
+    const future = { ...record({ eventId: 'future' }), schemaVersion: 7 };
     const result = parseReviewLog(`${JSON.stringify(future)}\n`);
     expect(result.records).toEqual([]);
     expect(result.invalidLines).toHaveLength(1);
-    expect(result.invalidLines[0]?.reason).toContain('6');
+    expect(result.invalidLines[0]?.reason).toContain('7');
+    expect(result.invalidLines[0]?.reason).toContain('1, 2, 3, 5, 6');
   });
 
   it('v4 is unreadable too — `[D-109]` drops it rather than keeping it as a frozen intermediate (`ol-tka5`)', () => {
@@ -264,13 +265,77 @@ describe('parseReviewLog — version first, never guess', () => {
     expect(result.invalidLines).toHaveLength(4);
   });
 
-  it('v1 and v5 lines mixed in one file both parse, in file order', () => {
+  it('v1 and v6 lines mixed in one file both parse, in file order', () => {
     // The real shape of a synced vault mid-upgrade: an old device's file and a
     // new device's file both exist, and one may even have both.
     const content = `${JSON.stringify(v1Record({ eventId: 'old' }))}\n${line(record({ eventId: 'new' }))}\n`;
     const result = parseReviewLog(content);
     expect(result.invalidLines).toEqual([]);
     expect(result.records.map((r) => r.eventId)).toEqual(['old', 'new']);
-    expect(result.records.every((r) => r.schemaVersion === 5)).toBe(true);
+    expect(result.records.every((r) => r.schemaVersion === 6)).toBe(true);
+  });
+
+  // `ol-95vv.8`: v5 is frozen and still readable. A v5 line validates against
+  // the v5 union and is restamped by `upgradeV5` — version only.
+  it('reads a v5 line against the v5 schema and hands back the same event at v6, nothing else changed', () => {
+    // The line exactly as a v5 writer laid it out (schema key order).
+    const v5Line = JSON.stringify(
+      reviewLogRecordV5.parse({ ...record({ eventId: 'five' }), schemaVersion: 5 }),
+    );
+    const result = parseReviewLog(`${v5Line}\n`);
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records).toEqual([record({ eventId: 'five' })]);
+    expect(JSON.stringify(result.records[0])).toBe(
+      v5Line.replace('"schemaVersion":5', '"schemaVersion":6'),
+    );
+  });
+
+  it('a v5 line that is invalid *as v5* is reported, not retried against v6', () => {
+    const v5Line = {
+      ...record({ eventId: 'five', rating: 'brilliant' as never }),
+      schemaVersion: 5,
+    };
+    const result = parseReviewLog(`${JSON.stringify(v5Line)}\n`);
+    expect(result.records).toEqual([]);
+    expect(result.invalidLines).toHaveLength(1);
+  });
+
+  it('a v5 line never gains a v6 field: the v5 schema decides, even when the line carries one', () => {
+    const v5Line = {
+      ...record({ eventId: 'five' }),
+      schemaVersion: 5,
+      compositionId: 'composition-1',
+      hintOpened: true,
+    };
+    const result = parseReviewLog(`${JSON.stringify(v5Line)}\n`);
+    expect(result.records).toHaveLength(1);
+    expect(Object.hasOwn(result.records[0] ?? {}, 'compositionId')).toBe(false);
+    expect(Object.hasOwn(result.records[0] ?? {}, 'hintOpened')).toBe(false);
+  });
+
+  it('a v6 line keeps every v6 field it carries', () => {
+    const v6 = record({ eventId: 'six', compositionId: 'composition-1', hintOpened: false });
+    const result = parseReviewLog(line(v6));
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records).toEqual([v6]);
+  });
+
+  it('a v5 dispute line is restamped and still lands in `disputes`, never in `records`', () => {
+    const dispute = {
+      schemaVersion: 5,
+      kind: 'dispute',
+      eventId: 'd1',
+      timestamp: '2026-08-10T09:00:00-04:00',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      conceptIds: ['imbrication'],
+      instrumentId: 'explain-back:imbrication:1',
+      evidenceBasis: 'basis-1',
+      effect: 'quarantined',
+    };
+    const result = parseReviewLog(`${JSON.stringify(dispute)}\n`);
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records).toEqual([]);
+    expect(result.disputes.map((d) => [d.eventId, d.schemaVersion])).toEqual([['d1', 6]]);
   });
 });

@@ -150,7 +150,7 @@ describe('createContestRegradeJobRunner — activation ON, no judge wired yet', 
 
 describe('createContestRegradeJobRunner — activation ON, judge wired', () => {
   const DISPUTE: DisputeLogRecord = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'dispute-1',
     timestamp: '2026-08-21T09:00:00+02:00',
@@ -221,7 +221,7 @@ describe('createContestRegradeJobRunner — activation ON, judge wired', () => {
       resolveContestedGrade: vi.fn().mockResolvedValue(resolution),
     };
     const standingGrade = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: 'eb-1',
       timestamp: '2026-08-20T09:00:00+02:00',

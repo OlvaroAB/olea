@@ -52,7 +52,7 @@ describe('appendReviewLogRecord — the review origin ([D-367])', () => {
   /** The line the writer lays out for `input()` with no optional field — the layout every record before `[D-367]` has. */
   function expectedLine(eventId: string, extra: Record<string, unknown> = {}): string {
     return `${JSON.stringify({
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId,
       timestamp,

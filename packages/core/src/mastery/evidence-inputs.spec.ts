@@ -101,7 +101,7 @@ describe('structural — rollup.ts inputs carry no authorship field', () => {
     // schedulingObservation, correctness) is populated here, so `Object.keys` below is the
     // record's full possible key set, not an accident of which optionals this fixture omitted.
     const record: ReviewLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: 'r-1',
       timestamp: '2026-01-10T09:00:00-04:00',
@@ -170,7 +170,7 @@ describe('structural — gradingInputContract.ts inputs and output carry no auth
 // were built by two separate calls, which is not what this scenario is testing.
 function review(conceptId: string, overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r-shared',
     timestamp: '2026-01-10T09:00:00-04:00',

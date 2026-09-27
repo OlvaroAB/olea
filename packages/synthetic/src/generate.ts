@@ -380,7 +380,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       timestamp: isoWithOffset(atMs, offsetMinutes),
     });
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: nextEventId(),
       ...outcome.record,
@@ -443,7 +443,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       slot.unsuspendOnDay = null;
       unsuspendedInstrumentIds.add(slot.instrument.instrumentId);
       const record: SuspendLogRecord = {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'unsuspend',
         eventId: nextEventId(),
         timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -591,7 +591,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
       };
 
       const record: ReviewLogRecord = {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'review',
         eventId: nextEventId(),
         timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -660,7 +660,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
             // guessing.
             const offerEventId = nextEventId();
             const offer: ExplainBackOfferLogRecord = {
-              schemaVersion: 5,
+              schemaVersion: 6,
               kind: 'explain-back-offered',
               eventId: offerEventId,
               timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -676,7 +676,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
               behaviour.betweenItemsMsRange[1],
             );
             const declined: ExplainBackOfferLogRecord = {
-              schemaVersion: 5,
+              schemaVersion: 6,
               kind: 'explain-back-declined',
               eventId: nextEventId(),
               timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -700,7 +700,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
             // routing happened, which is what `masteryAtTime` means.
             const explainBackMastery = perConceptMastery(concept.conceptId, masteryAtTime);
             const explainBack: ReviewLogRecord = {
-              schemaVersion: 5,
+              schemaVersion: 6,
               kind: 'review',
               eventId: nextEventId(),
               timestamp: isoWithOffset(cursorMs, offsetMinutes),
@@ -766,7 +766,7 @@ export function generateStream(spec: StreamSpec): SyntheticStream {
           behaviour.unsuspendAfterDays === null ? null : dayIndex + behaviour.unsuspendAfterDays;
         suspendedInstrumentIds.add(instrument.instrumentId);
         pendingEntries.push({
-          schemaVersion: 5,
+          schemaVersion: 6,
           kind: 'suspend',
           eventId: nextEventId(),
           timestamp: isoWithOffset(cursorMs, offsetMinutes),

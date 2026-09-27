@@ -8,7 +8,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { reviewLogRecordV5 } from 'olea-contracts';
+import { reviewLogRecord } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { AcceptedSoloGrading } from '../grading/explainBackSolo.js';
 import { readContentRecord } from '../review-log/content-store.js';
@@ -157,17 +157,17 @@ describe('composeGradedExplainBackReviewRecord (pure)', () => {
     expect(withEditsRest).toEqual(withoutEdits);
 
     expect(
-      reviewLogRecordV5.safeParse({
+      reviewLogRecord.safeParse({
         ...withoutEdits,
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'review',
         eventId: 'evt-1',
       }).success,
     ).toBe(true);
     expect(
-      reviewLogRecordV5.safeParse({
+      reviewLogRecord.safeParse({
         ...withEdits,
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'review',
         eventId: 'evt-2',
       }).success,
@@ -210,7 +210,7 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
     await rm(tempRoot, { recursive: true, force: true });
   });
 
-  it('mints a real [D-077] contentRef, writes it to the content store, and appends a complete v5 review event naming it', async () => {
+  it('mints a real [D-077] contentRef, writes it to the content store, and appends a complete current-version review event naming it', async () => {
     const vault = new FolderSource(tempRoot);
 
     const result = await recordGradedExplainBackReview(
@@ -233,7 +233,7 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
       },
     );
 
-    expect(result.record.schemaVersion).toBe(5);
+    expect(result.record.schemaVersion).toBe(6);
     expect(result.record.kind).toBe('review');
     expect(result.record.eventId).toBe('fixed-event-1');
     expect(result.record.instrumentType).toBe('explain-back');
@@ -319,17 +319,40 @@ describe('recordGradedExplainBackReview (the one impure export)', () => {
 // Scenario: features/F5-explain-it-back.md — "F5.8 — what the top growth
 // stage claims, and the evidence that qualifies it [D-281]".
 describe('composeGradedExplainBackReviewRecord — [D-281] the independent correctness verdict', () => {
-  it('carries a supplied verdict onto the grade record, beside the SOLO depth verdict', () => {
+  const judgeStamp = {
+    taskId: 'explain-back.judge.v1',
+    promptVersion: 'judge-v',
+    modelId: 'judge-model',
+  };
+
+  it('carries a supplied verdict in its own top-level place with its own stamp, beside the SOLO depth verdict ([D-303])', () => {
     const record = composeGradedExplainBackReviewRecord({
       subject: subject(),
       accepted: ACCEPTED,
       contentRef: 'content-1',
       revisionOf: null,
       artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
-      correctness: 'correct',
+      explainBackCorrectness: { verdict: 'correct', artifactProvenance: judgeStamp },
     });
-    expect(record.explainBackGrade?.correctness).toBe('correct');
+    expect(record.explainBackCorrectness).toEqual({
+      verdict: 'correct',
+      artifactProvenance: judgeStamp,
+    });
     expect(record.explainBackGrade?.soloLevel).toBe('relational');
+    // The depth call's stamp stays the depth grade's; the verdict's is its own.
+    expect(record.explainBackGrade?.artifactProvenance.taskId).toBe('t');
+  });
+
+  it('never writes the nested explainBackGrade.correctness ([D-386])', () => {
+    const record = composeGradedExplainBackReviewRecord({
+      subject: subject(),
+      accepted: ACCEPTED,
+      contentRef: 'content-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
+      explainBackCorrectness: { verdict: 'partial', artifactProvenance: judgeStamp },
+    });
+    expect(record.explainBackGrade).not.toHaveProperty('correctness');
   });
 
   it('omits the field entirely when the caller has no verdict — unknown, never defaulted to correct', () => {
@@ -341,5 +364,6 @@ describe('composeGradedExplainBackReviewRecord — [D-281] the independent corre
       artifactProvenance: { taskId: 't', promptVersion: 'v', modelId: 'm' },
     });
     expect(record.explainBackGrade).not.toHaveProperty('correctness');
+    expect(record).not.toHaveProperty('explainBackCorrectness');
   });
 });

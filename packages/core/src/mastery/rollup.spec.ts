@@ -41,7 +41,7 @@ import {
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-01-10T09:00:00-04:00',
@@ -587,7 +587,7 @@ describe('conceptIdsInLog', () => {
     const entries: ReviewLogEntry[] = [
       review({ eventId: 'a', conceptIds: ['concept-b', 'concept-a'] }),
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'suspend',
         eventId: 's1',
         timestamp: '2026-01-02T09:00:00-04:00',
@@ -689,7 +689,7 @@ function stubScheduler(byInstrument: Readonly<Record<string, number>>): Schedule
 
 function suspend(overrides: Partial<SuspendLogRecord> = {}): SuspendLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId: 's1',
     timestamp: '2026-01-10T09:00:00-04:00',

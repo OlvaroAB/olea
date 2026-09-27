@@ -178,7 +178,7 @@ describe('a held reading is acknowledged once and then left alone', () => {
   it('shows the acknowledgment on the render after the resolution, and never again', () => {
     const claim = claimOf();
     const opening: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'd1',
       timestamp: '2026-08-21T09:00:00+02:00',

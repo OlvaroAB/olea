@@ -1,4 +1,4 @@
-// Review-log schema version 6 (ol-95vv.8), the one evidence-format migration
+// Review-log schema version 6 (ol-95vv.8, current), the one evidence-format migration
 // that carries every ruled field together so her log migrates once:
 //
 //   - `masteryAtTime`'s per-concept arm stamps vitality beside the stage, plus
@@ -110,16 +110,16 @@ function issuePaths(result: { success: boolean; error?: { issues: { path: Proper
   return (result.error?.issues ?? []).map((issue) => issue.path.map(String).join('.'));
 }
 
-describe('review-log v6 — staged, not yet current', () => {
-  it('is defined beside v5 while writers still stamp 5 and every alias still names v5', () => {
+describe('review-log v6 — current', () => {
+  it('writers stamp 6, this build reads 6 and every older readable version, and every alias names v6', () => {
     // The flip (REVIEW_LOG_SCHEMA_VERSION → 6, 6 added to the readable list,
     // the aliases moved, core's parse.ts and upgrade.ts taught the v5 → v6
-    // hop) lands in one change with its readers; until then no writer can
-    // produce a line this build's reader would refuse.
-    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(5);
-    expect(REVIEW_LOG_READABLE_VERSIONS).toEqual([5, 3, 2, 1]);
-    expect(reviewLogRecord).toBe(reviewLogRecordV5);
-    expect(reviewLogEntry).toBe(reviewLogEntryV5);
+    // hop) landed in one change with its readers, so no writer can produce a
+    // line this build's reader would refuse.
+    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(6);
+    expect(REVIEW_LOG_READABLE_VERSIONS).toEqual([6, 5, 3, 2, 1]);
+    expect(reviewLogRecord).toBe(reviewLogRecordV6);
+    expect(reviewLogEntry).toBe(reviewLogEntryV6);
   });
 
   it('refuses any other schemaVersion — the version literal is 6', () => {

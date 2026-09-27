@@ -93,7 +93,7 @@ describe('foldDocumentLedger', () => {
   it('attributes a retrospective record to its own assessmentPath, with no instrument', () => {
     const entries = [
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'retrospective-offered',
         eventId: 'e1',
         timestamp: '2026-05-20T09:00:00Z',

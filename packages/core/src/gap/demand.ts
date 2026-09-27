@@ -35,7 +35,11 @@
  * demand-aware readiness is `ol-v7r5.65`, which follows this build.
  */
 
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import {
+  type ReviewLogEntry,
+  type ReviewLogRecord,
+  readExplainBackCorrectness,
+} from 'olea-contracts';
 import {
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
   excludedFromCurrent,
@@ -77,7 +81,7 @@ export interface DemandsMetReading {
 
 function succeeded(review: ReviewLogRecord): boolean {
   if (review.instrumentType === 'explain-back') {
-    return review.explainBackGrade?.correctness === 'correct';
+    return readExplainBackCorrectness(review)?.verdict === 'correct';
   }
   return review.rating !== null && review.rating !== 'again';
 }

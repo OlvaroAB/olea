@@ -13,8 +13,12 @@
 //     duplicate `eventId`s by their serialised form.
 import {
   type ReviewLogEntryV3,
+  type ReviewLogEntryV5,
   type ReviewLogRecordV1,
   type ReviewLogRecordV2,
+  readExplainBackCorrectness,
+  reviewLogEntryV5,
+  reviewLogEntryV6,
   reviewLogRecordV3,
   reviewLogRecordV5,
   type SuspendLogRecordV2,
@@ -22,7 +26,7 @@ import {
   suspendLogRecordV5,
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
-import { upgradeV1, upgradeV2, upgradeV3 } from './upgrade.js';
+import { upgradeV1, upgradeV2, upgradeV3, upgradeV5 } from './upgrade.js';
 
 const SELECTION_CONTEXT: ReviewLogRecordV1['selectionContext'] = {
   dueState: 'due',
@@ -436,5 +440,114 @@ describe('upgradeV2 is unchanged — it still produces v3, not v5', () => {
     expect(upgraded.schemaVersion).toBe(3);
     expect(upgraded.selectionContext.masteryAtTime).toBe('sprout');
     expect(upgraded).not.toHaveProperty('masteryAtTime');
+  });
+});
+
+// `ol-95vv.8`: the v5 -> v6 hop is a pure restamp. `[D-386]` (option a) rules
+// what it does with a nested explain-back verdict already recorded: carried
+// verbatim, no provenance synthesised; `[D-395]`: no composition link is ever
+// synthesised either. Every field new at v6 stays absent (unknown).
+describe('upgradeV5 — v5 to v6 is a pure restamp', () => {
+  const judgeless = {
+    taskId: 'grade.explain-back.v1',
+    promptVersion: '2026-09-20',
+    modelId: 'workers-ai:test-model',
+  };
+  function v5ExplainBack(over: Record<string, unknown> = {}): ReviewLogEntryV5 {
+    return reviewLogEntryV5.parse({
+      schemaVersion: 5,
+      kind: 'review',
+      eventId: 'eb1',
+      timestamp: '2026-09-24T09:10:00-04:00',
+      instrumentId: 'explain-back:imbrication:1',
+      instrumentType: 'explain-back',
+      rating: null,
+      wasUnsure: false,
+      durationMs: null,
+      selectionContext: {
+        dueState: 'new',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['explain-back'],
+        planVersion: null,
+      },
+      conceptIds: ['imbrication'],
+      masteryAtTime: { attribution: 'per-concept', byConcept: { imbrication: 'sprout' } },
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content:1',
+        revisionOf: null,
+        artifactProvenance: judgeless,
+      },
+      ...over,
+    });
+  }
+
+  it('takes one argument — it cannot look anything up', () => {
+    expect(upgradeV5.length).toBe(1);
+  });
+
+  it('changes the version digit and nothing else, for every kind', () => {
+    const entries: ReviewLogEntryV5[] = [
+      v5ExplainBack(),
+      upgradeV3(upgradeV2(upgradeV1(v1Record()))),
+      upgradeV3(upgradeV2(v2Suspend())),
+      reviewLogEntryV5.parse({
+        schemaVersion: 5,
+        kind: 'verdict',
+        eventId: 'v1',
+        timestamp: '2026-09-24T09:00:00-04:00',
+        instrumentId: 'qa:imbrication:1',
+        instrumentType: 'qa',
+        conceptIds: ['imbrication'],
+        verdict: 'accepted',
+        artifactProvenance: judgeless,
+      }),
+    ];
+    for (const entry of entries) {
+      const before = JSON.stringify(entry);
+      const after = upgradeV5(entry);
+      expect(after.schemaVersion).toBe(6);
+      expect(JSON.stringify(after)).toBe(before.replace('"schemaVersion":5', '"schemaVersion":6'));
+    }
+  });
+
+  it('[D-386] carries a nested verdict verbatim and never moves it or synthesises provenance for it', () => {
+    const upgraded = upgradeV5(v5ExplainBack());
+    if (upgraded.kind !== 'review') throw new Error('expected a review entry');
+    expect(upgraded.explainBackGrade?.correctness).toBe('correct');
+    expect(Object.hasOwn(upgraded, 'explainBackCorrectness')).toBe(false);
+    expect(readExplainBackCorrectness(upgraded)).toEqual({
+      verdict: 'correct',
+      source: 'legacy-nested',
+      provenance: 'unknown',
+    });
+  });
+
+  it('[D-395] never synthesises a composition link, and every other v6 field stays absent', () => {
+    const upgraded = upgradeV5(v5ExplainBack());
+    for (const key of ['compositionId', 'hintOpened', 'presentedPassageDigest']) {
+      expect(Object.hasOwn(upgraded, key)).toBe(false);
+    }
+    if (upgraded.kind !== 'review' || upgraded.masteryAtTime?.attribution !== 'per-concept') {
+      throw new Error('expected a per-concept review stamp');
+    }
+    expect(Object.keys(upgraded.masteryAtTime).sort()).toEqual(['attribution', 'byConcept']);
+    const suspend = upgradeV5(upgradeV3(upgradeV2(v2Suspend())));
+    expect(Object.hasOwn(suspend, 'reason')).toBe(false);
+  });
+
+  it('a migrated record and a natively-parsed v6 record of the same event are byte-identical', () => {
+    const migrated = upgradeV5(v5ExplainBack());
+    const native = reviewLogEntryV6.parse({ ...v5ExplainBack(), schemaVersion: 6 });
+    expect(JSON.stringify(migrated)).toBe(JSON.stringify(native));
+  });
+
+  it('every entry version reaches the same v6 bytes', () => {
+    const viaV1 = upgradeV5(upgradeV3(upgradeV2(upgradeV1(v1Record()))));
+    const viaV3 = upgradeV5(upgradeV3(v3Review()));
+    expect(JSON.stringify(viaV1)).toBe(JSON.stringify(viaV3));
   });
 });

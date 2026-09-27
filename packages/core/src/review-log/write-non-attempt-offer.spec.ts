@@ -44,7 +44,7 @@ describe('appendNonAttemptRecord — the offer reference ([D-369])', () => {
     expect(result.record.offerEventId).toBe('offer-event-7');
     expect(await fileText()).toBe(
       `${JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'non-attempt',
         eventId: 'non-attempt-1',
         timestamp,
@@ -83,7 +83,7 @@ describe('appendNonAttemptRecord — the offer reference ([D-369])', () => {
     // The bytes are exactly what this writer produced before the field existed.
     expect(text).toBe(
       `${JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'non-attempt',
         eventId: 'non-attempt-2',
         timestamp,
@@ -151,7 +151,11 @@ describe('appendNonAttemptRecord — the offer reference ([D-369])', () => {
     expect(records.map((record) => record.eventId)).toEqual(['legacy-1', 'non-attempt-4']);
     const [legacy, fresh] = records;
     expect(legacy !== undefined && Object.hasOwn(legacy, 'offerEventId')).toBe(false);
-    expect(JSON.stringify(legacy)).toBe(legacyLine);
+    // Read back at the current version: the v5 line is restamped by the one
+    // v5 → v6 hop, and nothing but the version digit changes.
+    expect(JSON.stringify(legacy)).toBe(
+      legacyLine.replace('"schemaVersion":5', '"schemaVersion":6'),
+    );
     if (fresh?.kind === 'non-attempt') expect(fresh.offerEventId).toBe('offer-event-7');
   });
 });

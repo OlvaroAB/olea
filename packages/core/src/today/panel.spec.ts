@@ -11,7 +11,7 @@ const DUE_THROUGH = new Date('2026-08-11T03:59:59.999Z');
 
 function review(day: string, eventId: string): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp: `${day}T20:00:00-04:00`,
@@ -414,7 +414,7 @@ describe('buildTodayPanel — the new count travels with the due summary or not 
  */
 function qualifyingExplainBack(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'eb-1',
     timestamp: '2026-08-01T09:00:00-04:00',
@@ -445,7 +445,7 @@ function qualifyingExplainBack(overrides: Partial<ReviewLogRecord> = {}): Review
 
 function rejectedVerdict(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId: 'verdict-1',
     timestamp: '2026-08-02T09:00:00-04:00',
@@ -484,7 +484,7 @@ function contestedGradeDisputes(
     timestamp: '2026-08-04T09:00:00-04:00',
   });
   const openingRecord: DisputeLogRecord = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'dispute-1',
     ...opening.record,
@@ -495,7 +495,7 @@ function contestedGradeDisputes(
     timestamp: '2026-08-05T09:00:00-04:00',
   });
   const resolutionRecord: DisputeLogRecord = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'dispute-2',
     ...resolution,

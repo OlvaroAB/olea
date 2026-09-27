@@ -94,7 +94,12 @@
  * any thrown error message.
  */
 
-import type { AnswerEdits, MasteryAtTime, SelectionContextV4 } from 'olea-contracts';
+import type {
+  AnswerEdits,
+  ExplainBackCorrectness,
+  MasteryAtTime,
+  SelectionContextV4,
+} from 'olea-contracts';
 import type { AcceptedSoloGrading, SoloArtifactProvenance } from '../grading/explainBackSolo.js';
 import {
   buildExplainBackGradeReviewFields,
@@ -165,14 +170,20 @@ export interface ComposeGradedExplainBackReviewRecordInput {
    * `accepted.soloLevel`, which is produced blind to this one and stays that
    * way (nothing here derives either from the other).
    *
+   * **Written to the record's top-level `explainBackCorrectness`, with the
+   * correctness call's own stamp** (`[D-303]`; `[D-386]`: since review-log v6
+   * no writer produces the nested `explainBackGrade.correctness`). The stamp
+   * names the correctness call, never the depth call's `artifactProvenance`.
+   *
    * **Optional, and omitted rather than defaulted when the caller has none.**
    * `[D-281]` rules that a record carrying no verdict reads as unknown and can
    * never newly qualify the top growth stage, so a caller that cannot resolve
-   * a verdict for this attempt — a grading rejected as stale, an attempt whose
-   * correctness pipeline did not run — leaves it absent. Writing a guess here
-   * is the one way this field can do harm.
+   * a stamped verdict for this attempt — a grading rejected as stale, an
+   * attempt whose correctness pipeline did not run, a verdict whose call
+   * returned no stamp — leaves it absent. Writing a guess here is the one way
+   * this field can do harm.
    */
-  readonly correctness?: 'correct' | 'partial' | 'incorrect';
+  readonly explainBackCorrectness?: ExplainBackCorrectness;
 }
 
 /**
@@ -213,16 +224,18 @@ export function composeGradedExplainBackReviewRecord(
       ? { supportLevelShown: subject.supportLevelShown }
       : {}),
     ...(subject.answerEdits !== undefined ? { answerEdits: subject.answerEdits } : {}),
-    explainBackGrade: {
-      ...gradeFields.explainBackGrade,
-      // `[D-281]`: merged here rather than inside
-      // `buildExplainBackGradeReviewFields` so that builder keeps its single
-      // job (turning an accepted SOLO grading into review fields) and stays
-      // blind to correctness, which is a different judge's output.
-      ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
-    },
+    explainBackGrade: gradeFields.explainBackGrade,
     ...(gradeFields.schedulingObservation !== undefined
       ? { schedulingObservation: gradeFields.schedulingObservation }
+      : {}),
+    // `[D-281]` / `[D-303]`: the independent verdict in its own top-level
+    // place, with its own stamp — merged here rather than inside
+    // `buildExplainBackGradeReviewFields` so that builder keeps its single
+    // job (turning an accepted SOLO grading into review fields) and stays
+    // blind to correctness, which is a different judge's output. Never the
+    // nested `explainBackGrade.correctness` (`[D-386]`).
+    ...(input.explainBackCorrectness !== undefined
+      ? { explainBackCorrectness: input.explainBackCorrectness }
       : {}),
   };
 }
@@ -388,7 +401,9 @@ export async function recordGradedExplainBackReview(
     // `[D-281]`: forwarded, never defaulted — absent here means the caller had
     // no independent correctness verdict for this attempt, which the mastery
     // fold reads as unknown.
-    ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
+    ...(input.explainBackCorrectness !== undefined
+      ? { explainBackCorrectness: input.explainBackCorrectness }
+      : {}),
   });
 
   return appendReviewLogRecord(vault, record, options);

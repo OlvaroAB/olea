@@ -270,7 +270,7 @@ function explainBackGradeEntry(input: {
   readonly soloLevel: SoloLevel;
 }): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: input.eventId,
     timestamp: input.timestamp,
@@ -304,7 +304,7 @@ function openGradeDispute(input: {
   readonly conceptIds: readonly string[];
 }): DisputeLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: input.eventId,
     timestamp: input.timestamp,
@@ -388,7 +388,7 @@ function scoredReviewEntry(input: {
   readonly conceptIds: readonly string[];
 }): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: input.eventId,
     timestamp: '2027-01-08T09:00:00-08:00',

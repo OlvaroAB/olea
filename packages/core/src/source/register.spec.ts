@@ -289,7 +289,7 @@ describe('projectRegisteredFiles — [D-226] ruling 1, the review-log projection
     }> = {},
   ): ReviewLogEntry {
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'source-registered',
       eventId: 'evt-1',
       timestamp: '2026-09-06T09:00:00.000+12:00',
@@ -350,7 +350,7 @@ describe('projectRegisteredFiles — [D-226] ruling 1, the review-log projection
   it('every other review-log kind is ignored — registering a source is not an opinion those kinds express', () => {
     const entries: ReviewLogEntry[] = [
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'suspend',
         eventId: 'evt-suspend',
         timestamp: '2026-09-06T09:00:00.000+12:00',

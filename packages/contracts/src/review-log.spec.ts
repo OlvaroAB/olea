@@ -22,6 +22,7 @@ import {
   reviewLogRecordV2,
   reviewLogRecordV3,
   reviewLogRecordV5,
+  reviewLogRecordV6,
   suspendLogRecordV2,
 } from './review-log.js';
 
@@ -67,13 +68,13 @@ function suspendLine(over: Record<string, unknown> = {}) {
 }
 
 describe('review-log schema versions', () => {
-  it('the current version writers stamp is 5, and v2 is no longer it', () => {
-    // Retargeted by `ol-t3sd`, `ol-g6zg` and again by `ol-tka5`, not deleted:
+  it('the current version writers stamp is 6, and v2 is no longer it', () => {
+    // Retargeted by `ol-t3sd`, `ol-g6zg`, `ol-tka5` and `ol-95vv.8`, not deleted:
     // the assertion "writers stamp the newest version" is the one that had to
     // keep holding across each bump. Every v1/v2 shape assertion below is
     // untouched — they test frozen schemas by name, which is why they did not
     // have to move.
-    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(5);
+    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(6);
   });
 
   it('v1 is unchanged: it still accepts a v1 line with no kind at all', () => {
@@ -95,7 +96,8 @@ describe('review-log schema versions', () => {
   });
 
   it('`reviewLogRecord` aliases the current review version, not a frozen one', () => {
-    expect(reviewLogRecord).toBe(reviewLogRecordV5);
+    expect(reviewLogRecord).toBe(reviewLogRecordV6);
+    expect(reviewLogRecord).not.toBe(reviewLogRecordV5);
     expect(reviewLogRecord).not.toBe(reviewLogRecordV1);
     expect(reviewLogRecord).not.toBe(reviewLogRecordV2);
     expect(reviewLogRecord).not.toBe(reviewLogRecordV3);

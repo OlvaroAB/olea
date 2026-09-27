@@ -449,7 +449,7 @@ describe('the prior state the view schedules against is the replayed one', () =>
       now: new Date('2027-08-20T12:00:00Z'),
       entries: [
         {
-          schemaVersion: 5,
+          schemaVersion: 6,
           kind: 'review',
           eventId: 'e1',
           timestamp: '2026-08-19T09:00:00+00:00',
@@ -785,7 +785,7 @@ function reviewLogEntry(overrides: {
   };
 }) {
   return {
-    schemaVersion: 5 as const,
+    schemaVersion: 6 as const,
     kind: 'review' as const,
     eventId: overrides.eventId,
     timestamp: overrides.timestamp,

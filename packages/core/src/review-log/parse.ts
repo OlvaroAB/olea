@@ -12,14 +12,16 @@
  * in this bead's acceptance criteria — recovery of everything before the crash,
  * with the crash itself visible for diagnostics rather than silently eaten.
  *
- * **Version first, never guess (D-020, `ol-t3sd`, `ol-g6zg`, `ol-tka5`).** A
- * line's `schemaVersion` is read before any shape is assumed: `1` validates
- * against the frozen `reviewLogRecordV1` and is then routed through core's
- * `upgradeV1`, `upgradeV2` and `upgradeV3` in turn; `2` validates against the
- * frozen `reviewLogEntryV2` union and is routed through `upgradeV2` then
- * `upgradeV3`; `3` validates against the frozen `reviewLogEntryV3` union and
- * is routed through `upgradeV3`; `5` validates against `reviewLogEntry`, the
- * current discriminated union of review, suspension and verdict events.
+ * **Version first, never guess (D-020, `ol-t3sd`, `ol-g6zg`, `ol-tka5`,
+ * `ol-95vv.8`).** A line's `schemaVersion` is read before any shape is
+ * assumed: `1` validates against the frozen `reviewLogRecordV1` and is then
+ * routed through core's `upgradeV1`, `upgradeV2`, `upgradeV3` and `upgradeV5`
+ * in turn; `2` validates against the frozen `reviewLogEntryV2` union and is
+ * routed through `upgradeV2`, `upgradeV3` then `upgradeV5`; `3` validates
+ * against the frozen `reviewLogEntryV3` union and is routed through
+ * `upgradeV3` then `upgradeV5`; `5` validates against the frozen
+ * `reviewLogEntryV5` union and is routed through `upgradeV5`, a pure restamp;
+ * `6` validates against `reviewLogEntry`, the current discriminated union.
  * Anything else — including a missing or non-numeric version, a version newer
  * than this build understands, **and `4`** — takes the ordinary invalid-line
  * path with a reason saying so. `4` joins that set deliberately, not by
@@ -27,8 +29,8 @@
  * because no real v4 record exists anywhere to stay readable for, so a v4
  * line is exactly as unreadable to this build as a version it has never heard
  * of — there is nothing to distinguish it from. The general case is worth
- * stating out loud regardless: a newer device writing v6 into a synced vault
- * must not have its records silently reinterpreted as v5 by an older build.
+ * stating out loud regardless: a newer device writing v7 into a synced vault
+ * must not have its records silently reinterpreted as v6 by an older build.
  * Every caller therefore sees only current-shape entries.
  */
 
@@ -38,10 +40,11 @@ import {
   reviewLogEntry,
   reviewLogEntryV2,
   reviewLogEntryV3,
+  reviewLogEntryV5,
   reviewLogRecordV1,
 } from 'olea-contracts';
 import type { DisputeLogRecord } from './contest-record.js';
-import { upgradeV1, upgradeV2, upgradeV3 } from './upgrade.js';
+import { upgradeV1, upgradeV2, upgradeV3, upgradeV5 } from './upgrade.js';
 
 export interface InvalidReviewLogLine {
   /** 1-based line number within the file, matching what an editor would show. */
@@ -141,7 +144,7 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
         return;
       }
-      records.push(upgradeV3(upgradeV2(upgradeV1(parsed.data))));
+      records.push(upgradeV5(upgradeV3(upgradeV2(upgradeV1(parsed.data)))));
       return;
     }
 
@@ -151,7 +154,7 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
         return;
       }
-      records.push(upgradeV3(upgradeV2(parsed.data)));
+      records.push(upgradeV5(upgradeV3(upgradeV2(parsed.data))));
       return;
     }
 
@@ -161,32 +164,44 @@ export function parseReviewLog(content: string): ParseReviewLogResult {
         invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
         return;
       }
-      records.push(upgradeV3(parsed.data));
+      records.push(upgradeV5(upgradeV3(parsed.data)));
       return;
     }
 
-    if (version === 5) {
-      // `reviewLogEntry` (contracts) is the current union, and `disputeLogRecordV5`
-      // is a member of it since `ol-qs72` moved the schema there. A dispute
-      // line validates and routes through the SAME `discriminatedUnion` every
-      // other v5 kind does — it is pulled OUT into `disputes` afterward, on
-      // its own `kind` literal, rather than left in `records`. That split is
-      // `./parse.ts`'s own choice, not a schema limitation (see
-      // `ParseReviewLogResult.disputes`'s doc): it keeps a dispute line out of
-      // `invalidLines` — a persisted event this build wrote and then reported
-      // as corrupt would be the worst of both — while sparing every consumer
-      // that switches exhaustively over `ReviewLogEntry['kind']` a `'dispute'`
-      // arm it has nothing to say about.
-      const parsed = reviewLogEntry.safeParse(json);
-      if (!parsed.success) {
-        invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
+    if (version === 5 || version === 6) {
+      // A v5 line validates against its own frozen union and is restamped by
+      // `upgradeV5`; a v6 line validates against `reviewLogEntry`, the current
+      // union. `disputeLogRecordV6` is a member of it (since `ol-qs72` moved
+      // the schema there), so a dispute line validates and routes through the
+      // SAME `discriminatedUnion` every other kind does — it is pulled OUT into
+      // `disputes` afterward, on its own `kind` literal, rather than left in
+      // `records`. That split is `./parse.ts`'s own choice, not a schema
+      // limitation (see `ParseReviewLogResult.disputes`'s doc): it keeps a
+      // dispute line out of `invalidLines` — a persisted event this build
+      // wrote and then reported as corrupt would be the worst of both — while
+      // sparing every consumer that switches exhaustively over
+      // `ReviewLogEntry['kind']` a `'dispute'` arm it has nothing to say about.
+      let entry: ReviewLogEntry;
+      if (version === 5) {
+        const parsed = reviewLogEntryV5.safeParse(json);
+        if (!parsed.success) {
+          invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
+          return;
+        }
+        entry = upgradeV5(parsed.data);
+      } else {
+        const parsed = reviewLogEntry.safeParse(json);
+        if (!parsed.success) {
+          invalidLines.push({ lineNumber: index + 1, raw: rawLine, reason: parsed.error.message });
+          return;
+        }
+        entry = parsed.data;
+      }
+      if (entry.kind === 'dispute') {
+        disputes.push(entry);
         return;
       }
-      if (parsed.data.kind === 'dispute') {
-        disputes.push(parsed.data);
-        return;
-      }
-      records.push(parsed.data);
+      records.push(entry);
       return;
     }
 

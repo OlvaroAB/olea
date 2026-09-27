@@ -11,7 +11,7 @@
  * here; everything downstream of `parse.ts` only ever sees the current shape.
  *
  * **One function per hop, chained, rather than one function per pair.** v1
- * reaches v5 as `upgradeV3(upgradeV2(upgradeV1(record)))`. The alternative — a
+ * reaches v6 as `upgradeV5(upgradeV3(upgradeV2(upgradeV1(record))))`. The alternative — a
  * direct `upgradeV1ToV5` alongside `upgradeV1ToV2` — is how the same record
  * acquires two migration paths that can disagree; chaining makes that
  * unrepresentable, and each hop stays independently testable against the
@@ -42,8 +42,10 @@ import {
   type ReviewLogEntry,
   type ReviewLogEntryV2,
   type ReviewLogEntryV3,
+  type ReviewLogEntryV5,
   type ReviewLogRecordV1,
   type ReviewLogRecordV2,
+  reviewLogEntryV6,
   reviewLogRecordV2,
   reviewLogRecordV3,
   reviewLogRecordV5,
@@ -177,7 +179,7 @@ function attributeV3Mastery(
  * reason — a one-entry map at this hop, but the ordering rule is stated where a
  * later writer will read it.
  */
-export function upgradeV3(entry: ReviewLogEntryV3): ReviewLogEntry {
+export function upgradeV3(entry: ReviewLogEntryV3): ReviewLogEntryV5 {
   if (entry.kind !== 'review') {
     const { schemaVersion: _v3, ...rest } = entry;
     return suspendLogRecordV5.parse({ schemaVersion: 5, ...rest });
@@ -200,4 +202,32 @@ export function upgradeV3(entry: ReviewLogEntryV3): ReviewLogEntry {
     // has nothing honest to say about any of the three.
     ...(attributed === undefined ? {} : { masteryAtTime: attributed }),
   });
+}
+
+/**
+ * Upgrades any v5 entry to **v6** (`ol-95vv.8`) — a pure restamp: the version
+ * moves from 5 to 6 and nothing else changes, for every kind.
+ *
+ * **Every field new at v6 stays absent, because a v5 record has nothing
+ * honest to say about any of them.** No vitality or arithmetic version on the
+ * mastery stamp (the stage-only stamp is v6's legacy form), no top-level
+ * `explainBackCorrectness`, no `hintOpened`, no `presentedPassageDigest`, no
+ * `compositionId` (`[D-395]`: never synthesised, never joined by time), no
+ * suspension `reason` (`[D-345]`: absent reads unknown). Each reads as *not
+ * recorded*, never as a default.
+ *
+ * **A nested explain-back correctness verdict crosses verbatim** (`[D-386]`,
+ * option a): it stays in `explainBackGrade` as a legacy carry, is never moved
+ * to the top-level field, and gains no model stamp, artifact provenance or
+ * date. Readers take it through `readExplainBackCorrectness`, which reports
+ * its provenance as unknown and still counts the verdict it records, so the
+ * same log folds to the same stages and awards before and after this hop.
+ *
+ * Produced through `reviewLogEntryV6.parse` for the same byte-identity reason
+ * as every earlier hop, and so every v6 refinement (a record never carries
+ * both correctness homes, among others) holds on migrated history too. A v5
+ * line and its v6 restamp serialise identically apart from the version digit.
+ */
+export function upgradeV5(entry: ReviewLogEntryV5): ReviewLogEntry {
+  return reviewLogEntryV6.parse({ ...entry, schemaVersion: 6 });
 }

@@ -20,7 +20,7 @@ function review(
   rating: Rating | null = 'good',
 ): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp: '2026-08-10T09:00:00+00:00',
@@ -36,7 +36,7 @@ function review(
 
 function suspend(eventId: string, instrumentId: string): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId,
     timestamp: '2026-08-10T09:00:00+00:00',

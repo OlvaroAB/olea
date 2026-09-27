@@ -189,11 +189,12 @@
  * from `Promise<void>` to `Promise<SoloLevel | void>` to match).
  */
 
-import type { AnswerEdits, SoloLevel, SupportLevel } from 'olea-contracts';
+import type { AnswerEdits, ExplainBackCorrectness, SoloLevel, SupportLevel } from 'olea-contracts';
 import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
   acceptSoloGrading,
+  EXPLAIN_BACK_JUDGE_TASK_ID,
   type ExplainBackPromptContext,
   type GradedExplainBackReviewSubject,
   type GradingSourceMaterial,
@@ -421,7 +422,7 @@ export async function recordSoloGradeAndReview(
   const accepted = acceptSoloGrading(outcome.pending);
   const timestamp = isoWithLocalOffset(deps.now());
   const attemptId = params.attemptId ?? params.instrumentId;
-  const correctness = await resolveIndependentCorrectness(deps.grading, attemptId);
+  const explainBackCorrectness = await resolveIndependentCorrectness(deps.grading, attemptId);
 
   const subject: GradedExplainBackReviewSubject = {
     instrumentId: params.instrumentId,
@@ -453,7 +454,7 @@ export async function recordSoloGradeAndReview(
       artifactProvenance: outcome.artifactProvenance,
       studentAnswer: params.answer,
       attemptId,
-      ...(correctness !== undefined ? { correctness } : {}),
+      ...(explainBackCorrectness !== undefined ? { explainBackCorrectness } : {}),
     },
     options,
   );
@@ -480,8 +481,17 @@ export async function recordSoloGradeAndReview(
  * writer a correctness verdict from a DIFFERENT attempt — the key is the
  * attempt.
  *
+ * **Returned as the record's top-level `explainBackCorrectness`** (`[D-303]`,
+ * `[D-386]`, `ol-95vv.8`): the verdict with the correctness call's own D7.3
+ * stamp, carried from the grading pipeline's accept. Since review-log v6 the
+ * nested `explainBackGrade.correctness` is never written.
+ *
  * `undefined` — recorded as unknown, never as correct — in every case where
- * the verdict is not a standing judgement about this attempt:
+ * the verdict is not a standing judgement about this attempt, or cannot be
+ * recorded with its own stamp:
+ * - the correctness call surfaced no usable stamp: the stamp is mandatory on
+ *   the top-level field, and none is ever invented or borrowed from the depth
+ *   call;
  * - no memoised accept for this attempt (the correctness pipeline did not run,
  *   or a caller supplied no real per-attempt id);
  * - the accept came back `'stale'` (`ol-0r92.89`): the source the grading cited
@@ -494,13 +504,25 @@ export async function recordSoloGradeAndReview(
 async function resolveIndependentCorrectness(
   wiring: RecordSoloGradeAndReviewDeps['grading'],
   attemptId: string,
-): Promise<'correct' | 'partial' | 'incorrect' | undefined> {
+): Promise<ExplainBackCorrectness | undefined> {
   const pendingAccept = wiring.acceptedObservationsByAttempt.get(attemptId);
   if (pendingAccept === undefined) return undefined;
   try {
     const accepted = await pendingAccept;
     if (accepted.status !== 'accepted') return undefined;
-    return accepted.accepted.verdict;
+    // `[D-303]` / `[D-386]`: the verdict is recorded with the correctness
+    // call's own stamp or not at all — never with the depth call's stamp,
+    // never with an invented one.
+    const stamp = accepted.accepted.stamp;
+    if (stamp === undefined) return undefined;
+    return {
+      verdict: accepted.accepted.verdict,
+      artifactProvenance: {
+        taskId: EXPLAIN_BACK_JUDGE_TASK_ID,
+        promptVersion: stamp.promptVersion,
+        modelId: stamp.modelId,
+      },
+    };
   } catch {
     return undefined;
   }

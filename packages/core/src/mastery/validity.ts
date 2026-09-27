@@ -55,7 +55,7 @@
 import type {
   DisputeLogRecord,
   ReviewLogEntry,
-  SuccessionLogRecordV5,
+  SuccessionLogRecord,
   SuspendLogRecord,
   VerdictLogRecord,
 } from 'olea-contracts';
@@ -144,12 +144,12 @@ export function projectInstrumentValidity(
     string,
     { instant: number; eventId: string; suspended: boolean }
   >();
-  const successionFacts = new Map<string, SuccessionLogRecordV5>();
+  const successionFacts = new Map<string, SuccessionLogRecord>();
 
   for (const entry of entries) {
     if (entry.kind !== 'verdict' && entry.kind !== 'suspend' && entry.kind !== 'unsuspend') {
       if (entry.kind === 'succession') {
-        const record = entry as SuccessionLogRecordV5;
+        const record = entry as SuccessionLogRecord;
         if (!successionFacts.has(record.predecessorInstrumentId)) {
           successionFacts.set(record.predecessorInstrumentId, record);
         }

@@ -20,7 +20,7 @@ function review(overrides: {
 }): ReviewLogRecord {
   seq += 1;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: overrides.eventId ?? `evt-${String(seq).padStart(3, '0')}`,
     timestamp: overrides.timestamp,
@@ -43,7 +43,7 @@ function review(overrides: {
 function suspend(timestamp: string): ReviewLogEntry {
   seq += 1;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId: `sus-${seq}`,
     timestamp,

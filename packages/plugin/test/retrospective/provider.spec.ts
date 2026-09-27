@@ -99,7 +99,7 @@ const CONCEPT_FILES: Readonly<Record<string, string>> = {
 
 function reviewRecord(conceptKey: string): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${conceptKey}`,
     timestamp: NOW.toISOString(),
@@ -367,7 +367,7 @@ describe('createLocalRetrospectiveProvider — the no-override holding cut is th
     await vault.write(
       reviewLogPath(reviewDay, DEVICE),
       `${JSON.stringify({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'review',
         eventId: 'owyn1',
         timestamp: reviewedAt,

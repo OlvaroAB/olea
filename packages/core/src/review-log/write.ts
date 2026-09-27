@@ -362,6 +362,16 @@ export async function appendReviewLogRecord(
     );
   }
   const record = parsed.data;
+  // `[D-386]`: the nested `explainBackGrade.correctness` is a legacy carry —
+  // the v6 schema keeps it only so v5 history crosses the upgrade verbatim.
+  // No v6 writer produces it; a verdict goes to the top-level
+  // `explainBackCorrectness`, with its own stamp.
+  if (record.explainBackGrade?.correctness !== undefined) {
+    throw new Error(
+      'appendReviewLogRecord: a new record never carries the nested explainBackGrade.correctness ' +
+        '([D-386]); write the verdict to explainBackCorrectness with its own stamp',
+    );
+  }
   const path = await appendEntryLine(vault, record, options.deviceId);
 
   return { record, path };

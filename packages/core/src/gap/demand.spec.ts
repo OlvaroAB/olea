@@ -18,7 +18,7 @@ const scheduler = createFsrsScheduler();
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r1',
     timestamp: T1,
@@ -42,7 +42,7 @@ function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
 
 function rejected(instrumentId: string): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId: `v-${instrumentId}`,
     timestamp: T1,

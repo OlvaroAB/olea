@@ -30,13 +30,23 @@
 // current version". `parseReviewLog` returns current-shape entries by contract,
 // so a v1 record read today comes back as v5, and an assertion that it comes
 // back as v2 was an assertion about which version was current rather than about
-// the fixture. Those are retargeted. Every assertion about a *frozen* shape —
+// the fixture. Those are retargeted (to v6 by `ol-95vv.8`, an ordinary
+// additive bump: the v5 file stays on disk unmodified, and two files are added
+// beside it — a v5 day carrying nested explain-back verdicts, `[D-386]`'s
+// golden, and the first v6 file). Every assertion about a *frozen* shape —
 // the raw bytes on disk, the field values carried through, the key shape of a
 // record — is untouched, and the raw-bytes guards below are applied to the v2
 // and v3 files too, so a future migration of a fixture fails loudly here.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ReviewLogEntry, ReviewLogRecord, SuspendLogRecord } from 'olea-contracts';
+import {
+  type ReviewLogEntry,
+  type ReviewLogRecord,
+  readExplainBackCorrectness,
+  reviewLogEntry,
+  reviewLogEntryV5,
+  type SuspendLogRecord,
+} from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { mergeReviewLogRecords } from '../../src/review-log/merge.js';
 import { parseReviewLog } from '../../src/review-log/parse.js';
@@ -67,6 +77,14 @@ const LAPTOP_V3_FIXTURE = '2026-08-10.device-laptop.v3.jsonl';
  * never pruned" here.
  */
 const WORKSTATION_V5_FIXTURE = '2026-08-10.device-workstation.v5.jsonl';
+/**
+ * A v5 day carrying nested explain-back correctness verdicts — the history
+ * `[D-386]` rules on (nested verdicts were written from `ol-95vv.10` until the
+ * v6 flip). Frozen v5 history: never migrated on disk.
+ */
+const STUDIO_V5_NESTED_FIXTURE = '2026-09-24.device-studio.v5-nested-verdict.jsonl';
+/** The first v6 file (`ol-95vv.8`): every v6 field, and `[D-395]`'s link present and absent. */
+const STUDIO_V6_FIXTURE = '2026-09-28.device-studio.v6.jsonl';
 
 /** Every v2 file on disk. Guarded as a group so a new one cannot skip the check. */
 const V2_FIXTURES = [
@@ -243,13 +261,13 @@ describe('review-log golden fixtures — device-desktop (frozen v1 history, well
   });
 
   it('upgrades every v1 record to a current review event — never discarded, never guessed at', () => {
-    // Retargeted from 2 to 3 by `ol-t3sd`, 3 to 4 by `ol-g6zg`, and 4 to 5 by
-    // `ol-tka5`, because `parseReviewLog` returns current-shape entries by
+    // Retargeted from 2 to 3 by `ol-t3sd`, 3 to 4 by `ol-g6zg`, 4 to 5 by
+    // `ol-tka5`, and 5 to 6 by `ol-95vv.8`, because `parseReviewLog` returns current-shape entries by
     // contract and the current shape moved. The assertion itself — "a v1 line
     // comes back as a review event at the version this build reads, not as a
     // v1 line" — is the same one.
     for (const record of result.records) {
-      expect(record.schemaVersion).toBe(5);
+      expect(record.schemaVersion).toBe(6);
       expect(record.kind).toBe('review');
     }
   });
@@ -540,7 +558,7 @@ describe('review-log golden fixtures — two devices suspending the same day (D-
     const mobile = parseReviewLog(readFixture(MOBILE_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone);
 
-    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 6)).toBe(true);
     // Chronological, with suspension and review events interleaved.
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
     expect(instants).toEqual([...instants].sort((a, b) => a - b));
@@ -741,7 +759,7 @@ describe('a whole vault of every version merges into one coherent day', () => {
     const laptop = parseReviewLog(readFixture(LAPTOP_V3_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop);
 
-    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 6)).toBe(true);
     expect(excludingSuccession(merged.records).every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
@@ -844,12 +862,12 @@ describe('migrating the v3 fixture — attribute where you can, decline where yo
 
   it('a v3 suspension only has its version stamped forward', () => {
     const suspend = suspensions(result.records)[0];
-    expect(suspend?.schemaVersion).toBe(5);
+    expect(suspend?.schemaVersion).toBe(6);
     expect(Object.keys(suspend ?? {}).sort()).toEqual(SUSPEND_RECORD_KEYS);
   });
 });
 
-describe('review-log golden fixtures — device-workstation (v5, the current writer output, `ol-tka5`)', () => {
+describe('review-log golden fixtures — device-workstation (v5, the writer output from `ol-tka5` until `ol-95vv.8`)', () => {
   const result = parseReviewLog(readFixture(WORKSTATION_V5_FIXTURE));
 
   it('the fixture on disk really is v5, with masteryAtTime on the record and not in the context', () => {
@@ -1065,7 +1083,7 @@ describe('a whole vault of all four versions merges into one coherent day', () =
     const workstation = parseReviewLog(readFixture(WORKSTATION_V5_FIXTURE)).records;
     const merged = mergeReviewLogRecords(desktopV1, mobile, tablet, phone, laptop, workstation);
 
-    expect(merged.records.every((r) => r.schemaVersion === 5)).toBe(true);
+    expect(merged.records.every((r) => r.schemaVersion === 6)).toBe(true);
     expect(excludingSuccession(merged.records).every((r) => r.conceptIds.length >= 1)).toBe(true);
 
     const instants = merged.records.map((r) => Date.parse(r.timestamp));
@@ -1109,5 +1127,103 @@ describe('a whole vault of all four versions merges into one coherent day', () =
     expect(suspendedInstrumentIds(merged.records)).toEqual(
       new Set(['cloze:imbrication-bioturbation:1', 'cloze:imbrication-bioturbation:2']),
     );
+  });
+});
+
+function nonBlankLines(raw: string): string[] {
+  return raw.split('\n').filter((l) => l.trim() !== '');
+}
+
+describe('review-log golden fixtures — device-studio v5 with nested verdicts (`[D-386]`, frozen)', () => {
+  const raw = readFixture(STUDIO_V5_NESTED_FIXTURE);
+  const result = parseReviewLog(raw);
+
+  it('the fixture on disk really is v5, in the exact bytes a v5 writer emits', () => {
+    for (const line of nonBlankLines(raw)) {
+      expect((JSON.parse(line) as { schemaVersion: unknown }).schemaVersion).toBe(5);
+      expect(JSON.stringify(reviewLogEntryV5.parse(JSON.parse(line)))).toBe(line);
+    }
+  });
+
+  it('carries nested verdicts of every kind, plus a depth grade with none', () => {
+    const verdicts = nonBlankLines(raw).map(
+      (line) =>
+        readExplainBackCorrectness(reviewLogEntryV5.parse(JSON.parse(line)) as never)?.verdict,
+    );
+    expect(verdicts).toEqual([
+      undefined,
+      'correct',
+      'partial',
+      'correct',
+      'incorrect',
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it('upgrades every line to v6 with zero invalid lines, changing the version digit and nothing else', () => {
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records.map((r) => JSON.stringify(r))).toEqual(
+      nonBlankLines(raw).map((line) => line.replace('"schemaVersion":5', '"schemaVersion":6')),
+    );
+  });
+
+  it('every nested verdict reads the same after the upgrade, provenance unknown, nothing moved to the top level', () => {
+    const before = nonBlankLines(raw).map((line) =>
+      readExplainBackCorrectness(reviewLogEntryV5.parse(JSON.parse(line)) as never),
+    );
+    const after = result.records.map((record) => readExplainBackCorrectness(record as never));
+    expect(after).toEqual(before);
+    for (const reading of after)
+      if (reading !== undefined) expect(reading.provenance).toBe('unknown');
+    for (const record of result.records) {
+      expect(Object.hasOwn(record, 'explainBackCorrectness')).toBe(false);
+      expect(Object.hasOwn(record, 'compositionId')).toBe(false);
+    }
+  });
+});
+
+describe('review-log golden fixtures — device-studio v6 (`ol-95vv.8`, the current writer output)', () => {
+  const raw = readFixture(STUDIO_V6_FIXTURE);
+  const result = parseReviewLog(raw);
+
+  it('the fixture on disk really is v6, in the exact key order the schema emits', () => {
+    for (const line of nonBlankLines(raw)) {
+      expect((JSON.parse(line) as { schemaVersion: unknown }).schemaVersion).toBe(6);
+      expect(JSON.stringify(reviewLogEntry.parse(JSON.parse(line)))).toBe(line);
+    }
+  });
+
+  it('parses every line natively with zero invalid lines, byte for byte', () => {
+    expect(result.invalidLines).toEqual([]);
+    expect(result.records.map((r) => JSON.stringify(r))).toEqual(nonBlankLines(raw));
+  });
+
+  it('[D-395] carries the composition link inside a composed session and none outside it', () => {
+    const links = reviews(result.records).map((r) => r.compositionId ?? null);
+    expect(links).toEqual(['composition-7f3a', 'composition-7f3a', null]);
+  });
+
+  it('carries both axes plus the arithmetic version on a written belief stamp (MAT-7)', () => {
+    const first = reviews(result.records)[0];
+    if (first?.masteryAtTime?.attribution !== 'per-concept') throw new Error('expected a stamp');
+    expect(first.masteryAtTime.vitalityByConcept).toEqual({ cementation: 'holding' });
+    expect(first.masteryAtTime.arithmeticVersion).toMatch(/^att-fold-1;/);
+  });
+
+  it('[D-303] a top-level verdict stands with its own stamp, with or without a depth grade; no record carries the nested one', () => {
+    const readings = reviews(result.records).map((r) => readExplainBackCorrectness(r));
+    expect(readings.map((r) => r?.source ?? null)).toEqual([null, 'top-level', 'top-level']);
+    for (const record of reviews(result.records)) {
+      expect(record.explainBackGrade?.correctness).toBeUndefined();
+    }
+    expect(reviews(result.records)[2]?.explainBackGrade).toBeUndefined();
+  });
+
+  it('[D-345] a suspension carries its reason; an unsuspension carries none', () => {
+    expect(suspensions(result.records).map((s) => [s.kind, s.reason ?? null])).toEqual([
+      ['suspend', 'own-choice'],
+      ['unsuspend', null],
+    ]);
   });
 });

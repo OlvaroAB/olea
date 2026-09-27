@@ -20,7 +20,8 @@ import {
   mcqMisconceptionProvenance,
   misconceptionObservedLogRecord,
   misconceptionObservedLogRecordV5,
-  reviewLogEntry,
+  misconceptionObservedLogRecordV6,
+  reviewLogEntryV5,
 } from './review-log.js';
 
 function observedLine(over: Record<string, unknown> = {}) {
@@ -138,18 +139,18 @@ describe('misconceptionObservedLogRecordV5', () => {
     );
   });
 
-  it('`misconceptionObservedLogRecord` is the v5 alias', () => {
-    expect(misconceptionObservedLogRecord).toBe(misconceptionObservedLogRecordV5);
+  it('`misconceptionObservedLogRecord` is the v6 alias (v6 is current since ol-95vv.8)', () => {
+    expect(misconceptionObservedLogRecord).toBe(misconceptionObservedLogRecordV6);
   });
 });
 
 describe('reviewLogEntry discriminates misconception-observed alongside every other kind', () => {
   it('parses an observed line as a member of the current union', () => {
-    expect(reviewLogEntry.safeParse(observedLine()).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(observedLine()).success).toBe(true);
   });
 
   it('a line missing its distractor fails the union the same way it fails the record', () => {
     const { distractor: _drop, ...rest } = observedLine();
-    expect(reviewLogEntry.safeParse(rest).success).toBe(false);
+    expect(reviewLogEntryV5.safeParse(rest).success).toBe(false);
   });
 });

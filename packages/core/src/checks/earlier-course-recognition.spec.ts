@@ -14,7 +14,7 @@ import {
 
 function review(conceptId: string, day: string, eventId: string): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp: `${day}T20:00:00+00:00`,

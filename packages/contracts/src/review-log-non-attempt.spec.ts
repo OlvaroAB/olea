@@ -19,10 +19,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   explainBackOfferTrigger,
-  type NonAttemptLogRecord,
+  type NonAttemptLogRecordV5,
   nonAttemptLogRecord,
   nonAttemptLogRecordV5,
-  reviewLogEntry,
+  nonAttemptLogRecordV6,
+  reviewLogEntryV5,
 } from './review-log.js';
 
 function nonAttemptLine(over: Record<string, unknown> = {}) {
@@ -130,27 +131,27 @@ describe('nonAttemptLogRecordV5', () => {
     expect(parsed.conceptIds).toEqual(['concept-b', 'concept-a', 'concept-b']);
   });
 
-  it('`nonAttemptLogRecord` is the v5 alias', () => {
-    expect(nonAttemptLogRecord).toBe(nonAttemptLogRecordV5);
+  it('`nonAttemptLogRecord` is the v6 alias (v6 is current since ol-95vv.8)', () => {
+    expect(nonAttemptLogRecord).toBe(nonAttemptLogRecordV6);
   });
 });
 
 describe('reviewLogEntry discriminates the non-attempt kind alongside every other one', () => {
   it('parses a non-attempt line as a member of the current union', () => {
-    const parsed = reviewLogEntry.safeParse(nonAttemptLine());
+    const parsed = reviewLogEntryV5.safeParse(nonAttemptLine());
     expect(parsed.success).toBe(true);
     if (parsed.success) expect(parsed.data.kind).toBe('non-attempt');
   });
 
   it('a non-attempt line without its trigger fails the union the same way it fails the record', () => {
     const { trigger: _drop, ...rest } = nonAttemptLine();
-    expect(reviewLogEntry.safeParse(rest).success).toBe(false);
+    expect(reviewLogEntryV5.safeParse(rest).success).toBe(false);
   });
 
   it('the union narrows on the literal to the record type (compile-time check)', () => {
-    const entry = reviewLogEntry.parse(nonAttemptLine());
+    const entry = reviewLogEntryV5.parse(nonAttemptLine());
     if (entry.kind !== 'non-attempt') throw new Error('expected a non-attempt');
-    const record: NonAttemptLogRecord = entry;
+    const record: NonAttemptLogRecordV5 = entry;
     expect(record.trigger).toBe('repeated-failure');
   });
 });

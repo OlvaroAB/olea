@@ -10,7 +10,7 @@ import type {
   DisputeLogRecord,
   ReviewLogEntry,
   ReviewLogRecord,
-  SuccessionLogRecordV5,
+  SuccessionLogRecord,
   SupportLevel,
   SuspendLogRecord,
   VerdictLogRecord,
@@ -40,7 +40,7 @@ const DAY = 24 * 60 * 60 * 1000;
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r-default',
     timestamp: '2026-01-10T09:00:00-04:00',
@@ -105,7 +105,7 @@ function verdict(
   eventId: string,
 ): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId,
     timestamp,
@@ -119,7 +119,7 @@ function verdict(
 
 function suspend(instrumentId: string, timestamp: string, eventId: string): SuspendLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'suspend',
     eventId,
     timestamp,
@@ -132,9 +132,9 @@ function succession(
   predecessorInstrumentId: string,
   successorInstrumentId: string,
   timestamp: string,
-): SuccessionLogRecordV5 {
+): SuccessionLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'succession',
     eventId: `s-${predecessorInstrumentId}`,
     timestamp,
@@ -150,7 +150,7 @@ function gradeDispute(
   resolution?: { resolves: string; outcome: 'upheld' | 'corrected' },
 ): DisputeLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId,
     timestamp,

@@ -173,7 +173,7 @@ function reviewRecord(
   overrides: Partial<ReviewLogRecord> = {},
 ): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${Math.random().toString(36).slice(2)}`,
     timestamp: '2026-08-05T09:00:00-04:00',

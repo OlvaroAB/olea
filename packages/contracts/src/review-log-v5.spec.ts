@@ -51,9 +51,11 @@ import {
   reviewLogEntry,
   reviewLogEntryV3,
   reviewLogEntryV5,
+  reviewLogEntryV6,
   reviewLogRecord,
   reviewLogRecordV3,
   reviewLogRecordV5,
+  reviewLogRecordV6,
   type SchedulingObservation,
   schedulingObservation,
   soloLevel,
@@ -61,6 +63,7 @@ import {
   suspendLogRecord,
   suspendLogRecordV3,
   suspendLogRecordV5,
+  suspendLogRecordV6,
 } from './review-log.js';
 
 const SELECTION_CONTEXT_V4 = {
@@ -146,15 +149,16 @@ function v5SuspendLine(over: Record<string, unknown> = {}) {
   return { ...v3SuspendLine(), schemaVersion: 5, ...over };
 }
 
-describe('review-log schema version 5 is the current one', () => {
-  it('the version writers stamp is 5', () => {
-    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(5);
+describe('review-log schema version 5 is frozen, and is no longer the current one (ol-95vv.8)', () => {
+  it('the version writers stamp has moved past 5', () => {
+    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(6);
   });
 
-  it('`reviewLogRecord` and `suspendLogRecord` alias the v5 shapes', () => {
-    expect(reviewLogRecord).toBe(reviewLogRecordV5);
-    expect(suspendLogRecord).toBe(suspendLogRecordV5);
-    expect(reviewLogEntry).toBe(reviewLogEntryV5);
+  it('the current aliases name the v6 shapes, not the v5 ones', () => {
+    expect(reviewLogRecord).toBe(reviewLogRecordV6);
+    expect(suspendLogRecord).toBe(suspendLogRecordV6);
+    expect(reviewLogEntry).toBe(reviewLogEntryV6);
+    expect(reviewLogEntry).not.toBe(reviewLogEntryV5);
   });
 });
 
@@ -551,12 +555,14 @@ describe('the four versions never silently cross', () => {
     expect(reviewLogEntryV3.safeParse(v5SuspendLine()).success).toBe(false);
   });
 
-  it('the current union parses v5 lines of every kind, and refuses v3 ones', () => {
-    expect(reviewLogEntry.safeParse(v5ReviewLine()).success).toBe(true);
-    expect(reviewLogEntry.safeParse(v5SuspendLine()).success).toBe(true);
-    expect(reviewLogEntry.safeParse(v5SuspendLine({ kind: 'unsuspend' })).success).toBe(true);
-    expect(reviewLogEntry.safeParse(v3ReviewLine()).success).toBe(false);
-    expect(reviewLogEntry.safeParse(v3SuspendLine()).success).toBe(false);
+  it('the v5 union parses v5 lines of every kind and refuses v3 ones; the current union refuses v5 ones (version first, never guess)', () => {
+    expect(reviewLogEntry.safeParse(v5ReviewLine()).success).toBe(false);
+    expect(reviewLogEntry.safeParse(v5SuspendLine()).success).toBe(false);
+    expect(reviewLogEntryV5.safeParse(v5ReviewLine()).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(v5SuspendLine()).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(v5SuspendLine({ kind: 'unsuspend' })).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(v3ReviewLine()).success).toBe(false);
+    expect(reviewLogEntryV5.safeParse(v3SuspendLine()).success).toBe(false);
   });
 
   it('conceptIds keeps every guarantee it had at v3', () => {

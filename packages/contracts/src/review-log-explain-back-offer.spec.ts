@@ -19,8 +19,9 @@ import {
   explainBackOfferEventKind,
   explainBackOfferLogRecord,
   explainBackOfferLogRecordV5,
+  explainBackOfferLogRecordV6,
   explainBackOfferTrigger,
-  reviewLogEntry,
+  reviewLogEntryV5,
 } from './review-log.js';
 
 function offeredLine(over: Record<string, unknown> = {}) {
@@ -149,8 +150,8 @@ describe('explainBackOfferLogRecordV5', () => {
     );
   });
 
-  it('`explainBackOfferLogRecord` is the v5 alias', () => {
-    expect(explainBackOfferLogRecord).toBe(explainBackOfferLogRecordV5);
+  it('`explainBackOfferLogRecord` is the v6 alias (v6 is current since ol-95vv.8)', () => {
+    expect(explainBackOfferLogRecord).toBe(explainBackOfferLogRecordV6);
   });
 });
 
@@ -185,12 +186,12 @@ describe('scheduling-observation trigger (`[D-204 / LOG-4]`)', () => {
 
 describe('reviewLogEntry discriminates the explain-back-offer kinds alongside every other one', () => {
   it('parses both offered and declined lines as members of the current union', () => {
-    expect(reviewLogEntry.safeParse(offeredLine()).success).toBe(true);
-    expect(reviewLogEntry.safeParse(declinedLine()).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(offeredLine()).success).toBe(true);
+    expect(reviewLogEntryV5.safeParse(declinedLine()).success).toBe(true);
   });
 
   it('a declined line without its pairing fields fails the union the same way it fails the record', () => {
     const { answers: _drop, ...missingAnswers } = declinedLine();
-    expect(reviewLogEntry.safeParse(missingAnswers).success).toBe(false);
+    expect(reviewLogEntryV5.safeParse(missingAnswers).success).toBe(false);
   });
 });

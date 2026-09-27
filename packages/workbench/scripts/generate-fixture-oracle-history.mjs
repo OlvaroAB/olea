@@ -318,7 +318,7 @@ function buildRecords(conceptKey, notePath, events) {
   return events.map((event, index) => {
     const isExplainBack = event.instrumentType === 'explain-back';
     const record = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: `wb-fixture-oracle:${slug}:${String(index)}`,
       timestamp: `${event.date}T09:00:00+00:00`,
@@ -328,7 +328,7 @@ function buildRecords(conceptKey, notePath, events) {
       instrumentType: event.instrumentType,
       conceptIds: [conceptKey],
       // F2.16: an explain-back produces no rating. Its verdict rides
-      // `explainBackGrade` instead (`contracts/review-log.ts`).
+      // `explainBackCorrectness` instead (`contracts/review-log.ts`).
       rating: isExplainBack ? null : event.rating,
       wasUnsure: false,
       durationMs: null,
@@ -350,10 +350,6 @@ function buildRecords(conceptKey, notePath, events) {
         ? {
             explainBackGrade: {
               soloLevel: event.soloLevel,
-              // `[D-281]` item 1: an explain-back reaches the top stage only
-              // with an explicit 'correct' verdict here — absence (the case
-              // before this field existed) never admits it.
-              ...(event.correctness !== undefined ? { correctness: event.correctness } : {}),
               // An opaque placeholder id, never text — the content store this
               // points into holds nothing for a synthetic fixture (D-005).
               contentRef: `wb-fixture-oracle:${slug}:grade:${String(index)}`,
@@ -364,6 +360,22 @@ function buildRecords(conceptKey, notePath, events) {
                 modelId: 'wb-fixture-oracle',
               },
             },
+            // `[D-281]` item 1: an explain-back reaches the top stage only
+            // with an explicit 'correct' verdict — absence never admits it.
+            // Since review-log v6 the verdict lives in its own top-level
+            // place with its own stamp (`[D-303]`, `[D-386]`).
+            ...(event.correctness !== undefined
+              ? {
+                  explainBackCorrectness: {
+                    verdict: event.correctness,
+                    artifactProvenance: {
+                      taskId: 'explain-back.judge.v1',
+                      promptVersion: 'wb-fixture-oracle',
+                      modelId: 'wb-fixture-oracle',
+                    },
+                  },
+                }
+              : {}),
           }
         : {}),
     };

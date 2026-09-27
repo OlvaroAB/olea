@@ -78,7 +78,7 @@ function qaInstrument(overrides: Partial<VaultInstrumentRecord> = {}): VaultInst
  */
 function qualifyingExplainBack(overrides: Partial<ExplainBackGrade> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'eb-1',
     timestamp: '2026-01-20T09:00:00-04:00',
@@ -128,7 +128,7 @@ function suspendRecord(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry 
 /** A `'rejected'` verdict — a real refusal, unlike a mere suspend, and proven invalid without waiting on a reason field. */
 function rejectedVerdict(overrides: Partial<ReviewLogEntry> = {}): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId: 'verdict-1',
     timestamp: '2026-01-26T09:00:00-04:00',
@@ -182,7 +182,7 @@ function contestedGradeDisputes(
     timestamp: '2026-01-21T09:00:00-04:00',
   });
   const openingRecord: DisputeLogRecord = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'dispute-1',
     ...opening.record,
@@ -193,7 +193,7 @@ function contestedGradeDisputes(
     timestamp: '2026-01-22T09:00:00-04:00',
   });
   const resolutionRecord: DisputeLogRecord = {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'dispute-2',
     ...resolution,

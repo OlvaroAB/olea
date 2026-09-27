@@ -158,11 +158,11 @@ describe('review-log wire format — current schema version and suspension event
     } as Parameters<typeof appendSuspendRecord>[1];
   }
 
-  it('the writer stamps schemaVersion 5 and kind "review" into the bytes it produces', async () => {
+  it('the writer stamps schemaVersion 6 and kind "review" into the bytes it produces', async () => {
     const { root, source } = newVault();
     await appendReviewLogRecord(source, record(), { deviceId: 'dev' });
     const line = readFileSync(join(root, LOG_PATH), 'utf8').trim();
-    expect(line).toContain('"schemaVersion":5');
+    expect(line).toContain('"schemaVersion":6');
     expect(line).toContain('"kind":"review"');
   });
 

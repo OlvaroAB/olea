@@ -34,7 +34,7 @@ function review(
   timestamp = '2026-09-01T18:00:00+00:00',
 ): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `e${index}`,
     timestamp,

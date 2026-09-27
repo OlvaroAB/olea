@@ -14,7 +14,7 @@ const HOLDING_CUT = 0.7;
 
 function review(conceptId: string, day: string, eventId: string): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp: `${day}T20:00:00+00:00`,
@@ -177,7 +177,7 @@ describe('buildRetrospective', () => {
     // the SAME baseline entry `baseInput()` already supplies for `c-held`.
     const heldReview = review('c-held', '2026-08-30', 'e1');
     const qualifyingExplainBack: ReviewLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: 'eb-1',
       timestamp: '2026-08-29T09:00:00+00:00',
@@ -206,7 +206,7 @@ describe('buildRetrospective', () => {
     // A real refusal, not a mere suspend — the proven-invalid signal D-281
     // item 4 and ol-v7r5.69's close reason both require.
     const rejectedVerdict: ReviewLogEntry = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'verdict',
       eventId: 'verdict-1',
       timestamp: '2026-08-29T09:30:00+00:00',

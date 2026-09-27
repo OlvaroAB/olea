@@ -26,7 +26,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 
 export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:0',
     timestamp: '2026-06-03T09:00:00+00:00',
@@ -45,7 +45,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:1',
     timestamp: '2026-06-10T09:00:00+00:00',
@@ -64,7 +64,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:2',
     timestamp: '2026-06-19T09:00:00+00:00',
@@ -83,7 +83,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:3',
     timestamp: '2026-07-02T09:00:00+00:00',
@@ -102,7 +102,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:4',
     timestamp: '2026-07-20T09:00:00+00:00',
@@ -121,7 +121,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:5',
     timestamp: '2026-08-10T09:00:00+00:00',
@@ -140,7 +140,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:imbrication:6',
     timestamp: '2026-08-24T09:00:00+00:00',
@@ -160,7 +160,6 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     supportLevelShown: 'independent',
     explainBackGrade: {
       soloLevel: 'relational',
-      correctness: 'correct',
       contentRef: 'wb-fixture-oracle:imbrication:grade:6',
       revisionOf: null,
       artifactProvenance: {
@@ -169,9 +168,17 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
         modelId: 'wb-fixture-oracle',
       },
     },
+    explainBackCorrectness: {
+      verdict: 'correct',
+      artifactProvenance: {
+        taskId: 'explain-back.judge.v1',
+        promptVersion: 'wb-fixture-oracle',
+        modelId: 'wb-fixture-oracle',
+      },
+    },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:bioturbation:0',
     timestamp: '2026-06-05T09:00:00+00:00',
@@ -190,7 +197,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:bioturbation:1',
     timestamp: '2026-06-12T09:00:00+00:00',
@@ -209,7 +216,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:bioturbation:2',
     timestamp: '2026-06-25T09:00:00+00:00',
@@ -228,7 +235,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:bioturbation:3',
     timestamp: '2026-07-15T09:00:00+00:00',
@@ -247,7 +254,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:bioturbation:4',
     timestamp: '2026-08-01T09:00:00+00:00',
@@ -266,7 +273,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:0',
     timestamp: '2026-06-02T09:00:00+00:00',
@@ -285,7 +292,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:1',
     timestamp: '2026-06-04T09:00:00+00:00',
@@ -304,7 +311,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:2',
     timestamp: '2026-06-09T09:00:00+00:00',
@@ -323,7 +330,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:3',
     timestamp: '2026-06-16T09:00:00+00:00',
@@ -342,7 +349,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:4',
     timestamp: '2026-06-23T09:00:00+00:00',
@@ -361,7 +368,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:5',
     timestamp: '2026-06-30T09:00:00+00:00',
@@ -380,7 +387,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:6',
     timestamp: '2026-07-10T09:00:00+00:00',
@@ -399,7 +406,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:7',
     timestamp: '2026-07-21T09:00:00+00:00',
@@ -418,7 +425,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:8',
     timestamp: '2026-08-05T09:00:00+00:00',
@@ -437,7 +444,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:paraconformity:9',
     timestamp: '2026-08-20T09:00:00+00:00',
@@ -456,7 +463,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:0',
     timestamp: '2026-06-03T09:00:00+00:00',
@@ -475,7 +482,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:1',
     timestamp: '2026-06-20T09:00:00+00:00',
@@ -494,7 +501,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:2',
     timestamp: '2026-07-10T09:00:00+00:00',
@@ -513,7 +520,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:3',
     timestamp: '2026-08-01T09:00:00+00:00',
@@ -532,7 +539,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:4',
     timestamp: '2026-09-05T09:00:00+00:00',
@@ -551,7 +558,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:5',
     timestamp: '2026-10-15T09:00:00+00:00',
@@ -570,7 +577,7 @@ export const FIXTURE_ORACLE_HISTORY: readonly ReviewLogEntry[] = [
     },
   },
   {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'wb-fixture-oracle:appoggiatura:6',
     timestamp: '2026-12-01T09:00:00+00:00',

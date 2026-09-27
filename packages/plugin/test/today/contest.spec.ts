@@ -143,7 +143,7 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
       entries,
       disputes: [
         {
-          schemaVersion: 5,
+          schemaVersion: 6,
           kind: 'dispute',
           eventId: 'd1',
           timestamp: '2026-08-21T09:00:00+02:00',
@@ -168,7 +168,7 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
   it('withholds the record gesture once a dispute stands, on a routed reading', () => {
     const disputes: readonly DisputeLogRecord[] = [
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'dispute',
         eventId: 'd1',
         timestamp: '2026-08-21T09:00:00+02:00',
@@ -187,7 +187,7 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
   it('withholds the record gesture once a dispute stands, on a DSN-1-open rendering ([D-215])', () => {
     const disputes: readonly DisputeLogRecord[] = [
       {
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'dispute',
         eventId: 'd1',
         timestamp: '2026-08-21T09:00:00+02:00',
@@ -213,7 +213,7 @@ describe('the gesture goes on the claim, and the dispute is recorded', () => {
 
   it('acknowledges an upheld dispute exactly once', () => {
     const opening: DisputeLogRecord = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'dispute',
       eventId: 'd1',
       timestamp: '2026-08-21T09:00:00+02:00',

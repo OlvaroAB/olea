@@ -31,7 +31,7 @@ function review(overrides: {
 }): ReviewLogEntry {
   const instrumentType = overrides.instrumentType ?? 'qa';
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: overrides.eventId,
     timestamp: overrides.timestamp,
@@ -66,7 +66,7 @@ function misconception(overrides: {
   readonly conceptIds: readonly string[];
 }): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'misconception-observed',
     eventId: overrides.eventId,
     timestamp: overrides.timestamp,
@@ -368,7 +368,7 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     // A real refusal, not a mere suspend — the proven-invalid signal D-281
     // item 4 and ol-v7r5.69's close reason both require.
     const rejectedVerdict: ReviewLogEntry = {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'verdict',
       eventId: 'verdict-1',
       timestamp: '2026-08-19T10:30:00+00:00',

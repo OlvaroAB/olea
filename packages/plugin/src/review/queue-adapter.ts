@@ -148,7 +148,7 @@
  * mechanism invented here.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import { type ReviewLogEntry, readExplainBackCorrectness } from 'olea-contracts';
 import type {
   ComposedQueue,
   DistractorProvenance,
@@ -309,6 +309,7 @@ export function buildSupportLevelHistoryLookup(
       } else if (review.instrumentType === 'explain-back') {
         const grade = review.explainBackGrade;
         if (grade === undefined || grade.soloLevel === undefined) continue;
+        const correctnessVerdict = readExplainBackCorrectness(review)?.verdict;
         tier = 'explanation';
         evidence = {
           instrumentType: 'explain-back',
@@ -320,7 +321,8 @@ export function buildSupportLevelHistoryLookup(
           // for this exact case.
           rating: 'again',
           soloLevel: grade.soloLevel,
-          ...(grade.correctness !== undefined ? { correctness: grade.correctness } : {}),
+          // `[D-386]`: top-level verdict first, legacy nested second.
+          ...(correctnessVerdict !== undefined ? { correctness: correctnessVerdict } : {}),
         };
       } else {
         continue;

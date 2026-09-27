@@ -20,7 +20,7 @@ import { z } from 'zod';
 import {
   nonAttemptLogRecordV5,
   REVIEW_LOG_SCHEMA_VERSION,
-  reviewLogEntry,
+  reviewLogEntryV5,
   reviewLogEntryV6,
   reviewLogRecord,
   reviewLogRecordV5,
@@ -101,20 +101,20 @@ describe('reviewLogRecordV5.origin ([D-367])', () => {
   });
 
   it('read: the current union returns it as a review that still carries its origin', () => {
-    const parsed = reviewLogEntry.parse(reviewLine({ origin: 'practice-paper' }));
+    const parsed = reviewLogEntryV5.parse(reviewLine({ origin: 'practice-paper' }));
     expect(parsed.kind).toBe('review');
     if (parsed.kind === 'review') expect(parsed.origin).toBe('practice-paper');
   });
 
   it('is part of the current record, with no version bump: the writers still stamp 5', () => {
-    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(5);
-    expect(reviewLogRecord).toBe(reviewLogRecordV5);
+    expect(REVIEW_LOG_SCHEMA_VERSION).toBe(6);
+    expect(reviewLogRecord).toBe(reviewLogRecordV6);
     expect(Object.keys(reviewLogRecordV5.shape)).toContain('origin');
   });
 
   it('lands last on the line, after every earlier optional field, so a full line re-serialises byte-identically', () => {
     const line = JSON.stringify(fullReviewLine({ origin: 'practice-paper' }));
-    const reparsed = reviewLogEntry.parse(JSON.parse(line));
+    const reparsed = reviewLogEntryV5.parse(JSON.parse(line));
     expect(JSON.stringify(reparsed)).toBe(line);
     const keys = Object.keys(reparsed);
     expect(keys[keys.length - 1]).toBe('origin');
@@ -132,7 +132,7 @@ describe('reviewLogRecordV5.origin ([D-367])', () => {
   it('legacy absent: those lines re-serialise byte-identically through the current union (INV-2)', () => {
     for (const record of [reviewLine(), fullReviewLine()]) {
       const line = JSON.stringify(record);
-      expect(JSON.stringify(reviewLogEntry.parse(JSON.parse(line)))).toBe(line);
+      expect(JSON.stringify(reviewLogEntryV5.parse(JSON.parse(line)))).toBe(line);
     }
   });
 
@@ -165,7 +165,7 @@ describe('reviewLogRecordV5.origin ([D-367])', () => {
     for (const schema of [suspendLogRecordV5, verdictLogRecordV5, nonAttemptLogRecordV5]) {
       expect(Object.keys(schema.shape)).not.toContain('origin');
     }
-    const suspend = reviewLogEntry.parse({
+    const suspend = reviewLogEntryV5.parse({
       schemaVersion: 5,
       kind: 'suspend',
       eventId: 's-1',

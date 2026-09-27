@@ -5,7 +5,7 @@
 import type {
   DisputeLogRecord,
   ReviewLogEntry,
-  SuccessionLogRecordV5,
+  SuccessionLogRecord,
   SuspendLogRecord,
   VerdictLogRecord,
 } from 'olea-contracts';
@@ -21,7 +21,7 @@ function verdict(
   eventId: string,
 ): VerdictLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'verdict',
     eventId,
     timestamp,
@@ -40,7 +40,7 @@ function suspension(
   eventId: string,
 ): SuspendLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind,
     eventId,
     timestamp,
@@ -53,9 +53,9 @@ function succession(
   predecessorInstrumentId: string,
   successorInstrumentId: string,
   timestamp: string,
-): SuccessionLogRecordV5 {
+): SuccessionLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'succession',
     eventId: `s-${predecessorInstrumentId}`,
     timestamp,
@@ -71,7 +71,7 @@ function gradeDispute(
   resolution?: { resolves: string; outcome: 'upheld' | 'corrected' },
 ): DisputeLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId,
     timestamp,

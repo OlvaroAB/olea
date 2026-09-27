@@ -456,3 +456,26 @@ describe('summarizeGradingForTelemetry — never logs content', () => {
     );
   });
 });
+
+// `ol-95vv.8` (`[D-303]`, `[D-386]`): the correctness call's D7.3 stamp rides
+// from the judge caller through the accept, so an accepted verdict can be
+// recorded in the review log's top-level field with its own stamp. No stamp
+// arrived means no stamp carried — never invented.
+describe('the correctness call’s stamp travels to the accept ([D-386])', () => {
+  const stamp = { promptVersion: 'judge-7', modelId: 'judge-model' };
+
+  it('carries a stamp the caller surfaced onto the pending grading and the accept', async () => {
+    const callJudge = vi.fn().mockResolvedValue({ ...wireResponse(), stamp });
+    const pending = await gradeExplainBack(baseInput(), callJudge);
+    expect(pending.stamp).toEqual(stamp);
+    expect(acceptExplainBackGrading(pending).stamp).toEqual(stamp);
+  });
+
+  it('carries none when the caller surfaced none, or surfaced null', async () => {
+    for (const response of [wireResponse(), { ...wireResponse(), stamp: null }]) {
+      const pending = await gradeExplainBack(baseInput(), vi.fn().mockResolvedValue(response));
+      expect(Object.hasOwn(pending, 'stamp')).toBe(false);
+      expect(Object.hasOwn(acceptExplainBackGrading(pending), 'stamp')).toBe(false);
+    }
+  });
+});

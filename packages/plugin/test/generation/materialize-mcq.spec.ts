@@ -401,7 +401,7 @@ describe('materializeAcceptedDraft — [D-133] succession hookup', () => {
     const succession = await readSuccessionLines(vault);
     expect(succession).toHaveLength(1);
     expect(succession[0]).toMatchObject({
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'succession',
       eventId: 'succession-event-1',
       predecessorInstrumentId: 'mcq-old-1',

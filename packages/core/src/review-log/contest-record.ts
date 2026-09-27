@@ -39,7 +39,7 @@ import {
   contestedClaimKind,
   contestedClaimRendering,
   type DisputeLogRecord,
-  disputeLogRecordV5,
+  disputeLogRecord,
 } from 'olea-contracts';
 
 export type {
@@ -61,9 +61,6 @@ export const CONTESTED_CLAIM_RENDERINGS: readonly ContestedClaimRendering[] = [
   ...contestedClaimRendering.options,
 ];
 
-/** Alias kept so the file family's `*V5` naming reads consistently. */
-export type DisputeLogRecordV5 = DisputeLogRecord;
-
 /** What a caller supplies; the writer stamps `schemaVersion`, `kind` and `eventId`. */
 export type DisputeLogRecordInput = Omit<DisputeLogRecord, 'schemaVersion' | 'kind' | 'eventId'>;
 
@@ -80,5 +77,5 @@ export type SafeParseDisputeResult =
  * resolution.
  */
 export function safeParseDisputeLogRecord(input: unknown): SafeParseDisputeResult {
-  return disputeLogRecordV5.safeParse(input);
+  return disputeLogRecord.safeParse(input);
 }

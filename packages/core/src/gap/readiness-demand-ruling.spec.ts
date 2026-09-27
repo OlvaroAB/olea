@@ -42,7 +42,7 @@ function quiz(
   rating: ReviewLogRecord['rating'],
 ): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp,

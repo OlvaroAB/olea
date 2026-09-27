@@ -39,7 +39,7 @@ const CONCEPT_B = 'concept-b';
 
 function dispute(overrides: Partial<DisputeLogRecord> = {}): DisputeLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'dispute',
     eventId: 'd1',
     timestamp: '2026-08-21T09:00:00+02:00',
@@ -132,7 +132,7 @@ describe('an open-routed rendering is recorded, not refused ([D-215])', () => {
         timestamp: '2026-08-21T09:00:00+02:00',
       });
       const parsed = safeParseDisputeLogRecord({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'dispute',
         eventId: 'e1',
         ...outcome.record,
@@ -262,7 +262,7 @@ describe('the dispute is recorded either way', () => {
         timestamp: '2026-08-21T09:00:00+02:00',
       });
       const parsed = safeParseDisputeLogRecord({
-        schemaVersion: 5,
+        schemaVersion: 6,
         kind: 'dispute',
         eventId: 'e1',
         ...outcome.record,
@@ -487,7 +487,7 @@ describe('[D-338] a corrected grade dispute reaches the growth-stage fold (att.m
   /** A top-stage-qualifying graded explain-back review for `concept-a` ([D-281]'s four pieces of evidence). */
   function qualifyingExplainBack(): ReviewLogRecord {
     return {
-      schemaVersion: 5,
+      schemaVersion: 6,
       kind: 'review',
       eventId: 'g1',
       timestamp: '2026-01-10T09:00:00-04:00',

@@ -38,7 +38,7 @@ function mustSignal(signal: GenerationPrioritySignal | null): GenerationPriority
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: 'r-default',
     timestamp: '2026-01-10T09:00:00-04:00',

@@ -20,11 +20,12 @@ import { describe, expect, it } from 'vitest';
 import {
   artifactProvenance,
   artifactVerdict,
-  reviewLogEntry,
+  reviewLogEntryV5,
   reviewLogRecordV5,
   suspendLogRecordV5,
   verdictLogRecord,
   verdictLogRecordV5,
+  verdictLogRecordV6,
 } from './review-log.js';
 
 const PROVENANCE = {
@@ -91,8 +92,8 @@ describe('verdictLogRecordV5', () => {
     expect(verdictLogRecordV5.safeParse(verdictLine({ verdict: 'ignored' })).success).toBe(false);
   });
 
-  it('`verdictLogRecord` is the v5 alias', () => {
-    expect(verdictLogRecord).toBe(verdictLogRecordV5);
+  it('`verdictLogRecord` is the v6 alias (v6 is current since ol-95vv.8)', () => {
+    expect(verdictLogRecord).toBe(verdictLogRecordV6);
   });
 });
 
@@ -130,7 +131,7 @@ describe('reviewLogEntry / reviewLogEntryV5 — three-way discrimination', () =>
     expect(suspendLogRecordV5.safeParse(suspendLine).success).toBe(true);
 
     for (const line of [reviewLine, suspendLine, verdictLine()]) {
-      const parsed = reviewLogEntry.safeParse(line);
+      const parsed = reviewLogEntryV5.safeParse(line);
       expect(parsed.success).toBe(true);
       if (parsed.success) expect(parsed.data.kind).toBe(line.kind);
     }
@@ -141,7 +142,7 @@ describe('reviewLogEntry / reviewLogEntryV5 — three-way discrimination', () =>
     // carry them, and this asserts extra review-shaped noise does not defeat
     // the discriminator into picking the wrong branch.
     const malformed = verdictLine({ rating: 'good' });
-    const parsed = reviewLogEntry.safeParse(malformed);
+    const parsed = reviewLogEntryV5.safeParse(malformed);
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       expect(parsed.data.kind).toBe('verdict');

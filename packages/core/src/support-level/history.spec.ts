@@ -19,7 +19,7 @@ let counter = 0;
 function review(minutes: number, overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   counter += 1;
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId: `r-${String(counter).padStart(4, '0')}`,
     timestamp: at(minutes),

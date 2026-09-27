@@ -1313,10 +1313,18 @@ describe('loadTodayPanel', () => {
           supportLevelShown: 'independent',
           explainBackGrade: {
             soloLevel: 'relational',
-            correctness: 'correct',
             contentRef: 'content-ref-1',
             revisionOf: null,
             artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+          },
+          // `[D-386]`: a verdict written today lives in its own top-level place with its own stamp.
+          explainBackCorrectness: {
+            verdict: 'correct',
+            artifactProvenance: {
+              taskId: 'explain-back.judge.v1',
+              promptVersion: 'v1',
+              modelId: 'model-1',
+            },
           },
         },
         { deviceId: DEVICE, generateEventId: () => 'old-qualifying-1' },
@@ -1413,10 +1421,18 @@ describe('loadTodayPanel', () => {
           supportLevelShown: 'independent',
           explainBackGrade: {
             soloLevel: 'relational',
-            correctness: 'correct',
             contentRef: 'content-ref-1',
             revisionOf: null,
             artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+          },
+          // `[D-386]`: a verdict written today lives in its own top-level place with its own stamp.
+          explainBackCorrectness: {
+            verdict: 'correct',
+            artifactProvenance: {
+              taskId: 'explain-back.judge.v1',
+              promptVersion: 'v1',
+              modelId: 'model-1',
+            },
           },
         },
         { deviceId: DEVICE, generateEventId: () => 'disputed-qualifying-1' },

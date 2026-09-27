@@ -13,10 +13,11 @@
 //      deliberately narrower than a verdict, per its own doc comment.
 import { describe, expect, it } from 'vitest';
 import {
-  reviewLogEntry,
+  reviewLogEntryV5,
   reviewLogRecordV5,
   successionLogRecord,
   successionLogRecordV5,
+  successionLogRecordV6,
   suspendLogRecordV5,
   verdictLogRecordV5,
 } from './review-log.js';
@@ -76,8 +77,8 @@ describe('successionLogRecordV5', () => {
     );
   });
 
-  it('`successionLogRecord` is the v5 alias', () => {
-    expect(successionLogRecord).toBe(successionLogRecordV5);
+  it('`successionLogRecord` is the v6 alias (v6 is current since ol-95vv.8)', () => {
+    expect(successionLogRecord).toBe(successionLogRecordV6);
   });
 });
 
@@ -131,7 +132,7 @@ describe('reviewLogEntry / reviewLogEntryV5 — four-way discrimination', () => 
     expect(verdictLogRecordV5.safeParse(verdictLine).success).toBe(true);
 
     for (const line of [reviewLine, suspendLine, verdictLine, successionLine()]) {
-      const parsed = reviewLogEntry.safeParse(line);
+      const parsed = reviewLogEntryV5.safeParse(line);
       expect(parsed.success).toBe(true);
       if (parsed.success) expect(parsed.data.kind).toBe(line.kind);
     }
@@ -139,7 +140,7 @@ describe('reviewLogEntry / reviewLogEntryV5 — four-way discrimination', () => 
 
   it('a succession line with verdict-shaped noise does not smuggle through', () => {
     const malformed = successionLine({ verdict: 'accepted', instrumentType: 'mcq' });
-    const parsed = reviewLogEntry.safeParse(malformed);
+    const parsed = reviewLogEntryV5.safeParse(malformed);
     expect(parsed.success).toBe(true);
     if (parsed.success) {
       expect(parsed.data.kind).toBe('succession');

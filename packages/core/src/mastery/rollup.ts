@@ -149,6 +149,7 @@ import type {
   SoloLevel,
   SupportLevel,
 } from 'olea-contracts';
+import { readExplainBackCorrectness } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
@@ -769,8 +770,11 @@ function conceptEvidence(
         }
         // Same success test `qualifiesForTopStage` reads first — an
         // independent verdict of `correct`, absent reads as unknown and
-        // never counts as demonstrated.
-        if (grade.correctness === 'correct') tiersSucceeded.explanation = true;
+        // never counts as demonstrated. Read top-level first, legacy nested
+        // second (`[D-386]`), with no provenance required to count it.
+        if (readExplainBackCorrectness(record)?.verdict === 'correct') {
+          tiersSucceeded.explanation = true;
+        }
         if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
           if (resolved.explanationMissingEventIds.has(record.eventId)) {
             // `[D-319]`: every other condition held, and the finding shows the
@@ -878,8 +882,11 @@ function stageOf(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): M
  * own account of it — so no one of these is sufficient and all of them are
  * read together:
  *
- * 1. **Correctness** — the judge's INDEPENDENT verdict, persisted on the grade
- *    record (`explainBackGrade.correctness`). `'correct'` and nothing else:
+ * 1. **Correctness** — the judge's INDEPENDENT verdict, read through
+ *    `readExplainBackCorrectness` (`[D-386]`): the top-level
+ *    `explainBackCorrectness` (v6, `[D-303]`) first, the legacy nested
+ *    `explainBackGrade.correctness` second, and a legacy verdict with no
+ *    recorded provenance counts exactly as the verdict it records. `'correct'` and nothing else:
  *    depth without correctness is a confident wrong answer, and a record
  *    written before the field existed carries no verdict and reads as
  *    **unknown, never as correct**.
@@ -916,7 +923,7 @@ function qualifiesForTopStage(
   resolved: ResolvedOptions,
   supersededEventIds: ReadonlySet<string>,
 ): boolean {
-  if (grade.correctness !== 'correct') return false;
+  if (readExplainBackCorrectness(record)?.verdict !== 'correct') return false;
   if (soloRank(grade.soloLevel) < soloRank(resolved.depthGate)) return false;
   const support = record.supportLevelShown;
   if (support === undefined || !resolved.admittedSupportLevels.has(support)) return false;

@@ -32,7 +32,7 @@ function review(
   } = {},
 ): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind: 'review',
     eventId,
     timestamp,
@@ -56,7 +56,7 @@ function suspend(
   kind: 'suspend' | 'unsuspend' = 'suspend',
 ): ReviewLogEntry {
   return {
-    schemaVersion: 5,
+    schemaVersion: 6,
     kind,
     eventId,
     timestamp,
