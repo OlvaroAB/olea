@@ -1863,12 +1863,27 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   // (pinned in that bead's own describe block below) — but for a different
   // concern: it feeds `open-session.ts`'s own `readInstrumentStanding`
   // pending-revalidation READ, never one of the four COMPOSE call sites this
-  // block is about. Counted here anyway, since this assertion matches the
-  // literal string wherever it occurs; kept at exactly five so a sixth,
-  // unaccounted-for occurrence still fails this test.
-  it('all four compose call sites (three direct, one via Home) plus the review-tab open/extend site receive it — exactly five occurrences', () => {
+  // block is about.
+
+  // `ol-egov.141.89.6.55` adds a SIXTH occurrence: the registry view's
+  // `createLocalRegistryProvider` construction, so its own suspect section
+  // (`registry/provider.ts`'s `citationHashStore` doc) reads the same
+  // pending-revalidation facts every compose call site above already does —
+  // a fifth reader of the store, not a sixth compose call.
+  it("the registry view's createLocalRegistryProvider construction site receives it too", () => {
+    expect(main).toMatch(
+      new RegExp(
+        `readRankWeights: this\\.rankWeights\\.readRankWeights\\s*\\}\\s*:\\s*\\{\\}\\),\\s*${citationSpread},\\s*editPort: createObsidianEditInstrumentPort\\(this\\.app\\),`,
+      ),
+    );
+  });
+
+  // Counted here anyway, since this assertion matches the literal string
+  // wherever it occurs; kept at exactly six so a seventh, unaccounted-for
+  // occurrence still fails this test.
+  it('all four compose call sites (three direct, one via Home) plus the review-tab open/extend site plus the registry provider site receive it — exactly six occurrences', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(5);
+    expect(occurrences.length).toBe(6);
   });
 });
 

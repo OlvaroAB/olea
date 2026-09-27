@@ -1797,6 +1797,13 @@ export default class OleaPlugin extends Plugin {
             ...(this.rankWeights?.readRankWeights
               ? { readRankWeights: this.rankWeights.readRankWeights }
               : {}),
+            // `ol-egov.141.89.6.55`: the same store `home`'s and `session-
+            // builder`'s registry-provider call sites already thread through
+            // (see this file's `citationHashStore` field doc), so the
+            // registry's suspect section reads the SAME pending-
+            // revalidation facts, never a second, independently-stale copy.
+            // Same `exactOptionalPropertyTypes` ternary as those call sites.
+            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
             editPort: createObsidianEditInstrumentPort(this.app),
             // `[D-171]`/`ol-2zfj.43`: the open-source-location hand-off —
             // until this line the registry's "Open source" action logged an
