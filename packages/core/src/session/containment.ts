@@ -64,6 +64,7 @@
  * live edge set through.
  */
 
+import type { RelationWithEndpointKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { QueueCandidate } from '../queue/types.js';
@@ -111,17 +112,26 @@ function nameToKey(concepts: readonly ConceptRecord[]): ReadonlyMap<string, stri
  * candidates (see {@link containerKeysToDrop} below); a `GapRow`-based caller
  * builds the equivalent map itself, the same first-occurrence-wins
  * convention.
+ *
+ * **An edge's own endpoint keys come first (`ol-egov.141.89.4.19`).** Since
+ * `[D-402]` one wording can name one identity per course, so a name join
+ * resolves a split wording to whichever course's concept claimed the name
+ * first. The per-document read (`concept/reconcile.js`) now resolves each
+ * endpoint to the identity of the document the edge came from and carries
+ * its key as `fromKey`/`toKey`, as the corpus stage already does (`ol-l40p`);
+ * `keyOfName` is only the fallback for an edge that carries none, the same
+ * key-first order `concept/related-concept-keys.js` applies.
  */
 export function containerConceptKeysToDrop(
-  edges: readonly ConceptRelation[],
+  edges: readonly RelationWithEndpointKeys[],
   keyOfName: ReadonlyMap<string, string>,
   presentConceptKeys: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const drop = new Set<string>();
   for (const edge of edges) {
     if (edge.type !== 'part-of') continue;
-    const partKey = keyOfName.get(edge.from);
-    const containerKey = keyOfName.get(edge.to);
+    const partKey = edge.fromKey ?? keyOfName.get(edge.from);
+    const containerKey = edge.toKey ?? keyOfName.get(edge.to);
     if (partKey === undefined || containerKey === undefined) continue;
     if (presentConceptKeys.has(partKey) && presentConceptKeys.has(containerKey))
       drop.add(containerKey);

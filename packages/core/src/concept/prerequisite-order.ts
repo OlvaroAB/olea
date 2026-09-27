@@ -49,10 +49,17 @@
  * counted**, never guessed at and never used to mint a concept (R8's
  * reconciliation rule — the concept set is authoritative).
  *
+ * **An edge's own endpoint keys come first (`ol-egov.141.89.4.19`).** The
+ * corpus stage carries `fromKey`/`toKey` on the edges it reconciles
+ * (`ol-l40p`), and since `[D-402]` one wording can name one identity per
+ * course, so the name join alone would order a split wording's identities as
+ * whichever claimed the name. A key the edge carries is used as is, the name
+ * join only when it carries none — `./related-concept-keys.js`'s order.
+ *
  * Pure: no I/O, no clock, no identity minting, no persistence.
  */
 
-import type { ConceptRelation } from './relation.js';
+import type { RelationWithEndpointKeys } from './related-concept-keys.js';
 import type { ConceptRecord } from './types.js';
 
 /** {@link resolvePrerequisiteConceptKeys}'s result: the adjacency map plus the honest miss count. */
@@ -83,7 +90,7 @@ export interface PrerequisiteConceptKeysResolution {
  * same posture `../session/build.js`'s `relations` input already documents.
  */
 export function resolvePrerequisiteConceptKeys(
-  relations: readonly ConceptRelation[],
+  relations: readonly RelationWithEndpointKeys[],
   concepts: readonly ConceptRecord[],
 ): PrerequisiteConceptKeysResolution {
   const keyByName = new Map(concepts.map((concept) => [concept.name, concept.key]));
@@ -92,8 +99,8 @@ export function resolvePrerequisiteConceptKeys(
 
   for (const relation of relations) {
     if (relation.type !== 'prerequisite') continue;
-    const fromKey = keyByName.get(relation.from);
-    const toKey = keyByName.get(relation.to);
+    const fromKey = relation.fromKey ?? keyByName.get(relation.from);
+    const toKey = relation.toKey ?? keyByName.get(relation.to);
     if (fromKey === undefined) unresolvedEndpointCount += 1;
     if (toKey === undefined) unresolvedEndpointCount += 1;
     if (fromKey === undefined || toKey === undefined) continue;

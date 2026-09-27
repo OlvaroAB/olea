@@ -99,6 +99,7 @@ describe('reconcileRelations — the concept set is authoritative', () => {
     expect(serialised).not.toContain('unknown concept name');
     expect(serialised).not.toContain('Osmosis');
     expect(Object.keys(result.dropped).sort()).toEqual([
+      'ambiguous-concept',
       'missing-passage-provenance',
       'not-per-document-eligible',
       'unknown-concept',
