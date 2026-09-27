@@ -83,9 +83,25 @@
  * original identity is preserved until she resolves it): once a record leaves `'proposed'`, this
  * module never rewrites it back — a later walk that still finds the same or different candidates
  * for an already-resolved id never re-litigates it.
+ *
+ * ## `[D-265]` ruling 3's item-validation proposals, sharing this same folder (`ol-egov.141.53.1`)
+ *
+ * F2.23's mismatch trigger (`../../../core/src/concept/revision/item-validation.ts`'s
+ * `checkItemValidation`) produces a `'proposed'` outcome for her to confirm or dismiss — the
+ * SAME "share the existing folder under a reason of their own" arrangement `[D-392]` chose over a
+ * store of its own for repair choices, reused here for the identical reason: a persisted shape
+ * distinct from both existing records (one item, one suspected defect kind, never a losing/kept
+ * pair or a candidate list) but sharing the folder, the read-then-mint idempotent write
+ * discipline, and the `'proposed' | 'confirmed' | 'declined'` status vocabulary. Identity here is
+ * simply `instrumentId`, the same as `[D-392]`'s repair-choice records and for the same reason —
+ * F2.23 flags the item itself, never a pair. `./item-validation-wiring.ts`'s
+ * `createItemValidationProposalReader` is this record's only writer today; **no reader consumes
+ * it yet** — the same honest-gap posture `[D-392]`'s own module doc already states for its
+ * candidates ("no clause defines an affordance for her to confirm or decline a duplication"),
+ * carried through to this third reason value.
  */
 
-import type { VaultPath, VaultSource } from 'olea-core';
+import type { ItemDefectEvidenceKind, VaultPath, VaultSource } from 'olea-core';
 import { hashText, listFolder } from 'olea-core';
 
 /** The vault folder this module owns — dot-prefixed, its own, never inside another store's. */
@@ -275,7 +291,12 @@ export function isRepairChoiceConfirmationRecord(
   return true;
 }
 
-function serialize(record: DuplicationConfirmationRecord | RepairChoiceConfirmationRecord): string {
+function serialize(
+  record:
+    | DuplicationConfirmationRecord
+    | RepairChoiceConfirmationRecord
+    | ItemValidationConfirmationRecord,
+): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
@@ -497,6 +518,187 @@ export async function proposeDuplicationConfirmations(
  * that. Writes only under {@link DUPLICATION_CONFIRMATION_FOLDER}; reads nothing when `entries` is
  * empty.
  */
+/** `[D-265]` ruling 3's own reason value — this store's own name for it, never a clause's verbatim wording. */
+export type ItemValidationConfirmationReason = 'item-validation';
+
+export const ITEM_VALIDATION_CONFIRMATION_REASON: ItemValidationConfirmationReason =
+  'item-validation';
+
+export const ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION = 1;
+
+/**
+ * One suspected item awaiting her confirmation or dismissal (F2.23) —
+ * persisted the same shared folder as {@link DuplicationConfirmationRecord}
+ * and {@link RepairChoiceConfirmationRecord}, under
+ * {@link ITEM_VALIDATION_CONFIRMATION_REASON}. `kind` is always one of the
+ * five defect kinds F2.23 names — never a free-form diagnosis, matching
+ * `ItemValidationProposal.kind`'s own contract in `packages/core/src/
+ * concept/revision/types.ts`.
+ */
+export interface ItemValidationConfirmationRecord {
+  readonly instrumentId: string;
+  readonly kind: ItemDefectEvidenceKind;
+  /** Content-free (D-005): a short structural note from the judge, never her wording. */
+  readonly reason?: string;
+  readonly status: DuplicationConfirmationRecordStatus;
+  readonly reasonKind: ItemValidationConfirmationReason;
+  /** ISO 8601 — when this item was first proposed. Never moved by a later read. */
+  readonly proposedAt: string;
+  readonly confirmedAt?: string;
+  readonly declinedAt?: string;
+  readonly schemaVersion: number;
+}
+
+/** What a caller (`./item-validation-wiring.ts`) hands in — one entry per `'proposed'` `ItemValidationOutcome`. */
+export interface ItemValidationConfirmationEntryInput {
+  readonly instrumentId: string;
+  readonly kind: ItemDefectEvidenceKind;
+  readonly reason?: string;
+  /** Epoch ms — the caller's clock. */
+  readonly proposedAt: number;
+}
+
+export interface StoredItemValidationConfirmationRecord {
+  readonly path: VaultPath;
+  readonly record: ItemValidationConfirmationRecord;
+}
+
+export interface ProposeItemValidationConfirmationsResult {
+  /** The record each entry now corresponds to, in the entries' own order. */
+  readonly records: readonly StoredItemValidationConfirmationRecord[];
+  /** Every path this call wrote — empty when nothing observed had changed. */
+  readonly written: readonly VaultPath[];
+}
+
+/** Mirrors `olea-core`'s `ItemDefectEvidenceKind` literals verbatim (`packages/core/src/concept/revision/types.ts`) — that type has no exported value-level array to derive this from, the same hand-rolled-guard style `citation-store.ts`'s own doc names for this directory. */
+const ITEM_DEFECT_EVIDENCE_KINDS: ReadonlySet<string> = new Set([
+  'key-conflicts-with-source',
+  'stem-satisfied-by-multiple-options',
+  'missing-central-assumption',
+  'corrupted-prompt-or-source',
+  'superseded-material',
+]);
+
+function isItemDefectEvidenceKind(value: unknown): value is ItemDefectEvidenceKind {
+  return typeof value === 'string' && ITEM_DEFECT_EVIDENCE_KINDS.has(value);
+}
+
+/** `[D-265]` ruling 3's reader accepts this reason value; the other two readers are unchanged and still recognise only their own. */
+export function isItemValidationConfirmationRecord(
+  value: unknown,
+): value is ItemValidationConfirmationRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!isNonEmptyString(v.instrumentId)) return false;
+  if (!isItemDefectEvidenceKind(v.kind)) return false;
+  if (v.reason !== undefined && !isNonEmptyString(v.reason)) return false;
+  if (v.status !== 'proposed' && v.status !== 'confirmed' && v.status !== 'declined') return false;
+  if (v.reasonKind !== ITEM_VALIDATION_CONFIRMATION_REASON) return false;
+  if (!isNonEmptyString(v.proposedAt)) return false;
+  if (v.confirmedAt !== undefined && !isNonEmptyString(v.confirmedAt)) return false;
+  if (v.declinedAt !== undefined && !isNonEmptyString(v.declinedAt)) return false;
+  if (typeof v.schemaVersion !== 'number') return false;
+  return true;
+}
+
+/**
+ * Every well-formed item-validation record under the same folder. A record of either other
+ * reason (or anything else unrecognised) is silently excluded — the same "not this reader's
+ * shape" posture {@link listRepairChoiceConfirmationRecords} already takes for a duplication
+ * record; none of the three readers throws on either other's records.
+ */
+export async function listItemValidationConfirmationRecords(
+  vault: VaultSource,
+): Promise<readonly StoredItemValidationConfirmationRecord[]> {
+  const paths = await listFolder(vault, DUPLICATION_CONFIRMATION_FOLDER, { extensions: ['json'] });
+  const out: StoredItemValidationConfirmationRecord[] = [];
+  for (const path of paths) {
+    try {
+      const parsed: unknown = JSON.parse(await vault.read(path));
+      if (isItemValidationConfirmationRecord(parsed)) out.push({ path, record: parsed });
+    } catch {
+      // Corrupt or unreadable: skipped, the same posture as every sibling sidecar.
+    }
+  }
+  return out;
+}
+
+/**
+ * Persists `entries` — one per `'proposed'` `ItemValidationOutcome`
+ * (`./item-validation-wiring.ts`) — against the records already in the folder. Idempotent, keyed
+ * by `instrumentId` alone, the same identity scheme {@link proposeRepairChoiceConfirmations}
+ * uses and for the same reason (see this module's doc's "Identity here is simply
+ * `instrumentId`"). Calling this again for an instrument already on record writes nothing new
+ * unless its still-`'proposed'` fields changed; once a record leaves `'proposed'` (she has
+ * answered — no reader does this yet, see the module doc), it is matched so nothing shadows it,
+ * but never rewritten. Writes only under {@link DUPLICATION_CONFIRMATION_FOLDER}; reads nothing
+ * when `entries` is empty.
+ */
+export async function proposeItemValidationConfirmations(
+  vault: VaultSource,
+  entries: readonly ItemValidationConfirmationEntryInput[],
+): Promise<ProposeItemValidationConfirmationsResult> {
+  if (entries.length === 0) return { records: [], written: [] };
+
+  const existing = await listItemValidationConfirmationRecords(vault);
+  const existingByInstrumentId = new Map(
+    existing.map((stored) => [stored.record.instrumentId, stored]),
+  );
+  // Every path already claimed under the shared folder, whichever reason wrote it — so a new
+  // item-validation record never collides with a duplication or repair-choice record's own
+  // deterministic name.
+  const taken = new Set(
+    await listFolder(vault, DUPLICATION_CONFIRMATION_FOLDER, { extensions: ['json'] }),
+  );
+
+  const records: StoredItemValidationConfirmationRecord[] = [];
+  const written: VaultPath[] = [];
+
+  for (const entry of entries) {
+    const stored = existingByInstrumentId.get(entry.instrumentId);
+
+    if (stored !== undefined) {
+      if (
+        stored.record.schemaVersion !== ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION ||
+        stored.record.status !== 'proposed'
+      ) {
+        records.push(stored);
+        continue;
+      }
+      const refreshed: ItemValidationConfirmationRecord = {
+        ...stored.record,
+        kind: entry.kind,
+        ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+      };
+      if (canonical(refreshed) !== canonical(stored.record)) {
+        await vault.write(stored.path, serialize(refreshed));
+        written.push(stored.path);
+        records.push({ path: stored.path, record: refreshed });
+      } else {
+        records.push(stored);
+      }
+      continue;
+    }
+
+    const record: ItemValidationConfirmationRecord = {
+      instrumentId: entry.instrumentId,
+      kind: entry.kind,
+      ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+      status: 'proposed',
+      reasonKind: ITEM_VALIDATION_CONFIRMATION_REASON,
+      proposedAt: new Date(entry.proposedAt).toISOString(),
+      schemaVersion: ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
+    };
+    const path = await newRecordPath(vault, [entry.instrumentId], taken);
+    taken.add(path);
+    await vault.write(path, serialize(record));
+    written.push(path);
+    records.push({ path, record });
+  }
+
+  return { records, written };
+}
+
 export async function proposeRepairChoiceConfirmations(
   vault: VaultSource,
   entries: readonly RepairChoiceConfirmationEntryInput[],

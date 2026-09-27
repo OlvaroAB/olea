@@ -24,6 +24,7 @@ import type {
   DisputeLogRecord,
   InstrumentStanding,
   InstrumentStandingConcern,
+  ItemValidationOutcome,
   McqRating,
   QueueItemReason,
   RepeatedFailureStandingCheckInput,
@@ -55,6 +56,7 @@ import {
   type ExplainWhyPort,
 } from './explainWhy.js';
 import { previewQaClozeIntervals, previewSingleInterval, type RatingPreview } from './interval.js';
+import type { JustGradedInstrument } from './item-validation-wiring.js';
 import {
   type Clock,
   type EditPort,
@@ -456,6 +458,30 @@ export interface ReviewSessionDeps {
    * write.
    */
   readonly resolutionEvidenceAppend?: ResolutionEvidenceAppendPort;
+  /**
+   * F2.23's mismatch trigger (`[D-265]` ruling 3, `ol-egov.141.53.1`
+   * [INTERV-11]): evaluated after every graded review, for the instrument
+   * that was just rated. Resolves whether today's rating, together with
+   * another same-concept instrument's own outcome today, matches the
+   * clause's same-day/same-claim mismatch precondition and — when it does —
+   * runs `checkItemValidation` and persists any `'proposed'` outcome to the
+   * shared confirmation-queue folder so it is ready for her to confirm or
+   * dismiss once a reader exists (`./duplication-confirmation-store.ts`'s
+   * `proposeItemValidationConfirmations`).
+   *
+   * Optional and absent by default, same "simply cannot check it" posture
+   * every other optional port on this interface already has: an absent
+   * port means this review's mismatch is simply never checked, never
+   * fabricated as a no-trigger verdict. The real composer lives at
+   * `../review/open-session.ts`
+   * (`createItemValidationProposalReader`, `./item-validation-wiring.ts`)
+   * — see that module's own doc for what it does and does not do (no real
+   * judge is wired yet; every warranted check reports `judge-unavailable`
+   * today, honestly, until a Worker task exists for F2.23).
+   */
+  readonly checkItemValidationMismatch?: (
+    justGraded: JustGradedInstrument,
+  ) => Promise<ItemValidationOutcome>;
 }
 
 /**
@@ -1601,6 +1627,23 @@ export class ReviewSession {
         standingOutcome.offer.prerequisiteConceptId,
       );
     }
+
+    // F2.23 (`[D-265]` ruling 3, `ol-egov.141.53.1` [INTERV-11]): a SEPARATE,
+    // independent path into item validation from the one just above — the
+    // same-day/same-claim mismatch, not the repeated-failure standing check.
+    // Evaluated after every graded review, never gated on `standingOutcome`
+    // or on `rating` (an ordinary strong rating can be the HARDER side of a
+    // mismatch a later, easier failure completes — see
+    // `./item-validation-wiring.ts`'s own doc). An absent port never checks,
+    // same "simply cannot check it" posture as every other optional port in
+    // this method.
+    await this.deps.checkItemValidationMismatch?.({
+      instrumentId: stamped.instrument.instrumentId,
+      instrumentType: stamped.instrument.type,
+      conceptIds: stamped.instrument.conceptIds,
+      rating,
+      now,
+    });
 
     // F5.3a / R7's third trigger (`ol-0r92.11`): evaluated after every
     // graded review, for the concept(s) the instrument just rated is

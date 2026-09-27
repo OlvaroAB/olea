@@ -104,7 +104,21 @@ describe('F2.16 lives in olea-core, and the plugin has no second copy', () => {
     // `'again'` is `GradedReviewEvidence.rating`'s required-but-unread
     // placeholder on the `explain-back` branch — see the previous test's
     // comment for why that is not F2.16's decision either.
+    // `item-validation-wiring.ts` joined this list on 2026-09-27
+    // (`ol-egov.141.53.1`, [INTERV-11]): its one `'again'` reads an EXISTING
+    // `Rating` a review already carries and classifies it into F2.23's
+    // `SameDayInstrumentOutcome` ('again' → 'failed', anything else →
+    // 'strong') — the opposite direction from F2.16's decision (a
+    // correctness/confidence signal → a `Rating`). No `correct`/`wasUnsure`
+    // signal is read anywhere in that file (the guard two tests above
+    // already proves this), so this is not a second rating mapping, just a
+    // reader of the one core already produces.
     const naming = reviewModules().filter((file) => RATING_LITERAL.test(codeOf(file)));
-    expect(naming).toEqual(['interval.ts', 'keymap.ts', 'queue-adapter.ts']);
+    expect(naming).toEqual([
+      'interval.ts',
+      'item-validation-wiring.ts',
+      'keymap.ts',
+      'queue-adapter.ts',
+    ]);
   });
 });

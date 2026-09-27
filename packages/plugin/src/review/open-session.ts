@@ -254,6 +254,7 @@ import {
 } from './duplication-confirmation-store.js';
 import type { ExplainWhyPort } from './explainWhy.js';
 import { describeInterval } from './interval.js';
+import { createItemValidationProposalReader } from './item-validation-wiring.js';
 import {
   type Clock,
   createVaultResolutionEvidenceAppendPort,
@@ -1074,6 +1075,27 @@ export async function openReviewSession(
         now,
         relations: input.relations ?? [],
         concepts: input.concepts ?? [],
+      }),
+      // F2.23's mismatch trigger (`[D-265]` ruling 3, `ol-egov.141.53.1`
+      // [INTERV-11]): closes over the SAME `composed.entries` every other
+      // reader in this block reads, plus `input.vault` for the citation
+      // sidecar (`readInstrumentCitation`) — no third log parse, no second
+      // vault walk. Always wired, unconditionally, same "computed HERE, no
+      // caller-omission case" posture as `resolveInstrumentStanding` above:
+      // `judge: null` today (no Worker task exists yet for F2.23 — see
+      // `./item-validation-wiring.ts`'s own doc) makes every warranted check
+      // report `judge-unavailable`, honestly, rather than never being wired
+      // at all.
+      checkItemValidationMismatch: createItemValidationProposalReader({
+        entries: composed.entries,
+        vault: input.vault,
+        // `olea-core`'s `Clock.now()` returns epoch ms; `input.ports.clock`
+        // (`./ports.js`'s own `Clock`) returns a `Date` — the same seam this
+        // package draws everywhere else it hands a plugin-side clock to a
+        // core-side port. Adapted here rather than in `item-validation-
+        // wiring.ts`, which stays agnostic of the plugin's own `Clock` shape.
+        clock: { now: () => input.ports.clock.now().getTime() },
+        judge: null,
       }),
       // M2 resolution evidence: always wired, unconditionally, same posture
       // as `evaluateSchedulingObservationRouting`/`stampOnFirstSight` above —

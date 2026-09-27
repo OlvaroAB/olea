@@ -21,11 +21,17 @@ import {
   DUPLICATION_CONFIRMATION_FOLDER,
   DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
   type DuplicationConfirmationEntryInput,
+  ITEM_VALIDATION_CONFIRMATION_REASON,
+  ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
+  type ItemValidationConfirmationEntryInput,
   isDuplicationConfirmationRecord,
+  isItemValidationConfirmationRecord,
   isRepairChoiceConfirmationRecord,
   listDuplicationConfirmationRecords,
+  listItemValidationConfirmationRecords,
   listRepairChoiceConfirmationRecords,
   proposeDuplicationConfirmations,
+  proposeItemValidationConfirmations,
   proposeRepairChoiceConfirmations,
   REPAIR_CHOICE_CONFIRMATION_REASON,
   REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
@@ -603,5 +609,162 @@ describe('[D-392]: repair-choice proposals share this store, under their own rea
       expect(written.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
     }
     expect(vault.contentOf('Notes/Candidate.md')).toBe('her note\n');
+  });
+});
+
+function itemValidationEntry(
+  instrumentId: string,
+  kind: ItemValidationConfirmationEntryInput['kind'],
+  proposedAt = T0,
+  reason?: string,
+): ItemValidationConfirmationEntryInput {
+  return { instrumentId, kind, proposedAt, ...(reason !== undefined ? { reason } : {}) };
+}
+
+describe('[D-265] ruling 3: item-validation proposals share this store, under their own reason', () => {
+  it('writes one proposed record per suspected item, under the third reason', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'key-conflicts-with-source', T0, 'cited key mismatch'),
+    ]);
+
+    const listed = await listItemValidationConfirmationRecords(vault);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.record).toEqual({
+      instrumentId: 'qa:concept-a:2',
+      kind: 'key-conflicts-with-source',
+      reason: 'cited key mismatch',
+      status: 'proposed',
+      reasonKind: ITEM_VALIDATION_CONFIRMATION_REASON,
+      proposedAt: '2026-08-10T18:00:00.000Z',
+      schemaVersion: ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
+    });
+    expect(listed[0]?.path.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
+  });
+
+  it('an omitted reason is never fabricated — the field is simply absent', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'missing-central-assumption'),
+    ]);
+    const [only] = await listItemValidationConfirmationRecords(vault);
+    expect(only?.record.reason).toBeUndefined();
+  });
+
+  it('the reader accepts the third reason value and still reads the other two records unchanged', async () => {
+    const vault = memoryVault();
+    await proposeDuplicationConfirmations(vault, [
+      entry('Notes/Copy.md', [['mcq-dup-1', 'Notes/Original.md']]),
+    ]);
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [['Notes/Candidate.md', true]]),
+    ]);
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'superseded-material'),
+    ]);
+
+    expect(await listDuplicationConfirmationRecords(vault)).toHaveLength(1);
+    expect(await listRepairChoiceConfirmationRecords(vault)).toHaveLength(1);
+    const items = await listItemValidationConfirmationRecords(vault);
+    expect(items).toHaveLength(1);
+    expect(items[0]?.record.reasonKind).toBe(ITEM_VALIDATION_CONFIRMATION_REASON);
+  });
+
+  it('walking again with the same suspected kind writes nothing new — one proposal per instrument', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'corrupted-prompt-or-source'),
+    ]);
+    const writesBefore = vault.writes.length;
+
+    const result = await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'corrupted-prompt-or-source', T1),
+    ]);
+
+    expect(result.written).toEqual([]);
+    expect(vault.writes.length).toBe(writesBefore);
+    expect(await listItemValidationConfirmationRecords(vault)).toHaveLength(1);
+  });
+
+  it('a walk with a changed suspected kind refreshes the still-proposed record in place', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'stem-satisfied-by-multiple-options'),
+    ]);
+    const [before] = await listItemValidationConfirmationRecords(vault);
+
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'key-conflicts-with-source', T1, 'now this instead'),
+    ]);
+
+    const after = await listItemValidationConfirmationRecords(vault);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.path).toBe(before?.path);
+    expect(after[0]?.record.kind).toBe('key-conflicts-with-source');
+    expect(after[0]?.record.reason).toBe('now this instead');
+    expect(after[0]?.record.proposedAt).toBe('2026-08-10T18:00:00.000Z'); // never moved by a later write.
+  });
+
+  it('her answer stands: a resolved proposal is never rewritten by a later walk', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'key-conflicts-with-source'),
+    ]);
+    const [only] = await listItemValidationConfirmationRecords(vault);
+    if (only === undefined) throw new Error('expected one record');
+    // No affordance writes an answer yet (see this module's doc); a resolution is written here
+    // by hand, in the vocabulary the shape already reserves for it.
+    await vault.write(
+      only.path,
+      `${JSON.stringify({ ...only.record, status: 'declined', declinedAt: '2026-08-11T00:00:00.000Z' }, null, 2)}\n`,
+    );
+
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'superseded-material', T1),
+    ]);
+
+    const after = await listItemValidationConfirmationRecords(vault);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.record.status).toBe('declined');
+    expect(after[0]?.record.kind).toBe('key-conflicts-with-source'); // never re-litigated.
+  });
+
+  it('writes nothing, and reads nothing, when there is no entry', async () => {
+    const vault = memoryVault({ 'Notes/A.md': 'her note\n' });
+    const result = await proposeItemValidationConfirmations(vault, []);
+    expect(result.written).toEqual([]);
+    expect(vault.writes).toEqual([]);
+  });
+
+  it('the validator accepts exactly the shape it writes, and refuses records of the other two reasons', async () => {
+    const vault = memoryVault();
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'key-conflicts-with-source'),
+    ]);
+    const [only] = await listItemValidationConfirmationRecords(vault);
+    if (only === undefined) throw new Error('expected one record');
+    const parsed: unknown = JSON.parse(vault.contentOf(only.path) ?? '');
+    expect(isItemValidationConfirmationRecord(parsed)).toBe(true);
+    expect(isDuplicationConfirmationRecord(parsed)).toBe(false);
+    expect(isRepairChoiceConfirmationRecord(parsed)).toBe(false);
+
+    expect(isItemValidationConfirmationRecord({ ...only.record, kind: 'not-a-real-kind' })).toBe(
+      false,
+    );
+    const { instrumentId: _instrumentId, ...noInstrumentId } = only.record;
+    expect(isItemValidationConfirmationRecord(noInstrumentId)).toBe(false);
+  });
+
+  it('every write lands under its own dot folder — never in a note she authored (INV-6)', async () => {
+    const vault = memoryVault({ 'Notes/A.md': 'her note\n' });
+    await proposeItemValidationConfirmations(vault, [
+      itemValidationEntry('qa:concept-a:2', 'key-conflicts-with-source'),
+    ]);
+
+    expect(vault.writes.length).toBeGreaterThan(0);
+    for (const written of vault.writes) {
+      expect(written.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
+    }
+    expect(vault.contentOf('Notes/A.md')).toBe('her note\n');
   });
 });
