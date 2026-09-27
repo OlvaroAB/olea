@@ -37,7 +37,20 @@
  *    (F7.1: a blank base URL/token is a legitimate, common state per F7.8 —
  *    there is nothing server-side to delete for a device that never
  *    connected).
- * 6. `resetDeviceId` — mints and persists a fresh device identity
+ * 6. `clearContentDerivedSettings` (`ol-egov.141.8.11`, ruled by `[D-393]`) —
+ *    every content-derived key in the plugin's settings file (`data.json`),
+ *    as classified by `data-manifest.ts`: pending work (the ingestion and
+ *    regrading queues), the record stores kept there (grove streaks and read
+ *    completeness, registry overrides, avoidance and scope-growth answers,
+ *    material arrivals, the judge-case capture among them) and the usage
+ *    record, plus any key the manifest does not list. Configuration (the
+ *    Worker connection, term dates, the assessments table path, the heading
+ *    offer toggle) and safety state (the explain-back audit gate) are kept.
+ *    Before this step, only the five cache keys of step 1 were cleared. Runs
+ *    after the vault steps, so a vault step that throws leaves this for the
+ *    retry, and as late as possible, so the window in which a still-running
+ *    writer could put a cleared key back is as short as the run allows.
+ * 7. `resetDeviceId` — mints and persists a fresh device identity
  *    (`ol-1ttf`, ruled by `ol-ppxj.16`: a full delete mints a fresh id;
  *    `purgeCache` alone keeps preserving it). Runs last, after steps 2 to 4
  *    have already used the old id.
@@ -47,11 +60,10 @@
  * reached, deliberately, and so not claimed: her notes and the items she
  * accepted into them, `[D-179]` home notes beside a source (Olea's layer, but
  * outside `.olea/` and a note she may have written in), the export files she
- * saved under `Olea exports/`, and every `data.json` key other than the five
- * cache keys and the device id: settings, the usage log, and the other stores
- * kept there (the grove's ground streaks and read completeness among them).
+ * saved under `Olea exports/`, and the settings `data-manifest.ts` classifies
+ * as configuration or safety state.
  *
- * The server call and the device-id reset run whatever the server answers —
+ * The server call, the settings clear and the device-id reset run whatever the server answers —
  * a full delete should not leave the vault-side purge undone because the
  * network call to the Worker timed out, or vice versa. A vault step that
  * throws (a delete the host refuses) stops the run before the reset, so the
@@ -63,6 +75,7 @@ import type { CalendarDay, VaultPath, VaultSource } from 'olea-core';
 import { resetDeviceId } from '../device/device-id.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { type CachePurgeResult, purgeCache } from './cache-purge.js';
+import { clearContentDerivedSettings, type SettingsClearResult } from './data-manifest.js';
 import {
   discoverOleaLayerPaths,
   isOleaLayerPath,
@@ -101,6 +114,8 @@ export interface FullDeleteResult {
   readonly remainingOleaPaths: readonly VaultPath[];
   /** `{ outcome: 'not-configured' }` when `workerConfig` has no base URL or token — see the module doc. */
   readonly serverConfig: ServerConfigDeleteOutcome | { readonly outcome: 'not-configured' };
+  /** Step 6: the content-derived (and any unlisted) settings keys removed — see `data-manifest.ts`. */
+  readonly settings: SettingsClearResult;
   /** The freshly minted, freshly persisted device id (`ol-1ttf`) — replaces `deps.deviceId` going forward. */
   readonly newDeviceId: string;
 }
@@ -200,6 +215,8 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
     ? await deleteServerConfigRecord(deps.workerConfig, deps.httpRequest)
     : ({ outcome: 'not-configured' } as const);
 
+  const settings = await clearContentDerivedSettings(deps.dataHost);
+
   const newDeviceId = await resetDeviceId(deps.dataHost);
 
   return {
@@ -210,6 +227,7 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
     unremovableOleaFolders,
     remainingOleaPaths,
     serverConfig,
+    settings,
     newDeviceId,
   };
 }

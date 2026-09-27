@@ -13,11 +13,15 @@ export const PRIVACY_SECTION_HEADING = 'Export & delete your data';
 // DELETE_DESCRIPTION below were widened to name every file Olea itself writes in the vault
 // (C6.2a: the whole `.olea/` layer is Olea's own), not only the review and misconception logs
 // this section originally described. Written to be true today, without a voice-charter pass
-// (`docs/Olea_vocabulary_registry.md` §9) yet. Deliberately NOT claimed: which `data.json`
-// settings keys a full delete clears beyond the five cache keys and the device id — that list
-// (grove ground streaks, registry overrides, home avoidance among others) is unchanged by this
-// bead and is an open decision (see this bead's report); nothing below says "everything" about
-// settings, only about the vault-side records and the one server-side connection record.
+// (`docs/Olea_vocabulary_registry.md` §9) yet.
+//
+// `[COPY PASS PENDING — ol-egov.141.8.11]` Class B: `[D-393]` ruled which settings keys a full
+// delete clears (`data-manifest.ts`): every record derived from her content or her use of Olea,
+// pending work included, is now cleared and exported, and configuration and safety state are
+// kept. DELETE_DESCRIPTION gained two clauses so it stays true under the "Delete everything"
+// label: the records kept on this device are removed, and her settings are kept. Nothing else
+// changed; the same voice pass is still owed. EXPORT_DESCRIPTION's "every other record Olea has
+// written for you" already covers the settings-stored records now carried in the export.
 
 export const PRIVACY_SECTION_INTRO =
   'Olea keeps everything it writes about your studying — your review history, your ' +
@@ -42,9 +46,11 @@ export const DELETE_BUTTON_LABEL_CONFIRMING = 'Click again to permanently delete
 
 export const DELETE_DESCRIPTION =
   'Permanently removes your local cache, your review history, your misconception history, ' +
-  "every other record in Olea's own folder in your vault, and your connection record on the " +
-  'server. This cannot be undone. Your notes and any cards you wrote yourself are never ' +
-  'touched — only what Olea itself created.';
+  "every other record in Olea's own folder in your vault, every record Olea keeps about your " +
+  'studying on this device (including work still waiting to run), and your connection record ' +
+  'on the server. This cannot be undone. Your notes and any cards you wrote yourself are never ' +
+  'touched — only what Olea itself created. Your settings are kept: the server address and ' +
+  'token, your term dates and your preferences.';
 
 export const DELETE_DONE_MESSAGE = "Olea's own files, history and cache have been deleted.";
 

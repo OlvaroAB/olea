@@ -81,10 +81,23 @@ describe('F7.4 privacy copy (ol-p6t01)', () => {
     }
   });
 
-  // A full delete clears only the five D-006 cache keys and resets the device id
-  // (full-delete.ts, cache-purge.ts) — which other data.json keys it should clear is an open
-  // decision (this bead's report). The description must not claim more than the code does.
-  it('the delete description never claims every setting or preference is cleared', () => {
-    expect(DELETE_DESCRIPTION.toLowerCase()).not.toMatch(/every setting|all settings|preferences/);
+  // ol-egov.141.8.11 (D-393): a full delete now clears every content-derived settings key and
+  // keeps configuration and safety state (data-manifest.ts). Under a "Delete everything" label,
+  // the description must say both: that the records kept on this device go, and that her
+  // settings stay.
+  it('the delete description says the records kept on this device are removed', () => {
+    expect(DELETE_DESCRIPTION.toLowerCase()).toContain('on this device');
+  });
+
+  it('the delete description says her settings are kept, naming the server address', () => {
+    const description = DELETE_DESCRIPTION.toLowerCase();
+    expect(description).toMatch(/settings are kept/);
+    expect(description).toContain('server address');
+  });
+
+  it('the delete description never claims every setting is cleared', () => {
+    expect(DELETE_DESCRIPTION.toLowerCase()).not.toMatch(
+      /(removes|deletes|clears)[^.]*(every setting|all settings|your settings)/,
+    );
   });
 });

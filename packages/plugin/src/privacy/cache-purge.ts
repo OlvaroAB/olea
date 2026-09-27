@@ -28,8 +28,14 @@
  *   Class B decision rather than folding it silently into "purge cache".
  * - `usageLog` (`usage/log-store.ts`) — a D-005-governed log, not a
  *   derivation: it is a record of past calls, not recomputable from
- *   anything. It is an export target (`export-bundle.ts`), never a purge
- *   target.
+ *   anything. Never a cache-purge target.
+ * - Every other settings key. Which of them a *full* delete clears, and the
+ *   export carries, is `data-manifest.ts`'s to say (`ol-egov.141.8.11`,
+ *   `[D-393]`): the usage log and every other content-derived key are cleared
+ *   there, by `runFullDelete`'s own settings step, not here. The five keys
+ *   below are all classified content-derived in that manifest
+ *   (`data-manifest.spec.ts` pins it), so this purge never clears a key the
+ *   full delete would keep.
  * - `.olea/reviews/` and `.olea/misconceptions/` — durable vault content
  *   per the knowledge model ("not a rebuildable derivation"), handled by
  *   `vault-artifact-delete.ts` under F7.4's separate, stronger "vault

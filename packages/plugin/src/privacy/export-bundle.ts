@@ -45,11 +45,15 @@
  * Nothing here is a delete-target discussion; see
  * `cache-purge.ts`/`vault-artifact-delete.ts` for those.
  *
- * The `usageLog` (D-005 telemetry: task id, prompt version, model id — never
- * content) is deliberately excluded from "logs" here. It is about Olea's own
- * operation cost, not her study evidence, and F7.3's usage view already
- * surfaces it; duplicating it into this bundle would blur what "her data" is
- * meant to mean. The other `data.json` stores are not exported either.
+ * **Settings-stored records** (`settings`, `ol-egov.141.8.11`, ruled by
+ * `[D-393]`) — every key of the plugin's settings file (`data.json`) that
+ * `data-manifest.ts` classifies as content-derived, with its stored value:
+ * pending work, the record stores kept there, and the usage record. The same
+ * list a full delete clears, so what the export carries and what the delete
+ * removes are one list. Never configuration, so never the Worker token
+ * (`[D-393]` condition 3); never safety state, the device id, or a key the
+ * manifest does not list. Before `ol-egov.141.8.11` no settings key was
+ * exported. `null` when the caller passes no `dataHost`.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -68,15 +72,20 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { readContentDerivedSettings } from './data-manifest.js';
 import {
   DEFAULT_LOG_PROBE_DAYS,
   discoverOleaLayerPaths,
   isEventLogPath,
   isOleaLayerPath,
 } from './log-discovery.js';
+import type { ObsidianDataHost } from './types.js';
 
-/** 2 since `ol-egov.141.8.7` added `oleaFiles` and `unreadableOleaPaths`; a version-1 bundle carries neither. */
-export const PRIVACY_EXPORT_BUNDLE_VERSION = 2 as const;
+/**
+ * 3 since `ol-egov.141.8.11` added `settings`; 2 since `ol-egov.141.8.7` added `oleaFiles` and
+ * `unreadableOleaPaths`; a version-1 bundle carries none of them.
+ */
+export const PRIVACY_EXPORT_BUNDLE_VERSION = 3 as const;
 
 /** One file Olea wrote under `.olea/`, as the exact text on disk. */
 export interface PrivacyExportFile {
@@ -95,12 +104,20 @@ export interface PrivacyExportBundle {
   readonly oleaFiles: readonly PrivacyExportFile[];
   /** Files under `.olea/` found but not readable, log files included — so a partial export says it is one. */
   readonly unreadableOleaPaths: readonly VaultPath[];
+  /** Every content-derived settings key present, by key (`data-manifest.ts`); `null` when no `dataHost` was given. */
+  readonly settings: Readonly<Record<string, unknown>> | null;
 }
 
 export interface BuildPrivacyExportBundleDeps {
   readonly vault: VaultSource;
   readonly deviceId: string;
   readonly today: CalendarDay;
+  /**
+   * The plugin's settings file, read for its content-derived keys (`settings`). Optional only so
+   * a caller predating `ol-egov.141.8.11` still compiles; the settings pane must pass it, or the
+   * bundle carries `settings: null` and misses every settings-stored record.
+   */
+  readonly dataHost?: ObsidianDataHost;
   /** Defaults to `DEFAULT_LOG_PROBE_DAYS` (`log-discovery.ts`). */
   readonly probeDays?: number;
   /** Passed through to `enumerateVaultInstruments` unchanged — a caller that needs a non-default Zettelkasten folder or a pinned instrument-id source. */
@@ -160,6 +177,8 @@ export async function buildPrivacyExportBundle(
   }
   const reviewLog = mergeReviewLogRecords(...reviewSources).records;
   const misconceptionLog = mergeMisconceptionEvents(...misconceptionSources).events;
+  const settings =
+    deps.dataHost === undefined ? null : await readContentDerivedSettings(deps.dataHost);
 
   return {
     version: PRIVACY_EXPORT_BUNDLE_VERSION,
@@ -169,5 +188,6 @@ export async function buildPrivacyExportBundle(
     instruments,
     oleaFiles,
     unreadableOleaPaths,
+    settings,
   };
 }
