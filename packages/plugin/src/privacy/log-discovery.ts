@@ -66,6 +66,7 @@ import {
   OUTCOME_CONCEPT_NEAR_MATCH_FOLDER,
   OUTCOME_STORE_FOLDER,
   PAPER_STORE_FOLDER,
+  PROBE_PRESENTATION_STORE_FOLDER,
   RELATION_CACHE_FOLDER,
   REVIEW_LOG_FOLDER,
   reviewLogPath,
@@ -129,6 +130,9 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   { folder: DUPLICATION_CONFIRMATION_FOLDER, role: 'record' },
   { folder: RETROSPECTIVE_NOTES_FOLDER, role: 'record' },
   { folder: MANUAL_ASSESSMENT_STORE_FOLDER, role: 'record' },
+  // `ol-egov.141.8.15`: the probe presentation records (one write-once file per presented probe,
+  // named by instrument id), exported as the text on disk and removed by the full delete.
+  { folder: PROBE_PRESENTATION_STORE_FOLDER, role: 'record' },
   // `[D-395]`: the composition records, an append-only daily-per-device stream that is not an
   // event log of C5.2's (no review or misconception fold reads it), so F7.4 carries it as the
   // exact text on disk and the full delete removes it — `[D-331]` choice 4 (a), kept like the
