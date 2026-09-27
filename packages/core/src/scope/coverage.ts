@@ -208,7 +208,7 @@
  */
 
 import type { MasteryState } from 'olea-contracts';
-import type { ConceptRelation } from '../concept/relation.js';
+import type { RelationWithEndpointKeys } from '../concept/related-concept-keys.js';
 
 /**
  * The five states a concept WITH declared scope can read, before the
@@ -607,14 +607,34 @@ export function isVolunteer(conceptName: string, declaredNames: ReadonlySet<stri
  * Pure and total: no clock, no I/O. A no-op whenever `edges` is empty —
  * which is every caller that has not yet threaded a relation set through
  * (`./grove.ts`'s `relations` field is optional for exactly this reason).
+ *
+ * **`declaredKeys` prefers the edge's own `fromKey`/`toKey` over the name join, falling back to
+ * `declaredNames` only when an edge carries no keys or the caller supplies no `declaredKeys`**
+ * (`ol-egov.141.89.4.20`, `[D-402]`) — the same preference `../session/containment.ts`'s
+ * `containerConceptKeysToDrop` and `../concept/prerequisite-order.ts`'s
+ * `resolvePrerequisiteConceptKeys` already give their own edges. **Omitting `declaredKeys` is a
+ * byte-for-byte no-op**, unchanged from before this parameter existed: `./grove.ts`'s own
+ * `declaredNames` is built from `ConceptCitation.conceptName` alone (`isVolunteer`'s doc, above —
+ * "a citation carries no concept key, only the vocabulary name it matched") and does not thread
+ * a key set through today, so the name join below still decides every real call this module has.
+ * `declaredKeys` exists so a future caller that CAN resolve `declaredNames` to keys — `./grove.ts`
+ * already builds a `conceptsByName` map with `.key` right where it calls this function — may hand
+ * the matching key set over and get the split-aware read: two identities sharing a wording no
+ * longer risk one dropping the other's container across a course boundary. Wiring `./grove.ts`
+ * itself is out of this bead's owned files.
  */
 export function containerNamesToFold(
-  edges: readonly ConceptRelation[],
+  edges: readonly RelationWithEndpointKeys[],
   declaredNames: ReadonlySet<string>,
+  declaredKeys?: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const drop = new Set<string>();
   for (const edge of edges) {
     if (edge.type !== 'part-of') continue;
+    if (declaredKeys !== undefined && edge.fromKey !== undefined && edge.toKey !== undefined) {
+      if (declaredKeys.has(edge.fromKey) && declaredKeys.has(edge.toKey)) drop.add(edge.to);
+      continue;
+    }
     if (declaredNames.has(edge.from) && declaredNames.has(edge.to)) drop.add(edge.to);
   }
   return drop;

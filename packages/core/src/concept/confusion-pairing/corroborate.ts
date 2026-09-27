@@ -79,6 +79,23 @@ function confusionPairKey(a: string, b: string): string {
   return relationKey({ type: 'contrasts-with', from: a, to: b });
 }
 
+/** Same ordering `../relation.js`'s own (unexported) `byCodeUnit` sorts a split entry's endpoint-key pair by — restated locally rather than exported for one call site. */
+function byCodeUnit(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * `entry.key` for a `contrasts-with` entry whose name pair was split into more than one course
+ * identity (`../relation.js`'s `deriveRelationSet`, `[D-402]`) is `baseKey` followed by NUL and
+ * the sorted `fromKey`/`toKey` pair — see that function's doc. Restated here (never re-exported
+ * from `../relation.js` for one call site) so a misconception record whose resolved concepts both
+ * carry a `key` can be matched to the ONE entry it actually evidences instead of the whole,
+ * unsplit name group.
+ */
+function splitPairKey(baseKey: string, aKey: string, bKey: string): string {
+  return `${baseKey}\u0000${[aKey, bKey].sort(byCodeUnit).join('\u0000')}`;
+}
+
 /**
  * Corroborate every `contrasts-with` edge `set` currently serves
  * (`RelationSetEntry.evidence === 'current'`, the same abstention gate
@@ -100,6 +117,22 @@ export function corroborateConfusionPairs(
 ): ConfusionPairingResult {
   const byName = byNameOrAlias(concepts);
   const byKey = byOpaqueKey(concepts);
+
+  const contrastsWithEntries = set.entries.filter(
+    (entry) => entry.evidence === 'current' && entry.edge.type === 'contrasts-with',
+  );
+
+  // `ol-egov.141.89.4.20` (`[D-402]`): a name pair split across course identities folds into
+  // more than one entry sharing the same `baseKey` (`../relation.js`'s `deriveRelationSet`) —
+  // this says, per name pair, how many entries actually share it, so a misconception record is
+  // matched by its own endpoint KEY pair only where disambiguation is actually needed and by the
+  // plain name pair (today's join, unchanged) everywhere else — never the reverse, and never a
+  // split key computed where nothing splits, which would silently stop matching the ordinary case.
+  const baseKeyCounts = new Map<string, number>();
+  for (const entry of contrastsWithEntries) {
+    const baseKey = confusionPairKey(entry.edge.from, entry.edge.to);
+    baseKeyCounts.set(baseKey, (baseKeyCounts.get(baseKey) ?? 0) + 1);
+  }
 
   const recordCountByPairKey = new Map<string, number>();
   const occurrenceCountByPairKey = new Map<string, number>();
@@ -130,17 +163,23 @@ export function corroborateConfusionPairs(
     }
     if (a.name === b.name) continue; // resolved to the same concept — not a pair, not an identity failure either
 
-    const key = confusionPairKey(a.name, b.name);
+    const baseKey = confusionPairKey(a.name, b.name);
+    const aKey = a.key;
+    const bKey = b.key;
+    // Split only when the fold actually split this name pair AND both endpoints resolved to a
+    // concept carrying `[D-088]`'s opaque key — an unkeyed record under a split wording cannot
+    // say which course's edge it evidences and is left to land on `baseKey`, which no split
+    // entry uses, so it is honestly reported as unmatched rather than guessed onto one course.
+    const key =
+      (baseKeyCounts.get(baseKey) ?? 0) > 1 && aKey != null && bKey != null
+        ? splitPairKey(baseKey, aKey, bKey)
+        : baseKey;
     recordCountByPairKey.set(key, (recordCountByPairKey.get(key) ?? 0) + 1);
     occurrenceCountByPairKey.set(
       key,
       (occurrenceCountByPairKey.get(key) ?? 0) + record.occurrenceCount,
     );
   }
-
-  const contrastsWithEntries = set.entries.filter(
-    (entry) => entry.evidence === 'current' && entry.edge.type === 'contrasts-with',
-  );
 
   const matchedPairKeys = new Set<string>();
   const entries: ConfusionPairCorroboration[] = contrastsWithEntries.map((entry) => {

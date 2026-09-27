@@ -406,6 +406,7 @@
 
 import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import { orderByPrerequisite } from '../concept/prerequisite-order.js';
+import type { RelationWithEndpointKeys } from '../concept/related-concept-keys.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { daysBetween } from '../dates.js';
 import type { GapRow } from '../gap/build.js';
@@ -1757,6 +1758,14 @@ function applyContainmentCoPresence(
  * reason `nameToKeyFromRows`'s doc gives for not reusing `session/containment.ts`'s
  * `ConceptRecord[]`-keyed `nameToKey`.
  *
+ * **Keys an endpoint by the edge's own `fromKey`/`toKey` first, falling back to the name join
+ * only when the edge carries neither** (`ol-egov.141.89.4.20`, `[D-402]`) — the identical
+ * preference {@link applyContainmentCoPresence}'s `containerConceptKeysToDrop` call and
+ * `concept/prerequisite-order.ts`'s `resolvePrerequisiteConceptKeys` already give their own
+ * endpoints, so a wording split by course (one name, one identity per course) resolves to the
+ * right course's `conceptKey` here too rather than joining by name and risking the wrong
+ * course's row.
+ *
  * **Direct prerequisites only** (`[D-296]`'s reading, `[D-265]`'s F2.12 ruling read across):
  * `edges` is expected to be `input.relations` verbatim, the composer's one relations input, never a
  * second, wider or transitively-closed set — this function does no traversal of its own, so an
@@ -1770,14 +1779,14 @@ function applyContainmentCoPresence(
  * already does for the same field, and reads through no other path to `concept/relation-cache.ts`.
  */
 function prerequisiteConceptKeysFromEdges(
-  edges: readonly ConceptRelation[],
+  edges: readonly RelationWithEndpointKeys[],
   keyOfName: ReadonlyMap<string, string>,
 ): ReadonlyMap<string, ReadonlySet<string>> {
   const adjacency = new Map<string, Set<string>>();
   for (const edge of edges) {
     if (edge.type !== 'prerequisite') continue;
-    const fromKey = keyOfName.get(edge.from);
-    const toKey = keyOfName.get(edge.to);
+    const fromKey = edge.fromKey ?? keyOfName.get(edge.from);
+    const toKey = edge.toKey ?? keyOfName.get(edge.to);
     if (fromKey === undefined || toKey === undefined) continue;
     if (fromKey === toKey) continue; // a self-prerequisite cannot order anything; defensive
     const existing = adjacency.get(toKey);
