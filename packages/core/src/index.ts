@@ -1756,6 +1756,17 @@ export {
   resolvedDisplayName,
   unpruneConcept,
 } from './registry/overrides.js';
+// `[D-397]` (F2.23 amended, `ol-egov.141.89.6.55`) — the registry's suspect-instrument section:
+// pure derivation only (no UI wiring yet; see `./registry/suspect-section.ts`'s own module doc
+// for the exact blocker — the registry screen's view/provider/copy files are held by a
+// concurrently live lane).
+export type {
+  FlaggedConcernEvidence,
+  RegistrySuspectSection,
+  RegistrySuspectSectionInstrumentEvidence,
+  RegistrySuspectSectionRow,
+} from './registry/suspect-section.js';
+export { deriveRegistrySuspectSection } from './registry/suspect-section.js';
 export type {
   BuildRegistryModelInput,
   RegistryConceptEntry,
