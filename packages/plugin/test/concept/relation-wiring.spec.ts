@@ -14,10 +14,12 @@ import type {
   ConceptRelation,
   ConceptsRead,
   EdgeDispositionKind,
+  NoteAnchor,
   TopicAnchor,
 } from 'olea-core';
 import {
   appendEdgeDisposition,
+  computeConceptRevision,
   conceptKeyRecordPath,
   FolderSource,
   listRelationCacheRecords,
@@ -33,6 +35,10 @@ import {
   syncRelationCacheAndDerive,
 } from '../../src/concept/relation-wiring.js';
 import type { ConceptAndRelationPass } from '../../src/concept/wiring.js';
+import type {
+  MaterialityHashStore,
+  MaterialityRecord,
+} from '../../src/ingestion/materiality/types.js';
 
 const introducingPassages = {
   from: { sourcePath: 'A.md', location: { page: 1 } },
@@ -40,7 +46,13 @@ const introducingPassages = {
 };
 
 function corpusEdge(
-  overrides: Partial<ConceptRelation & { fromKey?: string; toKey?: string }> = {},
+  overrides: Partial<
+    ConceptRelation & {
+      fromKey?: string;
+      toKey?: string;
+      endpointRevisions?: { readonly from: string; readonly to: string };
+    }
+  > = {},
 ) {
   return {
     type: 'prerequisite' as const,
@@ -52,6 +64,52 @@ function corpusEdge(
     fromKey: 'key-a',
     toKey: 'key-b',
     ...overrides,
+  };
+}
+
+/** A minimal `MaterialityRecord`, revision carried entirely in `hashes.rawHash` (the field `readRelationSetWithCache`'s freshness lookup reads). */
+function materialityRecord(path: string, rawHash: string): MaterialityRecord {
+  return {
+    path,
+    hashes: { rawHash, canonicalHash: rawHash },
+    canonicalLength: 0,
+    lastChangedAt: 0,
+    lastVerdictAt: null,
+  };
+}
+
+/** A `NoteAnchor` naming `notePath` — enough for `introducingPathsOfAnchor` to resolve one path. */
+function noteAnchor(notePath: string): NoteAnchor {
+  return { kind: 'note', noteUid: null, notePath };
+}
+
+async function seedConceptKey(vault: FolderSource, key: string, anchor: NoteAnchor): Promise<void> {
+  const record: ConceptKeyRecord = {
+    key,
+    tier: 1,
+    anchor,
+    aliases: [],
+    mintedAt: '2026-09-26T00:00:00.000Z',
+    schemaVersion: 1,
+  };
+  await vault.write(conceptKeyRecordPath(record.key), `${JSON.stringify(record, null, 2)}\n`);
+}
+
+/** A fake `MaterialityHashStore` over a plain map, counting `load` calls per path so the freshness-gate tests can assert the lookup batches (one load per distinct path, never once per concept that shares it). */
+function fakeHashStore(revisions: Readonly<Record<string, string>>): MaterialityHashStore & {
+  readonly loadCallsByPath: Map<string, number>;
+} {
+  const loadCallsByPath = new Map<string, number>();
+  return {
+    loadCallsByPath,
+    async load(path: string) {
+      loadCallsByPath.set(path, (loadCallsByPath.get(path) ?? 0) + 1);
+      const rawHash = revisions[path];
+      return rawHash === undefined ? null : materialityRecord(path, rawHash);
+    },
+    async save() {
+      throw new Error('fakeHashStore.save is not used by these tests');
+    },
   };
 }
 
@@ -177,6 +235,103 @@ describe('readRelationSetWithCache', () => {
     const { write, relations } = await syncRelationCacheAndDerive(vault, passWith([corpusEdge()]));
     expect(write).toEqual({ written: 1, droppedNoKey: 0, droppedUnemittable: 0 });
     expect(servedRelations(relations)).toHaveLength(1);
+  });
+});
+
+describe('readRelationSetWithCache — Default-4 freshness gate, given a hashStore (ol-egov.141.89.4.15)', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  // The judgment-time digest a real write-side stamp would have recorded — computed the SAME way
+  // (`computeConceptRevision` over the endpoint's one introducing path) the read side computes it
+  // now, per that function's own "MUST agree bit-for-bit" doc. A bare raw hash like `'rev-1'` is
+  // NOT what a real attestation carries; using it directly here would test nothing.
+  const digestFor = (path: string, rawHash: string): string =>
+    computeConceptRevision([path], () => rawHash) as string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-relation-wiring-freshness-'));
+    vault = new FolderSource(root);
+    await seedConceptKey(vault, 'key-a', noteAnchor('A.md'));
+    await seedConceptKey(vault, 'key-b', noteAnchor('B.md'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('serves a cached edge when both endpoints read current against the real lookup', async () => {
+    await persistRelationCacheFromPass(
+      vault,
+      passWith([
+        corpusEdge({
+          endpointRevisions: { from: digestFor('A.md', 'rev-1'), to: digestFor('B.md', 'rev-1') },
+        }),
+      ]),
+    );
+    const hashStore = fakeHashStore({ 'A.md': 'rev-1', 'B.md': 'rev-1' });
+
+    const served = servedRelations(
+      await readRelationSetWithCache(vault, passWith(undefined), { hashStore }),
+    );
+    expect(served).toHaveLength(1);
+    expect(served[0]?.from).toBe('Concept A');
+  });
+
+  it('withholds a cached edge once one endpoint has moved, even though the other is unchanged', async () => {
+    await persistRelationCacheFromPass(
+      vault,
+      passWith([
+        corpusEdge({
+          endpointRevisions: { from: digestFor('A.md', 'rev-1'), to: digestFor('B.md', 'rev-1') },
+        }),
+      ]),
+    );
+    // key-a's source (A.md) is still on rev-1; key-b's (B.md) has moved to rev-2.
+    const hashStore = fakeHashStore({ 'A.md': 'rev-1', 'B.md': 'rev-2' });
+
+    const served = servedRelations(
+      await readRelationSetWithCache(vault, passWith(undefined), { hashStore }),
+    );
+    expect(served).toHaveLength(0);
+  });
+
+  it('an attestation with no recorded endpointRevisions (the write side not wired yet) reads unverified and is withheld', async () => {
+    await persistRelationCacheFromPass(vault, passWith([corpusEdge()])); // no endpointRevisions
+    const hashStore = fakeHashStore({ 'A.md': 'rev-1', 'B.md': 'rev-1' });
+
+    const served = servedRelations(
+      await readRelationSetWithCache(vault, passWith(undefined), { hashStore }),
+    );
+    expect(served).toHaveLength(0);
+  });
+
+  it('omitting hashStore falls back to the unconditional pre-Default-4 read, not a from-scratch unverified one', async () => {
+    // Same fixture as the immediately preceding test — no endpointRevisions recorded — but with
+    // no hashStore at all this time: the fallback must still serve the edge (module doc on
+    // `RelationSetReadOptions.hashStore`), proving the fallback is live, not merely documented.
+    await persistRelationCacheFromPass(vault, passWith([corpusEdge()]));
+
+    const served = servedRelations(await readRelationSetWithCache(vault, passWith(undefined)));
+    expect(served).toHaveLength(1);
+  });
+
+  it('batch-loads each introducing path from the hash store once, never once per concept that shares it', async () => {
+    // Both endpoints' anchors name distinct paths already (A.md, B.md); this asserts the lookup
+    // never reloads the SAME path twice across the two endpoints of one proposition.
+    await persistRelationCacheFromPass(
+      vault,
+      passWith([
+        corpusEdge({
+          endpointRevisions: { from: digestFor('A.md', 'rev-1'), to: digestFor('B.md', 'rev-1') },
+        }),
+      ]),
+    );
+    const hashStore = fakeHashStore({ 'A.md': 'rev-1', 'B.md': 'rev-1' });
+
+    await readRelationSetWithCache(vault, passWith(undefined), { hashStore });
+    expect(hashStore.loadCallsByPath.get('A.md')).toBe(1);
+    expect(hashStore.loadCallsByPath.get('B.md')).toBe(1);
   });
 });
 

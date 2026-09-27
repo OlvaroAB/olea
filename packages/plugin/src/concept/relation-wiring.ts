@@ -33,6 +33,15 @@
  *    reaches `deriveRelationSet` at all, so every one of that function's existing consumers stays
  *    correct with no change to their own code.
  *
+ *    **Default-4 freshness gate (`ol-egov.141.89.4.15`, rel.md §3).** Given a `hashStore`
+ *    (`RelationSetReadOptions`), the persisted half of the fold is read through `olea-core`'s
+ *    `relationCacheRecordsWithFreshness` against a REAL per-endpoint revision lookup —
+ *    `listConceptKeyRecords` bridged to a batch-loaded per-path revision map read from that store
+ *    — so a cached edge whose endpoint has since changed stops being served, never deleted, and is
+ *    re-verdicted at the next corpus-batch pass. Without a `hashStore`, the fold stays the
+ *    unconditional `relationCacheRecordsAsConceptRelations` read this splice replaces — see that
+ *    option's own doc for exactly why omitting it is a safe fallback rather than a regression.
+ *
  * **Reachability (`[D-072]`, plan §2.7 clause 5) — LANDED.** Both functions are
  * production-reachable: the one-hop splice this doc names above was applied to `./wiring.ts`'s
  * `readConceptsAndRelations` (`[D-119]`, `ol-2zfj.14`/`.122`/`.124`), itself called from
@@ -55,14 +64,18 @@
  */
 
 import {
+  buildEndpointRevisionLookup,
   type ConceptKeyCanonicalIndex,
   type ConceptRelation,
   currentDisposition,
   deriveRelationSet,
   type EdgeDispositionLog,
+  type EndpointRevisionLookup,
   excludeDisposedRelationCacheRecords,
   excludedPropositionKeys,
+  introducingPathsOfAnchor,
   isExcludedAtReadTime,
+  listConceptKeyRecords,
   listEdgeDispositionLogs,
   listRelationCacheRecords,
   type RelationCacheRecord,
@@ -70,10 +83,12 @@ import {
   type RelationSet,
   readConceptKeyCanonicalIndex,
   relationCacheRecordsAsConceptRelations,
+  relationCacheRecordsWithFreshness,
   type VaultPath,
   type VaultSource,
   writeRelationCache,
 } from 'olea-core';
+import type { MaterialityHashStore } from '../ingestion/materiality/types.js';
 import type { ConceptAndRelationPass } from './wiring.js';
 
 export interface RelationCacheSyncOptions {
@@ -94,12 +109,63 @@ export interface RelationCacheSyncOptions {
    * it itself (`olea-core`'s `writeRelationCache` default).
    */
   readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+  /** Forwarded to `readRelationSetWithCache`'s own read — see that option's doc below. */
+  readonly hashStore?: MaterialityHashStore;
 }
 
 /** The read options `readRelationSetWithCache` takes (`[D-378]`, module doc). */
 export interface RelationSetReadOptions {
   /** The canonical-key index this tick already read. Omitted, it is read once, here. */
   readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+  /**
+   * `ol-egov.141.89.4.15`: the plugin's materiality-tracking store, read to build the REAL
+   * per-path current-revision reader `olea-core`'s `buildEndpointRevisionLookup` needs for
+   * Default 4's per-endpoint freshness gate (`docs/dev/intelligence-build/rel.md` §3,
+   * `../ingestion/materiality/types.js`'s `MaterialityHashStore`). Each introducing path named by
+   * any `.olea/concepts/` record's anchor (`introducingPathsOfAnchor`) is loaded from this store
+   * ONCE (batch, not once per concept that shares it) and read back as `MaterialityRecord.hashes
+   * .rawHash` — the same free per-file content hash row 1.4 already computes, so a path with no
+   * real content change never reads as revised.
+   *
+   * **Omitted, this read falls back to `relationCacheRecordsAsConceptRelations`** — every cached
+   * edge served unconditionally, the pre-Default-4 behaviour this splice replaces — rather than
+   * gating through a lookup that would read every endpoint `'unverified'` (no store to ask) and so
+   * silently stop serving every cached edge. That fallback is deliberate, not a shortcut: no
+   * production caller threads a real store yet (`./wiring.ts`'s `readConceptsAndRelations` calls
+   * this with no `hashStore`, `./wiring.ts` is outside this bead's `owns`), and the endpoint-
+   * revision STAMP this gate compares against is also not yet written in production
+   * (`ol-egov.141.89.4.14`'s own close notes: `./wiring.ts`'s `runCorpusRelationBatchIfDue` calls
+   * `runCorpusRelationBatch` with no `endpointRevisionStamping`). Landing this splice ungated by
+   * that fallback, before both the store and the stamp are threaded through, would make every
+   * cached relation read `'unverified'` and stop being served — a real regression to what she
+   * sees, not the "stale ones stop serving" this bead's brief describes. See this bead's close
+   * notes for the exact composition points still open.
+   */
+  readonly hashStore?: MaterialityHashStore;
+}
+
+/**
+ * The real per-path revision map Default 4's freshness gate compares against — every path any
+ * `.olea/concepts/` anchor names, batch-loaded from `hashStore` ONCE each (module doc on
+ * `RelationSetReadOptions.hashStore`), then wrapped as an `EndpointRevisionLookup` via
+ * `olea-core`'s `buildEndpointRevisionLookup`. A path the store has never observed reads
+ * `undefined` — `buildEndpointRevisionLookup`'s own "unverified, never current by default."
+ */
+async function buildHashStoreRevisionLookup(
+  vault: VaultSource,
+  hashStore: MaterialityHashStore,
+): Promise<EndpointRevisionLookup> {
+  const keyRecords = (await listConceptKeyRecords(vault)).map((entry) => entry.record);
+  const paths = new Set<VaultPath>();
+  for (const record of keyRecords) {
+    for (const path of introducingPathsOfAnchor(record.anchor)) paths.add(path);
+  }
+  const revisionByPath = new Map<VaultPath, string>();
+  for (const path of paths) {
+    const stored = await hashStore.load(path);
+    if (stored !== null) revisionByPath.set(path, stored.hashes.rawHash);
+  }
+  return buildEndpointRevisionLookup(keyRecords, (path) => revisionByPath.get(path));
 }
 
 /**
@@ -141,10 +207,19 @@ export async function readRelationSetWithCache(
   const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
   const dispositionLogs = (await listEdgeDispositionLogs(vault)).map((entry) => entry.log);
   const excluded = excludedPropositionKeys(dispositionLogs, canonicalKeys);
-  const cached = await relationCacheRecordsAsConceptRelations(vault, {
-    excludePropositionKeys: excluded,
-    canonicalKeys,
-  });
+  const cached =
+    options.hashStore === undefined
+      ? await relationCacheRecordsAsConceptRelations(vault, {
+          excludePropositionKeys: excluded,
+          canonicalKeys,
+        })
+      : (
+          await relationCacheRecordsWithFreshness(
+            vault,
+            await buildHashStoreRevisionLookup(vault, options.hashStore),
+            { excludePropositionKeys: excluded, canonicalKeys },
+          )
+        ).servable;
   const fresh: readonly ConceptRelation[] = pass.corpus.relations ?? [];
   return deriveRelationSet(pass.read.relations, fresh, cached);
 }
@@ -163,7 +238,10 @@ export async function syncRelationCacheAndDerive(
 ): Promise<{ readonly write: RelationCacheWriteResult | null; readonly relations: RelationSet }> {
   const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
   const write = await persistRelationCacheFromPass(vault, pass, { ...options, canonicalKeys });
-  const relations = await readRelationSetWithCache(vault, pass, { canonicalKeys });
+  const relations = await readRelationSetWithCache(vault, pass, {
+    canonicalKeys,
+    ...(options.hashStore !== undefined ? { hashStore: options.hashStore } : {}),
+  });
   return { write, relations };
 }
 

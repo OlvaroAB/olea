@@ -145,6 +145,18 @@ export {
   evaluatePropositionFreshness,
   evaluatePropositionFreshnessWithLookup,
 } from './concept/corpus-relations/eligibility.js';
+// The concept-keyed `EndpointRevisionLookup` builder (`ol-egov.141.89.4.13`) — bridges
+// `ConceptKeyRecord.anchor` to a caller-supplied per-path revision reader. `computeConceptRevision`
+// is exported alongside it so a caller building or testing a judgment-time STAMP (the write side,
+// `ol-egov.141.89.4.14`) computes the identical digest this builder's lookup reads back —
+// `PathRevisionLookup` is intentionally not re-exported as a type alias: every current consumer
+// writes its own plain `(path) => string | undefined` inline, matching the function signature's
+// own inferred type.
+export {
+  buildEndpointRevisionLookup,
+  computeConceptRevision,
+  introducingPathsOfAnchor,
+} from './concept/corpus-relations/endpoint-revision-lookup.js';
 export type {
   PrerequisiteCycleReport,
   PrerequisiteEdge,
