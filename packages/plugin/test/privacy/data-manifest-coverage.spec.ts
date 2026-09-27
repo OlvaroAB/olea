@@ -44,7 +44,8 @@ const PASS_THROUGH_FILES = new Set([
   'src/main.ts',
   'src/retrieval/serializing-data-host.ts',
   'src/privacy/cache-purge.ts',
-  'src/privacy/data-manifest.ts',
+  // `src/privacy/data-manifest.ts` is scanned like any store since `[D-406]`: it declares and
+  // writes the full-delete pause marker, so that key is held to the same checks.
   // `ol-egov.141.8.12`: the full delete's write seal on the plugin's one settings host.
   'src/privacy/settings-section.ts',
 ]);

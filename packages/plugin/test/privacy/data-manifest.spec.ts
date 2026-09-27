@@ -17,6 +17,7 @@ import { CACHE_DATA_JSON_KEYS } from '../../src/privacy/cache-purge.js';
 import {
   CONTENT_DERIVED_SETTINGS_KEYS,
   clearContentDerivedSettings,
+  FULL_DELETE_PAUSE_STORAGE_KEY,
   KEPT_SETTINGS_KEYS,
   SETTINGS_KEY_MANIFEST,
   settingsKeyEntry,
@@ -121,9 +122,11 @@ describe('runFullDelete over the settings file (ol-egov.141.8.11, D-393)', () =>
     const result = await fullDelete(dataHost, vault);
     const after = dataHost.blob as Record<string, unknown>;
 
+    // `[D-406]`: plus the pause marker, which holds the next start until she chooses Start.
     expect(Object.keys(after).sort()).toEqual(
-      [...KEPT_SETTINGS_KEYS, DEVICE_ID_STORAGE_KEY].sort(),
+      [...KEPT_SETTINGS_KEYS, DEVICE_ID_STORAGE_KEY, FULL_DELETE_PAUSE_STORAGE_KEY].sort(),
     );
+    expect(after[FULL_DELETE_PAUSE_STORAGE_KEY]).toBe(true);
     expect(after[DEVICE_ID_STORAGE_KEY]).toBe(result.newDeviceId);
     expect(result.newDeviceId).not.toBe(DEVICE_ID);
     expect(vault.paths()).toEqual(['01 Courses/SYN101/Lecture 1.md']);

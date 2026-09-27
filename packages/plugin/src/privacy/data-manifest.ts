@@ -10,7 +10,7 @@
  * - `content-derived` — anything derived from her notes, her studying or her use of Olea: record
  *   stores, caches, answers she gave to Olea's questions, pending work (the ingestion and
  *   regrading queues), usage records. **Cleared by a full delete, and carried in the export.**
- *   Everything that is not one of the three classes below belongs here — `[D-393]`: a full delete
+ *   Everything that is not one of the classes below belongs here — `[D-393]`: a full delete
  *   "keeps only configuration she would otherwise have to re-enter ... and safety state".
  * - `configuration` — a value she entered in settings and would otherwise have to enter again
  *   (the Worker connection, term dates, the assessments table path, a toggle). **Kept by a full
@@ -23,6 +23,12 @@
  *   mints a fresh one (`resetDeviceId`, ruled by `ol-ppxj.16`), after the vault steps have used the
  *   old one to find this device's own log files. Not exported: it is a random identifier, not her
  *   data, and the exported review history already names the device each entry came from.
+ * - `delete-pause` — the pause a full delete leaves behind (`[D-406]`): after the reload that
+ *   follows the delete, Olea reads, builds and sends nothing until she chooses to start again.
+ *   **Written by a full delete (before its first step), lifted only by her Start; never
+ *   exported.** It is Olea's own state about the delete, not her data. `FULL_DELETE_PAUSE_STORAGE_KEY`
+ *   below is its key, and this file holds its one reader and its two writers, so the manifest and
+ *   the marker cannot disagree about which key it is.
  *
  * **The guard.** `test/privacy/data-manifest-coverage.spec.ts` parses every plugin source file
  * that reads or writes the settings file and fails when a key constant there has no entry here,
@@ -46,8 +52,14 @@
  * and the unload flush runs only when the instance was not sealed. The same seal closes the
  * instance's writes under `.olea/` (`olea-layer-write-seal.ts`, `ol-egov.141.8.14`). When no reload
  * follows (the delete threw, or the host has no reload API) the seal lifts and the instance writes
- * as before; that case stays open beside `[D-406]`. This file still names only which keys a delete
- * clears and an export carries; it holds no writer.
+ * as before.
+ *
+ * **What the next plugin instance does** (`[D-406]`): the delete sets the `delete-pause` marker
+ * first, so the reload that follows it starts paused: `holdIfPausedAfterFullDelete`
+ * (`full-delete.ts`) reads this file's marker at the top of `onload`, seals the new instance's
+ * writers for good, shows the one-line explanation and offers Start, and nothing else of `onload`
+ * runs. Apart from that marker, this file names only which keys a delete clears and an export
+ * carries; it holds no other writer.
  */
 
 import { CORPUS_RELATION_STATE_STORAGE_KEY } from '../concept/corpusRelationStateStore.js';
@@ -85,7 +97,21 @@ import { USAGE_LOG_STORAGE_KEY } from '../usage/log-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../worker/config-store.js';
 import type { ObsidianDataHost } from './types.js';
 
-export type SettingsKeyClass = 'content-derived' | 'configuration' | 'safety' | 'device-identity';
+export type SettingsKeyClass =
+  | 'content-derived'
+  | 'configuration'
+  | 'safety'
+  | 'device-identity'
+  | 'delete-pause';
+
+/**
+ * `[D-406]`: present after a full delete until she chooses Start (module doc, `delete-pause`).
+ * Declared here, beside the manifest that classifies it, rather than in `full-delete.ts`: the
+ * manifest is built from key constants at load time, and `full-delete.ts` already imports this
+ * file, so a constant there would be read before it is initialised whenever `full-delete.ts` loads
+ * first.
+ */
+export const FULL_DELETE_PAUSE_STORAGE_KEY = 'pausedAfterFullDelete';
 
 export interface SettingsKeyEntry {
   readonly key: string;
@@ -246,6 +272,12 @@ export const SETTINGS_KEY_MANIFEST: readonly SettingsKeyEntry[] = [
     classification: 'device-identity',
     holds: "this install's random device id",
   },
+  // The pause after a full delete (`[D-406]`).
+  {
+    key: FULL_DELETE_PAUSE_STORAGE_KEY,
+    classification: 'delete-pause',
+    holds: 'that a full delete ran and she has not yet chosen Start',
+  },
 ];
 
 const BY_KEY: ReadonlyMap<string, SettingsKeyEntry> = new Map(
@@ -331,4 +363,45 @@ export async function readContentDerivedSettings(
     if (key in blob) out[key] = blob[key];
   }
   return out;
+}
+
+/** Writes `mutate`'s result atomically when the host offers it, else a plain load-then-save. */
+async function rewriteSettings(
+  dataHost: ObsidianDataHost,
+  mutate: (blob: Record<string, unknown>) => Record<string, unknown>,
+): Promise<void> {
+  if (hasReadModifyWrite(dataHost)) {
+    await dataHost.readModifyWrite((current) => mutate(asBlob(current)));
+  } else {
+    await dataHost.saveData(mutate(asBlob(await dataHost.loadData())));
+  }
+}
+
+/**
+ * `[D-406]`: records that a full delete ran, so the next plugin instance starts paused. Every
+ * other key is left as it was. `runFullDelete` calls it before its first step.
+ */
+export async function markPausedAfterFullDelete(dataHost: ObsidianDataHost): Promise<void> {
+  await rewriteSettings(dataHost, (blob) => ({ ...blob, [FULL_DELETE_PAUSE_STORAGE_KEY]: true }));
+}
+
+/**
+ * `[D-406]`: whether the settings file carries the pause. Any stored value counts, not only
+ * `true`: a marker this build cannot read still means a full delete ran, and the pause fails
+ * closed. Reads the settings file once and nothing else.
+ */
+export async function isPausedAfterFullDelete(dataHost: {
+  loadData(): Promise<unknown>;
+}): Promise<boolean> {
+  const blob = asBlob(await dataHost.loadData());
+  return FULL_DELETE_PAUSE_STORAGE_KEY in blob && blob[FULL_DELETE_PAUSE_STORAGE_KEY] !== undefined;
+}
+
+/** `[D-406]`: her Start. Removes the pause and nothing else. */
+export async function liftFullDeletePause(dataHost: ObsidianDataHost): Promise<void> {
+  await rewriteSettings(dataHost, (blob) => {
+    const next = { ...blob };
+    delete next[FULL_DELETE_PAUSE_STORAGE_KEY];
+    return next;
+  });
 }

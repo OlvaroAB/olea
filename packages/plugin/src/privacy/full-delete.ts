@@ -6,6 +6,13 @@
  *
  * Orchestrates these steps, each independently testable and callable:
  *
+ * 0. `markPausedAfterFullDelete` (`[D-406]`) — records in the settings file that a full delete
+ *    ran, before anything is removed. The reload that follows the delete (and every later start,
+ *    until she chooses Start) then holds at `holdIfPausedAfterFullDelete` below: nothing is read,
+ *    built or sent. Written first so that a delete interrupted at any later step (a vault step
+ *    that throws, Obsidian closed mid-run) also starts paused: nothing is rebuilt from a
+ *    half-deleted state until she acts. The marker is classified `delete-pause`, so step 6 keeps
+ *    it and the export never carries it.
  * 1. `purgeCache` — the five `data.json` cache keys + `.olea/drafts/`.
  * 2. `deleteVaultArtifacts` — every file under `.olea/` except the draft
  *    cache: the two event logs and every record store (`ol-egov.141.8.7`;
@@ -63,6 +70,15 @@
  * saved under `Olea exports/`, and the settings `data-manifest.ts` classifies
  * as configuration or safety state.
  *
+ * **After the delete: paused until she acts (`[D-406]`).** `holdIfPausedAfterFullDelete` is the
+ * one check `main.ts`'s `onload` makes before anything else. While the marker is present it reads
+ * nothing but the settings file, seals the new instance's writers for good (the same
+ * `FullDeleteWriteSeal` the delete uses, so not even the unload-time gate-stage flush can write a
+ * store back), shows `FULL_DELETE_PAUSE_LINE` and offers `FULL_DELETE_START_LABEL`; `onload` then
+ * returns, so no view, tick, index, queue or Worker call is set up. Choosing Start lifts the
+ * marker through the sealed instance's unsealed host and reloads the plugin, and the fresh
+ * instance starts as usual.
+ *
  * The server call, the settings clear and the device-id reset run whatever the server answers —
  * a full delete should not leave the vault-side purge undone because the
  * network call to the Worker timed out, or vice versa. A vault step that
@@ -75,7 +91,14 @@ import type { CalendarDay, VaultPath, VaultSource } from 'olea-core';
 import { resetDeviceId } from '../device/device-id.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { type CachePurgeResult, purgeCache } from './cache-purge.js';
-import { clearContentDerivedSettings, type SettingsClearResult } from './data-manifest.js';
+import { FULL_DELETE_PAUSE_LINE, FULL_DELETE_START_LABEL } from './copy.js';
+import {
+  clearContentDerivedSettings,
+  isPausedAfterFullDelete,
+  liftFullDeletePause,
+  markPausedAfterFullDelete,
+  type SettingsClearResult,
+} from './data-manifest.js';
 import {
   discoverOleaLayerPaths,
   isOleaLayerPath,
@@ -86,6 +109,7 @@ import {
   deleteServerConfigRecord,
   type ServerConfigDeleteOutcome,
 } from './server-config-delete.js';
+import type { SealedFullDeleteHost } from './settings-section.js';
 import type { DeleteHttpRequestFn, ObsidianDataHost } from './types.js';
 import {
   deleteRemainingOleaLayer,
@@ -185,6 +209,9 @@ async function removeEmptiedOleaFolders(
 }
 
 export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDeleteResult> {
+  // Step 0 (`[D-406]`): before anything is removed — see the module doc.
+  await markPausedAfterFullDelete(deps.dataHost);
+
   const cache = await purgeCache({
     dataHost: deps.dataHost,
     vault: deps.vault,
@@ -230,4 +257,49 @@ export async function runFullDelete(deps: RunFullDeleteDeps): Promise<FullDelete
     settings,
     newDeviceId,
   };
+}
+
+/**
+ * What `holdIfPausedAfterFullDelete` needs from the plugin instance (`[D-406]`). `main.ts`
+ * supplies it at the top of `onload`; each member is one Obsidian call there, so this module stays
+ * free of `obsidian` and testable under Vitest.
+ */
+export interface FullDeletePauseHost {
+  /** The settings file, read once to find the marker. The only read a paused start makes. */
+  loadData(): Promise<unknown>;
+  /** Seals every writer of this instance, in the settings file and under `.olea/` (`FullDeleteWriteSeal`). */
+  sealForFullDelete(): Promise<SealedFullDeleteHost>;
+  /** Shows her the one-line explanation. */
+  explain(line: string): void;
+  /** Offers her one deliberate action under `label`; choosing it runs `start`. */
+  offerStart(label: string, start: () => Promise<void>): void;
+  /** Reloads the plugin once the pause is lifted (`reloadPluginAfterFullDelete`). */
+  reload(): Promise<void>;
+}
+
+/**
+ * `[D-406]`: the check at the top of `onload`. Resolves `false`, having done nothing but read the
+ * settings file, when no full delete is waiting for her Start; `onload` then runs as usual.
+ * Resolves `true` when it is: the instance is sealed for good, the explanation is shown and Start
+ * is offered, and `onload` must return at once (module doc). A failure to read the settings file
+ * or to seal is thrown, not swallowed: an `onload` that throws builds nothing either.
+ */
+export async function holdIfPausedAfterFullDelete(host: FullDeletePauseHost): Promise<boolean> {
+  if (!(await isPausedAfterFullDelete(host))) return false;
+  // Never released: this instance only ever explains and offers Start, and a sealed instance that
+  // unloads skips the gate-stage flush (`FullDeleteWriteSeal.retire`).
+  const sealed = await host.sealForFullDelete();
+  host.explain(FULL_DELETE_PAUSE_LINE);
+  let starting = false;
+  host.offerStart(FULL_DELETE_START_LABEL, async () => {
+    if (starting) return;
+    starting = true;
+    try {
+      await liftFullDeletePause(sealed.dataHost);
+      await host.reload();
+    } finally {
+      starting = false;
+    }
+  });
+  return true;
 }
