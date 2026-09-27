@@ -567,7 +567,30 @@ function parseArgs(argv) {
 // implementation landed (`packages/core/src/misconception/embedder.ts`), so the finding is
 // resolved and the ratchet requires the entry's deletion. The port's remaining caller gap is
 // register-row content (escape-hatch terms, bead `ol-4053`), not a finding.
-const KNOWN_FINDINGS = [];
+//
+// `AssessSupportPort` added 2026-09-26 (`ol-egov.141.89.46`, from `ol-egov.179`'s original
+// disclosure): the seam is deliberately staged for a later candidate-vs-incumbent measurement
+// (`ol-3ux7.88`/[JEV-5], `review-response.md` §9.4) and has no production caller — its own doc
+// comment in `groundedContext.ts` says so plainly, and `ol-egov.141.89.20`'s close reason ("each
+// chain's wire bead adopts its adapter") names the mechanism rather than a specific bead. That
+// specific bead is `ol-egov.141.89.1.5` ([ILB-EVD-5], OPEN as of this entry), whose own
+// description already names `AssessSupportPort`'s wiring as one of its deliverables and whose
+// `owns` already lists the files a real caller would touch (`groundedContext.ts`,
+// `draft-quiz-cards.ts`). Verified with `bd show ol-egov.141.89.1.5` against `../olea-service`
+// before adding this entry. Wiring it now (rather than waiting for that bead) would change
+// production grounding-refusal behaviour, which is Class C and out of this entry's scope.
+const KNOWN_FINDINGS = [
+  {
+    port: 'AssessSupportPort',
+    tasks: ['ol-egov.141.89.20'],
+    followUp: 'ol-egov.141.89.1.5',
+    reason:
+      'a deliberately-staged measurement seam (candidate-vs-incumbent grounding-judge swap, ' +
+      '[JEV-5]) with no production caller yet; its owning task closed by design with the seam ' +
+      "unwired, and wiring it is the evidence chain's own benchmark-and-wire stage, not a " +
+      'standalone caller anyone else should compose ahead of it',
+  },
+];
 
 /** Validates `followUp` format on whichever findings list is active (the hardcoded default, or
  * a `--known-findings` test override) — unconditionally, before any register/scan work happens.
