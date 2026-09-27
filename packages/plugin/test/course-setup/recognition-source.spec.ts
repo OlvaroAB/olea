@@ -12,7 +12,12 @@
  * name below is invented for this suite.
  */
 
-import { appendReviewLogRecord, type CalendarDay, calendarDayFromLocalDate } from 'olea-core';
+import {
+  addManualAssessmentEntry,
+  appendReviewLogRecord,
+  type CalendarDay,
+  calendarDayFromLocalDate,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import { readCourseSetupRecognitions } from '../../src/course-setup/recognition-source.js';
@@ -178,5 +183,153 @@ describe('readCourseSetupRecognitions', () => {
     });
 
     expect(recognitions).toEqual([]);
+  });
+});
+
+/**
+ * `[D-387]` / `[D-411]` (`ol-v7r5.66`): the proposal-time seam takes each
+ * earlier course's cutoff the first time and records it in Olea's own layer;
+ * the dated line is read from that record alone. Assessments here are manual
+ * entries (blank Base path), invented for this suite.
+ */
+describe('readCourseSetupRecognitions: the cutoff record ([D-387], [D-411])', () => {
+  const CUTOFF_FOLDER = '.olea/course-cutoffs/';
+
+  async function vaultWithEvidence() {
+    const vault = twoCourseVault();
+    const extracted = await extractConceptsFromVault(vault, {});
+    const record = extracted.find((r) => r.name === 'Shared concept');
+    if (record === undefined) throw new Error('expected the shared concept to be extracted');
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-05-01T09:00:00-04:00',
+        instrumentId: `qa:${record.key}:1`,
+        instrumentType: 'qa',
+        conceptIds: [record.key],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 4000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'evt-1' },
+    );
+    return vault;
+  }
+
+  function cutoffFiles(vault: { readonly writes: readonly string[] }) {
+    return [...new Set(vault.writes.filter((path) => path.startsWith(CUTOFF_FOLDER)))];
+  }
+
+  it('a course with a passed assessment and no leaving gesture gets a provisional dated line, recorded once', async () => {
+    const vault = await vaultWithEvidence();
+    await addManualAssessmentEntry(
+      vault,
+      { course: 'TESTCA1', type: 'exam', due: '2026-06-12' },
+      { generateId: () => 'a1', now: () => '2026-04-01' },
+    );
+
+    const [rec] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+      assignmentsBasePath: '',
+    });
+
+    expect(rec?.state).toBe('sprout');
+    expect(rec?.historical).toHaveLength(1);
+    expect(rec?.historical[0]).toMatchObject({
+      course: 'TESTCA1',
+      cutoffDay: '2026-06-12',
+      source: 'provisional-last-passed-assessment',
+      provisional: true,
+      state: 'sprout',
+    });
+    const files = cutoffFiles(vault);
+    expect(files).toEqual([`${CUTOFF_FOLDER}${TODAY}.${DEVICE}.jsonl`]);
+    const written = vault.contentOf(files[0] ?? '') ?? '';
+    expect(written.trim().split('\n')).toHaveLength(1);
+    // No leaving reason, completion or archive can be recorded: the record has no such field.
+    expect(written).not.toMatch(/reason|finish|complet|archiv/i);
+  });
+
+  it('an edit to the assessment date after the cutoff was first taken does not move the dated line', async () => {
+    const vault = await vaultWithEvidence();
+    const { path } = await addManualAssessmentEntry(
+      vault,
+      { course: 'TESTCA1', type: 'exam', due: '2026-06-12' },
+      { generateId: () => 'a1', now: () => '2026-04-01' },
+    );
+    await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+      assignmentsBasePath: '',
+    });
+    const firstFiles = cutoffFiles(vault);
+    const firstContent = vault.contentOf(firstFiles[0] ?? '');
+
+    // She moves the assessment's date, and the course comes up again days later.
+    const moved = JSON.parse(vault.contentOf(path) ?? '{}');
+    await vault.write(path, `${JSON.stringify({ ...moved, due: '2026-08-20' }, null, 2)}\n`);
+    const later: CalendarDay = '2026-10-05';
+    const [rec] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: later,
+      assignmentsBasePath: '',
+    });
+
+    expect(rec?.historical[0]?.cutoffDay).toBe('2026-06-12');
+    expect(cutoffFiles(vault)).toEqual(firstFiles);
+    expect(vault.contentOf(firstFiles[0] ?? '')).toBe(firstContent);
+  });
+
+  it('with neither a leaving gesture nor a passed assessment, no dated line and nothing written', async () => {
+    const vault = await vaultWithEvidence();
+    await addManualAssessmentEntry(
+      vault,
+      { course: 'TESTCA1', type: 'exam', due: '2026-12-01' },
+      { generateId: () => 'a1', now: () => '2026-04-01' },
+    );
+
+    const [rec] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+      assignmentsBasePath: '',
+    });
+
+    expect(rec?.state).toBe('sprout');
+    expect(rec?.historical).toEqual([]);
+    expect(cutoffFiles(vault)).toEqual([]);
+  });
+
+  it('records no cutoff when the caller names no assignments Base, or the configured Base could not be read', async () => {
+    for (const assignmentsBasePath of [undefined, 'Missing/Assignments.base']) {
+      const vault = await vaultWithEvidence();
+      await addManualAssessmentEntry(
+        vault,
+        { course: 'TESTCA1', type: 'exam', due: '2026-06-12' },
+        { generateId: () => 'a1', now: () => '2026-04-01' },
+      );
+
+      const [rec] = await readCourseSetupRecognitions('TESTCB2', {
+        vault,
+        deviceId: DEVICE,
+        today: TODAY,
+        ...(assignmentsBasePath !== undefined ? { assignmentsBasePath } : {}),
+      });
+
+      expect(rec?.state).toBe('sprout');
+      expect(rec?.historical).toEqual([]);
+      expect(cutoffFiles(vault)).toEqual([]);
+    }
   });
 });

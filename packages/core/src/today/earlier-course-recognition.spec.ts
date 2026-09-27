@@ -6,7 +6,17 @@
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptCourses } from '../insights/types.js';
-import { buildEarlierCourseRecognitions } from './earlier-course-recognition.js';
+import { attainmentArithmeticVersion } from '../mastery/attainment.js';
+import {
+  buildCourseCutoffRecord,
+  type CourseCutoffRecord,
+  parseCourseCutoffRecord,
+  serializeCourseCutoffRecord,
+} from './course-cutoff-record.js';
+import {
+  buildEarlierCourseRecognitions,
+  recognitionArithmeticVersion,
+} from './earlier-course-recognition.js';
 
 function review(
   conceptId: string,
@@ -220,5 +230,224 @@ describe('buildEarlierCourseRecognitions', () => {
     // pass one itself), so a rejected verdict never reached the fold and the
     // stage shown here stayed `tree`.
     expect(withRejection[0]?.state).not.toBe('tree');
+  });
+});
+
+/**
+ * `[D-387]` / `[D-411]` (`ol-v7r5.66`): the dated line at a preserved cutoff,
+ * kept apart from the current reading. The cutoff record is the only source of
+ * the day and the rules; nothing here reads a calendar.
+ */
+describe('[D-387] the dated line at a preserved cutoff, apart from the current reading', () => {
+  const concepts: readonly ConceptCourses[] = [{ conceptId: 'c1', courses: ['NEW1', 'OLD1'] }];
+  const beforeCutoff = [
+    review('c1', '2026-05-01', 'e1'),
+    review('c1', '2026-05-04', 'e2'),
+    review('c1', '2026-05-08', 'e3'),
+  ];
+
+  function cutoff(overrides: Partial<CourseCutoffRecord> = {}): CourseCutoffRecord {
+    return {
+      ...buildCourseCutoffRecord({
+        courseId: 'OLD1',
+        cutoff: { cutoffDay: '2026-06-12', source: 'provisional-last-passed-assessment' },
+        arithmeticVersion: recognitionArithmeticVersion(),
+        conceptIds: ['c1'],
+      }),
+      ...overrides,
+    };
+  }
+
+  it('returns the stage at the cutoff as its own line beside the current stage, never merged', () => {
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      cutoffRecords: [cutoff()],
+    });
+    expect(rec?.state).toBe('sapling');
+    expect(rec?.historical).toEqual([
+      {
+        course: 'OLD1',
+        cutoffDay: '2026-06-12',
+        source: 'provisional-last-passed-assessment',
+        provisional: true,
+        state: 'sapling',
+        arithmeticVersion: recognitionArithmeticVersion(),
+        historicalAwardRuleVersion: cutoff().historicalAwardRuleVersion,
+      },
+    ]);
+  });
+
+  it('later learning moves the current line only', () => {
+    const early = [review('c1', '2026-05-01', 'e1')];
+    const later = [
+      review('c1', '2026-07-01', 'e4'),
+      review('c1', '2026-07-05', 'e5'),
+      review('c1', '2026-07-09', 'e6'),
+    ];
+    const at = (entries: readonly ReviewLogEntry[]) =>
+      buildEarlierCourseRecognitions({
+        newCourse: 'NEW1',
+        entries,
+        concepts,
+        cutoffRecords: [cutoff()],
+      })[0];
+
+    const before = at(early);
+    const after = at([...early, ...later]);
+    expect(before?.state).toBe('sprout');
+    expect(after?.state).toBe('sapling');
+    expect(before?.historical[0]?.state).toBe('sprout');
+    expect(after?.historical).toEqual(before?.historical);
+  });
+
+  it('an entry on the cutoff day itself counts; the day after does not (local day of the timestamp)', () => {
+    const entries = [
+      review('c1', '2026-06-01', 'e1'),
+      review('c1', '2026-06-06', 'e2'),
+      { ...review('c1', '2026-06-12', 'e3'), timestamp: '2026-06-12T23:30:00-04:00' },
+      { ...review('c1', '2026-06-13', 'e4'), timestamp: '2026-06-13T00:30:00+10:00' },
+    ];
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries,
+      concepts,
+      cutoffRecords: [cutoff()],
+    });
+    expect(rec?.historical[0]?.state).toBe('sapling');
+  });
+
+  it('a later arithmetic or rule version change does not move the dated line', () => {
+    // Recorded under the default sapling rule, where quiz answers on three
+    // days reach sapling; the current reading now runs under unaided recall,
+    // where they count toward sprout only.
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      options: { saplingRule: 'unaided-recall' },
+      cutoffRecords: [cutoff()],
+    });
+    expect(rec?.state).toBe('sprout');
+    expect(rec?.historical[0]?.state).toBe('sapling');
+    expect(rec?.historical[0]?.arithmeticVersion).toBe(
+      attainmentArithmeticVersion({ saplingRule: 'any-scored-success', withheldEvidence: 'count' }),
+    );
+  });
+
+  it('reads validity as known by the cutoff: a rejection logged afterwards lowers the current line only', () => {
+    // The top stage is the one instrument validity moves (`[D-281]` item 4).
+    const qualifyingExplainBack: ReviewLogRecord = {
+      ...review('c1', '2026-05-10', 'eb-1'),
+      instrumentId: 'eb:c1:1',
+      instrumentType: 'explain-back',
+      rating: null,
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    };
+    const rejectedLater = {
+      schemaVersion: 6,
+      kind: 'verdict',
+      eventId: 'verdict-1',
+      timestamp: '2026-08-01T09:30:00+00:00',
+      instrumentId: 'eb:c1:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c1'],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+    const entries = [...beforeCutoff, qualifyingExplainBack];
+    const [held] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries,
+      concepts,
+      cutoffRecords: [cutoff()],
+    });
+    expect(held?.state).toBe('tree');
+    expect(held?.historical[0]?.state).toBe('tree');
+
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [...entries, rejectedLater],
+      concepts,
+      cutoffRecords: [cutoff()],
+    });
+    expect(rec?.state).not.toBe('tree');
+    expect(rec?.historical[0]?.state).toBe('tree');
+  });
+
+  it('a leaving-gesture cutoff is not provisional', () => {
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      cutoffRecords: [cutoff({ source: 'leaving-gesture' })],
+    });
+    expect(rec?.historical[0]?.provisional).toBe(false);
+  });
+
+  it('with no cutoff record, no dated line: the current reading stands alone', () => {
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+    });
+    expect(rec?.state).toBe('sapling');
+    expect(rec?.historical).toEqual([]);
+  });
+
+  it('a record that does not cover the concept, or is for another course, draws no dated line', () => {
+    const [uncovered] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      cutoffRecords: [cutoff({ conceptIds: ['c9'] })],
+    });
+    expect(uncovered?.historical).toEqual([]);
+    const [elsewhere] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      cutoffRecords: [cutoff({ courseId: 'OLD9' })],
+    });
+    expect(elsewhere?.historical).toEqual([]);
+  });
+
+  it("a record naming a rule this build does not implement draws no dated line, never one refolded under today's rule", () => {
+    for (const record of [
+      cutoff({ historicalAwardRuleVersion: 'cutoff-asof-99' }),
+      cutoff({ arithmeticVersion: 'att-fold-99;sapling=any-scored-success;withheld=count' }),
+      cutoff({ arithmeticVersion: 'att-fold-1;sapling=a-rule-not-yet-built' }),
+    ]) {
+      const [rec] = buildEarlierCourseRecognitions({
+        newCourse: 'NEW1',
+        entries: beforeCutoff,
+        concepts,
+        cutoffRecords: [record],
+      });
+      expect(rec?.state).toBe('sapling');
+      expect(rec?.historical).toEqual([]);
+    }
+  });
+
+  it('the first record per course is read, whatever a later one says', () => {
+    const later = parseCourseCutoffRecord(
+      JSON.parse(serializeCourseCutoffRecord(cutoff({ cutoffDay: '2026-05-02' }))),
+    ) as CourseCutoffRecord;
+    const [rec] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: beforeCutoff,
+      concepts,
+      cutoffRecords: [cutoff(), later],
+    });
+    expect(rec?.historical).toHaveLength(1);
+    expect(rec?.historical[0]?.cutoffDay).toBe('2026-06-12');
   });
 });

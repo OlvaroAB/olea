@@ -32,11 +32,32 @@
  * repeating the four words. Vitality's own ratified site is `mastery/
  * vitality.ts`'s `VITALITY_DISPLAY` (`ol-egov.141.89.9.45`); this module reads
  * that export rather than holding a second copy of the three words.
+ *
+ * ## The dated line (`[D-387]`, `[D-411]`): a second line, never merged
+ *
+ * `RecognitionClaimCopy.historical` carries one line per earlier course with a
+ * preserved cutoff: the growth stage as it stood at that cutoff, with the
+ * cutoff's date, apart from `stage`/`vitality` (the current reading). It names
+ * a stage only, never a vitality word (knowledge model R3 forbids dating one),
+ * and a provisional cutoff's line says provisional and never says the course
+ * was finished, completed or left (`[D-387]` condition 2).
+ *
+ * **Its wording is a PLACEHOLDER awaiting the copy pass**
+ * ({@link HISTORICAL_LINE_WORDING_IS_PLACEHOLDER}). The vocabulary registry
+ * has no words for this line yet, and `[D-283]`'s worded claim conflicts on
+ * two points (`ol-v7r5.66`'s notes): "where you left" overclaims under a
+ * provisional cutoff, and "were holding" dates a vitality word. The
+ * placeholder borrows only the contract's own phrase ("what she had shown",
+ * F8.7 as amended by `[D-387]`) and the stage labels.
  */
 
 import type { MasteryState } from 'olea-contracts';
 import type { EarlierCourseEvidence, EarlierCourseRecognition, Vitality } from 'olea-core';
 import { MASTERY_DISPLAY, VITALITY_DISPLAY } from 'olea-core';
+// `[D-387]`/`[D-411]` (`ol-v7r5.66`): the dated line's type, imported by module path rather than
+// the `olea-core` barrel, which other lanes are landing exports into this round (the stance
+// `privacy/log-discovery.ts` takes for the composition log).
+import type { EarlierCourseCutoffSnapshot } from '../../../core/src/today/earlier-course-recognition.js';
 
 /** Sits above the claim block wherever course setup renders one. States the fact, asks nothing. */
 export const RECOGNITION_CLAIM_HEADING = 'Already met';
@@ -86,6 +107,52 @@ export function vitalityLabel(vitality: Vitality | null): string | null {
   return vitality === null ? null : VITALITY_DISPLAY[vitality].label;
 }
 
+/**
+ * **Placeholder wording for the copy pass** (module doc). True until the
+ * copy pass ratifies the dated line's words against the vocabulary registry;
+ * the copy pass flips it with the new strings.
+ */
+export const HISTORICAL_LINE_WORDING_IS_PLACEHOLDER = true;
+
+/** `12 Aug 2026` for a `YYYY-MM-DD` day, read as that calendar day wherever she is; `null` when it is not one. */
+export function cutoffDayLabel(day: string): string | null {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(day)) return null;
+  const parsed = new Date(`${day}T00:00:00.000Z`);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return parsed.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+    timeZone: 'UTC',
+  });
+}
+
+/**
+ * The dated line's text (PLACEHOLDER, module doc): the stage she had shown by
+ * the cutoff day, and for a provisional cutoff, that the day is provisional
+ * and read from the last assessment date. A stage label only, never a vitality
+ * word; never "left", "finished" or "completed". `null` when the day cannot be
+ * read, so no line is drawn rather than an undated one.
+ */
+export function historicalLineText(
+  snapshot: Pick<EarlierCourseCutoffSnapshot, 'cutoffDay' | 'provisional' | 'state'>,
+): string | null {
+  const date = cutoffDayLabel(snapshot.cutoffDay);
+  if (date === null) return null;
+  const when = snapshot.provisional
+    ? `Shown by ${date} (provisional: the last assessment date)`
+    : `Shown by ${date}`;
+  return `${when}: ${stageLabel(snapshot.state)}`;
+}
+
+/** One dated line: the course kept apart from the text, as `earlierCourses` is (module doc, INV-3). */
+export interface HistoricalLineCopy {
+  /** Real vault data, rendered by `view.ts`, never compiled into a string here. */
+  readonly course: string;
+  readonly text: string;
+  readonly provisional: boolean;
+}
+
 /** One recognition, reduced to exactly what F8.7 says the claim shows. */
 export interface RecognitionClaimCopy {
   readonly conceptId: string;
@@ -95,6 +162,8 @@ export interface RecognitionClaimCopy {
   /** `null` when no vitality reading was supplied — see `vitalityLabel`. */
   readonly vitality: string | null;
   readonly evidence: string;
+  /** The dated lines, apart from `stage`/`vitality` and never merged into them; empty when no earlier course has a preserved cutoff. */
+  readonly historical: readonly HistoricalLineCopy[];
 }
 
 export function buildRecognitionClaimCopy(
@@ -106,6 +175,12 @@ export function buildRecognitionClaimCopy(
     stage: stageLabel(recognition.state),
     vitality: vitalityLabel(recognition.vitality?.value ?? null),
     evidence: evidenceLine(recognition.evidence),
+    historical: recognition.historical.flatMap((snapshot) => {
+      const text = historicalLineText(snapshot);
+      return text === null
+        ? []
+        : [{ course: snapshot.course, text, provisional: snapshot.provisional }];
+    }),
   };
 }
 
@@ -129,5 +204,9 @@ export function allRecognitionClaimStrings(): readonly string[] {
     evidenceLine({ reviewCount: 0, explainedBack: true, lastCorrectAt: null }),
     ...(['seed', 'sprout', 'sapling', 'tree'] as const).map((state) => stageLabel(state)),
     ...(['holding', 'tending', 'early'] as const).map((v) => vitalityLabel(v) ?? ''),
+    ...(['seed', 'sprout', 'sapling', 'tree'] as const).flatMap((state) => [
+      historicalLineText({ cutoffDay: '2026-06-12', provisional: true, state }) ?? '',
+      historicalLineText({ cutoffDay: '2026-06-12', provisional: false, state }) ?? '',
+    ]),
   ];
 }

@@ -97,6 +97,37 @@
  * courses exactly as unrelated as they were. `canonicalKeys` (`[D-378]`)
  * resolves a superseded duplicate key to its identity first, as every other
  * same-as reader does.
+ *
+ * ## Two readings, kept apart: the dated line and the current one (`[D-387]`, `[D-411]`)
+ *
+ * `[D-387]` (ruled 2026-09-27) keeps both: the historical attainment at an
+ * earlier course's cutoff (`[D-283]`'s dated snapshot, never refreshed) and
+ * the current reading (`[D-274]`'s earned stage with live vitality), **never
+ * merged into one value**. `state`, `vitality` and `evidence` below are the
+ * current reading, exactly as before. `historical` is the dated line, one
+ * entry per earlier course whose preserved cutoff record
+ * (`./course-cutoff-record.ts`) covers the concept, and it is computed from
+ * the record alone plus the log:
+ *
+ * - **the cutoff day comes from the record**, never from her calendar now, so
+ *   an edit to an assessment date after the cutoff was first taken cannot move
+ *   it;
+ * - **the fold runs under the recorded rules**: the recorded arithmetic
+ *   version's sapling rule, not the caller's, and only when this build
+ *   implements the recorded fold version and historical-award rule version.
+ *   A record naming a rule this build does not implement yields no dated line
+ *   for that course, never one refolded under a later rule (`[D-387]`
+ *   condition 3: a later change of rule cannot silently revise it);
+ * - **the evidence is the log up to and including the cutoff day, with
+ *   validity as known from that same prefix** (`HISTORICAL_AWARD_RULE_VERSION`),
+ *   so later learning, and a defect proven later, move the current line only.
+ *
+ * A course with no record has no dated line and none is fabricated (condition
+ * 5); the current reading stands alone. A provisional record's line is marked
+ * provisional (`provisional`), and nothing here reads it as a leaving
+ * (condition 2). This module reads records; it never takes or writes one —
+ * the plugin's `course-setup/recognition-source.ts` does, through
+ * `./course-cutoff-log.ts`.
  */
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
@@ -104,9 +135,27 @@ import type { ConceptKeyCanonicalIndex } from '../concept/key-store.js';
 import type { SameAsLinkRecord } from '../concept/same-as.js';
 import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
 import type { ConceptCourses } from '../insights/types.js';
-import { computeConceptMastery, type MasteryRollupOptions } from '../mastery/rollup.js';
+import {
+  ATTAINMENT_FOLD_VERSION,
+  attainmentArithmeticVersion,
+  DEFAULT_WITHHELD_EVIDENCE_POLICY,
+} from '../mastery/attainment.js';
+import {
+  computeConceptMastery,
+  DEFAULT_SAPLING_RULE,
+  type MasteryRollupOptions,
+} from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { VitalityReading } from '../mastery/vitality.js';
+import { type CalendarDay, calendarDayOfTimestamp } from './calendar-day.js';
+import {
+  type CourseCutoffRecord,
+  type CourseCutoffSource,
+  firstCourseCutoffByCourse,
+  HISTORICAL_AWARD_RULE_VERSION,
+  isProvisionalCutoffSource,
+  parseRecordedStageArithmetic,
+} from './course-cutoff-record.js';
 
 /**
  * What F8.7 says the claim must show: "the earlier course, when it was
@@ -126,6 +175,25 @@ export interface EarlierCourseEvidence {
   readonly lastCorrectAt: string | null;
 }
 
+/**
+ * The dated line for one earlier course (`[D-387]`): the growth stage as it
+ * stood at that course's preserved cutoff. Attainment only — never a vitality
+ * value, which knowledge model R3 forbids dating.
+ */
+export interface EarlierCourseCutoffSnapshot {
+  readonly course: string;
+  /** From the cutoff record, never from her calendar now. */
+  readonly cutoffDay: CalendarDay;
+  readonly source: CourseCutoffSource;
+  /** True unless the cutoff is her leaving gesture: the line says provisional and never claims the course is finished or left. */
+  readonly provisional: boolean;
+  /** The stage folded from the log up to `cutoffDay`, with validity as then known, under the recorded rules. */
+  readonly state: MasteryState;
+  /** The recorded versions the fold ran under, carried so the line can always say which arithmetic produced it. */
+  readonly arithmeticVersion: string;
+  readonly historicalAwardRuleVersion: string;
+}
+
 /** One concept recognised as carrying history from a course other than the one being set up. */
 export interface EarlierCourseRecognition {
   readonly conceptId: string;
@@ -142,6 +210,13 @@ export interface EarlierCourseRecognition {
   /** `null` when the caller supplied no vitality reading — an honest "not read", never a fabricated default. */
   readonly vitality: VitalityReading | null;
   readonly evidence: EarlierCourseEvidence;
+  /**
+   * The dated line, apart from the current reading above and never merged
+   * into it: one entry per earlier course (sorted by course) whose preserved
+   * cutoff record covers this concept and whose recorded rules this build
+   * implements. Empty when there is none — no dated line, none fabricated.
+   */
+  readonly historical: readonly EarlierCourseCutoffSnapshot[];
 }
 
 export interface EarlierCourseRecognitionInput {
@@ -175,6 +250,31 @@ export interface EarlierCourseRecognitionInput {
   readonly sameAsLinks?: readonly SameAsLinkRecord[];
   /** The key store's canonical-key index (`[D-378]`), read with `sameAsLinks`. Optional. */
   readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+  /**
+   * The preserved course cutoff records (`./course-cutoff-log.ts`'s
+   * `readCourseCutoffLog`, or `recordCourseCutoffs`' result), in file order;
+   * the first per course is the one read. Omitted, no recognition has a dated
+   * line.
+   */
+  readonly cutoffRecords?: readonly CourseCutoffRecord[];
+}
+
+/**
+ * The arithmetic version this module's stage fold runs under for `options`:
+ * `../mastery/attainment.ts`'s one version string, with the sapling rule the
+ * fold reads and the withheld-evidence default (the stage keeps withheld
+ * evidence under every option). The version a cutoff taken now records, so
+ * the dated line can later be folded under exactly this arithmetic.
+ */
+export function recognitionArithmeticVersion(
+  options: MasteryRollupOptions = {},
+  schedulerVersion?: string,
+): string {
+  return attainmentArithmeticVersion({
+    saplingRule: options.saplingRule ?? DEFAULT_SAPLING_RULE,
+    withheldEvidence: DEFAULT_WITHHELD_EVIDENCE_POLICY,
+    schedulerVersion,
+  });
 }
 
 /**
@@ -251,6 +351,34 @@ function entriesByIdentity(
 }
 
 /**
+ * The stage as it stood at `record`'s cutoff (module doc), or `null` when the
+ * record names a rule this build does not implement. `entries` is already
+ * read under the confirmed same-as links.
+ */
+function stageAtCutoff(
+  entries: readonly ReviewLogEntry[],
+  identity: string,
+  record: CourseCutoffRecord,
+  options: MasteryRollupOptions | undefined,
+): MasteryState | null {
+  if (record.historicalAwardRuleVersion !== HISTORICAL_AWARD_RULE_VERSION) return null;
+  const recorded = parseRecordedStageArithmetic(record.arithmeticVersion);
+  if (recorded === null || recorded.foldVersion !== ATTAINMENT_FOLD_VERSION) return null;
+  const prefix = entries.filter((entry) => {
+    const timestamp: unknown = (entry as { readonly timestamp?: unknown }).timestamp;
+    if (typeof timestamp !== 'string') return false;
+    const day = calendarDayOfTimestamp(timestamp);
+    return day !== null && day <= record.cutoffDay;
+  });
+  const invalidInstrumentIds = [...projectInstrumentValidity(prefix).provenInvalid.keys()];
+  return computeConceptMastery(prefix, identity, {
+    ...options,
+    saplingRule: recorded.saplingRule,
+    invalidInstrumentIds,
+  }).state;
+}
+
+/**
  * Pure. Reads no clock beyond what `options`/`vitality` already carry, writes
  * nothing, and computes nothing `../mastery/` does not already compute.
  *
@@ -279,6 +407,13 @@ export function buildEarlierCourseRecognitions(
   // this screen shows, the same as it already drops from every other reader.
   const invalidInstrumentIds = [...projectInstrumentValidity(entries).provenInvalid.keys()];
   const resolvedOptions: MasteryRollupOptions = { ...options, invalidInstrumentIds };
+  // `[D-387]`/`[D-411]`: one record per course, and each record's covered
+  // concept ids read under the same identity redirect as everything else.
+  const cutoffByCourse = firstCourseCutoffByCourse(input.cutoffRecords ?? []);
+  const coveredByCourse = new Map<string, ReadonlySet<string>>();
+  for (const [course, record] of cutoffByCourse) {
+    coveredByCourse.set(course, new Set(record.conceptIds.map((id) => redirect.get(id) ?? id)));
+  }
 
   const results: EarlierCourseRecognition[] = [];
 
@@ -293,6 +428,23 @@ export function buildEarlierCourseRecognitions(
 
     const { state } = computeConceptMastery(entries, conceptId, resolvedOptions);
 
+    const historical: EarlierCourseCutoffSnapshot[] = [];
+    for (const course of earlierCourses) {
+      const record = cutoffByCourse.get(course);
+      if (record === undefined || !coveredByCourse.get(course)?.has(conceptId)) continue;
+      const stoodAt = stageAtCutoff(entries, conceptId, record, options);
+      if (stoodAt === null) continue;
+      historical.push({
+        course,
+        cutoffDay: record.cutoffDay,
+        source: record.source,
+        provisional: isProvisionalCutoffSource(record.source),
+        state: stoodAt,
+        arithmeticVersion: record.arithmeticVersion,
+        historicalAwardRuleVersion: record.historicalAwardRuleVersion,
+      });
+    }
+
     results.push({
       conceptId,
       newCourse,
@@ -300,6 +452,7 @@ export function buildEarlierCourseRecognitions(
       state,
       vitality: vitality?.get(conceptId) ?? null,
       evidence,
+      historical,
     });
   }
 

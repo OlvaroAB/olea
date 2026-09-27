@@ -55,21 +55,56 @@
  * mastery stage, F8.7 is a reading with nothing to confirm, so collapsing a
  * failed read to "show no recognition claims this time" costs her nothing
  * she was relying on.
+ *
+ * ## The cutoff is taken and recorded here (`[D-387]`, `[D-411]`)
+ *
+ * The first time a recognition names an earlier course, this seam takes that
+ * course's cutoff and appends it to the course cutoff log in Olea's own layer
+ * (`../../../core/src/today/course-cutoff-log.ts`'s `recordCourseCutoffs`):
+ * her leaving gesture once C7.8's record exists (none does yet), otherwise
+ * the course's last passed assessment date, provisional. A course that already
+ * has a record is never written again, so an assessment date she edits later
+ * cannot move it. The records then go to `buildEarlierCourseRecognitions`,
+ * which draws the dated line from them alone.
+ *
+ * **A cutoff is recorded only from a trustworthy read of her calendar**, since
+ * a record is never rewritten: only when the caller names the assignments
+ * Base path (`assignmentsBasePath`; blank means none configured, so her
+ * manual entries are the whole calendar), only when a configured Base was
+ * actually read (not the manual fallback of an unreadable Base), and only
+ * when the read resolved the course and date columns without a config error.
+ * Otherwise the existing records are still read and shown, and nothing new is
+ * written this time. Every failure here — a log read, an assessment read, a
+ * write — degrades to "no dated line this time", never a crash and never a
+ * cutoff from a partial read.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
+  type AssessmentRecord,
   buildEarlierCourseRecognitions,
   type CalendarDay,
   type ConceptCourses,
   type ConceptKeyCanonicalIndex,
+  calendarDaysEndingOn,
   type EarlierCourseRecognition,
   type ExtractConceptsOptions,
   listSameAsLinkRecords,
   readConceptKeyCanonicalIndex,
+  resolveAssessments,
   type SameAsLinkRecord,
+  type VaultPath,
   type VaultSource,
 } from 'olea-core';
+// `[D-411]` (`ol-v7r5.66`): imported by module path, not the `olea-core` barrel, which other
+// lanes are landing exports into this round (`privacy/log-discovery.ts`'s stance).
+import {
+  courseCutoffLogPath,
+  readCourseCutoffLog,
+  recordCourseCutoffs,
+} from '../../../core/src/today/course-cutoff-log.js';
+import type { CourseCutoffRecord } from '../../../core/src/today/course-cutoff-record.js';
+import { recognitionArithmeticVersion } from '../../../core/src/today/earlier-course-recognition.js';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import { readReviewHistory } from '../today/data-source.js';
 
@@ -79,6 +114,89 @@ export interface CourseSetupRecognitionSourceDeps {
   readonly today: CalendarDay;
   /** Forwarded to `extractConceptsFromVault`; defaults match F1.3's conventions. */
   readonly conceptOptions?: ExtractConceptsOptions;
+  /**
+   * Her configured assignments Base path (the study-plan settings'
+   * `assignmentsBasePath`; blank for none). **Absent means the caller did not
+   * say, and no new cutoff is recorded** (module doc): recorded cutoffs are
+   * still read and shown.
+   */
+  readonly assignmentsBasePath?: string;
+}
+
+/**
+ * ~10 years of this device's own cutoff-log files, probed by exact path so a
+ * host that cannot list a dot folder still finds the records it wrote — the
+ * probe window `privacy/log-discovery.ts` uses (`DEFAULT_LOG_PROBE_DAYS`).
+ * Without it such a host would see no record and take the cutoff again.
+ */
+const CUTOFF_LOG_PROBE_DAYS = 3650;
+
+function ownCutoffLogPaths(deviceId: string, today: CalendarDay): readonly VaultPath[] {
+  try {
+    return calendarDaysEndingOn(today, CUTOFF_LOG_PROBE_DAYS).map((day) =>
+      courseCutoffLogPath(day, deviceId),
+    );
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Her assessments, or `null` when this read is not one a permanent cutoff may
+ * be taken from (module doc).
+ */
+async function assessmentsForCutoff(
+  vault: VaultSource,
+  assignmentsBasePath: string | undefined,
+): Promise<readonly AssessmentRecord[] | null> {
+  if (assignmentsBasePath === undefined) return null;
+  try {
+    const report = await resolveAssessments(vault, assignmentsBasePath);
+    if (assignmentsBasePath.trim() !== '' && report.source !== 'base') return null;
+    if (report.configErrors.length > 0) return null;
+    if (report.unresolvedFields.includes('course') || report.unresolvedFields.includes('due')) {
+      return null;
+    }
+    return report.records;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The cutoff records to read the dated lines from: every recorded one, plus
+ * any this call takes and writes for `earlierCourses` (module doc). `[]` on a
+ * failed log read — nothing is written from a read that could not see what
+ * was already recorded.
+ */
+async function cutoffRecordsFor(
+  earlierCourses: readonly string[],
+  concepts: readonly ConceptCourses[],
+  deps: CourseSetupRecognitionSourceDeps,
+): Promise<readonly CourseCutoffRecord[]> {
+  let existing: readonly CourseCutoffRecord[];
+  try {
+    existing = (await readCourseCutoffLog(deps.vault, ownCutoffLogPaths(deps.deviceId, deps.today)))
+      .records;
+  } catch {
+    return [];
+  }
+  const assessments = await assessmentsForCutoff(deps.vault, deps.assignmentsBasePath);
+  if (assessments === null) return existing;
+  try {
+    const { byCourse } = await recordCourseCutoffs(deps.vault, {
+      courseIds: earlierCourses,
+      existing,
+      concepts,
+      assessments,
+      arithmeticVersion: recognitionArithmeticVersion(),
+      today: deps.today,
+      deviceId: deps.deviceId,
+    });
+    return [...byCourse.values()];
+  } catch {
+    return existing;
+  }
 }
 
 /**
@@ -121,11 +239,20 @@ export async function readCourseSetupRecognitions(
     canonicalKeys = undefined;
   }
 
-  return buildEarlierCourseRecognitions({
+  const input = {
     newCourse,
     entries,
     concepts,
     sameAsLinks,
     ...(canonicalKeys !== undefined ? { canonicalKeys } : {}),
-  });
+  };
+  const current = buildEarlierCourseRecognitions(input);
+  const earlierCourses = [...new Set(current.flatMap((r) => r.earlierCourses))];
+  if (earlierCourses.length === 0) return current;
+
+  // `[D-387]`/`[D-411]`: take and record each earlier course's cutoff the first
+  // time, then read the dated lines from the records alone (module doc).
+  const cutoffRecords = await cutoffRecordsFor(earlierCourses, concepts, deps);
+  if (cutoffRecords.length === 0) return current;
+  return buildEarlierCourseRecognitions({ ...input, cutoffRecords });
 }

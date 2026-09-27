@@ -17,8 +17,8 @@
  * No button, no checkbox, no link reading "confirm" / "merge" / "accept" /
  * "dismiss" — F8.7 in full: *"she is not asked to confirm, merge or accept
  * anything, there is no decision to make, and declining is not a state."*
- * There is nothing here for her to press: `renderClaim` below creates exactly
- * three `<p>` elements per claim and nothing with a `role`, an event handler
+ * There is nothing here for her to press: `renderClaim` below creates three `<p>`
+ * elements per claim (plus one per dated line) and nothing with a `role`, an event handler
  * or an `href`. **This file has no test of its own** — same accepted boundary
  * `sprig/render-sprig.ts`'s `renderSprig` and `today/view.ts` already carry:
  * this workspace has no DOM test environment (no `jsdom`/`happy-dom`
@@ -36,6 +36,13 @@
  * by `./confirmation-view.ts` (`ol-0r92.5`), in its own separate `<section>` —
  * this module still draws nothing that could be mistaken for it, and
  * `renderRecognitionClaims` itself is unchanged.
+ *
+ * ## The dated line is its own `<p>` (`[D-387]`, `[D-411]`)
+ *
+ * Each of `claim.historical` is drawn as a separate `<p>` after the current
+ * stage line, carrying its course and its own text — never folded into the
+ * current line's text, so the two readings stay visibly apart. With no
+ * dated line, nothing extra is drawn.
  */
 
 import { RECOGNITION_CLAIM_HEADING, type RecognitionClaimCopy } from './copy.js';
@@ -78,6 +85,15 @@ function renderClaim(doc: Document, claim: RecognitionClaimCopy): HTMLElement {
   stage.className = 'olea-recognition-stage';
   stage.textContent = claim.vitality === null ? claim.stage : `${claim.stage} — ${claim.vitality}`;
   article.appendChild(stage);
+
+  for (const line of claim.historical) {
+    const historical = doc.createElement('p');
+    historical.className = 'olea-recognition-historical';
+    if (line.provisional) historical.dataset.provisional = 'true';
+    // The course is runtime vault data, joined here as `earlierCourses` is above.
+    historical.textContent = `${line.course}: ${line.text}`;
+    article.appendChild(historical);
+  }
 
   const evidence = doc.createElement('p');
   evidence.className = 'olea-recognition-evidence';
