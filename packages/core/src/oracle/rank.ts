@@ -85,27 +85,60 @@
  * concept examined by three assessments accumulates more priority than one
  * examined by a single low-weight quiz, which is the plain reading of
  * "likelihood and weight of examination" (F4.2). The final `priorityScore`
- * multiplies that by a mastery-need factor (`masteryNeedWeight`) — so a
- * concept she has already got to `yours` still shows up (F4.9 forbids ever
- * implying full coverage is unnecessary, but ranks below an equally-evidenced
- * concept she hasn't touched) — and, when supplied, a retrievability factor
- * (`retrievabilityWeight`, `RankOracleInput.retrievability`'s doc). Both are
- * SIGNALS in C5.10's sense: they trade off smoothly and never remove a
- * concept the way a veto does.
+ * is `[D-332]`'s blend, described in the next section.
+ *
+ * ## The `[D-332]` blend (`ol-egov.141.89.10.78`)
+ *
+ *   priorityScore = w_relevance * preMasteryScore + w_need * needOrderingInput
+ *
+ * **The terms add; nothing multiplies them.** C5.10 names the
+ * all-multiplying formula as the shape it rules out, and the one this
+ * replaced was that shape: relevance × a stage-keyed ladder × current
+ * recall, under which the less she recalled a concept the LOWER it ranked,
+ * and a faded concept at the top stage was held down twice (by the 0.15
+ * rung and by its low recall). `[D-332]` rules the need input:
+ *
+ *  - **need rises as current recall falls**: `need = 1 − recall`, the
+ *    weakest eligible recall-tier instrument's probability now
+ *    (`RankOracleInput.retrievability`, produced by `./compose.ts` from
+ *    `readAllConceptReadiness`) — the same value `../mastery/attainment.ts`'s
+ *    `readNeed` computes;
+ *  - **demand-aware readiness replaces recall when supplied**
+ *    ({@link RankOracleNeedInput.demandAwareReadiness}): `need = 1 −
+ *    readiness`, and recall is then NOT read — readiness already
+ *    incorporates it, so recall is counted once (`[D-332]`'s check,
+ *    `pln.md` §5 R11);
+ *  - **no reading is unknown need** (`[D-348]`): `need` is absent (never a
+ *    number), `needBasis` is `'unknown'`, and the blend orders it at the
+ *    declared provisional maximum `UNKNOWN_NEED_VALUE` (1) — a ranking
+ *    mechanism about what she has not yet shown, never a reading of her
+ *    knowledge, and never worded as weakness (registry §22). This is
+ *    `[D-332]`'s explicit starting policy for a learner with no history;
+ *  - **the growth stage never enters** (`[D-281]`: the stage records what
+ *    happened and never predicts now). `masteryState` and
+ *    `masteryNeedWeight` are still reported, because the delivered envelope
+ *    still carries the ladder, and move nothing.
+ *
+ * The weights are `RankOracleOptions.blendWeights`, or
+ * {@link DECLARED_FALLBACK_BLEND_WEIGHTS}. Only their ratio changes the
+ * order. **How the uncertainty factor enters** (`pln.md` §2.1's fourth
+ * term, the evidence volume behind relevance and need): it does not — no
+ * ruling states it, and the shipped ranking never had one; recorded as such
+ * in the planning targets manifest before any held-out read. Proximity
+ * still rides inside each edge's relevance contribution, as before.
  *
  * **Two outputs, named apart (`ol-v7r5.55` [IL-D7]; see `./types.ts`'s own
  * section of that name for the full argument).** `preMasteryScore` IS
  * assessment relevance — the evidence question, "how strongly does this
  * concept's evidence say it will be examined," computed only from the
  * assessment side and never from anything about her. `priorityScore` IS
- * learner priority — that relevance with her mastery-need (and
- * retrievability) folded in, the policy question of how much of her time it
- * should get. Naming stays doc-only (no field renamed, so `./compose.ts` and
- * every plugin caller keep reading `priorityScore` unchanged): a caller that
- * wants relevance alone reads `preMasteryScore` directly rather than trying
- * to divide it back out of `priorityScore`, which is exactly the reasoning
- * that risks counting the mastery-need discount twice under two different
- * names (`./gap/build.ts`'s `GapRow.assessmentRelevance` does this for the
+ * learner priority — that relevance blended with her current need, the
+ * policy question of how much of her time it should get. Naming stays
+ * doc-only (no field renamed, so `./compose.ts` and every plugin caller keep
+ * reading `priorityScore` unchanged): a caller that wants relevance alone
+ * reads `preMasteryScore` directly rather than trying to take it back out of
+ * `priorityScore`, which is exactly the reasoning that risks counting need
+ * twice under two different names (`./gap/build.ts`'s `GapRow.assessmentRelevance` does this for the
  * gap view specifically).
  *
  * **Per `[D-110]` (`ol-egov.28`), the proximity half-life, the assessment
@@ -247,6 +280,7 @@ import type {
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
+import { type NeedBasis, UNKNOWN_NEED_VALUE } from '../mastery/attainment.js';
 import type { VaultPath } from '../vault/types.js';
 import type {
   ConceptPriority,
@@ -259,6 +293,7 @@ import type {
   OracleMasteryState,
   OracleVetoedConcept,
   OracleVetoedEdge,
+  RankBlendWeights,
   RankOracleInput,
   RankOracleOptions,
   RankOracleResult,
@@ -315,7 +350,10 @@ const DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR = 1;
 
 /**
  * DECLARED FALLBACK (`[D-110]`) — used only when `options` does not supply
- * `masteryNeedWeight`. **Plain-English defense:** the ladder only has to be
+ * `masteryNeedWeight`. **Reported only since `[D-332]`**: the ladder left the
+ * blend (module doc, "The `[D-332]` blend") and this value now moves no
+ * order; it stays because the delivered envelope still carries the ladder.
+ * Its original **plain-English defense:** the ladder only has to be
  * monotonically decreasing and never zero (F4.9 forbids ever implying full
  * coverage is unnecessary); seed/sprout/sapling/tree space four stages
  * roughly evenly between "no discount" and "small residual discount", and
@@ -361,6 +399,23 @@ const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState,
  * only on it being neither `0` nor unboundedly large.
  */
 const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.5;
+
+/**
+ * DECLARED FALLBACK (`[D-332]`, `ol-egov.141.89.10.78`) — the blend weights
+ * used when `options.blendWeights` is absent, which is every caller until
+ * the `rank-weights` envelope carries them. **Plain-English defense:** equal
+ * weights on two terms that each run over roughly `[0, 1]` — one edge's
+ * contribution and need — so neither the evidence that a concept will be
+ * examined nor how much of it she currently owes counts for more than the
+ * other, and nothing of hers yet says otherwise. It is a pin, not a fit:
+ * the development-set sweep (`olea-service`, `findings/ilb-pln-blend-sweep.md`)
+ * found every invariant holding across the whole open range of the ratio
+ * and failing only at its two ends, so the data rules those out and cannot
+ * choose inside. Frozen in the planning targets manifest before the
+ * held-out set is read; a provisional baseline, revisited when one term of
+ * her review log exists (`[D-332]`).
+ */
+const DECLARED_FALLBACK_BLEND_WEIGHTS: RankBlendWeights = { relevance: 1, need: 1 };
 
 /**
  * `[D-329]` — additive to `RankOracleInput`, typed HERE (not `./types.js`)
@@ -462,10 +517,30 @@ export interface RankOracleEligibilityInput {
   >;
 }
 
+/**
+ * `[D-332]` — additive to `RankOracleInput`, typed HERE for the same reason
+ * the other additive inputs above are. Keyed by `conceptKey`.
+ */
+export interface RankOracleNeedInput {
+  /**
+   * Per-concept demand-aware readiness in `[0, 1]` (`ol-v7r5.65`'s reading:
+   * the concept's current readiness for the operation its assessment
+   * demands). **When present for a concept, need reads it and NOT current
+   * recall** — readiness already incorporates recall, so reading both would
+   * count it twice (`[D-332]`'s clarification). Absent, or a concept missing
+   * from it, falls back to current recall, then to unknown.
+   *
+   * **No production caller supplies it yet**: `./compose.ts` would fold it
+   * from `../gap/demand.ts`'s producer; that splice is a follow-on bead.
+   */
+  readonly demandAwareReadiness?: ReadonlyMap<string, number>;
+}
+
 interface ResolvedOptions {
   readonly proximityHalfLifeDays: number;
   readonly assessmentWeightDivisor: number;
   readonly masteryNeedWeight: Readonly<Record<OracleMasteryState, number>>;
+  readonly blendWeights: RankBlendWeights;
 }
 
 /**
@@ -497,6 +572,15 @@ function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions
   const assessmentWeightDivisor =
     options?.assessmentWeightDivisor ?? DECLARED_FALLBACK_ASSESSMENT_WEIGHT_DIVISOR;
   const masteryNeedWeight = options?.masteryNeedWeight ?? DECLARED_FALLBACK_MASTERY_NEED_WEIGHT;
+  const blendWeights = options?.blendWeights ?? DECLARED_FALLBACK_BLEND_WEIGHTS;
+  for (const term of ['relevance', 'need'] as const) {
+    const value = blendWeights[term];
+    // Above zero, and finite: a zero weight makes its term decoration, which
+    // is exactly the endpoint the development-set sweep rules out.
+    if (!(Number.isFinite(value) && value > 0)) {
+      throw new Error(`rankOracle: blendWeights.${term} must be finite and > 0, got ${value}`);
+    }
+  }
   if (!(proximityHalfLifeDays > 0)) {
     throw new Error(`rankOracle: proximityHalfLifeDays must be > 0, got ${proximityHalfLifeDays}`);
   }
@@ -511,7 +595,7 @@ function resolveOptions(options: RankOracleOptions | undefined): ResolvedOptions
       throw new Error(`rankOracle: masteryNeedWeight.${state} must be >= 0, got ${value}`);
     }
   }
-  return { proximityHalfLifeDays, assessmentWeightDivisor, masteryNeedWeight };
+  return { proximityHalfLifeDays, assessmentWeightDivisor, masteryNeedWeight, blendWeights };
 }
 
 const CALENDAR_DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
@@ -747,12 +831,11 @@ function resolveMasteryState(
  * collapse to the identical stored number, which left a reader of
  * `OracleConceptFactors.retrievabilityWeight` unable to tell them apart —
  * exactly the distinction readiness's supported-only exclusion needs to
- * apply a real policy zero rather than a measured one. The BLEND this
- * feeds (`priorityScore`, below) still treats absence as neutral, per
- * C5.10 ("retrievability is a signal, never a gate") — only the STORED
- * factor now preserves the distinction; `resolveMasteryState`'s `'unknown'`
- * and `computeAssessmentWeightScore`'s unresolved-weight case still default
- * at the point they're consumed, the same as this one now does.
+ * apply a real policy zero rather than a measured one. Since `[D-332]` the
+ * blend reads this only through {@link resolveNeed} (need = 1 − recall), and
+ * absence there is unknown need, ordered at the declared provisional
+ * maximum — never a gate, per C5.10 ("retrievability is a signal, never a
+ * gate").
  *
  * A supplied value must be a genuine probability, `(0, 1]` — never negative,
  * never a silent >1 that would inflate a concept's priority beyond what it
@@ -768,6 +851,78 @@ function resolveRetrievabilityWeight(
     throw new Error(`rankOracle: retrievability.${conceptKey} must be within (0, 1], got ${value}`);
   }
   return value;
+}
+
+/** `[D-332]` need for one concept, with its `[D-348]` basis and the value the blend orders by. */
+interface NeedResolution {
+  readonly need?: number;
+  readonly needBasis: NeedBasis;
+  readonly needSource?: 'current-recall' | 'demand-aware-readiness';
+  readonly needOrderingInput: number;
+}
+
+/**
+ * `[D-332]`'s need input — see the module doc's "The `[D-332]` blend".
+ * Demand-aware readiness first (and then recall is not read), current
+ * recall second, unknown last. Unknown carries NO `need` number: its
+ * ordering input is the declared provisional maximum, for ordering only.
+ */
+function resolveNeed(
+  retrievabilityWeight: number | undefined,
+  demandAwareReadiness: ReadonlyMap<string, number> | undefined,
+  conceptKey: string,
+): NeedResolution {
+  const readiness = demandAwareReadiness?.get(conceptKey);
+  if (readiness !== undefined) {
+    if (!(Number.isFinite(readiness) && readiness >= 0 && readiness <= 1)) {
+      throw new Error(
+        `rankOracle: demandAwareReadiness.${conceptKey} must be within [0, 1], got ${readiness}`,
+      );
+    }
+    const need = 1 - readiness;
+    return {
+      need,
+      needBasis: 'estimated',
+      needSource: 'demand-aware-readiness',
+      needOrderingInput: need,
+    };
+  }
+  if (retrievabilityWeight !== undefined) {
+    const need = 1 - retrievabilityWeight;
+    return { need, needBasis: 'estimated', needSource: 'current-recall', needOrderingInput: need };
+  }
+  return { needBasis: 'unknown', needOrderingInput: UNKNOWN_NEED_VALUE };
+}
+
+/** `[D-332]`'s blend: the two terms add, weighted; see the module doc. */
+function blendPriority(
+  relevance: number,
+  needOrderingInput: number,
+  weights: RankBlendWeights,
+): number {
+  return weights.relevance * relevance + weights.need * needOrderingInput;
+}
+
+/**
+ * The need clause every reasoning string ends with. Unknown need is worded
+ * as unknown and nothing else (registry §22, `[D-348]`): no deficit word,
+ * no number standing in for a reading of her knowledge.
+ */
+function buildNeedClause(factors: OracleConceptFactors): string {
+  const weights = factors.blendWeights ?? DECLARED_FALLBACK_BLEND_WEIGHTS;
+  const weightsClause =
+    `(relevance weight ${weights.relevance.toFixed(2)}, need weight ` +
+    `${weights.need.toFixed(2)})`;
+  const needClause =
+    factors.needBasis === 'estimated' && factors.need !== undefined
+      ? `Need ${factors.need.toFixed(2)}, from ${
+          factors.needSource === 'demand-aware-readiness'
+            ? 'demand-aware readiness'
+            : 'current recall'
+        }.`
+      : 'Need unknown: no current evidence on this concept yet, so it is ordered at the ' +
+        `declared provisional value ${(factors.needOrderingInput ?? UNKNOWN_NEED_VALUE).toFixed(2)} ([D-348]).`;
+  return `${needClause} Priority score ${factors.priorityScore.toFixed(3)} ${weightsClause}.`;
 }
 
 /** Deterministic order for `vetoedEdges`, matching `compareContributions`'s tie-break so purity/rebuild equivalence holds regardless of `Map` iteration order. */
@@ -951,8 +1106,7 @@ function buildReasoning(
     `${conceptName} (${course}): ${buildEvidenceClause(factors)}, spanning ${assessmentCount} ` +
     `assessment${assessmentCount === 1 ? '' : 's'}. Strongest link: ${top.assessmentPath} ` +
     `(yield rank ${top.yieldRank}, confidence ${top.confidence.toFixed(2)}, ${weightClause}, ` +
-    `${dueClause}). Mastery: ${factors.masteryState} (need weight ` +
-    `${factors.masteryNeedWeight.toFixed(2)}). Priority score ${factors.priorityScore.toFixed(3)}.`
+    `${dueClause}). ${buildNeedClause(factors)}`
   );
 }
 
@@ -979,11 +1133,13 @@ function buildUnknownRelevanceEntry(
   course: string,
   mastery: ReadonlyMap<string, { readonly state: MasteryState }> | undefined,
   retrievability: ReadonlyMap<string, number> | undefined,
+  demandAwareReadiness: ReadonlyMap<string, number> | undefined,
   resolved: ResolvedOptions,
 ): ConceptPriority {
   const masteryState = resolveMasteryState(mastery, conceptKey);
   const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
   const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
+  const need = resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey);
   const preMasteryScore = DECLARED_FALLBACK_UNKNOWN_RELEVANCE;
   const factors: OracleConceptFactors = {
     citations: [],
@@ -996,7 +1152,9 @@ function buildUnknownRelevanceEntry(
     masteryState,
     masteryNeedWeight,
     ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
-    priorityScore: preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1),
+    ...need,
+    blendWeights: resolved.blendWeights,
+    priorityScore: blendPriority(preMasteryScore, need.needOrderingInput, resolved.blendWeights),
   };
   return {
     conceptName,
@@ -1024,9 +1182,7 @@ function buildUnknownRelevanceReasoning(
   return (
     `${conceptName} (${course}): no assessment evidence recorded yet. Relevance unknown, scored ` +
     `at the declared middle value ${factors.preMasteryScore.toFixed(2)} ([D-329]) so it is ` +
-    `neither hidden by a zero nor favoured by its own absence. Mastery: ${factors.masteryState} ` +
-    `(need weight ${factors.masteryNeedWeight.toFixed(2)}). Priority score ` +
-    `${factors.priorityScore.toFixed(3)}.`
+    `neither hidden by a zero nor favoured by its own absence. ${buildNeedClause(factors)}`
   );
 }
 
@@ -1037,6 +1193,8 @@ function rankOneCourse(
   assessmentsByPath: ReadonlyMap<VaultPath, AssessmentRecord>,
   mastery: ReadonlyMap<string, { readonly state: MasteryState }> | undefined,
   retrievability: ReadonlyMap<string, number> | undefined,
+  // `[D-332]`: see `RankOracleNeedInput`. `undefined` reads need from recall.
+  demandAwareReadiness: ReadonlyMap<string, number> | undefined,
   asOf: Date,
   resolved: ResolvedOptions,
   tiebreakEligible: ReadonlySet<string> | undefined,
@@ -1126,6 +1284,7 @@ function rankOneCourse(
     const masteryState = resolveMasteryState(mastery, conceptKey);
     const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
     const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
+    const need = resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey);
     // Citations reflect only SURVIVING evidence — a vetoed edge contributed
     // nothing to this concept's score, so its citations are not offered as
     // evidence for it either (reasoning matches what actually drove it).
@@ -1151,11 +1310,12 @@ function rankOneCourse(
       // `undefined`, for absence to read the same way an object literal
       // that never mentioned this field would (see the field's own doc).
       ...(retrievabilityWeight !== undefined ? { retrievabilityWeight } : {}),
-      // Neutral (1) exactly when no eligible retrievability evidence was
-      // supplied for this concept — the blend's own default, applied here
-      // rather than baked into `retrievabilityWeight` itself so the stored
-      // factor can stay absent (see `resolveRetrievabilityWeight`'s doc).
-      priorityScore: preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1),
+      // `[D-332]`: need (unknown ordered at the declared provisional
+      // maximum, `[D-348]`) ADDED to relevance, never multiplied into it;
+      // the stage ladder above is reported and moves nothing.
+      ...need,
+      blendWeights: resolved.blendWeights,
+      priorityScore: blendPriority(preMasteryScore, need.needOrderingInput, resolved.blendWeights),
     };
 
     entries.push({
@@ -1200,6 +1360,7 @@ function rankOneCourse(
           course,
           mastery,
           retrievability,
+          demandAwareReadiness,
           resolved,
         ),
       );
@@ -1238,7 +1399,8 @@ export function rankOracle(
   input: RankOracleInput &
     RankOracleTiebreakInput &
     RankOracleCourseConceptsInput &
-    RankOracleEligibilityInput,
+    RankOracleEligibilityInput &
+    RankOracleNeedInput,
 ): RankOracleResult {
   const asOfDate = dateFromCalendarDay(input.asOf);
   if (asOfDate === null) {
@@ -1296,6 +1458,7 @@ export function rankOracle(
       assessmentsByPath,
       input.mastery,
       input.retrievability,
+      input.demandAwareReadiness,
       asOfDate,
       resolved,
       input.tiebreakEligible,

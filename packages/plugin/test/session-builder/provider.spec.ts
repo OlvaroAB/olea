@@ -360,13 +360,15 @@ describe('createLocalSessionBuilderProvider — threads the delivered rank weigh
     expect(findWidgetItem(state.model).gapScore).toBeGreaterThan(0);
   });
 
-  it('with readRankWeights delivering a masteryNeedWeight, the fallback is NOT taken — gapScore scales by the delivered factor rather than the declared 1', async () => {
+  it('with readRankWeights delivering blend weights, the fallback is NOT taken — gapScore uses the delivered need weight rather than the declared 1 ([D-332])', async () => {
     const vault = vaultWithReviewLog([]); // no review log — masteryState reads 'seed'
     let calls = 0;
     const readRankWeights = async () => {
       calls += 1;
       return {
         masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+        // [D-332]: the stage ladder above moves nothing; the need weight does.
+        blendWeights: { relevance: 1, need: 0.2 },
         // `[D-331]` follow-up: `RankWeightsResult`'s own required field, not read by this test.
         policyVersion: 'rw-v-test',
       };
@@ -402,10 +404,10 @@ describe('createLocalSessionBuilderProvider — threads the delivered rank weigh
     // `readRankWeights` is read on every `load()`, mirroring `plan/
     // provider.ts`'s/`gap/provider.ts`'s posture.
     expect(calls).toBe(1);
-    // seed's delivered weight (0.2) vs. the declared fallback (1): the
-    // delivered gapScore must be exactly a fifth of the fallback's, since
-    // `readiness.weight` is unaffected by `masteryNeedWeight`.
-    expect(deliveredItem.gapScore).toBeCloseTo(fallbackItem.gapScore * 0.2, 10);
+    // [D-332]: with no review log need is unknown, ordered at 1 ([D-348]),
+    // so the delivered need weight (0.2) against the declared fallback (1)
+    // lowers the priority, and with it the gapScore.
+    expect(deliveredItem.gapScore).toBeLessThan(fallbackItem.gapScore);
     expect(deliveredItem.gapScore).not.toBeCloseTo(fallbackItem.gapScore, 5);
   });
 

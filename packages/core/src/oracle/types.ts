@@ -25,8 +25,9 @@
  *  - **Learner priority** (the policy question — "given that relevance, and
  *    given what SHE has shown about this concept, how much should she study
  *    it now?") is `OracleConceptFactors.priorityScore` /
- *    `ConceptPriority.priorityScore` — relevance multiplied by her
- *    mastery-need and retrievability, i.e. policy applied over evidence.
+ *    `ConceptPriority.priorityScore` — since `[D-332]` one weighted blend
+ *    that ADDS relevance and her current need (`./rank.ts`, "The `[D-332]`
+ *    blend"), i.e. policy applied beside evidence, never multiplied into it.
  *    This is the number ranking and ordering actually use.
  *
  * Naming is doc-only here — no field is renamed, since `priorityScore`,
@@ -46,6 +47,7 @@ import type {
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
+import type { NeedBasis } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { VaultPath } from '../vault/types.js';
 
@@ -215,15 +217,44 @@ export interface OracleConceptFactors {
   /** Edges REMOVED by a veto rather than folded into `contributions` — see `OracleVetoedEdge`. Always present (empty when nothing on this concept was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */
   readonly vetoedEdges?: readonly OracleVetoedEdge[];
   /**
-   * Sum of `contributions[*].contribution` — the score before the mastery
-   * and retrievability multipliers. **Assessment relevance** (see this
-   * module's own doc) — evidence alone, never a probability, never a
-   * reading of what she has shown.
+   * Sum of `contributions[*].contribution` — the blend's relevance term.
+   * **Assessment relevance** (see this module's own doc) — evidence alone,
+   * never a probability, never a reading of what she has shown.
    */
   readonly preMasteryScore: number;
+  /** The growth stage, reported only: since `[D-332]` it never enters `priorityScore` (`[D-281]`: the stage records what happened, never predicts now). */
   readonly masteryState: OracleMasteryState;
-  /** `options.masteryNeedWeight[masteryState]` — see `./rank.ts` for the ladder and why it is never zero. */
+  /**
+   * `options.masteryNeedWeight[masteryState]`, **reported only since
+   * `[D-332]`**: the stage-keyed ladder left the blend, and this number no
+   * longer moves `priorityScore`. Kept because the delivered `rank-weights`
+   * envelope still carries the ladder; retiring it from the envelope is a
+   * contract change of its own.
+   */
   readonly masteryNeedWeight: number;
+  /**
+   * `[D-332]` need, in `[0, 1]`: one minus demand-aware readiness when the
+   * caller supplied it for this concept, otherwise one minus current recall
+   * (`retrievabilityWeight`) — never both, so recall is counted once.
+   * **Absent when {@link needBasis} is `'unknown'`**: unknown need is never
+   * reported as a number (`[D-348]`). Optional only so object literals built
+   * before this field existed still typecheck; `rankOracle` sets it whenever
+   * the basis is estimated.
+   */
+  readonly need?: number;
+  /** `[D-348]`'s basis for {@link need}: `'estimated'` from eligible current evidence, `'unknown'` from none. `rankOracle` always sets it; optional for the object-literal reason above. */
+  readonly needBasis?: NeedBasis;
+  /** Which reading an estimated {@link need} came from; absent when the basis is unknown. */
+  readonly needSource?: 'current-recall' | 'demand-aware-readiness';
+  /**
+   * The need value the blend actually orders by: {@link need} when
+   * estimated, the declared provisional maximum `1` when unknown
+   * (`[D-348]`, for ordering only — never a reading of her knowledge).
+   * `rankOracle` always sets it; optional for the object-literal reason above.
+   */
+  readonly needOrderingInput?: number;
+  /** The blend weights this entry's `priorityScore` was computed with (`RankOracleOptions.blendWeights`, or `./rank.ts`'s declared fallback). `rankOracle` always sets it. */
+  readonly blendWeights?: RankBlendWeights;
   /**
    * Per-concept retrievability (FSRS recall probability at `asOf`) as a
    * blend multiplier — C5.10 names retrievability as one of the SIGNALS,
@@ -240,17 +271,18 @@ export interface OracleConceptFactors {
    * defaulted number could not carry (C5.6/`[D-264]`'s producer work,
    * `ol-v7r5.52`). A consumer building the true readiness fold (`[D-264]`
    * ruling 1's supported-only exclusion) reads `undefined` here as the
-   * policy-zero case; `rankOracle`'s own blend (`priorityScore`, below)
-   * still applies the neutral `1` fallback at the point of computing the
-   * score, so ranking behaviour is unchanged.
+   * policy-zero case. Since `[D-332]` it no longer multiplies the score:
+   * it reaches `priorityScore` only as {@link need} (one minus this value),
+   * and not at all when demand-aware readiness was supplied.
    */
   readonly retrievabilityWeight?: number;
   /**
-   * `preMasteryScore * masteryNeedWeight * (retrievabilityWeight ?? 1)` —
-   * restated on the entry itself as `ConceptPriority.priorityScore`.
-   * **Learner priority** (see this module's own doc) — assessment relevance
-   * with policy (her mastery, her retrievability) folded in; this is the
-   * number ranking and ordering use, never `preMasteryScore` alone.
+   * `[D-332]`'s blend: `blendWeights.relevance * preMasteryScore +
+   * blendWeights.need * needOrderingInput` — restated on the entry itself as
+   * `ConceptPriority.priorityScore`. **Learner priority** (see this module's
+   * own doc). The terms ADD (C5.10 rules out the all-multiplying shape), so
+   * no single low factor can take the score to zero; the stage ladder never
+   * enters it.
    */
   readonly priorityScore: number;
 }
@@ -337,8 +369,11 @@ export interface RankOracleOptions {
    */
   readonly assessmentWeightDivisor?: number;
   /**
-   * How much a concept's mastery state discounts its pre-mastery score.
-   * Never 0 for any state — F4.9 requires the oracle to "always advise
+   * The stage-keyed need ladder. **Since `[D-332]` it no longer enters the
+   * blend** (`OracleConceptFactors.masteryNeedWeight` reports it only); it is
+   * still accepted because the delivered `rank-weights` envelope carries it.
+   * Its original reading: how much a concept's mastery state discounts its
+   * pre-mastery score. Never 0 for any state — F4.9 requires the oracle to "always advise
    * covering the full syllabus", so a `yours`-mastered concept still
    * contributes a residual 0.15, not nothing. The ladder itself (which
    * states get which discount, and by how much) is invented for v0.9 and
@@ -346,6 +381,23 @@ export interface RankOracleOptions {
    * needed to revisit, before any value here can be called measured.
    */
   readonly masteryNeedWeight?: Readonly<Record<OracleMasteryState, number>>;
+  /**
+   * `[D-332]`'s blend weights (`./rank.ts`, "The `[D-332]` blend"). Both must
+   * be finite and above 0: a zero weight turns its term into decoration, and
+   * the development-set sweep rules both endpoints out
+   * (`olea-service/findings/ilb-pln-blend-sweep.md`). Derived and delivered by
+   * the service under `[D-110]` once the `rank-weights` envelope carries them;
+   * until then `./rank.ts`'s declared fallback applies.
+   */
+  readonly blendWeights?: RankBlendWeights;
+}
+
+/** `[D-332]`: the two weights of the ranking blend. Only their ratio changes the order. */
+export interface RankBlendWeights {
+  /** Weight on assessment relevance (`OracleConceptFactors.preMasteryScore`). */
+  readonly relevance: number;
+  /** Weight on need (`OracleConceptFactors.needOrderingInput`). */
+  readonly need: number;
 }
 
 /**

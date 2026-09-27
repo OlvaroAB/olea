@@ -148,9 +148,15 @@ describe('rankOracle — a single well-evidenced concept', () => {
     );
     const proximityScore = 1 / (1 + daysUntilDue / 14); // default half-life
     const expectedPreMastery = yieldScore * confidence * weightScore * proximityScore;
-    const expectedPriority = expectedPreMastery * 1; // mastery omitted => 'unknown' => neutral 1
+    // [D-332]: relevance ADDED to need at the declared fallback weights
+    // (1, 1). No recall supplied => need unknown, ordered at the declared
+    // provisional maximum 1 ([D-348]).
+    const expectedPriority = 1 * expectedPreMastery + 1 * 1;
 
     expect(entry.factors.masteryState).toBe('unknown');
+    expect(entry.factors.needBasis).toBe('unknown');
+    expect(entry.factors.need).toBeUndefined();
+    expect(entry.factors.needOrderingInput).toBe(1);
     expect(entry.priorityScore).toBeCloseTo(expectedPriority, 10);
     expect(entry.reasoning).toContain(`Priority score ${expectedPriority.toFixed(3)}`);
     expect(entry.reasoning).toContain('Strongest link: Assessments/Quiz1.md');
@@ -954,7 +960,12 @@ describe('rankOracle — vetoes are separated from the blend (C5.10, ol-plxu)', 
       (c) => c.assessmentPath === 'Assessments/Upcoming.md',
     );
     expect(upcomingContribution?.contribution).toBeGreaterThan(0);
-    expect(entry?.priorityScore).toBeCloseTo(upcomingContribution?.contribution ?? -1, 10);
+    expect(entry?.factors.preMasteryScore).toBeCloseTo(
+      upcomingContribution?.contribution ?? -1,
+      10,
+    );
+    // [D-332]: relevance plus unknown need (ordered at 1) at weights (1, 1).
+    expect(entry?.priorityScore).toBeCloseTo((upcomingContribution?.contribution ?? -1) + 1, 10);
   });
 
   it('(b) a SIGNAL — however low it scores — can never remove a candidate the way a veto does: an unparseable-date edge stays in `contributions` and the concept still ranks, even as its sole evidence', () => {
@@ -1278,19 +1289,21 @@ describe('rankOracle — mastery join, two distinct absences', () => {
     expect(course.ranked[0]?.factors.masteryState).toBe('seed');
   });
 
-  it('mastery present and high (`tree`) discounts, but never zeroes, the score', () => {
+  it('mastery present and high (`tree`) is REPORTED, but since [D-332] the stage never moves the score', () => {
     const mastery = new Map([['concept-a', masteryResult('concept-a', 'tree')]]);
     const result = rankOracle(input(mastery));
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
     expect(entry?.factors.masteryState).toBe('tree');
+    // The ladder rung is still reported (the delivered envelope carries it)...
     expect(entry?.factors.masteryNeedWeight).toBeGreaterThan(0);
     expect(entry?.factors.masteryNeedWeight).toBeLessThan(1);
-    expect(entry?.priorityScore).toBeCloseTo(
-      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0),
-      10,
-    );
+    // ...and moves nothing: the score equals the one with no mastery at all.
+    const noMastery = rankOracle(input(undefined)).courses[0];
+    if (noMastery?.status !== 'ranked') throw new Error('expected ranked');
+    expect(entry?.priorityScore).toBe(noMastery.ranked[0]?.priorityScore);
+    expect(entry?.priorityScore).toBeCloseTo((entry?.factors.preMasteryScore ?? 0) + 1, 10);
   });
 });
 
@@ -1311,11 +1324,10 @@ describe('rankOracle — retrievability weight: absence vs. a genuine neutral va
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
     expect(entry?.factors.retrievabilityWeight).toBeUndefined();
-    // The blend still reads neutral — only the stored factor changed shape.
-    expect(entry?.priorityScore).toBeCloseTo(
-      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0),
-      10,
-    );
+    // [D-332]/[D-348]: no reading is unknown need, ordered at 1, never a number.
+    expect(entry?.factors.needBasis).toBe('unknown');
+    expect(entry?.factors.need).toBeUndefined();
+    expect(entry?.priorityScore).toBeCloseTo((entry?.factors.preMasteryScore ?? 0) + 1, 10);
   });
 
   it('retrievability supplied but this concept absent from it => same absence, same neutral blend', () => {
@@ -1325,10 +1337,8 @@ describe('rankOracle — retrievability weight: absence vs. a genuine neutral va
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
     expect(entry?.factors.retrievabilityWeight).toBeUndefined();
-    expect(entry?.priorityScore).toBeCloseTo(
-      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0),
-      10,
-    );
+    expect(entry?.factors.needBasis).toBe('unknown');
+    expect(entry?.priorityScore).toBeCloseTo((entry?.factors.preMasteryScore ?? 0) + 1, 10);
   });
 
   it('retrievability supplied for this concept as a genuine 1.0 => the stored factor is a DEFINED 1, distinguishable from absence though numerically identical to the neutral fallback', () => {
@@ -1342,17 +1352,18 @@ describe('rankOracle — retrievability weight: absence vs. a genuine neutral va
     expect(Object.hasOwn(entry?.factors ?? {}, 'retrievabilityWeight')).toBe(true);
   });
 
-  it('retrievability supplied for this concept as a non-neutral value moves the score, and the stored factor carries it verbatim', () => {
+  it('retrievability supplied for this concept as a non-neutral value moves the score through need, and the stored factor carries it verbatim', () => {
     const retrievability = new Map([['concept-a', 0.4]]);
     const result = rankOracle(input(retrievability));
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
     expect(entry?.factors.retrievabilityWeight).toBe(0.4);
-    expect(entry?.priorityScore).toBeCloseTo(
-      (entry?.factors.preMasteryScore ?? 0) * (entry?.factors.masteryNeedWeight ?? 0) * 0.4,
-      10,
-    );
+    // [D-332]: need = 1 - recall, ADDED to relevance at weights (1, 1).
+    expect(entry?.factors.need).toBeCloseTo(0.6, 12);
+    expect(entry?.factors.needBasis).toBe('estimated');
+    expect(entry?.factors.needSource).toBe('current-recall');
+    expect(entry?.priorityScore).toBeCloseTo((entry?.factors.preMasteryScore ?? 0) + 0.6, 10);
   });
 });
 
@@ -1441,8 +1452,12 @@ describe(
       expect(upcomingContribution?.contribution).toBeGreaterThan(0);
       // The veto silences the one edge it applies to, not the concept as a
       // whole — the still-relevant assessment's evidence must keep counting
-      // toward the concept's priority.
-      expect(entry?.priorityScore).toBeCloseTo(upcomingContribution?.contribution ?? -1, 10);
+      // toward the concept's priority (relevance, plus unknown need at 1).
+      expect(entry?.factors.preMasteryScore).toBeCloseTo(
+        upcomingContribution?.contribution ?? -1,
+        10,
+      );
+      expect(entry?.priorityScore).toBeCloseTo((upcomingContribution?.contribution ?? -1) + 1, 10);
       // Reported with a stated reason, never silently.
       expect(entry?.factors.vetoedEdges).toEqual([
         {
@@ -1456,9 +1471,11 @@ describe(
     it('no for no-evidence-yet: a course with zero evidence never surfaces as a floored (zero-score) ranking — abstention is a status a floored-but-present concept never carries', () => {
       // Contrast case first: an assessment worth 0% of the grade genuinely
       // floors that edge's contribution to zero, and the concept still
-      // RANKS — evidence is present, only weighted to nothing. This is the
-      // legitimate floor: silence is correct here because a 0%-weighted
-      // assessment cannot inform priority, whatever its yield/confidence.
+      // RANKS — evidence is present, only weighted to nothing. The floor is
+      // the RELEVANCE term's: a 0%-weighted assessment cannot inform
+      // relevance, whatever its yield/confidence. Since [D-332] the blend
+      // adds, so the concept keeps its need term (unknown, ordered at 1) and
+      // no single low factor silences it (C5.10).
       const zeroWeightInput: RankOracleInput = {
         evidence: {
           edges: [edge()],
@@ -1471,7 +1488,8 @@ describe(
       const zeroWeightCourse = zeroWeightResult.courses[0];
       expect(zeroWeightCourse?.status).toBe('ranked');
       if (zeroWeightCourse?.status !== 'ranked') return;
-      expect(zeroWeightCourse.ranked[0]?.priorityScore).toBe(0);
+      expect(zeroWeightCourse.ranked[0]?.factors.preMasteryScore).toBe(0);
+      expect(zeroWeightCourse.ranked[0]?.priorityScore).toBe(1);
 
       // No-evidence case: the course must NOT collapse to the same shape (a
       // ranked entry sitting at the floor). It must abstain explicitly, so
@@ -1748,6 +1766,185 @@ describe('rankOracle — declared fallback vs. delivered weights (D-110, ol-egov
     const course = result.courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     expect(course.ranked[0]?.factors.masteryNeedWeight).toBe(0.9);
+  });
+});
+
+describe('rankOracle — the [D-332] blend: need from current recall, the stage out, the terms added (ol-egov.141.89.10.78)', () => {
+  // `pln.md` §5 R1's construction: three concepts with identical evidence
+  // (one edge each, same assessment), differing only in growth stage and
+  // current recall. Placeholder ids — INV-3.
+  const r1Input = (
+    stages: readonly [MasteryState, MasteryState, MasteryState],
+    extra: Partial<RankOracleInput> = {},
+  ): RankOracleInput => ({
+    evidence: {
+      edges: [
+        edge({ conceptName: 'faded' }),
+        edge({ conceptName: 'strong' }),
+        edge({ conceptName: 'unread' }),
+      ],
+      assessmentsRead: readReport([assessment()]),
+      assessmentsWithNoEvidence: [],
+    },
+    mastery: new Map([
+      ['faded', masteryResult('faded', stages[0])],
+      ['strong', masteryResult('strong', stages[1])],
+      ['unread', masteryResult('unread', stages[2])],
+    ]),
+    retrievability: new Map([
+      ['faded', 0.05],
+      ['strong', 0.9],
+    ]),
+    asOf: ASOF,
+    ...extra,
+  });
+  const ranked = (input: Parameters<typeof rankOracle>[0]) => {
+    const course = rankOracle(input).courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    return course.ranked;
+  };
+  const byKey = (input: Parameters<typeof rankOracle>[0], key: string) => {
+    const entry = ranked(input).find((e) => e.conceptKey === key);
+    if (entry === undefined) throw new Error(`no entry for ${key}`);
+    return entry;
+  };
+  const weighted = (relevance: number, need: number) =>
+    r1Input(['seed', 'seed', 'seed'], { options: { blendWeights: { relevance, need } } });
+
+  it('R1: the faded top-stage concept ranks ABOVE the strongly recalled lower-stage one, and the unread one first', () => {
+    const input = r1Input(['tree', 'sprout', 'tree']);
+    expect(ranked(input).map((e) => e.conceptKey)).toEqual(['unread', 'faded', 'strong']);
+    expect(byKey(input, 'faded').factors.need).toBeCloseTo(0.95, 12);
+    expect(byKey(input, 'faded').factors.needBasis).toBe('estimated');
+    expect(byKey(input, 'faded').factors.needSource).toBe('current-recall');
+    expect(byKey(input, 'strong').factors.need).toBeCloseTo(0.1, 12);
+  });
+
+  it('R1: no recall reading is unknown need — no number, ordered at the declared provisional maximum, never worded as weakness ([D-348])', () => {
+    const unread = byKey(r1Input(['tree', 'sprout', 'tree']), 'unread');
+    expect(unread.factors.needBasis).toBe('unknown');
+    expect(unread.factors.need).toBeUndefined();
+    expect('need' in unread.factors).toBe(false);
+    expect(unread.factors.needOrderingInput).toBe(1);
+    expect(unread.factors.retrievabilityWeight).toBeUndefined();
+    expect(unread.reasoning).toContain('Need unknown');
+    expect(unread.reasoning).not.toMatch(
+      /\b(weak|weakness|struggling|forgotten|behind|low recall|needs work)\b/i,
+    );
+  });
+
+  it('R1: the growth stage never enters — every stage assignment leaves need, basis, score and order unchanged ([D-281])', () => {
+    const stages: readonly MasteryState[] = ['seed', 'sprout', 'sapling', 'tree'];
+    const reference = ranked(r1Input(['tree', 'sprout', 'tree']));
+    for (const a of stages) {
+      for (const b of stages) {
+        for (const c of stages) {
+          const run = ranked(r1Input([a, b, c]));
+          expect(run.map((e) => e.conceptKey)).toEqual(reference.map((e) => e.conceptKey));
+          for (const [index, entry] of run.entries()) {
+            expect(entry.priorityScore).toBe(reference[index]?.priorityScore);
+            expect(entry.factors.need).toBe(reference[index]?.factors.need);
+            expect(entry.factors.needBasis).toBe(reference[index]?.factors.needBasis);
+          }
+        }
+      }
+    }
+  });
+
+  it('the terms ADD: priority is w_relevance × relevance + w_need × need, at the declared fallback (1, 1) and at delivered weights', () => {
+    const fallback = byKey(r1Input(['tree', 'sprout', 'tree']), 'faded');
+    expect(fallback.factors.blendWeights).toEqual({ relevance: 1, need: 1 });
+    expect(fallback.priorityScore).toBeCloseTo(fallback.factors.preMasteryScore + 0.95, 12);
+    expect(fallback.reasoning).toContain('Need 0.95, from current recall.');
+
+    const delivered = byKey(weighted(3, 0.5), 'faded');
+    expect(delivered.factors.blendWeights).toEqual({ relevance: 3, need: 0.5 });
+    expect(delivered.priorityScore).toBeCloseTo(
+      3 * delivered.factors.preMasteryScore + 0.5 * 0.95,
+      12,
+    );
+  });
+
+  it('only the ratio of the weights changes the order: scaling both leaves the order identical', () => {
+    const base = ranked(weighted(2, 1)).map((e) => e.conceptKey);
+    expect(ranked(weighted(20, 10)).map((e) => e.conceptKey)).toEqual(base);
+  });
+
+  it('no single low factor silences a concept: zero relevance still ranks on need, and full recall still ranks on relevance (C5.10)', () => {
+    const zeroRelevance = ranked({
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment({ weight: 0 })]),
+        assessmentsWithNoEvidence: [],
+      },
+      retrievability: new Map([['concept-a', 0.3]]),
+      asOf: ASOF,
+    })[0];
+    expect(zeroRelevance?.factors.preMasteryScore).toBe(0);
+    expect(zeroRelevance?.priorityScore).toBeCloseTo(0.7, 12);
+
+    const fullRecall = ranked({
+      evidence: {
+        edges: [edge()],
+        assessmentsRead: readReport([assessment()]),
+        assessmentsWithNoEvidence: [],
+      },
+      retrievability: new Map([['concept-a', 1]]),
+      asOf: ASOF,
+    })[0];
+    expect(fullRecall?.factors.need).toBe(0);
+    expect(fullRecall?.priorityScore).toBeGreaterThan(0);
+    expect(fullRecall?.priorityScore).toBeCloseTo(fullRecall?.factors.preMasteryScore ?? -1, 12);
+  });
+
+  it('R11: demand-aware readiness, when supplied, replaces recall — recall is counted once, so perturbing it moves neither need nor score', () => {
+    const withRecall = (recall: number) =>
+      ranked({
+        evidence: {
+          edges: [edge()],
+          assessmentsRead: readReport([assessment()]),
+          assessmentsWithNoEvidence: [],
+        },
+        retrievability: new Map([['concept-a', recall]]),
+        demandAwareReadiness: new Map([['concept-a', 0.4]]),
+        asOf: ASOF,
+      })[0];
+    const base = withRecall(0.4);
+    expect(base?.factors.need).toBeCloseTo(0.6, 12);
+    expect(base?.factors.needSource).toBe('demand-aware-readiness');
+    expect(base?.reasoning).toContain('from demand-aware readiness');
+    for (const recall of [0.01, 0.2, 0.9, 1]) {
+      const perturbed = withRecall(recall);
+      expect(perturbed?.factors.need).toBe(base?.factors.need);
+      expect(perturbed?.priorityScore).toBe(base?.priorityScore);
+    }
+  });
+
+  it('[D-329] unknown relevance blends the same way: the declared middle ADDED to need', () => {
+    const course = rankOracle({
+      evidence: { edges: [], assessmentsRead: readReport([]), assessmentsWithNoEvidence: [] },
+      courseConcepts: new Map([['COURSEA', new Map([['concept-a', 'concept-a']])]]),
+      retrievability: new Map([['concept-a', 0.25]]),
+      asOf: ASOF,
+    }).courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked[0];
+    expect(entry?.factors.preMasteryScore).toBe(0.5);
+    expect(entry?.factors.need).toBeCloseTo(0.75, 12);
+    expect(entry?.priorityScore).toBeCloseTo(0.5 + 0.75, 12);
+  });
+
+  it('rejects blend weights that are zero, negative or not finite, and a readiness outside [0, 1]', () => {
+    for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => rankOracle(weighted(bad, 1))).toThrow(/blendWeights\.relevance/);
+      expect(() => rankOracle(weighted(1, bad))).toThrow(/blendWeights\.need/);
+    }
+    expect(() =>
+      rankOracle({
+        ...r1Input(['seed', 'seed', 'seed']),
+        demandAwareReadiness: new Map([['faded', 1.2]]),
+      }),
+    ).toThrow(/demandAwareReadiness/);
   });
 });
 

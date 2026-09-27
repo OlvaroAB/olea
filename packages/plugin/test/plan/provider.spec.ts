@@ -509,7 +509,7 @@ describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C
     return weight;
   }
 
-  it('an injected Scheduler is actually consulted — a lower recall probability scales the concept weight down by exactly that factor', async () => {
+  it('an injected Scheduler is actually consulted — a lower recall probability raises the concept weight by exactly the recall it lost ([D-332]: need = 1 - recall, added)', async () => {
     const neutral = await createLocalStudyPlanProvider({
       vault: await vaultWithOneReview(),
       deviceId: DEVICE,
@@ -529,7 +529,8 @@ describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C
     const neutralWeight = weightOf(neutral);
     const halvedWeight = weightOf(halved);
     expect(neutralWeight).toBeGreaterThan(0);
-    expect(halvedWeight).toBeCloseTo(neutralWeight * 0.5, 10);
+    // Recall 1 is need 0; recall 0.5 is need 0.5, added at need weight 1.
+    expect(halvedWeight).toBeCloseTo(neutralWeight + 0.5, 10);
   });
 
   it('a concept with no review history at all stays neutral even when the injected Scheduler would answer something else — absence, never a manufactured reading, reaches the ranking', async () => {

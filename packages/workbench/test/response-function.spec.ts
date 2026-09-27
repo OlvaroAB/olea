@@ -18,7 +18,7 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
-import { createFsrsScheduler } from 'olea-core';
+import { createFsrsScheduler, projectInstrumentValidity, readAllConceptReadiness } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { computeAllConceptMastery, rankOracle } from '../src/oracle-bridge.js';
 import { buildWorld, generateStream, type WorldSpec } from '../src/synthetic-bridge.js';
@@ -32,6 +32,7 @@ function reviewEntry(input: {
   readonly day: string;
   readonly rating: 'again' | 'hard' | 'good' | 'easy';
   readonly instrumentType?: 'qa' | 'cloze' | 'mcq';
+  readonly independent?: boolean;
 }): ReviewLogEntry {
   return {
     schemaVersion: 6,
@@ -43,6 +44,7 @@ function reviewEntry(input: {
     conceptIds: [input.conceptId],
     rating: input.rating,
     wasUnsure: false,
+    ...(input.independent === true ? { supportLevelShown: 'independent' as const } : {}),
     durationMs: 5_000,
     selectionContext: {
       dueState: 'due',
@@ -134,14 +136,50 @@ describe('claim: a concept failed three times outranks one passed three times (e
     // test originally exploited is exactly what D-049 merged into `sprout`'s
     // single bucket.
     const entriesA: ReviewLogEntry[] = [
-      reviewEntry({ eventId: 'a1', conceptId: CONCEPT_A, day: '2027-01-01', rating: 'again' }),
-      reviewEntry({ eventId: 'a2', conceptId: CONCEPT_A, day: '2027-01-02', rating: 'again' }),
-      reviewEntry({ eventId: 'a3', conceptId: CONCEPT_A, day: '2027-01-03', rating: 'again' }),
+      reviewEntry({
+        eventId: 'a1',
+        independent: true,
+        conceptId: CONCEPT_A,
+        day: '2027-01-01',
+        rating: 'again',
+      }),
+      reviewEntry({
+        eventId: 'a2',
+        independent: true,
+        conceptId: CONCEPT_A,
+        day: '2027-01-02',
+        rating: 'again',
+      }),
+      reviewEntry({
+        eventId: 'a3',
+        independent: true,
+        conceptId: CONCEPT_A,
+        day: '2027-01-03',
+        rating: 'again',
+      }),
     ];
     const entriesB: ReviewLogEntry[] = [
-      reviewEntry({ eventId: 'b1', conceptId: CONCEPT_B, day: '2027-01-01', rating: 'good' }),
-      reviewEntry({ eventId: 'b2', conceptId: CONCEPT_B, day: '2027-01-02', rating: 'good' }),
-      reviewEntry({ eventId: 'b3', conceptId: CONCEPT_B, day: '2027-01-03', rating: 'good' }),
+      reviewEntry({
+        eventId: 'b1',
+        independent: true,
+        conceptId: CONCEPT_B,
+        day: '2027-01-01',
+        rating: 'good',
+      }),
+      reviewEntry({
+        eventId: 'b2',
+        independent: true,
+        conceptId: CONCEPT_B,
+        day: '2027-01-02',
+        rating: 'good',
+      }),
+      reviewEntry({
+        eventId: 'b3',
+        independent: true,
+        conceptId: CONCEPT_B,
+        day: '2027-01-03',
+        rating: 'good',
+      }),
     ];
     const mastery = computeAllConceptMastery([...entriesA, ...entriesB], [CONCEPT_A, CONCEPT_B]);
     expect(mastery.get(CONCEPT_A)?.state).toBe('sprout'); // three failures: the floor once evidence exists
@@ -164,6 +202,30 @@ describe('claim: a concept failed three times outranks one passed three times (e
       confidence: 0.8,
       citations: [],
     });
+    // [D-332]: the ranking's need reads CURRENT recall (need = 1 - recall),
+    // never the growth stage — so the claim is carried by the same recall
+    // reading production composes (`oracle/compose.ts` folds
+    // `readAllConceptReadiness` into `retrievability`), not by the stages
+    // asserted above, which the blend no longer reads.
+    const allEntries = [...entriesA, ...entriesB];
+    const readiness = readAllConceptReadiness(
+      allEntries,
+      [CONCEPT_A, CONCEPT_B],
+      createFsrsScheduler(),
+      new Date('2027-01-15T00:00:00.000Z'),
+      projectInstrumentValidity(allEntries),
+    );
+    const retrievability = new Map<string, number>();
+    for (const [conceptKey, reading] of readiness) {
+      if (reading.weakest !== null)
+        retrievability.set(conceptKey, reading.weakest.recallProbability);
+    }
+    // Three failures leave no eligible recall evidence (no success to read
+    // current recall from), so A's need is unknown and ordered at the
+    // declared provisional maximum ([D-348]); three passes give B a real
+    // reading, so its need is 1 - recall, below that maximum.
+    expect(retrievability.has(CONCEPT_A)).toBe(false);
+    expect(retrievability.get(CONCEPT_B)).toBeGreaterThan(0);
     const ranking = rankOracle({
       evidence: {
         edges: [edge(CONCEPT_A), edge(CONCEPT_B)],
@@ -190,6 +252,7 @@ describe('claim: a concept failed three times outranks one passed three times (e
         assessmentsWithNoEvidence: [],
       },
       mastery,
+      retrievability,
       asOf: '2027-01-15',
     });
 
@@ -199,7 +262,7 @@ describe('claim: a concept failed three times outranks one passed three times (e
     const priorityB = courseResult.ranked.find((p) => p.conceptName === CONCEPT_B);
     expect(priorityA).toBeDefined();
     expect(priorityB).toBeDefined();
-    // The worked claim: worse mastery (three fails) outranks better mastery
+    // The worked claim: worse recall (three fails) outranks better recall
     // (three passes) when every other evidence input is identical.
     expect(priorityA?.priorityScore ?? 0).toBeGreaterThan(priorityB?.priorityScore ?? 0);
   });

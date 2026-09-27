@@ -316,15 +316,19 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     const withEntry = findEntry(withRetrievability);
     const withoutEntry = findEntry(withoutRetrievability);
 
-    // Absent without a scheduler — the blend still reads neutral (re-asserted
-    // here so this test stands on its own if the dedicated default-path test
-    // above is ever removed), but the stored factor no longer fabricates a 1.
+    // Absent without a scheduler — need reads unknown (ordered at the
+    // declared provisional maximum, [D-348]), and the stored factor never
+    // fabricates a 1.
     expect(withoutEntry.factors.retrievabilityWeight).toBeUndefined();
+    expect(withoutEntry.factors.needBasis).toBe('unknown');
     // The stub's recall probability for `qa:widget-theory:1` — the review
-    // fixture's `instrumentId` — flows straight through as the multiplier.
+    // fixture's `instrumentId` — flows straight through as current recall,
+    // and [D-332]'s blend reads it as need = 1 - recall, ADDED to relevance
+    // at the declared fallback weights (1, 1).
     expect(withEntry.factors.retrievabilityWeight).toBe(0.35);
+    expect(withEntry.factors.need).toBeCloseTo(0.65, 12);
     expect(withEntry.factors.priorityScore).toBeCloseTo(
-      withoutEntry.factors.preMasteryScore * withoutEntry.factors.masteryNeedWeight * 0.35,
+      withoutEntry.factors.preMasteryScore + (1 - 0.35),
     );
     // The signal actually moved the score — this is the "changes ranking"
     // half `rank.ts`'s own blend arithmetic already specifies; this suite

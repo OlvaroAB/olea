@@ -354,7 +354,7 @@ describe('createLocalGapProvider — the concept-name join is case-sensitive on 
 });
 
 describe('createLocalGapProvider — threads the delivered rank weights ([D-110], ol-v7r5.55 [IL-D7])', () => {
-  it('with readRankWeights absent, composes with the declared fallback (masteryNeedWeight.seed = 1)', async () => {
+  it('with readRankWeights absent, composes with the declared fallback (blend weights 1 and 1)', async () => {
     const provider = createLocalGapProvider({
       vault: gapVault(),
       deviceId: DEVICE,
@@ -368,18 +368,20 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
     if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
     const row = course.rows.find((r) => r.conceptName === 'Widget theory');
     // She has no review log yet, so masteryState is 'seed' (see the "fresh
-    // install" test above) — the declared fallback's `masteryNeedWeight.seed`
-    // is 1, the identity, so `priorityScore` equals the raw pre-mastery score.
+    // install" test above) and need is unknown, ordered at 1 ([D-348]); at
+    // the declared fallback weights (1, 1) `priorityScore` is relevance + 1.
     expect(row?.masteryState).toBe('seed');
     expect(row?.priorityScore).toBeGreaterThan(0);
+    expect(row?.priorityScore).toBeCloseTo((row?.assessmentRelevance ?? 0) + 1, 10);
   });
 
-  it('with readRankWeights delivering a masteryNeedWeight, the fallback is NOT taken — priorityScore scales by the delivered factor rather than the declared 1', async () => {
+  it('with readRankWeights delivering blend weights, the fallback is NOT taken — priorityScore uses the delivered need weight rather than the declared 1 ([D-332])', async () => {
     let calls = 0;
     const readRankWeights = async () => {
       calls += 1;
       return {
         masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+        blendWeights: { relevance: 1, need: 0.2 },
       };
     };
 
@@ -415,11 +417,17 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
     // `readRankWeights` is read on every `load()`, not cached, mirroring
     // `plan/provider.ts`'s posture.
     expect(calls).toBe(1);
-    // seed's delivered weight (0.2) vs. the declared fallback (1): the
-    // delivered priority score must be exactly a fifth of the fallback's —
-    // proving the delivered options object, not the declared constants,
-    // drove the arithmetic.
-    expect(deliveredRow?.priorityScore).toBeCloseTo((fallbackRow?.priorityScore ?? 0) * 0.2, 10);
+    // [D-332]: priority = relevance + need weight × need. With no review
+    // log, need is unknown and ordered at 1 ([D-348]), so the delivered need
+    // weight (0.2) against the declared fallback (1) must lower the score by
+    // exactly 0.8 — proving the delivered options object, not the declared
+    // constants, drove the arithmetic. (The delivered stage ladder moves
+    // nothing since [D-332].)
+    expect(deliveredRow?.priorityScore).toBeCloseTo(
+      (deliveredRow?.assessmentRelevance ?? 0) + 0.2,
+      10,
+    );
+    expect(deliveredRow?.priorityScore).toBeCloseTo((fallbackRow?.priorityScore ?? 0) - 0.8, 10);
     expect(deliveredRow?.priorityScore).not.toBeCloseTo(fallbackRow?.priorityScore ?? 0, 5);
   });
 
@@ -512,7 +520,7 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     return score;
   }
 
-  it('REGRESSION (fails pre-fix): an injected Scheduler with a lower recall probability scales priorityScore down by exactly that factor', async () => {
+  it('REGRESSION (fails pre-fix): an injected Scheduler with a lower recall probability raises priorityScore by exactly the recall it lost ([D-332]: need = 1 - recall, added)', async () => {
     const neutral = await createLocalGapProvider({
       vault: await vaultWithIndependentReview(),
       deviceId: DEVICE,
@@ -537,7 +545,8 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     // ask to be shown red before the fix: `expect(halvedScore).toBeCloseTo(neutralScore * 0.5, 10)`
     // with `halvedScore === neutralScore` (unaffected) fails that check.
     expect(neutralScore).toBeGreaterThan(0);
-    expect(halvedScore).toBeCloseTo(neutralScore * 0.5, 10);
+    // Recall 1 is need 0; recall 0.5 is need 0.5, added at need weight 1.
+    expect(halvedScore).toBeCloseTo(neutralScore + 0.5, 10);
   });
 
   it('with no scheduler override at all, production now defaults to a real FSRS Scheduler — retrievability is no longer always neutral', async () => {

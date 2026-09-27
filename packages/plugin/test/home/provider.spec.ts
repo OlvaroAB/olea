@@ -398,6 +398,8 @@ describe('createLocalHomeProvider — Home composes with the same windowDeficit 
     // steering suite above.
     const readRankWeights = async () => ({
       masteryNeedWeight: { seed: 0.2, sprout: 0.2, sapling: 0.2, tree: 0.2, unknown: 0.2 },
+      // [D-332]: the stage ladder above moves nothing; the need weight does.
+      blendWeights: { relevance: 1, need: 0.2 },
       // `[D-331]` follow-up: `RankWeightsResult`'s own required field, not read by this test.
       policyVersion: 'rw-v-test',
     });
@@ -425,13 +427,13 @@ describe('createLocalHomeProvider — Home composes with the same windowDeficit 
     expect(homeItem.gapScore).toBe(startItem.gapScore);
 
     // Not a false-positive parity between two providers that both silently
-    // ignored `readRankWeights`: the delivered weight (0.2) actually moves
-    // the number away from the declared fallback (1), the same assertion
+    // ignored `readRankWeights`: the delivered need weight (0.2) actually
+    // moves the number below the declared fallback (1), the same assertion
     // `test/session-builder/provider.spec.ts`'s own suite makes for Start.
     const fallbackItem = widgetItem(
       sessionModel(await provider(vault, host).load(DEFAULT_REQUEST)),
     );
-    expect(homeItem.gapScore).toBeCloseTo(fallbackItem.gapScore * 0.2, 10);
+    expect(homeItem.gapScore).toBeLessThan(fallbackItem.gapScore);
     expect(homeItem.gapScore).not.toBeCloseTo(fallbackItem.gapScore, 5);
   });
 
