@@ -478,4 +478,17 @@ dates spread 2026-08-14 through 2026-11-27.
   vocabulary that stops at this directory will miss it.
 - `packages/core/fixtures/instruments/` is a **third** invented subject domain (LITHO204,
   mineralogy), chosen the same way and for the same reason. It predates this rebuild and is
-  untouched by it. Three fixture domains, none of them hers.
+  untouched by it. Three fixture domains, none of them hers — plus the fourth below, so four
+  in all.
+- **`01 Courses/ASTR150/`** (`ol-egov.141.89.10.73`) is a fourth invented domain (stellar
+  nucleosynthesis), added deliberately so this vault has one course that **never has a file in
+  `02 Assignments/`** — the no-assessment-declared case, distinct from a course whose
+  assessment has already passed. Its one note carries a `topic` (so extraction and material
+  presence see a real concept for it) and, on purpose, **no card, cloze or MCQ instrument at
+  all** — `packages/core/test/instrument/vault-instruments.spec.ts` (outside this bead's owns)
+  pins the fixture at exactly two instrument-bearing courses, and giving ASTR150 one would
+  silently make that pin wrong. Because it therefore also carries no due item, ASTR150 is
+  invisible to every instrument-based enumeration in the production composer (ranked or
+  legacy-fallback) — measured directly: `packages/workbench/e2e/simulator/lived-term.spec.ts`
+  and `goldens.spec.ts` are byte-identical with and without it. Its vocabulary was screened the
+  same way and to the same bar as the other three domains (`check-fixture-vocabulary.mjs`).
