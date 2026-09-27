@@ -27,11 +27,21 @@
  * this module needing to know anything about `IngestionQueueEngine`'s own
  * internals. The old job, under the old hash, is never touched (INV-2).
  *
- * **Not wired to a production caller by this bead.** `generation-queue.ts`
- * is the one call site that would need to start passing these two fields
- * (and is out of this bead's `owns` — reported, not built here). Until that
- * lands, this fix exists as a correct, tested mechanism with no live effect
- * — see this bead's report.
+ * **Wired to its production caller (`ol-egov.141.89.5.24`).**
+ * `generation-queue.ts`'s `buildGenerationEnqueueInput` now supplies both
+ * fields when its own caller knows them, computing the enqueued job's
+ * `contentHash` from the FULL `GenerationJobKeyInput` (version terms
+ * included) while deriving `EnqueueInput.sourceUnitId` from the version-
+ * BLIND triple alone (`generationJobIdentityString` with no version
+ * fields) — exactly the split this file's functions were built to support:
+ * a source or prompt-version bump changes `contentHash` for a `sourceUnitId`
+ * that stays the same, so `IngestionQueueEngine.enqueue`'s existing
+ * supersede check (`engine.ts`, "same `sourceUnitId`, different
+ * `contentHash`") retires a still-pending job for the old version without
+ * this file, or `generation-queue.ts`, needing to know anything about the
+ * engine's own internals. See `generation-queue.ts`'s module doc for where
+ * the two values come from in production (D-385, Class B: read from local
+ * state only — never a network probe triggered by the check).
  */
 
 import { hashText } from '../ingestion/hash.js';

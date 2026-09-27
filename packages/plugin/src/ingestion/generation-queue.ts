@@ -38,6 +38,7 @@ import {
   type EnqueueResult,
   type ExtractedUnit,
   extractConcepts,
+  type GenerationJobKeyInput,
   generationJobContentHash,
   generationJobIdentityString,
   isGenerationJobPayload,
@@ -59,45 +60,93 @@ export {
 };
 
 /**
+ * `buildGenerationEnqueueInput`'s input: `BuildGenerationJobPayloadInput`
+ * plus the same two optional version terms `GenerationJobKeyInput`
+ * (`job.ts`, `olea-core`) already declares — `sourceContentHash` and
+ * `promptVersion` (D-381/D-385, `ol-egov.141.89.5.24`). Both omitted (every
+ * caller before this bead): behaviour is byte-identical to before these
+ * fields existed.
+ */
+export type BuildGenerationEnqueueInputArgs = BuildGenerationJobPayloadInput &
+  Pick<GenerationJobKeyInput, 'sourceContentHash' | 'promptVersion'>;
+
+/**
  * Builds a generation call's `EnqueueInput`: `olea-core`'s
  * `generationJobContentHash` supplies D-238's idempotency key
  * (`IngestionQueueEngine.enqueue`'s own content-hash dedup does the rest,
  * for free) and `buildGenerationJobPayload` supplies the payload — this
  * function's own job is only the `EnqueueInput` wrapper (the label) neither
  * core function has a reason to know about.
+ *
+ * **D-381/D-385 (`ol-egov.141.89.5.24`): `contentHash` and `sourceUnitId`
+ * are deliberately derived from two DIFFERENT identity strings now.**
+ * `contentHash` hashes the FULL identity — `sourceContentHash`/
+ * `promptVersion` folded in when the caller supplies them (`job.ts`'s own
+ * module doc) — so a source or prompt-version bump produces a genuinely
+ * different hash, and `IngestionQueueEngine.enqueue`'s existing content-hash
+ * dedup naturally treats a bumped call as new rather than a duplicate.
+ * `sourceUnitId` stays the version-BLIND (course, concept, kind) triple
+ * (see the comment below for why the triple, not a coarser id): were
+ * `sourceUnitId` to fold the version terms in too, a version bump would
+ * change BOTH values together and the engine's supersede check (`engine.ts`,
+ * "same `sourceUnitId`, different `contentHash`") would never see a match —
+ * it would treat the new call as an entirely unrelated unit instead of a
+ * newer revision of the same one, and the stale, still-pending job for the
+ * old version would never be retired. Neither `buildGenerationJobPayload`
+ * nor the returned `payload` sees these two fields — they exist only to
+ * shape the identity, never to become persisted job state (`job.ts`'s own
+ * `GenerationJobKeyInput` doc: "not folded into `PersistedJob`").
  */
 export async function buildGenerationEnqueueInput(
-  input: BuildGenerationJobPayloadInput,
+  input: BuildGenerationEnqueueInputArgs,
 ): Promise<EnqueueInput> {
-  const contentHash = await generationJobContentHash(input);
-  const payload = buildGenerationJobPayload(input);
+  const {
+    courseCode,
+    conceptKey,
+    conceptName,
+    instrumentKind,
+    trigger,
+    sourceContentHash,
+    promptVersion,
+  } = input;
+  const contentHash = await generationJobContentHash({
+    courseCode,
+    conceptKey,
+    instrumentKind,
+    // `exactOptionalPropertyTypes`: omit the key entirely rather than set it
+    // to `undefined` — matches `pipeline.ts:614`'s own convention for this
+    // exact optional-field shape.
+    ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
+    ...(promptVersion !== undefined ? { promptVersion } : {}),
+  });
+  const payload = buildGenerationJobPayload({
+    courseCode,
+    conceptKey,
+    conceptName,
+    instrumentKind,
+    trigger,
+  });
   return {
     contentHash,
-    label: `${input.courseCode} · ${input.conceptName} · ${input.instrumentKind}`,
+    label: `${courseCode} · ${conceptName} · ${instrumentKind}`,
     payload,
     // The source unit for a generation call is its own (course, concept,
-    // kind) identity — `generationJobIdentityString`, the same string
-    // `contentHash` above is a hash of (`EnqueueInput.sourceUnitId`'s own
-    // doc, `olea-core`). Deliberately the FULL triple, including
-    // `instrumentKind`: a coarser id (course+concept alone) would make a
-    // second call for a DIFFERENT kind on the same concept — a normal,
-    // wanted thing under D-238's "further calls add kinds, they never
-    // replace the primary one" — wrongly retire a still-pending call for the
-    // first kind. At this granularity `sourceUnitId` is currently a no-op —
-    // it can only ever match an identical `contentHash`, so the "different
-    // hash, same unit" supersede branch never fires for this caller today —
-    // but it is the only honest choice, and stays correctly wired for the
-    // day a generation call's content can vary independently of this triple
-    // (e.g. a material fingerprint) without a second edit here
-    // (`ol-egov.141.89.10.49`).
-    sourceUnitId: generationJobIdentityString(input),
+    // kind) identity — `generationJobIdentityString`, called here WITHOUT
+    // the version terms (see the module doc above for why that split
+    // matters now that a caller can supply them). Deliberately the FULL
+    // triple, including `instrumentKind`: a coarser id (course+concept
+    // alone) would make a second call for a DIFFERENT kind on the same
+    // concept — a normal, wanted thing under D-238's "further calls add
+    // kinds, they never replace the primary one" — wrongly retire a
+    // still-pending call for the first kind.
+    sourceUnitId: generationJobIdentityString({ courseCode, conceptKey, instrumentKind }),
   };
 }
 
 /** `enqueuer` is anything structurally satisfying `JobEnqueuer` — `IngestionQueueEngine` itself in production, the same duck-typed dependency `arrival-watch.ts` already takes. */
 export async function enqueueGenerationJob(
   enqueuer: JobEnqueuer,
-  input: BuildGenerationJobPayloadInput,
+  input: BuildGenerationEnqueueInputArgs,
 ): Promise<EnqueueResult> {
   const enqueueInput = await buildGenerationEnqueueInput(input);
   return enqueuer.enqueue(enqueueInput);
@@ -106,7 +155,7 @@ export async function enqueueGenerationJob(
 /** A trigger already decided elsewhere (e.g. `evaluateGenerationTriggers` once reachable) — enqueues the further call it names. */
 export function enqueueTriggeredGenerationCall(
   enqueuer: JobEnqueuer,
-  input: BuildGenerationJobPayloadInput,
+  input: BuildGenerationEnqueueInputArgs,
 ): Promise<EnqueueResult> {
   return enqueueGenerationJob(enqueuer, input);
 }
@@ -170,6 +219,35 @@ export interface GenerationArrivalDeps {
   readonly formatMatchFor?: (courseCode: string) => SchedulableInstrumentType | undefined;
   /** F2.14's observed order (D7.1), opt-in — absent means nothing has been observed yet. */
   readonly recordedPreferenceFor?: (courseCode: string) => readonly SchedulableInstrumentType[];
+  /**
+   * D-381 (`ol-egov.141.89.5.24`): the concept's current source digest —
+   * the same `sourceContentHash` shape the draft cache already keys on
+   * (`hashText` of the concept's embedding-note/source content,
+   * `cache-store.ts`, outside this bead's owned paths) — read from
+   * whatever the caller already has in hand, never a fresh vault re-read
+   * this function triggers itself. Absent (every current production
+   * wiring — composing the real lookup is a named follow-up, same posture
+   * `hasAnyBuiltKind`'s own doc discloses): no source term is folded into
+   * the enqueued call's identity, byte-identical to before this option
+   * existed.
+   */
+  readonly sourceContentHashFor?: (
+    courseCode: string,
+    conceptKey: string,
+  ) => string | undefined | Promise<string | undefined>;
+  /**
+   * D-385 (`ol-egov.141.89.5.24`, Class B): the prompt version the given
+   * kind's generation task was last seen stamped with — read from local
+   * state only (e.g. the most recent `DraftRecord.provenance.promptVersion`
+   * this device has already cached for that task, `generation/types.ts`),
+   * **never a network probe this check triggers**: a version bump becomes
+   * visible only once some later draft response stamps a new value, not by
+   * asking the service what today's version is. Absent (every current
+   * production wiring — composing the real lookup from the draft cache is
+   * a named follow-up, outside this bead's owned paths): no version term is
+   * folded in, unchanged behaviour.
+   */
+  readonly promptVersionFor?: (instrumentKind: SchedulableInstrumentType) => string | undefined;
 }
 
 /**
@@ -191,6 +269,10 @@ export async function enqueuePrimaryGenerationCallsForLandedUnits(
     const formatMatch = deps.formatMatchFor?.(courseCode) ?? null;
     const recordedPreference = deps.recordedPreferenceFor?.(courseCode) ?? [];
     const instrumentKind = primaryKindFor({ formatMatch, recordedPreference });
+    // D-385: resolved once per course/kind, from local state only — never a
+    // network call this arrival sweep triggers (see `promptVersionFor`'s
+    // own doc).
+    const promptVersion = deps.promptVersionFor?.(instrumentKind);
 
     let concepts: readonly ConceptRecord[];
     try {
@@ -204,12 +286,17 @@ export async function enqueuePrimaryGenerationCallsForLandedUnits(
       if (!concept.courses.includes(courseCode)) continue;
       try {
         if (await deps.hasAnyBuiltKind(courseCode, concept.key)) continue;
+        const sourceContentHash = await deps.sourceContentHashFor?.(courseCode, concept.key);
         await enqueueGenerationJob(deps.enqueuer, {
           courseCode,
           conceptKey: concept.key,
           conceptName: concept.name,
           instrumentKind,
           trigger: 'arrival',
+          // `exactOptionalPropertyTypes`: same conditional-spread convention
+          // as `buildGenerationEnqueueInput` above.
+          ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
+          ...(promptVersion !== undefined ? { promptVersion } : {}),
         });
       } catch (error) {
         console.error('Olea: could not enqueue a primary generation call', error);
