@@ -35,6 +35,7 @@ import {
   composeQueue,
   createFsrsScheduler,
   hashText,
+  parseCards,
   parseMcqBlocks,
   provisionalConceptKey,
   reviewLogPath,
@@ -348,6 +349,70 @@ describe('createDraftAcceptPort — [D-133] predecessor threading', () => {
       .split('\n')
       .filter((line) => line.length > 0)
       .map((line) => JSON.parse(line) as Record<string, unknown>);
+    expect(lines.find((line) => line.kind === 'succession')).toBeUndefined();
+  });
+});
+
+// `ol-v7r5.98`: the same predecessor-threading hop as the `[D-133]` block
+// above, but for a `'qa'`-kind draft — `accept.ts`'s Q&A path did not
+// forward `record.predecessorInstrumentId` or the device id/clock/event-id
+// trio into `materializeAcceptedCardDraft`, so accepting a Q&A successor
+// draft wrote the card but never appended the succession event. Uses the
+// port's REAL, registered `'qa'` materializer (no injected override —
+// `accept-generalized-kind.spec.ts` covers dispatch with a fake), so this
+// proves the production path end to end, mirroring `materialize-card.spec.ts`'s
+// own `[D-366]` succession-hookup suite one layer up, through `accept()`.
+describe('createDraftAcceptPort — [D-366]/ol-v7r5.98 Q&A successor threading', () => {
+  function baseCardRecord(overrides: Partial<DraftRecord> = {}): DraftRecord {
+    return {
+      draftId: 'draft-1',
+      status: 'pending',
+      courseCode: 'COGS214',
+      conceptName: 'Working memory',
+      conceptIds: ['concept-key-1'],
+      sourcePath: NOTE_PATH,
+      createdAt: '2026-08-25T09:00:00-07:00',
+      instrumentType: 'qa',
+      card: { front: 'What limits working memory capacity?', back: 'Chunking' },
+      provenance: { taskId: 'cards.generate.v1', promptVersion: '1.0.0', modelId: 'test-model' },
+      firstServedAt: null,
+      ...overrides,
+    };
+  }
+
+  it('a Q&A draft carrying predecessorInstrumentId appends a succession record naming both ids on accept', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseCardRecord({ predecessorInstrumentId: 'qa-old-1' }));
+
+    const { instrumentId: successorId } = await port.accept('draft-1', 'accepted');
+
+    const cards = parseCards(vault.raw(NOTE_PATH) ?? '');
+    expect(cards).toHaveLength(1); // the card itself carries no predecessor field (no format mechanism for one)
+
+    const lines = (await readVerdictLines(vault)) as Array<Record<string, unknown>>;
+    const succession = lines.find((line) => line.kind === 'succession');
+    expect(succession).toMatchObject({
+      kind: 'succession',
+      predecessorInstrumentId: 'qa-old-1',
+      successorInstrumentId: successorId,
+    });
+    // The accept verdict is still appended too — succession is additional
+    // bookkeeping, never a replacement for it.
+    const verdict = lines.find((line) => line.kind === 'verdict');
+    expect(verdict).toMatchObject({
+      verdict: 'accepted',
+      instrumentId: successorId,
+      instrumentType: 'qa',
+    });
+  });
+
+  it('a Q&A draft with no predecessorInstrumentId appends no succession record (unchanged behaviour)', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseCardRecord());
+
+    await port.accept('draft-1', 'accepted');
+
+    const lines = (await readVerdictLines(vault)) as Array<Record<string, unknown>>;
     expect(lines.find((line) => line.kind === 'succession')).toBeUndefined();
   });
 });

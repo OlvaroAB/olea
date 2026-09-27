@@ -164,30 +164,55 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
  * `ol-0r92.116` / `[D-353]`: the real `'qa'` (card) materializer. Reads
  * `record.card` (required for a `'qa'`-kind record — see `types.ts`'s doc)
  * and forwards every optional field `materializeAcceptedCardDraft` accepts
- * — same shape `materializeMcqDraft` above forwards for `'mcq'`, minus the
- * fields that have no card equivalent yet (`[D-133]` succession, `[D-220]`
- * distractor provenance — see `materialize-card.ts`'s own module doc for
- * why neither applies to a card today).
+ * — same shape `materializeMcqDraft` above forwards for `'mcq'`, now
+ * including `[D-133]`/`[D-366]` succession (`materialize-card.ts` grew a
+ * real `predecessorInstrumentId` path in `bf23f03`; only `[D-220]`
+ * distractor provenance still has no card equivalent).
+ *
+ * `ol-v7r5.98`: `record.predecessorInstrumentId` and the device id/clock/
+ * event-id trio are now forwarded exactly as `materializeMcqDraft` already
+ * does for MCQ — before this bead, a Q&A successor draft's predecessor id
+ * was dropped on the floor here, so accepting it wrote the card but never
+ * appended the succession event `materializeAcceptedCardDraft` is able to
+ * append when given one.
  */
-const materializeQaCardDraft: DraftMaterializeFn = (vault, record, _deps) => {
+const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
   if (record.card === undefined) {
     throw new Error(
       `createDraftAcceptPort: draft ${record.draftId} has instrumentType 'qa' but no card`,
     );
   }
-  return materializeAcceptedCardDraft(vault, {
-    sourcePath: record.sourcePath,
-    card: record.card,
-    // `ol-0r92.116`: same "the id is per draft" argument
-    // `materializeMcqDraft` states above, applied to a card's block id
-    // instead of an MCQ's `id:` field — see `materialize-card.ts`'s
-    // "THE RETRY-ORPHAN ARGUMENT" section.
-    draftId: record.draftId,
-    ...(record.sourceCitation !== undefined ? { sourceCitation: record.sourceCitation } : {}),
-    ...(record.sourceContentHash !== undefined
-      ? { expectedSourceContentHash: record.sourceContentHash }
-      : {}),
-  });
+  return materializeAcceptedCardDraft(
+    vault,
+    {
+      sourcePath: record.sourcePath,
+      card: record.card,
+      // `ol-0r92.116`: same "the id is per draft" argument
+      // `materializeMcqDraft` states above, applied to a card's block id
+      // instead of an MCQ's `id:` field — see `materialize-card.ts`'s
+      // "THE RETRY-ORPHAN ARGUMENT" section.
+      draftId: record.draftId,
+      ...(record.sourceCitation !== undefined ? { sourceCitation: record.sourceCitation } : {}),
+      ...(record.sourceContentHash !== undefined
+        ? { expectedSourceContentHash: record.sourceContentHash }
+        : {}),
+      // `ol-v7r5.98`: forwarded only when this draft was produced by the
+      // `'instrument-revision'` job kind — `undefined` for every ordinary
+      // sweep draft, matching `materializeMcqDraft`'s identical branch above.
+      ...(record.predecessorInstrumentId !== undefined
+        ? { predecessorInstrumentId: record.predecessorInstrumentId }
+        : {}),
+    },
+    {
+      // `materializeAcceptedCardDraft` only actually requires `deviceId`
+      // when `predecessorInstrumentId` was supplied (its own guard) —
+      // harmless to pass unconditionally otherwise, matching
+      // `materializeMcqDraft`'s identical unconditional forward above.
+      deviceId: deps.deviceId,
+      now: deps.now,
+      ...(deps.generateEventId ? { generateEventId: deps.generateEventId } : {}),
+    },
+  );
 };
 
 /**
