@@ -599,6 +599,77 @@ describe('review-log write shape (D7.1, F2.14)', () => {
     expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
   });
 
+  // `[D-395]` condition 5 (review-log v6's `compositionId`, `ol-egov.141.89.10.65`):
+  // `queue-adapter.ts` stamps `ReviewQueueItem.compositionId` at adaptation
+  // time; this is the write-seam half — `logAndAdvance` must carry it
+  // straight into `RecordReviewInput.compositionId` unchanged, read off the
+  // CURRENT item (`stamped`), never off a session-wide dep.
+  describe("carries the queue item's compositionId verbatim (D-395)", () => {
+    it('a review inside a composed session carries the id', async () => {
+      const item = { ...queueItem(qaFixture()), compositionId: 'composition-key1:nonce-1' };
+      const reviewLog = fakeReviewLog();
+      const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+      await session.start();
+      session.reveal();
+      await session.rate('good');
+
+      expect(reviewLog.calls[0]?.compositionId).toBe('composition-key1:nonce-1');
+    });
+
+    it('one outside a composed session carries none — never fabricated, never joined by time', async () => {
+      const item = queueItem(qaFixture());
+      const reviewLog = fakeReviewLog();
+      const session = new ReviewSession(baseDeps({ queue: [item], reviewLog }));
+      await session.start();
+      session.reveal();
+      await session.rate('good');
+
+      expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'compositionId')).toBe(false);
+    });
+
+    // `continueWith` (F2.19/`ol-0r92.32`) can merge a second, freshly-opened
+    // session's queue onto this one's `items` mid-sitting. Where the ruling
+    // says the id stays the same (an item this session already held keeps
+    // whatever it was built with) that is exactly what happens; a genuinely
+    // NEW item the extension brings in keeps its own, different id — this
+    // class derives neither, it only ever passes each item's own through.
+    it("an extension keeps the same session's id for items already held, and its own for what it adds", async () => {
+      const first = {
+        ...queueItem(qaFixture({ instrumentId: 'first' })),
+        compositionId: 'composition-key1:nonce-1',
+      };
+      const second = {
+        ...queueItem(qaFixture({ instrumentId: 'second' })),
+        compositionId: 'composition-key1:nonce-1',
+      };
+      const reviewLog = fakeReviewLog();
+      const session = new ReviewSession(baseDeps({ queue: [first, second], reviewLog }));
+      await session.start();
+
+      session.reveal();
+      await session.rate('good');
+      expect(reviewLog.calls[0]?.compositionId).toBe('composition-key1:nonce-1');
+
+      session.reveal();
+      await session.rate('good');
+      expect(reviewLog.calls[1]?.compositionId).toBe('composition-key1:nonce-1');
+      expect(session.getViewModel().phase).toBe('complete');
+
+      // The extension's own record — a genuinely different id, per `[D-395]`
+      // condition 2 (a keep going that changed the list appends its own
+      // extension record).
+      const third = {
+        ...queueItem(qaFixture({ instrumentId: 'third' })),
+        compositionId: 'composition-key1:nonce-2',
+      };
+      await session.continueWith([third]);
+      session.reveal();
+      await session.rate('good');
+
+      expect(reviewLog.calls[2]?.compositionId).toBe('composition-key1:nonce-2');
+    });
+  });
+
   // F5.3a / C5.11's grade-write half, widened kind-general by `[D-185]`
   // (`ol-0r92.41`): `evaluateSchedulingObservationForGradeWrite` is the raw,
   // caller-decided input `logAndAdvance` forwards verbatim into

@@ -349,6 +349,76 @@ describe('createVaultReviewLogPort — the supportLevel write seam (ol-95vv.4)',
   });
 });
 
+describe('createVaultReviewLogPort — the compositionId write seam ([D-395], ol-egov.141.89.10.65)', () => {
+  const DEVICE = 'ports-spec-composition-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-composition-1',
+    conceptIds: ['concept-a'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'qa',
+    question: 'What is it?',
+    answer: 'It is this.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['qa'],
+    planVersion: null,
+  };
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  it('merges compositionId verbatim when the caller (a review inside a composed session) supplies one', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+      compositionId: 'composition-key1:nonce-1',
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(record.compositionId).toBe('composition-key1:nonce-1');
+  });
+
+  it('writes no compositionId field at all when the caller passes none (a review outside a composed session) — never a time-joined or fabricated one', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      instrument: INSTRUMENT,
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: SELECTION_CONTEXT,
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    const record = parsed.records[0];
+    expect(record?.kind).toBe('review');
+    if (record?.kind !== 'review') return;
+    expect(Object.hasOwn(record, 'compositionId')).toBe(false);
+  });
+});
+
 describe('createVaultReviewLogPort — the scheduling-observation write seam ([D-185], ol-0r92.41)', () => {
   const DEVICE = 'ports-spec-scheduling-observation-device';
 

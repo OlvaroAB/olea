@@ -152,6 +152,23 @@ export interface ReviewQueueItem {
    * reason," never an invented one.
    */
   readonly rankedReason?: string;
+  /**
+   * `[D-395]` condition 5 (review-log v6's `compositionId`, `olea-service`'s
+   * `ol-egov.141.89.10.65`): the id of the composition record that served
+   * THIS item — `composedSession.compositionRecord.compositionId` at the
+   * moment `queue-adapter.ts` built this item, passed straight through by
+   * `session.ts`'s `logAndAdvance` to `ports.ts`'s `RecordReviewInput`.
+   * Carried per item, not once for the whole session, because
+   * `ReviewSession.continueWith` (F2.19/`ol-0r92.32`) can merge a second,
+   * freshly-opened session's queue — composed under its own extension
+   * record — onto this one's `items`; an item built before that merge
+   * keeps whatever id it was built with, and one built after carries the
+   * extension's. `undefined` for a review outside a composed session (no
+   * `ComposedStudySession.compositionRecord` — a workbench fixture, a
+   * preview, or any caller that built this item by hand): never derived,
+   * never joined by time, never defaulted from a sibling item's value.
+   */
+  readonly compositionId?: string;
 }
 
 export type { Rating, SelectionContextV4 };

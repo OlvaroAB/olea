@@ -893,6 +893,17 @@ export async function openReviewSession(
       distractorProvenanceById,
       rankedReasonsById,
       ...(input.random !== undefined ? { random: input.random } : {}),
+      // `[D-395]` condition 5 (`ol-egov.141.89.10.65`): the record THIS open
+      // served this session under — its first record, or the latest
+      // extension once she outran the target (`composedSession.compositionRecord`'s
+      // own doc, above) — stamped onto every item this call's adapter
+      // builds (`queue-adapter.ts`'s `AdaptExecutedReviewQueueInput.compositionId`).
+      // Absent on a preview or any composition the recorder never wrote a
+      // record for (a failed write, or a caller outside this module) —
+      // exactly `[D-395]`'s "absence is never a prompt to join by time".
+      ...(composedSession.compositionRecord !== undefined
+        ? { compositionId: composedSession.compositionRecord.compositionId }
+        : {}),
     };
     // `ol-v7r5.35` (`[D-193]`): a caller-supplied `frozenQueue` routes this
     // call through C5.8's freeze instead of a bare, always-recomposing

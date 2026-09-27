@@ -110,6 +110,21 @@ export interface RecordReviewInput {
    * pick — never a fabricated provenance object.
    */
   readonly misconceptionDistractor?: McqMisconceptionProvenance;
+  /**
+   * `[D-395]` condition 5 (review-log v6's `compositionId`, `olea-service`'s
+   * `ol-egov.141.89.10.65`): the composition record that served this
+   * review's item — `session.ts`'s `logAndAdvance` passes
+   * `item.compositionId` verbatim (`queue-adapter.ts` stamped it at
+   * adaptation time from `composedSession.compositionRecord?.compositionId`
+   * — see that field's own doc). Merged straight onto the record below,
+   * same "caller decides, port writes" split every other optional field on
+   * this input already uses. `undefined` for a review outside a composed
+   * session (a workbench fixture, a preview, or any item this bead's queue
+   * adapters were not asked to stamp) — the record is written with no
+   * `compositionId` field at all, never a fabricated or time-joined one;
+   * `[D-395]` is explicit that absence here is never a prompt to guess.
+   */
+  readonly compositionId?: string;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -230,6 +245,9 @@ export function createVaultReviewLogPort(
           // `[D-205 / SIG-2]`: merged verbatim, only when the caller computed
           // one (an MCQ review) — see `RecordReviewInput.correctness`'s doc.
           ...(input.correctness !== undefined ? { correctness: input.correctness } : {}),
+          // `[D-395]` condition 5: merged verbatim, only when the caller's
+          // item carried one — see `RecordReviewInput.compositionId`'s doc.
+          ...(input.compositionId !== undefined ? { compositionId: input.compositionId } : {}),
         },
         { deviceId },
       );

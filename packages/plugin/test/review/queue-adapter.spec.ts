@@ -759,6 +759,106 @@ describe('both adapters map rankedReasonsById onto rankedReason, never fabricati
   });
 });
 
+// `[D-395]` condition 5 (review-log v6's `compositionId`, `olea-service`'s
+// `ol-egov.141.89.10.65`): both adapters stamp `input.compositionId` verbatim
+// onto every item they build — a single value for the whole call (never a
+// per-instrument map, unlike `rankedReasonsById` above), because one call is
+// one composed batch served under exactly one record.
+describe('both adapters stamp compositionId onto every item, never fabricating one (D-395)', () => {
+  it('adaptReviewQueue stamps the same id on every item when the caller supplies one', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const queue = composedQueueFor(session);
+    const items = adaptReviewQueue({
+      queue,
+      recordsById: session.recordsById,
+      compositionId: 'composition-key1:nonce-1',
+    });
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.compositionId).toBe('composition-key1:nonce-1');
+    }
+  });
+
+  it('omitting compositionId leaves every item without one — a review outside a composed session', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const items = adaptReviewQueue({
+      queue: composedQueueFor(session),
+      recordsById: session.recordsById,
+    });
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.compositionId).toBeUndefined();
+      expect(Object.hasOwn(item, 'compositionId')).toBe(false);
+    }
+  });
+
+  it('adaptExecutedReviewQueue carries the same field through PlannedQueueItem', async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const executed = executeStudyPlan({ queue: composedQueueFor(session), plan: null });
+    const items = adaptExecutedReviewQueue({
+      items: executed.items,
+      recordsById: session.recordsById,
+      compositionId: 'composition-key1:nonce-1',
+    });
+    expect(items.length).toBeGreaterThan(0);
+    for (const item of items) {
+      expect(item.compositionId).toBe('composition-key1:nonce-1');
+    }
+  });
+
+  // `[D-395]`: a "keep going" that grows an already-frozen sitting composes
+  // its additions under a DIFFERENT call (the extension's own record), and
+  // `extend` only ever appends what is not already present — the already-
+  // frozen items must keep whatever id `open` stamped them with, never pick
+  // up `extend`'s own value. Where the ruling says the record is unchanged
+  // (nothing in the list changed), the id an item carries stays the same
+  // one — this is the passthrough that makes that true, one call at a time.
+  it("createFrozenReviewQueue: an item already frozen under one call keeps that call's id when extend runs under a different one", async () => {
+    const session = await buildReviewSession({
+      vault: vault(),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const executed = executeStudyPlan({ queue: composedQueueFor(session), plan: null });
+    const frozen = createFrozenReviewQueue({ now: () => NOW });
+
+    const opened = frozen.open({
+      items: executed.items,
+      recordsById: session.recordsById,
+      compositionId: 'composition-key1:nonce-1',
+    });
+    expect(opened.length).toBeGreaterThan(0);
+    for (const item of opened) {
+      expect(item.compositionId).toBe('composition-key1:nonce-1');
+    }
+
+    // Re-`extend` with the SAME candidate list under a different call's id:
+    // nothing new to append, so the frozen items are returned unchanged —
+    // still carrying the FIRST call's id, never the second's.
+    const extended = frozen.extend({
+      items: executed.items,
+      recordsById: session.recordsById,
+      compositionId: 'composition-key1:nonce-2',
+    });
+    expect(extended).toBe(opened);
+    for (const item of extended) {
+      expect(item.compositionId).toBe('composition-key1:nonce-1');
+    }
+  });
+});
+
 // [SUPP-3] (`ol-lpl4`): row 3.9's chooser input, built from raw review-log
 // entries and threaded through both adapters — the live queue's equivalent of
 // `study-session/build.ts`'s composition-time wiring ([SUPP-2], `ol-95vv.4`).

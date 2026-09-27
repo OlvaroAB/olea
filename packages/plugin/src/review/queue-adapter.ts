@@ -421,6 +421,22 @@ export interface AdaptReviewQueueInput {
    * item gets a `rankedReason`.
    */
   readonly rankedReasonsById?: ReadonlyMap<string, string>;
+  /**
+   * `[D-395]` condition 5 (`olea-service`'s `ol-egov.141.89.10.65`): the
+   * single composition record's id serving this WHOLE call —
+   * `composedSession.compositionRecord?.compositionId`, the caller's to
+   * read (this file has no vault access, INV-1) — applied verbatim to every
+   * item this call builds, the same "one singular reading, applied to every
+   * item" shape {@link AdaptReviewQueueInput.supportSelfAssessment} already
+   * uses. Never a per-instrument map like `rankedReasonsById` above: one
+   * call to this adapter is one composed batch, served under exactly one
+   * record. Omitted (every caller before this bead, and any caller outside
+   * a composed session — a workbench fixture, a preview) means no item
+   * gets a `compositionId` at all — see `ReviewQueueItem.compositionId`'s
+   * own doc for why `continueWith` still lets two different calls' values
+   * coexist inside one live `ReviewSession`.
+   */
+  readonly compositionId?: string;
 }
 
 /**
@@ -585,6 +601,7 @@ export function adaptReviewQueue(input: AdaptReviewQueueInput): readonly ReviewQ
       selectionContext: toSelectionContext(item),
       ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
       ...(rankedReason !== undefined ? { rankedReason } : {}),
+      ...(input.compositionId !== undefined ? { compositionId: input.compositionId } : {}),
     });
   }
 
@@ -613,6 +630,8 @@ export interface AdaptExecutedReviewQueueInput {
   readonly distractorProvenanceById?: ReadonlyMap<string, DistractorProvenance>;
   /** See {@link AdaptReviewQueueInput.rankedReasonsById}. */
   readonly rankedReasonsById?: ReadonlyMap<string, string>;
+  /** See {@link AdaptReviewQueueInput.compositionId}. */
+  readonly compositionId?: string;
 }
 
 /**
@@ -646,6 +665,7 @@ export function adaptExecutedReviewQueue(
       selectionContext: item.selectionContext,
       ...(item.dedupeReason !== undefined ? { dedupeReason: item.dedupeReason } : {}),
       ...(rankedReason !== undefined ? { rankedReason } : {}),
+      ...(input.compositionId !== undefined ? { compositionId: input.compositionId } : {}),
     });
   }
 

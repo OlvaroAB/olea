@@ -1499,6 +1499,14 @@ export class ReviewSession {
       // `misconception-observed` append, never a field merged onto this
       // same record — see `RecordReviewInput.misconceptionDistractor`'s doc.
       ...(misconceptionDistractor !== undefined ? { misconceptionDistractor } : {}),
+      // `[D-395]` condition 5: `stamped.compositionId` is whatever
+      // `queue-adapter.ts` stamped this ITEM with at adaptation time
+      // (`ReviewQueueItem.compositionId`'s own doc) — read off the item,
+      // never off a session-wide dep, because `continueWith` can hold items
+      // from two different composition records in one live session.
+      // Conditional spread, same `exactOptionalPropertyTypes` discipline as
+      // `supportLevel` above.
+      ...(stamped.compositionId !== undefined ? { compositionId: stamped.compositionId } : {}),
     });
 
     // Called directly (rather than through `previewSingleInterval`) because
