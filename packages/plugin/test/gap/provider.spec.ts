@@ -14,6 +14,7 @@ import { studyPlanEnvelope } from 'olea-contracts';
 import type { Scheduler } from 'olea-core';
 import {
   createFsrsScheduler,
+  daysBetween,
   extractConcepts,
   type RetrievabilityInput,
   type RetrievabilityOutput,
@@ -84,8 +85,25 @@ const BASE_FILE = [
   '  status:',
 ].join('\n');
 
-const QUIZ =
-  '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n';
+const QUIZ_DUE = '2026-09-01';
+const QUIZ = `---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: ${QUIZ_DUE}\nstatus: upcoming\n---\n\n# Quiz 1\n`;
+
+/**
+ * `[D-410]`: every fixture row below carries one edge to `QUIZ`, so its
+ * concept-level `proximityScore` (the highest `examProximityScore` across
+ * surviving edges) is this one value — computed the same way
+ * `rank.ts`'s `computeExamProximityScore` does (`1 / (1 + daysUntilDue /
+ * proximityHalfLifeDays)`), from the fixture's own `due` date and the
+ * `now` each test supplies, rather than a pasted result. `14` is
+ * `rank.ts`'s `DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS` — every test
+ * below relies on the declared fallback (no `readRankWeights`/`options`
+ * override supplies a different half-life).
+ */
+function quizProximityScore(now: Date): number {
+  const daysUntilDue = daysBetween(now, new Date(`${QUIZ_DUE}T00:00:00.000Z`));
+  const DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS = 14;
+  return 1 / (1 + daysUntilDue / DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS);
+}
 
 /**
  * One course, one cited concept, one note carrying both the topic binding
@@ -360,12 +378,13 @@ describe('createLocalGapProvider — the concept-name join is case-sensitive on 
 });
 
 describe('createLocalGapProvider — threads the delivered rank weights ([D-110], ol-v7r5.55 [IL-D7])', () => {
-  it('with readRankWeights absent, composes with the declared fallback (blend weights 1 and 1)', async () => {
+  it('with readRankWeights absent, composes with the declared fallback (blend weights 1, 1 and 1)', async () => {
+    const now = new Date('2026-08-10T09:00:00-04:00');
     const provider = createLocalGapProvider({
       vault: gapVault(),
       deviceId: DEVICE,
       settingsHost: hostWithBasePath(BASE_PATH),
-      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      now: () => now,
     });
 
     const state = await provider.load();
@@ -375,13 +394,18 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
     const row = course.rows.find((r) => r.conceptName === 'Widget theory');
     // She has no review log yet, so masteryState is 'seed' (see the "fresh
     // install" test above) and need is unknown, ordered at 1 ([D-348]); at
-    // the declared fallback weights (1, 1) `priorityScore` is relevance + 1.
+    // the declared fallback weights (1, 1, 1) `priorityScore` is relevance +
+    // 1 + proximity ([D-410]).
     expect(row?.masteryState).toBe('seed');
     expect(row?.priorityScore).toBeGreaterThan(0);
-    expect(row?.priorityScore).toBeCloseTo((row?.assessmentRelevance ?? 0) + 1, 10);
+    expect(row?.priorityScore).toBeCloseTo(
+      (row?.assessmentRelevance ?? 0) + 1 + quizProximityScore(now),
+      10,
+    );
   });
 
   it('with readRankWeights delivering blend weights, the fallback is NOT taken — priorityScore uses the delivered need weight rather than the declared 1 ([D-332])', async () => {
+    const now = new Date('2026-08-10T09:00:00-04:00');
     let calls = 0;
     const readRankWeights = async () => {
       calls += 1;
@@ -395,13 +419,13 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
       vault: gapVault(),
       deviceId: DEVICE,
       settingsHost: hostWithBasePath(BASE_PATH),
-      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      now: () => now,
     });
     const deliveredProvider = createLocalGapProvider({
       vault: gapVault(),
       deviceId: DEVICE,
       settingsHost: hostWithBasePath(BASE_PATH),
-      now: () => new Date('2026-08-10T09:00:00-04:00'),
+      now: () => now,
       readRankWeights,
     });
 
@@ -423,14 +447,16 @@ describe('createLocalGapProvider — threads the delivered rank weights ([D-110]
     // `readRankWeights` is read on every `load()`, not cached, mirroring
     // `plan/provider.ts`'s posture.
     expect(calls).toBe(1);
-    // [D-332]: priority = relevance + need weight × need. With no review
-    // log, need is unknown and ordered at 1 ([D-348]), so the delivered need
-    // weight (0.2) against the declared fallback (1) must lower the score by
-    // exactly 0.8 — proving the delivered options object, not the declared
-    // constants, drove the arithmetic. (The delivered stage ladder moves
-    // nothing since [D-332].)
+    // [D-332]: priority = relevance + need weight × need + proximity weight ×
+    // proximity ([D-410]). With no review log, need is unknown and ordered at
+    // 1 ([D-348]), so the delivered need weight (0.2) against the declared
+    // fallback (1) must lower the score by exactly 0.8 — proving the
+    // delivered options object, not the declared constants, drove the
+    // arithmetic. (The delivered stage ladder moves nothing since [D-332].)
+    // The delivered `blendWeights` supplies no `proximity`, so it still
+    // resolves to the declared fallback (1) — same as the fallback run.
     expect(deliveredRow?.priorityScore).toBeCloseTo(
-      (deliveredRow?.assessmentRelevance ?? 0) + 0.2,
+      (deliveredRow?.assessmentRelevance ?? 0) + 0.2 + quizProximityScore(now),
       10,
     );
     expect(deliveredRow?.priorityScore).toBeCloseTo((fallbackRow?.priorityScore ?? 0) - 0.8, 10);
@@ -788,8 +814,18 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     if (widgetBefore === undefined || gadgetBefore === undefined) {
       throw new Error('expected both concepts ranked');
     }
-    expect(widgetBefore.priorityScore).toBeCloseTo(widgetBefore.assessmentRelevance ?? -1, 10);
-    expect(gadgetBefore.priorityScore).toBeCloseTo(gadgetBefore.assessmentRelevance ?? -1, 10);
+    // Both concepts' one surviving edge is to `QUIZ`, so both carry the same
+    // proximity ([D-410]) — added here rather than dropped, since "need 0,
+    // tied" was never a claim about proximity.
+    const proximity = quizProximityScore(NOW());
+    expect(widgetBefore.priorityScore).toBeCloseTo(
+      (widgetBefore.assessmentRelevance ?? -1) + proximity,
+      10,
+    );
+    expect(gadgetBefore.priorityScore).toBeCloseTo(
+      (gadgetBefore.assessmentRelevance ?? -1) + proximity,
+      10,
+    );
 
     const widgetRel = widgetBefore.assessmentRelevance ?? 0;
     const gadgetRel = gadgetBefore.assessmentRelevance ?? 0;
@@ -818,8 +854,17 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     }
     // Need is now KNOWN (not unknown) for both — proves acceptance bullet
     // 1 on two concepts at once, not just the one-row REGRESSION test above.
-    expect(lowerAfter.priorityScore).toBeCloseTo((lowerAfter.assessmentRelevance ?? 0) + 0.999, 6);
-    expect(higherAfter.priorityScore).toBeCloseTo(higherAfter.assessmentRelevance ?? 0, 10);
+    // Both still carry the same proximity ([D-410]) as the BEFORE read (same
+    // vault, same `due`, same `now` — the scheduler is the only thing that
+    // changed), added here rather than dropped.
+    expect(lowerAfter.priorityScore).toBeCloseTo(
+      (lowerAfter.assessmentRelevance ?? 0) + 0.999 + proximity,
+      6,
+    );
+    expect(higherAfter.priorityScore).toBeCloseTo(
+      (higherAfter.assessmentRelevance ?? 0) + proximity,
+      10,
+    );
 
     // BEFORE, by construction, `higherName` ranked first (bigger relevance,
     // tied need). AFTER, its real near-total need overturns that — exactly

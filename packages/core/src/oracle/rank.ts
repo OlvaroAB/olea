@@ -312,13 +312,21 @@ import type {
   OracleConceptFactors,
   OracleEdgeContribution,
   OracleMasteryState,
+  OracleProximityFactors,
   OracleVetoedConcept,
   OracleVetoedEdge,
-  RankBlendWeights,
+  RankBlendWeightsWithProximity,
   RankOracleInput,
   RankOracleOptions,
   RankOracleResult,
 } from './types.js';
+
+// Re-exported for compatibility: `OracleProximityFactors` and
+// `RankBlendWeightsWithProximity` used to be declared in this module
+// (`[D-410]`) and are imported from `'./rank.js'` elsewhere (`./rank.spec.ts`,
+// outside this bead's owns); they now live in `./types.js`, next to the
+// `[D-332]` `RankBlendWeights` the second extends.
+export type { OracleProximityFactors, RankBlendWeightsWithProximity } from './types.js';
 
 /**
  * DECLARED FALLBACK (`[D-110]`, `ol-egov.28`) — used only when
@@ -450,35 +458,11 @@ const DECLARED_FALLBACK_BLEND_WEIGHTS: RankBlendWeightsWithProximity = {
 };
 
 /**
- * `[D-410]` — the blend's three weights. `./types.js`'s `RankBlendWeights`
- * carries the `[D-332]` two; the proximity weight is typed HERE, for the
- * same one-owned-file reason as the additive inputs below, and is optional
- * on input so a two-weight object (the `rank-weights` envelope's future
- * shape, every existing caller) still resolves: its proximity weight is the
- * declared one. `rankOracle` always reports all three on
- * `factors.blendWeights`.
+ * `[D-410]` — the blend's three weights, and the per-concept proximity term:
+ * `RankBlendWeightsWithProximity` and `OracleProximityFactors`, both typed in
+ * `./types.js` now (moved there, `ol-egov.141.89.10.82` follow-up), next to
+ * the `[D-332]` two-weight `RankBlendWeights` they extend/accompany.
  */
-export interface RankBlendWeightsWithProximity extends RankBlendWeights {
-  /** Weight on {@link OracleProximityFactors.proximityScore}. Finite and above 0. */
-  readonly proximity: number;
-}
-
-/**
- * `[D-410]` — the per-concept proximity term, reported on every ranked
- * entry's `factors` (typed HERE; see {@link RankBlendWeightsWithProximity}).
- */
-export interface OracleProximityFactors {
-  /**
-   * The highest `examProximityScore` across the concept's SURVIVING edges —
-   * how soon the soonest dated assessment that examines it falls, in
-   * `[0, 1]`. `0` when no surviving edge has a readable date, and for a
-   * `[D-329]` concept with no edge at all: a missing date adds nothing to
-   * this term and takes nothing from relevance.
-   */
-  readonly proximityScore: number;
-  /** All three weights `priorityScore` was computed with (`[D-410]`). */
-  readonly blendWeights: RankBlendWeightsWithProximity;
-}
 
 /**
  * `[D-329]` — additive to `RankOracleInput`, typed HERE (not `./types.js`)

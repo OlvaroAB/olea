@@ -334,9 +334,13 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     expect(withEntry.factors.retrievabilityWeight).toBe(0.35);
     expect(withEntry.factors.need).toBeCloseTo(0.65, 12);
     expect(withEntry.factors.needSource).toBe('demand-aware-readiness');
-    expect(withEntry.factors.priorityScore).toBeCloseTo(
-      withoutEntry.factors.preMasteryScore + (1 - 0.35),
-    );
+    // Compared as a delta against `withoutEntry`'s own `priorityScore` rather
+    // than its `preMasteryScore` plus a pasted need term: both runs share the
+    // same vault and `asOf`, so relevance AND proximity ([D-410]) are
+    // identical between them, and only the need term (driven by
+    // `retrievability`) differs — by exactly `1 - 0.35` (unknown need's
+    // declared provisional maximum, [D-348], minus the measured need here).
+    expect(withEntry.factors.priorityScore).toBeCloseTo(withoutEntry.factors.priorityScore - 0.35);
     // The signal actually moved the score — this is the "changes ranking"
     // half `rank.ts`'s own blend arithmetic already specifies; this suite
     // covers only that compose's threading reaches it.

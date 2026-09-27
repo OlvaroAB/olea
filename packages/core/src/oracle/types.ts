@@ -15,9 +15,11 @@
  *  - **Assessment relevance** (the evidence question — "how strongly does
  *    this past-paper/objectives evidence say this concept is examined?") is
  *    `OracleEdgeContribution.evidenceStrength`/`.contribution` and
- *    `OracleConceptFactors.preMasteryScore` — the yield/confidence/weight/
- *    proximity blend, computed entirely from the assessment evidence and
- *    never from anything about her. **This is a relevance score, not a
+ *    `OracleConceptFactors.preMasteryScore` — the yield/confidence/weight
+ *    blend, computed entirely from the assessment evidence and never from
+ *    anything about her (`[D-410]`: proximity left this product and is now
+ *    its own additive blend term, `OracleProximityFactors.proximityScore`,
+ *    never folded back into relevance). **This is a relevance score, not a
  *    probability, until it is calibrated prospectively against real
  *    outcomes** — nothing in this bead recalibrates it, and none of these
  *    fields should be printed or reasoned about as "the chance this concept
@@ -170,7 +172,7 @@ export interface OracleEdgeContribution {
   readonly examProximityScore: number;
   /** `yieldScore * confidence` — the evidence signal alone, before assessment weight or timing. */
   readonly evidenceStrength: number;
-  /** `evidenceStrength * assessmentWeightScore * examProximityScore` — this edge's share of the concept's pre-mastery score. */
+  /** `evidenceStrength * assessmentWeightScore` — this edge's share of the concept's pre-mastery score. **No longer multiplied by `examProximityScore`** (`[D-410]`): proximity left this product, so an undated edge's evidence counts here in full; the edge's own `examProximityScore` feeds only the concept's separate proximity blend term. */
   readonly contribution: number;
 }
 
@@ -398,6 +400,35 @@ export interface RankBlendWeights {
   readonly relevance: number;
   /** Weight on need (`OracleConceptFactors.needOrderingInput`). */
   readonly need: number;
+}
+
+/**
+ * `[D-410]` — the blend's three weights. Extends the `[D-332]` two above with
+ * the proximity weight; a supplied two-weight object (the `rank-weights`
+ * envelope's current shape, every existing caller) still resolves, via
+ * `./rank.ts`'s `resolveOptions`, to the declared proximity weight.
+ * `rankOracle` always reports all three on `factors.blendWeights`.
+ */
+export interface RankBlendWeightsWithProximity extends RankBlendWeights {
+  /** Weight on {@link OracleProximityFactors.proximityScore}. Finite and above 0. */
+  readonly proximity: number;
+}
+
+/**
+ * `[D-410]` — the per-concept proximity term, reported on every ranked
+ * entry's `factors` alongside {@link OracleConceptFactors}.
+ */
+export interface OracleProximityFactors {
+  /**
+   * The highest `examProximityScore` across the concept's SURVIVING edges —
+   * how soon the soonest dated assessment that examines it falls, in
+   * `[0, 1]`. `0` when no surviving edge has a readable date, and for a
+   * `[D-329]` concept with no edge at all: a missing date adds nothing to
+   * this term and takes nothing from relevance.
+   */
+  readonly proximityScore: number;
+  /** All three weights `priorityScore` was computed with (`[D-410]`). */
+  readonly blendWeights: RankBlendWeightsWithProximity;
 }
 
 /**
