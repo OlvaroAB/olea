@@ -285,6 +285,41 @@ describe('the keyword index store is actually constructed (ol-tuvx)', () => {
   });
 });
 
+describe('a vault-read failure while building the keyword index never crashes onload (ol-egov.141.89.10.75)', () => {
+  // `keyword-index/wiring.ts`'s own rebuild-once step is a real vault walk
+  // with no handler of its own — before this bead, a failing read there
+  // threw straight out of the unawaited-nowhere `await
+  // buildKeywordIndexWiring({...})` call above, and because that call sits
+  // inside `onload` itself (not inside a lazily-invoked `registerView`
+  // factory), the throw propagated out of `onload` and crashed the WHOLE
+  // mount — every other view this remount composes included, not just one.
+  // Root-caused via a real simulator repro (`e2e/simulator/journeys/today-
+  // due-vault-fault.spec.ts`, run repeatedly): WBX-27's sticky vault-read
+  // fault axis armed, then a full remount, occasionally threw this exact
+  // stack out of `yp.onload` → ... → the keyword-index engine's rebuild →
+  // the shim's `read`.
+
+  it('wraps the construction in try/catch, degrading to the already-handled null state on failure', () => {
+    expect(main).toMatch(
+      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
+    );
+  });
+
+  it('never registers an unsubscribe for a wiring that failed to build (the register call is inside the try)', () => {
+    // A prior version guarded `this.keywordIndex = null` on failure but kept
+    // `this.register(this.keywordIndex.unsubscribe)` outside the try — that
+    // would itself throw on the null case. Assert the ordering directly:
+    // exactly one `this.register(this.keywordIndex.unsubscribe)` call, and it
+    // appears before the matching `catch`.
+    const tryIndex = main.indexOf('this.keywordIndex = await buildKeywordIndexWiring({');
+    const registerIndex = main.indexOf('this.register(this.keywordIndex.unsubscribe);');
+    const catchIndex = main.indexOf("console.error('Olea: could not build the keyword index'");
+    expect(tryIndex).toBeGreaterThan(-1);
+    expect(registerIndex).toBeGreaterThan(tryIndex);
+    expect(catchIndex).toBeGreaterThan(registerIndex);
+  });
+});
+
 describe('the embedding cache is actually drained (ol-odb0.1)', () => {
   // Same defect shape as ol-tuvx and the review-view gap this file opens
   // with, one layer up: `EmbeddingCacheEngine`, `WorkerEmbeddingProvider`

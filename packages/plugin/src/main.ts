@@ -1997,13 +1997,29 @@ export default class OleaPlugin extends Plugin {
     // ever constructed. This is that construction — see
     // `keyword-index/wiring.ts`'s module doc for the rebuild-once and
     // stay-live-via-watch policy.
-    this.keywordIndex = await buildKeywordIndexWiring({
-      vault,
-      store: new ObsidianKeywordIndexStore(this),
-      capability,
-      watch: (handler) => vault.watch(handler),
-    });
-    this.register(this.keywordIndex.unsubscribe);
+    //
+    // `ol-egov.141.89.10.75`: `wiring.ts`'s own rebuild-once step
+    // (`engine.rebuild()`) is a real vault walk, unguarded there, so a vault-
+    // read failure during it must not crash `onload` itself — the same
+    // "degrade, never throw" posture every other best-effort load in this
+    // method already takes (`registryOverridesCache`/`gateStageStore` above).
+    // `this.keywordIndex` staying `null` is already a handled state: every
+    // reader below (`drainEmbeddings`, `composeExplainWhySourceChunks`, the
+    // two `readLandedConceptsForFinishedFolders`/oracle-ranking callers) is
+    // guarded on `this.keywordIndex === null`, the same as before this
+    // construction ever ran.
+    try {
+      this.keywordIndex = await buildKeywordIndexWiring({
+        vault,
+        store: new ObsidianKeywordIndexStore(this),
+        capability,
+        watch: (handler) => vault.watch(handler),
+      });
+      this.register(this.keywordIndex.unsubscribe);
+    } catch (error) {
+      console.error('Olea: could not build the keyword index', error);
+      this.keywordIndex = null;
+    }
 
     // ol-odb0.1: the embeddings half of retrieval. `null` when no Worker
     // token is pasted yet (F7.8) — see `retrieval/wiring.ts`'s module doc.
