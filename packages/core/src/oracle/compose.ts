@@ -299,6 +299,55 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * caller has no such reading; nothing is then withheld on those grounds.
    */
   readonly otherIneligibleInstrumentIds?: ReadonlySet<string>;
+  /**
+   * `[D-373]` applying `[D-329]` (`ol-76pt`): opt a course she has material
+   * for but that has no assessment record at all into `rankOracle`'s
+   * need-only reading. Supplied `true`, this composition hands `rankOracle`
+   * a `courseConcepts` universe (`RankOracleCourseConceptsInput`) for
+   * exactly those courses — every concept in `concepts` whose course no
+   * record in `assessmentsRead` names — so their concepts rank at unknown
+   * relevance, served on need alone, instead of being absent from the
+   * ranking altogether. Their keys also join the mastery and readiness folds
+   * below, so need reads her own review evidence rather than none.
+   *
+   * **Only courses with no assessment record.** A course with a record keeps
+   * its ordinary reading, abstain or veto included: a course whose every
+   * assessment has passed is completed-course maintenance, which `[D-373]`
+   * hands to a separate reading and this field never touches; a course with
+   * records but no evidence edge keeps abstaining. Omitted or `false`,
+   * `courseConcepts` is never supplied and the ranking is byte-identical to
+   * before. Supply it from a caller that serves practice (the session
+   * composition); a scope or coverage reader has no need-only reading to
+   * show.
+   */
+  readonly serveCoursesWithoutAssessmentsOnNeed?: boolean;
+}
+
+/**
+ * `[D-373]`/`[D-329]` (`ol-76pt`): the `courseConcepts` universe for every
+ * course `concepts` names that no assessment record names — see
+ * {@link ComposeOracleRankingInput.serveCoursesWithoutAssessmentsOnNeed}.
+ * Keyed course → concept key → concept name, the shape `rankOracle` reads.
+ * Exported for `compose.spec.ts`.
+ */
+export function coursesWithoutAssessmentRecords(
+  concepts: readonly ConceptRecord[],
+  assessmentRecords: readonly { readonly course?: string | undefined }[],
+): ReadonlyMap<string, ReadonlyMap<string, string>> {
+  const coursesWithRecords = new Set<string>();
+  for (const record of assessmentRecords) {
+    if (record.course !== undefined) coursesWithRecords.add(record.course);
+  }
+  const universe = new Map<string, Map<string, string>>();
+  for (const concept of concepts) {
+    for (const course of concept.courses) {
+      if (coursesWithRecords.has(course)) continue;
+      const inner = universe.get(course) ?? new Map<string, string>();
+      if (!inner.has(concept.key)) inner.set(concept.key, concept.name);
+      universe.set(course, inner);
+    }
+  }
+  return universe;
 }
 
 /**
@@ -431,6 +480,7 @@ export async function composeOracleRanking(
     rankedReasons,
     instrumentInventory,
     otherIneligibleInstrumentIds,
+    serveCoursesWithoutAssessmentsOnNeed,
     ...edgeOptions
   } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
@@ -443,7 +493,17 @@ export async function composeOracleRanking(
   // exactly the value `session/enumerate.ts` now mints into a review-log
   // record's `conceptIds`, so this is the join that used to silently miss
   // every entry before the coordinated flip.
-  const conceptKeys = [...new Set(edges.edges.map((edge) => edge.conceptKey))].sort();
+  // `ol-76pt`: courses with material but no assessment record, served on
+  // need alone — empty (and nothing supplied to `rankOracle`) unless the
+  // caller opted in.
+  const courseConcepts =
+    serveCoursesWithoutAssessmentsOnNeed === true
+      ? coursesWithoutAssessmentRecords(edgeOptions.concepts, edges.assessmentsRead.records)
+      : new Map<string, ReadonlyMap<string, string>>();
+  const needOnlyKeys = [...courseConcepts.values()].flatMap((inner) => [...inner.keys()]);
+  const conceptKeys = [
+    ...new Set([...edges.edges.map((edge) => edge.conceptKey), ...needOnlyKeys]),
+  ].sort();
   // `ol-a07q` (`[D-281]` item 4): the same proven-invalid projection
   // `resolveRetrievabilityScores` below already needed is folded once, here,
   // and threaded to both — a rejected verdict or a corrected contest against
@@ -498,6 +558,7 @@ export async function composeOracleRanking(
     ...(tiebreakEligible.size > 0 ? { tiebreakEligible } : {}),
     ...(options !== undefined ? { options } : {}),
     ...(conceptInstrumentEligibility !== undefined ? { conceptInstrumentEligibility } : {}),
+    ...(courseConcepts.size > 0 ? { courseConcepts } : {}),
   });
 
   return {

@@ -89,6 +89,7 @@ import {
   VITALITY_DISPLAY,
   type Vitality,
 } from 'olea-core';
+import type { SessionNotComposedReason } from './data-source.js';
 import type { TermDatesAskState } from './term-window-store.js';
 
 /** The pane's title, as Obsidian shows it on the tab and in the sidebar. F6's own words: "Today". */
@@ -140,21 +141,26 @@ export const DUE_UNAVAILABLE =
  * doc), never a suppressed zero. This sentence answers the separate
  * question `[D-373]` requires: why no session was composed.
  *
- * **States the one fact the ruling names, and nothing it did not rule on.**
- * "No course currently has an upcoming assessment" is the cause this file
- * can name without a change outside its `owns` (see `data-source.ts`'s
- * `SessionCompositionOutcome` doc) — it does not name which course, and it
- * does not distinguish this from a completed course's own maintenance case,
- * which `[D-373]`'s own text hands to a separate, later reading rather than
- * deciding here.
+ * **States the fact the composition shows, and nothing it did not rule on.**
+ * `'nothing-assessed-soon'`: nothing was selected at all — no course
+ * currently has an upcoming assessment, completed-course maintenance
+ * included, which `[D-373]`'s own text hands to a separate, later reading
+ * rather than deciding here. `'nothing-to-practise-yet'` (`ol-76pt`): the
+ * composition selected concepts — a course with material but no assessment
+ * record is served on need alone (`[D-329]`) — and what it would start with
+ * has nothing built to practise yet, so the two cases read differently.
+ * Neither names a course (see `data-source.ts`'s `SessionCompositionOutcome`
+ * doc).
  *
- * **Class B, pending the copy pass** — this bead's own report flags it as a
- * new string for review, per the task's own instruction.
+ * **Class B, pending the copy pass** — both are new strings for review, per
+ * the task's own instruction.
  */
-export function sessionNotComposedSentence(reason: 'nothing-assessed-soon'): string {
+export function sessionNotComposedSentence(reason: SessionNotComposedReason): string {
   switch (reason) {
     case 'nothing-assessed-soon':
       return 'No session was composed today: no course currently has an upcoming assessment.';
+    case 'nothing-to-practise-yet':
+      return 'No session was composed today: the concepts to start with have nothing built to practise yet.';
   }
 }
 
@@ -916,8 +922,9 @@ export function allTodayStrings(): readonly string[] {
     DUE_TODAY_LABEL,
     NOTHING_DUE,
     DUE_UNAVAILABLE,
-    // `[D-373]` — one reason exists today; see `sessionNotComposedSentence`'s doc.
+    // `[D-373]` — both reasons; see `sessionNotComposedSentence`'s doc.
     sessionNotComposedSentence('nothing-assessed-soon'),
+    sessionNotComposedSentence('nothing-to-practise-yet'),
     START_REVIEW,
     dueTodaySentence(0),
     dueTodaySentence(1),

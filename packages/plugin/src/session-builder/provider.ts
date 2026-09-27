@@ -1028,6 +1028,12 @@ export async function composeStudySessionForRequest(
     // holds `instrumentId`/`conceptIds` for every instrument the walk
     // above found, no second walk. This is the production caller.
     instrumentInventory: enumeration.records,
+    // `[D-373]` applying `[D-329]` (`ol-76pt`): the session path serves
+    // practice, so a course she has material for but no assessment record
+    // is served on need alone rather than left out of the ranking. A
+    // course with records — completed-course maintenance included — keeps
+    // its ordinary reading. This is the production caller.
+    serveCoursesWithoutAssessmentsOnNeed: true,
     // `[D-087]`/`ol-95vv.1` (RANK-3, `ol-v7r5.4`): the first production
     // caller to thread real FSRS retrievability into the blend.
     // `deps.scheduler` and `now` are both already held above for the

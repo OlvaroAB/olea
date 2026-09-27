@@ -183,7 +183,11 @@
  * membership alone, which is exactly what P5-T03's edges refuse to do and
  * what this module must not undo — **when the caller supplies no
  * {@link RankOracleCourseConceptsInput.courseConcepts}**, which is every
- * production caller today, so this path is byte-identical to before.
+ * scope and coverage caller, so this path is byte-identical to before for
+ * them. The one production supplier is `./compose.ts`'s
+ * `serveCoursesWithoutAssessmentsOnNeed` (`ol-76pt`, `[D-373]`), opted into
+ * by the session composition only, and only for a course with no
+ * assessment record at all.
  *
  * `[D-329]` (`ol-egov.141.89.10.8`, proposal 2) rules that abstaining is the
  * wrong answer once a concept's course membership is known independently of
@@ -420,10 +424,11 @@ const DECLARED_FALLBACK_BLEND_WEIGHTS: RankBlendWeights = { relevance: 1, need: 
 /**
  * `[D-329]` — additive to `RankOracleInput`, typed HERE (not `./types.js`)
  * for the same reason {@link RankOracleTiebreakInput} is: this bead owns only
- * `rank.ts`. Omitted entirely — every production caller today — the abstain
- * path and per-concept invisibility for a no-edge concept are BYTE-IDENTICAL
- * to before this decision; see the module doc's "The abstain path, and
- * `[D-329]`'s 'unknown relevance' exception".
+ * `rank.ts`. Omitted entirely — every caller but the session composition's
+ * `./compose.ts` opt-in (`ol-76pt`) — the abstain path and per-concept
+ * invisibility for a no-edge concept are BYTE-IDENTICAL to before this
+ * decision; see the module doc's "The abstain path, and `[D-329]`'s
+ * 'unknown relevance' exception".
  */
 export interface RankOracleCourseConceptsInput {
   /**
