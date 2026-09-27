@@ -11,12 +11,15 @@ import { describe, expect, it } from 'vitest';
 import { applyDocumentEdits, removeSpans } from '../block/edit.js';
 import { parseDocument } from '../block/parse.js';
 import {
+  formatMcqPaperOrigin,
   insertMcqBlock,
   MCQ_FENCE_INFO,
   parseMcqBlocks,
+  parseMcqPaperOrigin,
   serializeMcq,
   serializeMcqInstrument,
   stampMcqId,
+  stampMcqPaperOrigin,
   stampMcqPredecessor,
 } from './mcq-format.js';
 import { MIN_DISTRACTOR_POOL } from './types.js';
@@ -550,5 +553,168 @@ describe('stampMcqPredecessor — the MCQ-aware write half of [D-133]', () => {
     expect(() =>
       stampMcqPredecessor(source, { start: codeBlock.start, end: codeBlock.end }, 'item-1'),
     ).toThrowError(/does not parse as an MCQ instrument/);
+  });
+});
+
+// `[D-407]` (ol-0r92.118): a handed-off practice-paper item keeps its paper and slot on one
+// optional field of its own block, written once at hand-off, beside `predecessor`.
+describe('paper-origin — [D-407] practice-paper provenance on the block', () => {
+  const ORIGIN = { paperId: 'paper-key1:0000-synthetic', slotId: 'slot-3' };
+
+  it('a block without the field parses exactly as before: no paperOrigin key at all', () => {
+    const [instrument] = parseMcqBlocks(block(validLines)).instruments;
+    expect(instrument).toBeDefined();
+    expect(instrument && 'paperOrigin' in instrument).toBe(false);
+    for (const golden of parseMcqBlocks(readFixture('mcq-valid.md')).instruments) {
+      expect('paperOrigin' in golden).toBe(false);
+    }
+  });
+
+  it('parses the field into paper id and slot id, in any field position and key case', () => {
+    for (const lines of [
+      [...validLines, 'id: item-1', `paper-origin: ${ORIGIN.paperId} ${ORIGIN.slotId}`],
+      [`Paper-Origin:   ${ORIGIN.paperId}\t${ORIGIN.slotId}  `, ...validLines],
+    ]) {
+      const { instruments, invalid } = parseMcqBlocks(block(lines));
+      expect(invalid).toHaveLength(0);
+      expect(instruments[0]?.paperOrigin).toEqual(ORIGIN);
+    }
+  });
+
+  it('round-trips byte-identically, and serializes it last, after id and predecessor', () => {
+    const text = serializeMcq({
+      stem: 'q',
+      answer: 'a',
+      distractors: POOL_AT_FLOOR,
+      feedback: 'f',
+      id: 'item-1',
+      predecessor: 'item-0',
+      paperOrigin: ORIGIN,
+    });
+    expect(text.split('\n').slice(-3, -1)).toEqual([
+      `paper-origin: ${ORIGIN.paperId} ${ORIGIN.slotId}`,
+      '```',
+    ]);
+    const [instrument] = parseMcqBlocks(text).instruments;
+    if (!instrument) throw new Error('no instrument');
+    expect(instrument.paperOrigin).toEqual(ORIGIN);
+    expect(instrument.predecessor).toBe('item-0');
+    expect(serializeMcqInstrument(instrument)).toBe(text);
+
+    const crlf = serializeMcq(
+      { stem: 'q', answer: 'a', distractors: POOL_AT_FLOOR, paperOrigin: ORIGIN },
+      { fence: '~~~~', terminator: '\r\n' },
+    );
+    const [crlfInstrument] = parseMcqBlocks(crlf).instruments;
+    if (!crlfInstrument) throw new Error('no CRLF instrument');
+    expect(serializeMcqInstrument(crlfInstrument)).toBe(crlf);
+  });
+
+  it('a repeated or empty field makes the block invalid, like every other single field', () => {
+    const repeated = parseMcqBlocks(
+      block([...validLines, 'paper-origin: p1 s1', 'paper-origin: p1 s1']),
+    );
+    expect(repeated.invalid.map((i) => i.reason)).toEqual(['repeated-field']);
+    const empty = parseMcqBlocks(block([...validLines, 'paper-origin:']));
+    expect(empty.invalid.map((i) => i.reason)).toEqual(['empty-value']);
+  });
+
+  it('an unreadable value leaves the instrument reviewable with its origin unknown, never guessed', () => {
+    for (const value of ['only-one-token', 'three tokens here']) {
+      const { instruments, invalid } = parseMcqBlocks(
+        block([...validLines, `paper-origin: ${value}`]),
+      );
+      expect(invalid).toHaveLength(0);
+      expect(instruments).toHaveLength(1);
+      expect(instruments[0] && 'paperOrigin' in instruments[0]).toBe(false);
+    }
+  });
+
+  it('parse and format are inverses, and format refuses what parse could not read back', () => {
+    expect(parseMcqPaperOrigin(formatMcqPaperOrigin(ORIGIN))).toEqual(ORIGIN);
+    expect(() => formatMcqPaperOrigin({ paperId: '', slotId: 's' })).toThrowError(/paperId/);
+    expect(() => formatMcqPaperOrigin({ paperId: 'p', slotId: 'slot 1' })).toThrowError(/slotId/);
+    expect(() =>
+      serializeMcq({
+        stem: 'q',
+        answer: 'a',
+        distractors: POOL_AT_FLOOR,
+        paperOrigin: { paperId: 'a b', slotId: 's' },
+      }),
+    ).toThrowError(/paperId/);
+  });
+});
+
+describe('stampMcqPaperOrigin — the write half of [D-407]', () => {
+  const ORIGIN = { paperId: 'paper-key1:0000-synthetic', slotId: 'slot-3' };
+  const unstamped = ['her own line above', '', block(validLines), 'and prose below'].join('\n');
+  const spanOf = (source: string) => {
+    const span = parseMcqBlocks(source).instruments[0]?.span;
+    if (!span) throw new Error('fixture has no MCQ block');
+    return span;
+  };
+
+  it('writes exactly one new line before the closing fence and touches nothing else (C1.2, INV-2)', () => {
+    const result = stampMcqPaperOrigin(unstamped, spanOf(unstamped), ORIGIN);
+    expect(result.changed).toBe(true);
+    expect(result.paperOrigin).toEqual(ORIGIN);
+    if (!result.insertedSpan) throw new Error('expected a span for a changed stamp');
+    expect(removeSpans(result.content, [result.insertedSpan])).toBe(unstamped);
+    expect(result.content.slice(result.insertedSpan.start, result.insertedSpan.end)).toBe(
+      `paper-origin: ${ORIGIN.paperId} ${ORIGIN.slotId}\n`,
+    );
+    expect(parseMcqBlocks(result.content).instruments[0]?.paperOrigin).toEqual(ORIGIN);
+  });
+
+  it('stamps after id and predecessor, and the result serializes back to its own bytes', () => {
+    const withId = stampMcqId(unstamped, spanOf(unstamped), { generateId: () => 'item-2' }).content;
+    const withPred = stampMcqPredecessor(withId, spanOf(withId), 'item-1').content;
+    const result = stampMcqPaperOrigin(withPred, spanOf(withPred), ORIGIN);
+    const [instrument] = parseMcqBlocks(result.content).instruments;
+    if (!instrument) throw new Error('no instrument');
+    expect(instrument).toMatchObject({ id: 'item-2', predecessor: 'item-1', paperOrigin: ORIGIN });
+    expect(serializeMcqInstrument(instrument)).toBe(instrument.raw);
+  });
+
+  it('is idempotent: a second stamp, even naming another origin, is a byte-identical no-op', () => {
+    const first = stampMcqPaperOrigin(unstamped, spanOf(unstamped), ORIGIN);
+    const second = stampMcqPaperOrigin(first.content, spanOf(first.content), {
+      paperId: 'paper-key1:other',
+      slotId: 'slot-9',
+    });
+    expect(second.changed).toBe(false);
+    expect(second.content).toBe(first.content);
+    expect(second.paperOrigin).toEqual(ORIGIN);
+  });
+
+  it('never overwrites or duplicates an unreadable value already on the block', () => {
+    const source = block([...validLines, 'paper-origin: hand-edited']);
+    const result = stampMcqPaperOrigin(source, spanOf(source), ORIGIN);
+    expect(result.changed).toBe(false);
+    expect(result.content).toBe(source);
+    expect(result.paperOrigin).toBeNull();
+  });
+
+  it('keeps a CRLF note CRLF and a tilde fence a tilde fence', () => {
+    const source = `${['~~~olea-mcq', ...validLines, '~~~'].join('\r\n')}\r\n`;
+    const result = stampMcqPaperOrigin(source, spanOf(source), ORIGIN);
+    if (!result.insertedSpan) throw new Error('expected a span');
+    expect(removeSpans(result.content, [result.insertedSpan])).toBe(source);
+    expect(result.content).toContain(`paper-origin: ${ORIGIN.paperId} ${ORIGIN.slotId}\r\n~~~\r\n`);
+  });
+
+  it('throws rather than stamp a missing block, an invalid one, or an unwritable origin', () => {
+    expect(() => stampMcqPaperOrigin(unstamped, { start: 0, end: 3 }, ORIGIN)).toThrowError(
+      /no code block/,
+    );
+    const invalidSource = `${block(['stem: q', 'answer: a', 'distractor: only-one'])}\n`;
+    const codeBlock = parseDocument(invalidSource).blocks.find((b) => b.kind === 'code');
+    if (!codeBlock) throw new Error('no code block in fixture');
+    expect(() =>
+      stampMcqPaperOrigin(invalidSource, { start: codeBlock.start, end: codeBlock.end }, ORIGIN),
+    ).toThrowError(/does not parse as an MCQ instrument/);
+    expect(() =>
+      stampMcqPaperOrigin(unstamped, spanOf(unstamped), { paperId: 'p', slotId: '' }),
+    ).toThrowError(/slotId/);
   });
 });

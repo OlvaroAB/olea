@@ -227,6 +227,18 @@ export const PRESENTED_DISTRACTORS = 3;
  */
 export const PRESENTED_OPTIONS = PRESENTED_DISTRACTORS + 1;
 
+/**
+ * A practice-paper item's provenance as carried on an MCQ block's
+ * `paper-origin:` field (`[D-407]`): the paper (`../oracle/paper-store.ts`'s
+ * opaque `PaperRecord.id`) and the slot on it (`PaperGeneratedItem.slotId`).
+ * Written as `paper-origin: <paperId> <slotId>` — both ids are opaque and
+ * whitespace-free, so one space separates them unambiguously.
+ */
+export interface McqPaperOrigin {
+  readonly paperId: string;
+  readonly slotId: string;
+}
+
 export interface McqInstrument {
   readonly type: 'mcq';
   /**
@@ -251,6 +263,23 @@ export interface McqInstrument {
    * records only the fact that succession happened, never a copy of it.
    */
   readonly predecessor: string | null;
+  /**
+   * The `paper-origin:` field — `[D-407]`'s home for a practice-paper item's
+   * provenance: the paper id and slot id of the paper item this instrument
+   * was entered from when she handed it to ordinary review (F4.11, `[D-391]`).
+   * Written once, at hand-off (`../oracle/paper-store.ts`'s
+   * `handOffPaperItem`), never recomputed, and it survives the paper file's
+   * removal because it lives on the item's own block, not in the paper's
+   * sidecar.
+   *
+   * **Optional, and absent rather than `null`**, unlike `id`/`predecessor`:
+   * a block that carries no such field parses to exactly the object it
+   * parsed to before the field existed (INV-2's reading side). Also absent
+   * when the field is present but its value is not exactly two
+   * whitespace-free tokens (a hand edit): the instrument stays reviewable,
+   * and its origin simply reads as unknown rather than as a guess.
+   */
+  readonly paperOrigin?: McqPaperOrigin;
   readonly stem: string;
   readonly answer: string;
   /** At least `MIN_DISTRACTOR_POOL` of them, guaranteed by the parser. */

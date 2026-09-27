@@ -23,14 +23,15 @@
  *   in sync: "a response exists for this slot" already is "attempted," and nothing here ever
  *   removes a response.
  * - `handoffs` — one per item explicitly handed to ordinary review (`handOffPaperItem`), each
- *   carrying the eliciting-context label `'from a practice paper'` (ruling 1) AS DATA. **This
- *   module does not itself write into her review log or call component register row 2.10's
- *   port** — `review/` is outside this bead's owned files, and the eliciting-context label on a
- *   review record is `[D-252]`'s own named Class C crossing, a persisted-schema decision for
- *   whichever bead wires the actual hand-off. What this module guarantees structurally is the
- *   half F4.11 asks of the PAPER: there is no "hand off the whole paper" event kind at all, only
- *   a per-slot one, so "never the whole paper as one gesture" is a fact about the event vocabulary
- *   this module offers, not a runtime check bolted onto a wider capability.
+ *   carrying the eliciting-context label `'from a practice paper'` (ruling 1) AS DATA. There is
+ *   no "hand off the whole paper" event kind at all, only a per-slot one, so "never the whole
+ *   paper as one gesture" is a fact about the event vocabulary this module offers, not a runtime
+ *   check bolted onto a wider capability. **The hand-off also enters the item as a real
+ *   instrument** (`[D-407]`, `[D-391]`): one quiz block, written into the note the caller names,
+ *   carrying the paper and slot on its own `paper-origin:` field so the link survives the paper
+ *   file's removal. **It never writes into her review log** (`[D-367]`'s clarification): the
+ *   review record that carries `origin: 'practice-paper'` is written later, by the ordinary review
+ *   path, for the first review after the act — reading the block's field, not this sidecar.
  * - `explanationResults` — one per free-response item, the depth reading (never a mark) ruling 2's
  *   explain-yourself route returns, recorded here as data (F5's five-level depth vocabulary,
  *   D-217) — this module does not run the grading itself (component register row 2.3's job); it
@@ -43,9 +44,13 @@
  * exists to drive it (named here rather than silently assumed).
  */
 
+import { parseDocument } from '../block/parse.js';
+import { hashText } from '../ingestion/hash.js';
+import { insertMcqBlock, parseMcqBlocks, stampMcqPaperOrigin } from '../instrument/mcq-format.js';
+import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import type { PaperGeneratedItem } from './paper-items.js';
+import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
 import type { PaperBlueprint, PaperEmptySlot } from './paper-types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/outcomes/`, `.olea/concepts/`, `.olea/reviews/`. */
@@ -417,19 +422,100 @@ export async function recordPaperResponse(
 }
 
 /**
- * Hands ONE item to ordinary review — never the whole paper (module doc). This function itself
- * writes only to the paper's own sidecar record; it does not call component register row 2.10's
- * review-log port (outside this bead's owned files — see the module doc's own note).
+ * Where a handed-off item is entered, and which of its questions is the item. Both are the
+ * caller's (the paper view's per-item hand-off control, not built yet): the note is hers to
+ * choose, since the act is her consent to the write (INV-6), and the service returns several
+ * questions per slot, so which one the paper presents as the item is the view's to say
+ * (`./paper-items.ts`'s `paperItemMcqCandidate`).
+ */
+export interface PaperHandoffTarget {
+  readonly notePath: VaultPath;
+  readonly questionIndex: number;
+}
+
+export interface PaperHandoffResult {
+  readonly record: PaperRecord;
+  /** The entered instrument's id — always `paperItemInstrumentId(paperId, slotId)`. */
+  readonly instrumentId: string;
+  /**
+   * `true` when this call wrote the quiz block (or repaired a missing `paper-origin:` on it);
+   * `false` on a repeat of an earlier hand-off, which writes nothing to any note.
+   */
+  readonly instrumentWritten: boolean;
+}
+
+/**
+ * The instrument id a handed-off paper item enters review under, derived from the paper id and
+ * the slot id alone (`[D-391]` binding condition 1: paper, slot and instrument are each found from
+ * the others — the block's `paper-origin:` names the paper and slot; this names the instrument).
+ * Deterministic, so a repeated or interrupted hand-off converges on one id rather than minting a
+ * second; same `mcq-` + 16-hex shape `materialize-mcq.ts` derives for accepted drafts, with a
+ * distinct `kind` in the hashed input so the two families never hash the same input.
+ */
+export async function paperItemInstrumentId(paperId: string, slotId: string): Promise<string> {
+  const digest = await hashText(JSON.stringify({ kind: 'paper-handoff', paperId, slotId }));
+  return `mcq-${digest.slice(0, 16)}`;
+}
+
+/**
+ * Hands ONE item to ordinary review — never the whole paper (module doc) — and enters it as a real
+ * instrument carrying its paper and slot (`[D-407]`).
+ *
+ * In order, and each step idempotent (`[D-391]` binding condition 2: a double press or a retry
+ * after restart yields one hand-off and one instrument):
+ *
+ * 1. The item's question is read and validated before anything is written (a `cards.generate.v1`
+ *    item is refused: a Q&A card line has no field to carry the origin).
+ * 2. If `target.notePath` already holds a block with the derived id, the instrument was written by
+ *    an earlier call; its `paper-origin:` is stamped if somehow missing (`stampMcqPaperOrigin`,
+ *    read-then-mint), otherwise the note is left byte-identical.
+ * 3. Else, if the paper already records this slot as handed off, nothing is written to any note:
+ *    the instrument exists (step 4 always precedes step 5) and she may have moved or removed it
+ *    since, which a repeated press must not undo.
+ * 4. Else the quiz block is inserted — after the note's frontmatter when it opens with one, the
+ *    same placement `materialize-mcq.ts` uses so the note's concept binding survives — carrying
+ *    `id:` and `paper-origin:` in one write, every other byte of the note untouched.
+ * 5. Finally the paper's own hand-off event is recorded (a repeat changes nothing).
+ *
+ * The note is written before the paper record, so a recorded hand-off always has its instrument.
+ * No review-log record is written here (`[D-367]`).
  */
 export async function handOffPaperItem(
   vault: VaultSource,
   paperId: string,
   slotId: string,
+  target: PaperHandoffTarget,
   options: PaperStoreOptions = {},
-): Promise<PaperRecord> {
+): Promise<PaperHandoffResult> {
   const now = options.now ?? defaultNow;
   const { path, record } = await loadExisting(vault, paperId, 'handOffPaperItem');
   assertKnownSlot(record, slotId, 'handOffPaperItem');
+  const item = record.items.find((i) => i.slotId === slotId);
+  if (item === undefined) throw new Error('handOffPaperItem: internal error, slot vanished');
+  const candidate = paperItemMcqCandidate(item, target.questionIndex);
+  const origin = { paperId, slotId };
+  const instrumentId = await paperItemInstrumentId(paperId, slotId);
+
+  const source = await vault.read(target.notePath);
+  const already = parseMcqBlocks(source).instruments.find((i) => i.id === instrumentId);
+  let instrumentWritten = false;
+  if (already !== undefined) {
+    const stamped = stampMcqPaperOrigin(source, already.span, origin);
+    if (stamped.changed) {
+      await vault.write(target.notePath, stamped.content);
+      instrumentWritten = true;
+    }
+  } else if (!record.handoffs.some((h) => h.slotId === slotId)) {
+    const firstBlock = parseDocument(source).blocks[0];
+    const { content } = insertMcqBlock({
+      source,
+      afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
+      fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
+    });
+    await vault.write(target.notePath, content);
+    instrumentWritten = true;
+  }
+
   const event: PaperItemHandedOffEvent = {
     kind: 'item-handed-off',
     schemaVersion: 1,
@@ -439,9 +525,11 @@ export async function handOffPaperItem(
     slotId,
   };
   const updated = applyPaperEvent(record, event);
-  if (updated === undefined || updated === record) return record;
+  if (updated === undefined || updated === record) {
+    return { record, instrumentId, instrumentWritten };
+  }
   await vault.write(path, serialize(updated));
-  return updated;
+  return { record: updated, instrumentId, instrumentWritten };
 }
 
 /** Records a free-response item's explain-yourself depth reading — ruling 2, never a mark. */

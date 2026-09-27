@@ -4,7 +4,8 @@
 // the one deliberate act is affected, going forward from it.
 //
 // This pins the paper's own half of that: `handOffPaperItem` records the act on
-// the paper's sidecar and nothing else. It writes nothing into her review log
+// the paper's sidecar and enters the item as a new instrument in the note the
+// caller names (`[D-407]`), and nothing else. It writes nothing into her review log
 // (no review record, with or without an origin, is built from a response she
 // gave on the paper), and it leaves the paper's earlier responses exactly as
 // they were: still on the paper, still exam-simulation evidence (F4.11). The
@@ -51,9 +52,24 @@ function item(slotId: string): PaperGeneratedItem {
     groundingLabel: 'covered-by-her-material',
     heldSourceKind: 'notes',
     heldSourceId: 's1',
-    response: { stem: 'x' },
+    response: {
+      ok: true,
+      result: {
+        questions: [
+          {
+            stem: 'Which synthetic option is correct?',
+            correctAnswer: 'Option A',
+            distractors: ['Option B', 'Option C'],
+            feedback: 'Option A is correct by construction.',
+          },
+        ],
+      },
+    },
   };
 }
+
+const NOTE_PATH = 'Course A/Topic one.md';
+const TARGET = { notePath: NOTE_PATH, questionIndex: 0 };
 
 async function filesUnder(root: string): Promise<string[]> {
   const entries = await readdir(root, { recursive: true, withFileTypes: true });
@@ -70,13 +86,14 @@ describe('handOffPaperItem — never converts earlier paper activity into review
   beforeEach(async () => {
     root = await mkdtemp(join(tmpdir(), 'olea-paper-handoff-'));
     vault = new FolderSource(root);
+    await vault.write(NOTE_PATH, '# Topic one\n');
   });
 
   afterEach(async () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('writes only the paper’s own record: no review-log file exists after attempts and a hand-off', async () => {
+  it('writes only the paper’s own record and the entered item’s note: no review-log file exists after attempts and a hand-off', async () => {
     const paper = await createPaper(vault, {
       course: 'COURSEA',
       asOf: '2026-09-26',
@@ -88,9 +105,9 @@ describe('handOffPaperItem — never converts earlier paper activity into review
     await recordPaperResponse(vault, paper.id, 'slot-1', 'second attempt');
     await recordPaperResponse(vault, paper.id, 'slot-2', 'other item');
 
-    await handOffPaperItem(vault, paper.id, 'slot-1');
+    await handOffPaperItem(vault, paper.id, 'slot-1', TARGET);
 
-    expect(await filesUnder(root)).toEqual([paperRecordPath(paper.id)]);
+    expect(await filesUnder(root)).toEqual([NOTE_PATH, paperRecordPath(paper.id)].sort());
     expect((await filesUnder(root)).some((path) => path.startsWith(REVIEW_LOG_FOLDER))).toBe(false);
   });
 
@@ -110,7 +127,7 @@ describe('handOffPaperItem — never converts earlier paper activity into review
     });
     const before = JSON.parse(await readFile(join(root, paperRecordPath(paper.id)), 'utf8'));
 
-    const after = await handOffPaperItem(vault, paper.id, 'slot-1', {
+    const { record: after } = await handOffPaperItem(vault, paper.id, 'slot-1', TARGET, {
       now: () => '2026-09-26T09:30:00-04:00',
     });
 

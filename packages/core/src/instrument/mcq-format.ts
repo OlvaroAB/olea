@@ -60,7 +60,13 @@ import type { AppliedSpan, DocumentEdit } from '../block/edit.js';
 import { applyDocumentEdits } from '../block/edit.js';
 import { parseDocument } from '../block/parse.js';
 import type { CodeBlock } from '../block/types.js';
-import type { InvalidMcqBlock, McqInstrument, McqInvalidReason, SourceSpan } from './types.js';
+import type {
+  InvalidMcqBlock,
+  McqInstrument,
+  McqInvalidReason,
+  McqPaperOrigin,
+  SourceSpan,
+} from './types.js';
 import { MIN_DISTRACTOR_POOL } from './types.js';
 
 /** The fence info string that marks a block as an Olea MCQ. */
@@ -73,6 +79,45 @@ export const MCQ_FIELD_FEEDBACK = 'feedback';
 export const MCQ_FIELD_ID = 'id';
 /** `[D-133]`'s revision-chain field — see `types.ts`'s doc on `McqInstrument.predecessor`. */
 export const MCQ_FIELD_PREDECESSOR = 'predecessor';
+/**
+ * `[D-407]`'s practice-paper provenance field — see `types.ts`'s doc on
+ * `McqInstrument.paperOrigin`. Its value is `<paperId> <slotId>`
+ * (`formatMcqPaperOrigin` / `parseMcqPaperOrigin`).
+ */
+export const MCQ_FIELD_PAPER_ORIGIN = 'paper-origin';
+
+/**
+ * Reads a `paper-origin:` value: exactly two whitespace-separated tokens,
+ * the paper id then the slot id. Anything else returns `null` — never a
+ * partial or guessed origin (see `types.ts`'s doc on why a malformed value
+ * leaves the instrument valid with its origin unknown).
+ */
+export function parseMcqPaperOrigin(value: string): McqPaperOrigin | null {
+  const tokens = value.trim().split(/[ \t]+/);
+  if (tokens.length !== 2) return null;
+  const [paperId, slotId] = tokens;
+  if (paperId === undefined || slotId === undefined || paperId === '' || slotId === '') return null;
+  return { paperId, slotId };
+}
+
+/**
+ * Writes a `paper-origin:` value. Throws on an empty id or one containing
+ * whitespace — either would write a value `parseMcqPaperOrigin` could not
+ * read back, which is the round-trip hole `serializeMcq` refuses everywhere.
+ */
+export function formatMcqPaperOrigin(origin: McqPaperOrigin): string {
+  for (const [name, id] of [
+    ['paperId', origin.paperId],
+    ['slotId', origin.slotId],
+  ] as const) {
+    if (id === '' || /\s/.test(id)) {
+      throw new Error(
+        `formatMcqPaperOrigin: ${name} ${JSON.stringify(id)} must be non-empty and contain no whitespace`,
+      );
+    }
+  }
+  return `${origin.paperId} ${origin.slotId}`;
+}
 
 const FIELD_LINE_RE = /^[ \t]*([A-Za-z][A-Za-z0-9_-]*)[ \t]*:[ \t]?([\s\S]*)$/;
 
@@ -188,6 +233,7 @@ function parseBlock(block: CodeBlock): McqInstrument | InvalidMcqBlock {
     MCQ_FIELD_FEEDBACK,
     MCQ_FIELD_ID,
     MCQ_FIELD_PREDECESSOR,
+    MCQ_FIELD_PAPER_ORIGIN,
   ]);
   for (const field of fields) {
     if (!known.has(field.key)) {
@@ -204,6 +250,7 @@ function parseBlock(block: CodeBlock): McqInstrument | InvalidMcqBlock {
     MCQ_FIELD_FEEDBACK,
     MCQ_FIELD_ID,
     MCQ_FIELD_PREDECESSOR,
+    MCQ_FIELD_PAPER_ORIGIN,
   ];
   for (const key of singles) {
     const count = fields.filter((f) => f.key === key).length;
@@ -246,10 +293,16 @@ function parseBlock(block: CodeBlock): McqInstrument | InvalidMcqBlock {
     );
   }
 
+  // `[D-407]`: present only when the block carries a readable field, so a
+  // block without one parses to exactly the object it always did.
+  const paperOriginValue = fields.find((f) => f.key === MCQ_FIELD_PAPER_ORIGIN)?.value;
+  const paperOrigin = paperOriginValue === undefined ? null : parseMcqPaperOrigin(paperOriginValue);
+
   return {
     type: 'mcq',
     id: fields.find((f) => f.key === MCQ_FIELD_ID)?.value ?? null,
     predecessor: fields.find((f) => f.key === MCQ_FIELD_PREDECESSOR)?.value ?? null,
+    ...(paperOrigin !== null ? { paperOrigin } : {}),
     stem,
     answer,
     distractors,
@@ -289,6 +342,8 @@ export interface McqFields {
   readonly id?: string | null;
   /** `[D-133]`'s revision-chain field — see `types.ts`'s doc on `McqInstrument.predecessor`. */
   readonly predecessor?: string | null;
+  /** `[D-407]`'s practice-paper provenance — see `types.ts`'s doc on `McqInstrument.paperOrigin`. */
+  readonly paperOrigin?: McqPaperOrigin | null;
 }
 
 export interface McqSerializeOptions {
@@ -300,9 +355,11 @@ export interface McqSerializeOptions {
 
 /**
  * The canonical form: stem, answer, the pool in order, then the optional
- * feedback, id, and predecessor. Human fields first and the machine fields
- * last, because the form has to read well to someone typing it — `id` and
- * `predecessor` are both machine fields, in that order, matching the order
+ * feedback, id, predecessor and paper-origin. Human fields first and the
+ * machine fields last, because the form has to read well to someone typing
+ * it — `id`, `predecessor` and `paper-origin` are machine fields, in that
+ * order (`paper-origin` is `[D-407]`'s, stamped by `stampMcqPaperOrigin`
+ * the same way), matching the order
  * `stampMcqId` then `stampMcqPredecessor` (or the plugin's block-agnostic
  * `stampPredecessorField`) would write them onto an already-serialized
  * block, each splicing its own line in immediately before the closing fence.
@@ -329,6 +386,9 @@ export function serializeMcq(fields: McqFields, options: McqSerializeOptions = {
   }
   if (fields.predecessor != null && fields.predecessor !== '') {
     values.push([MCQ_FIELD_PREDECESSOR, fields.predecessor]);
+  }
+  if (fields.paperOrigin != null) {
+    values.push([MCQ_FIELD_PAPER_ORIGIN, formatMcqPaperOrigin(fields.paperOrigin)]);
   }
 
   for (const [key, value] of values) {
@@ -654,6 +714,118 @@ export function stampMcqPredecessor(
     content: result.content,
     changed: true,
     predecessor: predecessorInstrumentId,
+    insertedSpan,
+  };
+}
+
+// ---- practice-paper provenance stamping ([D-407], ol-0r92.118) -----------
+//
+// `paper-origin` follows `predecessor` field-for-field: read-then-mint, never
+// recompute; one zero-width `replace` spliced in immediately before the
+// closing fence, so every other byte is provably untouched (INV-2, C1.2).
+// The value is always the caller's (the paper and slot the item came from),
+// never generated here. `../oracle/paper-store.ts`'s `handOffPaperItem` is
+// the caller; the plugin's block-agnostic twin is
+// `instrument-blocks/paper-origin.ts`, for the same reason `predecessor` has
+// one.
+
+/** The raw `paper-origin:` value on a block, read from its field lines directly — present even when `parseMcqPaperOrigin` cannot read it. */
+function rawFieldValue(block: CodeBlock, key: string): string | null {
+  for (const line of bodyLines(block)) {
+    const m = FIELD_LINE_RE.exec(line);
+    if (m?.[1]?.toLowerCase() !== key) continue;
+    const value = (m[2] ?? '').trim();
+    return value === '' ? null : value;
+  }
+  return null;
+}
+
+export interface StampMcqPaperOriginResult {
+  /** The full, new note content (identical to `source` when `changed` is `false`). */
+  readonly content: string;
+  /** `false` when the block already carried a non-empty `paper-origin:` — a true no-op. */
+  readonly changed: boolean;
+  /**
+   * The origin now on the block: the one just written, or the one it
+   * already carried. `null` only when the block already carries a value
+   * `parseMcqPaperOrigin` cannot read — left exactly as it is, never
+   * overwritten and never joined by a second line (which would make the
+   * block a `repeated-field` invalid one).
+   */
+  readonly paperOrigin: McqPaperOrigin | null;
+  /**
+   * Span of the newly written line in `content`, or `null` when `changed`
+   * is `false`. `removeSpans(content, [insertedSpan])` recovers `source`
+   * exactly, the same proof `stampMcqId` offers.
+   */
+  readonly insertedSpan: AppliedSpan | null;
+}
+
+/**
+ * Stamps a durable `paper-origin:` field onto the MCQ block at `blockSpan`,
+ * if it does not already carry one. **Read-then-mint, never recompute:** a
+ * block that already names an origin — even a different one, even one this
+ * module cannot read — is returned byte-identical, `changed: false`, so a
+ * repeated hand-off (a double press, a retry after restart) is always a
+ * no-op diff (`[D-391]` binding condition 2).
+ */
+export function stampMcqPaperOrigin(
+  source: string,
+  blockSpan: SourceSpan,
+  origin: McqPaperOrigin,
+): StampMcqPaperOriginResult {
+  const value = formatMcqPaperOrigin(origin);
+
+  const doc = parseDocument(source);
+  const block = doc.blocks.find(
+    (b): b is CodeBlock =>
+      b.kind === 'code' && b.start === blockSpan.start && b.end === blockSpan.end,
+  );
+  if (!block) {
+    throw new Error(`stampMcqPaperOrigin: no code block at [${blockSpan.start}, ${blockSpan.end})`);
+  }
+
+  const parsed = parseBlock(block);
+  if (!('type' in parsed)) {
+    throw new Error(
+      `stampMcqPaperOrigin: block at [${blockSpan.start}, ${blockSpan.end}) does not parse as an MCQ instrument`,
+    );
+  }
+  const existing = rawFieldValue(block, MCQ_FIELD_PAPER_ORIGIN);
+  if (existing !== null) {
+    return {
+      content: source,
+      changed: false,
+      paperOrigin: parsed.paperOrigin ?? null,
+      insertedSpan: null,
+    };
+  }
+
+  const lastLineStart = block.start + lastLineOffset(block.raw);
+  const lastLineRaw = source.slice(lastLineStart, block.end);
+  const lastLineText = lastLineRaw.replace(/\r?\n$/, '');
+  if (!CLOSING_FENCE_LINE_RE.test(lastLineText)) {
+    throw new Error(
+      `stampMcqPaperOrigin: block at [${blockSpan.start}, ${blockSpan.end}) has no closing fence to stamp before`,
+    );
+  }
+
+  const terminator = block.raw.includes('\r\n') ? '\r\n' : '\n';
+  const edits: DocumentEdit[] = [
+    {
+      kind: 'replace',
+      start: lastLineStart,
+      end: lastLineStart,
+      text: `${MCQ_FIELD_PAPER_ORIGIN}: ${value}${terminator}`,
+    },
+  ];
+  const result = applyDocumentEdits(doc, edits);
+  const insertedSpan = result.spans[0];
+  if (!insertedSpan) throw new Error('stampMcqPaperOrigin: internal error, missing inserted span');
+  return {
+    content: result.content,
+    changed: true,
+    paperOrigin: { paperId: origin.paperId, slotId: origin.slotId },
     insertedSpan,
   };
 }
