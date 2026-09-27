@@ -13,8 +13,9 @@
  * under its own vocabulary, rather than through `proposeSameAsLink` — which `[D-256]` ruled out
  * specifically because a consumer built to `same-as`'s contract (identity-only, no inspection of
  * key shape — `same-as.ts`'s own module doc disclaims that) has no principled way to reject an
- * outcome id reaching a `same-as` `'confirmed'` state, and `remapIncidentRelationCacheRecords`
- * would rewrite relation-cache edges using an outcome id as a concept key if one ever did.
+ * outcome id reaching a `same-as` `'confirmed'` state, and the read-time same-as fold
+ * (`../concept/same-as-consumer.ts`) would resolve relation-cache edges using an outcome id as a
+ * concept key if one ever did.
  *
  * **Status vocabulary: `'proposed'` / `'confirmed'` / `'declined'` — deliberately no `'severed'`.**
  * `same-as`'s confirm/sever pair models undoing a READING of two identities as one, which needs a

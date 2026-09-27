@@ -50,7 +50,7 @@
  *   supply false confidence rather than protection.
  * - **The concrete cost is slightly worse than "temporarily invisible."**
  *   `findByKey` (below) answers `pipeline.ts`'s dedupe check
- *   (`packages/plugin/src/generation/pipeline.ts:196`) from the index alone.
+ *   (`packages/plugin/src/generation/pipeline.ts:453`) from the index alone.
  *   A dropped entry makes that check report "no existing draft" for a
  *   concept that already has one, so the sweep drafts a **second** record for
  *   the same `(courseCode, conceptName)` pair — a spent generation call and a
@@ -188,9 +188,12 @@ const DEDUPE_PROBE_SEQUENCE = 0;
 
 /**
  * D-381 (`ol-egov.141.89.5.18`; chg.md §11's cache-key audit)'s optional
- * version-awareness for `findByKey`. Omitted entirely (today's only caller,
- * `pipeline.ts:415`): `findByKey` behaves exactly as before this existed —
- * version-blind, any prior draft blocks a fresh one. Supplied: a field left
+ * version-awareness for `findByKey`. Omitted entirely: `findByKey` behaves
+ * exactly as before this existed — version-blind, any prior draft blocks a
+ * fresh one. `pipeline.ts:453` supplies the course's embedding-note digest
+ * as `sourceContentHash` (and leaves `promptVersion` unset: the client
+ * cannot yet learn the generation task's current prompt version); a bare
+ * drop with no embedding note omits it. Supplied: a field left
  * `undefined` here is itself version-blind for JUST that field (matches
  * whatever the record carries); a field given a value only counts the
  * record as fresh when its own `sourceContentHash`/`provenance.promptVersion`
@@ -199,9 +202,9 @@ const DEDUPE_PROBE_SEQUENCE = 0;
  * rewritten, deleted, or otherwise touched: the stale record's file is
  * exactly as `put()` last left it (INV-2; D-381's clarification: preserve an
  * artifact she already accepted, never silently rewrite it). Nothing here
- * decides what a caller does with that `null` — a future caller drafting a
- * fresh record for a stale key is `pipeline.ts`'s call, out of this bead's
- * `owns` (reported, not built here).
+ * decides what a caller does with that `null`: `pipeline.ts` drafts the
+ * fresh record for a stale key under `deriveDraftId`'s 4-argument id, so it
+ * never lands on the stale record's path.
  */
 export interface FindByKeyVersionExpectation {
   readonly sourceContentHash?: string;
