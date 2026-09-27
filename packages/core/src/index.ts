@@ -1078,6 +1078,25 @@ export type {
   PresentableMcq,
 } from './instrument/mcq-present.js';
 export { mathRandomSource, presentMcq } from './instrument/mcq-present.js';
+// `[D-394]` choice 2's "answered" half: success derived at read time from an abstract qualifying
+// review-log event, never stored. Wiring the real review-log schema to this shape is a Class C
+// change this bead does not make — see `probe-outcome.ts`'s own module doc.
+export type { ProbeOutcome, QualifyingProbeReviewEvent } from './instrument/probe-outcome.js';
+export { deriveProbeOutcome, probeSucceeded } from './instrument/probe-outcome.js';
+// `[D-394]` choice 2's "shown" half (`ol-v7r5.74`) — a write-once sidecar, sibling to the
+// distractor-provenance and citation sidecars above, keyed the same way. No production caller yet
+// (F2.24's own offer flow is not wired into a live session path by this bead — see that bead's
+// close evidence).
+export type { PresentedProbeRecord } from './instrument/probe-presentation-store.js';
+export {
+  isPresentedProbeRecord,
+  isProbeShown,
+  PROBE_PRESENTATION_RECORD_SCHEMA_VERSION,
+  PROBE_PRESENTATION_STORE_FOLDER,
+  probePresentationStorePath,
+  readProbePresentation,
+  writeProbePresentation,
+} from './instrument/probe-presentation-store.js';
 // F2.16's rating mapping — one pure function per instrument type. Easy is
 // absent from `McqRating` by type, and explain-back has no mapper at all;
 // `loggedRating` is the single site where "no rating" becomes the log's null.
@@ -2333,6 +2352,27 @@ export * from './stage-contract/index.js';
 // The absence signal register row 3.8 names (F6.6; `ol-v7r5.18`): "days since
 // her last review", derived from the review log's own timestamps.
 export { daysSinceLastReview } from './study-session/absence.js';
+// F2.24's application-probe readiness trigger (`[D-335]`, `[D-394]`; `ol-v7r5.74`) — reuses
+// strong-recall-proposal.ts's own margin, no new constant. Structurally dark: no live caller
+// wires this in yet, and APPLICATION_PROBE_OFFER_LIVE is pinned false pending separately
+// authorised spend (see that module's own doc for the D-072 gate and what is left for another
+// lane — the review-log schema splice and the session/main.ts wiring).
+export type {
+  ApplicationProbeOffer,
+  ApplicationProbeOfferReason,
+  ApplicationProbeSincePresentation,
+  ApplicationProbeTriggerDecision,
+  ApplicationProbeTriggerInput,
+  NoApplicationProbeOffer,
+  NoApplicationProbeOfferReason,
+} from './study-session/application-probe-trigger.js';
+export {
+  APPLICATION_PROBE_OFFER_LIVE,
+  APPLICATION_PROBE_TRIGGER,
+  applicationProbeOfferLine,
+  evaluateApplicationProbeTrigger,
+  PROBE_OFFER_FORBIDDEN_PHRASES,
+} from './study-session/application-probe-trigger.js';
 // The session builder (F4.6, F4.7, F4.8; P5-T06b). Pure selection over the gap
 // view's own order — it ranks nothing, recomputes no exam proximity, and widens
 // no format map; study-session/build.ts's module doc states each of those three
