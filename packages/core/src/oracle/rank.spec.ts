@@ -14,7 +14,7 @@ import type {
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
-import type { RankOracleTiebreakInput } from './rank.js';
+import type { RankOracleEligibilityInput, RankOracleTiebreakInput } from './rank.js';
 import { rankOracle } from './rank.js';
 import type { RankOracleInput } from './types.js';
 
@@ -381,67 +381,140 @@ describe('rankOracle — verbatim-duplicate assessment edges are deduplicated (R
   });
 });
 
-describe('rankOracle — R6 (pln.md §5): distinct, identically-scored dated edges still sum by count — UNRESOLVED, ol-egov.141.89.10.4 part 3', () => {
-  // The frozen target (`eval/data/ilb/pln/targets.dev.json`, case
-  // PLN-cc6e4c20b6fb639a, assertion r6-count) requires a concept's relevance
-  // AND priority score to be numerically UNCHANGED whether it carries one
-  // dated edge or four edges that are individually indistinguishable in
-  // score (same yieldRank, confidence, weight and days-to-assessment, on
-  // four DIFFERENT real assessments). Today `preMasteryScore` is `sum of
-  // contributions`, so four identical contributions score 4x one — this
-  // test pins that current, failing behaviour (`it.fails`, not `it`) rather
-  // than silently going red, because no ruling settles HOW multiple edges
-  // should combine once they are not verbatim duplicates (R5's fix, above,
-  // dedupes an accidental REPEAT of the same real assessment; these are
-  // four DISTINCT real assessments that only coincide in score). Collapsing
-  // them the way R5 collapses a repeat would mean "she has four upcoming
-  // exams that happen to be equally weighted" scores the same as "she has
-  // one" — which contradicts this file's own documented reading of F4.2
-  // ("a concept examined by three assessments accumulates more priority
-  // than one examined by a single low-weight quiz") for every case where
-  // the accumulating edges are not literal repeats. A general fix here
-  // requires deciding a combination rule (see this bead's proposed decision
-  // in its close evidence) — max, a saturating sum, or some other function
-  // — none of which pln.md or a ruling names; changing it changes what she
-  // is shown first, so this bead reports rather than picks one.
-  it.fails('preMasteryScore and priorityScore are unchanged between one edge and four identically-scored edges (currently fails — see note above)', () => {
-    const asOf = '2026-01-01';
-    const manydatesEdges = [0, 1, 2, 3].map((i) =>
-      edge({
-        conceptName: 'dev-cpt-manydates',
-        assessmentPath: `Assessments/Dup${i}.md`,
-        yieldRank: 1,
-        confidence: 0.7,
-        citations: [],
-      }),
-    );
-    const dueDay = '2026-01-06'; // 5 days after asOf, matching daysToAssessment: 5
+describe('rankOracle — R6 (pln.md §5, [D-403]): distinct, identically-scored dated edges add by count; a verbatim repeat still does not', () => {
+  // D-403 (ruled 2026-09-27, off this bead's proposed decision): genuinely
+  // DISTINCT assessments' contributions ADD — "she has four upcoming exams
+  // that happen to be equally weighted" is strictly more relevant/urgent
+  // than "she has one" — while a verbatim REPEAT of the same edge (R5,
+  // above) still counts once. This replaces the old expected-failure test
+  // that pinned the REJECTED "unchanged by count" reading (the frozen
+  // target's amended `r6-count`/`r6-verbatim-duplicate` assertions,
+  // `eval/data/ilb/pln/targets.dev.json` case PLN-cc6e4c20b6fb639a, encode
+  // the same two facts on the harness side).
+  const asOf = '2026-01-01';
+  const manydatesEdges = [0, 1, 2, 3].map((i) =>
+    edge({
+      conceptName: 'dev-cpt-manydates',
+      assessmentPath: `Assessments/Dup${i}.md`,
+      yieldRank: 1,
+      confidence: 0.7,
+      citations: [],
+    }),
+  );
+  const dueDay = '2026-01-06'; // 5 days after asOf, matching daysToAssessment: 5
 
-    const buildInput = (edges: readonly ConceptAssessmentEdge[]): RankOracleInput => ({
+  const buildInput = (edges: readonly ConceptAssessmentEdge[]): RankOracleInput => ({
+    evidence: {
+      edges,
+      assessmentsRead: readReport(
+        edges.map((e) => assessment({ path: e.assessmentPath, due: dueDay, weight: undefined })),
+      ),
+      assessmentsWithNoEvidence: [],
+    },
+    asOf,
+  });
+
+  function entryFor(result: ReturnType<typeof rankOracle>) {
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    return course.ranked.find((r) => r.conceptName === 'dev-cpt-manydates');
+  }
+
+  it('four distinct dated edges score strictly HIGHER (relevance and priority) than one of them alone', () => {
+    const four = entryFor(rankOracle(buildInput(manydatesEdges)));
+    const one = entryFor(rankOracle(buildInput([manydatesEdges[0] as ConceptAssessmentEdge])));
+    expect(four?.factors.preMasteryScore).toBeGreaterThan(one?.factors.preMasteryScore ?? Infinity);
+    expect(four?.priorityScore).toBeGreaterThan(one?.priorityScore ?? Infinity);
+    // Not merely higher — exactly 4x, since the four edges are individually
+    // indistinguishable in score: pins the "add by count" reading precisely,
+    // not just "some combination that happens to increase".
+    expect(four?.factors.preMasteryScore).toBeCloseTo((one?.factors.preMasteryScore ?? 0) * 4, 9);
+  });
+
+  it('a verbatim copy of one of the four edges (same assessment, same basis) leaves relevance and priority UNCHANGED — R5s rule applied here too', () => {
+    const four = entryFor(rankOracle(buildInput(manydatesEdges)));
+    const withDuplicate = entryFor(
+      rankOracle(
+        buildInput([...manydatesEdges, { ...manydatesEdges[0] } as ConceptAssessmentEdge]),
+      ),
+    );
+    expect(withDuplicate?.factors.contributions).toHaveLength(4);
+    expect(withDuplicate?.factors.preMasteryScore).toBeCloseTo(
+      four?.factors.preMasteryScore ?? -1,
+      9,
+    );
+    expect(withDuplicate?.priorityScore).toBeCloseTo(four?.priorityScore ?? -1, 9);
+  });
+});
+
+describe('rankOracle — every contribution keeps its existing date, weight and scope rules alongside D-403s addition', () => {
+  it('among several assessments on one concept: a passed one contributes nothing (vetoed), an undated one adds nothing to proximity, and the dated ones still add', () => {
+    const passed = edge({
+      conceptName: 'concept-mixed',
+      assessmentPath: 'Assessments/Passed.md',
+      citations: [],
+    });
+    const undated = edge({
+      conceptName: 'concept-mixed',
+      assessmentPath: 'Assessments/Undated.md',
+      citations: [],
+    });
+    const datedA = edge({
+      conceptName: 'concept-mixed',
+      assessmentPath: 'Assessments/DatedA.md',
+      citations: [],
+    });
+    const datedB = edge({
+      conceptName: 'concept-mixed',
+      assessmentPath: 'Assessments/DatedB.md',
+      citations: [],
+    });
+    const asOf = '2026-01-01';
+    const input: RankOracleInput = {
       evidence: {
-        edges,
-        assessmentsRead: readReport(
-          edges.map((e) => assessment({ path: e.assessmentPath, due: dueDay, weight: undefined })),
-        ),
+        edges: [passed, undated, datedA, datedB],
+        assessmentsRead: readReport([
+          assessment({ path: 'Assessments/Passed.md', due: '2025-12-20', weight: undefined }),
+          assessment({ path: 'Assessments/Undated.md', due: undefined, weight: undefined }),
+          assessment({ path: 'Assessments/DatedA.md', due: '2026-01-06', weight: undefined }),
+          assessment({ path: 'Assessments/DatedB.md', due: '2026-01-11', weight: undefined }),
+        ]),
         assessmentsWithNoEvidence: [],
       },
       asOf,
-    });
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    const entry = course.ranked.find((r) => r.conceptName === 'concept-mixed');
 
-    const four = rankOracle(buildInput(manydatesEdges));
-    const one = rankOracle(buildInput([manydatesEdges[0] as ConceptAssessmentEdge]));
-    const fourCourse = four.courses[0];
-    const oneCourse = one.courses[0];
-    if (fourCourse?.status !== 'ranked' || oneCourse?.status !== 'ranked') {
-      throw new Error('expected ranked');
-    }
-    const fourEntry = fourCourse.ranked.find((r) => r.conceptName === 'dev-cpt-manydates');
-    const oneEntry = oneCourse.ranked.find((r) => r.conceptName === 'dev-cpt-manydates');
-    expect(fourEntry?.factors.preMasteryScore).toBeCloseTo(
-      oneEntry?.factors.preMasteryScore ?? -1,
+    // The passed assessment is REMOVED (vetoed), not merely scored low —
+    // C5.10's rule, unchanged by this bead.
+    expect(entry?.factors.vetoedEdges).toEqual([
+      expect.objectContaining({
+        assessmentPath: 'Assessments/Passed.md',
+        reason: 'assessment-passed',
+      }),
+    ]);
+    // The undated edge SURVIVES (it is a signal, not a veto) but contributes
+    // exactly 0 to proximity, and so 0 to this edge's own contribution.
+    const undatedContribution = entry?.factors.contributions.find(
+      (c) => c.assessmentPath === 'Assessments/Undated.md',
+    );
+    expect(undatedContribution?.examProximityScore).toBe(0);
+    expect(undatedContribution?.contribution).toBe(0);
+    // The two dated edges both still contribute a positive share, and both
+    // are present — D-403's "distinct assessments add" alongside the
+    // pre-existing date/weight/scope rules, not instead of them.
+    const datedContributions = entry?.factors.contributions.filter((c) =>
+      ['Assessments/DatedA.md', 'Assessments/DatedB.md'].includes(c.assessmentPath),
+    );
+    expect(datedContributions).toHaveLength(2);
+    for (const c of datedContributions ?? []) expect(c.contribution).toBeGreaterThan(0);
+    expect(entry?.factors.preMasteryScore).toBeCloseTo(
+      (datedContributions ?? []).reduce((sum, c) => sum + c.contribution, 0),
       9,
     );
-    expect(fourEntry?.priorityScore).toBeCloseTo(oneEntry?.priorityScore ?? -1, 9);
   });
 });
 
@@ -949,6 +1022,143 @@ describe('rankOracle — vetoes are separated from the blend (C5.10, ol-plxu)', 
     expect(malformedContribution?.dueDateIssue).toBe('unparseable');
     expect(malformedContribution?.daysUntilDue).toBeNull();
     expect(malformedContribution?.examProximityScore).toBe(0);
+  });
+});
+
+describe('rankOracle — the eligibility veto: a concept vetoed only once no eligible instrument remains ([D-404], ol-egov.141.89.10.4)', () => {
+  function courseFor(
+    edges: readonly ConceptAssessmentEdge[],
+    assessments: readonly AssessmentRecord[],
+    instrumentEligibility: RankOracleEligibilityInput['instrumentEligibility'],
+  ) {
+    const input: RankOracleInput & RankOracleEligibilityInput = {
+      evidence: {
+        edges,
+        assessmentsRead: readReport(assessments),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+      ...(instrumentEligibility !== undefined ? { instrumentEligibility } : {}),
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    return course;
+  }
+
+  it('a concept with one of two instruments marked ineligible ranks EXACTLY as it would with only the other instrument', () => {
+    const edgeA = edge({ assessmentPath: 'Assessments/A.md', citations: [] });
+    const edgeB = edge({ assessmentPath: 'Assessments/B.md', citations: [] });
+    const assessments = [
+      assessment({ path: 'Assessments/A.md', due: '2026-09-01', weight: undefined }),
+      assessment({ path: 'Assessments/B.md', due: '2026-09-10', weight: undefined }),
+    ];
+
+    const withBothEligible = courseFor([edgeA, edgeB], assessments, undefined);
+    const withASuspended = courseFor(
+      [edgeA, edgeB],
+      assessments,
+      new Map([['Assessments/A.md', 'suspended']]),
+    );
+    const withOnlyB = courseFor([edgeB], [assessments[1] as AssessmentRecord], undefined);
+
+    expect(withBothEligible.ranked[0]?.factors.contributions).toHaveLength(2);
+
+    const suspendedEntry = withASuspended.ranked.find((r) => r.conceptName === 'concept-a');
+    const onlyBEntry = withOnlyB.ranked.find((r) => r.conceptName === 'concept-a');
+    expect(suspendedEntry?.factors.contributions).toHaveLength(1);
+    expect(suspendedEntry?.factors.contributions[0]?.assessmentPath).toBe('Assessments/B.md');
+    expect(suspendedEntry?.factors.vetoedEdges).toEqual([
+      expect.objectContaining({ assessmentPath: 'Assessments/A.md', reason: 'suspended' }),
+    ]);
+    expect(suspendedEntry?.factors.preMasteryScore).toBeCloseTo(
+      onlyBEntry?.factors.preMasteryScore ?? -1,
+      9,
+    );
+    expect(suspendedEntry?.priorityScore).toBeCloseTo(onlyBEntry?.priorityScore ?? -1, 9);
+  });
+
+  it('her own suspension of every instrument reads as "suspended" — matching the locked R4 target', () => {
+    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
+    const course = courseFor(
+      [singleEdge],
+      [assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined })],
+      new Map([['Assessments/OnlyOne.md', 'suspended']]),
+    );
+    expect(course.ranked).toHaveLength(0);
+    expect(course.vetoedConcepts).toEqual([
+      expect.objectContaining({
+        conceptKey: 'concept-a',
+        vetoedEdges: [
+          expect.objectContaining({
+            assessmentPath: 'Assessments/OnlyOne.md',
+            reason: 'suspended',
+          }),
+        ],
+      }),
+    ]);
+  });
+
+  it('another mix (withdrawn / note missing / cited-passage-changed, all reported by the caller as "instrument-ineligible") carries a reason kept APART from "suspended"', () => {
+    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
+    const course = courseFor(
+      [singleEdge],
+      [assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined })],
+      new Map([['Assessments/OnlyOne.md', 'instrument-ineligible']]),
+    );
+    expect(course.ranked).toHaveLength(0);
+    const vetoedConcept = course.vetoedConcepts?.[0];
+    expect(vetoedConcept?.vetoedEdges[0]?.reason).toBe('instrument-ineligible');
+    expect(vetoedConcept?.vetoedEdges[0]?.reason).not.toBe('suspended');
+  });
+
+  it('a concept with no instruments yet is never vetoed by this rule', () => {
+    // `[D-329]`'s courseConcepts input names a concept with no real edge at
+    // all — `instrumentEligibility` naming an unrelated path has nothing to
+    // veto here; the concept still reads as unknown relevance, never vetoed.
+    const input: RankOracleInput &
+      RankOracleEligibilityInput & {
+        readonly courseConcepts?: ReadonlyMap<string, ReadonlyMap<string, string>>;
+      } = {
+      evidence: {
+        edges: [],
+        assessmentsRead: readReport([]),
+        assessmentsWithNoEvidence: [],
+      },
+      asOf: ASOF,
+      instrumentEligibility: new Map([['Assessments/SomewhereElse.md', 'suspended']]),
+      courseConcepts: new Map([['COURSEA', new Map([['concept-noedge', 'concept-noedge']])]]),
+    };
+    const result = rankOracle(input);
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    const entry = course.ranked.find((r) => r.conceptKey === 'concept-noedge');
+    expect(entry).toBeDefined();
+    expect(entry?.factors.contributions).toHaveLength(0);
+  });
+
+  it('the veto lifts as soon as one instrument becomes eligible again, with nothing recorded against her — purely a function of the current call', () => {
+    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
+    const assessments = [
+      assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined }),
+    ];
+
+    const vetoed = courseFor(
+      [singleEdge],
+      assessments,
+      new Map([['Assessments/OnlyOne.md', 'suspended']]),
+    );
+    expect(vetoed.vetoedConcepts).toHaveLength(1);
+
+    // Same evidence, same asOf, the instrument simply no longer named as
+    // ineligible: the concept ranks normally, and nothing about the earlier
+    // call is carried forward (this module holds no history, no cache, no
+    // clock — module doc, "computed fresh from input every time").
+    const eligibleAgain = courseFor([singleEdge], assessments, undefined);
+    expect(eligibleAgain.vetoedConcepts ?? []).toHaveLength(0);
+    expect(eligibleAgain.ranked).toHaveLength(1);
+    expect(eligibleAgain.ranked[0]?.factors.vetoedEdges ?? []).toHaveLength(0);
   });
 });
 

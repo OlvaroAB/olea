@@ -38,6 +38,28 @@
  * into the blend. Only `checkEdgeVeto`'s doc, not this one, is the source of
  * truth for which facts are wired as vetoes today.
  *
+ * ## `[D-404]`: a concept's veto now fires from per-instrument eligibility
+ *
+ * D-404 rules that the concept-level "no eligible instrument remains" veto
+ * fires only once EVERY instrument a concept has an edge to is ineligible —
+ * one suspended instrument alone never removes a concept that still has an
+ * eligible one. This is wired at the EDGE level, not as a separate
+ * concept-level special case: {@link RankOracleEligibilityInput} (below)
+ * lets a caller mark individual instruments ineligible, and
+ * {@link checkInstrumentEligibilityVeto} removes exactly those edges from
+ * the blend the same way {@link checkEdgeVeto} already removes a passed
+ * assessment's edge. The existing "no surviving contributions ⇒ the concept
+ * is vetoed" rule just below (`rankOneCourse`) then does the rest
+ * unmodified — a concept with two instruments, one marked ineligible,
+ * survives on its one remaining edge and ranks EXACTLY as it would if that
+ * were its only edge; a concept with every instrument marked ineligible
+ * loses all its contributions and is reported in `vetoedConcepts`, same as
+ * today's all-passed case. A concept with no edges never reaches this map
+ * at all, so this rule can never veto one. This is purely a function of
+ * `input.instrumentEligibility` on each call — nothing here is recorded
+ * against her, and a concept un-vetoes itself the moment a later call omits
+ * the instrument or marks it eligible again.
+ *
  * ## The scoring shape, and where its weights actually come from
  *
  * For each SURVIVING (non-vetoed) concept↔assessment edge, this module
@@ -383,6 +405,62 @@ export interface RankOracleTiebreakInput {
   readonly tiebreakEligible?: ReadonlySet<string>;
 }
 
+/**
+ * `[D-404]` — additive to `RankOracleInput`, typed HERE for the same reason
+ * {@link RankOracleCourseConceptsInput}/{@link RankOracleTiebreakInput} are:
+ * this bead owns only `rank.ts`. Per-INSTRUMENT eligibility, independent of
+ * the due-date veto `checkEdgeVeto` already computes: whether an instrument
+ * (assessment) the caller already knows about is currently usable, per the
+ * planning spec's own instrument eligibility table (`pln.md` §4) —
+ * ineligible because she suspended or withdrew it, its note is gone from
+ * the vault, or its cited passage is marked changed or pending
+ * revalidation. Keyed by `assessmentPath`, the same natural key
+ * {@link edgeIdentity} uses.
+ *
+ * **Two reported reasons, not four or five** (`EdgeVetoReason`'s own
+ * union): `'suspended'` when the caller reports the cause as her own
+ * suspension — the one cause `pln.md`'s R4 target names by that exact word
+ * — and `'instrument-ineligible'` for every other named cause (withdrawn,
+ * note missing, cited passage changed, pending revalidation), kept apart
+ * from `'suspended'` on purpose: reporting a note going missing from her
+ * vault AS "suspended" would misname what actually happened, even though
+ * both remove the instrument from the blend the same way. A finer-grained
+ * `EdgeVetoReason` for each of those four is additive and left to whichever
+ * producer first needs to tell them apart in a rendered surface — nothing
+ * in this chain does yet (Select/Present's own eligibility table, `pln.md`
+ * §4, is where that finer distinction is actually shown to her).
+ *
+ * **Absence is neutral, never a veto** — an `assessmentPath` omitted from
+ * this map, or the map itself omitted (every caller before this bead),
+ * reads as ELIGIBLE, the same "an absent signal never silently reads as the
+ * worst case" rule this file applies throughout (`resolveMasteryState`,
+ * `resolveRetrievabilityWeight`, `computeAssessmentWeightScore`). A
+ * concept's veto fires (`[D-404]`) only once EVERY instrument it actually
+ * has an edge to is present here and marked ineligible — one instrument
+ * omitted, or explicitly eligible, is enough to keep the concept served,
+ * ranked exactly as it would be with only that one surviving edge (this
+ * falls out of the ordinary per-edge veto removal below; no concept-level
+ * special case exists or is needed). A concept with no edges at all never
+ * reaches this map — there is nothing on it for this rule to veto, and
+ * `[D-329]`'s unknown-relevance path (`buildUnknownRelevanceEntry`) never
+ * consults it either.
+ *
+ * **Reachability — not wired to a production caller by this bead.** This
+ * bead owns only `rank.ts`; the shared ranking composition
+ * (`oracle/compose.ts:365`, outside this bead's `owns`) does not thread this
+ * field through yet, matching `RankOracleCourseConceptsInput`'s own
+ * unwired state above. The real per-instrument facts (suspension,
+ * withdrawal, a missing note, a changed citation) live in `review-log/` and
+ * `concept/`/`vault/` reads this bead's owned files cannot reach — the same
+ * "known gap, reachability" shape `RankOracleInput.retrievability`'s doc
+ * already carries. Wiring a real producer into the session and plan
+ * callers of `composeOracleRanking` is `ol-egov.141.89.10.5`'s
+ * (benchmark-and-wire) or a follow-on bead's, not this one's.
+ */
+export interface RankOracleEligibilityInput {
+  readonly instrumentEligibility?: ReadonlyMap<VaultPath, 'suspended' | 'instrument-ineligible'>;
+}
+
 interface ResolvedOptions {
   readonly proximityHalfLifeDays: number;
   readonly assessmentWeightDivisor: number;
@@ -497,11 +575,12 @@ function resolveDueTiming(
 }
 
 /**
- * C5.10's veto list, structurally separated from the weighted blend below:
- * "A short list of facts that genuinely disqualify a concept act as
+ * C5.10's due-date veto, structurally separated from the weighted blend
+ * below: "A short list of facts that genuinely disqualify a concept act as
  * vetoes... A veto removes the concept from consideration and is not a
- * weight." **Exactly one of the three is computable from data this module
- * has today.**
+ * weight." This is the DATE-DERIVED half only — see
+ * {@link checkInstrumentEligibilityVeto} just below for the per-instrument
+ * eligibility half `[D-404]` wired in.
  *
  *  - `'assessment-passed'` — `daysUntilDue < 0`. Wired here. A passed
  *    assessment cannot inform *future* study priority, whatever its
@@ -510,17 +589,22 @@ function resolveDueTiming(
  *    weight indistinguishable from any other), which is exactly the
  *    gate-that-should-have-been-a-weight-or-vice-versa confusion C5.10 warns
  *    against; separating it here is this bead's structural half.
- *  - `'out-of-course-scope'` and `'suspended'` — **reserved, not wired.**
- *    Neither fact is an input `rankOracle` receives today:
- *    `AssessmentRecord.status` (`../assessment/types.js`) is free text the
- *    contract does not define values for at this key (F1.7/F4.8 key on
- *    `type`, never `status`), and concept-level suspension is a different
- *    mechanism from `../review-log/suspension.ts`'s per-INSTRUMENT
- *    projection — neither is threaded into `RankOracleInput`. Guessing a
- *    mapping from `status` strings would be inventing contract vocabulary
- *    this module does not own; wiring either is a reachability gap for a
- *    follow-on bead, tracked structurally by `EdgeVetoReason` already
- *    naming both so a producer has somewhere to report into.
+ *  - `'out-of-course-scope'` — **still reserved, not wired.** Not an input
+ *    `rankOracle` receives today: it is SCP's declared-course-scope
+ *    mechanism, unrelated to instrument eligibility, and no producer
+ *    threads it into `RankOracleInput` yet. Guessing a mapping from
+ *    `AssessmentRecord.status` free text (`../assessment/types.js`) would be
+ *    inventing contract vocabulary this module does not own; wiring it is a
+ *    reachability gap for a follow-on bead, tracked structurally by
+ *    `EdgeVetoReason` already naming it so a producer has somewhere to
+ *    report into.
+ *  - `'suspended'` / `'instrument-ineligible'` — **wired, `[D-404]`,** via
+ *    {@link checkInstrumentEligibilityVeto} and
+ *    {@link RankOracleEligibilityInput}, not here: concept-level
+ *    "suspended" was previously a different mechanism from
+ *    `../review-log/suspension.ts`'s per-INSTRUMENT projection, never
+ *    threaded into `RankOracleInput`; it now is, through the new additive
+ *    input above.
  *
  * Never called for an edge whose `due` was merely absent or unparseable —
  * "we don't know when this is due" is a SIGNAL (see
@@ -529,6 +613,26 @@ function resolveDueTiming(
 function checkEdgeVeto(daysUntilDue: number | null): { readonly reason: EdgeVetoReason } | null {
   if (daysUntilDue !== null && daysUntilDue < 0) return { reason: 'assessment-passed' };
   return null;
+}
+
+/**
+ * `[D-404]` — the per-instrument eligibility veto: looks up `assessmentPath`
+ * in the caller-supplied `instrumentEligibility` map (see
+ * {@link RankOracleEligibilityInput}'s doc for what "ineligible" means and
+ * why absence is never a veto). Independent of {@link checkEdgeVeto}: the
+ * two checks are different facts about the SAME edge (one date-derived, one
+ * not), and either alone is enough to remove it — `buildEdgeOutcome` below
+ * checks the due-date veto first only because that check was here first;
+ * order between the two never matters, since a vetoed edge is vetoed
+ * regardless of which fact fired.
+ */
+function checkInstrumentEligibilityVeto(
+  assessmentPath: VaultPath,
+  instrumentEligibility: ReadonlyMap<VaultPath, 'suspended' | 'instrument-ineligible'> | undefined,
+): { readonly reason: EdgeVetoReason } | null {
+  const cause = instrumentEligibility?.get(assessmentPath);
+  if (cause === undefined) return null;
+  return { reason: cause };
 }
 
 /**
@@ -716,13 +820,30 @@ function buildEdgeOutcome(
   assessment: AssessmentRecord | undefined,
   asOf: Date,
   resolved: ResolvedOptions,
+  // `[D-404]`: `undefined` (every caller before this bead) keeps this
+  // byte-identical to before — see `RankOracleEligibilityInput`'s doc.
+  instrumentEligibility: ReadonlyMap<VaultPath, 'suspended' | 'instrument-ineligible'> | undefined,
 ): EdgeOutcome {
   const { daysUntilDue, dueDateIssue } = resolveDueTiming(asOf, assessment?.due);
-  const veto = checkEdgeVeto(daysUntilDue);
-  if (veto !== null) {
+  const dateVeto = checkEdgeVeto(daysUntilDue);
+  if (dateVeto !== null) {
     return {
       kind: 'vetoed',
-      vetoedEdge: { assessmentPath: edge.assessmentPath, reason: veto.reason, daysUntilDue },
+      vetoedEdge: { assessmentPath: edge.assessmentPath, reason: dateVeto.reason, daysUntilDue },
+    };
+  }
+  const eligibilityVeto = checkInstrumentEligibilityVeto(
+    edge.assessmentPath,
+    instrumentEligibility,
+  );
+  if (eligibilityVeto !== null) {
+    return {
+      kind: 'vetoed',
+      vetoedEdge: {
+        assessmentPath: edge.assessmentPath,
+        reason: eligibilityVeto.reason,
+        daysUntilDue,
+      },
     };
   }
   const yieldScore = computeYieldScore(edge.yieldRank);
@@ -926,6 +1047,10 @@ function rankOneCourse(
   // `undefined` (every caller before this bead) keeps the abstain path
   // byte-identical to before — see the module doc.
   courseConceptUniverse: ReadonlyMap<string, string> | undefined,
+  // `[D-404]`: per-instrument eligibility — see `RankOracleEligibilityInput`'s
+  // doc. `undefined` (every caller before this bead) keeps every edge
+  // outcome byte-identical to before.
+  instrumentEligibility: ReadonlyMap<VaultPath, 'suspended' | 'instrument-ineligible'> | undefined,
 ): CourseOracleRanking {
   if (edgesForCourse.length === 0 && courseConceptUniverse === undefined) {
     const paths = noEvidencePathsForCourse.slice().sort();
@@ -966,7 +1091,13 @@ function rankOneCourse(
     const conceptName = edges[0]?.conceptName ?? conceptKey;
 
     const outcomes = edges.map((edge) =>
-      buildEdgeOutcome(edge, assessmentsByPath.get(edge.assessmentPath), asOf, resolved),
+      buildEdgeOutcome(
+        edge,
+        assessmentsByPath.get(edge.assessmentPath),
+        asOf,
+        resolved,
+        instrumentEligibility,
+      ),
     );
     const vetoedEdges = outcomes
       .filter((o): o is Extract<EdgeOutcome, { kind: 'vetoed' }> => o.kind === 'vetoed')
@@ -1086,7 +1217,10 @@ function rankOneCourse(
  * abstain rule.
  */
 export function rankOracle(
-  input: RankOracleInput & RankOracleTiebreakInput & RankOracleCourseConceptsInput,
+  input: RankOracleInput &
+    RankOracleTiebreakInput &
+    RankOracleCourseConceptsInput &
+    RankOracleEligibilityInput,
 ): RankOracleResult {
   const asOfDate = dateFromCalendarDay(input.asOf);
   if (asOfDate === null) {
@@ -1148,6 +1282,7 @@ export function rankOracle(
       resolved,
       input.tiebreakEligible,
       input.courseConcepts?.get(course),
+      input.instrumentEligibility,
     ),
   );
 

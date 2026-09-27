@@ -63,13 +63,29 @@ export type OracleMasteryState = MasteryState | 'unknown';
  * weighted down — C5.10's veto list (`docs/Olea_alpha_functional_scope.md`,
  * `[D-076]` round 4): "a short list of facts that genuinely disqualify a
  * concept act as vetoes... A veto removes the concept from consideration and
- * is not a weight." **Only `'assessment-passed'` has a producer today** — see
+ * is not a weight." **`'out-of-course-scope'` has no producer today** — see
  * `./rank.ts`'s `checkEdgeVeto` doc for exactly what data this module has and
- * does not have for the other two. They are reserved here, not invented,
- * because a caller/report needs somewhere to name them the moment a producer
- * exists, and widening this union later is additive.
+ * does not have for it (a different, SCP-owned mechanism from the one below).
+ * It is reserved here, not invented, because a caller/report needs somewhere
+ * to name it the moment a producer exists, and widening this union later is
+ * additive.
+ *
+ * **`'suspended'` and `'instrument-ineligible'` — additive, `[D-404]`,
+ * `ol-egov.141.89.10.4`.** Wired from `RankOracleEligibilityInput`'s
+ * per-instrument eligibility map (`./rank.ts`): `'suspended'` reports the one
+ * cause the planning spec's own R4 target names by that exact word (her own
+ * suspension of the instrument); `'instrument-ineligible'` is every other
+ * named cause in the same table (withdrawn, note missing, cited passage
+ * changed, pending revalidation) — kept apart from `'suspended'` on purpose,
+ * so a note going missing from her vault is never reported as though she
+ * suspended it, even though both remove the instrument from the blend the
+ * same way. See `RankOracleEligibilityInput`'s own doc for the full account.
  */
-export type EdgeVetoReason = 'assessment-passed' | 'out-of-course-scope' | 'suspended';
+export type EdgeVetoReason =
+  | 'assessment-passed'
+  | 'out-of-course-scope'
+  | 'suspended'
+  | 'instrument-ineligible';
 
 /**
  * One concept↔assessment edge REMOVED from the blend by a veto, reported
