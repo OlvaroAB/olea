@@ -77,6 +77,7 @@
  */
 
 import {
+  type ConceptAssessmentEdge,
   type CoverageScope,
   type CoverageScopeSource,
   type EvidenceQuestionCitation,
@@ -187,6 +188,58 @@ export const OBJECTIVES_ATTRIBUTION_CLAUSE =
   'Some of this ranking also draws on your registered course objectives, for what they declare in scope.';
 
 /**
+ * The `[D-247]`/`[D-399]` brief-basis attribution (`ol-egov.141.89.10.74`):
+ * F4.2 gives the current assessment briefs "their own attribution sentence",
+ * like objectives, and its own example names the reason as the brief for
+ * that assessment. A brief names what that one assessment covers; like an
+ * objectives document it never evidences how often something is examined,
+ * so this sentence carries no frequency framing and no count. Proposed copy
+ * built from the clause's own words, **AWAITING A COPY PASS (Class B)** —
+ * the registry has no row for it yet.
+ */
+export const ASSESSMENT_BRIEF_ATTRIBUTION_SENTENCE =
+  'Ranked by what your assessment briefs say they cover — a brief names what is in scope for that assessment, not how often something is examined.';
+
+/** The mixed form of {@link ASSESSMENT_BRIEF_ATTRIBUTION_SENTENCE}, appended after the sentence for the other basis — F4.2: "each basis is stated for what it is." */
+export const ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE =
+  'Some of this ranking also draws on your assessment briefs, for what they say each assessment covers.';
+
+/** One evidence basis behind a ranked row — `ConceptAssessmentEdge.basis`, with its documented `'past-paper'` default applied. */
+export type GapRowEvidenceBasis = NonNullable<ConceptAssessmentEdge['basis']>;
+
+/**
+ * The evidence bases behind each ranked row, keyed by {@link gapRowBasisKey}.
+ * Built from the same edges the ranking was composed from
+ * ({@link gapRowEvidenceBases}); the caller hands it to
+ * {@link rankingAttribution} so the sentence can tell an objectives-only row
+ * from a brief-only one — both carry an empty `citations` array, and
+ * `GapRow` itself carries no basis.
+ */
+export type GapRowEvidenceBases = ReadonlyMap<string, ReadonlySet<GapRowEvidenceBasis>>;
+
+/** The key {@link GapRowEvidenceBases} is read by: course and opaque concept key, never the display name. */
+export function gapRowBasisKey(course: string, conceptKey: string): string {
+  return `${course}\u0000${conceptKey}`;
+}
+
+/**
+ * Collect {@link GapRowEvidenceBases} from the concept↔assessment edges
+ * (`ComposeOracleRankingResult.edges`). An edge with no `basis` reads as
+ * `'past-paper'`, the default `ConceptAssessmentEdge.basis` documents; an
+ * edge with no `conceptKey` falls back to its name, as the edge builder does.
+ */
+export function gapRowEvidenceBases(edges: readonly ConceptAssessmentEdge[]): GapRowEvidenceBases {
+  const bases = new Map<string, Set<GapRowEvidenceBasis>>();
+  for (const edge of edges) {
+    const key = gapRowBasisKey(edge.course, edge.conceptKey ?? edge.conceptName);
+    const set = bases.get(key) ?? new Set<GapRowEvidenceBasis>();
+    set.add(edge.basis ?? 'past-paper');
+    bases.set(key, set);
+  }
+  return bases;
+}
+
+/**
  * The gap view's ranking attribution — F4.9 half one's fix, extended for
  * `[D-226]` ruling 2's own attribution sentence.
  *
@@ -210,32 +263,77 @@ export const OBJECTIVES_ATTRIBUTION_CLAUSE =
  * through `gap/build.ts`'s `buildRow` is out of this bead's owned files
  * (`packages/core/src/gap/build.ts` is live-owned by another lane,
  * `ol-2zfj.84`, as of 2026-09-19). Filed as follow-on `ol-oxa2.1`.
+ *
+ * **The brief basis breaks that inference (`ol-egov.141.89.10.74`,
+ * `[D-399]`).** Once an assessment declares a scope, a concept ranked only by
+ * its brief also reaches here with empty `citations`, and the inference above
+ * would call it objectives-based. `bases` ({@link gapRowEvidenceBases}, from
+ * the same edges the ranking used) settles each row by its own edges: the
+ * brief is named as the brief, objectives as objectives, and both are stated
+ * when both are present. Omitting `bases` keeps the inference exactly as
+ * before for every caller that has not threaded the edges through yet.
  */
-export function rankingAttribution(rows: readonly GapRow[]): string {
+export function rankingAttribution(rows: readonly GapRow[], bases?: GapRowEvidenceBases): string {
   const sources = new Set<string>();
   for (const row of rows) for (const citation of row.citations) sources.add(citation.sourcePath);
   const n = sources.size;
-  // See the objectives-basis paragraph above: a ranked row with zero
-  // citations can only be objectives-basis, never "no evidence" (an edge
-  // with no evidence at all is never built).
-  const hasObjectivesEvidence = rows.some((row) => row.citations.length === 0);
+  const { hasObjectivesEvidence, hasBriefEvidence } = nonPaperBases(rows, bases);
   if (n === 0) {
     if (rows.length === 0) {
       // Reachable whenever there are no rows at all. Says what is true of
       // that state instead of borrowing the sentence for the other one.
       return 'Ranked by the evidence behind these concepts — no past paper is cited here.';
     }
-    // Every row present is objectives-basis. Never the past-paper sentence's
-    // frequency framing ("never wears a past paper's clothes", F4.2).
-    return OBJECTIVES_ATTRIBUTION_SENTENCE;
+    // Every row present is objectives- or brief-basis. Never the past-paper
+    // sentence's frequency framing ("never wears a past paper's clothes", F4.2).
+    if (hasObjectivesEvidence && hasBriefEvidence) {
+      return `${OBJECTIVES_ATTRIBUTION_SENTENCE} ${ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE}`;
+    }
+    return hasBriefEvidence
+      ? ASSESSMENT_BRIEF_ATTRIBUTION_SENTENCE
+      : OBJECTIVES_ATTRIBUTION_SENTENCE;
   }
   const pastPaperSentence =
     n === 1
       ? 'Ranked by what 1 past paper of yours has asked.'
       : `Ranked by what ${n} past papers of yours have asked.`;
-  return hasObjectivesEvidence
-    ? `${pastPaperSentence} ${OBJECTIVES_ATTRIBUTION_CLAUSE}`
-    : pastPaperSentence;
+  return [
+    pastPaperSentence,
+    ...(hasObjectivesEvidence ? [OBJECTIVES_ATTRIBUTION_CLAUSE] : []),
+    ...(hasBriefEvidence ? [ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE] : []),
+  ].join(' ');
+}
+
+/**
+ * Which non-past-paper bases stand behind `rows`. With `bases` supplied, read
+ * directly off each row's own edges. Without it, the objectives-basis
+ * paragraph above's inference stands unchanged: a ranked row with zero
+ * citations is read as objectives-basis — which a brief-only row would
+ * wrongly share, and is exactly why a caller that has the edges passes them.
+ */
+function nonPaperBases(
+  rows: readonly GapRow[],
+  bases: GapRowEvidenceBases | undefined,
+): { readonly hasObjectivesEvidence: boolean; readonly hasBriefEvidence: boolean } {
+  if (bases === undefined) {
+    return {
+      hasObjectivesEvidence: rows.some((row) => row.citations.length === 0),
+      hasBriefEvidence: false,
+    };
+  }
+  let hasObjectivesEvidence = false;
+  let hasBriefEvidence = false;
+  for (const row of rows) {
+    const rowBases = bases.get(gapRowBasisKey(row.course, row.conceptKey));
+    if (rowBases === undefined) {
+      // A row the caller's edges do not cover: the unsupplied inference, per row.
+      if (row.citations.length === 0) hasObjectivesEvidence = true;
+      continue;
+    }
+    if (rowBases.has('objectives')) hasObjectivesEvidence = true;
+    if (rowBases.has('assessment-brief')) hasBriefEvidence = true;
+  }
+  return { hasObjectivesEvidence, hasBriefEvidence };
 }
 
 /**
@@ -245,8 +343,11 @@ export function rankingAttribution(rows: readonly GapRow[]): string {
  * wherever a ranking is shown" is a property of the code path rather than of a
  * caller's diligence.
  */
-export function rankedCourseFraming(rows: readonly GapRow[]): readonly string[] {
-  return [rankingAttribution(rows), FULL_SYLLABUS_ADVICE];
+export function rankedCourseFraming(
+  rows: readonly GapRow[],
+  bases?: GapRowEvidenceBases,
+): readonly string[] {
+  return [rankingAttribution(rows, bases), FULL_SYLLABUS_ADVICE];
 }
 
 // ---------------------------------------------------------------------------
