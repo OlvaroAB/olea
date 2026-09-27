@@ -193,6 +193,7 @@ import {
   WITHHELD_SECTION_HEADING,
   withheldItemLine,
 } from './copy.js';
+import type { MergeAuditIdentityProposal } from './merge-audit-identity.js';
 import type { SameAsIdentityProposal } from './same-as-identity.js';
 
 /**
@@ -332,6 +333,8 @@ export type RegistryViewState =
       readonly model: RegistryModel;
       /** `[D-257]` (TRIAGE-6): every currently-resolvable F8.4a concept-identity proposal — see `./same-as-identity.ts`'s own doc for how this is built and why an empty array is the honest, expected value until a propose-side signal exists. */
       readonly identityProposals: readonly SameAsIdentityProposal[];
+      /** `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old cross-course merge audit's own proposals, landed on this SAME identity section — see `./merge-audit-identity.ts`'s own doc for the audit/repair `kind` split and why several rows may share one key. */
+      readonly mergeAuditProposals: readonly MergeAuditIdentityProposal[];
       /** `[D-334]`: every currently-withheld structurally-broken block, computed off the SAME vault walk this state's `model` is built from — no second enumeration. Empty is the honest, expected value on a vault with no structurally-broken block. */
       readonly withheldInstruments: readonly RegistryWithheldItem[];
       /**
@@ -378,6 +381,10 @@ export interface RegistryViewDeps {
   readonly confirmIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
   /** F8.4a's identity-section decline (`[D-257]` TRIAGE-6) — a hard labelled negative, never a claim the two concepts differ. */
   readonly declineIdentityProposal: (proposal: SameAsIdentityProposal) => Promise<void>;
+  /** `[D-402]` binding condition 3 — F8.4a's identity-section accept, reused: for an `'audit'` row, "yes, a genuine recurrence"; for a `'repair'` row, records intent only (never applies a repair). */
+  readonly confirmMergeAuditProposal: (proposal: MergeAuditIdentityProposal) => Promise<void>;
+  /** `[D-402]` binding condition 3 — F8.4a's identity-section decline, reused: for an `'audit'` row, "a known mistake" (may then surface a repair proposal); for a `'repair'` row, a hard labelled negative on the repair only. */
+  readonly declineMergeAuditProposal: (proposal: MergeAuditIdentityProposal) => Promise<void>;
   /**
    * `[D-334]`'s "edit it" action: takes her to the block in her note, the same click-through
    * `deps.openSourceLocation` already gives a concept or instrument row — Olea never edits her
@@ -600,6 +607,10 @@ export class RegistryView extends ItemView {
     // gated by `this.filter` (a same-as proposal spans two concepts, not one row a chip could
     // select). See this file's module doc for the "kept apart from relation candidates" argument.
     this.renderIdentitySection(root, state.identityProposals);
+    // `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old-merge audit's own rows, drawn
+    // in the SAME identity section, right after the same-as rows above — same question ("Are these
+    // one thing?"), same three actions, no new surface.
+    this.renderMergeAuditSection(root, state.mergeAuditProposals);
 
     // `[D-334]`: withheld items are a standing, top-level section — never nested per concept
     // (they never reached concept binding at all, see `RegistryWithheldItem`'s own doc) and never
@@ -736,6 +747,68 @@ export class RegistryView extends ItemView {
     const declineButton = actions.createEl('button', { text: IDENTITY_DECLINE_ACTION });
     declineButton.addEventListener('click', () => {
       void this.deps.declineIdentityProposal(proposal).then(() => this.refresh());
+    });
+  }
+
+  /**
+   * `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old cross-course merge audit's own
+   * rows, in the SAME F8.4a identity section as `renderIdentitySection` above (called right after
+   * it — see the call site's own comment). Renders nothing when `proposals` is empty. Duplicated
+   * rather than sharing `renderIdentitySection`'s loop — same "different bead's owns" reasoning
+   * `RegistryWithheldItem`'s own doc gives for its own near-duplicate — because the two proposal
+   * types are structurally distinct (`SameAsIdentityProposal` carries `keyA`/`keyB`;
+   * `MergeAuditIdentityProposal` carries one `key` and a `kind` discriminant) and `[D-257]`'s own
+   * rule keeps identity-section rows visually and behaviourally identical regardless of which
+   * proposal produced them, without forcing one generic type onto both producers.
+   */
+  private renderMergeAuditSection(
+    root: HTMLElement,
+    proposals: readonly MergeAuditIdentityProposal[],
+  ): void {
+    if (proposals.length === 0) return;
+    const section = root.createDiv({ cls: 'olea-registry-identity-section' });
+    section.createEl('h3', { text: IDENTITY_SECTION_QUESTION });
+    for (const proposal of proposals) this.renderMergeAuditProposal(section, proposal);
+  }
+
+  /**
+   * One row: F8.4a's exact three fields per side, never a score, then the SAME `Yes`/`No`
+   * actions `renderIdentityProposal` offers — reused verbatim via `deps.confirmMergeAuditProposal`/
+   * `deps.declineMergeAuditProposal`, which route by `proposal.kind` to the audit or repair store
+   * (`./merge-audit-identity.ts`'s own doc).
+   */
+  private renderMergeAuditProposal(root: HTMLElement, proposal: MergeAuditIdentityProposal): void {
+    const row = root.createDiv({ cls: 'olea-registry-identity-proposal' });
+
+    const renderSide = (
+      name: string,
+      courses: readonly string[],
+      passage: MergeAuditIdentityProposal['passageA'],
+    ): void => {
+      const side = row.createDiv({ cls: 'olea-registry-identity-side' });
+      side.createEl('h4', { text: name });
+      side.createDiv({ cls: 'olea-registry-courses', text: coursesLine(courses) });
+      side.createEl('p', { cls: 'olea-registry-identity-passage', text: passage.excerpt });
+      const openButton = side.createEl('button', {
+        cls: 'olea-button-quiet',
+        text: OPEN_SOURCE_LOCATION_ACTION,
+      });
+      openButton.addEventListener('click', () => {
+        void this.deps.openSourceLocation(passage.location);
+      });
+    };
+
+    renderSide(proposal.nameA, proposal.coursesA, proposal.passageA);
+    renderSide(proposal.nameB, proposal.coursesB, proposal.passageB);
+
+    const actions = row.createDiv({ cls: 'olea-registry-identity-actions' });
+    const acceptButton = actions.createEl('button', { text: IDENTITY_ACCEPT_ACTION });
+    acceptButton.addEventListener('click', () => {
+      void this.deps.confirmMergeAuditProposal(proposal).then(() => this.refresh());
+    });
+    const declineButton = actions.createEl('button', { text: IDENTITY_DECLINE_ACTION });
+    declineButton.addEventListener('click', () => {
+      void this.deps.declineMergeAuditProposal(proposal).then(() => this.refresh());
     });
   }
 

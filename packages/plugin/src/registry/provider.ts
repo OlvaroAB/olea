@@ -216,10 +216,23 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+// `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`) — imported by source path, not
+// `olea-core`'s barrel, the same reasoning `./merge-audit-identity.ts`'s own module doc gives.
+import {
+  listMergeAuditProposalRecords,
+  listMergeRepairProposalRecords,
+} from 'olea-core/src/concept/merge-audit-store.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
+import {
+  buildMergeAuditIdentityProposals,
+  buildMergeRepairIdentityProposals,
+  confirmMergeAuditIdentityProposal,
+  declineMergeAuditIdentityProposal,
+  type MergeAuditIdentityProposal,
+} from './merge-audit-identity.js';
 import type { ObsidianDataHost } from './overrides-store.js';
 import {
   ObsidianRegistryOverridesStore,
@@ -916,10 +929,31 @@ function createLoadModel(
         gatedConcepts,
       );
 
+      // `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old-merge audit's proposals,
+      // landed on this SAME F8.4a identity section — no second vault walk beyond the two record
+      // listings the audit and repair stores need, both read-only (see `./merge-audit-identity.ts`'s
+      // own doc for why several rows may share one key, and why a `'needs-decision'` escalation
+      // never appears here).
+      const [mergeAuditRecords, mergeRepairRecords] = await Promise.all([
+        listMergeAuditProposalRecords(deps.vault),
+        listMergeRepairProposalRecords(deps.vault),
+      ]);
+      const mergeAuditProposals: readonly MergeAuditIdentityProposal[] = [
+        ...(await buildMergeAuditIdentityProposals(
+          deps.vault,
+          mergeAuditRecords.map((entry) => entry.record),
+        )),
+        ...(await buildMergeRepairIdentityProposals(
+          deps.vault,
+          mergeRepairRecords.map((entry) => entry.record),
+        )),
+      ];
+
       return {
         kind: 'model',
         model: gatedModel,
         identityProposals,
+        mergeAuditProposals,
         // `[D-334]`/`[D-396]`: computed off the same `enumeration` this call already walked
         // above, plus the SAME validity fold (`entries`, `disputes`) `./view.ts`'s reject/restore
         // actions are keyed against everywhere else — no second vault pass, no second fold. See
@@ -1241,6 +1275,14 @@ export function createLocalRegistryProvider(
 
     async declineIdentityProposal(proposal: SameAsIdentityProposal): Promise<void> {
       await declineSameAsIdentityProposal(deps.vault, proposal);
+    },
+
+    async confirmMergeAuditProposal(proposal: MergeAuditIdentityProposal): Promise<void> {
+      await confirmMergeAuditIdentityProposal(deps.vault, proposal);
+    },
+
+    async declineMergeAuditProposal(proposal: MergeAuditIdentityProposal): Promise<void> {
+      await declineMergeAuditIdentityProposal(deps.vault, proposal);
     },
   };
 }

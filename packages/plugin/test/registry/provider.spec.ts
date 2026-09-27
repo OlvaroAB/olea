@@ -13,6 +13,7 @@ import {
   appendDisputeRecord,
   appendReviewLogRecord,
   type ConceptRecord,
+  conceptKeyRecordPath,
   contestClaim,
   createFsrsScheduler,
   enumerateVaultInstruments,
@@ -25,6 +26,13 @@ import {
   type RetrievabilityOutput,
   type Scheduler,
 } from 'olea-core';
+// `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`) — imported by source path, not
+// `olea-core`'s barrel, the same reasoning `../../src/registry/merge-audit-identity.ts`'s own
+// module doc gives.
+import {
+  listMergeAuditProposalRecords,
+  proposeAndPersistMergeAudits,
+} from 'olea-core/src/concept/merge-audit-store.js';
 import { describe, expect, it } from 'vitest';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
@@ -802,6 +810,150 @@ describe('createLocalRegistryProvider — F8.4a concept-identity section ([D-257
     const after = await provider.load();
     if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
     expect(after.identityProposals).toEqual([]);
+  });
+});
+
+// `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`): the old-merge audit's own rows, landed on
+// the SAME F8.4a identity section `buildSameAsIdentityProposals` already reaches above — this
+// suite proves `load()` calls `olea-core`'s `listMergeAuditProposalRecords`/
+// `listMergeRepairProposalRecords` against a real vault walk, and that confirm/decline reach the
+// real `merge-audit-store.ts` functions and are reflected on the next load.
+describe('createLocalRegistryProvider — the old-merge audit, reused on F8.4a ([D-402], ol-egov.141.89.3.19)', () => {
+  it('load() reports no merge-audit proposals when none is persisted', async () => {
+    const provider = makeProvider(fixtureVault(), new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.mergeAuditProposals).toEqual([]);
+  });
+
+  it('surfaces a persisted audit proposal with both sides’ wording, course and passage excerpt', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        '---',
+        'topic: [Concept A]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front text::Back text',
+        '',
+      ].join('\n'),
+      '01 Courses/TESTC101/anchor.md': 'A long enough passage anchored in the first course.\n',
+      '01 Courses/TESTC202/other.md': 'A separate passage carrying the misattributed course.\n',
+    });
+    const legacyKeyRecord = {
+      key: 'concept-key1:legacy',
+      tier: 2 as const,
+      anchor: {
+        kind: 'topic' as const,
+        course: 'TESTC101',
+        name: 'shared wording',
+        aliases: [],
+        introducingPaths: ['01 Courses/TESTC101/anchor.md', '01 Courses/TESTC202/other.md'],
+      },
+      mintedAt: '2026-09-01',
+      schemaVersion: 1,
+    };
+    await vault.write(
+      conceptKeyRecordPath(legacyKeyRecord.key),
+      `${JSON.stringify(legacyKeyRecord, null, 2)}\n`,
+    );
+    await proposeAndPersistMergeAudits(vault, [{ record: legacyKeyRecord }]);
+
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.mergeAuditProposals).toHaveLength(1);
+    const proposal = state.mergeAuditProposals[0];
+    expect(proposal?.kind).toBe('audit');
+    expect(proposal?.coursesA).toEqual(['TESTC101']);
+    expect(proposal?.coursesB).toEqual(['TESTC202']);
+    expect(proposal?.passageA.excerpt.length).toBeGreaterThan(0);
+    expect(proposal?.passageB.excerpt.length).toBeGreaterThan(0);
+  });
+
+  it('confirmMergeAuditProposal reaches the real confirmMergeAuditProposalRecord, and the proposal stops appearing', async () => {
+    const vault = memoryVault({
+      '01 Courses/TESTC101/anchor.md': 'Anchor passage.\n',
+      '01 Courses/TESTC202/other.md': 'Other passage.\n',
+    });
+    const legacyKeyRecord = {
+      key: 'concept-key1:legacy',
+      tier: 2 as const,
+      anchor: {
+        kind: 'topic' as const,
+        course: 'TESTC101',
+        name: 'shared wording',
+        aliases: [],
+        introducingPaths: ['01 Courses/TESTC101/anchor.md', '01 Courses/TESTC202/other.md'],
+      },
+      mintedAt: '2026-09-01',
+      schemaVersion: 1,
+    };
+    await vault.write(
+      conceptKeyRecordPath(legacyKeyRecord.key),
+      `${JSON.stringify(legacyKeyRecord, null, 2)}\n`,
+    );
+    await proposeAndPersistMergeAudits(vault, [{ record: legacyKeyRecord }]);
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const proposal = state.mergeAuditProposals[0];
+    if (proposal === undefined) throw new Error('missing proposal');
+
+    await provider.confirmMergeAuditProposal(proposal);
+
+    const record = (await listMergeAuditProposalRecords(vault))[0]?.record;
+    if (record === undefined) throw new Error('missing merge-audit record');
+    expect(record.status).toBe('confirmed');
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    expect(after.mergeAuditProposals).toEqual([]);
+  });
+
+  it('declineMergeAuditProposal reaches the real declineMergeAuditProposalRecord, and the proposal stops appearing', async () => {
+    const vault = memoryVault({
+      '01 Courses/TESTC101/anchor.md': 'Anchor passage.\n',
+      '01 Courses/TESTC202/other.md': 'Other passage.\n',
+    });
+    const legacyKeyRecord = {
+      key: 'concept-key1:legacy',
+      tier: 2 as const,
+      anchor: {
+        kind: 'topic' as const,
+        course: 'TESTC101',
+        name: 'shared wording',
+        aliases: [],
+        introducingPaths: ['01 Courses/TESTC101/anchor.md', '01 Courses/TESTC202/other.md'],
+      },
+      mintedAt: '2026-09-01',
+      schemaVersion: 1,
+    };
+    await vault.write(
+      conceptKeyRecordPath(legacyKeyRecord.key),
+      `${JSON.stringify(legacyKeyRecord, null, 2)}\n`,
+    );
+    await proposeAndPersistMergeAudits(vault, [{ record: legacyKeyRecord }]);
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const state = await provider.load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    const proposal = state.mergeAuditProposals[0];
+    if (proposal === undefined) throw new Error('missing proposal');
+
+    await provider.declineMergeAuditProposal(proposal);
+
+    const record = (await listMergeAuditProposalRecords(vault))[0]?.record;
+    if (record === undefined) throw new Error('missing merge-audit record');
+    expect(record.status).toBe('declined');
+    // A decline never appears as a new row, and the underlying audit's own row is gone; the
+    // repair proposal `declineMergeAuditIdentityProposal` attempts becomes its own row only once
+    // `merge-audit-identity.spec.ts` and `merge-audit-store.spec.ts` already cover that path in
+    // isolation — this suite's job is proving the wiring reaches the real store, not re-proving
+    // the repair-proposal rules themselves.
+    const after = await provider.load();
+    if (after.kind !== 'model') throw new Error(`expected a model, got ${after.kind}`);
+    expect(
+      after.mergeAuditProposals.every((p) => p.key !== proposal.key || p.kind === 'repair'),
+    ).toBe(true);
   });
 });
 
