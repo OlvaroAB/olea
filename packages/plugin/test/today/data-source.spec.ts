@@ -366,6 +366,29 @@ describe('readReviewHistory — tolerance', () => {
     });
     expect(history.entries.map((e) => e.kind)).toEqual(['suspend']);
   });
+
+  // `ol-egov.141.89.10.72`: a file `exists()` already confirmed, but whose `read()`
+  // itself then fails (a transient I/O error, not "the file is absent") used to have
+  // no handler — the raw `await vault.read(path)` threw straight out of
+  // `readReviewHistory`, and `loadTodayPanel` called this before either due-count
+  // path, so the whole panel (due section included) crashed rather than degrading.
+  it("a file that exists but fails to read is skipped, not thrown — it isn't a claim the file has nothing to say", async () => {
+    const { vault: base } = fakeVault({
+      [logPath('2026-08-10', DEVICE)]: reviewLine('2026-08-10', 'a'),
+    });
+    const failingPath = logPath('2026-08-10', DEVICE);
+    const flaky: typeof base = {
+      ...base,
+      read: async (path) => {
+        if (path === failingPath) throw new Error('memoryVault: simulated transient read failure');
+        return base.read(path);
+      },
+    };
+
+    const history = await readReviewHistory(flaky, DEVICE, { today: '2026-08-10', windowDays: 7 });
+
+    expect(history.entries).toEqual([]);
+  });
 });
 
 describe('endOfLocalDay and localToday', () => {
@@ -893,6 +916,34 @@ describe('createVaultInstrumentSource — [SESS-8.5] reading the shared composit
     }).listDueCandidates();
 
     expect(due).toBeNull();
+  });
+
+  // `ol-egov.141.89.10.72`: a vault-read failure while composing (e.g. `session-builder/
+  // provider.ts`'s `composeStudySessionForRequest`, through `main.ts`'s
+  // `composeDefaultStudySession`) used to have no handler on this branch and threw an
+  // uncaught error out of `listDueCandidates()` itself. Mirrors the legacy route's own
+  // `legacyDueCandidates` try/catch (this file, above): a thrown composer reads as "cannot
+  // count yet", the identical statement an unreadable vault already produces on that path,
+  // never a crash and never a suppressed zero.
+  it('a vault-read failure while composing on the idle branch reads as "cannot count yet", never an uncaught error', async () => {
+    const holder = createStudySessionHolder();
+    const composeDefaultStudySession = async (): Promise<ComposedStudySession | null> => {
+      throw new Error('data-source.spec: simulated vault-read failure during composition');
+    };
+
+    const source = createVaultInstrumentSource({
+      vault: memoryVault({}),
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession,
+    });
+
+    await expect(source.listDueCandidates()).resolves.toBeNull();
+    // No reason to report either — there is nothing honest to say beyond "cannot count yet",
+    // the same posture a `null` composition already takes.
+    expect(source.sessionCompositionOutcome?.()).toBeUndefined();
   });
 });
 

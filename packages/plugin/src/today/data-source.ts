@@ -317,7 +317,23 @@ export async function readReviewHistory(
   for (const path of [...paths].sort()) {
     if (!(await vault.exists(path))) continue;
     if (ownPaths.has(path)) ownDeviceHasHistory = true;
-    const parsed = parseReviewLog(await vault.read(path));
+    // `ol-egov.141.89.10.72`: a read failure on one already-`exists()`-confirmed file
+    // had no handler here — unlike the listing walk just above, which already treats
+    // its own failure as the expected degraded case rather than a crash. Left
+    // unguarded, this `vault.read()` could throw straight out of `loadTodayPanel`
+    // (called before either due-count path runs), taking the WHOLE panel down —
+    // including the due section — rather than letting `createVaultInstrumentSource`'s
+    // own "cannot count yet" signal be the one place a genuinely broken vault gets
+    // reported. Skipped like a file `exists()` had already said wasn't there: never a
+    // crash, and never a claim that this file (or the vault) has nothing due — that
+    // claim belongs to due-counting alone, never to this streak/mastery read.
+    let raw: string;
+    try {
+      raw = await vault.read(path);
+    } catch {
+      continue;
+    }
+    const parsed = parseReviewLog(raw);
     entries.push(...parsed.records);
     disputes.push(...parsed.disputes);
     invalidLineCount += parsed.invalidLines.length;
@@ -633,8 +649,25 @@ export function createVaultInstrumentSource(
         // twice in a row with nothing else touching the holder composes
         // twice on the idle branch, a cost and not a correctness problem —
         // the composer is pure over the same inputs.
-        const composed =
-          sitting.status === 'active' ? sitting.items : await composeDefaultStudySession();
+        //
+        // `ol-egov.141.89.10.72`: the idle branch walks her vault
+        // (`composeDefaultStudySession`, through `session-builder/
+        // provider.ts`'s `composeStudySessionForRequest`) with no try/catch
+        // of its own — same posture `createLocalSessionBuilderProvider`'s
+        // own `buildFresh` already takes toward that same call, catching at
+        // the caller rather than inside it. `legacyDueCandidates` below
+        // reads "the vault walk threw" as "cannot count yet" rather than
+        // letting it surface as an uncaught page error; this branch reads
+        // it exactly the same way, rather than composing twice under one
+        // umbrella try that would also swallow a throw from the active-
+        // sitting branch (which reads no vault and should never throw).
+        let composed: ComposedStudySession | null;
+        try {
+          composed =
+            sitting.status === 'active' ? sitting.items : await composeDefaultStudySession();
+        } catch {
+          return null;
+        }
         // `null`: the composition could not be produced at all — the
         // genuinely-unknown "cannot count yet" case, unchanged by `[D-373]`.
         // There is nothing yet to give a reason for, so
