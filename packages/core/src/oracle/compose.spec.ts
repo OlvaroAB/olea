@@ -322,11 +322,18 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     expect(withoutEntry.factors.retrievabilityWeight).toBeUndefined();
     expect(withoutEntry.factors.needBasis).toBe('unknown');
     // The stub's recall probability for `qa:widget-theory:1` — the review
-    // fixture's `instrumentId` — flows straight through as current recall,
-    // and [D-332]'s blend reads it as need = 1 - recall, ADDED to relevance
-    // at the declared fallback weights (1, 1).
+    // fixture's `instrumentId` — still reaches `retrievabilityWeight`
+    // unchanged (reported, never fabricated), and [D-332]'s blend reads
+    // need = 1 - recall, ADDED to relevance at the declared fallback weights
+    // (1, 1). Since `ol-egov.141.89.10.80` this same fold is ALSO threaded
+    // as `demandAwareReadiness` (see the dedicated test below for that), so
+    // the source the blend actually reads is `'demand-aware-readiness'`, not
+    // `'current-recall'` — the two branches give the same number here only
+    // because both are fed the identical map; `resolveNeed`'s own dedup is
+    // what makes that safe rather than a double count.
     expect(withEntry.factors.retrievabilityWeight).toBe(0.35);
     expect(withEntry.factors.need).toBeCloseTo(0.65, 12);
+    expect(withEntry.factors.needSource).toBe('demand-aware-readiness');
     expect(withEntry.factors.priorityScore).toBeCloseTo(
       withoutEntry.factors.preMasteryScore + (1 - 0.35),
     );
@@ -334,6 +341,41 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // half `rank.ts`'s own blend arithmetic already specifies; this suite
     // covers only that compose's threading reaches it.
     expect(withEntry.factors.priorityScore).not.toBe(withoutEntry.factors.priorityScore);
+  });
+
+  it("`ol-egov.141.89.10.80`: readiness reaches the blend as `demandAwareReadiness`, so `[D-332]`'s recall branch is not ALSO read — this bead's own acceptance criterion", async () => {
+    const scheduler = stubScheduler({ 'qa:widget-theory:1': 0.35 });
+    const now = new Date('2026-08-15T09:00:00.000Z');
+    const eligibleReview = review(widgetKey, { rating: 'good', supportLevelShown: 'independent' });
+
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog: [eligibleReview],
+      asOf: '2026-08-15',
+      concepts,
+      retrievability: { scheduler, now },
+    });
+
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const entry = course.ranked.find((c) => c.conceptName === 'Widget theory');
+    if (entry === undefined) throw new Error('expected Widget theory to be ranked');
+
+    // The source `rank.ts`'s reasoning actually names is readiness, never
+    // recall — `resolveNeed` (`./rank.ts`) picks `demandAwareReadiness` first
+    // and returns before ever reading `retrievabilityWeight` for `need`, so
+    // this is not "recall happens to equal readiness here": recall is
+    // structurally not consulted for `need` once readiness is present.
+    expect(entry.factors.needSource).toBe('demand-aware-readiness');
+    expect(entry.factors.needBasis).toBe('estimated');
+    // `need = 1 - readiness`, counted once — not `1 - readiness` folded a
+    // second time with a separate `1 - recall` term (`[D-332]`'s "counted
+    // once" check, `pln.md` §5 R11): a double count here would show up as a
+    // `need` outside `[0, 1]` or a `priorityScore` shifted by an extra
+    // `(1 - 0.35)` term, neither of which this is.
+    expect(entry.factors.need).toBeCloseTo(0.65, 12);
+    expect(entry.reasoning).toContain('demand-aware readiness');
   });
 
   it('a concept with no recall-tier instrument read (e.g. no review history) is left OUT of the map — reads neutral in the blend, absent in the stored factor, never a fabricated value', async () => {

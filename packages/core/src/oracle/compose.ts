@@ -88,6 +88,14 @@
  * now all pass this field, each threading its own `Scheduler` and `now`
  * through the identical `{ scheduler, now }` shape.
  *
+ * **Corrected again (`ol-egov.141.89.10.80`): the same fold now also reaches
+ * `[D-332]`'s need term as `demandAwareReadiness`, not only as
+ * `retrievability`.** Before this bead every caller's need fell back to the
+ * blend's `'current-recall'` branch, because nothing supplied
+ * `RankOracleInput.demandAwareReadiness` at all — see `retrievability`'s own
+ * doc, below, for the full account (what changed, and what this still is
+ * not: a fold that also checks the assessment's DEMANDED operation).
+ *
  * ## `[D-404]`'s eligibility veto is produced here, for the callers that serve practice
  *
  * `rankOracle` vetoes a concept once none of its practice instruments is
@@ -179,6 +187,36 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * still counts toward mastery. There is no `holding`/`tending`/`early`
    * classification here — `readAllConceptReadiness` computes no cut at all,
    * unlike the vitality fold it is a sibling of.
+   *
+   * **Corrected (`ol-egov.141.89.10.80`): this same fold is now ALSO the
+   * producer for `RankOracleInput.demandAwareReadiness`.** Attainment owns
+   * "the readiness reading" (`../mastery/attainment.js`'s `readAllConceptReadiness`,
+   * C5.6) — the fold this field's doc describes above is that reading, not a
+   * plainer "current recall". Before this bead, `composeOracleRanking`
+   * passed it to `rankOracle` only under the legacy `retrievability` name, so
+   * `[D-332]`'s blend always took the `needSource: 'current-recall'` branch —
+   * "every caller falls back to recall" (this bead's own filed description).
+   * The identical map is now passed a second time as `demandAwareReadiness`,
+   * so the blend reads `needSource: 'demand-aware-readiness'` instead
+   * whenever this fold has a reading for a concept, and does not also read
+   * `retrievabilityWeight` for `need` (`[D-332]`'s "counted once" check;
+   * `./rank.js`'s `resolveNeed` already picks `demandAwareReadiness` first
+   * and short-circuits before touching the recall value at all). The
+   * `retrievability` field itself is left wired unchanged — a caller's
+   * `factors.retrievabilityWeight` keeps reporting the same number, exactly
+   * as `OracleConceptFactors.retrievabilityWeight`'s own doc says it should
+   * ("reaches `priorityScore` only as `need`... and not at all when
+   * demand-aware readiness was supplied").
+   *
+   * **What this is not, yet.** `readAllConceptReadiness`'s eligibility rule
+   * (recall-tier, independent success) is not filtered against the specific
+   * operation an assessment DEMANDS of a concept (`recall-a-fact` vs.
+   * `calculate` vs. `apply`, `[D-281]`'s "a demand-aware calculation: what
+   * the course actually asks her to DO... against what she has practised").
+   * No declared-demand data reaches this composition today (`../gap/demand.js`'s
+   * `demandsMetNow` needs `declaredDemands`/`instrumentDemands` this input
+   * does not carry) — folding that in is real, separate plumbing, filed as a
+   * follow-up rather than built speculatively here.
    */
   readonly retrievability?: ComposeRetrievabilityInput;
   /**
@@ -444,7 +482,19 @@ export async function composeOracleRanking(
     },
     mastery,
     asOf,
-    ...(retrievabilityScores !== undefined ? { retrievability: retrievabilityScores } : {}),
+    ...(retrievabilityScores !== undefined
+      ? {
+          retrievability: retrievabilityScores,
+          // `ol-egov.141.89.10.80`: the identical attainment fold, ALSO as
+          // `demandAwareReadiness` — see `retrievability`'s own doc above for
+          // why these are the same map under two names, and `[D-332]`'s
+          // "counted once" check for why passing both is safe: `rank.ts`'s
+          // `resolveNeed` reads `demandAwareReadiness` first and never
+          // touches `retrievabilityWeight` for `need` once it has, so recall
+          // is not ALSO read for any concept this fold covers.
+          demandAwareReadiness: retrievabilityScores,
+        }
+      : {}),
     ...(tiebreakEligible.size > 0 ? { tiebreakEligible } : {}),
     ...(options !== undefined ? { options } : {}),
     ...(conceptInstrumentEligibility !== undefined ? { conceptInstrumentEligibility } : {}),
