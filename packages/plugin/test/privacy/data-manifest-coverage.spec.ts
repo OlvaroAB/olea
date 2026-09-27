@@ -45,6 +45,8 @@ const PASS_THROUGH_FILES = new Set([
   'src/retrieval/serializing-data-host.ts',
   'src/privacy/cache-purge.ts',
   'src/privacy/data-manifest.ts',
+  // `ol-egov.141.8.12`: the full delete's write seal on the plugin's one settings host.
+  'src/privacy/settings-section.ts',
 ]);
 
 const ACCESSOR_METHODS = new Set(['loadData', 'saveData', 'readModifyWrite']);

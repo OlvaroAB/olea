@@ -192,6 +192,7 @@ import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { studyPlanRefreshDue } from './plan/refresh-schedule.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
+import { FullDeleteWriteSeal, type SealedFullDeleteHost } from './privacy/settings-section.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
 import {
@@ -375,11 +376,17 @@ export default class OleaPlugin extends Plugin {
    * `./retrieval/serializing-data-host.ts`'s own doc for the full argument
    * and what this does not fix (each store still has no serialization of
    * its own if ever given a different host).
+   *
+   * `ol-egov.141.8.12`: wrapped in `FullDeleteWriteSeal`, so a full delete
+   * can stop every writer of this instance before it clears the file
+   * (`./privacy/settings-section.ts`'s module doc).
    */
-  private readonly dataFileHost = new SerializingDataHost({
-    loadData: () => super.loadData(),
-    saveData: (data) => super.saveData(data),
-  });
+  private readonly dataFileHost = new FullDeleteWriteSeal(
+    new SerializingDataHost({
+      loadData: () => super.loadData(),
+      saveData: (data) => super.saveData(data),
+    }),
+  );
   /**
    * `ol-3ux7.64.9` [WBX-8] (`docs/dev/simulator-design.md` §3): the one clock
    * seam this plugin owns. Every wall-clock read in this file goes through
@@ -899,6 +906,11 @@ export default class OleaPlugin extends Plugin {
    */
   readModifyWrite(mutate: (current: unknown) => unknown | Promise<unknown>): Promise<void> {
     return this.dataFileHost.readModifyWrite(mutate);
+  }
+
+  /** `ol-egov.141.8.12`: the privacy pane's full delete seals this instance's settings writers first. */
+  sealForFullDelete(): Promise<SealedFullDeleteHost> {
+    return this.dataFileHost.seal();
   }
 
   override async onload(): Promise<void> {
@@ -4913,6 +4925,10 @@ export default class OleaPlugin extends Plugin {
     // here; it is fired and left to settle on whatever time Obsidian
     // actually gives teardown, same best-effort posture every write on this
     // path already takes.
-    this.gateStagePersistence.flush();
+    //
+    // `ol-egov.141.8.12`: never after a full delete — this unload is the
+    // reload that follows it, and the flush would write the pre-delete
+    // counts back. `retire` also keeps a sealed instance sealed for good.
+    if (this.dataFileHost.retire()) this.gateStagePersistence.flush();
   }
 }

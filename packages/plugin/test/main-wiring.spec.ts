@@ -2174,7 +2174,8 @@ describe("the plugin exposes dataFileHost's atomic readModifyWrite on itself (ol
 
   it('dataFileHost is the first field declared on the class, so every store construction site — later fields and every onload()-time site alike — sees it already built: no ordering gap for this method to guard', () => {
     expect(main).toMatch(
-      /class OleaPlugin extends Plugin \{[\s\S]{0,700}?private readonly dataFileHost = new SerializingDataHost\(\{\s*loadData: \(\) => super\.loadData\(\),\s*saveData: \(data\) => super\.saveData\(data\),\s*\}\);/,
+      // `ol-egov.141.8.12`: the serializing queue now sits inside the full delete's write seal.
+      /class OleaPlugin extends Plugin \{[\s\S]{0,700}?private readonly dataFileHost = new FullDeleteWriteSeal\(\s*new SerializingDataHost\(\{\s*loadData: \(\) => super\.loadData\(\),\s*saveData: \(data\) => super\.saveData\(data\),\s*\}\),\s*\);/,
     );
   });
 });
