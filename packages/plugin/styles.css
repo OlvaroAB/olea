@@ -2747,6 +2747,40 @@ button.olea-review-mcq-option:hover {
   font: 400 14px / 1.5 var(--olea-host-content-font);
 }
 
+/* `[STY-9]` (`ol-l5og.18.19`, fix-list item 2): the course/note identity line the kit places
+   above the prompt (`docs/design/pass3-explainback-sprig/ui_kits/olea-plugin/ExplainBack.jsx`'s
+   `Head`, its `COURSE` row) — same visual pattern `.olea-review-meta`/`-course`/`-dot`/`-note`
+   already establish for the review queue (`review/view.ts`'s `meta`), a local, section-scoped
+   equivalent rather than a second invented shape. `--olea-host-muted`, not `-faint`, throughout —
+   this root declares no `-faint` role at all (ol-nrrm's finding: see this section's later note on
+   `.olea-explain-back-refusal-eyebrow-mark`). Renders only when `modal.ts`'s `renderIdentityStrip`
+   has a real course to show (an instrument-seeded prompt) — absent for a free-form topic entry. */
+.olea-explain-back-identity {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.olea-explain-back-identity-course {
+  font: 500 10.5px / 1 var(--olea-host-mono);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--olea-host-muted);
+}
+
+.olea-explain-back-identity-dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--olea-host-muted);
+}
+
+.olea-explain-back-identity-note {
+  font: 400 11.5px / 1 var(--olea-host-ui-font);
+  color: var(--olea-host-muted);
+}
+
 /* ---- Header row: "The question" label + the mastery tag, side by side ---- */
 
 .olea-explain-back-header {
@@ -2779,13 +2813,18 @@ button.olea-review-mcq-option:hover {
   flex: none;
 }
 
+/* `[STY-9]` (fix-list item 3): a modest size bump toward the kit's own h2 (30px in
+   `ExplainBack.jsx`'s 760px-wide column) — this modal is narrower than the kit's reference frame,
+   so this does not copy that number outright, but 17px read as one flattened line against the
+   kit's clearly-dominant prompt; this raises the weight without widening the modal (out of scope
+   here) or otherwise changing layout. */
 .olea-explain-back-question {
   font-family: var(--olea-host-question-font, var(--olea-host-content-font));
-  font-size: 17px;
-  line-height: 1.4;
+  font-size: 20px;
+  line-height: 1.35;
   font-weight: 500;
   color: var(--olea-host-text);
-  margin: 6px 0 16px;
+  margin: 8px 0 18px;
 }
 
 .olea-explain-back-answer {
@@ -3074,6 +3113,48 @@ button.olea-review-mcq-option:hover {
 .olea-explain-back .olea-explain-back-registry-action:hover {
   border-color: transparent;
   color: var(--olea-host-text);
+}
+
+/* `[STY-9]` (`ol-l5og.18.19`, fix-list item 1): the kit's single amber-filled primary CTA
+   (`ExplainBack.jsx`'s "Done explaining", same fill colour and dark-honey ink this modal's own
+   `.olea-explain-back-actions button:first-child` rule already uses for `Keep this` elsewhere in
+   this file — reused literals, not a second palette) — applied to `Continue` (`renderTopicPhase`)
+   and `Check this` (`renderAnsweringPhase`), the two other bare-bordered primary actions the
+   design-fidelity judgement named.
+
+   `button.olea-explain-back-primary` (class + element), not the bare two-class selector
+   `.olea-explain-back-registry-action` above uses — checked in the workbench harness
+   (`host-frame.ts`'s `loadModalHostCascade`) and needed for real: that document's own
+   `workbench.css` carries a `.wb-modal-host .modal-content button` fallback-chrome rule at
+   specificity (0,2,1) (two classes, one element), which a bare two-class `.olea-explain-back
+   .olea-explain-back-primary` rule at (0,2,0) loses to outright regardless of source order —
+   confirmed by inspecting `document.styleSheets` against the rendered button, the same way
+   `.olea-explain-back-actions button:first-child` (also (0,2,1)) already avoids the same trap by
+   tying rather than losing. This selector ties that fallback's specificity instead, and wins the
+   tie on source order (`plugin-styles.css` loads after `workbench.css` in that document, per
+   `host-frame.ts`'s own doc) — the same mechanism `:first-child`'s rule already relies on. */
+.olea-explain-back button.olea-explain-back-primary {
+  border-color: transparent;
+  background: var(--olea-host-attention, #e0a94e);
+  color: #3b2e12;
+  font-weight: 600;
+}
+
+/* **Deliberately no keycap glyph and no mic secondary control here — flagged, not built.** The
+   kit draws a keycap ON the primary (`⌘⏎`) and a separate mic button beside it; neither is
+   real: no keyboard shortcut is wired for either action (nothing in this file listens for
+   `keydown`), and `../review/copy.ts`'s own keycap discipline is explicit that "the caller must
+   show no keycap at all rather than promise a key that does nothing" (Q6.5) — a decorative glyph
+   here would be exactly that. The mic is further blocked by a live, ratified scenario:
+   `features/F5-explain-it-back.md`'s "typed input is the ship floor; the modal has no voice
+   affordance yet" states the answering phase renders "a `<textarea>` ... and a submit button,
+   and nothing else — no record control, no voice-input affordance." Building either now would be
+   the same kind of clause-less affordance this bead's own report already declines to build for
+   the reassurance line (fix-list item 4) — see this bead's close evidence for the citations. */
+.olea-explain-back button.olea-explain-back-primary:hover {
+  border-color: transparent;
+  color: #3b2e12;
+  filter: brightness(1.06);
 }
 
 /* ============================================================

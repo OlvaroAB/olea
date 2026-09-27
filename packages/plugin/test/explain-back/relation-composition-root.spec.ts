@@ -167,11 +167,13 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
     // `sourceMaterial`/`relationExpected`, carried to accept time;
     // `ol-egov.141.89.6.4` (`[D-322]`) added `practiceOnly`, always `false`
-    // here — matched by name here rather than wildcarded, so an unrelated
+    // here; `[STY-9]` (`ol-l5og.18.19`) added `courseCode`/`noteTitle`, the
+    // seeding instrument's own fields, real data for the identity strip —
+    // matched by name here rather than wildcarded, so an unrelated
     // future field slipping in unnoticed still fails this assertion instead
     // of silently passing through a loose wildcard.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
     );
   });
 

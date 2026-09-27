@@ -692,6 +692,25 @@ interface ResolvedPrompt {
    * for this prompt, carried the same way as `sourceMaterial` above.
    */
   readonly relationExpected: boolean;
+  /**
+   * `[STY-9]` (`ol-l5og.18.19`): the seeding instrument's own `courseCode` (`../review/types.js`'s
+   * `ReviewInstrumentCommon`) — real data already flowing into `resolveInstrumentPrompt`, never
+   * fabricated. `null` for a free-form topic entry (`resolveTopicPrompt`): there is no instrument,
+   * so genuinely no course to report, the same "absent, never invented" posture `subjectConceptId`
+   * already takes for that entry point. `renderIdentityStrip` reads this to decide whether to
+   * render anything at all.
+   */
+  readonly courseCode: string | null;
+  /**
+   * `[STY-9]`: the seeding instrument's own `noteTitle`, carried alongside `courseCode` — same
+   * source, same `null`-for-topic-entry posture. Together these are the closest real analogue this
+   * codebase has to the design kit's course/concept identity line (`docs/design/pass3-
+   * explainback-sprig/ui_kits/olea-plugin/ExplainBack.jsx`'s `Head`) — there is no separate
+   * "unit" field anywhere in the data model to report instead (checked: `ReviewInstrumentCommon`,
+   * `packages/core/src/registry/build.ts`'s concept shape); inventing one would be exactly the
+   * fabrication this bead's own report flags against.
+   */
+  readonly noteTitle: string | null;
 }
 
 /**
@@ -942,6 +961,10 @@ export class ExplainBackModal extends Modal {
       // .sourceMaterial`'s own doc.
       sourceMaterial: resolvedGrading.sourceMaterial,
       relationExpected: resolvedGrading.relationExpected,
+      // `[STY-9]`: real, already-available instrument fields — see `ResolvedPrompt.courseCode`'s
+      // own doc for why this is honest here and `null` for the freeform entry point below.
+      courseCode: instrument.courseCode,
+      noteTitle: instrument.noteTitle,
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
@@ -985,6 +1008,10 @@ export class ExplainBackModal extends Modal {
         conceptIds,
         sourceMaterial: resolvedGrading.sourceMaterial,
         relationExpected: resolvedGrading.relationExpected,
+        // `[STY-9]`: a freeform topic has no seeding instrument, so genuinely no course to
+        // report — see `ResolvedPrompt.courseCode`'s own doc.
+        courseCode: null,
+        noteTitle: null,
       };
       // Never shown an answer box — insufficient-notes is a refusal before
       // any prompt existed to present, so no `presentedAtMs` is set here,
@@ -1012,6 +1039,9 @@ export class ExplainBackModal extends Modal {
       conceptIds,
       sourceMaterial: resolvedGrading.sourceMaterial,
       relationExpected: resolvedGrading.relationExpected,
+      // `[STY-9]`: same as the insufficient-notes branch above — no instrument, no course.
+      courseCode: null,
+      noteTitle: null,
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
@@ -1395,7 +1425,16 @@ export class ExplainBackModal extends Modal {
     root.createEl('p', { text: EXPLAIN_BACK_TOPIC_PROMPT });
     const input = root.createEl('input', { type: 'text', cls: 'olea-explain-back-topic' });
     input.value = topic;
-    const button = root.createEl('button', { text: EXPLAIN_BACK_TOPIC_CONTINUE_LABEL });
+    // `[STY-9]` (`ol-l5og.18.19`, fix-list item 1): the kit's primary-action fill
+    // (`docs/design/pass3-explainback-sprig/ui_kits/olea-plugin/ExplainBack.jsx`'s "Done
+    // explaining"), same class the answering phase's submit button below takes — see
+    // `.olea-explain-back-primary`'s own doc in `styles.css` for what is and is not built here
+    // (no keycap, no mic: both need real functionality this bead does not add — see that rule's
+    // comment).
+    const button = root.createEl('button', {
+      cls: 'olea-explain-back-primary',
+      text: EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
+    });
     button.addEventListener('click', () => {
       const value = input.value.trim();
       if (value.length === 0) return;
@@ -1404,6 +1443,7 @@ export class ExplainBackModal extends Modal {
   }
 
   private renderQuestion(root: HTMLElement, prompt: ResolvedPrompt): void {
+    this.renderIdentityStrip(root, prompt);
     const header = root.createDiv({ cls: 'olea-explain-back-header' });
     header.createDiv({
       cls: 'olea-explain-back-question-label',
@@ -1412,6 +1452,24 @@ export class ExplainBackModal extends Modal {
     this.renderMasteryTag(header, prompt.subjectConceptId);
     root.createDiv({ cls: 'olea-explain-back-question', text: prompt.context.question });
     this.renderPracticeOnlyNotice(root, prompt);
+  }
+
+  /**
+   * `[STY-9]` (fix-list item 2): the course/note identity line the kit's `Head` places above the
+   * prompt (`ExplainBack.jsx`'s `COURSE` line) — same course/note-title pair and visual pattern
+   * `review/view.ts`'s own `meta` method already renders for the review queue (`.olea-review-meta`
+   * in `styles.css`), reused here as a local, section-scoped equivalent rather than a second
+   * invented shape. Renders nothing for a free-form topic entry (`prompt.courseCode === null` —
+   * see `ResolvedPrompt.courseCode`'s own doc: there is genuinely no course to report, never a
+   * fabricated one).
+   */
+  private renderIdentityStrip(root: HTMLElement, prompt: ResolvedPrompt): void {
+    if (prompt.courseCode === null) return;
+    const strip = root.createDiv({ cls: 'olea-explain-back-identity' });
+    strip.createSpan({ cls: 'olea-explain-back-identity-course', text: prompt.courseCode });
+    if (prompt.noteTitle === null || prompt.noteTitle.trim() === '') return;
+    strip.createSpan({ cls: 'olea-explain-back-identity-dot' });
+    strip.createSpan({ cls: 'olea-explain-back-identity-note', text: prompt.noteTitle });
   }
 
   /**
@@ -1474,7 +1532,12 @@ export class ExplainBackModal extends Modal {
         this.editBursts += 1;
       }
     });
-    const button = root.createEl('button', { text: EXPLAIN_BACK_SUBMIT_LABEL });
+    // `[STY-9]` (fix-list item 1): same primary class `renderTopicPhase`'s Continue button takes
+    // — see `.olea-explain-back-primary`'s own doc in `styles.css`.
+    const button = root.createEl('button', {
+      cls: 'olea-explain-back-primary',
+      text: EXPLAIN_BACK_SUBMIT_LABEL,
+    });
     button.addEventListener('click', () => {
       // `ol-0r92.98`: mirrors `renderTopicPhase`'s own guard above — an empty
       // or whitespace-only answer is a no-op, not a graded attempt. This is
@@ -1487,11 +1550,13 @@ export class ExplainBackModal extends Modal {
     // `ol-0r92.104` [DOS-I9]: the named skip action — a second, independent
     // button, never the same click handler as the guard above. See
     // `skipPrompt`'s own doc for exactly how this differs from the
-    // empty-submit guard just above it. No `cls` here, same as the submit
-    // button just above: neither is owned by `styles.css` (out of this
-    // bead's `owns`; `styles.spec.ts`'s drift guard requires every emitted
-    // class to have a rule), and a bare, unstyled Obsidian button is exactly
-    // what `submit`/`Done` already render as today.
+    // empty-submit guard just above it. No `cls` here — `[STY-9]` styles the
+    // PRIMARY action only (the kit's own ghost "Skip for now" is secondary,
+    // unfilled); this bead does not add a `.olea-explain-back-secondary` or
+    // similar (out of scope: the kit draws it as a top-corner ghost action,
+    // not an inline pill, and no clause requires matching that placement) —
+    // a bare, unstyled Obsidian button is exactly what it rendered before
+    // this bead, and `Done` below still renders the same way.
     const skip = root.createEl('button', { text: EXPLAIN_BACK_SKIP_LABEL });
     skip.addEventListener('click', () => this.skipPrompt(prompt));
   }
