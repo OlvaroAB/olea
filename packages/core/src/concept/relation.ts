@@ -46,6 +46,7 @@
  */
 
 import type { Provenance } from '../extract/types.js';
+import type { RelationWithEndpointKeys } from './related-concept-keys.js';
 
 /** The six ruled types, exactly. Nothing here is this module's to choose. */
 export type RelationType =
@@ -412,9 +413,28 @@ function reversedRelationKey(relation: Pick<ConceptRelation, 'type' | 'from' | '
   return relationKey({ type: relation.type, from: relation.to, to: relation.from });
 }
 
+/**
+ * An edge's endpoint identity keys as one string, respecting directedness the
+ * way `relationKey` does, or `undefined` when the edge does not carry both
+ * (`RelationWithEndpointKeys`). Used only to keep apart edges that share
+ * their wordings but join different identities (`deriveRelationSet`).
+ */
+function endpointKeyPair(edge: ConceptRelation, reversed = false): string | undefined {
+  const { fromKey, toKey } = edge as RelationWithEndpointKeys;
+  if (fromKey === undefined || toKey === undefined) return undefined;
+  const pair = reversed ? [toKey, fromKey] : [fromKey, toKey];
+  if (RELATION_DIRECTEDNESS[edge.type] === 'symmetric') pair.sort(byCodeUnit);
+  return `${pair[0]}\u0000${pair[1]}`;
+}
+
 /** One folded edge: the winning attestation, its standing, and every attestation that agreed. */
 export interface RelationSetEntry {
-  /** `relationKey` of every attestation below — the entry's identity within one fold. */
+  /**
+   * `relationKey` of every attestation below — the entry's identity within one
+   * fold. For edges whose wordings name more than one pair of identities
+   * (`deriveRelationSet`, `[D-402]`), `relationKey` followed by a NUL and the
+   * attestations' endpoint key pair, so each identity pair is its own entry.
+   */
   readonly key: string;
   readonly stage: RelationStage;
   /** The winning attestation — the one a reader is served. Always `attestations[0]`. */
@@ -483,11 +503,21 @@ function rankAttestations(a: ConceptRelation, b: ConceptRelation): number {
  * `relations` — in any order, and with any number of groups, since the stage
  * of each edge is derived from its own type rather than from which argument
  * it arrived in.
+ *
+ * **Same wordings, different identities, stay apart (`ol-egov.141.89.4.19`,
+ * `[D-402]`).** One wording can name one identity per course, so two edges of
+ * one type can share both wordings and still join different concepts. Where
+ * the attestations under one `relationKey` carry more than one distinct pair
+ * of endpoint keys (`fromKey`/`toKey`), each pair becomes its own entry, and
+ * an attestation carrying no keys, which cannot say which pair it meant,
+ * becomes an entry of its own under the plain `relationKey` rather than being
+ * merged into either. Where they carry one pair or none, the fold is exactly
+ * the name fold it always was.
  */
 export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[])[]): RelationSet {
   const byKey = new Map<string, ConceptRelation[]>();
   const stageByKey = new Map<string, RelationStage>();
-  let mergedDuplicates = 0;
+  let folded = 0;
   let droppedUnemittable = 0;
 
   for (const group of groups) {
@@ -497,6 +527,7 @@ export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[
         droppedUnemittable += 1;
         continue;
       }
+      folded += 1;
       const key = relationKey(edge);
       const existing = byKey.get(key);
       if (existing === undefined) {
@@ -505,7 +536,30 @@ export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[
         continue;
       }
       existing.push(edge);
-      mergedDuplicates += 1;
+    }
+  }
+
+  // Split a name group whose attestations join more than one identity pair
+  // (this function's doc). A group with one pair or none is left whole.
+  const groupsByEntryKey = new Map<string, ConceptRelation[]>();
+  const splitKeys = new Set<string>();
+  for (const [key, attestations] of byKey) {
+    const pairs = new Set<string>();
+    for (const edge of attestations) {
+      const pair = endpointKeyPair(edge);
+      if (pair !== undefined) pairs.add(pair);
+    }
+    if (pairs.size <= 1) {
+      groupsByEntryKey.set(key, attestations);
+      continue;
+    }
+    for (const edge of attestations) {
+      const pair = endpointKeyPair(edge);
+      const entryKey = pair === undefined ? key : `${key}\u0000${pair}`;
+      if (pair !== undefined) splitKeys.add(entryKey);
+      const existing = groupsByEntryKey.get(entryKey);
+      if (existing === undefined) groupsByEntryKey.set(entryKey, [edge]);
+      else existing.push(edge);
     }
   }
 
@@ -515,14 +569,14 @@ export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[
   // `droppedUnemittable` — the one signal that says a producer emitted a type
   // no stage may emit.
   const entries: RelationSetEntry[] = [];
-  for (const [key, attestations] of byKey) {
+  for (const [key, attestations] of groupsByEntryKey) {
     const ranked = [...attestations].sort(rankAttestations);
     const edge = ranked[0];
     // Unreachable — a key exists only because an edge was pushed under it —
     // but `noUncheckedIndexedAccess` is on and a thrown-away assertion is
     // worse than a guard that can never fire.
     if (edge === undefined) continue;
-    const stage = stageByKey.get(key);
+    const stage = stageByKey.get(relationKey(edge));
     if (stage === undefined) continue;
     entries.push({
       key,
@@ -539,12 +593,18 @@ export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[
   let contradictions = 0;
   for (const entry of entries) {
     if (RELATION_DIRECTEDNESS[entry.edge.type] === 'symmetric') continue;
-    const reversed = reversedRelationKey(entry.edge);
+    // A split entry's reverse is the same identity pair swapped; an unsplit
+    // entry's is the plain reversed name key, as always.
+    const reversedPair = splitKeys.has(entry.key) ? endpointKeyPair(entry.edge, true) : undefined;
+    const reversed =
+      reversedPair === undefined
+        ? reversedRelationKey(entry.edge)
+        : `${reversedRelationKey(entry.edge)}\u0000${reversedPair}`;
     // Count each contradicting pair once, from whichever side sorts first.
     if (keys.has(reversed) && byCodeUnit(entry.key, reversed) < 0) contradictions += 1;
   }
 
-  return { entries, mergedDuplicates, contradictions, droppedUnemittable };
+  return { entries, mergedDuplicates: folded - entries.length, contradictions, droppedUnemittable };
 }
 
 /**

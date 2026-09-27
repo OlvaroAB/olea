@@ -8,10 +8,10 @@
  * same wikilink, so `./extract.js` keeps one identity per course. Course codes and wording are
  * placeholders.
  *
- * `readConcepts` does not yet tell reconciliation which document each relation came from (the
- * splice is handed back on the bead), so these tests pin what the shipped path does without it:
- * the pair of endpoints sharing a document decides, and a relation that could belong to either
- * course is dropped and counted rather than resolved to the first.
+ * `readConcepts` tells reconciliation which document each relation's call read, so that document
+ * decides; a relation from a document in no course, whose passage sits with every identity, is
+ * dropped and counted rather than resolved to the first. Containment evidence and the relation
+ * fold follow the edge's keys, so the other course's identity is never marked or merged.
  */
 import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -30,6 +30,7 @@ import type {
 import { readConcepts } from './read.js';
 import type { RelationWithEndpointKeys } from './related-concept-keys.js';
 import type { ProposedRelation } from './relation.js';
+import { deriveRelationSet, servedRelations } from './relation.js';
 
 let root: string;
 let source: FolderSource;
@@ -227,9 +228,10 @@ describe('a relation between concepts of one course resolves to that course iden
   });
 });
 
-describe('a relation the shipped path cannot place is dropped and counted', () => {
-  it('both endpoints read in both courses, the relation in one: dropped as ambiguous, not given the first course', async () => {
+describe('the proposing document decides, where the endpoints alone cannot', () => {
+  it('both endpoints read in both courses, the relation in one: the second course identity, from its own passages', async () => {
     await writeHomonymPair();
+    const { keyB } = await cellKeys();
 
     const result = await read(
       new Map([
@@ -238,10 +240,59 @@ describe('a relation the shipped path cannot place is dropped and counted', () =
       ]),
     );
 
-    expect(result.relations).toEqual([]);
-    expect(result.relationsDropped).toBe(1);
+    expect(
+      edges(result).map((e) => [
+        e.toKey,
+        e.introducingPassages.from.sourcePath,
+        e.introducingPassages.to.sourcePath,
+      ]),
+    ).toEqual([[keyB, NOTE_B, NOTE_B]]);
+    expect(result.relationsDropped).toBe(0);
   });
 
+  it('containment evidence marks only the second course identity, never the other one', async () => {
+    await writeHomonymPair();
+    const { keyA, keyB } = await cellKeys();
+
+    const result = await read(
+      new Map([
+        [NOTE_A, { concepts: ['Cell'] }],
+        [
+          NOTE_B,
+          { concepts: ['Cell', 'Electrode'], relations: [{ from: 'Electrode', to: 'Cell' }] },
+        ],
+      ]),
+    );
+
+    const evidenceOf = (key: string) =>
+      result.concepts.find((c) => c.key === key)?.size.extent.containmentEvidence === true;
+    expect(evidenceOf(keyB)).toBe(true);
+    expect(evidenceOf(keyA)).toBe(false);
+  });
+
+  it('the fold keeps one edge per course identity when both courses read the same relation', async () => {
+    await writeHomonymPair();
+    const { keyA, keyB } = await cellKeys();
+
+    const result = await read(
+      new Map([
+        [NOTE_A, { concepts: ['Cell', 'Membrane'], relations: [{ from: 'Membrane', to: 'Cell' }] }],
+        [NOTE_B, { concepts: ['Cell', 'Membrane'], relations: [{ from: 'Membrane', to: 'Cell' }] }],
+      ]),
+    );
+    const set = deriveRelationSet(result.relations);
+
+    expect(set.entries).toHaveLength(2);
+    expect(set.mergedDuplicates).toBe(0);
+    expect(
+      servedRelations(set)
+        .map((e) => (e as RelationWithEndpointKeys).toKey)
+        .sort(),
+    ).toEqual([keyA, keyB].sort());
+  });
+});
+
+describe('a relation that cannot be placed is dropped and counted', () => {
   it('a document in no course, whose passage sits with each identity: dropped as ambiguous', async () => {
     await writeHomonymPair();
     await write(LOOSE, '# Loose\n\nA note about cells, filed in no course.\n');

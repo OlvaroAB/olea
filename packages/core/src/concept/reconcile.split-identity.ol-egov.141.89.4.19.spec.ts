@@ -20,7 +20,7 @@ import {
   type ScopedProposedRelation,
   totalDropped,
 } from './reconcile.js';
-import type { ConceptRelation } from './relation.js';
+import { type ConceptRelation, deriveRelationSet, servedRelations } from './relation.js';
 import type { ConceptRecord } from './types.js';
 
 const DOC_A = 'Courses/COURSEA/Week 1.md' as VaultPath;
@@ -344,5 +344,95 @@ describe('readers downstream join by the edge keys before the name', () => {
       ['key-cell-b', ['key-voltage']],
     ]);
     expect(unresolvedEndpointCount).toBe(0);
+  });
+});
+
+function keyedEdge(
+  type: ConceptRelation['type'],
+  from: string,
+  to: string,
+  keys?: { fromKey: string; toKey: string },
+  confidence = 0.7,
+): ConceptRelation {
+  return {
+    type,
+    from,
+    to,
+    provenance: 'model-proposed',
+    confidence,
+    introducingPassages: { from: at(DOC_A), to: at(DOC_A) },
+    ...(keys ?? {}),
+  };
+}
+
+describe('the relation fold keeps same-type edges between split identities apart', () => {
+  it('same wordings, two identity pairs: two entries, nothing merged', () => {
+    const set = deriveRelationSet([
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }),
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-b' }),
+    ]);
+
+    expect(set.entries).toHaveLength(2);
+    expect(set.mergedDuplicates).toBe(0);
+    expect(new Set(set.entries.map((e) => e.key)).size).toBe(2);
+    expect(servedRelations(set).map((e) => (e as { toKey?: string }).toKey)).toEqual([
+      'key-cell-a',
+      'key-cell-b',
+    ]);
+  });
+
+  it('same identity pair twice: one entry, as before, keeping the plain name key', () => {
+    const set = deriveRelationSet(
+      [keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }, 0.6)],
+      [keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }, 0.9)],
+    );
+
+    expect(set.entries).toHaveLength(1);
+    expect(set.mergedDuplicates).toBe(1);
+    expect(set.entries[0]?.key).toBe('part-of\u0000Membrane\u0000Cell');
+    expect(set.entries[0]?.edge.confidence).toBe(0.9);
+  });
+
+  it('one keyed and one unkeyed attestation of the same wordings: merged, as before', () => {
+    const set = deriveRelationSet([
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }),
+      keyedEdge('part-of', 'Membrane', 'Cell'),
+    ]);
+
+    expect(set.entries).toHaveLength(1);
+    expect(set.mergedDuplicates).toBe(1);
+  });
+
+  it('two identity pairs plus an unkeyed attestation: the unkeyed one is its own entry, merged into neither', () => {
+    const set = deriveRelationSet([
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }),
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-b' }),
+      keyedEdge('part-of', 'Membrane', 'Cell'),
+    ]);
+
+    expect(set.entries).toHaveLength(3);
+    expect(set.mergedDuplicates).toBe(0);
+    expect(set.entries.filter((e) => e.key === 'part-of\u0000Membrane\u0000Cell')).toHaveLength(1);
+  });
+
+  it('a symmetric type folds both orientations of one identity pair into one entry', () => {
+    const set = deriveRelationSet([
+      keyedEdge('contrasts-with', 'Cell', 'Cell', { fromKey: 'key-cell-a', toKey: 'key-cell-b' }),
+      keyedEdge('contrasts-with', 'Cell', 'Cell', { fromKey: 'key-cell-b', toKey: 'key-cell-a' }),
+    ]);
+
+    expect(set.entries).toHaveLength(1);
+    expect(set.mergedDuplicates).toBe(1);
+  });
+
+  it('contradictions are counted per identity pair, not across the split', () => {
+    const set = deriveRelationSet([
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-a' }),
+      keyedEdge('part-of', 'Membrane', 'Cell', { fromKey: 'm', toKey: 'key-cell-b' }),
+      keyedEdge('part-of', 'Cell', 'Membrane', { fromKey: 'key-cell-a', toKey: 'm' }),
+      keyedEdge('part-of', 'Cell', 'Membrane', { fromKey: 'key-cell-a', toKey: 'm2' }),
+    ]);
+
+    expect(set.contradictions).toBe(1);
   });
 });

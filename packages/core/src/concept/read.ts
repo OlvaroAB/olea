@@ -139,8 +139,9 @@ import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './conc
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
 import { extractConcepts, resolveLinkClosure } from './extract.js';
 import { type ConceptKeyRequest, resolveConceptKeys } from './key-store.js';
-import { reconcileRelations, totalDropped } from './reconcile.js';
-import type { ConceptRelation, ProposedRelation } from './relation.js';
+import { reconcileRelations, type ScopedProposedRelation, totalDropped } from './reconcile.js';
+import type { RelationWithEndpointKeys } from './related-concept-keys.js';
+import type { ProposedRelation } from './relation.js';
 import type { ConceptSize } from './size.js';
 import { readConceptSize } from './size.js';
 import type { ConceptRecord, ConceptTier } from './types.js';
@@ -463,8 +464,12 @@ export interface ConceptsRead extends ConceptReadBase {
    * scopes them to the corpus-level stage (`[EXT-5]`, `ol-2zfj.7`), which
    * this stage is not. `causes` and `related` never appear here either — not
    * emitted in v0.9 per `./relation.js`'s emission table.
+   *
+   * Each edge carries its endpoints' `fromKey`/`toKey` (`ol-egov.141.89.4.19`):
+   * reconciliation resolved each endpoint to one identity, which a wording
+   * `[D-402]` split by course cannot say by name alone.
    */
-  readonly relations: readonly ConceptRelation[];
+  readonly relations: readonly RelationWithEndpointKeys[];
   /**
    * How many proposed relations this read dropped, summed across every
    * reason (`./reconcile.js`'s `totalDropped`) — the health signal D-005
@@ -1235,17 +1240,28 @@ function callsBySource(batches: readonly DocumentBatch[]): ReadonlyMap<VaultPath
  * `'coarse'` (`./size.js`'s `deriveConceptSize`), never the reverse — the
  * same merge-upward asymmetry C7.9 rules for size generally. A concept named
  * on neither edge's broader side is returned unchanged.
+ *
+ * **By identity, not wording (`ol-egov.141.89.4.19`).** An edge carrying its
+ * container's key (`toKey`, which `./reconcile.js` sets whenever the concept
+ * has one) marks only that identity, so a wording `[D-402]` split by course
+ * gives containment evidence to the course the edge was read in and never to
+ * the other. An edge without a key marks by name, as before.
  */
 function applyContainmentEvidence(
   concepts: readonly ReadConcept[],
-  relations: readonly ConceptRelation[],
+  relations: readonly RelationWithEndpointKeys[],
 ): readonly ReadConcept[] {
-  const containers = new Set<string>();
-  for (const relation of relations) containers.add(relation.to);
-  if (containers.size === 0) return concepts;
+  const containerKeys = new Set<string>();
+  const containerNames = new Set<string>();
+  for (const relation of relations) {
+    if (relation.toKey !== undefined) containerKeys.add(relation.toKey);
+    else containerNames.add(relation.to);
+  }
+  if (containerKeys.size === 0 && containerNames.size === 0) return concepts;
 
   return concepts.map((concept) => {
-    if (!containers.has(concept.name) || concept.size.extent.containmentEvidence === true) {
+    const isContainer = containerKeys.has(concept.key) || containerNames.has(concept.name);
+    if (!isContainer || concept.size.extent.containmentEvidence === true) {
       return concept;
     }
     return {
@@ -1477,7 +1493,9 @@ export async function readConcepts(
   const perCall = Math.max(budget.passagesPerCall ?? Number.POSITIVE_INFINITY, 1);
   const documentBatches = batchesByDocument(budgeted, perCall);
   const proposals: ProposedConcept[] = [];
-  const proposedRelations: ProposedRelation[] = [];
+  // `ol-egov.141.89.4.19`: each relation remembers the document its call read, so a wording
+  // `[D-402]` split by course resolves to that document's identity (`./reconcile.js`).
+  const proposedRelations: ScopedProposedRelation[] = [];
   // `ol-egov.141.89.3.12`: extraction loss, folded per document across every
   // call belonging to it — see `ConceptReadCoverage.anchorsRejected`'s own
   // doc. An absent `response.anchorsRejected` folds as `0`, never as a gap in
@@ -1490,7 +1508,10 @@ export async function readConcepts(
     for (const { sourcePath, batch } of documentBatches) {
       const response = await reader.read({ passages: batch });
       proposals.push(...response.concepts);
-      if (response.relations !== undefined) proposedRelations.push(...response.relations);
+      if (response.relations !== undefined) {
+        for (const relation of response.relations)
+          proposedRelations.push({ ...relation, sourcePath });
+      }
       anchorsRejectedBySource.set(
         sourcePath,
         (anchorsRejectedBySource.get(sourcePath) ?? 0) + (response.anchorsRejected ?? 0),
