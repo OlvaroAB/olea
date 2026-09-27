@@ -249,6 +249,16 @@ export const requestTelemetry = z.object({
   latencyMs: z.number().int().nonnegative(),
   timestamp: z.string().datetime({ offset: true }),
   outcome: z.enum(['ok', 'refused', 'error']),
+  /**
+   * `[D-389]` (`ol-egov.141.6.25`): optional and additive, no meaning change
+   * to `outcome` or any existing field. An `error` row cannot otherwise tell
+   * an output-ceiling hit apart from an ordinary parse failure — both are
+   * `outcome: 'error'` with real, billed token counts. Present only when the
+   * generation stopped because its billed output reached the task's
+   * `maxOutputTokens` ceiling; absent on every other row, including every
+   * ordinary parse failure. Metadata only, one enum tag — never content.
+   */
+  outcomeDetail: z.enum(['output-ceiling-reached']).optional(),
 });
 export type RequestTelemetry = z.infer<typeof requestTelemetry>;
 

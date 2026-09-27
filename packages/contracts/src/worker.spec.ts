@@ -139,3 +139,47 @@ describe('requestTelemetry is unchanged by D-123 (D-005/D-014)', () => {
     expect(record).not.toHaveProperty('inputTokensSource');
   });
 });
+
+// [D-389] (ol-egov.141.6.25): requestTelemetry grows one optional, additive
+// field so an output-ceiling hit can be told apart from an ordinary parse
+// failure on the same outcome: 'error' row.
+describe('requestTelemetry gains an optional outcomeDetail field ([D-389])', () => {
+  const base = {
+    userId: 'user-1',
+    taskId: 'cards.generate.v1',
+    modelId: '@cf/google/gemma-4-26b-a4b-it',
+    promptVersion: '1.0.0',
+    inputTokens: 100,
+    outputTokens: 40,
+    costUsd: 0.000_05,
+    latencyMs: 500,
+    timestamp: new Date().toISOString(),
+    outcome: 'error' as const,
+  };
+
+  it('parses a row without the field exactly as before — absent, not a default', () => {
+    const parsed = requestTelemetry.parse(base);
+    expect(parsed).not.toHaveProperty('outcomeDetail');
+    expect(parsed.outcomeDetail).toBeUndefined();
+  });
+
+  it('carries the ceiling-hit tag through unchanged', () => {
+    expect(
+      requestTelemetry.parse({ ...base, outcomeDetail: 'output-ceiling-reached' }).outcomeDetail,
+    ).toBe('output-ceiling-reached');
+  });
+
+  it('rejects any value outside the one defined tag — no free text, ever', () => {
+    expect(() => requestTelemetry.parse({ ...base, outcomeDetail: 'parse-failure' })).toThrow();
+    expect(() =>
+      requestTelemetry.parse({ ...base, outcomeDetail: 'some real content here' }),
+    ).toThrow();
+  });
+
+  it('is legal on an ok or refused row too — the schema does not couple it to outcome', () => {
+    expect(
+      requestTelemetry.parse({ ...base, outcome: 'ok', outcomeDetail: 'output-ceiling-reached' })
+        .outcomeDetail,
+    ).toBe('output-ceiling-reached');
+  });
+});
