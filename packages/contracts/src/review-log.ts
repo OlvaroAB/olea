@@ -684,13 +684,17 @@ function refineMasteryAgreesWithConcepts(
  * rather than importing that type, so this record has no compile-time
  * coupling to the Worker envelope beyond the two fields it actually needs.
  *
- * **Why this is not content, and why it is required rather than optional.**
- * D-005 forbids her content, never the provenance of a call that produced an
- * artifact — task id, model id and prompt version are exactly what it
- * enumerates as permitted. Every verdict is about something Olea drafted, so
- * every verdict has a generating call to name; there is no honest case for
- * omitting it, unlike `masteryAtTime` (`ol-g6zg`'s doc above), where absence
- * states a true "not yet computed".
+ * **Why this is not content, and when it is required.** D-005 forbids her
+ * content, never the provenance of a call that produced an artifact — task
+ * id, model id and prompt version are exactly what it enumerates as
+ * permitted. Accepting or editing an Olea draft always has a generating call
+ * to name, so there it stays required: omitting it would be dishonest, unlike
+ * `masteryAtTime` (`ol-g6zg`'s doc above), where absence states a true "not
+ * yet computed". **`[D-396]` narrows that to drafts.** A rejection of a block
+ * a structural check withheld may have no generating call to name (a block
+ * she wrote herself never had one, and a broken one may not carry it), so at
+ * v6 a `rejected` verdict, and the restore that lifts one, may omit it; a
+ * writer never invents one (`verdictLogRecordV6`'s doc). v5 is unchanged.
  *
  * **Moved above the v4 record block by `ol-tka5`'s v5 migration** so that
  * `explainBackGrade` below can reference it — it was originally declared
@@ -2369,11 +2373,110 @@ export type SuspendLogRecordV6 = z.infer<typeof suspendLogRecordV6>;
 // shape with only the version restamped, and with its v5 refinements
 // re-applied where it has any.
 
-/** One verdict event, **schema version 6**: `verdictLogRecordV5`, version restamped. */
-export const verdictLogRecordV6 = z.object({
-  ...verdictLogRecordV5.shape,
-  schemaVersion: z.literal(6),
-});
+/**
+ * A verdict's provenance may be absent only where there may be no generating
+ * call to name (`[D-396]`): on a rejection, or on a restore. An accept or an
+ * edit of a draft always names the call that drafted it.
+ */
+function refineVerdictProvenance(
+  value: {
+    readonly verdict: ArtifactVerdict;
+    readonly artifactProvenance?: ArtifactProvenance | undefined;
+    readonly restores?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.artifactProvenance !== undefined) return;
+  if (value.verdict === 'rejected' || value.restores !== undefined) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['artifactProvenance'],
+    message:
+      'only a rejection or a restore may omit artifactProvenance ([D-396]); accepting or editing a draft names the call that drafted it',
+  });
+}
+
+/**
+ * A restore is her acceptance of an instrument she had rejected, so it rides
+ * only an `accepted` verdict, and it names a rejection other than itself.
+ */
+function refineRestoreIsAnAcceptance(
+  value: {
+    readonly eventId: string;
+    readonly verdict: ArtifactVerdict;
+    readonly restores?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.restores === undefined) return;
+  if (value.verdict !== 'accepted') {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['restores'],
+      message: 'a restore is an accepted verdict; a rejection or an edit never lifts a rejection',
+    });
+  }
+  if (value.restores === value.eventId) {
+    ctx.addIssue({
+      code: 'custom',
+      path: ['restores'],
+      message: 'a restore names the rejection it lifts, never itself',
+    });
+  }
+}
+
+/**
+ * One verdict event, **schema version 6**: `verdictLogRecordV5`, version
+ * restamped, with `[D-396]`'s two changes (`ol-v7r5.101`).
+ *
+ * **1. `artifactProvenance` is optional on a rejection and on a restore.**
+ * `[D-396]` lets her reject a block a structural check withheld, including
+ * one she wrote herself, with this same record rather than a second
+ * rejection shape. Such a block may have no generating call to name. Its
+ * `instrumentId`, `instrumentType` and `conceptIds` stay required and
+ * non-empty: **missing provenance never leads to a guessed identity**, and
+ * where a block cannot be identified safely no rejection is written at all
+ * (the writer's rule, `[D-396]` condition 1). A rejection with no provenance
+ * is exactly as much a rejection as one with it; no reader may treat absence
+ * as weaker, and none reads the provenance to decide standing. An accept or
+ * an edit still requires it (`refineVerdictProvenance`).
+ *
+ * **2. `restores`: the deliberate restore (`[D-396]` condition 4).** Only her
+ * own explicit restore returns a rejected instrument to circulation, so a
+ * restore is marked, never inferred: an `accepted` verdict for the same
+ * instrument carrying `restores`, the `eventId` of the rejection she lifted.
+ * It lifts that rejection and every earlier rejection of the same
+ * instrument, and nothing else: not a rejection logged after it, and never
+ * another instrument's (condition 2). An accepted or edited verdict without
+ * it, an edit to the block, a passing re-parse or an id repair lifts nothing
+ * (condition 3). The fold is `olea-core`'s `mastery/validity.ts`. Opaque: an
+ * event id, never content (D-005). The smallest additive shape: a field on
+ * the existing record, not a new kind.
+ *
+ * **Why neither change bumps the version.** A version exists so that a
+ * reader never has to guess what a line means. Every line valid under v6
+ * before this change is valid after it and means the same thing; the change
+ * only admits lines that were invalid before (a rejection without
+ * provenance, a restore), so no existing record needs migrating and no
+ * reader of this build meets a line whose meaning moved. The rule that does
+ * force a new version (this file's opening doc: a field made stricter, or an
+ * existing field's meaning changed) is not met. A build from before this
+ * change meets a new line exactly as it would meet a v7 line: `parse.ts`
+ * reports it as an invalid line and skips it, so a bump would buy that build
+ * nothing, and no released build carries the earlier v6 reader. A v5 line
+ * still requires provenance: every v5 writer drafted what it recorded.
+ */
+export const verdictLogRecordV6 = z
+  .object({
+    ...verdictLogRecordV5.shape,
+    schemaVersion: z.literal(6),
+    /** Required on an accept or an edit; may be absent on a rejection or a restore ([D-396]). Never invented. */
+    artifactProvenance: artifactProvenance.optional(),
+    /** On a restore only: the `eventId` of the rejection she deliberately lifted ([D-396]). */
+    restores: z.string().min(1).optional(),
+  })
+  .superRefine(refineVerdictProvenance)
+  .superRefine(refineRestoreIsAnAcceptance);
 export type VerdictLogRecordV6 = z.infer<typeof verdictLogRecordV6>;
 
 /** One succession event, **schema version 6**: `successionLogRecordV5`, version restamped. */

@@ -18,13 +18,24 @@
  *
  * 1. **Proven invalid** — something in the log shows the instrument or its
  *    grading was defective. Today exactly two facts prove that, the same two
- *    the readers already treat as proof (`8a017c4`, `f61cd18`): its LATEST
- *    verdict is `rejected` (`../review-log/verdicts.ts` calls that "a real
- *    refusal"), or a grade contest about it resolved `corrected`
+ *    the readers already treat as proof (`8a017c4`, `f61cd18`): it has a
+ *    `rejected` verdict (`../review-log/verdicts.ts` calls that "a real
+ *    refusal") that no deliberate restore has lifted, or a grade contest
+ *    about it resolved `corrected`
  *    (`../review-log/contest.ts#correctedGradeInstrumentIds`). `[D-338]`
  *    item 3: current readings always exclude it; item 2: the displayed stage
  *    is corrected on it, with a note; item 1: the historical award keeps what
  *    stood before it.
+ *
+ *    **What lifts a rejection (`[D-396]`, `ol-v7r5.101`).** Only her explicit
+ *    restore: an `accepted` verdict for the same instrument whose `restores`
+ *    names one of its rejections. It lifts that rejection and every earlier
+ *    one of the same instrument, never a rejection logged after it and never
+ *    another instrument's. A later accepted or edited verdict without it, a
+ *    review, an edit to the block, a passing re-parse or an id repair lifts
+ *    nothing: a repair keeps the rejected id, and so keeps its rejection
+ *    (condition 3). A rejection with no `artifactProvenance` stands exactly
+ *    as one with it; this fold never reads provenance.
  * 2. **Withheld, not proven invalid** — her suspension or withdrawal (F2.6,
  *    F8.5), or a successor that replaced it (`[D-133]`). **A suspension has no
  *    reason field** (`olea-contracts`' suspend record: the citation-revision
@@ -71,7 +82,10 @@ export type WithheldReason = 'her-choice' | 'succeeded';
 export interface ProvenInvalidFact {
   readonly instrumentId: string;
   readonly reason: ProvenInvalidReason;
-  /** The proving event's own id — a verdict or a dispute resolution. */
+  /**
+   * The proving event's own id — a verdict or a dispute resolution. For a
+   * rejection it is the standing one, the id a restore names in `restores`.
+   */
   readonly eventId: string;
   /** The proving event's timestamp, as written. */
   readonly at: string;
@@ -122,6 +136,38 @@ function byInstantThenEventId(
 ): number {
   if (a.instant !== b.instant) return a.instant - b.instant;
   return a.record.eventId < b.record.eventId ? -1 : a.record.eventId > b.record.eventId ? 1 : 0;
+}
+
+/**
+ * One instrument's standing rejection as of `asOf`: its latest `rejected`
+ * verdict that no restore at or before `asOf` has lifted (module doc, "What
+ * lifts a rejection"). `verdicts` are that instrument's own, in log order.
+ */
+function standingRejection(
+  verdicts: readonly TimedVerdict[],
+  asOf: number,
+): TimedVerdict | undefined {
+  const known: TimedVerdict[] = [];
+  for (const timed of verdicts) {
+    if (timed.instant > asOf) break;
+    known.push(timed);
+  }
+  const rejectionPosition = new Map<string, number>();
+  known.forEach((timed, position) => {
+    if (timed.record.verdict === 'rejected') rejectionPosition.set(timed.record.eventId, position);
+  });
+  let liftedThrough = -1;
+  for (const timed of known) {
+    const named = timed.record.restores;
+    if (named === undefined || timed.record.verdict !== 'accepted') continue;
+    const position = rejectionPosition.get(named);
+    if (position !== undefined && position > liftedThrough) liftedThrough = position;
+  }
+  for (let position = known.length - 1; position > liftedThrough; position -= 1) {
+    const timed = known[position];
+    if (timed !== undefined && timed.record.verdict === 'rejected') return timed;
+  }
+  return undefined;
 }
 
 /**
@@ -214,18 +260,13 @@ export function projectInstrumentValidity(
   function provenInvalidAsOf(asOf: number): ReadonlyMap<string, ProvenInvalidFact> {
     const result = new Map<string, ProvenInvalidFact>();
     for (const instrumentId of [...instrumentIds].sort()) {
-      const verdicts = verdictsByInstrument.get(instrumentId) ?? [];
-      let latest: TimedVerdict | undefined;
-      for (const timed of verdicts) {
-        if (timed.instant > asOf) break;
-        latest = timed;
-      }
-      if (latest !== undefined && latest.record.verdict === 'rejected') {
+      const rejection = standingRejection(verdictsByInstrument.get(instrumentId) ?? [], asOf);
+      if (rejection !== undefined) {
         result.set(instrumentId, {
           instrumentId,
           reason: 'rejected',
-          eventId: latest.record.eventId,
-          at: latest.record.timestamp,
+          eventId: rejection.record.eventId,
+          at: rejection.record.timestamp,
         });
         continue;
       }
@@ -268,4 +309,19 @@ export function projectInstrumentValidity(
     changeInstants,
     unreadableEventCount,
   };
+}
+
+/**
+ * The instruments standing rejected now: a `rejected` verdict no deliberate
+ * restore has lifted (module doc, "What lifts a rejection"). The same answer
+ * `projectInstrumentValidity` gives for its `rejected` reason, for a reader
+ * that asks only about rejection (`../routing/instrument-eligibility.ts`), so
+ * a restore reads the same everywhere.
+ */
+export function rejectedInstrumentIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+  const rejected = new Set<string>();
+  for (const [instrumentId, fact] of projectInstrumentValidity(entries).provenInvalid) {
+    if (fact.reason === 'rejected') rejected.add(instrumentId);
+  }
+  return rejected;
 }

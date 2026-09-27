@@ -19,8 +19,11 @@
  * **What "eligible" means here, and what it deliberately does not check.**
  * This module reads "eligible" as "the review log itself gives no reason to
  * distrust the instrument": it is not currently suspended
- * (`../review-log/suspension.ts`'s projection) and its most recent verdict,
- * if any, is not `rejected` (`../review-log/verdicts.ts`). This is
+ * (`../review-log/suspension.ts`'s projection) and it does not stand
+ * rejected: a `rejected` verdict counts until her deliberate restore lifts
+ * it, never merely because a later verdict or an edit followed (`[D-396]`;
+ * `../mastery/validity.ts`'s `rejectedInstrumentIds`, the same answer the
+ * evidence and serving exclusions read). This is
  * necessarily a PARTIAL reading — a fuller one (does the instrument still
  * exist in the vault at all, is it actually due today) needs a vault read
  * or `SchedulerState` this bead's owned files do not have. Recorded here as
@@ -44,8 +47,8 @@
  */
 
 import type { InstrumentType, ReviewLogEntry } from 'olea-contracts';
+import { rejectedInstrumentIds } from '../mastery/validity.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
-import { latestVerdictByInstrument } from '../review-log/verdicts.js';
 
 /** C5.10's "ordinary" instrument — every schedulable type except `explain-back` (see module doc). Same set `../review-log/tiebreak.ts` filters recall observations to. */
 export const ORDINARY_INSTRUMENT_TYPES: ReadonlySet<InstrumentType> = new Set([
@@ -85,12 +88,12 @@ export function hasDifferentEligibleOrdinaryInstrument(
   if (known.size === 0) return false;
 
   const suspended = suspendedInstrumentIds(entries);
-  const verdicts = latestVerdictByInstrument(entries);
+  const rejected = rejectedInstrumentIds(entries);
 
   for (const instrumentId of known) {
     if (excludeInstrumentIds.has(instrumentId)) continue;
     if (suspended.has(instrumentId)) continue;
-    if (verdicts.get(instrumentId)?.verdict === 'rejected') continue;
+    if (rejected.has(instrumentId)) continue;
     return true;
   }
   return false;

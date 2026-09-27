@@ -208,3 +208,51 @@ describe('hasDifferentEligibleOrdinaryInstrument', () => {
     ).toBe(false);
   });
 });
+
+describe('[D-396]: rejection without provenance, and the deliberate restore (ol-v7r5.101)', () => {
+  const other = new Set(['qa:widget-theory:1']);
+  function rejectedWithoutProvenance(eventId: string, timestamp: string): VerdictLogRecord {
+    const { artifactProvenance: _none, ...rest } = verdict({
+      eventId,
+      timestamp,
+      verdict: 'rejected',
+    });
+    return rest;
+  }
+
+  it('a rejection with no provenance makes the instrument ineligible, as one with provenance does', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      review({ instrumentId: 'qa:widget-theory:1' }),
+      review({ instrumentId: 'qa:widget-theory:3' }),
+      rejectedWithoutProvenance('v-rej', '2026-08-11T09:00:00-04:00'),
+    ];
+    expect(hasDifferentEligibleOrdinaryInstrument(entries, 'widget-theory', other)).toBe(false);
+  });
+
+  it('a later accepted or edited verdict without a restore keeps it ineligible', () => {
+    for (const later of ['accepted', 'edited'] as const) {
+      const entries: readonly ReviewLogEntry[] = [
+        review({ instrumentId: 'qa:widget-theory:1' }),
+        review({ instrumentId: 'qa:widget-theory:3' }),
+        rejectedWithoutProvenance('v-rej', '2026-08-11T09:00:00-04:00'),
+        verdict({ eventId: 'v-later', timestamp: '2026-08-12T09:00:00-04:00', verdict: later }),
+      ];
+      expect(hasDifferentEligibleOrdinaryInstrument(entries, 'widget-theory', other)).toBe(false);
+    }
+  });
+
+  it('her deliberate restore makes it eligible again', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      review({ instrumentId: 'qa:widget-theory:1' }),
+      review({ instrumentId: 'qa:widget-theory:3' }),
+      rejectedWithoutProvenance('v-rej', '2026-08-11T09:00:00-04:00'),
+      verdict({
+        eventId: 'v-restore',
+        timestamp: '2026-08-12T09:00:00-04:00',
+        verdict: 'accepted',
+        restores: 'v-rej',
+      }),
+    ];
+    expect(hasDifferentEligibleOrdinaryInstrument(entries, 'widget-theory', other)).toBe(true);
+  });
+});

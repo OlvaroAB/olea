@@ -298,11 +298,12 @@ describe('the award is judged against the validity known at the time', () => {
     expect(reading.displayed.state).toBe('seed');
   });
 
-  it('an attempt that comes to stand when its instrument is accepted again is awarded from then', () => {
+  it('an attempt that comes to stand when her restore lifts its rejection is awarded from then', () => {
+    // [D-396]: only a deliberate restore lifts a rejection (ol-v7r5.101).
     const reading = attain([
       verdict('eb:a', 'rejected', T1, 'v1'),
       explainBack('eb-1', T2),
-      verdict('eb:a', 'accepted', T3, 'v2'),
+      { ...verdict('eb:a', 'accepted', T3, 'v2'), restores: 'v1' },
     ]);
     expect(reading.displayed.state).toBe('tree');
     expect(reading.award).toMatchObject({ attemptEventId: 'eb-1', attemptAt: T2 });
