@@ -430,6 +430,7 @@ import {
   type StudySessionItem,
   type StudySessionModel,
 } from './build.js';
+import type { CompositionProvenance, CompositionRecord } from './composition-record.js';
 import type { DurationModel } from './duration.js';
 import type { ConceptInstrumentIndex } from './instrument-index.js';
 import type {
@@ -2478,6 +2479,23 @@ export interface ComposedStudySession {
    * fixture reason; `buildComposedStudySession` always sets it.
    */
   readonly setAside?: CompositionSetAside;
+  /**
+   * `[D-395]`: what the caller read to compose this session (the plan version and allocation, the
+   * other policy versions, the steering, whether it was a re-entry), for the composition record
+   * written if she starts it (`./composition-record.ts`'s {@link CompositionProvenance}). Set by
+   * the plugin's composition door (`session-builder/provider.ts`'s
+   * `composeStudySessionForRequest`), never by this module; absent on a session composed any other
+   * way, which therefore cannot be recorded.
+   */
+  readonly provenance?: CompositionProvenance;
+  /**
+   * `[D-395]`: the composition record this session is being served under — its first record, or
+   * the latest extension record once she outran the target and the list changed. Set only when the
+   * session became actual and the record was appended (the plugin's
+   * `session/composition-recorder.ts`); absent on a preview, which writes nothing. Its
+   * `compositionId` is the id a review served from this session carries (review log v6).
+   */
+  readonly compositionRecord?: CompositionRecord;
 }
 
 /**

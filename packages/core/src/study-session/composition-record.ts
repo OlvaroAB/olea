@@ -1,5 +1,5 @@
 /**
- * The composition record (`[D-331]`, `ol-egov.141.89.10.65`, phase 1: pure parts only).
+ * The composition record (`[D-331]`, `[D-395]`, `ol-egov.141.89.10.65`).
  *
  * `[D-331]` (ruled 2026-09-25): preserve what a composition selected, what it set aside and why,
  * alongside the plan, the shares and the policy versions it used; record actual compositions
@@ -9,18 +9,25 @@
  * reading the record never unfreezes or recomposes the session (C5.8, `[D-193]`). A separately
  * labelled preview of the next session is not bound to it.
  *
+ * `[D-395]` (ruled 2026-09-27, C5.5 as amended): every composed session has its own record with
+ * its own explicit session id; an extension that changed the list is its own record naming the
+ * same session id, never a rewrite; a preview she did not start writes nothing; the record is
+ * never study activity; and a review links to the record that served it by the review log's v6
+ * `compositionId`, never by timestamp.
+ *
  * This module builds the record from a composed session, serializes it as one JSONL line, and
- * parses it back. **It writes nothing.** Where the record is written, when a composition counts
- * as actual, and how Home, Start and the review session read it are the write-path half of the
- * bead, specified in its phase-1 report and gated on the shape decisions filed there.
+ * parses it back. **It writes nothing.** `./composition-log.ts` is the append-only stream it is
+ * written to; the plugin's `session/composition-recorder.ts` decides when a composition is actual
+ * and writes it.
  *
  * ## What the record is, and what it is not
  *
  * - **One record per actual composition**: a fresh one (`kind: 'compose'`) or an outrun extension
  *   of an open one (`kind: 'extend'`, C5.8's "outrunning the target under the same plan's
- *   shares"). Every record is a whole snapshot of its sitting at that point, so the active
- *   session's snapshot is the latest record carrying its `sittingId`; an extension names the
- *   record it grew in `parentCompositionId`.
+ *   shares"). Every record is a whole snapshot of its session at that point, so the active
+ *   session's snapshot is the latest record carrying its `sessionId`; an extension names the
+ *   record it grew in `parentCompositionId`. Two sessions never share a record, even on the same
+ *   day and device (`[D-395]` condition 1).
  * - **Not a review event, and never read as one.** It carries no rating, no duration and no
  *   outcome, and it is kept out of the review log's stream entirely, so no attention, mastery,
  *   scheduling or insight fold can count it. `[D-331]`'s "without accruing attention" holds by
@@ -148,8 +155,8 @@ export interface CompositionRecord {
   readonly schemaVersion: 1;
   readonly kind: CompositionKind;
   readonly compositionId: string;
-  /** The sitting this composition belongs to: its own id for `'compose'`, the parent's `sittingId` for `'extend'`. */
-  readonly sittingId: string;
+  /** The session this composition belongs to (`[D-395]` condition 1): its own `compositionId` for `'compose'`, the parent's `sessionId` for `'extend'`. */
+  readonly sessionId: string;
   /** `null` for `'compose'`; the record this extension grew for `'extend'`. */
   readonly parentCompositionId: string | null;
   /** When the composition became actual. ISO-8601 with offset: "when did she study" is local. */
@@ -199,6 +206,16 @@ export interface CompositionRecordContext {
   readonly conceptIds?: readonly string[];
 }
 
+/**
+ * What the composer's caller read to compose one session — {@link CompositionRecordContext} less
+ * the id and instant, which exist only once the composition becomes actual. Carried on the
+ * session itself (`ComposedStudySession.provenance`) from the moment it is composed, so the record
+ * written when she starts it states what actually composed it, never a later re-read of a plan
+ * that may have been replaced meanwhile. A preview carries it too and writes nothing (`[D-395]`
+ * condition 3): carrying it is not recording it.
+ */
+export type CompositionProvenance = Omit<CompositionRecordContext, 'compositionId' | 'composedAt'>;
+
 /** What {@link buildExtendedCompositionRecord} needs beyond the parent record and the extended session. */
 export interface ExtendedCompositionRecordContext {
   readonly compositionId: string;
@@ -239,7 +256,7 @@ const RECORD_KEYS = [
   'schemaVersion',
   'kind',
   'compositionId',
-  'sittingId',
+  'sessionId',
   'parentCompositionId',
   'composedAt',
   'asOf',
@@ -282,7 +299,7 @@ function canonical(record: CompositionRecord): CompositionRecord {
     schemaVersion: record.schemaVersion,
     kind: record.kind,
     compositionId: record.compositionId,
-    sittingId: record.sittingId,
+    sessionId: record.sessionId,
     parentCompositionId: record.parentCompositionId,
     composedAt: record.composedAt,
     asOf: record.asOf,
@@ -512,10 +529,10 @@ export function parseCompositionRecord(json: unknown): CompositionRecord | null 
   if (!hasExactKeys(json, RECORD_KEYS)) return null;
   const v = json;
   if (!isOneOf(COMPOSITION_KINDS, v.kind)) return null;
-  if (!isNonEmptyString(v.compositionId) || !isNonEmptyString(v.sittingId)) return null;
+  if (!isNonEmptyString(v.compositionId) || !isNonEmptyString(v.sessionId)) return null;
   if (!isNullableNonEmptyString(v.parentCompositionId)) return null;
-  // A fresh composition opens its own sitting; an extension always names what it grew.
-  if (v.kind === 'compose' && (v.parentCompositionId !== null || v.sittingId !== v.compositionId)) {
+  // A fresh composition opens its own session; an extension always names what it grew.
+  if (v.kind === 'compose' && (v.parentCompositionId !== null || v.sessionId !== v.compositionId)) {
     return null;
   }
   if (v.kind === 'extend' && v.parentCompositionId === null) return null;
@@ -660,7 +677,7 @@ export function buildCompositionRecord(
       schemaVersion: 1,
       kind: 'compose',
       compositionId: context.compositionId,
-      sittingId: context.compositionId,
+      sessionId: context.compositionId,
       parentCompositionId: null,
       composedAt: context.composedAt,
       asOf: session.model.asOf,
@@ -683,7 +700,7 @@ export function buildCompositionRecord(
 }
 
 /**
- * The record of C5.8's outrun growth of an open sitting (`kind: 'extend'`). `session` must be the
+ * The record of C5.8's outrun growth of an open session (`kind: 'extend'`). `session` must be the
  * extended session `extendComposedStudySessionWithAccount` returns (its account kept true through
  * the growth). Everything the extension holds "under the same plan's shares" — the course, the
  * branch, the grouping signal, the steering, the plan version, the other policy versions, the
@@ -692,7 +709,7 @@ export function buildCompositionRecord(
  * instant) comes from `session` and `context`. What the extension dropped under `[D-330]` is
  * readable as `parent.chosen` less this record's `chosen`, and is listed in `setAside` as
  * `'cited-passage-changed'`. Throws when `session` is not the parent's course (a different
- * sitting's session) or carries no account.
+ * session's composition) or carries no account.
  */
 export function buildExtendedCompositionRecord(
   parent: CompositionRecord,

@@ -623,7 +623,7 @@ describe('[D-331] buildCompositionRecord', () => {
       schemaVersion: COMPOSITION_RECORD_SCHEMA_VERSION,
       kind: 'compose',
       compositionId: `${OPAQUE_COMPOSITION_ID_PREFIX}:nonce-1`,
-      sittingId: `${OPAQUE_COMPOSITION_ID_PREFIX}:nonce-1`,
+      sessionId: `${OPAQUE_COMPOSITION_ID_PREFIX}:nonce-1`,
       parentCompositionId: null,
       composedAt: COMPOSED_AT,
       asOf: AS_OF,
@@ -780,7 +780,7 @@ describe('[D-331] buildExtendedCompositionRecord', () => {
     expect(kind).toBe('extend');
     expect(compositionId).toBe('composition-key1:nonce-5');
     expect(parentCompositionId).toBe(parent.compositionId);
-    expect(record.sittingId).toBe(parent.sittingId);
+    expect(record.sessionId).toBe(parent.sessionId);
     expect(composedAt).toBe('2026-09-14T19:00:00.000+10:00');
     expect(budgetMinutes).toBe(4);
     expect(chosen.map((c) => c.instrumentId)).toEqual(['i-alpha', 'i-beta', 'i-gamma']);
@@ -858,7 +858,7 @@ describe('[D-331] serialize and parse — byte-identical round trips (INV-2)', (
     expect(parseCompositionRecord(noVersion)).toBeNull();
   });
 
-  it('refuses an unknown or missing field, an unknown enum value, and an inconsistent sitting', () => {
+  it('refuses an unknown or missing field, an unknown enum value, and an inconsistent session', () => {
     const json = JSON.parse(serializeCompositionRecord(recordFixture()));
     expect(parseCompositionRecord({ ...json, rating: 'good' })).toBeNull();
     const { setAside: _s, ...missing } = json;

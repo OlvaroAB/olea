@@ -239,6 +239,10 @@ import {
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
+import {
+  type CompositionRecorder,
+  createCompositionRecorder,
+} from '../session/composition-recorder.js';
 import type { StudySessionHolder } from '../session/holder.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
@@ -422,6 +426,15 @@ export interface OpenReviewSessionInput {
    * instance for the whole plugin and passes it here unchanged.
    */
   readonly studySessionHolder: StudySessionHolder;
+  /**
+   * `[D-395]` (`ol-egov.141.89.10.65`): the one writer of composition records — see
+   * `session/composition-recorder.ts`. This module is the door every answer passes through, so it
+   * records a session as it becomes actual: a fresh composition as it enters the holder, a sitting
+   * Start entered without a record (before any answer), and a keep going that changed the list.
+   * Omitted (every caller today, `main.ts` included) builds one over this call's own
+   * {@link vault} and {@link deviceId}; a test supplies its own to observe or fail the writes.
+   */
+  readonly compositionRecorder?: CompositionRecorder;
   /**
    * `[SESS-8.4]` (§3c): composes a fresh `ComposedStudySession` with no
    * course/topic/concept steering and C5.5's default budget — the SAME
@@ -701,6 +714,11 @@ export async function openReviewSession(
     // it — see the module doc's "she gets a composition, not a different
     // one".
     const sitting = input.studySessionHolder.getSitting();
+    // `[D-395]`: see `compositionRecorder`'s own doc. A write that fails never blocks the session;
+    // the recorder hands the session back unrecorded and it is served exactly as before.
+    const compositionRecorder =
+      input.compositionRecorder ??
+      createCompositionRecorder({ vault: input.vault, deviceId: input.deviceId });
     let composedSession: ComposedStudySession;
     // C5.8/`[D-193]` (`ol-egov.141.89.10.45`): the plan this open joins
     // against, decided by the SAME branch below that decides whether this is
@@ -725,7 +743,10 @@ export async function openReviewSession(
           ? await input.extendDefaultStudySession(sitting.items)
           : null;
       if (extended !== null) {
-        composedSession = extended;
+        // `[D-395]` condition 2: a keep going that changed the list appends its own extension
+        // record under the same session; one that changed nothing appends nothing.
+        composedSession = (await compositionRecorder.recordExtension(sitting.items, extended, now))
+          .session;
         // The freeze clock does not restart on an extension — `enteredAt`
         // still marks when she opened THIS sitting, the same discipline
         // `queue-adapter.ts`'s own `FrozenReviewQueue.extend` states for the
@@ -734,6 +755,16 @@ export async function openReviewSession(
         // unlike `enter`, leaves the captured composition plan untouched —
         // an outrun grows the SAME sitting under the same plan's shares.
         input.studySessionHolder.growActiveSitting(sitting.enteredAt, composedSession);
+      } else if (sitting.items.compositionRecord === undefined) {
+        // `[D-395]` condition 4: Start on Home entered this sitting (`main.ts`) and revealed this
+        // tab; the record is written here, as the tab opens and before any answer. Also retries a
+        // start whose earlier write failed. The held session is swapped for the recorded one in
+        // place — same sitting, same `enteredAt`, same captured plan.
+        const outcome = await compositionRecorder.recordStart(sitting.items, now);
+        composedSession = outcome.session;
+        if (outcome.status === 'recorded') {
+          input.studySessionHolder.growActiveSitting(sitting.enteredAt, composedSession);
+        }
       } else {
         composedSession = sitting.items;
       }
@@ -745,7 +776,9 @@ export async function openReviewSession(
           'openReviewSession: the study plan is not configured, so there is nothing for the study-session composer to build from',
         );
       }
-      composedSession = fresh;
+      // `[D-395]`: opening review onto an idle session starts one — its record is appended before
+      // the session enters the holder, so the held session always carries it.
+      composedSession = (await compositionRecorder.recordStart(fresh, now)).session;
       // `ol-egov.141.89.10.4.1` (bug fix): `composedSessionPlan`, when
       // supplied, is read AFTER `composeDefaultStudySession` above has
       // settled — the plan the composition actually joined against — never

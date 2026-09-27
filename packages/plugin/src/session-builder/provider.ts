@@ -215,7 +215,12 @@
  * her closing and reopening the leaf.
  */
 
-import type { ReviewLogEntry, StudyPlanAllocationEntry, StudyPlanEnvelope } from 'olea-contracts';
+import {
+  RANK_WEIGHTS_KIND,
+  type ReviewLogEntry,
+  type StudyPlanAllocationEntry,
+  type StudyPlanEnvelope,
+} from 'olea-contracts';
 import type {
   AssessmentProximityBand,
   BuildComposedStudySessionInput,
@@ -274,6 +279,9 @@ import {
 // or the `olea-core` package barrel it feeds: see `session/holder.ts`'s own import comment, which
 // takes the identical stance for the identical reason.
 import { hasCitationRevisionChangedInScope } from '../../../core/src/concept/revision/session-staleness.js';
+// `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path for the same reason — the
+// `olea-core` barrel is another live lane's file this round.
+import type { CompositionProvenance } from '../../../core/src/study-session/composition-record.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
 // see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
 // resolver from `resolveCitationFreshness` above, never a shared one.
@@ -837,9 +845,9 @@ export interface ComposeStudySessionForRequestResult {
    * `policyVersion`, read off `deps.readRankWeights`'s widened `RankWeightsResult` when a delivered
    * artifact was read this call — `undefined` when `deps.readRankWeights` is absent or resolved
    * `undefined` (unconfigured, offline, no envelope), the same absence-reads-as-absence posture
-   * `options` itself already has above. Additive: no caller reads this yet — a future composition
-   * record's `policyVersions` map is the intended reader (`study-session/composition-record.ts`'s
-   * `CompositionRecordContext.policyVersions`), gated on that bead's own phase-2 write path.
+   * `options` itself already has above. The composition record reads the same value through
+   * `composed.full.provenance.policyVersions` (`[D-395]`, this bead's write path), set from the same
+   * `options`, so the two never disagree.
    */
   readonly rankWeightsPolicyVersion?: string;
 }
@@ -1182,7 +1190,11 @@ export async function composeStudySessionForRequest(
   // allocation, read fresh through `deps.plan` — see that field's own
   // doc. An empty array reads the same as `undefined` to `compose.ts`'s
   // own optional field, so this is not narrowed further here.
-  const allocation = deps.plan?.()?.body.allocation;
+  // `[D-395]`: the envelope is read ONCE, and both the allocation and the plan version the
+  // composition record states come off that same read — never a second `deps.plan()` call that
+  // could land on a plan replaced in between.
+  const planEnvelope = deps.plan?.() ?? null;
+  const allocation = planEnvelope?.body.allocation;
   // `[SESS-13]`: handed what this call has already read — never a second
   // whole-log read or a second vault walk. See the dep's own doc.
   const windowDeficit = deps.windowDeficit?.({
@@ -1269,12 +1281,33 @@ export async function composeStudySessionForRequest(
     ...(windowDeficit !== undefined ? { windowDeficit } : {}),
   };
 
-  const composed = composeReentrySession({
+  const reentryComposed = composeReentrySession({
     ...composedInput,
     daysSinceLastReview: daysSinceLastReview(entries, now),
     candidateBudgetMinutes: reentryCandidateBudgetMinutes(request.budgetMinutes),
     ordinaryBudgetMinutes: request.budgetMinutes,
   });
+  // `[D-395]` (`ol-egov.141.89.10.65`): what this call read to compose, carried on the session
+  // itself so the composition record written if she STARTS it states exactly this — see
+  // `ComposedStudySession.provenance`. Carrying it writes nothing: this function also serves
+  // Home's live preview and the session builder, and a preview she did not start is never
+  // recorded (`[D-395]` condition 3; `session/composition-recorder.ts` is the only writer).
+  const provenance: CompositionProvenance = {
+    planVersion: planEnvelope?.policyVersion ?? null,
+    ...(options !== undefined
+      ? { policyVersions: { [RANK_WEIGHTS_KIND]: options.policyVersion } }
+      : {}),
+    reentry: reentryComposed.isReentry,
+    ...(allocation !== undefined ? { allocation } : {}),
+    ...(courseOrTopicFilter.courses !== undefined ? { courses: courseOrTopicFilter.courses } : {}),
+    ...(courseOrTopicFilter.conceptIds !== undefined
+      ? { conceptIds: courseOrTopicFilter.conceptIds }
+      : {}),
+  };
+  const composed: ComposedReentrySession = {
+    ...reentryComposed,
+    full: { ...reentryComposed.full, provenance },
+  };
 
   return {
     composed,

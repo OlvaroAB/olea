@@ -131,6 +131,7 @@ import {
   reviewLogPath,
 } from 'olea-core';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { COMPOSITION_LOG_FOLDER } from '../../../core/src/study-session/composition-log.js';
 import {
   type ObsidianDataHost,
   STUDY_PLAN_SETTINGS_STORAGE_KEY,
@@ -853,8 +854,18 @@ describe('every rating reached the vault as a D7.1 record (INV-4)', () => {
     const conceptKeyRecords = added.filter((path) =>
       path.startsWith(`${CONCEPT_KEY_STORE_FOLDER}/`),
     );
-    expect(added.filter((path) => !conceptKeyRecords.includes(path))).toEqual([logPath()]);
+    // `[D-395]` (`ol-egov.141.89.10.65`): and the session's composition record, appended to this
+    // device's own daily file in Olea's composition stream as the session started.
+    const compositionRecords = added.filter((path) =>
+      path.startsWith(`${COMPOSITION_LOG_FOLDER}/`),
+    );
+    expect(
+      added.filter(
+        (path) => !conceptKeyRecords.includes(path) && !compositionRecords.includes(path),
+      ),
+    ).toEqual([logPath()]);
     expect(conceptKeyRecords.length).toBeGreaterThan(0);
+    expect(compositionRecords).toHaveLength(1);
   });
 
   it('minted one permanent key per concept, however many walks met it at once (ol-egov.141.89.9.52)', async () => {

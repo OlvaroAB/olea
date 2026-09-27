@@ -71,6 +71,12 @@ import {
   reviewLogPath,
   SAME_AS_LINK_FOLDER,
 } from 'olea-core';
+// `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path, never the `olea-core`
+// barrel, which is another live lane's file this round (`session/holder.ts`'s stance).
+import {
+  COMPOSITION_LOG_FOLDER,
+  compositionLogPath,
+} from '../../../core/src/study-session/composition-log.js';
 import { DRAFT_CACHE_FOLDER } from '../generation/cache-store.js';
 import { RETROSPECTIVE_NOTES_FOLDER } from '../retrospective/note-writer.js';
 import { DUPLICATION_CONFIRMATION_FOLDER } from '../review/duplication-confirmation-store.js';
@@ -116,6 +122,12 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   { folder: DUPLICATION_CONFIRMATION_FOLDER, role: 'record' },
   { folder: RETROSPECTIVE_NOTES_FOLDER, role: 'record' },
   { folder: MANUAL_ASSESSMENT_STORE_FOLDER, role: 'record' },
+  // `[D-395]`: the composition records, an append-only daily-per-device stream that is not an
+  // event log of C5.2's (no review or misconception fold reads it), so F7.4 carries it as the
+  // exact text on disk and the full delete removes it — `[D-331]` choice 4 (a), kept like the
+  // review log and never pruned. Probed by exact path for this device too
+  // (`OLEA_PROBED_DAILY_STREAMS`), since its files are named by day like the logs'.
+  { folder: COMPOSITION_LOG_FOLDER, role: 'record' },
 ];
 
 /**
@@ -212,6 +224,16 @@ export const OLEA_EVENT_LOGS: ReadonlyArray<{
   { folder: MISCONCEPTION_LOG_FOLDER, pathFor: misconceptionLogPath },
 ];
 
+/**
+ * Every stream whose files are named `<YYYY-MM-DD>.<deviceId>.jsonl`, and so can be probed by
+ * exact path for this device on a host that lists nothing: the two event logs, plus the
+ * composition records (`[D-395]`), which share the naming but are carried as record files.
+ */
+export const OLEA_PROBED_DAILY_STREAMS: ReadonlyArray<{
+  readonly folder: VaultPath;
+  readonly pathFor: (day: CalendarDay, deviceId: string) => VaultPath;
+}> = [...OLEA_EVENT_LOGS, { folder: COMPOSITION_LOG_FOLDER, pathFor: compositionLogPath }];
+
 export interface DiscoverOleaLayerOptions {
   readonly deviceId: string;
   readonly today: CalendarDay;
@@ -232,10 +254,12 @@ async function listedUnder(vault: VaultSource, folder: VaultPath): Promise<reado
  * Every file under `.olea/` this host lets us find: the whole root walked (`listFolder`, the
  * adapter walk on `ObsidianSource`), each registered folder listed as well (a host whose listing
  * serves an exact folder but not the root), and this device's own two event logs probed by exact
- * path. Filtered to `isOleaLayerPath`, checked to exist, de-duplicated and sorted.
+ * path, with this device's composition-record files (`OLEA_PROBED_DAILY_STREAMS`). Filtered to
+ * `isOleaLayerPath`, checked to exist, de-duplicated and sorted.
  *
- * **What a host that lists nothing hides.** It still yields this device's own logs, and nothing
- * else: record files are named by key, not by day, so there is no path to probe. The production
+ * **What a host that lists nothing hides.** It still yields this device's own logs and
+ * composition records, and nothing else: other record files are named by key, not by day, so
+ * there is no path to probe. The production
  * host, `ObsidianSource`, lists `.olea/` through `listUnder`.
  */
 export async function discoverOleaLayerPaths(
@@ -252,7 +276,7 @@ export async function discoverOleaLayerPaths(
   for (const path of candidates) {
     if (isOleaLayerPath(path) && (await vault.exists(path))) found.add(path);
   }
-  for (const { folder, pathFor } of OLEA_EVENT_LOGS) {
+  for (const { folder, pathFor } of OLEA_PROBED_DAILY_STREAMS) {
     const probed = await discoverLogPaths(
       vault,
       folder,
