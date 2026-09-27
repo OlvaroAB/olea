@@ -215,7 +215,7 @@ describe('resolveRelationCacheRecordsWithSameAsLinks — read-time endpoint reso
     expect(resolved?.toKey).toBe('key-z');
     expect(resolved?.propositionKey).toBe(propositionKey('prerequisite', 'key-a', 'key-z'));
     // Read-time only: the record's own `remappedFrom` provenance field is untouched — this is a
-    // view, not the write-side remap `./same-as.ts`'s `remapIncidentRelationCacheRecords` performs.
+    // view; nothing writes a remap (`[D-295 / CPT-D2]`).
     expect(resolved?.remappedFrom).toBeUndefined();
   });
 

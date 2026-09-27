@@ -5,16 +5,15 @@
  * and §3 (reconciliation).
  *
  * **What this closes.** `./same-as.ts` persists the link and its status transitions
- * (`'proposed'` / `'confirmed'` / `'severed'`), and `remapIncidentRelationCacheRecords` gives a
- * confirm an explicit, one-time WRITE-side rewrite of relation-cache records. Until this module,
+ * (`'proposed'` / `'confirmed'` / `'severed'`); a confirm rewrites no stored record
+ * (`[D-295 / CPT-D2]`). Until this module,
  * nothing ever READ a confirmed link back: a consumer asking "what does she know about this
  * concept" still saw two identities for one concept, because no read path consulted
  * `.olea/same-as/` at all. This module is that read — given the concept-like records and
  * relation-cache records a caller already has in hand, plus the currently persisted same-as
  * links, it returns the SAME shapes with every confirmed pair folded to one canonical key. It is
  * a VIEW, never a write: nothing here calls `VaultSource.write`, mutates a `ConceptRecord`, a
- * `RelationCacheRecord` or a `SameAsLinkRecord` on disk, or requires the write-side remap to have
- * run first.
+ * `RelationCacheRecord` or a `SameAsLinkRecord` on disk.
  *
  * **Canonical key, stated plainly: the pair's `keyA`.** `./same-as.ts`'s own `canonicalPair` /
  * `byCodeUnit` already sorts and persists `keyA <= keyB` for every link that exists — this module
@@ -43,14 +42,12 @@
  * half of that same sentence; a decline is a hard labelled negative on the proposal, never a
  * signal this module treats any differently from the proposal it declined.
  *
- * **Relation-cache resolution works even before the write-side remap ran (requirement 4).**
- * `resolveRelationCacheRecordsWithSameAsLinks` restates the same `fromKey`/`toKey` rewrite
- * `./same-as.ts`'s `remapIncidentRelationCacheRecords` performs on disk, but as a pure read-time
- * projection over records the caller already listed: a record still on file under the losing key
- * resolves to the canonical `propositionKey` on every read, whether or not the one-time
- * write-side remap has executed. The two are deliberately independent — one is a repair that
- * shrinks the vault's own file count; the other is what a reader sees today, regardless of
- * whether that repair has run yet.
+ * **Relation-cache resolution is read-time only (requirement 4).**
+ * `resolveRelationCacheRecordsWithSameAsLinks` applies a confirmed link's `fromKey`/`toKey`
+ * rewrite as a pure read-time projection over records the caller already listed: a record on file
+ * under the losing key resolves to the canonical `propositionKey` on every read. There is no
+ * write-side counterpart (`[D-295 / CPT-D2]`: a confirmed merge rewrites no stored record), so this
+ * fold is the one merge rule every reader goes through.
  *
  * **Course memberships union, never picked (requirement 5).** `resolveConceptsWithSameAsLinks`
  * unions `courses` (and `sourcePaths`, for the same "no evidence a merge would otherwise drop"
@@ -245,18 +242,16 @@ function rankAttestations(a: RelationCacheAttestation, b: RelationCacheAttestati
 }
 
 /**
- * The read-time counterpart of `./same-as.ts`'s `remapIncidentRelationCacheRecords` (requirement
- * 4) — the same endpoint rewrite, applied as a pure projection over records the caller already
- * listed, never a write. A record touching neither side of any confirmed link passes through
+ * The read-time fold of every confirmed same-as link over relation-cache records (requirement 4,
+ * `[D-295 / CPT-D2]`) — the endpoint rewrite applied as a pure projection over records the caller
+ * already listed, never a write. A record touching neither side of any confirmed link passes through
  * unchanged, by reference, so a caller that skips reference-equal records downstream pays nothing
  * extra for the ordinary case.
  *
- * Two records that resolve to the same `propositionKey` after the rewrite — the same collision
- * `remapIncidentRelationCacheRecords` counts and deliberately leaves unremapped on disk — are
- * folded here instead: a reader must see one edge per proposition, so the read side cannot leave
- * the gap the write side leaves on purpose. Attestations are unioned (deduplicated on content,
- * never on object identity) and ranked the same provenance-then-confidence way the write side's
- * cache does.
+ * Two records that resolve to the same `propositionKey` after the rewrite are folded into one: a
+ * reader must see one edge per proposition. Attestations are unioned (deduplicated on content,
+ * never on object identity) and ranked the same provenance-then-confidence way
+ * `./relation-cache.ts` ranks them on write.
  *
  * Given `canonicalKeys` (`[D-378]`, module doc), a record cached under a superseded duplicate's key
  * resolves to its canonical proposition and folds with the record already there, the same way.
