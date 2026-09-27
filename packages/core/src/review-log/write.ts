@@ -53,9 +53,11 @@ import {
   type VerdictLogRecord,
   verdictLogRecord,
 } from 'olea-contracts';
+import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { DisputeLogRecordInput } from './contest-record.js';
-import { reviewLogPath } from './path.js';
+import { REVIEW_LOG_FOLDER, reviewLogPath } from './path.js';
+import { readReviewLogFile } from './read.js';
 
 export type { DisputeLogRecordInput } from './contest-record.js';
 
@@ -259,6 +261,50 @@ function defaultGenerateEventId(): string {
 }
 
 /**
+ * True when the review log already holds an ordinary review of `instrumentId`
+ * — the `[D-391]` derivation `appendReviewLogRecord`'s origin doc describes,
+ * scanning every device's file under `REVIEW_LOG_FOLDER` rather than trusting
+ * a store that can vanish (the paper record's own hand-off list, which
+ * disappears with the paper file — the exact fragility `[D-391]` names).
+ *
+ * Only `kind: 'review'` entries count: a suspend, verdict, succession or
+ * dispute event naming the same instrument is not a review of it. Any prior
+ * review counts, whichever `origin` it carries or lacks — the question is
+ * only ever "has this instrument been reviewed before", never "was it
+ * reviewed a particular way".
+ *
+ * A listing failure (a host that cannot walk a dot-prefixed folder at all) is
+ * treated as "found nothing", the same degraded-not-fatal posture
+ * `packages/plugin/src/today/data-source.ts`'s `readReviewHistory` already
+ * takes for the identical listing call — never a thrown error out of a write
+ * path, and never a reason this function's caller cannot proceed with the
+ * append itself. It does mean a host in that degraded state can mislabel a
+ * second review as a first on the device that cannot see the first review's
+ * file; that gap belongs to the listing capability (`ol-yk1c`), not to this
+ * derivation.
+ */
+async function hasEarlierReviewForInstrument(
+  vault: VaultSource,
+  instrumentId: string,
+): Promise<boolean> {
+  let paths: readonly VaultPath[];
+  try {
+    paths = await listFolder(vault, REVIEW_LOG_FOLDER, { extensions: ['jsonl'] });
+  } catch {
+    return false;
+  }
+  for (const path of paths) {
+    const { records } = await readReviewLogFile(vault, path);
+    if (
+      records.some((record) => record.kind === 'review' && record.instrumentId === instrumentId)
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/**
  * The calendar day a record belongs to, taken verbatim from its own
  * timestamp's date portion — never recomputed via `../dates.ts`'s UTC
  * normalisation, which exists for scheduling arithmetic (FSRS due-dates),
@@ -320,24 +366,46 @@ async function appendEntryLine(
  * `null` are not interchangeable here) and a permanently corrupt semester of
  * history.
  *
- * **The review origin (`[D-367]`).** `input.origin` is `'practice-paper'` only
- * when the caller is writing the review through which an item she deliberately
- * handed over from a practice paper entered ordinary review, and it is the
- * caller's to pass: this writer never looks one up, infers one or defaults
- * one, and never writes one onto any earlier line (every append adds one line
- * and rewrites nothing, so no review already on disk is relabelled after the
- * fact). A caller with no hand-off behind the review passes nothing, and the
- * record then carries no such key at all; an `undefined` value that reaches
- * here past the types is dropped rather than kept as a key, so the returned
+ * **The review origin (`[D-367]`, first-only per `[D-391]`).** `input.origin`
+ * is a caller's *candidate* — "this review's item entered ordinary review
+ * through a practice-paper hand-off" — never a caller-guaranteed fact about
+ * *this particular* line: the caller may pass `'practice-paper'` on every
+ * review of an item it knows was handed off, not only the first, because this
+ * writer is what turns "may have been handed off" into "is the record the
+ * hand-off's own label belongs on". A candidate of `'practice-paper'` is kept
+ * only when `hasEarlierReviewForInstrument` (above) finds no earlier
+ * `kind: 'review'` record for `input.instrumentId` anywhere in the log; found
+ * one, and the candidate is silently dropped — not a validation failure, the
+ * intended labelling rule, and never a thrown error, since a caller passing
+ * it on a later review by design (rather than tracking "was this the first"
+ * itself) is the whole point of this split. **This derivation never depends
+ * on the paper record's own hand-off list or the paper file's continued
+ * existence** (`[D-391]`'s binding condition): it reads only the review log
+ * itself, which this writer already appends to and which — unlike a paper
+ * record — is never retired or deleted. No line already on disk is ever
+ * relabelled after the fact (every append adds one line and rewrites
+ * nothing), so at most one review of a given instrument ever carries the
+ * field, and it is always the earliest one on record.
+ *
+ * A caller with no hand-off behind the review passes nothing, and the record
+ * then carries no such key at all; an `undefined` value that reaches here
+ * past the types is dropped rather than kept as a key, so the returned
  * record's absence is a true absence and the line is byte-identical to one
  * written before the field existed. A value outside the ruled enum, `null`, an
- * empty string or a boolean is refused before any byte is written.
+ * empty string or a boolean is refused before any byte is written — that
+ * validation is unchanged and happens whether or not the first-only check
+ * above ever ran.
  *
- * **Reachability of the origin.** No production caller passes one yet: the
- * plugin's `createVaultReviewLogPort` (`packages/plugin/src/review/ports.ts`)
- * builds its record field by field and has no origin to forward until the
- * paper view's per-item hand-off (F4.11) is wired to the ordinary review path
- * — the follow-up to `ol-0r92.118`, not this writer's.
+ * **Reachability of the origin.** No production caller passes a candidate
+ * yet: the plugin's `createVaultReviewLogPort`
+ * (`packages/plugin/src/review/ports.ts`) builds its record field by field
+ * and has no origin to forward until the paper view's per-item hand-off
+ * (F4.11) is wired to the ordinary review path, which in turn needs the
+ * entered instrument's own `paper-origin` block field
+ * (`packages/core/src/instrument/mcq-format.ts`'s `McqInstrument.paperOrigin`)
+ * threaded onto `ReviewInstrument`/`RecordReviewInput` — the follow-up to
+ * `ol-0r92.118`/`ol-0r92.134`, not this writer's; see `ol-0r92.134`'s bead
+ * notes for the exact edit that follow-up needs.
  */
 export async function appendReviewLogRecord(
   vault: VaultSource,
@@ -346,7 +414,17 @@ export async function appendReviewLogRecord(
 ): Promise<AppendReviewLogResult> {
   const generateEventId = options.generateEventId ?? defaultGenerateEventId;
 
-  const { origin, ...fields } = input;
+  const { origin: candidateOrigin, ...fields } = input;
+  // `[D-391]`: a `'practice-paper'` candidate is honoured only on the first
+  // ordinary review of this instrument — see this function's own doc above.
+  // Any other value (including `undefined`, and every value the schema will
+  // go on to refuse) passes through unchanged; the log is never scanned for
+  // those, since only the ruled literal can ever survive to be written.
+  const origin =
+    candidateOrigin === 'practice-paper' &&
+    (await hasEarlierReviewForInstrument(vault, input.instrumentId))
+      ? undefined
+      : candidateOrigin;
   const candidate: unknown = {
     schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
     kind: 'review',

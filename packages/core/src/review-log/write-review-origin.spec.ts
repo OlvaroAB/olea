@@ -133,10 +133,16 @@ describe('appendReviewLogRecord — the review origin ([D-367])', () => {
     await expect(fileText()).rejects.toThrow();
   });
 
-  it('INV-2: earlier reviews of the same instrument keep every byte and never acquire the field', async () => {
-    // A file already holding two reviews of this instrument, one of them a
+  it('INV-2: earlier reviews of another instrument keep every byte and never acquire the field', async () => {
+    // A file already holding two reviews of ANOTHER instrument, one of them a
     // hand-written line in the exact layout an older build produced, the
-    // other written by this writer with no origin.
+    // other written by this writer with no origin. The third append is the
+    // FIRST review of a *different*, freshly-handed-off instrument — under
+    // `[D-391]` (`write.ts`'s own doc), a `'practice-paper'` candidate is
+    // kept only on the first review of its own instrument, so this uses a
+    // distinct `instrumentId` to isolate that from the INV-2 property this
+    // test is actually about (see `write-review-origin.spec.ts`'s own
+    // `[D-391]` block below for the first-only behaviour itself).
     const path = join(tempRoot, reviewLogPath(day, 'desktop'));
     await mkdir(dirname(path), { recursive: true });
     const legacy = expectedLine('review-legacy');
@@ -148,15 +154,19 @@ describe('appendReviewLogRecord — the review origin ([D-367])', () => {
     });
     const before = await fileText();
 
-    await appendReviewLogRecord(source, input({ origin: 'practice-paper' }), {
-      deviceId: 'desktop',
-      generateEventId: () => 'review-after',
-    });
+    await appendReviewLogRecord(
+      source,
+      input({ instrumentId: 'qa:concept-a:9', origin: 'practice-paper' }),
+      {
+        deviceId: 'desktop',
+        generateEventId: () => 'review-after',
+      },
+    );
     const after = await fileText();
 
     expect(after.startsWith(before)).toBe(true);
     expect(after.slice(before.length)).toBe(
-      expectedLine('review-after', { origin: 'practice-paper' }),
+      expectedLine('review-after', { instrumentId: 'qa:concept-a:9', origin: 'practice-paper' }),
     );
 
     const parsed = parseReviewLog(after);
@@ -168,6 +178,75 @@ describe('appendReviewLogRecord — the review origin ([D-367])', () => {
     for (const record of parsed.records.slice(0, 2)) {
       expect(Object.hasOwn(record, 'origin')).toBe(false);
     }
+  });
+
+  describe('[D-391]: the origin candidate is kept only on the first ordinary review of its instrument', () => {
+    it('the first review of an instrument keeps the practice-paper candidate; a second does not, even passed again', async () => {
+      const source = new FolderSource(tempRoot);
+      const first = await appendReviewLogRecord(
+        source,
+        input({ instrumentId: 'qa:handed-off:1', origin: 'practice-paper' }),
+        { deviceId: 'desktop', generateEventId: () => 'review-first' },
+      );
+      expect(first.record.origin).toBe('practice-paper');
+
+      const second = await appendReviewLogRecord(
+        source,
+        input({ instrumentId: 'qa:handed-off:1', origin: 'practice-paper' }),
+        { deviceId: 'desktop', generateEventId: () => 'review-second' },
+      );
+      expect(Object.hasOwn(second.record, 'origin')).toBe(false);
+
+      const parsed = parseReviewLog(await fileText());
+      expect(parsed.invalidLines).toEqual([]);
+      const origins = parsed.records.map((record) =>
+        record.kind === 'review' ? (record.origin ?? null) : 'not-a-review',
+      );
+      expect(origins).toEqual(['practice-paper', null]);
+    });
+
+    it('reads the log alone: detects an earlier review on another device, with no paper record involved', async () => {
+      const source = new FolderSource(tempRoot);
+      // An unrelated instrument's review, on a different device, already in
+      // the log — proves the scan is not fooled by, and needs nothing about,
+      // any paper record or paper file.
+      await appendReviewLogRecord(source, input({ instrumentId: 'qa:concept-a:5' }), {
+        deviceId: 'laptop',
+        generateEventId: () => 'other-instrument-review',
+      });
+
+      const first = await appendReviewLogRecord(
+        source,
+        input({ instrumentId: 'qa:handed-off:2', origin: 'practice-paper' }),
+        { deviceId: 'desktop', generateEventId: () => 'review-first' },
+      );
+      expect(first.record.origin).toBe('practice-paper');
+
+      // The SAME instrument's second review, from a SECOND device that never
+      // held the first review's own file — still correctly detected as not
+      // first, because the scan walks every device's file.
+      const second = await appendReviewLogRecord(
+        source,
+        input({ instrumentId: 'qa:handed-off:2', origin: 'practice-paper' }),
+        { deviceId: 'laptop', generateEventId: () => 'review-second' },
+      );
+      expect(Object.hasOwn(second.record, 'origin')).toBe(false);
+    });
+
+    it('an ordinary item with no hand-off candidate never gets an origin, first review or not', async () => {
+      const source = new FolderSource(tempRoot);
+      const first = await appendReviewLogRecord(source, input({ instrumentId: 'qa:ordinary:1' }), {
+        deviceId: 'desktop',
+        generateEventId: () => 'ordinary-first',
+      });
+      expect(Object.hasOwn(first.record, 'origin')).toBe(false);
+
+      const second = await appendReviewLogRecord(source, input({ instrumentId: 'qa:ordinary:1' }), {
+        deviceId: 'desktop',
+        generateEventId: () => 'ordinary-second',
+      });
+      expect(Object.hasOwn(second.record, 'origin')).toBe(false);
+    });
   });
 
   it('INV-2: a line carrying the field, and one without it, both re-serialise byte-identically after a read', async () => {
