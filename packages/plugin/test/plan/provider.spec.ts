@@ -14,6 +14,7 @@ import type { Scheduler } from 'olea-core';
 import {
   addManualAssessmentEntry,
   createFsrsScheduler,
+  enumerateVaultInstruments,
   type RetrievabilityInput,
   type RetrievabilityOutput,
 } from 'olea-core';
@@ -21,6 +22,7 @@ import { describe, expect, it } from 'vitest';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
+import { createVaultSuspendPort } from '../../src/review/ports.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 /**
@@ -582,5 +584,71 @@ describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C
     // builds and consults a real `Scheduler` by default rather than
     // silently staying at the pre-`ol-v7r5.53` always-omitted behaviour.
     expect(weightOf(withHistory)).not.toBe(weightOf(neutralControl));
+  });
+});
+
+describe('createLocalStudyPlanProvider — vault instrument inventory reaches composeOracleRanking ([D-404], ol-egov.141.89.10.5)', () => {
+  /**
+   * `olea 48d3067` wired `enumerateVaultInstruments`'s `records` into
+   * `composeOracleRanking`'s `instrumentInventory` argument, but the test
+   * for that wiring was lost in the same commit (a binary placeholder
+   * landed instead of the real hunk) — this bead (`ol-egov.141.89.10.84`)
+   * replaces it.
+   *
+   * The fixture: `studyVault()`'s one course/one concept (`TESTC101`/
+   * `Widget theory`, cited by the past paper, so the concept has real
+   * assessment evidence and would otherwise rank) plus exactly one
+   * practice instrument bound to that concept, which is then suspended
+   * through the real F2.6 `SuspendPort` — the identical mechanism
+   * `session-builder/provider-suspended-instruments.spec.ts` uses to prove
+   * the sibling wiring in `session-builder/provider.ts`.
+   *
+   * `[D-404]`'s eligibility veto only fires when `composeOracleRanking`
+   * is actually handed an `instrumentInventory` — omit that argument (the
+   * regression this test guards) and the suspended instrument is invisible
+   * to the ranking: `Widget theory` composes as an ordinary ranked concept
+   * instead of a vetoed one, and `TESTC101` never reaches
+   * `emptyReason: 'nothing-to-practise'`. **Verified by hand**: temporarily
+   * removing `instrumentInventory: enumeration.records` from `provider.ts`'s
+   * `composeOracleRanking` call makes this test fail (`TESTC101` ranks with
+   * `concepts: [{ conceptId: 'Widget theory', ... }]`, `emptyReason`
+   * absent) before restoring the file; see this bead's close evidence for
+   * the exact command and output.
+   */
+  it('a suspended sole practice instrument reaches the ranking and vetoes its concept — the course ranks empty with emptyReason nothing-to-practise', async () => {
+    const vault = studyVault();
+    await vault.write(
+      'Notes/widget-card.md',
+      ['---', 'topic: [Widget theory]', 'course: TESTC101', '---', '', 'Front::Back', ''].join(
+        '\n',
+      ),
+    );
+
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const widgetInstrument = enumeration.records.find((r) => r.notePath === 'Notes/widget-card.md');
+    if (widgetInstrument === undefined) {
+      throw new Error('expected the fixture card to enumerate as an instrument');
+    }
+    await createVaultSuspendPort(vault, DEVICE).suspend(
+      widgetInstrument.instrumentId,
+      widgetInstrument.conceptIds,
+    );
+
+    const provider = createLocalStudyPlanProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+
+    const raw = await provider.fetchPlan();
+    const plan = studyPlanEnvelope.parse(raw);
+    const course = plan.body.courses.find((c) => c.course === 'TESTC101');
+    expect(course?.status).toBe('ranked');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to still rank');
+    expect(course.concepts).toEqual([]);
+    expect(course.emptyReason).toBe('nothing-to-practise');
   });
 });
