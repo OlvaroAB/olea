@@ -802,8 +802,10 @@ export const explainBackGrade = z.object({
    * nested here it can only be recorded when a depth grade also exists. Once
    * v6 is current, new writes go there; this nested field stays in the v6
    * shape, unchanged, only so a record that already carries one keeps it
-   * verbatim through the v5 → v6 hop, and `reviewLogRecordV6` refuses a
-   * record carrying both.
+   * verbatim through the v5 → v6 hop (a legacy carry, `[D-386]` option a:
+   * no provenance is synthesised for it), and `reviewLogRecordV6` refuses a
+   * record carrying both. Read it through `readExplainBackCorrectness`,
+   * which takes the top-level field first and this one second.
    */
   correctness: explainBackCorrectnessVerdict.optional(),
   /**
@@ -1959,8 +1961,19 @@ export type ReviewLogEntryV5 = z.infer<typeof reviewLogEntryV5>;
  * rides together, so her log migrates once** (`ol-95vv.8`): MAT-7's vitality
  * and arithmetic version on the mastery stamp (`[D-087]`, `[D-116]`),
  * `[D-303]`'s top-level explain-back correctness, `[D-345]`'s reason on a
- * suspension plus its rule-version marker, `[D-350]`'s hint-opened fact and
- * `[D-358]`'s presented source-revision stamp.
+ * suspension plus its rule-version marker, `[D-350]`'s hint-opened fact,
+ * `[D-358]`'s presented source-revision stamp and `[D-395]`'s explicit link
+ * from a review to the composition record that served it.
+ *
+ * **What the hop does with a verdict already recorded (`[D-386]`, option a).**
+ * A v5 explain-back record may carry the correctness verdict nested in
+ * `explainBackGrade`; it crosses to v6 verbatim, as a legacy carry. The hop
+ * never moves it to the top-level `explainBackCorrectness` and never
+ * synthesises a model stamp, artifact provenance, date or any other
+ * provenance for it — a nested verdict that recorded none reads *provenance
+ * unknown* (`readExplainBackCorrectness`), and still counts as the verdict
+ * it is. No v6 writer produces the nested field; readers take the top-level
+ * field first and the nested one second; no record carries both.
  *
  * **An ordinary additive hop, not `[D-109]`'s migrate-in-place exception.**
  * v5 records exist, so v5 stays readable forever, exactly as v1–v3 do. The
@@ -2168,13 +2181,73 @@ function refineExplainBackCorrectness(
 }
 
 /**
+ * What a reader learns about one explain-back attempt's correctness verdict
+ * (`[D-386]`): the verdict, and either the stamp of the call that produced
+ * it or the explicit statement that none was recorded.
+ *
+ * `provenance: 'unknown'` is the legacy nested verdict's reading. The depth
+ * grade beside it carries a stamp of its own, but that stamp names the depth
+ * call, never the correctness call (`explainBackCorrectness`'s doc), so it is
+ * never borrowed; nothing else could honestly fill the gap.
+ */
+export type ExplainBackCorrectnessReading =
+  | {
+      readonly verdict: ExplainBackCorrectnessVerdict;
+      readonly source: 'top-level';
+      readonly provenance: ArtifactProvenance;
+    }
+  | {
+      readonly verdict: ExplainBackCorrectnessVerdict;
+      readonly source: 'legacy-nested';
+      readonly provenance: 'unknown';
+    };
+
+/**
+ * The one reading order for an explain-back correctness verdict (`[D-386]`,
+ * option a): the top-level `explainBackCorrectness` first, the legacy nested
+ * `explainBackGrade.correctness` second, `undefined` when neither is recorded
+ * — which means UNKNOWN, never `correct` (`[D-281]`).
+ *
+ * **Provenance never gates the verdict.** A legacy nested verdict counts as
+ * exactly the verdict it records, with `provenance: 'unknown'`; a fold that
+ * demanded a stamp before counting it would silently drop evidence she earned
+ * before the flip, which `[D-386]` condition 3 forbids (the same log folds to
+ * the same stage and the same historical award before and after the upgrade).
+ *
+ * Accepts any review record, v5 or v6 (the v5 shape has no top-level field,
+ * so only the nested one can answer). A v6 record never carries both
+ * (`refineExplainBackCorrectness`); were one handed in unvalidated, the
+ * top-level field still wins, the ruled order.
+ */
+export function readExplainBackCorrectness(record: {
+  readonly explainBackCorrectness?: ExplainBackCorrectness | undefined;
+  readonly explainBackGrade?: ExplainBackGrade | undefined;
+}): ExplainBackCorrectnessReading | undefined {
+  const topLevel = record.explainBackCorrectness;
+  if (topLevel !== undefined) {
+    return {
+      verdict: topLevel.verdict,
+      source: 'top-level',
+      provenance: topLevel.artifactProvenance,
+    };
+  }
+  const nested = record.explainBackGrade?.correctness;
+  if (nested !== undefined) {
+    return { verdict: nested, source: 'legacy-nested', provenance: 'unknown' };
+  }
+  return undefined;
+}
+
+/**
  * One review event, **schema version 6** (`ol-95vv.8`) — defined, not yet
  * current (see the v6 block's opening doc).
  *
  * Every v5 field, by derivation, with `masteryAtTime` widened in place to
- * `masteryAtTimeV6`, plus three optional top-level fields. Every v5
- * refinement is re-applied unchanged (a refined object's refinements do not
- * travel with its `.shape`), plus the three v6 adds. `[D-367]`'s `origin` is
+ * `masteryAtTimeV6`, plus four optional top-level fields
+ * (`explainBackCorrectness`, `hintOpened`, `presentedPassageDigest`,
+ * `compositionId`). Every v5 refinement is re-applied unchanged (a refined
+ * object's refinements do not travel with its `.shape`), plus the three v6
+ * refinements. `[D-367]`'s `origin` is
  * a v5 field, so it arrives here with the spread, after `answerEdits` and
  * before the first v6 field, and a v5 record carrying it restamps to 6
  * byte-identically apart from the version digit.
@@ -2210,6 +2283,22 @@ export const reviewLogRecordV6 = z
      * comparable. Opaque: a digest, never the passage (D-005).
      */
     presentedPassageDigest: z.string().min(1).optional(),
+    /**
+     * The composition record that served this review (`[D-395]` condition
+     * 5): the `compositionId` of exactly one composition record — the
+     * session's first record or one of its extensions — and through it the
+     * session (`packages/core/src/study-session/composition-record.ts`).
+     * Written by the session's review writer (`ol-egov.141.89.10.65`); this
+     * contract only gives it a place.
+     *
+     * **Absent means UNKNOWN**: on every record migrated from v5 (the upgrade
+     * never synthesises one) and on any review outside a composed session.
+     * Absence is never a prompt to join the review to a composition by time
+     * — `[D-395]` replaced that join with this explicit id, and no reader may
+     * reintroduce it as a fallback. Opaque: a minted nonce, never derived from
+     * what was composed (D-005).
+     */
+    compositionId: z.string().min(1).optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineVitalityAgreesWithConcepts)

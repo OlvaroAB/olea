@@ -10,7 +10,16 @@
 //     absent meaning unknown (`[D-345]`);
 //   - `hintOpened`, an explicit true or false, absent meaning unknown (`[D-350]`);
 //   - `presentedPassageDigest`, the cited passage's digest as presented to
-//     her, absent meaning unknown (`[D-358]`).
+//     her, absent meaning unknown (`[D-358]`);
+//   - `compositionId`, the composition record that served the review, absent
+//     meaning unknown and never a prompt to join by time (`[D-395]`).
+//
+// `[D-386]` (option a) rules what the hop does with a verdict already
+// recorded nested in `explainBackGrade`: carried verbatim, no provenance
+// synthesised, read top-level first and nested second. The last block below
+// proves that on a whole old-shape log: v5 → v6 → v5 round-trips byte for
+// byte, every verdict reads the same before and after, and no key appears
+// at any depth that the v5 line did not hold.
 //
 // Each field is proved three ways: a record carrying it keeps it (write), the
 // v6 union reads it back (read), and a record without it — which is exactly
@@ -27,6 +36,7 @@ import {
   nonAttemptLogRecordV6,
   REVIEW_LOG_READABLE_VERSIONS,
   REVIEW_LOG_SCHEMA_VERSION,
+  readExplainBackCorrectness,
   retrospectiveOfferLogRecordV6,
   reviewLogEntry,
   reviewLogEntryV5,
@@ -123,10 +133,16 @@ describe('review-log v6 — staged, not yet current', () => {
         explainBackCorrectness: { verdict: 'correct', artifactProvenance: provenance },
         hintOpened: false,
         presentedPassageDigest: 'digest-1',
+        compositionId: 'composition-1',
       }),
       schemaVersion: 5,
     });
-    for (const key of ['explainBackCorrectness', 'hintOpened', 'presentedPassageDigest']) {
+    for (const key of [
+      'explainBackCorrectness',
+      'hintOpened',
+      'presentedPassageDigest',
+      'compositionId',
+    ]) {
       expect(Object.hasOwn(parsed, key)).toBe(false);
     }
   });
@@ -143,7 +159,12 @@ describe('legacy absent: a v5 record restamped to 6 is a valid v6 record, byte f
       }),
     );
     const parsed = reviewLogRecordV6.parse(JSON.parse(line));
-    for (const key of ['explainBackCorrectness', 'hintOpened', 'presentedPassageDigest']) {
+    for (const key of [
+      'explainBackCorrectness',
+      'hintOpened',
+      'presentedPassageDigest',
+      'compositionId',
+    ]) {
       expect(Object.hasOwn(parsed, key)).toBe(false);
     }
     expect(parsed.masteryAtTime).toEqual({
@@ -589,5 +610,249 @@ describe('suspend reason at v6 ([D-345])', () => {
     expect(result.success).toBe(false);
     expect(issuePaths(result)).toContain('reason');
     expect(suspendLogRecordV6.safeParse(suspendLine({ kind: 'unsuspend' })).success).toBe(true);
+  });
+});
+
+describe('compositionId at v6 ([D-395])', () => {
+  it('write: keeps the id of the composition record that served the review', () => {
+    expect(
+      reviewLogRecordV6.parse(reviewLine({ compositionId: 'composition-7' })).compositionId,
+    ).toBe('composition-7');
+  });
+
+  it('read: the v6 union reads it back, byte for byte, beside every other v6 field', () => {
+    const line = JSON.stringify(
+      reviewLine({
+        masteryAtTime: fullStamp,
+        hintOpened: true,
+        presentedPassageDigest: 'sha256:abc',
+        compositionId: 'composition-7',
+      }),
+    );
+    expect(JSON.stringify(reviewLogEntryV6.parse(JSON.parse(line)))).toBe(line);
+  });
+
+  it('legacy absent, and absent outside a composed session: no key, never synthesised', () => {
+    expect(Object.hasOwn(reviewLogRecordV6.parse(reviewLine()), 'compositionId')).toBe(false);
+    const line = JSON.stringify(reviewLine());
+    expect(JSON.stringify(reviewLogEntryV6.parse(JSON.parse(line)))).toBe(line);
+  });
+
+  it('refuses an empty or null placeholder — absence is the only unknown', () => {
+    for (const bad of ['', null, 7]) {
+      expect(reviewLogRecordV6.safeParse(reviewLine({ compositionId: bad })).success).toBe(false);
+    }
+  });
+});
+
+describe('readExplainBackCorrectness: top-level first, legacy nested second ([D-386])', () => {
+  const depthStamp = { ...provenance, taskId: 'explain-back.solo.v1', modelId: 'depth-model' };
+  const nestedGrade = (correctness?: string) => ({
+    soloLevel: 'relational',
+    ...(correctness === undefined ? {} : { correctness }),
+    contentRef: 'content-1',
+    revisionOf: null,
+    artifactProvenance: depthStamp,
+  });
+
+  it('a top-level verdict reads with its own stamp', () => {
+    const record = reviewLogRecordV6.parse(
+      explainBackLine({
+        explainBackCorrectness: { verdict: 'partial', artifactProvenance: provenance },
+        explainBackGrade: nestedGrade(),
+      }),
+    );
+    expect(readExplainBackCorrectness(record)).toEqual({
+      verdict: 'partial',
+      source: 'top-level',
+      provenance,
+    });
+  });
+
+  it('a legacy nested verdict reads the same verdict with provenance unknown — the depth stamp is never borrowed', () => {
+    const record = reviewLogRecordV6.parse(
+      explainBackLine({ explainBackGrade: nestedGrade('correct') }),
+    );
+    const reading = readExplainBackCorrectness(record);
+    expect(reading).toEqual({ verdict: 'correct', source: 'legacy-nested', provenance: 'unknown' });
+    expect(JSON.stringify(reading)).not.toContain('depth-model');
+  });
+
+  it('the same reading from the v5 record and from the v6 record it restamps to', () => {
+    for (const verdict of explainBackCorrectnessVerdict.options) {
+      const v5 = reviewLogRecordV5.parse({
+        ...explainBackLine({ explainBackGrade: nestedGrade(verdict) }),
+        schemaVersion: 5,
+      });
+      const v6 = reviewLogRecordV6.parse({ ...v5, schemaVersion: 6 });
+      expect(readExplainBackCorrectness(v6)).toEqual(readExplainBackCorrectness(v5));
+      expect(readExplainBackCorrectness(v6)?.verdict).toBe(verdict);
+    }
+  });
+
+  it('neither recorded reads undefined — unknown, never correct', () => {
+    expect(readExplainBackCorrectness(reviewLogRecordV6.parse(explainBackLine()))).toBeUndefined();
+    expect(
+      readExplainBackCorrectness(
+        reviewLogRecordV6.parse(explainBackLine({ explainBackGrade: nestedGrade() })),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('no record carrying both can be produced through the v6 schema, so the order is never a tie-break', () => {
+    // Every writer and the upgrade hop produce records through `.parse`, and
+    // the schema refuses both at once; the order only matters for an
+    // unvalidated object, where the top-level field wins.
+    const both = explainBackLine({
+      explainBackCorrectness: { verdict: 'incorrect', artifactProvenance: provenance },
+      explainBackGrade: nestedGrade('correct'),
+    });
+    expect(reviewLogRecordV6.safeParse(both).success).toBe(false);
+    expect(reviewLogEntryV6.safeParse(both).success).toBe(false);
+    expect(
+      readExplainBackCorrectness(
+        both as unknown as Parameters<typeof readExplainBackCorrectness>[0],
+      )?.source,
+    ).toBe('top-level');
+  });
+});
+
+describe('an old-shape log round-trips v5 → v6 → v5 with nothing rewritten and nothing manufactured ([D-386], [D-395])', () => {
+  // A v5 day as a v5 build wrote it: stage-only mastery stamps, a nested
+  // correctness verdict of each kind (one on a record with a support level
+  // shown), a depth grade with no verdict, a suspension with no reason and a
+  // verdict event. Each line is the exact string a v5 writer emits.
+  const nested = (correctness: string | undefined, id: string) => ({
+    soloLevel: 'multistructural',
+    ...(correctness === undefined ? {} : { correctness }),
+    contentRef: `content-${id}`,
+    revisionOf: null,
+    artifactProvenance: { ...provenance, taskId: 'explain-back.solo.v1' },
+  });
+  const v5Log = [
+    reviewLine({
+      schemaVersion: 5,
+      eventId: 'old-1',
+      masteryAtTime: {
+        attribution: 'per-concept',
+        byConcept: { 'concept-a': 'sprout', 'concept-b': 'seed' },
+      },
+    }),
+    explainBackLine({
+      schemaVersion: 5,
+      eventId: 'old-2',
+      masteryAtTime: { attribution: 'per-concept', byConcept: { 'concept-a': 'sprout' } },
+      supportLevelShown: 'prompted',
+      explainBackGrade: nested('correct', '2'),
+    }),
+    explainBackLine({
+      schemaVersion: 5,
+      eventId: 'old-3',
+      explainBackGrade: nested('partial', '3'),
+    }),
+    explainBackLine({
+      schemaVersion: 5,
+      eventId: 'old-4',
+      explainBackGrade: nested('incorrect', '4'),
+    }),
+    explainBackLine({
+      schemaVersion: 5,
+      eventId: 'old-5',
+      explainBackGrade: nested(undefined, '5'),
+    }),
+    {
+      schemaVersion: 5,
+      kind: 'suspend',
+      eventId: 'old-6',
+      timestamp: '2026-09-25T10:20:00-04:00',
+      instrumentId: 'qa:concept-a:1',
+      conceptIds: ['concept-a'],
+    },
+    {
+      schemaVersion: 5,
+      kind: 'verdict',
+      eventId: 'old-7',
+      timestamp: '2026-09-25T10:25:00-04:00',
+      instrumentId: 'qa:concept-a:1',
+      instrumentType: 'qa',
+      conceptIds: ['concept-a'],
+      verdict: 'accepted',
+      artifactProvenance: provenance,
+    },
+  ].map((record) => JSON.stringify(record));
+
+  /** The pure restamp the v5 → v6 hop is documented to be: version only, through `.parse`. */
+  const restamp = (line: string) =>
+    reviewLogEntryV6.parse({ ...reviewLogEntryV5.parse(JSON.parse(line)), schemaVersion: 6 });
+
+  /** Every key path in a JSON value, array indices collapsed — "what keys exist, at any depth". */
+  function keyPaths(value: unknown, prefix = ''): string[] {
+    if (Array.isArray(value)) return value.flatMap((item) => keyPaths(item, `${prefix}[]`));
+    if (typeof value !== 'object' || value === null) return [];
+    return Object.entries(value).flatMap(([key, inner]) => [
+      `${prefix}${key}`,
+      ...keyPaths(inner, `${prefix}${key}.`),
+    ]);
+  }
+
+  it('every line is a valid v5 line as written (the fixture is genuinely old-shape)', () => {
+    for (const line of v5Log) {
+      expect(JSON.stringify(reviewLogEntryV5.parse(JSON.parse(line)))).toBe(line);
+    }
+  });
+
+  it('v5 → v6 changes the version digit and nothing else, byte for byte', () => {
+    for (const line of v5Log) {
+      expect(JSON.stringify(restamp(line))).toBe(
+        line.replace('"schemaVersion":5', '"schemaVersion":6'),
+      );
+    }
+  });
+
+  it('v6 → v5 gives back the original line: nothing recorded was rewritten or dropped', () => {
+    for (const line of v5Log) {
+      const back = reviewLogEntryV5.parse({ ...restamp(line), schemaVersion: 5 });
+      expect(JSON.stringify(back)).toBe(line);
+    }
+  });
+
+  it('no key appears at any depth that the v5 line did not hold — no provenance, date, stamp or composition link is manufactured', () => {
+    for (const line of v5Log) {
+      expect(keyPaths(restamp(line)).sort()).toEqual(keyPaths(JSON.parse(line)).sort());
+    }
+    const upgraded = v5Log.map(restamp);
+    for (const key of [
+      'explainBackCorrectness',
+      'compositionId',
+      'hintOpened',
+      'presentedPassageDigest',
+      'reason',
+    ]) {
+      expect(upgraded.some((record) => Object.hasOwn(record, key))).toBe(false);
+    }
+    for (const record of upgraded) {
+      if (record.kind !== 'review' || record.masteryAtTime?.attribution !== 'per-concept') continue;
+      expect(Object.keys(record.masteryAtTime).sort()).toEqual(['attribution', 'byConcept']);
+    }
+  });
+
+  it('every nested verdict reads the same after the upgrade, with provenance unknown on both sides', () => {
+    const before = v5Log.map((line) =>
+      readExplainBackCorrectness(reviewLogEntryV5.parse(JSON.parse(line)) as never),
+    );
+    const after = v5Log.map((line) => readExplainBackCorrectness(restamp(line) as never));
+    expect(after).toEqual(before);
+    expect(after.map((reading) => reading?.verdict)).toEqual([
+      undefined,
+      'correct',
+      'partial',
+      'incorrect',
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    for (const reading of after) {
+      if (reading !== undefined) expect(reading.provenance).toBe('unknown');
+    }
   });
 });
