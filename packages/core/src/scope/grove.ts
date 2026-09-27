@@ -81,7 +81,9 @@
  * absent means no fold runs, so every caller that predates this field stays
  * valid unchanged. When supplied, `./coverage.js#containerNamesToFold`
  * decides which declared names are container sides of a present part-of
- * pair, and this module simply skips them before building `cells` and
+ * pair — by endpoint key where the edge carries one, against the keys of
+ * this course's own declared concepts (`ol-egov.141.89.4.21`), and by name
+ * only for an edge with no keys, and this module simply skips them before building `cells` and
  * `materialGaps` — the same direction and yielding-side convention
  * `../session/containment.ts`'s `filterContainmentCoPresence` already ruled
  * for session composition, not a second rule for the same asymmetry.
@@ -386,7 +388,23 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
   // (`cells.length + materialGaps.length`) never lands two entries for what
   // the material names as one broad area and one of its own parts. A no-op
   // when `input.relations` is absent — see the field's own doc.
-  const foldedContainerNames = containerNamesToFold(input.relations ?? [], declaredNames);
+  //
+  // `declaredKeys` (`ol-egov.141.89.4.21`, `[D-402]`): the keys of THIS
+  // course's own concepts whose wording a registered source declares. Handed
+  // to the fold so an edge carrying its own endpoint keys is judged by key,
+  // not by wording — a split wording whose part-of pair belongs to another
+  // identity no longer drops this course's container by name match. An edge
+  // with no keys still falls back to the name join, unchanged.
+  const declaredKeys = new Set(
+    input.concepts
+      .filter((concept) => declaredNames.has(concept.name))
+      .map((concept) => concept.key),
+  );
+  const foldedContainerNames = containerNamesToFold(
+    input.relations ?? [],
+    declaredNames,
+    declaredKeys,
+  );
 
   const cells: GroveCell[] = [];
   const materialGaps: GroveMaterialGapCell[] = [];

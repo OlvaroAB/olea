@@ -369,20 +369,49 @@ export async function readReviewHistory(
  * nothing yet to give a reason for — and this outcome is not read at all in
  * that case.
  *
- * **One reason exists today.** `'nothing-assessed-soon'` is the one cause
- * this file can name without a change outside its `owns`: the oracle's
- * per-course abstain/veto reasoning (`../oracle/rank.ts`'s `checkEdgeVeto`
- * and its `'no-evidence'` abstain path) never reaches `ComposedStudySession`
- * — nothing on that type carries it through. A richer, per-course reason
- * (telling a course genuinely lacking upcoming assessment evidence apart
- * from a completed course's own maintenance case, which `[D-373]`'s own text
- * defers to a separate reading) needs a structured signal
- * `study-session/compose.ts` does not expose yet — see this bead's report
- * for the exact change and the companion core lane it belongs to.
+ * **Two reasons, told apart by what the composition weighed (`ol-76pt`).**
+ * The oracle's per-course abstain/veto reasoning never reaches
+ * `ComposedStudySession`, but what the composition weighed and set aside
+ * does (`ComposedStudySession.setAside`, `[D-331]`), and that is enough to
+ * separate the two cases `[D-373]` keeps apart:
+ *
+ *  - `'nothing-assessed-soon'` — nothing was selected at all: no course
+ *    ranked a concept, the reading when every course's assessments have
+ *    passed (completed-course maintenance, which `[D-373]` hands to a
+ *    separate reading and this file does not decide) or none is upcoming.
+ *  - `'nothing-to-practise-yet'` — concepts WERE selected, and at least one
+ *    was set aside because nothing practises it yet (`'no-instruments'`).
+ *    Since the session composition serves a course with material but no
+ *    assessment record on need alone (`[D-329]` via `[D-373]`,
+ *    `session-builder/provider.ts`'s `serveCoursesWithoutAssessmentsOnNeed`),
+ *    this is how such a course reads when its notes have no instruments
+ *    built yet — never as "no upcoming assessment", which would hide that
+ *    its concepts are ranked and waiting on practice.
+ *
+ * Neither names a course: the composition does not carry which course a
+ * set-aside concept belongs to.
  */
 export type SessionCompositionOutcome =
   | { readonly composed: true }
-  | { readonly composed: false; readonly reason: 'nothing-assessed-soon' };
+  | { readonly composed: false; readonly reason: SessionNotComposedReason };
+
+/** Why a composition that succeeded composed nothing — see {@link SessionCompositionOutcome}. */
+export type SessionNotComposedReason = 'nothing-assessed-soon' | 'nothing-to-practise-yet';
+
+/**
+ * `ol-76pt`: which {@link SessionNotComposedReason} an empty composition
+ * reads as — `'nothing-to-practise-yet'` when it selected a concept and set
+ * it aside for having nothing to practise, `'nothing-assessed-soon'`
+ * otherwise (nothing was selected at all). Pure over the composition alone.
+ */
+export function sessionNotComposedReason(
+  composed: Pick<ComposedStudySession, 'setAside'>,
+): SessionNotComposedReason {
+  const nothingToPractise = composed.setAside?.concepts.some(
+    (concept) => concept.reason === 'no-instruments',
+  );
+  return nothingToPractise === true ? 'nothing-to-practise-yet' : 'nothing-assessed-soon';
+}
 
 /**
  * Where the panel gets the instruments it counts. Implemented for real by
@@ -691,7 +720,7 @@ export function createVaultInstrumentSource(
         // it always has.
         const known = await legacyDueCandidates(deps);
         if (known !== null) {
-          lastCompositionOutcome = { composed: false, reason: 'nothing-assessed-soon' };
+          lastCompositionOutcome = { composed: false, reason: sessionNotComposedReason(composed) };
         }
         return known;
       }
