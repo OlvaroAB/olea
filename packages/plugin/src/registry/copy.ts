@@ -520,3 +520,25 @@ export function withheldItemLine(kind: 'mcq' | 'qa' | 'cloze', reason: string): 
       return withheldClozeLine(reason);
   }
 }
+
+/**
+ * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`) — the registry's suspect-instrument section,
+ * beside (never inside) the withholding section above. The ruling's own rule 6 binds every
+ * string below exactly as registry §23 already binds `withheldItemLine`'s: the internal term is
+ * never printed (neither "pending revalidation" nor "flagged" appears in either sentence), one
+ * plain sentence names what Olea found, the framing is never about her, and no action is offered
+ * — neither reason this section lists has one defined yet (`./view.ts#renderSuspectSection`'s own
+ * doc names exactly why).
+ *
+ * **Only one sentence per reason, not per per-kind reason value.** Unlike `withheldItemLine`'s
+ * switch (several structural reasons, one per literal `McqInvalidReason`/etc. value), `[D-397]`
+ * names exactly two reasons and gives neither a further breakdown — `RegistrySuspectSectionRow`
+ * (`olea-core`) carries no reason detail to switch on, so there is nothing finer to say yet.
+ */
+export const SUSPECT_SECTION_HEADING = 'Being checked';
+
+export const SUSPECT_PENDING_REVALIDATION_LINE =
+  'The source passage this item cites appears to have changed, and Olea is checking it again.';
+
+export const SUSPECT_FLAGGED_LINE =
+  'Olea has a concern about this item, and is holding it back until that concern is resolved.';

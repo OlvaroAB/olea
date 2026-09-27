@@ -174,6 +174,7 @@ import {
   composeOracleRanking,
   createFsrsScheduler,
   type DisputeLogRecord,
+  deriveRegistrySuspectSection,
   enumerateVaultInstruments,
   HOLDING_CUT,
   type InvalidCardReport,
@@ -187,6 +188,8 @@ import {
   type RegistryModel,
   type RegistryOverrides,
   type RegistrySourceLocation,
+  type RegistrySuspectSection,
+  type RegistrySuspectSectionInstrumentEvidence,
   readConceptKeyCanonicalIndex,
   readReviewLogFile,
   readReviewLogHistory,
@@ -198,6 +201,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { ObsidianDataHost } from './overrides-store.js';
@@ -505,6 +509,29 @@ export interface CreateLocalRegistryProviderDeps {
    * when this is omitted.
    */
   readonly scheduler?: Scheduler;
+  /**
+   * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`) — feeds the registry's suspect-instrument
+   * section's pending-revalidation half. The SAME per-instrument `CitationHashStore` interface
+   * `session-builder/provider.ts`'s `citationHashStore` and `review/open-session.ts`'s
+   * `OpenReviewSessionInput.citationHashStore` already read (see either's own doc) —
+   * `pendingRevalidationInstrumentIdsFrom` below mirrors both of those resolvers exactly, the
+   * same "duplicated rather than shared: different bead's owns" precedent
+   * `review/open-session.ts`'s own copy of the identical function already states for itself. The
+   * flagged half has no store to read from anywhere in this codebase yet (rule 5 of this bead's
+   * own brief, confirmed independently by `review/open-session.ts`'s own `readInstrumentStanding`
+   * doc: "`flagged`: no reader anywhere in this codebase... not a wiring gap, a missing mechanism
+   * entirely"), so it stays correctly empty regardless of this field.
+   *
+   * **Optional, same reason `openSourceLocationPort` above is.** `main.ts` already constructs one
+   * `ObsidianCitationHashStore` instance (`this.citationHashStore`) and threads it into
+   * `session-builder/provider.ts`'s and `review/open-session.ts`'s own deps, but does not yet
+   * pass it to this provider's call site — a one-line addition outside this bead's `owns` at the
+   * time of writing (`main.ts` is a concurrently live lane's file; see this bead's close notes).
+   * Omitting this field reads as "no store to check": `pendingRevalidationInstrumentIds` is then
+   * an empty set, so the section's pending-revalidation half is correctly empty too, never
+   * silently guessed clear.
+   */
+  readonly citationHashStore?: CitationHashStore;
 }
 
 /**
@@ -672,6 +699,63 @@ function withheldItemsFromEnumeration(enumeration: {
   ];
 }
 
+/** Shared, never mutated — the "no store supplied" reading `suspectSectionFrom` below falls back to. */
+const EMPTY_INSTRUMENT_ID_SET: ReadonlySet<string> = new Set();
+
+/**
+ * `[D-351]` (`ol-egov.141.89.6.55`): mirrors `session-builder/provider.ts`'s
+ * `resolveCitationPendingRevalidation` and `review/open-session.ts`'s
+ * `pendingRevalidationInstrumentIdsFrom` function-for-function — duplicated rather than shared,
+ * the same "different bead's owns, and this is a few lines" precedent both of those files' own
+ * docs already state for themselves (and `disputesFromFiles` above states for this same file).
+ * Re-checks each candidate's PERSISTED currency via `isPendingRevalidationCurrent` rather than
+ * trusting `loadAll()`'s snapshot alone — the store's own revision-scoping, so a late result for
+ * an earlier edit is discarded rather than acted on. An instrument with no pending fact at all,
+ * or one the store no longer confirms current, is simply absent from the result.
+ */
+async function pendingRevalidationInstrumentIdsFrom(
+  store: CitationHashStore,
+  instrumentIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const anchors = await store.loadAll();
+  const result = new Set<string>();
+  await Promise.all(
+    instrumentIds.map(async (instrumentId) => {
+      const pending = anchors.get(instrumentId)?.pendingRevalidation;
+      if (pending === undefined) return;
+      const isCurrent = await store.isPendingRevalidationCurrent(
+        instrumentId,
+        pending.sinceContentHash,
+      );
+      if (isCurrent) result.add(instrumentId);
+    }),
+  );
+  return result;
+}
+
+/**
+ * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`): the registry's suspect-instrument section —
+ * derived, never stored, from `enumeration.records`'s own instrument ids plus whichever ids
+ * `pendingRevalidationInstrumentIdsFrom` above currently confirms. See `olea-core`'s
+ * `suspect-section.ts` module doc for the full rule; `flagConcern` is never supplied here (no
+ * producer exists anywhere in this codebase — rule 5), so `flagged` is correctly always empty
+ * today, never a stubbed placeholder row.
+ */
+function suspectSectionFrom(
+  instrumentIds: readonly string[],
+  pendingRevalidationInstrumentIds: ReadonlySet<string>,
+): RegistrySuspectSection {
+  const evidence: RegistrySuspectSectionInstrumentEvidence[] = instrumentIds.map(
+    (instrumentId) => ({
+      instrumentId,
+      ...(pendingRevalidationInstrumentIds.has(instrumentId)
+        ? { citationValidity: 'pending' as const }
+        : {}),
+    }),
+  );
+  return deriveRegistrySuspectSection(evidence);
+}
+
 /**
  * The whole of `load()`'s composition, factored out so `acceptNoteOffer`
  * below can call it a second time at accept-time — see that method's own
@@ -708,7 +792,7 @@ function createLoadModel(
         storedOverrides,
         await canonicalKeysOrAsStored(deps.vault),
       );
-      const [disputes, courseRankings] = await Promise.all([
+      const [disputes, courseRankings, pendingRevalidationInstrumentIds] = await Promise.all([
         disputesFromFiles(deps.vault, files),
         courseRankingsForNoteOffer(
           deps.vault,
@@ -720,6 +804,15 @@ function createLoadModel(
           scheduler,
           now,
         ),
+        // `[D-397]`: the SAME `enumeration.records` this call already walked above — no second
+        // vault pass. See `citationHashStore`'s own doc on `CreateLocalRegistryProviderDeps` for
+        // why this is optional and what an omitted store reads as.
+        deps.citationHashStore
+          ? pendingRevalidationInstrumentIdsFrom(
+              deps.citationHashStore,
+              enumeration.records.map((record) => record.instrumentId),
+            )
+          : Promise.resolve(EMPTY_INSTRUMENT_ID_SET),
       ]);
 
       const model = buildRegistryModel({
@@ -775,6 +868,12 @@ function createLoadModel(
         // second vault pass. See `withheldItemsFromEnumeration`'s own doc for what this omits and
         // why.
         withheldInstruments: withheldItemsFromEnumeration(enumeration),
+        // `[D-397]`: same `enumeration.records` ids, plus the `pendingRevalidationInstrumentIds`
+        // just resolved above — see `suspectSectionFrom`'s own doc.
+        suspectInstruments: suspectSectionFrom(
+          enumeration.records.map((record) => record.instrumentId),
+          pendingRevalidationInstrumentIds,
+        ),
       };
     } catch (error) {
       console.error('Olea: could not compose the registry', error);

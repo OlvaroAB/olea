@@ -131,6 +131,7 @@ import {
   type RegistryInstrumentSummary,
   type RegistryModel,
   type RegistrySourceLocation,
+  type RegistrySuspectSection,
   type VaultPath,
 } from 'olea-core';
 import { renderSprig } from '../sprig/render-sprig.js';
@@ -175,6 +176,9 @@ import {
   RESTORE_INSTRUMENT_ACTION,
   registryAggregateLine,
   SOURCE_LOCATIONS_HEADING,
+  SUSPECT_FLAGGED_LINE,
+  SUSPECT_PENDING_REVALIDATION_LINE,
+  SUSPECT_SECTION_HEADING,
   sourceLocationLabel,
   THIN_NOTE_LABEL,
   thinNoteLine,
@@ -314,6 +318,15 @@ export type RegistryViewState =
       readonly identityProposals: readonly SameAsIdentityProposal[];
       /** `[D-334]`: every currently-withheld structurally-broken block, computed off the SAME vault walk this state's `model` is built from — no second enumeration. Empty is the honest, expected value on a vault with no structurally-broken block. */
       readonly withheldInstruments: readonly RegistryWithheldItem[];
+      /**
+       * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`): the registry's suspect-instrument
+       * section — beside, never inside, `withheldInstruments` above — derived at read time from
+       * whatever citation-validity and concern evidence `./provider.ts`'s `load()` already holds,
+       * never a second stored list. Empty in both halves is the honest, expected value; the
+       * flagged half is correctly always empty today (no producer records a concern anywhere in
+       * this codebase yet — see `olea-core`'s `suspect-section.ts` module doc).
+       */
+      readonly suspectInstruments: RegistrySuspectSection;
     }
   | { readonly kind: 'unavailable' };
 
@@ -567,6 +580,11 @@ export class RegistryView extends ItemView {
     // places its own withheld-items list ("shown before the course grid").
     this.renderWithheldSection(root, state.withheldInstruments);
 
+    // `[D-397]`: the suspect-instrument section — beside, never inside, `renderWithheldSection`
+    // immediately above (the ruling's own words); same top-level, unfiltered placement, for the
+    // same reason. See `renderSuspectSection`'s own doc.
+    this.renderSuspectSection(root, state.suspectInstruments);
+
     this.renderFilterChips(root, concepts);
 
     const visible = concepts.filter((entry) => matchesRegistryFilter(entry, this.filter));
@@ -729,6 +747,43 @@ export class RegistryView extends ItemView {
     editButton.addEventListener('click', () => {
       void this.deps.editWithheldItem(item);
     });
+  }
+
+  /**
+   * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`) — the registry's suspect-instrument
+   * section. Renders nothing when both lists are empty — the honest, expected state on a vault
+   * with no relevant source mismatch recorded and no recorded concern (today, always true of the
+   * flagged half: no producer records one anywhere in this codebase yet) — matching
+   * `renderWithheldSection`'s own "no empty heading" rule immediately above.
+   *
+   * **No action button, unlike `renderWithheldItem` above.** Neither reason this section lists
+   * has a defined action for her to take from here: pending revalidation clears on its own once
+   * Olea's own re-check resolves it against the current source revision, and no producer records
+   * OR resolves a flagged concern anywhere in this codebase yet (rule 5, this bead's own brief) —
+   * inventing a button with nothing behind it would be exactly the fabrication this codebase's
+   * "never invent" discipline forbids.
+   *
+   * **Each row is currently undifferentiated within its bucket.** `olea-core`'s
+   * `RegistrySuspectSection` carries only an instrument id per row, with no note title or source
+   * location threaded through this far yet, so two pending-revalidation instruments read the
+   * identical sentence today. Named here as a known gap, not invented past: identifying which
+   * instrument (a lookup against `state.model`, or a click-through, once one is defined) is a
+   * follow-up, not a decision this file makes unilaterally.
+   */
+  private renderSuspectSection(root: HTMLElement, section: RegistrySuspectSection): void {
+    if (section.pendingRevalidation.length === 0 && section.flagged.length === 0) return;
+    const el = root.createDiv({ cls: 'olea-registry-suspect-section' });
+    el.createEl('h3', { text: SUSPECT_SECTION_HEADING });
+    for (const _row of section.pendingRevalidation) {
+      el.createDiv({ cls: 'olea-registry-suspect-item' }).createEl('p', {
+        text: SUSPECT_PENDING_REVALIDATION_LINE,
+      });
+    }
+    for (const _row of section.flagged) {
+      el.createDiv({ cls: 'olea-registry-suspect-item' }).createEl('p', {
+        text: SUSPECT_FLAGGED_LINE,
+      });
+    }
   }
 
   /**
