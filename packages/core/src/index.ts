@@ -519,7 +519,11 @@ export type {
   ConceptAssessmentEdge,
   EvidenceQuestionCitation,
 } from './evidence-edge/types.js';
-export { docxExtractor } from './extract/docx.js';
+export { docxExtractor, docxFigureCue } from './extract/docx.js';
+export type { DocxFigureCueResult } from './extract/docx.js';
+// The office-image combine-cue's shared candidate shape (`ol-egov.141.89.8.26`,
+// `[D-324]`) — see `embedded-image.ts`'s own module doc.
+export type { EmbeddedRasterImage, PageEmbeddedImages } from './extract/embedded-image.js';
 export type {
   DiscoverEmbeddedSourcesResult,
   ResolvedEmbed,
@@ -553,7 +557,8 @@ export {
   isReachedButUnreadable,
   MAX_CONTROL_CHAR_SHARE,
 } from './extract/plausibility.js';
-export { pptxExtractor } from './extract/pptx.js';
+export { pptxExtractor, pptxFigureCue } from './extract/pptx.js';
+export type { PptxFigureCueSlide } from './extract/pptx.js';
 export { EXTRACTORS, extractFromVault, formatFromExtension } from './extract/registry.js';
 export {
   DEFAULT_TEXT_LAYER_CHAR_THRESHOLD,
@@ -1061,13 +1066,17 @@ export type {
   StampMcqPredecessorResult,
 } from './instrument/mcq-format.js';
 export {
+  formatMcqPaperOrigin,
   insertMcqBlock,
   MCQ_FENCE_INFO,
+  MCQ_FIELD_PAPER_ORIGIN,
   MCQ_FIELD_PREDECESSOR,
   parseMcqBlocks,
+  parseMcqPaperOrigin,
   serializeMcq,
   serializeMcqInstrument,
   stampMcqId,
+  stampMcqPaperOrigin,
   stampMcqPredecessor,
 } from './instrument/mcq-format.js';
 export type { GeneratedMcqCandidate } from './instrument/mcq-generated.js';
@@ -1145,6 +1154,7 @@ export type {
   InvalidMcqBlock,
   McqInstrument,
   McqInvalidReason,
+  McqPaperOrigin,
   QaCardInstrument,
   QaCardStyle,
   SourceSpan,
@@ -1553,7 +1563,7 @@ export type {
   PaperItemGenerationRequest,
   PaperItemGenerationResult,
 } from './oracle/paper-items.js';
-export { fillPaperBlueprintSlots } from './oracle/paper-items.js';
+export { fillPaperBlueprintSlots, paperItemMcqCandidate } from './oracle/paper-items.js';
 export type {
   CreatePaperInput,
   PaperCompositionAccount,
@@ -1561,6 +1571,8 @@ export type {
   PaperEvent,
   PaperExplanationRecord,
   PaperHandoffRecord,
+  PaperHandoffResult,
+  PaperHandoffTarget,
   PaperRecord,
   PaperResponseRecord,
   PaperStatus,
@@ -1579,6 +1591,7 @@ export {
   PAPER_STATUSES,
   PAPER_STORE_FOLDER,
   paperCompositionAccountFromBlueprint,
+  paperItemInstrumentId,
   paperRecordPath,
   recordPaperExplanationResult,
   recordPaperResponse,

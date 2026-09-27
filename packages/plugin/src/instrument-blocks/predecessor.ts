@@ -11,21 +11,6 @@
  * others in; and a `applyDocumentEdits` zero-width splice, so every other
  * byte in the block is provably untouched (INV-2).
  *
- * **BLOCKED ON A CORE CHANGE before this may run against a real vault
- * write.** `olea-core`'s `instrument/mcq-format.ts` `parseBlock` rejects any
- * field line it does not recognise (`'unknown-field'`) — its known-field set
- * is `stem`/`answer`/`distractor`/`feedback`/`id` and does not include
- * `predecessor`. Stamping a `predecessor:` line into a real MCQ block today
- * would make `parseMcqBlocks` (the function every production reader —
- * session enumeration, the review queue — calls to find instruments in a
- * note) classify the WHOLE block as `invalid`, so the successor instrument
- * would silently stop being reviewable at all. That is a strictly worse
- * outcome than not building the field, so nothing in this module may be
- * wired into a materialization path (`packages/plugin/src/generation/
- * materialize-mcq.ts` and its kin) until `olea-core` recognises the field.
- * The exact addition needed there is out of this bead's `owns` and is named
- * in `ol-w00s`'s close notes.
- *
  * **Deliberately independent of `mcq-format.ts`.** This module imports only
  * the generic block layer (`parseDocument`, `applyDocumentEdits`, `CodeBlock`
  * from `olea-core`'s barrel) — never anything MCQ-format-specific — so it
@@ -113,9 +98,6 @@ export interface StampPredecessorFieldResult {
  * Writes through `applyDocumentEdits` and nothing else: one zero-width
  * `replace` splicing in the new line, so every other byte in the note is
  * provably untouched (INV-2).
- *
- * **Callers: see this file's module doc's BLOCKED note before wiring this
- * into a real materialization path.**
  */
 export function stampPredecessorField(
   source: string,
