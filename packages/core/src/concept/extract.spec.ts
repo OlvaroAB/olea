@@ -21,11 +21,13 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
     // per course, deliberately shared within each course, never across the
     // two courses in this fixture — PLUS the nine of the fixture's twelve
     // Zettelkasten titles that some course-folder note's body plainly
-    // wikilinks (`./course.js`'s `courseFromPath`, applied per note). The
-    // remaining three (Consecutive fifths, Deceptive cadence — cited only
-    // from `03 Research`, outside the course folders — and Tierce picarde,
-    // cited nowhere at all) are exactly the ones the tier-3 describe block
-    // below still finds absent.
+    // wikilinks (`./course.js`'s `courseFromPath`, applied per note) — PLUS
+    // one more topic term named by `ASTR150`'s own single note
+    // (`ol-egov.141.89.10.73`), the course that never declares an assessment
+    // in this fixture. The remaining three (Consecutive fifths, Deceptive
+    // cadence — cited only from `03 Research`, outside the course folders —
+    // and Tierce picarde, cited nowhere at all) are exactly the ones the
+    // tier-3 describe block below still finds absent.
     expect(names).toEqual([
       'Appoggiatura',
       'Bioturbation',
@@ -42,6 +44,7 @@ describe('extractConcepts — tier 2, against the synthetic fixture vault', () =
       'Paraconformity',
       'Plagal cadence',
       'Sediment provenance',
+      'Stellar Nucleosynthesis',
       'Stratigraphic succession',
       'Suspension',
     ]);

@@ -22,6 +22,7 @@ import { waitForSettled } from '../helpers.js';
 import {
   advanceDays,
   badgeDate,
+  frame,
   gotoSimulator,
   overlayEntryCount,
   overlayTotalBytes,
@@ -334,13 +335,23 @@ test('@auto-web:simulator/lived-term — reset returns the scrubber to asOf and 
 // fallback (`ol-egov.141.89.10.66`) is what this test actually exercises:
 // Today falls back to the known due count from what she has already
 // scheduled and states separately why no session was composed — never a
-// bare zero. This is the "completed-course maintenance" case `[D-373]`'s
-// own text names as distinct from a course that never had an assessment
-// declared at all (D-329's need-only path) — the fixture vault's two
-// courses both always carry a declared assessment, so the
-// no-assessment-declared half of that distinction is not exercised here;
-// see this bead's report.
-test('@auto-web:simulator/lived-term — once every declared assessment has passed, Today shows the known due count and why no session was composed, never a bare zero', async ({
+// bare zero.
+//
+// `ol-egov.141.89.10.73`: the fixture vault now also carries ASTR150, a
+// course whose assessment evidence was never declared at all (D-329's
+// need-only path via `ol-76pt`), distinct from GEOL204/MUSTH104 completing
+// their own declared assessments (the "completed-course maintenance" case
+// `[D-373]`'s own text names separately). Measured directly: at this same
+// scrubbed day, ASTR150's own need-only concept is ranked and set aside for
+// having no instrument built yet, and `today/data-source.ts`'s documented
+// priority (`sessionNotComposedReason`) reads that as `'nothing-to-practise-
+// yet'` ahead of the plain `'nothing-assessed-soon'` reading that this same
+// moment showed before ASTR150 existed — "never as 'no upcoming
+// assessment', which would hide that its concepts are ranked and waiting on
+// practice" (that file's own module doc). So the assertion below is this
+// bead's required distinguishing test: the no-assessment course's reading
+// is not silently folded into the completed-course-maintenance sentence.
+test('@auto-web:simulator/lived-term — once every declared assessment has passed, Today shows the known due count, and the no-assessment course reads differently from completed-course maintenance, never a bare zero', async ({
   page,
 }) => {
   await gotoSimulator(page);
@@ -356,15 +367,32 @@ test('@auto-web:simulator/lived-term — once every declared assessment has pass
   // The known-due-count fallback reads a real enumeration, never the
   // composition's own empty list — so this must be a number, not the
   // 'none' `readDueCount` returns for a genuine "nothing due" sentence,
-  // and never a bare zero either.
+  // and never a bare zero either. This is GEOL204/MUSTH104's own
+  // completed-course-maintenance fact (real, already-scheduled review
+  // material), unaffected by ASTR150's separate need-only reading below.
   expect(due).not.toBe('none');
   expect(due).not.toBe(0);
   expect(typeof due).toBe('number');
 
+  // ASTR150 (`ol-egov.141.89.10.73`) is the course this reading is about —
+  // confirmed present in the Mastery panel, not merely inferred from the
+  // sentence text.
+  await expect(
+    frame(page).locator('.olea-today-mastery-code', { hasText: 'ASTR150' }).first(),
+  ).toBeVisible();
+
   // The distinct second fact `[D-373]` requires: why no session was
   // composed, stated separately from the due count above — never folded
   // into one sentence (`today/copy.ts`'s `sessionNotComposedSentence`).
+  // With ASTR150 present, this reads as the no-assessment course's own
+  // reason, `'nothing-to-practise-yet'` — never the bare completed-course-
+  // maintenance reason (`'nothing-assessed-soon'`) alone.
   await expect
     .poll(() => sessionNotComposedNote(page))
-    .toBe('No session was composed today: no course currently has an upcoming assessment.');
+    .toBe(
+      'No session was composed today: the concepts to start with have nothing built to practise yet.',
+    );
+  expect(await sessionNotComposedNote(page)).not.toBe(
+    'No session was composed today: no course currently has an upcoming assessment.',
+  );
 });
