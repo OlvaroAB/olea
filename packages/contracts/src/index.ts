@@ -246,6 +246,8 @@ export {
 // policy, cached and executed client-side; its `planVersion` is the one value
 // that crosses from here into her append-only review log.
 export {
+  type EmptyRankingReason,
+  emptyRankingReason,
   type PlannedConcept,
   plannedConcept,
   STUDY_PLAN_CONTRACT_ID,

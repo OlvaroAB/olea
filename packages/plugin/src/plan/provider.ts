@@ -62,6 +62,7 @@ import {
   calendarDaysEndingOn,
   composeOracleRanking,
   createFsrsScheduler,
+  enumerateVaultInstruments,
   loadCachedStudyPlan,
   pastSessionsFromReviewLog,
   readReviewLogHistory,
@@ -69,7 +70,6 @@ import {
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
-import { extractConceptsFromVault } from '../concept/wiring.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import { type ObsidianDataHost, ObsidianStudyPlanSettingsStore } from './settings-store.js';
@@ -200,9 +200,8 @@ export function createLocalStudyPlanProvider(
 
       // Neither walk depends on the other's result — both read the same
       // read-only vault — so they run concurrently, same discipline as
-      // `gap/provider.ts`/`session-builder/provider.ts`. `extractConcepts`
-      // (not the heavier `enumerateVaultInstruments`, which this provider has
-      // no other use for) is the name→opaque-key source for
+      // `gap/provider.ts`/`session-builder/provider.ts`. The concept list
+      // inside the instrument walk is the name→opaque-key source for
       // `ConceptAssessmentEdge.conceptKey` (`ol-63e1`).
       // The vault/log walk and the rank-weights fetch share nothing —
       // one reads her material, the other is a network call to the Worker
@@ -227,12 +226,22 @@ export function createLocalStudyPlanProvider(
       // core-side), so a manual-only setup (no Base configured) now ranks
       // off the same manual entries this call reads, rather than zero
       // assessment edges.
-      const [{ entries }, concepts, options, assessmentReport] = await Promise.all([
+      // `[D-404]` (`ol-egov.141.89.10.5`): the instrument walk replaces the
+      // bare concept extraction it contains — `enumerateVaultInstruments`
+      // runs `extractConcepts` with the same `stampConceptKeys: true` that
+      // `extractConceptsFromVault(vault, {})` passes, so `concepts` is the
+      // identical list, and its `records` are the instrument inventory
+      // `composeOracleRanking` needs to veto a concept none of whose
+      // instruments she can still be served (the plan's served set,
+      // `[D-404]` condition 2). One walk, the same one
+      // `session-builder/provider.ts` makes.
+      const [{ entries }, enumeration, options, assessmentReport] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
-        extractConceptsFromVault(deps.vault, {}),
+        enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
         deps.readRankWeights?.() ?? Promise.resolve(undefined),
         resolveAssessments(deps.vault, config.assignmentsBasePath),
       ]);
+      const concepts = enumeration.concepts;
 
       // F1.2 (`ol-egov.141.8.10`): "not configured" now means neither a real
       // Base NOR any manual entry produced anything to work from —
@@ -263,6 +272,13 @@ export function createLocalStudyPlanProvider(
         // below, not just `rankOracle`'s own blend.
         retrievability: { scheduler, now },
         ...(options !== undefined ? { options } : {}),
+        // `[D-404]`: the suspension fold over `entries` happens inside
+        // `composeOracleRanking`. No citation-freshness or
+        // pending-revalidation reading reaches this provider yet, so
+        // `otherIneligibleInstrumentIds` is omitted: nothing is withheld
+        // here on those grounds (the session's own fill still withholds
+        // them, `study-session/compose.ts`).
+        instrumentInventory: enumeration.records,
       });
 
       // `[DOS-C4-a]` / `ol-feza`: `sittingsSinceFloorMet`'s two inputs,

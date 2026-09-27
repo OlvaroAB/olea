@@ -80,11 +80,40 @@ describe('studyPlanArtifact', () => {
     expect(studyPlanArtifact.safeParse(broken).success).toBe(false);
   });
 
-  it('rejects a ranked course with an empty concept list — that case abstains instead', () => {
+  it('rejects a ranked course with an empty concept list and no named reason — that case abstains instead', () => {
     const plan = validPlan();
     const ranked = plan.courses[0];
     if (ranked?.status !== 'ranked') throw new Error('fixture drift');
     const broken = { ...plan, courses: [{ ...ranked, concepts: [] }] };
+    expect(studyPlanArtifact.safeParse(broken).success).toBe(false);
+  });
+
+  it('[D-408] accepts a ranked course with an empty concept list when a named emptyReason is present', () => {
+    const plan = validPlan();
+    const ranked = plan.courses[0];
+    if (ranked?.status !== 'ranked') throw new Error('fixture drift');
+    const finished = {
+      ...plan,
+      courses: [{ ...ranked, concepts: [], emptyReason: 'every-assessment-passed' as const }],
+    };
+    const parsed = studyPlanArtifact.safeParse(finished);
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) return;
+    const course = parsed.data.courses[0];
+    expect(course?.status).toBe('ranked');
+    if (course?.status !== 'ranked') return;
+    expect(course.concepts).toEqual([]);
+    expect(course.emptyReason).toBe('every-assessment-passed');
+  });
+
+  it('[D-408] rejects emptyReason on a ranked course that actually has concepts', () => {
+    const plan = validPlan();
+    const ranked = plan.courses[0];
+    if (ranked?.status !== 'ranked') throw new Error('fixture drift');
+    const broken = {
+      ...plan,
+      courses: [{ ...ranked, emptyReason: 'every-assessment-passed' as const }],
+    };
     expect(studyPlanArtifact.safeParse(broken).success).toBe(false);
   });
 

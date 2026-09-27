@@ -49,6 +49,7 @@
 
 import {
   ARTIFACT_ENVELOPE_VERSION,
+  type EmptyRankingReason,
   GOVERNING_FRESH_FOR_SECONDS,
   GOVERNING_GOVERNS_FOR_SECONDS,
   type PlannedConcept,
@@ -61,7 +62,12 @@ import {
   studyPlanEnvelope,
 } from 'olea-contracts';
 import { hashText } from '../ingestion/hash.js';
-import type { ConceptPriority, RankOracleOptions, RankOracleResult } from '../oracle/types.js';
+import type {
+  ConceptPriority,
+  OracleVetoedConcept,
+  RankOracleOptions,
+  RankOracleResult,
+} from '../oracle/types.js';
 
 /**
  * Prefix on every `policyVersion`, so a value found in a log line six months
@@ -186,11 +192,36 @@ function toPlannedConcept(entry: ConceptPriority): PlannedConcept {
 }
 
 /**
- * A ranked course with zero entries cannot be represented as `ranked` (the
- * contract requires a non-empty concept list) and must not be silently dropped
- * either. It is unreachable from `rankOracle` — a course with no edges takes
- * the abstain branch there — so reaching it means an upstream invariant broke,
- * and this says so instead of producing an artifact that quietly lost a course.
+ * `[D-408]` (`ol-egov.141.89.10.76`): which named reason a `'ranked'` course
+ * with nothing left to rank carries. `rankOneCourse` only reaches this branch
+ * (`ranked.length === 0`) when the course HAD evidence and every one of its
+ * concepts was vetoed away this pass (a course with no evidence at all takes
+ * the `'abstained'` branch instead, above) — so `vetoedConcepts` is always
+ * populated here in practice; the empty-map fallback below only guards
+ * against a caller-constructed fixture that skips it.
+ *
+ * `'nothing-to-practise'` whenever ANY vetoed concept carries `[D-404]`'s
+ * `eligibilityVeto` (every remaining practice instrument on that concept is
+ * suspended or otherwise ineligible) — that is the more specific, more
+ * actionable fact, so it wins over a course where some OTHER concept merely
+ * ran out of future assessments. Otherwise `'every-assessment-passed'`: every
+ * vetoed concept's edges were vetoed on date grounds alone.
+ */
+function emptyRankingReasonFor(vetoedConcepts: readonly OracleVetoedConcept[]): EmptyRankingReason {
+  const hasEligibilityVeto = vetoedConcepts.some(
+    (concept) => concept.eligibilityVeto !== undefined,
+  );
+  return hasEligibilityVeto ? 'nothing-to-practise' : 'every-assessment-passed';
+}
+
+/**
+ * A ranked course with zero entries is `[D-408]`'s "nothing left to rank"
+ * state: the course had evidence, but every concept's evidence was vetoed
+ * away this pass (every assessment passed, or nothing left to practise —
+ * `[D-404]`). It stays in the plan, `ranked` with an empty `concepts` array
+ * and a named `emptyReason`, rather than failing the whole refresh (the throw
+ * this replaced, measured by `ol-egov.141.89.10.5`) or silently dropping the
+ * course.
  */
 function toStudyPlanCourse(course: RankOracleResult['courses'][number]): StudyPlanCourse {
   if (course.status === 'abstained') {
@@ -203,10 +234,12 @@ function toStudyPlanCourse(course: RankOracleResult['courses'][number]): StudyPl
     };
   }
   if (course.ranked.length === 0) {
-    throw new Error(
-      `buildStudyPlan: course ${JSON.stringify(course.course)} is 'ranked' with no entries — ` +
-        'a course with no evidence must abstain, never rank empty',
-    );
+    return {
+      course: course.course,
+      status: 'ranked',
+      concepts: [],
+      emptyReason: emptyRankingReasonFor(course.vetoedConcepts ?? []),
+    };
   }
   return {
     course: course.course,

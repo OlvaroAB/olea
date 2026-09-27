@@ -137,13 +137,88 @@ describe('buildStudyPlan', () => {
     expect(Object.hasOwn(course, 'concepts')).toBe(false);
   });
 
-  it('refuses a ranked course with no entries rather than emitting an empty ranking', async () => {
-    await expect(
-      buildStudyPlan({
-        ranking: ranking([{ course: 'COURSE-C', status: 'ranked', ranked: [] }]),
-        computedAt: COMPUTED_AT,
-      }),
-    ).rejects.toThrow(/must abstain, never rank empty/);
+  it('[D-408] keeps a course with every assessment passed in the plan, ranked with zero concepts and a named reason, and never fails the refresh', async () => {
+    const plan = await buildStudyPlan({
+      ranking: ranking([
+        { course: 'COURSE-A', status: 'ranked', ranked: [conceptPriority()] },
+        {
+          course: 'COURSE-C',
+          status: 'ranked',
+          ranked: [],
+          vetoedConcepts: [
+            {
+              conceptName: 'concept-gamma',
+              conceptKey: 'concept-gamma',
+              vetoedEdges: [
+                {
+                  assessmentPath: 'assessments/c1.md' as VaultPath,
+                  reason: 'assessment-passed',
+                  daysUntilDue: -3,
+                },
+              ],
+            },
+          ],
+        },
+      ]),
+      computedAt: COMPUTED_AT,
+    });
+
+    // The other course still plans as usual — the finished course never
+    // blocks it.
+    const courseA = plan.body.courses.find((c) => c.course === 'COURSE-A');
+    expect(courseA?.status).toBe('ranked');
+    if (courseA?.status !== 'ranked') throw new Error('expected COURSE-A ranked');
+    expect(courseA.concepts.length).toBe(1);
+
+    const courseC = plan.body.courses.find((c) => c.course === 'COURSE-C');
+    expect(courseC?.status).toBe('ranked');
+    if (courseC?.status !== 'ranked') throw new Error('expected COURSE-C ranked');
+    expect(courseC.concepts).toEqual([]);
+    expect(courseC.emptyReason).toBe('every-assessment-passed');
+  });
+
+  it('[D-408]/[D-404] names "nothing-to-practise" when a vetoed concept carries an eligibility veto, even alongside a date-vetoed sibling', async () => {
+    const plan = await buildStudyPlan({
+      ranking: ranking([
+        {
+          course: 'COURSE-D',
+          status: 'ranked',
+          ranked: [],
+          vetoedConcepts: [
+            {
+              conceptName: 'concept-delta',
+              conceptKey: 'concept-delta',
+              vetoedEdges: [
+                {
+                  assessmentPath: 'assessments/d1.md' as VaultPath,
+                  reason: 'assessment-passed',
+                  daysUntilDue: -1,
+                },
+              ],
+            },
+            {
+              conceptName: 'concept-epsilon',
+              conceptKey: 'concept-epsilon',
+              vetoedEdges: [
+                {
+                  assessmentPath: 'assessments/d2.md' as VaultPath,
+                  reason: 'suspended',
+                  daysUntilDue: null,
+                },
+              ],
+              eligibilityVeto: 'suspended',
+            },
+          ],
+        },
+      ]),
+      computedAt: COMPUTED_AT,
+    });
+
+    const courseD = plan.body.courses.find((c) => c.course === 'COURSE-D');
+    expect(courseD?.status).toBe('ranked');
+    if (courseD?.status !== 'ranked') throw new Error('expected COURSE-D ranked');
+    expect(courseD.concepts).toEqual([]);
+    expect(courseD.emptyReason).toBe('nothing-to-practise');
   });
 
   describe('policyVersion', () => {

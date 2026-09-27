@@ -184,6 +184,20 @@ export const studyPlanAllocationEntry = z.object({
 export type StudyPlanAllocationEntry = z.infer<typeof studyPlanAllocationEntry>;
 
 /**
+ * `[D-408]` (`ol-egov.141.89.10.76`): why a `'ranked'` course's `concepts` is
+ * empty — every one of its concepts had evidence, and every edge on every one
+ * was vetoed away this pass, which is a different state from `'abstained'`
+ * (no evidence at all, P5-T03). `'every-assessment-passed'` when the vetoes
+ * were all date-derived (`EdgeVetoReason: 'assessment-passed'` — she is done,
+ * not stuck); `'nothing-to-practise'` when any concept's vetoes came from
+ * `[D-404]`'s instrument-eligibility fold instead (every remaining practice
+ * instrument suspended or otherwise ineligible). Never present when
+ * `concepts` is non-empty.
+ */
+export const emptyRankingReason = z.enum(['every-assessment-passed', 'nothing-to-practise']);
+export type EmptyRankingReason = z.infer<typeof emptyRankingReason>;
+
+/**
  * One course's policy — a ranking or an abstention, never both and never
  * neither.
  *
@@ -192,24 +206,57 @@ export type StudyPlanAllocationEntry = z.infer<typeof studyPlanAllocationEntry>;
  * as a course that simply came back empty; flattening it to an empty `concepts`
  * array here would undo that at the one layer that persists, and the emptiness
  * would then look like a plan that had considered the course and found nothing.
+ *
+ * **`concepts` may be empty exactly when `emptyReason` is present** (`[D-408]`,
+ * additive to this shape): a course that had evidence but has nothing left to
+ * rank this pass — every assessment passed, or nothing left to practise —
+ * stays in the plan with zero allocation and a named reason, rather than
+ * failing the whole refresh (`core/src/plan/build.ts`'s `toStudyPlanCourse`
+ * builds this). The cross-field half of that invariant — `emptyReason`
+ * present if and only if `concepts` is empty — is enforced below by
+ * `.superRefine`, since a bare `z.discriminatedUnion` branch cannot
+ * cross-validate two of its own fields.
  */
-export const studyPlanCourse = z.discriminatedUnion('status', [
-  z.object({
-    course: z.string().min(1),
-    status: z.literal('ranked'),
-    /** Ascending by `rank`, which is also descending by `weight`. Non-empty — an empty ranking abstains instead. */
-    concepts: z.array(plannedConcept).min(1),
-  }),
-  z.object({
-    course: z.string().min(1),
-    status: z.literal('abstained'),
-    reason: z.literal('no-evidence'),
-    /** The abstention's own account of itself, carried verbatim from the ranking. */
-    detail: z.string().min(1),
-    /** The assessment paths abstained over. Non-empty: an abstention with nothing to cite is not an abstention. */
-    assessmentPaths: z.array(z.string().min(1)).min(1),
-  }),
-]);
+export const studyPlanCourse = z
+  .discriminatedUnion('status', [
+    z.object({
+      course: z.string().min(1),
+      status: z.literal('ranked'),
+      /** Ascending by `rank`, which is also descending by `weight`. Empty exactly when `emptyReason` is present. */
+      concepts: z.array(plannedConcept),
+      /** `[D-408]`: present exactly when `concepts` is empty. See {@link emptyRankingReason}. */
+      emptyReason: emptyRankingReason.optional(),
+    }),
+    z.object({
+      course: z.string().min(1),
+      status: z.literal('abstained'),
+      reason: z.literal('no-evidence'),
+      /** The abstention's own account of itself, carried verbatim from the ranking. */
+      detail: z.string().min(1),
+      /** The assessment paths abstained over. Non-empty: an abstention with nothing to cite is not an abstention. */
+      assessmentPaths: z.array(z.string().min(1)).min(1),
+    }),
+  ])
+  .superRefine((course, ctx) => {
+    if (course.status !== 'ranked') return;
+    const isEmpty = course.concepts.length === 0;
+    const hasEmptyReason = course.emptyReason !== undefined;
+    if (isEmpty && !hasEmptyReason) {
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          "[D-408]: a 'ranked' course with an empty concept list must carry emptyReason — an empty ranking with no named reason abstains instead",
+        path: ['emptyReason'],
+      });
+    }
+    if (!isEmpty && hasEmptyReason) {
+      ctx.addIssue({
+        code: 'custom',
+        message: '[D-408]: emptyReason is present only when concepts is empty',
+        path: ['emptyReason'],
+      });
+    }
+  });
 export type StudyPlanCourse = z.infer<typeof studyPlanCourse>;
 
 /**
