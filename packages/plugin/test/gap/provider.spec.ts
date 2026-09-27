@@ -672,4 +672,161 @@ describe('createLocalGapProvider — threads retrievability into the ranking (C5
     // un-halved value instead and this equality would fail.
     expect(gapScore).toBeCloseTo(planWeight, 10);
   });
+
+  /**
+   * `ol-egov.141.89.10.79` acceptance bullet 2: the order this view would
+   * show BEFORE real recall reached the `[D-332]` need term (both concepts
+   * tied on need, so relevance alone decides — the neutral(1) scheduler
+   * below stands in for that, since an untied `retrievability` map was
+   * already ruled out as reachable through this provider's public deps by
+   * every test above) versus AFTER (one concept's real, near-total need
+   * overturns whichever concept the relevance-only read ranked first).
+   * Reported as a count: exactly one row-order change on this fixture.
+   */
+  it('REPORT (order before/after as a count): real recall for the lower-relevance concept overturns the relevance-only order', async () => {
+    const vault = memoryVault({
+      '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+      '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      'Notes/two.md': [
+        '---',
+        'topic: [Gadget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2023.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+        '## Question 2 (10 marks)',
+        '',
+        'Explain the core mechanism behind Gadget theory and why it matters.',
+        '',
+      ].join('\n'),
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': QUIZ,
+    });
+
+    const concepts = await extractConcepts(vault, { stampConceptKeys: true });
+    const widgetKey = concepts.find((c) => c.name === 'Widget theory')?.key;
+    const gadgetKey = concepts.find((c) => c.name === 'Gadget theory')?.key;
+    if (widgetKey === undefined || gadgetKey === undefined) {
+      throw new Error('fixture vault missing one of the two concepts');
+    }
+
+    const reviewFor = (conceptKey: string, instrumentId: string) =>
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: `r-${instrumentId}`,
+        timestamp: '2026-08-09T09:00:00-04:00',
+        instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [conceptKey],
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`;
+
+    await vault.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      reviewFor(widgetKey, 'qa:widget-theory:1') + reviewFor(gadgetKey, 'qa:gadget-theory:1'),
+    );
+
+    async function ranked(scheduler: Scheduler) {
+      const state = await createLocalGapProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: NOW,
+        scheduler,
+      }).load();
+      if (state.kind !== 'model') throw new Error('expected a model');
+      const course = state.model.courses.find((c) => c.course === 'TESTC101');
+      if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+      return course.rows;
+    }
+
+    // BEFORE: both concepts read neutral recall (need 0, tied) — the D-332
+    // need term contributes nothing, so order is relevance alone.
+    const beforeRows = await ranked(fixedRetrievabilityScheduler(1));
+    const widgetBefore = beforeRows.find((r) => r.conceptName === 'Widget theory');
+    const gadgetBefore = beforeRows.find((r) => r.conceptName === 'Gadget theory');
+    if (widgetBefore === undefined || gadgetBefore === undefined) {
+      throw new Error('expected both concepts ranked');
+    }
+    expect(widgetBefore.priorityScore).toBeCloseTo(widgetBefore.assessmentRelevance ?? -1, 10);
+    expect(gadgetBefore.priorityScore).toBeCloseTo(gadgetBefore.assessmentRelevance ?? -1, 10);
+
+    const widgetRel = widgetBefore.assessmentRelevance ?? 0;
+    const gadgetRel = gadgetBefore.assessmentRelevance ?? 0;
+    const [higherName, lowerName, lowerInstrument] =
+      widgetRel >= gadgetRel
+        ? (['Widget theory', 'Gadget theory', 'qa:gadget-theory:1'] as const)
+        : (['Gadget theory', 'Widget theory', 'qa:widget-theory:1'] as const);
+
+    // AFTER: give the lower-relevance concept real, near-total need
+    // (recall near 0) — enough to overturn ANY relevance gap the BEFORE
+    // read showed — while the higher-relevance concept stays neutral.
+    const afterScheduler: Scheduler = {
+      schedule: (input) => createFsrsScheduler().schedule(input),
+      retrievability(input: RetrievabilityInput): RetrievabilityOutput {
+        return {
+          instrumentId: input.instrumentId,
+          recallProbability: input.instrumentId === lowerInstrument ? 0.001 : 1,
+        };
+      },
+    };
+    const afterRows = await ranked(afterScheduler);
+    const higherAfter = afterRows.find((r) => r.conceptName === higherName);
+    const lowerAfter = afterRows.find((r) => r.conceptName === lowerName);
+    if (higherAfter === undefined || lowerAfter === undefined) {
+      throw new Error('expected both concepts ranked');
+    }
+    // Need is now KNOWN (not unknown) for both — proves acceptance bullet
+    // 1 on two concepts at once, not just the one-row REGRESSION test above.
+    expect(lowerAfter.priorityScore).toBeCloseTo((lowerAfter.assessmentRelevance ?? 0) + 0.999, 6);
+    expect(higherAfter.priorityScore).toBeCloseTo(higherAfter.assessmentRelevance ?? 0, 10);
+
+    // BEFORE, by construction, `higherName` ranked first (bigger relevance,
+    // tied need). AFTER, its real near-total need overturns that — exactly
+    // one row-order change on this fixture vault (acceptance bullet 2).
+    expect(beforeRows.indexOf(widgetBefore) < beforeRows.indexOf(gadgetBefore)).toBe(
+      higherName === 'Widget theory',
+    );
+    expect(afterRows.indexOf(higherAfter) < afterRows.indexOf(lowerAfter)).toBe(false);
+    const orderChangedCount =
+      beforeRows.map((r) => r.conceptName).join('|') ===
+      afterRows.map((r) => r.conceptName).join('|')
+        ? 0
+        : 1;
+    expect(orderChangedCount).toBe(1);
+  });
 });
