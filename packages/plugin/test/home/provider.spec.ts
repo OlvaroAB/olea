@@ -16,6 +16,7 @@ import {
   GOVERNING_GOVERNS_FOR_SECONDS,
   type StudyPlanEnvelope,
 } from 'olea-contracts';
+import type { ComposedStudySession, DurationModelBasis, StudySessionModel } from 'olea-core';
 import {
   createFsrsScheduler,
   enumerateVaultInstruments,
@@ -23,6 +24,10 @@ import {
   reviewLogPath,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+// `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): not yet barrel-exported from `olea-core` — the
+// same source-path precedent `test/session/composition-recorder.spec.ts` already uses for this
+// module.
+import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import { sessionCompositionSentence } from '../../src/home/copy.js';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
@@ -31,6 +36,7 @@ import type { HomeViewState } from '../../src/home/view.js';
 import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
+import { createStudySessionHolder } from '../../src/session/holder.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
 import { createLocalSessionBuilderProvider } from '../../src/session-builder/provider.js';
 import type { SessionBuilderState } from '../../src/session-builder/view.js';
@@ -726,5 +732,155 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
     };
     expect(stored.courses.TESTC202?.answer?.value).toBe('practise-differently');
     expect(typeof stored.courses.TESTC202?.answer?.text).toBe('string');
+  });
+});
+
+// `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): `home/view.ts`'s own module doc named
+// this as the missing DATA path — `provider.ts`'s `load()` had no read of `session/holder.ts`'s
+// shared `StudySessionHolder` at all, so `HomeViewState.activeSession` was always `undefined`.
+// This suite proves the wiring this bead adds: presence tracks the holder's own `status`, the
+// stated reason is the frozen record's own `branch` resolved through `FOCUS_BRANCH_SENTENCE`
+// (never a fresh call into Home's own live composer), and reading it never enters, extends,
+// exits or decides against the holder (AC(4), "never unfreezes or recomposes").
+//
+// A structurally valid, content-free `ComposedStudySession` carrying a minimal
+// `compositionRecord` — same "assert identity/the one field under test, never full shape"
+// posture `test/session/holder.spec.ts`'s own `fakeComposedStudySession` fixture takes,
+// extended with the one field this suite needs: `compositionRecord.branch`.
+function fakeComposedSessionWithBranch(
+  branch: 'filter' | 'urgency' | 'deficit' | null,
+): ComposedStudySession {
+  const model: StudySessionModel = {
+    asOf: '2026-09-01',
+    budgetMinutes: 20,
+    budgetSeconds: 1200,
+    plannedSeconds: 0,
+    items: [],
+    leftOut: [],
+    leftOutInstrumentCount: 0,
+    consideredRowCount: 0,
+    formatPreference: 'unknown',
+    nextAssessment: null,
+    durationBasis: 'assumed' as DurationModelBasis,
+    focusConcept: null,
+  };
+  return {
+    model,
+    overflow: [],
+    courseShares: new Map(),
+    forcedCourses: [],
+    obligationClasses: new Map(),
+    citationRecheckQueued: new Set(),
+    citationRevalidationPending: new Set(),
+    compositionRecord: {
+      schemaVersion: 1,
+      kind: 'compose',
+      compositionId: 'composition-testc101:a',
+      sessionId: 'composition-testc101:a',
+      parentCompositionId: null,
+      composedAt: NOW.toISOString(),
+      asOf: '2026-09-01',
+      reentry: false,
+      focusPolicy: 'single',
+      course: branch !== null ? 'TESTC101' : null,
+      branch,
+      groupingSignal: 'none',
+      steering: { courses: null, conceptIds: null },
+      budgetMinutes: 20,
+      planVersion: null,
+      policyVersions: {},
+      planAllocation: [],
+      declaredConstants: {
+        urgencyOverrideThreshold: 0.07,
+        withinBlockProximityHalfLifeDays: 7,
+        materialArrivalCohortHalfLifeDays: 7,
+      },
+      chosen: [],
+      setAside: { courses: [], concepts: [], instruments: [] },
+    },
+  };
+}
+
+describe("createLocalHomeProvider — reads the shared holder's active session (D-382/D-331, ol-egov.141.89.10.64, F2.22)", () => {
+  it('activeSession is absent when no studySessionHolder dep is supplied at all — unchanged pre-bead behaviour, never an explicit `undefined` key', async () => {
+    const state = dashboard(
+      await provider(fixtureVault(), hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
+    expect(state.activeSession).toBeUndefined();
+    expect('activeSession' in state).toBe(false);
+  });
+
+  it('activeSession is absent when a holder is supplied but idle (no sitting active)', async () => {
+    const holder = createStudySessionHolder();
+    const state = dashboard(
+      await createLocalHomeProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+        studySessionHolder: holder,
+      }).load(DEFAULT_REQUEST),
+    );
+    expect(state.activeSession).toBeUndefined();
+  });
+
+  it("activeSession is present with the frozen record's own sentence fragment while a sitting is active — never a fresh call into Home's live composer", async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedSessionWithBranch('deficit'));
+
+    const state = dashboard(
+      await createLocalHomeProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+        studySessionHolder: holder,
+      }).load(DEFAULT_REQUEST),
+    );
+
+    expect(state.activeSession).toEqual({ reason: FOCUS_BRANCH_SENTENCE.deficit });
+  });
+
+  it('activeSession is present with no reason when the frozen record carries no course — the harness course-less baseline, honest absence (never a placeholder sentence)', async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedSessionWithBranch(null));
+
+    const state = dashboard(
+      await createLocalHomeProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+        studySessionHolder: holder,
+      }).load(DEFAULT_REQUEST),
+    );
+
+    expect(state.activeSession).toEqual({});
+  });
+
+  it("AC(4): reading activeSession never unfreezes or recomposes the sitting — the holder's own sitting object is byte-identical (same reference) before and after load()", async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedSessionWithBranch('urgency'));
+    const before = holder.getSitting();
+
+    await createLocalHomeProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+      studySessionHolder: holder,
+    }).load(DEFAULT_REQUEST);
+
+    const after = holder.getSitting();
+    // `enter`/`growActiveSitting`/`exit` each construct a fresh `SittingState` object — a
+    // reference-identical sitting after `load()` proves none of them was called (`decide` never
+    // mutates `sitting` either way, but this is the strongest single assertion available on the
+    // holder's own public surface).
+    expect(after).toBe(before);
+    expect(after.status).toBe('active');
   });
 });

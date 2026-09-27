@@ -1735,6 +1735,14 @@ export default class OleaPlugin extends Plugin {
         // (`[D-243]`'s "rendered once"). Same `exactOptionalPropertyTypes`
         // ternary as every other optional dep on this call.
         ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
+        // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the SAME shared holder
+        // constructed once above (`this.studySessionHolder`) and already threaded to the
+        // `VIEW_TYPE_OLEA_SESSION` registration's session-builder provider and to
+        // `review/open-session.ts` — see `home/provider.ts`'s own
+        // `CreateLocalHomeProviderDeps.studySessionHolder` doc. `load()` only ever calls
+        // `getSitting()` on it, so this closes the DATA path `home/view.ts`'s own module doc
+        // named as still missing, without giving Home a second holder instance.
+        studySessionHolder: this.studySessionHolder,
         // `ol-ppa9` (F1.4/`[D-213]`): a thunk, not a snapshot, so a later
         // ingestion tick's fresh queue state and a later course-setup
         // confirmation both reach a Home leaf built before either happened —

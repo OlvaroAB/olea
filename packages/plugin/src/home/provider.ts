@@ -75,6 +75,10 @@ import type {
   WindowDeficitEntry,
 } from 'olea-core';
 import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
+// `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): `FOCUS_BRANCH_SENTENCE` is not yet barrel-exported
+// from `olea-core` — imported by source path, the same precedent `../session/holder.ts`'s own
+// import of `session-staleness.js` already sets for a pending barrel export.
+import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded straight through to
@@ -93,6 +97,10 @@ import {
   type RetrospectiveOfferEventLog,
 } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
+// `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): the same shared holder `main.ts` already threads
+// to `../session-builder/provider.ts` and `../review/open-session.ts` — see
+// `CreateLocalHomeProviderDeps.studySessionHolder`'s own doc.
+import type { StudySessionHolder } from '../session/holder.js';
 import { createLocalSessionBuilderProvider } from '../session-builder/provider.js';
 import type { SessionBuilderRequest } from '../session-builder/view.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
@@ -110,6 +118,7 @@ import {
   ObsidianHomeScopeGrowthStore,
 } from './scope-growth-store.js';
 import type {
+  HomeActiveSession,
   HomeAvoidanceQuestion,
   HomeCourseRow,
   HomeGroveMark,
@@ -195,6 +204,18 @@ export interface CreateLocalHomeProviderDeps {
    * this bead.
    */
   readonly firstRead?: () => readonly FirstReadFolderView[];
+  /**
+   * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the SAME shared holder instance
+   * `main.ts` constructs once and already threads to `../session-builder/provider.ts` and
+   * `../review/open-session.ts` — see `./view.ts`'s own module doc, "Reachability, corrected."
+   * `load()` below only ever calls {@link StudySessionHolder.getSitting} on it — a pure read,
+   * never `enter`/`growActiveSitting`/`exit`/`decide`, so reading it can never unfreeze or
+   * recompose an active sitting (AC(4)). Omitted (every caller outside `main.ts`'s own
+   * `VIEW_TYPE_OLEA_HOME` registration, e.g. every test in this suite that does not itself
+   * exercise this field) reads exactly as before this bead: `HomeViewState.activeSession` stays
+   * absent on every load, since there is no shared holder to have an opinion about.
+   */
+  readonly studySessionHolder?: StudySessionHolder;
 }
 
 /**
@@ -296,6 +317,25 @@ function isReviewEntry(
   entry: ReviewLogEntry,
 ): entry is Extract<ReviewLogEntry, { readonly kind: 'review' }> {
   return entry.kind === 'review';
+}
+
+/**
+ * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the shared holder's active session,
+ * described from its own frozen composition snapshot — see `./view.ts`'s `HomeActiveSession`
+ * doc. A PURE read: calls only {@link StudySessionHolder.getSitting}, never `enter`/
+ * `growActiveSitting`/`exit`/`decide`, so this can never unfreeze or recompose the sitting
+ * (AC(4)). Returns `undefined` when no holder is supplied or no sitting is active — the
+ * unchanged pre-bead behaviour; returns `{}` (present, no reason) when a sitting is active but
+ * its record carries no course (`branch === null`, the harness's course-less baseline), matching
+ * `focusReason`'s own honest-absence rule.
+ */
+function readActiveSession(
+  studySessionHolder: StudySessionHolder | undefined,
+): HomeActiveSession | undefined {
+  const sitting = studySessionHolder?.getSitting();
+  if (sitting === undefined || sitting.status !== 'active') return undefined;
+  const branch = sitting.items.compositionRecord?.branch;
+  return branch != null ? { reason: FOCUS_BRANCH_SENTENCE[branch] } : {};
 }
 
 /**
@@ -447,6 +487,14 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
         // other than `'model'`) stays absent on `HomeViewState` rather than
         // an explicit `focusReason: undefined` key — the same honest-absence
         // posture `composed.full.focusReason` itself already takes.
+        //
+        // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the shared holder's active
+        // session, read via `readActiveSession` — a pure `getSitting()` read, never a second
+        // call into `session/holder.ts` that could enter/extend/exit/decide (AC(4)). Same
+        // optional-spread posture as `focusReason`/`avoidanceQuestion` above: absent exactly
+        // when no holder is supplied or no sitting is active, never an explicit `activeSession:
+        // undefined` key.
+        const activeSession = readActiveSession(deps.studySessionHolder);
         return {
           kind: 'dashboard',
           session,
@@ -455,6 +503,7 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
             ? { focusReason: session.focusReason }
             : {}),
           ...(avoidanceQuestion !== undefined ? { avoidanceQuestion } : {}),
+          ...(activeSession !== undefined ? { activeSession } : {}),
         };
       } catch (error) {
         console.error('Olea: could not compose Home', error);
