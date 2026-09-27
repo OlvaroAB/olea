@@ -2584,10 +2584,18 @@ export default class OleaPlugin extends Plugin {
     this.courseSetupModalOpen = true;
 
     const deviceId = await ensureDeviceId(this);
+    let assignmentsBasePath: string | undefined;
+    try {
+      assignmentsBasePath = (await new ObsidianStudyPlanSettingsStore(this).load())
+        .assignmentsBasePath;
+    } catch {
+      assignmentsBasePath = undefined;
+    }
     const recognitions = await readCourseSetupRecognitions(next.code, {
       vault,
       deviceId,
       today: localToday(this.now()),
+      ...(assignmentsBasePath !== undefined ? { assignmentsBasePath } : {}),
     });
 
     new CourseSetupModal(this.app, {

@@ -85,6 +85,11 @@ import {
   COMPOSITION_LOG_FOLDER,
   compositionLogPath,
 } from '../../../core/src/study-session/composition-log.js';
+// `[D-411]` (`ol-v7r5.66`): the course cutoff records, imported by module path for the same reason.
+import {
+  COURSE_CUTOFF_LOG_FOLDER,
+  courseCutoffLogPath,
+} from '../../../core/src/today/course-cutoff-log.js';
 import { DRAFT_CACHE_FOLDER } from '../generation/cache-store.js';
 import { RETROSPECTIVE_NOTES_FOLDER } from '../retrospective/note-writer.js';
 import { DUPLICATION_CONFIRMATION_FOLDER } from '../review/duplication-confirmation-store.js';
@@ -144,6 +149,10 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // record folder so a full delete does not leave them behind.
   { folder: MERGE_AUDIT_PROPOSAL_FOLDER, role: 'record' },
   { folder: MERGE_REPAIR_PROPOSAL_FOLDER, role: 'record' },
+  // `[D-411]` (`ol-v7r5.66`): the course cutoff records, append-only and written once per course,
+  // named by day and device like the composition records, so probed by exact path too. Carried as
+  // the exact text on disk and removed by the full delete; never pruned.
+  { folder: COURSE_CUTOFF_LOG_FOLDER, role: 'record' },
 ];
 
 /**
@@ -248,7 +257,11 @@ export const OLEA_EVENT_LOGS: ReadonlyArray<{
 export const OLEA_PROBED_DAILY_STREAMS: ReadonlyArray<{
   readonly folder: VaultPath;
   readonly pathFor: (day: CalendarDay, deviceId: string) => VaultPath;
-}> = [...OLEA_EVENT_LOGS, { folder: COMPOSITION_LOG_FOLDER, pathFor: compositionLogPath }];
+}> = [
+  ...OLEA_EVENT_LOGS,
+  { folder: COMPOSITION_LOG_FOLDER, pathFor: compositionLogPath },
+  { folder: COURSE_CUTOFF_LOG_FOLDER, pathFor: courseCutoffLogPath },
+];
 
 export interface DiscoverOleaLayerOptions {
   readonly deviceId: string;

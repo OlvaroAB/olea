@@ -1311,7 +1311,13 @@ describe('C7.8 course detection has a real trigger and a real host (ol-0r92.7)',
 
   it('assembles recognitions for the proposal’s own course code before opening the modal', () => {
     expect(main).toMatch(
-      /const recognitions = await readCourseSetupRecognitions\(\s*next\.code,\s*\{\s*vault,\s*deviceId,\s*today:\s*localToday\(this\.now\(\)\),\s*\}\s*\);/,
+      /const recognitions = await readCourseSetupRecognitions\(\s*next\.code,\s*\{\s*vault,\s*deviceId,\s*today:\s*localToday\(this\.now\(\)\),\s*\.\.\.\(assignmentsBasePath !== undefined[^)]*\)\s*,?\s*\}\s*\);/,
+    );
+  });
+
+  it('loads the assignments Base path from settings for the cutoff read, failing closed to undefined', () => {
+    expect(main).toMatch(
+      /let assignmentsBasePath: string \| undefined;\s*try\s*\{\s*assignmentsBasePath = \(await new ObsidianStudyPlanSettingsStore\(this\)\.load\(\)\)\s*\.assignmentsBasePath;\s*\}\s*catch\s*\{\s*assignmentsBasePath = undefined;\s*\}/,
     );
   });
 
