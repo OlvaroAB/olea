@@ -77,6 +77,7 @@ import {
   resolveCreateCardOutcome,
 } from './commands/create-card.js';
 import { copyDiagnosticsToClipboard } from './commands/diagnostics-clipboard.js';
+import { OLEA_COMMAND_START_AFTER_FULL_DELETE } from './commands/ids.js';
 import { QaCardModal } from './commands/qa-card-modal.js';
 import { registerOleaCommands } from './commands/register-commands.js';
 import { ObsidianCorpusRelationStateStore } from './concept/corpusRelationStateStore.js';
@@ -197,7 +198,9 @@ import { createLocalStudyPlanProvider } from './plan/provider.js';
 import { studyPlanRefreshDue } from './plan/refresh-schedule.js';
 import { ObsidianStudyPlanSettingsStore } from './plan/settings-store.js';
 import { ObsidianStudyPlanStore } from './plan/store.js';
+import { holdIfPausedAfterFullDelete } from './privacy/full-delete.js';
 import { OleaLayerWriteSeal } from './privacy/olea-layer-write-seal.js';
+import { reloadPluginAfterFullDelete } from './privacy/reload-plugin.js';
 import { FullDeleteWriteSeal, type SealedFullDeleteHost } from './privacy/settings-section.js';
 import { obsidianRankWeightsGet } from './rank/obsidian-rank-weights-transport.js';
 import { buildRankWeightsWiring, type RankWeightsWiring } from './rank/wiring.js';
@@ -927,6 +930,23 @@ export default class OleaPlugin extends Plugin {
   }
 
   override async onload(): Promise<void> {
+    // `[D-406]` (`ol-egov.141.8.11`): after a full delete, nothing is read, built or sent until she
+    // chooses Start (`./privacy/full-delete.ts`'s module doc). Must stay the first statement here.
+    const pausedAfterFullDelete = await holdIfPausedAfterFullDelete({
+      loadData: () => this.loadData(),
+      sealForFullDelete: () => this.sealForFullDelete(),
+      explain: (line) => new Notice(line, 0),
+      offerStart: (label, start) => {
+        this.addCommand({
+          id: OLEA_COMMAND_START_AFTER_FULL_DELETE,
+          name: label,
+          callback: () => void start(),
+        });
+      },
+      reload: () => reloadPluginAfterFullDelete(this.app),
+    });
+    if (pausedAfterFullDelete) return;
+
     // F7.3 usage view (`ol-p3t09`): every Worker transport built below records
     // the D-005-safe per-call subset (task id, prompt version, model id) into
     // `usage/log-store.ts`'s own `data.json` key, which the settings pane's

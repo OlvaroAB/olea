@@ -24,6 +24,12 @@ export const OLEA_COMMAND_TODAY_OPEN = 'olea-today-open';
  * to the same view `OLEA_COMMAND_HOME_OPEN` does.
  */
 export const OLEA_COMMAND_OPEN = 'olea-open';
+/**
+ * `[D-406]` (`ol-egov.141.8.11`): the one command a paused plugin registers after a full delete;
+ * choosing it lifts the pause and reloads (`../privacy/full-delete.ts`). Registered only while
+ * paused, directly in `main.ts`'s `onload` guard, never by `register-commands.ts`.
+ */
+export const OLEA_COMMAND_START_AFTER_FULL_DELETE = 'olea-start-after-full-delete';
 /** `ol-2tyj`: opens the gap/coverage screen (F4.3, F4.5, F4.9, F4.10) — the first command-palette entry reaching `GapView`. */
 export const OLEA_COMMAND_GAP_OPEN = 'olea-gap-open';
 /**
