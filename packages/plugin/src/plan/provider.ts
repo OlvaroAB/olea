@@ -51,6 +51,7 @@
  */
 
 import type {
+  CourseAvoidanceSteeringAnswer,
   RankOracleOptions,
   Scheduler,
   StudyPlanProvider,
@@ -70,9 +71,79 @@ import {
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
+// Read-only import — `home/` is a concurrent lane's `owns`, not this bead's
+// (`ol-egov.141.93`). `ObsidianHomeAvoidanceStore` is the durable F4.6
+// record this bead wires into `resolvePlanPolicyCourseInputs` below; nothing
+// in `home/avoidance.ts` is edited by this bead.
+import type { CourseAvoidanceRecord } from '../home/avoidance.js';
+import { ObsidianHomeAvoidanceStore } from '../home/avoidance.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import { type ObsidianDataHost, ObsidianStudyPlanSettingsStore } from './settings-store.js';
+
+const AVOIDANCE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * D-361's own clarification (`ol-egov.141.92`, carried on this bead's
+ * acceptance): the ruling accepts `0.25` as `leave-for-now`'s steering
+ * weight only WITH a stated, checkable expiry — "there is no expiry
+ * condition in the code today" is the exact gap the ruling names. This is
+ * that stated condition, half of it: a `leave-for-now` answer stops applying
+ * once it is this many days old (the other half — a newer answer supersedes
+ * an older one — falls out of `ObsidianHomeAvoidanceStore.recordAnswer`
+ * itself, which REPLACES a course's stored answer rather than accumulating
+ * one, so `load()` can only ever return the latest).
+ *
+ * **Declared, Class B, provisional (`docs/dev/engineering-conventions.md`'s
+ * declared/derived line; run charter's decision ladder) — a plain-English
+ * guess, not fitted to any data, flagged for David's retroactive review, and
+ * explicitly named in D-361's own ruling as something to revisit "once real
+ * answers exist."** Two weeks: long enough that a single ordinary lull
+ * between sittings on an otherwise-fine course does not silently reactivate
+ * steering mid-cycle, short enough that a soft deprioritisation she gave
+ * once does not quietly outlive the situation that prompted it.
+ */
+export const AVOIDANCE_ANSWER_EXPIRY_DAYS = 14;
+
+/**
+ * D-361's expiry, applied at read time (never at write time — the store
+ * itself stays a plain durable record, per this bead's brief not to touch
+ * its persisted shape). Only `'leave-for-now'` answers are considered:
+ * `'practise-differently'` stays recorded and inert per the ruling's other
+ * half — `resolvePlanPolicyCourseInputs` already resolves it to no
+ * `steeringWeight` (`steeringWeightForAvoidanceAnswer`, `olea-core`), but
+ * this function does not even hand it across the boundary, so no future
+ * change to that core fold can accidentally start steering on it from this
+ * caller.
+ *
+ * An answer with no readable `recordedAt` timestamp cannot happen through
+ * this store today — `ObsidianHomeAvoidanceStore.load()`'s own
+ * `isCourseAvoidanceAnswerRecord` guard rejects any persisted blob whose
+ * `answer.recordedAt` is not a `string` before this function ever sees it —
+ * but a string that fails to PARSE as a date (corrupted `data.json`, a
+ * future format change) is still possible. That case is read as expired,
+ * never as "no expiry" and never thrown: a plan fetch degrading to "no
+ * steering for this course" is the same "absence, not a fabricated
+ * confident answer" posture this file already applies throughout (see
+ * `readFloorSharesByCourse`), and it is strictly SAFER than the alternative
+ * (an unparseable date silently reading as fresh forever).
+ */
+function avoidanceSteeringAnswersByCourse(
+  records: ReadonlyMap<string, CourseAvoidanceRecord>,
+  nowMs: number,
+  expiryDays: number = AVOIDANCE_ANSWER_EXPIRY_DAYS,
+): ReadonlyMap<string, CourseAvoidanceSteeringAnswer> {
+  const expiryMs = expiryDays * AVOIDANCE_DAY_MS;
+  const answers = new Map<string, CourseAvoidanceSteeringAnswer>();
+  for (const [course, record] of records) {
+    if (record.answer === undefined || record.answer.value !== 'leave-for-now') continue;
+    const recordedAtMs = Date.parse(record.answer.recordedAt);
+    if (Number.isNaN(recordedAtMs)) continue; // unparseable — read as expired, never thrown
+    if (nowMs - recordedAtMs >= expiryMs) continue; // expired
+    answers.set(course, 'leave-for-now');
+  }
+  return answers;
+}
 
 export interface CreateLocalStudyPlanProviderDeps {
   readonly vault: VaultSource;
@@ -297,6 +368,18 @@ export function createLocalStudyPlanProvider(
       });
       const floorSharesByCourse = await readFloorSharesByCourse(deps.studyPlanStore, now);
 
+      // `ol-egov.141.93` (D-361): the same durable, per-course F4.6 answer
+      // `home/provider.ts` writes through `ObsidianHomeAvoidanceStore` —
+      // same `deps.settingsHost`, same single `data.json` blob, keyed
+      // separately (`HOME_AVOIDANCE_STORAGE_KEY`), so no new dependency is
+      // threaded in to read it. `avoidanceSteeringAnswersByCourse` (above)
+      // applies D-361's expiry and drops `'practise-differently'` entirely
+      // before this ever reaches `resolvePlanPolicyCourseInputs`.
+      const avoidanceAnswersByCourse = avoidanceSteeringAnswersByCourse(
+        await new ObsidianHomeAvoidanceStore(deps.settingsHost).load(),
+        now.getTime(),
+      );
+
       // `[D-167]` / `ol-v7r5.25`: resolve component 3.5's per-course inputs
       // from what this device already has, ask for the allocation policy
       // behind the fingerprint gate, and land whatever comes back onto the
@@ -332,6 +415,7 @@ export function createLocalStudyPlanProvider(
         concepts,
         sittingsHistory,
         floorSharesByCourse,
+        avoidanceAnswersByCourse,
       );
       const attemptingPolicyFetch = courses.length > 0 && deps.readPlanPolicy !== undefined;
       const policy = attemptingPolicyFetch
