@@ -20,7 +20,11 @@ import { extractConcepts } from '../concept/extract.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import { FolderSource } from '../vault/folder-source.js';
-import { composeOracleRanking, resolveTiebreakEligibleConcepts } from './compose.js';
+import {
+  composeOracleRanking,
+  resolveConceptInstrumentEligibility,
+  resolveTiebreakEligibleConcepts,
+} from './compose.js';
 
 /**
  * A `Scheduler` whose recall probability is looked up per instrument id —
@@ -991,5 +995,201 @@ describe('composeOracleRanking — threading `resolveTiebreakSourceVersion` (C5.
     // concept).
     expect(findEntry(withResolver).priorityScore).toBe(findEntry(withoutResolver).priorityScore);
     expect(findEntry(withResolver).rank).toBe(1);
+  });
+});
+
+describe('composeOracleRanking — [D-404] eligibility from the instrument inventory and the review log (ol-egov.141.89.10.5)', () => {
+  let root: string;
+  let source: FolderSource;
+  let concepts: readonly ConceptRecord[];
+  let widgetKey: string;
+
+  async function write(relPath: string, content: string): Promise<void> {
+    const full = join(root, ...relPath.split('/'));
+    await mkdir(join(full, '..'), { recursive: true });
+    await writeFile(full, content, 'utf8');
+  }
+
+  function suspendEvent(
+    kind: 'suspend' | 'unsuspend',
+    instrumentId: string,
+    timestamp: string,
+  ): ReviewLogEntry {
+    return {
+      schemaVersion: 6,
+      kind,
+      eventId: `${kind}-${instrumentId}-${timestamp}`,
+      timestamp,
+      instrumentId,
+      conceptIds: [widgetKey],
+    };
+  }
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-oracle-compose-eligibility-'));
+    source = new FolderSource(root);
+    await write(
+      '05 Zettelkasten/Widget theory.md',
+      '---\ntopic: Widget theory\n---\n\n# Widget theory\n',
+    );
+    await write(
+      '03 Research/TESTC101 Past Paper 2023.md',
+      [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+    );
+    await write(
+      BASE_PATH,
+      [
+        'filters:',
+        '  and:',
+        '    - file.inFolder("02 Assignments")',
+        '    - file.ext == "md"',
+        'properties:',
+        '  class:',
+        '  type:',
+        '  weight:',
+        '  due:',
+        '  status:',
+      ].join('\n'),
+    );
+    await write(
+      '02 Assignments/Quiz 1.md',
+      '---\nclass: TESTC101\ntype: Quiz\nweight: 10\ndue: 2026-09-01\nstatus: upcoming\n---\n\n# Quiz 1\n',
+    );
+    concepts = await extractConcepts(source, {});
+    const widget = concepts.find((c) => c.name === 'Widget theory');
+    if (widget === undefined) throw new Error('expected "Widget theory" to extract');
+    widgetKey = widget.key;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function courseWith(
+    reviewLog: readonly ReviewLogEntry[],
+    extra: {
+      readonly instrumentInventory?: readonly { instrumentId: string; conceptIds: string[] }[];
+      readonly otherIneligibleInstrumentIds?: ReadonlySet<string>;
+    },
+  ) {
+    const result = await composeOracleRanking({
+      vault: source,
+      basePath: BASE_PATH,
+      reviewLog,
+      asOf: '2026-08-15',
+      concepts,
+      ...extra,
+    });
+    const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    return course;
+  }
+
+  it('a concept whose only instrument she suspended is vetoed as "suspended" once the inventory is supplied, and ranked when it is omitted', async () => {
+    const log = [suspendEvent('suspend', 'qa:widget-theory:1', '2026-08-10T09:00:00-04:00')];
+    const inventory = [{ instrumentId: 'qa:widget-theory:1', conceptIds: [widgetKey] }];
+
+    const withoutInventory = await courseWith(log, {});
+    expect(withoutInventory.ranked.map((r) => r.conceptKey)).toEqual([widgetKey]);
+
+    const withInventory = await courseWith(log, { instrumentInventory: inventory });
+    expect(withInventory.ranked).toHaveLength(0);
+    expect(withInventory.vetoedConcepts).toEqual([
+      expect.objectContaining({ conceptKey: widgetKey, eligibilityVeto: 'suspended' }),
+    ]);
+  });
+
+  it('one eligible instrument left keeps the concept ranked exactly as without the inventory', async () => {
+    const log = [suspendEvent('suspend', 'qa:widget-theory:1', '2026-08-10T09:00:00-04:00')];
+    const inventory = [
+      { instrumentId: 'qa:widget-theory:1', conceptIds: [widgetKey] },
+      { instrumentId: 'cloze:widget-theory:1', conceptIds: [widgetKey] },
+    ];
+    const baseline = await courseWith(log, {});
+    const course = await courseWith(log, { instrumentInventory: inventory });
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    expect(course.ranked).toEqual(baseline.ranked);
+  });
+
+  it('an unsuspend after the suspend lifts the veto: the fold reads the latest event', async () => {
+    const log = [
+      suspendEvent('suspend', 'qa:widget-theory:1', '2026-08-10T09:00:00-04:00'),
+      suspendEvent('unsuspend', 'qa:widget-theory:1', '2026-08-11T09:00:00-04:00'),
+    ];
+    const course = await courseWith(log, {
+      instrumentInventory: [{ instrumentId: 'qa:widget-theory:1', conceptIds: [widgetKey] }],
+    });
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    expect(course.ranked.map((r) => r.conceptKey)).toEqual([widgetKey]);
+  });
+
+  it('a caller-named citation cause reads "instrument-ineligible", never "suspended"', async () => {
+    const course = await courseWith([], {
+      instrumentInventory: [{ instrumentId: 'qa:widget-theory:1', conceptIds: [widgetKey] }],
+      otherIneligibleInstrumentIds: new Set(['qa:widget-theory:1']),
+    });
+    expect(course.vetoedConcepts).toEqual([
+      expect.objectContaining({ conceptKey: widgetKey, eligibilityVeto: 'instrument-ineligible' }),
+    ]);
+  });
+
+  it('an inventory with no instrument on the concept never vetoes it (not built yet)', async () => {
+    const course = await courseWith([], {
+      instrumentInventory: [{ instrumentId: 'qa:other:1', conceptIds: ['some-other-key'] }],
+    });
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    expect(course.ranked.map((r) => r.conceptKey)).toEqual([widgetKey]);
+  });
+});
+
+describe('resolveConceptInstrumentEligibility — [D-404] facts per concept', () => {
+  const suspend = (instrumentId: string, timestamp: string): ReviewLogEntry => ({
+    schemaVersion: 6,
+    kind: 'suspend',
+    eventId: `s-${instrumentId}-${timestamp}`,
+    timestamp,
+    instrumentId,
+    conceptIds: ['k1'],
+  });
+
+  it('files each instrument under every concept it names, once, with its cause', () => {
+    const facts = resolveConceptInstrumentEligibility(
+      [
+        { instrumentId: 'i1', conceptIds: ['k1', 'k2'] },
+        { instrumentId: 'i2', conceptIds: ['k1', 'k1'] },
+        { instrumentId: 'i3', conceptIds: ['k2'] },
+      ],
+      [suspend('i1', '2026-08-10T09:00:00Z')],
+      new Set(['i3']),
+    );
+    expect(facts.get('k1')).toEqual([
+      { instrumentId: 'i1', ineligible: 'suspended' },
+      { instrumentId: 'i2' },
+    ]);
+    expect(facts.get('k2')).toEqual([
+      { instrumentId: 'i1', ineligible: 'suspended' },
+      { instrumentId: 'i3', ineligible: 'instrument-ineligible' },
+    ]);
+  });
+
+  it('her suspension wins over a citation cause for the same instrument', () => {
+    const facts = resolveConceptInstrumentEligibility(
+      [{ instrumentId: 'i1', conceptIds: ['k1'] }],
+      [suspend('i1', '2026-08-10T09:00:00Z')],
+      new Set(['i1']),
+    );
+    expect(facts.get('k1')).toEqual([{ instrumentId: 'i1', ineligible: 'suspended' }]);
   });
 });

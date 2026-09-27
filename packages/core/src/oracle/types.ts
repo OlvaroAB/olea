@@ -71,21 +71,27 @@ export type OracleMasteryState = MasteryState | 'unknown';
  * additive.
  *
  * **`'suspended'` and `'instrument-ineligible'` — additive, `[D-404]`,
- * `ol-egov.141.89.10.4`.** Wired from `RankOracleEligibilityInput`'s
- * per-instrument eligibility map (`./rank.ts`): `'suspended'` reports the one
- * cause the planning spec's own R4 target names by that exact word (her own
- * suspension of the instrument); `'instrument-ineligible'` is every other
- * named cause in the same table (withdrawn, note missing, cited passage
- * changed, pending revalidation) — kept apart from `'suspended'` on purpose,
- * so a note going missing from her vault is never reported as though she
- * suspended it, even though both remove the instrument from the blend the
- * same way. See `RankOracleEligibilityInput`'s own doc for the full account.
+ * `ol-egov.141.89.10.4`, keyed by concept since `ol-egov.141.89.10.5`.**
+ * A fact about the CONCEPT (every one of its practice instruments is
+ * ineligible), applied to each of its edges — see
+ * {@link InstrumentEligibilityVetoReason}.
  */
 export type EdgeVetoReason =
   | 'assessment-passed'
   | 'out-of-course-scope'
-  | 'suspended'
-  | 'instrument-ineligible';
+  | InstrumentEligibilityVetoReason;
+
+/**
+ * `[D-404]`'s two reported causes for a concept whose every practice
+ * instrument is ineligible (`./rank.ts`'s `conceptEligibilityVeto`):
+ * `'suspended'` when every one is suspended or withdrawn by her (the one
+ * cause the planning spec's R4 target names by that word), and
+ * `'instrument-ineligible'` when any other cause is among them (note
+ * missing, cited passage changed, pending revalidation) — kept apart so a
+ * changed citation is never reported as though she suspended something.
+ * In-memory only: nothing persists it.
+ */
+export type InstrumentEligibilityVetoReason = 'suspended' | 'instrument-ineligible';
 
 /**
  * One concept↔assessment edge REMOVED from the blend by a veto, reported
@@ -114,6 +120,14 @@ export interface OracleVetoedConcept {
   readonly conceptName: string;
   readonly conceptKey: string;
   readonly vetoedEdges: readonly OracleVetoedEdge[];
+  /**
+   * `[D-404]`: present exactly when the concept was vetoed because none of
+   * its practice instruments is eligible — the reason stated once for the
+   * concept, including a concept of unknown relevance that has no edges to
+   * carry it (`[D-404]` condition 2: listed with its reason, never silently
+   * dropped). Absent for a concept removed only by date vetoes.
+   */
+  readonly eligibilityVeto?: InstrumentEligibilityVetoReason;
 }
 
 /**

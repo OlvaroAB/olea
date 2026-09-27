@@ -15,7 +15,7 @@ import type {
 } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { RankOracleEligibilityInput, RankOracleTiebreakInput } from './rank.js';
-import { rankOracle } from './rank.js';
+import { conceptEligibilityVeto, rankOracle } from './rank.js';
 import type { RankOracleInput } from './types.js';
 
 function citation(overrides: Partial<EvidenceQuestionCitation> = {}): EvidenceQuestionCitation {
@@ -1025,11 +1025,13 @@ describe('rankOracle — vetoes are separated from the blend (C5.10, ol-plxu)', 
   });
 });
 
-describe('rankOracle — the eligibility veto: a concept vetoed only once no eligible instrument remains ([D-404], ol-egov.141.89.10.4)', () => {
+describe('rankOracle — the eligibility veto: a concept vetoed only once none of its practice instruments is eligible ([D-404], ol-egov.141.89.10.5)', () => {
+  type Eligibility = RankOracleEligibilityInput['conceptInstrumentEligibility'];
+
   function courseFor(
     edges: readonly ConceptAssessmentEdge[],
     assessments: readonly AssessmentRecord[],
-    instrumentEligibility: RankOracleEligibilityInput['instrumentEligibility'],
+    conceptInstrumentEligibility: Eligibility,
   ) {
     const input: RankOracleInput & RankOracleEligibilityInput = {
       evidence: {
@@ -1038,7 +1040,7 @@ describe('rankOracle — the eligibility veto: a concept vetoed only once no eli
         assessmentsWithNoEvidence: [],
       },
       asOf: ASOF,
-      ...(instrumentEligibility !== undefined ? { instrumentEligibility } : {}),
+      ...(conceptInstrumentEligibility !== undefined ? { conceptInstrumentEligibility } : {}),
     };
     const result = rankOracle(input);
     const course = result.courses[0];
@@ -1046,76 +1048,129 @@ describe('rankOracle — the eligibility veto: a concept vetoed only once no eli
     return course;
   }
 
-  it('a concept with one of two instruments marked ineligible ranks EXACTLY as it would with only the other instrument', () => {
-    const edgeA = edge({ assessmentPath: 'Assessments/A.md', citations: [] });
-    const edgeB = edge({ assessmentPath: 'Assessments/B.md', citations: [] });
-    const assessments = [
-      assessment({ path: 'Assessments/A.md', due: '2026-09-01', weight: undefined }),
-      assessment({ path: 'Assessments/B.md', due: '2026-09-10', weight: undefined }),
-    ];
+  const twoAssessments = [
+    assessment({ path: 'Assessments/A.md', due: '2026-09-01', weight: undefined }),
+    assessment({ path: 'Assessments/B.md', due: '2026-09-10', weight: undefined }),
+  ];
+  const edgesOf = (conceptName: string) => [
+    edge({ conceptName, assessmentPath: 'Assessments/A.md', citations: [] }),
+    edge({ conceptName, assessmentPath: 'Assessments/B.md', citations: [] }),
+  ];
 
-    const withBothEligible = courseFor([edgeA, edgeB], assessments, undefined);
-    const withASuspended = courseFor(
-      [edgeA, edgeB],
-      assessments,
-      new Map([['Assessments/A.md', 'suspended']]),
+  it('a concept with one of two instruments suspended ranks EXACTLY as with no eligibility input: its evidence is untouched', () => {
+    const edges = edgesOf('concept-a');
+    const baseline = courseFor(edges, twoAssessments, undefined);
+    const oneSuspended = courseFor(
+      edges,
+      twoAssessments,
+      new Map([
+        [
+          'concept-a',
+          [
+            { instrumentId: 'card-1', ineligible: 'suspended' as const },
+            { instrumentId: 'card-2' },
+          ],
+        ],
+      ]),
     );
-    const withOnlyB = courseFor([edgeB], [assessments[1] as AssessmentRecord], undefined);
-
-    expect(withBothEligible.ranked[0]?.factors.contributions).toHaveLength(2);
-
-    const suspendedEntry = withASuspended.ranked.find((r) => r.conceptName === 'concept-a');
-    const onlyBEntry = withOnlyB.ranked.find((r) => r.conceptName === 'concept-a');
-    expect(suspendedEntry?.factors.contributions).toHaveLength(1);
-    expect(suspendedEntry?.factors.contributions[0]?.assessmentPath).toBe('Assessments/B.md');
-    expect(suspendedEntry?.factors.vetoedEdges).toEqual([
-      expect.objectContaining({ assessmentPath: 'Assessments/A.md', reason: 'suspended' }),
-    ]);
-    expect(suspendedEntry?.factors.preMasteryScore).toBeCloseTo(
-      onlyBEntry?.factors.preMasteryScore ?? -1,
-      9,
-    );
-    expect(suspendedEntry?.priorityScore).toBeCloseTo(onlyBEntry?.priorityScore ?? -1, 9);
+    expect(oneSuspended.vetoedConcepts ?? []).toHaveLength(0);
+    expect(oneSuspended.ranked).toEqual(baseline.ranked);
+    expect(oneSuspended.ranked[0]?.factors.contributions).toHaveLength(2);
+    expect(oneSuspended.ranked[0]?.factors.vetoedEdges).toEqual([]);
   });
 
-  it('her own suspension of every instrument reads as "suspended" — matching the locked R4 target', () => {
-    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
+  it('her own suspension of every instrument vetoes the concept as "suspended", on every edge and on the concept — matching the locked R4 target', () => {
     const course = courseFor(
-      [singleEdge],
-      [assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined })],
-      new Map([['Assessments/OnlyOne.md', 'suspended']]),
+      edgesOf('concept-a'),
+      twoAssessments,
+      new Map([
+        [
+          'concept-a',
+          [
+            { instrumentId: 'card-1', ineligible: 'suspended' as const },
+            { instrumentId: 'card-2', ineligible: 'suspended' as const },
+          ],
+        ],
+      ]),
     );
     expect(course.ranked).toHaveLength(0);
     expect(course.vetoedConcepts).toEqual([
-      expect.objectContaining({
+      {
+        conceptName: 'concept-a',
         conceptKey: 'concept-a',
+        eligibilityVeto: 'suspended',
         vetoedEdges: [
-          expect.objectContaining({
-            assessmentPath: 'Assessments/OnlyOne.md',
-            reason: 'suspended',
-          }),
+          expect.objectContaining({ assessmentPath: 'Assessments/A.md', reason: 'suspended' }),
+          expect.objectContaining({ assessmentPath: 'Assessments/B.md', reason: 'suspended' }),
         ],
-      }),
+      },
     ]);
   });
 
-  it('another mix (withdrawn / note missing / cited-passage-changed, all reported by the caller as "instrument-ineligible") carries a reason kept APART from "suspended"', () => {
-    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
+  it('a mix of causes (one suspended, one with a changed citation) is "instrument-ineligible", kept APART from "suspended"', () => {
     const course = courseFor(
-      [singleEdge],
-      [assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined })],
-      new Map([['Assessments/OnlyOne.md', 'instrument-ineligible']]),
+      edgesOf('concept-a'),
+      twoAssessments,
+      new Map([
+        [
+          'concept-a',
+          [
+            { instrumentId: 'card-1', ineligible: 'suspended' as const },
+            { instrumentId: 'card-2', ineligible: 'instrument-ineligible' as const },
+          ],
+        ],
+      ]),
     );
     expect(course.ranked).toHaveLength(0);
-    const vetoedConcept = course.vetoedConcepts?.[0];
-    expect(vetoedConcept?.vetoedEdges[0]?.reason).toBe('instrument-ineligible');
-    expect(vetoedConcept?.vetoedEdges[0]?.reason).not.toBe('suspended');
+    const vetoed = course.vetoedConcepts?.[0];
+    expect(vetoed?.eligibilityVeto).toBe('instrument-ineligible');
+    expect(vetoed?.vetoedEdges.map((e) => e.reason)).toEqual([
+      'instrument-ineligible',
+      'instrument-ineligible',
+    ]);
   });
 
-  it('a concept with no instruments yet is never vetoed by this rule', () => {
-    // `[D-329]`'s courseConcepts input names a concept with no real edge at
-    // all — `instrumentEligibility` naming an unrelated path has nothing to
-    // veto here; the concept still reads as unknown relevance, never vetoed.
+  it('vetoing one concept never touches another concept examined by the SAME assessments', () => {
+    const edges = [...edgesOf('concept-a'), ...edgesOf('concept-b')];
+    const baseline = courseFor(edges, twoAssessments, undefined);
+    const course = courseFor(
+      edges,
+      twoAssessments,
+      new Map([['concept-a', [{ instrumentId: 'card-1', ineligible: 'suspended' as const }]]]),
+    );
+    expect(course.vetoedConcepts?.map((v) => v.conceptKey)).toEqual(['concept-a']);
+    const survivor = course.ranked.find((r) => r.conceptKey === 'concept-b');
+    const survivorBaseline = baseline.ranked.find((r) => r.conceptKey === 'concept-b');
+    expect(survivor?.factors).toEqual(survivorBaseline?.factors);
+    expect(survivor?.priorityScore).toBe(survivorBaseline?.priorityScore);
+  });
+
+  it('a concept with no instruments yet (an empty list, or absent from the map) is never vetoed by this rule', () => {
+    const edges = [...edgesOf('concept-a'), ...edgesOf('concept-b')];
+    const course = courseFor(edges, twoAssessments, new Map([['concept-a', []]]));
+    expect(course.vetoedConcepts ?? []).toHaveLength(0);
+    expect(course.ranked.map((r) => r.conceptKey).sort()).toEqual(['concept-a', 'concept-b']);
+  });
+
+  it('a date veto on one edge and the eligibility veto together: the passed edge keeps its own reason', () => {
+    const assessments = [
+      assessment({ path: 'Assessments/A.md', due: '2026-07-01', weight: undefined }),
+      assessment({ path: 'Assessments/B.md', due: '2026-09-10', weight: undefined }),
+    ];
+    const course = courseFor(
+      edgesOf('concept-a'),
+      assessments,
+      new Map([['concept-a', [{ instrumentId: 'card-1', ineligible: 'suspended' as const }]]]),
+    );
+    const vetoed = course.vetoedConcepts?.[0];
+    expect(vetoed?.eligibilityVeto).toBe('suspended');
+    expect(vetoed?.vetoedEdges.map((e) => [e.assessmentPath, e.reason])).toEqual([
+      ['Assessments/A.md', 'assessment-passed'],
+      ['Assessments/B.md', 'suspended'],
+    ]);
+  });
+
+  it('a concept of unknown relevance ([D-329]) whose every instrument is ineligible is vetoed and listed with its reason, never ranked', () => {
     const input: RankOracleInput &
       RankOracleEligibilityInput & {
         readonly courseConcepts?: ReadonlyMap<string, ReadonlyMap<string, string>>;
@@ -1126,39 +1181,71 @@ describe('rankOracle — the eligibility veto: a concept vetoed only once no eli
         assessmentsWithNoEvidence: [],
       },
       asOf: ASOF,
-      instrumentEligibility: new Map([['Assessments/SomewhereElse.md', 'suspended']]),
-      courseConcepts: new Map([['COURSEA', new Map([['concept-noedge', 'concept-noedge']])]]),
+      conceptInstrumentEligibility: new Map([
+        ['concept-noedge', [{ instrumentId: 'card-9', ineligible: 'suspended' as const }]],
+      ]),
+      courseConcepts: new Map([
+        [
+          'COURSEA',
+          new Map([
+            ['concept-noedge', 'concept-noedge'],
+            ['concept-other', 'concept-other'],
+          ]),
+        ],
+      ]),
     };
-    const result = rankOracle(input);
-    const course = result.courses[0];
+    const course = rankOracle(input).courses[0];
     if (course?.status !== 'ranked') throw new Error('expected ranked');
-    expect(course.vetoedConcepts ?? []).toHaveLength(0);
-    const entry = course.ranked.find((r) => r.conceptKey === 'concept-noedge');
-    expect(entry).toBeDefined();
-    expect(entry?.factors.contributions).toHaveLength(0);
+    expect(course.vetoedConcepts).toEqual([
+      {
+        conceptName: 'concept-noedge',
+        conceptKey: 'concept-noedge',
+        vetoedEdges: [],
+        eligibilityVeto: 'suspended',
+      },
+    ]);
+    expect(course.ranked.map((r) => r.conceptKey)).toEqual(['concept-other']);
   });
 
   it('the veto lifts as soon as one instrument becomes eligible again, with nothing recorded against her — purely a function of the current call', () => {
-    const singleEdge = edge({ assessmentPath: 'Assessments/OnlyOne.md', citations: [] });
-    const assessments = [
-      assessment({ path: 'Assessments/OnlyOne.md', due: '2026-09-01', weight: undefined }),
-    ];
-
+    const edges = edgesOf('concept-a');
     const vetoed = courseFor(
-      [singleEdge],
-      assessments,
-      new Map([['Assessments/OnlyOne.md', 'suspended']]),
+      edges,
+      twoAssessments,
+      new Map([['concept-a', [{ instrumentId: 'card-1', ineligible: 'suspended' as const }]]]),
     );
     expect(vetoed.vetoedConcepts).toHaveLength(1);
 
-    // Same evidence, same asOf, the instrument simply no longer named as
-    // ineligible: the concept ranks normally, and nothing about the earlier
-    // call is carried forward (this module holds no history, no cache, no
-    // clock — module doc, "computed fresh from input every time").
-    const eligibleAgain = courseFor([singleEdge], assessments, undefined);
+    const eligibleAgain = courseFor(
+      edges,
+      twoAssessments,
+      new Map([['concept-a', [{ instrumentId: 'card-1' }]]]),
+    );
     expect(eligibleAgain.vetoedConcepts ?? []).toHaveLength(0);
-    expect(eligibleAgain.ranked).toHaveLength(1);
-    expect(eligibleAgain.ranked[0]?.factors.vetoedEdges ?? []).toHaveLength(0);
+    expect(eligibleAgain.ranked).toEqual(courseFor(edges, twoAssessments, undefined).ranked);
+  });
+});
+
+describe('conceptEligibilityVeto — the rollup ([D-404])', () => {
+  it('rolls a concept up only when every instrument is ineligible', () => {
+    expect(conceptEligibilityVeto(undefined)).toBeNull();
+    expect(conceptEligibilityVeto([])).toBeNull();
+    expect(conceptEligibilityVeto([{ instrumentId: 'x' }])).toBeNull();
+    expect(
+      conceptEligibilityVeto([
+        { instrumentId: 'x', ineligible: 'suspended' },
+        { instrumentId: 'y' },
+      ]),
+    ).toBeNull();
+    expect(conceptEligibilityVeto([{ instrumentId: 'x', ineligible: 'suspended' }])).toBe(
+      'suspended',
+    );
+    expect(
+      conceptEligibilityVeto([
+        { instrumentId: 'x', ineligible: 'suspended' },
+        { instrumentId: 'y', ineligible: 'instrument-ineligible' },
+      ]),
+    ).toBe('instrument-ineligible');
   });
 });
 

@@ -87,6 +87,22 @@
  * `session-builder/provider.ts` and `gap/provider.ts` (`ol-egov.141.89.10.22`)
  * now all pass this field, each threading its own `Scheduler` and `now`
  * through the identical `{ scheduler, now }` shape.
+ *
+ * ## `[D-404]`'s eligibility veto is produced here, for the callers that serve practice
+ *
+ * `rankOracle` vetoes a concept once none of its practice instruments is
+ * eligible (`./rank.ts`'s module doc). The facts come from here:
+ * {@link ComposeOracleRankingInput.instrumentInventory} names the
+ * instruments, the review log already in hand says which she suspended or
+ * withdrew, and the caller may add ids it found ineligible for a citation
+ * reason. The gap view and the note offer deliberately never pass it
+ * (`[D-404]` condition 3). **No production caller passes it yet**
+ * (`ol-egov.141.89.10.5`'s close evidence): `session-builder/provider.ts`
+ * already holds the inventory (`enumeration.records`) and needs one line;
+ * `plan/provider.ts` waits because a course whose every concept is vetoed
+ * reaches `plan/build.ts`'s `toStudyPlanCourse` as ranked-and-empty, which
+ * throws and fails the whole plan refresh — the same throw a course whose
+ * assessments have all passed already hits today.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -101,10 +117,12 @@ import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import { computeAllConceptMastery } from '../mastery/rollup.js';
 import type { InstrumentValidityProjection } from '../mastery/validity.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
+import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
 import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
 import type { Scheduler } from '../scheduler/types.js';
 import type { VaultSource } from '../vault/types.js';
+import type { ConceptInstrumentEligibilityFact } from './rank.js';
 import { rankOracle } from './rank.js';
 import type { RankOracleOptions, RankOracleResult } from './types.js';
 
@@ -208,6 +226,51 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * already keeps `ConceptPriority.reasoning` off her screen.
    */
   readonly rankedReasons?: ReadonlyMap<string, string>;
+  /**
+   * `[D-404]` (`ol-egov.141.89.10.5`): the caller's instrument inventory —
+   * every practice instrument currently in the vault, with the concept keys
+   * it is filed under (`enumerateVaultInstruments`'s `records` satisfy this
+   * shape as they are, enumerated with `stampConceptKeys: true` so the keys
+   * are the ones edges and the review log carry). Supplied, this
+   * composition folds the review log's suspension projection
+   * (`../review-log/suspension.ts`, which covers her withdrawals too) over
+   * it and hands `rankOracle` one eligibility list per concept, so a concept
+   * whose every instrument is ineligible is vetoed and listed with its
+   * reason, and a concept with one eligible instrument left ranks exactly as
+   * before.
+   *
+   * **Supply it from a caller that serves practice** — the session
+   * composition, and the plan once an all-vetoed course can be carried by
+   * it (see the module doc) — `[D-404]` condition 2: "removed from the
+   * servable practice list". **Omit it from a scope or coverage reader** — the gap
+   * view and the note offer — so no scope or coverage reading loses a
+   * vetoed concept (condition 3). Omitted, nothing is vetoed by this rule,
+   * byte-identical to before.
+   *
+   * A note gone from the vault is not in the inventory at all, so its
+   * instruments are simply not there; a concept whose every instrument's
+   * note is gone reads as having no instruments (not vetoed, condition 4's
+   * reading), and the session's fill then has nothing of it to serve.
+   */
+  readonly instrumentInventory?: readonly ComposeInventoryInstrument[];
+  /**
+   * `[D-404]` with `[D-330]`'s other causes: instrument ids the caller has
+   * already found ineligible for a reason the review log does not carry —
+   * a cited passage marked changed, or pending revalidation (`[D-343]`).
+   * Read only together with {@link instrumentInventory}. Omit when the
+   * caller has no such reading; nothing is then withheld on those grounds.
+   */
+  readonly otherIneligibleInstrumentIds?: ReadonlySet<string>;
+}
+
+/**
+ * One inventory entry {@link ComposeOracleRankingInput.instrumentInventory}
+ * reads — the two fields of `../session/types.js`'s `VaultInstrumentRecord`
+ * this composition needs, so an enumeration's records pass as they are.
+ */
+export interface ComposeInventoryInstrument {
+  readonly instrumentId: string;
+  readonly conceptIds: readonly string[];
 }
 
 export interface ComposeOracleRankingResult {
@@ -328,6 +391,8 @@ export async function composeOracleRanking(
     retrievability,
     resolveTiebreakSourceVersion,
     rankedReasons,
+    instrumentInventory,
+    otherIneligibleInstrumentIds,
     ...edgeOptions
   } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
@@ -362,6 +427,15 @@ export async function composeOracleRanking(
     resolveTiebreakSourceVersion,
   );
 
+  const conceptInstrumentEligibility =
+    instrumentInventory !== undefined
+      ? resolveConceptInstrumentEligibility(
+          instrumentInventory,
+          reviewLog,
+          otherIneligibleInstrumentIds,
+        )
+      : undefined;
+
   const ranking = rankOracle({
     evidence: {
       edges: edges.edges,
@@ -373,6 +447,7 @@ export async function composeOracleRanking(
     ...(retrievabilityScores !== undefined ? { retrievability: retrievabilityScores } : {}),
     ...(tiebreakEligible.size > 0 ? { tiebreakEligible } : {}),
     ...(options !== undefined ? { options } : {}),
+    ...(conceptInstrumentEligibility !== undefined ? { conceptInstrumentEligibility } : {}),
   });
 
   return {
@@ -411,6 +486,44 @@ function resolveRankedReasonsByKey(
     if (key !== undefined) byKey.set(key, reason);
   }
   return byKey;
+}
+
+/**
+ * `[D-404]`'s producer (`ol-egov.141.89.10.5`): per concept key, each
+ * practice instrument filed under it and whether it can be served now —
+ * `'suspended'` when the review log's suspension fold holds it (her suspend
+ * or withdraw action; last event wins, `../review-log/suspension.ts`),
+ * `'instrument-ineligible'` when the caller named it in
+ * `otherIneligible` (a changed or pending citation), and eligible
+ * otherwise. An instrument filed under two concepts counts on both; one
+ * listed twice under a concept counts once. `rankOracle`'s
+ * `conceptEligibilityVeto` does the rollup; this only states the facts.
+ *
+ * Exported for `compose.spec.ts`, which proves the fold against a real
+ * suspend/unsuspend sequence without a vault fixture.
+ */
+export function resolveConceptInstrumentEligibility(
+  inventory: readonly ComposeInventoryInstrument[],
+  reviewLog: readonly ReviewLogEntry[],
+  otherIneligible: ReadonlySet<string> | undefined,
+): ReadonlyMap<string, readonly ConceptInstrumentEligibilityFact[]> {
+  const suspended = suspendedInstrumentIds(reviewLog);
+  const byConcept = new Map<string, Map<string, ConceptInstrumentEligibilityFact>>();
+  for (const record of inventory) {
+    const fact: ConceptInstrumentEligibilityFact = suspended.has(record.instrumentId)
+      ? { instrumentId: record.instrumentId, ineligible: 'suspended' }
+      : otherIneligible?.has(record.instrumentId) === true
+        ? { instrumentId: record.instrumentId, ineligible: 'instrument-ineligible' }
+        : { instrumentId: record.instrumentId };
+    for (const conceptKey of record.conceptIds) {
+      const facts = byConcept.get(conceptKey);
+      if (facts === undefined) byConcept.set(conceptKey, new Map([[record.instrumentId, fact]]));
+      else if (!facts.has(record.instrumentId)) facts.set(record.instrumentId, fact);
+    }
+  }
+  const result = new Map<string, readonly ConceptInstrumentEligibilityFact[]>();
+  for (const [conceptKey, facts] of byConcept) result.set(conceptKey, [...facts.values()]);
+  return result;
 }
 
 /**
