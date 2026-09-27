@@ -162,9 +162,10 @@ type StoredJob = PersistedJob & {
 /**
  * `EnqueueInput` (`types.ts`) plus the same optional `workflowVersion` this
  * file's `StoredJob` carries — see that type's doc for why it isn't folded
- * into `types.ts` itself. Every current production caller omits it, so
- * `enqueue`'s behaviour is byte-identical to before this field existed until
- * a caller opts in.
+ * into `types.ts` itself. A caller that omits it gets `enqueue`'s behaviour
+ * byte-identical to before this field existed; embedded-source extraction
+ * (`process-now.ts`/`arrival-watch.ts`, in the plugin) opts in, the
+ * generation path (`generation-queue.ts`) does not yet.
  */
 export type VersionedEnqueueInput = EnqueueInput & { readonly workflowVersion?: string };
 
@@ -377,11 +378,13 @@ export class IngestionQueueEngine {
    *
    * **Version-aware dedup (D-381, `ol-egov.141.89.5.18`; chg.md §11's
    * cache-key audit).** `input.workflowVersion` is opt-in, same posture as
-   * `enqueueDebounce` above: omitted (every current production caller —
-   * embedded-source extraction via `process-now.ts`/`arrival-watch.ts`, and
-   * the generation path via `job.ts`/`generation-queue.ts`), the dedup check
-   * is exactly `contentHash` alone, unchanged from before this field
-   * existed. Supplied: a job already on record under the same `contentHash`
+   * `enqueueDebounce` above: omitted (the generation path via
+   * `job.ts`/`generation-queue.ts`, which folds its version into
+   * `contentHash` instead once it supplies one — `job.ts`'s module doc), the
+   * dedup check is exactly `contentHash` alone, unchanged from before this
+   * field existed. Supplied (embedded-source extraction via
+   * `process-now.ts`/`arrival-watch.ts`, keyed on the extraction contract
+   * versions): a job already on record under the same `contentHash`
    * only counts as "duplicate" when its own recorded `workflowVersion` is
    * the SAME string — a job recorded under a DIFFERENT version, or with no
    * version recorded at all (a legacy job from before a caller started
