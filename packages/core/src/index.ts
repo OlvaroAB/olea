@@ -1010,6 +1010,17 @@ export {
   readClozeId,
   stampClozeId,
 } from './instrument/cloze-identity.js';
+// C5.3 / `[D-090]`'s deleted-id repair, the MATCHING half (`ol-v7r5.91`): given a previous and a
+// current vault enumeration, finds every id that disappeared and pairs it with the candidates
+// `./repair.js`'s `resolveInstrumentRepair` is allowed to test it against. Caller: `review/
+// open-session.ts` (plugin repo), which keeps the previous enumeration in memory between opens
+// (see that module's `createReviewSessionOpener`) — no persisted snapshot store.
+export type {
+  CurrentInstrumentSnapshot,
+  DeletedInstrumentMatch,
+  MatchDeletedInstrumentIdsInput,
+} from './instrument/deleted-id-match.js';
+export { matchDeletedInstrumentIds } from './instrument/deleted-id-match.js';
 // `[D-220 / DIST-3]`'s distractor-provenance sidecar (`ol-egov.109`, `ol-0r92.52`) — beside the
 // citation sidecar above, keyed the same way. Write side: `generation/materialize-mcq.ts` (plugin
 // repo) at accept time, from `DraftQuestion.distractorGrounding`. Read side: `review/queue-adapter.ts`
@@ -1086,6 +1097,24 @@ export {
   mapReviewOutcome,
   RATING_MAPPERS,
 } from './instrument/rating.js';
+// C5.3 / `[D-090]`'s deleted-id repair, the DECISION half (`ol-v7r5.91`, `ol-v7r5.86`): a
+// single-candidate near-certainty test (byte-identical text, same file, id unclaimed). Shares its
+// non-silent shape with `./duplication.js`'s `DuplicationConfirmationStatus`. Caller: `review/
+// open-session.ts` (plugin repo) — see `./deleted-id-match.js`'s own doc for the matching half that
+// finds candidates to test, and `[D-392]`'s several-candidates rule (`repair-choice.ts`, plugin
+// repo) for what happens when this test alone is not enough to decide silently.
+export type {
+  DeletedInstrumentRecord,
+  RepairCandidate,
+  RepairConfirmationQueueEntry,
+  RepairConfirmationReason,
+  RepairDuplicationOutcome,
+  RepairedOutcome,
+  RepairOutcome,
+  RepairSurfacedOutcome,
+  ResolveInstrumentRepairInput,
+} from './instrument/repair.js';
+export { resolveInstrumentRepair } from './instrument/repair.js';
 export type {
   CardInstrument,
   CardInvalidReason,

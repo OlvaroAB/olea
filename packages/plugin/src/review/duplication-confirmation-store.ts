@@ -66,6 +66,23 @@
  * what she is served — the withholding is `./open-session.ts`'s, computed from the live
  * collision every time, whatever status a record holds (F3's "it holds while the loser waits in
  * the queue as much as after she answers"). It never deletes a record.
+ *
+ * ## `[D-392]`'s repair-choice records, sharing this same folder (`ol-v7r5.91`, `ol-v7r5.100`)
+ *
+ * `[D-392]` ruled that an ambiguous deleted-id repair (more than one candidate, or a single
+ * candidate short of `[D-090]`'s near-certainty test) shares THIS store "under a second reason
+ * value," rather than a store of its own (part 2 of the ruling — a persisted shape is David's to
+ * decide, per this module's own precedent). `./repair-choice.ts`'s `buildRepairChoice`/
+ * `resolveRepairChoice` are the pure decision; {@link proposeRepairChoiceConfirmations} and
+ * {@link listRepairChoiceConfirmationRecords} below are its persisted half, structurally distinct
+ * from {@link DuplicationConfirmationRecord} (one deleted id and every candidate she must choose
+ * among, never a losing/kept pair) but sharing the folder, the read-then-mint idempotent write
+ * discipline, and the `'proposed' | 'confirmed' | 'declined'` status vocabulary. Identity here is
+ * simply `instrumentId` — the deleted id itself never renames, so this needs none of the
+ * losing-note rename-tracking the duplication half above does. `[D-392]` binding condition 1 (the
+ * original identity is preserved until she resolves it): once a record leaves `'proposed'`, this
+ * module never rewrites it back — a later walk that still finds the same or different candidates
+ * for an already-resolved id never re-litigates it.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
@@ -138,6 +155,59 @@ export interface StoredDuplicationConfirmationRecord {
   readonly record: DuplicationConfirmationRecord;
 }
 
+/** `[D-392]`'s second reason value — this store's own name for it, never a clause's verbatim wording (unlike `repair-choice.ts`'s user-facing label). */
+export type RepairChoiceConfirmationReason = 'deleted-id-repair';
+
+export const REPAIR_CHOICE_CONFIRMATION_REASON: RepairChoiceConfirmationReason =
+  'deleted-id-repair';
+
+export const REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION = 1;
+
+/** One candidate as recorded — `./repair-choice.ts`'s `RepairChoiceCandidate`, persisted. */
+export interface RepairChoiceConfirmationCandidateRecord {
+  readonly notePath: VaultPath;
+  readonly meetsCertaintyTest: boolean;
+}
+
+/**
+ * One deleted id awaiting her grouped choice (`[D-392]`) — persisted the same folder as
+ * {@link DuplicationConfirmationRecord}, under {@link REPAIR_CHOICE_CONFIRMATION_REASON}.
+ */
+export interface RepairChoiceConfirmationRecord {
+  readonly instrumentId: string;
+  /** Non-empty; every candidate `./repair-choice.ts`'s `buildRepairChoice` named for `instrumentId`. */
+  readonly candidates: readonly RepairChoiceConfirmationCandidateRecord[];
+  readonly status: DuplicationConfirmationRecordStatus;
+  readonly reason: RepairChoiceConfirmationReason;
+  /** ISO 8601 — when this deleted id was first proposed. Never moved by a later read. */
+  readonly proposedAt: string;
+  readonly confirmedAt?: string;
+  readonly declinedAt?: string;
+  /** Set only once `status` is `'confirmed'` — which candidate she chose. */
+  readonly resolvedNotePath?: VaultPath;
+  readonly schemaVersion: number;
+}
+
+/** What a caller (`./open-session.ts`) hands in — one entry per deleted id `buildRepairChoice` sent to `'choice-needed'`. */
+export interface RepairChoiceConfirmationEntryInput {
+  readonly instrumentId: string;
+  readonly candidates: readonly RepairChoiceConfirmationCandidateRecord[];
+  /** Epoch ms — the caller's clock. */
+  readonly proposedAt: number;
+}
+
+export interface StoredRepairChoiceConfirmationRecord {
+  readonly path: VaultPath;
+  readonly record: RepairChoiceConfirmationRecord;
+}
+
+export interface ProposeRepairChoiceConfirmationsResult {
+  /** The record each entry now corresponds to, in the entries' own order. */
+  readonly records: readonly StoredRepairChoiceConfirmationRecord[];
+  /** Every path this call wrote — empty when nothing observed had changed. */
+  readonly written: readonly VaultPath[];
+}
+
 export interface ProposeDuplicationConfirmationsResult {
   /** The record each entry now corresponds to, in the entries' own order. */
   readonly records: readonly StoredDuplicationConfirmationRecord[];
@@ -178,7 +248,34 @@ export function isDuplicationConfirmationRecord(
   return true;
 }
 
-function serialize(record: DuplicationConfirmationRecord): string {
+function isRepairChoiceCandidateRecord(
+  value: unknown,
+): value is RepairChoiceConfirmationCandidateRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return isNonEmptyString(v.notePath) && typeof v.meetsCertaintyTest === 'boolean';
+}
+
+/** `[D-392]`'s reader accepts this reason value; {@link isDuplicationConfirmationRecord} is unchanged and still recognises only the other. */
+export function isRepairChoiceConfirmationRecord(
+  value: unknown,
+): value is RepairChoiceConfirmationRecord {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (!isNonEmptyString(v.instrumentId)) return false;
+  if (!Array.isArray(v.candidates) || v.candidates.length === 0) return false;
+  if (!v.candidates.every(isRepairChoiceCandidateRecord)) return false;
+  if (v.status !== 'proposed' && v.status !== 'confirmed' && v.status !== 'declined') return false;
+  if (v.reason !== REPAIR_CHOICE_CONFIRMATION_REASON) return false;
+  if (!isNonEmptyString(v.proposedAt)) return false;
+  if (v.confirmedAt !== undefined && !isNonEmptyString(v.confirmedAt)) return false;
+  if (v.declinedAt !== undefined && !isNonEmptyString(v.declinedAt)) return false;
+  if (v.resolvedNotePath !== undefined && !isNonEmptyString(v.resolvedNotePath)) return false;
+  if (typeof v.schemaVersion !== 'number') return false;
+  return true;
+}
+
+function serialize(record: DuplicationConfirmationRecord | RepairChoiceConfirmationRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
@@ -221,6 +318,28 @@ export async function listDuplicationConfirmationRecords(
     try {
       const parsed: unknown = JSON.parse(await vault.read(path));
       if (isDuplicationConfirmationRecord(parsed)) out.push({ path, record: parsed });
+    } catch {
+      // Corrupt or unreadable: skipped, the same posture as every sibling sidecar.
+    }
+  }
+  return out;
+}
+
+/**
+ * Every well-formed repair-choice record under the same folder — `[D-392]`'s second reason value.
+ * A duplication record (or anything else unrecognised) is silently excluded, the same "not this
+ * reader's shape" posture {@link listDuplicationConfirmationRecords} already takes for a record of
+ * the wrong schema version; neither reader throws on the other's records.
+ */
+export async function listRepairChoiceConfirmationRecords(
+  vault: VaultSource,
+): Promise<readonly StoredRepairChoiceConfirmationRecord[]> {
+  const paths = await listFolder(vault, DUPLICATION_CONFIRMATION_FOLDER, { extensions: ['json'] });
+  const out: StoredRepairChoiceConfirmationRecord[] = [];
+  for (const path of paths) {
+    try {
+      const parsed: unknown = JSON.parse(await vault.read(path));
+      if (isRepairChoiceConfirmationRecord(parsed)) out.push({ path, record: parsed });
     } catch {
       // Corrupt or unreadable: skipped, the same posture as every sibling sidecar.
     }
@@ -358,6 +477,79 @@ export async function proposeDuplicationConfirmations(
       schemaVersion: DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
     };
     const path = await newRecordPath(vault, entryIdSets[e] ?? [], taken);
+    taken.add(path);
+    await vault.write(path, serialize(record));
+    written.push(path);
+    records.push({ path, record });
+  }
+
+  return { records, written };
+}
+
+/**
+ * `[D-392]`'s persisted half: one grouped proposal per deleted id, in the SAME folder as
+ * {@link proposeDuplicationConfirmations}, under {@link REPAIR_CHOICE_CONFIRMATION_REASON}.
+ * Idempotent, keyed by `instrumentId` alone (see module doc's "Identity here is simply
+ * `instrumentId`"): calling this again with the same deleted id writes nothing new unless its
+ * still-`'proposed'` candidates changed. Once a record leaves `'proposed'` (she has answered), it
+ * is matched so nothing shadows it, but never rewritten — binding condition 1's "the original
+ * identity is preserved until she resolves it" is this store's own no-op for every call after
+ * that. Writes only under {@link DUPLICATION_CONFIRMATION_FOLDER}; reads nothing when `entries` is
+ * empty.
+ */
+export async function proposeRepairChoiceConfirmations(
+  vault: VaultSource,
+  entries: readonly RepairChoiceConfirmationEntryInput[],
+): Promise<ProposeRepairChoiceConfirmationsResult> {
+  if (entries.length === 0) return { records: [], written: [] };
+
+  const existing = await listRepairChoiceConfirmationRecords(vault);
+  const existingByInstrumentId = new Map(
+    existing.map((stored) => [stored.record.instrumentId, stored]),
+  );
+  // Every path already claimed under the shared folder, whichever reason wrote it — so a new
+  // repair-choice record never collides with a duplication record's own deterministic name.
+  const taken = new Set(
+    await listFolder(vault, DUPLICATION_CONFIRMATION_FOLDER, { extensions: ['json'] }),
+  );
+
+  const records: StoredRepairChoiceConfirmationRecord[] = [];
+  const written: VaultPath[] = [];
+
+  for (const entry of entries) {
+    const candidates = [...entry.candidates].sort((a, b) => byString(a.notePath, b.notePath));
+    const stored = existingByInstrumentId.get(entry.instrumentId);
+
+    if (stored !== undefined) {
+      if (
+        stored.record.schemaVersion !== REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION ||
+        stored.record.status !== 'proposed'
+      ) {
+        // Not this module's shape to rewrite, or already resolved: matched, so no second
+        // proposal shadows it, and never rewritten (binding condition 1).
+        records.push(stored);
+        continue;
+      }
+      const refreshed: RepairChoiceConfirmationRecord = { ...stored.record, candidates };
+      if (canonical(refreshed) !== canonical(stored.record)) {
+        await vault.write(stored.path, serialize(refreshed));
+        written.push(stored.path);
+        records.push({ path: stored.path, record: refreshed });
+      } else {
+        records.push(stored);
+      }
+      continue;
+    }
+
+    const record: RepairChoiceConfirmationRecord = {
+      instrumentId: entry.instrumentId,
+      candidates,
+      status: 'proposed',
+      reason: REPAIR_CHOICE_CONFIRMATION_REASON,
+      proposedAt: new Date(entry.proposedAt).toISOString(),
+      schemaVersion: REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+    };
+    const path = await newRecordPath(vault, [entry.instrumentId], taken);
     taken.add(path);
     await vault.write(path, serialize(record));
     written.push(path);

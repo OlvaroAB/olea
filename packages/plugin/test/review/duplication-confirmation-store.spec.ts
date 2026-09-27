@@ -22,8 +22,14 @@ import {
   DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
   type DuplicationConfirmationEntryInput,
   isDuplicationConfirmationRecord,
+  isRepairChoiceConfirmationRecord,
   listDuplicationConfirmationRecords,
+  listRepairChoiceConfirmationRecords,
   proposeDuplicationConfirmations,
+  proposeRepairChoiceConfirmations,
+  REPAIR_CHOICE_CONFIRMATION_REASON,
+  REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+  type RepairChoiceConfirmationEntryInput,
 } from '../../src/review/duplication-confirmation-store.js';
 import { memoryVault } from './memory-vault.js';
 
@@ -383,5 +389,219 @@ describe('round trips and where it writes', () => {
 
   it('the folder is its own, never the automatic processing queue’s', () => {
     expect(DUPLICATION_CONFIRMATION_FOLDER).toBe('.olea/duplication-confirmation');
+  });
+});
+
+/** `[D-392]` part 2 (`ol-v7r5.91`, `ol-v7r5.100`): repair-choice proposals share this same store. */
+function repairEntry(
+  instrumentId: string,
+  candidates: readonly (readonly [notePath: string, meetsCertaintyTest: boolean])[],
+  proposedAt = T0,
+): RepairChoiceConfirmationEntryInput {
+  return {
+    instrumentId,
+    candidates: candidates.map(([notePath, meetsCertaintyTest]) => ({
+      notePath,
+      meetsCertaintyTest,
+    })),
+    proposedAt,
+  };
+}
+
+describe('[D-392]: repair-choice proposals share this store, under their own reason', () => {
+  it('writes one proposed record per deleted id, naming every candidate, under the second reason', async () => {
+    const vault = memoryVault();
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [
+        ['Notes/Candidate B.md', false],
+        ['Notes/Candidate A.md', true],
+      ]),
+    ]);
+
+    const listed = await listRepairChoiceConfirmationRecords(vault);
+    expect(listed).toHaveLength(1);
+    expect(listed[0]?.record).toEqual({
+      instrumentId: 'mcq-deleted-1',
+      candidates: [
+        { notePath: 'Notes/Candidate A.md', meetsCertaintyTest: true },
+        { notePath: 'Notes/Candidate B.md', meetsCertaintyTest: false },
+      ],
+      status: 'proposed',
+      reason: REPAIR_CHOICE_CONFIRMATION_REASON,
+      proposedAt: '2026-08-10T18:00:00.000Z',
+      schemaVersion: REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+    });
+    expect(listed[0]?.path.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
+  });
+
+  it('the reader accepts the new reason value and still reads every existing duplicate record unchanged', async () => {
+    const vault = memoryVault();
+    await proposeDuplicationConfirmations(vault, [
+      entry('Notes/Copy.md', [['mcq-dup-1', 'Notes/Original.md']]),
+    ]);
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [['Notes/Candidate.md', true]]),
+    ]);
+
+    const duplicates = await listDuplicationConfirmationRecords(vault);
+    expect(duplicates).toHaveLength(1);
+    expect(duplicates[0]?.record.reason).toBe('duplicate-instrument-id');
+    const repairs = await listRepairChoiceConfirmationRecords(vault);
+    expect(repairs).toHaveLength(1);
+    expect(repairs[0]?.record.reason).toBe(REPAIR_CHOICE_CONFIRMATION_REASON);
+  });
+
+  it('walking again with the same candidates writes nothing new — one proposal per deleted id, never per candidate', async () => {
+    const vault = memoryVault();
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [
+        ['Notes/A.md', false],
+        ['Notes/B.md', false],
+      ]),
+    ]);
+    const writesBefore = vault.writes.length;
+
+    const result = await proposeRepairChoiceConfirmations(vault, [
+      repairEntry(
+        'mcq-deleted-1',
+        [
+          ['Notes/A.md', false],
+          ['Notes/B.md', false],
+        ],
+        T1,
+      ),
+    ]);
+
+    expect(result.written).toEqual([]);
+    expect(vault.writes.length).toBe(writesBefore);
+    expect(await listRepairChoiceConfirmationRecords(vault)).toHaveLength(1);
+  });
+
+  it('a walk with a changed candidate set refreshes the still-proposed record in place', async () => {
+    const vault = memoryVault();
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [['Notes/A.md', false]]),
+    ]);
+    const [before] = await listRepairChoiceConfirmationRecords(vault);
+
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry(
+        'mcq-deleted-1',
+        [
+          ['Notes/A.md', false],
+          ['Notes/C.md', false],
+        ],
+        T1,
+      ),
+    ]);
+
+    const after = await listRepairChoiceConfirmationRecords(vault);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.path).toBe(before?.path);
+    expect(after[0]?.record.candidates.map((c) => c.notePath)).toEqual([
+      'Notes/A.md',
+      'Notes/C.md',
+    ]);
+    expect(after[0]?.record.proposedAt).toBe('2026-08-10T18:00:00.000Z'); // never moved by a later write.
+  });
+
+  it('her answer stands: a resolved proposal is never rewritten by a later walk (binding condition 1)', async () => {
+    const vault = memoryVault();
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [
+        ['Notes/A.md', false],
+        ['Notes/B.md', false],
+      ]),
+    ]);
+    const [only] = await listRepairChoiceConfirmationRecords(vault);
+    if (only === undefined) throw new Error('expected one record');
+    // No affordance writes an answer yet (see this bead's report); a resolution is written here
+    // by hand, in the vocabulary the shape already reserves for it.
+    await vault.write(
+      only.path,
+      `${JSON.stringify(
+        {
+          ...only.record,
+          status: 'confirmed',
+          confirmedAt: '2026-08-10T19:00:00.000Z',
+          resolvedNotePath: 'Notes/A.md',
+        },
+        null,
+        2,
+      )}\n`,
+    );
+
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry(
+        'mcq-deleted-1',
+        [
+          ['Notes/A.md', false],
+          ['Notes/B.md', false],
+        ],
+        T1,
+      ),
+    ]);
+
+    const after = await listRepairChoiceConfirmationRecords(vault);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.record.status).toBe('confirmed');
+    expect(after[0]?.record.resolvedNotePath).toBe('Notes/A.md');
+  });
+
+  it('a duplication record and a repair-choice record for the same id never collide on one path', async () => {
+    const vault = memoryVault();
+    // Both hash the identical id set (`['mcq-shared-1']`) — the duplication half's single-collision
+    // case and the repair half's own identity are the same string.
+    await proposeDuplicationConfirmations(vault, [
+      entry('Notes/Losing.md', [['mcq-shared-1', 'Notes/Kept.md']]),
+    ]);
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-shared-1', [['Notes/Candidate.md', false]]),
+    ]);
+
+    const duplicates = await listDuplicationConfirmationRecords(vault);
+    const repairs = await listRepairChoiceConfirmationRecords(vault);
+    expect(duplicates).toHaveLength(1);
+    expect(repairs).toHaveLength(1);
+    expect(duplicates[0]?.path).not.toBe(repairs[0]?.path);
+  });
+
+  it('writes nothing, and reads nothing, when there is no entry', async () => {
+    const vault = memoryVault({ 'Notes/A.md': 'her note\n' });
+    const result = await proposeRepairChoiceConfirmations(vault, []);
+    expect(result.written).toEqual([]);
+    expect(vault.writes).toEqual([]);
+  });
+
+  it('the validator accepts exactly the shape it writes, and refuses a duplication record', async () => {
+    const vault = memoryVault();
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [['Notes/A.md', true]]),
+    ]);
+    const [only] = await listRepairChoiceConfirmationRecords(vault);
+    if (only === undefined) throw new Error('expected one record');
+    const parsed: unknown = JSON.parse(vault.contentOf(only.path) ?? '');
+    expect(isRepairChoiceConfirmationRecord(parsed)).toBe(true);
+    expect(isDuplicationConfirmationRecord(parsed)).toBe(false);
+
+    expect(isRepairChoiceConfirmationRecord({ ...only.record, candidates: [] })).toBe(false);
+    expect(
+      isRepairChoiceConfirmationRecord({ ...only.record, reason: 'duplicate-instrument-id' }),
+    ).toBe(false);
+    const { instrumentId: _instrumentId, ...noInstrumentId } = only.record;
+    expect(isRepairChoiceConfirmationRecord(noInstrumentId)).toBe(false);
+  });
+
+  it('every write lands under its own dot folder — never in a note she authored (INV-6)', async () => {
+    const vault = memoryVault({ 'Notes/Candidate.md': 'her note\n' });
+    await proposeRepairChoiceConfirmations(vault, [
+      repairEntry('mcq-deleted-1', [['Notes/Candidate.md', true]]),
+    ]);
+
+    expect(vault.writes.length).toBeGreaterThan(0);
+    for (const written of vault.writes) {
+      expect(written.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
+    }
+    expect(vault.contentOf('Notes/Candidate.md')).toBe('her note\n');
   });
 });
