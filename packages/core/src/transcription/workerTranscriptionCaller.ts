@@ -32,9 +32,10 @@
  * ===========================================================================
  * This is a real, callable production port, not a test fake — it reaches the
  * actual `WorkerTaskTransport` seam `createWorkerJudgeCaller` already uses.
- * What is NOT built here: the plugin-side composition root that hands a real
- * `TranscriptionCaller` to anything. See `./transcribe.ts`'s module doc for
- * the named seam this bead stops at.
+ * The plugin-side composition root that hands a real `TranscriptionCaller`
+ * to something now exists (`packages/plugin/src/transcription/wiring.ts`,
+ * `ol-0r92.14`); what is still NOT built anywhere is the invocable surface
+ * that would call it with real audio — see `./transcribe.ts`'s module doc.
  */
 
 import type { WorkerTaskTransport } from '../retrieval/workerProvider.js';
@@ -94,6 +95,9 @@ export function createWorkerTranscriptionCaller(
   };
 }
 
+/** The two values `audioTranscribeResponse`'s additive `outcome` field can carry — see `transcribe.ts`'s `TranscribeAudioWireResponse` doc (`ol-egov.141.89.8.40`). */
+const AUDIO_TRANSCRIBE_OUTCOMES = ['transcribed', 'no-speech'] as const;
+
 function readTranscription(body: unknown): TranscribeAudioWireResponse {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerTranscriptionError(
@@ -124,6 +128,21 @@ function readTranscription(body: unknown): TranscribeAudioWireResponse {
   }
   const r = result as Record<string, unknown>;
 
+  // `ol-egov.141.89.8.40`: additive, required on every real response — never
+  // guessed when absent (a response that predates the field reads as
+  // malformed, not silently defaulted). No production caller reaches this
+  // path with real audio yet (see this file's module doc), so no live
+  // traffic is at risk of the stricter check.
+  const outcome = r.outcome;
+  if (
+    typeof outcome !== 'string' ||
+    !(AUDIO_TRANSCRIBE_OUTCOMES as readonly string[]).includes(outcome)
+  ) {
+    throw new WorkerTranscriptionError(
+      'WorkerTranscriptionCaller: the Worker response carried no valid outcome field.',
+    );
+  }
+
   const transcript = r.transcript;
   if (typeof transcript !== 'string') {
     throw new WorkerTranscriptionError(
@@ -141,5 +160,21 @@ function readTranscription(body: unknown): TranscribeAudioWireResponse {
     );
   }
 
-  return { transcript, durationSeconds };
+  // `[D-326]`-style producer provenance, threaded from the envelope's own
+  // `stamp` — same reasoning `vision-page-runner.ts`'s `WorkerVisionPageExtractor`
+  // gives for folding `stamp.modelId`/`stamp.promptVersion` into its own
+  // parsed result. Optional: a test double may answer without one.
+  const stamp = response.stamp;
+  const s = typeof stamp === 'object' && stamp !== null ? (stamp as Record<string, unknown>) : null;
+  const modelId = s !== null && typeof s.modelId === 'string' ? s.modelId : undefined;
+  const promptVersion =
+    s !== null && typeof s.promptVersion === 'string' ? s.promptVersion : undefined;
+
+  return {
+    outcome: outcome as TranscribeAudioWireResponse['outcome'],
+    transcript,
+    durationSeconds,
+    ...(modelId !== undefined ? { modelId } : {}),
+    ...(promptVersion !== undefined ? { promptVersion } : {}),
+  };
 }

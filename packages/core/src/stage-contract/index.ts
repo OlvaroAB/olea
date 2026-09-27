@@ -29,6 +29,16 @@ export {
   decisionFromAssessSupport,
   EMPTY_EVIDENCE_PACKAGE_RULE,
 } from './adapters/assess-support.js';
+export type {
+  AudioTranscribeCallFailure,
+  AudioTranscribeDraft,
+  AudioTranscribeResultShape,
+  AudioTranscribeSeamContext,
+} from './adapters/audio-transcribe.js';
+export {
+  writingFromAudioTranscribeCallFailure,
+  writingFromAudioTranscribeResult,
+} from './adapters/audio-transcribe.js';
 export type { AuthoringAttemptWithDraft } from './adapters/authoring.js';
 export {
   EVIDENCE_REFUSED_RULE,

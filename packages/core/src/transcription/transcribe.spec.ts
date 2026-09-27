@@ -12,7 +12,11 @@ const context = {
 describe('buildGradeExplainBackInputFromTranscript — voice is an input method, not a new grading path', () => {
   it('produces the exact GradeExplainBackInput shape a typed answer would', () => {
     const input = buildGradeExplainBackInputFromTranscript(
-      { transcript: 'A heap is a tree-shaped structure.', durationSeconds: 4.2 },
+      {
+        outcome: 'transcribed',
+        transcript: 'A heap is a tree-shaped structure.',
+        durationSeconds: 4.2,
+      },
       context,
     );
 
@@ -33,7 +37,7 @@ describe('buildGradeExplainBackInputFromTranscript — voice is an input method,
     // `studentAnswer` as "she gave no answer" (see that function's module
     // doc), so this composer adds no special case of its own.
     const input = buildGradeExplainBackInputFromTranscript(
-      { transcript: '', durationSeconds: 3.0 },
+      { outcome: 'no-speech', transcript: '', durationSeconds: 3.0 },
       context,
     );
     expect(input.studentAnswer).toBe('');
@@ -41,7 +45,7 @@ describe('buildGradeExplainBackInputFromTranscript — voice is an input method,
 
   it('never invents or drops a field from the context', () => {
     const input = buildGradeExplainBackInputFromTranscript(
-      { transcript: 'anything', durationSeconds: 1 },
+      { outcome: 'transcribed', transcript: 'anything', durationSeconds: 1 },
       context,
     );
     expect(Object.keys(input).sort()).toEqual(

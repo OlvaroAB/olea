@@ -49,7 +49,7 @@ describe('createWorkerTranscriptionCaller — the frozen vocabulary it mirrors',
 describe('createWorkerTranscriptionCaller — the request it builds', () => {
   it('sends the wire input verbatim, in the frozen envelope', async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ transcript: 'a spoken answer', durationSeconds: 5.5 }),
+      okResponse({ outcome: 'transcribed', transcript: 'a spoken answer', durationSeconds: 5.5 }),
     );
     const callTranscription = createWorkerTranscriptionCaller({ transport });
 
@@ -64,26 +64,56 @@ describe('createWorkerTranscriptionCaller — the request it builds', () => {
 });
 
 describe('createWorkerTranscriptionCaller — reading the response', () => {
-  it('parses a full response', async () => {
+  it('parses a full response, including the modelId/promptVersion threaded from the envelope stamp', async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ transcript: 'a heap is a tree', durationSeconds: 3.25 }),
+      okResponse({ outcome: 'transcribed', transcript: 'a heap is a tree', durationSeconds: 3.25 }),
     );
     const callTranscription = createWorkerTranscriptionCaller({ transport });
 
     const result = await callTranscription(wireInput);
 
-    expect(result).toEqual({ transcript: 'a heap is a tree', durationSeconds: 3.25 });
+    expect(result).toEqual({
+      outcome: 'transcribed',
+      transcript: 'a heap is a tree',
+      durationSeconds: 3.25,
+      modelId: 'test-model',
+      promptVersion: '1.0.0',
+    });
   });
 
   it("parses an honest empty transcript (the Worker's own no-speech refusal) without treating it as an error", async () => {
     const transport = new RecordingTransport(() =>
-      okResponse({ transcript: '', durationSeconds: 2.0 }),
+      okResponse({ outcome: 'no-speech', transcript: '', durationSeconds: 2.0 }),
     );
     const callTranscription = createWorkerTranscriptionCaller({ transport });
 
     const result = await callTranscription(wireInput);
 
-    expect(result).toEqual({ transcript: '', durationSeconds: 2.0 });
+    expect(result).toEqual({
+      outcome: 'no-speech',
+      transcript: '',
+      durationSeconds: 2.0,
+      modelId: 'test-model',
+      promptVersion: '1.0.0',
+    });
+  });
+
+  it('omits modelId/promptVersion (rather than inventing them) when the response carries no stamp object at all', async () => {
+    const transport = new RecordingTransport(() => ({
+      ok: true,
+      result: { outcome: 'transcribed', transcript: 'no stamp here', durationSeconds: 1.0 },
+    }));
+    const callTranscription = createWorkerTranscriptionCaller({ transport });
+
+    const result = await callTranscription(wireInput);
+
+    expect(result).toEqual({
+      outcome: 'transcribed',
+      transcript: 'no stamp here',
+      durationSeconds: 1.0,
+    });
+    expect('modelId' in result).toBe(false);
+    expect('promptVersion' in result).toBe(false);
   });
 
   it('throws WorkerTranscriptionError with the code on a well-formed refusal', async () => {
@@ -100,15 +130,37 @@ describe('createWorkerTranscriptionCaller — reading the response', () => {
     });
   });
 
+  it('throws on a response missing the outcome field', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ transcript: 'hi', durationSeconds: 1 }),
+    );
+    const callTranscription = createWorkerTranscriptionCaller({ transport });
+
+    await expect(callTranscription(wireInput)).rejects.toBeInstanceOf(WorkerTranscriptionError);
+  });
+
+  it('throws on a response with an outcome value outside the known pair', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'not-a-real-outcome', transcript: 'hi', durationSeconds: 1 }),
+    );
+    const callTranscription = createWorkerTranscriptionCaller({ transport });
+
+    await expect(callTranscription(wireInput)).rejects.toBeInstanceOf(WorkerTranscriptionError);
+  });
+
   it('throws on a response missing the transcript field', async () => {
-    const transport = new RecordingTransport(() => okResponse({ durationSeconds: 1 }));
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'transcribed', durationSeconds: 1 }),
+    );
     const callTranscription = createWorkerTranscriptionCaller({ transport });
 
     await expect(callTranscription(wireInput)).rejects.toBeInstanceOf(WorkerTranscriptionError);
   });
 
   it('throws on a response missing a valid durationSeconds field', async () => {
-    const transport = new RecordingTransport(() => okResponse({ transcript: 'hi' }));
+    const transport = new RecordingTransport(() =>
+      okResponse({ outcome: 'transcribed', transcript: 'hi' }),
+    );
     const callTranscription = createWorkerTranscriptionCaller({ transport });
 
     await expect(callTranscription(wireInput)).rejects.toBeInstanceOf(WorkerTranscriptionError);

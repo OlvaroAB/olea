@@ -22,22 +22,26 @@
  * ===========================================================================
  * This file and `./workerTranscriptionCaller.ts` build the port and its
  * production implementation, mirroring `../grading/workerJudgeCaller.ts`
- * exactly. What is NOT built:
+ * exactly.
  *
- * - Any plugin-side composition root. `packages/plugin/src/grading/wiring.ts`'s
- *   `GradingWiring` (`judgeCaller: JudgeCaller | null`, `null` when the Worker
- *   isn't configured) is the pattern a future `TranscriptionWiring` would
- *   mirror exactly — reusing the SAME `isWorkerConfigured` check that
- *   `buildGradingWiring` already runs, since transcription and grading share
- *   one Worker configuration. D-007's "greys out with the other AI features"
- *   therefore needs no new offline-detection logic, only threading the
- *   existing check through a second wiring object — that threading is plugin
- *   work, outside this bead's ownership (`packages/core/src/transcription/`).
+ * **Since built** (`ol-0r92.14`): `packages/plugin/src/transcription/wiring.ts`'s
+ * `buildTranscriptionWiring`/`TranscriptionWiring` is the plugin-side
+ * composition root this section originally named as missing — it mirrors
+ * `grading/wiring.ts`'s `GradingWiring` exactly, reusing the same
+ * `isWorkerConfigured` check. **Still NOT built**, and not this bead's or
+ * that one's to build:
+ *
  * - Any audio-capture or recording UI. F5.1 names voice as an input option
  *   ("spoken or typed"); it names no command, button or view, and D-072's
  *   reachability rule does not license inventing one where the contract is
  *   silent — see `ol-p4t01`'s own bead for the surface-bead pointer this
- *   stops at.
+ *   stops at, and `wiring.ts`'s own module doc ("WHY THIS STOPS HERE") for
+ *   the same finding restated where the composition root lives. Because of
+ *   this, `TranscriptionCaller` — real, callable, and now (`ol-egov.141.89.8.40`)
+ *   wrapped so every call also produces a Writing-contract outcome
+ *   (`packages/core/src/stage-contract/adapters/audio-transcribe.ts`) — still
+ *   has no real invocation anywhere in production: the wrapping runs
+ *   whenever the caller is called, but nothing yet calls it with real audio.
  *
  * `buildGradeExplainBackInputFromTranscript` below is the actual seam: a
  * real, callable function producing a real `GradeExplainBackInput`, with no
@@ -69,10 +73,22 @@ export interface TranscribeAudioWireRequest {
  * its own anti-hallucination check (`audioTranscribe.ts`'s
  * `groundTranscription`): `transcript` is `""` rather than a confabulated
  * sentence when Whisper's own voice-activity signal says there was no speech.
+ *
+ * `outcome` (`ol-egov.141.89.8.40`) mirrors the Worker's own additive
+ * discriminant (`audioTranscribeResponse`'s `outcome` field) — see that
+ * file's module doc for why it exists and what each value means. `modelId`/
+ * `promptVersion` are threaded from the envelope's own `stamp`
+ * (`./workerTranscriptionCaller.ts`'s `readTranscription`), optional for the
+ * same reason `packages/core/src/stage-contract/adapters/vision-page.ts`'s
+ * mirrored result shape gives: a test double may answer with no wire stamp
+ * to read.
  */
 export interface TranscribeAudioWireResponse {
+  readonly outcome: 'transcribed' | 'no-speech';
   readonly transcript: string;
   readonly durationSeconds: number;
+  readonly modelId?: string;
+  readonly promptVersion?: string;
 }
 
 /** Performs the actual transcription call. Not implemented here — see `./workerTranscriptionCaller.ts`. */
