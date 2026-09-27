@@ -25,6 +25,20 @@
  *   3. ASKED — a single question at the point it matters. No code path: see
  *      features/F1-sources.md's `@manual` scenario for F1.7.
  *
+ * **Declared scope — the narrower leg the ranking reads (`[D-399]`).** Of the
+ * two STATED routes above, only the first — a scope-aliased frontmatter
+ * property — is a statement she made *about coverage*; body prose is her
+ * description of the assessment, in which a concept name can appear for any
+ * reason ("not this one", "unlike last term's"). F1.7's grouping keeps
+ * reading both (`extractStatedScope`, unchanged), but `[D-399]` binding
+ * condition 4 allows a ranking edge only from "a confirmed statement of what
+ * the assessment covers, never from a concept name that merely appears
+ * somewhere in the brief's wording", so `extractDeclaredScope` /
+ * `readDeclaredScope` below return the property leg alone, and
+ * `../evidence-edge/build.ts`'s brief basis reads nothing else. An inferred
+ * scope is never declared, by construction: neither function looks at
+ * `resolveScope`'s candidates.
+ *
  * An absent scope (neither stated nor inferrable) is not an error and not
  * reported as one — `resolveScope` returns `undefined`, and callers degrade to
  * the ordinary whole-course ranking (F4.2) rather than an empty result, the
@@ -104,18 +118,29 @@ function bodyParagraphText(doc: ParsedDocument): string | undefined {
 }
 
 /**
+ * The DECLARED leg only (`[D-399]`, see the file doc): the value of a
+ * scope-aliased frontmatter property, verbatim, or `undefined` when the note
+ * carries none (or carries one with an empty value). Never the note's body
+ * prose and never an inferred scope — this is the only text
+ * `../evidence-edge/build.ts` turns into an `'assessment-brief'` edge.
+ */
+export function extractDeclaredScope(fm: Frontmatter): string | undefined {
+  const entry = findScopeEntry(fm);
+  if (entry === undefined) return undefined;
+  const value = unquote(entry.valueRaw.trim());
+  return value !== '' ? value : undefined;
+}
+
+/**
  * Extracts whatever an already-parsed assessment note states about its own
  * coverage — a scope-aliased frontmatter property first, else its body
  * prose. Pure (no vault I/O), so ./read.ts can call it on frontmatter and a
- * document it has already parsed rather than re-reading the note.
+ * document it has already parsed rather than re-reading the note. Wider than
+ * {@link extractDeclaredScope} on purpose: F1.7's within-block grouping reads
+ * this one, the ranking's brief basis reads only the declared leg.
  */
 export function extractStatedScope(fm: Frontmatter, doc: ParsedDocument): string | undefined {
-  const entry = findScopeEntry(fm);
-  if (entry !== undefined) {
-    const value = unquote(entry.valueRaw.trim());
-    if (value !== '') return value;
-  }
-  return bodyParagraphText(doc);
+  return extractDeclaredScope(fm) ?? bodyParagraphText(doc);
 }
 
 /**
@@ -135,6 +160,23 @@ export async function readStatedScope(
   if (first?.kind !== 'frontmatter') return undefined;
   const fm = parseFrontmatter(first.inner);
   return extractStatedScope(fm, doc);
+}
+
+/**
+ * Reads one assessment note and returns its DECLARED scope only (see
+ * {@link extractDeclaredScope}). `undefined` for a missing note, a note with
+ * no frontmatter block, or a note with no scope-aliased property — body prose
+ * is deliberately not consulted.
+ */
+export async function readDeclaredScope(
+  vault: VaultSource,
+  path: VaultPath,
+): Promise<string | undefined> {
+  if (!(await vault.exists(path))) return undefined;
+  const doc = parseDocument(await vault.read(path));
+  const first = doc.blocks[0];
+  if (first?.kind !== 'frontmatter') return undefined;
+  return extractDeclaredScope(parseFrontmatter(first.inner));
 }
 
 /**

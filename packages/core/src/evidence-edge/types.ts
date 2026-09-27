@@ -13,7 +13,9 @@
  * her registered past papers.
  *
  * **Evidential, not membership — the load-bearing rule.** An edge exists only
- * where a real past-paper question cites the concept; nothing here infers an
+ * where a real past-paper question or a registered objectives document cites
+ * the concept, or where an assessment's own declared scope names it
+ * (`[D-247]`/`[D-399]`, see {@link ConceptEvidenceBasis}); nothing here infers an
  * edge from course membership, folder structure, or co-occurrence. A course
  * with assessments but zero registered (or zero citing) past papers produces
  * zero edges for every one of that course's assessments — see `build.ts`'s
@@ -112,16 +114,17 @@ export interface EvidenceQuestionCitation {
  *
  * **`'assessment-brief'` (`[D-247]`, `ol-egov.142.2`) is the third basis
  * functional scope F4.2 names** — "what this term's own assignment or test
- * says it covers" (F1.7's per-assessment `scope`, `../assessment/types.js`'s
- * `AssessmentRecord.scope`), admitted on its own confidence basis exactly as
- * objectives are, never folded into either other denominator. **Confidence
- * is always `1` for this basis** — unlike the other two bases, which
- * measure a FREQUENCY across a course's registered sources, an assessment
- * brief is her own stated coverage for THIS one assessment: there is
- * exactly one possible source (the assessment note itself), so "found" and
- * "confident" collapse to the same fact rather than one being an aggregate
- * of the other. See `build.ts`'s `briefEntriesForAssessment` for the exact
- * rule. Mirrors (but does not import — the two repos share no types across
+ * says it covers", read from the assessment note's DECLARED scope only (a
+ * scope-aliased frontmatter property, `../assessment/scope.js`'s
+ * `readDeclaredScope` — never its body prose, never an inferred scope,
+ * `[D-399]` condition 4), admitted on its own confidence basis exactly as
+ * objectives are, never folded into either other denominator. **Its
+ * confidence is the declared constant `build.ts`'s
+ * `ASSESSMENT_BRIEF_CONFIDENCE`** (`[D-399]`: modest, below past-paper
+ * evidence's typical value, in every course) — not a frequency, since a
+ * declared scope has exactly one possible source (the assessment note
+ * itself). See `build.ts`'s `briefEdgesForAssessment` for the exact rule and
+ * the four guards the ruling binds. Mirrors (but does not import — the two repos share no types across
  * `[D-069]`'s boundary) the service's `oracleEvidenceBasis`
  * (`olea-service/src/tasks/oracleRank.ts`).
  */
@@ -158,9 +161,9 @@ export interface EvidenceObjectivesCitation {
  * `provenance.location` is always `{ page: 1 }`, never a `charRange` — the
  * same "absent means this location's grain is the page... never a
  * fabricated range" convention `../extract/types.js`'s `SourceLocation` doc
- * states. `build.ts` resolves `AssessmentRecord.scope` to plain text only
- * (`../assessment/scope.js`'s `extractStatedScope` returns a joined string,
- * not a block with its own character offsets), so a `charRange` here would
+ * states. `build.ts` resolves the declared scope to plain text only
+ * (`../assessment/scope.js`'s `readDeclaredScope` returns the property's
+ * value, not a block with its own character offsets), so a `charRange` here would
  * have to be invented rather than read; `page: 1` alone is the honest grain
  * this module can actually cite, the same convention markdown past-paper
  * provenance uses for a whole logical page (`../source/segment-past-paper.js`).
@@ -210,15 +213,23 @@ export interface ConceptAssessmentEdge {
   /**
    * 1-based rank among the concepts evidenced for THIS assessment, 1 =
    * highest yield. Ties are broken deterministically (see `build.ts`), so no
-   * two edges on the same assessment ever share a rank. **Provisional
+   * two `'past-paper'`/`'objectives'` edges on the same assessment ever share
+   * a rank. **The `'assessment-brief'` exception (`[D-399]`):** every brief
+   * edge on an assessment carries ONE shared rank — the place the course's
+   * first single-citation entry holds — because a declared scope names what
+   * is covered without ranking how often, and giving its concepts distinct
+   * ranks would order them by spelling and push older papers' concepts down
+   * (see `build.ts`'s `briefEdgesForAssessment`). **Provisional
    * signal, not a final priority** — F4.2's actual ranking (P5-T04) also
    * weighs assessment weight, exam proximity and mastery; this field is one
    * input to that, not the finished answer.
    */
   readonly yieldRank: number;
   /**
-   * In `(0, 1]` — the fraction of this course's distinct registered sources
-   * of THIS edge's {@link basis} that cite this concept at least once. A
+   * In `(0, 1]` — for `'past-paper'`/`'objectives'`, the fraction of this
+   * course's distinct registered sources of THIS edge's {@link basis} that
+   * cite this concept at least once; for `'assessment-brief'`, the declared
+   * constant `build.ts`'s `ASSESSMENT_BRIEF_CONFIDENCE` (`[D-399]`). A
    * `'past-paper'` edge's denominator is distinct past-paper sources; an
    * `'objectives'` edge's denominator is distinct objectives sources —
    * **never the other basis's count** (`[D-226]` ruling 2). See `build.ts`'s
@@ -276,11 +287,15 @@ export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3Evidence
    */
   readonly concepts: readonly ConceptRecord[];
   /**
-   * `[D-247]`: include `'assessment-brief'` edges. Off unless a caller opts in:
-   * a brief edge enters the ranking's contribution at its confidence, so
-   * turning it on changes what every ranking caller orders, and the weight a
-   * brief mention carries against past-paper evidence is not yet ruled
-   * (`[D-399]`). No production caller sets it.
+   * `[D-247]`/`[D-399]`: include `'assessment-brief'` edges. **On unless a
+   * caller passes `false`** — `[D-399]` rules that every production ranking
+   * caller takes the brief basis, in every course, at the declared weight
+   * `build.ts`'s `ASSESSMENT_BRIEF_CONFIDENCE`; every production caller
+   * reaches this function through `oracle/compose.ts`'s
+   * `composeOracleRanking`, which passes its options through, so the default
+   * is what switches them on. `false` exists for a caller that must measure
+   * the ranking without the basis (a before/after comparison), never as a
+   * product setting.
    */
   readonly includeAssessmentBriefBasis?: boolean;
 }
