@@ -2612,6 +2612,58 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
     expect(result.orderedRows.some((r) => r.course === 'GAMMA')).toBe(false);
   });
 
+  it('ol-egov.141.89.10.86: a never-served course with no eligible instrument anywhere cannot win the dominant slot against a course with real due material', () => {
+    // NOASSESS has a row (it entered the ranking on need alone, [D-329]/D-373) but no instrument
+    // backs its concept anywhere -- it can never actually be served, regardless of which course
+    // wins the deficit branch. Its "never served" reading is `Number.POSITIVE_INFINITY`, which
+    // used to always beat DUECOURSE's real, finite deficit -- permanently starving a course with
+    // genuinely due material whenever a course like this exists (measured on the real fixture
+    // vault, ol-egov.141.89.10.73's evidence notes).
+    const theRows = rows([
+      { conceptName: 'Nuc1', course: 'NOASSESS', gapScore: 5 },
+      { conceptName: 'Geo1', course: 'DUECOURSE', gapScore: 5 },
+    ]);
+    // Only DUECOURSE's concept has an instrument at all -- NOASSESS's `instrumentsFor` returns
+    // nothing, so `representativeSecondsFor` reads its row's cost as 0 (F4.5/F4.10 gaps' own
+    // documented posture) and it can never be filled regardless of selection.
+    const instruments = buildConceptInstrumentIndex([qa('geo1', ['Geo1'])]);
+    const theReplay = replay({
+      geo1: { lastReviewedDay: '2026-08-01', dueDay: '2099-01-01' },
+    });
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+    });
+
+    expect(result.dominantCourse).toBe('DUECOURSE');
+    expect(result.focusBranch).toBe('deficit');
+    expect(result.orderedRows.length).toBeGreaterThan(0);
+    expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['DUECOURSE']));
+    expect(result.setAside?.courses).not.toContainEqual({
+      courseId: 'DUECOURSE',
+      reason: 'another-course-chosen',
+    });
+
+    // End to end (the fill, not only the selection): the due course's real
+    // instrument is actually served, matching what `composed: true` means at
+    // the caller level -- not merely "chosen" rows that then fill to nothing.
+    const built = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: theReplay,
+      budgetMinutes: 10,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+    expect(built.model.items.length).toBeGreaterThan(0);
+    expect(built.model.items.every((i) => i.instrumentId === 'geo1')).toBe(true);
+  });
+
   it('`[FOCUS-5]`: never composes a second course, however much budget is left over or however owed another course is', () => {
     // Before `[FOCUS-5]` this fixture (room left over after the dominant
     // course, and a second course whose deficit door would have opened)

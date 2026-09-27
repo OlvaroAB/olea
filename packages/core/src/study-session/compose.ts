@@ -1484,13 +1484,37 @@ export function fillWholeGroups(
  * `Number.POSITIVE_INFINITY` for "never served at all", the same convention
  * both readings already use. `courseId` still breaks a remaining tie, for
  * determinism only.
+ *
+ * **`ol-egov.141.89.10.86`: a course with nothing servable this pass never wins the automatic
+ * (urgency/deficit) part of this hierarchy against a course that has servable material.**
+ * `servableCourses` names every eligible course with at least one row this pass whose
+ * {@link representativeSecondsFor} cost is greater than 0 — i.e. a course some instrument could
+ * actually fill. A need-only course admitted on `[D-329]`/D-373 grounds but backed by NO
+ * instrument anywhere (F4.5/F4.10's zero-cost reading) can never be served regardless of which
+ * course wins selection; letting it win anyway, on the strength of a "never served" deficit/
+ * recency reading of `Number.POSITIVE_INFINITY` that such a course can never escape, would
+ * permanently occupy the one dominant-course slot and starve every other course — including one
+ * with genuinely due material — of it forever. When `servableCourses` is non-empty, the urgency
+ * and deficit loops below run only over its intersection with `eligibleCourses`. **This is not a
+ * second eligibility check** — the eligibility note above still governs `eligibleCourses` itself
+ * (an unservable course stays fully eligible: it keeps its `byCourse` entry, its own `share`/
+ * `courseSeconds` bookkeeping in {@link composeFocusedSelection} is untouched, and it is never
+ * inferred to be "refused"); this only narrows which of the already-eligible courses may WIN the
+ * two automatic branches, so an unservable one can still win via the `courseFilter` branch (her
+ * explicit choice, F4.6, a different concern) or via these same branches whenever nothing eligible
+ * this pass is servable either. **When every eligible course is equally unservable**
+ * (`servableCourses` empty), the restriction is a no-op and the ordinary hierarchy decides among
+ * all of them exactly as before this bead — there is no course with servable material to protect
+ * from being starved.
  */
 /**
  * Exported for `scripts/harness/ilb-pln/` (`ol-egov.141.89.10.4` [ILB-PLN-4] part 5): the case
  * runner's `focus` family can drive this real hierarchy directly against plain
  * urgency/deficit/recency maps built from a case's own declared facts, without needing the full
- * `GapRow` roster `composeFocusedSelection` (its only caller) builds them from. No behaviour
- * change: export keyword only.
+ * `GapRow` roster `composeFocusedSelection` (its only caller) builds them from. `servableCourses`
+ * (`ol-egov.141.89.10.86`) is a real behaviour change, not export-only — a harness caller driving
+ * this function directly must now pass the set of courses it considers servable this pass (an
+ * empty set is always a safe, no-op default matching the pre-fix hierarchy).
  */
 export function selectDominantCourse(
   eligibleCourses: readonly string[],
@@ -1498,6 +1522,7 @@ export function selectDominantCourse(
   urgencyByCourse: ReadonlyMap<string, number>,
   deficitByCourse: ReadonlyMap<string, number>,
   recencyByCourse: ReadonlyMap<string, number>,
+  servableCourses: ReadonlySet<string>,
 ): { readonly course: string; readonly branch: FocusBranch } | undefined {
   if (eligibleCourses.length === 0) return undefined;
 
@@ -1508,8 +1533,17 @@ export function selectDominantCourse(
     }
   }
 
+  // `ol-egov.141.89.10.86`: the automatic branches below never let an
+  // unservable course starve a servable one — see this function's own doc.
+  // A no-op (unfiltered) whenever `servableCourses` is empty, i.e. nothing
+  // eligible this pass is servable either.
+  const contenders =
+    servableCourses.size > 0
+      ? eligibleCourses.filter((course) => servableCourses.has(course))
+      : eligibleCourses;
+
   let byUrgency: { readonly course: string; readonly value: number } | undefined;
-  for (const course of eligibleCourses) {
+  for (const course of contenders) {
     const urgency = urgencyByCourse.get(course);
     if (urgency === undefined || urgency < URGENCY_OVERRIDE_THRESHOLD) continue;
     if (
@@ -1525,7 +1559,7 @@ export function selectDominantCourse(
   let byDeficit:
     | { readonly course: string; readonly value: number; readonly recency: number }
     | undefined;
-  for (const course of eligibleCourses) {
+  for (const course of contenders) {
     const deficit = deficitByCourse.get(course) ?? 0;
     const recency = recencyByCourse.get(course) ?? Number.POSITIVE_INFINITY;
     if (
@@ -1628,12 +1662,20 @@ function composeFocusedSelection(
       ? new Map([...windowDeficit].map(([course, entry]) => [course, entry.deficit]))
       : deficitDaysByCourseFrom(byCourse, asOf);
   const recencyByCourse = recencyByCourseFrom(byCourse, asOf, windowDeficit);
+  // `ol-egov.141.89.10.86`: a course with at least one row this pass some
+  // instrument could actually fill — see `selectDominantCourse`'s own doc
+  // for why an unservable course must never win the automatic branches
+  // against one of these.
+  const servableCourses = new Set(
+    courses.filter((course) => (byCourse.get(course) ?? []).some((c) => c.cost > 0)),
+  );
   const dominantPick = selectDominantCourse(
     courses,
     courseFilter,
     urgencyByCourse,
     deficitByCourse,
     recencyByCourse,
+    servableCourses,
   );
   if (dominantPick === undefined) return undefined;
   const { course: dominantCourse, branch } = dominantPick;
