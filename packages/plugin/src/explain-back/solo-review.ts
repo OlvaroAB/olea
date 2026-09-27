@@ -489,9 +489,12 @@ export async function recordSoloGradeAndReview(
  * `undefined` — recorded as unknown, never as correct — in every case where
  * the verdict is not a standing judgement about this attempt, or cannot be
  * recorded with its own stamp:
- * - the correctness call surfaced no usable stamp: the stamp is mandatory on
- *   the top-level field, and none is ever invented or borrowed from the depth
- *   call;
+ * - the accept carries no stamp: the stamp is mandatory on the top-level
+ *   field, and none is ever invented or borrowed from the depth call.
+ *   Unreachable from production since `ol-95vv.8`'s Class B change: the only
+ *   production judge caller (`createWorkerJudgeCaller`) fails a success reply
+ *   without a usable stamp, so no stamp-less verdict is ever accepted. Kept as
+ *   a defensive guard;
  * - no memoised accept for this attempt (the correctness pipeline did not run,
  *   or a caller supplied no real per-attempt id);
  * - the accept came back `'stale'` (`ol-0r92.89`): the source the grading cited

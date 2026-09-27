@@ -3,7 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { WorkerTaskRequest, WorkerTaskTransport } from '../retrieval/workerProvider.js';
-import { gradeExplainBack } from './gradingPipeline.js';
+import { acceptExplainBackGrading, gradeExplainBack } from './gradingPipeline.js';
 import {
   createWorkerJudgeCaller,
   EXPLAIN_BACK_JUDGE_CONTRACT_VERSION,
@@ -263,16 +263,80 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     expect(result.stamp).toEqual({ promptVersion: '1.2.0', modelId: 'test-model' });
   });
 
-  it('reads a null stamp when the response carries none, rather than inventing one', async () => {
-    const transport = new RecordingTransport(() => ({
-      ok: true,
-      result: { verdict: 'correct', feedback: 'Good.', missedPoints: [] },
-    }));
-    const callJudge = createWorkerJudgeCaller({ transport });
+  // `ol-95vv.8` (Class B, flagged for David's review): the Worker contract
+  // requires the stamp on every success response, so one without a usable
+  // stamp is out of contract and fails the call on the existing error path —
+  // at BOTH return sites, graded and unable-to-assess. A stamp is never
+  // invented, and a verdict is never accepted without one.
+  const missingStamp = (result: unknown) => ({ ok: true, result });
+  const malformedStamps = [
+    { promptVersion: '', modelId: 'test-model' },
+    { promptVersion: '1.2.0' },
+    { promptVersion: '1.2.0', modelId: 42 },
+    'not-an-object',
+  ];
+  const gradedResult = { verdict: 'correct', feedback: 'Good.', missedPoints: [] };
+  const unableResult = { outcome: 'unable-to-assess', reason: 'blank answer' };
 
-    const result = await callJudge(baseWireInput);
+  it('fails a graded response that carries no stamp — never reads it as a null stamp', async () => {
+    const callJudge = createWorkerJudgeCaller({
+      transport: new RecordingTransport(() => missingStamp(gradedResult)),
+    });
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+    await expect(callJudge(baseWireInput)).rejects.toMatchObject({
+      message: expect.stringContaining('D7.3 stamp'),
+    });
+  });
 
-    expect(result.stamp).toBeNull();
+  it('fails a graded response whose stamp is malformed', async () => {
+    for (const stamp of malformedStamps) {
+      const callJudge = createWorkerJudgeCaller({
+        transport: new RecordingTransport(() => ({ ok: true, stamp, result: gradedResult })),
+      });
+      await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+    }
+  });
+
+  it('fails an unable-to-assess response that carries no stamp', async () => {
+    const callJudge = createWorkerJudgeCaller({
+      transport: new RecordingTransport(() => missingStamp(unableResult)),
+    });
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
+  it('fails an unable-to-assess response whose stamp is malformed', async () => {
+    for (const stamp of malformedStamps) {
+      const callJudge = createWorkerJudgeCaller({
+        transport: new RecordingTransport(() => ({ ok: true, stamp, result: unableResult })),
+      });
+      await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+    }
+  });
+
+  it('on the production path an accepted verdict always carries its stamp: the grading pipeline fed by this caller cannot reach the accept without one', async () => {
+    // With a stamp: the pending grading, and so the accept, carry it.
+    const stamped = createWorkerJudgeCaller({
+      transport: new RecordingTransport(() => okResponse(gradedResult)),
+    });
+    const pending = await gradeExplainBack(
+      { ...baseWireInput, misconceptionDigest: [], sourceBlocks: baseWireInput.sourceBlocks },
+      stamped,
+    );
+    expect(acceptExplainBackGrading(pending).stamp).toEqual({
+      promptVersion: '1.2.0',
+      modelId: 'test-model',
+    });
+    // Without one: the call fails before any pending grading exists, so no
+    // accept — and no unstamped verdict — can follow.
+    const unstamped = createWorkerJudgeCaller({
+      transport: new RecordingTransport(() => missingStamp(gradedResult)),
+    });
+    await expect(
+      gradeExplainBack(
+        { ...baseWireInput, misconceptionDigest: [], sourceBlocks: baseWireInput.sourceBlocks },
+        unstamped,
+      ),
+    ).rejects.toBeInstanceOf(WorkerJudgeError);
   });
 
   it('throws when a present citedIssues entry is missing sourceBlockIds — never fabricates one', async () => {

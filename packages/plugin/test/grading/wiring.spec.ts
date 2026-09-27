@@ -421,7 +421,10 @@ describe('gradeExplainBackAttemptDecision — the correctness pipeline read thro
     });
   });
 
-  it('carries a null stamp, never a fabricated one, when the response has none', async () => {
+  // `ol-95vv.8` (Class B, flagged for David's review): the Worker contract
+  // requires the stamp on every success response, so a reply without one is
+  // out of contract and fails the call — no verdict, and no fabricated stamp.
+  it('reads a success response with no stamp as a malformed, failed call: no verdict, never a fabricated stamp', async () => {
     const host = configuredHost({
       version: 1,
       baseUrl: 'https://worker.example',
@@ -441,8 +444,7 @@ describe('gradeExplainBackAttemptDecision — the correctness pipeline read thro
 
     const decision = await gradeExplainBackAttemptDecision(wiring, baseInput);
 
-    expect(decision.kind).toBe('verdict');
-    if (decision.kind !== 'verdict') throw new Error('unreachable');
+    expect(decision).toMatchObject({ kind: 'unavailable', cause: 'malformed' });
     expect(decision.provenance.producer).toMatchObject({ stamp: null });
   });
 });

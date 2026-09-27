@@ -60,8 +60,17 @@
  * unchanged (a wider value satisfies a narrower declared type), while making
  * the stamp available, at runtime and to any caller that imports the
  * stamped type, for whichever composition site builds a `StageSeamContext`
- * (`../stage-contract/provenance.ts`) next. `stamp` is `null` exactly when
- * the response carried no usable stamp — never invented to fill the field.
+ * (`../stage-contract/provenance.ts`) next.
+ *
+ * **A success response with no usable stamp is a failed call** (`ol-95vv.8`,
+ * Class B, flagged for David's review). The Worker contract requires the
+ * stamp on every successful response (`olea-contracts`' `worker.ts`,
+ * `stamp: responseStamp`), so a reply without one is out of contract, and it
+ * takes the same `WorkerJudgeError` path as every other malformed reply: no
+ * verdict is shown or accepted. That keeps an accepted verdict always
+ * recordable in the review log's top-level `explainBackCorrectness`, whose
+ * stamp is mandatory (`[D-303]`, `[D-386]`) — a stamp is never invented to
+ * fill the field, and a verdict is never accepted without one.
  *
  * ===========================================================================
  * `ol-0r92.130` round 2 / `[D-321]`: `readGrading` NOW BRANCHES ON `outcome`
@@ -127,7 +136,7 @@ export interface WorkerJudgeCallerDeps {
 
 /** `ExplainBackGradingWireResponse` plus the D7.3 stamp this caller reads off the response body — see the module doc's "THE D7.3 STAMP" section. */
 export type StampedExplainBackGradingWireResponse = ExplainBackGradingWireResponse & {
-  readonly stamp: ModelStamp | null;
+  readonly stamp: ModelStamp;
 };
 
 /**
@@ -185,6 +194,21 @@ function readStamp(response: Record<string, unknown>): ModelStamp | null {
   return { promptVersion, modelId };
 }
 
+/**
+ * `readStamp`, required: a success response without a usable stamp is out of
+ * contract and fails the call (see the module doc's D7.3 section).
+ */
+function requireStamp(response: Record<string, unknown>): ModelStamp {
+  const stamp = readStamp(response);
+  if (stamp === null) {
+    throw new WorkerJudgeError(
+      'WorkerJudgeCaller: the Worker success response carried no usable D7.3 stamp ' +
+        '(promptVersion and modelId), which the Worker contract requires.',
+    );
+  }
+  return stamp;
+}
+
 function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
   if (typeof body !== 'object' || body === null) {
     throw new WorkerJudgeError('WorkerJudgeCaller: the Worker response was not an object.');
@@ -224,7 +248,7 @@ function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
         'WorkerJudgeCaller: the Worker returned outcome unable-to-assess with no reason text.',
       );
     }
-    return { outcome: 'unable-to-assess', reason, stamp: readStamp(response) };
+    return { outcome: 'unable-to-assess', reason, stamp: requireStamp(response) };
   }
 
   const verdict = r.verdict;
@@ -245,7 +269,7 @@ function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
     missedPoints: readStringArray(r.missedPoints, 'missedPoints'),
     citedIssues: readCitedIssues(r.citedIssues),
     misconceptionCandidates: readMisconceptionCandidates(r.misconceptionCandidates),
-    stamp: readStamp(response),
+    stamp: requireStamp(response),
   };
 }
 
