@@ -19,13 +19,14 @@
  * Production caller: `main.ts:2903`'s `tickCitationRevisions` (wired at `main.ts:2197`).
  */
 
-import type {
-  ListOptions,
-  RevisionJudgePort,
-  Unsubscribe,
-  VaultEvent,
-  VaultPath,
-  VaultSource,
+import {
+  citationStorePath,
+  type ListOptions,
+  type RevisionJudgePort,
+  type Unsubscribe,
+  type VaultEvent,
+  type VaultPath,
+  type VaultSource,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import type {
@@ -182,11 +183,26 @@ function actions() {
   return { enqueue: vi.fn(async () => undefined), suspend: vi.fn(async () => undefined) };
 }
 
+/**
+ * `[D-181]` citation sidecar entry — what `enumerate.ts` reads back onto
+ * `sourceProvenance`. `[D-398]`: both MCQ fixtures below need one (a
+ * self-referential citation, the same shape `materialize-card.ts`'s
+ * `[D-366]` Class B write mints) to stay TRACKED under the new,
+ * authorship-based `isTrackedForRevision` rule — this file tests per-
+ * instrument SELECTIVITY, never the `[D-366]`/`[D-398]` exemption itself.
+ */
+function citationSidecar(instrumentId: string, sourcePath: VaultPath): string {
+  return `${JSON.stringify({ instrumentId, sourcePath, page: 1, schemaVersion: 1 }, null, 2)}\n`;
+}
+
 describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective per tracked reference', () => {
   it('a changed-claim revision on ONE instrument suspends and enqueues only that one, leaving an unrelated tracked instrument entirely untouched', async () => {
     const vault = new MemoryVaultSource({
       [PATH_A]: note('Weathering rates', 'GEO101', PARAGRAPH_A_BEFORE, MCQ_A),
       [PATH_B]: note('Erosion patterns', 'GEO101', PARAGRAPH_B_TEXT, MCQ_B),
+      // [D-398]: keeps both MCQs tracked under the new authorship-based rule.
+      [citationStorePath(MCQ_A)]: citationSidecar(MCQ_A, PATH_A),
+      [citationStorePath(MCQ_B)]: citationSidecar(MCQ_B, PATH_B),
     });
     const store = new FakeCitationHashStore();
     // Answers "material" for the A pair only -- if B were ever (wrongly) sent to the judge with a
@@ -237,6 +253,9 @@ describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective
     const vault = new MemoryVaultSource({
       [PATH_A]: note('Weathering rates', 'GEO101', PARAGRAPH_A_BEFORE, MCQ_A),
       [PATH_B]: note('Erosion patterns', 'GEO101', PARAGRAPH_B_TEXT, MCQ_B),
+      // [D-398]: keeps both MCQs tracked under the new authorship-based rule.
+      [citationStorePath(MCQ_A)]: citationSidecar(MCQ_A, PATH_A),
+      [citationStorePath(MCQ_B)]: citationSidecar(MCQ_B, PATH_B),
     });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) }; // same claim

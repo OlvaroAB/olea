@@ -248,7 +248,13 @@ function actions(overrides: Partial<Parameters<CitationRevisionTrigger['tick']>[
 
 describe('CitationRevisionTrigger.tick', () => {
   it('baselines a newly-seen MCQ instrument without calling the judge', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn() };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
@@ -263,7 +269,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('reports unchanged and never calls the judge on a second identical pass', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn() };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
@@ -278,7 +290,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('reports judge-unavailable and leaves the baseline untouched when no judge is configured', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const trigger = new CitationRevisionTrigger({ store, judge: null, clock: fakeClock(0) });
     await trigger.tick(vault, actions());
@@ -295,7 +313,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('advances the baseline on a same-claim (refreshed) verdict, without suspending or enqueuing', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
@@ -317,7 +341,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('suspends the predecessor and enqueues a successor on a changed-claim (revised) verdict, then retires tracking', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = {
       judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
@@ -355,7 +385,13 @@ describe('CitationRevisionTrigger.tick', () => {
     const judge: RevisionJudgePort = { judge: vi.fn() };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
 
-    const vaultBefore = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vaultBefore = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     await trigger.tick(vaultBefore, actions());
 
     // Note A is gone; note C carries a PARAPHRASE of its material (enough
@@ -363,7 +399,13 @@ describe('CitationRevisionTrigger.tick', () => {
     // whitespace-normalised match) beside its own, differently-id'd MCQ.
     const NEAR_PARAGRAPH = 'Basalt weathers slowly in humid regions typically.';
     const OTHER_PATH = 'Courses/GEO101/Paraphrased.md';
-    const vaultAfter = new MemoryVaultSource({ [OTHER_PATH]: note(NEAR_PARAGRAPH, 'q3') });
+    const vaultAfter = new MemoryVaultSource({
+      [OTHER_PATH]: note(NEAR_PARAGRAPH, 'q3'),
+      // [D-398]: tracked, same reasoning as vaultBefore above -- this
+      // instrument must be a relocation CANDIDATE, which only draws from
+      // `trackedRecords`.
+      [citationStorePath('q3')]: citationSidecar('q3', OTHER_PATH),
+    });
 
     const onRelocationProposed = vi.fn();
     const report = await trigger.tick(vaultAfter, actions({ onRelocationProposed }));
@@ -383,7 +425,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('defect 5 (ol-egov.141.89.5.7): a formatting-only change to the cited passage exits free, no judge call and no invalidation', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn() };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
@@ -424,7 +472,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('[D-351] sets pendingRevalidation the moment a real difference is seen, even with no judge configured', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const trigger = new CitationRevisionTrigger({ store, judge: null, clock: fakeClock(1_000) });
     await trigger.tick(vault, actions());
@@ -443,7 +497,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('[D-351] clears pendingRevalidation on a same-claim (refreshed) resolution', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
@@ -457,7 +517,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('[D-351] a late refreshed result for an earlier edit is discarded once a newer edit has raised its own pending state — no restore, no stale clear', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     // The judge call is slow: WHILE it is in flight, simulate a second,
     // overlapping tick's own pass raising its OWN pending state for a newer
@@ -491,7 +557,13 @@ describe('CitationRevisionTrigger.tick', () => {
   });
 
   it('[D-351] a late revised result for an earlier edit is discarded — no suspend, no enqueue, tracking stays', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = {
       judge: vi.fn(async () => {
@@ -524,13 +596,25 @@ describe('CitationRevisionTrigger.tick', () => {
     const judge: RevisionJudgePort = { judge: vi.fn() };
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
 
-    const vaultBefore = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vaultBefore = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     await trigger.tick(vaultBefore, actions());
 
     // Note A is gone; note B is a different note carrying the SAME material
     // paragraph (exact, whitespace-normalised) beside its own MCQ.
     const DECOY_PATH = 'Courses/GEO101/Elsewhere.md';
-    const vaultAfter = new MemoryVaultSource({ [DECOY_PATH]: note(PARAGRAPH_A, 'q2') });
+    const vaultAfter = new MemoryVaultSource({
+      [DECOY_PATH]: note(PARAGRAPH_A, 'q2'),
+      // [D-398]: tracked, same reasoning as vaultBefore above -- this
+      // instrument must be a relocation CANDIDATE, which only draws from
+      // `trackedRecords`.
+      [citationStorePath('q2')]: citationSidecar('q2', DECOY_PATH),
+    });
 
     const report = await trigger.tick(vaultAfter, actions());
     expect(report.relocated).toBe(1);
@@ -656,7 +740,11 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
 
 /**
  * `[D-366]` (David, 2026-09-25, ruled on `ol-v7r5.83`) — the widening past
- * MCQ, and the exemption ruling carries.
+ * MCQ, and the exemption ruling carries. `[D-398]` (ruled 2026-09-27 on
+ * `ol-v7r5.97`) extends the same exemption to MCQ itself — see the
+ * `describe` block below this one for MCQ's own self-contained and
+ * generated-with-real-source cases, and the bug fix for a citation that
+ * names its own note (`[D-398]`'s binding condition 2).
  */
 describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
   const QA_HAND_NOTE_PATH = 'Courses/GEO101/HandAuthoredQa.md';
@@ -784,8 +872,146 @@ describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
       expect(stored.size).toBe(0);
     });
 
-    it('MCQ path is unchanged: a self-contained hand-authored MCQ still suspends on a changed-claim revision, unlike its Q&A/cloze counterpart above', async () => {
+    it('[D-398] MCQ path is now widened too: a self-contained hand-authored MCQ is exempt, never tracked or suspended — the deab181-era pinning behaviour this rewrites', async () => {
       const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'would suspend if ever called' })),
+      };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(0);
+      expect(baseline.tracked).toBe(0);
+      expect(baseline.exemptSelfContained).toBe(0);
+      // Not a verified authored signal for MCQ (materialize-mcq.ts's own
+      // conditional citation write) — counted, not silently folded into
+      // exemptSelfContained. See CitationRevisionTickReport's own doc.
+      expect(baseline.authorshipUnverified).toBe(1);
+
+      // She edits her own note — the surrounding material this trigger
+      // would otherwise diff for a tracked instrument.
+      await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+      const act = actions();
+      const report = await trigger.tick(vault, act);
+
+      expect(report.authorshipUnverified).toBe(1);
+      expect(report.revised).toBe(0);
+      expect(judge.judge).not.toHaveBeenCalled();
+      expect(act.suspend).not.toHaveBeenCalled();
+      expect(act.enqueue).not.toHaveBeenCalled();
+      const stored = await store.loadAll();
+      expect(stored.size).toBe(0);
+    });
+  });
+
+  describe('[D-398] a self-contained, hand-authored MCQ, and the generated/self-referential citation bug fix — every format alike', () => {
+    const MCQ_GENERATED_HOME_PATH = 'Zettel/Weathering MCQ (Olea).md';
+
+    function generatedMcqHomeNote(mcqId: string = MCQ_ID): string {
+      return [
+        '---',
+        `topic: [${CONCEPT_TOPIC}]`,
+        'course: GEO101',
+        '---',
+        '',
+        mcqBlock(mcqId),
+        '',
+      ].join('\n');
+    }
+
+    it('an MCQ whose citation names a genuinely separate, real source is tracked and suspends exactly like the pre-existing MCQ path', async () => {
+      const vault = new MemoryVaultSource({
+        [MCQ_GENERATED_HOME_PATH]: generatedMcqHomeNote(),
+        [GENERATED_SOURCE_PATH]: PARAGRAPH_A,
+        [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, GENERATED_SOURCE_PATH),
+      });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = { judge: vi.fn() };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(1);
+      expect(baseline.exemptSelfContained).toBe(0);
+      expect(baseline.authorshipUnverified).toBe(0);
+      const baselined = await store.loadAll();
+      expect(baselined.get(MCQ_ID)?.sourcePath).toBe(GENERATED_SOURCE_PATH);
+
+      await vault.write(GENERATED_SOURCE_PATH, PARAGRAPH_B);
+      const materialJudge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+      };
+      const trigger2 = new CitationRevisionTrigger({
+        store,
+        judge: materialJudge,
+        clock: fakeClock(1000),
+      });
+      const act = actions();
+      const report = await trigger2.tick(vault, act);
+
+      expect(report.revised).toBe(1);
+      expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+      expect(act.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('[D-398 binding condition 2] a generated MCQ whose citation is self-referential (names its own note) stays tracked — never exempt merely for sharing a note with its source', async () => {
+      const vault = new MemoryVaultSource({
+        [NOTE_PATH]: note(PARAGRAPH_A),
+        // Self-referential citation — exactly what `materialize-card.ts`'s
+        // `[D-366]` Class B write mints for a Q&A/cloze card when the
+        // pipeline had no separate passage to cite; here proving the SAME
+        // shape for MCQ names its own note and must not be read as
+        // self-contained.
+        [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+      });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = {
+        judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
+      };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(1000) });
+
+      const baseline = await trigger.tick(vault, actions());
+      expect(baseline.newlyBaselined).toBe(1);
+      expect(baseline.exemptSelfContained).toBe(0);
+      expect(baseline.authorshipUnverified).toBe(0);
+
+      await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+      const act = actions();
+      const report = await trigger.tick(vault, act);
+
+      expect(report.revised).toBe(1);
+      expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+      expect(act.enqueue).toHaveBeenCalledTimes(1);
+    });
+
+    it('[D-398 binding condition 2] a generated Q&A card whose citation is self-referential (names its own note) stays tracked — the same bug fix for the format [D-366] already covered', async () => {
+      const QA_SELF_REFERENTIAL_NOTE_PATH = 'Courses/GEO101/SelfReferentialQa.md';
+      function selfReferentialQaNote(paragraph: string): string {
+        return [
+          '---',
+          `topic: [${CONCEPT_TOPIC}]`,
+          'course: GEO101',
+          '---',
+          '',
+          '## What resists weathering?',
+          '',
+          paragraph,
+          '',
+          'Which mineral is most weathering-resistant?::Quartz',
+          '',
+        ].join('\n');
+      }
+      const vault = new MemoryVaultSource({
+        [QA_SELF_REFERENTIAL_NOTE_PATH]: selfReferentialQaNote(PARAGRAPH_A),
+      });
+      const instrumentId = await soleInstrumentId(vault);
+      // Self-referential citation, same shape `materialize-card.ts` mints
+      // when the pipeline had no separate passage to record.
+      await vault.write(
+        citationStorePath(instrumentId),
+        citationSidecar(instrumentId, QA_SELF_REFERENTIAL_NOTE_PATH),
+      );
+
       const store = new FakeCitationHashStore();
       const judge: RevisionJudgePort = {
         judge: vi.fn(async () => ({ material: true, reason: 'different claim' })),
@@ -796,13 +1022,60 @@ describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
       expect(baseline.newlyBaselined).toBe(1);
       expect(baseline.exemptSelfContained).toBe(0);
 
-      await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+      await vault.write(QA_SELF_REFERENTIAL_NOTE_PATH, selfReferentialQaNote(PARAGRAPH_B));
       const act = actions();
       const report = await trigger.tick(vault, act);
 
       expect(report.revised).toBe(1);
-      expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+      expect(act.suspend).toHaveBeenCalledWith(instrumentId, [expect.any(String)]);
       expect(act.enqueue).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('[D-398 binding condition 3 / D-334] structural withholding still applies to an exempt item', () => {
+    it('a self-contained, hand-authored MCQ with a duplicate distractor is never enumerated as an instrument at all — invisible to this trigger, still withheld at parse time', async () => {
+      const duplicateOptionMcq = [
+        '```olea-mcq',
+        `id: ${MCQ_ID}`,
+        'stem: Which mineral is most weathering-resistant?',
+        'answer: Quartz',
+        'distractor: Olivine',
+        'distractor: Quartz',
+        'distractor: Feldspar',
+        'distractor: Biotite',
+        '```',
+      ].join('\n');
+      const noteWithDuplicateOption = [
+        '---',
+        `topic: [${CONCEPT_TOPIC}]`,
+        'course: GEO101',
+        '---',
+        '',
+        '## What resists weathering?',
+        '',
+        PARAGRAPH_A,
+        '',
+        duplicateOptionMcq,
+        '',
+      ].join('\n');
+      const vault = new MemoryVaultSource({ [NOTE_PATH]: noteWithDuplicateOption });
+      const store = new FakeCitationHashStore();
+      const judge: RevisionJudgePort = { judge: vi.fn() };
+      const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+
+      // Confirms the fixture is actually invalid, not merely absent from
+      // the report for some unrelated reason.
+      const enumeration = await enumerateVaultInstruments(vault, {});
+      expect(enumeration.records).toHaveLength(0);
+      expect(enumeration.invalidMcqBlocks).toHaveLength(1);
+
+      const report = await trigger.tick(vault, actions());
+      expect(report.newlyBaselined).toBe(0);
+      expect(report.tracked).toBe(0);
+      expect(report.exemptSelfContained).toBe(0);
+      expect(report.authorshipUnverified).toBe(0);
+      const stored = await store.loadAll();
+      expect(stored.size).toBe(0);
     });
   });
 
@@ -916,7 +1189,13 @@ describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
  */
 describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
   it('gate case CHG-57f55b30941e3290: fires exactly one automatic retry across two restarts, never a fresh allowance per restart', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = {
       judge: vi.fn(async () => {
@@ -966,7 +1245,13 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
   });
 
   it("a successful retry resolves normally — the same real judge call any original check would make, so its spend is logged wherever every other call's already is", async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const failingJudge: RevisionJudgePort = {
       judge: vi.fn(async () => {
@@ -1003,7 +1288,13 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
   });
 
   it("[D-311] a retry's own answer is discarded once a newer edit has raised its own pending state — the same obsolete-answer guard an original dispatch already gets", async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const failingJudge: RevisionJudgePort = {
       judge: vi.fn(async () => {
@@ -1050,7 +1341,13 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
   });
 
   it('a genuinely new edit gets its own fresh retry budget, never blocked by an older, already-spent one', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const store = new FakeCitationHashStore();
     const failingJudge: RevisionJudgePort = {
       judge: vi.fn(async () => {

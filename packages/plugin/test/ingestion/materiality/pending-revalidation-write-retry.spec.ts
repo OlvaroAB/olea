@@ -36,13 +36,14 @@
  * redundant clearing write once the first one has already landed.
  */
 
-import type {
-  ListOptions,
-  RevisionJudgePort,
-  Unsubscribe,
-  VaultEvent,
-  VaultPath,
-  VaultSource,
+import {
+  citationStorePath,
+  type ListOptions,
+  type RevisionJudgePort,
+  type Unsubscribe,
+  type VaultEvent,
+  type VaultPath,
+  type VaultSource,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -153,9 +154,26 @@ function actions() {
   return { enqueue: vi.fn(async () => undefined), suspend: vi.fn(async () => undefined) };
 }
 
+/**
+ * `[D-181]` citation sidecar entry — what `enumerate.ts` reads back onto
+ * `sourceProvenance`. `[D-398]`: this file's MCQ fixture must carry one (a
+ * self-referential citation, the same shape `materialize-card.ts`'s
+ * `[D-366]` Class B write mints) so it stays TRACKED under the new,
+ * authorship-based `isTrackedForRevision` rule — this file tests the
+ * pending-revalidation write-retry mechanics (`[D-351]`), never the
+ * `[D-366]`/`[D-398]` exemption itself.
+ */
+function citationSidecar(instrumentId: string, sourcePath: VaultPath): string {
+  return `${JSON.stringify({ instrumentId, sourcePath, page: 1, schemaVersion: 1 }, null, 2)}\n`;
+}
+
 describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: retried after a simulated failure', () => {
   it('never marks a known difference as current when the SETTING write fails, and sets it exactly once once the retry succeeds', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: keeps this MCQ tracked under the new authorship-based rule.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     // Call #1 is the baseline `save` below (tick 1); call #2 would be the pending-revalidation
     // `setPendingRevalidation` write on tick 2 -- fail exactly that one.
     const host = new FlakyDataHost(new Set([2]));
@@ -205,7 +223,11 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
   });
 
   it('never clears a pending fact when the RESOLVING write fails, and clears it exactly once once the retry succeeds — text and the cleared flag land together, never split', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: keeps this MCQ tracked under the new authorship-based rule.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     // Call #1: baseline (tick 1). `citation-revision-wiring.ts` has no floor or debounce at this
     // grain (`material-change.ts`'s own doc: "any hash difference... reaches the judge, once
     // relocation has been ruled out"), so tick 2 makes three more calls, in order: the `[D-400]`
@@ -255,7 +277,11 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
   });
 
   it('sanity check: the store key this all lives under is exactly CITATION_ANCHOR_STORAGE_KEY, one entry per instrument, on the real host', async () => {
-    const vault = new MemoryVaultSource({ [NOTE_PATH]: note(PARAGRAPH_A) });
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: keeps this MCQ tracked under the new authorship-based rule.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
     const host = new FlakyDataHost(new Set());
     const store = new ObsidianCitationHashStore(host);
     const trigger = new CitationRevisionTrigger({ store, judge: null, clock: fakeClock(0) });

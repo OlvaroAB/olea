@@ -24,31 +24,47 @@
  * assumes.
  *
  * ===========================================================================
- * `[D-366]` — Q&A/CLOZE ARE TRACKED TOO, EXCEPT WHEN SELF-CONTAINED
+ * `[D-366]`/`[D-398]` — EVERY FORMAT IS TRACKED, EXCEPT WHEN SELF-CONTAINED
  * ===========================================================================
- * MCQ is unchanged: every MCQ instrument is tracked, exactly as before this
- * bead (`ol-v7r5.68`). A Q&A or cloze instrument is now tracked as well —
- * `evaluateCitedPassageRevision`, `buildSuccessorRevisionEnqueueInput` and
- * `InstrumentRevisionJobPayload` never assumed MCQ (they key everything by
- * `instrumentId` and plain text) — **except** when it is exempt under
- * `[D-366]` (David, 2026-09-25, ruled on `ol-v7r5.83`): "editing a
- * self-contained, learner-authored card should update that card without
- * automatic suspension... use actual source dependencies and authorship,
- * never file location."
+ * Every instrument type is tracked — `evaluateCitedPassageRevision`,
+ * `buildSuccessorRevisionEnqueueInput` and `InstrumentRevisionJobPayload`
+ * never assumed MCQ (they key everything by `instrumentId` and plain text)
+ * — **except** when it is exempt under `[D-366]` (David, 2026-09-25, ruled
+ * on `ol-v7r5.83`, extended to MCQ by `[D-398]`, ruled 2026-09-27 on
+ * `ol-v7r5.97`): "editing a self-contained, learner-authored card should
+ * update that card without automatic suspension... use actual source
+ * dependencies and authorship, never file location." `[D-398]`'s own
+ * binding conditions: the exemption rests on authorship and actual source
+ * dependency, never file location alone, for EVERY format; an item citing a
+ * passage other than itself — even one that happens to sit in its own note
+ * — stays tracked; a generated item sharing a note with its source is not
+ * exempt either. MCQ was previously unconditional (`ol-v7r5.68`'s own
+ * scope); `[D-398]` removes that carve-out.
  *
- * `isTrackedForRevision` below is that rule. It is **not** the same test as
- * "does it happen to live alone in its note": it asks whether
- * `citedPassagePath` resolves to a note DIFFERENT from the instrument's own
- * `notePath` — a genuine, actual dependency on separate material, wherever
- * the block physically sits. An authored card that quotes a separate source
- * note is tracked (its dependency's change can still suspend it); a
- * generated card materialized into the very note its source text lives in
- * is, by this file's own available signals, indistinguishable from a
- * hand-authored one — see that function's doc for exactly what is known,
- * what is not, and why the untellable case defaults to exempt rather than a
- * guess. The `[D-133]` predecessor/successor chain a `'revised'` outcome
- * enqueues stays enqueue-only here for every instrument type — this file
- * never generates a successor, only asks the existing ingestion queue to
+ * `isTrackedForRevision` below is that rule, decided from ONE recorded
+ * signal — `sourceProvenance`'s mere presence, never `citedPassagePath`'s
+ * `sourcePath === notePath` fallback (that decides only WHICH text to diff
+ * for an instrument already known to be tracked; it is not itself an
+ * authorship test, and using it as one is exactly the bug `[D-398]` names:
+ * "a card citing a separate passage in the same note, or a generated card
+ * whose citation names the note it sits in, can be exempt" under the old,
+ * file-location-shaped test). `sourceProvenance` absent is `[D-366]`'s
+ * "self-contained, learner-authored" case: nothing mints a citation sidecar
+ * for a hand-authored instrument, of any format (`enumerate.ts`'s own doc).
+ * `sourceProvenance` present — even self-referential, naming the
+ * instrument's own note (`materialize-card.ts`'s own `[D-366]` Class B
+ * write) — means a generation pipeline minted it, so the item is tracked
+ * regardless of where that citation points: a genuine dependency on
+ * separate material stays trackable, and a generated item merely sharing a
+ * note with its source is never mistaken for self-contained again. See
+ * `isTrackedForRevision`'s own doc for the one format where this signal is
+ * not yet fully verified (MCQ), and `report.authorshipUnverified` for how
+ * that residual risk is counted rather than silently accepted or blocked
+ * on.
+ *
+ * The `[D-133]` predecessor/successor chain a `'revised'` outcome enqueues
+ * stays enqueue-only here for every instrument type — this file never
+ * generates a successor, only asks the existing ingestion queue to
  * (`CitationRevisionActions.enqueue`'s own doc). **Generating one for a Q&A
  * or cloze predecessor is not yet wired end to end**: `materialize-card.ts`
  * has no `predecessorInstrumentId` parameter today (its own module doc:
@@ -69,10 +85,10 @@
  * the vault when a `'revised'` outcome suspends it (a real, still-present
  * block gets suspended, not one whose bytes a judge call just rewrote), at
  * the cost of every TRACKED instrument sharing one note reacting to the same
- * material delta rather than to its own individually-nearest passage — MCQ
- * always, and a Q&A/cloze instrument only when it is tracked at all (see the
- * `[D-366]` section above: a self-contained one is exempt, so this
- * shared-note cost never reaches it).
+ * material delta rather than to its own individually-nearest passage — every
+ * format alike, only when it is tracked at all (see the `[D-366]`/`[D-398]`
+ * section above: a self-contained one, MCQ included since `[D-398]`, is
+ * exempt, so this shared-note cost never reaches it).
  *
  * **Exception, since `[D-179]`/`[D-214]` split an instrument's home note from
  * its actual source (`ol-0r92.46`): when `sourceProvenance.sourcePath` names
@@ -214,15 +230,39 @@ export interface CitationRevisionTickReport {
   readonly staleResultDiscarded: number;
   /**
    * `[D-366]`: how many Q&A/cloze instruments THIS PASS found self-contained
-   * by citation — no `sourceProvenance` naming a real, separate note — and
-   * therefore exempt from tracking under this trigger altogether. Counted,
-   * never tracked, never baselined, never sent to the judge: her own
-   * self-contained card follows her own edit with no automatic suspension.
-   * See `isTrackedForRevision`'s own doc for exactly what this can and
-   * cannot tell apart. MCQ never contributes to this count (unchanged
-   * scope).
+   * — no `sourceProvenance` recorded at all — and therefore exempt from
+   * tracking under this trigger altogether. Counted, never tracked, never
+   * baselined, never sent to the judge: her own self-contained card follows
+   * her own edit with no automatic suspension. See `isTrackedForRevision`'s
+   * own doc for exactly what this can and cannot tell apart. MCQ never
+   * contributes to this count — an exempt MCQ is counted separately, by
+   * `authorshipUnverified` below, since the underlying signal is not yet as
+   * reliable for that format.
    */
   readonly exemptSelfContained: number;
+  /**
+   * `[D-398]`: how many MCQ instruments THIS PASS exempted from tracking on
+   * the same absent-`sourceProvenance` signal `exemptSelfContained` uses for
+   * Q&A/cloze — counted separately because that signal is not yet fully
+   * verified for MCQ. `materialize-card.ts`'s own `[D-366]` Class B fix
+   * makes a Q&A/cloze card's generation pipeline always write a citation
+   * sidecar, self-referential at minimum, so an absent `sourceProvenance`
+   * reliably means hand-authored for that format. MCQ's own generation path
+   * (`materialize-mcq.ts`) still writes its citation sidecar only when
+   * `input.sourceCitation` is supplied, so an absent `sourceProvenance`
+   * cannot yet rule out "generated, but the pipeline's own defensive
+   * no-matching-unit fallback fired" (`materialize-card.ts`'s own doc on
+   * `pipeline.ts`'s `sourceCitation`: that fallback "SHOULD NOT HAPPEN",
+   * never a designed outcome, given a real generated question is always
+   * grounded against a retrieved unit first). `[D-398]` rules: exempt this
+   * MCQ anyway rather than keep every one tracked against a defensive-only
+   * theoretical risk, but count it here so that risk stays observable
+   * rather than silently accepted — never acted on further by this file;
+   * see this bead's hand-back notes for the follow-up that would close the
+   * gap (writing a self-referential MCQ citation the same way
+   * `materialize-card.ts` already does for Q&A/cloze).
+   */
+  readonly authorshipUnverified: number;
   /**
    * `[D-400]`: how many tracked instruments THIS PASS found with a real,
    * still-unresolved difference whose one permitted automatic retry has
@@ -285,25 +325,45 @@ function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
 }
 
 /**
- * `[D-366]` — whether an instrument is tracked under `[D-093]`'s
- * passage-change auto-suspension at all. See this module's own "`[D-366]` —
- * Q&A/CLOZE ARE TRACKED TOO" doc section for the full ruling and its limits;
- * this is that rule, in code.
+ * `[D-366]`/`[D-398]` — whether an instrument is tracked under `[D-093]`'s
+ * passage-change auto-suspension at all. See this module's own "`[D-366]`/
+ * `[D-398]`" doc section above for the full ruling and its limits; this is
+ * that rule, in code, uniform across every instrument type.
  *
- * MCQ: always tracked, unchanged — this bead does not touch that path.
+ * Tracked whenever `sourceProvenance` is recorded at all — a generation
+ * pipeline minted it (`enumerate.ts`'s own doc: nothing mints one for a
+ * hand-authored instrument), so the item is not learner-authored and stays
+ * tracked REGARDLESS of what it names: {@link citedPassagePath}'s
+ * `sourcePath === notePath` fallback decides only which text to diff for a
+ * tracked instrument, never whether it is tracked. This is the fix
+ * `[D-398]` names: the old test used `citedPassagePath(record) !==
+ * record.notePath` as the tracking decision itself, which wrongly exempted
+ * a generated instrument whose citation happened to name its own note (a
+ * self-referential citation, or a same-note passage) — a file-location
+ * proxy, not an authorship signal.
  *
- * Q&A/cloze: tracked only when {@link citedPassagePath} resolves to a note
- * DIFFERENT from the instrument's own `notePath` — a real, actual citation
- * naming separate material, never inferred from where the block sits.
- * Falling back to the instrument's own note (no `sourceProvenance` at all,
- * one naming a non-markdown source, or one naming the note itself) is
- * exempt: `[D-366]`'s "self-contained, learner-authored" case, or — where
- * this module genuinely cannot tell the two apart, see `citedPassagePath`'s
- * own doc — the safe default for the case it cannot tell.
+ * Exempt only when `sourceProvenance` is entirely absent — `[D-366]`'s
+ * "self-contained, learner-authored" case. For Q&A/cloze this is a reliable
+ * signal: `materialize-card.ts`'s own `[D-366]` Class B fix makes that
+ * format's generation pipeline always write a citation sidecar, self-
+ * referential at minimum, so absence there really does mean hand-authored.
+ * **Not yet fully verified for MCQ**: `materialize-mcq.ts`'s own citation
+ * write stays conditional on `input.sourceCitation` being supplied, so an
+ * absent `sourceProvenance` cannot yet rule out a generated MCQ that hit
+ * the pipeline's own defensive "no matching unit" fallback (per
+ * `materialize-card.ts`'s own doc on `pipeline.ts`'s `sourceCitation`: that
+ * "SHOULD NOT HAPPEN", never a designed outcome). `[D-398]` rules to exempt
+ * an MCQ on this signal anyway — the alternative is keeping every MCQ
+ * tracked against a purely theoretical, defensive-only risk, which is
+ * exactly the file-location-shaped default this bead exists to remove —
+ * but `tick` counts every such MCQ into `report.authorshipUnverified`
+ * rather than folding it into `report.exemptSelfContained` silently, so the
+ * residual risk stays observable. This function itself does not need to
+ * know the instrument type to decide tracked-or-not; `tick` reads
+ * `instrumentType` only to route the count.
  */
 function isTrackedForRevision(record: VaultInstrumentRecord): boolean {
-  if (record.instrumentType === 'mcq') return true;
-  return citedPassagePath(record) !== record.notePath;
+  return record.sourceProvenance !== undefined;
 }
 
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
@@ -319,6 +379,7 @@ interface MutableTickReport {
   formattingOnly: number;
   staleResultDiscarded: number;
   exemptSelfContained: number;
+  authorshipUnverified: number;
   retryExhausted: number;
 }
 
@@ -345,6 +406,7 @@ export class CitationRevisionTrigger {
       formattingOnly: 0,
       staleResultDiscarded: 0,
       exemptSelfContained: 0,
+      authorshipUnverified: 0,
       retryExhausted: 0,
     };
 
@@ -365,12 +427,20 @@ export class CitationRevisionTrigger {
     const enumeration = await enumerateVaultInstruments(vault, {
       concepts: { stampConceptKeys: true },
     });
-    // `[D-366]`: exempt Q&A/cloze instruments (self-contained by citation —
-    // see `isTrackedForRevision`'s own doc) are counted here, once, and then
-    // never touched again this pass: excluded from `trackedRecords` below,
-    // so they are never baselined, never diffed, never sent to the judge.
-    report.exemptSelfContained = enumeration.records.filter(
-      (record) => record.instrumentType !== 'mcq' && !isTrackedForRevision(record),
+    // `[D-366]`/`[D-398]`: exempt instruments of EVERY format (self-
+    // contained by authorship — see `isTrackedForRevision`'s own doc) are
+    // counted here, once, and then never touched again this pass: excluded
+    // from `trackedRecords` below, so they are never baselined, never
+    // diffed, never sent to the judge. Q&A/cloze and MCQ are split into two
+    // counters — see `CitationRevisionTickReport`'s own doc on
+    // `authorshipUnverified` for why the underlying signal is reliable for
+    // one and not yet for the other.
+    const exemptRecords = enumeration.records.filter((record) => !isTrackedForRevision(record));
+    report.exemptSelfContained = exemptRecords.filter(
+      (record) => record.instrumentType !== 'mcq',
+    ).length;
+    report.authorshipUnverified = exemptRecords.filter(
+      (record) => record.instrumentType === 'mcq',
     ).length;
     const trackedRecords = enumeration.records.filter(isTrackedForRevision);
     const currentAllByInstrumentId = new Map(
@@ -719,10 +789,10 @@ export class CitationRevisionTrigger {
  * raw `notePath` — the same substitution `tick`'s tracked-instrument loop
  * makes, so a relocation search for a split-home-note instrument (`ol-0r92.46`)
  * looks at candidates' real source text too, not their empty home-note stubs.
- * Drawn from `trackedRecords` (`[D-366]`), not every enumerated instrument —
- * an exempt, self-contained Q&A/cloze instrument's own note is never offered
- * as somewhere a DIFFERENT, tracked instrument's citation relocated to;
- * MCQ's population is unchanged (it was already every MCQ).
+ * Drawn from `trackedRecords` (`[D-366]`/`[D-398]`), not every enumerated
+ * instrument — an exempt, self-contained instrument's own note, of any
+ * format including MCQ since `[D-398]`, is never offered as somewhere a
+ * DIFFERENT, tracked instrument's citation relocated to.
  */
 async function buildRelocationCandidates(
   trackedRecords: readonly VaultInstrumentRecord[],
