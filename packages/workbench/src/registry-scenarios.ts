@@ -787,7 +787,23 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
       // honest fixture value, matching `RegistryViewState.withheldInstruments`'s
       // own doc ("empty is the honest, expected value on a vault with no
       // structurally-broken block").
-      return { kind: 'model', model: buildModel(), identityProposals: [], withheldInstruments: [] };
+      //
+      // `[D-402]`: same posture for `mergeAuditProposals` — no scenario here
+      // drives the old cross-course merge audit either, so an empty array is
+      // the honest fixture value.
+      //
+      // `[D-397]`: same posture for `suspectInstruments` — no scenario here
+      // records citation-validity or flag-concern evidence, so both lists
+      // empty is the honest fixture value, matching
+      // `RegistrySuspectSection`'s own doc.
+      return {
+        kind: 'model',
+        model: buildModel(),
+        identityProposals: [],
+        mergeAuditProposals: [],
+        withheldInstruments: [],
+        suspectInstruments: { pendingRevalidation: [], flagged: [] },
+      };
     },
     async rename(entry: RegistryConceptEntry, newDisplayName: string): Promise<void> {
       overrides = renameConcept(overrides, entry.key, entry.originalName, newDisplayName);
@@ -823,6 +839,10 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     async editWithheldItem(item: RegistryWithheldItem): Promise<void> {
       sourceOpens.push({ sourcePath: item.notePath });
     },
+    // `[D-396]` (`ol-v7r5.101`) reject/restore halves — no scenario here drives a withheld
+    // item whose identity was derived, so no-ops, matching `withheldInstruments: []` above.
+    async rejectWithheldItem(_item: RegistryWithheldItem): Promise<void> {},
+    async restoreWithheldItem(_item: RegistryWithheldItem): Promise<void> {},
     async acceptNoteOffer(entry: RegistryConceptEntry): Promise<void> {
       noteOfferAccepts.push(entry);
     },
@@ -864,6 +884,10 @@ export function buildRegistryScenario(stateId: string): RegistryScenario {
     // `identityProposals: []` above: there is nothing here for either to act on.
     async confirmIdentityProposal(_proposal): Promise<void> {},
     async declineIdentityProposal(_proposal): Promise<void> {},
+    // `[D-402]` binding condition 3 — merge-audit identity halves, reusing the same
+    // identity-section action shape — no-ops, matching `mergeAuditProposals: []` above.
+    async confirmMergeAuditProposal(_proposal): Promise<void> {},
+    async declineMergeAuditProposal(_proposal): Promise<void> {},
   };
 
   return {
