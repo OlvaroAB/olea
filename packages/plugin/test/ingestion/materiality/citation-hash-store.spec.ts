@@ -179,4 +179,78 @@ describe('ObsidianCitationHashStore', () => {
       expect(await store.isPendingRevalidationCurrent('instrument-1', 'hash-1')).toBe(true);
     });
   });
+
+  describe('[D-420] grantExplicitRetry — the store-side half of the compare-and-set', () => {
+    async function withSpentRetry(): Promise<ObsidianCitationHashStore> {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.recordDispatch('instrument-1', 'hash-1', 1_000, false);
+      await store.recordDispatch('instrument-1', 'hash-1', 2_000, true); // the one automatic retry, spent
+      return store;
+    }
+
+    it('re-arms a spent retry for the passage version on record: keeps since/dispatchedAt, drops retriedAt', async () => {
+      const store = await withSpentRetry();
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-1')).toBe(true);
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-1')?.pendingRevalidation).toEqual({
+        sinceContentHash: 'hash-1',
+        since: 1_000,
+        dispatchedAt: 2_000,
+      });
+    });
+
+    it('refuses (returns false, nothing written) for a different source revision', async () => {
+      const store = await withSpentRetry();
+      const before = await store.loadAll();
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-2')).toBe(false);
+      expect(await store.loadAll()).toEqual(before);
+    });
+
+    it('refuses when the retry has not been spent yet', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('instrument-1', RECORD_A);
+      await store.recordDispatch('instrument-1', 'hash-1', 1_000, false);
+      const before = await store.loadAll();
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-1')).toBe(false);
+      expect(await store.loadAll()).toEqual(before);
+    });
+
+    it('refuses when nothing is tracked for the instrument at all', async () => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      expect(await store.grantExplicitRetry('never-saved', 'hash-1')).toBe(false);
+      expect(await store.loadAll()).toEqual(new Map());
+    });
+
+    it('a second press finds nothing left to re-arm', async () => {
+      const store = await withSpentRetry();
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-1')).toBe(true);
+      const before = await store.loadAll();
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-1')).toBe(false);
+      expect(await store.loadAll()).toEqual(before);
+    });
+
+    it('does not disturb another instrument already tracked', async () => {
+      const store = await withSpentRetry();
+      await store.save('instrument-2', RECORD_B);
+      await store.grantExplicitRetry('instrument-1', 'hash-1');
+      const loaded = await store.loadAll();
+      expect(loaded.get('instrument-2')).toEqual(RECORD_B);
+    });
+
+    it('the atomic path behaves identically to the fallback path', async () => {
+      const raw = new FakeDataHost();
+      const host = new SerializingDataHost(raw);
+      const store = new ObsidianCitationHashStore(host);
+      await store.save('instrument-1', RECORD_A);
+      await store.recordDispatch('instrument-1', 'hash-1', 1_000, false);
+      await store.recordDispatch('instrument-1', 'hash-1', 2_000, true);
+      expect(await store.grantExplicitRetry('instrument-1', 'hash-1')).toBe(true);
+      expect((await store.loadAll()).get('instrument-1')?.pendingRevalidation).toEqual({
+        sinceContentHash: 'hash-1',
+        since: 1_000,
+        dispatchedAt: 2_000,
+      });
+    });
+  });
 });

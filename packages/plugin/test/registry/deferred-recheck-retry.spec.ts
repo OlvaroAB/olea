@@ -4,18 +4,16 @@
  * block, tagged `@auto:plugin/registry/deferred-recheck-retry.spec`.
  *
  * The end-to-end half runs the REAL `CitationRevisionTrigger` (the `[D-400]` retry gate this action
- * reuses), the REAL `ObsidianCitationHashStore` persisted shape, and the REAL
- * `createLocalRegistryProvider`, with a fake judge counting calls — zero spend. The store's
- * compare-and-set re-arm is not yet on `ObsidianCitationHashStore` (outside this bead's owns; the
- * splice is reported on the bead), so `RearmableCitationHashStore` below adds it by subclassing,
- * with a merge equivalent to the proposed splice: read the freshest record, apply `rearmSpentRetry`, write back.
+ * reuses), the REAL `ObsidianCitationHashStore` persisted shape — including its own
+ * `grantExplicitRetry` (`[D-420]`'s store-side compare-and-set; unit-tested directly in
+ * `test/ingestion/materiality/citation-hash-store.spec.ts`) — and the REAL
+ * `createLocalRegistryProvider`, with a fake judge counting calls — zero spend.
  *
  * Every fixture string is INVENTED (INV-3).
  */
 import { citationStorePath, type RevisionJudgePort, type VaultPath } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
-  CITATION_ANCHOR_STORAGE_KEY,
   type CitationAnchorRecord,
   type CitationHashStore,
   ObsidianCitationHashStore,
@@ -31,7 +29,6 @@ import {
 } from '../../src/registry/copy.js';
 import {
   CHECK_AGAIN_JUDGE_CALLS_PER_PRESS,
-  type DeferredRecheckRearmPort,
   deferredRecheckActionAvailability,
   rearmSpentRetry,
   retryDeferredRecheck,
@@ -86,39 +83,6 @@ class FakeDataHost implements ObsidianDataHost {
   }
 }
 
-/**
- * The proposed splice, applied by subclassing: `grantExplicitRetry` as one read-modify-write over
- * the store's own table, applying `rearmSpentRetry` to the freshest persisted record.
- */
-class RearmableCitationHashStore
-  extends ObsidianCitationHashStore
-  implements DeferredRecheckRearmPort
-{
-  grants = 0;
-  constructor(private readonly dataHost: FakeDataHost) {
-    super(dataHost);
-  }
-  async grantExplicitRetry(
-    instrumentId: string,
-    expectedSourceContentHash: string,
-  ): Promise<boolean> {
-    const existing = await this.dataHost.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const table = { ...((blob[CITATION_ANCHOR_STORAGE_KEY] ?? {}) as Record<string, unknown>) };
-    const current = (await this.loadAll()).get(instrumentId);
-    const rearmed = rearmSpentRetry(current?.pendingRevalidation, expectedSourceContentHash);
-    if (current === undefined || rearmed === null) return false;
-    table[instrumentId] = { ...current, pendingRevalidation: rearmed };
-    blob[CITATION_ANCHOR_STORAGE_KEY] = table;
-    await this.dataHost.saveData(blob);
-    this.grants += 1;
-    return true;
-  }
-}
-
 function actions() {
   return { enqueue: vi.fn(async () => undefined), suspend: vi.fn(async () => undefined) };
 }
@@ -146,7 +110,7 @@ async function deferredWorld() {
     [citationStorePath(MCQ_ID)]: citationSidecar(),
   });
   const host = new FakeDataHost();
-  const store = new RearmableCitationHashStore(host);
+  const store = new ObsidianCitationHashStore(host);
   const judge = throwingJudge();
   let clock = 0;
   const trigger = new CitationRevisionTrigger({ store, judge, clock: { now: () => clock } });
@@ -367,7 +331,6 @@ describe('[D-420] end to end — the real [D-400] gate, the real store shape, th
     const provider = world.provider();
     expect(await provider.retryDeferredRecheck?.(MCQ_ID)).toBe('rearmed');
     expect(await provider.retryDeferredRecheck?.(MCQ_ID)).toBe('not-deferred');
-    expect(world.store.grants).toBe(1);
     await world.pass();
     await world.pass();
     expect(world.judge.judge).toHaveBeenCalledTimes(3);
@@ -413,7 +376,6 @@ describe('[D-420] end to end — the real [D-400] gate, the real store shape, th
 
     expect(await provider.retryDeferredRecheck?.(MCQ_ID)).toBe('not-deferred');
     expect(await world.store.grantExplicitRetry(MCQ_ID, staleHash)).toBe(false);
-    expect(world.store.grants).toBe(0);
   });
 
   it('editing the cited passage still opens a fresh check with its own budget, no press needed', async () => {

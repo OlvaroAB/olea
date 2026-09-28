@@ -62,6 +62,7 @@
  */
 
 import type { VaultPath } from 'olea-core';
+import { rearmSpentRetry } from '../../registry/deferred-recheck-retry.js';
 import { hasReadModifyWrite } from '../../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — same narrow-port pattern every store in this plugin uses. */
@@ -225,6 +226,20 @@ export interface CitationHashStore {
     dispatchedAt: number,
     retry: boolean,
   ): Promise<void>;
+  /**
+   * `[D-420]`: the store-side half of `DeferredRecheckRearmPort`
+   * (`../../registry/deferred-recheck-retry.ts`) — a compare-and-set that re-arms a spent
+   * `[D-400]` retry for `instrumentId`'s CURRENT persisted source revision only. Optional so
+   * every existing fake/mock implementing this interface still compiles (same additive posture
+   * `pendingRevalidation` itself took on {@link CitationAnchorRecord}); `undefined` reads as "not
+   * wired" the same way `main.ts` reports no `deferredRecheckRearm` today.
+   *
+   * `true` when the persisted fact for `instrumentId` still named `expectedSourceContentHash`
+   * with a spent retry and the mark was lifted (see `rearmSpentRetry`, the pure half of this
+   * compare-and-set); `false` (nothing written) when there is nothing tracked, the revision
+   * differs, or the retry is not yet spent.
+   */
+  grantExplicitRetry?(instrumentId: string, expectedSourceContentHash: string): Promise<boolean>;
 }
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob — distinct from `MATERIALITY_HASH_STORAGE_KEY`, same blob, same read-modify-write discipline. */
@@ -465,6 +480,47 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     }
     const existing = await this.host.loadData();
     await this.host.saveData(merge(existing));
+  }
+
+  /**
+   * `[D-420]`. Read-modify-write, same reason `save`/`recordDispatch` above give. The store-side
+   * half of `DeferredRecheckRearmPort` (`../../registry/deferred-recheck-retry.ts`) — applies the
+   * pure {@link rearmSpentRetry} compare-and-set to the freshest persisted record, never a
+   * snapshot: a no-op (returns `false`, nothing written) when there is nothing tracked for
+   * `instrumentId`, the persisted fact names a different source revision, or its retry is not yet
+   * spent.
+   */
+  async grantExplicitRetry(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+  ): Promise<boolean> {
+    let granted = false;
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      const currentEntry = table[instrumentId];
+      if (!isCitationAnchorRecord(currentEntry)) return blob;
+      const rearmed = rearmSpentRetry(currentEntry.pendingRevalidation, expectedSourceContentHash);
+      if (rearmed === null) return blob;
+      table[instrumentId] = { ...currentEntry, pendingRevalidation: rearmed };
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      granted = true;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return granted;
+    }
+    const existing = await this.host.loadData();
+    await this.host.saveData(merge(existing));
+    return granted;
   }
 
   /**
