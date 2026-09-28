@@ -11,7 +11,7 @@
  * other statics survive, uninstall restores the real `Date`) went with it.
  * This file now proves only the offset arithmetic and persistence below.
  */
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createSimulatorClock } from '../src/simulator/clock.js';
 import { createMemoryStore } from '../src/simulator/store.js';
 
@@ -51,8 +51,19 @@ describe('SimulatorClock', () => {
 
   it('with no persisted offset and an asOf given, now() starts at asOf rather than real time (ol-3ux7.64.14 [WBX-12])', async () => {
     const asOf = new RealDate('2027-01-15T00:00:00.000Z');
-    const clock = await createSimulatorClock(createMemoryStore(), asOf);
-    expect(clock.now().getTime()).toBe(asOf.getTime());
+    // now() is real wall time plus offset, by design (the module doc above) —
+    // it never stops ticking. Pin Date.now() so the awaits inside
+    // createSimulatorClock (computing the offset, then persisting it) can't
+    // let real time advance between that computation and this readback; an
+    // unpinned clock can drift the read by however many milliseconds elapsed,
+    // which is real, correct behaviour and not what this test means to check.
+    const nowSpy = vi.spyOn(RealDate, 'now').mockReturnValue(asOf.getTime() - 60_000);
+    try {
+      const clock = await createSimulatorClock(createMemoryStore(), asOf);
+      expect(clock.now().getTime()).toBe(asOf.getTime());
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('an asOf argument is ignored once an offset has actually been persisted', async () => {
@@ -68,11 +79,23 @@ describe('SimulatorClock', () => {
   it('the asOf fallback is itself persisted, so a second clock over the same untouched store reads the same instant back', async () => {
     const asOf = new RealDate('2027-01-15T00:00:00.000Z');
     const store = createMemoryStore();
-    const first = await createSimulatorClock(store, asOf);
-    expect(first.now().getTime()).toBe(asOf.getTime());
+    // Same reasoning as the single-clock case above, doubled: two
+    // createSimulatorClock calls, each with its own awaits, sit between the
+    // offset being computed and this second readback. now() legitimately
+    // ticks with real time (that's the point of the offset design), so
+    // without pinning Date.now() this assertion is racing the wall clock —
+    // observed in CI as an occasional off-by-one-millisecond failure, not a
+    // clock bug. Pin it so both clocks see the same "now" throughout.
+    const nowSpy = vi.spyOn(RealDate, 'now').mockReturnValue(asOf.getTime() - 60_000);
+    try {
+      const first = await createSimulatorClock(store, asOf);
+      expect(first.now().getTime()).toBe(asOf.getTime());
 
-    const second = await createSimulatorClock(store);
-    expect(second.now().getTime()).toBe(asOf.getTime());
+      const second = await createSimulatorClock(store);
+      expect(second.now().getTime()).toBe(asOf.getTime());
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 
   it('jumpTo sets now() to exactly the given instant', async () => {
