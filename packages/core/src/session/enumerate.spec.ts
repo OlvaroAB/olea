@@ -788,3 +788,67 @@ describe('ol-8ae9: stamping one heading-sharing Q&A sibling must not reassign th
     expect(secondAfter.instrumentId.endsWith(':3')).toBe(true);
   });
 });
+
+// Scenarios: features/F3-learn-from-anything.md, C5.3 / [D-409] — the heading path a repair
+// candidate's digest is built from (ol-v7r5.105).
+describe('[D-409]: every record carries its full heading path, outermost first', () => {
+  it('nests by level, closes a heading at its own level or shallower, and ends with the nearest heading', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        FRONTMATTER('[Alpha]'),
+        'Before any heading::sits at the top',
+        '',
+        '# Part one',
+        '',
+        '## Section A',
+        '',
+        '### Detail',
+        '',
+        'Deep front::Deep back',
+        '',
+        '## Section B',
+        '',
+        'Sibling front::Sibling back',
+        '',
+        '# Part two',
+        '',
+        '### Skipped a level',
+        '',
+        'Skip front::Skip back',
+        '',
+      ].join('\n'),
+    });
+
+    const { records } = await enumerateVaultInstruments(vault);
+    const pathOf = (prefix: string) =>
+      records.find((r) => r.instrumentType === 'qa' && r.card.raw.startsWith(prefix));
+
+    expect(pathOf('Before')?.headingPath).toEqual([]);
+    expect(pathOf('Before')?.heading).toBeNull();
+    expect(pathOf('Deep')?.headingPath).toEqual(['Part one', 'Section A', 'Detail']);
+    expect(pathOf('Sibling')?.headingPath).toEqual(['Part one', 'Section B']);
+    expect(pathOf('Skip')?.headingPath).toEqual(['Part two', 'Skipped a level']);
+    for (const record of records) {
+      expect(record.headingPath?.at(-1) ?? null).toBe(record.heading);
+    }
+  });
+
+  it('two blocks with the same text under different headings in one note differ only by heading path', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [
+        FRONTMATTER('[Alpha]'),
+        '## First',
+        '',
+        'Same front::Same back',
+        '',
+        '## Second',
+        '',
+        'Same front::Same back',
+        '',
+      ].join('\n'),
+    });
+
+    const { records } = await enumerateVaultInstruments(vault);
+    expect(records.map((r) => r.headingPath)).toEqual([['First'], ['Second']]);
+  });
+});

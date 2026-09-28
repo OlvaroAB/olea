@@ -68,6 +68,19 @@ interface VaultInstrumentCommon {
   readonly blockId: string | null;
   /** Text of the nearest heading above the instrument, or `null`. */
   readonly heading: string | null;
+  /**
+   * `[D-409]` (`ol-v7r5.105`): every heading the instrument sits under, outermost first — each
+   * entry the nearest heading above it of a shallower level than the one after it, so the last
+   * entry is always `heading` and the list is empty exactly when `heading` is `null`. A repair
+   * candidate is identified by a digest of its block text plus this path
+   * (`plugin/src/review/repair-choice.ts`'s `repairCandidateDigest`), which is what tells two
+   * candidates in one note apart without storing her wording.
+   *
+   * Optional so a record built by hand (a test, a fixture) need not carry it; every record
+   * `enumerate.ts` produces does. A reader that needs it treats its absence as "cannot identify",
+   * never as an empty path.
+   */
+  readonly headingPath?: readonly string[];
   /** 1-based position within this instrument's anchor — the id's ordinal component. */
   readonly ordinal: number;
   /**

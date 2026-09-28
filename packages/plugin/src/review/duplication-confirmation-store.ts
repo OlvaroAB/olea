@@ -61,8 +61,10 @@
  *
  * ## What this module does not do
  *
- * It never transitions a status and never reads her answer: no clause defines an affordance for
- * her to confirm or decline a duplication, so this module stops at the record. It never decides
+ * For a duplication it never transitions a status and never reads her answer: no clause defines
+ * an affordance for her to confirm or decline a duplication, so this module stops at the record.
+ * (A repair choice is different — `[D-392]` defines her grouped choice, so its answer is saved
+ * here; see below.) It never decides
  * what she is served — the withholding is `./open-session.ts`'s, computed from the live
  * collision every time, whatever status a record holds (F3's "it holds while the loser waits in
  * the queue as much as after she answers"). It never deletes a record.
@@ -80,9 +82,39 @@
  * discipline, and the `'proposed' | 'confirmed' | 'declined'` status vocabulary. Identity here is
  * simply `instrumentId` — the deleted id itself never renames, so this needs none of the
  * losing-note rename-tracking the duplication half above does. `[D-392]` binding condition 1 (the
- * original identity is preserved until she resolves it): once a record leaves `'proposed'`, this
- * module never rewrites it back — a later walk that still finds the same or different candidates
- * for an already-resolved id never re-litigates it.
+ * original identity is preserved until she resolves it): once a record leaves `'proposed'`, a
+ * later walk that still finds the same or different candidates for an already-resolved id never
+ * re-litigates it. The one way back to `'proposed'` is `[D-409]`'s: a confirmed answer whose
+ * block no longer matches its digest is re-proposed by {@link applyConfirmedRepairChoice} rather
+ * than applied — nothing was attached, so the identity is still the one she has not yet given away.
+ *
+ * ### `[D-409]` (`ol-v7r5.105`): schema version 2, candidates identified by digest
+ *
+ * Version 1 named each candidate by note path only, so two candidates in one note could not be
+ * told apart. Version 2 adds, to every candidate, `digest` — `./repair-choice.ts`'s
+ * `repairCandidateDigest` of the block's text plus its heading path, a one-way hash that stores
+ * none of her wording — and, once she answers with a candidate, `resolvedDigest` beside
+ * `resolvedNotePath`. Candidates are ordered by note path, then digest.
+ *
+ * - **Persisted shape, version 1 (read, never newly written for a digested entry):**
+ *   `{ instrumentId, candidates: [{ notePath, meetsCertaintyTest }], status, reason, proposedAt,
+ *   confirmedAt?, declinedAt?, resolvedNotePath?, schemaVersion: 1 }`.
+ * - **Version 2:** the same, with `digest` required on every candidate and `resolvedDigest`
+ *   required on a `'confirmed'` record: `{ instrumentId, candidates: [{ notePath,
+ *   meetsCertaintyTest, digest }], status, reason, proposedAt, confirmedAt?, declinedAt?,
+ *   resolvedNotePath?, resolvedDigest?, schemaVersion: 2 }`.
+ *
+ * **Migration posture.** Reading never writes: {@link listRepairChoiceConfirmationRecords} accepts
+ * both versions as they are on disk. A version 1 record still `'proposed'` is rewritten as version
+ * 2 only by {@link proposeRepairChoiceConfirmations}, and only when a walk hands it digested
+ * candidates for the same deleted id — the same in-place refresh this store has always made when
+ * a proposal's candidates change. A resolved version 1 record is never rewritten by a walk. An
+ * entry whose candidates are not all digested (a caller that cannot compute one yet) is still
+ * written as version 1, exactly as before, and never downgrades a version 2 record. A version 1
+ * candidate carries no digest, so an answer naming one is stale ({@link saveRepairChoiceAnswer})
+ * and a version 1 confirmed record is re-proposed rather than applied — never guessed onto a
+ * block by note path. A record of any other version is matched, so nothing shadows it, and
+ * never rewritten or answered.
  *
  * ## `[D-265]` ruling 3's item-validation proposals, sharing this same folder (`ol-egov.141.53.1`)
  *
@@ -101,8 +133,20 @@
  * carried through to this third reason value.
  */
 
-import type { ItemDefectEvidenceKind, VaultPath, VaultSource } from 'olea-core';
+import type {
+  ItemDefectEvidenceKind,
+  VaultInstrumentRecord,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import { hashText, listFolder } from 'olea-core';
+import {
+  compareRepairChoiceCandidates,
+  digestOfInstrumentRecord,
+  type RepairChoiceAttachedResult,
+  type RepairChoiceProposal,
+  rawOfInstrumentRecord,
+} from './repair-choice.js';
 
 /** The vault folder this module owns — dot-prefixed, its own, never inside another store's. */
 export const DUPLICATION_CONFIRMATION_FOLDER: VaultPath = '.olea/duplication-confirmation';
@@ -177,12 +221,18 @@ export type RepairChoiceConfirmationReason = 'deleted-id-repair';
 export const REPAIR_CHOICE_CONFIRMATION_REASON: RepairChoiceConfirmationReason =
   'deleted-id-repair';
 
-export const REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION = 1;
+/** `[D-409]` (`ol-v7r5.105`): version 2 identifies each candidate by digest — see the module doc. */
+export const REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION = 2;
+
+/** The pre-`[D-409]` version: candidates by note path only. Read, and still written for an undigested entry. */
+export const REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION_V1 = 1;
 
 /** One candidate as recorded — `./repair-choice.ts`'s `RepairChoiceCandidate`, persisted. */
 export interface RepairChoiceConfirmationCandidateRecord {
   readonly notePath: VaultPath;
   readonly meetsCertaintyTest: boolean;
+  /** `[D-409]`: `./repair-choice.ts`'s `repairCandidateDigest`. Required at version 2, absent at version 1. */
+  readonly digest?: string;
 }
 
 /**
@@ -201,6 +251,8 @@ export interface RepairChoiceConfirmationRecord {
   readonly declinedAt?: string;
   /** Set only once `status` is `'confirmed'` — which candidate she chose. */
   readonly resolvedNotePath?: VaultPath;
+  /** `[D-409]`: set with `resolvedNotePath` at version 2 — the chosen candidate's digest. */
+  readonly resolvedDigest?: string;
   readonly schemaVersion: number;
 }
 
@@ -269,7 +321,11 @@ function isRepairChoiceCandidateRecord(
 ): value is RepairChoiceConfirmationCandidateRecord {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return isNonEmptyString(v.notePath) && typeof v.meetsCertaintyTest === 'boolean';
+  return (
+    isNonEmptyString(v.notePath) &&
+    typeof v.meetsCertaintyTest === 'boolean' &&
+    (v.digest === undefined || isNonEmptyString(v.digest))
+  );
 }
 
 /** `[D-392]`'s reader accepts this reason value; {@link isDuplicationConfirmationRecord} is unchanged and still recognises only the other. */
@@ -287,7 +343,20 @@ export function isRepairChoiceConfirmationRecord(
   if (v.confirmedAt !== undefined && !isNonEmptyString(v.confirmedAt)) return false;
   if (v.declinedAt !== undefined && !isNonEmptyString(v.declinedAt)) return false;
   if (v.resolvedNotePath !== undefined && !isNonEmptyString(v.resolvedNotePath)) return false;
+  if (v.resolvedDigest !== undefined && !isNonEmptyString(v.resolvedDigest)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
+  if (v.schemaVersion === REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION) {
+    // `[D-409]`: at version 2 every candidate is identified by digest, and a confirmed answer
+    // names one by note path and digest together.
+    const candidates = v.candidates as readonly RepairChoiceConfirmationCandidateRecord[];
+    if (!candidates.every((candidate) => isNonEmptyString(candidate.digest))) return false;
+    if (
+      v.status === 'confirmed' &&
+      (!isNonEmptyString(v.resolvedNotePath) || !isNonEmptyString(v.resolvedDigest))
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 
@@ -507,17 +576,6 @@ export async function proposeDuplicationConfirmations(
   return { records, written };
 }
 
-/**
- * `[D-392]`'s persisted half: one grouped proposal per deleted id, in the SAME folder as
- * {@link proposeDuplicationConfirmations}, under {@link REPAIR_CHOICE_CONFIRMATION_REASON}.
- * Idempotent, keyed by `instrumentId` alone (see module doc's "Identity here is simply
- * `instrumentId`"): calling this again with the same deleted id writes nothing new unless its
- * still-`'proposed'` candidates changed. Once a record leaves `'proposed'` (she has answered), it
- * is matched so nothing shadows it, but never rewritten — binding condition 1's "the original
- * identity is preserved until she resolves it" is this store's own no-op for every call after
- * that. Writes only under {@link DUPLICATION_CONFIRMATION_FOLDER}; reads nothing when `entries` is
- * empty.
- */
 /** `[D-265]` ruling 3's own reason value — this store's own name for it, never a clause's verbatim wording. */
 export type ItemValidationConfirmationReason = 'item-validation';
 
@@ -699,6 +757,22 @@ export async function proposeItemValidationConfirmations(
   return { records, written };
 }
 
+/**
+ * `[D-392]`'s persisted half: one grouped proposal per deleted id, in the SAME folder as
+ * {@link proposeDuplicationConfirmations}, under {@link REPAIR_CHOICE_CONFIRMATION_REASON}.
+ * Idempotent, keyed by `instrumentId` alone (see module doc's "Identity here is simply
+ * `instrumentId`"): calling this again with the same deleted id writes nothing new unless its
+ * still-`'proposed'` candidates changed. Once a record leaves `'proposed'` (she has answered), it
+ * is matched so nothing shadows it, but never rewritten — binding condition 1's "the original
+ * identity is preserved until she resolves it" is this store's own no-op for every call after
+ * that. Writes only under {@link DUPLICATION_CONFIRMATION_FOLDER}; reads nothing when `entries` is
+ * empty.
+ *
+ * `[D-409]`: an entry whose every candidate carries a digest is written as version 2 (upgrading a
+ * still-proposed version 1 record in place); any other entry is written as version 1, as before,
+ * and never downgrades a version 2 record. Candidates are stored in note-path-then-digest order.
+ * See the module doc's migration posture.
+ */
 export async function proposeRepairChoiceConfirmations(
   vault: VaultSource,
   entries: readonly RepairChoiceConfirmationEntryInput[],
@@ -719,20 +793,30 @@ export async function proposeRepairChoiceConfirmations(
   const written: VaultPath[] = [];
 
   for (const entry of entries) {
-    const candidates = [...entry.candidates].sort((a, b) => byString(a.notePath, b.notePath));
+    const candidates = candidateRecordsOf(entry.candidates);
+    const digested = candidates.every((candidate) => candidate.digest !== undefined);
+    const schemaVersion = digested
+      ? REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION
+      : REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION_V1;
     const stored = existingByInstrumentId.get(entry.instrumentId);
 
     if (stored !== undefined) {
       if (
-        stored.record.schemaVersion !== REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION ||
-        stored.record.status !== 'proposed'
+        !isWritableRepairChoiceVersion(stored.record.schemaVersion) ||
+        stored.record.status !== 'proposed' ||
+        // Never downgrade: an undigested entry leaves a version 2 record's digests as they are.
+        stored.record.schemaVersion > schemaVersion
       ) {
         // Not this module's shape to rewrite, or already resolved: matched, so no second
         // proposal shadows it, and never rewritten (binding condition 1).
         records.push(stored);
         continue;
       }
-      const refreshed: RepairChoiceConfirmationRecord = { ...stored.record, candidates };
+      const refreshed: RepairChoiceConfirmationRecord = {
+        ...stored.record,
+        candidates,
+        schemaVersion,
+      };
       if (canonical(refreshed) !== canonical(stored.record)) {
         await vault.write(stored.path, serialize(refreshed));
         written.push(stored.path);
@@ -749,7 +833,7 @@ export async function proposeRepairChoiceConfirmations(
       status: 'proposed',
       reason: REPAIR_CHOICE_CONFIRMATION_REASON,
       proposedAt: new Date(entry.proposedAt).toISOString(),
-      schemaVersion: REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+      schemaVersion,
     };
     const path = await newRecordPath(vault, [entry.instrumentId], taken);
     taken.add(path);
@@ -759,4 +843,242 @@ export async function proposeRepairChoiceConfirmations(
   }
 
   return { records, written };
+}
+
+/** The two repair-choice versions this module reads, answers and refreshes; any other is left as it is. */
+function isWritableRepairChoiceVersion(schemaVersion: number): boolean {
+  return (
+    schemaVersion === REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION ||
+    schemaVersion === REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION_V1
+  );
+}
+
+/**
+ * The candidates as they are persisted: `[D-409]`'s note-path-then-digest order, and no `digest`
+ * key at all on a candidate that has none (so a version 1 file stays exactly its old shape).
+ */
+function candidateRecordsOf(
+  candidates: readonly RepairChoiceConfirmationCandidateRecord[],
+): RepairChoiceConfirmationCandidateRecord[] {
+  return [...candidates].sort(compareRepairChoiceCandidates).map((candidate) => ({
+    notePath: candidate.notePath,
+    meetsCertaintyTest: candidate.meetsCertaintyTest,
+    ...(candidate.digest !== undefined ? { digest: candidate.digest } : {}),
+  }));
+}
+
+/** The record for `instrumentId` — the same one {@link proposeRepairChoiceConfirmations} would match (the last listed). */
+async function findRepairChoiceRecord(
+  vault: VaultSource,
+  instrumentId: string,
+): Promise<StoredRepairChoiceConfirmationRecord | undefined> {
+  const matches = (await listRepairChoiceConfirmationRecords(vault)).filter(
+    (stored) => stored.record.instrumentId === instrumentId,
+  );
+  return matches[matches.length - 1];
+}
+
+/**
+ * `[D-409]`: the one current block the candidate `(notePath, digest)` names, or `undefined` when
+ * none or several do — the block was edited, its heading path changed, it moved to another note,
+ * or two blocks with the same text sit under the same headings. Every such case is stale.
+ */
+async function pinCandidate(
+  notePath: VaultPath,
+  digest: string,
+  currentRecords: readonly VaultInstrumentRecord[],
+): Promise<VaultInstrumentRecord | undefined> {
+  const pinned: VaultInstrumentRecord[] = [];
+  for (const record of currentRecords) {
+    if (record.notePath !== notePath) continue;
+    if ((await digestOfInstrumentRecord(record)) === digest) pinned.push(record);
+  }
+  return pinned.length === 1 ? pinned[0] : undefined;
+}
+
+/** Her answer as the grouped choice saves it — `[D-409]`: a candidate by note path and digest, or none of these. */
+export type RepairChoiceSavedAnswer =
+  | { readonly kind: 'candidate'; readonly notePath: VaultPath; readonly digest: string }
+  | { readonly kind: 'none-of-these' };
+
+export interface SaveRepairChoiceAnswerInput {
+  /** The deleted id the grouped choice is about. */
+  readonly instrumentId: string;
+  readonly answer: RepairChoiceSavedAnswer;
+  /** Every instrument a fresh vault walk sees now — what her chosen candidate is re-checked against. */
+  readonly currentRecords: readonly VaultInstrumentRecord[];
+  /** Epoch ms — the caller's clock. */
+  readonly now: number;
+}
+
+export type SaveRepairChoiceAnswerResult =
+  /** Written: `'confirmed'` with `resolvedNotePath` and `resolvedDigest`, or `'declined'`. */
+  | { readonly kind: 'saved'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /**
+   * `[D-409]`: her chosen block no longer matches its digest (edited, moved, or now ambiguous), or
+   * the record predates digests. Nothing is written; the record stays `'proposed'`, to be
+   * refreshed by the next walk's {@link proposeRepairChoiceConfirmations} and offered again.
+   */
+  | { readonly kind: 'stale'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /** The deleted id is live again somewhere; there is nothing left to repair, and nothing is written. */
+  | { readonly kind: 'id-live'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /** Already answered — binding condition 1: an answer is saved once. */
+  | { readonly kind: 'already-resolved'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /** The answer names a candidate this record never offered — a caller bug, never a real choice. */
+  | { readonly kind: 'unknown-candidate'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /** A record version this module does not answer; left exactly as it is. */
+  | { readonly kind: 'unsupported-version'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  | { readonly kind: 'not-found' };
+
+/**
+ * `[D-392]` / `[D-409]` (`ol-v7r5.105`): saves her answer to a grouped repair choice. "None of
+ * these" is saved as `'declined'` whatever the vault now holds — declining attaches nothing, so
+ * there is nothing to go stale. A candidate is saved as `'confirmed'` only when its
+ * `(notePath, digest)` pins exactly one block in the current walk; otherwise the answer is
+ * `'stale'` and nothing is written (re-proposed, never applied). Writes only the record, only
+ * under {@link DUPLICATION_CONFIRMATION_FOLDER}; it never writes into her note — the write-back is
+ * {@link applyConfirmedRepairChoice}'s caller's, through `../instrument-stamping/repair-write-back.ts`.
+ */
+export async function saveRepairChoiceAnswer(
+  vault: VaultSource,
+  input: SaveRepairChoiceAnswerInput,
+): Promise<SaveRepairChoiceAnswerResult> {
+  const { instrumentId, answer, currentRecords, now } = input;
+  const stored = await findRepairChoiceRecord(vault, instrumentId);
+  if (stored === undefined) return { kind: 'not-found' };
+  const { record } = stored;
+  if (!isWritableRepairChoiceVersion(record.schemaVersion)) {
+    return { kind: 'unsupported-version', stored };
+  }
+  if (record.status !== 'proposed') return { kind: 'already-resolved', stored };
+  if (currentRecords.some((current) => current.instrumentId === instrumentId)) {
+    return { kind: 'id-live', stored };
+  }
+
+  const at = new Date(now).toISOString();
+  if (answer.kind === 'none-of-these') {
+    const declined: RepairChoiceConfirmationRecord = {
+      ...record,
+      status: 'declined',
+      declinedAt: at,
+    };
+    await vault.write(stored.path, serialize(declined));
+    return { kind: 'saved', stored: { path: stored.path, record: declined } };
+  }
+
+  // A version 1 record carries no digest: its candidates cannot be pinned to one block, so an
+  // answer naming one is re-proposed, never guessed onto a block by note path.
+  if (record.schemaVersion !== REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION) {
+    return { kind: 'stale', stored };
+  }
+  const offered = record.candidates.some(
+    (candidate) => candidate.notePath === answer.notePath && candidate.digest === answer.digest,
+  );
+  if (!offered) return { kind: 'unknown-candidate', stored };
+  if ((await pinCandidate(answer.notePath, answer.digest, currentRecords)) === undefined) {
+    return { kind: 'stale', stored };
+  }
+
+  const confirmed: RepairChoiceConfirmationRecord = {
+    ...record,
+    status: 'confirmed',
+    confirmedAt: at,
+    resolvedNotePath: answer.notePath,
+    resolvedDigest: answer.digest,
+  };
+  await vault.write(stored.path, serialize(confirmed));
+  return { kind: 'saved', stored: { path: stored.path, record: confirmed } };
+}
+
+export interface ApplyConfirmedRepairChoiceInput {
+  readonly instrumentId: string;
+  /** Every instrument a fresh vault walk sees now. */
+  readonly currentRecords: readonly VaultInstrumentRecord[];
+}
+
+export type ApplyConfirmedRepairChoiceResult =
+  /**
+   * Her confirmed block still matches its digest: hand `resolution` and `candidateRaw` to
+   * `../instrument-stamping/repair-write-back.ts`'s `writeBackRecoveredInstrumentId`, which applies
+   * its own refusals before writing. `target` is the one current record the digest pinned.
+   */
+  | {
+      readonly kind: 'apply';
+      readonly stored: StoredRepairChoiceConfirmationRecord;
+      readonly resolution: RepairChoiceAttachedResult;
+      readonly candidateRaw: string;
+      readonly target: VaultInstrumentRecord;
+    }
+  /** The deleted id is live again (the write-back already landed, or it is claimed): nothing to apply. */
+  | { readonly kind: 'id-live'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  /**
+   * `[D-409]`: the confirmed block no longer matches its digest, so the record was written back to
+   * `'proposed'` (her answer's fields removed) to be offered again — never applied.
+   */
+  | { readonly kind: 'reproposed'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  | { readonly kind: 'not-confirmed'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  | { readonly kind: 'unsupported-version'; readonly stored: StoredRepairChoiceConfirmationRecord }
+  | { readonly kind: 'not-found' };
+
+/**
+ * `[D-409]` (`ol-v7r5.105`): re-checks a confirmed answer's digest against the current walk
+ * before anything is written into her note. Exactly one block at `resolvedNotePath` with
+ * `resolvedDigest` is `'apply'`; anything else is stale and the record is re-proposed. Writes only
+ * the record, and only when re-proposing; never her note.
+ */
+export async function applyConfirmedRepairChoice(
+  vault: VaultSource,
+  input: ApplyConfirmedRepairChoiceInput,
+): Promise<ApplyConfirmedRepairChoiceResult> {
+  const { instrumentId, currentRecords } = input;
+  const stored = await findRepairChoiceRecord(vault, instrumentId);
+  if (stored === undefined) return { kind: 'not-found' };
+  const { record } = stored;
+  if (!isWritableRepairChoiceVersion(record.schemaVersion)) {
+    return { kind: 'unsupported-version', stored };
+  }
+  if (record.status !== 'confirmed') return { kind: 'not-confirmed', stored };
+  if (currentRecords.some((current) => current.instrumentId === instrumentId)) {
+    return { kind: 'id-live', stored };
+  }
+
+  const { resolvedNotePath, resolvedDigest } = record;
+  const target =
+    resolvedNotePath === undefined || resolvedDigest === undefined
+      ? undefined
+      : await pinCandidate(resolvedNotePath, resolvedDigest, currentRecords);
+
+  if (target === undefined || resolvedNotePath === undefined || resolvedDigest === undefined) {
+    const {
+      confirmedAt: _confirmedAt,
+      resolvedNotePath: _resolvedNotePath,
+      resolvedDigest: _resolvedDigest,
+      ...rest
+    } = record;
+    const reproposed: RepairChoiceConfirmationRecord = { ...rest, status: 'proposed' };
+    await vault.write(stored.path, serialize(reproposed));
+    return { kind: 'reproposed', stored: { path: stored.path, record: reproposed } };
+  }
+
+  const proposal: RepairChoiceProposal = {
+    instrumentId: record.instrumentId,
+    candidates: record.candidates.map((candidate) => ({ ...candidate })),
+    status: 'confirmed',
+    proposedAt: Date.parse(record.proposedAt),
+    resolvedNotePath,
+    resolvedDigest,
+  };
+  return {
+    kind: 'apply',
+    stored,
+    resolution: {
+      kind: 'attached',
+      instrumentId: record.instrumentId,
+      notePath: resolvedNotePath,
+      digest: resolvedDigest,
+      proposal,
+    },
+    candidateRaw: rawOfInstrumentRecord(target),
+    target,
+  };
 }

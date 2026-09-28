@@ -189,6 +189,24 @@ function headingAbove(headings: readonly HeadingBlock[], offset: number): string
 }
 
 /**
+ * `[D-409]` (`ol-v7r5.105`): every heading above `offset` that encloses it, outermost first — a
+ * heading closes every open heading of its own level or deeper, so the path is the chain of
+ * still-open headings when `offset` is reached. Its last entry is always `headingAbove`'s result
+ * for the same offset (the most recent heading is always open), and it is empty exactly when that
+ * is `null`. A heading that skips levels (`#` then `###`) simply nests; nothing is invented for
+ * the missing level.
+ */
+function headingPathAbove(headings: readonly HeadingBlock[], offset: number): readonly string[] {
+  const open: HeadingBlock[] = [];
+  for (const heading of headings) {
+    if (heading.start >= offset) break;
+    while (open.length > 0 && (open[open.length - 1]?.level ?? 0) >= heading.level) open.pop();
+    open.push(heading);
+  }
+  return open.map((heading) => heading.text);
+}
+
+/**
  * Every instrument in one note's source, in source order.
  *
  * Q&A and cloze come from `parseCards`, MCQ from `parseMcqBlocks`; the two
@@ -699,6 +717,7 @@ export async function enumerateVaultInstruments(
         noteUid,
         blockId: instrument.blockId,
         heading,
+        headingPath: headingPathAbove(headings, instrument.span.start),
         ordinal,
         ...(sourceProvenance !== undefined ? { sourceProvenance } : {}),
       };

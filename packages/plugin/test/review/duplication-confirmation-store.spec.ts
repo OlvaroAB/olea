@@ -34,7 +34,7 @@ import {
   proposeItemValidationConfirmations,
   proposeRepairChoiceConfirmations,
   REPAIR_CHOICE_CONFIRMATION_REASON,
-  REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+  REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION_V1,
   type RepairChoiceConfirmationEntryInput,
 } from '../../src/review/duplication-confirmation-store.js';
 import { memoryVault } from './memory-vault.js';
@@ -435,7 +435,9 @@ describe('[D-392]: repair-choice proposals share this store, under their own rea
       status: 'proposed',
       reason: REPAIR_CHOICE_CONFIRMATION_REASON,
       proposedAt: '2026-08-10T18:00:00.000Z',
-      schemaVersion: REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION,
+      // `[D-409]`: an entry with no digests is still written as version 1, exactly as before;
+      // `repair-choice-digest.spec.ts` holds the version 2 shape and the migration posture.
+      schemaVersion: REPAIR_CHOICE_CONFIRMATION_RECORD_SCHEMA_VERSION_V1,
     });
     expect(listed[0]?.path.startsWith(`${DUPLICATION_CONFIRMATION_FOLDER}/`)).toBe(true);
   });
