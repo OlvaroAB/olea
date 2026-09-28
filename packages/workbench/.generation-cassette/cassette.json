@@ -68,56 +68,31 @@
             {
               "stem": "Which part of quorbin names ilmenor alongside sarquith?",
               "correctAnswer": "section 3",
-              "distractors": [
-                "passage 1",
-                "passage 4",
-                "passage 9",
-                "passage 10"
-              ],
+              "distractors": ["passage 1", "passage 4", "passage 9", "passage 10"],
               "feedback": "Within quorbin, section 3, ilmenor is named alongside sarquith."
             },
             {
               "stem": "Which part of quorbin provides a further note on ilmenor that expands earlier coverage?",
               "correctAnswer": "passage 4",
-              "distractors": [
-                "passage 1",
-                "passage 9",
-                "passage 10",
-                "section 3"
-              ],
+              "distractors": ["passage 1", "passage 9", "passage 10", "section 3"],
               "feedback": "Passage 4 contains a further note on ilmenor that expands earlier coverage of quorbin."
             },
             {
               "stem": "Where is additional material on ilmenor recorded within quorbin?",
               "correctAnswer": "passage 9",
-              "distractors": [
-                "passage 1",
-                "passage 4",
-                "passage 10",
-                "section 3"
-              ],
+              "distractors": ["passage 1", "passage 4", "passage 10", "section 3"],
               "feedback": "Additional material on ilmenor is recorded under quorbin, passage 9."
             },
             {
               "stem": "Which part of quorbin contains a note on ilmenor that is cross-referenced against sarquith?",
               "correctAnswer": "passage 10",
-              "distractors": [
-                "passage 1",
-                "passage 4",
-                "passage 9",
-                "section 3"
-              ],
+              "distractors": ["passage 1", "passage 4", "passage 9", "section 3"],
               "feedback": "A note on ilmenor follows in passage 10, which is cross-referenced against sarquith."
             },
             {
               "stem": "Which part of quorbin discusses ilmenor in relation to quorbin?",
               "correctAnswer": "passage 1",
-              "distractors": [
-                "passage 4",
-                "passage 9",
-                "passage 10",
-                "section 3"
-              ],
+              "distractors": ["passage 4", "passage 9", "passage 10", "section 3"],
               "feedback": "Passage 1 discusses ilmenor in relation to quorbin."
             }
           ]
