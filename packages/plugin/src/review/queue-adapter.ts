@@ -148,12 +148,19 @@
  * mechanism invented here.
  */
 
-import { type ReviewLogEntry, readExplainBackCorrectness } from 'olea-contracts';
+import {
+  type ExplainBackCorrectnessVerdict,
+  type ReviewLogEntry,
+  type ReviewLogRecord,
+  readExplainBackCorrectness,
+  type SoloLevel,
+} from 'olea-contracts';
 import type {
   ComposedQueue,
   DistractorProvenance,
   FailureShape,
   GradedReviewEvidence,
+  InstrumentValidityProjection,
   McqInstrumentRecord,
   PlannedQueueItem,
   QueueItem,
@@ -177,6 +184,7 @@ import {
   IDLE_SITTING,
   mathRandomSource,
   presentMcq,
+  projectInstrumentValidity,
 } from 'olea-core';
 import { localToday } from '../today/data-source.js';
 import type { McqOption, ReviewInstrument, ReviewQueueItem, SelectionContextV4 } from './types.js';
@@ -291,6 +299,20 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * treatment a null recall rating gets. `packages/core/src/support-level/
  * history.ts` folds the same rule.
  *
+ * **Only her own failures move the ladder** (rulings of 2026-09-28,
+ * `ol-egov.141.89.9.66`; the core fold's module doc states the same rule).
+ * An explanation with NO correctness verdict — the grader unavailable, a
+ * transport fault, a check that failed, or a record older than the verdict —
+ * has no reading unless its depth grade is `prestructural` (a reading of what
+ * she wrote): it no longer reads as a minor slip of hers. Every review of an
+ * instrument proven invalid (`validity.provenInvalid`: a standing rejection,
+ * a defect) is left out; a review whose grade a contest resolved `corrected`
+ * proved wrong is read through its corrective re-grade (`revisionOf`) where
+ * one was recorded, and not at all where none was, and the re-grade is not
+ * read a second time on its own. Her suspended instruments keep their
+ * history: a withdrawal is not invalidity. `validity` defaults to the
+ * projection of `entries`.
+ *
  * Because `qa`/`cloze` and `explain-back` reviews of the SAME concept in one
  * sitting occupy different tiers (`[D-094]`'s ladders are per-tier), the
  * per-session fold below is keyed by concept AND tier, not concept alone —
@@ -303,12 +325,32 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  */
 export function buildSupportLevelHistoryLookup(
   entries: readonly ReviewLogEntry[],
+  validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
 ): SupportLevelHistoryLookup {
   const byKey = new Map<string, SessionSupportOutcome[]>();
 
+  // Corrective re-grades are read in place of the review they replace.
+  const reviewsById = new Map<string, ReviewLogRecord>();
+  for (const entry of entries) if (entry.kind === 'review') reviewsById.set(entry.eventId, entry);
+  const replacement = new Map<string, ReviewLogRecord>();
+  const replacing = new Set<string>();
+  for (const candidate of reviewsById.values()) {
+    const revisionOf = candidate.explainBackGrade?.revisionOf;
+    if (typeof revisionOf !== 'string' || !reviewsById.has(revisionOf)) continue;
+    const prior = replacement.get(revisionOf);
+    if (prior === undefined || isLaterReview(candidate, prior)) {
+      replacement.set(revisionOf, candidate);
+    }
+    replacing.add(candidate.eventId);
+  }
+
   for (const session of clusterReviewSessions(entries)) {
     const shapeByKey = new Map<string, FailureShape>();
-    for (const review of session.reviews) {
+    for (const sessionReview of session.reviews) {
+      if (replacing.has(sessionReview.eventId)) continue;
+      if (validity.provenInvalid.has(sessionReview.instrumentId)) continue;
+      const review = standingVerdictOf(sessionReview, replacement, validity.correctedEvidence);
+      if (review === null) continue;
       let tier: SupportLadderTier;
       let evidence: GradedReviewEvidence;
 
@@ -319,8 +361,8 @@ export function buildSupportLevelHistoryLookup(
       } else if (review.instrumentType === 'explain-back') {
         const soloLevel = review.explainBackGrade?.soloLevel;
         const correctnessVerdict = readExplainBackCorrectness(review)?.verdict;
-        // `ol-ryrh`: without a depth grade only an incorrect verdict has a reading.
-        if (soloLevel === undefined && correctnessVerdict !== 'incorrect') continue;
+        // `ol-ryrh` and the 2026-09-28 rulings: see `hasExplanationReading`.
+        if (!hasExplanationReading(correctnessVerdict, soloLevel)) continue;
         tier = 'explanation';
         evidence = {
           instrumentType: 'explain-back',
@@ -340,7 +382,7 @@ export function buildSupportLevelHistoryLookup(
       }
 
       const shape = deriveFailureShape(evidence);
-      for (const conceptId of review.conceptIds) {
+      for (const conceptId of sessionReview.conceptIds) {
         const key = `${conceptId}:${tier}`;
         const existing = shapeByKey.get(key);
         shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
@@ -360,6 +402,54 @@ export function buildSupportLevelHistoryLookup(
       return byKey.get(`${conceptId}:${tier}`) ?? [];
     },
   };
+}
+
+/**
+ * Whether an explanation has a ladder reading — the same rule as
+ * `packages/core/src/support-level/history.ts`'s function of this name. An
+ * `'incorrect'` verdict always does (`ol-ryrh`: escalation needs no depth); a
+ * `'correct'` or `'partial'` one only with a depth grade (F2.20); with NO
+ * verdict — an operational failure, never hers — only a `prestructural`
+ * depth grade does, since that grade reads what she wrote.
+ */
+function hasExplanationReading(
+  correctness: ExplainBackCorrectnessVerdict | undefined,
+  soloLevel: SoloLevel | undefined,
+): boolean {
+  if (correctness === 'incorrect') return true;
+  if (correctness === undefined) return soloLevel === 'prestructural';
+  return soloLevel !== undefined;
+}
+
+/**
+ * The review whose verdict stands for `review`: itself, or the corrective
+ * re-grade that replaced it (followed to the last one), or `null` when a
+ * corrected contest proved its grade wrong with no corrected verdict
+ * recorded — the same rule as the core fold's `standingVerdictOf`.
+ */
+function standingVerdictOf(
+  review: ReviewLogRecord,
+  replacement: ReadonlyMap<string, ReviewLogRecord>,
+  correctedEvidence: ReadonlyMap<string, unknown>,
+): ReviewLogRecord | null {
+  let source = review;
+  const visited = new Set<string>([source.eventId]);
+  for (;;) {
+    const next = replacement.get(source.eventId);
+    if (next === undefined || visited.has(next.eventId)) break;
+    visited.add(next.eventId);
+    source = next;
+  }
+  return correctedEvidence.has(source.eventId) ? null : source;
+}
+
+/** `a` was logged after `b`, by `(instant, eventId)`; an unreadable instant never wins. */
+function isLaterReview(a: ReviewLogRecord, b: ReviewLogRecord): boolean {
+  const aInstant = Date.parse(a.timestamp);
+  const bInstant = Date.parse(b.timestamp);
+  if (!Number.isFinite(aInstant)) return false;
+  if (!Number.isFinite(bInstant)) return true;
+  return aInstant > bInstant || (aInstant === bInstant && a.eventId > b.eventId);
 }
 
 /**

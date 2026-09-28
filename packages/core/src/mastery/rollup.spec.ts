@@ -188,7 +188,9 @@ describe('computeConceptMastery — an UNGRADED explain-back is recorded, never 
     const result = computeConceptMastery(entries, 'concept-a');
     expect(result.state).toBe('seed');
     expect(result.evidence.explainBackAttempts).toBe(2);
-    expect(result.evidence.tiersPracticed.explanation).toBe(true);
+    // Ruling of 2026-09-28 (`ol-egov.141.89.9.66`): nothing assessed, so no
+    // practice is established — not even the "practised" flag.
+    expect(result.evidence.tiersPracticed.explanation).toBe(false);
   });
 
   it('an ungraded explain-back does not satisfy the depth gate even alongside solid recall evidence', () => {
@@ -1554,5 +1556,271 @@ describe('readAllConceptVitality / readConceptVitality — proven-invalid eviden
     }
     expect(plain.get('concept-a')?.value).toBe('holding');
     expect(plain.get('concept-b')?.value).toBe('holding');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.66` — the rulings of 2026-09-28: which evidence counts,
+// and a system failure is never read as hers. One block per rule; ids are
+// structural placeholders (INV-3).
+// ---------------------------------------------------------------------------
+
+const PROVENANCE = { taskId: 't', promptVersion: 'v0', modelId: 'm' } as const;
+
+function suspendOn(
+  instrumentId: string,
+  eventId: string,
+  reason?: 'defect' | 'source-revision' | 'own-choice',
+): SuspendLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'suspend',
+    eventId,
+    timestamp: '2026-01-25T09:00:00-04:00',
+    instrumentId,
+    conceptIds: ['concept-a'],
+    ...(reason !== undefined ? { reason } : {}),
+  } as SuspendLogRecord;
+}
+
+function correctnessOnly(
+  eventId: string,
+  verdict: 'correct' | 'partial' | 'incorrect',
+  timestamp = '2026-01-10T09:00:00-04:00',
+): ReviewLogRecord {
+  return review({
+    eventId,
+    timestamp,
+    instrumentId: 'explain-back:concept-a',
+    instrumentType: 'explain-back',
+    rating: null,
+    supportLevelShown: 'independent',
+    explainBackCorrectness: { verdict, artifactProvenance: PROVENANCE },
+  });
+}
+
+function gradeContest(instrumentId: string, opened: string, resolved: string): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6,
+    kind: 'dispute',
+    claimKind: 'grade',
+    claimRendering: 'explain-back-grade',
+    conceptIds: ['concept-a'],
+    instrumentId,
+    evidenceBasis: 'basis-1',
+    effect: 'quarantined',
+  };
+  return [
+    { ...base, eventId: `open-${instrumentId}`, timestamp: opened } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: `resolved-${instrumentId}`,
+      timestamp: resolved,
+      resolves: `open-${instrumentId}`,
+      outcome: 'corrected',
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('rule 1 (ol-egov.141.89.9.66): a personal withdrawal never invalidates sound evidence', () => {
+  const recall = onConsecutiveDays('2026-01-01', 3, () => ({ instrumentId: 'qa:w' }));
+  const scheduler = stubScheduler({ 'qa:w': 0.3 });
+
+  it('her withdrawal, a revision or an unknown reason keeps the stage and the vitality reading', () => {
+    const baseline = readAllConceptVitality(recall, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    for (const reason of ['own-choice', 'source-revision', undefined] as const) {
+      const entries = [...recall, suspendOn('qa:w', 's1', reason)];
+      const validity = projectInstrumentValidity(entries);
+      expect(computeConceptMastery(entries, 'concept-a').state).toBe('sapling');
+      expect(
+        computeConceptMastery(entries, 'concept-a', {
+          invalidInstrumentIds: [...validity.provenInvalid.keys()],
+        }).state,
+      ).toBe('sapling');
+      expect(
+        readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get('concept-a'),
+      ).toStrictEqual(baseline);
+    }
+  });
+
+  it('only a proven defect leaves current vitality: a suspension recorded as a defect does', () => {
+    const entries = [...recall, suspendOn('qa:w', 's1', 'defect')];
+    const reading = readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(reading?.instrumentsRead).toBe(0);
+    expect(reading?.value).toBe('early');
+  });
+});
+
+describe('rule 2 (ol-egov.141.89.9.66): a corrected grade uses the corrected verdict; unrelated reviews are never erased', () => {
+  it('a corrective re-grade replaces the attempt it corrects in every fact, not only the top stage', () => {
+    const original = gradedExplainBack('relational', { eventId: 'eb-original' });
+    const regrade = gradedExplainBack('multistructural', {
+      eventId: 'eb-regrade',
+      timestamp: '2026-01-12T09:00:00-04:00',
+      explainBackGrade: {
+        soloLevel: 'multistructural',
+        correctness: 'partial',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: 'eb-original',
+        artifactProvenance: PROVENANCE,
+      },
+    });
+    const result = computeConceptMastery([original, regrade], 'concept-a');
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.deepestSoloLevel).toBe('multistructural');
+    expect(result.evidence.depthGateCleared).toBe(false);
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    expect(result.evidence.gradedExplainBackCount).toBe(1);
+  });
+
+  it('a corrected contest keeps the contested attempt as practice only and every other review of the instrument', () => {
+    const recall = onConsecutiveDays('2026-01-01', 4, () => ({ instrumentId: 'qa:c' }));
+    // The contest was about the last answer (nearest the dispute).
+    const disputes = gradeContest('qa:c', '2026-01-04T09:05:00-04:00', '2026-01-06T09:00:00-04:00');
+    const validity = projectInstrumentValidity(recall, disputes);
+    expect([...validity.correctedEvidence.keys()]).toEqual(['d3']);
+    expect(validity.provenInvalid.size).toBe(0);
+    const result = computeConceptMastery(recall, 'concept-a', {
+      correctedEventIds: [...validity.correctedEvidence.keys()],
+    });
+    // Three sound successes on three days still stand: nothing unrelated was erased.
+    expect(result.state).toBe('sapling');
+    expect(result.evidence.scoredEventCount).toBe(4);
+    expect(result.evidence.scoredSuccessCount).toBe(3);
+    expect(result.evidence.successfulScoredDays).toBe(3);
+    expect(result.evidence.correctedAttemptCount).toBe(1);
+  });
+
+  it('a contested attempt with no corrected verdict is practice: seed lifts to sprout, and nothing more', () => {
+    const attempt = gradedExplainBack('relational', { eventId: 'eb-1' });
+    const disputes = gradeContest(
+      'explain-back:concept-a',
+      '2026-01-10T09:05:00-04:00',
+      '2026-01-11T09:00:00-04:00',
+    );
+    const validity = projectInstrumentValidity([attempt], disputes);
+    const result = computeConceptMastery([attempt], 'concept-a', {
+      correctedEventIds: [...validity.correctedEvidence.keys()],
+    });
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.topStageQualified).toBe(false);
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    expect(result.evidence.deepestSoloLevel).toBeNull();
+    expect(result.evidence.gradedExplainBackCount).toBe(0);
+  });
+
+  it('vitality replays the instrument without the corrected review, and keeps its other reviews', () => {
+    const scheduler = stubScheduler({ 'qa:c': 0.3, 'qa:solo': 0.2 });
+    const entries = [
+      review({ eventId: 'c-1', instrumentId: 'qa:c', timestamp: '2026-01-02T09:00:00-04:00' }),
+      review({ eventId: 'c-2', instrumentId: 'qa:c', timestamp: '2026-01-10T09:00:00-04:00' }),
+      review({ eventId: 'solo', instrumentId: 'qa:solo', timestamp: '2026-01-02T09:00:00-04:00' }),
+    ];
+    const onC = projectInstrumentValidity(
+      entries,
+      gradeContest('qa:c', '2026-01-10T09:01:00-04:00', '2026-01-12T09:00:00-04:00'),
+    );
+    expect([...onC.correctedEvidence.keys()]).toEqual(['c-2']);
+    const keptC = readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9, onC).get(
+      'concept-a',
+    );
+    expect(keptC?.instrumentsRead).toBe(2);
+
+    const onSolo = projectInstrumentValidity(
+      entries,
+      gradeContest('qa:solo', '2026-01-02T09:01:00-04:00', '2026-01-03T09:00:00-04:00'),
+    );
+    const droppedSolo = readAllConceptVitality(
+      entries,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      0.9,
+      onSolo,
+    ).get('concept-a');
+    expect(droppedSolo).toStrictEqual({
+      value: 'tending',
+      weakest: { instrumentId: 'qa:c', recallProbability: 0.3 },
+      instrumentsRead: 1,
+    });
+  });
+});
+
+describe('rule 3 (ol-egov.141.89.9.66): sprout means practised — a genuine unsuccessful attempt earns no credit', () => {
+  it('an incorrect explanation lifts seed to sprout and earns no explanation credit', () => {
+    const result = computeConceptMastery([correctnessOnly('x1', 'incorrect')], 'concept-a');
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.tiersPracticed.explanation).toBe(true);
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    expect(result.evidence.depthGateCleared).toBe(false);
+  });
+
+  it('a missed recall answer lifts to sprout and earns no recall credit, no success day', () => {
+    const result = computeConceptMastery([review({ rating: 'again' })], 'concept-a');
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.scoredSuccessCount).toBe(0);
+    expect(result.evidence.successfulScoredDays).toBe(0);
+    expect(result.evidence.tiersSucceeded?.recall).toBe(false);
+  });
+
+  it('missed answers on three days never reach sapling', () => {
+    const misses = onConsecutiveDays('2026-01-01', 3, () => ({ rating: 'again' as Rating }));
+    expect(computeConceptMastery(misses, 'concept-a').state).toBe('sprout');
+  });
+});
+
+describe('rule 4 (ol-egov.141.89.9.66): blank, skipped and unassessable submissions do not establish practice', () => {
+  it('an explanation nothing assessed stays seed and is not practice', () => {
+    const ungraded = review({
+      eventId: 'u1',
+      instrumentId: 'explain-back:concept-a',
+      instrumentType: 'explain-back',
+      rating: null,
+    });
+    const result = computeConceptMastery([ungraded], 'concept-a');
+    expect(result.state).toBe('seed');
+    expect(result.evidence.tiersPracticed.explanation).toBe(false);
+  });
+
+  it('a scored record with no rating has no reading and establishes nothing', () => {
+    const result = computeConceptMastery([review({ rating: null })], 'concept-a');
+    expect(result.state).toBe('seed');
+    expect(result.evidence.scoredEventCount).toBe(0);
+    expect(result.evidence.tiersPracticed.recall).toBe(false);
+  });
+
+  it('a skip is a non-attempt record, never a review: nothing moves', () => {
+    const skip = {
+      schemaVersion: 6,
+      kind: 'non-attempt',
+      eventId: 'n1',
+      timestamp: '2026-01-10T09:00:00-04:00',
+      conceptIds: ['concept-a'],
+      trigger: 'on-demand',
+    } as unknown as ReviewLogEntry;
+    expect(computeConceptMastery([skip], 'concept-a').state).toBe('seed');
+  });
+});
+
+describe('rule 5 (ol-egov.141.89.9.66): an operational failure is never read as hers', () => {
+  it('an assessed explanation whose correctness check failed is practice, never a success and never a failure', () => {
+    // Depth graded, verdict missing: the correctness check did not run.
+    const checkFailed = gradedExplainBack('relational', {
+      eventId: 'cf1',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: null,
+        artifactProvenance: PROVENANCE,
+      },
+    });
+    const result = computeConceptMastery([checkFailed], 'concept-a');
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    expect(result.evidence.topStageQualified).toBe(false);
   });
 });

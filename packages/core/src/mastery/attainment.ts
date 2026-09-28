@@ -15,9 +15,14 @@
  *
  * - **Displayed** — {@link foldConceptStage} over the evidence that stands
  *   now: the instruments proven invalid now are removed at EVERY stage, not
- *   only the top one (`[D-338]` items 2 and 3; the chain spec's item 5).
- *   Withheld-but-valid evidence (her suspension, a changed passage, a
- *   successor) is kept (`[D-338]` items 2 and 4; R3; F8.5).
+ *   only the top one (`[D-338]` items 2 and 3; the chain spec's item 5); a
+ *   review whose grade a contest resolved `corrected` proved wrong stays as
+ *   practice and earns nothing, its corrective re-grade (where one was
+ *   recorded) read in its place, and the instrument's other reviews stand
+ *   (rulings of 2026-09-28, `ol-egov.141.89.9.66`). Withheld-but-valid
+ *   evidence (her suspension or withdrawal, a changed passage, a successor)
+ *   is kept (`[D-338]` items 2 and 4; R3; F8.5): a withdrawal never
+ *   invalidates sound earlier evidence.
  * - **The historical award** — the earliest instant at which an attempt
  *   qualifying for the top stage STOOD, judged against the validity known at
  *   that instant: the same fold, as of that instant, with the instruments
@@ -29,7 +34,8 @@
  *   reads the award until a clause names one.
  * - **The correction note** — present exactly when the displayed stage is
  *   below the highest stage that ever stood; it names the proven-invalid facts
- *   behind the drop (rejected, corrected on contest, re-graded). Its words
+ *   behind the drop (rejected, recorded as a defect, a grade corrected on
+ *   contest, re-graded). Its words
  *   are the vocabulary registry's to add with `[D-338]`'s contract text; this
  *   module returns facts, never prose.
  *
@@ -41,7 +47,8 @@
  * ## Current readings: one eligibility rule
  *
  * Vitality, readiness, need and the recognition credit exclude proven-invalid
- * instruments always (`[D-338]` item 3). What they do with withheld-but-valid
+ * instruments always (`[D-338]` item 3), and never replay a review whose
+ * grade a corrected contest proved wrong. What they do with withheld-but-valid
  * ones is `[D-347]`, open — built as {@link WithheldEvidencePolicy} with
  * today's behaviour ("count them") as the default. Readiness additionally
  * needs an unaided (independent) success (`[D-264]`); need carries a basis
@@ -74,7 +81,11 @@ import {
   reviewRecordsForConcept,
   type SaplingRule,
 } from './rollup.js';
-import type { InstrumentValidityProjection, ProvenInvalidReason } from './validity.js';
+import {
+  type InstrumentValidityProjection,
+  type ProvenInvalidReason,
+  withoutCorrectedEvidence,
+} from './validity.js';
 import {
   isRecallTier,
   type ReadinessRecallReading,
@@ -106,11 +117,12 @@ export const ATTAINMENT_FOLD_VERSION = 'att-fold-1';
  * - `'drop-from-every-current-reading'` — (c), the spec's recommendation:
  *   vitality, readiness and need all drop it, and take it back when restored.
  *
- * Note what the log can say today: a suspension has no reason
- * (`./validity.ts`), so a revision's suspension and her own read alike; the
- * option applies to both. `[D-338]` item 4's "readiness moves on a revision"
- * becomes expressible apart from her choice only once `[D-345]` gives the
- * event a reason.
+ * Under every option a withdrawal is withheld, never proven invalid: it never
+ * invalidates sound earlier evidence (the ruling of 2026-09-28 on
+ * `ol-egov.141.89.9.60`), so the default counts it. A suspension may now
+ * record its reason (`[D-345]`); only `defect` moves an instrument to proven
+ * invalid (`./validity.ts`), and the option applies alike to her choice, a
+ * revision and an unknown reason.
  */
 export type WithheldEvidencePolicy =
   | 'count'
@@ -245,6 +257,16 @@ export type CorrectionFact =
       readonly at: string;
     }
   | {
+      /** One review's grade proven wrong by a contest resolved `corrected`; the review stays practice. */
+      readonly kind: 'grade-corrected';
+      readonly instrumentId: string;
+      /** The review whose grade was proven wrong. */
+      readonly reviewEventId: string;
+      /** The resolution that proved it. */
+      readonly resolutionEventId: string;
+      readonly at: string;
+    }
+  | {
       readonly kind: 'regraded';
       /** The instrument the superseded attempt was on. */
       readonly instrumentId: string;
@@ -290,6 +312,18 @@ function sortedDistinct(values: readonly number[]): number[] {
   return [...new Set(values.filter((value) => Number.isFinite(value)))].sort((a, b) => a - b);
 }
 
+/** The proving event of a correction fact, for its tie-break. */
+function correctionFactEventId(fact: CorrectionFact): string {
+  switch (fact.kind) {
+    case 'instrument':
+      return fact.eventId;
+    case 'grade-corrected':
+      return fact.resolutionEventId;
+    case 'regraded':
+      return fact.byEventId;
+  }
+}
+
 function correctionFacts(
   records: readonly ReviewLogRecord[],
   validity: InstrumentValidityProjection,
@@ -304,6 +338,17 @@ function correctionFacts(
       instrumentId,
       reason: fact.reason,
       eventId: fact.eventId,
+      at: fact.at,
+    });
+  }
+  for (const record of records) {
+    const fact = validity.correctedEvidence.get(record.eventId);
+    if (fact === undefined) continue;
+    facts.push({
+      kind: 'grade-corrected',
+      instrumentId: fact.instrumentId,
+      reviewEventId: fact.reviewEventId,
+      resolutionEventId: fact.resolutionEventId,
       at: fact.at,
     });
   }
@@ -329,8 +374,8 @@ function correctionFacts(
   return facts.sort((a, b) => {
     const byInstant = Date.parse(a.at) - Date.parse(b.at);
     if (byInstant !== 0 && Number.isFinite(byInstant)) return byInstant;
-    const aId = a.kind === 'instrument' ? a.eventId : a.byEventId;
-    const bId = b.kind === 'instrument' ? b.eventId : b.byEventId;
+    const aId = correctionFactEventId(a);
+    const bId = correctionFactEventId(b);
     return aId < bId ? -1 : aId > bId ? 1 : 0;
   });
 }
@@ -353,6 +398,7 @@ export function readConceptAttainment(
   const provenNow = new Set(validity.provenInvalid.keys());
   const displayed = foldConceptStage(entries, conceptId, rollup, {
     excludedInstrumentIds: provenNow,
+    correctedEventIds: new Set(validity.correctedEvidence.keys()),
   });
   // The cheap upper bound: every record, no validity, no supersession. No
   // stage above it ever stood, so when it equals the displayed stage there is
@@ -364,6 +410,7 @@ export function readConceptAttainment(
     foldConceptStage(entries, conceptId, rollup, {
       asOf: instant,
       excludedInstrumentIds: new Set(validity.provenInvalidAsOf(instant).keys()),
+      correctedEventIds: new Set(validity.correctedEvidenceAsOf(instant).keys()),
     });
 
   let award: TopStageAward | null = null;
@@ -501,7 +548,10 @@ export function readAllEligibleConceptVitality(
 ): ReadonlyMap<string, EligibleVitalityReading> {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
-  const replayed = replaySchedulerStates(entries, scheduler);
+  const replayed = replaySchedulerStates(
+    withoutCorrectedEvidence(entries, validity.correctedEvidence),
+    scheduler,
+  );
   const result = new Map<string, EligibleVitalityReading>();
   for (const id of conceptIds) {
     const instruments = conceptVitalityInstruments(entries, id, replayed);
@@ -560,8 +610,9 @@ export function readAllConceptReadiness(
 ): ReadonlyMap<string, ConceptReadinessReading> {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
-  const replayed = replaySchedulerStates(entries, scheduler);
-  const independent = instrumentsWithIndependentSuccess(entries);
+  const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
+  const replayed = replaySchedulerStates(standing, scheduler);
+  const independent = instrumentsWithIndependentSuccess(standing);
   const result = new Map<string, ConceptReadinessReading>();
   for (const id of conceptIds) {
     const instruments = conceptVitalityInstruments(entries, id, replayed)
@@ -673,8 +724,9 @@ export function readAllCurrentRecognition(
 ): ReadonlyMap<string, boolean> {
   const policy = withheldPolicyOf(options);
   const cut = options.holdingCut ?? HOLDING_CUT;
-  const replayed: ReplayResult = replaySchedulerStates(entries, scheduler);
-  const latest = latestRatedReviewByInstrument(entries);
+  const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
+  const replayed: ReplayResult = replaySchedulerStates(standing, scheduler);
+  const latest = latestRatedReviewByInstrument(standing);
   const result = new Map<string, boolean>();
   for (const id of conceptIds) {
     let current = false;

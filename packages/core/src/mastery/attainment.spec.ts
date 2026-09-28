@@ -226,7 +226,7 @@ describe('[D-338]: the award stays; the displayed stage falls only on proven-inv
     });
   });
 
-  it('a grade contest resolved corrected is a proven defect too (E5)', () => {
+  it('a grade contest resolved corrected proves that attempt wrongly graded: practice only, with the note (E5; ruling 2026-09-28)', () => {
     const reading = attain(
       [attempt],
       [
@@ -234,9 +234,22 @@ describe('[D-338]: the award stays; the displayed stage falls only on proven-inv
         gradeDispute('eb:a', 'd2', T3, { resolves: 'd1', outcome: 'corrected' }),
       ],
     );
-    expect(reading.displayed.state).toBe('seed');
+    // The attempt was genuine, so it stays practice (sprout), never a success.
+    expect(reading.displayed.state).toBe('sprout');
     expect(reading.award?.attemptEventId).toBe('eb-1');
-    expect(reading.correction?.facts[0]).toMatchObject({ reason: 'corrected-on-contest' });
+    expect(reading.correction).toEqual({
+      from: 'tree',
+      to: 'sprout',
+      facts: [
+        {
+          kind: 'grade-corrected',
+          instrumentId: 'eb:a',
+          reviewEventId: 'eb-1',
+          resolutionEventId: 'd2',
+          at: T3,
+        },
+      ],
+    });
   });
 
   it('an open contest keeps the evidence, marked thin, never absent (E5)', () => {
@@ -685,5 +698,116 @@ describe('the recognition credit reads only a correct, current, standing quiz an
 
   it('recall evidence is not recognition evidence', () => {
     expect(current([recall('r1', T1)], soon)).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.66` — the rulings of 2026-09-28 at the entry point.
+// ---------------------------------------------------------------------------
+
+function suspendWith(
+  instrumentId: string,
+  timestamp: string,
+  eventId: string,
+  reason: 'defect' | 'source-revision' | 'own-choice',
+): SuspendLogRecord {
+  return { ...suspend(instrumentId, timestamp, eventId), reason } as SuspendLogRecord;
+}
+
+describe('rule 1: a personal withdrawal never invalidates sound earlier evidence', () => {
+  const attempt = explainBack('eb-1', T1);
+
+  it('her own choice or a revision: the stage and award stand, and current readings count it by default', () => {
+    for (const reason of ['own-choice', 'source-revision'] as const) {
+      const entries = [attempt, suspendWith('eb:a', T2, 's1', reason)];
+      const reading = attain(entries);
+      expect(reading.displayed.state).toBe('tree');
+      expect(reading.correction).toBeNull();
+      const validity = projectInstrumentValidity(entries);
+      expect(validity.provenInvalid.size).toBe(0);
+    }
+    const quiz = review({
+      eventId: 'm1',
+      timestamp: T1,
+      instrumentId: 'mcq:a:1',
+      instrumentType: 'mcq',
+    });
+    const withdrawn = [quiz, suspendWith('mcq:a:1', T2, 's2', 'own-choice')];
+    expect(
+      readAllCurrentRecognition(
+        withdrawn,
+        ['concept-a'],
+        scheduler,
+        new Date(Date.parse(T1) + DAY),
+        projectInstrumentValidity(withdrawn),
+      ).get('concept-a'),
+    ).toBe(true);
+  });
+
+  it('a suspension recorded as a defect is proven invalid: displayed falls with the note, the award stays', () => {
+    const reading = attain([attempt, suspendWith('eb:a', T3, 's1', 'defect')]);
+    expect(reading.displayed.state).toBe('seed');
+    expect(reading.award?.attemptEventId).toBe('eb-1');
+    expect(reading.correction?.facts).toEqual([
+      { kind: 'instrument', instrumentId: 'eb:a', reason: 'defect', eventId: 's1', at: T3 },
+    ]);
+  });
+});
+
+describe('rule 2: a corrected grade uses the corrected verdict; unrelated reviews are never erased', () => {
+  const corrected = [
+    gradeDispute('eb:a', 'd1', T2),
+    gradeDispute('eb:a', 'd2', T3, { resolves: 'd1', outcome: 'corrected' }),
+  ];
+
+  it('a corrected verdict that qualifies is read in place of the one it corrects', () => {
+    const reading = attain(
+      [
+        explainBack('eb-1', T1, { correctness: 'incorrect' }),
+        explainBack('eb-2', T4, { revisionOf: 'eb-1', correctness: 'correct' }),
+      ],
+      corrected,
+    );
+    expect(reading.displayed.state).toBe('tree');
+    expect(reading.displayed.evidence.topStageAttempt?.eventId).toBe('eb-2');
+    expect(reading.correction).toBeNull();
+  });
+
+  it('the instrument’s other attempts stand: an earlier sound attempt keeps the stage', () => {
+    const reading = attain(
+      [
+        explainBack('eb-0', T1, { conceptIds: ['concept-a'] }),
+        explainBack('eb-1', '2026-01-11T09:00:00-04:00'),
+      ],
+      corrected,
+    );
+    expect(reading.displayed.state).toBe('tree');
+    expect(reading.displayed.evidence.topStageAttempt?.eventId).toBe('eb-0');
+    expect(reading.correction).toBeNull();
+  });
+
+  it('readiness and the recognition credit never replay a corrected answer, and keep the rest', () => {
+    const quiz = (eventId: string, timestamp: string, rating: ReviewLogRecord['rating']) =>
+      review({ eventId, timestamp, instrumentId: 'mcq:a:1', instrumentType: 'mcq', rating });
+    const entries = [quiz('m1', T1, 'good'), quiz('m2', T2, 'good')];
+    const onM2 = [
+      gradeDispute('mcq:a:1', 'q1', '2026-01-12T08:59:00-04:00'),
+      gradeDispute('mcq:a:1', 'q2', T3, { resolves: 'q1', outcome: 'corrected' }),
+    ];
+    const validity = projectInstrumentValidity(entries, onM2);
+    expect([...validity.correctedEvidence.keys()]).toEqual(['m2']);
+    const soon = new Date(Date.parse(T1) + DAY);
+    // m1 alone still stands as a correct, current answer.
+    expect(
+      readAllCurrentRecognition(entries, ['concept-a'], scheduler, soon, validity).get('concept-a'),
+    ).toBe(true);
+    const wrongOnly = [quiz('m1', T1, 'again'), quiz('m2', T2, 'good')];
+    const validityWrong = projectInstrumentValidity(wrongOnly, onM2);
+    // The corrected m2 no longer stands in for m1's miss.
+    expect(
+      readAllCurrentRecognition(wrongOnly, ['concept-a'], scheduler, soon, validityWrong).get(
+        'concept-a',
+      ),
+    ).toBe(false);
   });
 });

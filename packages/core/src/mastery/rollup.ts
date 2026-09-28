@@ -155,7 +155,11 @@ import { readExplainBackCorrectness } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
-import { type InstrumentValidityProjection, projectInstrumentValidity } from './validity.js';
+import {
+  type InstrumentValidityProjection,
+  projectInstrumentValidity,
+  withoutCorrectedEvidence,
+} from './validity.js';
 import { readVitality, type VitalityInstrument, type VitalityReading } from './vitality.js';
 
 /** R7's three evidence tiers, ordered weakest to strongest. */
@@ -370,9 +374,14 @@ export interface MasteryRollupOptions {
    */
   readonly admittedSupportLevels?: readonly SupportLevel[];
   /**
-   * `[D-281]` item 4 — instrument validity: the ids of instruments that are
-   * **withdrawn, rejected, or built on evidence that has gone stale**, whose
-   * graded attempts therefore qualify nothing. Her ACCEPTANCE of an
+   * `[D-281]` item 4 — instrument validity: the ids of instruments whose
+   * evidence is **proven invalid** (`./validity.ts`'s `provenInvalid`: a
+   * standing rejection, a suspension recorded as a defect), whose graded
+   * attempts therefore qualify nothing. Her withdrawal is NOT invalidity and
+   * must never be passed here (`[D-338]`, `[D-347]`; ruling of 2026-09-28:
+   * a personal withdrawal never invalidates sound evidence), and neither is
+   * a contest resolved `corrected`, which proves one review wrong
+   * ({@link MasteryRollupOptions.correctedEventIds}). Her ACCEPTANCE of an
    * instrument is not validity and must never be passed here as if it were.
    *
    * Supplied by the caller rather than derived here, because validity is a
@@ -413,6 +422,18 @@ export interface MasteryRollupOptions {
    * criteria exclude) cannot either.
    */
   readonly explanationMissingEventIds?: readonly string[];
+  /**
+   * The event ids of reviews whose grade a contest resolved `corrected`
+   * proved wrong (`./validity.ts`'s standing 4, `correctedEvidence`; ruling of
+   * 2026-09-28 on `ol-egov.141.89.9.60`, `ol-egov.141.89.9.66`). Such a review
+   * was a genuine attempt, so it still counts as practice (the `sprout`
+   * floor); its grade earns nothing — no success, no spaced day, no depth, no
+   * top stage. The instrument's other reviews are untouched, and a corrective
+   * re-grade, where one was recorded, is read in its place (`revisionOf`).
+   * Empty by default: a caller that reads no validity projection states that
+   * by saying nothing. Pass `[...validity.correctedEvidence.keys()]`.
+   */
+  readonly correctedEventIds?: readonly string[];
 }
 
 interface ResolvedOptions {
@@ -422,6 +443,7 @@ interface ResolvedOptions {
   readonly invalidInstrumentIds: ReadonlySet<string>;
   readonly saplingRule: SaplingRule;
   readonly explanationMissingEventIds: ReadonlySet<string>;
+  readonly correctedEventIds: ReadonlySet<string>;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
@@ -448,6 +470,7 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
     invalidInstrumentIds: new Set(options?.invalidInstrumentIds ?? []),
     saplingRule,
     explanationMissingEventIds: new Set(options?.explanationMissingEventIds ?? []),
+    correctedEventIds: new Set(options?.correctedEventIds ?? []),
   };
 }
 
@@ -472,8 +495,18 @@ export interface StageFoldScope {
   readonly excludedInstrumentIds?: ReadonlySet<string>;
   /** Epoch ms: only records at or before this instant are evidence. A record whose timestamp cannot be read is left out of an as-of fold. */
   readonly asOf?: number;
-  /** `'applied'` (default): a corrective re-grade's `revisionOf` disqualifies the attempt it names. */
+  /**
+   * `'applied'` (default): a corrective re-grade replaces the attempt its
+   * `revisionOf` names — the replaced attempt supports nothing, and the
+   * re-grade, a review of its own, is read in its place.
+   */
   readonly supersession?: 'applied' | 'ignored';
+  /**
+   * Reviews whose grade a corrected contest proved wrong as of the scope's
+   * instant — practice only, exactly as `MasteryRollupOptions.correctedEventIds`
+   * (the two are read together).
+   */
+  readonly correctedEventIds?: ReadonlySet<string>;
 }
 
 /**
@@ -489,7 +522,7 @@ function isSuccessRating(rating: Rating | null): boolean {
 
 /** The honest "what practice produced this state" line the concept-detail surface needs (BRIEF §3). */
 export interface ConceptMasteryEvidence {
-  /** Total scored (recall or recognition) review events for this concept, across the whole log. */
+  /** Total rated scored (recall or recognition) review events for this concept, across the whole log. */
   readonly scoredEventCount: number;
   /**
    * How many of those scored events succeeded (a rating other than `again`).
@@ -518,7 +551,23 @@ export interface ConceptMasteryEvidence {
    * type-check; `computeConceptMastery` always sets it.
    */
   readonly correctnessOnlyExplainBackCount?: number;
-  /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated, whatever its outcome. */
+  /**
+   * Attempts kept as practice only because a contest resolved `corrected`
+   * proved their grade wrong (`MasteryRollupOptions.correctedEventIds`): they
+   * lift `seed` to `sprout` and earn nothing else. A scored one is also in
+   * `scoredEventCount`, never in `scoredSuccessCount`. Optional, like
+   * `tiersSucceeded`; `computeConceptMastery` always sets it.
+   */
+  readonly correctedAttemptCount?: number;
+  /**
+   * Every R7 tier at least one event for this concept PRACTISED, whatever its
+   * outcome: a rated scored review, or an explanation carrying a depth grade
+   * or a correctness verdict. An explanation with neither (never graded:
+   * nothing was assessed) and a scored record with no rating (no honest
+   * reading) establish no practice (ruling of 2026-09-28 on
+   * `ol-egov.141.89.6.59`: blank, skipped and unassessable submissions do not
+   * establish practice).
+   */
   readonly tiersPracticed: Readonly<Record<EvidenceTier, boolean>>;
   /**
    * Every R7 tier at least one event for this concept **succeeded** at —
@@ -737,6 +786,7 @@ function conceptEvidence(
   let explainBackAttempts = 0;
   let gradedExplainBackCount = 0;
   let correctnessOnlyExplainBackCount = 0;
+  let correctedAttemptCount = 0;
   let deepestSoloLevel: SoloLevel | null = null;
   let topStageQualified = false;
   let topStageAttempt: {
@@ -758,15 +808,22 @@ function conceptEvidence(
           const instant = Date.parse(record.timestamp);
           return Number.isFinite(instant) && instant <= asOf;
         });
+  // Reviews whose grade a corrected contest proved wrong: practice, nothing more.
+  const correctedEventIds =
+    scope.correctedEventIds === undefined || scope.correctedEventIds.size === 0
+      ? resolved.correctedEventIds
+      : new Set([...resolved.correctedEventIds, ...scope.correctedEventIds]);
 
   // `[D-281]` correction: "where a grade supersedes an earlier one, the later
   // grade wins in the projection." `revisionOf` names the event a corrective
-  // re-grade replaces, so the replaced event stops supporting anything —
-  // collected before the fold below so a correction recorded later in the log
-  // still disqualifies the attempt it corrects, whatever order the records
-  // arrive in (this fold has no total order and needs none). An as-of fold
-  // reads only the re-grades logged by then, because `records` is already cut
-  // at that instant.
+  // re-grade replaces, so the replaced event stops supporting anything and the
+  // re-grade — a review of its own — is read in its place (the ruling of
+  // 2026-09-28: a corrected grade uses the corrected verdict, rather than
+  // erasing the review). Collected before the fold below so a correction
+  // recorded later in the log still replaces the attempt it corrects,
+  // whatever order the records arrive in (this fold has no total order and
+  // needs none). An as-of fold reads only the re-grades logged by then,
+  // because `records` is already cut at that instant.
   const supersededEventIds = new Set<string>();
   if (scope.supersession !== 'ignored') {
     for (const record of records) {
@@ -775,60 +832,81 @@ function conceptEvidence(
     }
   }
   for (const record of records) {
-    tiersPracticed[evidenceTierOf(record.instrumentType)] = true;
+    if (supersededEventIds.has(record.eventId)) continue;
+    const gradeProvenWrong = correctedEventIds.has(record.eventId);
 
     if (record.instrumentType === 'explain-back') {
       explainBackAttempts += 1;
       const grade = record.explainBackGrade;
-      if (grade === undefined && readExplainBackCorrectness(record) !== undefined) {
+      const correctness = readExplainBackCorrectness(record);
+      // Never graded — no depth grade and no verdict: nothing was assessed,
+      // so no practice is established (blank, skipped and unassessable
+      // submissions do not establish practice; ruling of 2026-09-28).
+      if (grade === undefined && correctness === undefined) continue;
+      tiersPracticed.explanation = true;
+      if (gradeProvenWrong) {
+        // A genuine attempt whose grade a contest proved wrong: practice only.
+        correctedAttemptCount += 1;
+        continue;
+      }
+      if (grade === undefined) {
         // `ol-ryrh`: a verdict with no depth grade is practice (the sprout
         // floor) and nothing more — no explanation-tier success, no depth.
         correctnessOnlyExplainBackCount += 1;
+        continue;
       }
-      if (grade !== undefined) {
-        gradedExplainBackCount += 1;
-        if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
-          deepestSoloLevel = grade.soloLevel;
-        }
-        // Same success test `qualifiesForTopStage` reads first — an
-        // independent verdict of `correct`, absent reads as unknown and
-        // never counts as demonstrated. Read top-level first, legacy nested
-        // second (`[D-386]`), with no provenance required to count it.
-        if (readExplainBackCorrectness(record)?.verdict === 'correct') {
-          tiersSucceeded.explanation = true;
-        }
-        if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
-          if (resolved.explanationMissingEventIds.has(record.eventId)) {
-            // `[D-319]`: every other condition held, and the finding shows the
-            // requested explanation missing — the one thing that withholds it.
-            withheldByRestatementFinding += 1;
-          } else {
-            topStageQualified = true;
-            const instant = Date.parse(record.timestamp);
-            const candidate = {
-              eventId: record.eventId,
-              instrumentId: record.instrumentId,
-              at: record.timestamp,
-              instant,
-            };
-            if (
-              topStageAttempt === null ||
-              instant < topStageAttempt.instant ||
-              (instant === topStageAttempt.instant && record.eventId < topStageAttempt.eventId)
-            ) {
-              topStageAttempt = candidate;
-            }
+      gradedExplainBackCount += 1;
+      if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
+        deepestSoloLevel = grade.soloLevel;
+      }
+      // Same success test `qualifiesForTopStage` reads first — an
+      // independent verdict of `correct`, absent reads as unknown and
+      // never counts as demonstrated. Read top-level first, legacy nested
+      // second (`[D-386]`), with no provenance required to count it.
+      if (correctness?.verdict === 'correct') {
+        tiersSucceeded.explanation = true;
+      }
+      if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
+        if (resolved.explanationMissingEventIds.has(record.eventId)) {
+          // `[D-319]`: every other condition held, and the finding shows the
+          // requested explanation missing — the one thing that withholds it.
+          withheldByRestatementFinding += 1;
+        } else {
+          topStageQualified = true;
+          const instant = Date.parse(record.timestamp);
+          const candidate = {
+            eventId: record.eventId,
+            instrumentId: record.instrumentId,
+            at: record.timestamp,
+            instant,
+          };
+          if (
+            topStageAttempt === null ||
+            instant < topStageAttempt.instant ||
+            (instant === topStageAttempt.instant && record.eventId < topStageAttempt.eventId)
+          ) {
+            topStageAttempt = candidate;
           }
         }
       }
       continue;
     }
 
+    // A scored record with no rating has no honest reading (the schema admits
+    // a null rating only for explain-back): it establishes nothing.
+    if (record.rating === null) continue;
+    const tier = evidenceTierOf(record.instrumentType);
+    tiersPracticed[tier] = true;
     scoredEventCount += 1;
     if (record.instrumentType === 'mcq') recognitionScoredCount += 1;
+    if (gradeProvenWrong) {
+      // Practice, whatever its rating said: the rating was proven wrong, and
+      // no corrected rating was recorded to read in its place.
+      correctedAttemptCount += 1;
+      continue;
+    }
     if (isSuccessRating(record.rating)) {
       scoredSuccessCount += 1;
-      const tier = evidenceTierOf(record.instrumentType);
       tiersSucceeded[tier] = true;
       const day = calendarDayOfTimestamp(record.timestamp);
       if (day !== null) successDays.add(day);
@@ -848,6 +926,7 @@ function conceptEvidence(
     explainBackAttempts,
     gradedExplainBackCount,
     correctnessOnlyExplainBackCount,
+    correctedAttemptCount,
     tiersPracticed,
     tiersSucceeded,
     recognitionOnly: scoredEventCount > 0 && recognitionScoredCount === scoredEventCount,
@@ -890,14 +969,19 @@ function stageOf(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): M
   // so the stage can only rise — R3's "no implementation may express decay by
   // lowering it", held by construction rather than by a later check.
   let state: MasteryState = 'seed';
-  // `sprout` is "practised" (vocabulary registry), whatever the outcome. An
-  // explain-back carrying a correctness verdict but no depth grade is
-  // practice on correctness alone (`ol-ryrh`: it counts wherever correctness
-  // alone counts), so it lifts the floor exactly as a depth-graded one does.
+  // `sprout` is "practised" (vocabulary registry), whatever the outcome — and
+  // only practised: a genuine unsuccessful attempt lifts it and earns nothing
+  // further (ruling of 2026-09-28 on `ol-egov.141.89.6.59`). An explain-back
+  // carrying a correctness verdict but no depth grade is practice on
+  // correctness alone (`ol-ryrh`: it counts wherever correctness alone
+  // counts), and an attempt whose grade a contest proved wrong is still an
+  // attempt, so each lifts the floor exactly as a depth-graded one does. An
+  // attempt nothing assessed (never graded) lifts nothing.
   if (
     evidence.scoredEventCount > 0 ||
     evidence.gradedExplainBackCount > 0 ||
-    (evidence.correctnessOnlyExplainBackCount ?? 0) > 0
+    (evidence.correctnessOnlyExplainBackCount ?? 0) > 0 ||
+    (evidence.correctedAttemptCount ?? 0) > 0
   ) {
     state = 'sprout';
   }
@@ -929,10 +1013,11 @@ function stageOf(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): M
  * 3. **Assistance** — the support level actually shown at the time
  *    (`supportLevelShown`), admitted per `ADMITTED_SUPPORT_LEVELS`. Absent is
  *    unknown and does not permit the claim.
- * 4. **Instrument validity** — the instrument is not withdrawn, not rejected,
- *    and not built on evidence that has gone stale
- *    (`MasteryRollupOptions.invalidInstrumentIds`). Her acceptance of an
- *    instrument is not validity and is never read as such here.
+ * 4. **Instrument validity** — the instrument's evidence is not proven
+ *    invalid (`MasteryRollupOptions.invalidInstrumentIds`), and this attempt's
+ *    grade was not proven wrong on contest (`correctedEventIds`, read before
+ *    this predicate). Her withdrawal is not invalidity; her acceptance of an
+ *    instrument is not validity; neither is ever read as such here.
  *
  * Plus correction: an attempt a later grade supersedes (`revisionOf`) supports
  * nothing, so a wrongly high grade that was afterwards corrected does not keep
@@ -1114,8 +1199,11 @@ export function conceptVitalityInstruments(
  * readings always exclude proven-invalid evidence (`[D-338]` item 3;
  * `[D-097]`'s read-time exclusion on reject, INV-6) — the same set the
  * attainment fold excludes, read from the one validity projection
- * (`./validity.ts`): a standing rejection no restore has lifted, or a grade
- * contest resolved `corrected`.
+ * (`./validity.ts`): a standing rejection no restore has lifted, or a
+ * suspension recorded as a defect. A contest resolved `corrected` proves one
+ * review's grade wrong, not the instrument: that review leaves the replay
+ * (`withoutCorrectedEvidence`, in the two readers below) and the instrument's
+ * other reviews keep counting (ruling of 2026-09-28, `ol-egov.141.89.9.66`).
  *
  * Withheld-but-valid evidence (her suspension or withdrawal, a successor) is
  * NOT proven invalid and keeps counting here: `[D-347]` separates whether
@@ -1148,7 +1236,8 @@ function standingVitalityInstruments(
  * `validity` defaults to the projection of `entries` alone. A caller that
  * reads dispute records apart from the log passes
  * `projectInstrumentValidity(entries, disputes)`, so a contest resolved
- * `corrected` reaches the exclusion too.
+ * `corrected` reaches the exclusion too: the review it proved wrongly graded
+ * is left out of the replay, and nothing else of its instrument.
  *
  * Unlike `computeConceptMastery`, this is not a pure function of `entries`
  * alone — vitality is a current reading and needs `now` and the (declared,
@@ -1168,7 +1257,10 @@ export function readConceptVitality(
   holdingCut: number,
   validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
 ): VitalityReading {
-  const replayed = replaySchedulerStates(entries, scheduler);
+  const replayed = replaySchedulerStates(
+    withoutCorrectedEvidence(entries, validity.correctedEvidence),
+    scheduler,
+  );
   const instruments = standingVitalityInstruments(entries, conceptId, replayed, validity);
   return readVitality({ instruments, scheduler, now, holdingCut });
 }
@@ -1191,7 +1283,10 @@ export function readAllConceptVitality(
   holdingCut: number,
   validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
 ): ReadonlyMap<string, VitalityReading> {
-  const replayed = replaySchedulerStates(entries, scheduler);
+  const replayed = replaySchedulerStates(
+    withoutCorrectedEvidence(entries, validity.correctedEvidence),
+    scheduler,
+  );
   const result = new Map<string, VitalityReading>();
   for (const id of conceptIds) {
     const instruments = standingVitalityInstruments(entries, id, replayed, validity);

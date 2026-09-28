@@ -5,6 +5,7 @@
 import type {
   DisputeLogRecord,
   ReviewLogEntry,
+  ReviewLogRecord,
   SuccessionLogRecord,
   SuspendLogRecord,
   VerdictLogRecord,
@@ -12,7 +13,11 @@ import type {
 import { describe, expect, it } from 'vitest';
 import { correctedGradeInstrumentIds } from '../review-log/contest.js';
 import { latestVerdictByInstrument } from '../review-log/verdicts.js';
-import { projectInstrumentValidity, rejectedInstrumentIds } from './validity.js';
+import {
+  projectInstrumentValidity,
+  rejectedInstrumentIds,
+  withoutCorrectedEvidence,
+} from './validity.js';
 
 function verdict(
   instrumentId: string,
@@ -63,6 +68,7 @@ function suspension(
   instrumentId: string,
   timestamp: string,
   eventId: string,
+  reason?: 'defect' | 'source-revision' | 'own-choice',
 ): SuspendLogRecord {
   return {
     schemaVersion: 6,
@@ -71,7 +77,45 @@ function suspension(
     timestamp,
     instrumentId,
     conceptIds: ['concept-a'],
+    ...(reason !== undefined ? { reason } : {}),
   } as SuspendLogRecord;
+}
+
+function reviewOf(
+  instrumentId: string,
+  eventId: string,
+  timestamp: string,
+  instrumentType: 'qa' | 'mcq' | 'explain-back' = 'qa',
+  overrides: Partial<ReviewLogRecord> = {},
+): ReviewLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'review',
+    eventId,
+    timestamp,
+    instrumentId,
+    instrumentType,
+    conceptIds: ['concept-a'],
+    rating: instrumentType === 'explain-back' ? null : 'good',
+    wasUnsure: false,
+    durationMs: 1000,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: [instrumentType],
+      planVersion: null,
+    },
+    ...(instrumentType === 'explain-back'
+      ? {
+          explainBackCorrectness: {
+            verdict: 'correct' as const,
+            artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+          },
+        }
+      : {}),
+    ...overrides,
+  } as ReviewLogRecord;
 }
 
 function succession(
@@ -165,21 +209,24 @@ describe('proven invalid: a rejected verdict (E2)', () => {
   });
 });
 
-describe('proven invalid: a grade contest resolved corrected (E5)', () => {
-  it('corrected proves the instrument invalid from the resolution instant', () => {
+describe('a grade contest resolved corrected proves ONE review wrong, never the instrument (E5; ruling 2026-09-28)', () => {
+  it('corrected proves the contested review wrongly graded from the resolution instant; the instrument stands', () => {
     const v = projectInstrumentValidity(
-      [],
+      [reviewOf('eb:1', 'r1', T1, 'explain-back')],
       [
         gradeDispute('eb:1', 'd1', T1),
         gradeDispute('eb:1', 'd2', T2, { resolves: 'd1', outcome: 'corrected' }),
       ],
     );
-    expect(v.provenInvalid.get('eb:1')).toEqual({
+    expect(v.provenInvalid.size).toBe(0);
+    expect(v.correctedEvidence.get('r1')).toEqual({
+      reviewEventId: 'r1',
       instrumentId: 'eb:1',
-      reason: 'corrected-on-contest',
-      eventId: 'd2',
+      resolutionEventId: 'd2',
       at: T2,
     });
+    expect(v.correctedEvidenceAsOf(at(T1)).size).toBe(0);
+    expect([...v.correctedEvidenceAsOf(at(T2)).keys()]).toEqual(['r1']);
     expect(v.contested.has('eb:1')).toBe(false);
   });
 
@@ -202,20 +249,35 @@ describe('proven invalid: a grade contest resolved corrected (E5)', () => {
   it('a dispute read from the entries array and the same dispute read separately count once', () => {
     const opening = gradeDispute('eb:1', 'd1', T1);
     const resolution = gradeDispute('eb:1', 'd2', T2, { resolves: 'd1', outcome: 'corrected' });
-    const v = projectInstrumentValidity([opening, resolution] as unknown as ReviewLogEntry[], [
-      opening,
-      resolution,
-    ]);
-    expect(v.provenInvalid.get('eb:1')?.eventId).toBe('d2');
+    const v = projectInstrumentValidity(
+      [
+        reviewOf('eb:1', 'r1', T1, 'explain-back'),
+        opening,
+        resolution,
+      ] as unknown as ReviewLogEntry[],
+      [opening, resolution],
+    );
+    expect([...v.correctedEvidence.values()].map((fact) => fact.resolutionEventId)).toEqual(['d2']);
     expect(v.changeInstants).toEqual([at(T2)]);
   });
 });
 
 describe('withheld, never proven invalid: her suspension, a successor (E3, E10)', () => {
-  it('a suspension has no reason field, so it reads as her choice and proves no defect', () => {
+  it('a suspension that records no reason reads as unknown — never as her choice — and proves no defect ([D-345])', () => {
     const v = projectInstrumentValidity([suspension('suspend', 'qa:1', T1, 's1')]);
     expect(v.provenInvalid.size).toBe(0);
-    expect(v.withheld.get('qa:1')?.reasons).toEqual(['her-choice']);
+    expect(v.withheld.get('qa:1')?.reasons).toEqual(['reason-unknown']);
+  });
+
+  it('her own choice and a revision are withheld with their reason, never proven invalid', () => {
+    const v = projectInstrumentValidity([
+      suspension('suspend', 'qa:1', T1, 's1', 'own-choice'),
+      suspension('suspend', 'qa:2', T1, 's2', 'source-revision'),
+    ]);
+    expect(v.provenInvalid.size).toBe(0);
+    expect(v.withheld.get('qa:1')?.reasons).toEqual(['own-choice']);
+    expect(v.withheld.get('qa:2')?.reasons).toEqual(['source-revision']);
+    expect(v.changeInstants).toEqual([]);
   });
 
   it('her restore ends the withholding', () => {
@@ -238,7 +300,7 @@ describe('withheld, never proven invalid: her suspension, a successor (E3, E10)'
       succession('qa:old', 'qa:new', T2),
       suspension('suspend', 'qa:old', T1, 's1'),
     ]);
-    expect(v.withheld.get('qa:old')?.reasons).toEqual(['her-choice', 'succeeded']);
+    expect(v.withheld.get('qa:old')?.reasons).toEqual(['reason-unknown', 'succeeded']);
   });
 });
 
@@ -259,8 +321,13 @@ describe('as of an instant: judged only on what was logged by then', () => {
   });
 
   it('now equals as-of the last change', () => {
-    expect([...v.provenInvalidAsOf(at(T3)).keys()].sort()).toEqual(['eb:1', 'qa:1', 'qa:2']);
-    expect([...v.provenInvalid.keys()].sort()).toEqual(['eb:1', 'qa:1', 'qa:2']);
+    expect([...v.provenInvalidAsOf(at(T3)).keys()].sort()).toEqual(['qa:1', 'qa:2']);
+    expect([...v.provenInvalid.keys()].sort()).toEqual(['qa:1', 'qa:2']);
+  });
+
+  it('a corrected contest the log cannot tie to any review excludes nothing, and is counted', () => {
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(1);
   });
 
   it('a rejection later restored stands again as of the restore ([D-396])', () => {
@@ -306,7 +373,7 @@ describe('merges and order (S3, E9)', () => {
 });
 
 describe('parity with the proven-invalid set the readers build today (8a017c4, f61cd18)', () => {
-  it('provenInvalid is exactly latest-verdict-rejected union corrected-on-contest', () => {
+  it('provenInvalid is exactly latest-verdict-rejected; a corrected contest is no longer instrument-wide', () => {
     const entries: ReviewLogEntry[] = [
       verdict('qa:1', 'rejected', T1, 'v1'),
       verdict('qa:2', 'rejected', T1, 'v2'),
@@ -324,10 +391,12 @@ describe('parity with the proven-invalid set the readers build today (8a017c4, f
     for (const [id, record] of latestVerdictByInstrument(entries)) {
       if (record.verdict === 'rejected') today.add(id);
     }
-    for (const id of correctedGradeInstrumentIds(disputes)) today.add(id);
-
     const v = projectInstrumentValidity(entries, disputes);
     expect([...v.provenInvalid.keys()].sort()).toEqual([...today].sort());
+    // The instrument a contest was resolved `corrected` on is named by the
+    // contest, but its evidence as a whole is not proven invalid.
+    expect(correctedGradeInstrumentIds(disputes)).toEqual(['eb:1']);
+    expect(v.provenInvalid.has('eb:1')).toBe(false);
   });
 });
 
@@ -457,5 +526,145 @@ describe('[D-396]: a rejection without provenance, and only a deliberate restore
     const b = projectInstrumentValidity([...entries].reverse());
     expect([...a.provenInvalid.keys()]).toEqual(['qa:1']);
     expect([...b.provenInvalid.entries()]).toEqual([...a.provenInvalid.entries()]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.66` — the rulings of 2026-09-28 on invalidity scope.
+// ---------------------------------------------------------------------------
+
+const T0 = '2026-01-09T09:00:00-04:00';
+const MINUTE = 60 * 1000;
+const plus = (iso: string, ms: number): string => new Date(Date.parse(iso) + ms).toISOString();
+
+describe('rule 1: a personal withdrawal never invalidates sound evidence; a proven defect does', () => {
+  it('her withdrawal, a revision and an unknown reason leave every review standing', () => {
+    for (const reason of ['own-choice', 'source-revision', undefined] as const) {
+      const v = projectInstrumentValidity([
+        reviewOf('qa:1', 'r1', T0),
+        suspension('suspend', 'qa:1', T1, 's1', reason),
+      ]);
+      expect(v.provenInvalid.size).toBe(0);
+      expect(v.correctedEvidence.size).toBe(0);
+      expect(v.withheld.has('qa:1')).toBe(true);
+    }
+  });
+
+  it('a suspension recorded as a defect proves the instrument invalid from its instant ([D-345])', () => {
+    const v = projectInstrumentValidity([
+      reviewOf('qa:1', 'r1', T0),
+      suspension('suspend', 'qa:1', T2, 's1', 'defect'),
+    ]);
+    expect(v.provenInvalid.get('qa:1')).toEqual({
+      instrumentId: 'qa:1',
+      reason: 'defect',
+      eventId: 's1',
+      at: T2,
+    });
+    expect(v.withheld.has('qa:1')).toBe(false);
+    expect(v.provenInvalidAsOf(at(T1)).has('qa:1')).toBe(false);
+    expect(v.changeInstants).toEqual([at(T2)]);
+  });
+
+  it('an unsuspend lifts a defect from its own instant on', () => {
+    const v = projectInstrumentValidity([
+      suspension('suspend', 'qa:1', T1, 's1', 'defect'),
+      suspension('unsuspend', 'qa:1', T3, 's2'),
+    ]);
+    expect(v.provenInvalid.has('qa:1')).toBe(false);
+    expect(v.provenInvalidAsOf(at(T2)).has('qa:1')).toBe(true);
+    expect(v.changeInstants).toEqual([at(T1), at(T3)]);
+  });
+});
+
+describe('rule 2: a corrected contest is tied to the one review it was about', () => {
+  const opened = T2;
+  const resolved = T3;
+  const corrected = (instrumentId: string) => [
+    gradeDispute(instrumentId, 'd1', opened),
+    gradeDispute(instrumentId, 'd2', resolved, { resolves: 'd1', outcome: 'corrected' }),
+  ];
+
+  it('an explanation: the grade standing when she contested, never an earlier or a later attempt', () => {
+    const v = projectInstrumentValidity(
+      [
+        reviewOf('eb:1', 'earlier', T0, 'explain-back'),
+        reviewOf('eb:1', 'contested', T1, 'explain-back'),
+        reviewOf('eb:1', 'later', plus(opened, MINUTE), 'explain-back'),
+      ],
+      corrected('eb:1'),
+    );
+    expect([...v.correctedEvidence.keys()]).toEqual(['contested']);
+  });
+
+  it('a corrective re-grade names the review exactly, whatever the times say', () => {
+    const v = projectInstrumentValidity(
+      [
+        reviewOf('eb:1', 'named', T0, 'explain-back'),
+        reviewOf('eb:1', 'nearer', T1, 'explain-back'),
+        reviewOf('eb:1', 'regrade', plus(resolved, MINUTE), 'explain-back', {
+          explainBackGrade: {
+            soloLevel: 'relational',
+            contentRef: 'content-ref-placeholder',
+            revisionOf: 'named',
+            artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+          },
+        }),
+      ],
+      corrected('eb:1'),
+    );
+    expect([...v.correctedEvidence.keys()]).toEqual(['named']);
+  });
+
+  it('a quiz answer contested before its review was written: the review nearest the contest', () => {
+    const v = projectInstrumentValidity(
+      [
+        reviewOf('mcq:1', 'last-week', T0, 'mcq'),
+        reviewOf('mcq:1', 'this-answer', plus(opened, MINUTE), 'mcq'),
+      ],
+      corrected('mcq:1'),
+    );
+    expect([...v.correctedEvidence.keys()]).toEqual(['this-answer']);
+  });
+
+  it('an explanation never graded is not what a grade contest was about', () => {
+    const v = projectInstrumentValidity(
+      [
+        reviewOf('eb:1', 'graded', T0, 'explain-back'),
+        reviewOf('eb:1', 'ungraded', T1, 'explain-back', { explainBackCorrectness: undefined }),
+      ],
+      corrected('eb:1'),
+    );
+    expect([...v.correctedEvidence.keys()]).toEqual(['graded']);
+  });
+
+  it('another instrument’s reviews are never touched', () => {
+    const v = projectInstrumentValidity(
+      [reviewOf('qa:1', 'mine', T1), reviewOf('qa:2', 'other', T1)],
+      corrected('qa:1'),
+    );
+    expect([...v.correctedEvidence.keys()]).toEqual(['mine']);
+  });
+
+  it('withoutCorrectedEvidence drops exactly the corrected reviews, and returns the same array when there are none', () => {
+    const entries: ReviewLogEntry[] = [reviewOf('qa:1', 'r1', T1), reviewOf('qa:1', 'r2', T0)];
+    const v = projectInstrumentValidity(entries, corrected('qa:1'));
+    expect(withoutCorrectedEvidence(entries, v.correctedEvidence).map((e) => e.eventId)).toEqual([
+      'r2',
+    ]);
+    const none = projectInstrumentValidity(entries);
+    expect(withoutCorrectedEvidence(entries, none.correctedEvidence)).toBe(entries);
+  });
+
+  it('upheld ties nothing to any review', () => {
+    const v = projectInstrumentValidity(
+      [reviewOf('qa:1', 'r1', T1)],
+      [
+        gradeDispute('qa:1', 'd1', opened),
+        gradeDispute('qa:1', 'd2', resolved, { resolves: 'd1', outcome: 'upheld' }),
+      ],
+    );
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(0);
   });
 });

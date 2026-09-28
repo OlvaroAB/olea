@@ -23,6 +23,7 @@ import {
   createFsrsScheduler,
   executeStudyPlan,
   PRESENTED_OPTIONS,
+  projectInstrumentValidity,
   provisionalConceptKey,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -1152,15 +1153,14 @@ describe('explain-back reviews reach the support history, at the explanation tie
         instrumentType: 'explain-back',
         rating: null,
         conceptIds: ['concept-a'],
-        // No `correctness` at all — a pre-D-286 single-pass grade. [D-281]:
-        // read as unknown, capped at 'minor-slip', never promoted to 'none'
-        // on depth alone.
+        // No `correctness` at all — a pre-D-286 single-pass grade, or a
+        // correctness check that failed. [D-281]: never promoted to 'none' on
+        // depth alone; and since the 2026-09-28 rulings (`ol-egov.141.89.9.66`)
+        // never read as a slip of hers either: it has no reading.
         explainBackGrade: { soloLevel: 'relational' },
       }),
     ]);
-    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
-      { failureShape: 'minor-slip', hintUptake: false },
-    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([]);
   });
 
   it('a confirmed correct, relational explanation reads as a clean pass', () => {
@@ -1569,5 +1569,182 @@ describe('createFrozenReviewQueue — C5.8’s freeze, held across calls', () =>
         provenance: 'evidence-thin',
       });
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.66` — the rulings of 2026-09-28: only her own failures
+// move the ladder (the same rule `packages/core/src/support-level/history.ts`
+// folds). Ids are structural placeholders.
+// ---------------------------------------------------------------------------
+
+type LadderEntry = Parameters<typeof buildSupportLevelHistoryLookup>[0][number];
+
+const LADDER_PROVENANCE = { taskId: 't', promptVersion: 'v0', modelId: 'm' } as const;
+
+function missOn(eventId: string, timestamp: string, instrumentId: string): LadderEntry {
+  return {
+    ...reviewLogEntry({
+      eventId,
+      timestamp,
+      instrumentType: 'qa',
+      rating: 'again',
+      conceptIds: ['concept-a'],
+    }),
+    instrumentId,
+  } as unknown as LadderEntry;
+}
+
+function standingEvent(
+  kind: 'verdict' | 'suspend',
+  instrumentId: string,
+  timestamp: string,
+  reason?: 'defect' | 'own-choice',
+): LadderEntry {
+  if (kind === 'verdict') {
+    return {
+      schemaVersion: 6,
+      kind: 'verdict',
+      eventId: `v-${instrumentId}`,
+      timestamp,
+      instrumentId,
+      instrumentType: 'qa',
+      conceptIds: ['concept-a'],
+      verdict: 'rejected',
+    } as unknown as LadderEntry;
+  }
+  return {
+    schemaVersion: 6,
+    kind: 'suspend',
+    eventId: `s-${instrumentId}`,
+    timestamp,
+    instrumentId,
+    conceptIds: ['concept-a'],
+    ...(reason !== undefined ? { reason } : {}),
+  } as unknown as LadderEntry;
+}
+
+describe('buildSupportLevelHistoryLookup — only her own failures move the ladder (ol-egov.141.89.9.66)', () => {
+  it('rule 1: a miss on an instrument she suspended (her choice, or no reason) still counts', () => {
+    for (const reason of ['own-choice', undefined] as const) {
+      const lookup = buildSupportLevelHistoryLookup([
+        missOn('m1', '2026-08-18T09:00:00+00:00', 'qa:w'),
+        standingEvent('suspend', 'qa:w', '2026-08-18T10:00:00+00:00', reason),
+      ]);
+      expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+        { failureShape: 'wrong-concept', hintUptake: false },
+      ]);
+    }
+  });
+
+  it('rule 1: a miss on a rejected or defective instrument is not read as hers', () => {
+    for (const standing of [
+      standingEvent('verdict', 'qa:w', '2026-08-18T10:00:00+00:00'),
+      standingEvent('suspend', 'qa:w', '2026-08-18T10:00:00+00:00', 'defect'),
+    ]) {
+      const lookup = buildSupportLevelHistoryLookup([
+        missOn('m1', '2026-08-18T09:00:00+00:00', 'qa:w'),
+        standing,
+      ]);
+      expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+    }
+  });
+
+  it('rule 2: a miss whose grade a contest proved wrong is skipped; a corrective re-grade stands in for its grade', () => {
+    const entries = [
+      missOn('m1', '2026-08-18T09:00:00+00:00', 'qa:c'),
+      missOn('m2', '2026-08-20T09:00:00+00:00', 'qa:c'),
+    ];
+    const validity = projectInstrumentValidity(entries, [
+      {
+        schemaVersion: 6,
+        kind: 'dispute',
+        eventId: 'd1',
+        timestamp: '2026-08-20T09:01:00+00:00',
+        claimKind: 'grade',
+        claimRendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:c',
+        evidenceBasis: 'basis-1',
+        effect: 'quarantined',
+      },
+      {
+        schemaVersion: 6,
+        kind: 'dispute',
+        eventId: 'd2',
+        timestamp: '2026-08-22T09:00:00+00:00',
+        claimKind: 'grade',
+        claimRendering: 'explain-back-grade',
+        conceptIds: ['concept-a'],
+        instrumentId: 'qa:c',
+        evidenceBasis: 'basis-1',
+        effect: 'quarantined',
+        resolves: 'd1',
+        outcome: 'corrected',
+      },
+    ] as Parameters<typeof projectInstrumentValidity>[1]);
+    const lookup = buildSupportLevelHistoryLookup(entries, validity);
+    // m1 (a separate, sound session) stands; m2's proven-wrong grade does not.
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+
+    const original = reviewLogEntry({
+      eventId: 'e1',
+      timestamp: '2026-08-18T09:00:00+00:00',
+      instrumentType: 'explain-back',
+      rating: null,
+      conceptIds: ['concept-a'],
+      explainBackGrade: { soloLevel: 'relational', correctness: 'correct' },
+    });
+    const regrade = {
+      ...reviewLogEntry({
+        eventId: 'e2',
+        timestamp: '2026-08-25T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackCorrectness: 'incorrect',
+      }),
+      instrumentId: original.instrumentId,
+      explainBackGrade: {
+        soloLevel: 'multistructural',
+        contentRef: 'content:e2',
+        revisionOf: 'e1',
+        artifactProvenance: LADDER_PROVENANCE,
+      },
+    };
+    const regraded = buildSupportLevelHistoryLookup([original, regrade] as LadderEntry[]);
+    expect(regraded.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+
+  it('rule 5: a failed correctness check neither escalates nor breaks her clean run', () => {
+    const clean = (eventId: string, timestamp: string) =>
+      reviewLogEntry({
+        eventId,
+        timestamp,
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'relational', correctness: 'correct' },
+      });
+    const lookup = buildSupportLevelHistoryLookup([
+      clean('e1', '2026-08-18T09:00:00+00:00'),
+      reviewLogEntry({
+        eventId: 'e2',
+        timestamp: '2026-08-19T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'multistructural' },
+      }),
+      clean('e3', '2026-08-20T09:00:00+00:00'),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+      { failureShape: 'none', hintUptake: false },
+    ]);
   });
 });

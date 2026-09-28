@@ -2,8 +2,15 @@
 // clustered sessions (the attainment chain spec's section 2.6 in
 // `olea-service`; failure classes L1, L3, L4, L5, L6, L8). Ids are structural
 // placeholders, never fixture vocabulary (INV-3).
-import type { ReviewLogRecord } from 'olea-contracts';
+import type {
+  DisputeLogRecord,
+  ReviewLogEntry,
+  ReviewLogRecord,
+  SuspendLogRecord,
+  VerdictLogRecord,
+} from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import { SESSION_CLUSTERING_GAP_SECONDS } from '../session/cluster.js';
 import { chooseSupportLevel } from '../study-session/support-level-chooser.js';
 import { buildSupportLevelHistory, NO_LADDER_SUPPORT_LEVEL } from './history.js';
@@ -111,9 +118,9 @@ describe('tiers are separate ladders; explanations read correctness first (L8, [
     expect(history.outcomesFor('concept-a', 'explanation')[0]?.failureShape).toBe('wrong-concept');
   });
 
-  it('unknown correctness never reads as a clean pass', () => {
+  it('unknown correctness never reads as a clean pass — nor as a slip of hers (ruling 2026-09-28)', () => {
     const history = buildSupportLevelHistory([explainBack(0, undefined, 'relational')]);
-    expect(history.outcomesFor('concept-a', 'explanation')[0]?.failureShape).toBe('minor-slip');
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([]);
   });
 
   it('a correct, relational explanation is clean', () => {
@@ -278,5 +285,212 @@ describe('levels are fixed at composition, extension included (L3, [D-186])', ()
   it('without a composition instant it reads every session, as the plugin fold does today', () => {
     const history = buildSupportLevelHistory([...earlier, ...inSession]);
     expect(history.outcomesFor('concept-a', 'recall')).toHaveLength(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.66` — the rulings of 2026-09-28: only her own failures
+// move the ladder.
+// ---------------------------------------------------------------------------
+
+const PROVENANCE = { taskId: 't', promptVersion: 'v0', modelId: 'm' } as const;
+
+function verdictAt(minutes: number, instrumentId: string, eventId: string): VerdictLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'verdict',
+    eventId,
+    timestamp: at(minutes),
+    instrumentId,
+    instrumentType: 'qa',
+    conceptIds: ['concept-a'],
+    verdict: 'rejected',
+    artifactProvenance: PROVENANCE,
+  };
+}
+
+function suspendAt(
+  minutes: number,
+  instrumentId: string,
+  reason?: 'defect' | 'own-choice',
+): SuspendLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'suspend',
+    eventId: `s-${minutes}`,
+    timestamp: at(minutes),
+    instrumentId,
+    conceptIds: ['concept-a'],
+    ...(reason !== undefined ? { reason } : {}),
+  } as SuspendLogRecord;
+}
+
+function correctedContest(
+  instrumentId: string,
+  opened: number,
+  resolved: number,
+): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6,
+    kind: 'dispute',
+    claimKind: 'grade',
+    claimRendering: 'explain-back-grade',
+    conceptIds: ['concept-a'],
+    instrumentId,
+    evidenceBasis: 'basis-1',
+    effect: 'quarantined',
+  };
+  return [
+    { ...base, eventId: `o-${instrumentId}`, timestamp: at(opened) } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: `c-${instrumentId}`,
+      timestamp: at(resolved),
+      resolves: `o-${instrumentId}`,
+      outcome: 'corrected',
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('rule 1: her withdrawal keeps her history; a proven defect does not count as her failure', () => {
+  const miss = (minutes: number) => review(minutes, { rating: 'again', instrumentId: 'qa:w' });
+
+  it('a suspended instrument (her choice, or no reason) keeps its sessions', () => {
+    for (const reason of ['own-choice', undefined] as const) {
+      const history = buildSupportLevelHistory([miss(0), suspendAt(10, 'qa:w', reason)]);
+      expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+        { failureShape: 'wrong-concept', hintUptake: false },
+      ]);
+    }
+  });
+
+  it('a miss on a rejected or defective instrument is not read as hers', () => {
+    expect(
+      buildSupportLevelHistory([miss(0), verdictAt(10, 'qa:w', 'v1')]).outcomesFor(
+        'concept-a',
+        'recall',
+      ),
+    ).toEqual([]);
+    expect(
+      buildSupportLevelHistory([miss(0), suspendAt(10, 'qa:w', 'defect')]).outcomesFor(
+        'concept-a',
+        'recall',
+      ),
+    ).toEqual([]);
+  });
+
+  it('fixed at composition: a rejection logged after the composition instant does not rewrite it', () => {
+    const history = buildSupportLevelHistory([miss(0), verdictAt(APART * 2, 'qa:w', 'v1')], {
+      composedAt: new Date(BASE + APART * MIN),
+    });
+    expect(history.outcomesFor('concept-a', 'recall')).toHaveLength(1);
+  });
+});
+
+describe('rule 2: a corrected grade is read through its corrected verdict; the rest stands', () => {
+  it('a corrective re-grade stands in for the grade it corrects, in that session', () => {
+    const original = explainBack(0, 'correct', 'relational');
+    const regrade = review(APART * 3, {
+      instrumentId: 'eb:a',
+      instrumentType: 'explain-back',
+      rating: null,
+      explainBackGrade: {
+        soloLevel: 'multistructural',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: original.eventId,
+        artifactProvenance: PROVENANCE,
+      },
+      explainBackCorrectness: { verdict: 'incorrect', artifactProvenance: PROVENANCE },
+    });
+    const history = buildSupportLevelHistory([original, regrade]);
+    // One session, read with the corrected verdict — and the re-grade is not a second session.
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+
+  it('a miss whose grade a contest proved wrong is not hers; her other sessions stand', () => {
+    const first = review(0, { rating: 'again', instrumentId: 'mcq-free-recall' });
+    const contested = review(APART, { rating: 'again', instrumentId: 'mcq-free-recall' });
+    const entries: ReviewLogEntry[] = [first, contested];
+    const validity = projectInstrumentValidity(
+      entries,
+      correctedContest('mcq-free-recall', APART - 1, APART * 3),
+    );
+    expect([...validity.correctedEvidence.keys()]).toEqual([contested.eventId]);
+    const history = buildSupportLevelHistory(entries, { validity });
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+});
+
+describe('rules 4 and 5: nothing she did not genuinely attempt, and no system failure, escalates the ladder', () => {
+  it('an explanation nothing assessed has no reading (blank, unassessable)', () => {
+    const ungraded = review(0, {
+      instrumentId: 'eb:a',
+      instrumentType: 'explain-back',
+      rating: null,
+    });
+    expect(buildSupportLevelHistory([ungraded]).outcomesFor('concept-a', 'explanation')).toEqual(
+      [],
+    );
+  });
+
+  it('a skip is a non-attempt record: no session outcome at all', () => {
+    const skip = {
+      schemaVersion: 6,
+      kind: 'non-attempt',
+      eventId: 'n1',
+      timestamp: at(0),
+      conceptIds: ['concept-a'],
+      trigger: 'on-demand',
+    } as unknown as ReviewLogEntry;
+    const history = buildSupportLevelHistory([skip]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([]);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('a failed correctness check neither escalates nor breaks a clean run of hers', () => {
+    const clean = (minutes: number) => explainBack(minutes, 'correct', 'relational');
+    const checkFailed = explainBack(APART, undefined, 'multistructural');
+    const history = buildSupportLevelHistory([clean(0), checkFailed, clean(APART * 2)]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('a depth grade that reads she missed the point still counts, verdict or not', () => {
+    const history = buildSupportLevelHistory([
+      review(0, {
+        instrumentId: 'eb:a',
+        instrumentType: 'explain-back',
+        rating: null,
+        explainBackGrade: {
+          soloLevel: 'prestructural',
+          contentRef: 'content-ref-placeholder',
+          revisionOf: null,
+          artifactProvenance: PROVENANCE,
+        },
+      }),
+    ]);
+    expect(history.outcomesFor('concept-a', 'explanation')[0]?.failureShape).toBe('wrong-concept');
+  });
+
+  it('a genuine incorrect explanation still escalates (rule 3: practice that can raise support)', () => {
+    const incorrect = review(0, {
+      instrumentId: 'eb:a',
+      instrumentType: 'explain-back',
+      rating: null,
+      explainBackCorrectness: { verdict: 'incorrect', artifactProvenance: PROVENANCE },
+    });
+    const history = buildSupportLevelHistory([incorrect]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+    expect(chooseSupportLevel(history.outcomesFor('concept-a', 'explanation')).level).toBe(
+      'guided',
+    );
   });
 });
