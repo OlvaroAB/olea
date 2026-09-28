@@ -503,6 +503,53 @@ export type {
   CourseRootSnapshot,
 } from './course/mapping.js';
 export { buildCourseMapping, pathInCourseMapping, recomputeCourseRoot } from './course/mapping.js';
+export type { CoverageGateOptions } from './coverage/gate.js';
+export { coverageGateOptionsOf } from './coverage/gate.js';
+export { buildCoursePopulation, buildCoursePopulations } from './coverage/population.js';
+export {
+  conceptEvidenceFromAttainment,
+  conceptEvidenceOfAttainment,
+  conceptExtractionOfScopeSource,
+  declarationsFromOutcomeRecords,
+  populationReadingOfManifest,
+  populationReadingOfScopeSource,
+} from './coverage/readers.js';
+// The standing views' population record and per-unit coverage
+// (`ol-egov.141.89.11.4`; the chain spec's sections 2.1 and 2.2) — see
+// `./coverage/population.ts` for the rules, `./coverage/readers.ts` for the
+// production inputs and `./coverage/gate.ts` for how a set of course
+// populations feeds `gap/coverage.js`'s `declaredUnits`/`declaredScopeUnknown`
+// gate options (above). No production caller supplies this yet
+// (`ol-egov.141.89.11.19`'s module doc; `ol-egov.141.89.11.5` wires it).
+export type {
+  ConceptEvidenceState,
+  CountedUnit,
+  CoursePopulation,
+  CoursePopulationInput,
+  DeclarationAlignment,
+  DeclaredUnitCoverage,
+  DenominatorSource,
+  DenominatorState,
+  ExhaustiveWithholdReason,
+  PopulationConceptInput,
+  PopulationCounts,
+  PopulationDeclarationInput,
+  PopulationDenominator,
+  PopulationDocumentInput,
+  PopulationExtractionState,
+  PopulationExtractionSummary,
+  PopulationInstrumentInput,
+  PopulationInstrumentStanding,
+  PopulationProcessingPass,
+  PopulationReading,
+  PopulationReadingState,
+  PopulationReadingSummary,
+  PopulationSourceInput,
+  UnitMaterialCounts,
+  UnitMaterialState,
+  UnitSupportCounts,
+  UnitSupportState,
+} from './coverage/types.js';
 export { addDays, daysBetween } from './dates.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
 // pure projection over past-paper citations and the assessments Base, never

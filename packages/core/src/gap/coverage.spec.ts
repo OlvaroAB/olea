@@ -178,6 +178,37 @@ describe('summariseCoverageScope', () => {
         expect(scope.unalignedDeclaredUnitCount).toBeNull();
       });
 
+      // `ol-egov.141.89.11.19` investigation, re-checked after `../coverage/`
+      // (population + gate) landed: today's one production caller of this
+      // function (`gap/build.ts#buildGapView`, called by
+      // `plugin/src/gap/provider.ts:244`) never supplies `coveragePopulation`,
+      // so `build.ts` passes this function `{}` — no `declaredUnits`, no
+      // `declaredScopeUnknown` — every time. The case above already proves
+      // that shape is unaffected; this test pins it at the exact shape the
+      // production call passes today (empty options object, not just
+      // "omitted"), so a caller reading only this suite sees the claim STILL
+      // renders for a course with zero declared units or an unaligned one,
+      // because the population record that would tell this gate so is never
+      // built or threaded through in production yet. That gap is not a
+      // defect in this function: given `declaredUnits`, both cases are
+      // already withheld (below), matching `vew.md` section 2.2's gate
+      // exactly. Closing it for real users needs `gap/build.ts` and
+      // `plugin/src/gap/provider.ts` to pass a real `CoursePopulation[]` —
+      // `ol-egov.141.89.11.5`'s wiring, gated on the population build
+      // (`ol-egov.141.89.11.4`) — not a change reachable from this file
+      // alone: flipping this function's own "no declaredUnits supplied"
+      // default to withhold instead would reverse the case directly above
+      // (itself written for this same bead) and break
+      // `gap/build.spec.ts`'s and `packages/workbench`'s and
+      // `packages/plugin/test/gap/provider.spec.ts`'s existing
+      // `canStateExhaustiveness: true` fixtures, none of which are this
+      // bead's `owns` and none of which supply declared-unit data either.
+      it('still allows the claim on a course whose real declared set is empty or unaligned, at the exact options shape production passes today', () => {
+        const productionShapedOptions = {}; // `gap/build.ts`: `input.coveragePopulation === undefined ? {} : ...`
+        const scope = summariseCoverageScope(allRead, productionShapedOptions);
+        expect(scope.canStateExhaustiveness).toBe(true);
+      });
+
       it('is true when every source is read and every declared unit is aligned', () => {
         const scope = summariseCoverageScope(allRead, {
           declaredUnits: [declaredUnit('u1', ['cpt-01']), declaredUnit('u2', ['cpt-02'])],
