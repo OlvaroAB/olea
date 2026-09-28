@@ -1,8 +1,36 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import type { Stats } from 'node:fs';
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FolderSource } from './folder-source.js';
+
+// `node:fs/promises`'s module namespace is not configurable under Vitest's
+// current (Vite-native ESM) runner, so `vi.spyOn` on it throws ("Module
+// namespace is not configurable in ESM") rather than intercepting the call —
+// confirmed by running it here first. `vi.mock` (below) replaces the module
+// itself for every importer in this file's graph, `firstSeen`'s own
+// `folder-source.ts` included, which is what makes stubbing `stat`'s result
+// possible at all. Everything except `stat` passes through to the real
+// implementation unchanged, so every other test in this file (which reads
+// and writes real files) is unaffected.
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  return { ...actual, stat: vi.fn(actual.stat) };
+});
+const mockedStat = vi.mocked(stat);
+
+// Each stubbed test queues exactly one `mockImplementationOnce`; clearing
+// after every test means a failure that leaves it unconsumed can never leak
+// into a later, unrelated test.
+afterEach(() => {
+  mockedStat.mockClear();
+});
+
+/** A `Stats`-shaped value exposing only what `firstSeen` reads. */
+function statsWithBirthtime(birthtimeMs: number): Stats {
+  return { birthtimeMs } as unknown as Stats;
+}
 
 const FIXTURE_ROOT = join(import.meta.dirname, '..', '..', 'fixtures', 'vault');
 const CRLF_FIXTURE = '01 Courses/MUSTH104/Chorale No. 12/Aural notes.md';
@@ -104,17 +132,25 @@ describe('FolderSource against the synthetic fixture vault', () => {
       expect(await source.firstSeen('01 Courses/does-not-exist.md')).toBeNull();
     });
 
-    // Deliberately NOT a synthetic case: this repo's own git-checked-out
-    // fixture files report `birthtimeMs: 0` on this project's dev/CI
-    // platform (verified directly against this exact file with `fs.statSync`
-    // — Linux ext4-family filesystems frequently do not track a real
-    // creation time). This is the production-shaped "no signal" path the
-    // interface doc calls a first-class, expected outcome, and it is exactly
-    // why `study-session/compose.ts`'s fallback matters: a real vault's own
-    // dev-platform checkout hits it routinely, not just a contrived edge
-    // case.
+    // Whether a real, checked-out file's `birthtimeMs` reads as 0 (no
+    // signal) or a real timestamp is host-dependent — some filesystems
+    // (Linux ext4-family, notably) frequently do not track a true creation
+    // time and Node reports the epoch rather than throwing; other hosts
+    // (a GitHub Actions runner, observed Sep 2026) report a real value for
+    // the very same file. Either way this is production-shaped, not
+    // contrived: `study-session/compose.ts`'s fallback exists because a real
+    // vault's own dev-platform checkout can hit either case. Both are
+    // exercised here deterministically, by stubbing `fs.stat` rather than
+    // depending on what the host under test happens to report.
     it('returns null (not epoch 0) for a real file whose birthtime the host cannot report', async () => {
+      mockedStat.mockImplementationOnce(async () => statsWithBirthtime(0));
       expect(await source.firstSeen(PDF_FIXTURE)).toBeNull();
+    });
+
+    it('returns the real birthtime for a file whose host reports one', async () => {
+      const realBirthtimeMs = 1_700_000_000_000;
+      mockedStat.mockImplementationOnce(async () => statsWithBirthtime(realBirthtimeMs));
+      expect(await source.firstSeen(PDF_FIXTURE)).toBe(realBirthtimeMs);
     });
   });
 });
