@@ -64,18 +64,21 @@
  *   "we simply have not seen this concept reviewed" case.
  * - **`defective`** — evidence exists, but EVERY instrument that is
  *   evidence for the prerequisite has been proven invalid (`../mastery/
- *   validity.js`'s `projectInstrumentValidity`: a rejected verdict or a
- *   grade contest resolved `corrected`). This is the knowledge model §8 /
+ *   validity.js`'s `projectInstrumentValidity`: a standing rejection, or a
+ *   suspension recorded as a defect). A grade contest resolved `corrected`
+ *   proves one review's grade wrong, never the instrument, so it never makes
+ *   a prerequisite `defective` (`ol-egov.141.89.9.66`). This is the knowledge model §8 /
  *   F2.23 "item-defect exclusion applied to evidence" the bead's
  *   description names: nothing trustworthy remains, which is a different
  *   honest state from never having been reviewed.
  * - **`strong`** — the prerequisite's high-water-mark growth stage
  *   (`../mastery/rollup.js`'s `computeAllConceptMastery`, over the SAME
- *   `invalidInstrumentIds` exclusion `defective` above uses) is `sapling` or
- *   `tree`, AND its current vitality (`readVitality`, over every instrument
- *   that is evidence for it, valid or not — the same non-exclusion
- *   `./strong-recall-wiring.ts` already takes for vitality) reads
- *   `holding`. Demonstrated competence that is not currently fading.
+ *   validity projection `defective` above reads, with a review a corrected
+ *   contest proved wrong read as practice only) is `sapling` or `tree`, AND
+ *   its current vitality (`readVitality`, over the instruments not proven
+ *   invalid, replayed without corrected reviews — as
+ *   `./strong-recall-wiring.ts` reads vitality) reads `holding`.
+ *   Demonstrated competence that is not currently fading.
  * - **`weak`** — every other case with at least some non-excluded evidence:
  *   below `sapling`, or at/above it but currently `tending` (fading despite
  *   a past demonstration). Either way, "current evidence" — the clause's
@@ -119,6 +122,7 @@ import type {
   ConceptRecord,
   ConceptRelation,
   DirectPrerequisiteEvidence,
+  InstrumentValidityProjection,
   PrerequisiteEvidenceReading,
   ReplayResult,
   Scheduler,
@@ -132,6 +136,7 @@ import {
   replaySchedulerStates,
   resolvePrerequisiteConceptKeys,
 } from 'olea-core';
+import { withoutCorrectedEvidence } from 'olea-core/src/mastery/validity.js';
 
 export interface PrerequisiteEvidenceReaderDeps {
   /** The review log the session was composed from — passed, never re-read. See the module doc. */
@@ -155,13 +160,22 @@ export interface PrerequisiteEvidenceReaderDeps {
   readonly concepts: readonly ConceptRecord[];
   /** Overrides {@link HOLDING_CUT} ([D-115]'s ratified 0.90). */
   readonly holdingCut?: number;
+  /**
+   * The validity projection over `entries` and the dispute records read
+   * beside them (`olea-core`'s `projectInstrumentValidity(entries,
+   * disputes)`), so a contest resolved `corrected` — read apart from the log
+   * — reaches this reader (`ol-egov.141.89.9.68`). Omitted, this reader folds
+   * `entries` alone: rejections and defect suspensions still count, a
+   * corrected contest cannot be seen.
+   */
+  readonly validity?: InstrumentValidityProjection;
 }
 
 function classifyPrerequisite(
   prerequisiteConceptId: string,
   deps: PrerequisiteEvidenceReaderDeps,
   replayed: ReplayResult,
-  invalidInstrumentIds: readonly string[],
+  validity: InstrumentValidityProjection,
   holdingCut: number,
 ): PrerequisiteEvidenceReading {
   const evidenceInstruments = conceptVitalityInstruments(
@@ -171,19 +185,21 @@ function classifyPrerequisite(
   );
   if (evidenceInstruments.length === 0) return 'unknown';
 
-  const invalidSet = new Set(invalidInstrumentIds);
   const validInstruments = evidenceInstruments.filter(
-    (instrument) => !invalidSet.has(instrument.instrumentId),
+    (instrument) => !validity.provenInvalid.has(instrument.instrumentId),
   );
   if (validInstruments.length === 0) return 'defective';
 
+  // A review a corrected contest proved wrong is practice only here, with any
+  // re-grade read in its place; the instrument's other reviews count
+  // (`ol-egov.141.89.9.66`).
   const mastery = computeAllConceptMastery(deps.entries, [prerequisiteConceptId], {
-    invalidInstrumentIds,
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
   }).get(prerequisiteConceptId);
   // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3)
-  // and must exclude proven-invalid evidence too — `validInstruments` above
-  // already filters for the `'defective'` check; reusing it here (instead of
-  // the unfiltered `evidenceInstruments`) is the fix.
+  // and must exclude proven-invalid instruments too — `validInstruments`
+  // above, whose states `replayed` built without any corrected review.
   const vitality = readVitality({
     instruments: validInstruments,
     scheduler: deps.scheduler,
@@ -217,7 +233,9 @@ export function createPrerequisiteEvidenceReader(
   const { prerequisiteConceptKeys } = resolvePrerequisiteConceptKeys(deps.relations, deps.concepts);
 
   let replayed: ReplayResult | null = null;
-  let invalidInstrumentIds: readonly string[] | null = null;
+  // `[D-281]` item 4 at the ruled scope (`ol-egov.141.89.9.68`): the one
+  // validity projection, from `deps.validity` or folded once over `entries`.
+  let validity: InstrumentValidityProjection | null = deps.validity ?? null;
   const dependentMemo = new Map<string, DirectPrerequisiteEvidence | undefined>();
   const readingMemo = new Map<string, PrerequisiteEvidenceReading>();
 
@@ -235,12 +253,15 @@ export function createPrerequisiteEvidenceReader(
         // Replayed and folded once, lazily, on the first call that actually
         // needs it — never at composition time, so a session she never
         // rates past the threshold costs nothing.
-        replayed ??= replaySchedulerStates(deps.entries, deps.scheduler);
-        invalidInstrumentIds ??= [...projectInstrumentValidity(deps.entries).provenInvalid.keys()];
+        validity ??= projectInstrumentValidity(deps.entries);
+        replayed ??= replaySchedulerStates(
+          withoutCorrectedEvidence(deps.entries, validity.correctedEvidence),
+          deps.scheduler,
+        );
 
         let reading = readingMemo.get(chosen);
         if (reading === undefined) {
-          reading = classifyPrerequisite(chosen, deps, replayed, invalidInstrumentIds, holdingCut);
+          reading = classifyPrerequisite(chosen, deps, replayed, validity, holdingCut);
           readingMemo.set(chosen, reading);
         }
         evidence = { conceptId: chosen, reading };

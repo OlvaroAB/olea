@@ -1123,86 +1123,6 @@ function instrumentCountsByNotePath(
 }
 
 /**
- * `[D-338]` interim fix (`ol-egov.141.89.9.14`), partly reversing `ol-vrlp`'s
- * `[D-281]` item 4 wiring here: `computeAllConceptMastery`'s
- * `invalidInstrumentIds` must name instruments PROVEN invalid, and a plain
- * `suspend`/`unsuspend` record cannot say why — the citation-revision tick,
- * her own withdrawal (F8.5) and a confirmed defect all write the identical
- * event, with no reason field until `docs/dev/intelligence-build/att.md`
- * section 7 proposal 1 (`olea-service`) lands one. `[D-338]` items 2 and 4
- * rule that neither a revision nor her own choice may retract an earned
- * stage, so `suspendedInstrumentIds` must NOT reach this fold — that was the
- * retraction bug.
- *
- * A `verdict` record is a different, already-unambiguous signal:
- * `olea-core`'s `../review-log/verdicts.ts` doc calls `rejected` "a real
- * refusal", never a mere pause. A corrective re-grade
- * (`explainBackGrade.revisionOf`) is already read unconditionally inside
- * `olea-core`'s mastery fold and needs no entry here. Matches
- * `../registry/build.ts` (olea-core)'s own `provenInvalidInstrumentIds`.
- *
- * **Widened by `ol-egov.141.89.9.23`** to union in
- * `correctedGradeInstrumentIds`'s signal too: a contest resolved `corrected`
- * is the same today-unambiguous "found defective" shape a `rejected` verdict
- * already is (`[D-338]` item 2). `upheld` stays excluded — see
- * `correctedGradeInstrumentIds` below, this file's own mirror of
- * `olea-core`'s function of the same name (not itself exported from
- * `olea-core`'s barrel — widening `packages/core/src/index.ts` is outside
- * this bead's `owns`, the named reachability gap `../review-log/
- * contest.ts#correctedGradeInstrumentIds`'s own doc flags).
- *
- * **`projectInstrumentValidity`'s `provenInvalid`, not "latest verdict is
- * `rejected`" (`ol-v7r5.101` follow-up, matching `../registry/build.ts`
- * (olea-core)'s identical fix).** This used to read `latestVerdictByInstrument`
- * and test the LATEST verdict's own `verdict` field — correct only because no
- * writer in this codebase, before `[D-396]`, ever appended a plain
- * `accepted`/`edited` verdict for an instrument that already had a `rejected`
- * one. `[D-396]` makes that unsafe to assume: a rejection now stands until a
- * DELIBERATE restore (an `accepted` verdict naming it in `restores`) lifts
- * it, and a later plain accept or edit with no `restores` must lift nothing
- * (condition 3) — which "latest verdict wins" gets wrong the instant such a
- * write exists. `olea-core`'s `rejectedInstrumentIds` (`../mastery/
- * validity.ts`) is the canonical answer, but it is not itself exported from
- * `olea-core`'s barrel — the same reachability gap this function's own doc
- * already names for `correctedGradeInstrumentIds` above — so this reads the
- * IDENTICAL projection via `projectInstrumentValidity` (exported) and filters
- * for `reason === 'rejected'` itself, rather than a guessed re-derivation.
- */
-function provenInvalidInstrumentIds(
-  entries: readonly ReviewLogEntry[],
-  disputes: readonly DisputeLogRecord[],
-): ReadonlySet<string> {
-  const invalid = new Set<string>();
-  for (const [instrumentId, fact] of projectInstrumentValidity(entries).provenInvalid) {
-    if (fact.reason === 'rejected') invalid.add(instrumentId);
-  }
-  for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
-  return invalid;
-}
-
-/**
- * `olea-core`'s `review-log/contest.ts#correctedGradeInstrumentIds`, mirrored
- * here rather than imported: that function is not exported from `olea-core`'s
- * barrel (`packages/core/src/index.ts`), which sits outside this bead's
- * `owns` — see `provenInvalidInstrumentIds`'s own doc, above, for why
- * widening it is out of scope rather than silently worked around. This reads
- * the identical two fields (`claimKind`, `resolves`, `outcome`) the core
- * function's own doc names: only a RESOLUTION record (`resolves` present)
- * whose `outcome` is `corrected`, for a `grade`-kind dispute, counts. `upheld`
- * is deliberately excluded — nothing was found defective there.
- */
-function correctedGradeInstrumentIds(disputes: readonly DisputeLogRecord[]): ReadonlySet<string> {
-  const ids = new Set<string>();
-  for (const record of disputes) {
-    if (record.claimKind !== 'grade') continue;
-    if (record.resolves === undefined) continue;
-    if (record.outcome !== 'corrected') continue;
-    if (record.instrumentId !== undefined) ids.add(record.instrumentId);
-  }
-  return ids;
-}
-
-/**
  * `readReviewLogHistory` (`../../core/session/history.ts`) deliberately does
  * not surface dispute records — `../../core/review-log/parse.ts`'s own doc
  * says why — and `session/history.ts` sits outside this bead's `owns`, so
@@ -1321,14 +1241,23 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
           enumeration.concepts,
           instrumentCountsByNotePath(enumeration.records),
         );
-        // `[D-338]` interim fix (`ol-egov.141.89.9.14`), widened by
-        // `ol-egov.141.89.9.23`: see `provenInvalidInstrumentIds`'s own doc,
-        // above, for why this no longer reads `suspendedInstrumentIds`, and
-        // now also unions a contest resolved `corrected`.
+        // `[D-281]` item 4 at the ruled scope (`[D-338]`; rulings of
+        // 2026-09-28, `ol-egov.141.89.9.66`, wired here by
+        // `ol-egov.141.89.9.68`): the one dispute-aware validity projection
+        // (`olea-core`'s `mastery/validity.ts`), never a local mirror of it.
+        // Instruments proven invalid — a standing rejection, a suspension
+        // recorded as a defect — qualify nothing at the top stage; a review a
+        // corrected contest proved wrong is practice only, with any re-grade
+        // read in its place, and the instrument's other reviews keep counting.
+        // A withdrawal (`suspendedInstrumentIds`) is never invalidity.
+        const validity = projectInstrumentValidity(entries, disputes);
         const mastery = computeAllConceptMastery(
           entries,
           enumeration.concepts.map((concept) => concept.key),
-          { invalidInstrumentIds: [...provenInvalidInstrumentIds(entries, disputes)] },
+          {
+            invalidInstrumentIds: [...validity.provenInvalid.keys()],
+            correctedEventIds: [...validity.correctedEvidence.keys()],
+          },
         );
 
         // Every course a concept or a registered source names — a course
@@ -1481,15 +1410,14 @@ export async function loadTodayPanel(
 
   const base: TodayPanelInput = {
     entries: history.entries,
-    // `[D-281]` item 4 / `[D-338]`'s corrected-on-contest half
-    // (`ol-egov.141.89.9.43`): `readReviewHistory` already reads `disputes`
-    // off the same log walk `entries` comes from (see its own doc above);
-    // forwarding it lets `buildTodayPanel`'s `projectInstrumentValidity`
-    // fold in a `[D-095]` grade contest resolved `corrected`, the same
-    // proven-invalid fact `registry/build.ts` and this file's own
-    // `createVaultScopeSource` fold already act on. The rejected-verdict
-    // half needed nothing here, since verdict records already travel inside
-    // `entries` — only this field was still being dropped.
+    // `[D-281]` item 4 (`ol-egov.141.89.9.43`, `ol-egov.141.89.9.68`):
+    // `readReviewHistory` already reads `disputes` off the same log walk
+    // `entries` comes from (see its own doc above); forwarding it lets
+    // `buildTodayPanel`'s validity projection read a `[D-095]` grade contest
+    // resolved `corrected` — which proves one review's grade wrong, never the
+    // instrument — as `registry/build.ts` and this file's own
+    // `createVaultScopeSource` fold do. Rejections and defect suspensions
+    // travel inside `entries` and needed nothing here.
     disputes: history.disputes,
     instruments,
     today,

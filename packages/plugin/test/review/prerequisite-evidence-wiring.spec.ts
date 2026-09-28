@@ -14,9 +14,9 @@
  * Feature: F2-review.md, "F2.12 — the prerequisite-aware offer rides the
  * confusion-routing trigger, read fresh each time [D-265]".
  */
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
 import type { ConceptRecord, ConceptRelation, RelationSet, Scheduler } from 'olea-core';
-import { createFsrsScheduler, servedRelations } from 'olea-core';
+import { createFsrsScheduler, projectInstrumentValidity, servedRelations } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createPrerequisiteEvidenceReader } from '../../src/review/prerequisite-evidence-wiring.js';
 
@@ -273,6 +273,107 @@ describe('createPrerequisiteEvidenceReader — classifying the prerequisite’s 
     expect(noEvidence?.reading).toBe('unknown');
     expect(allInvalid?.reading).toBe('defective');
     expect(noEvidence?.reading).not.toBe(allInvalid?.reading);
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): the
+ * reader reads the one validity projection, handed in with the dispute
+ * records read beside the log. A corrected contest proves ONE review's grade
+ * wrong — never the instrument, so never `defective` — and a suspension
+ * recorded as a defect proves the instrument invalid.
+ */
+describe('createPrerequisiteEvidenceReader — the ruled validity scope (ol-egov.141.89.9.68)', () => {
+  function correctedContest(instrumentId: string, openedAt: string, resolvedAt: string) {
+    const base = {
+      schemaVersion: 6 as const,
+      kind: 'dispute' as const,
+      timestamp: openedAt,
+      claimKind: 'grade' as const,
+      claimRendering: 'explain-back-grade' as const,
+      conceptIds: ['key-prereq'],
+      instrumentId,
+      evidenceBasis: 'evidence-fingerprint-1',
+      effect: 'quarantined' as const,
+    };
+    return [
+      { ...base, eventId: 'contest-open' } as DisputeLogRecord,
+      {
+        ...base,
+        eventId: 'contest-resolved',
+        timestamp: resolvedAt,
+        resolves: 'contest-open',
+        outcome: 'corrected' as const,
+      } as DisputeLogRecord,
+    ];
+  }
+
+  function readerOver(
+    entries: readonly ReviewLogEntry[],
+    disputes: readonly DisputeLogRecord[] = [],
+  ) {
+    return createPrerequisiteEvidenceReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      relations: [edge('prerequisite', 'Prereq', 'Dependent')],
+      concepts: [concept('Prereq', 'key-prereq'), concept('Dependent', 'key-dependent')],
+      validity: projectInstrumentValidity(entries, disputes),
+    });
+  }
+
+  it('a corrected contest on one review never makes the prerequisite defective: its other reviews still read strong', () => {
+    const entries = fourSpacedSuccesses('key-prereq', 'inst-prereq');
+    const contest = correctedContest(
+      'inst-prereq',
+      '2026-08-20T08:01:00+00:00',
+      '2026-08-20T08:30:00+00:00',
+    );
+    expect(readerOver(entries, contest)(['key-dependent'])).toEqual({
+      conceptId: 'key-prereq',
+      reading: 'strong',
+    });
+  });
+
+  it('vitality replays without a corrected review: a faded sibling whose only review was proven wrong no longer downgrades strong to weak', () => {
+    const entries = [
+      ...fourSpacedSuccesses('key-prereq', 'inst-good'),
+      review({
+        eventId: 'e-bad',
+        timestamp: '2020-01-01T08:00:00+00:00',
+        conceptIds: ['key-prereq'],
+        instrumentId: 'inst-bad',
+        rating: 'again',
+      }),
+    ];
+    expect(readerOver(entries)(['key-dependent'])?.reading).toBe('weak');
+    const contest = correctedContest(
+      'inst-bad',
+      '2020-01-01T08:01:00+00:00',
+      '2020-01-02T08:00:00+00:00',
+    );
+    expect(readerOver(entries, contest)(['key-dependent'])?.reading).toBe('strong');
+  });
+
+  it('a suspension recorded as a defect makes its instrument proven invalid: defective while it stands', () => {
+    const entries = [
+      review({
+        eventId: 'e-1',
+        timestamp: '2026-08-18T08:00:00+00:00',
+        conceptIds: ['key-prereq'],
+        instrumentId: 'inst-defect',
+      }),
+      {
+        schemaVersion: 6,
+        kind: 'suspend',
+        eventId: 'suspend-1',
+        timestamp: '2026-08-19T08:00:00+00:00',
+        instrumentId: 'inst-defect',
+        conceptIds: ['key-prereq'],
+        reason: 'defect',
+      } as unknown as ReviewLogEntry,
+    ];
+    expect(readerOver(entries)(['key-dependent'])?.reading).toBe('defective');
   });
 });
 

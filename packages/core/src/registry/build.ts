@@ -56,10 +56,10 @@
  * gets a fully honest history, simply with no row ever marked contested,
  * which is the correct default for "unknown" rather than a fabricated
  * "definitely not contested." **The same default now also means "no
- * corrected-contest evidence to fold into the growth stage"**
- * (`provenInvalidInstrumentIds` below, `ol-egov.141.89.9.23`) — absent
- * `disputes`, a contest resolved corrected simply cannot be seen here, the
- * identical honest-absence posture, never a fabricated "definitely upheld."
+ * corrected grade to read"** (the validity projection `buildRegistryModel`
+ * folds, `ol-egov.141.89.9.68`) — absent `disputes`, a contest resolved
+ * corrected simply cannot be seen here, the identical honest-absence
+ * posture, never a fabricated "definitely upheld."
  *
  * Only an INSTRUMENT-SEEDED explain-back attempt gets a row here — see
  * `RegistryInstrumentSummary.explainBackHistory`'s own doc in `./types.ts`
@@ -89,7 +89,6 @@
  * using this fact for.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
 import { noteOfferEligible } from '../concept/note-offer.js';
 import { noteTitle } from '../concept/zettelkasten.js';
 import type { Provenance } from '../extract/types.js';
@@ -99,13 +98,9 @@ import {
   conceptIdsInLog,
   readAllConceptVitality,
 } from '../mastery/rollup.js';
-import { projectInstrumentValidity, rejectedInstrumentIds } from '../mastery/validity.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
-import {
-  correctedGradeInstrumentIds,
-  type DisputeLogRecord,
-  quarantinedGradeInstrumentIds,
-} from '../review-log/contest.js';
+import { quarantinedGradeInstrumentIds } from '../review-log/contest.js';
 import {
   type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
@@ -482,56 +477,6 @@ function compareEntries(a: RegistryConceptEntry, b: RegistryConceptEntry): numbe
 }
 
 /**
- * `[D-338]` interim fix (`ol-egov.141.89.9.14`), partly reversing `ol-vrlp`'s
- * `[D-281]` item 4 wiring: `../mastery/rollup.ts`'s `invalidInstrumentIds`
- * must name instruments **proven** invalid, and a plain `suspend`/`unsuspend`
- * record cannot say why — the citation-revision tick, her own withdrawal
- * (F8.5) and a confirmed defect all write the identical event, with no
- * reason field until proposal 1 (`docs/dev/intelligence-build/att.md`
- * section 7, `olea-service`) lands one. `[D-338]` items 2 and 4 rule that
- * neither a revision nor her own choice may retract an earned stage, so
- * `suspendedInstrumentIds` (F8.5's withdrawn-instrument projection, still
- * read above for the `pruned` display) must NOT reach this fold as
- * `invalidInstrumentIds` — that was the retraction bug.
- *
- * A `verdict` record is a different, already-unambiguous signal:
- * `../review-log/verdicts.ts`'s own doc calls `rejected` "a real refusal",
- * never a mere pause. A corrective re-grade (`explainBackGrade.revisionOf`)
- * is already read unconditionally inside `../mastery/rollup.ts` itself and
- * needs no entry here.
- *
- * **Widened by `ol-egov.141.89.9.23`** to close the reachability gap
- * `correctedGradeInstrumentIds`'s own doc names: a contest resolved
- * `corrected` is the identical today-unambiguous "found defective" shape a
- * `rejected` verdict already is (`[D-338]` item 2), so it now joins the
- * proven-invalid set here too. `upheld` stays excluded — that function's own
- * doc says why (nothing was found defective there).
- *
- * **`rejectedInstrumentIds` (`ol-v7r5.101` follow-up), not "latest verdict is
- * `rejected`".** This used to read `../review-log/verdicts.ts`'s
- * `latestVerdictByInstrument` and test the LATEST verdict's own `verdict`
- * field — correct only because no writer in this codebase, before `[D-396]`,
- * ever appended a plain `accepted`/`edited` verdict for an instrument that
- * already had a `rejected` one. `[D-396]` makes that no longer safe to
- * assume: a rejection now stands until a DELIBERATE restore (an `accepted`
- * verdict naming it in `restores`) lifts it, and a later plain accept or edit
- * with no `restores` must lift nothing (condition 3) — which "latest verdict
- * wins" gets wrong the instant such a write exists. `../mastery/validity.ts`'s
- * `rejectedInstrumentIds` is the one fold every other reader of rejection
- * standing in this codebase already reads (`./provider.ts`'s reject/restore
- * actions included, once wired — `ol-v7r5.93`), so this reads the same
- * answer rather than a second, now-provably-divergent one.
- */
-function provenInvalidInstrumentIds(
-  entries: readonly ReviewLogEntry[],
-  disputes: readonly DisputeLogRecord[],
-): ReadonlySet<string> {
-  const invalid = new Set(rejectedInstrumentIds(entries));
-  for (const instrumentId of correctedGradeInstrumentIds(disputes)) invalid.add(instrumentId);
-  return invalid;
-}
-
-/**
  * Builds the whole registry model — pure, synchronous, and (per this
  * module's doc) not itself responsible for reading the vault or the log.
  *
@@ -583,28 +528,30 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const conceptIds = concepts.map((c) => c.key);
   const idsForRollup = new Set([...conceptIds, ...conceptIdsInLog(input.entries)]);
 
-  // `[D-338]` interim fix (`ol-egov.141.89.9.14`): `invalidInstrumentIds`
-  // must be PROVEN invalid, never merely suspended — see
-  // `provenInvalidInstrumentIds`'s own doc for why `ol-vrlp`'s
-  // `suspendedInstrumentIds` wiring here was the retraction bug D-338 rules
-  // against, and what still counts without it.
+  // `[D-281]` item 4 at the ruled scope (`[D-338]`; rulings of 2026-09-28,
+  // `ol-egov.141.89.9.66`, wired here by `ol-egov.141.89.9.68`): ONE
+  // validity projection, dispute-aware, read by both the stage and vitality.
+  // - Instruments proven invalid — a standing rejection no restore lifted, or
+  //   a suspension recorded as a defect — qualify nothing at the top stage
+  //   and leave vitality. A withdrawal (her choice, a revision, an unknown
+  //   reason; `suspendedInstrumentIds`, still read above for the `pruned`
+  //   display) is never invalidity and never reaches either fold.
+  // - A contest resolved `corrected` proves ONE review's grade wrong
+  //   (`correctedEvidence`): that review stays practice, a re-grade is read
+  //   in its place, and the instrument's other reviews keep counting.
+  //   Vitality replays without it (`readAllConceptVitality`).
+  const validity = projectInstrumentValidity(input.entries, input.disputes ?? []);
   const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup], {
-    invalidInstrumentIds: [...provenInvalidInstrumentIds(input.entries, input.disputes ?? [])],
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
   });
-  // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3),
-  // so a contest resolved `corrected` must exclude its instrument here too —
-  // not only from `masteryByConcept`'s stage fold above, which already
-  // reads `input.disputes` through `provenInvalidInstrumentIds`. Folded once
-  // and reused rather than defaulting to `readAllConceptVitality`'s own
-  // entries-only projection, which would see the rejection but not a
-  // contest read apart from the log.
   const vitalityByConcept = readAllConceptVitality(
     input.entries,
     [...idsForRollup],
     input.scheduler,
     input.now,
     input.holdingCut,
-    projectInstrumentValidity(input.entries, input.disputes ?? []),
+    validity,
   );
 
   const entries: RegistryConceptEntry[] = concepts.map((concept) => {

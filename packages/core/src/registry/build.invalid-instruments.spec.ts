@@ -223,7 +223,7 @@ describe('buildRegistryModel — [D-338]: suspension alone never retracts the to
     expect(model.concepts[0]?.mastery.state).toBe('sprout');
   });
 
-  it('the SAME attempt, once a `[D-095]` dispute against its grade resolves `corrected` — the identical today-unambiguous "found defective" shape a `rejected` verdict already is (`[D-338]` item 2, `ol-egov.141.89.9.23`) — no longer qualifies the top stage', () => {
+  it('the SAME attempt, once a `[D-095]` dispute against its grade resolves `corrected`, no longer qualifies the top stage — its grade was proven wrong; it stays practice (`ol-egov.141.89.9.66`)', () => {
     const model = buildFor(
       [qualifyingExplainBack()],
       new Set(),
@@ -236,5 +236,35 @@ describe('buildRegistryModel — [D-338]: suspension alone never retracts the to
   it('the SAME contest resolved `upheld` instead — the grading was checked and held, nothing found defective — KEEPS the top stage', () => {
     const model = buildFor([qualifyingExplainBack()], new Set(), contestedGradeDisputes('upheld'));
     expect(model.concepts[0]?.mastery.state).toBe('tree');
+  });
+
+  // `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): a
+  // corrected contest proves ONE review's grade wrong, never the instrument.
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound attempt still reaches `tree`', () => {
+    const earlier = {
+      ...qualifyingExplainBack(),
+      eventId: 'eb-0',
+      timestamp: '2026-01-10T09:00:00-04:00',
+    };
+    const model = buildFor(
+      [earlier, qualifyingExplainBack()],
+      new Set(),
+      contestedGradeDisputes('corrected'),
+    );
+    expect(model.concepts[0]?.mastery.state).toBe('tree');
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend (`[D-345]`)', () => {
+    const defect = suspendRecord({ schemaVersion: 6, reason: 'defect' } as Partial<ReviewLogEntry>);
+    expect(buildFor([qualifyingExplainBack(), defect]).concepts[0]?.mastery.state).toBe('sprout');
+    const unsuspend = suspendRecord({
+      schemaVersion: 6,
+      kind: 'unsuspend',
+      eventId: 'unsuspend-1',
+      timestamp: '2026-01-27T09:00:00-04:00',
+    } as Partial<ReviewLogEntry>);
+    expect(buildFor([qualifyingExplainBack(), defect, unsuspend]).concepts[0]?.mastery.state).toBe(
+      'tree',
+    );
   });
 });

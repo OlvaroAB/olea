@@ -143,19 +143,24 @@ function buildCarriesEntry(
 export function buildRetrospective(input: RetrospectiveInput): RetrospectiveReading {
   const entries: readonly ReviewLogEntry[] = input.entries;
   const conceptIds = input.scope.map((c) => c.conceptId);
-  // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3),
-  // so a contest resolved `corrected` must exclude its instrument here too,
-  // when `input.disputes` supplies one — the same dispute-aware projection
-  // `registry/build.ts`'s own vitality read now folds. Defaults to none
-  // (`RetrospectiveInput.disputes`'s own doc): a rejection already inside
-  // `entries` still excludes without it.
+  // `[D-281]` item 4 at the ruled scope (`[D-338]`; rulings of 2026-09-28,
+  // `ol-egov.141.89.9.66`, wired here by `ol-egov.141.89.9.68`): ONE
+  // dispute-aware validity projection, folded once over the whole input log
+  // and read by both the vitality partition and the displayed stage below.
+  // Instruments proven invalid (a standing rejection, a defect suspension)
+  // leave vitality and qualify nothing at the top stage; a review a corrected
+  // contest proved wrong is practice only, with any re-grade read in its
+  // place, and vitality replays without it. `input.disputes` defaults to none
+  // (`RetrospectiveInput.disputes`'s own doc): rejections and defects, inside
+  // `entries`, still count without it.
+  const validity = projectInstrumentValidity(entries, input.disputes ?? []);
   const vitalityByConceptId = readAllConceptVitality(
     entries,
     conceptIds,
     input.scheduler,
     input.now,
     input.holdingCut,
-    projectInstrumentValidity(entries, input.disputes ?? []),
+    validity,
   );
   // `[D-388]` condition 4 / `[D-402]`: one identity is the same key or a
   // CONFIRMED same-as link, nothing weaker; with no links the redirect is
@@ -183,13 +188,10 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     finalAssessmentBasis:
       input.finalAssessmentScopeOrigin === 'assessment-stated' ? 'declared-scope' : 'olea-reading',
   };
-  // `ol-a07q` (`[D-281]` item 4): the displayed stage must exclude evidence
-  // from an instrument proven invalid — a `rejected` verdict or a contest
-  // resolved `corrected` (`../mastery/validity.ts`, `ol-v7r5.69`'s close
-  // reason) — the same fold `../registry/build.ts`'s `buildRegistryModel`
-  // already threads into its own stage read. Folded once over the whole
-  // input log, not per concept.
-  const invalidInstrumentIds = [...projectInstrumentValidity(entries).provenInvalid.keys()];
+  const stageOptions = {
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
+  };
 
   const held: RetrospectiveConceptLine[] = [];
   const faded: RetrospectiveConceptLine[] = [];
@@ -221,7 +223,7 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
       continue;
     }
 
-    const { state } = computeConceptMastery(entries, conceptId, { invalidInstrumentIds });
+    const { state } = computeConceptMastery(entries, conceptId, stageOptions);
     const line: RetrospectiveConceptLine = {
       conceptId,
       conceptName,

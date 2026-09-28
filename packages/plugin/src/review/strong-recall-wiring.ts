@@ -75,7 +75,12 @@
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
-import type { ReplayResult, Scheduler, StrongRecallProposalDecision } from 'olea-core';
+import type {
+  InstrumentValidityProjection,
+  ReplayResult,
+  Scheduler,
+  StrongRecallProposalDecision,
+} from 'olea-core';
 import {
   computeAllConceptMastery,
   conceptVitalityInstruments,
@@ -85,6 +90,7 @@ import {
   readVitality,
   replaySchedulerStates,
 } from 'olea-core';
+import { withoutCorrectedEvidence } from 'olea-core/src/mastery/validity.js';
 
 export interface StrongRecallProposalReaderDeps {
   /**
@@ -106,6 +112,15 @@ export interface StrongRecallProposalReaderDeps {
    * ratified 0.90 (`ol-owyn`). Overrides {@link HOLDING_CUT}.
    */
   readonly holdingCut?: number;
+  /**
+   * The validity projection over `entries` and the dispute records read
+   * beside them (`olea-core`'s `projectInstrumentValidity(entries,
+   * disputes)`), so a contest resolved `corrected` — read apart from the log
+   * — reaches this reader (`ol-egov.141.89.9.68`). Omitted, this reader folds
+   * `entries` alone: rejections and defect suspensions still count, a
+   * corrected contest cannot be seen.
+   */
+  readonly validity?: InstrumentValidityProjection;
 }
 
 /**
@@ -186,12 +201,15 @@ export function createStrongRecallProposalReader(
   const holdingCut = deps.holdingCut ?? HOLDING_CUT;
   const memo = new Map<string, StrongRecallProposalDecision>();
   let replayed: ReplayResult | null = null;
-  // `ol-a07q` (`[D-281]` item 4): folded once, lazily, over the SAME `deps.entries`
-  // this module already closes over — never re-derived per concept. A
-  // rejected verdict or a contest resolved `corrected` against an instrument
-  // must drop its evidence here too, the same as every other mastery reader
-  // (`../../../core/src/mastery/validity.ts`, `ol-v7r5.69`'s close reason).
-  let invalidInstrumentIds: readonly string[] | null = null;
+  // `[D-281]` item 4 at the ruled scope (`ol-a07q`; rulings of 2026-09-28,
+  // `ol-egov.141.89.9.66`, wired here by `ol-egov.141.89.9.68`): the one
+  // validity projection, taken from `deps.validity` or folded once, lazily,
+  // over the SAME `deps.entries` — never re-derived per concept. Instruments
+  // proven invalid (a standing rejection, a defect suspension) leave both
+  // folds; a review a corrected contest proved wrong is practice only in the
+  // stage fold, with any re-grade read in its place, and the scheduler replay
+  // behind vitality runs without it. The instrument's other reviews count.
+  let validity: InstrumentValidityProjection | null = deps.validity ?? null;
 
   function decide(conceptId: string): StrongRecallProposalDecision {
     const cached = memo.get(conceptId);
@@ -199,19 +217,22 @@ export function createStrongRecallProposalReader(
 
     // Once per session, on the first grade — never once per grade, and never
     // at open, so a session she never rates costs nothing.
-    replayed ??= replaySchedulerStates(deps.entries, deps.scheduler);
-    invalidInstrumentIds ??= [...projectInstrumentValidity(deps.entries).provenInvalid.keys()];
+    validity ??= projectInstrumentValidity(deps.entries);
+    const standing = validity;
+    replayed ??= replaySchedulerStates(
+      withoutCorrectedEvidence(deps.entries, standing.correctedEvidence),
+      deps.scheduler,
+    );
 
     const mastery = computeAllConceptMastery(deps.entries, [conceptId], {
-      invalidInstrumentIds,
+      invalidInstrumentIds: [...standing.provenInvalid.keys()],
+      correctedEventIds: [...standing.correctedEvidence.keys()],
     }).get(conceptId);
     // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item
-    // 3) and must exclude proven-invalid evidence the same way `mastery`
-    // above already does — `conceptVitalityInstruments` alone does not
-    // filter, so the same `invalidInstrumentIds` set feeds both folds.
-    const invalidSet = new Set(invalidInstrumentIds);
+    // 3) and must exclude proven-invalid instruments the same way `mastery`
+    // above does — `conceptVitalityInstruments` alone does not filter.
     const validInstruments = conceptVitalityInstruments(deps.entries, conceptId, replayed).filter(
-      (instrument) => !invalidSet.has(instrument.instrumentId),
+      (instrument) => !standing.provenInvalid.has(instrument.instrumentId),
     );
     const decision: StrongRecallProposalDecision =
       mastery === undefined

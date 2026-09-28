@@ -1494,7 +1494,7 @@ describe('loadTodayPanel', () => {
       );
     }
 
-    it('a corrected grade contest excludes the instrument from the panel’s top stage', async () => {
+    it('a corrected grade contest withholds the top stage its proven-wrong grade earned (ol-egov.141.89.9.66)', async () => {
       const vault = fixtureVault();
       const conceptId = await resolveConceptId(vault);
       const instrumentId = `card:${conceptId}:1`;
@@ -1534,7 +1534,9 @@ describe('loadTodayPanel', () => {
       const course = vm.mastery?.courses.find((c) => c.course === 'TESTC404');
       if (course === undefined) throw new Error('expected TESTC404 in the mastery overview');
       // Pre-fix (disputes dropped before `TodayPanelInput`), this reads 1: the
-      // corrected-contest signal never reached `buildTodayPanel`.
+      // corrected-contest signal never reached `buildTodayPanel`. The contest
+      // proves this one review's grade wrong (it stays practice); the
+      // instrument's other reviews, had it any, would still count.
       expect(course.distribution.counts.tree).toBe(0);
     });
 

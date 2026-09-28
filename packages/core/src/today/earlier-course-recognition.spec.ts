@@ -3,7 +3,7 @@
  * Fixture ids are opaque (INV-3): no real course code or concept name
  * anywhere in this file.
  */
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptCourses } from '../insights/types.js';
 import { attainmentArithmeticVersion } from '../mastery/attainment.js';
@@ -449,5 +449,151 @@ describe('[D-387] the dated line at a preserved cutoff, apart from the current r
     });
     expect(rec?.historical).toHaveLength(1);
     expect(rec?.historical[0]?.cutoffDay).toBe('2026-06-12');
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): the
+ * stage and the evidence line read one dispute-aware validity projection. A
+ * corrected contest proves one review's grade wrong — never the instrument —
+ * and a suspension recorded as a defect proves the instrument invalid until a
+ * later unsuspend.
+ */
+describe('buildEarlierCourseRecognitions — the ruled validity scope (ol-egov.141.89.9.68)', () => {
+  const concepts: readonly ConceptCourses[] = [{ conceptId: 'c1', courses: ['NEW1', 'OLD1'] }];
+
+  function attempt(eventId: string, timestamp: string): ReviewLogRecord {
+    return {
+      schemaVersion: 6,
+      kind: 'review',
+      eventId,
+      timestamp,
+      instrumentId: 'eb:c1:1',
+      instrumentType: 'explain-back',
+      conceptIds: ['c1'],
+      rating: null,
+      wasUnsure: false,
+      durationMs: 4000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['explain-back'],
+        planVersion: null,
+      },
+      supportLevelShown: 'independent',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    };
+  }
+
+  function correctedContest(
+    instrumentId: string,
+    openedAt: string,
+    resolvedAt: string,
+  ): DisputeLogRecord[] {
+    const base = {
+      schemaVersion: 6 as const,
+      kind: 'dispute' as const,
+      timestamp: openedAt,
+      claimKind: 'grade' as const,
+      claimRendering: 'explain-back-grade' as const,
+      conceptIds: ['c1'],
+      instrumentId,
+      evidenceBasis: 'evidence-fingerprint-1',
+      effect: 'quarantined' as const,
+    };
+    return [
+      { ...base, eventId: 'contest-open' } as DisputeLogRecord,
+      {
+        ...base,
+        eventId: 'contest-resolved',
+        timestamp: resolvedAt,
+        resolves: 'contest-open',
+        outcome: 'corrected' as const,
+      } as DisputeLogRecord,
+    ];
+  }
+
+  const heldReview = review('c1', '2026-08-30', 'e1');
+
+  it('a corrected contest read from `disputes` withholds the top stage its proven-wrong grade earned', () => {
+    const [result] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [heldReview, attempt('eb-1', '2026-08-29T09:00:00+00:00')],
+      concepts,
+      disputes: correctedContest(
+        'eb:c1:1',
+        '2026-08-29T10:00:00+00:00',
+        '2026-08-29T11:00:00+00:00',
+      ),
+    });
+    expect(result?.state).not.toBe('tree');
+  });
+
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound attempt still reaches tree', () => {
+    const [result] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [
+        heldReview,
+        attempt('eb-0', '2026-08-20T09:00:00+00:00'),
+        attempt('eb-1', '2026-08-29T09:00:00+00:00'),
+      ],
+      concepts,
+      disputes: correctedContest(
+        'eb:c1:1',
+        '2026-08-29T10:00:00+00:00',
+        '2026-08-29T11:00:00+00:00',
+      ),
+    });
+    expect(result?.state).toBe('tree');
+  });
+
+  it('a quiz answer whose grade a corrected contest proved wrong still counts as practice but never as the last correct answer', () => {
+    const earlier = review('c1', '2026-08-10', 'e0');
+    const later = review('c1', '2026-08-30', 'e1');
+    const [result] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [earlier, later],
+      concepts,
+      disputes: correctedContest(
+        'qa:c1:1',
+        '2026-08-30T20:00:05+00:00',
+        '2026-08-31T09:00:00+00:00',
+      ),
+    });
+    expect(result?.evidence.reviewCount).toBe(2);
+    expect(result?.evidence.lastCorrectAt).toBe(earlier.timestamp);
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', () => {
+    const suspension = (kind: 'suspend' | 'unsuspend', eventId: string, timestamp: string) =>
+      ({
+        schemaVersion: 6,
+        kind,
+        eventId,
+        timestamp,
+        instrumentId: 'eb:c1:1',
+        conceptIds: ['c1'],
+        ...(kind === 'suspend' ? { reason: 'defect' } : {}),
+      }) as ReviewLogEntry;
+    const entries = [
+      heldReview,
+      attempt('eb-1', '2026-08-29T09:00:00+00:00'),
+      suspension('suspend', 'suspend-1', '2026-08-29T12:00:00+00:00'),
+    ];
+    const [suspended] = buildEarlierCourseRecognitions({ newCourse: 'NEW1', entries, concepts });
+    expect(suspended?.state).not.toBe('tree');
+    const [lifted] = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [...entries, suspension('unsuspend', 'unsuspend-1', '2026-08-30T12:00:00+00:00')],
+      concepts,
+    });
+    expect(lifted?.state).toBe('tree');
   });
 });

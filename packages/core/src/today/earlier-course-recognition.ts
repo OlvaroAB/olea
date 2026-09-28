@@ -130,7 +130,7 @@
  * `./course-cutoff-log.ts`.
  */
 
-import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, MasteryState, ReviewLogEntry } from 'olea-contracts';
 import type { ConceptKeyCanonicalIndex } from '../concept/key-store.js';
 import type { SameAsLinkRecord } from '../concept/same-as.js';
 import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
@@ -227,14 +227,25 @@ export interface EarlierCourseRecognitionInput {
   readonly concepts: readonly ConceptCourses[];
   /**
    * Passed through to `computeConceptMastery` for every concept. `[D-281]`
-   * item 4's `invalidInstrumentIds` is derived internally from `entries`
-   * (`../mastery/validity.js`'s `projectInstrumentValidity`, the same fold
-   * `oracle/compose.ts` and `retrospective/build.ts` now do) and always wins
-   * over any value passed here — this module owns that fold the same way the
-   * other three readers own theirs, so a caller cannot accidentally show a
-   * stage that still counts a proven-invalid instrument's evidence.
+   * item 4's `invalidInstrumentIds` and the ruled `correctedEventIds`
+   * (`ol-egov.141.89.9.66`) are derived internally from `entries` and
+   * `disputes` (`../mastery/validity.js`'s `projectInstrumentValidity`, the
+   * same fold `oracle/compose.ts` and `retrospective/build.ts` do) and always
+   * win over any value passed here — this module owns that fold the same way
+   * the other readers own theirs, so a caller cannot accidentally show a
+   * stage that still counts a proven-invalid instrument's evidence or a grade
+   * a contest proved wrong.
    */
   readonly options?: MasteryRollupOptions;
+  /**
+   * `[D-095]` grade-contest records read apart from `entries`, folded into
+   * the same validity projection (`ol-egov.141.89.9.68`). A contest resolved
+   * `corrected` proves ONE review's grade wrong: that review stays practice,
+   * earns no stage and no last-correct date, and the instrument's other
+   * reviews keep counting. Optional and defaults to none — rejections and
+   * defect suspensions, inside `entries`, still count without it.
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
   /**
    * Pre-computed vitality readings, keyed by concept id — typically
    * `readAllConceptVitality`'s result. Optional; see this module's doc. Where
@@ -284,7 +295,11 @@ export function recognitionArithmeticVersion(
  * restated here as the one-line rule it is rather than widening that
  * module's export surface for a single boolean.
  */
-function evidenceFor(entries: readonly ReviewLogEntry[], conceptId: string): EarlierCourseEvidence {
+function evidenceFor(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+  correctedEventIds: ReadonlySet<string>,
+): EarlierCourseEvidence {
   let reviewCount = 0;
   let explainedBack = false;
   let lastCorrectAt: string | null = null;
@@ -300,7 +315,10 @@ function evidenceFor(entries: readonly ReviewLogEntry[], conceptId: string): Ear
     }
 
     reviewCount += 1;
-    const isSuccess = entry.rating !== null && entry.rating !== 'again';
+    // A review whose grade a corrected contest proved wrong stays practice
+    // (counted above) but is never a correct answer (`ol-egov.141.89.9.66`).
+    const isSuccess =
+      entry.rating !== null && entry.rating !== 'again' && !correctedEventIds.has(entry.eventId);
     if (isSuccess) {
       const instant = Date.parse(entry.timestamp);
       if (Number.isFinite(instant) && instant > lastCorrectInstant) {
@@ -360,21 +378,26 @@ function stageAtCutoff(
   identity: string,
   record: CourseCutoffRecord,
   options: MasteryRollupOptions | undefined,
+  disputes: readonly DisputeLogRecord[],
 ): MasteryState | null {
   if (record.historicalAwardRuleVersion !== HISTORICAL_AWARD_RULE_VERSION) return null;
   const recorded = parseRecordedStageArithmetic(record.arithmeticVersion);
   if (recorded === null || recorded.foldVersion !== ATTAINMENT_FOLD_VERSION) return null;
-  const prefix = entries.filter((entry) => {
-    const timestamp: unknown = (entry as { readonly timestamp?: unknown }).timestamp;
+  const byCutoff = (event: { readonly timestamp?: unknown }): boolean => {
+    const timestamp: unknown = event.timestamp;
     if (typeof timestamp !== 'string') return false;
     const day = calendarDayOfTimestamp(timestamp);
     return day !== null && day <= record.cutoffDay;
-  });
-  const invalidInstrumentIds = [...projectInstrumentValidity(prefix).provenInvalid.keys()];
+  };
+  const prefix = entries.filter(byCutoff);
+  // Validity as it stood at the cutoff: only events and contest resolutions
+  // logged by then.
+  const validity = projectInstrumentValidity(prefix, disputes.filter(byCutoff));
   return computeConceptMastery(prefix, identity, {
     ...options,
     saplingRule: recorded.saplingRule,
-    invalidInstrumentIds,
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
   }).state;
 }
 
@@ -400,13 +423,20 @@ export function buildEarlierCourseRecognitions(
       : new Map<string, string>();
   const entries = entriesByIdentity(input.entries, redirect);
   const byConcept = courseSetsByConcept(concepts, (id) => redirect.get(id) ?? id);
-  // `ol-egov.141.89.9.47` (`[D-281]` item 4, `ol-a07q`): the same proven-
-  // invalid projection `oracle/compose.ts` and `retrospective/build.ts` fold
-  // is folded here too, once over the whole input log — a rejected verdict
-  // or a contest resolved `corrected` must drop its evidence from the stage
-  // this screen shows, the same as it already drops from every other reader.
-  const invalidInstrumentIds = [...projectInstrumentValidity(entries).provenInvalid.keys()];
-  const resolvedOptions: MasteryRollupOptions = { ...options, invalidInstrumentIds };
+  // `[D-281]` item 4 at the ruled scope (`ol-egov.141.89.9.47`,
+  // `ol-egov.141.89.9.68`): the same dispute-aware validity projection every
+  // other reader folds, once over the whole input log. An instrument proven
+  // invalid (a standing rejection, a defect suspension) qualifies nothing at
+  // the top stage; a review a corrected contest proved wrong is practice
+  // only, with any re-grade read in its place. Never a withdrawal.
+  const disputes = input.disputes ?? [];
+  const validity = projectInstrumentValidity(entries, disputes);
+  const correctedEventIds = new Set(validity.correctedEvidence.keys());
+  const resolvedOptions: MasteryRollupOptions = {
+    ...options,
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...correctedEventIds],
+  };
   // `[D-387]`/`[D-411]`: one record per course, and each record's covered
   // concept ids read under the same identity redirect as everything else.
   const cutoffByCourse = firstCourseCutoffByCourse(input.cutoffRecords ?? []);
@@ -423,7 +453,7 @@ export function buildEarlierCourseRecognitions(
     const earlierCourses = [...courses].filter((course) => course !== newCourse).sort();
     if (earlierCourses.length === 0) continue;
 
-    const evidence = evidenceFor(entries, conceptId);
+    const evidence = evidenceFor(entries, conceptId, correctedEventIds);
     if (evidence.reviewCount === 0 && !evidence.explainedBack) continue;
 
     const { state } = computeConceptMastery(entries, conceptId, resolvedOptions);
@@ -432,7 +462,7 @@ export function buildEarlierCourseRecognitions(
     for (const course of earlierCourses) {
       const record = cutoffByCourse.get(course);
       if (record === undefined || !coveredByCourse.get(course)?.has(conceptId)) continue;
-      const stoodAt = stageAtCutoff(entries, conceptId, record, options);
+      const stoodAt = stageAtCutoff(entries, conceptId, record, options, disputes);
       if (stoodAt === null) continue;
       historical.push({
         course,

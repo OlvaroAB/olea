@@ -39,8 +39,12 @@ import {
 import type { CourseFloorShare, EffortComposition } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
+import type { MasteryRollupOptions } from '../mastery/rollup.js';
 import type { MasteryVitalityInputs } from '../mastery/sprig.js';
-import { projectInstrumentValidity } from '../mastery/validity.js';
+import {
+  type InstrumentValidityProjection,
+  projectInstrumentValidity,
+} from '../mastery/validity.js';
 import type { CourseFreshnessReading } from '../schedule/freshness.js';
 import type { GroveCourseModel } from '../scope/grove.js';
 import type { CalendarDay } from './calendar-day.js';
@@ -67,38 +71,25 @@ export interface TodayPanelInput {
   /** Suspended instruments (F2.6), folded from the log by `review-log/suspension.ts`. */
   readonly suspendedInstrumentIds?: ReadonlySet<string>;
   /**
-   * `[D-095]` grade-contest records, read alongside `entries` to derive
-   * D-281 item 4's proven-invalid instrument set for the mastery section
-   * below (`../mastery/validity.js#projectInstrumentValidity`).
+   * `[D-095]` grade-contest records, read alongside `entries` into the one
+   * validity projection (`../mastery/validity.js#projectInstrumentValidity`)
+   * the mastery section below reads.
    *
-   * **`suspendedInstrumentIds` above is not this set, and must never
-   * substitute for it.** `[D-338]`/`ol-v7r5.69`: a plain `suspend`/
-   * `unsuspend` record cannot say why it was written — the citation-revision
-   * tick, her own withdrawal (F8.5) and a confirmed defect all write the
-   * identical event — so a suspension never proves a defect and must never
-   * retract an earned growth stage. Only two facts do: an instrument's
-   * LATEST verdict is `rejected`, or a grade contest about it resolved
-   * `corrected` — both already present in `entries`/`disputes`, so
-   * `projectInstrumentValidity` needs nothing else. `registry/build.ts` and
-   * `packages/plugin/src/today/data-source.ts` derive the identical set for
-   * their own production mastery/instrument folds (their local
-   * `provenInvalidInstrumentIds` mirrors). Unlike `courseFreshness`/
-   * `courseScopeModels` below, this needs no vault-wide read — `entries` and
-   * `disputes` are both already read off the log by the caller — so this
-   * function folds them into the proven-invalid set itself, through the one
-   * shared projection every reader is meant to converge on
-   * (`ol-egov.141.89.9.5`, `olea-service`), rather than take a third
-   * caller-side mirror of the same fold.
+   * **`suspendedInstrumentIds` above is not validity, and must never
+   * substitute for it.** A withdrawal (her choice, a revision, an unknown
+   * reason) is availability, never invalidity (`[D-338]`, `[D-345]`; ruling
+   * of 2026-09-28 on `ol-egov.141.89.9.60`): it never retracts an earned
+   * growth stage. The projection proves an instrument invalid only on a
+   * standing rejection or a suspension recorded as a defect — both inside
+   * `entries` — and proves ONE review's grade wrong on a contest resolved
+   * `corrected` (its `correctedEvidence`), which is what this field adds:
+   * that review stays practice, a re-grade is read in its place, and the
+   * instrument's other reviews keep counting.
    *
-   * Optional and defaults to none, the same "absent means nothing to add"
-   * resolution `suspendedInstrumentIds` already takes: a caller that has not
-   * wired dispute records through yet still gets rejected-verdict exclusion
-   * (already inside `entries`), just not the corrected-contest half.
-   * **No production caller supplies this field yet** —
-   * `packages/plugin/src/today/data-source.ts`'s `loadTodayPanel` already
-   * reads `readReviewHistory`'s `disputes` return but currently discards it
-   * before building `TodayPanelInput`; wiring that discard shut is this
-   * bead's (`ol-4mse`) named follow-up.
+   * Optional and defaults to none: without it a corrected contest cannot be
+   * seen, and rejections and defects still are. The production caller,
+   * `packages/plugin/src/today/data-source.ts`'s `loadTodayPanel`, forwards
+   * the dispute records it reads off the same log walk.
    */
   readonly disputes?: readonly DisputeLogRecord[];
   /** Her local calendar day. */
@@ -310,13 +301,11 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
   // whether half a section is worth drawing.
   const concepts = input.concepts;
   // `ol-egov.141.89.9.61`: `MasteryVitalityInputs.disputes` (`../mastery/
-  // sprig.js`) is what lets `masteryVitalityByStage`'s vitality tally, not
-  // only its growth-stage fold above, exclude a contest resolved
-  // `corrected` — the same `input.disputes` this function already reads for
-  // `options.invalidInstrumentIds` below, merged in here rather than left
-  // for a caller of `buildMasteryOverview` to duplicate. A `vitality` object
-  // that already names its own `disputes` (no production caller does today)
-  // is left alone.
+  // sprig.js`) is what lets `masteryVitalityByStage`'s vitality tally read
+  // the dispute-aware projection too — the same `input.disputes` the stage
+  // fold below reads, merged in here rather than left for a caller of
+  // `buildMasteryOverview` to duplicate. A `vitality` object that already
+  // names its own `disputes` (no production caller does today) is left alone.
   const vitality =
     input.vitality === undefined
       ? undefined
@@ -329,26 +318,20 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
             ? { disputes: input.disputes }
             : {}),
         };
+  // `[D-281]` item 4, at the ruled scope (`ol-egov.141.89.9.66`,
+  // `ol-egov.141.89.9.68`): one projection, read two ways — instruments
+  // proven invalid (a standing rejection, a defect suspension) qualify
+  // nothing at the top stage; a review a corrected contest proved wrong is
+  // practice only, with any re-grade read in its place. Never a withdrawal.
   const mastery =
     concepts === undefined
       ? null
       : buildMasteryOverview({
           entries: input.entries,
           concepts,
-          // D-281 item 4 (`ol-4mse`): proven-invalid evidence — a rejected
-          // verdict, or a `[D-095]` grade contest resolved `corrected`, never
-          // a plain suspend/withdrawal (`[D-338]`, `TodayPanelInput.disputes`
-          // doc above) — excluded from the top growth stage the same way
-          // `registry/build.ts` and `today/data-source.ts` already exclude it
-          // from their own production mastery folds.
-          options: {
-            invalidInstrumentIds: [
-              ...projectInstrumentValidity(
-                input.entries,
-                input.disputes ?? EMPTY_DISPUTES,
-              ).provenInvalid.keys(),
-            ],
-          },
+          options: validityRollupOptions(
+            projectInstrumentValidity(input.entries, input.disputes ?? EMPTY_DISPUTES),
+          ),
           ...(vitality !== undefined ? { vitality } : {}),
         });
   const insights =
@@ -411,5 +394,16 @@ const EMPTY_SUSPENDED: ReadonlySet<string> = new Set<string>();
 /** Same reasoning: frozen, so "no floor shares supplied" cannot become a caller's scratch array. */
 const EMPTY_FLOOR_SHARES: readonly CourseFloorShare[] = Object.freeze([]);
 
-/** Same reasoning: "no disputes supplied" degrades to rejected-verdict exclusion only, never a mutable scratch array. */
+/** Same reasoning: "no disputes supplied" still reads rejections and defects from `entries`, never a mutable scratch array. */
 const EMPTY_DISPUTES: readonly DisputeLogRecord[] = Object.freeze([]);
+
+/**
+ * The stage fold's two validity inputs from one projection: instruments
+ * proven invalid, and reviews whose grade a corrected contest proved wrong.
+ */
+function validityRollupOptions(validity: InstrumentValidityProjection): MasteryRollupOptions {
+  return {
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
+  };
+}

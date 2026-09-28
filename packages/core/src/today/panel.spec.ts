@@ -553,6 +553,65 @@ describe('buildTodayPanel — D-281 item 4: proven-invalid evidence excluded fro
     );
     expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
   });
+
+  // `ol-egov.141.89.9.68` (ruling of 2026-09-28, `ol-egov.141.89.9.66`): a
+  // corrected contest proves ONE review's grade wrong, never the instrument.
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound attempt still reaches tree', () => {
+    const earlier = qualifyingExplainBack({
+      eventId: 'eb-0',
+      timestamp: '2026-07-20T09:00:00-04:00',
+    });
+    const vm = buildTodayPanel(
+      input({
+        entries: [earlier, qualifyingExplainBack()],
+        concepts,
+        disputes: contestedGradeDisputes('corrected'),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
+
+  it('a corrective re-grade is read in place of the grade the contest proved wrong', () => {
+    const regrade = qualifyingExplainBack({
+      eventId: 'eb-regrade',
+      timestamp: '2026-08-05T10:00:00-04:00',
+      explainBackGrade: {
+        soloLevel: 'relational',
+        correctness: 'correct',
+        contentRef: 'content-ref-1',
+        revisionOf: 'eb-1',
+        artifactProvenance: { taskId: 'task-2', promptVersion: 'v1', modelId: 'model-1' },
+      },
+    } as Partial<ReviewLogRecord>);
+    const vm = buildTodayPanel(
+      input({
+        entries: [qualifyingExplainBack(), regrade],
+        concepts,
+        disputes: contestedGradeDisputes('corrected'),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', () => {
+    const defect = suspendRecord({ schemaVersion: 6, reason: 'defect' } as Partial<ReviewLogEntry>);
+    const suspended = buildTodayPanel(
+      input({ entries: [qualifyingExplainBack(), defect], concepts }),
+    );
+    expect(suspended.mastery?.courses[0]?.distribution.counts.tree).toBe(0);
+    expect(suspended.mastery?.courses[0]?.distribution.counts.sprout).toBe(1);
+
+    const unsuspend = suspendRecord({
+      schemaVersion: 6,
+      kind: 'unsuspend',
+      eventId: 'unsuspend-1',
+      timestamp: '2026-08-06T09:00:00-04:00',
+    } as Partial<ReviewLogEntry>);
+    const lifted = buildTodayPanel(
+      input({ entries: [qualifyingExplainBack(), defect, unsuspend], concepts }),
+    );
+    expect(lifted.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
 });
 
 /**

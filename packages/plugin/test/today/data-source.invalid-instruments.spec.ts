@@ -72,7 +72,11 @@ async function conceptACell(vault: ReturnType<typeof fixtureVault>) {
 }
 
 /** Writes the qualifying explain-back attempt and returns the real minted instrument id. */
-async function seedQualifyingAttempt(vault: ReturnType<typeof fixtureVault>) {
+async function seedQualifyingAttempt(
+  vault: ReturnType<typeof fixtureVault>,
+  eventId = 'eb-1',
+  timestamp = '2026-08-01T09:00:00-04:00',
+) {
   // Stamped, as the provider's own walk is (`[D-357]`): the attempt is logged under the
   // concept's permanent key, the key a real review carries.
   const enumeration = await enumerateVaultInstruments(vault, {
@@ -85,7 +89,7 @@ async function seedQualifyingAttempt(vault: ReturnType<typeof fixtureVault>) {
   await appendReviewLogRecord(
     vault,
     {
-      timestamp: '2026-08-01T09:00:00-04:00',
+      timestamp,
       instrumentId: instrument.instrumentId,
       instrumentType: 'explain-back',
       conceptIds,
@@ -116,7 +120,7 @@ async function seedQualifyingAttempt(vault: ReturnType<typeof fixtureVault>) {
         },
       },
     },
-    { deviceId: DEVICE, generateEventId: () => 'eb-1' },
+    { deviceId: DEVICE, generateEventId: () => eventId },
   );
 
   return { instrumentId: instrument.instrumentId, conceptIds };
@@ -207,7 +211,7 @@ describe('createVaultScopeSource — [D-338]: suspension alone never retracts th
     expect(afterReject.state).toBe('sprout');
   });
 
-  it('the SAME attempt, once a `[D-095]` dispute against its grade resolves `corrected` — the identical today-unambiguous "found defective" shape a `rejected` verdict already is (`[D-338]` item 2, `ol-egov.141.89.9.23`) — no longer qualifies the top stage', async () => {
+  it('the SAME attempt, once a `[D-095]` dispute against its grade resolves `corrected`, no longer qualifies the top stage — its grade was proven wrong; it stays practice (`ol-egov.141.89.9.66`)', async () => {
     const vault = fixtureVault();
     const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
 
@@ -233,7 +237,57 @@ describe('createVaultScopeSource — [D-338]: suspension alone never retracts th
 });
 
 /**
- * `[D-396]` (`ol-v7r5.101` follow-up): this module's own `provenInvalidInstrumentIds` used to
+ * `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): this
+ * fold reads the one validity projection, not a local mirror of the old
+ * whole-instrument rule. A corrected contest proves ONE review's grade wrong;
+ * a suspension recorded as a defect proves the instrument invalid until a
+ * later unsuspend.
+ */
+describe('createVaultScopeSource — the ruled validity scope (ol-egov.141.89.9.68)', () => {
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound attempt still reaches `tree`', async () => {
+    const vault = fixtureVault();
+    await seedQualifyingAttempt(vault, 'eb-0', '2026-07-20T09:00:00-04:00');
+    const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
+
+    await seedContestedGradeDispute(vault, instrumentId, conceptIds, 'corrected');
+
+    expect((await conceptACell(vault)).state).toBe('tree');
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', async () => {
+    const vault = fixtureVault();
+    const { instrumentId, conceptIds } = await seedQualifyingAttempt(vault);
+
+    await appendSuspendRecord(
+      vault,
+      {
+        kind: 'suspend',
+        timestamp: '2026-08-15T09:00:00-04:00',
+        instrumentId,
+        conceptIds,
+        reason: 'defect',
+      },
+      { deviceId: DEVICE, generateEventId: () => 'suspend-1' },
+    );
+    expect((await conceptACell(vault)).state).toBe('sprout');
+
+    await appendSuspendRecord(
+      vault,
+      {
+        kind: 'unsuspend',
+        timestamp: '2026-08-20T09:00:00-04:00',
+        instrumentId,
+        conceptIds,
+      },
+      { deviceId: DEVICE, generateEventId: () => 'unsuspend-1' },
+    );
+    expect((await conceptACell(vault)).state).toBe('tree');
+  });
+});
+
+/**
+ * `[D-396]` (`ol-v7r5.101` follow-up): this module's fold (then a local mirror, retired by
+ * `ol-egov.141.89.9.68` for the one validity projection) used to
  * read the LATEST verdict's own `verdict` field ("latest verdict wins") — correct only because no
  * writer before `[D-396]` ever appended a plain accept/edit after a rejection. `[D-396]` makes a
  * rejection stand until a DELIBERATE restore names it, so this file's own reject test above (line

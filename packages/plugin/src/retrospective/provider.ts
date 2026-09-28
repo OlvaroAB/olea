@@ -322,16 +322,16 @@ export function createLocalRetrospectiveProvider(
         scope,
         scopeOrigin,
         entries,
-        // `[D-281]` item 4 / `[D-338]`'s corrected-on-contest half
-        // (`ol-egov.141.89.9.63`): `readReviewHistory` already reads
-        // `disputes` off the same log walk `entries` comes from (see
-        // `ReviewHistory.disputes`'s own doc, `today/data-source.ts`) —
-        // forwarding it here lets `buildRetrospective`'s vitality partition
-        // fold in a `[D-095]` grade contest resolved `corrected`, the same
-        // proven-invalid fact `today/data-source.ts`'s own `loadTodayPanel`
-        // call already forwards. Without this, a corrected contest could
-        // never reach `held`/`faded` here even though `buildRetrospective`
-        // already knew how to use it (`ol-egov.141.89.9.61`).
+        // `[D-281]` item 4 (`ol-egov.141.89.9.63`, `ol-egov.141.89.9.68`):
+        // `readReviewHistory` already reads `disputes` off the same log walk
+        // `entries` comes from (see `ReviewHistory.disputes`'s own doc,
+        // `today/data-source.ts`) — forwarding it here lets
+        // `buildRetrospective`'s one validity projection read a `[D-095]`
+        // grade contest resolved `corrected`, for both the `held`/`faded`
+        // partition and the displayed stage, as `today/data-source.ts`'s own
+        // `loadTodayPanel` call does. The contest proves one review's grade
+        // wrong, never the instrument: that review stays practice and the
+        // instrument's other reviews keep counting.
         disputes: history.disputes,
         scheduler,
         now,

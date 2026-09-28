@@ -247,8 +247,8 @@ describe('buildRetrospective', () => {
  * that arrives apart from `entries` — `RetrospectiveInput` carried no
  * `disputes` field, so a corrected contest could never reach either the
  * `held`/`faded` partition (vitality) or the displayed stage. This suite
- * covers the vitality half now that the field exists; the stage half stays
- * the D-371 interim (`ol-egov.141.89.9.5`) and is untouched here.
+ * covers the vitality half; the stage half is the suite after it
+ * (`ol-egov.141.89.9.68`).
  */
 function correctedGradeContest(instrumentId: string): DisputeLogRecord[] {
   const base = {
@@ -281,14 +281,159 @@ describe('buildRetrospective — a contest resolved corrected, read apart from t
     expect(result.tooEarlyCount).toBe(1);
   });
 
-  it('a contest against that same instrument, resolved corrected, drops it out of every current reading — `c-faded` has no eligible evidence left and moves to too-early, not `held`', () => {
+  it('a contest against that same instrument, resolved corrected, drops its only review out of every current reading — `c-faded` has no eligible evidence left and moves to too-early, not `held`', () => {
     const result = buildRetrospective(
       baseInput({ disputes: correctedGradeContest('qa:c-faded:1') }),
     );
     expect(result.faded.map((c) => c.conceptId)).toEqual([]);
     expect(result.held.map((c) => c.conceptId)).toEqual(['c-held']);
-    // c-early plus c-faded, now that its evidence is proven invalid.
+    // c-early plus c-faded: its only review's grade was proven wrong, and
+    // vitality replays without it (`ol-egov.141.89.9.66`).
     expect(result.tooEarlyCount).toBe(2);
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): the
+ * displayed stage and the vitality partition read ONE dispute-aware validity
+ * projection. A corrected contest proves one review's grade wrong — never the
+ * instrument — and a suspension recorded as a defect proves the instrument
+ * invalid until a later unsuspend.
+ */
+function explainBackOn(instrumentId: string, eventId: string, timestamp: string): ReviewLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'review',
+    eventId,
+    timestamp,
+    instrumentId,
+    instrumentType: 'explain-back',
+    conceptIds: ['c-held'],
+    rating: null,
+    wasUnsure: false,
+    durationMs: 4000,
+    selectionContext: {
+      dueState: 'due',
+      examProximity: null,
+      yieldRank: null,
+      instrumentTypesOffered: ['explain-back'],
+      planVersion: null,
+    },
+    supportLevelShown: 'independent',
+    explainBackGrade: {
+      soloLevel: 'relational',
+      correctness: 'correct',
+      contentRef: 'content-ref-1',
+      revisionOf: null,
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    },
+  };
+}
+
+function correctedContestOn(
+  instrumentId: string,
+  conceptId: string,
+  openedAt: string,
+  resolvedAt: string,
+): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6 as const,
+    kind: 'dispute' as const,
+    timestamp: openedAt,
+    claimKind: 'grade' as const,
+    claimRendering: 'explain-back-grade' as const,
+    conceptIds: [conceptId],
+    instrumentId,
+    evidenceBasis: 'evidence-fingerprint-1',
+    effect: 'quarantined' as const,
+  };
+  return [
+    { ...base, eventId: 'contest-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'contest-resolved',
+      timestamp: resolvedAt,
+      resolves: 'contest-open',
+      outcome: 'corrected' as const,
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('buildRetrospective — the ruled validity scope reaches the displayed stage and vitality (ol-egov.141.89.9.68)', () => {
+  const heldReview = review('c-held', '2026-08-30', 'e1');
+  const stageOf = (result: ReturnType<typeof buildRetrospective>) =>
+    result.held.find((c) => c.conceptId === 'c-held')?.stage;
+
+  it('a corrected contest read from `disputes` withholds the top stage its one proven-wrong grade earned', () => {
+    const attempt = explainBackOn('eb:c-held:1', 'eb-1', '2026-08-29T09:00:00+00:00');
+    const result = buildRetrospective(
+      baseInput({
+        entries: [heldReview, attempt],
+        disputes: correctedContestOn(
+          'eb:c-held:1',
+          'c-held',
+          '2026-08-29T10:00:00+00:00',
+          '2026-08-29T11:00:00+00:00',
+        ),
+      }),
+    );
+    expect(stageOf(result)).not.toBe('tree');
+  });
+
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound attempt still reaches tree', () => {
+    const earlier = explainBackOn('eb:c-held:1', 'eb-0', '2026-08-20T09:00:00+00:00');
+    const contested = explainBackOn('eb:c-held:1', 'eb-1', '2026-08-29T09:00:00+00:00');
+    const result = buildRetrospective(
+      baseInput({
+        entries: [heldReview, earlier, contested],
+        disputes: correctedContestOn(
+          'eb:c-held:1',
+          'c-held',
+          '2026-08-29T10:00:00+00:00',
+          '2026-08-29T11:00:00+00:00',
+        ),
+      }),
+    );
+    expect(stageOf(result)).toBe('tree');
+  });
+
+  it('vitality keeps an instrument whose OTHER review stands: a corrected contest on its later review leaves `c-faded` in faded', () => {
+    const later = review('c-faded', '2026-02-10', 'e3');
+    const result = buildRetrospective(
+      baseInput({
+        entries: [heldReview, review('c-faded', '2026-01-10', 'e2'), later],
+        disputes: correctedContestOn(
+          'qa:c-faded:1',
+          'c-faded',
+          `${later.timestamp.slice(0, 10)}T23:00:00+00:00`,
+          '2026-02-11T09:00:00+00:00',
+        ),
+      }),
+    );
+    expect(result.faded.map((c) => c.conceptId)).toEqual(['c-faded']);
+    expect(result.tooEarlyCount).toBe(1);
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', () => {
+    const attempt = explainBackOn('eb:c-held:1', 'eb-1', '2026-08-29T09:00:00+00:00');
+    const suspension = (kind: 'suspend' | 'unsuspend', eventId: string, timestamp: string) =>
+      ({
+        schemaVersion: 6,
+        kind,
+        eventId,
+        timestamp,
+        instrumentId: 'eb:c-held:1',
+        conceptIds: ['c-held'],
+        ...(kind === 'suspend' ? { reason: 'defect' } : {}),
+      }) as ReviewLogEntry;
+    const defect = suspension('suspend', 'suspend-1', '2026-08-29T12:00:00+00:00');
+    expect(
+      stageOf(buildRetrospective(baseInput({ entries: [heldReview, attempt, defect] }))),
+    ).not.toBe('tree');
+    const lifted = suspension('unsuspend', 'unsuspend-1', '2026-08-30T12:00:00+00:00');
+    expect(
+      stageOf(buildRetrospective(baseInput({ entries: [heldReview, attempt, defect, lifted] }))),
+    ).toBe('tree');
   });
 });
 

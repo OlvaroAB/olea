@@ -19,6 +19,7 @@ import type { ReviewLogRecord } from 'olea-contracts';
 import {
   addManualAssessmentEntry,
   appendDisputeRecord,
+  appendReviewLogRecord,
   confirmSameAsLink,
   contestClaim,
   proposeSameAsLink,
@@ -515,8 +516,7 @@ describe('createLocalRetrospectiveProvider — finalAssessmentScopeOrigin wired 
  * `ol-egov.141.89.9.63`: `readReviewHistory`'s `disputes` return already
  * reached `history.disputes` here (same read `entries` comes from), but the
  * `buildRetrospective` call dropped it, so a `[D-095]` grade contest
- * resolved `corrected` (`[D-338]` item 3's proven-invalid fact) never
- * reached this provider's vitality partition even though `buildRetrospective`
+ * resolved `corrected` never reached this provider's vitality partition even though `buildRetrospective`
  * itself already knew how to use it (`ol-egov.141.89.9.61`). Mirrors
  * `today/data-source.ts`'s own `disputes: history.disputes` forwarding this
  * bead copies the pattern from.
@@ -554,9 +554,11 @@ describe('createLocalRetrospectiveProvider — disputes forwarded into vitality 
     expect(result.reading.tooEarlyCount).toBe(0);
   });
 
-  it('a grade contest against that instrument, resolved corrected, drops it out of vitality — it moves to too-early, not held/faded', async () => {
-    const { vault, conceptId, instrumentId } = await vaultWithDisputableConcept();
-
+  async function contestCorrected(
+    vault: ReturnType<typeof memoryVault>,
+    conceptId: string,
+    instrumentId: string,
+  ) {
     const opening = contestClaim({
       claim: {
         rendering: 'explain-back-grade',
@@ -579,6 +581,43 @@ describe('createLocalRetrospectiveProvider — disputes forwarded into vitality 
       deviceId: DEVICE,
       generateEventId: () => 'retro-dispute-2',
     });
+  }
+
+  // `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): the
+  // contest proves ONE review's grade wrong, never the instrument.
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier review still sets vitality', async () => {
+    const { vault, conceptId, instrumentId } = await vaultWithDisputableConcept();
+    const {
+      eventId: _eventId,
+      schemaVersion: _schemaVersion,
+      kind: _kind,
+      ...earlier
+    } = reviewRecord(conceptId);
+    await appendReviewLogRecord(
+      vault,
+      { ...earlier, timestamp: '2026-09-01T09:00:00-04:00' },
+      { deviceId: DEVICE, generateEventId: () => 'retro-earlier-review' },
+    );
+    await contestCorrected(vault, conceptId, instrumentId);
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+
+    const names = [...result.reading.held, ...result.reading.faded].map((l) => l.conceptName);
+    expect(names).toEqual(['Photosynthesis']);
+    expect(result.reading.tooEarlyCount).toBe(0);
+  });
+
+  it('a grade contest against that instrument, resolved corrected, drops its only review out of vitality — it moves to too-early, not held/faded', async () => {
+    const { vault, conceptId, instrumentId } = await vaultWithDisputableConcept();
+    await contestCorrected(vault, conceptId, instrumentId);
 
     const provider = createLocalRetrospectiveProvider({
       vault,

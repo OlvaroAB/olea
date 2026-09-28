@@ -112,7 +112,7 @@
  * `emptyRankingReasonFor`, `[D-408]`), never a failed plan refresh.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
 import type { ConceptRecord } from '../concept/types.js';
 import { buildConceptAssessmentEdges } from '../evidence-edge/build.js';
 import type {
@@ -168,6 +168,16 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * inconsistent, read of the same files.
    */
   readonly reviewLog: readonly ReviewLogEntry[];
+  /**
+   * `[D-095]` grade-contest records read apart from `reviewLog`, folded into
+   * the one validity projection this composition reads (`ol-egov.141.89.9.68`).
+   * A contest resolved `corrected` proves ONE review's grade wrong: that
+   * review stays practice, a re-grade is read in its place, readiness replays
+   * without it, and the instrument's other reviews keep counting. Optional
+   * and defaults to none — rejections and defect suspensions, inside
+   * `reviewLog`, count without it.
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
   /** The calendar day exam proximity is measured from — passed straight to `rankOracle`. */
   readonly asOf: string;
   /**
@@ -472,6 +482,7 @@ export async function composeOracleRanking(
   const {
     vault,
     reviewLog,
+    disputes,
     asOf,
     options,
     retrievability,
@@ -503,14 +514,17 @@ export async function composeOracleRanking(
   const conceptKeys = [
     ...new Set([...edges.edges.map((edge) => edge.conceptKey), ...needOnlyKeys]),
   ].sort();
-  // `ol-a07q` (`[D-281]` item 4): the same proven-invalid projection
-  // `resolveRetrievabilityScores` below already needed is folded once, here,
-  // and threaded to both — a rejected verdict or a corrected contest against
-  // an instrument must drop its evidence from the mastery this composition
-  // hands `rankOracle`, the same as it already dropped it from readiness.
-  const validity = projectInstrumentValidity(reviewLog);
+  // `ol-a07q` (`[D-281]` item 4), at the ruled scope (`ol-egov.141.89.9.66`,
+  // `ol-egov.141.89.9.68`): one dispute-aware validity projection, folded
+  // once here and threaded to both the mastery join and readiness below. An
+  // instrument proven invalid (a standing rejection, a defect suspension)
+  // qualifies nothing at the top stage and leaves readiness; a review a
+  // corrected contest proved wrong is practice only, with any re-grade read in
+  // its place, and readiness replays without it. Never a withdrawal.
+  const validity = projectInstrumentValidity(reviewLog, disputes ?? []);
   const mastery = computeAllConceptMastery(reviewLog, conceptKeys, {
     invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
   });
   const retrievabilityScores = resolveRetrievabilityScores(
     reviewLog,

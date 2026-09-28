@@ -13,8 +13,8 @@
  * folds one concept, not the vault" and "the reopening branch is supplied
  * from the log's own misconception-observed records".
  */
-import type { ReviewLogEntry } from 'olea-contracts';
-import { createFsrsScheduler, type Scheduler } from 'olea-core';
+import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
+import { createFsrsScheduler, projectInstrumentValidity, type Scheduler } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createStrongRecallProposalReader } from '../../src/review/strong-recall-wiring.js';
 
@@ -463,6 +463,151 @@ describe('createStrongRecallProposalReader — a rejected instrument no longer s
     expect(decisionWith.shouldPropose).toBe(true);
     if (!decisionWith.shouldPropose) return;
     expect(decisionWith.reason.kind).toBe('strong-recall');
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.68` (rulings of 2026-09-28, `ol-egov.141.89.9.66`): the
+ * reader reads the one validity projection, handed in with the dispute
+ * records read beside the log. A corrected contest proves ONE review's grade
+ * wrong — never the instrument — and a suspension recorded as a defect proves
+ * the instrument invalid.
+ */
+function correctedContest(
+  instrumentId: string,
+  conceptId: string,
+  openedAt: string,
+  resolvedAt: string,
+): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6 as const,
+    kind: 'dispute' as const,
+    timestamp: openedAt,
+    claimKind: 'grade' as const,
+    claimRendering: 'explain-back-grade' as const,
+    conceptIds: [conceptId],
+    instrumentId,
+    evidenceBasis: 'evidence-fingerprint-1',
+    effect: 'quarantined' as const,
+  };
+  return [
+    { ...base, eventId: 'contest-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'contest-resolved',
+      timestamp: resolvedAt,
+      resolves: 'contest-open',
+      outcome: 'corrected' as const,
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('createStrongRecallProposalReader — the ruled validity scope (ol-egov.141.89.9.68)', () => {
+  const explainBack = (eventId: string, timestamp: string) =>
+    review({
+      eventId,
+      timestamp,
+      conceptIds: ['concept-tree'],
+      instrumentType: 'explain-back',
+      instrumentId: 'inst-eb-1',
+      rating: null,
+      explainBackGrade: { soloLevel: 'relational' },
+    });
+  const freshMisconception = misconception({
+    eventId: 'm-1',
+    timestamp: '2026-08-20T08:30:00+00:00',
+    conceptIds: ['concept-tree'],
+  });
+  const contest = correctedContest(
+    'inst-eb-1',
+    'concept-tree',
+    '2026-08-19T11:00:00+00:00',
+    '2026-08-19T12:00:00+00:00',
+  );
+
+  function decide(entries: readonly ReviewLogEntry[], disputes: readonly DisputeLogRecord[] = []) {
+    return createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      validity: projectInstrumentValidity(entries, disputes),
+    })({ conceptIds: ['concept-tree'] });
+  }
+
+  it('a corrected contest on the sole qualifying explain-back withholds the top stage it earned', () => {
+    const entries = [explainBack('eb-1', '2026-08-19T10:00:00+00:00'), freshMisconception];
+    expect(decide(entries).shouldPropose).toBe(true);
+    expect(decide(entries, contest)).toEqual({
+      shouldPropose: false,
+      because: 'stage-below-sapling',
+    });
+  });
+
+  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound explain-back still holds the top stage', () => {
+    const entries = [
+      explainBack('eb-0', '2026-08-10T10:00:00+00:00'),
+      explainBack('eb-1', '2026-08-19T10:00:00+00:00'),
+      freshMisconception,
+    ];
+    const decision = decide(entries, contest);
+    expect(decision.shouldPropose).toBe(true);
+    if (!decision.shouldPropose) return;
+    expect(decision.reason.kind).toBe('reopened-by-misconception');
+  });
+
+  it('vitality replays without a corrected review: a faded instrument whose only review was proven wrong no longer sets the weakest reading', () => {
+    const strong = strongRecallLog('concept-mixed');
+    const faded = review({
+      eventId: 'faded-1',
+      timestamp: '2020-01-01T08:00:00+00:00',
+      conceptIds: ['concept-mixed'],
+      instrumentId: 'inst-faded',
+      rating: 'again',
+    });
+    const entries = [...strong, faded];
+    const reader = (disputes: readonly DisputeLogRecord[]) =>
+      createStrongRecallProposalReader({
+        entries,
+        scheduler: createFsrsScheduler(),
+        now: NOW,
+        validity: projectInstrumentValidity(entries, disputes),
+      })({ conceptIds: ['concept-mixed'] });
+
+    expect(reader([])).toEqual({ shouldPropose: false, because: 'recall-not-holding' });
+    const decision = reader(
+      correctedContest(
+        'inst-faded',
+        'concept-mixed',
+        '2020-01-01T08:01:00+00:00',
+        '2020-01-02T08:00:00+00:00',
+      ),
+    );
+    expect(decision.shouldPropose).toBe(true);
+    if (!decision.shouldPropose) return;
+    expect(decision.reason.kind).toBe('strong-recall');
+  });
+
+  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', () => {
+    const suspension = (kind: 'suspend' | 'unsuspend', eventId: string, timestamp: string) =>
+      ({
+        schemaVersion: 6,
+        kind,
+        eventId,
+        timestamp,
+        instrumentId: 'inst-eb-1',
+        conceptIds: ['concept-tree'],
+        ...(kind === 'suspend' ? { reason: 'defect' } : {}),
+      }) as ReviewLogEntry;
+    const entries = [
+      explainBack('eb-1', '2026-08-19T10:00:00+00:00'),
+      suspension('suspend', 'suspend-1', '2026-08-19T10:30:00+00:00'),
+      freshMisconception,
+    ];
+    expect(decide(entries)).toEqual({ shouldPropose: false, because: 'stage-below-sapling' });
+    expect(
+      decide([...entries, suspension('unsuspend', 'unsuspend-1', '2026-08-19T11:30:00+00:00')])
+        .shouldPropose,
+    ).toBe(true);
   });
 });
 
