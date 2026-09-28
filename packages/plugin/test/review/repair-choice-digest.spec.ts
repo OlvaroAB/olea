@@ -658,7 +658,7 @@ describe('applying a confirmed answer re-checks the digest', () => {
     expect(result.kind).toBe('not-confirmed');
   });
 
-  it('two identical blocks under different headings: the digest pins one, and the write-back still refuses (it pins by text alone)', async () => {
+  it('[D-409] two identical blocks under different headings: the digest pins the one she chose, by heading path', async () => {
     const vault = memoryVault({ [NOTE]: twoInOneNote('Same stem?', 'Same stem?') });
     const second = await confirmSecond(vault);
     const current = await recordsOf(vault);
@@ -670,14 +670,25 @@ describe('applying a confirmed answer re-checks the digest', () => {
     if (applied.kind !== 'apply') throw new Error(`expected apply: ${applied.kind}`);
     expect(applied.target.instrumentId).toBe(second.record.instrumentId);
 
-    const noteBefore = vault.contentOf(NOTE);
     const written = await writeBackRecoveredInstrumentId(vault, {
       resolution: applied.resolution,
       recoveredInstrumentType: 'mcq',
       candidateRaw: applied.candidateRaw,
       currentRecords: current,
     });
-    expect(written).toEqual({ kind: 'refused', reason: 'candidate-ambiguous' });
-    expect(vault.contentOf(NOTE)).toBe(noteBefore);
+    expect(written).toEqual({ kind: 'written', instrumentId: DELETED, notePath: NOTE });
+
+    // The id landed on the block under "Heading two" — the one she chose — never the identical
+    // one under "Heading one": text alone cannot tell them apart, but the digest's heading path
+    // can (`../../src/instrument-stamping/repair-write-back.ts`'s `pinByDigest`).
+    const after = await recordsOf(vault);
+    expect(after.find((r) => r.instrumentId === DELETED)?.headingPath).toEqual([
+      'Part',
+      'Heading two',
+    ]);
+    const untouched = after.find(
+      (r) => JSON.stringify(r.headingPath) === JSON.stringify(['Part', 'Heading one']),
+    );
+    expect(untouched?.instrumentId).not.toBe(DELETED);
   });
 });

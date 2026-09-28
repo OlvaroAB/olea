@@ -272,7 +272,11 @@ import {
   createFrozenReviewQueue,
   type FrozenReviewQueue,
 } from './queue-adapter.js';
-import { buildRepairChoice, type RepairChoiceCandidate } from './repair-choice.js';
+import {
+  buildRepairChoice,
+  type RepairChoiceCandidate,
+  repairCandidateDigests,
+} from './repair-choice.js';
 import { type ContestRegradeEnqueuePort, ReviewSession } from './session.js';
 import { createStrongRecallProposalReader } from './strong-recall-wiring.js';
 import type { ReviewQueueItem } from './types.js';
@@ -1247,7 +1251,17 @@ async function resolveDeletedInstrumentIds(
   for (const match of matches) {
     if (match.candidates.length === 0) continue; // no candidate found — nothing to propose.
 
-    const choiceCandidates: RepairChoiceCandidate[] = match.candidates.map((candidate) => ({
+    // `[D-409]`: a digest of each candidate's block text plus heading path, so the persisted
+    // grouped choice (and, once she answers, `../instrument-stamping/repair-write-back.ts`) can
+    // tell two candidates in the same note apart. `undefined` when a candidate's own record
+    // carries no heading path (a hand-built record) — the persisted half writes v1 for that entry
+    // rather than guess one.
+    const digests = await repairCandidateDigests(
+      match.candidates,
+      currentRecords,
+      new Set(previous.map((record) => record.instrumentId)),
+    );
+    const choiceCandidates: RepairChoiceCandidate[] = match.candidates.map((candidate, index) => ({
       notePath: candidate.notePath,
       // `[D-090]`'s own three-condition test, computed by the REAL `resolveInstrumentRepair`
       // rather than reimplemented here: `'repaired'` is the only outcome that met all three
@@ -1256,6 +1270,7 @@ async function resolveDeletedInstrumentIds(
       // `[D-392]`'s binding condition 3's "otherwise it too goes to her."
       meetsCertaintyTest:
         resolveInstrumentRepair({ deletedId: match.deletedId, candidate, now }).kind === 'repaired',
+      ...(digests[index] !== undefined ? { digest: digests[index] } : {}),
     }));
 
     const outcome = buildRepairChoice({

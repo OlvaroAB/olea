@@ -34,6 +34,7 @@ import { describe, expect, it } from 'vitest';
 import {
   DUPLICATION_CONFIRMATION_FOLDER,
   listRepairChoiceConfirmationRecords,
+  proposeRepairChoiceConfirmations,
 } from '../../src/review/duplication-confirmation-store.js';
 import {
   createReviewSessionOpener,
@@ -282,8 +283,56 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
     const records = await listRepairChoiceConfirmationRecords(vault);
     expect(records).toHaveLength(1);
     expect(records[0]?.record.instrumentId).toBe('mcq-deleted-1');
-    expect(records[0]?.record.candidates).toEqual([{ notePath, meetsCertaintyTest: false }]);
     expect(records[0]?.record.status).toBe('proposed');
+    // `[D-409]`: the open path digests the candidate itself, so this is written as schema
+    // version 2, not the undigested version 1 shape.
+    expect(records[0]?.record.schemaVersion).toBe(2);
+    expect(records[0]?.record.candidates).toHaveLength(1);
+    const [candidate] = records[0]?.record.candidates ?? [];
+    expect(candidate?.notePath).toBe(notePath);
+    expect(candidate?.meetsCertaintyTest).toBe(false);
+    expect(candidate?.digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('[D-409] a resolved version-1 record is left exactly as it is by a later open, never upgraded', async () => {
+    const notePath = 'Notes/Candidate.md';
+    const vault: MemoryVault = memoryVault({
+      ...baseVaultFiles(),
+      [notePath]: orphanMcqNote('What is the mitochondria?'),
+    });
+    const raw = await rawAt(vault, notePath);
+
+    // A record as the store wrote it before `[D-409]`'s digest existed: undigested candidates,
+    // schema version 1, and already resolved — as if she answered the grouped choice back then.
+    const { records: proposed } = await proposeRepairChoiceConfirmations(vault, [
+      {
+        instrumentId: 'mcq-deleted-1',
+        candidates: [{ notePath, meetsCertaintyTest: false }],
+        proposedAt: 1_000,
+      },
+    ]);
+    const [stored] = proposed;
+    if (stored === undefined) throw new Error('fixture expected a stored record');
+    expect(stored.record.schemaVersion).toBe(1);
+    const resolvedV1 = {
+      ...stored.record,
+      status: 'confirmed' as const,
+      confirmedAt: new Date(1_500).toISOString(),
+      resolvedNotePath: notePath,
+    };
+    await vault.write(stored.path, `${JSON.stringify(resolvedV1, null, 2)}\n`);
+
+    // The same deleted id is proposed again by a later open (the note still hasn't recovered its
+    // id) — binding condition 1 says her answer is never rewritten, and the migration posture
+    // says a RESOLVED version 1 record is never upgraded in place, unlike a still-proposed one.
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath, instrumentType: 'mcq' },
+    ];
+    await open(vault, { previousInstrumentEnumeration: previous });
+
+    const after = await listRepairChoiceConfirmationRecords(vault);
+    expect(after).toHaveLength(1);
+    expect(after[0]?.record).toEqual(resolvedV1);
   });
 
   it('more than one candidate in the deleted id’s own file is ONE grouped choice, never one per candidate', async () => {

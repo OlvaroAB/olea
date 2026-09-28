@@ -32,9 +32,10 @@
  * - **The id is live elsewhere** — `[D-090]`: a claimed id is a duplication case, not a repair.
  * - **The block cannot be pinned exactly** — the caller must hand the exact text of the block she
  *   was shown (`candidateRaw`), and exactly one instrument in the chosen note must still carry
- *   that text. Zero (she edited or removed it) or several (two identical blocks) is a refusal:
- *   the persisted grouped choice names candidates by note only, so the text is what tells two
- *   blocks in one note apart.
+ *   that text, or the confirmed answer's `[D-409]` digest must pin exactly one of several
+ *   identical-text blocks by heading path ({@link pinByDigest}). Zero (she edited or removed it),
+ *   or several that neither the text nor the digest can tell apart (no digest, or two identical
+ *   blocks under the same heading too), is a refusal.
  * - **The block already carries a durable marker** — `[D-030]`: an existing id is read, never
  *   overwritten.
  * - **A different instrument type** — the history belongs to the kind of item that earned it.
@@ -86,9 +87,10 @@ import {
   provisionalInstrumentId,
   readClozeId,
 } from 'olea-core';
-import type {
-  RepairChoiceAttachedResult,
-  RepairChoiceSilentOutcome,
+import {
+  digestOfInstrumentRecord,
+  type RepairChoiceAttachedResult,
+  type RepairChoiceSilentOutcome,
 } from '../review/repair-choice.js';
 import { stampOnFirstSight } from './port.js';
 
@@ -240,6 +242,7 @@ export async function writeBackRecoveredInstrumentId(
     recoveredInstrumentType,
     candidateRaw,
     currentRecords,
+    ...(resolution.digest !== undefined ? { digest: resolution.digest } : {}),
   });
 }
 
@@ -278,6 +281,31 @@ interface RecoveredIdWrite {
   readonly recoveredInstrumentType: RecoverableInstrumentType;
   readonly candidateRaw: string;
   readonly currentRecords: readonly VaultInstrumentRecord[];
+  /**
+   * `[D-409]`: the chosen candidate's digest, when the resolution carries one. Text alone cannot
+   * tell two identical blocks in one note apart; the digest can, because it is computed over the
+   * block's heading path as well as its text (`../review/repair-choice.ts`'s
+   * `digestOfInstrumentRecord`). Used only to disambiguate `candidateRaw`'s multiple matches —
+   * never to widen or replace the exact-text pin.
+   */
+  readonly digest?: string;
+}
+
+/**
+ * Among blocks that all share `candidateRaw`'s exact text, the one `digest` names by heading path
+ * — or `undefined` when `digest` cannot pin exactly one (no digest given, no record carries a
+ * heading path, or more than one candidate resolves to the same digest, e.g. two identical blocks
+ * under the same heading).
+ */
+async function pinByDigest(
+  pinned: readonly VaultInstrumentRecord[],
+  digest: string,
+): Promise<VaultInstrumentRecord | undefined> {
+  const matches: VaultInstrumentRecord[] = [];
+  for (const record of pinned) {
+    if ((await digestOfInstrumentRecord(record)) === digest) matches.push(record);
+  }
+  return matches.length === 1 ? matches[0] : undefined;
 }
 
 /** The write both authorities share, once each has established its own authority to write. */
@@ -285,7 +313,8 @@ async function writeRecoveredId(
   vault: VaultSource,
   input: RecoveredIdWrite,
 ): Promise<WriteBackRecoveredIdResult> {
-  const { recoveredId, notePath, recoveredInstrumentType, candidateRaw, currentRecords } = input;
+  const { recoveredId, notePath, recoveredInstrumentType, candidateRaw, currentRecords, digest } =
+    input;
 
   const carriers = currentRecords.filter((record) => record.instrumentId === recoveredId);
   if (carriers.some((record) => record.notePath !== notePath)) return refused('id-live-elsewhere');
@@ -295,8 +324,13 @@ async function writeRecoveredId(
     (record) => record.notePath === notePath && rawOf(record) === candidateRaw,
   );
   if (pinned.length === 0) return refused('candidate-not-found');
-  if (pinned.length > 1) return refused('candidate-ambiguous');
-  const target = pinned[0] as VaultInstrumentRecord;
+  let target: VaultInstrumentRecord | undefined = pinned.length === 1 ? pinned[0] : undefined;
+  if (target === undefined && digest !== undefined) {
+    // `[D-409]`: several blocks share this exact text — the digest may still pin exactly one of
+    // them by heading path. Still a refusal when it cannot (same heading too, or no match).
+    target = await pinByDigest(pinned, digest);
+  }
+  if (target === undefined) return refused('candidate-ambiguous');
 
   if (target.instrumentType !== recoveredInstrumentType) return refused('type-mismatch');
   if (carriesDurableMarker(target)) return refused('candidate-already-identified');

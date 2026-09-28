@@ -24,6 +24,7 @@ import {
 } from '../../src/instrument-stamping/repair-write-back.js';
 import {
   buildRepairChoice,
+  digestOfInstrumentRecord,
   type RepairChoiceAttachedResult,
   type RepairChoiceProposal,
   resolveRepairChoice,
@@ -87,6 +88,31 @@ function confirmed(
   });
   if (outcome.kind !== 'choice-needed') throw new Error('fixture expected a grouped choice');
   const resolution = resolveRepairChoice(outcome.proposal, { kind: 'candidate', notePath: chosen });
+  if (resolution.kind !== 'attached') throw new Error('fixture expected an attached answer');
+  return resolution;
+}
+
+/** `[D-409]`: her real answer to a grouped choice whose candidate carries a digest. */
+function confirmedWithDigest(
+  instrumentId: string,
+  chosen: VaultPath,
+  digest: string,
+  others: readonly VaultPath[] = [OTHER_NOTE],
+): RepairChoiceAttachedResult {
+  const outcome = buildRepairChoice({
+    instrumentId,
+    candidates: [
+      { notePath: chosen, meetsCertaintyTest: false, digest },
+      ...others.map((notePath) => ({ notePath, meetsCertaintyTest: false })),
+    ],
+    now: 1_000,
+  });
+  if (outcome.kind !== 'choice-needed') throw new Error('fixture expected a grouped choice');
+  const resolution = resolveRepairChoice(outcome.proposal, {
+    kind: 'candidate',
+    notePath: chosen,
+    digest,
+  });
   if (resolution.kind !== 'attached') throw new Error('fixture expected an attached answer');
   return resolution;
 }
@@ -334,7 +360,7 @@ describe('writeBackRecoveredInstrumentId — refusals that write nothing', () =>
     expect(v.writes).toHaveLength(0);
   });
 
-  it('refuses when two identical blocks in the chosen note could each be the one she chose', async () => {
+  it('refuses when two identical blocks in the chosen note could each be the one she chose, and her answer carries no digest', async () => {
     const v = memoryVault({
       [MCQ_NOTE]: [FRONTMATTER('[Alpha]'), '## Q1', '', MCQ_BLOCK, '', MCQ_BLOCK, ''].join('\n'),
     });
@@ -343,6 +369,64 @@ describe('writeBackRecoveredInstrumentId — refusals that write nothing', () =>
       resolution: confirmed('mcq-recovered1', MCQ_NOTE),
       recoveredInstrumentType: 'mcq',
       candidateRaw: rawOf(records.find((r) => r.instrumentType === 'mcq') as VaultInstrumentRecord),
+      currentRecords: records,
+    });
+    expect(result).toEqual({ kind: 'refused', reason: 'candidate-ambiguous' });
+    expect(v.writes).toHaveLength(0);
+  });
+
+  it('[D-409] locates the chosen block among identical texts by heading path, when her answer names it by digest', async () => {
+    const v = memoryVault({
+      [MCQ_NOTE]: [
+        FRONTMATTER('[Alpha]'),
+        '## Q1',
+        '',
+        MCQ_BLOCK,
+        '',
+        '## Q2',
+        '',
+        MCQ_BLOCK,
+        '',
+      ].join('\n'),
+    });
+    const records = await recordsOf(v);
+    const mcqRecords = records.filter((r) => r.instrumentType === 'mcq');
+    expect(mcqRecords).toHaveLength(2);
+    const chosen = mcqRecords.find((r) => r.headingPath?.at(-1) === 'Q2');
+    if (chosen === undefined) throw new Error('fixture expected a Q2 block');
+    const digest = await digestOfInstrumentRecord(chosen);
+    if (digest === undefined) throw new Error('fixture expected a digest');
+
+    const result = await writeBackRecoveredInstrumentId(v, {
+      resolution: confirmedWithDigest('mcq-recovered1', MCQ_NOTE, digest),
+      recoveredInstrumentType: 'mcq',
+      candidateRaw: rawOf(chosen),
+      currentRecords: records,
+    });
+
+    expect(result).toEqual({ kind: 'written', instrumentId: 'mcq-recovered1', notePath: MCQ_NOTE });
+    const content = v.contentOf(MCQ_NOTE) ?? '';
+    const q1Index = content.indexOf('## Q1');
+    const q2Index = content.indexOf('## Q2');
+    const idIndex = content.indexOf('id: mcq-recovered1');
+    expect(q2Index).toBeGreaterThan(q1Index);
+    // the recovered id landed in the Q2 block, not the Q1 one.
+    expect(idIndex).toBeGreaterThan(q2Index);
+  });
+
+  it('[D-409] still refuses when two identical blocks share the same heading too — the digest cannot tell them apart either', async () => {
+    const v = memoryVault({
+      [MCQ_NOTE]: [FRONTMATTER('[Alpha]'), '## Q1', '', MCQ_BLOCK, '', MCQ_BLOCK, ''].join('\n'),
+    });
+    const records = await recordsOf(v);
+    const mcqRecords = records.filter((r) => r.instrumentType === 'mcq');
+    const digest = await digestOfInstrumentRecord(mcqRecords[0] as VaultInstrumentRecord);
+    if (digest === undefined) throw new Error('fixture expected a digest');
+
+    const result = await writeBackRecoveredInstrumentId(v, {
+      resolution: confirmedWithDigest('mcq-recovered1', MCQ_NOTE, digest),
+      recoveredInstrumentType: 'mcq',
+      candidateRaw: rawOf(mcqRecords[0] as VaultInstrumentRecord),
       currentRecords: records,
     });
     expect(result).toEqual({ kind: 'refused', reason: 'candidate-ambiguous' });
