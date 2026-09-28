@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { MisconceptionDigestEntry } from '../misconception/digest.js';
 import {
   acceptExplainBackGrading,
+  answerSpanOccurs,
   discardExplainBackGrading,
   type ExplainBackGradingWireGraded,
   type ExplainBackGradingWireResponse,
@@ -477,5 +478,228 @@ describe('the correctness call’s stamp travels to the accept ([D-386])', () =>
       expect(Object.hasOwn(pending, 'stamp')).toBe(false);
       expect(Object.hasOwn(acceptExplainBackGrading(pending), 'stamp')).toBe(false);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// [D-318]: the answer half of each reference — quoted words of her answer
+// (features/F5-explain-it-back.md, "F5.3 / [D-318]" block)
+// ---------------------------------------------------------------------------
+
+describe('answerSpanOccurs — word for word, spacing aside ([D-318])', () => {
+  const answer = 'Because Y causes Z,\n  and  W is the same as Y.';
+
+  it('finds a span that occurs verbatim', () => {
+    expect(answerSpanOccurs('W is the same as Y', answer)).toBe(true);
+  });
+
+  it('treats runs of spaces and line breaks as one space, and ignores edge whitespace', () => {
+    expect(answerSpanOccurs('  Z, and W is ', answer)).toBe(true);
+  });
+
+  it('is case- and punctuation-sensitive: a paraphrase never passes as her words', () => {
+    expect(answerSpanOccurs('because y causes z', answer)).toBe(false);
+    expect(answerSpanOccurs('Z and W', answer)).toBe(false);
+    expect(answerSpanOccurs('W is identical to Y', answer)).toBe(false);
+  });
+
+  it('an empty or whitespace-only span never occurs', () => {
+    expect(answerSpanOccurs('', answer)).toBe(false);
+    expect(answerSpanOccurs('   ', answer)).toBe(false);
+  });
+});
+
+describe('groundCitations — quoted words of her answer ([D-318])', () => {
+  const answer = 'Because Y causes Z, and W is the same as Y.';
+
+  it('keeps a finding whose quoted words occur in her answer, exactly as quoted', () => {
+    const response = wireResponse({
+      citedIssues: [
+        {
+          kind: 'confusion',
+          description: 'treats W as Y',
+          sourceBlockIds: ['blk-2'],
+          answerSpans: ['W is the same as Y'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.citedIssues).toEqual([
+      {
+        kind: 'confusion',
+        description: 'treats W as Y',
+        sourceBlockIds: ['blk-2'],
+        answerSpans: ['W is the same as Y'],
+      },
+    ]);
+    expect(grounded.droppedCitationCount).toBe(0);
+  });
+
+  it('ADVERSARIAL: drops a finding whose every quotation is absent from her answer, and counts it', () => {
+    const response = wireResponse({
+      citedIssues: [
+        {
+          kind: 'error',
+          description: 'an invented quotation',
+          sourceBlockIds: ['blk-1'],
+          answerSpans: ['Y prevents Z'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.citedIssues).toEqual([]);
+    expect(grounded.droppedCitationCount).toBe(1);
+  });
+
+  it('ADVERSARIAL: drops a misconception candidate quoting only words she never wrote, and counts it', () => {
+    const response = wireResponse({
+      misconceptionCandidates: [
+        {
+          concept: 'concept-y',
+          statement: 'believes Y prevents Z',
+          correction: 'Y drives Z',
+          correctionSourceBlockIds: ['blk-1'],
+          answerSpans: ['Y prevents Z'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.misconceptionCandidates).toEqual([]);
+    expect(grounded.droppedMisconceptionCount).toBe(1);
+  });
+
+  it('keeps only the real quotation when an entry quotes one real passage and one invented one', () => {
+    const response = wireResponse({
+      misconceptionCandidates: [
+        {
+          concept: 'concept-y',
+          confusedWith: 'concept-w',
+          statement: 'believes W is Y',
+          correction: 'Y is not the same as W',
+          correctionSourceBlockIds: ['blk-2'],
+          answerSpans: ['W is the same as Y', 'W and Y are one thing'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.misconceptionCandidates).toHaveLength(1);
+    expect(grounded.misconceptionCandidates[0]?.answerSpans).toEqual(['W is the same as Y']);
+    expect(grounded.droppedMisconceptionCount).toBe(0);
+  });
+
+  it('a finding that quotes nothing is unchanged, with no answerSpans key added', () => {
+    const issue = {
+      kind: 'omission' as const,
+      description: 'never mentions W',
+      sourceBlockIds: ['blk-2'],
+    };
+    const withAnswer = groundCitations(
+      wireResponse({ citedIssues: [issue] }),
+      SOURCE_BLOCKS,
+      answer,
+    );
+    const withoutAnswer = groundCitations(wireResponse({ citedIssues: [issue] }), SOURCE_BLOCKS);
+    expect(withAnswer).toEqual(withoutAnswer);
+    expect(withAnswer.citedIssues[0]).toEqual(issue);
+    expect(Object.hasOwn(withAnswer.citedIssues[0] ?? {}, 'answerSpans')).toBe(false);
+  });
+
+  it('an empty answerSpans list reads as quoting nothing: the entry is kept, the key removed', () => {
+    const response = wireResponse({
+      citedIssues: [
+        {
+          kind: 'omission',
+          description: 'never mentions W',
+          sourceBlockIds: ['blk-2'],
+          answerSpans: [],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.citedIssues).toEqual([
+      { kind: 'omission', description: 'never mentions W', sourceBlockIds: ['blk-2'] },
+    ]);
+  });
+
+  it('without her answer, quoted words cannot be checked: they are removed and the entry is otherwise kept', () => {
+    const response = wireResponse({
+      citedIssues: [
+        {
+          kind: 'confusion',
+          description: 'treats W as Y',
+          sourceBlockIds: ['blk-2'],
+          answerSpans: ['anything at all'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS);
+    expect(grounded.citedIssues).toEqual([
+      { kind: 'confusion', description: 'treats W as Y', sourceBlockIds: ['blk-2'] },
+    ]);
+    expect(grounded.droppedCitationCount).toBe(0);
+  });
+
+  it('an invented source id still drops the entry even when its quotation is real', () => {
+    const response = wireResponse({
+      citedIssues: [
+        {
+          kind: 'confusion',
+          description: 'treats W as Y',
+          sourceBlockIds: ['blk-does-not-exist'],
+          answerSpans: ['W is the same as Y'],
+        },
+      ],
+    });
+    const grounded = groundCitations(response, SOURCE_BLOCKS, answer);
+    expect(grounded.citedIssues).toEqual([]);
+    expect(grounded.droppedCitationCount).toBe(1);
+  });
+
+  it('gradeExplainBack checks the quoted words against the answer it sent to the judge', async () => {
+    const callJudge = vi.fn(async () =>
+      wireResponse({
+        citedIssues: [
+          {
+            kind: 'confusion',
+            description: 'real quotation',
+            sourceBlockIds: ['blk-2'],
+            answerSpans: ['Y causes Z'],
+          },
+          {
+            kind: 'error',
+            description: 'invented quotation',
+            sourceBlockIds: ['blk-1'],
+            answerSpans: ['Y prevents Z'],
+          },
+        ],
+      }),
+    );
+    const pending = await gradeExplainBack(baseInput(), callJudge);
+    const grading = pending.grading;
+    if (grading.outcome !== 'graded') throw new Error('expected a graded outcome');
+    expect(grading.citedIssues.map((issue) => issue.description)).toEqual(['real quotation']);
+    expect(grading.citedIssues[0]?.answerSpans).toEqual(['Y causes Z']);
+    expect(grading.droppedCitationCount).toBe(1);
+  });
+
+  it('the telemetry summary stays counts only: a quoted span never appears in it (D-005)', async () => {
+    const sentinel = 'SENTINEL-HER-WORDS';
+    const callJudge = vi.fn(async () =>
+      wireResponse({
+        citedIssues: [
+          {
+            kind: 'confusion',
+            description: 'x',
+            sourceBlockIds: ['blk-2'],
+            answerSpans: [sentinel],
+          },
+        ],
+      }),
+    );
+    const pending = await gradeExplainBack(
+      baseInput({ studentAnswer: `I wrote ${sentinel} here.` }),
+      callJudge,
+    );
+    expect(JSON.stringify(summarizeGradingForTelemetry(pending))).not.toContain(sentinel);
   });
 });

@@ -196,6 +196,15 @@ export interface CitedIssue {
   readonly kind: CitedIssueKind;
   readonly description: string;
   readonly sourceBlockIds: readonly string[];
+  /**
+   * `[D-318]`: the words of her answer this finding is about, each quoted
+   * verbatim. Optional: today's promoted prompt does not ask for them (the
+   * draft that does lives in `olea-service`'s `scripts/harness/ilb-xbk/
+   * prompt-drafts/`), and an omission has nothing of hers to quote. After
+   * {@link groundCitations}, every span present occurs in her answer. Transient:
+   * nothing persists it (see {@link answerSpanOccurs}).
+   */
+  readonly answerSpans?: readonly string[];
 }
 
 /** Knowledge-model §4.1, minus the fields only the store/caller can populate — see header. */
@@ -205,6 +214,8 @@ export interface MisconceptionCandidate {
   readonly statement: string;
   readonly correction: string;
   readonly correctionSourceBlockIds: readonly string[];
+  /** `[D-318]`: as {@link CitedIssue.answerSpans} — the words of her answer that show this belief. */
+  readonly answerSpans?: readonly string[];
 }
 
 /**
@@ -377,6 +388,16 @@ export type GroundedGrading = GroundedGradingGraded | GroundedGradingUnableToAss
  * at all — it passes through unchanged (still the same discriminant), never
  * coerced into the graded shape's measurements.
  *
+ * **`[D-318]`: the answer half of each reference.** With `studentAnswer`
+ * supplied, every quoted `answerSpans` entry must occur in her answer
+ * ({@link answerSpanOccurs}); a span that does not is removed, and an entry
+ * that quoted something but keeps no span is dropped whole and counted with
+ * the other dropped entries — the same rule the source ids above follow, for
+ * the same reason: a finding about words she never wrote is an invention.
+ * An entry that quotes nothing is unchanged. Without `studentAnswer` the
+ * spans cannot be checked, so they are removed and the entry is otherwise
+ * kept: an unchecked quotation is never passed on.
+ *
  * **Overloaded on the input's own narrowness, round 2 (`ol-0r92.130`).** A
  * caller that already holds a statically-graded `ExplainBackGradingWireGraded`
  * (every hand-built test fixture in this file's own spec, in particular) gets
@@ -392,14 +413,17 @@ export type GroundedGrading = GroundedGradingGraded | GroundedGradingUnableToAss
 export function groundCitations(
   response: ExplainBackGradingWireGraded,
   sourceBlocks: readonly SourceBlockRef[],
+  studentAnswer?: string,
 ): GroundedGradingGraded;
 export function groundCitations(
   response: ExplainBackGradingWireResponse,
   sourceBlocks: readonly SourceBlockRef[],
+  studentAnswer?: string,
 ): GroundedGrading;
 export function groundCitations(
   response: ExplainBackGradingWireResponse,
   sourceBlocks: readonly SourceBlockRef[],
+  studentAnswer?: string,
 ): GroundedGrading {
   if (response.outcome === 'unable-to-assess') {
     return { outcome: 'unable-to-assess', reason: response.reason };
@@ -411,22 +435,26 @@ export function groundCitations(
   const citedIssues: CitedIssue[] = [];
   for (const issue of response.citedIssues) {
     const validIds = issue.sourceBlockIds.filter((id) => knownIds.has(id));
-    if (validIds.length === 0) {
+    const spans = groundAnswerSpans(issue.answerSpans, studentAnswer);
+    if (validIds.length === 0 || spans === 'drop') {
       droppedCitationCount++;
       continue;
     }
-    citedIssues.push({ ...issue, sourceBlockIds: validIds });
+    const { answerSpans: _unchecked, ...rest } = issue;
+    citedIssues.push({ ...rest, sourceBlockIds: validIds, ...spans });
   }
 
   let droppedMisconceptionCount = 0;
   const misconceptionCandidates: MisconceptionCandidate[] = [];
   for (const candidate of response.misconceptionCandidates) {
     const validIds = candidate.correctionSourceBlockIds.filter((id) => knownIds.has(id));
-    if (validIds.length === 0) {
+    const spans = groundAnswerSpans(candidate.answerSpans, studentAnswer);
+    if (validIds.length === 0 || spans === 'drop') {
       droppedMisconceptionCount++;
       continue;
     }
-    misconceptionCandidates.push({ ...candidate, correctionSourceBlockIds: validIds });
+    const { answerSpans: _unchecked, ...rest } = candidate;
+    misconceptionCandidates.push({ ...rest, correctionSourceBlockIds: validIds, ...spans });
   }
 
   return {
@@ -440,6 +468,46 @@ export function groundCitations(
     droppedCitationCount,
     droppedMisconceptionCount,
   };
+}
+
+/**
+ * `[D-318]`: whether `span` occurs in `studentAnswer`, word for word.
+ *
+ * Spacing is the one allowance: runs of whitespace (spaces, tabs, line
+ * breaks) compare as a single space, and a span's leading or trailing
+ * whitespace is ignored, because a model re-flowing her line breaks has not
+ * changed her words. Everything else — case, punctuation, word order — must
+ * match exactly (Class B, flagged for review on `ol-egov.141.89.6.4`: a
+ * looser rule would let a paraphrase pass as her own words). A span that is
+ * empty once trimmed never occurs.
+ *
+ * The span and the answer are her content: nothing here or in
+ * {@link groundCitations} logs or persists them (D-005).
+ */
+export function answerSpanOccurs(span: string, studentAnswer: string): boolean {
+  const needle = normaliseSpacing(span);
+  if (needle === '') return false;
+  return normaliseSpacing(studentAnswer).includes(needle);
+}
+
+function normaliseSpacing(text: string): string {
+  return text.replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * One entry's spans after the check: `{}` when there is nothing to carry (no
+ * spans quoted, or no answer to check them against), `{ answerSpans }` with
+ * only the spans that occur, or `'drop'` when spans were quoted and none
+ * occur. See {@link groundCitations}.
+ */
+function groundAnswerSpans(
+  spans: readonly string[] | undefined,
+  studentAnswer: string | undefined,
+): { readonly answerSpans?: readonly string[] } | 'drop' {
+  if (spans === undefined || spans.length === 0) return {};
+  if (studentAnswer === undefined) return {};
+  const occurring = spans.filter((span) => answerSpanOccurs(span, studentAnswer));
+  return occurring.length === 0 ? 'drop' : { answerSpans: occurring };
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +580,8 @@ export async function gradeExplainBack(
   return {
     status: 'pending-review',
     overlap,
-    grading: groundCitations(wire, input.sourceBlocks),
+    // `[D-318]`: her answer is passed so any quoted span is checked against it.
+    grading: groundCitations(wire, input.sourceBlocks, input.studentAnswer),
     ...(wire.stamp !== undefined && wire.stamp !== null ? { stamp: wire.stamp } : {}),
   };
 }
