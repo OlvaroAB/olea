@@ -15,6 +15,7 @@
 import {
   addManualAssessmentEntry,
   appendReviewLogRecord,
+  appendVerdictRecord,
   type CalendarDay,
   calendarDayFromLocalDate,
 } from 'olea-core';
@@ -96,9 +97,12 @@ describe('readCourseSetupRecognitions', () => {
     expect(recognitions[0]?.newCourse).toBe('TESTCB2');
     expect(recognitions[0]?.earlierCourses).toEqual(['TESTCA1']);
     expect(recognitions[0]?.evidence.reviewCount).toBe(1);
-    // No vitality dependency is constructed by this seam — see the module's
-    // own doc for why that is an honest omission, not a gap.
-    expect(recognitions[0]?.vitality).toBeNull();
+    // `ol-egov.141.89.9.62`: this seam now constructs the vitality reading
+    // itself (module doc, "Vitality is computed here") — a real review
+    // exists, so the claim carries a real reading, never the `null` "not
+    // read" placeholder this used to show unconditionally.
+    expect(recognitions[0]?.vitality).not.toBeNull();
+    expect(recognitions[0]?.vitality?.value).toMatch(/^(holding|tending|early)$/);
   });
 
   it('finds nothing to recognise when the concept has no evidence yet', async () => {
@@ -183,6 +187,82 @@ describe('readCourseSetupRecognitions', () => {
     });
 
     expect(recognitions).toEqual([]);
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.62` (discovered from `ol-egov.141.89.9.60`): this seam
+ * now constructs the vitality reading itself (module doc, "Vitality is
+ * computed here"). Metamorphic, matching `readAllConceptVitality`'s own spec
+ * style (`packages/core/src/mastery/rollup.spec.ts`): the SAME single review
+ * is read once with its instrument standing, once after a `rejected`
+ * verdict proves it invalid — the reading must move, never the evidence
+ * count `evidence.reviewCount` (a raw log tally, unaffected by standing).
+ */
+describe('readCourseSetupRecognitions: vitality (ol-egov.141.89.9.62)', () => {
+  it('a rejected instrument no longer counts toward the claim it is the only evidence for', async () => {
+    const vault = twoCourseVault();
+    const extracted = await extractConceptsFromVault(vault, {});
+    const record = extracted.find((r) => r.name === 'Shared concept');
+    if (record === undefined) throw new Error('expected the shared concept to be extracted');
+    const conceptId = record.key;
+    const instrumentId = `qa:${conceptId}:1`;
+
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-08-01T09:00:00-04:00',
+        instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [conceptId],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 4000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'evt-1' },
+    );
+
+    const [before] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+    });
+    expect(before?.evidence.reviewCount).toBe(1);
+    expect(before?.vitality?.instrumentsRead).toBe(1);
+    expect(before?.vitality?.value).not.toBe('early');
+
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [conceptId],
+        timestamp: '2026-08-02T09:00:00-04:00',
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-1' },
+    );
+
+    const [after] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+    });
+    // The rejected instrument's evidence still exists in the log (the raw
+    // tally is unaffected — `evidence.reviewCount` reads the log directly,
+    // never a validity fold), but no longer counts toward vitality: the
+    // ONLY instrument is now proven invalid, so the reading falls to the
+    // sufficiency floor.
+    expect(after?.evidence.reviewCount).toBe(1);
+    expect(after?.vitality).toStrictEqual({ value: 'early', weakest: null, instrumentsRead: 0 });
   });
 });
 
@@ -331,5 +411,70 @@ describe('readCourseSetupRecognitions: the cutoff record ([D-387], [D-411])', ()
       expect(rec?.historical).toEqual([]);
       expect(cutoffFiles(vault)).toEqual([]);
     }
+  });
+
+  it('the cutoff bounds the dated line alone — vitality stays a current reading, unbounded by it (ol-egov.141.89.9.62)', async () => {
+    const vault = await vaultWithEvidence();
+    const extracted = await extractConceptsFromVault(vault, {});
+    const record = extracted.find((r) => r.name === 'Shared concept');
+    if (record === undefined) throw new Error('expected the shared concept to be extracted');
+    await addManualAssessmentEntry(
+      vault,
+      { course: 'TESTCA1', type: 'exam', due: '2026-06-12' },
+      { generateId: () => 'a1', now: () => '2026-04-01' },
+    );
+
+    // First call takes and records the cutoff (module doc, "The cutoff is
+    // taken and recorded here").
+    const [firstRec] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+      assignmentsBasePath: '',
+    });
+    expect(firstRec?.historical[0]).toMatchObject({ cutoffDay: '2026-06-12', state: 'sprout' });
+    expect(firstRec?.vitality?.instrumentsRead).toBe(1);
+    const filesAfterFirstCall = cutoffFiles(vault);
+
+    // A second review lands on a NEW instrument, well after the recorded
+    // cutoff day — evidence the dated line (bounded to the cutoff) must
+    // never see, but vitality (the current reading) must.
+    await appendReviewLogRecord(
+      vault,
+      {
+        timestamp: '2026-08-01T09:00:00-04:00',
+        instrumentId: `qa:${record.key}:2`,
+        instrumentType: 'qa',
+        conceptIds: [record.key],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 4000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'evt-2' },
+    );
+
+    const [rec] = await readCourseSetupRecognitions('TESTCB2', {
+      vault,
+      deviceId: DEVICE,
+      today: TODAY,
+      assignmentsBasePath: '',
+    });
+
+    // The dated line is exactly as it stood at the cutoff — the second
+    // review changes nothing there.
+    expect(rec?.historical[0]).toMatchObject({ cutoffDay: '2026-06-12', state: 'sprout' });
+    // No re-take on a course already recorded (module doc, "A course that
+    // already has a record is never written again").
+    expect(cutoffFiles(vault)).toEqual(filesAfterFirstCall);
+    // Vitality, the current reading, sees BOTH instruments — the cutoff
+    // bounds the dated line alone, never this one (module doc).
+    expect(rec?.vitality?.instrumentsRead).toBe(2);
   });
 });

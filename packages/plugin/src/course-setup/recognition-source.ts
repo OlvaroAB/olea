@@ -24,14 +24,49 @@
  *   join. `displayName` is dropped: `buildEarlierCourseRecognitions` only
  *   ever reads `conceptId`/`courses` off this shape, never a name.
  *
- * ## Vitality is omitted, not computed
+ * ## Vitality is computed here, once, over the identity-resolved log
+ * (`ol-egov.141.89.9.62`, discovered from `ol-egov.141.89.9.60`)
  *
  * `buildEarlierCourseRecognitions`'s own module doc: "vitality is accepted,
- * never computed" — a live reading needs a `Scheduler`, `now` and
- * `HOLDING_CUT`, dependencies this proposal-time seam has no other reason to
- * construct. Every claim's `vitality` therefore reads `null` here, the same
- * honest "not read" every other caller that omits the option gets, never a
- * fabricated default.
+ * never computed" — so this IS the seam that constructs the `Scheduler`,
+ * `now` and `HOLDING_CUT` a live reading needs, the same posture
+ * `today/data-source.ts` and `registry/provider.ts` already take for their
+ * own callers of `readAllConceptVitality`/its eligible-reader sibling.
+ * `deps.now`/`.scheduler`/`.holdingCut` are all optional, defaulting to a
+ * fresh clock, `createFsrsScheduler()` and the ratified `[D-115]` cut — so
+ * `main.ts`'s existing call (`ol-egov.141.89.9.49`'s seam, unchanged by this
+ * bead) gets a real reading with no caller change.
+ *
+ * Two things this reading must get right that a naive `readAllConceptVitality`
+ * call would not:
+ *
+ * - **Identity.** A confirmed same-as link (`[D-402]`, above) folds two
+ *   `conceptId`s into one identity everywhere else this module reads the log
+ *   (`buildEarlierCourseRecognitions`'s own private `entriesByIdentity`) —
+ *   vitality must read the SAME resolved log, or a linked pair's evidence
+ *   recorded under the losing key would silently drop out of its vitality
+ *   reading even though it still counts for `state`/`evidence`.
+ *   `entriesResolvedByIdentity` below mirrors that private fold (six lines,
+ *   duplicated across the owns boundary rather than widening `earlier-
+ *   course-recognition.ts`'s export surface for this bead — the same
+ *   precedent `today/data-source.ts`'s own `disputesFromFiles` states for
+ *   itself). The map is then looked up by `buildEarlierCourseRecognitions`
+ *   under exactly the identities its own `byConcept` fold produces (its own
+ *   doc: "the reading is looked up under the link's surviving key").
+ * - **Proven-invalid exclusion, dispute-aware.** `readReviewHistory` above
+ *   already reads `disputes` off the SAME log walk `entries` comes from (its
+ *   own `ReviewHistory.disputes` field) — so there is no "disputes
+ *   unavailable, entries available" case at this call site to degrade from:
+ *   whenever `entries` is real, `disputes` is too, both from one read that
+ *   fails closed together. `projectInstrumentValidity(vitalityEntries,
+ *   disputes)` therefore folds in a `[D-095]` grade contest resolved
+ *   `corrected`, not just a bare `rejected` verdict — the same fact
+ *   `ol-egov.141.89.9.60` named missing from this seam's vitality.
+ *
+ * Vitality is a CURRENT reading (module doc, elsewhere: "never a vitality
+ * value, which knowledge model R3 forbids dating") — it is computed over the
+ * whole current log, never bounded by a recorded cutoff the way `historical`
+ * is; the cutoff mechanism below is unchanged and untouched by this reading.
  *
  * ## Confirmed same-as links are followed (`[D-402]`, `ol-egov.141.89.3.20`)
  *
@@ -79,23 +114,34 @@
  * cutoff from a partial read.
  */
 
-import type { ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
 import {
   type AssessmentRecord,
   buildEarlierCourseRecognitions,
+  buildSameAsKeyRedirect,
   type CalendarDay,
   type ConceptCourses,
   type ConceptKeyCanonicalIndex,
   calendarDaysEndingOn,
+  createFsrsScheduler,
   type EarlierCourseRecognition,
   type ExtractConceptsOptions,
+  HOLDING_CUT,
   listSameAsLinkRecords,
+  projectInstrumentValidity,
   readConceptKeyCanonicalIndex,
   resolveAssessments,
   type SameAsLinkRecord,
+  type Scheduler,
   type VaultPath,
   type VaultSource,
+  type VitalityReading,
 } from 'olea-core';
+// `readAllConceptVitality` is deliberately not on the `olea-core` barrel
+// (`packages/core/src/index.ts`'s own comment: only `conceptVitalityInstruments`
+// and `HOLDING_CUT` are, for readers outside core) — same deep-import posture
+// as the `[D-411]` block below, not a second precedent.
+import { readAllConceptVitality } from '../../../core/src/mastery/rollup.js';
 // `[D-411]` (`ol-v7r5.66`): imported by module path, not the `olea-core` barrel, which other
 // lanes are landing exports into this round (`privacy/log-discovery.ts`'s stance).
 import {
@@ -121,6 +167,17 @@ export interface CourseSetupRecognitionSourceDeps {
    * still read and shown.
    */
   readonly assignmentsBasePath?: string;
+  /**
+   * Injected for determinism under test; production omits it and gets a
+   * fresh `new Date()` (module doc) — the same `?? new Date()` fallback
+   * this seam's own `deps.today` default would take if it had one, and the
+   * reason `main.ts`'s existing call needs no change for this bead.
+   */
+  readonly now?: () => Date;
+  /** Overrides `HOLDING_CUT` (`[D-115]`) for F2.11's vitality axis — injected for determinism under test, the same `?? HOLDING_CUT` pattern `registry/provider.ts`'s `CreateLocalRegistryProviderDeps.holdingCut` already uses. */
+  readonly holdingCut?: number;
+  /** Overridable for tests; production gets a fresh `createFsrsScheduler()`, the same posture `registry/provider.ts` and `grove/provider.ts` already take. */
+  readonly scheduler?: Scheduler;
 }
 
 /**
@@ -200,6 +257,58 @@ async function cutoffRecordsFor(
 }
 
 /**
+ * The log as read under the confirmed same-as links — mirrors
+ * `../../../core/src/today/earlier-course-recognition.ts`'s own private
+ * `entriesByIdentity` exactly (six lines, duplicated across the owns
+ * boundary rather than widening that bead's export surface for this one;
+ * see this module's own doc, "Vitality is computed here"). An entry no link
+ * touches is returned as-is, by reference; so is the whole log when there is
+ * nothing to resolve. In memory only — nothing is written.
+ */
+function entriesResolvedByIdentity(
+  entries: readonly ReviewLogEntry[],
+  redirect: ReadonlyMap<string, string>,
+): readonly ReviewLogEntry[] {
+  if (redirect.size === 0) return entries;
+  return entries.map((entry) => {
+    if (!('conceptIds' in entry) || !Array.isArray(entry.conceptIds)) return entry;
+    const ids: readonly string[] = entry.conceptIds;
+    if (!ids.some((id) => redirect.has(id))) return entry;
+    const resolved = [...new Set(ids.map((id) => redirect.get(id) ?? id))];
+    return { ...entry, conceptIds: resolved } as ReviewLogEntry;
+  });
+}
+
+/**
+ * F8.7's vitality reading (`ol-egov.141.89.9.62`; module doc "Vitality is
+ * computed here, once, over the identity-resolved log"): one
+ * `readAllConceptVitality` replay, keyed by exactly the identities
+ * `buildEarlierCourseRecognitions`'s own `byConcept` fold will look it up
+ * under — every `concepts` row's `conceptId`, resolved through the SAME
+ * same-as redirect, deduplicated.
+ */
+function vitalityForRecognitions(
+  entries: readonly ReviewLogEntry[],
+  disputes: readonly DisputeLogRecord[],
+  concepts: readonly ConceptCourses[],
+  sameAsLinks: readonly SameAsLinkRecord[],
+  canonicalKeys: ConceptKeyCanonicalIndex | undefined,
+  deps: CourseSetupRecognitionSourceDeps,
+): ReadonlyMap<string, VitalityReading> {
+  const redirect = buildSameAsKeyRedirect(sameAsLinks, canonicalKeys);
+  const vitalityEntries = entriesResolvedByIdentity(entries, redirect);
+  const conceptIds = [...new Set(concepts.map((c) => redirect.get(c.conceptId) ?? c.conceptId))];
+  const scheduler = deps.scheduler ?? createFsrsScheduler();
+  const now = deps.now?.() ?? new Date();
+  const holdingCut = deps.holdingCut ?? HOLDING_CUT;
+  // `disputes` is real whenever `entries` is (module doc) — the dispute-
+  // aware validity projection is therefore always in play here, never the
+  // log-only default `readAllConceptVitality` itself would fall back to.
+  const validity = projectInstrumentValidity(vitalityEntries, disputes);
+  return readAllConceptVitality(vitalityEntries, conceptIds, scheduler, now, holdingCut, validity);
+}
+
+/**
  * `newCourse`: the course code the proposal is about —
  * `CourseDetectionProposal.code`, read from `courseFromPath` the same way
  * `ConceptCourses.courses` already is (`../concept/course.ts`), so the two
@@ -215,10 +324,14 @@ export async function readCourseSetupRecognitions(
   deps: CourseSetupRecognitionSourceDeps,
 ): Promise<readonly EarlierCourseRecognition[]> {
   let entries: readonly ReviewLogEntry[];
+  let disputes: readonly DisputeLogRecord[];
   try {
-    entries = (await readReviewHistory(deps.vault, deps.deviceId, { today: deps.today })).entries;
+    const history = await readReviewHistory(deps.vault, deps.deviceId, { today: deps.today });
+    entries = history.entries;
+    disputes = history.disputes;
   } catch {
     entries = [];
+    disputes = [];
   }
 
   let concepts: readonly ConceptCourses[];
@@ -239,11 +352,25 @@ export async function readCourseSetupRecognitions(
     canonicalKeys = undefined;
   }
 
+  // `[D-116]`/F2.11, `ol-egov.141.89.9.62`: computed once, over the SAME
+  // `entries`/`disputes`/`sameAsLinks`/`canonicalKeys` this call already
+  // read above — no second vault or log read (module doc, "Vitality is
+  // computed here").
+  const vitality = vitalityForRecognitions(
+    entries,
+    disputes,
+    concepts,
+    sameAsLinks,
+    canonicalKeys,
+    deps,
+  );
+
   const input = {
     newCourse,
     entries,
     concepts,
     sameAsLinks,
+    vitality,
     ...(canonicalKeys !== undefined ? { canonicalKeys } : {}),
   };
   const current = buildEarlierCourseRecognitions(input);
