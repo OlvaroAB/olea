@@ -77,6 +77,16 @@
  * since the last arrival and nothing else. The sentence itself is not built
  * here: exactly like `insights/index.ts`'s split with `plugin/today/copy.ts`,
  * this module decides only what is true, never what to say.
+ *
+ * ## The arrivals stage (`ol-egov.141.89.11.4`, vew.md §2.5)
+ *
+ * `lastMaterialArrivalDay` and `unreadable` on `RhythmCourseInput` are this
+ * module's own vocabulary — a day, and whether the latest one could be
+ * read — and this file has no opinion on how either is produced. `./arrivals.js`
+ * is the stage that produces them correctly: from PROCESSED revisions,
+ * independent of any materiality verdict, with `unreadable` kept apart from
+ * "never arrived" (`RhythmStatus`'s own doc). See that module's doc for what
+ * is wrong with today's production wiring and why.
  */
 
 import { type CalendarDay, isCalendarDay } from './calendar-day.js';
@@ -138,7 +148,16 @@ export const DECLARED_FLAT_TEMPO_WEIGHT = 1;
  */
 export const MIN_TEMPO_WEIGHT_FOR_THRESHOLD_DIVISOR = 0.1;
 
-export type RhythmStatus = 'observed' | 'not-observed' | 'not-enough-history';
+/**
+ * `'unreadable'` (`ol-egov.141.89.11.4`, vew.md §2.5) — the arrivals stage
+ * (`./arrivals.js`) found that this course's most recent processed revision
+ * arrived but could not be read (its reading failed, or is still pending).
+ * Kept apart from `'not-enough-history'` on purpose: the two say different
+ * things — "nothing has ever arrived" vs. "something arrived and Olea
+ * cannot read it" — and neither may be read as `'not-observed'` (a quiet
+ * course), per failure class R4 ("harm if quiet").
+ */
+export type RhythmStatus = 'observed' | 'not-observed' | 'not-enough-history' | 'unreadable';
 
 /**
  * A term's boundary, in her own local calendar days. Asked once per F6.9;
@@ -186,12 +205,23 @@ export interface RhythmCourseInput {
    * term-relative yardstick (see the module doc).
    */
   readonly tempoWeight?: number;
+  /**
+   * `ol-egov.141.89.11.4`, vew.md §2.5. True when the arrivals stage
+   * (`./arrivals.js#detectCourseArrivals`) found that this course's most
+   * recent processed revision could not be read (its reading failed, or is
+   * still pending). Takes priority over `lastMaterialArrivalDay` — see
+   * `RhythmStatus`'s `'unreadable'` doc — so a caller need not clear that
+   * field when this is `true`. Omitted or `false` for a course whose latest
+   * arrival, if any, read successfully. Built by `./arrivals.js`'s
+   * `toRhythmCourseInput`; not set by any caller today.
+   */
+  readonly unreadable?: boolean;
 }
 
 export interface RhythmCourseReading {
   readonly course: string;
   readonly status: RhythmStatus;
-  /** Days between the last observed arrival and `today`. `null` only when `status` is `not-enough-history`. */
+  /** Days between the last observed arrival and `today`. `null` when `status` is `not-enough-history` or `unreadable`. */
   readonly quietDays: number | null;
   /**
    * This course's own quiet threshold, in days — `QUIET_DAYS_THRESHOLD`
@@ -274,6 +304,19 @@ function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourse
   const tempoWeight = course.tempoWeight ?? DECLARED_FLAT_TEMPO_WEIGHT;
   const quietDaysThreshold = effectiveQuietDaysThreshold(tempoWeight);
 
+  if (course.unreadable === true) {
+    // vew.md §2.5 / failure class R4: an arrival that could not be read is
+    // never a quiet course — checked before the null-day branch below so it
+    // takes priority regardless of what `lastMaterialArrivalDay` carries.
+    return {
+      course: course.course,
+      status: 'unreadable',
+      quietDays: null,
+      quietDaysThreshold,
+      reason: 'the most recent processed revision for this course could not be read',
+    };
+  }
+
   if (lastMaterialArrivalDay === null || !isCalendarDay(lastMaterialArrivalDay)) {
     return {
       course: course.course,
@@ -338,7 +381,10 @@ export function detectRhythm(input: RhythmInput): RhythmInsight {
   const courses = input.courses.map((course) => readCourse(course, input.today));
   const hadTermWindow = (input.termWindow ?? null) !== null;
 
-  const withHistory = courses.filter((c) => c.status !== 'not-enough-history');
+  // 'unreadable' is deliberately excluded here, not just 'not-enough-history':
+  // it is neither "no arrival ever observed" nor a measurable quiet gap
+  // (vew.md §2.5) — see `RhythmStatus`'s doc.
+  const withHistory = courses.filter((c) => c.status === 'observed' || c.status === 'not-observed');
   if (withHistory.length === 0) {
     return {
       id: 'rhythm',

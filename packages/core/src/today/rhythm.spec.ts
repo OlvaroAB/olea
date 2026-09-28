@@ -191,3 +191,45 @@ describe('detectRhythm — tempo input ([D-155], ol-v7r5.8)', () => {
     );
   });
 });
+
+describe("detectRhythm — 'unreadable' input (ol-egov.141.89.11.4, vew.md §2.5, R4)", () => {
+  it('reads unreadable, never observed/not-observed/not-enough-history, regardless of lastMaterialArrivalDay', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [{ course: 'C1', lastMaterialArrivalDay: shiftedDay(40), unreadable: true }],
+    });
+    const reading = result.measured?.courses[0];
+    expect(reading?.status).toBe('unreadable');
+    expect(reading?.quietDays).toBeNull();
+    expect(reading?.quietDaysThreshold).toBe(QUIET_DAYS_THRESHOLD);
+  });
+
+  it('unreadable also takes priority over a null lastMaterialArrivalDay', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [{ course: 'C1', lastMaterialArrivalDay: null, unreadable: true }],
+    });
+    expect(result.measured?.courses[0]?.status).toBe('unreadable');
+  });
+
+  it('an unreadable course is never picked as the quietest course, but never blocks a verdict about others', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [
+        { course: 'UNREADABLE', lastMaterialArrivalDay: shiftedDay(90), unreadable: true },
+        course('GONE_QUIET', 30),
+      ],
+    });
+    expect(result.status).toBe('observed');
+    expect(result.measured?.quietestCourse).toBe('GONE_QUIET');
+  });
+
+  it('an all-unreadable set of courses reads the overall not-enough-history status — no measurable quiet gap exists', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [{ course: 'C1', lastMaterialArrivalDay: shiftedDay(5), unreadable: true }],
+    });
+    expect(result.status).toBe('not-enough-history');
+    expect(result.measured?.quietestCourse).toBeNull();
+  });
+});
