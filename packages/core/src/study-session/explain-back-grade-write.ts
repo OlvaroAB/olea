@@ -152,6 +152,12 @@ export interface GradedExplainBackReviewSubject {
    * does, never fabricated when the caller has none.
    */
   readonly answerEdits?: AnswerEdits;
+  /**
+   * `[D-416]`: the `attemptId` of the attempt she set aside with Try again
+   * immediately before writing this answer — travels onto the record's
+   * `followsAttemptId`. Absent for a first attempt, never fabricated.
+   */
+  readonly followsAttemptId?: string;
 }
 
 export interface ComposeGradedExplainBackReviewRecordInput {
@@ -236,6 +242,11 @@ export function composeGradedExplainBackReviewRecord(
     // nested `explainBackGrade.correctness` (`[D-386]`).
     ...(input.explainBackCorrectness !== undefined
       ? { explainBackCorrectness: input.explainBackCorrectness }
+      : {}),
+    // `[D-416]`: the link to the attempt this retry followed; absent for a
+    // first attempt. A link, never evidence — no fold reads it.
+    ...(subject.followsAttemptId !== undefined
+      ? { followsAttemptId: subject.followsAttemptId }
       : {}),
   };
 }

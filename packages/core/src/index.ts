@@ -2078,6 +2078,7 @@ export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdi
 export type {
   AppendDisputeLogResult,
   AppendExplainBackOfferLogResult,
+  AppendExplainBackSetAsideLogResult,
   AppendMisconceptionObservedLogResult,
   AppendMisconceptionObservedOptions,
   AppendNonAttemptLogResult,
@@ -2089,6 +2090,7 @@ export type {
   AppendSuspendLogResult,
   AppendVerdictLogResult,
   ExplainBackOfferLogRecordInput,
+  ExplainBackSetAsideLogRecordInput,
   MisconceptionObservedLogRecordInput,
   NonAttemptLogRecordInput,
   RetrospectiveOfferLogRecordInput,
@@ -2101,6 +2103,7 @@ export type {
 export {
   appendDisputeRecord,
   appendExplainBackOfferRecord,
+  appendExplainBackSetAsideRecord,
   appendMisconceptionObservedRecord,
   appendNonAttemptRecord,
   appendRetrospectiveOfferRecord,

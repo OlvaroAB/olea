@@ -256,6 +256,33 @@ export interface AppendNonAttemptLogResult {
   readonly path: VaultPath;
 }
 
+/**
+ * The contracts `explainBackSetAsideLogRecordV6` shape (`[D-416]`), read off
+ * the current union and narrowed on its own `kind` literal, the same way
+ * `NonAttemptLogRecord` above is.
+ */
+type ExplainBackSetAsideLogRecord = Extract<
+  ReviewLogEntry,
+  { readonly kind: 'explain-back-set-aside' }
+>;
+
+/**
+ * Every set-aside field the caller supplies (`[D-416]`); the writer stamps
+ * `schemaVersion`, `kind`, `eventId` and `acceptance` — there is one
+ * acceptance value for this kind, so the caller has no choice to make.
+ */
+export type ExplainBackSetAsideLogRecordInput = Omit<
+  ExplainBackSetAsideLogRecord,
+  'schemaVersion' | 'eventId' | 'kind' | 'acceptance'
+>;
+
+export interface AppendExplainBackSetAsideLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: ExplainBackSetAsideLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
 function defaultGenerateEventId(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -941,6 +968,70 @@ export async function appendNonAttemptRecord(
     // before any byte is written, like every other validation failure here.
     throw new Error(
       `appendNonAttemptRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not a non-attempt`,
+    );
+  }
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **explain-back-set-aside**
+ * event (`[D-416]`, ruled 2026-09-28): an explain-back attempt she chose Try
+ * again on, kept as its own record so Try again never erases the attempt
+ * sequence.
+ *
+ * The sibling of `appendNonAttemptRecord`, sharing the same append path and
+ * durability discipline. `kind` and `acceptance: 'not-accepted'` are stamped,
+ * not asked for. `followsAttemptId` and `supportLevelShown` are written only
+ * when supplied: an `undefined` value reaching here past the types is dropped
+ * rather than kept as a key, so absence stays a true absence (the first
+ * attempt at a question; an unknown rung).
+ *
+ * **What calling this does not do.** It writes no review, no rating and no
+ * grade that any fold reads: an unaccepted grade is not learning evidence
+ * (`[D-416]`). It takes no answer text, feedback or passage (D-005) — the
+ * input type has no place for any.
+ *
+ * **Validated against the current union `reviewLogEntry`**, then narrowed on
+ * its `kind` literal, so a record this writer accepts is by construction one
+ * `./parse.ts` returns as this kind, never an `invalidLines` entry.
+ *
+ * **Reachability.** Reached from the explain-back view's Try again
+ * (`packages/plugin/src/explain-back/modal.ts`'s `discardGrading`, through
+ * `ExplainBackModalDeps.recordSetAsideAttempt`), once the plugin's
+ * composition root wires that dependency.
+ */
+export async function appendExplainBackSetAsideRecord(
+  vault: VaultSource,
+  input: ExplainBackSetAsideLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendExplainBackSetAsideLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const { followsAttemptId, supportLevelShown, ...fields } = input;
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'explain-back-set-aside',
+    eventId: generateEventId(),
+    ...fields,
+    ...(followsAttemptId !== undefined ? { followsAttemptId } : {}),
+    acceptance: 'not-accepted',
+    ...(supportLevelShown !== undefined ? { supportLevelShown } : {}),
+  };
+
+  const parsed = reviewLogEntry.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendExplainBackSetAsideRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  if (record.kind !== 'explain-back-set-aside') {
+    // Reachable only through a cast that forced a `kind` in; refused before
+    // any byte is written, like every other validation failure here.
+    throw new Error(
+      `appendExplainBackSetAsideRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not an explain-back-set-aside`,
     );
   }
   const path = await appendEntryLine(vault, record, options.deviceId);
