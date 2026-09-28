@@ -1,46 +1,62 @@
 /**
- * The effort detector's own behaviour, on hand-built logs. Same scope note as
- * `./spacing.spec.ts`: the claim that it fires on a student whose effort really
- * is lopsided and goes quiet on the same student with that pattern removed
- * needs a planted ground truth, and is asserted in
- * `packages/workbench/test/trends-scenarios.spec.ts` against
- * `olea-synthetic`'s `lopsided-effort` persona.
+ * The effort reading's own behaviour, on hand-built logs and composition records
+ * (`ol-egov.141.89.11.18`; the standing-views spec, service repo, `vew.md` section 2.4). The
+ * persona pairing (fires on `lopsided-effort`, quiet on its neutralised twin) lives in
+ * `packages/workbench/test/trends-scenarios.spec.ts`.
  *
- * **Fixtures re-specified against window accounting (`ol-v7r5.33`).** The
- * comparison target used to be a raw assessment-weight share (`weight: 50`,
- * normalised to `weightShare`); it is now the plan's own windowed floor share
- * (`floorShare`, `[D-081]`/`[D-092]`), taken as given and never renormalised —
- * see `effort.ts`'s module doc. `EVEN_FLOORS` below uses `0.3` per course
- * rather than the old `50`, a magnitude in the range a real two-course window
- * floor plausibly takes (`windowWidthSittings`'s own declared constants,
- * `olea-service`'s `src/plan/allocation.ts`), not a re-derivation of them.
+ * Every fixture here is built from sessions: each session sits on its own day (well past C5.5's
+ * 45-minute gap), its reviews one minute apart, each review linked by `compositionId` to the
+ * composition record that served it, unless a test says otherwise. Course and concept ids are
+ * invented letters.
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { RECEIVED_SECONDS_PER_ITEM_CAP } from '../session/cluster.js';
 import {
-  type CourseFloorShare,
+  type CompositionRecord,
+  parseCompositionRecord,
+} from '../study-session/composition-record.js';
+import {
   detectEffortImbalance,
+  type EffortComposition,
+  type EffortInput,
   MIN_GAP,
+  MIN_TIMED_REVIEWS,
   SHORTFALL_RATIO_K,
 } from './effort.js';
+import type { ConceptCourses } from './types.js';
 
 const MINUTE = 60_000;
+const DAY = 24 * 60 * 60 * 1000;
+const START = Date.parse('2026-01-05T09:00:00Z');
+
+const CONCEPTS: readonly ConceptCourses[] = [
+  { conceptId: 'a-1', courses: ['A'] },
+  { conceptId: 'b-1', courses: ['B'] },
+  { conceptId: 'c-1', courses: ['C'] },
+  { conceptId: 'd-1', courses: ['D'] },
+  { conceptId: 'e-1', courses: ['E'] },
+  { conceptId: 'shared', courses: ['A', 'B'] },
+];
+
+const EVEN: Readonly<Record<string, number>> = { A: 0.3, B: 0.3 };
 
 function review(
-  conceptIds: readonly string[],
+  conceptId: string,
   index: number,
+  timestamp: string,
   durationMs: number | null,
-  timestamp = '2026-09-01T18:00:00+00:00',
+  compositionId: string | null,
 ): ReviewLogRecord {
   return {
     schemaVersion: 6,
     kind: 'review',
     eventId: `e${index}`,
     timestamp,
-    instrumentId: `qa:${conceptIds[0] ?? 'x'}:${index}`,
+    instrumentId: `qa:${conceptId}:${index}`,
     instrumentType: 'qa',
-    conceptIds: [...conceptIds],
+    conceptIds: [conceptId],
     rating: 'good',
     wasUnsure: false,
     durationMs,
@@ -51,612 +67,483 @@ function review(
       instrumentTypesOffered: ['qa'],
       planVersion: null,
     },
+    ...(compositionId === null ? {} : { compositionId }),
   };
 }
 
-const CONCEPTS = [
-  { conceptId: 'bio-1', courses: ['BIOL204'] },
-  { conceptId: 'stat-1', courses: ['STAT110'] },
-];
-
-const EVEN_FLOORS: readonly CourseFloorShare[] = [
-  { course: 'BIOL204', floorShare: 0.3 },
-  { course: 'STAT110', floorShare: 0.3 },
-];
-
-/** `n` reviews of `conceptId`, a minute each. */
-function minutes(conceptId: string, n: number, from: number): ReviewLogEntry[] {
-  return Array.from({ length: n }, (_, i) => review([conceptId], from + i, MINUTE));
+interface SessionSpec {
+  /** The record's one course. `null` builds a record naming no course. */
+  readonly course: string | null;
+  /** The concept every review in the session is on; defaults to the course's own. */
+  readonly concept?: string;
+  readonly reviews: number;
+  /** Per-review durations, overriding one minute each from the start of the session. */
+  readonly durations?: readonly (number | null)[];
+  /** The frozen floor shares the session was composed under. */
+  readonly floors?: Readonly<Record<string, number>>;
+  /** `'none'`: the reviews carry no `compositionId` and no record is written. `'orphan'`: they carry one no record has. */
+  readonly link?: 'record' | 'none' | 'orphan';
 }
 
-const DAY = 24 * 60 * 60 * 1000;
+function allocation(floors: Readonly<Record<string, number>>): EffortComposition['planAllocation'] {
+  return Object.entries(floors).map(([courseId, value]) => ({
+    courseId,
+    contributions: [{ name: 'floor', value }],
+  }));
+}
 
-/**
- * `sittingCount` REAL sittings of `reviewsPerSitting` reviews each, one
- * calendar day apart (well over `SESSION_CLUSTERING_GAP_SECONDS`, so each is
- * its own sitting), oldest first — unlike `minutes()` above, whose reviews
- * all share one default `timestamp` and so always collapse into a single
- * sitting regardless of count. That collapse is why this module's own
- * fixtures never exercised more than one sitting at a time and never caught
- * `ol-egov.141.89.11.7` (discovered from `ol-egov.141.89.11.6`): the
- * sufficiency gate (`MIN_TIMED_REVIEWS`) being checked against the narrow
- * D-092 sittings window instead of the whole log. See that describe block,
- * below.
- */
-function sittings(
-  conceptId: string,
-  sittingCount: number,
-  reviewsPerSitting: number,
-  startMs: number,
-): ReviewLogEntry[] {
-  const out: ReviewLogEntry[] = [];
+/** One session per spec, oldest first, one day apart. */
+function world(specs: readonly SessionSpec[]): {
+  entries: ReviewLogEntry[];
+  compositions: EffortComposition[];
+} {
+  const entries: ReviewLogEntry[] = [];
+  const compositions: EffortComposition[] = [];
   let index = 0;
-  for (let s = 0; s < sittingCount; s += 1) {
-    const sittingStart = startMs + s * DAY;
-    for (let r = 0; r < reviewsPerSitting; r += 1) {
-      out.push(
-        review([conceptId], index, MINUTE, new Date(sittingStart + r * MINUTE).toISOString()),
-      );
+  specs.forEach((spec, s) => {
+    const compositionId = `composition-${s}`;
+    const link = spec.link ?? 'record';
+    if (link === 'record') {
+      compositions.push({
+        compositionId,
+        course: spec.course,
+        planAllocation: allocation(spec.floors ?? EVEN),
+      });
+    }
+    const concept = spec.concept ?? `${(spec.course ?? 'a').toLowerCase()}-1`;
+    for (let r = 0; r < spec.reviews; r += 1) {
+      const at = new Date(START + s * DAY + r * MINUTE).toISOString();
+      const given = spec.durations;
+      const duration = given !== undefined && r < given.length ? (given[r] ?? null) : MINUTE;
+      entries.push(review(concept, index, at, duration, link === 'none' ? null : compositionId));
       index += 1;
     }
-  }
-  return out;
+  });
+  return { entries, compositions };
 }
 
-describe('detectEffortImbalance — abstention is not a negative result', () => {
-  it('declines when fewer than two courses have a known floor share', () => {
-    const result = detectEffortImbalance({
-      entries: minutes('bio-1', 60, 0),
-      concepts: CONCEPTS,
-      floorShares: [{ course: 'BIOL204', floorShare: 0.3 }],
+function run(specs: readonly SessionSpec[], extra: Partial<EffortInput> = {}) {
+  const { entries, compositions } = world(specs);
+  return detectEffortImbalance({ entries, concepts: CONCEPTS, compositions, ...extra });
+}
+
+function course(result: ReturnType<typeof run>, id: string) {
+  return result.measured?.courses.find((c) => c.course === id);
+}
+
+/** Four twelve-review sessions: two courses, n = 2, so the window is exactly these four. */
+const BALANCED: readonly SessionSpec[] = [
+  { course: 'A', reviews: 12 },
+  { course: 'B', reviews: 12 },
+  { course: 'A', reviews: 12 },
+  { course: 'B', reviews: 12 },
+];
+const B_ONLY: readonly SessionSpec[] = [
+  { course: 'B', reviews: 12 },
+  { course: 'B', reviews: 12 },
+  { course: 'B', reviews: 12 },
+  { course: 'B', reviews: 12 },
+];
+
+describe('effort: received time is capped active time (C5.5, [D-091])', () => {
+  it('caps each review at the declared per-item cap, read from its one declared home', () => {
+    const hour = 60 * MINUTE;
+    const result = run([
+      { course: 'A', reviews: 12, durations: [hour] },
+      { course: 'B', reviews: 12 },
+      { course: 'A', reviews: 12 },
+      { course: 'B', reviews: 12 },
+    ]);
+    const cap = RECEIVED_SECONDS_PER_ITEM_CAP * 1000;
+    expect(course(result, 'A')?.timeMs).toBe(cap + 11 * MINUTE + 12 * MINUTE);
+    expect(result.measured?.windowCompositions[0]).toEqual({
+      compositionId: 'composition-0',
+      course: 'A',
+      receivedMs: cap + 11 * MINUTE,
     });
-    expect(result.status).toBe('not-enough-history');
+  });
+
+  it('one very long session does not out-vote another course: raw time would fire, capped time does not', () => {
+    const hour = 60 * MINUTE;
+    const long = [hour, hour, hour];
+    const specs: SessionSpec[] = [
+      { course: 'A', reviews: 12, durations: long },
+      { course: 'B', reviews: 12 },
+      { course: 'A', reviews: 12, durations: long },
+      { course: 'B', reviews: 12 },
+    ];
+    const result = run(specs);
+    // Capped: A = 2 x (3 x 5 + 9) = 48 minutes, B = 24; B's share is a third, over half its 0.3.
+    expect(course(result, 'A')?.timeMs).toBe(48 * MINUTE);
+    expect(course(result, 'B')?.timeShare).toBeCloseTo(1 / 3, 12);
+    expect(result.status).toBe('not-observed');
+    // Raw: A = 378 minutes, B's share 24/402 would sit under half of 0.3 and fire.
+    expect(24 / 402).toBeLessThan(SHORTFALL_RATIO_K * 0.3);
+  });
+
+  it('a null duration receives nothing and is not a timed review', () => {
+    const result = run([
+      { course: 'A', reviews: 13, durations: [null] },
+      { course: 'B', reviews: 12 },
+      { course: 'A', reviews: 12 },
+      { course: 'B', reviews: 12 },
+    ]);
+    expect(result.measured?.timedReviewCount).toBe(48);
+    expect(course(result, 'A')?.timeMs).toBe(24 * MINUTE);
+  });
+});
+
+describe('effort: a review touching two courses counts once, to its session’s one course (F2.18)', () => {
+  it('credits the record’s course only, and the window total holds the time once', () => {
+    const result = run([
+      { course: 'A', concept: 'shared', reviews: 12 },
+      { course: 'A', concept: 'shared', reviews: 12 },
+      { course: 'A', concept: 'shared', reviews: 12 },
+      { course: 'A', concept: 'shared', reviews: 12 },
+    ]);
+    expect(course(result, 'A')?.timeMs).toBe(48 * MINUTE);
+    expect(course(result, 'B')?.timeMs).toBe(0);
+    expect(result.measured?.totalTimeMs).toBe(48 * MINUTE);
+    // B's concepts were reviewed, but no session was composed for B: under half its set-aside.
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('B');
+  });
+
+  it('two concepts of one course in one review still count once', () => {
+    const { entries, compositions } = world(BALANCED);
+    const doubled = entries.map((entry) =>
+      entry.kind === 'review' && entry.conceptIds[0] === 'a-1'
+        ? { ...entry, conceptIds: ['a-1', 'shared'] }
+        : entry,
+    );
+    const result = detectEffortImbalance({ entries: doubled, concepts: CONCEPTS, compositions });
+    expect(course(result, 'A')?.timeMs).toBe(24 * MINUTE);
+    expect(result.measured?.totalTimeMs).toBe(48 * MINUTE);
+  });
+});
+
+describe('effort: a past window reads the frozen floor shares that composed it ([D-331])', () => {
+  it('one plan version over the whole window: the set-aside is that plan’s floor share', () => {
+    const result = run(BALANCED);
+    expect(course(result, 'A')?.floorShare).toBeCloseTo(0.3, 12);
+    expect(course(result, 'B')?.floorShare).toBeCloseTo(0.3, 12);
+    expect(result.status).toBe('not-observed');
+  });
+
+  it('two plan versions: each session’s frozen share, weighted by its received time', () => {
+    const v1 = { A: 0.2, B: 0.4 };
+    const v2 = { A: 0.5, B: 0.1 };
+    const result = run([
+      { course: 'A', reviews: 20, floors: v1 },
+      { course: 'B', reviews: 20, floors: v1 },
+      { course: 'A', reviews: 10, floors: v2 },
+      { course: 'B', reviews: 10, floors: v2 },
+    ]);
+    // A: (0.2 x 40 + 0.5 x 20) / 60 = 0.3; B: (0.4 x 40 + 0.1 x 20) / 60 = 0.3.
+    expect(course(result, 'A')?.floorShare).toBeCloseTo(0.3, 12);
+    expect(course(result, 'B')?.floorShare).toBeCloseTo(0.3, 12);
+  });
+
+  it('today’s plan is never read for a past session, whatever a caller still passes', () => {
+    const v1 = { A: 0.3, B: 0.5 };
+    const v2 = { A: 0.3, B: 0.2 };
+    const specs: SessionSpec[] = [
+      { course: 'A', reviews: 12, floors: v1 },
+      { course: 'A', reviews: 12, floors: v1 },
+      { course: 'A', reviews: 12, floors: v2 },
+      { course: 'B', reviews: 12, floors: v2 },
+    ];
+    const without = run(specs);
+    const withTodaysPlan = run(specs, {
+      floorShares: [
+        { course: 'A', floorShare: 0.2 },
+        { course: 'B', floorShare: 0.6 },
+      ],
+    });
+    expect(withTodaysPlan).toEqual(without);
+    // B: share 0.25 against a set-aside of 0.35, not today's 0.6: not under half.
+    expect(course(without, 'B')?.floorShare).toBeCloseTo(0.35, 12);
+    expect(without.status).toBe('not-observed');
+  });
+
+  it('a record read back from the composition log is taken as it is', () => {
+    const line = (id: string, courseId: string) => ({
+      schemaVersion: 1,
+      kind: 'compose',
+      compositionId: id,
+      sessionId: id,
+      parentCompositionId: null,
+      composedAt: '2026-01-05T08:59:00+00:00',
+      asOf: '2026-01-05',
+      reentry: false,
+      focusPolicy: 'single',
+      course: courseId,
+      branch: 'deficit',
+      groupingSignal: 'assessment-scope',
+      steering: { courses: null, conceptIds: null },
+      budgetMinutes: 20,
+      planVersion: 'v1',
+      policyVersions: {},
+      planAllocation: [
+        {
+          courseId: 'A',
+          share: 0.5,
+          minBlockSeconds: 300,
+          contributions: [{ name: 'floor', value: 0.3 }],
+        },
+        {
+          courseId: 'B',
+          share: 0.5,
+          minBlockSeconds: 300,
+          contributions: [{ name: 'floor', value: 0.3 }],
+        },
+      ],
+      declaredConstants: {
+        urgencyOverrideThreshold: 0.07,
+        withinBlockProximityHalfLifeDays: 7,
+        materialArrivalCohortHalfLifeDays: 7,
+      },
+      chosen: [],
+      setAside: { courses: [], concepts: [], instruments: [] },
+    });
+    const { entries } = world(BALANCED);
+    const records: CompositionRecord[] = BALANCED.map((spec, s) => {
+      const parsed = parseCompositionRecord(line(`composition-${s}`, spec.course ?? 'A'));
+      if (parsed === null) throw new Error('fixture record does not parse');
+      return parsed;
+    });
+    const result = detectEffortImbalance({ entries, concepts: CONCEPTS, compositions: records });
+    expect(result).toEqual(run(BALANCED));
+  });
+});
+
+describe('effort: comparison unavailable where no record covers the window', () => {
+  it('no records at all: unavailable, never computed from anything else, and never not-observed', () => {
+    const { entries } = world(BALANCED.map((spec) => ({ ...spec, link: 'none' as const })));
+    const result = detectEffortImbalance({
+      entries,
+      concepts: CONCEPTS,
+      floorShares: [
+        { course: 'A', floorShare: 0.3 },
+        { course: 'B', floorShare: 0.3 },
+      ],
+    });
+    expect(result.status).toBe('comparison-unavailable');
     expect(result.measured).toBeNull();
   });
 
-  it('declines when almost no review time is attributed to a floor-share course', () => {
-    const result = detectEffortImbalance({
-      entries: minutes('bio-1', 5, 0),
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(result.status).toBe('not-enough-history');
+  it('one session in the window with no record: unavailable', () => {
+    const result = run([
+      { course: 'A', reviews: 12 },
+      { course: 'B', reviews: 12, link: 'none' },
+      { course: 'A', reviews: 12 },
+      { course: 'B', reviews: 12 },
+    ]);
+    expect(result.status).toBe('comparison-unavailable');
+    expect(result.measured).toBeNull();
   });
 
-  it('ignores a course whose floor share the plan does not state', () => {
-    const result = detectEffortImbalance({
-      entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
-      concepts: CONCEPTS,
-      floorShares: [
-        { course: 'BIOL204', floorShare: 0.3 },
-        { course: 'STAT110', floorShare: undefined },
-      ],
-    });
+  it('a link no record answers, or one two records answer, is no record', () => {
+    expect(
+      run([
+        { course: 'A', reviews: 12 },
+        { course: 'B', reviews: 12, link: 'orphan' },
+        { course: 'A', reviews: 12 },
+        { course: 'B', reviews: 12 },
+      ]).status,
+    ).toBe('comparison-unavailable');
+
+    const { entries, compositions } = world(BALANCED);
+    const first = compositions[0];
+    if (first === undefined) throw new Error('fixture');
+    const duplicated = [...compositions, { ...first, course: 'B' }];
+    expect(
+      detectEffortImbalance({ entries, concepts: CONCEPTS, compositions: duplicated }).status,
+    ).toBe('comparison-unavailable');
+  });
+
+  it('a record naming no one course, or composed with no plan’s floor shares, is unavailable', () => {
+    expect(
+      run([
+        { course: 'A', reviews: 12 },
+        { course: null, reviews: 12 },
+        { course: 'A', reviews: 12 },
+        { course: 'B', reviews: 12 },
+      ]).status,
+    ).toBe('comparison-unavailable');
+    expect(
+      run([
+        { course: 'A', reviews: 12 },
+        { course: 'B', reviews: 12, floors: {} },
+        { course: 'A', reviews: 12 },
+        { course: 'B', reviews: 12 },
+      ]).status,
+    ).toBe('comparison-unavailable');
+  });
+
+  it('unrecorded history before the window does not withhold a window that is recorded', () => {
+    const result = run([
+      { course: 'A', reviews: 12, link: 'none' },
+      { course: 'A', reviews: 12, link: 'none' },
+      ...BALANCED,
+    ]);
+    expect(result.status).toBe('not-observed');
+    expect(result.measured?.windowCompositions.map((c) => c.compositionId)).toEqual([
+      'composition-2',
+      'composition-3',
+      'composition-4',
+      'composition-5',
+    ]);
+  });
+
+  it('too little history at all reads not enough history, record or none', () => {
+    const { entries } = world([
+      { course: 'A', reviews: 10, link: 'none' },
+      { course: 'B', reviews: 10, link: 'none' },
+    ]);
+    const result = detectEffortImbalance({ entries, concepts: CONCEPTS });
     expect(result.status).toBe('not-enough-history');
   });
 });
 
-describe('detectEffortImbalance — what it measures', () => {
-  it('an even split against even floor shares is measured and not observed', () => {
-    const result = detectEffortImbalance({
-      entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
+describe('effort: the gates ([D-365] keeps both sample floors)', () => {
+  it('declines when fewer than two courses carry a frozen floor share in the window', () => {
+    const result = run(BALANCED.map((spec) => ({ ...spec, floors: { A: 0.3 } })));
+    expect(result.status).toBe('not-enough-history');
+    expect(result.measured).toBeNull();
+  });
+
+  it('the whole-log gate binds on its own, whatever the windowed floor', () => {
+    const specs: SessionSpec[] = [
+      { course: 'A', reviews: 10 },
+      { course: 'B', reviews: 10 },
+      { course: 'A', reviews: 10 },
+      { course: 'B', reviews: 9 },
+    ];
+    const { entries, compositions } = world(specs);
+    expect(entries.length).toBe(MIN_TIMED_REVIEWS - 1);
+    const result = detectEffortImbalance(
+      { entries, concepts: CONCEPTS, compositions },
+      { minWindowedTimedReviews: 1 },
+    );
+    expect(result.status).toBe('not-enough-history');
+    expect(result.reason).toContain('whole log');
+  });
+
+  it('the windowed gate reads only the window: much history, a thin window, declines', () => {
+    const specs: SessionSpec[] = Array.from({ length: 25 }, () => ({ course: 'B', reviews: 2 }));
+    const result = run(specs);
+    expect(result.status).toBe('not-enough-history');
+    const overridden = detectEffortImbalance(
+      {
+        entries: world(specs).entries,
+        concepts: CONCEPTS,
+        compositions: world(specs).compositions,
+      },
+      { minWindowedTimedReviews: 4 },
+    );
+    expect(overridden.status).toBe('observed');
+    expect(overridden.measured?.timedReviewCount).toBe(50);
+    expect(overridden.measured?.windowedWeightedReviewCount).toBe(8);
+    expect(overridden.measured?.totalTimeMs).toBe(8 * MINUTE);
+  });
+});
+
+describe('effort: what it measures', () => {
+  it('fires on the course under half its set-aside, and names it', () => {
+    const result = run(B_ONLY);
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('A');
+  });
+
+  it('a course with a frozen floor share and no time is included at zero, never dropped', () => {
+    const result = run(B_ONLY);
+    expect(course(result, 'A')?.timeMs).toBe(0);
+    expect(course(result, 'A')?.timeShare).toBe(0);
+    expect(result.measured?.widestGap).toBeCloseTo(0.3, 12);
+  });
+
+  it('a course at or above its set-aside while another dominates produces nothing', () => {
+    const result = run([
+      { course: 'A', reviews: 12, floors: { A: 0.2, B: 0.2 } },
+      { course: 'A', reviews: 12, floors: { A: 0.2, B: 0.2 } },
+      { course: 'A', reviews: 16, floors: { A: 0.2, B: 0.2 } },
+      { course: 'B', reviews: 10, floors: { A: 0.2, B: 0.2 } },
+    ]);
+    expect(course(result, 'B')?.timeShare).toBeCloseTo(0.2, 12);
     expect(result.status).toBe('not-observed');
-    expect(result.measured?.widestGap).toBe(0);
-    expect(result.measured?.widestGapCourse).toBeNull();
-  });
-
-  it('fires on the course logging less time than its own floor share, and names it', () => {
-    const result = detectEffortImbalance({
-      entries: [...minutes('bio-1', 5, 0), ...minutes('stat-1', 75, 100)],
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(result.status).toBe('observed');
-    expect(result.measured?.widestGapCourse).toBe('BIOL204');
-    expect(result.measured?.widestGap).toBeGreaterThan(MIN_GAP);
-  });
-
-  it('a floor-share course with no time at all is included at time share zero, not dropped', () => {
-    // The loudest finding available must not be the one thing the shape cannot
-    // express.
-    const result = detectEffortImbalance({
-      entries: minutes('stat-1', 80, 0),
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(result.status).toBe('observed');
-    expect(result.measured?.courses.find((c) => c.course === 'BIOL204')?.timeMs).toBe(0);
-    // gap = floorShare (0.3) - timeShare (0) — never renormalised, unlike the
-    // old weight share.
-    expect(result.measured?.widestGap).toBeCloseTo(0.3, 10);
-  });
-
-  it('never reports the negative direction as a finding', () => {
-    // STAT110 logs far more time than its floor share, and BIOL204's own gap
-    // is what fires. "You are over-studying X" is a verdict and there is no
-    // path to it in this shape: `widestGap` is clamped at zero from below.
-    const result = detectEffortImbalance({
-      entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
     expect(result.measured?.widestGap).toBeGreaterThanOrEqual(0);
   });
 
-  it('attributes a record naming two courses to both in full, and never twice to one', () => {
-    const concepts = [
-      { conceptId: 'shared', courses: ['BIOL204', 'STAT110'] },
-      { conceptId: 'also-bio', courses: ['BIOL204'] },
-      { conceptId: 'bio-1', courses: ['BIOL204'] },
-      { conceptId: 'stat-1', courses: ['STAT110'] },
-    ];
-    const result = detectEffortImbalance({
-      // One record, two concepts, both in BIOL204: the record's minute counts
-      // once for BIOL204, not twice.
-      entries: [
-        ...Array.from({ length: 60 }, (_, i) => review(['bio-1', 'also-bio'], i, MINUTE)),
-        ...minutes('stat-1', 60, 1000),
-      ],
-      concepts,
-      floorShares: EVEN_FLOORS,
-    });
-    const biol = result.measured?.courses.find((c) => c.course === 'BIOL204');
-    expect(biol?.timeMs).toBe(60 * MINUTE);
-    expect(result.status).toBe('not-observed');
+  it('time on a course with no frozen floor share is left out of both totals and named', () => {
+    const result = run([
+      { course: 'A', reviews: 14 },
+      { course: 'B', reviews: 14 },
+      { course: 'C', reviews: 14 },
+      { course: 'A', reviews: 14 },
+      { course: 'B', reviews: 14 },
+    ]);
+    expect(result.measured?.coursesWithoutFloorShare).toEqual(['C']);
+    expect(result.measured?.totalTimeMs).toBe(42 * MINUTE);
   });
 
-  it('a null duration contributes no time and is not counted as a timed review', () => {
-    const result = detectEffortImbalance({
-      entries: [
-        ...minutes('bio-1', 40, 0),
-        ...minutes('stat-1', 40, 100),
-        review(['bio-1'], 999, null),
-      ],
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(result.measured?.timedReviewCount).toBe(80);
+  it('stale time outside the window does not save a course from firing', () => {
+    const result = run([{ course: 'A', reviews: 45 }, { course: 'A', reviews: 45 }, ...B_ONLY]);
+    expect(result.status).toBe('observed');
+    expect(result.measured?.widestGapCourse).toBe('A');
+    expect(course(result, 'A')?.timeMs).toBe(0);
   });
 
-  it('reports the courses it left out for having no known floor share, rather than narrowing silently', () => {
-    const result = detectEffortImbalance({
-      entries: [
-        ...minutes('bio-1', 40, 0),
-        ...minutes('stat-1', 40, 100),
-        ...minutes('hist-1', 40, 200),
-      ],
-      concepts: [...CONCEPTS, { conceptId: 'hist-1', courses: ['HIST101'] }],
-      floorShares: EVEN_FLOORS,
-    });
-    expect(result.measured?.coursesWithoutFloorShare).toEqual(['HIST101']);
+  it('observed always names a measured course; the other states carry no course claim (ol-7j54)', () => {
+    const observed = run(B_ONLY);
+    expect(observed.measured?.courses.map((c) => c.course)).toContain(
+      observed.measured?.widestGapCourse,
+    );
+    expect(run(BALANCED).measured?.widestGapCourse).toBeNull();
   });
 
-  it('never reports "observed" without naming the course (ol-7j54 / ARC-1)', () => {
-    // The copy rule this bead enforces only works if the detector never lets
-    // an observed gap go unnamed — a caller has nothing to attach the
-    // sentence to otherwise. Checked across every fixture above that reaches
-    // "observed", not just one example.
-    const observedCases = [
-      detectEffortImbalance({
-        entries: [...minutes('bio-1', 5, 0), ...minutes('stat-1', 75, 100)],
-        concepts: CONCEPTS,
-        floorShares: EVEN_FLOORS,
-      }),
-      detectEffortImbalance({
-        entries: minutes('stat-1', 80, 0),
-        concepts: CONCEPTS,
-        floorShares: EVEN_FLOORS,
-      }),
-      detectEffortImbalance({
-        // Same imbalance as the first case, plus a third, floor-share-less
-        // course mixed in — the invariant must hold with a course left out too.
-        entries: [
-          ...minutes('bio-1', 5, 0),
-          ...minutes('stat-1', 75, 100),
-          ...minutes('hist-1', 40, 200),
-        ],
-        concepts: [...CONCEPTS, { conceptId: 'hist-1', courses: ['HIST101'] }],
-        floorShares: EVEN_FLOORS,
-      }),
-    ];
-    for (const result of observedCases) {
-      expect(result.status).toBe('observed');
-      expect(result.measured?.widestGapCourse).toEqual(expect.any(String));
-      expect(result.measured?.widestGapCourse).not.toBe('');
-      // The named course is one of the ones actually measured, never an
-      // aggregate label invented on the side.
-      expect(result.measured?.courses.map((c) => c.course)).toContain(
-        result.measured?.widestGapCourse,
-      );
-    }
-  });
-
-  it('"not-observed" and "not-enough-history" carry no course claim to misattribute', () => {
-    const notObserved = detectEffortImbalance({
-      entries: [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)],
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(notObserved.status).toBe('not-observed');
-    expect(notObserved.measured?.widestGapCourse).toBeNull();
-
-    const tooEarly = detectEffortImbalance({
-      entries: minutes('bio-1', 60, 0),
-      concepts: CONCEPTS,
-      floorShares: [{ course: 'BIOL204', floorShare: 0.3 }],
-    });
-    expect(tooEarly.status).toBe('not-enough-history');
-    expect(tooEarly.measured).toBeNull();
-  });
-
-  it('is pure and leaves the log untouched', () => {
-    const entries = [...minutes('bio-1', 40, 0), ...minutes('stat-1', 40, 100)];
+  it('is pure, and reads the same from a shuffled log and shuffled records', () => {
+    const { entries, compositions } = world(B_ONLY);
     const snapshot = JSON.stringify(entries);
-    const first = detectEffortImbalance({
-      entries,
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
+    const first = detectEffortImbalance({ entries, concepts: CONCEPTS, compositions });
     const second = detectEffortImbalance({
-      entries,
+      entries: [...entries].reverse(),
       concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
+      compositions: [...compositions].reverse(),
     });
     expect(second).toEqual(first);
     expect(JSON.stringify(entries)).toBe(snapshot);
   });
 });
 
-/**
- * `ol-v7r5.63` (`[DOS-C4]`): the dossier review found the OLD absolute
- * `MIN_GAP` structurally unreachable at real floor magnitudes for four or
- * five running courses (`max(0.12, 1/(n+2))` gives `0.167`/`0.143`, both
- * below `MIN_GAP = 0.2`, and a course's own floor share is also the largest
- * gap it can ever post). These tests use the REAL floor formula's magnitudes
- * (not the old `0.3` fixture, which never occurs once four or more courses
- * are running) and the new shortfall-RATIO criterion
- * (`SHORTFALL_RATIO_K`) — see `findings/effort-gap-sweep.md` (`olea-service`)
- * for the sweep behind the `0.5` pin.
- */
-describe('detectEffortImbalance — the shortfall-ratio fix (ol-v7r5.63 / [DOS-C4])', () => {
-  it('n=4 real floor (0.167): a course with zero attention fires — structurally unreachable under the old absolute MIN_GAP', () => {
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare: 1 / 6 },
-      { course: 'B', floorShare: 1 / 6 },
-      { course: 'C', floorShare: 1 / 6 },
-      { course: 'D', floorShare: 1 / 6 },
-    ];
-    const concepts = [
-      { conceptId: 'a-1', courses: ['A'] },
-      { conceptId: 'b-1', courses: ['B'] },
-      { conceptId: 'c-1', courses: ['C'] },
-      { conceptId: 'd-1', courses: ['D'] },
-    ];
-    const result = detectEffortImbalance({
-      // A gets nothing; B/C/D split 60 timed reviews evenly — well clear of
-      // MIN_TIMED_REVIEWS. The maximum absolute gap A could ever post is its
-      // own floor share, 0.167 — below the old MIN_GAP=0.2, so the OLD
-      // criterion could never have fired here at any attention level.
-      entries: [...minutes('b-1', 20, 0), ...minutes('c-1', 20, 100), ...minutes('d-1', 20, 200)],
-      concepts,
-      floorShares: floors,
+describe('effort: the shortfall ratio is reachable at every course count ([DOS-C4])', () => {
+  for (const n of [4, 5]) {
+    it(`n=${n} at the real floor formula: zero attention to one course fires, below the old MIN_GAP`, () => {
+      const ids = ['A', 'B', 'C', 'D', 'E'].slice(0, n);
+      const floors = Object.fromEntries(ids.map((id) => [id, 1 / (n + 2)]));
+      // n + 2 sessions, none composed for A.
+      const specs: SessionSpec[] = Array.from({ length: n + 2 }, (_, s) => ({
+        course: ids[1 + (s % (n - 1))] ?? 'B',
+        reviews: 12,
+        floors,
+      }));
+      const result = run(specs);
+      expect(result.status).toBe('observed');
+      expect(result.measured?.widestGapCourse).toBe('A');
+      expect(course(result, 'A')?.gap).toBeLessThan(MIN_GAP);
     });
-    expect(result.status).toBe('observed');
-    expect(result.measured?.widestGapCourse).toBe('A');
-    const a = result.measured?.courses.find((c) => c.course === 'A');
-    expect(a?.timeShare).toBe(0);
-    // The absolute gap (0.167) never reached the old MIN_GAP (0.2) — proof
-    // this fixture is exactly the previously-unreachable case.
-    expect(a?.gap).toBeLessThan(MIN_GAP);
-  });
+  }
 
-  it('n=5 real floor (0.143): a course with zero attention fires — structurally unreachable under the old absolute MIN_GAP', () => {
-    const floorShare = 1 / 7;
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare },
-      { course: 'B', floorShare },
-      { course: 'C', floorShare },
-      { course: 'D', floorShare },
-      { course: 'E', floorShare },
-    ];
-    const concepts = [
-      { conceptId: 'a-1', courses: ['A'] },
-      { conceptId: 'b-1', courses: ['B'] },
-      { conceptId: 'c-1', courses: ['C'] },
-      { conceptId: 'd-1', courses: ['D'] },
-      { conceptId: 'e-1', courses: ['E'] },
-    ];
-    const result = detectEffortImbalance({
-      entries: [
-        ...minutes('b-1', 15, 0),
-        ...minutes('c-1', 15, 100),
-        ...minutes('d-1', 15, 200),
-        ...minutes('e-1', 15, 300),
-      ],
-      concepts,
-      floorShares: floors,
-    });
-    expect(result.status).toBe('observed');
-    expect(result.measured?.widestGapCourse).toBe('A');
-    const a = result.measured?.courses.find((c) => c.course === 'A');
-    expect(a?.gap).toBeLessThan(MIN_GAP);
-  });
-
-  it('equal attention across four real-floor courses (n=4) is measured and not observed', () => {
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare: 1 / 6 },
-      { course: 'B', floorShare: 1 / 6 },
-      { course: 'C', floorShare: 1 / 6 },
-      { course: 'D', floorShare: 1 / 6 },
-    ];
-    const concepts = [
-      { conceptId: 'a-1', courses: ['A'] },
-      { conceptId: 'b-1', courses: ['B'] },
-      { conceptId: 'c-1', courses: ['C'] },
-      { conceptId: 'd-1', courses: ['D'] },
-    ];
-    const result = detectEffortImbalance({
-      entries: [
-        ...minutes('a-1', 15, 0),
-        ...minutes('b-1', 15, 100),
-        ...minutes('c-1', 15, 200),
-        ...minutes('d-1', 15, 300),
-      ],
-      concepts,
-      floorShares: floors,
-    });
+  it('a course at 0.6 of its set-aside does not fire', () => {
+    const floors = { A: 0.25, B: 0.25 };
+    // A: 6 of 40 minutes = 0.15 = 0.6 x 0.25.
+    const result = run([
+      { course: 'A', reviews: 6, floors },
+      { course: 'B', reviews: 12, floors },
+      { course: 'B', reviews: 11, floors },
+      { course: 'B', reviews: 11, floors },
+    ]);
+    expect(course(result, 'A')?.timeShare).toBeCloseTo(0.15, 12);
     expect(result.status).toBe('not-observed');
-    expect(result.measured?.widestGapCourse).toBeNull();
-  });
-
-  it('a course under the ratio but still above MIN_GAP-scale attention does not fire once it clears SHORTFALL_RATIO_K', () => {
-    // A receives 60% of its own floor share worth of attention — a real
-    // shortfall, but not the "under half" the pin is set at.
-    const floorShare = 1 / 6;
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare },
-      { course: 'B', floorShare: 1 - floorShare },
-    ];
-    const concepts = [
-      { conceptId: 'a-1', courses: ['A'] },
-      { conceptId: 'b-1', courses: ['B'] },
-    ];
-    // total = 100 units; A's share = 0.6 * floorShare * 100.
-    const aMinutes = Math.round(0.6 * floorShare * 100);
-    const result = detectEffortImbalance({
-      entries: [...minutes('a-1', aMinutes, 0), ...minutes('b-1', 100 - aMinutes, 200)],
-      concepts,
-      floorShares: floors,
-    });
-    expect(result.status).toBe('not-observed');
-    const a = result.measured?.courses.find((c) => c.course === 'A');
-    expect(a !== undefined && a.timeShare / a.floorShare).toBeGreaterThanOrEqual(SHORTFALL_RATIO_K);
-  });
-
-  it('a changed policy mid-window: stale attention outside the D-092 sittings window does not save a course from firing', () => {
-    // Two courses, n=2 → window width = 2 + WINDOW_SLACK_SESSIONS(2) = 4
-    // sittings (`windowWidthSessions`). Two OLD sittings (well before the
-    // window, separated from the rest by a multi-hour silence) give course A
-    // substantial historical time; the four most RECENT sittings give A
-    // nothing at all. Reading the whole history unwindowed would show A with
-    // real, floor-clearing time overall — reading only the true D-092 window
-    // (this bead's fix) shows A completely neglected right now.
-    const floorShare = 0.25; // n=2 real floor: max(0.12, 1/(2+2)) = 0.25
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare },
-      { course: 'B', floorShare },
-    ];
-    const concepts = [
-      { conceptId: 'a-1', courses: ['A'] },
-      { conceptId: 'b-1', courses: ['B'] },
-    ];
-
-    const oldSittingA = (sittingIndex: number, baseHour: number) =>
-      Array.from({ length: 45 }, (_, i) =>
-        review(
-          ['a-1'],
-          sittingIndex * 100 + i,
-          MINUTE,
-          `2026-01-01T${String(baseHour).padStart(2, '0')}:${String(i).padStart(2, '0')}:00+00:00`,
-        ),
-      );
-    const recentSittingB = (sittingIndex: number, dayOffset: number) =>
-      Array.from({ length: 45 }, (_, i) =>
-        review(
-          ['b-1'],
-          1000 + sittingIndex * 100 + i,
-          MINUTE,
-          `2026-02-0${dayOffset}T09:${String(i).padStart(2, '0')}:00+00:00`,
-        ),
-      );
-
-    const entries: ReviewLogEntry[] = [
-      // Two old sittings (>45 minutes apart from everything else), all A.
-      ...oldSittingA(0, 0),
-      ...oldSittingA(1, 3),
-      // Four recent sittings (separate days, well over the 45-minute gap
-      // apart), all B — this is the D-092 window.
-      ...recentSittingB(0, 1),
-      ...recentSittingB(1, 2),
-      ...recentSittingB(2, 3),
-      ...recentSittingB(3, 4),
-    ];
-
-    const result = detectEffortImbalance({ entries, concepts, floorShares: floors });
-    expect(result.status).toBe('observed');
-    expect(result.measured?.widestGapCourse).toBe('A');
-    const a = result.measured?.courses.find((c) => c.course === 'A');
-    // Windowed correctly, A's in-window time is zero — the old sittings
-    // never entered the accounting.
-    expect(a?.timeMs).toBe(0);
-  });
-
-  it('shared-course concepts are counted once per course under the windowed accounting too', () => {
-    const floors: readonly CourseFloorShare[] = [
-      { course: 'A', floorShare: 1 / 6 },
-      { course: 'B', floorShare: 1 / 6 },
-      { course: 'C', floorShare: 1 / 6 },
-      { course: 'D', floorShare: 1 / 6 },
-    ];
-    const concepts = [
-      { conceptId: 'shared', courses: ['A', 'B'] },
-      { conceptId: 'c-1', courses: ['C'] },
-      { conceptId: 'd-1', courses: ['D'] },
-    ];
-    const result = detectEffortImbalance({
-      // One record, two concepts, both naming A and B: the record's minute
-      // counts once for A and once for B, never twice for either.
-      entries: [
-        ...Array.from({ length: 20 }, (_, i) => review(['shared'], i, MINUTE)),
-        ...minutes('c-1', 20, 100),
-        ...minutes('d-1', 20, 200),
-      ],
-      concepts,
-      floorShares: floors,
-    });
-    const a = result.measured?.courses.find((c) => c.course === 'A');
-    const b = result.measured?.courses.find((c) => c.course === 'B');
-    expect(a?.timeMs).toBe(20 * MINUTE);
-    expect(b?.timeMs).toBe(20 * MINUTE);
-  });
-});
-
-/**
- * `ol-egov.141.89.11.7` (discovered from `ol-egov.141.89.11.6`, a workbench
- * bug): the sufficiency gate (`MIN_TIMED_REVIEWS`) was being checked against
- * `weightedReviewCount` counted over the same narrow D-092 sittings window
- * `timeShare` reads (`windowedReviewsOf`, `./effort.ts`), as an unintended
- * side effect of `1fd420e` (`ol-v7r5.63` / `[DOS-C4]`) routing the module's
- * one counting loop through that window — despite that very commit's own
- * comment on the constant saying it was "unchanged by the window-accounting
- * re-spec". For two courses that window is only
- * `2 + WINDOW_SLACK_SESSIONS(2) = 4` sittings, and a real (or this repo's own
- * synthetic) sitting averages one to two timed reviews — so four sittings
- * essentially never reach 40, and the insight read `not-enough-history`
- * almost unconditionally, in production too, no matter how much real history
- * existed beyond the window.
- *
- * First pass: `MIN_TIMED_REVIEWS` now reads `weightedReviewCount` over the
- * WHOLE clustered log (`allReviewsOf`) while `timeShare` itself stays
- * windowed exactly as `1fd420e` specified — the same split
- * `study-session/window.ts`'s `computeWindowDeficit` already makes between
- * its windowed `deficit` and its whole-history `sessionsSinceLastServed`.
- * Folded in here from the originally separate core-level reproduction
- * (`effort-window-sufficiency-mismatch.ol-egov.141.89.11.6.spec.ts`) so this
- * detector's regression coverage has one home, per this bead's brief. This
- * describe block is also this module's multi-sitting fixture coverage: every
- * other describe block above uses `minutes()`, whose reviews all share one
- * default timestamp and so always collapse into a single sitting regardless
- * of count — which is exactly why this bug went uncaught (see `sittings()`'s
- * own doc, above).
- *
- * Second pass (coordinator direction, same bead): widening `MIN_TIMED_REVIEWS`
- * alone is a Class C change on its own — it had been the module's ONLY
- * sample-size protection at the WINDOW's own granularity, by accident, and
- * removing it bare lets `timeShare` fire on sampling noise from a handful of
- * windowed reviews (measured on the workbench personas: a balanced persona
- * false-fired, a neutralised twin false-fired on 19/40 seeds, three
- * no-imbalance personas false-fired on 51/120). `MIN_WINDOWED_TIMED_REVIEWS`
- * restores that protection explicitly, defaulting to exactly `HEAD`'s
- * behaviour (see its own doc) with an `EffortDetectionOptions` override for
- * sweeps.
- */
-describe('detectEffortImbalance — the sufficiency gate reads the whole log (ol-egov.141.89.11.7)', () => {
-  it('at the windowed floor\'s default (40, "HEAD" behaviour), a textbook total-neglect imbalance still abstains', () => {
-    const bEntries = sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z'));
-    // Sanity: not a thin fixture log-wide. 50 weighted reviews on B alone,
-    // well clear of MIN_TIMED_REVIEWS(40) — but only the last 4 sittings (8
-    // reviews) fall inside the D-092 window, well under
-    // MIN_WINDOWED_TIMED_REVIEWS's default (40) too.
-    expect(bEntries.length).toBe(50);
-
-    const result = detectEffortImbalance({
-      entries: bEntries, // course A: nothing, ever.
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-
-    // The log-wide fix (first pass) alone must not change production
-    // behaviour — David's direction. At the declared default this reads
-    // exactly as it does at HEAD: not-enough-history.
-    expect(result.status).toBe('not-enough-history');
-    expect(result.measured).toBeNull();
-  });
-
-  it('more history log-wide does not rescue it at the default windowed floor either — both stuck at not-enough-history', () => {
-    // Same generator, 100 sittings instead of 25 (200 weighted reviews in the
-    // full log, all still on B). The log-wide gate clears identically either
-    // way, but the WINDOWED floor (default 40) still abstains both, because
-    // only the last 4 sittings ever feed timeShare regardless of how much
-    // history exists beyond the window.
-    const b25 = detectEffortImbalance({
-      entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    const b100 = detectEffortImbalance({
-      entries: sittings('stat-1', 100, 2, Date.parse('2026-10-17T18:00:00Z')),
-      concepts: CONCEPTS,
-      floorShares: EVEN_FLOORS,
-    });
-    expect(b25.status).toBe(b100.status);
-    expect(b25.status).toBe('not-enough-history');
-  });
-
-  it('overriding the windowed floor low makes detection possible — MIN_WINDOWED_TIMED_REVIEWS is the lever, not MIN_TIMED_REVIEWS', () => {
-    // Same textbook fixture as above (25 sittings, 8 windowed reviews). With
-    // the windowed floor overridden below 8 (test-only, per
-    // EffortDetectionOptions), the log-wide fix is finally visible: the
-    // finding fires. This is the "low floor" side of the sweep this bead's
-    // report tables.
-    const result = detectEffortImbalance(
-      {
-        entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
-        concepts: CONCEPTS,
-        floorShares: EVEN_FLOORS,
-      },
-      { minWindowedTimedReviews: 4 },
-    );
-    expect(result.status).toBe('observed');
-    expect(result.measured).not.toBeNull();
-    expect(result.measured?.widestGapCourse).toBe('BIOL204');
-  });
-
-  it('the log-wide gate still binds on its own, independent of the windowed floor', () => {
-    // 20 sittings of 2 gives 40; drop the very last review to land at
-    // exactly 39 weighted reviews log-wide — one short, even with the
-    // windowed floor overridden down to 1 (so it is definitely not what is
-    // abstaining here).
-    const result = detectEffortImbalance(
-      {
-        entries: sittings('stat-1', 20, 2, Date.parse('2026-10-17T18:00:00Z')).slice(0, 39),
-        concepts: CONCEPTS,
-        floorShares: EVEN_FLOORS,
-      },
-      { minWindowedTimedReviews: 1 },
-    );
-    expect(result.status).toBe('not-enough-history');
-    expect(result.measured).toBeNull();
-    expect(result.reason).toContain('40 timed reviews on a course with a known floor share');
-  });
-
-  it('the log-wide sufficiency count and the windowed sample are genuinely different populations', () => {
-    // 25 real sittings on B (50 weighted reviews log-wide) but only the most
-    // recent 4 sittings (8 reviews) actually feed timeShare/totalTimeMs — the
-    // windowed floor overridden low enough to see both numbers at once.
-    const result = detectEffortImbalance(
-      {
-        entries: sittings('stat-1', 25, 2, Date.parse('2026-10-17T18:00:00Z')),
-        concepts: CONCEPTS,
-        floorShares: EVEN_FLOORS,
-      },
-      { minWindowedTimedReviews: 4 },
-    );
-    expect(result.measured?.weightedReviewCount).toBe(50);
-    expect(result.measured?.windowedWeightedReviewCount).toBe(8);
-    expect(result.measured?.totalTimeMs).toBe(8 * MINUTE);
   });
 });
