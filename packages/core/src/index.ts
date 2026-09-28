@@ -1619,6 +1619,10 @@ export {
 // F4.11's practice-paper generation pipeline (`[D-250]`/`[D-252]`, component register row 2.11,
 // `[H-blueprint]` / `ol-0r92.75`, bead `[PAPER-3]`). No production caller yet — surfaces are a
 // separate lane's job (DP-7, `[D-255]`); see each module's own doc for the reachability note.
+// Question groups and shared stimuli (David's 2026-09-28 ruling, `ol-egov.141.89.7.12`): the
+// generic-over-anchor vocabulary both splitters' question groupings share. See
+// `./oracle/paper-types.js`'s own module doc and `./outcome/paper-question-groups.js` below for
+// the pass that produces them from a splitter's output.
 export type {
   PaperAssessment,
   PaperBlueprint,
@@ -1631,18 +1635,28 @@ export type {
   PaperGroundingTier,
   PaperHeldSource,
   PaperPurpose,
+  PaperQuestionGroup,
+  PaperQuestionGroupKind,
   PaperRecoveredSection,
   PaperRecoveredSitting,
   PaperRecoveredStructure,
   PaperScopeConcept,
   PaperScopeOutcome,
   PaperSteering,
+  PaperStimulus,
+  PaperStimulusForm,
+  PaperStimulusNotIdentifiedReason,
   PaperTaughtSignal,
   PaperWeightingAlpha,
 } from './oracle/paper-types.js';
 // F4.11's declared practice-paper purposes (`ol-egov.141.89.9.4`'s slot-weight
 // consumer) — see `./oracle/paper-types.js`'s own module doc.
-export { PAPER_PURPOSES } from './oracle/paper-types.js';
+export {
+  PAPER_PURPOSES,
+  PAPER_QUESTION_GROUP_KINDS,
+  PAPER_STIMULUS_FORMS,
+  PAPER_STIMULUS_NOT_IDENTIFIED_REASONS,
+} from './oracle/paper-types.js';
 export type { PaperUnlockInput, PaperUnlockResult } from './oracle/paper-unlock.js';
 export {
   daysUntilDue as paperDaysUntilDue,
@@ -1686,6 +1700,23 @@ export type {
 // `packages/plugin/src/privacy/log-discovery.ts` can name the real constant instead of
 // retyping the vault path literal (`ol-egov.141.8.7`, `ol-v7r5.94`).
 export { OUTCOME_CONCEPT_NEAR_MATCH_FOLDER } from './outcome/near-match.js';
+// The pure grouping pass over either splitter's output (David's 2026-09-28 ruling,
+// `ol-egov.141.89.7.12`): parent questions, sections, answer-one-of choices, and shared stimuli,
+// never changing what a splitter already produced. See `./outcome/paper-question-groups.js`'s own
+// module doc. No production caller yet — the consumer is the alignment stage's past-paper half
+// (`ol-egov.141.89.7.4`).
+export type {
+  QuestionPlacement,
+  TextPaperGroupingInput,
+  TextPaperQuestionGroup,
+  TextPaperQuestionGrouping,
+} from './outcome/paper-question-groups.js';
+export {
+  groupMarkdownPastPaper,
+  groupPaperQuestions,
+  groupPlainTextPastPaper,
+  plainTextPaperText,
+} from './outcome/paper-question-groups.js';
 export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
 // `[OUT-3]` (F4.1, ONT-R1 `ol-2zfj.86`): the outcome→concept containment reconciliation and its
 // two coverage reads. See `./outcome/reconcile.js`'s own module doc for the three-bucket match
