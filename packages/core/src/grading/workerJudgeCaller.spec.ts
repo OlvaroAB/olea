@@ -159,6 +159,131 @@ describe('createWorkerJudgeCaller — reading the response', () => {
     expect('confusedWith' in (result.misconceptionCandidates[1] ?? {})).toBe(false);
   });
 
+  // -------------------------------------------------------------------------
+  // `[D-318]` — `answerSpans`, read the same way `confusedWith` is: spread
+  // only when the Worker actually populated it.
+  // -------------------------------------------------------------------------
+
+  it('carries answerSpans through on citedIssues and misconceptionCandidates when the response populated them', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdict: 'partial',
+        feedback: 'Close, but you missed the shape invariant.',
+        missedPoints: [],
+        citedIssues: [
+          {
+            kind: 'omission',
+            description: 'missed the shape rule',
+            sourceBlockIds: ['b1'],
+            answerSpans: ['a tree-shaped structure'],
+          },
+        ],
+        misconceptionCandidates: [
+          {
+            concept: 'heap',
+            statement: 'a heap is sorted',
+            correction: 'a heap only orders parent/child, not siblings',
+            correctionSourceBlockIds: ['b1'],
+            answerSpans: ['always fully sorted'],
+          },
+        ],
+      }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+
+    if (result.outcome !== 'graded') throw new Error('expected a graded outcome');
+    expect(result.citedIssues[0]?.answerSpans).toEqual(['a tree-shaped structure']);
+    expect(result.misconceptionCandidates[0]?.answerSpans).toEqual(['always fully sorted']);
+  });
+
+  it('leaves the entry unchanged (no answerSpans key) when the response omits answerSpans or sends an empty array', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdict: 'partial',
+        feedback: 'Close, but you missed the shape invariant.',
+        missedPoints: [],
+        citedIssues: [
+          { kind: 'omission', description: 'missed the shape rule', sourceBlockIds: ['b1'] },
+          {
+            kind: 'omission',
+            description: 'missed the other rule',
+            sourceBlockIds: ['b1'],
+            answerSpans: [],
+          },
+        ],
+        misconceptionCandidates: [
+          {
+            concept: 'heap',
+            statement: 'a heap is sorted',
+            correction: 'a heap only orders parent/child, not siblings',
+            correctionSourceBlockIds: ['b1'],
+          },
+          {
+            concept: 'stack',
+            statement: 'thinks a stack grows from index 0 always',
+            correction: 'growth direction is an implementation detail, not part of the ADT',
+            correctionSourceBlockIds: ['b1'],
+            answerSpans: [],
+          },
+        ],
+      }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    const result = await callJudge(baseWireInput);
+
+    if (result.outcome !== 'graded') throw new Error('expected a graded outcome');
+    expect('answerSpans' in (result.citedIssues[0] ?? {})).toBe(false);
+    expect('answerSpans' in (result.citedIssues[1] ?? {})).toBe(false);
+    expect('answerSpans' in (result.misconceptionCandidates[0] ?? {})).toBe(false);
+    expect('answerSpans' in (result.misconceptionCandidates[1] ?? {})).toBe(false);
+  });
+
+  it("throws WorkerJudgeError when a citedIssues answerSpans entry is not a string array (readStringArray's existing contract)", async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdict: 'partial',
+        feedback: 'Close.',
+        missedPoints: [],
+        citedIssues: [
+          {
+            kind: 'omission',
+            description: 'missed the shape rule',
+            sourceBlockIds: ['b1'],
+            answerSpans: ['fine', 42],
+          },
+        ],
+      }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
+  it("throws WorkerJudgeError when a misconceptionCandidates answerSpans entry is not a string array (readStringArray's existing contract)", async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdict: 'incorrect',
+        feedback: 'You conflated two concepts.',
+        missedPoints: [],
+        misconceptionCandidates: [
+          {
+            concept: 'heap',
+            statement: 'confused heap ordering with BST ordering',
+            correction: 'a heap does not guarantee left-right ordering',
+            correctionSourceBlockIds: ['b1'],
+            answerSpans: [null],
+          },
+        ],
+      }),
+    );
+    const callJudge = createWorkerJudgeCaller({ transport });
+
+    await expect(callJudge(baseWireInput)).rejects.toBeInstanceOf(WorkerJudgeError);
+  });
+
   it('throws WorkerJudgeError with the code on a well-formed refusal', async () => {
     const transport = new RecordingTransport(() => ({
       ok: false,

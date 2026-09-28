@@ -314,7 +314,15 @@ function readCitedIssues(value: unknown): readonly CitedIssue[] {
       entry.sourceBlockIds,
       `citedIssues[${index}].sourceBlockIds`,
     );
-    return { kind: kind as CitedIssueKind, description, sourceBlockIds };
+    const answerSpans = readStringArray(entry.answerSpans, `citedIssues[${index}].answerSpans`);
+    return {
+      kind: kind as CitedIssueKind,
+      description,
+      sourceBlockIds,
+      // `exactOptionalPropertyTypes`: same discipline as `confusedWith` below —
+      // the key is present only when there is a real value.
+      ...(answerSpans.length > 0 ? { answerSpans } : {}),
+    };
   });
 }
 
@@ -355,6 +363,10 @@ function readMisconceptionCandidates(value: unknown): readonly MisconceptionCand
       `misconceptionCandidates[${index}].correctionSourceBlockIds`,
     );
     const confusedWith = entry.confusedWith;
+    const answerSpans = readStringArray(
+      entry.answerSpans,
+      `misconceptionCandidates[${index}].answerSpans`,
+    );
     return {
       concept,
       statement,
@@ -365,6 +377,7 @@ function readMisconceptionCandidates(value: unknown): readonly MisconceptionCand
       // as omitting it (same discipline `gradingPipeline.ts` uses for
       // `sourceExcerpt`).
       ...(typeof confusedWith === 'string' && confusedWith.length > 0 ? { confusedWith } : {}),
+      ...(answerSpans.length > 0 ? { answerSpans } : {}),
     };
   });
 }
