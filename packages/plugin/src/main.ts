@@ -1843,7 +1843,19 @@ export default class OleaPlugin extends Plugin {
             // registry's suspect section reads the SAME pending-
             // revalidation facts, never a second, independently-stale copy.
             // Same `exactOptionalPropertyTypes` ternary as those call sites.
-            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
+            ...(this.citationHashStore
+              ? {
+                  citationHashStore: this.citationHashStore,
+                  // `[D-420]`: the deferred-recheck action's re-arm port —
+                  // wiring this (with `citationHashStore` above) is what
+                  // flips `provider.ts`'s `wired` check true and swaps the
+                  // `[D-400]` sentence for the button. `navigator.onLine` is
+                  // the same production `isOnline` source `processNowAction`
+                  // above uses.
+                  deferredRecheckRearm: this.citationHashStore,
+                  isOnline: () => navigator.onLine,
+                }
+              : {}),
             editPort: createObsidianEditInstrumentPort(this.app),
             // `[D-171]`/`ol-2zfj.43`: the open-source-location hand-off —
             // until this line the registry's "Open source" action logged an
