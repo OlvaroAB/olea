@@ -2,9 +2,10 @@
  * F6.5 — the observed-pattern insights, composed (`ol-p6t04` / P6-T04).
  *
  * Two detectors, both pure functions of D7.1 plus (for the effort half) the
- * concept↔course map and the plan's per-course windowed floor shares
- * (component 3.5, `[D-081]`/`[D-092]`, re-specified from raw assessment
- * weight by `ol-v7r5.33`). Neither writes, neither reads a clock, and neither
+ * concept↔course map and her composition records, whose frozen per-course
+ * floor shares (component 3.5, `[D-081]`/`[D-092]`) are the set-aside a past
+ * window is compared with (`ol-egov.141.89.11.18`; never the current plan's,
+ * which `ol-v7r5.33` once read). Neither writes, neither reads a clock, and neither
  * takes a control stream: see each module's doc for why the statistics were
  * chosen so that a real student's log is self-sufficient.
  *
@@ -52,9 +53,12 @@
 export type {
   CourseEffort,
   CourseFloorShare,
+  EffortComposition,
   EffortInput,
   EffortInsight,
   EffortMeasured,
+  EffortStatus,
+  EffortWindowComposition,
 } from './effort.js';
 export {
   detectEffortImbalance,
@@ -77,7 +81,12 @@ export {
 export type { ConceptCourses, InsightId, InsightResult, InsightStatus } from './types.js';
 
 import type { ReviewLogEntry } from 'olea-contracts';
-import { type CourseFloorShare, detectEffortImbalance, type EffortInsight } from './effort.js';
+import {
+  type CourseFloorShare,
+  detectEffortImbalance,
+  type EffortComposition,
+  type EffortInsight,
+} from './effort.js';
 import { detectSpacing, type SpacingInsight } from './spacing.js';
 import type { ConceptCourses } from './types.js';
 
@@ -85,19 +94,20 @@ export interface InsightsInput {
   readonly entries: readonly ReviewLogEntry[];
   readonly concepts: readonly ConceptCourses[];
   /**
-   * The plan's per-course windowed floor shares (component 3.5,
-   * `[D-081]`/`[D-092]`) — read from the cached study-plan artifact, never
-   * recomputed here. Empty is a real and common state — no cached plan yet,
-   * or one that predates this wiring — and produces `not-enough-history` on
-   * the effort half rather than a finding computed over nothing.
-   * **RETRACTED, `ol-v7r5.63` (`[DOS-C4]`): "no production caller supplies
-   * this today" was stale.** `ol-v7r5.38` (commit `2afcc76`) wired a real
-   * producer — `packages/plugin/src/today/data-source.ts`'s
-   * `createVaultTrendsSource` reads it through `deps.studyPlanStore`, and
-   * `main.ts:902-905` supplies that store in production. See `effort.ts`'s
-   * module doc, "Reachability note", for the full correction.
+   * Every composition record she has (`[D-331]`, `[D-395]`), as the Today data source reads them
+   * from her composition log (`readCompositionLog`), handed to the effort reading unchanged
+   * (`ol-egov.141.89.11.20`). The effort reading takes each window session's course and frozen
+   * floor shares from the record that composed it (`./effort.ts`, `ol-egov.141.89.11.18`).
+   * Absent reads as none: a window with enough history then reads `comparison-unavailable`, never
+   * a comparison against anything else.
    */
-  readonly floorShares: readonly CourseFloorShare[];
+  readonly compositions?: readonly EffortComposition[];
+  /**
+   * @deprecated Not read (`ol-egov.141.89.11.18`): the effort reading compares a past window with
+   * the floor shares frozen in its composition records, never the current cached plan's. Kept, and
+   * optional, so callers that still pass it compile until they stop.
+   */
+  readonly floorShares?: readonly CourseFloorShare[];
 }
 
 export interface InsightsSummary {
@@ -111,7 +121,8 @@ export function buildInsights(input: InsightsInput): InsightsSummary {
     effort: detectEffortImbalance({
       entries: input.entries,
       concepts: input.concepts,
-      floorShares: input.floorShares,
+      // `exactOptionalPropertyTypes`: an absent key stays absent rather than becoming `undefined`.
+      ...(input.compositions !== undefined ? { compositions: input.compositions } : {}),
     }),
   };
 }
