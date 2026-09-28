@@ -153,6 +153,106 @@ export interface PaperRecoveredStructure {
   readonly sittings: readonly PaperRecoveredSitting[];
 }
 
+/**
+ * Question groups and shared stimuli (the 2026-09-28 ruling on reading papers, `ol-egov.141.89.7.12`;
+ * `olea-service/docs/dev/intelligence-build/scp.md` S.14). A question part is judged inside its
+ * group, never alone, and groups nest, so a part carries its whole group path. Four kinds:
+ *
+ * - `'parent-question'` — a parent question and its sub-parts; its stem is the parent's own text
+ *   before its first part;
+ * - `'choice'` — an "answer one of" choice over questions or parts (`choose` says how many, when the
+ *   paper states it);
+ * - `'shared-stimulus'` — the parts a paper sets on one scenario, extract, table, figure or data set;
+ * - `'section'` — a paper section, whose heading is carried in its parts' group path.
+ *
+ * Vocabulary shared by the two shapes that carry it: `outcomes.extract.v1`'s
+ * `paperStructure.questionGroups` (`olea-service/src/tasks/outcomesExtract.ts`, private — restated
+ * here with `TAnchor` = the Worker's 1-based passage index, the same "restate, never import" rule
+ * `PaperRecoveredSection` follows) and core's text-paper grouping pass
+ * (`../outcome/paper-question-groups.ts`, `TAnchor` = a `CharRange` into the paper's text).
+ * Additive: nothing that predates groups reads or requires them.
+ */
+export const PAPER_QUESTION_GROUP_KINDS = Object.freeze([
+  'parent-question',
+  'choice',
+  'shared-stimulus',
+  'section',
+] as const);
+
+/** One word from `PAPER_QUESTION_GROUP_KINDS`. */
+export type PaperQuestionGroupKind = (typeof PAPER_QUESTION_GROUP_KINDS)[number];
+
+/** What a shared stimulus is. `'figure'` covers a graph, diagram, chart, plot or image: anything whose content is not text. */
+export const PAPER_STIMULUS_FORMS = Object.freeze([
+  'scenario',
+  'extract',
+  'table',
+  'figure',
+  'data-set',
+] as const);
+
+/** One word from `PAPER_STIMULUS_FORMS`. */
+export type PaperStimulusForm = (typeof PAPER_STIMULUS_FORMS)[number];
+
+/**
+ * Why a group's stimulus is not identified — the ruling's "mark a stimulus not identified where
+ * it cannot tell", with the reason stated rather than left silent:
+ *
+ * - `'no-cue'` — nothing in the text says whether the group's parts share a stimulus. Not the same
+ *   as "there is none": a text reader cannot see an image it was never given.
+ * - `'referenced-not-located'` — the paper refers to a stimulus (a table, "the scenario above") that
+ *   the reader could not locate in the text it read.
+ * - `'figure-not-in-text'` — the stimulus is a figure, whose content is never text, so no text
+ *   passage can stand for it.
+ * - `'ungrounded-anchor'` — the Worker downgraded a stimulus the model placed on a passage it was
+ *   never shown (grounding, INV-5).
+ */
+export const PAPER_STIMULUS_NOT_IDENTIFIED_REASONS = Object.freeze([
+  'no-cue',
+  'referenced-not-located',
+  'figure-not-in-text',
+  'ungrounded-anchor',
+] as const);
+
+/** One word from `PAPER_STIMULUS_NOT_IDENTIFIED_REASONS`. */
+export type PaperStimulusNotIdentifiedReason =
+  (typeof PAPER_STIMULUS_NOT_IDENTIFIED_REASONS)[number];
+
+/**
+ * A group's shared stimulus. Three states, never collapsed: located (`'identified'`, with where);
+ * positively absent (`'none'` — only a reader that checked may say so, and core's text pass never
+ * does); or `'not-identified'`, the default whenever a reader cannot tell.
+ */
+export type PaperStimulus<TAnchor> =
+  | { readonly status: 'identified'; readonly form: PaperStimulusForm; readonly anchor: TAnchor }
+  | { readonly status: 'none' }
+  | {
+      readonly status: 'not-identified';
+      /** The form, when the paper names one (a referenced figure or table); absent when nothing says. */
+      readonly form?: PaperStimulusForm;
+      readonly reason?: PaperStimulusNotIdentifiedReason;
+    };
+
+/**
+ * One question group. `memberLabels` are the question labels the group directly groups, as the
+ * paper numbers them (`"3"`, `"3(a)"`) — resolved against core's question index by the consumer,
+ * never here. `parentGroupId` names the group it sits inside, absent at the outermost level.
+ * `anchor` is where the group is stated: a section's heading, a parent question's stem, a choice
+ * instruction or a stimulus cue.
+ */
+export interface PaperQuestionGroup<TAnchor> {
+  readonly id: string;
+  readonly kind: PaperQuestionGroupKind;
+  /** The paper's own heading or instruction wording for the group — local content, never logged (D-005). */
+  readonly label: string;
+  readonly parentGroupId?: string;
+  readonly memberLabels: readonly string[];
+  /** How many members to answer — a `'choice'` group only, and only when the paper states it. */
+  readonly choose?: number;
+  readonly anchor: TAnchor;
+  readonly stimulus: PaperStimulus<TAnchor>;
+}
+
 /** F4.11 ruling 3's two steerable inputs. Format class and a specific past sitting are deliberately absent — never dials, per that ruling's own text. */
 export type PaperExtent = 'shorter' | 'standard' | 'longer';
 
