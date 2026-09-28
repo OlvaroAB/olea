@@ -826,12 +826,14 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
 // (never a fresh call into Home's own live composer), and reading it never enters, extends,
 // exits or decides against the holder (AC(4), "never unfreezes or recomposes").
 //
-// A structurally valid, content-free `ComposedStudySession` carrying a minimal
-// `compositionRecord` — same "assert identity/the one field under test, never full shape"
-// posture `test/session/holder.spec.ts`'s own `fakeComposedStudySession` fixture takes,
-// extended with the one field this suite needs: `compositionRecord.branch`.
+// A structurally valid, content-free `ComposedStudySession` carrying the composer's own account
+// (`focusBranch`/`focusReason`/`groupingSignal`) and, unless `recorded: false`, a minimal
+// `compositionRecord` copying it — same "assert identity/the one field under test, never full
+// shape" posture `test/session/holder.spec.ts`'s own `fakeComposedStudySession` fixture takes.
+// `ol-egov.141.89.10.93`: the frozen composition is what Home reads; the record is its copy.
 function fakeComposedSessionWithBranch(
   branch: 'filter' | 'urgency' | 'deficit' | null,
+  options: { readonly recorded?: boolean } = {},
 ): ComposedStudySession {
   const model: StudySessionModel = {
     asOf: '2026-09-01',
@@ -855,32 +857,45 @@ function fakeComposedSessionWithBranch(
     obligationClasses: new Map(),
     citationRecheckQueued: new Set(),
     citationRevalidationPending: new Set(),
-    compositionRecord: {
-      schemaVersion: 1,
-      kind: 'compose',
-      compositionId: 'composition-testc101:a',
-      sessionId: 'composition-testc101:a',
-      parentCompositionId: null,
-      composedAt: NOW.toISOString(),
-      asOf: '2026-09-01',
-      reentry: false,
-      focusPolicy: 'single',
-      course: branch !== null ? 'TESTC101' : null,
-      branch,
-      groupingSignal: 'none',
-      steering: { courses: null, conceptIds: null },
-      budgetMinutes: 20,
-      planVersion: null,
-      policyVersions: {},
-      planAllocation: [],
-      declaredConstants: {
-        urgencyOverrideThreshold: 0.07,
-        withinBlockProximityHalfLifeDays: 7,
-        materialArrivalCohortHalfLifeDays: 7,
-      },
-      chosen: [],
-      setAside: { courses: [], concepts: [], instruments: [] },
-    },
+    focusPolicy: 'single',
+    groupingSignal: 'none',
+    ...(branch !== null
+      ? {
+          dominantCourse: 'TESTC101',
+          focusBranch: branch,
+          focusReason: FOCUS_BRANCH_SENTENCE[branch],
+        }
+      : {}),
+    ...(options.recorded === false
+      ? {}
+      : {
+          compositionRecord: {
+            schemaVersion: 1,
+            kind: 'compose',
+            compositionId: 'composition-testc101:a',
+            sessionId: 'composition-testc101:a',
+            parentCompositionId: null,
+            composedAt: NOW.toISOString(),
+            asOf: '2026-09-01',
+            reentry: false,
+            focusPolicy: 'single',
+            course: branch !== null ? 'TESTC101' : null,
+            branch,
+            groupingSignal: 'none',
+            steering: { courses: null, conceptIds: null },
+            budgetMinutes: 20,
+            planVersion: null,
+            policyVersions: {},
+            planAllocation: [],
+            declaredConstants: {
+              urgencyOverrideThreshold: 0.07,
+              withinBlockProximityHalfLifeDays: 7,
+              materialArrivalCohortHalfLifeDays: 7,
+            },
+            chosen: [],
+            setAside: { courses: [], concepts: [], instruments: [] },
+          },
+        }),
   };
 }
 
@@ -926,7 +941,25 @@ describe("createLocalHomeProvider — reads the shared holder's active session (
     expect(state.activeSession).toEqual({ reason: FOCUS_BRANCH_SENTENCE.deficit });
   });
 
-  it('activeSession is present with no reason when the frozen record carries no course — the harness course-less baseline, honest absence (never a placeholder sentence)', async () => {
+  it('ol-egov.141.89.10.93: a session whose record write failed is still described from its frozen composition — the record is its durable copy, never a gate', async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, fakeComposedSessionWithBranch('urgency', { recorded: false }));
+
+    const state = dashboard(
+      await createLocalHomeProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+        studySessionHolder: holder,
+      }).load(DEFAULT_REQUEST),
+    );
+
+    expect(state.activeSession).toEqual({ reason: FOCUS_BRANCH_SENTENCE.urgency });
+  });
+
+  it('activeSession is present with no reason when the frozen composition carries no course — the harness course-less baseline, honest absence (never a placeholder sentence)', async () => {
     const holder = createStudySessionHolder();
     holder.enter(NOW, fakeComposedSessionWithBranch(null));
 

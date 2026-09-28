@@ -110,8 +110,9 @@ import {
   type RetrospectiveOfferEventLog,
 } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
-// `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`): the one read of the active session's explanation
-// from its composition record, shared with the review tab's first-item sentence.
+// `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`, `ol-egov.141.89.10.93`): the one read of the active
+// session's explanation from its frozen in-memory composition, shared with the review tab's
+// first-item sentence.
 import { recordedSessionReason } from '../session/composition-recorder.js';
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): the same shared holder `main.ts` already threads
 // to `../session-builder/provider.ts` and `../review/open-session.ts` — see
@@ -369,17 +370,22 @@ function isReviewEntry(
  * doc. A PURE read: calls only {@link StudySessionHolder.getSitting}, never `enter`/
  * `growActiveSitting`/`exit`/`decide`, so this can never unfreeze or recompose the sitting
  * (AC(4)). Returns `undefined` when no holder is supplied or no sitting is active — the
- * unchanged pre-bead behaviour; returns `{}` (present, no reason) when a sitting is active but
- * carries no record, or its record names no course (`branch === null`, the harness's course-less
- * baseline), matching `focusReason`'s own honest-absence rule.
+ * unchanged pre-bead behaviour; returns `{}` (present, no reason) when the frozen composition
+ * chose no course (the harness's course-less baseline) or carries no composer account at all,
+ * matching `focusReason`'s own honest-absence rule.
+ *
+ * `ol-egov.141.89.10.93` (David's ruling 2026-09-28): the snapshot is the frozen in-memory
+ * composition, whether or not its record write has landed — a failed or not-yet-attempted write
+ * no longer empties this block; the record is the composition's durable copy, never a gate.
  */
 function readActiveSession(
   studySessionHolder: StudySessionHolder | undefined,
 ): HomeActiveSession | undefined {
   const sitting = studySessionHolder?.getSitting();
   if (sitting === undefined || sitting.status !== 'active') return undefined;
-  // `ol-egov.141.89.10.65`: the reason comes from `recordedSessionReason`, the same read the
-  // review tab's first-item sentence uses, so Home and review cannot disagree about one session.
+  // `ol-egov.141.89.10.65`/`.93`: the reason comes from `recordedSessionReason`, the same read of
+  // the frozen composition the review tab's first-item sentence uses, so Home and review cannot
+  // disagree about one session.
   const reason = recordedSessionReason(sitting);
   return reason !== undefined ? { reason } : {};
 }

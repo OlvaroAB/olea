@@ -1244,9 +1244,10 @@ export default class OleaPlugin extends Plugin {
         // active: an idle holder (never entered, or exited) renders no
         // sentence rather than a stale one from a sitting that already
         // ended — see `ReviewView`'s own param doc for why this is a thunk,
-        // not a value captured once. `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`):
-        // read from the active session's composition record, through the same
-        // `recordedSessionReason` Home reads, so Home and review state one reason.
+        // not a value captured once. `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`,
+        // `ol-egov.141.89.10.93`): read from the active session's frozen in-memory
+        // composition (its record is the durable copy, never a gate), through the
+        // same `recordedSessionReason` Home reads, so Home and review state one reason.
         () => recordedSessionReason(this.studySessionHolder.getSitting()),
       );
     });

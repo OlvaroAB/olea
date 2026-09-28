@@ -242,6 +242,7 @@ import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.
 import { createVaultMisconceptionStore } from '../misconception/store.js';
 import {
   type CompositionRecorder,
+  compositionIdentityOf,
   createCompositionRecorder,
 } from '../session/composition-recorder.js';
 import type { StudySessionHolder } from '../session/holder.js';
@@ -723,7 +724,8 @@ export async function openReviewSession(
     // one".
     const sitting = input.studySessionHolder.getSitting();
     // `[D-395]`: see `compositionRecorder`'s own doc. A write that fails never blocks the session;
-    // the recorder hands the session back unrecorded and it is served exactly as before.
+    // the recorder hands the session back with its record queued under the same identity for the
+    // next occasion (`ol-egov.141.89.10.93`), and it is served exactly as before.
     const compositionRecorder =
       input.compositionRecorder ??
       createCompositionRecorder({ vault: input.vault, deviceId: input.deviceId });
@@ -763,18 +765,20 @@ export async function openReviewSession(
         // unlike `enter`, leaves the captured composition plan untouched —
         // an outrun grows the SAME sitting under the same plan's shares.
         input.studySessionHolder.growActiveSitting(sitting.enteredAt, composedSession);
-      } else if (sitting.items.compositionRecord === undefined) {
+      } else {
         // `[D-395]` condition 4: Start on Home entered this sitting (`main.ts`) and revealed this
-        // tab; the record is written here, as the tab opens and before any answer. Also retries a
-        // start whose earlier write failed. The held session is swapped for the recorded one in
-        // place — same sitting, same `enteredAt`, same captured plan.
+        // tab; the record is written here, as the tab opens and before any answer. This is also
+        // the occasion a record left queued by a failed write is retried, under the identity it
+        // was first built with (`ol-egov.141.89.10.93`); a session already recorded with nothing
+        // queued comes back unchanged. Whenever the recorder hands back a different session
+        // object (a record landed), the held session is swapped for it in place — same sitting,
+        // same `enteredAt`, same captured plan — so the holder keeps the object any still-queued
+        // record is attached to.
         const outcome = await compositionRecorder.recordStart(sitting.items, now);
         composedSession = outcome.session;
-        if (outcome.status === 'recorded') {
+        if (composedSession !== sitting.items) {
           input.studySessionHolder.growActiveSitting(sitting.enteredAt, composedSession);
         }
-      } else {
-        composedSession = sitting.items;
       }
       compositionPlan = input.studySessionHolder.resolveCompositionPlan(input.plan ?? null);
     } else {
@@ -894,6 +898,7 @@ export async function openReviewSession(
         .map((record) => record.conceptId),
     );
 
+    const compositionIdentity = compositionIdentityOf(composedSession);
     const adapterInput = {
       items: executed.items,
       recordsById: composed.recordsById,
@@ -903,15 +908,16 @@ export async function openReviewSession(
       ...(input.random !== undefined ? { random: input.random } : {}),
       // `[D-395]` condition 5 (`ol-egov.141.89.10.65`): the record THIS open
       // served this session under — its first record, or the latest
-      // extension once she outran the target (`composedSession.compositionRecord`'s
-      // own doc, above) — stamped onto every item this call's adapter
-      // builds (`queue-adapter.ts`'s `AdaptExecutedReviewQueueInput.compositionId`).
-      // Absent on a preview or any composition the recorder never wrote a
-      // record for (a failed write, or a caller outside this module) —
-      // exactly `[D-395]`'s "absence is never a prompt to join by time".
-      ...(composedSession.compositionRecord !== undefined
-        ? { compositionId: composedSession.compositionRecord.compositionId }
-        : {}),
+      // extension once she outran the target — stamped onto every item this
+      // call's adapter builds (`queue-adapter.ts`'s
+      // `AdaptExecutedReviewQueueInput.compositionId`). `ol-egov.141.89.10.93`:
+      // read through `compositionIdentityOf`, so a record still queued for a
+      // retry stamps the id it will be written under, and the review resolves
+      // once the write lands. Absent on a preview or any composition the
+      // recorder could not record at all (no provenance, or a caller outside
+      // this module) — exactly `[D-395]`'s "absence is never a prompt to join
+      // by time".
+      ...(compositionIdentity !== undefined ? { compositionId: compositionIdentity } : {}),
     };
     // `ol-v7r5.35` (`[D-193]`): a caller-supplied `frozenQueue` routes this
     // call through C5.8's freeze instead of a bare, always-recomposing
