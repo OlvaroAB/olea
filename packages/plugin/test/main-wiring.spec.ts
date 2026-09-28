@@ -80,7 +80,7 @@ describe('ReviewView reads the composition sentence through the shared study-ses
     // composition record through `recordedSessionReason`, the same read Home's provider uses —
     // `test/session/composition-recorder.spec.ts` proves its active/idle/unrecorded behaviour.
     expect(main).toMatch(
-      /\(\) => reviewSessionOpener\.close\(\),\s*\(\) => recordedSessionReason\(this\.studySessionHolder\.getSitting\(\)\),\s*\);/,
+      /\(\) => reviewSessionOpener\.close\(\),\s*\(\) => recordedSessionReason\(this\.studySessionHolder\.getSitting\(\)\),\s*\(\) => activeSessionGroupingSentence\(this\.studySessionHolder\.getSitting\(\)\),\s*\);/,
     );
     expect(main).not.toMatch(/sitting\.items\.focusReason/);
   });

@@ -41,7 +41,10 @@ import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citat
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
-import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
+import {
+  DEFAULT_SESSION_BUDGET_MINUTES,
+  groupingWhySentence,
+} from '../../src/session-builder/copy.js';
 import { createLocalSessionBuilderProvider } from '../../src/session-builder/provider.js';
 import type { SessionBuilderState } from '../../src/session-builder/view.js';
 import { memoryVault } from '../review/memory-vault.js';
@@ -957,6 +960,30 @@ describe("createLocalHomeProvider — reads the shared holder's active session (
     );
 
     expect(state.activeSession).toEqual({ reason: FOCUS_BRANCH_SENTENCE.urgency });
+  });
+
+  it('[D-421] activeSession carries the grouping sentence beside the course sentence when a grouping decision occurred', async () => {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, {
+      ...fakeComposedSessionWithBranch('deficit'),
+      groupingSignal: 'relatedness',
+    });
+
+    const state = dashboard(
+      await createLocalHomeProvider({
+        vault: fixtureVault(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        scheduler: createFsrsScheduler(),
+        studySessionHolder: holder,
+      }).load(DEFAULT_REQUEST),
+    );
+
+    expect(state.activeSession).toEqual({
+      reason: FOCUS_BRANCH_SENTENCE.deficit,
+      groupingSentence: groupingWhySentence('relatedness'),
+    });
   });
 
   it('activeSession is present with no reason when the frozen composition carries no course — the harness course-less baseline, honest absence (never a placeholder sentence)', async () => {

@@ -263,7 +263,10 @@ import {
 import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
-import { recordedSessionReason } from './session/composition-recorder.js';
+import {
+  activeSessionGroupingSentence,
+  recordedSessionReason,
+} from './session/composition-recorder.js';
 import { createStudySessionHolder, type StudySessionHolder } from './session/holder.js';
 import { computeSharedSittingStaleness } from './session/shared-sitting-staleness.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from './session-builder/copy.js';
@@ -1249,6 +1252,9 @@ export default class OleaPlugin extends Plugin {
         // composition (its record is the durable copy, never a gate), through the
         // same `recordedSessionReason` Home reads, so Home and review state one reason.
         () => recordedSessionReason(this.studySessionHolder.getSitting()),
+        // `[D-421]` (`ol-egov.141.89.10.93`): the grouping sentence from the same frozen
+        // composition, rendered beside the course sentence on the first item.
+        () => activeSessionGroupingSentence(this.studySessionHolder.getSitting()),
       );
     });
 

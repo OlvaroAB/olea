@@ -113,7 +113,10 @@ import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
 // `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`, `ol-egov.141.89.10.93`): the one read of the active
 // session's explanation from its frozen in-memory composition, shared with the review tab's
 // first-item sentence.
-import { recordedSessionReason } from '../session/composition-recorder.js';
+import {
+  activeSessionGroupingSentence,
+  recordedSessionReason,
+} from '../session/composition-recorder.js';
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): the same shared holder `main.ts` already threads
 // to `../session-builder/provider.ts` and `../review/open-session.ts` — see
 // `CreateLocalHomeProviderDeps.studySessionHolder`'s own doc.
@@ -387,7 +390,13 @@ function readActiveSession(
   // the frozen composition the review tab's first-item sentence uses, so Home and review cannot
   // disagree about one session.
   const reason = recordedSessionReason(sitting);
-  return reason !== undefined ? { reason } : {};
+  // `[D-421]`: the grouping sentence from the same frozen composition, absent when no grouping
+  // decision occurred; `./view.ts` renders it beside the course sentence.
+  const groupingSentence = activeSessionGroupingSentence(sitting);
+  return {
+    ...(reason !== undefined ? { reason } : {}),
+    ...(groupingSentence !== undefined ? { groupingSentence } : {}),
+  };
 }
 
 /**

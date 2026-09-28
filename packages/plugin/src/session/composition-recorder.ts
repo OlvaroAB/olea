@@ -126,6 +126,17 @@ export function recordedSessionReason(sitting: StudySessionSitting): string | un
 }
 
 /**
+ * The grouping sentence of {@link explainActiveSession} (`[D-421]`), for the two readers that
+ * render it beside the course sentence: Home's active-session block and the review tab's first
+ * item. `undefined` when no session is active, when the explanation is unavailable, or when no
+ * grouping decision occurred (`groupingSignal === 'none'`).
+ */
+export function activeSessionGroupingSentence(sitting: StudySessionSitting): string | undefined {
+  const explanation = explainActiveSession(sitting);
+  return explanation?.status === 'available' ? explanation.groupingSentence : undefined;
+}
+
+/**
  * How many attempts are made at writing one session's unwritten composition records before
  * nothing more is tried. **Declared**, never fitted: a transient failure (a sync client holding
  * the daily file, a momentary lock) clears within a try or two, while one that survives three

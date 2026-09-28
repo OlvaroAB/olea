@@ -83,6 +83,26 @@ describe('ReviewView.renderHeader — the composition sentence, said once (F2.22
   });
 });
 
+describe('ReviewView.renderHeader — the D-421 grouping sentence beside the course sentence (ol-egov.141.89.10.93)', () => {
+  it("reads it fresh from this.getGroupingSentence(), only inside the course sentence's own branch, after it", () => {
+    const branch = RENDER_HEADER_BODY.slice(
+      RENDER_HEADER_BODY.indexOf('if (focusReason !== undefined) {'),
+    );
+    const courseAt = branch.indexOf('sessionCompositionSentence(focusReason)');
+    const readAt = branch.indexOf('const groupingSentence = this.getGroupingSentence?.();');
+    expect(courseAt).toBeGreaterThan(-1);
+    expect(readAt).toBeGreaterThan(courseAt);
+    expect(branch.slice(readAt)).toMatch(
+      /if \(groupingSentence !== undefined\) \{\s*this\.contentEl\.createDiv\(\{ cls: 'olea-prose', text: groupingSentence \}\);/,
+    );
+  });
+
+  it('declares and stores an optional getGroupingSentence parameter', () => {
+    expect(VIEW).toMatch(/getGroupingSentence\?: \(\) => string \| undefined,/);
+    expect(VIEW).toMatch(/this\.getGroupingSentence = getGroupingSentence;/);
+  });
+});
+
 describe('ReviewView constructor — getFocusReason is accepted, optional, and stored (F2.22)', () => {
   it('declares an optional getFocusReason parameter', () => {
     expect(VIEW).toMatch(/getFocusReason\?: \(\) => string \| undefined,/);

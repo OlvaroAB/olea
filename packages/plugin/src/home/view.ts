@@ -318,6 +318,13 @@ export interface HomeActiveSession {
    * takes for the live case.
    */
   readonly reason?: string;
+  /**
+   * `[D-421]` (`ol-egov.141.89.10.93`): the frozen composition's why-this-grouping sentence
+   * (`../session-builder/copy.ts#groupingWhySentence`, PROPOSED wording until David signs it
+   * off), rendered beside {@link reason}'s course sentence. Absent when no grouping decision
+   * occurred, and then no second sentence is shown.
+   */
+  readonly groupingSentence?: string;
 }
 
 export type HomeViewState =
@@ -533,6 +540,14 @@ export class HomeView extends ItemView {
       cls: 'olea-prose olea-home-offer-reason-line',
       text: sessionCompositionSentence(activeSession.reason),
     });
+    // `[D-421]`: the grouping sentence beside the course sentence, only when a grouping decision
+    // occurred — the same frozen-composition read the review tab's first item renders.
+    if (activeSession.groupingSentence !== undefined) {
+      card.createDiv({
+        cls: 'olea-prose olea-home-offer-reason-line',
+        text: activeSession.groupingSentence,
+      });
+    }
   }
 
   /**

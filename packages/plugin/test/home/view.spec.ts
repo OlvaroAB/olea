@@ -145,6 +145,19 @@ describe('HomeView.renderActiveSession — the frozen explanation, never a live 
     expect(ACTIVE_SESSION_BODY).toMatch(/sessionCompositionSentence\(activeSession\.reason\)/);
   });
 
+  it('[D-421] renders the grouping sentence as written, after the course sentence and only when present', () => {
+    const courseAt = ACTIVE_SESSION_BODY.indexOf(
+      'sessionCompositionSentence(activeSession.reason)',
+    );
+    const guardAt = ACTIVE_SESSION_BODY.indexOf(
+      'if (activeSession.groupingSentence !== undefined) {',
+    );
+    const textAt = ACTIVE_SESSION_BODY.indexOf('text: activeSession.groupingSentence,');
+    expect(courseAt).toBeGreaterThan(-1);
+    expect(guardAt).toBeGreaterThan(courseAt);
+    expect(textAt).toBeGreaterThan(guardAt);
+  });
+
   it('labels the active-session block HOME_OFFER_EYEBROW — the label the ordinary card carries when nothing is active', () => {
     expect(ACTIVE_SESSION_BODY).toMatch(/text: HOME_OFFER_EYEBROW,/);
   });

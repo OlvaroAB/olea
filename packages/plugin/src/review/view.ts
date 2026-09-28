@@ -325,6 +325,8 @@ export class ReviewView extends ItemView {
   private readonly releaseSession: (() => void) | undefined;
   /** F2.22 / F6.4 (`ol-egov.141.89.10.19`) — see `constructor`'s own param doc and `renderHeader`'s. */
   private readonly getFocusReason: (() => string | undefined) | undefined;
+  /** `[D-421]` (`ol-egov.141.89.10.93`) — see `constructor`'s own param doc and `renderHeader`'s. */
+  private readonly getGroupingSentence: (() => string | undefined) | undefined;
   private session: ReviewSession | null = null;
   private started = false;
   private explainWhyPanel: ExplainWhyPanelState | null = null;
@@ -453,6 +455,14 @@ export class ReviewView extends ItemView {
      * accepting the callback; reported, not made.
      */
     getFocusReason?: () => string | undefined,
+    /**
+     * `[D-421]` (`ol-egov.141.89.10.93`): the active session's why-this-grouping sentence, read
+     * fresh from the same frozen composition as {@link getFocusReason} (`main.ts` wires
+     * `session/composition-recorder.ts#activeSessionGroupingSentence`). `renderHeader` shows it
+     * as written, beside the course sentence and only with it; `undefined` (no grouping decision
+     * occurred) shows no second sentence.
+     */
+    getGroupingSentence?: () => string | undefined,
   ) {
     super(leaf);
     this.openSession = openSession;
@@ -464,6 +474,7 @@ export class ReviewView extends ItemView {
     this.extendSession = extendSession;
     this.releaseSession = releaseSession;
     this.getFocusReason = getFocusReason;
+    this.getGroupingSentence = getGroupingSentence;
     // A review session isn't a file to navigate back/forward through like a
     // note — closing it and reopening review starts fresh, same as the old
     // olea-app review screen.
@@ -795,6 +806,10 @@ export class ReviewView extends ItemView {
           cls: 'olea-prose',
           text: sessionCompositionSentence(focusReason),
         });
+        const groupingSentence = this.getGroupingSentence?.();
+        if (groupingSentence !== undefined) {
+          this.contentEl.createDiv({ cls: 'olea-prose', text: groupingSentence });
+        }
       }
     }
     const header = this.contentEl.createDiv({ cls: 'olea-review-header' });
