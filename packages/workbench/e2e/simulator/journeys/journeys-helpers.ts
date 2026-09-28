@@ -25,7 +25,7 @@
  * would) and are used directly for those three journeys.
  */
 import { expect, type Page } from '@playwright/test';
-import { frame, hostFrameElement } from '../helpers.js';
+import { frame, hostFrameElement, waitForCaptureReady } from '../helpers.js';
 
 export { frame, hostFrameElement };
 
@@ -51,7 +51,10 @@ export async function captureJourneyStep(
   week: number,
   step: string,
 ): Promise<void> {
-  await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
+  // `ol-egov.141.89.51`: no fatal error, no toast left over the frame, and
+  // none of the plugin's tracked work in flight — `waitForCaptureReady`'s own
+  // doc (`../helpers.ts`).
+  await waitForCaptureReady(page);
   await expect(hostFrameElement(page)).toHaveScreenshot([
     WORLD,
     PERSONA,

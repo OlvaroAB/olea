@@ -106,7 +106,7 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
 } from '../../../plugin/src/explain-back/copy.js';
-import { VIEW_TYPE_OLEA_HOME } from '../../../plugin/src/home/view.js';
+import { HomeView, VIEW_TYPE_OLEA_HOME } from '../../../plugin/src/home/view.js';
 import OleaPlugin from '../../../plugin/src/main.js';
 import { ObsidianStudyPlanSettingsStore } from '../../../plugin/src/plan/settings-store.js';
 import { VIEW_TYPE_OLEA_REGISTRY } from '../../../plugin/src/registry/view.js';
@@ -153,6 +153,7 @@ import {
 import { loadLiveDueQueue } from './live-queue.js';
 import { PersistentVaultSource } from './persistent-vault.js';
 import { createPluginDataHost, type ObsidianDataHost } from './plugin-data-host.js';
+import { installPluginWorkTracker, type PluginWorkTracker } from './plugin-work.js';
 import { renderProvenanceBadge, type SimulatorTransport } from './provenance-badge.js';
 import {
   loadSimulatorSeedEvents,
@@ -628,6 +629,38 @@ function installContentGenerationCounter(pane: HTMLElement): () => void {
   });
   observer.observe(pane, { childList: true, subtree: true, characterData: true });
   return () => observer.disconnect();
+}
+
+/**
+ * What the simulator's settle signal waits on (`ol-egov.141.89.51`,
+ * `plugin-work.ts`): the two views every capture shows in full — Today in the
+ * right sidebar, Home in the main pane — and the plugin's cold-start
+ * course-proposal step, whose modals `e2e/simulator/helpers.ts`'s
+ * `dismissCourseSetupModals` confirms. `openNextCourseSetupProposal` is a
+ * private method of `OleaPlugin`; the tracker reports it on
+ * `[data-wb-plugin-untracked]` if a rename ever removes it, rather than
+ * silently no longer waiting for it.
+ */
+const PLUGIN_WORK_TARGETS = [
+  { label: 'TodayView', prototype: TodayView.prototype, methods: ['onOpen', 'refresh'] },
+  { label: 'HomeView', prototype: HomeView.prototype, methods: ['onOpen', 'refresh'] },
+  {
+    label: 'OleaPlugin',
+    prototype: OleaPlugin.prototype,
+    methods: ['openNextCourseSetupProposal'],
+  },
+] as const;
+
+/**
+ * This realm plus the simulator's host iframe's, when `root` lives in one
+ * (`deterministic-random.ts`'s own doc: the plugin's code runs here, its
+ * views render there). `globalThis` alone when `root` has no separate window
+ * (this package's DOM-less unit tests).
+ */
+function mathRealmsFor(root: HTMLElement): readonly { Math: Math }[] {
+  const frameWindow = root.ownerDocument?.defaultView ?? null;
+  if (frameWindow === null || frameWindow === (globalThis as unknown)) return [globalThis];
+  return [globalThis, frameWindow];
 }
 
 function makeSimpleLeaf(host: HTMLElement): WorkspaceLeaf {
@@ -1365,6 +1398,8 @@ export class SimulatorController {
   private remountCount = 0;
   /** Disposes the two {@link installContentGenerationCounter} observers (`elements.main`/`elements.right`) — see that function's own doc. */
   private readonly disposeContentGenerationCounters: () => void;
+  /** Counts the plugin's own in-flight Today/Home loads and course-proposal steps — see `plugin-work.ts`'s own doc (`ol-egov.141.89.51`). Installed once, for this controller's whole lifetime. */
+  private readonly pluginWork: PluginWorkTracker;
   /** `[HARD-18]`: the lazy frontier-sessions loader's per-mount cache — see `renderFrontierPanel`'s own doc. Assigned in the constructor, not a field initialiser, so its doc sits beside the other constructor-body assignments. */
   private readonly frontierSessionsCache: FrontierSessionsCache;
 
@@ -1433,6 +1468,7 @@ export class SimulatorController {
       disposeMain();
       disposeRight();
     };
+    this.pluginWork = installPluginWorkTracker(elements.root, PLUGIN_WORK_TARGETS);
   }
 
   static async create(options: SimulatorControllerOptions): Promise<SimulatorController> {
@@ -1502,12 +1538,16 @@ export class SimulatorController {
       token: options.transportToken,
       faultAxis,
     });
-    // `ol-egov.141.89.45`: one fixed `Math.random` draw sequence for the
-    // whole mounted page, closing the real `ReviewView`'s MCQ-shuffle gap
-    // `deterministic-random.ts`'s own doc explains — installed before
+    // `ol-egov.141.89.45`/`ol-egov.141.89.51`: fixed `Math.random` streams
+    // (one per call site) for the whole mounted page, closing the real
+    // `ReviewView`'s MCQ-shuffle gap `deterministic-random.ts`'s own doc
+    // explains — in this realm, where the plugin's code runs, and in the
+    // host iframe's, where its views render — installed before
     // `remountPane()` below ever mounts the plugin, uninstalled in
     // `dispose()`.
-    const uninstallMathRandomOverride = installDeterministicMathRandomOverride();
+    const uninstallMathRandomOverride = installDeterministicMathRandomOverride(
+      mathRealmsFor(options.elements.root),
+    );
 
     const controller = new SimulatorController(
       options.elements,
@@ -1574,6 +1614,7 @@ export class SimulatorController {
     this.uninstallMathRandomOverride();
     this.courseSetupSeenBridge.dispose();
     this.disposeContentGenerationCounters();
+    this.pluginWork.dispose();
     await this.closeCurrent();
   }
 
@@ -1705,6 +1746,13 @@ export class SimulatorController {
       // (`ol-3ux7.64.10` [WBX-1b]): every remount wiped the message the
       // action that triggered it had just set.
       mounted.plugin.invokeCommand(OLEA_COMMAND_TODAY_OPEN);
+      // `ol-egov.141.89.51`: the command above is fire-and-forget inside the
+      // plugin, so returning from it says nothing about Today having loaded.
+      // Wait for the plugin's own tracked work — Today's `onOpen` and its
+      // second refresh, Home's, and the cold-start course-proposal step —
+      // to go idle before `[data-wb-remount]` below announces a settled
+      // mount (`plugin-work.ts`'s own doc).
+      await this.pluginWork.whenSettled();
       this.populateRibbon(mounted);
       installSimulatorWalkDriver(this, mounted, this.elements.root);
     } else {

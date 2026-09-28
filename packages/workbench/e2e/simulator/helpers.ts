@@ -102,48 +102,48 @@ export interface GotoSimulatorOptions {
 }
 
 /**
- * Clicks through any `CourseSetupModal` confirmation(s) the real plugin's
- * cold-start course-detection scan opened on this mount — see this module's
- * doc header. Originally documented as only ever needed right after a
- * genuine "fresh device" moment (the real cold start, or right after
- * `[data-sim-reset]` clears the shared plugin-data blob WBX-9's seen-set
- * lives in), because {@link advanceDays} and {@link rateNextDue} — the OLD
- * `SimulatorWalkDriver`'s own day-advance/rating methods — no longer need
- * to call this.
+ * Clicks through every `CourseSetupModal` confirmation the real plugin's
+ * course-detection chain opens, until the chain has nothing left to propose.
+ * Needed only right after a genuine "fresh device" moment — the real cold
+ * start ({@link gotoSimulator}) and right after `[data-sim-reset]` clears the
+ * shared plugin-data blob WBX-9's seen-set lives in ({@link resetSimulator});
+ * after an ordinary remount `course-setup-bridge.ts` confirms already-seen
+ * codes itself. `CourseSetupModal` renders into the TOP document's
+ * `[data-wb-modal-host]`, never inside `[data-wb-surface]`, which is why the
+ * confirm button is queried on `page`, not `frame(page)`.
  *
- * **WBX-18 finding (`ol-qm6u`), fixed by ol-yng7:** that claim briefly did
- * NOT extend to the newer, raw driver path `advanceWeeksViaDriver`
- * (`tour-helpers.ts`) drives via `window.__oleaSimulatorDriver.advanceOneDay()`
- * — against the real world, once course attribution actually works (WBX-18's
- * fix), a real vault's course-shaped folders could re-surface a "This looks
- * like a course" proposal across a remount even after an earlier confirm,
- * stacking several deep across several day-advances (observed: 7 stacked
- * proposals for 2 distinct courses over 7 `advanceOneDay()` calls). This was
- * invisible before WBX-18 because the real world had zero course-shaped
- * folders reachable by path, so zero proposals ever fired. The cause was
- * `course-setup-bridge.ts`'s watcher comparing the CURRENT modal's code by
- * VALUE (a `querySelector` first-match against one scalar) rather than by
- * INSTANCE: `Modal.open()` only ever appends a new `.modal-container`, never
- * removing an earlier unresolved one, so a repeat proposal's input read the
- * same value as the still-present earlier instance and the watcher never
- * re-ran its seen-code check. Fixed by tracking modal instances with a
- * `WeakSet` keyed on the DOM node itself — every caller driving a real-shaped
- * vault across several day-advances now needs no more round budget than the
- * plain default below; the widened, week-scaled bound this comment used to
- * ask for is gone from every caller (`tour.spec.ts`, `week2-review.spec.ts`).
+ * **Signal-driven, not a fixed number of sleeps (`ol-egov.141.89.51`).** This
+ * used to be five rounds 150ms apart, bounded rather than polled to a stable
+ * state — so on a slow enough machine a proposal still being prepared when
+ * the rounds ran out (each step lists the vault and reads the review log
+ * before it opens its modal) was left open, or left unconfirmed, and the
+ * captures after it differed from a fast machine's. The plugin's own
+ * proposal step (`openNextCourseSetupProposal`) is now counted by the
+ * simulator's plugin-work tracker (`src/simulator/plugin-work.ts`), so this
+ * waits for that work to settle, clicks the one modal the chain has opened
+ * (it opens one at a time and chains to the next from `onConfirm`), waits for
+ * the next step to settle, and stops when a settled chain has left no modal
+ * open. `maxRounds` only guards against a chain that never ends; running
+ * into it throws rather than leaving the page in an unknown state.
  *
- * Bounded (`rounds`, 150ms apart) rather than polled to a stable "definitely
- * none left" state — a real vault's course count needs no more headroom than
- * the fixture vault's did now that a cross-mount repeat can never
- * accumulate a round of its own. In the top document (`[data-wb-modal-host]`),
- * never inside `[data-wb-surface]`.
+ * **WBX-18 finding (`ol-qm6u`), fixed by ol-yng7**, kept for its history:
+ * `course-setup-bridge.ts`'s watcher once compared a modal's code by VALUE
+ * rather than by INSTANCE, so a repeat proposal across a remount stacked
+ * several deep over several `advanceOneDay()` calls. Tracking modal
+ * instances with a `WeakSet` fixed it; no caller needs a wider bound.
  */
-export async function dismissCourseSetupModals(page: Page, rounds = 5): Promise<void> {
-  for (let i = 0; i < rounds; i += 1) {
-    await page.waitForTimeout(150);
+export async function dismissCourseSetupModals(page: Page, maxRounds = 20): Promise<void> {
+  await waitForPluginIdle(page);
+  for (let round = 0; round < maxRounds; round += 1) {
     const confirmButton = page.locator('.olea-course-setup-confirm');
-    if ((await confirmButton.count()) > 0) await confirmButton.first().click();
+    if ((await confirmButton.count()) === 0) return;
+    const before = await pluginSettledGeneration(page);
+    await confirmButton.first().click();
+    await waitForPluginSettled(page, before);
   }
+  throw new Error(
+    `dismissCourseSetupModals: still proposing courses after ${String(maxRounds)} confirmations`,
+  );
 }
 
 /** Navigates to `#/simulator` and waits for the initial mount's `data-wb-ready`. */
@@ -240,6 +240,141 @@ const REMOUNT_TIMEOUT_MS = 20_000;
 export async function waitForRemount(page: Page, before: string | null): Promise<void> {
   await expect(remountLocator(page)).not.toHaveAttribute('data-wb-remount', before ?? '0', {
     timeout: REMOUNT_TIMEOUT_MS,
+  });
+}
+
+/**
+ * `[data-wb-plugin-busy]`/`[data-wb-plugin-settled]` on the simulator root
+ * (`src/simulator/plugin-work.ts`, `ol-egov.141.89.51`): how many of the
+ * plugin's own tracked async calls (Today's and Home's `onOpen`/`refresh`,
+ * the course-proposal step) are in flight, and a generation bumped each time
+ * that count returns to zero and stays there across a macrotask.
+ */
+function pluginWorkLocator(page: Page): Locator {
+  return frame(page).locator('[data-wb-plugin-settled]');
+}
+
+/** Reads `[data-wb-plugin-settled]` — pass it to {@link waitForPluginSettled} after the action. */
+export async function pluginSettledGeneration(page: Page): Promise<string | null> {
+  return pluginWorkLocator(page).getAttribute('data-wb-plugin-settled');
+}
+
+/**
+ * Fails when the tracker could not find a method it was told to wait on (a
+ * rename in `packages/plugin`) — the settle signal would otherwise quietly
+ * stop covering that work.
+ */
+async function expectPluginWorkTracked(page: Page): Promise<void> {
+  await expect(frame(page).locator('[data-wb-plugin-untracked]')).toHaveCount(0);
+}
+
+/** Waits until none of the plugin's tracked work is in flight. */
+export async function waitForPluginIdle(page: Page): Promise<void> {
+  await expectPluginWorkTracked(page);
+  await expect(pluginWorkLocator(page)).toHaveAttribute('data-wb-plugin-busy', '0', {
+    timeout: REMOUNT_TIMEOUT_MS,
+  });
+}
+
+/**
+ * Waits for the plugin's tracked work to settle AFTER an action that started
+ * some: the settled generation must move past `before` (read before the
+ * action) and nothing may be in flight. A click that starts tracked work
+ * starts it synchronously or on a microtask of its own event, so the
+ * generation cannot move for an earlier, unrelated settle while this
+ * action's work is still running — the busy count would not be zero.
+ */
+export async function waitForPluginSettled(page: Page, before: string | null): Promise<void> {
+  await expectPluginWorkTracked(page);
+  await expect(pluginWorkLocator(page)).not.toHaveAttribute(
+    'data-wb-plugin-settled',
+    before ?? '0',
+    {
+      timeout: REMOUNT_TIMEOUT_MS,
+    },
+  );
+  await waitForPluginIdle(page);
+}
+
+/**
+ * Waits until every transient toast (`obsidian-shim/index.ts`'s `Notice`)
+ * has been removed from `[data-wb-notices]`. That host sits in the TOP page
+ * (`main.ts`'s `noticeHost`), a `position: fixed` SIBLING of
+ * `[data-wb-surface]`, not inside the iframe — but `hostFrameElement`'s
+ * screenshot clips the rendered page pixels at the iframe's bounding box, so
+ * a toast overlapping that box lands in the capture. `Notice`'s lifetime is
+ * REAL wall-clock 4000ms (`window.setTimeout`, not the simulator's calendar
+ * clock), so how many toasts are still visible when a screenshot is taken
+ * depends only on how long this particular run took to get there. Measured
+ * (`ol-egov.141.89.51`): two runs of the same build on the same machine
+ * differed ONLY in toast count on two goldens. Moved here from
+ * `tour-helpers.ts` (`ol-egov.141.89.45`, where it was first found) so every
+ * capture path shares it. Bounded at 10s — above the 4000ms a toast can live,
+ * with margin for several created moments apart. This is a condition wait,
+ * never a sleep: it returns the moment the last toast is gone.
+ */
+export async function waitForNoticesToClear(page: Page, timeoutMs = 10_000): Promise<void> {
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-wb-notices] [data-wb-notice]').length === 0,
+    undefined,
+    { timeout: timeoutMs },
+  );
+}
+
+/**
+ * Everything a golden capture waits for first (`ol-egov.141.89.51`): no
+ * fatal error, none of the plugin's tracked work in flight, and no transient
+ * toast left over the frame. `goldens.spec.ts`, the journeys'
+ * `captureJourneyStep` and the tour's `captureAndCheck` all call this
+ * immediately before `toHaveScreenshot`.
+ */
+export async function waitForCaptureReady(page: Page): Promise<void> {
+  await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
+  await waitForPluginIdle(page);
+  await waitForNoticesToClear(page);
+  await waitForPluginIdle(page);
+  await repaintEverything(page);
+}
+
+/**
+ * Makes the next capture a full repaint of both documents, never a patchwork
+ * of partial repaints (`ol-egov.141.89.51`).
+ *
+ * Chromium re-rasters only the invalidated rectangle of a tile when a small
+ * region changes ("partial raster"), and an anti-aliased edge that crosses
+ * the boundary of such a rectangle comes out one level different from the
+ * same edge rastered whole. WHICH small regions were invalidated before a
+ * capture depends on timing — a toast removed here, a hover state there — so
+ * two runs of the same build on the same machine produced captures that
+ * differed by one level on a few edge pixels (rounded corners, the term
+ * slider's thumb, a pane border). Measured: 33 of 76 captures differed that
+ * way between two identical runs; with partial raster disabled, 0 of 76 did.
+ * Changing the zoom of both documents and changing it back relays out and
+ * repaints everything, so every tile is rastered whole before the capture.
+ * Waits are animation frames, never a duration.
+ */
+async function repaintEverything(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const frameDocument =
+      document.querySelector<HTMLIFrameElement>('[data-wb-surface]')?.contentDocument ?? null;
+    const roots = [document.documentElement, frameDocument?.documentElement].filter(
+      (root): root is HTMLElement => root !== undefined && root !== null,
+    );
+    const nextFrame = () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => resolve());
+        });
+      });
+    const previous = roots.map((root) => root.style.getPropertyValue('zoom'));
+    for (const root of roots) root.style.setProperty('zoom', '1.25');
+    await nextFrame();
+    roots.forEach((root, index) => {
+      const value = previous[index] ?? '';
+      if (value === '') root.style.removeProperty('zoom');
+      else root.style.setProperty('zoom', value);
+    });
+    await nextFrame();
   });
 }
 
@@ -456,6 +591,7 @@ export async function openCommandViaPalette(
   const beforeContentGeneration = await contentGenerationLocator(page, pane).getAttribute(
     'data-wb-content-gen',
   );
+  await waitForPluginIdle(page);
   await frame(page).locator('[data-wb-palette-toggle]').click();
   await expect(frame(page).locator('[data-wb-palette]')).toBeVisible();
   await frame(page).locator(`[data-wb-command-id="${commandId}"]`).click();
@@ -464,6 +600,15 @@ export async function openCommandViaPalette(
     expectedViewType,
   );
   await waitForContentGeneration(page, pane, beforeContentGeneration);
+  // `ol-egov.141.89.51`: the content-generation bump above fires on the
+  // FIRST render pass the command causes; a reveal can run more than one
+  // (`revealTodayView` refreshes again after `onOpen` already did). The next
+  // pass starts on a microtask of the first, so by the time this separate
+  // read runs it is either in flight (busy > 0) or done — wait for none of
+  // the plugin's tracked work to be in flight. Not a wait for the settled
+  // generation to move: a command whose view is not tracked (the gap panel)
+  // starts no tracked work, and that generation would never move for it.
+  await waitForPluginIdle(page);
   await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
 }
 

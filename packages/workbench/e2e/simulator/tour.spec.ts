@@ -35,7 +35,12 @@
  * sized for `goldens.spec.ts`'s much shorter walks).
  */
 import { expect, type Page, test } from '@playwright/test';
-import { dismissCourseSetupModals, gotoSimulator, resetSimulator } from './helpers.js';
+import {
+  dismissCourseSetupModals,
+  gotoSimulator,
+  resetSimulator,
+  waitForCaptureReady,
+} from './helpers.js';
 import {
   activeViewText,
   advanceWeeksViaDriver,
@@ -58,7 +63,6 @@ import {
   structuralPass,
   TOUR_WEEKS,
   type TourFinding,
-  waitForNoticesToClear,
 } from './tour-helpers.js';
 
 test.describe.configure({ mode: 'serial' });
@@ -86,12 +90,12 @@ async function captureAndCheck(
   },
 ): Promise<void> {
   await expect(page.locator('body[data-wb-error]')).toHaveCount(0);
-  // ol-egov.141.89.45: a course-confirmation toast (or several) can still be
-  // fading out at capture time — see `waitForNoticesToClear`'s own doc for
-  // why that made the toast stack read as 0/2/3 toasts across otherwise-
-  // identical runs. Waiting for the stack to fully clear first makes the
-  // capture deterministic without touching any product code.
-  await waitForNoticesToClear(page);
+  // ol-egov.141.89.45/ol-egov.141.89.51: a course-confirmation toast (or
+  // several) can still be fading out at capture time, and the plugin's own
+  // Today/Home loads can still be in flight — see `waitForCaptureReady`'s own
+  // doc (`./helpers.ts`). Waiting for both first makes the capture
+  // deterministic without touching any product code.
+  await waitForCaptureReady(page);
   await expect(hostFrameElement(page)).toHaveScreenshot([
     WORLD,
     PERSONA,

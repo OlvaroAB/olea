@@ -55,6 +55,7 @@ import {
   resetSimulator,
   VIEW_TYPE_HOME,
   VIEW_TYPE_TODAY,
+  waitForCaptureReady,
 } from './helpers.js';
 
 test.describe.configure({ mode: 'parallel' });
@@ -89,6 +90,9 @@ for (const week of WEEKS) {
       await resetSimulator(page);
       if (week > 0) await advanceDays(page, week * 7);
       await openCommandViaPalette(page, commandId, viewType, pane);
+      // `ol-egov.141.89.51`: no toast left over the frame and none of the
+      // plugin's tracked work in flight — `waitForCaptureReady`'s own doc.
+      await waitForCaptureReady(page);
       await expect(hostFrameElement(page)).toHaveScreenshot([
         WORLD,
         PERSONA,

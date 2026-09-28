@@ -69,7 +69,7 @@
  */
 import { expect, type Page, test } from '@playwright/test';
 import { waitForSettled } from '../../helpers.js';
-import { SIMULATOR_STATE_ID } from '../helpers.js';
+import { pluginSettledGeneration, SIMULATOR_STATE_ID, waitForPluginSettled } from '../helpers.js';
 import { captureJourneyStep, PERSONA, WORLD } from './journeys-helpers.js';
 
 const JOURNEY = 'course-setup';
@@ -125,7 +125,15 @@ test(`@auto-web:simulator/journeys/course-setup ${WORLD}/${PERSONA} — CourseSe
   const firstValue = await currentNameValue();
   await captureJourneyStep(page, JOURNEY, WEEK, 'confirmation');
 
+  const beforeConfirm = await pluginSettledGeneration(page);
   await page.locator(CONFIRM_BUTTON_SELECTOR).first().click();
+  // `ol-egov.141.89.51`: `onConfirm` starts the plugin's next proposal step
+  // (`openNextCourseSetupProposal`, counted by the simulator's plugin-work
+  // tracker). Until it settles, "no modal open" only means the confirmed one
+  // has closed and the next has not opened YET — the poll below could read
+  // that gap as "closed" (one of three measured runs captured no "chained"
+  // step at all).
+  await waitForPluginSettled(page, beforeConfirm);
 
   // `onConfirm` chains straight into the next queued proposal, one at a time, never stacked
   // (C7.8/`[D-098]`) — or resolves to an empty queue on a world with only one unseen course-shaped
