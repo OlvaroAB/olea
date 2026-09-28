@@ -55,6 +55,49 @@ describe('deriveRegistrySuspectSection', () => {
       expect(result.pendingRevalidation).toEqual([]);
     });
 
+    describe('[D-400] deferred (registry §24 — PROPOSED, Class B, pending ratification)', () => {
+      it('marks the row deferred when the retry has also gone unanswered', () => {
+        const result = deriveRegistrySuspectSection([
+          { instrumentId: 'i-1', citationValidity: 'pending', retryExhausted: true },
+        ]);
+        expect(result.pendingRevalidation).toEqual([{ instrumentId: 'i-1', deferred: true }]);
+      });
+
+      it('leaves the row as the ordinary pending reading when the retry has not been spent', () => {
+        const result = deriveRegistrySuspectSection([
+          { instrumentId: 'i-1', citationValidity: 'pending', retryExhausted: false },
+        ]);
+        expect(result.pendingRevalidation).toEqual([{ instrumentId: 'i-1' }]);
+      });
+
+      it('leaves the row as the ordinary pending reading when retryExhausted is not supplied at all', () => {
+        const result = deriveRegistrySuspectSection([
+          { instrumentId: 'i-1', citationValidity: 'pending' },
+        ]);
+        expect(result.pendingRevalidation).toEqual([{ instrumentId: 'i-1' }]);
+      });
+
+      it('has no effect when citationValidity is not pending — no row exists to mark', () => {
+        const result = deriveRegistrySuspectSection([
+          { instrumentId: 'i-1', citationValidity: 'current', retryExhausted: true },
+        ]);
+        expect(result.pendingRevalidation).toEqual([]);
+      });
+
+      it('never marks a flagged row deferred — [D-400] names only the pending-revalidation half', () => {
+        const result = deriveRegistrySuspectSection([
+          {
+            instrumentId: 'i-1',
+            citationValidity: 'pending',
+            retryExhausted: true,
+            flagConcern: { resolved: false },
+          },
+        ]);
+        expect(result.pendingRevalidation).toEqual([{ instrumentId: 'i-1', deferred: true }]);
+        expect(result.flagged).toEqual([{ instrumentId: 'i-1' }]);
+      });
+    });
+
     describe('integration with citationValidityStatus — proves the current-revision tie transitively', () => {
       const citation: InstrumentCitation = {
         sourcePath: 'Sources/Lecture 3.pdf',
@@ -115,6 +158,9 @@ describe('deriveRegistrySuspectSection', () => {
     const evidence: readonly RegistrySuspectSectionInstrumentEvidence[] = [
       { instrumentId: 'i-1', citationValidity: 'pending' },
       { instrumentId: 'i-2', flagConcern: { resolved: false } },
+      // `[D-400]`: a deferred row (registry §24) is exactly as immune to a restart/reopen/clock
+      // as the ordinary pending reading above — nothing here reads a clock either.
+      { instrumentId: 'i-3', citationValidity: 'pending', retryExhausted: true },
     ];
 
     it('an identical call, simulating a restart/reopen/advanced clock with unchanged evidence, returns an identical result', () => {

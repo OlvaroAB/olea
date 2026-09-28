@@ -55,6 +55,21 @@
  * type at all. Until a producer exists, every caller omits `flagConcern`, so `flagged` is
  * correctly always empty — never a stubbed placeholder row.
  *
+ * ## Deferred (`[D-400]`; registry §24 — PROPOSED, Class B, pending David's ratification)
+ *
+ * `[D-400]` (functional scope C5.3, amended): once a pending-revalidation instrument's one
+ * automatic retry has ALSO gone unanswered (`CitationRevisionTickReport.retryExhausted`, and
+ * persisted as `PendingRevalidation.retriedAt` on the same record `citationValidity: 'pending'`
+ * is itself read from), the instrument stays in this SAME `pendingRevalidation` bucket — `[D-400]`
+ * never invents a third bucket — but its row is marked {@link RegistrySuspectSectionRow.deferred}
+ * so the caller renders the registry vocabulary §24 sentence instead of the ordinary
+ * pending-revalidation one for that row alone. `retryExhausted` on
+ * {@link RegistrySuspectSectionInstrumentEvidence} is read only when `citationValidity` is
+ * `'pending'`; supplying it alongside any other `citationValidity` value has no effect, since no
+ * row is created for that instrument in the first place. The wording itself (registry §24) is
+ * Class B, PROPOSED, pending David's ratification — this module carries none of that prose, only
+ * the boolean the caller needs to choose it.
+ *
  * ## What is deliberately NOT tested here
  *
  * `'contested'`, `'rejected'` and `'safety-information-unavailable'` (the other three of
@@ -91,12 +106,28 @@ export interface RegistrySuspectSectionInstrumentEvidence {
    * computed by the caller. Only `'pending'` puts the instrument in `pendingRevalidation`.
    */
   readonly citationValidity?: CitationValidityStatus;
+  /**
+   * `[D-400]` (registry §24, PROPOSED) — true when this instrument's persisted pending-
+   * revalidation fact also carries `retriedAt` (the one automatic retry has been dispatched and
+   * has also gone unanswered). Read only when `citationValidity` is `'pending'`; ignored
+   * otherwise, since no `pendingRevalidation` row exists for this instrument to mark in that
+   * case. Absent or `false` means the ordinary pending-revalidation wording still applies.
+   */
+  readonly retryExhausted?: boolean;
   /** See {@link FlaggedConcernEvidence}'s own doc. */
   readonly flagConcern?: FlaggedConcernEvidence;
 }
 
 export interface RegistrySuspectSectionRow {
   readonly instrumentId: string;
+  /**
+   * `[D-400]` (registry §24 — PROPOSED, Class B, pending David's ratification) — true when this
+   * pending-revalidation row's one automatic retry has also gone unanswered, so the caller
+   * (`packages/plugin/src/registry/view.ts#renderSuspectSection`) renders the registry §24
+   * sentence for this row instead of the ordinary pending-revalidation one. Always absent on a
+   * `flagged` row — `[D-400]` names only the pending-revalidation half.
+   */
+  readonly deferred?: boolean;
 }
 
 /**
@@ -120,7 +151,12 @@ export function deriveRegistrySuspectSection(
   const flagged: RegistrySuspectSectionRow[] = [];
   for (const instrument of instruments) {
     if (instrument.citationValidity === 'pending') {
-      pendingRevalidation.push({ instrumentId: instrument.instrumentId });
+      pendingRevalidation.push({
+        instrumentId: instrument.instrumentId,
+        // `[D-400]`: only ever set true, never `false` — see `RegistrySuspectSectionRow.deferred`'s
+        // own doc on why an explicit `false` and an absent field must read identically to a caller.
+        ...(instrument.retryExhausted === true ? { deferred: true } : {}),
+      });
     }
     if (instrument.flagConcern !== undefined && !instrument.flagConcern.resolved) {
       flagged.push({ instrumentId: instrument.instrumentId });

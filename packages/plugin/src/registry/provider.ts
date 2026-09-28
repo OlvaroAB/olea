@@ -540,25 +540,25 @@ export interface CreateLocalRegistryProviderDeps {
   readonly scheduler?: Scheduler;
   /**
    * `[D-397]` (F2.23 amended; `ol-egov.141.89.6.55`) — feeds the registry's suspect-instrument
-   * section's pending-revalidation half. The SAME per-instrument `CitationHashStore` interface
-   * `session-builder/provider.ts`'s `citationHashStore` and `review/open-session.ts`'s
-   * `OpenReviewSessionInput.citationHashStore` already read (see either's own doc) —
-   * `pendingRevalidationInstrumentIdsFrom` below mirrors both of those resolvers exactly, the
-   * same "duplicated rather than shared: different bead's owns" precedent
-   * `review/open-session.ts`'s own copy of the identical function already states for itself. The
-   * flagged half has no store to read from anywhere in this codebase yet (rule 5 of this bead's
-   * own brief, confirmed independently by `review/open-session.ts`'s own `readInstrumentStanding`
-   * doc: "`flagged`: no reader anywhere in this codebase... not a wiring gap, a missing mechanism
-   * entirely"), so it stays correctly empty regardless of this field.
+   * section's pending-revalidation half, including its `[D-400]` deferred reading (registry §24 —
+   * PROPOSED, Class B, pending David's ratification; `ol-egov.141.89.5.23`). The SAME
+   * per-instrument `CitationHashStore` interface `session-builder/provider.ts`'s
+   * `citationHashStore` and `review/open-session.ts`'s `OpenReviewSessionInput.citationHashStore`
+   * already read (see either's own doc) — `pendingRevalidationInstrumentIdsFrom` below mirrors
+   * both of those resolvers exactly, the same "duplicated rather than shared: different bead's
+   * owns" precedent `review/open-session.ts`'s own copy of the identical function already states
+   * for itself. The flagged half has no store to read from anywhere in this codebase yet (rule 5
+   * of this bead's own brief, confirmed independently by `review/open-session.ts`'s own
+   * `readInstrumentStanding` doc: "`flagged`: no reader anywhere in this codebase... not a wiring
+   * gap, a missing mechanism entirely"), so it stays correctly empty regardless of this field.
    *
-   * **Optional, same reason `openSourceLocationPort` above is.** `main.ts` already constructs one
-   * `ObsidianCitationHashStore` instance (`this.citationHashStore`) and threads it into
-   * `session-builder/provider.ts`'s and `review/open-session.ts`'s own deps, but does not yet
-   * pass it to this provider's call site — a one-line addition outside this bead's `owns` at the
-   * time of writing (`main.ts` is a concurrently live lane's file; see this bead's close notes).
-   * Omitting this field reads as "no store to check": `pendingRevalidationInstrumentIds` is then
-   * an empty set, so the section's pending-revalidation half is correctly empty too, never
-   * silently guessed clear.
+   * **Optional, same reason `openSourceLocationPort` above is.** `main.ts` constructs one
+   * `ObsidianCitationHashStore` instance (`this.citationHashStore`) and threads it into every
+   * compose call site, this one included (`main.ts`, `ol-egov.141.89.6.55`'s `dadfd30`) — omitting
+   * this field (a test fixture with no store to check, say) reads as "no store": the resolved map
+   * `pendingRevalidationInstrumentIdsFrom` below returns is then empty, so the section's
+   * pending-revalidation half (deferred rows included) is correctly empty too, never silently
+   * guessed clear.
    */
   readonly citationHashStore?: CitationHashStore;
 }
@@ -769,7 +769,7 @@ function withheldItemsFromEnumeration(
 }
 
 /** Shared, never mutated — the "no store supplied" reading `suspectSectionFrom` below falls back to. */
-const EMPTY_INSTRUMENT_ID_SET: ReadonlySet<string> = new Set();
+const EMPTY_PENDING_REVALIDATION_MAP: ReadonlyMap<string, boolean> = new Map();
 
 /**
  * `[D-351]` (`ol-egov.141.89.6.55`): mirrors `session-builder/provider.ts`'s
@@ -781,13 +781,21 @@ const EMPTY_INSTRUMENT_ID_SET: ReadonlySet<string> = new Set();
  * trusting `loadAll()`'s snapshot alone — the store's own revision-scoping, so a late result for
  * an earlier edit is discarded rather than acted on. An instrument with no pending fact at all,
  * or one the store no longer confirms current, is simply absent from the result.
+ *
+ * **`[D-400]` (registry §24 — PROPOSED, Class B, pending David's ratification;
+ * `ol-egov.141.89.5.23`) widens the return type from a set to a map**: the value is whether THIS
+ * current pending fact's one automatic retry has also gone unanswered
+ * (`PendingRevalidation.retriedAt` present) — `suspectSectionFrom` below reads it to mark the row
+ * `deferred` per `olea-core`'s `RegistrySuspectSectionRow` doc. `review/open-session.ts`'s own
+ * copy of this function is a separate, still-unmodified concern (a different surface, out of this
+ * bead's `owns` — see the registry entry's own "where this lands" list).
  */
 async function pendingRevalidationInstrumentIdsFrom(
   store: CitationHashStore,
   instrumentIds: readonly string[],
-): Promise<ReadonlySet<string>> {
+): Promise<ReadonlyMap<string, boolean>> {
   const anchors = await store.loadAll();
-  const result = new Set<string>();
+  const result = new Map<string, boolean>();
   await Promise.all(
     instrumentIds.map(async (instrumentId) => {
       const pending = anchors.get(instrumentId)?.pendingRevalidation;
@@ -796,7 +804,7 @@ async function pendingRevalidationInstrumentIdsFrom(
         instrumentId,
         pending.sinceContentHash,
       );
-      if (isCurrent) result.add(instrumentId);
+      if (isCurrent) result.set(instrumentId, pending.retriedAt !== undefined);
     }),
   );
   return result;
@@ -809,19 +817,24 @@ async function pendingRevalidationInstrumentIdsFrom(
  * `suspect-section.ts` module doc for the full rule; `flagConcern` is never supplied here (no
  * producer exists anywhere in this codebase — rule 5), so `flagged` is correctly always empty
  * today, never a stubbed placeholder row.
+ *
+ * **`[D-400]` (registry §24 — PROPOSED, Class B): `pendingRevalidation`'s value is now the
+ * retry-exhausted boolean**, passed straight through to `RegistrySuspectSectionInstrumentEvidence.retryExhausted`
+ * — `deriveRegistrySuspectSection` (olea-core) is what turns that into the row's own `deferred`.
  */
 function suspectSectionFrom(
   instrumentIds: readonly string[],
-  pendingRevalidationInstrumentIds: ReadonlySet<string>,
+  pendingRevalidation: ReadonlyMap<string, boolean>,
 ): RegistrySuspectSection {
-  const evidence: RegistrySuspectSectionInstrumentEvidence[] = instrumentIds.map(
-    (instrumentId) => ({
+  const evidence: RegistrySuspectSectionInstrumentEvidence[] = instrumentIds.map((instrumentId) => {
+    const retryExhausted = pendingRevalidation.get(instrumentId);
+    return {
       instrumentId,
-      ...(pendingRevalidationInstrumentIds.has(instrumentId)
-        ? { citationValidity: 'pending' as const }
+      ...(retryExhausted !== undefined
+        ? { citationValidity: 'pending' as const, retryExhausted }
         : {}),
-    }),
-  );
+    };
+  });
   return deriveRegistrySuspectSection(evidence);
 }
 
@@ -861,7 +874,7 @@ function createLoadModel(
         storedOverrides,
         await canonicalKeysOrAsStored(deps.vault),
       );
-      const [disputes, courseRankings, pendingRevalidationInstrumentIds] = await Promise.all([
+      const [disputes, courseRankings, pendingRevalidation] = await Promise.all([
         disputesFromFiles(deps.vault, files),
         courseRankingsForNoteOffer(
           deps.vault,
@@ -881,7 +894,7 @@ function createLoadModel(
               deps.citationHashStore,
               enumeration.records.map((record) => record.instrumentId),
             )
-          : Promise.resolve(EMPTY_INSTRUMENT_ID_SET),
+          : Promise.resolve(EMPTY_PENDING_REVALIDATION_MAP),
       ]);
 
       const model = buildRegistryModel({
@@ -962,11 +975,11 @@ function createLoadModel(
           enumeration,
           projectInstrumentValidity(entries, disputes).provenInvalid,
         ),
-        // `[D-397]`: same `enumeration.records` ids, plus the `pendingRevalidationInstrumentIds`
+        // `[D-397]`/`[D-400]`: same `enumeration.records` ids, plus the `pendingRevalidation` map
         // just resolved above — see `suspectSectionFrom`'s own doc.
         suspectInstruments: suspectSectionFrom(
           enumeration.records.map((record) => record.instrumentId),
-          pendingRevalidationInstrumentIds,
+          pendingRevalidation,
         ),
       };
     } catch (error) {

@@ -176,6 +176,7 @@ import {
   RESTORE_INSTRUMENT_ACTION,
   registryAggregateLine,
   SOURCE_LOCATIONS_HEADING,
+  SUSPECT_DEFERRED_LINE,
   SUSPECT_FLAGGED_LINE,
   SUSPECT_PENDING_REVALIDATION_LINE,
   SUSPECT_SECTION_HEADING,
@@ -887,14 +888,22 @@ export class RegistryView extends ItemView {
    * identical sentence today. Named here as a known gap, not invented past: identifying which
    * instrument (a lookup against `state.model`, or a click-through, once one is defined) is a
    * follow-up, not a decision this file makes unilaterally.
+   *
+   * **`[D-400]` deferred wording (registry §24 — PROPOSED, Class B, pending David's
+   * ratification; `ol-egov.141.89.5.23`).** A pending-revalidation row whose one automatic retry
+   * has also gone unanswered carries `deferred: true` (`olea-core`'s `RegistrySuspectSectionRow`,
+   * set by `./provider.ts`'s `suspectSectionFrom` off the persisted `retriedAt` fact) and is
+   * rendered with {@link SUSPECT_DEFERRED_LINE} instead of the ordinary
+   * {@link SUSPECT_PENDING_REVALIDATION_LINE} — same section, same heading, no new bucket and no
+   * new action: the sentence itself is the recovery path (a genuine edit to the cited passage).
    */
   private renderSuspectSection(root: HTMLElement, section: RegistrySuspectSection): void {
     if (section.pendingRevalidation.length === 0 && section.flagged.length === 0) return;
     const el = root.createDiv({ cls: 'olea-registry-suspect-section' });
     el.createEl('h3', { text: SUSPECT_SECTION_HEADING });
-    for (const _row of section.pendingRevalidation) {
+    for (const row of section.pendingRevalidation) {
       el.createDiv({ cls: 'olea-registry-suspect-item' }).createEl('p', {
-        text: SUSPECT_PENDING_REVALIDATION_LINE,
+        text: row.deferred ? SUSPECT_DEFERRED_LINE : SUSPECT_PENDING_REVALIDATION_LINE,
       });
     }
     for (const _row of section.flagged) {

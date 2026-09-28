@@ -548,3 +548,18 @@ export const SUSPECT_PENDING_REVALIDATION_LINE =
 
 export const SUSPECT_FLAGGED_LINE =
   'Olea has a concern about this item, and is holding it back until that concern is resolved.';
+
+/**
+ * `[D-400]` (registry §24 — **PROPOSED, Class B, pending David's ratification**;
+ * `ol-egov.141.89.5.23`) — replaces {@link SUSPECT_PENDING_REVALIDATION_LINE} for a row whose one
+ * automatic retry (`[D-400]`) has also gone unanswered (`./view.ts#renderSuspectSection`'s own
+ * per-row choice, keyed off `RegistrySuspectSectionRow.deferred`, `olea-core`). Exact wording from
+ * the registry entry, copied verbatim rather than retyped — never the words "deferred," "retry" or
+ * "exhausted" (the registry's own rule for this sentence). No action button: the sentence itself
+ * names the one thing that starts a fresh check (a genuine edit to the cited passage), matching
+ * F2.23's "offers no action where none exists" this section's other two sentences already follow.
+ * Reversible (Class B): a wording-only string constant, not a persisted value — changing it later
+ * needs no migration.
+ */
+export const SUSPECT_DEFERRED_LINE =
+  "Olea couldn't confirm the change to this source passage after two tries, and won't try again until you edit that passage.";

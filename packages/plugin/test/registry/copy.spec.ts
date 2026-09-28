@@ -35,6 +35,7 @@ import {
   RESTORE_CONCEPT_ACTION,
   RESTORE_INSTRUMENT_ACTION,
   registryAggregateLine,
+  SUSPECT_DEFERRED_LINE,
   THIN_NOTE_LABEL,
   thinNoteLine,
   vitalityLabel,
@@ -489,5 +490,22 @@ describe('withheldItemLine ([D-334])', () => {
       expect(label.toLowerCase()).not.toContain('withheld');
       expect(label.toLowerCase()).not.toContain('delete');
     }
+  });
+});
+
+// Scenarios: olea-service/features/F2-review.md — F2.23's `[D-400]` deferred wording (registry
+// §24, PROPOSED — Class B, pending David's ratification), tagged `@auto:plugin/registry/copy.spec`.
+describe('[D-400] SUSPECT_DEFERRED_LINE (registry §24 — PROPOSED, Class B, pending ratification)', () => {
+  it('is exactly the registry entry’s proposed sentence', () => {
+    expect(SUSPECT_DEFERRED_LINE).toBe(
+      "Olea couldn't confirm the change to this source passage after two tries, and won't try again until you edit that passage.",
+    );
+  });
+
+  it('never says "deferred", "retry" or "exhausted" — the registry entry’s own rule for this sentence', () => {
+    const lower = SUSPECT_DEFERRED_LINE.toLowerCase();
+    expect(lower).not.toContain('deferred');
+    expect(lower).not.toContain('retry');
+    expect(lower).not.toContain('exhausted');
   });
 });

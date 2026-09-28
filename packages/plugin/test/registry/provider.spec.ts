@@ -34,6 +34,10 @@ import {
   proposeAndPersistMergeAudits,
 } from 'olea-core/src/concept/merge-audit-store.js';
 import { describe, expect, it } from 'vitest';
+import type {
+  CitationAnchorRecord,
+  CitationHashStore,
+} from '../../src/ingestion/materiality/citation-hash-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import type { ObsidianDataHost } from '../../src/registry/overrides-store.js';
 import type { EditInstrumentPort, OpenSourceLocationPort } from '../../src/registry/provider.js';
@@ -61,6 +65,46 @@ class FakeEditPort implements EditInstrumentPort {
 
   async edit(instrument: RegistryInstrumentSummary): Promise<void> {
     this.opened.push(instrument);
+  }
+}
+
+/**
+ * `[D-397]`/`[D-400]` (`ol-egov.141.89.5.23`) — a minimal in-memory `CitationHashStore`, same
+ * shape as `citation-revision-wiring.spec.ts`'s own `FakeCitationHashStore`, for proving
+ * `createLocalRegistryProvider`'s `suspectInstruments.pendingRevalidation` reads real per-
+ * instrument pending/retry facts rather than the "no store" empty reading.
+ */
+class FakeCitationHashStore implements CitationHashStore {
+  readonly byId = new Map<string, CitationAnchorRecord>();
+
+  async loadAll(): Promise<ReadonlyMap<string, CitationAnchorRecord>> {
+    return new Map(this.byId);
+  }
+
+  async save(instrumentId: string, record: CitationAnchorRecord): Promise<void> {
+    this.byId.set(instrumentId, record);
+  }
+
+  async remove(instrumentId: string): Promise<void> {
+    this.byId.delete(instrumentId);
+  }
+
+  async setPendingRevalidation(): Promise<void> {
+    throw new Error('not needed: this suite seeds pendingRevalidation directly via save()');
+  }
+
+  async isPendingRevalidationCurrent(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+  ): Promise<boolean> {
+    return (
+      this.byId.get(instrumentId)?.pendingRevalidation?.sinceContentHash ===
+      expectedSourceContentHash
+    );
+  }
+
+  async recordDispatch(): Promise<void> {
+    throw new Error('not needed: this suite seeds dispatchedAt/retriedAt directly via save()');
   }
 }
 
@@ -128,6 +172,83 @@ describe('createLocalRegistryProvider — load', () => {
     );
     const state = await provider.load();
     expect(state.kind).toBe('unavailable');
+  });
+});
+
+// Scenarios: olea-service/features/F2-review.md — F2.23's suspect-instrument section reading
+// through `createLocalRegistryProvider`'s own `citationHashStore` dep, including the `[D-400]`
+// deferred reading (registry §24 — PROPOSED, Class B, pending David's ratification), tagged
+// `@auto:plugin/registry/provider.spec`.
+describe("createLocalRegistryProvider — the [D-397]/[D-400] suspect-instrument section's citationHashStore wiring", () => {
+  async function instrumentIdFrom(vault: ReturnType<typeof fixtureVault>): Promise<string> {
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const model = await modelFrom(await provider.load());
+    const instrumentId = model.concepts[0]?.instruments[0]?.instrumentId;
+    if (instrumentId === undefined) throw new Error('expected a fixture instrument');
+    return instrumentId;
+  }
+
+  it('reads pendingRevalidation as empty in both halves when no citationHashStore is supplied — the honest "no store" reading', async () => {
+    const state = await createLocalRegistryProvider({
+      vault: fixtureVault(),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+    }).load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.suspectInstruments).toEqual({ pendingRevalidation: [], flagged: [] });
+  });
+
+  it('lists an instrument with a current, not-yet-retried pending-revalidation fact under the ordinary reading (deferred absent)', async () => {
+    const vault = fixtureVault();
+    const instrumentId = await instrumentIdFrom(vault);
+    const store = new FakeCitationHashStore();
+    await store.save(instrumentId, {
+      sourcePath: 'Notes/one.md',
+      text: 'irrelevant to this resolver',
+      conceptIds: [],
+      pendingRevalidation: { sinceContentHash: 'hash-1', since: 0 },
+    });
+    const state = await createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      citationHashStore: store,
+    }).load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.suspectInstruments.pendingRevalidation).toEqual([{ instrumentId }]);
+  });
+
+  it('[D-400] marks the row deferred once the persisted fact carries retriedAt — the one automatic retry has also gone unanswered', async () => {
+    const vault = fixtureVault();
+    const instrumentId = await instrumentIdFrom(vault);
+    const store = new FakeCitationHashStore();
+    await store.save(instrumentId, {
+      sourcePath: 'Notes/one.md',
+      text: 'irrelevant to this resolver',
+      conceptIds: [],
+      pendingRevalidation: {
+        sinceContentHash: 'hash-1',
+        since: 0,
+        dispatchedAt: 1,
+        retriedAt: 2,
+      },
+    });
+    const state = await createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      citationHashStore: store,
+    }).load();
+    if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+    expect(state.suspectInstruments.pendingRevalidation).toEqual([
+      { instrumentId, deferred: true },
+    ]);
   });
 });
 
