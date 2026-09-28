@@ -236,12 +236,9 @@ export interface RetrospectiveInput {
    * exclude, and `held`/`faded`'s vitality partition above is exactly such
    * a reading. Optional and defaults to none — a rejection already inside
    * `entries` still excludes without this field; only the corrected-contest
-   * half, read apart from the log, needs it. **No production caller
-   * supplies this yet** — `packages/plugin/src/retrospective/provider.ts`'s
-   * `buildRetrospective` call sits outside this bead's `owns`; wiring it a
-   * discovered follow-up, the same "caller one hop further out" gap this
-   * package documents elsewhere (e.g. `../today/mastery-overview.ts`'s
-   * `MasteryOverviewInput.vitality` doc).
+   * half, read apart from the log, needs it. Supplied in production by
+   * `packages/plugin/src/retrospective/provider.ts`'s `buildRetrospective`
+   * call, from the same `readReviewHistory` read (`ol-egov.141.89.9.63`).
    */
   readonly disputes?: readonly DisputeLogRecord[];
 }
