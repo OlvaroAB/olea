@@ -33,6 +33,16 @@
  * resolves normally through the ordinary outcome/write path; and a retry's
  * own late answer is discarded under the same D-311 obsolete-answer guard an
  * original dispatch's late answer already is.
+ *
+ * The fifth `describe` block (`[ol-egov.141.89.5.33]`, a moment F runner
+ * host finding, synthetic) is a DIFFERENT recovery shape from the fourth:
+ * an outage, never a restart — the SAME trigger instance runs throughout,
+ * only `deps.isOnline` changes. Proves an edit made while flatly
+ * unreachable spends no `[D-400]` budget at all (the judge is never even
+ * called) and gets a fresh, decided dispatch once reachable again; and that
+ * a genuine provider failure while reachable still exhausts the bound
+ * exactly as the fourth block already proves — an outage narrows what
+ * counts as an attempt, it never widens the bound itself.
  */
 import {
   citationStorePath,
@@ -1373,6 +1383,120 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
     expect(workingJudge.judge).toHaveBeenCalledTimes(1);
     expect(report.refreshed).toBe(1);
     expect(report.retryExhausted).toBe(0);
+  });
+});
+
+/**
+ * `[ol-egov.141.89.5.33]` (moment F runner host finding, synthetic): an
+ * outage is not a restart. The SAME `CitationRevisionTrigger` instance runs
+ * throughout every tick below — no fresh instance, matching this bead's
+ * scope (the plugin staying running, in-memory pending state; a restart
+ * mid-outage is `[D-427]`'s own separate, open question). `deps.isOnline`
+ * is the only thing that changes between ticks, exactly as `main.ts` reads
+ * `navigator.onLine` fresh on its own fixed interval.
+ */
+describe('CitationRevisionTrigger.tick — outage (Worker unreachable) recovery', () => {
+  it('an edit made during an outage spends no [D-400] budget, and gets a fresh dispatch, decided, once the Worker is reachable again', async () => {
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
+    const store = new FakeCitationHashStore();
+    let online = false;
+    let now = 0;
+    // Mirrors `WorkerMaterialityJudge`'s own posture (that file's own doc,
+    // "OFFLINE / UNAVAILABLE DEGRADES EXACTLY AS THE EXISTING
+    // JUDGE-UNAVAILABLE PATH"): a call made while unreachable would throw,
+    // same as a real network failure. Proving it is never called while
+    // `online` is false is this test's whole point.
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        if (!online) throw new Error('unreachable');
+        return { material: false };
+      }),
+    };
+    const trigger = new CitationRevisionTrigger({
+      store,
+      judge,
+      clock: { now: () => now },
+      isOnline: () => online,
+    });
+
+    await trigger.tick(vault, actions()); // baseline, t=0, offline
+
+    // She edits the cited passage during a Worker outage. Two ticks fire
+    // before it returns — the outage outlasts a single tick, as it would in
+    // production on `main.ts`'s fixed interval.
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    now = 100;
+    const outageTick1 = await trigger.tick(vault, actions());
+    now = 200;
+    const outageTick2 = await trigger.tick(vault, actions());
+
+    expect(judge.judge).not.toHaveBeenCalled();
+    expect(outageTick1.judgeUnavailable).toBe(1);
+    expect(outageTick2.judgeUnavailable).toBe(1);
+    expect(outageTick1.retryExhausted).toBe(0);
+    expect(outageTick2.retryExhausted).toBe(0);
+    const duringOutage = await store.loadAll();
+    // The [D-400] budget was never touched -- no dispatch was ever recorded.
+    expect(duringOutage.get(MCQ_ID)?.pendingRevalidation?.dispatchedAt).toBeUndefined();
+    expect(duringOutage.get(MCQ_ID)?.pendingRevalidation?.retriedAt).toBeUndefined();
+
+    // The Worker reconnects -- same trigger, same store, no restart.
+    online = true;
+    now = 1_000;
+    const report = await trigger.tick(vault, actions());
+
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(report.refreshed).toBe(1);
+    expect(report.retryExhausted).toBe(0);
+    const afterReconnect = await store.loadAll();
+    expect(afterReconnect.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+  });
+
+  it('a genuine provider failure while reachable still spends the [D-400] budget exactly as before — an outage never widens the bound, it only stops it being spent for nothing', async () => {
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      // [D-398]: a self-referential citation keeps this MCQ tracked under the
+      // new authorship-based rule -- this fixture tests batch-pass revision
+      // mechanics (D-093/D-351/D-400), never the D-366/D-398 exemption itself.
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
+    const store = new FakeCitationHashStore();
+    let now = 0;
+    const judge: RevisionJudgePort = {
+      judge: vi.fn(async () => {
+        throw new Error('provider unavailable');
+      }),
+    };
+    // Always reachable throughout -- the failures below are genuine
+    // provider errors, not an outage, so the pre-existing [D-400] bound
+    // (one original check, one retry, then `retryExhausted` forever) must
+    // fire exactly as `[D-400] restart recovery` above already proves.
+    const trigger = new CitationRevisionTrigger({
+      store,
+      judge,
+      clock: { now: () => now },
+      isOnline: () => true,
+    });
+
+    await trigger.tick(vault, actions());
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    now = 1_000;
+    const original = await trigger.tick(vault, actions());
+    expect(original.retryExhausted).toBe(0);
+    now = 2_000;
+    const retry = await trigger.tick(vault, actions());
+    expect(retry.retryExhausted).toBe(0);
+    now = 3_000;
+    const exhausted = await trigger.tick(vault, actions());
+
+    expect(judge.judge).toHaveBeenCalledTimes(2);
+    expect(exhausted.retryExhausted).toBe(1);
   });
 });
 

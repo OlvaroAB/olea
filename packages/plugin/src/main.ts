@@ -2195,6 +2195,12 @@ export default class OleaPlugin extends Plugin {
       store: this.citationHashStore,
       clock: { now: () => this.now().getTime() },
       judge: adaptMaterialityJudgeAsRevisionJudge(this.buildMaterialityJudge()),
+      // `[ol-egov.141.89.5.33]`: the [D-400] retry budget is spent only per
+      // REACHABLE attempt — see `citation-revision-wiring.ts`'s own "AN
+      // OUTAGE NEVER SPENDS THE [D-400] BUDGET" doc section. Same
+      // `navigator.onLine` source `processNowAction`/the [D-420] registry
+      // action already use for the identical reachability question.
+      isOnline: () => navigator.onLine,
     });
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`

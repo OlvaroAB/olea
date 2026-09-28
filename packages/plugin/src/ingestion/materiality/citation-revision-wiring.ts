@@ -164,6 +164,42 @@
  * before, and the D-311 obsolete-answer guard (`isPendingRevalidationCurrent`)
  * applies to a retry's own late answer exactly as it already does to an
  * original one — no changes needed there.
+ *
+ * ===========================================================================
+ * AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET — THE BOUND IS PER REACHABLE
+ * ATTEMPT (`ol-egov.141.89.5.33`)
+ * ===========================================================================
+ * `[D-400]`'s bound is ONE retry PER ORIGINAL CHECK, deliberately shared
+ * between a call truly lost (a restart mid-`await`) and "a provider failure
+ * this loop's own outer `catch` below swallowed" — see the section above.
+ * But a `WorkerMaterialityJudge` call made while the Worker is flatly
+ * UNREACHABLE (no connection at all, not a configured-but-erroring Worker)
+ * is not a check that was ever really attempted — the moment F runner host
+ * found that the pre-existing code could not tell the two apart, so an edit
+ * made during an outage could spend both the original check AND the retry
+ * before the Worker was ever reachable, leaving it stuck in the
+ * `retryExhausted` state forever with no automatic dispatch ever reaching
+ * the Worker — `[D-400]`'s own condition 4 ("a recoverable deferred state")
+ * was never actually earned for that item.
+ *
+ * `deps.isOnline` (optional, defaults to `() => true` — the same permissive
+ * default `ingestion/process-now.ts`'s own `isOnline` takes for tests and an
+ * unwired caller; production `main.ts` supplies `() => navigator.onLine`,
+ * the identical source `[D-420]`'s own `registry/deferred-recheck-retry.ts`
+ * already uses for the SAME reachability question) is read once per `tick()`
+ * call below and gates the DISPATCH half only: `[D-400]`'s `retryExhausted`
+ * accounting (a difference whose retry is already spent) is untouched by
+ * reachability — a genuinely spent budget stays spent, offline or not — but
+ * a NOT-YET-exhausted difference records no dispatch and never reaches
+ * `judge.judge()` while offline, taking the ordinary `'judge-unavailable'`
+ * outcome instead (exactly `evaluateCitedPassageRevision`'s own `judge ===
+ * null` branch: the pending fact is still recorded per `[D-351]`, nothing
+ * else advances, and the SAME delta is retried — for real, this time — on
+ * the first tick after `isOnline()` reads true again). No new persisted
+ * field: `deps.isOnline` reads a live signal each call, so an in-memory-only
+ * "was this dispatch actually attempted while reachable" concept, matching
+ * this bead's scope (the plugin staying running; a restart mid-outage is
+ * `[D-427]`'s separate, open question, not this one).
  */
 
 import {
@@ -295,6 +331,14 @@ export interface CitationRevisionTriggerDeps {
   readonly store: CitationHashStore;
   readonly judge: RevisionJudgePort | null;
   readonly clock: Clock;
+  /**
+   * See this module's own "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc
+   * section above. Defaults to `() => true` (always reachable) — the same
+   * permissive default `ingestion/process-now.ts`'s own `isOnline` takes —
+   * so every existing caller and test that supplies no value keeps today's
+   * behaviour unchanged.
+   */
+  readonly isOnline?: () => boolean;
 }
 
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
@@ -409,6 +453,12 @@ export class CitationRevisionTrigger {
       authorshipUnverified: 0,
       retryExhausted: 0,
     };
+
+    // See this module's own "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET"
+    // doc section: read once per pass, not per instrument — reachability
+    // cannot meaningfully change within one synchronous batch pass, and a
+    // single snapshot keeps every instrument this pass touches consistent.
+    const online = (this.deps.isOnline ?? (() => true))();
 
     // `[D-351]`: the moment `evaluateCitedPassageRevision` confirms a real
     // difference, it calls this BEFORE any judge call, so the pending fact
@@ -579,7 +629,8 @@ export class CitationRevisionTrigger {
             // The one permitted automatic retry already fired for this
             // exact difference and it is STILL unresolved — never retry
             // again, no matter how many further restarts or provider
-            // failures happen.
+            // failures happen. Unaffected by `online`: a genuinely spent
+            // budget stays spent regardless of reachability right now.
             report.retryExhausted += 1;
             continue;
           }
@@ -587,13 +638,18 @@ export class CitationRevisionTrigger {
           // this exact difference; the one permitted automatic retry when a
           // dispatch is already recorded and still unresolved (lost to a
           // restart, a provider failure this same `catch` swallowed, or a
-          // genuine answer whose resolving write itself failed).
-          await this.deps.store.recordDispatch(
-            instrumentId,
-            newContentHash,
-            this.deps.clock.now(),
-            priorForThisDifference?.dispatchedAt !== undefined,
-          );
+          // genuine answer whose resolving write itself failed). Gated on
+          // `online`: a flatly unreachable Worker never gets to spend this —
+          // see this module's own "AN OUTAGE NEVER SPENDS THE `[D-400]`
+          // BUDGET" doc section.
+          if (online) {
+            await this.deps.store.recordDispatch(
+              instrumentId,
+              newContentHash,
+              this.deps.clock.now(),
+              priorForThisDifference?.dispatchedAt !== undefined,
+            );
+          }
         }
 
         outcome = await evaluateCitedPassageRevision(
@@ -603,7 +659,11 @@ export class CitationRevisionTrigger {
             previousContentHash: await hashText(previous.text),
             current,
           },
-          this.deps.judge,
+          // While unreachable, take the SAME `'judge-unavailable'` path a
+          // `judge === null` caller already gets — no call, no spend, the
+          // pending fact still recorded per `[D-351]`. See this module's own
+          // "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc section.
+          online ? this.deps.judge : null,
           this.deps.clock,
           pendingRecorder,
         );
@@ -820,6 +880,8 @@ export interface CitationRevisionWiringDeps {
   readonly store: CitationHashStore;
   readonly judge: RevisionJudgePort | null;
   readonly clock: Clock;
+  /** See `CitationRevisionTriggerDeps.isOnline`'s own doc. */
+  readonly isOnline?: () => boolean;
 }
 
 export function buildCitationRevisionWiring(
