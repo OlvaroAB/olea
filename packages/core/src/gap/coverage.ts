@@ -205,7 +205,9 @@ export interface CoverageScope {
    * extraction finished: a partly read or unsettled source, or unfinished
    * extraction, withdraws it. Where the caller supplied `declaredUnits`
    * (`ol-egov.141.89.11.19`), an empty declared set or any unit with no
-   * concept key aligned to it withdraws it too.
+   * concept key aligned to it withdraws it too, and so does a declared scope
+   * the population could not know in full (`declaredScopeUnknown`,
+   * `ol-egov.141.89.11.4`).
    *
    * **Note what this still is not.** It says the read path completed, not that
    * concept resolution was complete or that her material was checked
@@ -342,6 +344,14 @@ export interface SummariseCoverageScopeOptions {
    * aligned to it withholds `canStateExhaustiveness`.
    */
   readonly declaredUnits?: readonly DeclaredUnitScope[];
+  /**
+   * `ol-egov.141.89.11.4`: `true` when some course that declares a scope has a
+   * denominator that is not known (declarations not extracted, or a document partly
+   * read, unread, unreadable or with no record), so `declaredUnits` may be missing
+   * units. Withholds `canStateExhaustiveness`. `undefined` or `false` changes nothing.
+   * Formed from the population by `../coverage/gate.ts#coverageGateOptionsOf`.
+   */
+  readonly declaredScopeUnknown?: boolean;
 }
 
 /**
@@ -407,8 +417,9 @@ export function summariseCoverageScope(
       ? null
       : declaredUnits.filter((u) => u.conceptKeys.length === 0).length;
   const declaredUnitsWithholdExhaustiveness =
-    declaredUnits !== undefined &&
-    (declaredUnits.length === 0 || (unalignedDeclaredUnitCount ?? 0) > 0);
+    options.declaredScopeUnknown === true ||
+    (declaredUnits !== undefined &&
+      (declaredUnits.length === 0 || (unalignedDeclaredUnitCount ?? 0) > 0));
 
   return {
     sources,
@@ -426,7 +437,8 @@ export function summariseCoverageScope(
     // is the purest form of the sentence this bead rejects. `[D-326]`: and
     // nothing recorded as partly read, unsettled or not yet extracted.
     // `ol-egov.141.89.11.19`: and, where declared units were supplied, at
-    // least one and every one aligned.
+    // least one and every one aligned. `ol-egov.141.89.11.4`: and no declaring
+    // course's denominator unknown.
     canStateExhaustiveness:
       sources.length > 0 &&
       yieldedNothingCount === 0 &&

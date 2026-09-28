@@ -71,6 +71,8 @@
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
+import { coverageGateOptionsOf } from '../coverage/gate.js';
+import type { CoursePopulation } from '../coverage/types.js';
 import type { EvidenceQuestionCitation } from '../evidence-edge/types.js';
 import { type NeedReading, readNeed } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
@@ -277,6 +279,16 @@ export interface BuildGapViewInput {
   readonly materialPresence: ReadonlyMap<string, ConceptMaterialPresence>;
   /** `extractTier3Evidence`'s own `sourceCoverage`, unmodified. */
   readonly sourceCoverage: readonly SourceCoverage[];
+  /**
+   * The standing views' population record per course (`../coverage/`,
+   * `ol-egov.141.89.11.4`, `[D-355]`, `[D-326]`). **Omitted means today's
+   * gate.** Supplied, the exhaustive gate also withholds on a declaring
+   * course's empty or unaligned declared set, or on a declared scope not known
+   * in full (`../coverage/gate.ts`). No production caller supplies it yet:
+   * doing so changes when the closing line shows, and is `ol-egov.141.89.11.5`'s
+   * wiring with its copy.
+   */
+  readonly coveragePopulation?: readonly CoursePopulation[];
   readonly readiness?: ReadinessOptions;
   /**
    * Per concept KEY: whether a correct, current, standing quiz answer exists
@@ -497,7 +509,10 @@ export function buildGapView(input: BuildGapViewInput): GapViewModel {
 
   return {
     courses,
-    scope: summariseCoverageScope(input.sourceCoverage),
+    scope: summariseCoverageScope(
+      input.sourceCoverage,
+      input.coveragePopulation === undefined ? {} : coverageGateOptionsOf(input.coveragePopulation),
+    ),
     asOf: input.ranking.asOf,
   };
 }

@@ -212,6 +212,19 @@ describe('summariseCoverageScope', () => {
         expect(withUnits.unreadableCount).toBe(without.unreadableCount);
         expect(withUnits.notAttemptedCount).toBe(without.notAttemptedCount);
       });
+
+      // `ol-egov.141.89.11.4`: a declared scope the population could not know in full.
+      it('is withheld when a declared scope is unknown, even with every unit aligned', () => {
+        const aligned = [declaredUnit('u1', ['cpt-01'])];
+        expect(
+          summariseCoverageScope(allRead, { declaredUnits: aligned, declaredScopeUnknown: true })
+            .canStateExhaustiveness,
+        ).toBe(false);
+        expect(
+          summariseCoverageScope(allRead, { declaredUnits: aligned, declaredScopeUnknown: false })
+            .canStateExhaustiveness,
+        ).toBe(true);
+      });
     });
   });
 

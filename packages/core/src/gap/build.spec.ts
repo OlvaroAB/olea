@@ -3,6 +3,8 @@ import type { AssessmentRecord } from '../assessment/types.js';
 import { provisionalConceptKey } from '../concept/concept-key.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
+import { buildCoursePopulation } from '../coverage/population.js';
+import type { CoursePopulationInput } from '../coverage/types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
 import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -461,5 +463,107 @@ describe('GapRow.assessmentRelevance — the pre-mastery-need blend, named apart
     // separately readable without recomputing it from the others.
     expect(row?.assessmentRelevance).not.toBeCloseTo(row?.priorityScore ?? 0, 5);
     expect(row?.priorityScore).not.toBeCloseTo(row?.gapScore ?? 0, 5);
+  });
+});
+
+// `ol-egov.141.89.11.4`: scenario "the gap view's exhaustive gate takes the population
+// where a course declares a scope" (features/F4-oracle.md, olea-service).
+describe('the gap view gate takes the population where a course declares a scope', () => {
+  const population = (overrides: Partial<CoursePopulationInput> = {}) =>
+    buildCoursePopulation({
+      courseId: 'crs-a',
+      documents: [
+        {
+          documentId: 'doc-1',
+          examiner: true,
+          revision: 'r1',
+          revisionDate: '2026-01-07',
+          reading: { state: 'complete' },
+          declarationExtraction: 'finished',
+        },
+      ],
+      declarations: [
+        {
+          declarationId: 'u1',
+          documentId: 'doc-1',
+          revision: 'r1',
+          alignment: 'aligned',
+          conceptKeys: ['c1'],
+        },
+      ],
+      sources: [{ sourceId: 'src-1', reading: { state: 'complete' } }],
+      conceptExtraction: 'finished',
+      concepts: [{ conceptKey: 'c1', sourceIds: ['src-1'] }],
+      instruments: [],
+      conceptEvidence: new Map(),
+      ...overrides,
+    });
+  const withPopulation = (pops: ReturnType<typeof population>[] | undefined) =>
+    buildGapView({
+      ranking: ranking([entry('Alpha', 1, 3)]),
+      assessments: ASSESSMENTS,
+      materialPresence: new Map(),
+      sourceCoverage: COVERAGE,
+      ...(pops === undefined ? {} : { coveragePopulation: pops }),
+    }).scope;
+
+  it('with no population the gate is unchanged', () => {
+    expect(withPopulation(undefined).canStateExhaustiveness).toBe(true);
+    expect(withPopulation(undefined).declaredUnitCount).toBeNull();
+  });
+
+  it('a declaring course whose units are all aligned and known keeps the claim', () => {
+    const scope = withPopulation([population()]);
+    expect(scope.canStateExhaustiveness).toBe(true);
+    expect(scope.declaredUnitCount).toBe(1);
+  });
+
+  it('an unaligned unit withholds it', () => {
+    const scope = withPopulation([
+      population({
+        declarations: [
+          {
+            declarationId: 'u1',
+            documentId: 'doc-1',
+            revision: 'r1',
+            alignment: 'aligned',
+            conceptKeys: ['c1'],
+          },
+          {
+            declarationId: 'u2',
+            documentId: 'doc-1',
+            revision: 'r1',
+            alignment: 'not-aligned',
+            conceptKeys: [],
+          },
+        ],
+      }),
+    ]);
+    expect(scope.canStateExhaustiveness).toBe(false);
+    expect(scope.unalignedDeclaredUnitCount).toBe(1);
+  });
+
+  it('a denominator not yet known withholds it', () => {
+    const scope = withPopulation([
+      population({
+        documents: [
+          {
+            documentId: 'doc-1',
+            examiner: true,
+            revision: 'r1',
+            revisionDate: '2026-01-07',
+            reading: { state: 'complete' },
+            declarationExtraction: 'pending',
+          },
+        ],
+      }),
+    ]);
+    expect(scope.canStateExhaustiveness).toBe(false);
+  });
+
+  it('a population in which no course declares a scope leaves the gate unchanged', () => {
+    const scope = withPopulation([population({ documents: [], declarations: [] })]);
+    expect(scope.canStateExhaustiveness).toBe(true);
+    expect(scope.declaredUnitCount).toBeNull();
   });
 });
