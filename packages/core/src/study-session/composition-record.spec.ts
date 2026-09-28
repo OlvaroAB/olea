@@ -630,7 +630,10 @@ describe('[D-331] buildCompositionRecord', () => {
       reentry: false,
       focusPolicy: 'single',
       course: 'CRS101',
-      branch: 'deficit',
+      // `[D-418]`: `baseInput` supplies `emptyReplay()` — no session history at all, so no
+      // course reads behind its share. `'none-behind'` is the true branch; the course chosen is
+      // unchanged (`readsBehind` gates the branch, never the winner).
+      branch: 'none-behind',
       groupingSignal: 'none',
       steering: { courses: null, conceptIds: null },
       budgetMinutes: 2,

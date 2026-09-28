@@ -27,7 +27,7 @@ import { describe, expect, it } from 'vitest';
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): not yet barrel-exported from `olea-core` — the
 // same source-path precedent `test/session/composition-recorder.spec.ts` already uses for this
 // module.
-import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
+import { FOCUS_BRANCH_SENTENCE, focusReasonFor } from '../../../core/src/study-session/compose.js';
 import {
   HOME_EVERY_ASSESSMENT_PASSED_LINE,
   HOME_NOTHING_TO_PRACTISE_LINE,
@@ -689,7 +689,10 @@ describe("createLocalHomeProvider — threads the composed session's focusReason
     const session = sessionModel(state);
     // Guards the rest of this test against a silently-undefined reason —
     // `twoCourseVault()` unsteered always has a dominant course (the F4.6
-    // steering suite above establishes TESTC101 wins the deficit tie-break).
+    // steering suite above establishes TESTC101 wins the by-name tie-break).
+    // `[D-417]`/`[D-418]`: the fixture has no session or window history at
+    // all, so nobody is behind — the true branch is `'none-behind'`, not
+    // `'deficit'`.
     expect(session.focusReason).toBeDefined();
     expect(state.focusReason).toBe(session.focusReason);
 
@@ -699,7 +702,7 @@ describe("createLocalHomeProvider — threads the composed session's focusReason
     // just that some string made it across.
     if (state.focusReason === undefined) throw new Error('expected a focusReason');
     expect(sessionCompositionSentence(state.focusReason)).toBe(
-      'This course because it is behind its share from your recent sessions.',
+      sessionCompositionSentence(focusReasonFor('none-behind', 'TESTC101')),
     );
   });
 

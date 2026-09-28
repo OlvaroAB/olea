@@ -61,7 +61,7 @@ const COMPOSED_AT = '2026-08-25T09:00:00.000-04:00';
 const ENUMS = {
   kind: ['compose', 'extend'],
   focusPolicy: ['single', 'every-course'],
-  branch: ['filter', 'urgency', 'deficit'],
+  branch: ['filter', 'urgency', 'deficit', 'none-behind'],
   groupingSignal: ['assessment-scope', 'arrival-cohort', 'relatedness', 'none'],
   obligationClass: ['unmet', 'recall-due', 'baseline-due', 'elective'],
   formatMatch: ['preferred-format', 'other-format', 'no-preference'],

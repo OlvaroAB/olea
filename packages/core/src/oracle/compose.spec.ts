@@ -379,7 +379,9 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // `need` outside `[0, 1]` or a `priorityScore` shifted by an extra
     // `(1 - 0.35)` term, neither of which this is.
     expect(entry.factors.need).toBeCloseTo(0.65, 12);
-    expect(entry.reasoning).toContain('demand-aware readiness');
+    // The ranking reason never renders readiness (registry §15 — the
+    // `needSource` assertion above already pins which source decided
+    // `need`; the reason names only what decided).
   });
 
   it('a concept with no recall-tier instrument read (e.g. no review history) is left OUT of the map — reads neutral in the blend, absent in the stored factor, never a fabricated value', async () => {
