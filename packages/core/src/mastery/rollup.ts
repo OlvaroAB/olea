@@ -155,6 +155,7 @@ import { readExplainBackCorrectness } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
+import { type InstrumentValidityProjection, projectInstrumentValidity } from './validity.js';
 import { readVitality, type VitalityInstrument, type VitalityReading } from './vitality.js';
 
 /** R7's three evidence tiers, ordered weakest to strongest. */
@@ -1107,9 +1108,47 @@ export function conceptVitalityInstruments(
 }
 
 /**
+ * The instruments that are evidence for `conceptId` and whose evidence still
+ * stands: {@link conceptVitalityInstruments} less every instrument proven
+ * invalid (`ol-egov.141.89.9.60`). Vitality is a CURRENT reading, and current
+ * readings always exclude proven-invalid evidence (`[D-338]` item 3;
+ * `[D-097]`'s read-time exclusion on reject, INV-6) — the same set the
+ * attainment fold excludes, read from the one validity projection
+ * (`./validity.ts`): a standing rejection no restore has lifted, or a grade
+ * contest resolved `corrected`.
+ *
+ * Withheld-but-valid evidence (her suspension or withdrawal, a successor) is
+ * NOT proven invalid and keeps counting here: `[D-347]` separates whether
+ * practice can be offered now from whether past evidence was sound, so her
+ * pause never erases what she did. `./attainment.ts`'s
+ * `readAllEligibleConceptVitality` is the reader that carries the withheld
+ * policy; with its default it reads exactly what this reads.
+ *
+ * `conceptVitalityInstruments` itself stays the unfiltered join, because its
+ * other callers apply their own eligibility rule to it.
+ */
+function standingVitalityInstruments(
+  entries: readonly ReviewLogEntry[],
+  conceptId: string,
+  replayed: ReplayResult,
+  validity: InstrumentValidityProjection,
+): readonly VitalityInstrument[] {
+  const instruments = conceptVitalityInstruments(entries, conceptId, replayed);
+  if (validity.provenInvalid.size === 0) return instruments;
+  return instruments.filter((instrument) => !validity.provenInvalid.has(instrument.instrumentId));
+}
+
+/**
  * Reads one concept's vitality (R3's fold, `[D-087]`) from the review log:
  * replays every instrument's scheduler state, gathers the ones that are
- * evidence for `conceptId`, and folds them through `readVitality`.
+ * evidence for `conceptId` and still stand (proven-invalid instruments left
+ * out — see `standingVitalityInstruments`), and folds them through
+ * `readVitality`.
+ *
+ * `validity` defaults to the projection of `entries` alone. A caller that
+ * reads dispute records apart from the log passes
+ * `projectInstrumentValidity(entries, disputes)`, so a contest resolved
+ * `corrected` reaches the exclusion too.
  *
  * Unlike `computeConceptMastery`, this is not a pure function of `entries`
  * alone — vitality is a current reading and needs `now` and the (declared,
@@ -1127,19 +1166,22 @@ export function readConceptVitality(
   scheduler: Scheduler,
   now: Date,
   holdingCut: number,
+  validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
 ): VitalityReading {
   const replayed = replaySchedulerStates(entries, scheduler);
-  const instruments = conceptVitalityInstruments(entries, conceptId, replayed);
+  const instruments = standingVitalityInstruments(entries, conceptId, replayed, validity);
   return readVitality({ instruments, scheduler, now, holdingCut });
 }
 
 /**
  * `readConceptVitality` for every concept in `conceptIds`, replaying the log
- * once and reusing the result — the vitality-axis counterpart to
- * `computeAllConceptMastery` above. Not "every concept the log names": the
- * caller supplies the set, matching `computeAllConceptMastery`'s own
- * default-from-log convenience being a separate, explicit choice
- * (`conceptIdsInLog`) rather than baked into this function.
+ * once and projecting validity once, reusing both — the vitality-axis
+ * counterpart to `computeAllConceptMastery` above. Proven-invalid evidence
+ * is excluded exactly as in `readConceptVitality`; `validity` defaults the
+ * same way. Not "every concept the log names": the caller supplies the set,
+ * matching `computeAllConceptMastery`'s own default-from-log convenience
+ * being a separate, explicit choice (`conceptIdsInLog`) rather than baked
+ * into this function.
  */
 export function readAllConceptVitality(
   entries: readonly ReviewLogEntry[],
@@ -1147,11 +1189,12 @@ export function readAllConceptVitality(
   scheduler: Scheduler,
   now: Date,
   holdingCut: number,
+  validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
 ): ReadonlyMap<string, VitalityReading> {
   const replayed = replaySchedulerStates(entries, scheduler);
   const result = new Map<string, VitalityReading>();
   for (const id of conceptIds) {
-    const instruments = conceptVitalityInstruments(entries, id, replayed);
+    const instruments = standingVitalityInstruments(entries, id, replayed, validity);
     result.set(id, readVitality({ instruments, scheduler, now, holdingCut }));
   }
   return result;

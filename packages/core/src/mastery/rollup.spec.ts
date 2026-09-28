@@ -13,6 +13,7 @@
 // ("concept-a", "qa:concept-a:1"), never fixture vocabulary — INV-3.
 import assert from 'node:assert';
 import type {
+  DisputeLogRecord,
   InstrumentType,
   Rating,
   ReviewLogEntry,
@@ -20,12 +21,14 @@ import type {
   SoloLevel,
   SupportLevel,
   SuspendLogRecord,
+  VerdictLogRecord,
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { mergeReviewLogRecords } from '../review-log/merge.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
 import { replaySchedulerStates } from '../session/replay.js';
+import { readAllEligibleConceptVitality } from './attainment.js';
 import {
   computeAllConceptMastery,
   computeConceptMastery,
@@ -38,6 +41,7 @@ import {
   readAllConceptVitality,
   readConceptVitality,
 } from './rollup.js';
+import { projectInstrumentValidity } from './validity.js';
 
 function review(overrides: Partial<ReviewLogRecord> = {}): ReviewLogRecord {
   return {
@@ -1341,5 +1345,214 @@ describe('Knowledge model §8 test 5 / `[D-087]` — strip-invariance', () => {
     expect(withResult.evidence.scoredEventCount).toBe(1);
     expect(withResult.evidence.scoredSuccessCount).toBe(1);
     expect(withoutResult.evidence.scoredEventCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.60`: vitality is a CURRENT reading, so it excludes the
+// evidence of an instrument proven invalid (`[D-338]` item 3; `[D-097]`'s
+// read-time exclusion on reject, INV-6) — the same set the attainment fold
+// excludes (`./validity.ts#projectInstrumentValidity`'s `provenInvalid`).
+// Withheld-but-valid evidence (her suspension, a successor) is not proven
+// invalid and keeps counting (`[D-347]`: availability is not validity).
+// ---------------------------------------------------------------------------
+
+function verdictOn(
+  instrumentId: string,
+  value: VerdictLogRecord['verdict'],
+  eventId: string,
+  timestamp = '2026-01-20T09:00:00-04:00',
+): VerdictLogRecord {
+  return {
+    schemaVersion: 6,
+    kind: 'verdict',
+    eventId,
+    timestamp,
+    instrumentId,
+    instrumentType: 'qa',
+    conceptIds: ['concept-a'],
+    verdict: value,
+    artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+  };
+}
+
+function correctedGradeContest(instrumentId: string): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6,
+    kind: 'dispute',
+    timestamp: '2026-01-20T09:00:00-04:00',
+    claimKind: 'grade',
+    claimRendering: 'explain-back-grade',
+    conceptIds: ['concept-a'],
+    instrumentId,
+    evidenceBasis: 'basis-1',
+    effect: 'quarantined',
+  };
+  return [
+    { ...base, eventId: 'dispute-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'dispute-resolved',
+      timestamp: '2026-01-21T09:00:00-04:00',
+      resolves: 'dispute-open',
+      outcome: 'corrected',
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('readAllConceptVitality / readConceptVitality — proven-invalid evidence is excluded (D-338 item 3, INV-6)', () => {
+  // `faded` alone would set the minimum and read the concept as tending.
+  const scheduler = stubScheduler({ sound: 0.99, faded: 0.3 });
+  const practice: ReviewLogEntry[] = [
+    review({ eventId: 'r-sound', instrumentId: 'sound' }),
+    review({ eventId: 'r-faded', instrumentId: 'faded' }),
+  ];
+
+  it('baseline: with no validity fact the faded instrument sets the minimum', () => {
+    const reading = readAllConceptVitality(practice, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(reading?.value).toBe('tending');
+    expect(reading?.weakest?.instrumentId).toBe('faded');
+    expect(reading?.instrumentsRead).toBe(2);
+  });
+
+  it('a rejected instrument no longer counts: removing the rejection moves the reading back (metamorphic)', () => {
+    const withRejection = [...practice, verdictOn('faded', 'rejected', 'v-reject')];
+    const excluded = readAllConceptVitality(withRejection, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(excluded).toStrictEqual({
+      value: 'holding',
+      weakest: { instrumentId: 'sound', recallProbability: 0.99 },
+      instrumentsRead: 1,
+    });
+    const withoutRejection = withRejection.filter((e) => e.eventId !== 'v-reject');
+    expect(
+      readAllConceptVitality(withoutRejection, ['concept-a'], scheduler, NOW, 0.9).get('concept-a')
+        ?.value,
+    ).toBe('tending');
+  });
+
+  it('readConceptVitality applies the same exclusion as the batched reader', () => {
+    const withRejection = [...practice, verdictOn('faded', 'rejected', 'v-reject')];
+    expect(readConceptVitality(withRejection, 'concept-a', scheduler, NOW, 0.9)).toStrictEqual(
+      readAllConceptVitality(withRejection, ['concept-a'], scheduler, NOW, 0.9).get('concept-a'),
+    );
+    expect(readConceptVitality(withRejection, 'concept-a', scheduler, NOW, 0.9).value).toBe(
+      'holding',
+    );
+  });
+
+  it('her deliberate restore lifts the rejection, and the evidence counts again (D-396)', () => {
+    const restored: ReviewLogEntry[] = [
+      ...practice,
+      verdictOn('faded', 'rejected', 'v-reject'),
+      {
+        ...verdictOn('faded', 'accepted', 'v-restore', '2026-01-22T09:00:00-04:00'),
+        restores: 'v-reject',
+      },
+    ];
+    const reading = readAllConceptVitality(restored, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(reading?.value).toBe('tending');
+    expect(reading?.instrumentsRead).toBe(2);
+  });
+
+  it('a grade contest resolved corrected, logged in the entries, excludes the instrument', () => {
+    const entries = [...practice, ...correctedGradeContest('faded')];
+    const reading = readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(reading?.value).toBe('holding');
+    expect(reading?.instrumentsRead).toBe(1);
+  });
+
+  it('disputes read apart from the log reach the exclusion through a supplied validity projection', () => {
+    const validity = projectInstrumentValidity(practice, correctedGradeContest('faded'));
+    const reading = readAllConceptVitality(
+      practice,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      0.9,
+      validity,
+    ).get('concept-a');
+    expect(reading?.value).toBe('holding');
+    expect(readConceptVitality(practice, 'concept-a', scheduler, NOW, 0.9, validity).value).toBe(
+      'holding',
+    );
+  });
+
+  it('an only instrument proven invalid leaves the concept at the floor, never at a reading built on it', () => {
+    const entries = [
+      review({ eventId: 'r-faded', instrumentId: 'faded' }),
+      verdictOn('faded', 'rejected', 'v-reject'),
+    ];
+    expect(
+      readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get('concept-a'),
+    ).toStrictEqual({ value: 'early', weakest: null, instrumentsRead: 0 });
+  });
+
+  it('withheld but not proven invalid keeps counting: her suspension is not a defect (D-347)', () => {
+    const entries = [
+      ...practice,
+      suspend({
+        eventId: 's-faded',
+        instrumentId: 'faded',
+        timestamp: '2026-01-20T09:00:00-04:00',
+      }),
+    ];
+    const reading = readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get(
+      'concept-a',
+    );
+    expect(reading?.value).toBe('tending');
+    expect(reading?.weakest?.instrumentId).toBe('faded');
+  });
+
+  it('her acceptance is not a validity fact: an accepted or edited verdict excludes nothing', () => {
+    const entries = [
+      ...practice,
+      verdictOn('faded', 'accepted', 'v-accept'),
+      verdictOn('sound', 'edited', 'v-edit'),
+    ];
+    expect(
+      readAllConceptVitality(entries, ['concept-a'], scheduler, NOW, 0.9).get('concept-a')?.value,
+    ).toBe('tending');
+  });
+
+  it('excludes exactly the set the attainment reader excludes (one validity rule for vitality)', () => {
+    const entries: ReviewLogEntry[] = [
+      review({ eventId: 'a1', instrumentId: 'sound' }),
+      review({ eventId: 'a2', instrumentId: 'faded' }),
+      review({ eventId: 'b1', instrumentId: 'b-sound', conceptIds: ['concept-b'] }),
+      review({ eventId: 'b2', instrumentId: 'b-faded', conceptIds: ['concept-b'] }),
+      verdictOn('faded', 'rejected', 'v-reject'),
+      ...correctedGradeContest('b-faded'),
+      suspend({ eventId: 's-b', instrumentId: 'b-sound', timestamp: '2026-01-20T09:00:00-04:00' }),
+    ];
+    const both = stubScheduler({ sound: 0.99, faded: 0.3, 'b-sound': 0.95, 'b-faded': 0.2 });
+    const ids = ['concept-a', 'concept-b', 'concept-nowhere'];
+    const plain = readAllConceptVitality(entries, ids, both, NOW, 0.9);
+    const eligible = readAllEligibleConceptVitality(
+      entries,
+      ids,
+      both,
+      NOW,
+      0.9,
+      projectInstrumentValidity(entries),
+    );
+    for (const id of ids) {
+      const e = eligible.get(id);
+      assert(e !== undefined);
+      expect(plain.get(id)).toStrictEqual({
+        value: e.value,
+        weakest: e.weakest,
+        instrumentsRead: e.instrumentsRead,
+      });
+    }
+    expect(plain.get('concept-a')?.value).toBe('holding');
+    expect(plain.get('concept-b')?.value).toBe('holding');
   });
 });
