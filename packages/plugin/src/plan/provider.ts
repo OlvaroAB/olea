@@ -52,10 +52,12 @@
 
 import type {
   CourseAvoidanceSteeringAnswer,
+  DisputeLogRecord,
   RankOracleOptions,
   Scheduler,
   StudyPlanProvider,
   StudyPlanStore,
+  VaultPath,
   VaultSource,
 } from 'olea-core';
 import {
@@ -66,6 +68,7 @@ import {
   enumerateVaultInstruments,
   loadCachedStudyPlan,
   pastSessionsFromReviewLog,
+  readReviewLogFile,
   readReviewLogHistory,
   resolveAssessments,
   resolvePlanPolicyCourseInputs,
@@ -82,6 +85,23 @@ import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider
 import { type ObsidianDataHost, ObsidianStudyPlanSettingsStore } from './settings-store.js';
 
 const AVOIDANCE_DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * `[D-095]`/`[D-338]`'s corrected-contest validity fold (`ol-egov.141.89.9.69`) needs dispute
+ * records to reach `composeOracleRanking`'s own `disputes` input — `readReviewLogHistory`
+ * (`../../core/session/history.ts`) deliberately does not surface them (`../../core/review-
+ * log/parse.ts`'s own doc says why). `session/history.ts` sits outside this bead's `owns`, so
+ * rather than widen it, this re-reads exactly the `files` that walk already reported as read —
+ * matching `../registry/provider.ts`'s and `../grove/provider.ts`'s own `disputesFromFiles`
+ * (duplicated rather than shared: different bead's `owns`, and this is six lines).
+ */
+async function disputesFromFiles(
+  vault: VaultSource,
+  files: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
+}
 
 /**
  * D-361's own clarification (`ol-egov.141.92`, carried on this bead's
@@ -306,13 +326,16 @@ export function createLocalStudyPlanProvider(
       // instruments she can still be served (the plan's served set,
       // `[D-404]` condition 2). One walk, the same one
       // `session-builder/provider.ts` makes.
-      const [{ entries }, enumeration, options, assessmentReport] = await Promise.all([
+      const [{ entries, files }, enumeration, options, assessmentReport] = await Promise.all([
         readReviewLogHistory(deps.vault, { additionalPaths }),
         enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
         deps.readRankWeights?.() ?? Promise.resolve(undefined),
         resolveAssessments(deps.vault, config.assignmentsBasePath),
       ]);
       const concepts = enumeration.concepts;
+      // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
+      // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
+      const disputes = await disputesFromFiles(deps.vault, files);
 
       // F1.2 (`ol-egov.141.8.10`): "not configured" now means neither a real
       // Base NOR any manual entry produced anything to work from —
@@ -332,6 +355,7 @@ export function createLocalStudyPlanProvider(
         vault: deps.vault,
         basePath: config.assignmentsBasePath,
         reviewLog: entries,
+        disputes,
         asOf: today,
         concepts,
         // C5.6/`[D-264]` items 3-4 (`ol-v7r5.53`): this was the one production

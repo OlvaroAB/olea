@@ -368,6 +368,7 @@ export async function readCourseSetupRecognitions(
   const input = {
     newCourse,
     entries,
+    disputes,
     concepts,
     sameAsLinks,
     vitality,

@@ -231,14 +231,20 @@ export interface RetrospectiveInput {
   /**
    * `[D-095]` grade-contest records, read alongside `entries` (`ol-egov.
    * 141.89.9.61`) — same field, same rule as `../today/panel.ts`'s
-   * `TodayPanelInput.disputes`: a contest resolved `corrected` is a
-   * proven-invalid fact `[D-338]` item 3 says a CURRENT reading must
-   * exclude, and `held`/`faded`'s vitality partition above is exactly such
-   * a reading. Optional and defaults to none — a rejection already inside
-   * `entries` still excludes without this field; only the corrected-contest
-   * half, read apart from the log, needs it. Supplied in production by
-   * `packages/plugin/src/retrospective/provider.ts`'s `buildRetrospective`
-   * call, from the same `readReviewHistory` read (`ol-egov.141.89.9.63`).
+   * `TodayPanelInput.disputes` (ruling of 2026-09-28 on `ol-egov.
+   * 141.89.9.66`, wired here by `ol-egov.141.89.9.68`): a contest resolved
+   * `corrected` proves ONE review's grade wrong (its `correctedEvidence`),
+   * never the whole instrument invalid — that review stays practice, a
+   * re-grade is read in its place, and the instrument's other reviews keep
+   * counting. `[D-338]` item 3's "a CURRENT reading must exclude" still
+   * applies, but to that one review via the replay `held`/`faded`'s
+   * vitality partition above reads, not to `provenInvalid`. Optional and
+   * defaults to none — a standing rejection or a defect suspension already
+   * inside `entries` still excludes without this field; only the
+   * corrected-contest half, read apart from the log, needs it. Supplied in
+   * production by `packages/plugin/src/retrospective/provider.ts`'s
+   * `buildRetrospective` call, from the same `readReviewHistory` read
+   * (`ol-egov.141.89.9.63`).
    */
   readonly disputes?: readonly DisputeLogRecord[];
 }

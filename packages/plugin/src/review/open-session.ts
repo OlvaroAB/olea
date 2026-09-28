@@ -148,11 +148,13 @@
  * recorded standing is suspect — but the port's own doc says the real reader
  * belongs here, where the whole review log is already in hand. Two of the
  * ruling's six named concerns are real, wired production reads today,
- * unconditionally: `rejected` (a `rejected` verdict, or a grade dispute that
- * resolved `corrected` — both fold onto `rejected` here, since both mean the
- * instrument is proven invalid; see {@link readInstrumentStanding}'s own doc
- * for why) folds straight off the SAME `composed.entries` this module
- * already reads for `replayUnconsumedSchedulingObservations`/
+ * unconditionally: `rejected` (a `rejected` verdict or a defect suspension —
+ * `validity.provenInvalid` — folded together with a grade dispute that
+ * resolved `corrected` — `correctedGradeInstrumentIds(disputes)`, pending
+ * David's ruling on whether it belongs here at all; see {@link
+ * readInstrumentStanding}'s own doc for why) folds straight off the SAME
+ * `composed.entries` this module already reads for
+ * `replayUnconsumedSchedulingObservations`/
  * `buildSupportLevelHistoryLookup`, no second parse. `contested` (an open,
  * unresolved grade dispute) needs one MORE fact `composed.entries` does not
  * carry — `review-log/parse.ts`'s own doc: a dispute line is deliberately
@@ -212,6 +214,7 @@ import type {
 import {
   buildReviewSession,
   calendarDaysEndingOn,
+  correctedGradeInstrumentIds,
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlanOverComposedRows,
@@ -1021,6 +1024,7 @@ export async function openReviewSession(
       // their input.
       resolveInstrumentStanding: readInstrumentStanding(
         instrumentValidity,
+        disputes,
         pendingRevalidationInstrumentIds,
         input.safetyUnavailableInstrumentIds ?? EMPTY_INSTRUMENT_ID_SET,
       ),
@@ -1064,10 +1068,19 @@ export async function openReviewSession(
       // concept at a time; see its module doc for the cost argument and for
       // why the review being written right now is deliberately not in
       // `entries`.
+      // `validity: instrumentValidity` (`ol-egov.141.89.9.69`): the SAME
+      // projection already built above for `resolveInstrumentStanding`, over
+      // the same `composed.entries`/`disputes` — the reader folds its own
+      // otherwise (`strong-recall-wiring.ts`'s own doc), so this is a second
+      // I/O-free fold avoided, not a behaviour change (rejections and defect
+      // suspensions already reached this reader; a corrected contest now
+      // does too, on the same "the whole review log is already in hand
+      // here" posture this block states for itself throughout).
       evaluateStrongRecallProposal: createStrongRecallProposalReader({
         entries: composed.entries,
         scheduler: input.scheduler,
         now,
+        validity: instrumentValidity,
       }),
       // F2.12's prerequisite-aware branch (`[D-265]` ruling 2,
       // `ol-egov.141.51.1.1` [INTERV-16]): closes over the SAME
@@ -1082,12 +1095,15 @@ export async function openReviewSession(
       // classification this bead's own close evidence flags Class B, and
       // for why `deps.relations` already carries rel.md §3's Default 4
       // freshness gate (this module never reads a raw `RelationSet`).
+      // `validity: instrumentValidity`, same reasoning as
+      // `evaluateStrongRecallProposal` just above.
       resolvePrerequisiteEvidence: createPrerequisiteEvidenceReader({
         entries: composed.entries,
         scheduler: input.scheduler,
         now,
         relations: input.relations ?? [],
         concepts: input.concepts ?? [],
+        validity: instrumentValidity,
       }),
       // F2.23's mismatch trigger (`[D-265]` ruling 3, `ol-egov.141.53.1`
       // [INTERV-11]): closes over the SAME `composed.entries` every other
@@ -1429,17 +1445,28 @@ async function disputesFromReviewLog(
  *   grade dispute (`[D-095]`'s "quarantines"; `review-log/contest.ts`'s
  *   `quarantinedGradeInstrumentIds`). This is exactly D-323's own "a
  *   contest" ground.
- * - `rejected`: the projection's `provenInvalid` map, folding BOTH of its
- *   reasons onto this one concern — a verdict of `rejected` (D-323's own
- *   "a rejection" ground, named literally), and a grade dispute that
- *   resolved `corrected` (`'corrected-on-contest'`, not literally named by
- *   the ruling's six-way vocabulary). Folding the second reason in here,
- *   rather than leaving it unmapped, is a Class B choice, not Class C
- *   (non-persisted, reversible): `mastery/validity.ts`'s own doc calls both
- *   readings "proven invalid," and offering an ordinary explain-back on a
- *   proven-invalid instrument is precisely what D-323 exists to prevent,
- *   whichever of the two facts proved it. Flagged for review rather than
- *   left undone.
+ * - `rejected`: the projection's `provenInvalid` map (a verdict of
+ *   `rejected`, D-323's own "a rejection" ground, named literally, or a
+ *   suspension recorded as a defect) folded together with
+ *   `correctedGradeInstrumentIds(disputes)` (`../../core/review-log/
+ *   contest.ts`; a grade dispute that resolved `corrected`,
+ *   `'corrected-on-contest'`, not literally named by the ruling's six-way
+ *   vocabulary). **As of the ruling of 2026-09-28 on `ol-egov.141.89.9.66`
+ *   (wired by `ol-egov.141.89.9.68`), a corrected contest proves only ONE
+ *   review's grade wrong — it is no longer in `provenInvalid`, which now
+ *   holds only `rejected`/`defect`; it lives in `validity.correctedEvidence`,
+ *   keyed by the corrected review's event id, and ONLY when the log can tie
+ *   the correction to a review at all (`unattributedCorrectionCount`
+ *   otherwise).** `readInstrumentStanding` below reads the closing dispute's
+ *   own `instrumentId` field directly instead (`correctedGradeInstrumentIds`)
+ *   — attribution or not, the SAME direct read the pre-ruling whole-
+ *   instrument rule used — to keep today's reading exactly: an ordinary
+ *   explain-back offered on an instrument with a corrected grade is exactly
+ *   what D-323 exists to prevent, whichever of the two facts proved it —
+ *   pending David's ruling on whether a corrected contest should still mark
+ *   the instrument suspect at all now that `[D-338]` reads it as a narrower
+ *   fact than a standing rejection; see `readInstrumentStanding`'s own
+ *   comment. Flagged for review rather than left undone.
  *
  * **A third is a real, wired read, conditional on a caller actually
  * supplying its input (`ol-egov.141.89.6.54`):**
@@ -1510,13 +1537,32 @@ async function disputesFromReviewLog(
  */
 function readInstrumentStanding(
   validity: InstrumentValidityProjection,
+  disputes: readonly DisputeLogRecord[],
   pendingRevalidationInstrumentIds: ReadonlySet<string>,
   safetyUnavailableInstrumentIds: ReadonlySet<string>,
 ): (instrumentId: string) => InstrumentStanding {
+  // Pending David's ruling on the batch-4 question (`ol-egov.141.89.9.66`'s
+  // own follow-up, restated in `ol-egov.141.89.9.69`'s notes): should a
+  // corrected contest still mark the instrument suspect for `[D-323]`, now
+  // that `ol-egov.141.89.9.68` moved it out of `validity.provenInvalid`
+  // (which today reads only `rejected`/`defect`) and into a projection keyed
+  // by the corrected REVIEW's event id (`validity.correctedEvidence`), which
+  // an UNATTRIBUTABLE correction (no review the log can tie it to — see
+  // `mastery/validity.ts`'s own `unattributedCorrectionCount` doc) never
+  // enters at all? Until ruled, this keeps TODAY'S behaviour exactly —
+  // `../../core/review-log/contest.ts`'s `correctedGradeInstrumentIds`, the
+  // SAME direct read of a closing dispute's own `instrumentId` field the
+  // pre-`ol-egov.141.89.9.66` whole-instrument rule used, attribution or
+  // not — rather than `validity.correctedEvidence`, which would silently
+  // drop the unattributable case this test fixture exercises.
+  const correctedInstrumentIds = new Set(correctedGradeInstrumentIds(disputes));
+
   return (instrumentId: string): InstrumentStanding => {
     const concerns: InstrumentStandingConcern[] = [];
     if (validity.contested.has(instrumentId)) concerns.push('contested');
-    if (validity.provenInvalid.has(instrumentId)) concerns.push('rejected');
+    if (validity.provenInvalid.has(instrumentId) || correctedInstrumentIds.has(instrumentId)) {
+      concerns.push('rejected');
+    }
     if (pendingRevalidationInstrumentIds.has(instrumentId)) concerns.push('pending-revalidation');
     if (safetyUnavailableInstrumentIds.has(instrumentId)) {
       concerns.push('safety-information-unavailable');

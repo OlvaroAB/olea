@@ -58,6 +58,7 @@
 
 import type {
   ConceptMaterialPresence,
+  DisputeLogRecord,
   GapRow,
   RankOracleOptions,
   Scheduler,
@@ -71,6 +72,7 @@ import {
   composeOracleRanking,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  readReviewLogFile,
   readReviewLogHistory,
   reviewLogPath,
 } from 'olea-core';
@@ -152,6 +154,23 @@ function instrumentCountsByNotePath(
 }
 
 /**
+ * `[D-095]`/`[D-338]`'s corrected-contest validity fold (`ol-egov.141.89.9.69`) needs dispute
+ * records to reach `composeOracleRanking`'s own `disputes` input — `readReviewLogHistory`
+ * (`../../core/session/history.ts`) deliberately does not surface them (`../../core/review-
+ * log/parse.ts`'s own doc says why). `session/history.ts` sits outside this bead's `owns`, so
+ * rather than widen it, this re-reads exactly the `files` that walk already reported as read —
+ * matching `../registry/provider.ts`'s and `../grove/provider.ts`'s own `disputesFromFiles`
+ * (duplicated rather than shared: different bead's `owns`, and this is six lines).
+ */
+async function disputesFromFiles(
+  vault: VaultSource,
+  files: readonly VaultPath[],
+): Promise<readonly DisputeLogRecord[]> {
+  const reads = await Promise.all(files.map((path) => readReviewLogFile(vault, path)));
+  return reads.flatMap((read) => read.disputes);
+}
+
+/**
  * A `GapViewDeps` whose `load` composes a fresh `GapViewModel` from the vault
  * and the review log, entirely on-device, no Worker call — the gap-view twin
  * of `createLocalStudyPlanProvider`.
@@ -183,17 +202,21 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // concurrently rather than paying their latency serially, the same
         // discipline `plan/provider.ts` uses for its own three-way
         // `Promise.all`.
-        const [{ entries }, enumeration, options] = await Promise.all([
+        const [{ entries, files }, enumeration, options] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           // `[D-357]`: the permanent concept key, the one her review log carries.
           enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
           deps.readRankWeights?.() ?? Promise.resolve(undefined),
         ]);
+        // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
+        // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
+        const disputes = await disputesFromFiles(deps.vault, files);
 
         const { ranking, edges, mastery } = await composeOracleRanking({
           vault: deps.vault,
           basePath: config.assignmentsBasePath,
           reviewLog: entries,
+          disputes,
           asOf: today,
           // The name→opaque-key source for `ConceptAssessmentEdge.conceptKey`
           // (`ol-63e1`) — already extracted by the instrument walk above, so

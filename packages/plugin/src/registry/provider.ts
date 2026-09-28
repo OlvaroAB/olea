@@ -669,6 +669,7 @@ async function courseRankingsForNoteOffer(
   readRankWeights: (() => Promise<RankOracleOptions | undefined>) | undefined,
   scheduler: Scheduler,
   now: Date,
+  disputes: readonly DisputeLogRecord[],
 ): Promise<readonly CourseOracleRanking[]> {
   try {
     const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
@@ -681,6 +682,7 @@ async function courseRankingsForNoteOffer(
       vault,
       basePath: config.assignmentsBasePath,
       reviewLog: entries,
+      disputes,
       asOf,
       concepts,
       // C5.6/`[D-264]` (`ol-egov.141.89.10.22`): the same `retrievability`
@@ -914,8 +916,12 @@ function createLoadModel(
         storedOverrides,
         await canonicalKeysOrAsStored(deps.vault),
       );
-      const [disputes, courseRankings, pendingRevalidation] = await Promise.all([
-        disputesFromFiles(deps.vault, files),
+      // `disputes` feeds `courseRankingsForNoteOffer`'s own `composeOracleRanking` call
+      // (`ol-egov.141.89.9.69`) as well as `buildRegistryModel` below, so it is read
+      // ahead of that Promise.all rather than alongside it — the one dependency between
+      // these otherwise-independent reads.
+      const disputes = await disputesFromFiles(deps.vault, files);
+      const [courseRankings, pendingRevalidation] = await Promise.all([
         courseRankingsForNoteOffer(
           deps.vault,
           deps.settingsHost,
@@ -925,6 +931,7 @@ function createLoadModel(
           deps.readRankWeights,
           scheduler,
           now,
+          disputes,
         ),
         // `[D-397]`: the SAME `enumeration.records` this call already walked above — no second
         // vault pass. See `citationHashStore`'s own doc on `CreateLocalRegistryProviderDeps` for
