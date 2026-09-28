@@ -358,7 +358,7 @@ describe('F6.5(a) spacing — measured against a planted ground truth', () => {
     }
   });
 
-  it('still fires on the crammer’s neutralised twin on 3 of 40 seeds once the sufficiency gate holds', () => {
+  it('still fires on the crammer’s neutralised twin on 4 of 40 seeds once the sufficiency gate holds', () => {
     // This is the finding, not a bug to be threshold-ed away. The neutralised
     // crammer is an irregular reviewer who studies on roughly a seventh of
     // days, so a ninety-day history gives her about ten pre-assessment calendar
@@ -380,10 +380,36 @@ describe('F6.5(a) spacing — measured against a planted ground truth', () => {
     // SPC-1 (ol-5xg9, per the ol-cahv ruling): the threshold above was NOT
     // moved — a MIN_NEAR_STUDY_DAYS sufficiency floor now abstains when the
     // near window carries too few distinct study-days to support a rate.
-    // Under the gate the count falls 8 -> 3; the ungated arithmetic is still
-    // recoverable from each abstained result's populated `measured` field, so
-    // the original 8-of-40 finding stays on the record below.
-    expect(firingCounts('crammer', true).spacing).toBe(3);
+    // Under the gate the count falls 8 -> 3 (against the near window as it
+    // stood before D-422); the ungated arithmetic is still recoverable from
+    // each abstained result's populated `measured` field, so the original
+    // 8-of-40 finding stays on the record below.
+    //
+    // 3 -> 4 (D-422, ol-egov.141.89.11.22): D-422 moved the near window from
+    // "the assessment day plus the six days before it" to "strictly the seven
+    // days before it", with the assessment day pulled into its own bucket
+    // rather than folded into near OR far. Checked seed by seed against the
+    // pre-D-422 window (same generator, same seeds — the only difference is
+    // which seven calendar days count as near): `s1` and `s11` fire either
+    // side of D-422 unchanged, but the window shift moves three seeds across
+    // MIN_NEAR_STUDY_DAYS —
+    //   - seed `s3`: the assessment day carried 0 reviews, so dropping it
+    //     from near costs nothing; the newly-included eighth-day-back carried
+    //     a full study session (a real near study-day), which pushes near
+    //     study-days from 3 (below the MIN_NEAR_STUDY_DAYS=4 floor, so it
+    //     previously abstained) to 4 (clears the floor) — now `observed`.
+    //   - seed `s34`: same shape — both assessments' own days carried 0
+    //     reviews, and both newly-included eighth-days-back carried real
+    //     sessions, taking near study-days from 3 to 5 — now `observed`.
+    //   - seed `s32`: the opposite. The assessment day itself carried a real
+    //     study session (a burst on exam day, which the old window counted
+    //     as near); the newly-included eighth-day-back was empty. Losing that
+    //     session drops near study-days from 4 to 3, so this seed now falls
+    //     BELOW MIN_NEAR_STUDY_DAYS and moves from `observed` to abstaining.
+    // Net: the three pre-D-422 firers minus `s32` plus `s3` and `s34` is 4.
+    // No other cause was found — every other seed's status is unchanged by
+    // the window shift, and the generator/seed list is identical either side.
+    expect(firingCounts('crammer', true).spacing).toBe(4);
   });
 });
 
