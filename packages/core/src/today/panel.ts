@@ -36,7 +36,7 @@ import {
   buildCrossCourseScopeOverview,
   type CrossCourseScopeOverview,
 } from '../gap/scope-overview.js';
-import type { CourseFloorShare } from '../insights/effort.js';
+import type { CourseFloorShare, EffortComposition } from '../insights/effort.js';
 import { buildInsights, type InsightsSummary } from '../insights/index.js';
 import type { ConceptCourses } from '../insights/types.js';
 import type { MasteryVitalityInputs } from '../mastery/sprig.js';
@@ -150,6 +150,14 @@ export interface TodayPanelInput {
    * the same bead.
    */
   readonly floorShares?: readonly CourseFloorShare[];
+  /**
+   * Every composition record she has (`[D-331]`, `[D-395]`), read from her
+   * composition log by the Today data source, for F6.5's effort half
+   * (`ol-egov.141.89.11.20`): passed to `buildInsights` unchanged. Absent reads
+   * as none, and a window with enough history then reads
+   * `comparison-unavailable`.
+   */
+  readonly compositions?: readonly EffortComposition[];
   /**
    * F6.9's rhythm reading: one entry per course a material arrival has ever
    * been observed for (`ol-v7r5.6`).
@@ -301,7 +309,26 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
   // supplied. Both fields resolve together so the renderer never has to decide
   // whether half a section is worth drawing.
   const concepts = input.concepts;
-  const vitality = input.vitality;
+  // `ol-egov.141.89.9.61`: `MasteryVitalityInputs.disputes` (`../mastery/
+  // sprig.js`) is what lets `masteryVitalityByStage`'s vitality tally, not
+  // only its growth-stage fold above, exclude a contest resolved
+  // `corrected` — the same `input.disputes` this function already reads for
+  // `options.invalidInstrumentIds` below, merged in here rather than left
+  // for a caller of `buildMasteryOverview` to duplicate. A `vitality` object
+  // that already names its own `disputes` (no production caller does today)
+  // is left alone.
+  const vitality =
+    input.vitality === undefined
+      ? undefined
+      : {
+          ...input.vitality,
+          // `exactOptionalPropertyTypes`: the key is added only when there is
+          // a real value to give it, matching this file's own
+          // `disputes`/`courseRankings` convention elsewhere.
+          ...(input.vitality.disputes === undefined && input.disputes !== undefined
+            ? { disputes: input.disputes }
+            : {}),
+        };
   const mastery =
     concepts === undefined
       ? null
@@ -331,6 +358,7 @@ export function buildTodayPanel(input: TodayPanelInput): TodayViewModel {
           entries: input.entries,
           concepts,
           floorShares: input.floorShares ?? EMPTY_FLOOR_SHARES,
+          ...(input.compositions !== undefined ? { compositions: input.compositions } : {}),
         });
 
   // F6.9 (`ol-v7r5.6`): the same "absent means never asked" third state as
