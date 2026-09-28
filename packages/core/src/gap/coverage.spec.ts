@@ -2,7 +2,15 @@ import { describe, expect, it } from 'vitest';
 import type { ExtractionOutcome } from '../extract/types.js';
 import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
+import type { DeclaredUnitScope } from './coverage.js';
 import { readStateOf, sourcesInState, summariseCoverageScope } from './coverage.js';
+
+function declaredUnit(
+  declarationId: string,
+  conceptKeys: readonly string[] = [],
+): DeclaredUnitScope {
+  return { declarationId, conceptKeys };
+}
 
 function row(overrides: Partial<SourceCoverage> & { sourcePath: string }): SourceCoverage {
   return {
@@ -157,6 +165,53 @@ describe('summariseCoverageScope', () => {
         row({ sourcePath: 'a.pdf', outcome: 'extracted', units: 4, citations: 0 }),
       ]);
       expect(scope.canStateExhaustiveness).toBe(true);
+    });
+
+    // `ol-egov.141.89.11.19`: the population record (every declared unit's
+    // alignment state) is separate, unbuilt work — these test only the gate
+    // itself, given the minimal projection `declaredUnits` carries.
+    describe('with declaredUnits (ol-egov.141.89.11.19)', () => {
+      it('is unaffected when the caller supplies no declared units at all', () => {
+        const scope = summariseCoverageScope(allRead);
+        expect(scope.canStateExhaustiveness).toBe(true);
+        expect(scope.declaredUnitCount).toBeNull();
+        expect(scope.unalignedDeclaredUnitCount).toBeNull();
+      });
+
+      it('is true when every source is read and every declared unit is aligned', () => {
+        const scope = summariseCoverageScope(allRead, {
+          declaredUnits: [declaredUnit('u1', ['cpt-01']), declaredUnit('u2', ['cpt-02'])],
+        });
+        expect(scope.canStateExhaustiveness).toBe(true);
+        expect(scope.declaredUnitCount).toBe(2);
+        expect(scope.unalignedDeclaredUnitCount).toBe(0);
+      });
+
+      it('is withheld by an empty declared set, even with every source read', () => {
+        const scope = summariseCoverageScope(allRead, { declaredUnits: [] });
+        expect(scope.canStateExhaustiveness).toBe(false);
+        expect(scope.declaredUnitCount).toBe(0);
+      });
+
+      it('is withheld by a single declared unit with no concept key aligned to it', () => {
+        const scope = summariseCoverageScope(allRead, {
+          declaredUnits: [declaredUnit('u1', ['cpt-01']), declaredUnit('u2', [])],
+        });
+        expect(scope.canStateExhaustiveness).toBe(false);
+        expect(scope.unalignedDeclaredUnitCount).toBe(1);
+      });
+
+      it('never turns declared-unit harm into a read-state count', () => {
+        // The declared-unit conditions are additional gates, not a rewrite of
+        // the existing read-state ones: the source-level counts stay exactly
+        // what they were without declaredUnits.
+        const withUnits = summariseCoverageScope(allRead, { declaredUnits: [] });
+        const without = summariseCoverageScope(allRead);
+        expect(withUnits.readCount).toBe(without.readCount);
+        expect(withUnits.yieldedNothingCount).toBe(without.yieldedNothingCount);
+        expect(withUnits.unreadableCount).toBe(without.unreadableCount);
+        expect(withUnits.notAttemptedCount).toBe(without.notAttemptedCount);
+      });
     });
   });
 

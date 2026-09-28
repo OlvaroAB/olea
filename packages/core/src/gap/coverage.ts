@@ -70,6 +70,23 @@
  * the view's to add with its copy; the four read states are unchanged, so no
  * renderer keyed on them breaks.
  *
+ * **`ol-egov.141.89.11.19`: the gate checks the sources it reads, not the
+ * examiner's own unit.** `vew.md` section 2.2's gate is "at least one [SCP]
+ * unit; every unit aligned ... every source read in full ... extraction
+ * finished" — three conditions, and until this bead this function only ever
+ * held the third. The population record that could supply every declared
+ * unit's alignment state is separate, unbuilt work (`vew.md` section 8's new
+ * `packages/core/src/coverage/`), so `SummariseCoverageScopeOptions.declaredUnits`
+ * carries only the minimum the gate itself needs: an id and the concept keys
+ * aligned to it, mirroring `OutcomeRecord.conceptKeys` (`../outcome/types.js`)
+ * by shape rather than by import, so this module stays decoupled from that
+ * population module's own evolution — the same isolation argument
+ * `OutcomeSourceReference`'s own doc makes for not importing a sibling's
+ * shape. Exactly like `manifests`, an absent `declaredUnits` keeps today's
+ * gate unchanged (no caller has this yet, so there is no new evidence to
+ * withdraw a claim on); once supplied, an empty set or any unit with no
+ * concept key withholds the claim, same as `[D-326]`'s own conditions do.
+ *
  * **INV-1.** Pure computation over already-gathered inputs; no `obsidian`, no
  * vault I/O, no clock. §7.1: this is a local projection, deterministically
  * recomputable from the same inputs forever.
@@ -111,6 +128,20 @@ export type SourceConceptExtraction =
   | 'unfinished'
   | 'nothing-to-extract'
   | 'not-recorded';
+
+/**
+ * One examiner-declared assessment unit (`SCP`'s declaration, `[D-355]`), so far as
+ * `canStateExhaustiveness` needs to know. See the module doc's `ol-egov.141.89.11.19` note for
+ * why this is a local, minimal shape and not an import of `OutcomeRecord`.
+ */
+export interface DeclaredUnitScope {
+  readonly declarationId: string;
+  /**
+   * The concept keys aligned to this unit (`[D-355]`). Empty means no concept in her material
+   * yet, or extracted but not aligned — the gate treats both the same way: not aligned.
+   */
+  readonly conceptKeys: readonly string[];
+}
 
 /** One source's row on the coverage surface — the denominator, made visible. */
 export interface CoverageScopeSource {
@@ -160,11 +191,21 @@ export interface CoverageScope {
   /** Sources whose record says concept extraction has not finished over what was read (`[D-326]`). */
   readonly extractionUnfinishedCount: number;
   /**
+   * Declared assessment units the caller supplied (`SummariseCoverageScopeOptions.declaredUnits`,
+   * `[D-355]`), or `null` when it supplied none — the population record itself is separate,
+   * unbuilt work (module doc, `ol-egov.141.89.11.19`).
+   */
+  readonly declaredUnitCount: number | null;
+  /** Of `declaredUnitCount`, those with no concept key aligned to them. `null` exactly when `declaredUnitCount` is. */
+  readonly unalignedDeclaredUnitCount: number | null;
+  /**
    * Every source read successfully — and therefore the *only* state in which
    * an exhaustiveness claim over the read set is even eligible. Where a
    * `[D-326]` record exists, that also means read in full with concept
    * extraction finished: a partly read or unsettled source, or unfinished
-   * extraction, withdraws it.
+   * extraction, withdraws it. Where the caller supplied `declaredUnits`
+   * (`ol-egov.141.89.11.19`), an empty declared set or any unit with no
+   * concept key aligned to it withdraws it too.
    *
    * **Note what this still is not.** It says the read path completed, not that
    * concept resolution was complete or that her material was checked
@@ -294,6 +335,13 @@ export interface SummariseCoverageScopeOptions {
    * with no record, or a record with no units, keeps the extractor verdict.
    */
   readonly manifests?: ReadonlyMap<VaultPath, UnitManifest>;
+  /**
+   * The examiner's own declared assessment units for this scope (`SCP`, `[D-355]`), where the
+   * caller has them (`ol-egov.141.89.11.19`; `vew.md` section 2.2). `undefined` keeps today's
+   * gate unchanged (module doc); once supplied, an empty set or any unit with no concept key
+   * aligned to it withholds `canStateExhaustiveness`.
+   */
+  readonly declaredUnits?: readonly DeclaredUnitScope[];
 }
 
 /**
@@ -347,6 +395,21 @@ export function summariseCoverageScope(
     (s) => s.conceptExtraction === 'unfinished',
   ).length;
 
+  // `ol-egov.141.89.11.19`: `undefined` keeps today's gate unchanged (module
+  // doc) — a caller with no declared-unit population yet must not have its
+  // claim withdrawn on no new evidence. Once supplied, an empty declared set
+  // or any unit with no concept key aligned to it is the same shape of harm
+  // `[D-326]`'s own conditions guard against, so it withholds the same way.
+  const declaredUnits = options.declaredUnits;
+  const declaredUnitCount = declaredUnits === undefined ? null : declaredUnits.length;
+  const unalignedDeclaredUnitCount =
+    declaredUnits === undefined
+      ? null
+      : declaredUnits.filter((u) => u.conceptKeys.length === 0).length;
+  const declaredUnitsWithholdExhaustiveness =
+    declaredUnits !== undefined &&
+    (declaredUnits.length === 0 || (unalignedDeclaredUnitCount ?? 0) > 0);
+
   return {
     sources,
     readCount,
@@ -356,10 +419,14 @@ export function summariseCoverageScope(
     partlyReadCount,
     unsettledCount,
     extractionUnfinishedCount,
+    declaredUnitCount,
+    unalignedDeclaredUnitCount,
     // Every source read, and at least one source to have read. An empty scope
     // is NOT exhaustive over anything: "we checked all zero of your sources"
     // is the purest form of the sentence this bead rejects. `[D-326]`: and
     // nothing recorded as partly read, unsettled or not yet extracted.
+    // `ol-egov.141.89.11.19`: and, where declared units were supplied, at
+    // least one and every one aligned.
     canStateExhaustiveness:
       sources.length > 0 &&
       yieldedNothingCount === 0 &&
@@ -367,7 +434,8 @@ export function summariseCoverageScope(
       notAttemptedCount === 0 &&
       partlyReadCount === 0 &&
       unsettledCount === 0 &&
-      extractionUnfinishedCount === 0,
+      extractionUnfinishedCount === 0 &&
+      !declaredUnitsWithholdExhaustiveness,
   };
 }
 

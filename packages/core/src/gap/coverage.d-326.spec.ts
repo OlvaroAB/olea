@@ -193,4 +193,52 @@ describe('[D-326] the coverage scope reads the completeness record', () => {
     expect(scope.sources.map((s) => s.readingCompleteness)).toEqual(['full', 'partial']);
     expect(scope.canStateExhaustiveness).toBe(false);
   });
+
+  // `ol-egov.141.89.11.19`: `declaredUnits` is a second, independent gate
+  // beside `[D-326]`'s own three — each can withhold the claim on its own,
+  // and neither's presence changes the other's verdict.
+  describe('declaredUnits beside [D-326] (ol-egov.141.89.11.19)', () => {
+    it('a fully read, fully extracted source still withholds on an empty declared set', () => {
+      const scope = summariseCoverageScope([row('a.pdf')], {
+        manifests: records(FULL_A),
+        declaredUnits: [],
+      });
+      expect(scope.canStateExhaustiveness).toBe(false);
+      // The [D-326] facts this bead must not disturb, unchanged.
+      expect(scope.sources[0]).toMatchObject({
+        readState: 'read',
+        readingCompleteness: 'full',
+        conceptExtraction: 'complete',
+      });
+    });
+
+    it('a fully read, fully extracted source still withholds on a declared unit with no aligned concept', () => {
+      const scope = summariseCoverageScope([row('a.pdf')], {
+        manifests: records(FULL_A),
+        declaredUnits: [
+          { declarationId: 'u1', conceptKeys: ['cpt-01'] },
+          { declarationId: 'u2', conceptKeys: [] },
+        ],
+      });
+      expect(scope.canStateExhaustiveness).toBe(false);
+      expect(scope.unalignedDeclaredUnitCount).toBe(1);
+    });
+
+    it('every declared unit aligned does not override a [D-326] withholding condition', () => {
+      const partB = manifest('b.pdf', [unit('b.pdf', 1, PARTIAL, true)]);
+      const scope = summariseCoverageScope([row('a.pdf'), row('b.pdf')], {
+        manifests: records(FULL_A, partB),
+        declaredUnits: [{ declarationId: 'u1', conceptKeys: ['cpt-01'] }],
+      });
+      expect(scope.canStateExhaustiveness).toBe(false);
+    });
+
+    it('a fully read, fully extracted source with every declared unit aligned allows the claim', () => {
+      const scope = summariseCoverageScope([row('a.pdf')], {
+        manifests: records(FULL_A),
+        declaredUnits: [{ declarationId: 'u1', conceptKeys: ['cpt-01'] }],
+      });
+      expect(scope.canStateExhaustiveness).toBe(true);
+    });
+  });
 });
