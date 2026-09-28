@@ -18,8 +18,11 @@
 import type { ReviewLogRecord } from 'olea-contracts';
 import {
   addManualAssessmentEntry,
+  appendDisputeRecord,
   confirmSameAsLink,
+  contestClaim,
   proposeSameAsLink,
+  resolveDispute,
   reviewLogPath,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -505,5 +508,91 @@ describe('createLocalRetrospectiveProvider — finalAssessmentScopeOrigin wired 
     // carries anywhere, proving the basis above is read from Quiz 3's OWN
     // text, not a blanket "the last assessment exists" default.
     expect(result.reading.carries.find((c) => c.conceptName === 'Osmosis')).toBeUndefined();
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.63`: `readReviewHistory`'s `disputes` return already
+ * reached `history.disputes` here (same read `entries` comes from), but the
+ * `buildRetrospective` call dropped it, so a `[D-095]` grade contest
+ * resolved `corrected` (`[D-338]` item 3's proven-invalid fact) never
+ * reached this provider's vitality partition even though `buildRetrospective`
+ * itself already knew how to use it (`ol-egov.141.89.9.61`). Mirrors
+ * `today/data-source.ts`'s own `disputes: history.disputes` forwarding this
+ * bead copies the pattern from.
+ */
+describe('createLocalRetrospectiveProvider — disputes forwarded into vitality (ol-egov.141.89.9.63)', () => {
+  async function vaultWithDisputableConcept() {
+    const vault = await vaultWithReviewedConcepts(
+      {
+        [BASE_PATH]: BASE_FILE,
+        '02 Assignments/Quiz 1.md': assessmentNote({ due: '2026-08-20', scope: 'Photosynthesis' }),
+      },
+      ['Photosynthesis'],
+    );
+    const concepts = await extractConceptsFromVault(vault, {});
+    const conceptId = concepts.find((c) => c.name === 'Photosynthesis')?.key;
+    if (conceptId === undefined) throw new Error('expected Photosynthesis to mint a concept key');
+    return { vault, conceptId, instrumentId: `qa:${conceptId}:1` };
+  }
+
+  it('baseline (no disputes): the reviewed concept sets its vitality and lands in held or faded, none too-early', async () => {
+    const { vault } = await vaultWithDisputableConcept();
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+
+    const names = [...result.reading.held, ...result.reading.faded].map((l) => l.conceptName);
+    expect(names).toEqual(['Photosynthesis']);
+    expect(result.reading.tooEarlyCount).toBe(0);
+  });
+
+  it('a grade contest against that instrument, resolved corrected, drops it out of vitality — it moves to too-early, not held/faded', async () => {
+    const { vault, conceptId, instrumentId } = await vaultWithDisputableConcept();
+
+    const opening = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: [conceptId],
+        instrumentId,
+        evidenceBasis: 'evidence-fingerprint-1',
+      },
+      timestamp: '2026-09-02T10:00:00-04:00',
+    });
+    const { record: openingRecord } = await appendDisputeRecord(vault, opening.record, {
+      deviceId: DEVICE,
+      generateEventId: () => 'retro-dispute-1',
+    });
+    const resolution = resolveDispute({
+      dispute: openingRecord,
+      outcome: 'corrected',
+      timestamp: '2026-09-02T11:00:00-04:00',
+    });
+    await appendDisputeRecord(vault, resolution, {
+      deviceId: DEVICE,
+      generateEventId: () => 'retro-dispute-2',
+    });
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+
+    const names = [...result.reading.held, ...result.reading.faded].map((l) => l.conceptName);
+    expect(names).toEqual([]);
+    expect(result.reading.tooEarlyCount).toBe(1);
   });
 });
