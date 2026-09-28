@@ -194,11 +194,16 @@ describe('the session builder reads what only a real vault has', () => {
   // from* `enumeration.records`, and both index calls consume that derived
   // value — rather than pinning either literal alone, which would pass for a
   // filter that silently dropped or fabricated records.
-  it('indexes real enumerated instruments, filtered to non-suspended, rather than a fixture list', () => {
+  //
+  // `ol-egov.141.89.2.14` renamed it `servableRecords` and widened the filter
+  // to also drop an instrument proven invalid (a standing rejection); the
+  // behaviour is proven by `./rejected-instrument-readers.spec.ts`, this
+  // keeps the same structural relationship.
+  it('indexes real enumerated instruments, filtered to non-suspended and not proven invalid, rather than a fixture list', () => {
     expect(provider).toMatch(
-      /const nonSuspendedRecords = enumeration\.records\.filter\(\s*\(record\) => !suspended\.has\(record\.instrumentId\),?\s*\);/,
+      /const servableRecords = enumeration\.records\.filter\(\s*\(record\) => !suspended\.has\(record\.instrumentId\) && !provenInvalid\.has\(record\.instrumentId\),?\s*\);/,
     );
-    const indexCalls = provider.match(/buildConceptInstrumentIndex\(nonSuspendedRecords\)/g) ?? [];
+    const indexCalls = provider.match(/buildConceptInstrumentIndex\(servableRecords\)/g) ?? [];
     expect(indexCalls.length).toBe(2);
     // Never called directly over the unfiltered enumeration any more — that
     // would let a suspended instrument straight back into the index.

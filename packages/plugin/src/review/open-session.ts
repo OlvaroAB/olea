@@ -805,6 +805,19 @@ export async function openReviewSession(
       input.studySessionHolder.enter(now, composedSession, compositionPlan);
     }
 
+    // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`): `entries` is
+    // the SAME `composed.entries` this module reads for
+    // `liveSchedulingObservations`/`buildSupportLevelHistoryLookup` below —
+    // no second parse there. `disputes` IS a second, deliberate read (see
+    // `disputesFromReviewLog`'s own doc for why `composed.entries` cannot
+    // carry them). See this module's doc's "`[D-323]`'s instrument-standing
+    // reader" section and `readInstrumentStanding`'s own doc for exactly
+    // which of the ruling's six concerns this covers. Folded here, ahead of
+    // the join below, because the present-time check reads it too
+    // (`ol-egov.141.89.2.14`, next comment).
+    const disputes = await disputesFromReviewLog(input.vault, additionalPaths);
+    const instrumentValidity = projectInstrumentValidity(composed.entries, disputes);
+
     // `[SESS-8.4]`/`[SESS-8.3]`: the composer's own ordered rows, translated
     // into the plan join's input off the SAME kept enumeration above (no
     // second vault walk, no second replay), then executed — C5.5's "core
@@ -816,10 +829,19 @@ export async function openReviewSession(
     // that report yet. A duplicated id's rows are cut to one before the join
     // (`withholdLosingCopies`), and the join reads the resolution's candidates,
     // which carry at most one per duplicated id (C5.3, `ol-v7r5.88`).
+    //
+    // `ol-egov.141.89.2.14`, the present-time check: a held sitting was
+    // composed earlier, so a row naming an instrument that has since become
+    // proven invalid — above all one she has since rejected (C5.3 as amended
+    // by `[D-396]`: only her own deliberate restore returns it to
+    // circulation) — is dropped here, as she opens the tab, never served. A
+    // fresh composition already excludes it (`session-builder/provider.ts`'s
+    // instrument index reads the same fold); this covers the sitting that
+    // outlived her rejection. The rows keep their order; nothing is added.
     const composedItems = withholdLosingCopies(
       composedSession.model.items,
       duplicatedInstrumentIds,
-    );
+    ).filter((item) => !instrumentValidity.provenInvalid.has(item.instrumentId));
     const { items: queueItems } = queueItemsFromComposedSession({
       items: composedItems,
       recordsById: duplication.recordsById,
@@ -952,17 +974,6 @@ export async function openReviewSession(
     // `queue`, `executed` or `composed` above — only whether `ReviewSession`
     // proposes the reciprocal offer once she reaches the neighbour concept.
     const liveSchedulingObservations = replayUnconsumedSchedulingObservations(composed.entries);
-
-    // `[D-323]` (`ol-egov.141.89.6.4`, `ol-egov.141.89.10.45`): `entries` is
-    // the SAME `composed.entries` this module already read for
-    // `liveSchedulingObservations`/`buildSupportLevelHistoryLookup` above —
-    // no second parse there. `disputes` IS a second, deliberate read (see
-    // `disputesFromReviewLog`'s own doc for why `composed.entries` cannot
-    // carry them). See this module's doc's "`[D-323]`'s instrument-standing
-    // reader" section and `readInstrumentStanding`'s own doc for exactly
-    // which of the ruling's six concerns this covers.
-    const disputes = await disputesFromReviewLog(input.vault, additionalPaths);
-    const instrumentValidity = projectInstrumentValidity(composed.entries, disputes);
 
     // `[D-351]` (`ol-egov.141.89.6.54`): a real read of the caller's citation
     // pending-revalidation store, when one is supplied — see

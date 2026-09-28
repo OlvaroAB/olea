@@ -267,6 +267,7 @@ import {
   exitSitting,
   IDLE_SITTING,
   isCalendarDay,
+  projectInstrumentValidity,
   readInstrumentCitation,
   readReviewLogFile,
   readReviewLogHistory,
@@ -1119,18 +1120,28 @@ export async function composeStudySessionForRequest(
   // scope or `composedInput.instruments` — the two places `study-session/
   // compose.ts`'s `buildComposedStudySession` and this call's own
   // obligation-signal fold read instruments from.
+  //
+  // `ol-egov.141.89.2.14`: an instrument proven invalid is excluded the same way — above all one
+  // standing rejected (C5.3 as amended by `[D-396]`: a rejection follows the item once it is
+  // fixed, and only her own deliberate restore returns it to circulation). The fold is
+  // `olea-core`'s `projectInstrumentValidity` over the same `entries`, the one answer every other
+  // reader of rejection standing reads, so a restore lifts it here exactly as it does there. A
+  // suspension recorded as a defect, the fold's other proven-invalid reason, is already a
+  // suspension above; a rejection is a verdict record and never was, which is how a rejected,
+  // since-fixed item used to reach her session.
   const suspended = suspendedInstrumentIds(entries);
-  const nonSuspendedRecords = enumeration.records.filter(
-    (record) => !suspended.has(record.instrumentId),
+  const provenInvalid = projectInstrumentValidity(entries).provenInvalid;
+  const servableRecords = enumeration.records.filter(
+    (record) => !suspended.has(record.instrumentId) && !provenInvalid.has(record.instrumentId),
   );
-  const conceptInstrumentIndex = buildConceptInstrumentIndex(nonSuspendedRecords);
+  const conceptInstrumentIndex = buildConceptInstrumentIndex(servableRecords);
 
   // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`'s own follow-up): resolve citation
   // freshness for every instrument reachable from today's candidate concepts — `gapRows`, the
   // same candidate set `arrivalDays` above is scoped to (every concept this call considered,
   // not just the ones the budget cut keeps; a concept that narrowly misses the cut is still a
   // real candidate `compose.ts` may look up). Scoped through `conceptInstrumentIndex` rather
-  // than the whole vault's `nonSuspendedRecords`, so a course or topic not in play today costs
+  // than the whole vault's `servableRecords`, so a course or topic not in play today costs
   // no citation reads. See `resolveCitationFreshness`'s own doc for why `() => undefined` is
   // the honest call here (no production observation of a current passage digest exists yet —
   // reported as a gap, not invented) and for the exact three places checked.
@@ -1250,7 +1261,7 @@ export async function composeStudySessionForRequest(
     arrivalDays,
     relatedConceptKeys,
     assessmentContext,
-    instruments: buildConceptInstrumentIndex(nonSuspendedRecords),
+    instruments: buildConceptInstrumentIndex(servableRecords),
     // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`): resolved above, scoped to today's
     // candidate concepts — see that resolution's own comment.
     citationFreshness,

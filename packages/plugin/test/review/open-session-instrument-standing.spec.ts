@@ -222,7 +222,13 @@ describe('openReviewSession — [D-323] instrument standing over the real review
     });
   });
 
-  it('an instrument with a rejected verdict reads suspect and routes to item repair', async () => {
+  // `ol-egov.141.89.2.14`: this case used to open a session that SERVED an instrument standing
+  // rejected and then routed it to item repair after a rating. C5.3 as amended by `[D-396]` rules
+  // that a rejection keeps the item out of circulation until her own deliberate restore, so
+  // `openReviewSession` no longer serves it at all (its present-time check reads the same
+  // validity fold `readInstrumentStanding` does). The `rejected` concern is still reached on this
+  // path through a grade dispute resolved `corrected`, the next case.
+  it('an instrument with a rejected verdict is not served, so it never reaches the standing check', async () => {
     const vault = qaVault();
     const enumeration = await enumerateVaultInstruments(vault);
     const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
@@ -249,14 +255,11 @@ describe('openReviewSession — [D-323] instrument standing over the real review
 
     const outcome = await openReviewSession(await sessionInputFor(vault));
     if (!outcome.ok) throw new Error('expected a composed session');
+    expect(outcome.scheduledQueue.map((item) => item.instrument.instrumentId)).not.toContain(
+      qa.instrumentId,
+    );
     await outcome.session.start();
-    await rateCurrentItem(outcome.session);
-
-    expect(outcome.session.getConfusionRoutingOffer()).toBeNull();
-    expect(outcome.session.getPendingItemRepairReferral()).toEqual({
-      instrumentId: qa.instrumentId,
-      concerns: ['rejected'],
-    });
+    expect(outcome.session.getPendingItemRepairReferral()).toBeNull();
   });
 
   it("a grade dispute resolved 'corrected' also reads suspect, folded onto the same 'rejected' concern (Class B — see readInstrumentStanding's doc)", async () => {

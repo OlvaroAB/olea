@@ -127,6 +127,21 @@
  * event, `DraftRecord.predecessorInstrumentId`) even though a card has no
  * in-block `predecessor:` field the way an MCQ does — see that file's module
  * doc for exactly why, and for the Class C gap that remains.
+ *
+ * ## A rejected predecessor gets no successor (`ol-egov.141.89.2.14`)
+ *
+ * C5.3 as amended by `[D-396]`: "A rejection follows the item once it is
+ * fixed: no edit or repair silently undoes it, and only her own deliberate
+ * restore returns it to circulation." A successor drafted from an edit to
+ * the source of an item she rejected would return that item to circulation
+ * through a change path, so {@link runInstrumentRevisionJob} reads her
+ * review log first and, when the predecessor stands rejected (the same
+ * `projectInstrumentValidity` fold every other reader of rejection standing
+ * reads, so a restore lifts it here too), ends the job with nothing drafted
+ * and no drafting call made. Only a rejection counts here, not a defect
+ * suspension: an item found defective is the case a successor exists to
+ * repair. A predecessor restored after this job ran gets its successor from
+ * the next edit, since this job is done.
  */
 
 import {
@@ -135,6 +150,8 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  projectInstrumentValidity,
+  readReviewLogHistory,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
@@ -256,6 +273,18 @@ async function resolveRevisionTarget(
   };
 }
 
+/**
+ * Whether `instrumentId` stands rejected in her review log: a `rejected`
+ * verdict her deliberate restore has not lifted (`olea-core`'s
+ * `projectInstrumentValidity`, reason `'rejected'`). The whole log, read
+ * through `readReviewLogHistory`'s folder listing, since a rejection from
+ * any earlier day still stands.
+ */
+async function standsRejected(vault: VaultSource, instrumentId: string): Promise<boolean> {
+  const { entries } = await readReviewLogHistory(vault);
+  return projectInstrumentValidity(entries).provenInvalid.get(instrumentId)?.reason === 'rejected';
+}
+
 /** One "nothing to cache" reason, shared by both drafting branches below — see their own doc. */
 type SuccessorDraftOutcome<TContent> =
   | { readonly kind: 'thrown' }
@@ -369,6 +398,13 @@ export async function runInstrumentRevisionJob(
   deps: RevisionJobRunnerDeps,
   payload: InstrumentRevisionJobPayload,
 ): Promise<JobRunOutcome> {
+  // `ol-egov.141.89.2.14`: see the module doc's section. Read before the
+  // Worker check, so a rejected predecessor's job ends rather than waiting
+  // for a Worker it will never call.
+  if (await standsRejected(deps.vault, payload.predecessorInstrumentId)) {
+    return { ok: true };
+  }
+
   const draftDeps = deps.draftDeps();
   if (draftDeps === null) {
     // F7.8's "grey out, don't crash" posture: the Worker isn't configured
