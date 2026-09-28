@@ -139,17 +139,52 @@ describe('isFullyRead / hasPendingUnits — the coverage predicate this manifest
     expect(hasPendingUnits(m)).toBe(true);
   });
 
-  it('partial and unreadable units count as settled, not fully-read-blocking', () => {
+  it('a partial unit is never counted as fully read — matching-rule.md §11: a partial unit\'s uncovered regions read unknown, never absent; per.md §3: "a source with any unit not read is never counted as fully read"', () => {
     const m = manifestOf([
       withReadingState(newPendingEntry(SOURCE, 1), {
         kind: 'partial',
         method: 'image',
         coverage: 'half the page',
       }),
+    ]);
+    expect(isFullyRead(m)).toBe(false);
+    // A partial unit is settled (the pass over it finished) — it is not still awaiting a pass.
+    expect(hasPendingUnits(m)).toBe(false);
+  });
+
+  it('unreadable as blank-page or no-text-on-page counts toward fully read — matching-rule.md §11', () => {
+    const m = manifestOf([
+      withReadingState(newPendingEntry(SOURCE, 1), { kind: 'read', method: 'text-layer' }),
       withReadingState(newPendingEntry(SOURCE, 2), { kind: 'unreadable', reason: 'blank-page' }),
+      withReadingState(newPendingEntry(SOURCE, 3), {
+        kind: 'unreadable',
+        reason: 'no-text-on-page',
+      }),
     ]);
     expect(isFullyRead(m)).toBe(true);
     expect(hasPendingUnits(m)).toBe(false);
+  });
+
+  it('unreadable as not-legible leaves the source not fully read — matching-rule.md §11: "a not-legible unit leaves it not fully read"', () => {
+    const m = manifestOf([
+      withReadingState(newPendingEntry(SOURCE, 1), { kind: 'read', method: 'text-layer' }),
+      withReadingState(newPendingEntry(SOURCE, 2), { kind: 'unreadable', reason: 'not-legible' }),
+    ]);
+    expect(isFullyRead(m)).toBe(false);
+    expect(hasPendingUnits(m)).toBe(false);
+  });
+
+  it('a mixed manifest with one partial unit among otherwise-read units is not fully read', () => {
+    const m = manifestOf([
+      withReadingState(newPendingEntry(SOURCE, 1), { kind: 'read', method: 'text-layer' }),
+      withReadingState(newPendingEntry(SOURCE, 2), { kind: 'read', method: 'image' }),
+      withReadingState(newPendingEntry(SOURCE, 3), {
+        kind: 'partial',
+        method: 'image',
+        coverage: 'the first paragraph',
+      }),
+    ]);
+    expect(isFullyRead(m)).toBe(false);
   });
 
   it('an unavailable unit blocks isFullyRead and counts as pending — it is still being retried', () => {

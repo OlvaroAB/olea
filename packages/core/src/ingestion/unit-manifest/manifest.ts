@@ -108,20 +108,30 @@ export function absenceGroundingFor(entry: UnitManifestEntry): AbsenceGrounding 
 /**
  * A source revision counts as fully read only when every one of its units
  * does (per.md section 3, Coverage: "a source with any unit not read is
- * never counted as fully read"). `'partial'` and `'unreadable'` both count
- * as settled/"read" for this purpose — the pass over them finished, even
- * though a `'partial'` unit's coverage is incomplete and an `'unreadable'`
- * unit found nothing usable; only `'pending'`, `'unavailable'` and
- * `'failed'` are "not read" in the sense this predicate means. How a partly
- * read source is *shown* to her is `VEW`'s to design (per.md section 3) —
- * this is only the underlying fact a coverage view would read.
+ * never counted as fully read"; matching-rule.md section 11: "The source is
+ * fully read when every unit is read, or unreadable as `blank-page` or
+ * `no-text-on-page`; a `not-legible` unit leaves it not fully read").
+ *
+ * `'partial'` NEVER counts: its coverage is incomplete by definition, and a
+ * partial unit's uncovered regions read `unknown`, never a claim the source
+ * was finished (matching-rule.md section 11, the same posture
+ * `absenceGroundingFor` already takes). `'unreadable'` counts only for the
+ * two reasons that found genuinely nothing to read — `'blank-page'` and
+ * `'no-text-on-page'`; `'unreadable: not-legible'` does NOT count, even
+ * though the reading attempt itself succeeded (per.md section 3 lists
+ * `not-legible` alongside `not read` for the grove census for the identical
+ * reason). `'pending'`, `'unavailable'` and `'failed'` never counted and
+ * still do not. How a partly read source is *shown* to her is `VEW`'s to
+ * design (per.md section 3) — this is only the underlying fact a coverage
+ * view would read.
  */
 export function isFullyRead(manifest: UnitManifest): boolean {
   return manifest.entries.every(
     (entry) =>
       entry.readingState.kind === 'read' ||
-      entry.readingState.kind === 'partial' ||
-      entry.readingState.kind === 'unreadable',
+      (entry.readingState.kind === 'unreadable' &&
+        (entry.readingState.reason === 'blank-page' ||
+          entry.readingState.reason === 'no-text-on-page')),
   );
 }
 
