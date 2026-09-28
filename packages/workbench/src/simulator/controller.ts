@@ -112,6 +112,7 @@ import { ObsidianStudyPlanSettingsStore } from '../../../plugin/src/plan/setting
 import { VIEW_TYPE_OLEA_REGISTRY } from '../../../plugin/src/registry/view.js';
 import { ObsidianWorkerConfigStore } from '../../../plugin/src/worker/config-store.js';
 import { type HttpRequestFn, WorkerTransportError } from '../../../plugin/src/worker/transport.js';
+import { installDeterministicMathRandomOverride } from '../deterministic-random.js';
 import type { App, ShimVaultSource, WorkspaceLeaf } from '../obsidian-shim/index.js';
 import {
   createVaultInstrumentSource,
@@ -1377,6 +1378,8 @@ export class SimulatorController {
     private deviceId: string,
     private readonly transport: SimulatorTransport,
     private readonly uninstallTransportBridge: () => void,
+    /** Restores the page's real `Math.random` — see `installDeterministicMathRandomOverride`'s own doc (`ol-egov.141.89.45`). */
+    private readonly uninstallMathRandomOverride: () => void,
     /** WBX-27's fault axis, shared by the transport bridge and every `remountPane()`'s shim vault wrapper — see {@link SimulatorFaultAxis}'s own doc. */
     private readonly faultAxis: SimulatorFaultAxis,
     /** The world descriptor's own display label (`world.ts`) — the badge reads this, never a hard-coded `'FIXTURE'` (`ol-3ux7.64.14` [WBX-12], design doc §7). */
@@ -1499,6 +1502,12 @@ export class SimulatorController {
       token: options.transportToken,
       faultAxis,
     });
+    // `ol-egov.141.89.45`: one fixed `Math.random` draw sequence for the
+    // whole mounted page, closing the real `ReviewView`'s MCQ-shuffle gap
+    // `deterministic-random.ts`'s own doc explains — installed before
+    // `remountPane()` below ever mounts the plugin, uninstalled in
+    // `dispose()`.
+    const uninstallMathRandomOverride = installDeterministicMathRandomOverride();
 
     const controller = new SimulatorController(
       options.elements,
@@ -1510,6 +1519,7 @@ export class SimulatorController {
       deviceId,
       transportMode,
       uninstallTransportBridge,
+      uninstallMathRandomOverride,
       faultAxis,
       worldLoad.descriptor.label,
       worldAsOf,
@@ -1561,6 +1571,7 @@ export class SimulatorController {
    */
   async dispose(): Promise<void> {
     this.uninstallTransportBridge();
+    this.uninstallMathRandomOverride();
     this.courseSetupSeenBridge.dispose();
     this.disposeContentGenerationCounters();
     await this.closeCurrent();

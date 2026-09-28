@@ -48,3 +48,40 @@ export function createDeterministicRandom(seed: number = FIXED_SEED): RandomSour
     },
   };
 }
+
+/**
+ * Installs a page-level override of `Math.random` for the simulator's whole
+ * mounted lifetime, drawing from the same fixed-seed sequence as
+ * {@link createDeterministicRandom}, and returns the function that restores
+ * the real one (`ol-egov.141.89.45`).
+ *
+ * Why a global override here rather than one more per-call `random` seam:
+ * `queue/derive.ts` and `simulator/live-queue.ts` (above) already thread
+ * `createDeterministicRandom()` through `olea-core#adaptReviewQueue` for this
+ * package's own synthetic queue composition, but `tour.spec.ts`'s generic
+ * ribbon walk also opens the REAL plugin `ReviewView` — whose composition
+ * path (`packages/plugin/src/main.ts`'s `buildReviewSessionInput` →
+ * `review/open-session.ts`'s `openReviewSession` → `review/queue-adapter.ts`
+ * → `olea-core#presentMcq`) never sets `random` and so keeps production's
+ * correct default, live `Math.random`. Wiring a `random` parameter all the
+ * way down that chain is `packages/plugin` production-source work this
+ * package does not own; this override reaches the same result — one fixed
+ * draw sequence for every `Math.random()` call anywhere on the mounted page,
+ * `presentMcq`'s bare call included — without editing a single line of
+ * `packages/plugin` or `packages/core`.
+ *
+ * Same install/uninstall convention `simulator/controller.ts`'s own
+ * `installTransportBridge` already uses for `globalThis.fetch`: install once
+ * in `SimulatorController.create()`, before `remountPane()` ever mounts the
+ * plugin; call the returned function from `dispose()` so the page's real
+ * `Math.random` is restored the instant the simulator route is left, and no
+ * other route or test on the same page is ever affected.
+ */
+export function installDeterministicMathRandomOverride(seed: number = FIXED_SEED): () => void {
+  const original = Math.random;
+  const source = createDeterministicRandom(seed);
+  Math.random = () => source.next();
+  return () => {
+    Math.random = original;
+  };
+}
