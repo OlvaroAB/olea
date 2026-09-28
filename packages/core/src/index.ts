@@ -503,6 +503,13 @@ export type {
   CourseRootSnapshot,
 } from './course/mapping.js';
 export { buildCourseMapping, pathInCourseMapping, recomputeCourseRoot } from './course/mapping.js';
+export type {
+  CountCauseEvent,
+  CountCauseKind,
+  CountReceiptLine,
+  PopulationCountStep,
+} from './coverage/count-cause.js';
+export { checkCountCauseAttribution, countReceiptsBetween } from './coverage/count-cause.js';
 export type { CoverageGateOptions } from './coverage/gate.js';
 export { coverageGateOptionsOf } from './coverage/gate.js';
 export { buildCoursePopulation, buildCoursePopulations } from './coverage/population.js';
