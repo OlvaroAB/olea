@@ -30,16 +30,38 @@
  * has at least one review-log entry" (D-134 Q6's second path) — fires only
  * when the assessment records no scope text at all.
  *
- * ## D-134 Q3's fallback, still the coarse evidenced set
+ * ## D-134 Q3's fallback: the actual last assessment's own stated scope, where it has one
  *
- * `finalAssessmentScope` is still the SAME evidenced set (every concept in
- * the course with review-log evidence) rather than the course's actual
- * final assessment's own resolved scope — `buildConceptAssessmentEdges`'s
- * course-level join still does not produce a per-assessment-other-than-
- * chosen concept list, so "the final assessment's concepts" still collapses
- * to "the course's concepts" for the same honest reason `retrospective/
- * types.ts` names. Out of this bead's scope: Q6 governs `scope`/
- * `scopeOrigin` above, not Q3's separate carry-forward fallback.
+ * `finalAssessmentScope`/`finalAssessmentScopeOrigin` resolve against the
+ * course's ACTUAL last assessment record (by due date, over every
+ * assessment `resolveAssessments` returns — not only the passed ones), via
+ * the SAME two-path text lookup `scope`/`scopeOrigin` above use
+ * (`hasStatedScope`/`assessmentStatedScope`) — never `buildConceptAssessmentEdges`'s
+ * course-level evidence join, which still collapses to "the course's
+ * concepts" for the reason `retrospective/types.ts` names, and never
+ * `scope` itself (a DIFFERENT assessment's own resolution). Where the last
+ * assessment records no scope text, this still falls through to the coarse
+ * evidenced set, `finalAssessmentScopeOrigin: 'evidenced'`.
+ *
+ * ## `sameAsLinks` / `canonicalKeys`: the same store the identity triage surface reads
+ *
+ * `[D-388]` condition 4's cross-course identity input is `listSameAsLinkRecords`
+ * (`registry/provider.ts`'s own production caller for F8.4a), read here
+ * too — every persisted link, every status; `buildRetrospective`'s
+ * `buildSameAsKeyRedirect` seam is what narrows this to confirmed links.
+ *
+ * ## `declaredScopes`: no production reader yet
+ *
+ * `[D-388]` condition 3's basis input — the D-355 examiner-declared-unit
+ * alignment per course — has no production caller yet: the Outcome-record
+ * declared units exist (`plugin/src/ingestion/wiring.ts:943-945`) but only
+ * the practice paper reads them (`plugin/src/paper/provider.ts:106,:204`),
+ * and the grove's own per-course declared set (`core/src/scope/grove.ts`)
+ * is Olea's reading of registered documents, not D-355's examiner-declared
+ * unit, so wiring it here would mislabel an `'olea-reading'` fact as
+ * `'declared-scope'`. Left `undefined` (every basis reads `'olea-reading'`)
+ * until `SCP`'s D-355 rewiring of the grove (`ol-egov.141.89.7.4`) gives a
+ * real course → declared-concept-id reader.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -51,15 +73,18 @@ import {
   createFsrsScheduler,
   HOLDING_CUT,
   hasAssessmentPassed,
+  listSameAsLinkRecords,
   REQUIRED_ASSESSMENT_FIELDS,
   type RetrospectiveConceptCoverage,
   type RetrospectiveOfferEvent,
   type RetrospectiveOfferStatus,
   type RetrospectiveReading,
   type RetrospectiveScopeOrigin,
+  readConceptKeyCanonicalIndex,
   resolveAssessmentGroupingContext,
   resolveAssessments,
   resolveRetrospectiveOfferStatus,
+  type SameAsLinkRecord,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -262,9 +287,34 @@ export function createLocalRetrospectiveProvider(
           ? assessmentStatedScope(chosen, conceptRecords)
           : evidencedCourseScope(conceptRecords, course, entries);
 
-      const isLastAssessment =
-        assessmentsRead.records.filter((r) => r.course === course).sort(compareByDueDescending)[0]
-          ?.path === chosen.path;
+      const lastAssessmentForCourse = assessmentsRead.records
+        .filter((r) => r.course === course)
+        .sort(compareByDueDescending)[0];
+      const isLastAssessment = lastAssessmentForCourse?.path === chosen.path;
+
+      // This module's doc, "`sameAsLinks` / `canonicalKeys`".
+      const [sameAsRecords, canonicalKeys] = await Promise.all([
+        listSameAsLinkRecords(deps.vault),
+        readConceptKeyCanonicalIndex(deps.vault),
+      ]);
+      const sameAsLinks: readonly SameAsLinkRecord[] = sameAsRecords.map(({ record }) => record);
+
+      // This module's doc, "D-134 Q3's fallback".
+      const finalAssessmentFields =
+        isLastAssessment || lastAssessmentForCourse === undefined
+          ? {}
+          : hasStatedScope(lastAssessmentForCourse)
+            ? {
+                finalAssessmentScope: assessmentStatedScope(
+                  lastAssessmentForCourse,
+                  conceptRecords,
+                ),
+                finalAssessmentScopeOrigin: 'assessment-stated' as RetrospectiveScopeOrigin,
+              }
+            : {
+                finalAssessmentScope: evidencedCourseScope(conceptRecords, course, entries),
+                finalAssessmentScopeOrigin: 'evidenced' as RetrospectiveScopeOrigin,
+              };
 
       const reading = buildRetrospective({
         assessmentPath: chosen.path,
@@ -276,14 +326,11 @@ export function createLocalRetrospectiveProvider(
         now,
         holdingCut,
         conceptCourses,
-        // D-134 Q3's fallback is still the coarse course-wide evidenced set
-        // (this module's doc, "D-134 Q3's fallback") — deliberately NOT
-        // `scope` above, which as of this bead can be the narrower
-        // assessment-stated set for `chosen` itself and would be the wrong
-        // stand-in for a DIFFERENT (later) assessment's own scope.
-        ...(isLastAssessment
-          ? {}
-          : { finalAssessmentScope: evidencedCourseScope(conceptRecords, course, entries) }),
+        sameAsLinks,
+        canonicalKeys,
+        // `declaredScopes`: this module's doc, "`declaredScopes`: no
+        // production reader yet" — left undefined on purpose.
+        ...finalAssessmentFields,
       });
 
       const status = resolveRetrospectiveOfferStatus(offerEvents, chosen.path, true);

@@ -63,11 +63,12 @@ export {
   MIN_TIMED_REVIEWS,
   SHORTFALL_RATIO_K,
 } from './effort.js';
-export type { SpacingInsight, SpacingMeasured } from './spacing.js';
+export type { CourseSpacingReading, SpacingInsight, SpacingMeasured } from './spacing.js';
 export {
   ATTENDANCE_RATIO,
   CONCENTRATION_RATIO,
   detectSpacing,
+  detectSpacingByCourse,
   impliedAssessmentDays,
   MIN_REVIEWS,
   MIN_SPAN_DAYS,

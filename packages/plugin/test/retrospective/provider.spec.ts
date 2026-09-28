@@ -16,7 +16,12 @@
  * invented for this suite; nothing is drawn from a real vault.
  */
 import type { ReviewLogRecord } from 'olea-contracts';
-import { addManualAssessmentEntry, reviewLogPath } from 'olea-core';
+import {
+  addManualAssessmentEntry,
+  confirmSameAsLink,
+  proposeSameAsLink,
+  reviewLogPath,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -401,5 +406,104 @@ describe('createLocalRetrospectiveProvider — the no-override holding cut is th
     if (result === null) throw new Error('expected a retrospective to load');
     expect(result.reading.faded.map((l) => l.conceptName)).toEqual(['Owyn Retro Concept']);
     expect(result.reading.held).toEqual([]);
+  });
+});
+
+/**
+ * `[D-388]` condition 4's identity input, wired to its real production
+ * store (`ol-egov.141.89.11.4`): before this bead `load()` never called
+ * `listSameAsLinkRecords`, so two identities sharing only a confirmed
+ * same-as link never carried into each other's course — the redirect map
+ * was always empty and every id was its own identity.
+ */
+describe('createLocalRetrospectiveProvider — sameAsLinks wired from the vault (ol-egov.141.89.11.4)', () => {
+  it('a confirmed same-as link carries a concept into the OTHER identity’s course', async () => {
+    const vault = await vaultWithReviewedConcepts(
+      {
+        [BASE_PATH]: BASE_FILE,
+        '02 Assignments/Quiz 1.md': assessmentNote({ due: '2026-08-20', scope: 'Photosynthesis' }),
+      },
+      [],
+    );
+    const concepts = await extractConceptsFromVault(vault, {});
+    const photoKey = concepts.find((c) => c.name === 'Photosynthesis')?.key;
+    const krebsKey = concepts.find((c) => c.name === 'Krebs Cycle')?.key;
+    if (photoKey === undefined || krebsKey === undefined) {
+      throw new Error('missing concept key for the fixture');
+    }
+    await proposeSameAsLink(vault, photoKey, krebsKey);
+    await confirmSameAsLink(vault, photoKey, krebsKey);
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+
+    const entry = result.reading.carries.find((c) => c.conceptName === 'Photosynthesis');
+    if (entry === undefined) throw new Error('expected a carries entry for Photosynthesis');
+    // "Krebs Cycle" (`CONCEPT_FILES`) is a TESTC202 concept — the confirmed
+    // link is the ONLY reason its course shows up here, never a shared
+    // label (TESTC101's own concept, "Photosynthesis", shares no wording
+    // with it at all).
+    expect(entry.otherCourses).toEqual(['TESTC202']);
+  });
+});
+
+/**
+ * D-134 Q3's fallback, wired to the course's real last assessment (`ol-
+ * egov.141.89.11.4`): before this bead `finalAssessmentScope` always used
+ * the coarse evidenced set and `finalAssessmentScopeOrigin` was always
+ * omitted, even when the course's own actual last assessment stated its
+ * scope in F1.7 text — so a "what carries into the term's last assessment"
+ * line always read its basis as Olea's reading, never the examiner's.
+ */
+describe('createLocalRetrospectiveProvider — finalAssessmentScopeOrigin wired from the last assessment (ol-egov.141.89.11.4)', () => {
+  it("reads the basis from the course's actual LAST assessment's own stated scope, not the chosen (earlier) one", async () => {
+    const vault = await vaultWithReviewedConcepts(
+      {
+        [BASE_PATH]: BASE_FILE,
+        '02 Assignments/Quiz 1.md': assessmentNote({
+          due: '2026-08-20',
+          scope: 'Photosynthesis, Osmosis',
+        }),
+        // Due AFTER `NOW`, so it has not passed and is never `chosen` — but
+        // it IS the course's actual last assessment by due date, and its
+        // own stated scope is what `finalAssessmentScopeOrigin` should read.
+        '02 Assignments/Quiz 3.md': assessmentNote({
+          due: '2026-12-01',
+          status: 'assigned',
+          scope: 'Photosynthesis',
+        }),
+      },
+      [],
+    );
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+
+    expect(result.reading.assessmentPath).toBe('02 Assignments/Quiz 1.md');
+    const photosynthesis = result.reading.carries.find((c) => c.conceptName === 'Photosynthesis');
+    if (photosynthesis === undefined)
+      throw new Error('expected a carries entry for Photosynthesis');
+    expect(photosynthesis.carriesToFinalAssessment).toBe(true);
+    expect(photosynthesis.finalAssessmentBasis).toBe('declared-scope');
+    // Osmosis is in Quiz 1's own scope but not in Quiz 3's — it never
+    // carries anywhere, proving the basis above is read from Quiz 3's OWN
+    // text, not a blanket "the last assessment exists" default.
+    expect(result.reading.carries.find((c) => c.conceptName === 'Osmosis')).toBeUndefined();
   });
 });
