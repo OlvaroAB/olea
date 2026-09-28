@@ -45,11 +45,23 @@
  * **Ordering among a course's own quiet-line candidates**, since F6.10
  * allows only one: the retrospective offer wins first (F8.8's own "offered
  * from Home" mechanics is unconditional once an assessment has passed —
- * something is actually asking for her), then "scope grew" (a fact about
- * what just changed), then "set up, waiting" (a standing fact about a
- * course with nothing registered at all, which does not change read to
- * read). A course showing none of the three renders no quiet line, which is
- * F6.10's ordinary state, not a gap.
+ * something is actually asking for her), then `[D-408]`'s empty-ranking
+ * reason (`ol-egov.141.89.10.85`) — a standing fact about the course's
+ * *current* study plan, read fresh every call from `deps.plan`, the same
+ * `StudyPlanEnvelope` already threaded through to `sessionProvider` below —
+ * then "scope grew" (a fact about what just changed), then "set up,
+ * waiting" (a standing fact about a course with nothing registered at all,
+ * which does not change read to read). A course showing none of the four
+ * renders no quiet line, which is F6.10's ordinary state, not a gap.
+ *
+ * **`[D-408]`'s line is read from the plan, never recomputed.** `emptyReasonsByCourse` below
+ * folds `deps.plan?.().body.courses` down to a `course -> EmptyRankingReason` map once per
+ * `load()`, for exactly the `'ranked'`/empty/`emptyReason`-present entries
+ * `packages/contracts/src/study-plan.ts`'s own `.superRefine` already guarantees are the only
+ * shape carrying one — `quietLineFor` then only looks the course up, it never re-derives whether
+ * a ranking is empty or why. **Start has no separate rendering of this**: `[D-243]` folded Start
+ * into sitting the composed session directly on this same Home screen, so this one course row is
+ * what "Start" in `ol-egov.141.89.10.85`'s own title resolves to as well.
  *
  * **F4.6's once-asked course-avoidance question (`[D-265]`, `[INTERV-5]`).**
  * `./avoidance.ts`'s own module doc carries the full argument; this module is
@@ -64,7 +76,12 @@
  * whole Home read (identical reasoning to that same call site).
  */
 
-import type { ReviewLogEntry, StudyPlanAllocationEntry, StudyPlanEnvelope } from 'olea-contracts';
+import type {
+  EmptyRankingReason,
+  ReviewLogEntry,
+  StudyPlanAllocationEntry,
+  StudyPlanEnvelope,
+} from 'olea-contracts';
 import type {
   ConceptRecord,
   ConceptRelation,
@@ -111,7 +128,7 @@ import {
   findAvoidedCourse,
   ObsidianHomeAvoidanceStore,
 } from './avoidance.js';
-import { HOME_SET_UP_WAITING, homeScopeGrewLine } from './copy.js';
+import { emptyRankingQuietLine, HOME_SET_UP_WAITING, homeScopeGrewLine } from './copy.js';
 import {
   type HomeScopeSnapshot,
   homeScopeGrowthReceiptFor,
@@ -249,20 +266,46 @@ function marksForDeclaredCourse(
   return [...stageMarks, ...gapMarks];
 }
 
-/** One course's own quiet line, per the priority this module's doc names — `undefined` when none of the three apply. */
+/** One course's own quiet line, per the priority this module's doc names — `undefined` when none of the four apply. */
 function quietLineFor(
   model: GroveCourseModel,
   offer: RetrospectiveOfferCard | undefined,
   growthLine: string | undefined,
+  emptyReason: EmptyRankingReason | undefined,
 ): HomeQuietLine | undefined {
   if (offer !== undefined) {
     return { kind: 'retrospective-offer', text: offer.line, assessmentPath: offer.assessmentPath };
+  }
+  // `[D-408]` (`ol-egov.141.89.10.85`): a standing fact about the course's current study plan —
+  // ahead of "scope grew"/"set up, waiting", which are both about the coverage map rather than
+  // what is currently practisable.
+  if (emptyReason !== undefined) {
+    return { kind: emptyReason, text: emptyRankingQuietLine(emptyReason) };
   }
   if (growthLine !== undefined) return { kind: 'scope-grew', text: growthLine };
   if (model.status === 'no-registered-source') {
     return { kind: 'set-up-waiting', text: HOME_SET_UP_WAITING };
   }
   return undefined;
+}
+
+/**
+ * Folds a study plan's courses down to a `course -> EmptyRankingReason` lookup, for exactly the
+ * `'ranked'` entries carrying `[D-408]`'s `emptyReason` — every other entry (a non-empty ranking,
+ * or an `'abstained'` course) has nothing to contribute here. `undefined`/`null` (no plan
+ * configured, or `deps.plan` omitted) folds to an empty map, the same honest-absence reading
+ * `quietLineFor` already gives every other candidate.
+ */
+function emptyRankingReasonsByCourse(
+  planEnvelope: StudyPlanEnvelope | null | undefined,
+): ReadonlyMap<string, EmptyRankingReason> {
+  const byCourse = new Map<string, EmptyRankingReason>();
+  for (const course of planEnvelope?.body.courses ?? []) {
+    if (course.status === 'ranked' && course.emptyReason !== undefined) {
+      byCourse.set(course.course, course.emptyReason);
+    }
+  }
+  return byCourse;
 }
 
 /**
@@ -273,6 +316,7 @@ function quietLineFor(
 async function buildCourseRows(
   sections: readonly GroveCourseSection[],
   scopeGrowthStore: ObsidianHomeScopeGrowthStore,
+  emptyReasons: ReadonlyMap<string, EmptyRankingReason>,
 ): Promise<readonly HomeCourseRow[]> {
   const priorScope = await scopeGrowthStore.load();
   const nextScope = new Map<string, HomeScopeSnapshot>();
@@ -280,9 +324,10 @@ async function buildCourseRows(
   const rows = sections.map((section): HomeCourseRow => {
     const { course, model } = section;
     const offer = pickCourseOffer(section.offerCards);
+    const emptyReason = emptyReasons.get(course);
 
     if (model.status !== 'declared') {
-      const quiet = quietLineFor(model, offer, undefined);
+      const quiet = quietLineFor(model, offer, undefined, emptyReason);
       return { course, ...(quiet !== undefined ? { quiet } : {}) };
     }
 
@@ -300,7 +345,7 @@ async function buildCourseRows(
           )
         : undefined;
 
-    const quiet = quietLineFor(model, offer, growthLine);
+    const quiet = quietLineFor(model, offer, growthLine, emptyReason);
     return {
       course,
       marks: marksForDeclaredCourse(model),
@@ -464,8 +509,14 @@ export function createLocalHomeProvider(deps: CreateLocalHomeProviderDeps): Home
           sessionProvider.load(request),
           groveProvider.load(),
         ]);
+        // `[D-408]`: read fresh from the same `deps.plan` thunk `sessionProvider` above is
+        // already wired with — never a second, independent plan read — so a course's quiet line
+        // and Start's own composition can never disagree about whether it has anything to rank.
+        const emptyReasons = emptyRankingReasonsByCourse(deps.plan?.() ?? null);
         const courses =
-          grove.kind === 'model' ? await buildCourseRows(grove.courses, scopeGrowthStore) : [];
+          grove.kind === 'model'
+            ? await buildCourseRows(grove.courses, scopeGrowthStore, emptyReasons)
+            : [];
         // F4.6 (`[D-265]`, `[INTERV-5]`): needs the same course→concept
         // membership the coverage strips just read, so it runs after
         // `grove` resolves rather than joining the `Promise.all` above —

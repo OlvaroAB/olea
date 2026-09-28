@@ -98,22 +98,20 @@ export function deleteButtonLabel(state: DeleteConfirmState): string {
   return state === 'idle' ? DELETE_BUTTON_LABEL_IDLE : DELETE_BUTTON_LABEL_CONFIRMING;
 }
 
-// `[COPY PASS PENDING — ol-egov.141.8.11]` PLACEHOLDER, Class B: `[D-406]` ruled that after the
-// reload that follows a full delete Olea is paused, "nothing is read, built or sent until she
-// acts, with a one-line explanation". The vocabulary registry
-// (`docs/Olea_vocabulary_registry.md`) has no word for this state or for the action that ends it,
-// so the two strings below are plain-language placeholders written to be true, not product
-// wording: they await the copy pass. Voice-charter intent (section 9): Olea is the subject only
-// because the sentence is about Olea itself (V1); fact plus one available action (V3); no apology
-// (V4).
+// `[D-406]` ruled that after the reload that follows a full delete Olea is paused, "nothing is
+// read, built or sent until she acts, with a one-line explanation". The two strings below are the
+// ratified copy-pass wording (`docs/design/copy-pass-2026-09/paused-after-delete-line.md`,
+// candidate A; David's 2026-09-27 sign-off). Voice-charter intent (section 9): Olea is the subject
+// only because the sentence is about Olea itself (V1); fact plus one available action (V3); no
+// apology (V4).
 
-/** `[D-406]`: the name of her one deliberate action while paused. PLACEHOLDER (see above). */
+/** `[D-406]`: the name of her one deliberate action while paused. */
 export const FULL_DELETE_START_LABEL = 'Start';
 
 /**
- * `[D-406]`: the one-line explanation shown while paused. PLACEHOLDER (see above). One line, and
- * it names the action by `FULL_DELETE_START_LABEL` so the two cannot drift apart.
+ * `[D-406]`: the one-line explanation shown while paused. One line, and it names the action by
+ * `FULL_DELETE_START_LABEL` so the two cannot drift apart.
  */
 export const FULL_DELETE_PAUSE_LINE =
-  'Olea is paused after the full delete: it reads, builds and sends nothing until you choose ' +
+  'Olea is paused after a full delete — nothing is read, built or sent until you choose ' +
   `${FULL_DELETE_START_LABEL}.`;

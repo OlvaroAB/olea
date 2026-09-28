@@ -253,7 +253,12 @@ export type HomeGroveMark =
   | { readonly kind: 'ground' }
   | { readonly kind: 'material-gap' };
 
-/** One course row's own quiet line — F6.10: "never more than one line per course." */
+/**
+ * One course row's own quiet line — F6.10: "never more than one line per course." The two
+ * `EmptyRankingReason` kinds (`[D-408]`, `ol-egov.141.89.10.85`) name a course whose cached study
+ * plan is `'ranked'` with an empty concept list — see `./copy.ts#emptyRankingQuietLine` for the
+ * one place the contract's enum is mapped onto the registered sentence.
+ */
 export type HomeQuietLine =
   | {
       readonly kind: 'retrospective-offer';
@@ -261,7 +266,9 @@ export type HomeQuietLine =
       readonly assessmentPath: VaultPath;
     }
   | { readonly kind: 'scope-grew'; readonly text: string }
-  | { readonly kind: 'set-up-waiting'; readonly text: string };
+  | { readonly kind: 'set-up-waiting'; readonly text: string }
+  | { readonly kind: 'every-assessment-passed'; readonly text: string }
+  | { readonly kind: 'nothing-to-practise'; readonly text: string };
 
 /**
  * One running course's row (F6.10). `marks` is `undefined` exactly when no

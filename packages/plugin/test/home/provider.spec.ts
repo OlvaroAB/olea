@@ -28,7 +28,11 @@ import { describe, expect, it } from 'vitest';
 // same source-path precedent `test/session/composition-recorder.spec.ts` already uses for this
 // module.
 import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
-import { sessionCompositionSentence } from '../../src/home/copy.js';
+import {
+  HOME_EVERY_ASSESSMENT_PASSED_LINE,
+  HOME_NOTHING_TO_PRACTISE_LINE,
+  sessionCompositionSentence,
+} from '../../src/home/copy.js';
 import { createLocalHomeProvider } from '../../src/home/provider.js';
 import type { HomeViewState } from '../../src/home/view.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): the same store
@@ -170,6 +174,69 @@ describe('createLocalHomeProvider — F6.10 per-course quiet-line selection', ()
     expect(row?.marks).toBeUndefined();
     expect(row?.quiet?.kind).toBe('set-up-waiting');
   });
+
+  // `[D-408]` (`ol-egov.141.89.10.85`, F6.10 §26): a course whose cached study plan is
+  // `'ranked'` with an empty `concepts` array reads the named reason, read fresh from
+  // `deps.plan` — never re-derived from the grove read, which knows nothing about ranking.
+  // "Start" has no separate rendering to pin: `[D-243]` folded it into this same Home course
+  // row, so these two cases are what Home AND Start show, per the bead's own title.
+  it("a course whose plan ran out of assessments shows [D-408]'s 'every-assessment-passed' line", async () => {
+    const vault = fixtureVault({
+      '02 Assignments/Quiz 1.md':
+        '---\nclass: TESTC303\ntype: Quiz\nweight: 10\ndue: 2026-09-20\nstatus: pending\n---\n\n# Quiz 1\n',
+    });
+    const plan = planFixtureWithCourses([
+      {
+        course: 'TESTC303',
+        status: 'ranked',
+        concepts: [],
+        emptyReason: 'every-assessment-passed',
+      },
+    ]);
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH), () => plan).load(DEFAULT_REQUEST),
+    );
+    const row = courses.find((r) => r.course === 'TESTC303');
+    expect(row?.quiet).toEqual({
+      kind: 'every-assessment-passed',
+      text: HOME_EVERY_ASSESSMENT_PASSED_LINE,
+    });
+  });
+
+  it("a course whose plan has nothing eligible shows [D-408]'s 'nothing-to-practise' line", async () => {
+    const vault = fixtureVault({
+      '02 Assignments/Quiz 1.md':
+        '---\nclass: TESTC404\ntype: Quiz\nweight: 10\ndue: 2026-09-20\nstatus: pending\n---\n\n# Quiz 1\n',
+    });
+    const plan = planFixtureWithCourses([
+      { course: 'TESTC404', status: 'ranked', concepts: [], emptyReason: 'nothing-to-practise' },
+    ]);
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH), () => plan).load(DEFAULT_REQUEST),
+    );
+    const row = courses.find((r) => r.course === 'TESTC404');
+    expect(row?.quiet).toEqual({
+      kind: 'nothing-to-practise',
+      text: HOME_NOTHING_TO_PRACTISE_LINE,
+    });
+  });
+
+  it('[D-408]\'s empty-ranking reason wins over the standing "set up, waiting" line for the same course', async () => {
+    const vault = fixtureVault({
+      '02 Assignments/Quiz 1.md':
+        '---\nclass: TESTC505\ntype: Quiz\nweight: 10\ndue: 2026-09-20\nstatus: pending\n---\n\n# Quiz 1\n',
+    });
+    const plan = planFixtureWithCourses([
+      { course: 'TESTC505', status: 'ranked', concepts: [], emptyReason: 'nothing-to-practise' },
+    ]);
+    const { courses } = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH), () => plan).load(DEFAULT_REQUEST),
+    );
+    // Without the plan, this exact fixture reads "set-up-waiting" (proven above) — with it,
+    // the more specific, more actionable [D-408] reason takes over the same row.
+    const row = courses.find((r) => r.course === 'TESTC505');
+    expect(row?.quiet?.kind).toBe('nothing-to-practise');
+  });
 });
 
 describe('createLocalHomeProvider — dismiss', () => {
@@ -267,6 +334,22 @@ function planFixtureWithAllocation(
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
     governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
     body: { asOf: '2026-09-01', courses: [], allocation },
+  };
+}
+
+// `[D-408]` (`ol-egov.141.89.10.85`): the sibling of `planFixtureWithAllocation` above, for
+// tests that need `body.courses` (the per-course ranking, `emptyReason` included) rather than
+// `body.allocation`.
+function planFixtureWithCourses(courses: StudyPlanEnvelope['body']['courses']): StudyPlanEnvelope {
+  return {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: 1,
+    policyVersion: 'sp1-cccccccccccccccc',
+    computedAt: NOW.toISOString(),
+    freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+    governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
+    body: { asOf: '2026-09-01', courses },
   };
 }
 

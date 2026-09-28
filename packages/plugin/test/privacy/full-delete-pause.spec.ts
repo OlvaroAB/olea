@@ -516,4 +516,14 @@ describe('after a full delete, Olea is paused until she acts ([D-406], ol-egov.1
     expect(FULL_DELETE_PAUSE_LINE).toContain(FULL_DELETE_START_LABEL);
     expect(FULL_DELETE_START_LABEL.trim().length).toBeGreaterThan(0);
   });
+
+  // [D-406], David's 2026-09-27 sign-off on `docs/design/copy-pass-2026-09/paused-after-delete-
+  // line.md` candidate A — the exact ratified string, pinned so a later edit has to argue with
+  // the sign-off rather than drift past it unnoticed.
+  it('the explanation is the exact ratified [D-406] wording', () => {
+    expect(FULL_DELETE_PAUSE_LINE).toBe(
+      'Olea is paused after a full delete — nothing is read, built or sent until you choose Start.',
+    );
+    expect(FULL_DELETE_START_LABEL).toBe('Start');
+  });
 });

@@ -49,6 +49,7 @@
  * wording rule, only a second caller of the one function F2.22 already governs.
  */
 
+import type { EmptyRankingReason } from 'olea-contracts';
 import type { VaultPath } from 'olea-core';
 
 export const HOME_VIEW_TITLE = 'Home';
@@ -141,6 +142,45 @@ export const HOME_NO_MAP_DRAWN =
 export const HOME_SET_UP_WAITING = 'Set up, waiting for material to arrive.';
 
 /**
+ * `[D-408]` (`ol-egov.141.89.10.85`, F6.10) — the quiet line for a course whose cached study
+ * plan carries `status: 'ranked'` with an empty `concepts` array and
+ * `emptyReason: 'every-assessment-passed'` (`packages/contracts/src/study-plan.ts`): every one of
+ * the course's concepts was vetoed on date grounds alone — it has run out of future assessments
+ * to be tested on, not stuck or broken. Registered wording
+ * (`docs/Olea_vocabulary_registry.md` §26; David's 2026-09-27 sign-off,
+ * `docs/design/copy-pass-2026-09/home-start-nothing-to-practise.md` candidate A) — never
+ * paraphrased at the call site. **Start has no separate screen to carry its own wording**:
+ * `[D-243]` folded Start into sitting the composed session directly on Home, so this same line,
+ * on this same row, is what "Start" in this bead's own title resolves to as well.
+ */
+export const HOME_EVERY_ASSESSMENT_PASSED_LINE =
+  "Every assessment for this course has passed — there's nothing to practise here right now.";
+
+/**
+ * `[D-408]`'s sibling line, for `emptyReason: 'nothing-to-practise'`: at least one vetoed concept
+ * carries `[D-404]`'s eligibility veto instead (every remaining practice instrument on that
+ * concept suspended, withdrawn, missing its note, or pending revalidation) — the more specific,
+ * more actionable fact, so `../core/src/plan/build.ts#emptyRankingReasonFor` prefers it over
+ * `'every-assessment-passed'` whenever both could apply. Points at the registry (F8.4, §23's
+ * "Withheld" vocabulary) rather than re-deriving the specific per-instrument cause here, so the
+ * two surfaces cannot drift apart. Registered wording (`docs/Olea_vocabulary_registry.md` §26;
+ * David's 2026-09-27 sign-off, same source file, candidate A).
+ */
+export const HOME_NOTHING_TO_PRACTISE_LINE =
+  'Nothing in this course is eligible to practise right now — check the registry to see why.';
+
+/**
+ * Maps `[D-408]`'s contract enum onto the one registered sentence for each reason — the single
+ * place that translation happens, so a caller building a `HomeQuietLine` (`./view.ts`) never
+ * paraphrases or re-derives which reason gets which words.
+ */
+export function emptyRankingQuietLine(reason: EmptyRankingReason): string {
+  return reason === 'every-assessment-passed'
+    ? HOME_EVERY_ASSESSMENT_PASSED_LINE
+    : HOME_NOTHING_TO_PRACTISE_LINE;
+}
+
+/**
  * F6.10's "scope grew and by which document" quiet line — the mirror image
  * of `../grove/copy.ts#groveScopeCorrectionReceiptLine`, which states a
  * FALL. States two facts and stops: the document that was registered, and
@@ -211,6 +251,10 @@ export function allHomeStrings(): readonly string[] {
     HOME_SCOPE_NOT_DECLARED,
     HOME_NO_MAP_DRAWN,
     HOME_SET_UP_WAITING,
+    HOME_EVERY_ASSESSMENT_PASSED_LINE,
+    HOME_NOTHING_TO_PRACTISE_LINE,
+    emptyRankingQuietLine('every-assessment-passed'),
+    emptyRankingQuietLine('nothing-to-practise'),
     homeScopeGrewLine('03 Research/Objectives.md', 3),
     sessionCompositionSentence('this course because you asked for it'),
     sessionCompositionSentence(

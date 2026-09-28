@@ -232,6 +232,34 @@ describe('resolvePlanPolicyCourseInputs', () => {
     ]);
   });
 
+  // `[D-408]` (`ol-egov.141.89.10.85`): a `'ranked'` course whose every concept was vetoed away
+  // this pass reaches `RankOracleResult` as `status: 'ranked', ranked: []` — a shape distinct
+  // from `'abstained'` (this course HAD evidence; every edge on it was vetoed this pass, not "no
+  // evidence at all") but the same zero this function already gives an abstained course, per its
+  // own `course.status === 'abstained' || course.ranked.length === 0` branch. Pinning this
+  // separately from the abstained case above so the two are never conflated: `[D-408]`'s own
+  // shape must fund no study block either, whichever of its two named reasons produced the empty
+  // ranking (the reason lives only on the persisted `StudyPlanCourse.emptyReason`,
+  // `packages/contracts/src/study-plan.ts` — computed downstream of this function, from
+  // `vetoedConcepts`, and irrelevant to this zero reading either way).
+  it("[D-408]: a 'ranked' course with nothing left to rank reads the same zero readiness/evidenceVolume an abstained course gets — no allocation input funds a study block for it", () => {
+    const result = resolvePlanPolicyCourseInputs(
+      '2026-09-01',
+      ranking([{ course: 'COURSE-C', status: 'ranked', ranked: [] }]),
+      [assessment({ course: 'COURSE-C', due: '2026-09-30', weight: 0.4 })],
+    );
+
+    expect(result).toEqual([
+      {
+        courseId: 'COURSE-C',
+        daysToNextAssessment: 29,
+        assessmentWorth: 0.4,
+        readiness: 0,
+        evidenceVolume: 0,
+      },
+    ]);
+  });
+
   it("emits one entry per course reported by the ranking, in the ranking's own order", () => {
     const result = resolvePlanPolicyCourseInputs(
       '2026-09-01',

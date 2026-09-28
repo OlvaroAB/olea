@@ -6,7 +6,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   allHomeStrings,
+  emptyRankingQuietLine,
+  HOME_EVERY_ASSESSMENT_PASSED_LINE,
   HOME_NEXT_SESSION_EYEBROW,
+  HOME_NOTHING_TO_PRACTISE_LINE,
   HOME_OFFER_EYEBROW,
   HOME_VIEW_TITLE,
   sessionCompositionSentence,
@@ -92,5 +95,35 @@ describe('home copy — HOME_NEXT_SESSION_EYEBROW (D-382, D-331)', () => {
   it('names the session plainly — no percentage, ratio or fraction (F8.3)', () => {
     expect(HOME_NEXT_SESSION_EYEBROW).not.toMatch(/%/);
     expect(HOME_NEXT_SESSION_EYEBROW).not.toMatch(/\d+\s*\/\s*\d+/);
+  });
+});
+
+/**
+ * `[D-408]` (`ol-egov.141.89.10.85`, F6.10 §26 — David's 2026-09-27 sign-off): the two registered
+ * lines for a `'ranked'` course with an empty concept list, and the one function
+ * (`emptyRankingQuietLine`) that maps the contract's `EmptyRankingReason` enum onto them. Pinned
+ * here as the exact ratified strings so a later edit has to argue with the sign-off.
+ */
+describe('home copy — emptyRankingQuietLine (D-408)', () => {
+  it('every-assessment-passed reads the exact ratified line', () => {
+    expect(emptyRankingQuietLine('every-assessment-passed')).toBe(
+      HOME_EVERY_ASSESSMENT_PASSED_LINE,
+    );
+    expect(HOME_EVERY_ASSESSMENT_PASSED_LINE).toBe(
+      "Every assessment for this course has passed — there's nothing to practise here right now.",
+    );
+  });
+
+  it('nothing-to-practise reads the exact ratified line, and points at the registry rather than re-deriving the per-instrument cause', () => {
+    expect(emptyRankingQuietLine('nothing-to-practise')).toBe(HOME_NOTHING_TO_PRACTISE_LINE);
+    expect(HOME_NOTHING_TO_PRACTISE_LINE).toBe(
+      'Nothing in this course is eligible to practise right now — check the registry to see why.',
+    );
+  });
+
+  it('the two reasons never share a line — Home renders each honestly, not a single interchangeable sentence', () => {
+    expect(emptyRankingQuietLine('every-assessment-passed')).not.toBe(
+      emptyRankingQuietLine('nothing-to-practise'),
+    );
   });
 });
