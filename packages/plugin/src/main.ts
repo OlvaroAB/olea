@@ -114,6 +114,7 @@ import {
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
+import { createRecordSetAsideAttempt } from './explain-back/set-aside-record.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
 import { hasExplainBackSourceFingerprintChanged } from './explain-back/source-fingerprint-staleness.js';
 import { frozenCourseOrTopicFilter } from './extend-outrun-course-filter.js';
@@ -4542,6 +4543,12 @@ export default class OleaPlugin extends Plugin {
           resolveIntroducingPassageFromVault(vault, provenance),
         buildObservationContext: (params) => this.buildExplainBackObservationContextFor(params),
         recordSoloGradeAndReview: (params) => this.recordExplainBackSoloGradeAndReview(params),
+        // `[D-416]`: writes the set-aside attempt (Try again) so the retry sequence
+        // survives past the in-view sequence — see `set-aside-record.ts`'s own doc.
+        recordSetAsideAttempt: createRecordSetAsideAttempt({
+          vault: this.vaultSource,
+          deviceId: () => ensureDeviceId(this),
+        }),
         loadMisconceptionDigest: (conceptIds) =>
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,

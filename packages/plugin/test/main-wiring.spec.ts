@@ -169,12 +169,16 @@ describe('every port the session needs is the real one', () => {
     // `ol-egov.141.89.9.49`'s `openNextCourseSetupProposal` awaits it a
     // ninth time to thread the same id into
     // `readCourseSetupRecognitions`'s own `readReviewHistory` read (F8.7's
-    // proposal-time recognition claims) —
+    // proposal-time recognition claims), and `[D-416]`'s
+    // `openExplainBackModal` deps (`recordSetAsideAttempt`) awaits it a
+    // tenth time to thread the same id into
+    // `createRecordSetAsideAttempt`'s own vault write (the Try again
+    // set-aside-attempt event) —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // nine. The count below tracks known call sites rather than asserting
+    // ten. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(9);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(10);
   });
 });
 
@@ -1755,9 +1759,15 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
   });
 
   it('main.ts:1225 — the registry view’s createLocalRegistryProvider receives it', () => {
+    // `ol-egov.141.89.5.28` (`[D-420]`): the gap to `editPort:` widened from
+    // `{0,400}?` to `{0,1400}?` — the registry provider's own
+    // `citationHashStore` ternary (pinned in the `[D-420]` describe block
+    // below) grew from a one-line spread to a multi-key block that also
+    // wires `deferredRecheckRearm`/`isOnline`, so this pattern needs more
+    // room to still reach `editPort:` past it.
     expect(main).toMatch(
       new RegExp(
-        `createLocalRegistryProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*${spread},[\\s\\S]{0,400}?editPort:`,
+        `createLocalRegistryProvider\\(\\{\\s*vault,\\s*deviceId,\\s*settingsHost:\\s*this,\\s*now:\\s*this\\.now,\\s*${spread},[\\s\\S]{0,1400}?editPort:`,
       ),
     );
   });
@@ -1875,25 +1885,34 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   // pending-revalidation READ, never one of the four COMPOSE call sites this
   // block is about.
 
-  // `ol-egov.141.89.6.55` adds a SIXTH occurrence: the registry view's
+  // `ol-egov.141.89.6.55` adds a SIXTH reader: the registry view's
   // `createLocalRegistryProvider` construction, so its own suspect section
   // (`registry/provider.ts`'s `citationHashStore` doc) reads the same
   // pending-revalidation facts every compose call site above already does —
   // a fifth reader of the store, not a sixth compose call.
-  it("the registry view's createLocalRegistryProvider construction site receives it too", () => {
+  // `ol-egov.141.89.5.28` (`[D-420]`): that call site's own ternary no
+  // longer matches `citationSpread` (the plain one-line
+  // `citationHashStore: this.citationHashStore` spread every other reader
+  // above still uses) — it now also wires `deferredRecheckRearm` and
+  // `isOnline` for the deferred-recheck retry action, so this pin matches
+  // the wider shape directly instead.
+  it("the registry view's createLocalRegistryProvider construction site receives it too, with the [D-420] deferredRecheckRearm/isOnline spread", () => {
     expect(main).toMatch(
-      new RegExp(
-        `readRankWeights: this\\.rankWeights\\.readRankWeights\\s*\\}\\s*:\\s*\\{\\}\\),\\s*${citationSpread},\\s*editPort: createObsidianEditInstrumentPort\\(this\\.app\\),`,
-      ),
+      /readRankWeights: this\.rankWeights\.readRankWeights\s*\}\s*:\s*\{\}\),\s*\.\.\.\(this\.citationHashStore\s*\?\s*\{\s*citationHashStore: this\.citationHashStore,[\s\S]{0,500}?deferredRecheckRearm: this\.citationHashStore,\s*isOnline: \(\) => navigator\.onLine,\s*\}\s*:\s*\{\}\),\s*editPort: createObsidianEditInstrumentPort\(this\.app\),/,
     );
   });
 
   // Counted here anyway, since this assertion matches the literal string
-  // wherever it occurs; kept at exactly six so a seventh, unaccounted-for
-  // occurrence still fails this test.
-  it('all four compose call sites (three direct, one via Home) plus the review-tab open/extend site plus the registry provider site receive it — exactly six occurrences', () => {
+  // wherever it occurs; kept at exactly five so a sixth, unaccounted-for
+  // occurrence still fails this test. Five, not six: the registry provider
+  // site pinned just above no longer matches this literal one-line spread
+  // (`[D-420]` widened it to also wire `deferredRecheckRearm`/`isOnline`,
+  // asserted separately there) — the other five readers (session-builder,
+  // both direct compose calls, Home, and the review-tab open/extend site)
+  // are unaffected and still match.
+  it('the four compose call sites (three direct, one via Home) plus the review-tab open/extend site receive it — exactly five occurrences of the plain one-line spread', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(6);
+    expect(occurrences.length).toBe(5);
   });
 });
 
