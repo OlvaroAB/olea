@@ -612,8 +612,21 @@ export {
   buildMaterialPresence,
   classifyGap,
 } from './gap/build.js';
-export type { CoverageScope, CoverageScopeSource, SourceReadState } from './gap/coverage.js';
-export { readStateOf, sourcesInState, summariseCoverageScope } from './gap/coverage.js';
+export type {
+  CoverageScope,
+  CoverageScopeSource,
+  SourceConceptExtraction,
+  SourceReadingCompleteness,
+  SourceReadState,
+  SourceRecordReading,
+  SummariseCoverageScopeOptions,
+} from './gap/coverage.js';
+export {
+  readRecordOf,
+  readStateOf,
+  sourcesInState,
+  summariseCoverageScope,
+} from './gap/coverage.js';
 // [ILB-ATT] Whether a concept's demand rule is currently met
 // (`ol-egov.141.89.9.4`) — see `./gap/demand.js`'s own module doc.
 export type { DemandRule, DemandsMetInput, DemandsMetReading } from './gap/demand.js';
@@ -948,6 +961,12 @@ export {
   PRE_ASSESSMENT_WINDOW_DAYS,
   SHORTFALL_RATIO_K,
 } from './insights/index.js';
+// Per-course spacing (standing-views spec §2.3): `insights/index.js` above
+// re-exports only the pooled `detectSpacing`; this reads `spacing.js` directly
+// for the per-course reading, the same additive-barrel precedent `retrospective/
+// types.js` below uses rather than widening `insights/index.ts` mid-lane.
+export type { CourseSpacingReading } from './insights/spacing.js';
+export { detectSpacingByCourse } from './insights/spacing.js';
 // Instrument formats in the vault (F2.1, F2.15, C5.3). Q&A/cloze target an
 // Obsidian SR plugin's default syntax; MCQ is Olea's own block. Both parse and
 // write through the round-trip engine above and nowhere else.
@@ -1947,9 +1966,13 @@ export {
   resolveRetrospectiveOfferStatus,
 } from './retrospective/offer.js';
 export type {
+  RetrospectiveCarriesEntry,
   RetrospectiveCarriesLine,
+  RetrospectiveCarryBasis,
+  RetrospectiveCarryDestination,
   RetrospectiveConceptCoverage,
   RetrospectiveConceptLine,
+  RetrospectiveDeclaredScope,
   RetrospectiveInput,
   RetrospectiveReading,
   RetrospectiveScopeOrigin,

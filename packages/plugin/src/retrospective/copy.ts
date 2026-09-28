@@ -38,24 +38,15 @@
  */
 
 import type {
+  RetrospectiveCarriesEntry,
   RetrospectiveCarriesLine,
+  RetrospectiveCarryBasis,
   RetrospectiveConceptLine,
   RetrospectiveOfferStatus,
   RetrospectiveReading,
   RetrospectiveScopeOrigin,
 } from 'olea-core';
 import { VITALITY_DISPLAY } from 'olea-core';
-// `RetrospectiveCarriesEntry`/`RetrospectiveCarryBasis` (landed `olea` 612d2c7)
-// are not yet re-exported from `olea-core`'s own root barrel (`src/index.ts`
-// still lists only the pre-612d2c7 `RetrospectiveCarriesLine`) — the same deep
-// import already used elsewhere in this package for a type the barrel has not
-// caught up to yet (`main.ts`'s `olea-core/src/study-session/compose.js`,
-// `wiring.ts`'s `olea-core/src/concept/merge-audit-store.js`). Filed as a gap
-// for the barrel, not fixed here (outside this bead's owns).
-import type {
-  RetrospectiveCarriesEntry,
-  RetrospectiveCarryBasis,
-} from 'olea-core/src/retrospective/types.js';
 
 export const RETROSPECTIVE_VIEW_TITLE = 'Assessment retrospective';
 
