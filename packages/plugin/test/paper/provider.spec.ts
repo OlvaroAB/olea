@@ -27,8 +27,10 @@ import {
   enumerateVaultInstruments,
   fillPaperBlueprintSlots,
   type PaperCompositionAccount,
+  type PaperGeneratedItem,
   type PaperItemGenerationPort,
   type PaperRecord,
+  readInstrumentCitation,
   resolveOutcome,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -342,5 +344,135 @@ describe('buildReadyStateFromRecord — the demand-gap face statement', () => {
     const state = buildReadyStateFromRecord('COURSEA', served);
     expect(state.partial).toBe(false);
     expect(state.partialStatement).toBeNull();
+  });
+});
+
+/**
+ * `handOffItem()` (`ol-0r92.135`, F4.11 ruling 1, `[D-252]`/`[D-367]`/`[D-391]`/`[D-407]`) — the
+ * caller `PaperView`'s per-item control invokes. Exercises the real `handOffPaperItem` +
+ * `ensureHomeNoteForConcept` + citation-sidecar chain end to end, against a hand-built
+ * `PaperRecord` (same "construct the record directly" technique the demand-gap suite above
+ * already uses) rather than driving the whole blueprint/generation pipeline, which is not this
+ * bead's `owns`.
+ */
+describe('createLocalPracticePaperProvider — handOffItem()', () => {
+  const HANDOFF_COMPOSITION_ACCOUNT: PaperCompositionAccount = {
+    formatVersion: 'paper-blueprint-v1',
+    course: 'COURSEA',
+    asOf: '2026-09-19',
+    alpha: 0.5,
+    formatClass: 'written',
+    intendedDemand: 'recall-a-fact',
+    steering: {},
+    structureSummary: { sittingCount: 1, currentCount: 1, historicalCount: 0 },
+    eligibleCount: 1,
+    unbuiltDemand: null,
+    partial: false,
+  };
+
+  function quizItem(overrides: Partial<PaperGeneratedItem> = {}): PaperGeneratedItem {
+    return {
+      slotId: 'slot-0',
+      conceptKey: 'concept-1',
+      conceptName: 'Krebs cycle',
+      taskId: 'quiz.generate.v1',
+      promptVersion: 'v1',
+      intendedDemand: 'recall-a-fact',
+      groundingTier: 'T2',
+      groundingLabel: 'covered-by-her-material',
+      heldSourceKind: 'notes',
+      heldSourceId: null,
+      response: {
+        result: {
+          questions: [
+            {
+              stem: 'What does the Krebs cycle produce?',
+              correctAnswer: 'ATP',
+              distractors: ['DNA', 'RNA'],
+              feedback: 'The Krebs cycle produces ATP.',
+            },
+          ],
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  async function paperWithItems(
+    vault: VaultSource,
+    items: readonly PaperGeneratedItem[],
+  ): Promise<PaperRecord> {
+    return createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-19',
+      compositionAccount: HANDOFF_COMPOSITION_ACCOUNT,
+      items,
+      emptySlots: [],
+    });
+  }
+
+  const HANDOFF_NOTE_PATH = 'Practice paper hand-offs/COURSEA.md';
+
+  it('enters the item as a real, queueable instrument and writes its citation sidecar', async () => {
+    const vault = fakeVault();
+    const record = await paperWithItems(vault, [quizItem()]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    const result = await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+
+    expect(result.instrumentWritten).toBe(true);
+    expect(result.record.handoffs).toHaveLength(1);
+    expect(result.record.handoffs[0]).toMatchObject({
+      slotId: 'slot-0',
+      elicitingContextLabel: 'from a practice paper',
+    });
+
+    expect(await vault.exists(HANDOFF_NOTE_PATH)).toBe(true);
+    const content = await vault.read(HANDOFF_NOTE_PATH);
+    expect(content).toContain(`id: ${result.instrumentId}`);
+    expect(content).toContain('paper-origin:');
+    // Concept binding (`generation/home-note.ts`'s own rule): without this, the entered item
+    // would be invisible to `enumerateVaultInstruments`/the ordinary review queue.
+    expect(content).toMatch(/topic:\s*\n\s*-\s*Krebs cycle/);
+
+    // `[D-181]` citation sidecar, self-referential — so a later authorship check never reads this
+    // item as unverified (materialize-mcq.ts's own precedent).
+    const citation = await readInstrumentCitation(vault, result.instrumentId);
+    expect(citation?.sourcePath).toBe(HANDOFF_NOTE_PATH);
+  });
+
+  it('is idempotent — a repeat call for the same slot changes nothing on disk ([D-391])', async () => {
+    const vault = fakeVault();
+    const record = await paperWithItems(vault, [quizItem()]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    const first = await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+    const noteAfterFirst = await vault.read(HANDOFF_NOTE_PATH);
+
+    const second = await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+
+    expect(second.instrumentWritten).toBe(false);
+    expect(second.instrumentId).toBe(first.instrumentId);
+    expect(second.record.handoffs).toHaveLength(1);
+    expect(await vault.read(HANDOFF_NOTE_PATH)).toBe(noteAfterFirst);
+  });
+
+  it('a second, different item from the same course reuses one home note and grows its topic:', async () => {
+    const vault = fakeVault();
+    const record = await paperWithItems(vault, [
+      quizItem(),
+      quizItem({ slotId: 'slot-1', conceptKey: 'concept-2', conceptName: 'Calvin cycle' }),
+    ]);
+    const provider = createLocalPracticePaperProvider(baseDeps({ vault }));
+
+    await provider.handOffItem('COURSEA', record.id, 'slot-0', 'Krebs cycle');
+    const result2 = await provider.handOffItem('COURSEA', record.id, 'slot-1', 'Calvin cycle');
+
+    expect(result2.instrumentWritten).toBe(true);
+    const content = await vault.read(HANDOFF_NOTE_PATH);
+    expect(content).toContain('Krebs cycle');
+    expect(content).toContain('Calvin cycle');
+    // Two distinct instruments, one note.
+    expect((content.match(/```olea-mcq/g) ?? []).length).toBe(2);
   });
 });

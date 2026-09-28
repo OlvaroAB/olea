@@ -2,13 +2,15 @@
  * `PaperView` — the practice-paper surface (F4.11, `[D-250]`/`[D-252]`/`[D-262]`, `[PAPER-8]` /
  * `ol-egov.141.6.1`, NEW-E4).
  *
- * **Thin by design, same discipline `gap/view.ts`'s own module doc states and the same reason: no
- * test file for this module, and none is expected** — `obsidian` has no runtime outside a real
- * host, so the logic worth testing (which state a course is in, what the partial statement says,
- * what an item's label reads) lives in `./provider.ts` and `./copy.ts`, both plain TypeScript,
- * both unit-tested (`test/paper/provider.spec.ts`, `test/paper/copy.spec.ts`). This file is DOM
- * only: it renders whatever `PracticePaperCourseState`/`PracticePaperReadyState` it is handed, and
- * decides nothing about wording or eligibility itself.
+ * **Thin by design, same discipline `gap/view.ts`'s own module doc states and the same reason:**
+ * `obsidian` has no runtime outside a real host, so most of the logic worth testing (which state a
+ * course is in, what the partial statement says, what an item's label reads) lives in
+ * `./provider.ts` and `./copy.ts`, both plain TypeScript, both unit-tested
+ * (`test/paper/provider.spec.ts`, `test/paper/copy.spec.ts`). This file is otherwise DOM only: it
+ * renders whatever `PracticePaperCourseState`/`PracticePaperReadyState` it is handed, and decides
+ * nothing about wording or eligibility itself — **except** the per-item hand-off control below,
+ * which this module doc's next paragraph explains, and which `test/paper/view.spec.ts` pins as a
+ * source-text assertion.
  *
  * **One course per open, seeded rather than picked from a list** (`setCourse`) — mirrors
  * `session-builder/view.ts`'s `setFocusConcept` seeding pattern. F4.11's own text is explicit that
@@ -20,6 +22,17 @@
  * **Statement placement is the one rule this file must not break** (`[D-262]` ruling 4: "before
  * she opens it"). `renderReady` always draws `state.partialStatement` first, before any item —
  * never after, never conditionally reordered.
+ *
+ * **The per-item hand-off control (`ol-0r92.135`, F4.11 ruling 1, `[D-252]`/`[D-367]`/`[D-391]`/
+ * `[D-407]`) is the one exception to "no test file for this module."** `renderHandoffControl` and
+ * `handOffItem` below carry real branching logic — which of three fixed strings to show, and
+ * whether pressing the button does anything — that is worth pinning even though it cannot be
+ * mounted (`view.spec.ts`, the same source-text-assertion technique
+ * `review/view-button-activation.spec.ts` already uses for the identical `obsidian`-cannot-load
+ * constraint). It renders inside a single item's own row and nowhere else: there is no sibling
+ * control anywhere in this file that acts on more than one `slotId` at a time — F4.11's "never the
+ * whole paper as one gesture" is a fact about which methods exist, not a runtime check bolted onto
+ * a wider one.
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
@@ -29,15 +42,50 @@ import {
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
 import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
-import type { PracticePaperCourseState, PracticePaperViewDeps } from './provider.js';
+import type {
+  PracticePaperCourseState,
+  PracticePaperFaceItem,
+  PracticePaperViewDeps,
+} from './provider.js';
 
 export { VIEW_TYPE_OLEA_PAPER };
 
 export const PAPER_VIEW_TITLE = 'Practice paper';
 
+/**
+ * F4.11 ruling 1's per-item hand-off control — wording signed off by David, 2026-09-27
+ * (`docs/design/copy-pass-2026-09/paper-item-handoff.md`, olea-service): every candidate was
+ * hand-checked against the vocabulary registry's forbidden list and voice charter, and "from a
+ * practice paper" (registry §8) is used verbatim below, never paraphrased. These three strings are
+ * the ratified ones — never edit them here without a corresponding update to that copy pass and
+ * to the vocabulary registry's own entry (filed separately, outside this bead's `owns`).
+ */
+export const PAPER_HANDOFF_BUTTON_LABEL = 'Add to review';
+/** Shown once, immediately after the act succeeds — states only the filing fact, never a review, mark or mastery claim. */
+export const PAPER_HANDOFF_CONFIRMATION = 'Added to your ordinary review, from a practice paper.';
+/**
+ * `[D-391]`'s idempotence made real: reachable whenever a row renders for a `slotId` already on
+ * `state.record.handoffs` that THIS view instance did not itself just hand off in the render pass
+ * that put it there (a repeat press after the button was already replaced is not reachable through
+ * the DOM at all — see `renderHandoffControl` — but a later re-render of the same in-memory ready
+ * state is). Same fact as the confirmation above, told in the past tense — never a second, richer
+ * claim about what happened.
+ */
+export const PAPER_HANDOFF_ALREADY_DONE =
+  'Already added to your ordinary review, from a practice paper.';
+
 export class PaperView extends ItemView {
   private readonly deps: PracticePaperViewDeps;
   private course: string | undefined;
+  /**
+   * `slotId`s this view instance has itself handed off during the CURRENT ready state's lifetime —
+   * distinguishes `PAPER_HANDOFF_CONFIRMATION` (this render is the direct result of the act) from
+   * `PAPER_HANDOFF_ALREADY_DONE` (this render finds the fact already true, for any other reason).
+   * Cleared whenever a fresh ready state replaces the current one — `refresh()`/`pullPaper()` — so
+   * a stale entry from an earlier paper can never leak a "just now" confirmation onto a slot id
+   * that happens to collide across two different `PaperRecord`s.
+   */
+  private readonly justHandedOff = new Set<string>();
 
   constructor(leaf: WorkspaceLeaf, deps: PracticePaperViewDeps, initialCourse?: string) {
     super(leaf);
@@ -80,6 +128,7 @@ export class PaperView extends ItemView {
       return;
     }
     const state = await this.deps.load(this.course);
+    this.justHandedOff.clear();
     this.render(state);
   }
 
@@ -124,6 +173,7 @@ export class PaperView extends ItemView {
     root.empty();
     root.createEl('p', { text: 'Composing your practice paper…' });
     const result = await this.deps.requestPaper(course);
+    this.justHandedOff.clear();
     if (result.kind === 'ai-unavailable') {
       this.render(result);
       return;
@@ -152,6 +202,7 @@ export class PaperView extends ItemView {
       const row = list.createEl('li');
       row.createEl('strong', { text: item.conceptName });
       row.createEl('span', { text: ` — ${item.groundingLabel}` });
+      this.renderHandoffControl(row, state, item);
     }
 
     if (state.emptySlots.length > 0) {
@@ -160,5 +211,61 @@ export class PaperView extends ItemView {
         emptyList.createEl('li', { text: `${slot.conceptName}: ${slot.reason}` });
       }
     }
+  }
+
+  /**
+   * ONE item's own hand-off control (F4.11 ruling 1, `[D-252]`) — never called for more than one
+   * `item` at a time, and there is no caller of this method anywhere but `renderReady`'s own
+   * per-item loop above. Branches on `state.record.handoffs` (`[D-391]`'s durable fact), never a
+   * separate view-local flag, so a row for an already-handed-off slot reads back the same true
+   * state whether that hand-off happened on THIS render pass or an earlier one.
+   */
+  private renderHandoffControl(
+    row: HTMLElement,
+    state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
+    item: PracticePaperFaceItem,
+  ): void {
+    const alreadyHandedOff = state.record.handoffs.some((h) => h.slotId === item.slotId);
+    if (alreadyHandedOff) {
+      row.createEl('p', {
+        cls: 'olea-paper-handoff-confirmation',
+        text: this.justHandedOff.has(item.slotId)
+          ? PAPER_HANDOFF_CONFIRMATION
+          : PAPER_HANDOFF_ALREADY_DONE,
+      });
+      return;
+    }
+
+    const button = row.createEl('button', { text: PAPER_HANDOFF_BUTTON_LABEL });
+    button.addEventListener('click', () => {
+      void this.handOffItem(state, item, button);
+    });
+  }
+
+  /**
+   * Calls `olea-core`'s `handOffPaperItem` (via `deps.handOffItem`) for exactly ONE item, then
+   * redraws from the returned `PaperHandoffResult.record` — never by re-`load`ing the course,
+   * because `load` never returns a `'ready'` state (ruling 5: every pull composes a fresh paper).
+   * `button.disabled` is set before the `await` so a fast double-click cannot fire this twice
+   * before the row is replaced by the confirmation text; `[D-391]`'s own idempotence in
+   * `handOffPaperItem` means a second call would change nothing durable either way, but this keeps
+   * the view from issuing a redundant vault write at all.
+   */
+  private async handOffItem(
+    state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
+    item: PracticePaperFaceItem,
+    button: HTMLButtonElement,
+  ): Promise<void> {
+    button.disabled = true;
+    const result = await this.deps.handOffItem(
+      state.course,
+      state.record.id,
+      item.slotId,
+      item.conceptName,
+    );
+    this.justHandedOff.add(item.slotId);
+    // Only `record` changes on a hand-off — `items`/`partialStatement`/`emptySlots` were fixed at
+    // generation time (`buildReadyStateFromRecord`'s own doc: "never recomposes") and stay valid.
+    this.render({ ...state, record: result.record });
   }
 }

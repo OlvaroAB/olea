@@ -29,22 +29,54 @@ import {
   createPaper,
   enumerateVaultInstruments,
   fillPaperBlueprintSlots,
+  handOffPaperItem,
   listOutcomeRecords,
   outcomeConceptCoverage,
   type PaperEmptySlot,
   type PaperGroundingLabel,
+  type PaperHandoffResult,
   type PaperItemGenerationPort,
   type PaperRecord,
   paperCompositionAccountFromBlueprint,
   resolveAssessments,
   type VaultSource,
+  writeInstrumentCitation,
 } from 'olea-core';
+import { ensureHomeNoteForConcept } from '../generation/home-note.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { PartialPaperStatement } from './copy.js';
 import { buildPartialPaperStatement } from './copy.js';
 import type { PaperDemand } from './demand.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
+
+/**
+ * Where a handed-off item's instrument enters the vault (`[D-391]`/`[D-407]`'s `PaperHandoffTarget.
+ * notePath`, "the caller's" per that type's own doc) — `ol-0r92.135`'s own Class B default, not a
+ * ruling: F4.11/`[D-252]`/`[D-367]`/`[D-391]`/`[D-407]` say WHAT the hand-off is and WHAT it
+ * stamps, never WHICH note a fresh instrument is entered into.
+ *
+ * **Why a course-scoped Olea home note, not one of her own authored notes.** The item must land
+ * where the ordinary review queue can actually find it: `enumerateVaultInstruments` binds an
+ * instrument to a concept only through its note's own `topic:` frontmatter
+ * (`generation/home-note.ts`'s module doc), so the destination note MUST carry `item.conceptName`
+ * in `topic:` or the handed-off item would be entered but never queued — silently defeating the
+ * whole point of the act. Reusing `ensureHomeNoteForConcept` unmodified (this module's existing
+ * `[D-179]` mechanism) gets that binding for free and keeps the destination in Olea's own layer
+ * (INV-6 Part Two, `[D-097]`) — no consent question about WHOSE note is written into, only about
+ * the hand-off act itself, which her button press already supplies. A synthetic, extension-less
+ * "source path" under this folder (never a real document) makes `homeNotePathForSource` derive one
+ * stable note per course, reusing every existing collision/marker/topic-growth guarantee that
+ * module already has tests for.
+ *
+ * **Reversible, non-persisted.** Nothing durable names this folder: `[D-407]`'s own `paper-origin:`
+ * field on the entered block carries only `paperId`/`slotId`, never a path, and
+ * `paperItemInstrumentId` derives the instrument id from those two ids alone — so moving this
+ * folder, or replacing it with a different destination rule entirely, changes where a FUTURE
+ * hand-off's note lands and nothing about any hand-off already made. Flagged for retroactive
+ * review, per `CLAUDE.md`'s Class B ladder.
+ */
+const PRACTICE_PAPER_HANDOFF_FOLDER = 'Practice paper hand-offs';
 
 /** One face-ready item — the labels the view renders alongside her response, never the blueprint's internal weight/rank fields she has no reason to see. */
 export interface PracticePaperFaceItem {
@@ -199,6 +231,20 @@ export interface PracticePaperViewDeps {
   ) => Promise<
     PracticePaperReadyState | { readonly kind: 'ai-unavailable'; readonly course: string }
   >;
+  /**
+   * Hands ONE item to ordinary review (F4.11 ruling 1, `[D-252]`) — never the whole paper; the
+   * view's per-item control is the only caller, and it is never asked to hand off more than one
+   * `slotId` per call. Idempotent: a repeat for a `slotId` already on `record.handoffs` writes no
+   * new instrument and returns the SAME `instrumentId` (`[D-391]`) — the view relies on this rather
+   * than tracking "already pressed" itself. See `PRACTICE_PAPER_HANDOFF_FOLDER`'s doc for where
+   * `notePath` and `questionIndex` (always `0`) come from.
+   */
+  readonly handOffItem: (
+    course: string,
+    paperId: string,
+    slotId: string,
+    conceptName: string,
+  ) => Promise<PaperHandoffResult>;
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc. */
@@ -241,6 +287,41 @@ export function createLocalPracticePaperProvider(
       });
 
       return buildReadyStateFromRecord(course, record);
+    },
+
+    async handOffItem(course, paperId, slotId, conceptName) {
+      // Synthetic, extension-less "source path": never a real document, just a stable per-course
+      // key `homeNotePathForSource` turns into one reused note (`PRACTICE_PAPER_HANDOFF_FOLDER`'s
+      // doc). `ensureHomeNoteForConcept` grows the note's `topic:` to include `conceptName`
+      // idempotently, so review-queue binding holds whether this is the note's first item or its
+      // fifth.
+      const notePath = await ensureHomeNoteForConcept(
+        deps.vault,
+        `${PRACTICE_PAPER_HANDOFF_FOLDER}/${course}`,
+        conceptName,
+      );
+      if (notePath === null) {
+        throw new Error(
+          `handOffItem: a note already sits at "${PRACTICE_PAPER_HANDOFF_FOLDER}/${course}.md" ` +
+            "and is not one of Olea's own home notes — refusing to write into it (INV-6).",
+        );
+      }
+      // Ruling: the paper view is "the item's" own reader (`paper-items.ts`'s
+      // `paperItemMcqCandidate` doc) — see `ol-0r92.135`'s copy-pass notes for why index 0, always,
+      // is the only choice consistent with an id that carries no index information.
+      const result = await handOffPaperItem(deps.vault, paperId, slotId, {
+        notePath,
+        questionIndex: 0,
+      });
+      // `[D-181]`'s citation sidecar, self-referential (`materialize-mcq.ts`'s own precedent for a
+      // generated instrument with no separately-citable unit) — written only on the write that
+      // actually created the block, never on a repeat hand-off, since `writeInstrumentCitation`
+      // itself refuses to overwrite an existing record and a repeat's `instrumentWritten` is
+      // `false` by construction (`PaperHandoffResult`'s own doc).
+      if (result.instrumentWritten) {
+        await writeInstrumentCitation(deps.vault, result.instrumentId, { sourcePath: notePath });
+      }
+      return result;
     },
   };
 }
