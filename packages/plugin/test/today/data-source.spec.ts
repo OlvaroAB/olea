@@ -42,6 +42,7 @@ import {
   appendDisputeRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
+  appendVerdictRecord,
   calendarDayFromLocalDate,
   computeAllConceptMastery,
   contestClaim,
@@ -598,6 +599,70 @@ describe('createVaultInstrumentSource — the seam, closed', () => {
     expect(due?.map((d) => d.instrumentId)).not.toContain(target.instrumentId);
   });
 
+  // `ol-egov.141.89.2.14`: the legacy (no-holder/no-composer) path used to filter
+  // `session.suspended` alone here, so a rejected instrument — a stronger fact than a plain
+  // suspension (C5.3 as amended by `[D-396]`) — still reached this count. Same shape as the
+  // suspend test above, through the same production writer's record shape
+  // (`registry/provider.ts`'s `rejectWithheldItem` writes exactly this `kind: 'verdict'` line).
+  it('a rejected instrument is not counted, and her deliberate restore brings it back', async () => {
+    const vault = noteVault();
+    const bare = createVaultInstrumentSource({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+    });
+    const all = await bare.listDueCandidates();
+    const target = all?.[0];
+    if (target === undefined) throw new Error('expected an instrument');
+
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId: target.instrumentId,
+        instrumentType: 'qa',
+        conceptIds: ['Alpha'],
+        timestamp: '2026-08-09T09:00:00-04:00',
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-1' },
+    );
+
+    const rejected = await createVaultInstrumentSource({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+    }).listDueCandidates();
+    expect(rejected).toHaveLength(2);
+    expect(rejected?.map((d) => d.instrumentId)).not.toContain(target.instrumentId);
+
+    // Restore control (`[D-396]`): only her deliberate restore — an `accepted` verdict
+    // naming the rejection in `restores` — brings it back.
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId: target.instrumentId,
+        instrumentType: 'qa',
+        conceptIds: ['Alpha'],
+        timestamp: '2026-08-10T09:00:00-04:00',
+        verdict: 'accepted',
+        restores: 'verdict-1',
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-2' },
+    );
+
+    const restored = await createVaultInstrumentSource({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+    }).listDueCandidates();
+    expect(restored).toHaveLength(3);
+    expect(restored?.map((d) => d.instrumentId)).toContain(target.instrumentId);
+  });
+
   it('a vault it cannot walk says "cannot count yet", never zero', async () => {
     const broken = {
       async list() {
@@ -809,6 +874,77 @@ describe('createVaultInstrumentSource — [SESS-8.5] reading the shared composit
     expect(new Set(due?.map((d) => d.courseCode))).toEqual(new Set(['GEO101', 'MUS101']));
     // Never a second composition, never a re-entry: same sitting, by reference.
     expect(holder.getSitting()).toBe(sittingBefore);
+  });
+
+  // `ol-egov.141.89.2.14`: a HELD sitting names an instrument she has since rejected through
+  // the production writer — the exact "composed before she rejected the item" gap
+  // `review/open-session.ts`'s own present-time check exists for, mirrored here for Today's
+  // count. `dueInstrumentsFromComposition` used to read `sitting.items` unchecked.
+  it('a rejected instrument in the held composition is not counted, and her deliberate restore brings it back', async () => {
+    const holder = createStudySessionHolder();
+    const composed = fixtureComposedSession(
+      [
+        { instrumentId: 'qa:alpha:1', course: 'GEO101', obligationClass: 'unmet' },
+        { instrumentId: 'qa:beta:1', course: 'MUS101', obligationClass: 'recall-due' },
+      ],
+      now(),
+    );
+    holder.enter(now(), composed);
+
+    const vault = memoryVault({});
+    // The production writer's own record shape (`registry/provider.ts`'s `rejectWithheldItem`).
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId: 'qa:alpha:1',
+        instrumentType: 'qa',
+        conceptIds: ['Alpha'],
+        timestamp: '2026-08-09T09:00:00-04:00',
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-1' },
+    );
+
+    const rejected = await createVaultInstrumentSource({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
+    }).listDueCandidates();
+
+    expect(rejected).not.toBeNull();
+    expect(rejected?.map((d) => d.instrumentId)).not.toContain('qa:alpha:1');
+    expect(rejected?.map((d) => d.instrumentId)).toContain('qa:beta:1');
+    expect(rejected).toHaveLength(1);
+
+    // Restore control (`[D-396]`): only her deliberate restore lifts it.
+    await appendVerdictRecord(
+      vault,
+      {
+        instrumentId: 'qa:alpha:1',
+        instrumentType: 'qa',
+        conceptIds: ['Alpha'],
+        timestamp: '2026-08-10T09:00:00-04:00',
+        verdict: 'accepted',
+        restores: 'verdict-1',
+      },
+      { deviceId: DEVICE, generateEventId: () => 'verdict-2' },
+    );
+
+    const restored = await createVaultInstrumentSource({
+      vault,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      now,
+      studySessionHolder: holder,
+      composeDefaultStudySession: composeDefaultStudySessionUnreachable,
+    }).listDueCandidates();
+
+    expect(restored?.map((d) => d.instrumentId)).toContain('qa:alpha:1');
+    expect(restored).toHaveLength(2);
   });
 
   it('marks an unmet-obligation item as never-reviewed (F6.1 newCount), every other class as due now', async () => {

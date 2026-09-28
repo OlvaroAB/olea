@@ -574,20 +574,57 @@ export interface VaultInstrumentSourceDeps {
  * only for Today's count would make the three surfaces disagree about what
  * counts as "hers", which is the opposite of `[D-033]`'s one-answer intent;
  * the fix belongs on `[SESS-11]`, for every reader at once.
+ *
+ * **Proven-invalid re-filtering DOES happen here (`ol-egov.141.89.2.14`),
+ * unlike suspended/containment above.** That is not the same posture: the
+ * composer's own instrument index and the review tab's present-time check
+ * already exclude an instrument proven invalid — above all one she has
+ * since rejected (C5.3 as amended by `[D-396]`) — so a `session` handed to
+ * this function is already the composer's honest answer for a FRESH
+ * composition; the one case this function alone can still get wrong is a
+ * held sitting composed before a later rejection, the same "outlived her
+ * rejection" case `review/open-session.ts`'s present-time check exists for.
+ * Filtering it here too, rather than leaving it to `[SESS-11]`, keeps this
+ * reader agreeing with the other two rather than disagreeing with them.
  */
 function dueInstrumentsFromComposition(
   session: ComposedStudySession,
   now: Date,
+  provenInvalid: ReadonlySet<string>,
 ): readonly DueInstrument[] {
   const nowIso = now.toISOString();
-  return session.model.items.map((item) => ({
-    instrumentId: item.instrumentId,
-    courseCode: item.course,
-    // The vault gives a course *code*, never a name (INV-3) — the same
-    // empty-string convention `toDueInstruments` uses below.
-    courseName: '',
-    due: item.obligationClass === 'unmet' ? null : nowIso,
-  }));
+  return session.model.items
+    .filter((item) => !provenInvalid.has(item.instrumentId))
+    .map((item) => ({
+      instrumentId: item.instrumentId,
+      courseCode: item.course,
+      // The vault gives a course *code*, never a name (INV-3) — the same
+      // empty-string convention `toDueInstruments` uses below.
+      courseName: '',
+      due: item.obligationClass === 'unmet' ? null : nowIso,
+    }));
+}
+
+/**
+ * `ol-egov.141.89.2.14`: the proven-invalid instrument ids her whole review
+ * log names (above all a standing rejection, C5.3 as amended by `[D-396]`),
+ * for {@link dueInstrumentsFromComposition}'s held-sitting case — a
+ * `ComposedStudySession` carries no `entries` of its own to fold, unlike
+ * `ReviewSession` (see `legacyDueCandidates` below, which reuses
+ * `session.entries` instead of reading again). The same `additionalPaths`
+ * probe `legacyDueCandidates` builds, so a host that cannot list
+ * `.olea/reviews/` still sees this device's own rejections.
+ */
+async function provenInvalidInstrumentIds(
+  deps: VaultInstrumentSourceDeps,
+): Promise<ReadonlySet<string>> {
+  const today = localToday(deps.now());
+  const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
+  const additionalPaths = calendarDaysEndingOn(today, probeDays).map((day) =>
+    reviewLogPath(day, deps.deviceId),
+  );
+  const { entries } = await readReviewLogHistory(deps.vault, { additionalPaths });
+  return new Set(projectInstrumentValidity(entries).provenInvalid.keys());
 }
 
 /**
@@ -646,10 +683,19 @@ async function legacyDueCandidates(
     const containmentDropped = new Set(
       session.containmentDropped.map((candidate) => candidate.instrumentId),
     );
+    // `ol-egov.141.89.2.14`: an instrument proven invalid — above all one
+    // standing rejected (C5.3 as amended by `[D-396]`) — is excluded the
+    // same way, over `session.entries` this walk already read (no second
+    // log read; `olea-core`'s own `session/build.ts` candidates fold reads
+    // the identical set, but `toDueInstruments` below reads the raw
+    // enumeration, not `session.candidates`, so it has to be re-applied
+    // here too, exactly like `suspended` and containment above).
+    const provenInvalid = projectInstrumentValidity(session.entries).provenInvalid;
     return toDueInstruments(session.instruments.records, session.replay).filter(
       (instrument) =>
         !session.suspended.has(instrument.instrumentId) &&
-        !containmentDropped.has(instrument.instrumentId),
+        !containmentDropped.has(instrument.instrumentId) &&
+        !provenInvalid.has(instrument.instrumentId),
     );
   } catch {
     // "We could not read your vault" is not "nothing is due". The panel
@@ -705,7 +751,27 @@ export function createVaultInstrumentSource(
         // `lastCompositionOutcome` stays `undefined`.
         if (composed === null) return null;
 
-        const items = dueInstrumentsFromComposition(composed, deps.now());
+        // `ol-egov.141.89.2.14`: a HELD sitting may have been composed
+        // before a later rejection — the same present-time gap
+        // `review/open-session.ts`'s own check exists for, mirrored here
+        // for Today's count. A fresh composition (the idle branch) already
+        // excludes a proven-invalid instrument at the source
+        // (`session-builder/provider.ts`'s instrument index), so this read
+        // only ever changes the answer on the held-sitting branch above;
+        // reading it unconditionally costs the idle branch one extra log
+        // read, the same "a cost, not a correctness problem" posture this
+        // function's own doc already states for composing twice.
+        let provenInvalid: ReadonlySet<string>;
+        try {
+          provenInvalid = await provenInvalidInstrumentIds(deps);
+        } catch {
+          // "We could not read your vault" is not "nothing is due" — the
+          // same posture `legacyDueCandidates` and the composer catch above
+          // already take.
+          return null;
+        }
+
+        const items = dueInstrumentsFromComposition(composed, deps.now(), provenInvalid);
         if (items.length > 0) {
           lastCompositionOutcome = { composed: true };
           return items;

@@ -123,6 +123,28 @@ function reviewOf(
   };
 }
 
+/** A verdict record — the shape `registry/provider.ts`'s `rejectWithheldItem` (the production writer, in the plugin package) writes. */
+function verdictOf(
+  eventId: string,
+  timestamp: string,
+  instrumentId: string,
+  conceptId: string,
+  verdict: 'rejected' | 'accepted',
+  restores?: string,
+): ReviewLogEntry {
+  return {
+    schemaVersion: 6,
+    kind: 'verdict',
+    eventId,
+    timestamp,
+    instrumentId,
+    instrumentType: 'qa',
+    conceptIds: [conceptId],
+    verdict,
+    ...(restores !== undefined ? { restores } : {}),
+  };
+}
+
 // `[SESS-8.6]` (`ol-egov.132.6`): `buildReviewSession` no longer composes —
 // see `build.ts`'s own module doc. Every test below that used to read
 // `session.queue` now calls `composeQueue` directly over `session.candidates`
@@ -412,6 +434,93 @@ describe('suspension, read from the whole log', () => {
       ],
     });
 
+    expect(session.candidates.map((c) => c.instrumentId)).not.toContain(gamma.instrumentId);
+  });
+});
+
+describe('rejection, read from the whole log (ol-egov.141.89.2.14)', () => {
+  it('a rejected instrument never appears in candidates, and her deliberate restore brings it back', async () => {
+    const vault = smallVault();
+    const base = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const gamma = base.instruments.records.find((r) => r.conceptIds.includes(unboundKey('Gamma')));
+    if (gamma === undefined) throw new Error('expected a Gamma instrument');
+    expect(base.candidates.map((c) => c.instrumentId)).toContain(gamma.instrumentId);
+
+    const rejected = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries: [
+        verdictOf(
+          'v1',
+          '2026-08-01T09:00:00+00:00',
+          gamma.instrumentId,
+          unboundKey('Gamma'),
+          'rejected',
+        ),
+      ],
+    });
+    // The defect this bead fixes: `candidates` (not merely a downstream reader) must not
+    // carry the rejected instrument.
+    expect(rejected.candidates.map((c) => c.instrumentId)).not.toContain(gamma.instrumentId);
+    // Every other, still-eligible instrument stays — this is exclusion, not an accidental
+    // truncation of the whole pool.
+    expect(rejected.candidates.length).toBe(base.candidates.length - 1);
+
+    // Restore control (`[D-396]`): only her deliberate restore — an `accepted` verdict
+    // naming the rejection in `restores` — lifts it, back to `candidates`.
+    const restored = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries: [
+        verdictOf(
+          'v1',
+          '2026-08-01T09:00:00+00:00',
+          gamma.instrumentId,
+          unboundKey('Gamma'),
+          'rejected',
+        ),
+        verdictOf(
+          'v2',
+          '2026-08-02T09:00:00+00:00',
+          gamma.instrumentId,
+          unboundKey('Gamma'),
+          'accepted',
+          'v1',
+        ),
+      ],
+    });
+    expect(restored.candidates.map((c) => c.instrumentId)).toContain(gamma.instrumentId);
+  });
+
+  it('a plain later accept, naming nothing in `restores`, never lifts a standing rejection', async () => {
+    const vault = smallVault();
+    const base = await buildReviewSession({ vault, scheduler: createFsrsScheduler(), now: NOW });
+    const gamma = base.instruments.records.find((r) => r.conceptIds.includes(unboundKey('Gamma')));
+    if (gamma === undefined) throw new Error('expected a Gamma instrument');
+
+    const session = await buildReviewSession({
+      vault,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+      entries: [
+        verdictOf(
+          'v1',
+          '2026-08-01T09:00:00+00:00',
+          gamma.instrumentId,
+          unboundKey('Gamma'),
+          'rejected',
+        ),
+        verdictOf(
+          'v2',
+          '2026-08-02T09:00:00+00:00',
+          gamma.instrumentId,
+          unboundKey('Gamma'),
+          'accepted',
+        ),
+      ],
+    });
     expect(session.candidates.map((c) => c.instrumentId)).not.toContain(gamma.instrumentId);
   });
 });

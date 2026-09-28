@@ -74,6 +74,17 @@
  * container artificially dropped for a co-presence with an instrument that
  * will never be served anyway.
  *
+ * **`candidates` also excludes an instrument proven invalid (`ol-egov.141.89.2.14`).**
+ * A standing rejection (C5.3 as amended by `[D-396]`: a rejection follows the item once it is
+ * fixed, and only her own deliberate restore returns it to circulation) or a suspension recorded
+ * as a defect is a stronger fact than a plain suspension above — `olea-core`'s
+ * `projectInstrumentValidity` (`../mastery/validity.js`), the one fold every other reader of
+ * rejection standing reads, folded here over the same `entries` this walk already holds, no
+ * second log read. A defect-reason suspension is already excluded by the plain `suspended` fold
+ * above; a rejection is a verdict record and never was, which is how a rejected, since-fixed item
+ * used to reach a caller composing over `candidates` directly (this file's own no-composer
+ * callers — the workbench and the simulator, `[SESS-8.6]` above).
+ *
  * ## C7.9's containment co-presence rule
  *
  * `containment.ts`'s `filterContainmentCoPresence` runs here, over the
@@ -98,6 +109,7 @@ import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptRelation } from '../concept/relation.js';
 import { daysBetween } from '../dates.js';
 import type { SchedulableInstrumentType } from '../instrument/rating.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { QueueCandidate, QueueItem, QueueSelectionContext } from '../queue/types.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
@@ -162,9 +174,11 @@ export interface ReviewSession {
   readonly instruments: VaultInstrumentEnumeration;
   /**
    * Every enumerated instrument, in enumeration order, **excluding a
-   * currently-suspended or withdrawn instrument** (`ol-egov.141.89.10.13`;
-   * "Suspension comes from the whole log, deliberately" above) and **after**
-   * the C7.9 containment co-presence filter — see this file's module doc.
+   * currently-suspended or withdrawn instrument** (`ol-egov.141.89.10.13`)
+   * **and an instrument proven invalid** (`ol-egov.141.89.2.14` — above all a
+   * standing rejection; "Suspension comes from the whole log, deliberately"
+   * above) and **after** the C7.9 containment co-presence filter — see this
+   * file's module doc.
    * Exposed for diagnostics (`instrumentTypesOfferedAmong`, a candidate's
    * replayed FSRS state) and for the Today panel's legacy count; it does not
    * decide what is served — see the module doc for which composer does.
@@ -344,8 +358,17 @@ export async function buildReviewSession(input: BuildReviewSessionInput): Promis
   // dropped here, before containment co-presence runs — never a candidate at
   // all, so no caller composing over `candidates` can serve it. See the
   // module doc's "Suspension comes from the whole log, deliberately".
+  //
+  // `ol-egov.141.89.2.14`: an instrument proven invalid — above all one
+  // standing rejected (C5.3 as amended by `[D-396]`) — is excluded the same
+  // way, over the same `entries` this call already holds (no second log
+  // read). See the module doc's "`candidates` also excludes an instrument
+  // proven invalid".
+  const provenInvalid = projectInstrumentValidity(entries).provenInvalid;
   const enumeratedCandidates = instruments.records
-    .filter((record) => !suspended.has(record.instrumentId))
+    .filter(
+      (record) => !suspended.has(record.instrumentId) && !provenInvalid.has(record.instrumentId),
+    )
     .map((record) => toQueueCandidate(record, replay, targetAssessmentPathByConceptKey));
   const containment = filterContainmentCoPresence(
     enumeratedCandidates,
