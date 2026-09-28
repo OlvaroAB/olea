@@ -2462,6 +2462,21 @@ export {
   withinBlockGroupingScore,
   withinBlockOrder,
 } from './study-session/compose.js';
+// The composition log (`[D-395]`) — the append-only stream composition records are written to
+// and read back from, one file per day per device beside `.olea/reviews/` (never inside it,
+// condition 4: never study activity). See composition-log.ts's module doc.
+export type {
+  AppendCompositionRecordResult,
+  ReadCompositionLogResult,
+} from './study-session/composition-log.js';
+export {
+  appendCompositionRecord,
+  COMPOSITION_LOG_FOLDER,
+  compositionLogPath,
+  compositionRecordsOfSession,
+  readCompositionLog,
+  resolveCompositionRecord,
+} from './study-session/composition-log.js';
 // The composition record (`[D-331]`, `[D-395]`, `ol-egov.141.89.10.65`): what a composition
 // selected, set aside and used, frozen at composition time and never a review event. See
 // composition-record.ts's module doc for what the record is and is not.
@@ -2490,21 +2505,6 @@ export {
   parseCompositionRecord,
   serializeCompositionRecord,
 } from './study-session/composition-record.js';
-// The composition log (`[D-395]`) — the append-only stream composition records are written to
-// and read back from, one file per day per device beside `.olea/reviews/` (never inside it,
-// condition 4: never study activity). See composition-log.ts's module doc.
-export type {
-  AppendCompositionRecordResult,
-  ReadCompositionLogResult,
-} from './study-session/composition-log.js';
-export {
-  appendCompositionRecord,
-  COMPOSITION_LOG_FOLDER,
-  compositionLogPath,
-  compositionRecordsOfSession,
-  readCompositionLog,
-  resolveCompositionRecord,
-} from './study-session/composition-log.js';
 export type {
   DurationEstimateSource,
   DurationModel,
