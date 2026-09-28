@@ -423,6 +423,76 @@ export function itemReasonLine(reason: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// F2.19 / F2.22 / `[D-245]` — the second composition sentence: why this grouping
+// (`ol-egov.141.6.20`)
+//
+// `[D-245]` (David, 2026-09-25) amends F2.22: the session's composition
+// explanation is two sentences, kept prominent — why this course now (already
+// rendered: `FOCUS_BRANCH_SENTENCE` in `olea-core`'s `study-session/compose.ts`,
+// assembled by `../home/copy.js`'s `sessionCompositionSentence`) and why this
+// grouping, drawn from the actual recorded composition, never an invented
+// rationale. `[D-331]`'s composition record (`olea-core`'s
+// `study-session/composition-record.ts`) carries exactly that fact as
+// `groupingSignal`, computed by `study-session/compose.ts`'s
+// `dominantGroupingSignal`: which of F2.19's three blended signals decided the
+// within-course order of the presented composition's tie bands.
+//
+// **Wording drafted and hand-checked, not yet ratified.**
+// `docs/design/copy-pass-2026-09/grouping-why-sentence.md` (olea-service,
+// private) drafts 2-3 candidates per signal against the vocabulary registry
+// and the voice charter and recommends one; the constants below are exactly
+// those recommended candidates, kept PROPOSED until David signs off, the same
+// posture that copy-pass file's own header states. Nothing calls
+// {@link groupingWhySentence} to render yet — the render splice beside the
+// course-why sentence (`home/provider.ts`'s `readActiveSession`, `main.ts`'s
+// review-tab read of `recordedSessionReason`) is a later, separate step, named
+// in that copy-pass file's own "what this pass does not settle" section.
+//
+// **Not re-exported from `olea-core`'s barrel today.** `GroupingSignal`
+// (`study-session/types.ts`) has no `index.ts` export, and widening that
+// export is core's own file, outside this module's `owns`. {@link
+// GroupingSignal} below is a local mirror of the same four string literals —
+// structurally identical, so a real `olea-core` `GroupingSignal` value
+// type-checks against it without a cross-package deep import — kept in sync
+// by {@link groupingWhySentence}'s own exhaustiveness (a value outside the
+// four literals is a type error, not a silent `undefined`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Mirrors `olea-core`'s `study-session/types.ts` `GroupingSignal` exactly —
+ * see the section doc above for why this is a local literal union rather than
+ * an import.
+ */
+export type GroupingSignal = 'assessment-scope' | 'arrival-cohort' | 'relatedness' | 'none';
+
+/**
+ * `[D-245]`'s recommended candidates, per `docs/design/copy-pass-2026-09/
+ * grouping-why-sentence.md` (olea-service) — PROPOSED, awaiting David's
+ * sign-off. `'none'` carries no entry: `dominantGroupingSignal`'s own doc
+ * names it the reading whenever no F2.19 signal decided any adjacency (no
+ * signal supplied, every tie band held one concept, or every score tied), so
+ * there is no grouping reason to state.
+ */
+const GROUPING_WHY_SENTENCES: Readonly<Record<Exclude<GroupingSignal, 'none'>, string>> = {
+  'assessment-scope':
+    'These concepts are grouped together because an approaching assessment covers all of them.',
+  'arrival-cohort':
+    'These concepts are grouped together because they arrived in your notes together, recently.',
+  relatedness: "These concepts are grouped together because they're closely related.",
+};
+
+/**
+ * F2.22's second composition sentence — why this grouping — for one recorded
+ * `groupingSignal`. `null` for `'none'`: the same "nothing to say" contract
+ * {@link focusLine} already uses elsewhere in this module for an honest
+ * absence, never a sentence invented to fill the slot. Pure and total: every
+ * {@link GroupingSignal} value maps to exactly one result.
+ */
+export function groupingWhySentence(groupingSignal: GroupingSignal): string | null {
+  return groupingSignal === 'none' ? null : GROUPING_WHY_SENTENCES[groupingSignal];
+}
+
+// ---------------------------------------------------------------------------
 // The times, and whose estimate they are
 // ---------------------------------------------------------------------------
 
@@ -801,6 +871,8 @@ export function allSessionBuilderStrings(): readonly string[] {
     SESSION_NEXT_ASSESSMENT_LABEL,
     ...Object.values(DURATION_BASIS_LINES),
     ...Object.values(INSTRUMENT_TYPE_LABELS),
+    // --- `[D-245]` — the why-this-grouping sentence, PROPOSED (`ol-egov.141.6.20`) ---
+    ...Object.values(GROUPING_WHY_SENTENCES),
     ...SESSION_BUDGET_OPTIONS.map(budgetOptionLabel),
     // --- F6.6 — re-entry composition after an absence (`ol-v7r5.18`) ---
     REENTRY_STILL_AVAILABLE_LINE,

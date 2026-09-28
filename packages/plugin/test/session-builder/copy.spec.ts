@@ -30,6 +30,8 @@ import {
   emptySessionLines,
   focusLine,
   formatPreferenceLine,
+  type GroupingSignal,
+  groupingWhySentence,
   instrumentGroupHeading,
   instrumentTypeLabel,
   itemReasonLine,
@@ -539,6 +541,80 @@ describe('itemReasonLine — one clause, evidence stays underneath', () => {
       'You missed this twice in your last five attempts. It is also cited in three past papers.';
     const once = itemReasonLine(raw);
     expect(itemReasonLine(once)).toBe(once);
+  });
+});
+
+// --------------------------------------------------------------------------
+// F2.19 / F2.22 / `[D-245]` — why this grouping (`ol-egov.141.6.20`)
+// --------------------------------------------------------------------------
+
+describe('groupingWhySentence — F2.22’s second composition sentence, PROPOSED wording', () => {
+  const DECIDING_SIGNALS: readonly Exclude<GroupingSignal, 'none'>[] = [
+    'assessment-scope',
+    'arrival-cohort',
+    'relatedness',
+  ];
+
+  it('returns null for "none" — no signal decided any adjacency, so there is nothing to say', () => {
+    expect(groupingWhySentence('none')).toBeNull();
+  });
+
+  it('returns a non-empty sentence for every deciding signal, and never null for one', () => {
+    for (const signal of DECIDING_SIGNALS) {
+      const sentence = groupingWhySentence(signal);
+      expect(sentence, `signal "${signal}"`).not.toBeNull();
+      expect((sentence as string).length).toBeGreaterThan(0);
+    }
+  });
+
+  it('is pure and total: the same signal always returns the identical string', () => {
+    for (const signal of DECIDING_SIGNALS) {
+      expect(groupingWhySentence(signal)).toBe(groupingWhySentence(signal));
+    }
+  });
+
+  it('every signal returns a distinct sentence — no two grouping reasons read alike', () => {
+    const sentences = DECIDING_SIGNALS.map((signal) => groupingWhySentence(signal));
+    expect(new Set(sentences).size).toBe(DECIDING_SIGNALS.length);
+  });
+
+  it('matches the exact PROPOSED candidates ratified by docs/design/copy-pass-2026-09/grouping-why-sentence.md (olea-service)', () => {
+    expect(groupingWhySentence('assessment-scope')).toBe(
+      'These concepts are grouped together because an approaching assessment covers all of them.',
+    );
+    expect(groupingWhySentence('arrival-cohort')).toBe(
+      'These concepts are grouped together because they arrived in your notes together, recently.',
+    );
+    expect(groupingWhySentence('relatedness')).toBe(
+      "These concepts are grouped together because they're closely related.",
+    );
+  });
+
+  it('never renders a ratio or a percentage — D-245’s clarification binds this sentence too', () => {
+    for (const signal of DECIDING_SIGNALS) {
+      const sentence = groupingWhySentence(signal) as string;
+      expect(sentence).not.toMatch(/%/);
+      expect(sentence).not.toMatch(/\b\d+\s*(\/|out of)\s*\d+\b/);
+    }
+  });
+
+  it('names no course, concept or assessment identifier — generic wording only, matching the copy pass', () => {
+    // The three candidates are deliberately identifier-free: "these concepts",
+    // never a course code, concept name or assessment path (INV-3-safe by
+    // construction, and consistent with the course-why sentence's own
+    // "this course" — never the course's own name — home/copy.ts's
+    // `sessionCompositionSentence` doc).
+    for (const signal of DECIDING_SIGNALS) {
+      const sentence = groupingWhySentence(signal) as string;
+      expect(sentence.startsWith('These concepts are grouped together')).toBe(true);
+    }
+  });
+
+  it('is included in the fixed-string inventory the F4.9/principle-12 audits already sweep', () => {
+    const strings = allSessionBuilderStrings();
+    for (const signal of DECIDING_SIGNALS) {
+      expect(strings).toContain(groupingWhySentence(signal));
+    }
   });
 });
 
