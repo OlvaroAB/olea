@@ -87,6 +87,28 @@ describe('segmentPlainTextPastPaper — synthetic fixtures modelled on findings/
     expect(partB?.text).not.toContain('begins here');
   });
 
+  it('a question that starts at the very top of a page, with no blank line before it, opens its own question instead of being absorbed into the previous one still open when the page turns (ol-egov.141.89.7.14)', () => {
+    const page1 = [
+      'Question 1. Describe the mechanism of tidal locking in enough detail',
+      'to justify the marks allocated, covering both bodies involved and the',
+      'timescale over which the effect becomes significant for a close pair.',
+    ].join('\n');
+    // No blank line above "Question 2." — it is the very first line extracted
+    // from page 2, exactly the shape a PDF produces when a new question
+    // happens to start at the top of a page.
+    const page2 = 'Question 2. Outline glacial isostatic adjustment. (10 marks)';
+
+    const result = segmentPlainTextPastPaper(extraction([textPage(1, page1), textPage(2, page2)]));
+    expect(result.status).toBe('segmented');
+    if (result.status !== 'segmented') return;
+    expect(result.questions.map((q) => q.label)).toEqual(['1', '2']);
+    expect(result.questions.find((q) => q.label === '1')?.text).not.toContain('glacial');
+    const q2 = result.questions.find((q) => q.label === '2');
+    expect(q2?.text).toContain('glacial isostatic adjustment');
+    expect(q2?.marks).toBe(10);
+    expect(q2?.provenance.location.page).toBe(2);
+  });
+
   it('marks: parenthetical, bracketed, "Maximum marks:", and bare forms are read where stated, undefined when absent', () => {
     const page = [
       'Question 1. First part. (10 marks)',

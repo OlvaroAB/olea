@@ -317,8 +317,25 @@ interface Paragraph {
   readonly firstLine: string;
 }
 
-/** Blank-line-delimited runs of text, spanning page joins freely (a page break with no blank line around it never splits a paragraph — the same immunity `segmentPastPaper`'s A6 argues for, reached by a different mechanism). */
-function splitParagraphs(lines: readonly Line[]): Paragraph[] {
+/**
+ * Blank-line-delimited runs of text — **and a page join is always its own
+ * boundary too**, not only a blank line. Pages are stitched with a single
+ * `\n` (`stitchPages`), so a question that starts at the very top of a page
+ * with no blank line above it used to land mid-paragraph, never as a
+ * paragraph's own `firstLine` — the one thing `matchTopLevelAnchor` ever
+ * looks at — and was silently absorbed into whatever question was still open
+ * (`ol-egov.141.89.7.14`). Forcing the break costs nothing on the case this
+ * module already relied on staying joined: prose that merely *continues*
+ * across a page break with no anchor of its own still fails
+ * `matchTopLevelAnchor` and `PART_MARKER_RE` on its new paragraph's
+ * `firstLine`, so the caller's "not handled" path still extends the current
+ * label's span across the two paragraphs — same stitched-text slice, same
+ * content, same provenance, just reached through one more paragraph instead
+ * of one merged one. `pageStarts` holds the stitched-offset each page after
+ * the first begins at (`stitchPages`'s per-page bounds), so this never needs
+ * its own page-detection logic.
+ */
+function splitParagraphs(lines: readonly Line[], pageStarts: ReadonlySet<number>): Paragraph[] {
   const paragraphs: Paragraph[] = [];
   let i = 0;
   while (i < lines.length) {
@@ -326,7 +343,12 @@ function splitParagraphs(lines: readonly Line[]): Paragraph[] {
     if (i >= lines.length) break;
     const first = lines[i] as Line;
     let j = i;
-    while (j < lines.length && !isBlankLine(lines[j] as Line)) j++;
+    while (
+      j < lines.length &&
+      !isBlankLine(lines[j] as Line) &&
+      (j === i || !pageStarts.has((lines[j] as Line).start))
+    )
+      j++;
     const last = lines[j - 1] as Line;
     paragraphs.push({ start: first.start, end: last.end, firstLine: first.text });
     i = j;
@@ -434,7 +456,8 @@ export function segmentPlainTextPastPaper(
   const stitched = stitchPages(pageTexts);
   const lines = splitLines(stitched.text);
   const furniture = computeFurnitureLines(lines, stitched.bounds);
-  const paragraphs = splitParagraphs(lines);
+  const pageStarts = new Set(stitched.bounds.slice(1).map((b) => b.start));
+  const paragraphs = splitParagraphs(lines, pageStarts);
 
   interface Span {
     start: number;
