@@ -212,6 +212,35 @@ const VIEW_MOUNT_TIMEOUT_MS = 60_000;
  * "the app raised a fatal error", not as an opaque, unexplained timeout (ol-shjr: "fail loudly,
  * not hang").
  */
+/**
+ * Waits until every transient toast (`obsidian-shim/index.ts`'s `Notice` — a
+ * course-confirmation toast is the shape `dismissCourseSetupModals` produces
+ * during this tour's own day-advances) has been removed from `[data-wb-
+ * notices]`. That host sits in the TOP page (`main.ts`'s `noticeHost`), a
+ * `position: fixed` SIBLING of `[data-wb-surface]`, not inside the iframe —
+ * but `hostFrameElement`'s screenshot clips the actual rendered page pixels
+ * at the iframe's bounding box, so a fixed-position toast overlapping that
+ * box still lands in the capture. `Notice`'s own default lifetime is REAL
+ * wall-clock 4000ms (`window.setTimeout`, not the simulator's fake calendar
+ * clock), so how many toasts are still visible at the moment a screenshot is
+ * taken depends only on how much real time this particular run happened to
+ * take to reach that point — not on anything the tour itself controls. This
+ * is why the same golden observably captured 0, 2 or 3 toasts across
+ * otherwise-identical runs (see this bead's own evidence). `captureAndCheck`
+ * calls this immediately before every capture so the toast stack is always
+ * "fully cleared" by the time the screenshot is taken, never whatever the
+ * clock happened to leave behind. Bounded at 10s — comfortably above the
+ * 4000ms a toast can ever still be alive for, with margin for several
+ * overlapping toasts created moments apart.
+ */
+export async function waitForNoticesToClear(page: Page, timeoutMs = 10_000): Promise<void> {
+  await page.waitForFunction(
+    () => document.querySelectorAll('[data-wb-notices] [data-wb-notice]').length === 0,
+    undefined,
+    { timeout: timeoutMs },
+  );
+}
+
 export async function openViewSurface(page: Page, viewType: string): Promise<void> {
   await frame(page).locator(`[data-wb-sim-ribbon-view="${viewType}"]`).click();
   const pane = frame(page)
