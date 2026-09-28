@@ -15,6 +15,7 @@
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
+import { shiftCalendarDay } from '../today/calendar-day.js';
 import {
   ATTENDANCE_RATIO,
   CONCENTRATION_RATIO,
@@ -230,7 +231,7 @@ describe('detectSpacing — the three statuses are three different statements', 
     // "rate" is a rate over almost nothing.
     const perDay = (offset: number): number => {
       if (offset === 3 || offset === 15 || offset === 30) return 6; // far, spread thin
-      if (offset === 45) return 15; // the one busy evening — inside the near window
+      if (offset === 44) return 15; // the one busy evening — inside the near window, the day before the assessment (D-422: the assessment day itself, 45, is its own bucket and no longer part of "near")
       return 0;
     };
     const result = detectSpacing(history(perDay));
@@ -280,5 +281,123 @@ describe('detectSpacing — the three statuses are three different statements', 
     const second = detectSpacing(entries);
     expect(second).toEqual(first);
     expect(JSON.stringify(entries)).toBe(snapshot);
+  });
+});
+
+describe('D-422 (ol-egov.141.89.11.22): near is the seven preceding calendar days; the assessment day is its own bucket', () => {
+  // A single assessment, `back` days before it in LOCAL calendar-day terms
+  // (negative means after it). `examProximity` mirrors `back` for every
+  // pre-assessment review, so every one of them implies the same assessment
+  // day; a review recorded after the assessment carries no proximity, the
+  // same way a review whose selection context never saw an assessment does
+  // elsewhere in this file.
+  const ASSESSMENT_DAY = '2026-03-29';
+
+  let marker = 0;
+  function reviewsOn(
+    back: number,
+    count: number,
+    opts: { readonly time?: string; readonly offset?: string } = {},
+  ): ReviewLogRecord[] {
+    const day = shiftCalendarDay(ASSESSMENT_DAY, -back);
+    const time = opts.time ?? '12:00:00.000';
+    const offset = opts.offset ?? '+00:00';
+    const out: ReviewLogRecord[] = [];
+    for (let i = 0; i < count; i += 1) {
+      marker += 1;
+      out.push({
+        schemaVersion: 6,
+        kind: 'review',
+        eventId: `d422-${marker}`,
+        timestamp: `${day}T${time}${offset}`,
+        instrumentId: `qa:c${marker % 4}:1`,
+        instrumentType: 'qa',
+        conceptIds: [`c${marker % 4}`],
+        rating: 'good',
+        wasUnsure: false,
+        durationMs: 5_000,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: back >= 0 ? back : null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      });
+    }
+    return out;
+  }
+
+  it('minus-7 and minus-1 are near, minus-8 is far, day zero is neither — even when each is recorded at an offset a UTC-day reading would misclassify', () => {
+    const entries: ReviewLogRecord[] = [];
+
+    // Baseline: one review a day, 40 days either side of the assessment (51
+    // calendar days total) — comfortably past every sufficiency floor, and a
+    // flat background the four marked days below stand out against.
+    for (let back = 40; back >= -10; back -= 1) {
+      entries.push(...reviewsOn(back, 1));
+    }
+
+    // The four boundary days, each with four EXTRA reviews (on top of that
+    // day's baseline one) recorded at a time and offset whose UTC instant
+    // falls on a different calendar day than the local one — so reading the
+    // UTC day instead of the local day would put each of these in the WRONG
+    // bucket. `calendarDayOfTimestamp` reads the local day only (the ISO
+    // string's own first ten characters), so none of them move.
+    entries.push(...reviewsOn(8, 4, { time: '23:50:00.000', offset: '-08:00' })); // minus-8, far: UTC instant is minus-7's day
+    entries.push(...reviewsOn(7, 4, { time: '00:10:00.000', offset: '+05:00' })); // minus-7, near: UTC instant is minus-8's day
+    entries.push(...reviewsOn(1, 4, { time: '23:50:00.000', offset: '-05:00' })); // minus-1, near: UTC instant is day zero
+    entries.push(...reviewsOn(0, 4, { time: '23:55:00.000', offset: '-03:00' })); // day zero: UTC instant is the day after
+
+    const result = detectSpacing(entries);
+    const measured = result.measured;
+    expect(measured).not.toBeNull();
+    if (measured === null) throw new Error('unreachable — asserted above');
+
+    expect(measured.assessmentDays).toEqual([ASSESSMENT_DAY]);
+    expect(measured.windowDays).toBe(PRE_ASSESSMENT_WINDOW_DAYS);
+    expect(measured.spanDays).toBe(51);
+
+    // Window sizes: seven near days (minus-7..minus-1), one today day (day
+    // zero), the rest far.
+    expect(measured.nearDayCount).toBe(7);
+    expect(measured.todayDayCount).toBe(1);
+    expect(measured.farDayCount).toBe(51 - 7 - 1);
+
+    // Near reviews: the window's baseline (one each on the seven near days)
+    // plus the four extra on minus-7 and the four extra on minus-1. Minus-8's
+    // extra four and day zero's extra four are NOT in here — that is the
+    // whole claim this test makes.
+    const nearReviews = 7 * 1 + 4 /* minus-7 */ + 4 /* minus-1 */;
+    expect(measured.nearReviewsPerDay).toBeCloseTo(nearReviews / measured.nearDayCount, 10);
+
+    // Far reviews: the far window's baseline plus minus-8's extra four.
+    // Day zero's extra four are excluded from this side too — a separate
+    // bucket, not folded into "everything that isn't near".
+    const farReviews = measured.farDayCount * 1 + 4 /* minus-8 */;
+    expect(measured.farReviewsPerDay).toBeCloseTo(farReviews / measured.farDayCount, 10);
+
+    // Every review is still read (nothing is dropped from the log, only from
+    // the two rates): 51 baseline plus 4×4 marked extras.
+    expect(measured.reviewCount).toBe(51 + 4 * 4);
+  });
+
+  it('day zero holds even where it is the ONLY marked day — its reviews inflate neither rate', () => {
+    const entries: ReviewLogRecord[] = [];
+    for (let back = 30; back >= -10; back -= 1) entries.push(...reviewsOn(back, 1));
+    entries.push(...reviewsOn(0, 9)); // nine extra reviews, all on the assessment day itself
+
+    const result = detectSpacing(entries);
+    const measured = result.measured;
+    expect(measured).not.toBeNull();
+    if (measured === null) throw new Error('unreachable — asserted above');
+
+    expect(measured.todayDayCount).toBe(1);
+    // A flat 1-a-day baseline reads concentration 1 on its own (asserted
+    // elsewhere in this file); the nine extra reviews sitting entirely in the
+    // today bucket must not move it, which is a stronger check than only
+    // reading nearDayCount/farDayCount off the day-zero test above.
+    expect(measured.concentration).toBeCloseTo(1, 10);
+    expect(measured.attendanceRatio).toBeCloseTo(1, 10);
   });
 });

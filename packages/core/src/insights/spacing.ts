@@ -189,9 +189,12 @@ export const MIN_SPAN_DAYS = 21;
 export const MIN_NEAR_STUDY_DAYS = Math.ceil(PRE_ASSESSMENT_WINDOW_DAYS / 2);
 
 export interface SpacingMeasured {
-  /** Reviews per calendar day inside `PRE_ASSESSMENT_WINDOW_DAYS` of an assessment. */
+  /**
+   * Reviews per calendar day in the `PRE_ASSESSMENT_WINDOW_DAYS` calendar days
+   * strictly before an assessment (D-422: never the assessment day itself).
+   */
   readonly nearReviewsPerDay: number;
-  /** Reviews per calendar day everywhere else in the span. */
+  /** Reviews per calendar day everywhere else in the span (never the assessment day itself; D-422). */
   readonly farReviewsPerDay: number;
   /** `nearReviewsPerDay / farReviewsPerDay`. `Infinity` when she did no work at all outside the windows. */
   readonly concentration: number;
@@ -206,6 +209,12 @@ export interface SpacingMeasured {
   readonly windowDays: number;
   readonly nearDayCount: number;
   readonly farDayCount: number;
+  /**
+   * Calendar days in span that are some assessment's own day (D-422): never
+   * near, and excluded from far rather than defaulted into it — a separate
+   * bucket, not a count folded into either rate.
+   */
+  readonly todayDayCount: number;
   readonly reviewCount: number;
   readonly spanDays: number;
   /** Assessment days the log itself implies. Dates only — no title, no course. */
@@ -311,16 +320,33 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
   const assessmentOffsets = assessmentDays
     .map((day) => daysBetween(first, day))
     .sort((a, b) => a - b);
+  // Near is strictly the seven CALENDAR days *before* an assessment — `back`
+  // runs 1..7, never 0 (D-422, ol-egov.141.89.11.22): day A-7 is near, day A
+  // itself never is. Day A is `vew.md`'s separate "today" bucket, built next.
   const nearOffsets = new Set<number>();
   for (const offset of assessmentOffsets) {
-    for (let back = 0; back < PRE_ASSESSMENT_WINDOW_DAYS; back += 1) {
+    for (let back = 1; back <= PRE_ASSESSMENT_WINDOW_DAYS; back += 1) {
       const at = offset - back;
       if (at >= 0 && at < spanDays) nearOffsets.add(at);
     }
   }
 
+  // The assessment day itself: never near (see above), and never folded into
+  // "far" either — the ruling's point is that urgency must not vanish into an
+  // undifferentiated background rate on the one day it is highest. A day that
+  // is one assessment's own day but also falls inside a DIFFERENT, closer
+  // assessment's near window keeps reading near for that assessment; only a
+  // day that is nobody's near day is pulled out of the far side.
+  const todayOffsets = new Set<number>();
+  for (const offset of assessmentOffsets) {
+    if (offset >= 0 && offset < spanDays && !nearOffsets.has(offset)) {
+      todayOffsets.add(offset);
+    }
+  }
+
   const nearDayCount = nearOffsets.size;
-  const farDayCount = spanDays - nearDayCount;
+  const todayDayCount = todayOffsets.size;
+  const farDayCount = spanDays - nearDayCount - todayDayCount;
   if (nearDayCount === 0)
     return abstain('no day of the history falls inside a pre-assessment window');
   if (farDayCount === 0) {
@@ -330,6 +356,7 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
   }
 
   let nearReviews = 0;
+  let todayReviews = 0;
   const nearStudyOffsets = new Set<number>();
   const farStudyOffsets = new Set<number>();
   for (const day of dayOfReview) {
@@ -337,11 +364,16 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
     if (nearOffsets.has(offset)) {
       nearReviews += 1;
       nearStudyOffsets.add(offset);
+    } else if (todayOffsets.has(offset)) {
+      // Neither near nor far (D-422): a review on the assessment day itself
+      // counts toward neither rate, the same way its day counts toward
+      // neither denominator above.
+      todayReviews += 1;
     } else {
       farStudyOffsets.add(offset);
     }
   }
-  const farReviews = dayOfReview.length - nearReviews;
+  const farReviews = dayOfReview.length - nearReviews - todayReviews;
 
   const nearReviewsPerDay = nearReviews / nearDayCount;
   const farReviewsPerDay = farReviews / farDayCount;
@@ -370,6 +402,7 @@ export function detectSpacing(entries: readonly ReviewLogEntry[]): SpacingInsigh
     windowDays: PRE_ASSESSMENT_WINDOW_DAYS,
     nearDayCount,
     farDayCount,
+    todayDayCount,
     reviewCount: dayOfReview.length,
     spanDays,
     assessmentDays,
