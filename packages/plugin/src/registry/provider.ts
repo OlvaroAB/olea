@@ -227,6 +227,14 @@ import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/s
 import { isoWithLocalOffset } from '../review/ports.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import {
+  type DeferredRecheckActionAvailability,
+  type DeferredRecheckRearmPort,
+  type DeferredRecheckRetryOutcome,
+  defaultIsOnline,
+  deferredRecheckActionAvailability,
+  retryDeferredRecheck,
+} from './deferred-recheck-retry.js';
+import {
   buildMergeAuditIdentityProposals,
   buildMergeRepairIdentityProposals,
   confirmMergeAuditIdentityProposal,
@@ -561,6 +569,21 @@ export interface CreateLocalRegistryProviderDeps {
    * guessed clear.
    */
   readonly citationHashStore?: CitationHashStore;
+  /**
+   * `[D-420]` (`ol-egov.141.89.5.28`) — the store-side compare-and-set that re-arms a deferred
+   * row's spent `[D-400]` retry (`./deferred-recheck-retry.ts`'s module doc: the bound and where it
+   * is enforced). Production: the SAME `ObsidianCitationHashStore` instance as
+   * `citationHashStore` above, once it implements `grantExplicitRetry`. **Optional; omitted means
+   * the check-again action is not offered** — the deferred row keeps the `[D-400]` sentence and no
+   * button, never a control with nothing behind it.
+   */
+  readonly deferredRecheckRearm?: DeferredRecheckRearmPort;
+  /**
+   * `[D-420]` — connectivity for the check-again action: offline it is shown unavailable and a
+   * press writes nothing. Defaults to `navigator.onLine` (`./deferred-recheck-retry.ts`'s
+   * `defaultIsOnline`), the same source `main.ts` hands `process-now.ts`.
+   */
+  readonly isOnline?: () => boolean;
 }
 
 /**
@@ -839,6 +862,23 @@ function suspectSectionFrom(
 }
 
 /**
+ * `[D-420]` (`ol-egov.141.89.5.28`): the `deferredRecheckAction` field `load()` spreads into its
+ * state — empty (the field omitted) when either the store or the re-arm port is missing, so the
+ * view keeps the `[D-400]` sentence and draws no button. Online is read at load time for the
+ * button's enabled state; the press re-reads it (`retryDeferredRecheck`), so a connection lost
+ * after load still writes nothing.
+ */
+function deferredRecheckActionField(deps: CreateLocalRegistryProviderDeps): {
+  readonly deferredRecheckAction?: DeferredRecheckActionAvailability;
+} {
+  const availability = deferredRecheckActionAvailability({
+    wired: deps.citationHashStore !== undefined && deps.deferredRecheckRearm !== undefined,
+    online: (deps.isOnline ?? defaultIsOnline)(),
+  });
+  return availability === undefined ? {} : { deferredRecheckAction: availability };
+}
+
+/**
  * The whole of `load()`'s composition, factored out so `acceptNoteOffer`
  * below can call it a second time at accept-time — see that method's own
  * doc for why a second full call, not a narrower re-derivation, is the
@@ -981,6 +1021,9 @@ function createLoadModel(
           enumeration.records.map((record) => record.instrumentId),
           pendingRevalidation,
         ),
+        // `[D-420]`: whether a deferred row offers "check again", and whether it is usable right
+        // now — absent when the re-arm port is not wired (`deferredRecheckRearm`'s own doc).
+        ...deferredRecheckActionField(deps),
       };
     } catch (error) {
       console.error('Olea: could not compose the registry', error);
@@ -1181,6 +1224,22 @@ export function createLocalRegistryProvider(
         },
         { deviceId: deps.deviceId },
       );
+    },
+
+    /**
+     * `[D-420]` (`ol-egov.141.89.5.28`) — the deferred row's "check again" action. Re-arms the
+     * existing `[D-400]` retry for the item's current source revision and nothing else: no judge
+     * call here, no pass run here — the next ordinary batch pass makes exactly one call. See
+     * `./deferred-recheck-retry.ts` for the bound and the three places it is enforced. Offline, or
+     * with no re-arm port wired, nothing is written.
+     */
+    async retryDeferredRecheck(instrumentId: string): Promise<DeferredRecheckRetryOutcome> {
+      return retryDeferredRecheck({
+        instrumentId,
+        store: deps.citationHashStore,
+        rearm: deps.deferredRecheckRearm,
+        isOnline: deps.isOnline ?? defaultIsOnline,
+      });
     },
 
     /**

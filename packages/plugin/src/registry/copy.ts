@@ -49,6 +49,7 @@ import {
   VITALITY_DISPLAY,
   type Vitality,
 } from 'olea-core';
+import type { DeferredRecheckActionAvailability } from './deferred-recheck-retry.js';
 
 /**
  * F8.4b's per-instrument explain-back history row. Derived by indexed
@@ -559,7 +560,64 @@ export const SUSPECT_FLAGGED_LINE =
  * names the one thing that starts a fresh check (a genuine edit to the cited passage), matching
  * F2.23's "offers no action where none exists" this section's other two sentences already follow.
  * Reversible (Class B): a wording-only string constant, not a persisted value — changing it later
- * needs no migration.
+ * needs no migration. **Since `[D-420]`, shown only while the check-again action is not wired**
+ * ({@link suspectDeferredRowCopy} below); once it is, {@link SUSPECT_DEFERRED_WITH_ACTION_LINE}
+ * replaces it.
  */
 export const SUSPECT_DEFERRED_LINE =
   "Olea couldn't confirm the change to this source passage after two tries, and won't try again until you edit that passage.";
+
+/**
+ * `[D-420]` (amends `[D-400]`; **PROPOSED, Class B, pending David's ratification**;
+ * `ol-egov.141.89.5.28`) — the deferred row's sentence once the explicit check-again action is
+ * wired (`./deferred-recheck-retry.ts`). Drafted, with its rejected alternatives, in olea-service
+ * `docs/design/copy-pass-2026-09/deferred-recheck.md` (recommended candidate A), which also
+ * re-drafts registry §24 in full. Differs from {@link SUSPECT_DEFERRED_LINE} in two ways, both on
+ * purpose: it does not send her to edit the passage (`[D-420]`: editing correct material must not
+ * be the only recovery), and it carries no attempt count, so it stays true after a pressed check
+ * also goes unanswered. Never "deferred," "retry" or "exhausted."
+ */
+export const SUSPECT_DEFERRED_WITH_ACTION_LINE =
+  "Olea couldn't confirm the change to this source passage, and won't check it again on its own.";
+
+/** `[D-420]` — the action's label (PROPOSED, candidate A; see {@link SUSPECT_DEFERRED_WITH_ACTION_LINE}). */
+export const SUSPECT_DEFERRED_RECHECK_ACTION = 'Check again';
+
+/** `[D-420]` — shown with the action, which is then unavailable, while the device is offline (PROPOSED, candidate A). */
+export const SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE = 'Checking again needs a connection.';
+
+/** What a deferred row shows: its sentence, and the action beside it when one is wired. */
+export interface SuspectDeferredRowCopy {
+  readonly line: string;
+  readonly action?: {
+    readonly label: string;
+    readonly enabled: boolean;
+    readonly note?: string;
+  };
+}
+
+/**
+ * `[D-420]` — the deferred row's whole presentation, decided here so `./view.ts` only draws it.
+ * With no action wired (`availability` absent) the row keeps the `[D-400]` sentence, which names
+ * the edit route, and offers no control; with the action wired it reads the action-era sentence
+ * with "Check again" beside it, unavailable with the offline note while there is no connection.
+ */
+export function suspectDeferredRowCopy(
+  availability: DeferredRecheckActionAvailability | undefined,
+): SuspectDeferredRowCopy {
+  if (availability === undefined) return { line: SUSPECT_DEFERRED_LINE };
+  if (availability === 'available') {
+    return {
+      line: SUSPECT_DEFERRED_WITH_ACTION_LINE,
+      action: { label: SUSPECT_DEFERRED_RECHECK_ACTION, enabled: true },
+    };
+  }
+  return {
+    line: SUSPECT_DEFERRED_WITH_ACTION_LINE,
+    action: {
+      label: SUSPECT_DEFERRED_RECHECK_ACTION,
+      enabled: false,
+      note: SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE,
+    },
+  };
+}

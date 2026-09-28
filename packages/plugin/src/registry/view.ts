@@ -176,11 +176,12 @@ import {
   RESTORE_INSTRUMENT_ACTION,
   registryAggregateLine,
   SOURCE_LOCATIONS_HEADING,
-  SUSPECT_DEFERRED_LINE,
+  SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE,
   SUSPECT_FLAGGED_LINE,
   SUSPECT_PENDING_REVALIDATION_LINE,
   SUSPECT_SECTION_HEADING,
   sourceLocationLabel,
+  suspectDeferredRowCopy,
   THIN_NOTE_LABEL,
   thinNoteLine,
   vitalityLabel,
@@ -194,6 +195,10 @@ import {
   WITHHELD_SECTION_HEADING,
   withheldItemLine,
 } from './copy.js';
+import type {
+  DeferredRecheckActionAvailability,
+  DeferredRecheckRetryOutcome,
+} from './deferred-recheck-retry.js';
 import type { MergeAuditIdentityProposal } from './merge-audit-identity.js';
 import type { SameAsIdentityProposal } from './same-as-identity.js';
 
@@ -347,6 +352,13 @@ export type RegistryViewState =
        * this codebase yet — see `olea-core`'s `suspect-section.ts` module doc).
        */
       readonly suspectInstruments: RegistrySuspectSection;
+      /**
+       * `[D-420]` (`ol-egov.141.89.5.28`): whether a deferred row in `suspectInstruments` offers
+       * the explicit "check again" action, and whether it is usable right now. Absent means the
+       * action is not wired (`./provider.ts`'s `deferredRecheckRearm`), and the deferred row keeps
+       * the `[D-400]` sentence with no button.
+       */
+      readonly deferredRecheckAction?: DeferredRecheckActionAvailability;
     }
   | { readonly kind: 'unavailable' };
 
@@ -409,6 +421,14 @@ export interface RegistryViewDeps {
    * never another instrument's.
    */
   readonly restoreWithheldItem: (item: RegistryWithheldItem) => Promise<void>;
+  /**
+   * `[D-420]` (`ol-egov.141.89.5.28`) — the deferred row's "check again": re-arms the existing
+   * `[D-400]` retry so the next ordinary batch pass makes exactly one further check
+   * (`./deferred-recheck-retry.ts`). Optional so a host with no source-change store (the
+   * workbench) needs no stub; `renderSuspectSection` draws the button only when this is present
+   * AND the loaded state carries `deferredRecheckAction`.
+   */
+  readonly retryDeferredRecheck?: (instrumentId: string) => Promise<DeferredRecheckRetryOutcome>;
 }
 
 export class RegistryView extends ItemView {
@@ -623,7 +643,7 @@ export class RegistryView extends ItemView {
     // `[D-397]`: the suspect-instrument section — beside, never inside, `renderWithheldSection`
     // immediately above (the ruling's own words); same top-level, unfiltered placement, for the
     // same reason. See `renderSuspectSection`'s own doc.
-    this.renderSuspectSection(root, state.suspectInstruments);
+    this.renderSuspectSection(root, state.suspectInstruments, state.deferredRecheckAction);
 
     this.renderFilterChips(root, concepts);
 
@@ -896,14 +916,48 @@ export class RegistryView extends ItemView {
    * rendered with {@link SUSPECT_DEFERRED_LINE} instead of the ordinary
    * {@link SUSPECT_PENDING_REVALIDATION_LINE} — same section, same heading, no new bucket and no
    * new action: the sentence itself is the recovery path (a genuine edit to the cited passage).
+   *
+   * **`[D-420]` (`ol-egov.141.89.5.28`) adds the one action this section has.** When the
+   * check-again action is wired (`availability` present and `deps.retryDeferredRecheck` supplied),
+   * a deferred row reads `./copy.ts#suspectDeferredRowCopy`'s action-era sentence with "Check
+   * again" beside it — disabled, with the offline note, while there is no connection. A press
+   * re-arms the one further check and refreshes: the row then reads the ordinary
+   * pending-revalidation sentence until that check concludes. Not wired, the row is exactly as
+   * `[D-400]` left it. Ordinary pending and flagged rows still offer nothing.
    */
-  private renderSuspectSection(root: HTMLElement, section: RegistrySuspectSection): void {
+  private renderSuspectSection(
+    root: HTMLElement,
+    section: RegistrySuspectSection,
+    availability: DeferredRecheckActionAvailability | undefined,
+  ): void {
     if (section.pendingRevalidation.length === 0 && section.flagged.length === 0) return;
     const el = root.createDiv({ cls: 'olea-registry-suspect-section' });
     el.createEl('h3', { text: SUSPECT_SECTION_HEADING });
+    const retry = this.deps.retryDeferredRecheck;
+    const deferredCopy = suspectDeferredRowCopy(retry === undefined ? undefined : availability);
     for (const row of section.pendingRevalidation) {
-      el.createDiv({ cls: 'olea-registry-suspect-item' }).createEl('p', {
-        text: row.deferred ? SUSPECT_DEFERRED_LINE : SUSPECT_PENDING_REVALIDATION_LINE,
+      const item = el.createDiv({ cls: 'olea-registry-suspect-item' });
+      if (!row.deferred) {
+        item.createEl('p', { text: SUSPECT_PENDING_REVALIDATION_LINE });
+        continue;
+      }
+      item.createEl('p', { text: deferredCopy.line });
+      const action = deferredCopy.action;
+      if (action === undefined || retry === undefined) continue;
+      const actions = item.createDiv({ cls: 'olea-registry-suspect-actions' });
+      const button = actions.createEl('button', { cls: 'olea-button-quiet', text: action.label });
+      button.disabled = !action.enabled;
+      if (action.note !== undefined) {
+        actions.createSpan({ cls: 'olea-registry-suspect-note', text: action.note });
+      }
+      button.addEventListener('click', () => {
+        // One press, one re-arm: disabled at once so a double click never reaches the store twice
+        // (the store's compare-and-set would refuse the second anyway — belt and braces).
+        button.disabled = true;
+        void retry(row.instrumentId).then((outcome) => {
+          if (outcome === 'offline') this.announce(SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE);
+          return this.refresh();
+        });
       });
     }
     for (const _row of section.flagged) {

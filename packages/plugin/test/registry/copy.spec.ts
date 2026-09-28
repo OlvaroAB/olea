@@ -36,6 +36,9 @@ import {
   RESTORE_INSTRUMENT_ACTION,
   registryAggregateLine,
   SUSPECT_DEFERRED_LINE,
+  SUSPECT_DEFERRED_RECHECK_ACTION,
+  SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE,
+  SUSPECT_DEFERRED_WITH_ACTION_LINE,
   THIN_NOTE_LABEL,
   thinNoteLine,
   vitalityLabel,
@@ -507,5 +510,34 @@ describe('[D-400] SUSPECT_DEFERRED_LINE (registry §24 — PROPOSED, Class B, pe
     expect(lower).not.toContain('deferred');
     expect(lower).not.toContain('retry');
     expect(lower).not.toContain('exhausted');
+  });
+});
+
+// Scenarios: olea-service/features/F2-review.md — F2.23's `[D-420]` block, "the proposed action-era
+// sentence, action label and offline note are exact", tagged `@auto:plugin/registry/copy.spec`.
+// Drafted (candidate A, recommended) in olea-service docs/design/copy-pass-2026-09/deferred-recheck.md.
+describe('[D-420] the check-again strings (PROPOSED, Class B, pending ratification)', () => {
+  it('are exactly the draft’s recommended candidate A', () => {
+    expect(SUSPECT_DEFERRED_WITH_ACTION_LINE).toBe(
+      "Olea couldn't confirm the change to this source passage, and won't check it again on its own.",
+    );
+    expect(SUSPECT_DEFERRED_RECHECK_ACTION).toBe('Check again');
+    expect(SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE).toBe('Checking again needs a connection.');
+  });
+
+  it('never say "deferred", "retry" or "exhausted", and the sentence neither sends her to edit nor counts tries', () => {
+    for (const text of [
+      SUSPECT_DEFERRED_WITH_ACTION_LINE,
+      SUSPECT_DEFERRED_RECHECK_ACTION,
+      SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE,
+    ]) {
+      const lower = text.toLowerCase();
+      expect(lower).not.toContain('deferred');
+      expect(lower).not.toContain('retry');
+      expect(lower).not.toContain('exhausted');
+    }
+    const line = SUSPECT_DEFERRED_WITH_ACTION_LINE.toLowerCase();
+    expect(line).not.toContain('edit');
+    expect(line).not.toMatch(/\btwo\b|\btries\b/);
   });
 });
