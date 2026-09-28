@@ -101,9 +101,12 @@ describe('defect 2 (ol-egov.141.89.5.7): a judge call chains from the last proce
 
     // The first (older) call's response now arrives — dropped as stale by
     // the existing `[DOS-C3]` guard, never committed.
+    // `ol-egov.141.89.5.30`: reported as `'stale-response-dropped'`, not
+    // `'judge-unavailable'` — the second call already committed its own
+    // (newer) verdict for this path.
     resolveFirst({ material: true });
     const stale = await stalePromise;
-    expect(stale).toEqual({ kind: 'judge-unavailable' });
+    expect(stale).toEqual({ kind: 'stale-response-dropped' });
 
     // No gap: the store's baseline now spans R0 all the way to R2 in one
     // committed judgment, never leaving R0->R1 unaccounted for.

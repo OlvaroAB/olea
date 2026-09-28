@@ -124,9 +124,13 @@ describe('[D-311] persisted revision -- stale response surviving a restart', () 
     // work, so it alone would let this through. The persisted revision must
     // catch it instead: the record now on disk was advanced by instance B,
     // past what instance A saw when it started.
+    // `ol-egov.141.89.5.30`: reported as `'stale-response-dropped'`, not
+    // `'judge-unavailable'` — instance B already committed a newer verdict
+    // for this path, so `main.ts`'s `observedMaterialChange` must not read
+    // this drop as a second, independent change.
     resolveStale({ material: true });
     const staleResult = await stale;
-    expect(staleResult).toEqual({ kind: 'judge-unavailable' });
+    expect(staleResult).toEqual({ kind: 'stale-response-dropped' });
 
     // No clobber: the store still holds instance B's verdict-baseline record,
     // untouched by instance A's late write.

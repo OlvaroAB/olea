@@ -421,9 +421,13 @@ describe('MaterialityTrigger.evaluate', () => {
 
     // The older call's judge now resolves — its response must be dropped,
     // never committed as a baseline for content that has since moved on.
+    // `ol-egov.141.89.5.30`: reported as `'stale-response-dropped'`, not
+    // `'judge-unavailable'` — a newer call already committed its own verdict
+    // for this path, so `main.ts`'s `observedMaterialChange` must not read
+    // this drop as a second, independent change.
     resolveFirst({ material: true });
     const stale = await stalePromise;
-    expect(stale).toEqual({ kind: 'judge-unavailable' });
+    expect(stale).toEqual({ kind: 'stale-response-dropped' });
   });
 
   it('a first sighting (no prior record) always calls the judge when one is configured and previousText is given', async () => {
