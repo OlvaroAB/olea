@@ -31,9 +31,11 @@ import {
   type BuildSchedulingObservationFieldInput,
   buildSchedulingObservationField,
   masteryAtTimeForConceptIds,
+  parseMcqBlocks,
   type SupportLevelPresentation,
   supportLevelReviewFields,
 } from 'olea-core';
+import { readPaperOriginField } from '../instrument-blocks/paper-origin.js';
 import {
   localToday,
   readReviewHistory,
@@ -187,7 +189,40 @@ export function isoWithLocalOffset(date: Date): string {
  * `open-session.ts` already reads to replay scheduler state for this same
  * session — not the shorter streak window, which is a display concern with no
  * bearing on what mastery this event should carry.
+ *
+ * **The practice-paper origin (`[D-367]`/`[D-391]`/`[D-407]`, F4.11) is read
+ * back here, not carried on `RecordReviewInput`.** Unlike every other
+ * optional field on this port, the caller (`session.ts`) never decides this
+ * one — it is derived straight from the entered instrument's own
+ * `paper-origin:` block field, the durable label `paper/provider.ts`'s
+ * `handOffItem` stamps once at hand-off (`stampPaperOriginField`'s core
+ * twin). For an `'mcq'` review whose source note still carries a block with
+ * `input.instrument.instrumentId` as its `id:`, this re-reads that note and
+ * hands `readPaperOriginField`'s verdict, as the RAW `'practice-paper'`
+ * *candidate*, to `appendReviewLogRecord` — on every review of the item, not
+ * only its first. That writer's own doc is what turns "carries the field"
+ * into "is the record the label belongs on": `hasEarlierReviewForInstrument`
+ * keeps the candidate only when no earlier `kind: 'review'` record for this
+ * instrument exists yet, and silently drops it on every later review, so
+ * this port never has to track "was this the first" itself. A non-`'mcq'`
+ * review, a source note that no longer exists, or a block that cannot be
+ * found or carries no readable `paper-origin:` field all resolve to no
+ * candidate at all — never a fabricated one.
  */
+async function practiceOriginCandidate(
+  vault: VaultSource,
+  instrument: ReviewInstrument,
+): Promise<'practice-paper' | undefined> {
+  if (instrument.type !== 'mcq') return undefined;
+  if (!(await vault.exists(instrument.sourcePath))) return undefined;
+
+  const source = await vault.read(instrument.sourcePath);
+  const mcq = parseMcqBlocks(source).instruments.find((i) => i.id === instrument.instrumentId);
+  if (mcq === undefined) return undefined;
+
+  return readPaperOriginField(mcq) === null ? undefined : 'practice-paper';
+}
+
 export function createVaultReviewLogPort(
   vault: VaultSource,
   deviceId: string,
@@ -215,6 +250,11 @@ export function createVaultReviewLogPort(
         input.schedulingObservationInput === undefined
           ? undefined
           : buildSchedulingObservationField(input.schedulingObservationInput);
+
+      // F4.11 (`[D-367]`/`[D-391]`/`[D-407]`): read back from the instrument's
+      // own `paper-origin:` block field, not from the caller — see this
+      // function's own doc, above `createVaultReviewLogPort`, for why.
+      const originCandidate = await practiceOriginCandidate(vault, input.instrument);
 
       const reviewResult = await appendReviewLogRecord(
         vault,
@@ -248,6 +288,10 @@ export function createVaultReviewLogPort(
           // `[D-395]` condition 5: merged verbatim, only when the caller's
           // item carried one — see `RecordReviewInput.compositionId`'s doc.
           ...(input.compositionId !== undefined ? { compositionId: input.compositionId } : {}),
+          // F4.11: a RAW candidate — `appendReviewLogRecord` itself is what
+          // keeps it only on the instrument's first ordinary review. See
+          // `practiceOriginCandidate` and this function's own doc.
+          ...(originCandidate !== undefined ? { origin: originCandidate } : {}),
         },
         { deviceId },
       );
