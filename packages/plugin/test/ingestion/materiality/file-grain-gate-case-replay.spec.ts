@@ -239,7 +239,7 @@ describe.skipIf(!CASES_PRESENT)(
       const tick = c.events.find((e) => e.kind === 'tick')!;
       const drained = await trigger.drainDuePendingEdits(tick.atMs);
       expect(drained).toHaveLength(1);
-      expect(drained[0]?.material).toBe(true);
+      expect(drained[0]?.verdict.material).toBe(true);
       expect(calls).toEqual([{ from: 'r0', to: 'r1' }]);
 
       // No gap, no double-count: exactly one committed judgment, covering the whole span.
@@ -273,7 +273,7 @@ describe.skipIf(!CASES_PRESENT)(
       const tick = c.events.find((e) => e.kind === 'tick')!;
       const drained = await trigger.drainDuePendingEdits(tick.atMs);
       expect(drained).toHaveLength(1);
-      expect(drained[0]?.material).toBe(true);
+      expect(drained[0]?.verdict.material).toBe(true);
       // The chain from the last committed baseline (r0) to the final revision (r2) in one call --
       // never against the intervening, undecided r1 (this bead's own defect-1 fix).
       expect(calls).toEqual([{ from: 'r0', to: 'r2' }]);
@@ -445,9 +445,10 @@ describe.skipIf(!CASES_PRESENT)(
 
       // The older call's response now arrives. It must be dropped: a newer dispatch for this path
       // already committed its own (newer) baseline while it was in flight.
+      // `ol-egov.141.89.5.30`: reported as `'stale-response-dropped'`, not `'judge-unavailable'`.
       resolveOlder({ material: true, reason: 'older, now-superseded response' });
       const olderResult = await olderCall;
-      expect(olderResult).toEqual({ kind: 'judge-unavailable' });
+      expect(olderResult).toEqual({ kind: 'stale-response-dropped' });
 
       // Exactly one committed judgment for the whole span, no gap, no double-count.
       const final = store.peek(path);

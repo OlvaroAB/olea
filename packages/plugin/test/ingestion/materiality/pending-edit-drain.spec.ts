@@ -95,7 +95,16 @@ describe('[DOS-3] MaterialityTrigger.drainDuePendingEdits', () => {
       currentText: 'The reading was -5 degrees.',
     });
     expect(drained).toHaveLength(1);
-    expect(drained[0]?.material).toBe(true);
+    expect(drained[0]?.verdict.material).toBe(true);
+    // `ol-egov.141.89.5.29`: the drained verdict carries the text it is
+    // ABOUT alongside it -- this is what `main.ts`'s `drainPendingMaterialityEdits`
+    // needed to route the verdict through the same consumers
+    // (`recordMaterialArrivalIfObserved`, `triggerAuthoredNoteGenerationIfObserved`)
+    // the direct `evaluate()` path already uses. Before this bead,
+    // `drainDuePendingEdits` returned a bare `MaterialityVerdictEvent[]` with
+    // nothing a consumer could act on, which is exactly why the verdict
+    // reached neither consumer in production.
+    expect(drained[0]?.currentText).toBe('The reading was -5 degrees.');
 
     // Draining again is a no-op -- the pending marker was consumed.
     const drainedAgain = await trigger.drainDuePendingEdits(clock.now() + 1_000_000);

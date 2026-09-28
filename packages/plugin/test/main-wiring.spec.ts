@@ -1117,8 +1117,13 @@ describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
   });
 
   it('records an arrival from the real materiality-evaluation result, not on every raw edit', () => {
+    // `ol-egov.141.89.5.29`: `evaluateMaterialityChange` now computes the
+    // `materialChangeObserved` boolean once (via `observedMaterialChange`)
+    // and passes it to both consumers, rather than handing each its own copy
+    // of the raw `result` — see the same describe block below ("the new
+    // consumer is gated on the SAME observedMaterialChange reading").
     expect(main).toMatch(
-      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, result\);/,
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, materialChangeObserved\);/,
     );
     expect(main).toMatch(
       /result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)/,
@@ -1206,7 +1211,7 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
 
   it('evaluateMaterialityChange calls the new consumer right alongside the F6.9 one, from the same verdict', () => {
     expect(main).toMatch(
-      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, result\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(path, currentText, result\);/,
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, materialChangeObserved\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(path, currentText, materialChangeObserved\);/,
     );
   });
 
@@ -1214,11 +1219,17 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
     expect(main).toMatch(
       /private observedMaterialChange\(result: MaterialityEvaluationResult\): boolean \{\s*return \(\s*result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)\s*\);\s*\}/,
     );
+    // `ol-egov.141.89.5.29`: both consumers now take the already-computed
+    // `materialChangeObserved` boolean, not the raw result — this is what
+    // lets `drainPendingMaterialityEdits` (a second, drained caller with no
+    // `MaterialityEvaluationResult` of its own to hand them, only a
+    // `MaterialityVerdictEvent`) reuse the SAME two consumer bodies instead
+    // of duplicating their logic.
     expect(main).toMatch(
-      /private async recordMaterialArrivalIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*result: MaterialityEvaluationResult,\s*\): Promise<void> \{\s*if \(this\.materialArrivals === null\) return;\s*if \(!this\.observedMaterialChange\(result\)\) return;/,
+      /private async recordMaterialArrivalIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*materialChangeObserved: boolean,\s*\): Promise<void> \{\s*if \(this\.materialArrivals === null\) return;\s*if \(!materialChangeObserved\) return;/,
     );
     expect(main).toMatch(
-      /private async triggerAuthoredNoteGenerationIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*result: MaterialityEvaluationResult,\s*\): Promise<void> \{\s*if \(!this\.observedMaterialChange\(result\)\) return;/,
+      /private async triggerAuthoredNoteGenerationIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*materialChangeObserved: boolean,\s*\): Promise<void> \{\s*if \(!materialChangeObserved\) return;/,
     );
   });
 
@@ -2206,6 +2217,31 @@ describe('[D-167] the study-plan refresh now has a between-sessions trigger too,
 
   it('imports the pure predicate from its own testable module, not an inline re-implementation', () => {
     expect(main).toMatch(/import \{ studyPlanRefreshDue \} from '\.\/plan\/refresh-schedule\.js';/);
+  });
+});
+
+describe('ol-egov.141.89.5.29: a drained materiality verdict now reaches both TRG-1 consumers, not just the periodic tick', () => {
+  // CONFIRMED bug (`findings/ilb-chg-benchmark.md`, olea-service): a
+  // same-length edit or an autosave burst that only ever resolves through
+  // `drainPendingMaterialityEdits` (never a second `evaluate()` call on its
+  // own path) produced a real verdict from
+  // `MaterialityTrigger.drainDuePendingEdits`, but `main.ts` discarded that
+  // return value entirely — neither F6.9's material-arrival timestamp nor
+  // F3.3's authored-note generation sweep ever ran for it. These are the
+  // source-level checks that the drain loop now routes each drained verdict
+  // through the SAME two consumers `evaluateMaterialityChange` already uses,
+  // per `[D-293]`.
+
+  it('captures drainDuePendingEdits’ return value and iterates it, rather than discarding it', () => {
+    expect(main).toMatch(
+      /const drained = await this\.materiality\.drainDuePendingEdits\(this\.now\(\)\.getTime\(\)\);\s*for \(const \{ verdict, currentText \} of drained\) \{/,
+    );
+  });
+
+  it('calls both consumers per drained verdict, keyed on verdict.material — the same boolean observedMaterialChange derives for a direct call-judge verdict', () => {
+    expect(main).toMatch(
+      /for \(const \{ verdict, currentText \} of drained\) \{\s*await this\.recordMaterialArrivalIfObserved\(verdict\.path, currentText, verdict\.material\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(\s*verdict\.path,\s*currentText,\s*verdict\.material,\s*\);\s*\}/,
+    );
   });
 });
 

@@ -2370,8 +2370,9 @@ export default class OleaPlugin extends Plugin {
     const previousText = this.materialityPreviousText.get(path);
     try {
       const result = await this.materiality.evaluate(path, currentText, previousText);
-      await this.recordMaterialArrivalIfObserved(path, currentText, result);
-      await this.triggerAuthoredNoteGenerationIfObserved(path, currentText, result);
+      const materialChangeObserved = this.observedMaterialChange(result);
+      await this.recordMaterialArrivalIfObserved(path, currentText, materialChangeObserved);
+      await this.triggerAuthoredNoteGenerationIfObserved(path, currentText, materialChangeObserved);
     } catch (error) {
       console.error('Olea: materiality trigger evaluation failed', error);
     } finally {
@@ -2389,15 +2390,46 @@ export default class OleaPlugin extends Plugin {
    * own path stays pending until something else happens to touch that path
    * again -- see `drainDuePendingEdits`'s own doc for why.
    *
+   * `ol-egov.141.89.5.29`: a drained verdict now reaches the SAME two
+   * consumers `evaluateMaterialityChange` already routes a direct verdict
+   * through (`recordMaterialArrivalIfObserved`,
+   * `triggerAuthoredNoteGenerationIfObserved`), per `[D-293]`. Before this,
+   * `drainDuePendingEdits`'s return value was discarded here -- a same-length
+   * edit or an autosave burst that only ever resolves through this drain
+   * (never a second `evaluate()` call on its own path) produced a real
+   * verdict that reached neither consumer. `verdict.material` is the exact
+   * boolean `observedMaterialChange` reads off a `'verdict'`-kind result
+   * (`result.kind === 'verdict' && result.verdict.material`) -- a drained
+   * result is always an actual `'verdict'` (`drainDuePendingEdits` itself
+   * only ever returns one when `dispatchJudgeAndCommit` resolves to
+   * `'verdict'`, never `'judge-unavailable'`/`'stale-response-dropped'`), so
+   * there is no separate "unavailable" case to fold in here the way the
+   * direct path's `observedMaterialChange` has to.
+   *
    * Never throws into the interval: a failure here must not stop the
    * neighbouring ticks (`tickCitationRevisions`'s own doc argues the same
    * for its own tick), same "last line of defence, not the primary
    * error-handling path" posture `drainEmbeddings`'s doc states outright.
+   * Both consumer methods already swallow their own failures internally
+   * (`recordMaterialArrivalIfObserved`'s own try/catch;
+   * `triggerAuthoredNoteGenerationIfObserved`'s `onUnitsLanded` never lets a
+   * sweep failure propagate either), so one bad path in a drained batch
+   * cannot abort the rest of it -- this method's own try/catch is the same
+   * defensive backstop `evaluateMaterialityChange` keeps for its single
+   * verdict, never the primary error path for either consumer.
    */
   private async drainPendingMaterialityEdits(): Promise<void> {
     if (this.materiality === null) return;
     try {
-      await this.materiality.drainDuePendingEdits(this.now().getTime());
+      const drained = await this.materiality.drainDuePendingEdits(this.now().getTime());
+      for (const { verdict, currentText } of drained) {
+        await this.recordMaterialArrivalIfObserved(verdict.path, currentText, verdict.material);
+        await this.triggerAuthoredNoteGenerationIfObserved(
+          verdict.path,
+          currentText,
+          verdict.material,
+        );
+      }
     } catch (error) {
       console.error('Olea: materiality pending-edit drain failed', error);
     }
@@ -2441,14 +2473,23 @@ export default class OleaPlugin extends Plugin {
    * Never lets a parse or store failure propagate — same "a downstream
    * failure must never make the trigger look like it misfired" posture the
    * caller already holds for `materiality.evaluate` itself.
+   *
+   * `ol-egov.141.89.5.29`: takes the already-computed `materialChangeObserved`
+   * boolean rather than a raw `MaterialityEvaluationResult`, so this ONE
+   * consumer body serves both callers — `evaluateMaterialityChange` (which
+   * derives it via `observedMaterialChange` from a direct `evaluate()`
+   * result) and `drainPendingMaterialityEdits` (which derives it from a
+   * drained `MaterialityVerdictEvent.material` — always an actual verdict,
+   * never `'judge-unavailable'`/`'stale-response-dropped'`, so there is
+   * nothing else for that caller to fold in).
    */
   private async recordMaterialArrivalIfObserved(
     path: VaultPath,
     currentText: string,
-    result: MaterialityEvaluationResult,
+    materialChangeObserved: boolean,
   ): Promise<void> {
     if (this.materialArrivals === null) return;
-    if (!this.observedMaterialChange(result)) return;
+    if (!materialChangeObserved) return;
 
     try {
       const doc = parseDocument(currentText);
@@ -2513,13 +2554,17 @@ export default class OleaPlugin extends Plugin {
    * `ol-2zfj.33`'s finding names for the ingested case; this bead does not
    * widen that scope. Delegates to `onUnitsLanded`, which already never lets
    * a sweep failure propagate.
+   *
+   * `ol-egov.141.89.5.29`: same `materialChangeObserved` boolean parameter
+   * `recordMaterialArrivalIfObserved` takes, for the same reason — see that
+   * method's own doc.
    */
   private async triggerAuthoredNoteGenerationIfObserved(
     path: VaultPath,
     currentText: string,
-    result: MaterialityEvaluationResult,
+    materialChangeObserved: boolean,
   ): Promise<void> {
-    if (!this.observedMaterialChange(result)) return;
+    if (!materialChangeObserved) return;
 
     // `ol-0r92.21` [D-152]: this exact unit shape is now shared with the
     // manual process-now override (`ingestion/process-now.ts`'s

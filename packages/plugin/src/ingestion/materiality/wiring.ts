@@ -52,6 +52,32 @@
  * interval that already drives `tickCitationRevisions`
  * (`INGESTION_TICK_INTERVAL_MS`, `main.ts:1714-1723`).
  * ===========================================================================
+ *
+ * ===========================================================================
+ * `ol-egov.141.89.5.29` / `ol-egov.141.89.5.30` (from the change-detection
+ * development run, `findings/ilb-chg-benchmark.md`, olea-service): two
+ * defects in how a verdict actually reaches row 1.4's two consumers, fixed
+ * together.
+ *
+ * (1) `drainDuePendingEdits` was wired to production (the paragraph above)
+ * but its RETURN VALUE was discarded at the call site — a same-length edit
+ * or an autosave burst that only ever resolves through the drain (never a
+ * second `evaluate()` call on that path) produced a real verdict that never
+ * reached `recordMaterialArrivalIfObserved` or
+ * `triggerAuthoredNoteGenerationIfObserved`. Fixed by returning
+ * `DrainedMaterialityVerdict` (verdict + the text it is about) and having
+ * `main.ts`'s `drainPendingMaterialityEdits` route each one through the SAME
+ * two consumers `evaluateMaterialityChange` already uses, per `[D-293]`.
+ *
+ * (2) The `[DOS-C3]`/`[D-311]` stale-response guard in
+ * `dispatchJudgeAndCommit` reported a dropped, superseded response as
+ * `'judge-unavailable'` — a kind `observedMaterialChange` (`main.ts`) already
+ * reads as a real change. A stale drop means a NEWER call already committed
+ * its own verdict for this path; reading the drop itself as a second change
+ * fired both consumers again, redundantly, on text she has already
+ * superseded. Fixed by a distinct `'stale-response-dropped'` kind
+ * (`MaterialityEvaluationResult`, above) that consumers read as no-op.
+ * ===========================================================================
  */
 
 import {
@@ -83,6 +109,25 @@ import { MATERIALITY_JUDGE_TASK_ID } from './workerJudge.js';
 export type MaterialityEvaluationResult =
   | MaterialityGateOutcome
   | { readonly kind: 'judge-unavailable' }
+  /**
+   * `ol-egov.141.89.5.30`: a judge response that answered but was dropped by
+   * the `[DOS-C3]`/`[D-311]` stale-response guard below (`dispatchJudgeAndCommit`)
+   * because a newer dispatch for the same path already committed its own,
+   * later verdict — the content this response is about has already been
+   * superseded. Distinct from `'judge-unavailable'` (no judge configured, no
+   * `previousText` to send, or the judge call itself failed operationally):
+   * those are genuinely UNANSWERED, so every consumer treats them as changed,
+   * conservatively. A stale drop is the opposite — a newer, more current
+   * answer already exists and was already acted on — so `main.ts`'s
+   * `observedMaterialChange` must NOT read this as a change: the superseded
+   * older text driving this drop already had its say via the newer call's
+   * own commit, and the newer call's own verdict (or ongoing pending
+   * revalidation) is what consumers should trust. Before this bead, this was
+   * reported as `'judge-unavailable'` and `observedMaterialChange` read it as
+   * changed — firing both consumers a second, redundant time on text she has
+   * already superseded.
+   */
+  | { readonly kind: 'stale-response-dropped' }
   | {
       readonly kind: 'verdict';
       readonly verdict: MaterialityVerdictEvent;
@@ -97,6 +142,24 @@ export type MaterialityEvaluationResult =
        */
       readonly decision: MaterialityDecision;
     };
+
+/**
+ * `ol-egov.141.89.5.29`: `drainDuePendingEdits`'s own return element — the
+ * verdict a drained below-floor/debounced edit produced, paired with the
+ * `currentText` that verdict is ABOUT (cached on the pending entry when the
+ * edit was first deferred; see `PendingBelowFloorEdit`'s own field doc). A
+ * bare `MaterialityVerdictEvent` (`path`, `at`, `material`, `reason`) has
+ * nothing a consumer could pass to `parseDocument`/`buildAuthoredNoteUnit` —
+ * this is what `main.ts`'s `drainPendingMaterialityEdits` needed to route a
+ * drained verdict through the SAME `recordMaterialArrivalIfObserved`/
+ * `triggerAuthoredNoteGenerationIfObserved` consumers the direct
+ * `evaluate()` path already uses (per `[D-293]`'s own consumer-parity
+ * ruling).
+ */
+export interface DrainedMaterialityVerdict {
+  readonly verdict: MaterialityVerdictEvent;
+  readonly currentText: string;
+}
 
 /**
  * Reads `.stamp` off a `MaterialityJudge`'s verdict. The declared
@@ -606,9 +669,19 @@ export class MaterialityTrigger {
    * (see that method's own doc), called from `main.ts:1721`, inside the SAME
    * periodic interval `main.ts` already drives `tickCitationRevisions` from
    * (`INGESTION_TICK_INTERVAL_MS`, `main.ts:1714-1723`).
+   *
+   * `ol-egov.141.89.5.29`: the returned verdicts carry `currentText`
+   * alongside each `MaterialityVerdictEvent` (`DrainedMaterialityVerdict`,
+   * below) — before this bead, the caller had no committed text to hand row
+   * 1.4's two consumers (`recordMaterialArrivalIfObserved`,
+   * `triggerAuthoredNoteGenerationIfObserved`), which is exactly why the
+   * drained verdict reached neither: `main.ts` had nothing to route it
+   * through with. `evaluate()`'s own `'call-judge'` path never had this
+   * problem — its caller (`evaluateMaterialityChange`) already holds the
+   * fresh `currentText` it just read from the vault.
    */
-  async drainDuePendingEdits(now: number): Promise<readonly MaterialityVerdictEvent[]> {
-    const verdicts: MaterialityVerdictEvent[] = [];
+  async drainDuePendingEdits(now: number): Promise<readonly DrainedMaterialityVerdict[]> {
+    const verdicts: DrainedMaterialityVerdict[] = [];
     for (const [path, pending] of [...this.pendingSmallEdit]) {
       if (now - pending.since < this.constants.pendingDrainMs) continue;
       if (pending.texts === undefined || this.deps.judge === null) continue;
@@ -627,7 +700,9 @@ export class MaterialityTrigger {
         lastChangedAt: pending.since,
         now,
       });
-      if (result.kind === 'verdict') verdicts.push(result.verdict);
+      if (result.kind === 'verdict') {
+        verdicts.push({ verdict: result.verdict, currentText: pending.texts.currentText });
+      }
     }
     // Defect 1 (ol-egov.141.89.5.7): the debounced-save counterpart of the
     // drain above. Quiet threshold is `constants.debounceMs` here, not
@@ -656,7 +731,9 @@ export class MaterialityTrigger {
         lastChangedAt: pending.since,
         now,
       });
-      if (result.kind === 'verdict') verdicts.push(result.verdict);
+      if (result.kind === 'verdict') {
+        verdicts.push({ verdict: result.verdict, currentText: pending.texts.currentText });
+      }
     }
     return verdicts;
   }
@@ -734,9 +811,14 @@ export class MaterialityTrigger {
       // flight, and will persist its own (newer) baseline. This response is
       // older than that call's request: it must never mark the newer
       // content as already processed, so it is dropped entirely — no store
-      // write, no verdict, no `onVerdict`. The newer call is the one of
-      // record for this path.
-      return { kind: 'judge-unavailable' };
+      // write, no verdict, no `onVerdict`.
+      //
+      // `ol-egov.141.89.5.30`: reported as `'stale-response-dropped'`, never
+      // `'judge-unavailable'` — the newer call is the one of record for this
+      // path and has already (or will already) commit its own verdict, so
+      // `main.ts`'s `observedMaterialChange` must not read this drop as a
+      // second, independent change on top of it.
+      return { kind: 'stale-response-dropped' };
     }
     // `[D-311]`: the check above is scoped to `this` instance and starts
     // empty again after a restart — a response completing against a FRESH
@@ -749,7 +831,11 @@ export class MaterialityTrigger {
     // the same way — no store write, no verdict, no `onVerdict`.
     const recordAfterJudge = await this.deps.store.load(path);
     if ((recordAfterJudge?.revision ?? 0) !== persistedRevision) {
-      return { kind: 'judge-unavailable' };
+      // `ol-egov.141.89.5.30`: same reasoning as the in-memory guard above —
+      // a genuinely newer evaluation (this process, or a later one after a
+      // restart) already committed its own verdict for this path, so this is
+      // a stale drop, never an unanswered `'judge-unavailable'`.
+      return { kind: 'stale-response-dropped' };
     }
     // `ol-egov.141.89.5.17`: a free-gate write (debounced/formatting-only/
     // below-floor/no-groundable-content, all in `evaluateUnderLock`) on this

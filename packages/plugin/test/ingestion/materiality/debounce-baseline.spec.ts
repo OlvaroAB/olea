@@ -117,7 +117,7 @@ describe('defect 1 (ol-egov.141.89.5.7): a debounced save does not silently move
       currentText: SECOND_EDIT,
     });
     expect(drained).toHaveLength(1);
-    expect(drained[0]?.material).toBe(true);
+    expect(drained[0]?.verdict.material).toBe(true);
 
     // Draining again is a no-op — the pending marker was consumed.
     const drainedAgain = await trigger.drainDuePendingEdits(clock.now() + 1_000_000);
