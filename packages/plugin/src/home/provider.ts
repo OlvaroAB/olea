@@ -92,10 +92,6 @@ import type {
   WindowDeficitEntry,
 } from 'olea-core';
 import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
-// `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): `FOCUS_BRANCH_SENTENCE` is not yet barrel-exported
-// from `olea-core` — imported by source path, the same precedent `../session/holder.ts`'s own
-// import of `session-staleness.js` already sets for a pending barrel export.
-import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded straight through to
@@ -114,6 +110,9 @@ import {
   type RetrospectiveOfferEventLog,
 } from '../retrospective/offer-events.js';
 import { createLocalRetrospectiveProvider } from '../retrospective/provider.js';
+// `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`): the one read of the active session's explanation
+// from its composition record, shared with the review tab's first-item sentence.
+import { recordedSessionReason } from '../session/composition-recorder.js';
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`): the same shared holder `main.ts` already threads
 // to `../session-builder/provider.ts` and `../review/open-session.ts` — see
 // `CreateLocalHomeProviderDeps.studySessionHolder`'s own doc.
@@ -371,16 +370,18 @@ function isReviewEntry(
  * `growActiveSitting`/`exit`/`decide`, so this can never unfreeze or recompose the sitting
  * (AC(4)). Returns `undefined` when no holder is supplied or no sitting is active — the
  * unchanged pre-bead behaviour; returns `{}` (present, no reason) when a sitting is active but
- * its record carries no course (`branch === null`, the harness's course-less baseline), matching
- * `focusReason`'s own honest-absence rule.
+ * carries no record, or its record names no course (`branch === null`, the harness's course-less
+ * baseline), matching `focusReason`'s own honest-absence rule.
  */
 function readActiveSession(
   studySessionHolder: StudySessionHolder | undefined,
 ): HomeActiveSession | undefined {
   const sitting = studySessionHolder?.getSitting();
   if (sitting === undefined || sitting.status !== 'active') return undefined;
-  const branch = sitting.items.compositionRecord?.branch;
-  return branch != null ? { reason: FOCUS_BRANCH_SENTENCE[branch] } : {};
+  // `ol-egov.141.89.10.65`: the reason comes from `recordedSessionReason`, the same read the
+  // review tab's first-item sentence uses, so Home and review cannot disagree about one session.
+  const reason = recordedSessionReason(sitting);
+  return reason !== undefined ? { reason } : {};
 }
 
 /**

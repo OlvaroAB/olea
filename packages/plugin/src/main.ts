@@ -263,6 +263,7 @@ import {
 import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
+import { recordedSessionReason } from './session/composition-recorder.js';
 import { createStudySessionHolder, type StudySessionHolder } from './session/holder.js';
 import { computeSharedSittingStaleness } from './session/shared-sitting-staleness.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from './session-builder/copy.js';
@@ -1243,11 +1244,10 @@ export default class OleaPlugin extends Plugin {
         // active: an idle holder (never entered, or exited) renders no
         // sentence rather than a stale one from a sitting that already
         // ended — see `ReviewView`'s own param doc for why this is a thunk,
-        // not a value captured once.
-        () => {
-          const sitting = this.studySessionHolder.getSitting();
-          return sitting.status === 'active' ? sitting.items.focusReason : undefined;
-        },
+        // not a value captured once. `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`):
+        // read from the active session's composition record, through the same
+        // `recordedSessionReason` Home reads, so Home and review state one reason.
+        () => recordedSessionReason(this.studySessionHolder.getSitting()),
       );
     });
 

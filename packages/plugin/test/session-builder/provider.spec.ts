@@ -57,6 +57,10 @@ import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.j
 // `ol-egov.141.89.10.30`'s own port — the real F2.6/F8.5 write path, the
 // same one `test/session-builder/provider-suspended-instruments.spec.ts` uses.
 import { createVaultSuspendPort } from '../../src/review/ports.js';
+import {
+  createCompositionRecorder,
+  recordedSessionReason,
+} from '../../src/session/composition-recorder.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
 import {
   composeStudySessionForRequest,
@@ -1062,12 +1066,13 @@ describe('createLocalSessionBuilderProvider — F6.6 re-entry composition wiring
  * `session/holder.ts`'s shared `StudySessionHolder` — resolves to the
  * identical string while the sitting is active, and to `undefined` once it
  * is idle. `main.ts` cannot be loaded under Vitest (it imports `obsidian`),
- * so this test reproduces its callback's exact guard
- * (`sitting.status === 'active' ? sitting.items.focusReason : undefined`)
- * against a real `StudySessionHolder` instance rather than a stub —
- * `test/main-wiring.spec.ts`'s own source-level assertion pins that
- * `main.ts` actually wires this literal guard at its `ReviewView` call
- * site.
+ * so this test calls the same read its callback makes
+ * (`recordedSessionReason(holder.getSitting())`, `[D-331]`/`[D-382]`,
+ * `ol-egov.141.89.10.65`: the active session's composition record) against a
+ * real `StudySessionHolder` holding a session recorded by the real
+ * `createCompositionRecorder` — `test/main-wiring.spec.ts`'s own
+ * source-level assertion pins that `main.ts` wires exactly this read at its
+ * `ReviewView` call site.
  */
 describe("createLocalSessionBuilderProvider — the composed session's focusReason reaches SessionBuilderState, identically to how the review view reads it (F2.22/F6.4, ol-egov.141.89.10.60)", () => {
   it("a model composition's focusReason is composed.full.focusReason verbatim, never a paraphrase", async () => {
@@ -1111,15 +1116,19 @@ describe("createLocalSessionBuilderProvider — the composed session's focusReas
     if (state.kind !== 'model') throw new Error('expected an ordinary model');
 
     const holder = createStudySessionHolder();
-    // `main.ts`'s own `ReviewView` `getFocusReason` call site, reproduced
-    // verbatim — see this describe block's own doc.
-    const getFocusReason = (): string | undefined => {
-      const sitting = holder.getSitting();
-      return sitting.status === 'active' ? sitting.items.focusReason : undefined;
-    };
+    // `main.ts`'s own `ReviewView` `getFocusReason` call site's read — see this
+    // describe block's own doc.
+    const getFocusReason = (): string | undefined => recordedSessionReason(holder.getSitting());
 
     expect(getFocusReason()).toBeUndefined(); // idle: no sentence, never a stale one
-    holder.enter(NOW, composeResult.composed.full);
+    // Started the way the review tab starts it: recorded, then entered.
+    const recorded = await createCompositionRecorder({
+      vault: deps.vault,
+      deviceId: DEVICE,
+    }).recordStart(composeResult.composed.full, NOW);
+    expect(recorded.status).toBe('recorded');
+    holder.enter(NOW, recorded.session);
+    expect(getFocusReason()).toBeDefined();
     expect(getFocusReason()).toBe(state.focusReason);
     holder.exit();
     expect(getFocusReason()).toBeUndefined(); // exited: back to no sentence

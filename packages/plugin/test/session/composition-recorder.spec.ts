@@ -18,14 +18,21 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 // Not in the `olea-core` barrel (another live lane's file this round): imported by module path.
-import { extendComposedStudySessionWithAccount } from '../../../core/src/study-session/compose.js';
+import {
+  extendComposedStudySessionWithAccount,
+  FOCUS_BRANCH_SENTENCE,
+} from '../../../core/src/study-session/compose.js';
 import {
   COMPOSITION_LOG_FOLDER,
   readCompositionLog,
 } from '../../../core/src/study-session/composition-log.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
-import { createCompositionRecorder } from '../../src/session/composition-recorder.js';
+import {
+  createCompositionRecorder,
+  recordedSessionReason,
+} from '../../src/session/composition-recorder.js';
+import { createStudySessionHolder } from '../../src/session/holder.js';
 import { composeStudySessionForRequest } from '../../src/session-builder/provider.js';
 import { localToday, readReviewHistory } from '../../src/today/data-source.js';
 import { type MemoryVault, memoryVault } from '../review/memory-vault.js';
@@ -306,5 +313,74 @@ describe('[D-395] writing a record is never study activity', () => {
     const { entries } = await readReviewLogHistory(vault);
     expect(entries).toEqual([]);
     expect(clusterReviewSessions(entries)).toEqual([]);
+  });
+});
+
+describe('[D-331]/[D-382] the active session explains itself from its own record', () => {
+  it('no session active: no sentence', () => {
+    expect(recordedSessionReason(createStudySessionHolder().getSitting())).toBeUndefined();
+  });
+
+  it("an active recorded session reads its record's branch through the one sentence table", async () => {
+    const vault = memoryVault(oneCourseFiles());
+    const { outcome } = await started(vault);
+    if (outcome.status !== 'recorded') throw new Error('unreachable');
+    const branch = outcome.record.branch;
+    if (branch === null) throw new Error('expected the one-course fixture to name a branch');
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, outcome.session);
+    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE[branch]);
+    holder.exit();
+    expect(recordedSessionReason(holder.getSitting())).toBeUndefined();
+  });
+
+  it('reads the record, not the live field: a session whose own focusReason says otherwise still states its record', async () => {
+    const vault = memoryVault(oneCourseFiles());
+    const { outcome } = await started(vault);
+    if (outcome.status !== 'recorded') throw new Error('unreachable');
+    const branch = outcome.record.branch;
+    if (branch === null) throw new Error('expected the one-course fixture to name a branch');
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, { ...outcome.session, focusReason: 'a sentence nothing recorded' });
+    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE[branch]);
+  });
+
+  it('an active session with no record (a failed write, or Start before the review tab opened) states nothing', async () => {
+    const vault = memoryVault(oneCourseFiles());
+    const { composed } = await compose(vault, 20);
+    expect(composed.full.focusReason).toBeDefined();
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, composed.full);
+    expect(recordedSessionReason(holder.getSitting())).toBeUndefined();
+  });
+
+  it('a record naming no course (the every-course baseline) states nothing', async () => {
+    const vault = memoryVault(oneCourseFiles());
+    const { outcome } = await started(vault);
+    if (outcome.status !== 'recorded') throw new Error('unreachable');
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, {
+      ...outcome.session,
+      compositionRecord: { ...outcome.record, course: null, branch: null },
+    });
+    expect(recordedSessionReason(holder.getSitting())).toBeUndefined();
+  });
+
+  it('a keep going that appended an extension record states the same sentence as the first record', async () => {
+    const vault = memoryVault(oneCourseFiles());
+    const { outcome, composedInput, writer } = await started(vault, 1);
+    if (outcome.status !== 'recorded') throw new Error('unreachable');
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, outcome.session);
+    const before = recordedSessionReason(holder.getSitting());
+    const extended = extendComposedStudySessionWithAccount(
+      { ...composedInput, budgetMinutes: 30 },
+      outcome.session,
+    );
+    const grown = await writer.recordExtension(outcome.session, extended, LATER);
+    if (grown.status !== 'recorded') throw new Error(`expected a record, got ${grown.status}`);
+    holder.growActiveSitting(NOW, grown.session);
+    expect(before).toBeDefined();
+    expect(recordedSessionReason(holder.getSitting())).toBe(before);
   });
 });

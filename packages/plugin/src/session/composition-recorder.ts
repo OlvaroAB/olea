@@ -34,6 +34,7 @@
 import type { ComposedStudySession, VaultPath, VaultSource } from 'olea-core';
 // Imported from their own module paths, never the `olea-core` barrel, which is another live
 // lane's file this round — the same stance `./holder.ts` takes for its own source-path import.
+import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import { appendCompositionRecord } from '../../../core/src/study-session/composition-log.js';
 import {
   buildCompositionRecord,
@@ -43,6 +44,30 @@ import {
 } from '../../../core/src/study-session/composition-record.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import { localToday } from '../today/data-source.js';
+import type { StudySessionSitting } from './holder.js';
+
+/**
+ * The active session's explanation, read from its own composition record (`[D-331]`: screens
+ * describing the active session read that same snapshot; `[D-382]`: Home shows that session's
+ * frozen explanation). The one read Home (`../home/provider.ts`) and the review tab's first-item
+ * sentence (`main.ts`'s `VIEW_TYPE_OLEA_REVIEW` registration) share, so the two can never state
+ * two different reasons for one session.
+ *
+ * The sentence is rendered from the record's `branch` through `FOCUS_BRANCH_SENTENCE`, as the
+ * record's own doc says (the sentence is never stored). The latest record the held session
+ * carries is read: an extension carries its parent's branch verbatim, so a keep going never
+ * changes it. A pure read of the sitting: nothing is entered, grown, exited or recomposed.
+ *
+ * `undefined` when no session is active, when the active session carries no record (its write
+ * failed, or Start entered it and the review tab has not opened yet), or when the record names no
+ * course (`branch === null`, the harness's every-course baseline): no snapshot, no sentence, never
+ * a sentence recomputed from something else.
+ */
+export function recordedSessionReason(sitting: StudySessionSitting): string | undefined {
+  if (sitting.status !== 'active') return undefined;
+  const branch = sitting.items.compositionRecord?.branch;
+  return branch != null ? FOCUS_BRANCH_SENTENCE[branch] : undefined;
+}
 
 export interface CompositionRecorderDeps {
   readonly vault: VaultSource;

@@ -76,9 +76,13 @@ describe('ReviewView reads the composition sentence through the shared study-ses
   // vs. idle correctly — that behaviour cannot be checked here.
 
   it('passes a getFocusReason callback as the last ReviewView argument, reading the shared holder', () => {
+    // `[D-331]`/`[D-382]` (`ol-egov.141.89.10.65`): the callback reads the active session's
+    // composition record through `recordedSessionReason`, the same read Home's provider uses —
+    // `test/session/composition-recorder.spec.ts` proves its active/idle/unrecorded behaviour.
     expect(main).toMatch(
-      /\(\) => reviewSessionOpener\.close\(\),\s*\(\) => \{\s*const sitting = this\.studySessionHolder\.getSitting\(\);\s*return sitting\.status === 'active' \? sitting\.items\.focusReason : undefined;\s*\},\s*\);/,
+      /\(\) => reviewSessionOpener\.close\(\),\s*\(\) => recordedSessionReason\(this\.studySessionHolder\.getSitting\(\)\),\s*\);/,
     );
+    expect(main).not.toMatch(/sitting\.items\.focusReason/);
   });
 
   it('reads this.studySessionHolder — the SAME single instance enterStudySessionHolderForStart enters/exits, never a second one', () => {
