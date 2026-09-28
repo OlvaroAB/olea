@@ -2687,6 +2687,16 @@ export type {
 } from './tier3-evidence/types.js';
 // The Today panel (F6.1, P2-T09). The whole of what the panel decides lives
 // here so `packages/plugin`'s view stays a renderer — see today/panel.ts.
+// F6.9's arrivals stage (`ol-egov.141.89.11.4`) — the `detectRhythm` input
+// this package doesn't itself compute; see today/arrivals.ts's module doc.
+export type {
+  CourseArrivalStatus,
+  CourseArrivalsInput,
+  CourseArrivalsReading,
+  ProcessedRevision,
+  ProcessedRevisionReadState,
+} from './today/arrivals.js';
+export { detectArrivals, detectCourseArrivals, toRhythmCourseInput } from './today/arrivals.js';
 export type { CalendarDay } from './today/calendar-day.js';
 export {
   calendarDayFromLocalDate,
