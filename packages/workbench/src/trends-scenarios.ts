@@ -84,11 +84,14 @@
  * `trends-healthy`'s and `trends-course-behind`'s notes do.
  */
 
+import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import {
   buildTodayPanel,
   type ConceptCourses,
   type CourseFloorShare,
+  clusterReviewSessions,
   createFsrsScheduler,
+  type EffortInput,
   HOLDING_CUT,
   type TodayPanelInput,
   type TodayViewModel,
@@ -323,6 +326,12 @@ export const TRENDS_CONCEPTS: readonly ConceptCourses[] = CONCEPTS.map((concept)
  * not a new measurement — while being honest in its own doc that it is not
  * the real windowed floor D-092 describes. Revalidating these fixtures
  * against a real floor computation is follow-up work, not done here.
+ *
+ * **Read through the composition records now** (`ol-egov.141.89.11.20`): the
+ * effort reading takes each window session's floor shares from the record that
+ * composed it, never from a caller's current-plan list, so these numbers reach
+ * it as every synthetic record's frozen `planAllocation`
+ * ({@link TRENDS_PLAN_ALLOCATION}, {@link recordSyntheticSessions}).
  */
 export const TRENDS_ASSESSMENTS: readonly CourseFloorShare[] = (() => {
   const totalByCourse = new Map<string, number>();
@@ -337,6 +346,71 @@ export const TRENDS_ASSESSMENTS: readonly CourseFloorShare[] = (() => {
     floorShare: total > 0 ? weight / total : undefined,
   }));
 })();
+
+/** The composition-record structure the effort reading reads (`olea-core`'s `EffortComposition`). */
+export type TrendsComposition = NonNullable<EffortInput['compositions']>[number];
+
+/**
+ * {@link TRENDS_ASSESSMENTS} as a composition record's frozen `planAllocation`: one `floor`
+ * contribution per course, the entry the effort reading takes a set-aside from.
+ */
+export const TRENDS_PLAN_ALLOCATION: TrendsComposition['planAllocation'] =
+  TRENDS_ASSESSMENTS.flatMap(({ course, floorShare }) =>
+    course === undefined || floorShare === undefined
+      ? []
+      : [{ courseId: course, contributions: [{ name: 'floor', value: floorShare }] }],
+  );
+
+/**
+ * A synthetic stream as the product would have recorded it (`[D-331]`, `[D-395]`,
+ * `ol-egov.141.89.11.20`): each review linked by `compositionId` to a composition record, and the
+ * records beside it.
+ *
+ * `olea-synthetic`'s generator predates composition records, and its sittings interleave both
+ * courses, which the product's composer never does (a session has one course, C5.6, F2.18). So
+ * each sitting (C5.5's clustering, the same one the effort reading windows by) gets **one record
+ * per course it served**, naming that course and carrying {@link TRENDS_PLAN_ALLOCATION} frozen:
+ * the reading the product would make had she sat those courses as back-to-back one-course
+ * sessions. A review's course is its concept's (every synthetic concept has exactly one). Nothing
+ * else about the stream changes; a review with no known course is left unlinked.
+ *
+ * N-015: fabricated, like everything here. The records exist so the effort reading exercises its
+ * recorded path; they are evidence of nothing about her.
+ */
+export function recordSyntheticSessions(entries: readonly ReviewLogEntry[]): {
+  readonly entries: readonly ReviewLogEntry[];
+  readonly compositions: readonly TrendsComposition[];
+} {
+  const courseOfConcept = new Map(
+    TRENDS_CONCEPTS.map((concept) => [concept.conceptId, concept.courses[0]] as const),
+  );
+  const compositionOf = new Map<ReviewLogRecord, string>();
+  const compositions: TrendsComposition[] = [];
+  clusterReviewSessions(entries).forEach((session, index) => {
+    const idByCourse = new Map<string, string>();
+    for (const review of session.reviews) {
+      const course = review.conceptIds
+        .map((conceptId) => courseOfConcept.get(conceptId))
+        .find((c) => c !== undefined);
+      if (course === undefined) continue;
+      let compositionId = idByCourse.get(course);
+      if (compositionId === undefined) {
+        compositionId = `syn-composition-${index}-${course}`;
+        idByCourse.set(course, compositionId);
+        compositions.push({ compositionId, course, planAllocation: TRENDS_PLAN_ALLOCATION });
+      }
+      compositionOf.set(review, compositionId);
+    }
+  });
+  return {
+    entries: entries.map((entry) => {
+      if (entry.kind !== 'review') return entry;
+      const compositionId = compositionOf.get(entry);
+      return compositionId === undefined ? entry : { ...entry, compositionId };
+    }),
+    compositions,
+  };
+}
 
 function streamFor(state: TrendsWorkbenchState): SyntheticStream {
   const base = {
@@ -390,6 +464,7 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     throw new Error(`workbench: unknown trends state ${JSON.stringify(stateId)}`);
 
   const stream = streamFor(state);
+  const recorded = recordSyntheticSessions(stream.entries);
   // WB-8 (`ol-ppxj.31`): every course shares this one `vitality` input, or
   // (for `state.vitalityWired === false`) none does — see
   // `MasteryOverviewInput.vitality`'s own doc for why that is an "either all
@@ -398,7 +473,7 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     ? { scheduler: trendsScheduler, now: WORKBENCH_NOW, holdingCut: HOLDING_CUT }
     : undefined;
   const vm = buildTodayPanel({
-    entries: stream.entries,
+    entries: recorded.entries,
     // See the module doc (WBF-2, `ol-9j3w`): `[]`, not `null` — a real "no
     // instruments enumerated" rather than the panel's "could not enumerate"
     // state, which `TodayView` renders as a false read-failure message here.
@@ -407,7 +482,9 @@ export function buildTrendsViewModel(stateId: string): TodayViewModel {
     dueThrough: WORKBENCH_NOW,
     windowDays: state.days,
     concepts: TRENDS_CONCEPTS,
-    floorShares: TRENDS_ASSESSMENTS,
+    // F6.5(b) (`ol-egov.141.89.11.20`): one record per course each sitting
+    // served, carrying the placeholder floor shares frozen.
+    compositions: recorded.compositions,
     ...(vitality !== undefined ? { vitality } : {}),
   });
 

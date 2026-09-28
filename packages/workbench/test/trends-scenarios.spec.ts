@@ -38,8 +38,9 @@ import {
   buildTrendsScenario,
   buildTrendsViewModel,
   findTrendsState,
-  TRENDS_ASSESSMENTS,
+  recordSyntheticSessions,
   TRENDS_CONCEPTS,
+  TRENDS_PLAN_ALLOCATION,
   TRENDS_STATES,
 } from '../src/trends-scenarios.js';
 
@@ -95,6 +96,43 @@ describe('TRENDS_STATES', () => {
   it('every state ids uniquely and carries the trends group', () => {
     expect(new Set(TRENDS_STATES.map((s) => s.id)).size).toBe(TRENDS_STATES.length);
     for (const state of TRENDS_STATES) expect(state.group).toBe('trends');
+  });
+});
+
+describe('F6.5(b): each synthetic sitting is recorded (ol-egov.141.89.11.20)', () => {
+  it('links every review to exactly one record naming its concept\u2019s course, with the placeholder floors frozen', () => {
+    const stream = generateStream(
+      streamSpec('lopsided-effort', 'workbench', {
+        startDate: '2026-10-17',
+        days: 90,
+        utcOffset: '+00:00',
+        assessmentDayOffsets: [42, 93],
+      }),
+    );
+    const { entries, compositions } = recordSyntheticSessions(stream.entries);
+    const byId = new Map(compositions.map((record) => [record.compositionId, record] as const));
+    expect(byId.size).toBe(compositions.length);
+    const courseOf = new Map(TRENDS_CONCEPTS.map((c) => [c.conceptId, c.courses[0]] as const));
+    let reviews = 0;
+    for (const entry of entries) {
+      if (entry.kind !== 'review') continue;
+      reviews += 1;
+      const record = entry.compositionId === undefined ? undefined : byId.get(entry.compositionId);
+      expect(record, `review ${entry.eventId} has no record`).toBeDefined();
+      expect(record?.course).toBe(courseOf.get(entry.conceptIds[0] ?? ''));
+      expect(record?.planAllocation).toBe(TRENDS_PLAN_ALLOCATION);
+    }
+    expect(reviews).toBeGreaterThan(0);
+    // Nothing but the link changes: same entries, same order, same count.
+    expect(entries.map((e) => e.eventId)).toEqual(stream.entries.map((e) => e.eventId));
+  });
+
+  it('no trends state reads the withheld comparison: every one is compared or too early', () => {
+    for (const state of TRENDS_STATES) {
+      expect(buildTrendsViewModel(state.id).insights?.effort.status, state.id).not.toBe(
+        'comparison-unavailable',
+      );
+    }
   });
 });
 
@@ -271,9 +309,8 @@ const STRUGGLER_SUFFICIENCY_DENSITY: BehaviourOverride = {
  */
 function widestShortfallRatio(stream: ReturnType<typeof streamFor>): number {
   const result = detectEffortImbalance({
-    entries: stream.entries,
+    ...recordSyntheticSessions(stream.entries),
     concepts: TRENDS_CONCEPTS,
-    floorShares: TRENDS_ASSESSMENTS,
   });
   const widest = result.measured?.courses[0];
   return widest !== undefined && widest.floorShare > 0 ? widest.timeShare / widest.floorShare : 1;
@@ -294,9 +331,8 @@ function firingCounts(
     const stream = streamFor(persona, seed, neutralised, behaviourOverride);
     if (detectSpacing(stream.entries).status === 'observed') spacing += 1;
     const effortResult = detectEffortImbalance({
-      entries: stream.entries,
+      ...recordSyntheticSessions(stream.entries),
       concepts: TRENDS_CONCEPTS,
-      floorShares: TRENDS_ASSESSMENTS,
     });
     if (effortResult.status === 'observed') effort += 1;
   }
@@ -414,9 +450,8 @@ describe('F6.5(b) effort — measured against a planted ground truth', () => {
     );
     const stream = streamFor('struggler', 'workbench', false, STRUGGLER_SUFFICIENCY_DENSITY);
     const result = detectEffortImbalance({
-      entries: stream.entries,
+      ...recordSyntheticSessions(stream.entries),
       concepts: TRENDS_CONCEPTS,
-      floorShares: TRENDS_ASSESSMENTS,
     });
     // Display-named, same reason as the assertion above.
     expect(result.measured?.widestGapCourse).toBe('Quorbin');
