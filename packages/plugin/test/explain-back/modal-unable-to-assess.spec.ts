@@ -39,7 +39,7 @@ describe('renderGradedPhase — branches on the unable-to-assess outcome before 
     const guardIndex = body.search(/grading\.outcome\s*===\s*'unable-to-assess'/);
     expect(guardIndex).toBeGreaterThan(-1);
     expect(body).toMatch(
-      /this\.renderUnableToAssessPhase\(root, prompt, answer, pending, attemptId, support\)/,
+      /this\.renderUnableToAssessPhase\(\s*root,\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*support,?\s*\)/,
     );
     // The guard's own `return;` must precede the feedback paragraph and the
     // Accept button — never fall through to render graded-only content.
@@ -58,7 +58,9 @@ describe('renderUnableToAssessPhase — no grade, no verdict badge, no Accept bu
   it('renders the placeholder message and only the Try again (discard) action', () => {
     expect(body).toMatch(/EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE/);
     expect(body).toMatch(/EXPLAIN_BACK_DISCARD_LABEL/);
-    expect(body).toMatch(/this\.discardGrading\(prompt, answer, pending, attemptId, support\)/);
+    expect(body).toMatch(
+      /this\.discardGrading\(prompt, answer, pending, durationMs, attemptId, support\)/,
+    );
   });
 
   it('never renders an Accept button, a verdict, feedback text or any grading-content region', () => {

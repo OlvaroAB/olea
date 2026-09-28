@@ -24,12 +24,12 @@
  * three-value verdict only (D-005): never her answer text, the feedback, or a
  * cited passage.
  *
- * **Held in the view, not yet in her log.** The review-log contract has no
- * record for an attempt she did not accept and no field linking a retry to
- * the attempt before it, so this sequence lives for the life of the view.
- * Writing it is the escalated half of `[D-416]`; `followsAttemptId` below is
- * the link that write will carry, computed here so the rule for WHICH attempt
- * a retry follows has one home.
+ * **Held in the view and written to her log.** Each entry `discardGrading`
+ * appends is also written as its own `explain-back-set-aside` review-log
+ * record (`./set-aside-record.ts`), and the accepted retry's review carries
+ * `followsAttemptId`, so the sequence reads back from the log alone. The rule
+ * for WHICH attempt a retry follows, and at what rung it was answered, has its
+ * one home here; the writers only persist what this module decided.
  */
 import type { ExplainBackCorrectnessVerdict, SupportLevel } from 'olea-contracts';
 import type { ExplainBackSupportShown } from './solo-review.js';

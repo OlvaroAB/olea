@@ -85,6 +85,7 @@ import {
   type ConceptRelation,
   discardExplainBackGrading,
   type ExplainBackPromptContext,
+  type ExplainBackSetAsideLogRecordInput,
   formatSourceCitation,
   type GradeExplainBackInput,
   type GradingRelationContext,
@@ -145,6 +146,7 @@ import {
   type FreeformTopicConceptMatch,
   shouldRunExplainBackDepthPass,
 } from './request.js';
+import { setAsideRecordInput } from './set-aside-record.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
 import type { ExplainBackSupportShown } from './solo-review.js';
 
@@ -365,6 +367,16 @@ export interface ExplainBackModalDeps {
      * accommodation `attemptId` above takes; absent means `'run'`.
      */
     readonly depthPass?: 'run' | 'skipped';
+    /**
+     * `[D-416]`: the `attemptId` of the attempt she set aside immediately
+     * before writing this answer, forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.followsAttemptId` and persisted as the
+     * review's `followsAttemptId`. Absent for a first attempt. Sealed at
+     * `submitAnswer` (`./attempt-sequence.ts`'s `sealAttemptSupport`). The
+     * object reaches `solo-review.ts` unreconstructed through `main.ts`'s
+     * wrapper, so no composition-root change is needed for it to land.
+     */
+    readonly followsAttemptId?: string;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -400,6 +412,21 @@ export interface ExplainBackModalDeps {
     /** ISO-8601 with offset, the moment she left the prompt (the skip taken, or the close handled) — this view's own clock (`this.now`), the same "this view is the only place that can observe it" reasoning `durationMs` (`ol-yj0k`) already documents above. */
     readonly timestamp: string;
   }) => Promise<void>;
+  /**
+   * `[D-416]` (`ol-egov.141.89.6.63`): writes the attempt she set aside with
+   * Try again as its own `explain-back-set-aside` review-log record — core's
+   * `appendExplainBackSetAsideRecord`, wrapped with a vault and device id by
+   * `./set-aside-record.ts`'s `createRecordSetAsideAttempt`. The input is
+   * built here (`setAsideRecordInput`) from the entry `discardGrading` just
+   * appended to the view's sequence: ids, the verdict with its call's stamp,
+   * the rung and the duration, never her answer or the feedback (D-005).
+   *
+   * Optional and best-effort, same posture as `recordNonAttempt`: unwired,
+   * Try again writes nothing (the sequence is still kept in the view); a
+   * failed write is caught and logged content-free, never thrown, and never
+   * delays the return to answering.
+   */
+  readonly recordSetAsideAttempt?: (input: ExplainBackSetAsideLogRecordInput) => Promise<void>;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
   /**
@@ -1337,6 +1364,11 @@ export class ExplainBackModal extends Modal {
           // always sent, same posture `answerEdits` takes.
           relationExpected: prompt.relationExpected,
           depthPass,
+          // `[D-416]`: the link to the attempt this answer followed, sealed at
+          // submit; absent for a first attempt, never a `null` key.
+          ...(support.followsAttemptId !== null
+            ? { followsAttemptId: support.followsAttemptId }
+            : {}),
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {
@@ -1373,6 +1405,7 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    durationMs: number | null,
     attemptId: string,
     support: SealedAttemptSupport,
   ): void {
@@ -1389,6 +1422,13 @@ export class ExplainBackModal extends Modal {
           : { kind: 'unable-to-assess' },
       support,
     });
+    // `[D-416]`: and into her log, as its own record, so the sequence
+    // survives the view. Best-effort and never awaited — see
+    // `recordSetAsideAttemptIfPossible`.
+    const setAside = this.attemptSequence[this.attemptSequence.length - 1];
+    if (setAside !== undefined) {
+      void this.recordSetAsideAttemptIfPossible(prompt, pending, setAside, durationMs);
+    }
     discardExplainBackGrading(pending);
     // `ol-yj0k`: a fresh presentation for a fresh attempt — she is looking at
     // the question again, about to compose (or edit) another answer to it,
@@ -1398,6 +1438,38 @@ export class ExplainBackModal extends Modal {
     this.firstEditAtMs = null;
     this.state = { phase: 'answering', prompt, answer };
     this.render();
+  }
+
+  /**
+   * `[D-416]`: writes the attempt `discardGrading` just set aside, through
+   * `deps.recordSetAsideAttempt`. Writes nothing when the dep is unwired or
+   * the prompt has no subject concept (`setAsideRecordInput` returns `null`,
+   * the same rule the accepted retry's review follows). The input is built
+   * BEFORE `discardExplainBackGrading` runs, while the pending grading and
+   * its stamp are still in hand. A failed write is caught and logged
+   * content-free (D-005), never thrown.
+   */
+  private async recordSetAsideAttemptIfPossible(
+    prompt: ResolvedPrompt,
+    pending: PendingExplainBackGrading,
+    attempt: ExplainBackAttemptSequence[number],
+    durationMs: number | null,
+  ): Promise<void> {
+    if (!this.deps.recordSetAsideAttempt) return;
+    const input = setAsideRecordInput({
+      instrumentId: prompt.originInstrumentId,
+      subjectConceptId: prompt.subjectConceptId,
+      attempt,
+      pending,
+      durationMs,
+      at: this.now(),
+    });
+    if (input === null) return;
+    try {
+      await this.deps.recordSetAsideAttempt(input);
+    } catch (error) {
+      console.error('Olea: set-aside attempt record failed (Try again unaffected)', { error });
+    }
   }
 
   /**
@@ -1656,7 +1728,7 @@ export class ExplainBackModal extends Modal {
     // union) — this early return is what the type forces, not an optional
     // style choice.
     if (grading.outcome === 'unable-to-assess') {
-      this.renderUnableToAssessPhase(root, prompt, answer, pending, attemptId, support);
+      this.renderUnableToAssessPhase(root, prompt, answer, pending, durationMs, attemptId, support);
       return;
     }
 
@@ -1705,7 +1777,7 @@ export class ExplainBackModal extends Modal {
     );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () =>
-      this.discardGrading(prompt, answer, pending, attemptId, support),
+      this.discardGrading(prompt, answer, pending, durationMs, attemptId, support),
     );
   }
 
@@ -1762,6 +1834,7 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    durationMs: number | null,
     attemptId: string,
     support: SealedAttemptSupport,
   ): void {
@@ -1772,7 +1845,7 @@ export class ExplainBackModal extends Modal {
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
     discard.addEventListener('click', () =>
-      this.discardGrading(prompt, answer, pending, attemptId, support),
+      this.discardGrading(prompt, answer, pending, durationMs, attemptId, support),
     );
   }
 

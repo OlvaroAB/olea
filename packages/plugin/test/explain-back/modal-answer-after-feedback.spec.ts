@@ -162,7 +162,7 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
       modal.indexOf('private skipPrompt('),
     );
     expect(discard).toMatch(
-      /this\.attemptSequence = appendSetAsideAttempt\(this\.attemptSequence, \{[\s\S]*?attemptId,[\s\S]*?support,\s*\}\);\s*discardExplainBackGrading\(pending\);/,
+      /this\.attemptSequence = appendSetAsideAttempt\(this\.attemptSequence, \{[\s\S]*?attemptId,[\s\S]*?support,\s*\}\);[\s\S]*?discardExplainBackGrading\(pending\);/,
     );
   });
 
@@ -180,9 +180,11 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
     }
   });
 
-  it('both Try again buttons, graded and could-not-assess, pass the attempt id and its sealed support', () => {
+  it('both Try again buttons, graded and could-not-assess, pass the attempt id, its duration and its sealed support', () => {
     expect(
-      modal.match(/this\.discardGrading\(prompt, answer, pending, attemptId, support\)/g),
+      modal.match(
+        /this\.discardGrading\(prompt, answer, pending, durationMs, attemptId, support\)/g,
+      ),
     ).toHaveLength(2);
   });
 });

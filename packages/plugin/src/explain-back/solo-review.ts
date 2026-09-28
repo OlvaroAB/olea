@@ -356,6 +356,15 @@ export interface RecordSoloGradeAndReviewParams {
    * behaviour every caller had before this field existed.
    */
   readonly depthPass?: 'run' | 'skipped';
+  /**
+   * **`[D-416]`: the attempt this accepted answer followed** — the
+   * `attemptId` of the attempt she set aside with Try again immediately
+   * before writing it (`modal.ts`'s sealed `SealedAttemptSupport`). Relayed
+   * onto `GradedExplainBackReviewSubject.followsAttemptId` and so onto the
+   * review's `followsAttemptId`, on the depth-graded and correctness-only
+   * writes alike. Absent for a first attempt; never defaulted or guessed.
+   */
+  readonly followsAttemptId?: string;
 }
 
 /** What a successful write hands back — the real `AppendReviewLogResult` (`ol-cqz8`'s original shape, a test or future caller can still inspect exactly what landed) plus the `SoloLevel` `acceptSoloGrading` graded it at, surfaced so a caller can forward it on without re-deriving it from `result.record.explainBackGrade` (`ol-iti2`, `[D-217]`'s render path). */
@@ -459,6 +468,7 @@ export async function recordSoloGradeAndReview(
       ? { supportLevelShown: params.supportLevelShown }
       : {}),
     ...(params.answerEdits !== undefined ? { answerEdits: params.answerEdits } : {}),
+    ...(params.followsAttemptId !== undefined ? { followsAttemptId: params.followsAttemptId } : {}),
     selectionContext: {
       dueState: 'new',
       examProximity: null,
@@ -564,6 +574,7 @@ async function recordCorrectnessOnly(
       : {}),
     ...(fields.answerEdits !== undefined ? { answerEdits: fields.answerEdits } : {}),
     explainBackCorrectness,
+    ...(fields.followsAttemptId !== undefined ? { followsAttemptId: fields.followsAttemptId } : {}),
   };
   const result = await appendReviewLogRecord(deps.vault, record, options);
   return { result, depth };
