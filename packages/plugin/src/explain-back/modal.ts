@@ -109,6 +109,13 @@ import {
 import type { ReviewInstrument } from '../review/types.js';
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
+  appendSetAsideAttempt,
+  EMPTY_ATTEMPT_SEQUENCE,
+  type ExplainBackAttemptSequence,
+  type SealedAttemptSupport,
+  sealAttemptSupport,
+} from './attempt-sequence.js';
+import {
   EXPLAIN_BACK_ACCEPT_LABEL,
   EXPLAIN_BACK_ANSWER_PLACEHOLDER,
   EXPLAIN_BACK_CITED_HEADING,
@@ -139,7 +146,7 @@ import {
   shouldRunExplainBackDepthPass,
 } from './request.js';
 import { canRecordNonAttempt, EXPLAIN_BACK_SKIP_LABEL } from './skip.js';
-import { type ExplainBackSupportShown, supportLevelShownForExplainBack } from './solo-review.js';
+import type { ExplainBackSupportShown } from './solo-review.js';
 
 /**
  * `ol-l7ew` [DOS-C5a] — what this view has on screen while she composes an
@@ -745,6 +752,8 @@ type ModalState =
       readonly attemptId: string;
       /** `ol-0r92.56` (`[D-228 / SIG-3]`): sealed alongside `durationMs`, same posture — see `submitAnswer`'s doc. */
       readonly answerEdits: ModalAnswerEdits;
+      /** `[D-416]`: the rung and the attempt this one follows, sealed at submit — see `submitAnswer`'s doc. */
+      readonly support: SealedAttemptSupport;
     }
   | {
       readonly phase: 'graded';
@@ -755,6 +764,8 @@ type ModalState =
       readonly attemptId: string;
       /** `ol-0r92.56` (`[D-228 / SIG-3]`): carried through to `acceptGrading` on Accept — see `submitAnswer`'s doc. */
       readonly answerEdits: ModalAnswerEdits;
+      /** `[D-416]`: carried through to `acceptGrading` on Accept, and onto the sequence on Try again. */
+      readonly support: SealedAttemptSupport;
     }
   | {
       readonly phase: 'refused';
@@ -885,6 +896,15 @@ export class ExplainBackModal extends Modal {
    */
   private readonly acceptInFlightByAttempt = new Map<string, Promise<void>>();
 
+  /**
+   * `[D-416]` (`ol-egov.141.89.6.63`): every attempt at the current question
+   * she chose Try again on, oldest first — see `./attempt-sequence.ts`. Only
+   * `discardGrading` grows it, and only by appending; it is reset solely when
+   * a new question is resolved (`resolveInstrumentPrompt`,
+   * `resolveTopicPrompt`), so no retry ever erases an earlier attempt.
+   */
+  private attemptSequence: ExplainBackAttemptSequence = EMPTY_ATTEMPT_SEQUENCE;
+
   constructor(app: App, deps: ExplainBackModalDeps, seed: ExplainBackSeed) {
     super(app);
     this.deps = deps;
@@ -977,6 +997,7 @@ export class ExplainBackModal extends Modal {
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
+    this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
@@ -1054,6 +1075,7 @@ export class ExplainBackModal extends Modal {
     };
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
+    this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
     this.state = { phase: 'answering', prompt, answer: '' };
     this.render();
   }
@@ -1095,7 +1117,13 @@ export class ExplainBackModal extends Modal {
     // needs, and reusing it keeps `main.ts`'s existing deps literal
     // (outside this bead's `owns`) unchanged.
     const attemptId = this.deps.generateInstrumentId();
-    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits };
+    // `[D-416]`: sealed HERE, at submit, from what she had seen BEFORE writing
+    // this answer — never at accept, when she has also read this answer's own
+    // graded result. An earlier graded attempt in the sequence makes this one
+    // guided; otherwise the answering phase's own reading stands. See
+    // `./attempt-sequence.ts`'s module doc.
+    const support = sealAttemptSupport(this.attemptSequence, EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN);
+    this.state = { phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits, support };
     this.render();
 
     const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
@@ -1113,7 +1141,16 @@ export class ExplainBackModal extends Modal {
         this.render();
         return;
       }
-      this.state = { phase: 'graded', prompt, answer, pending, durationMs, attemptId, answerEdits };
+      this.state = {
+        phase: 'graded',
+        prompt,
+        answer,
+        pending,
+        durationMs,
+        attemptId,
+        answerEdits,
+        support,
+      };
       this.render();
     } catch (error) {
       // `UnusableGradingInputError` (empty referenceAnswer) reads as
@@ -1158,6 +1195,7 @@ export class ExplainBackModal extends Modal {
     durationMs: number | null,
     attemptId: string,
     answerEdits: ModalAnswerEdits,
+    support: SealedAttemptSupport,
   ): Promise<void> {
     const inFlight = this.acceptInFlightByAttempt.get(attemptId);
     if (inFlight) return inFlight;
@@ -1168,6 +1206,7 @@ export class ExplainBackModal extends Modal {
       durationMs,
       attemptId,
       answerEdits,
+      support,
     );
     this.acceptInFlightByAttempt.set(attemptId, promise);
     return promise;
@@ -1180,6 +1219,7 @@ export class ExplainBackModal extends Modal {
     durationMs: number | null,
     attemptId: string,
     answerEdits: ModalAnswerEdits,
+    support: SealedAttemptSupport,
   ): Promise<void> {
     // `[ol-egov.141.89.6.18]`: read BEFORE either write this call makes (the
     // correctness accept just below, then `recordSoloGradeAndReview`'s own
@@ -1258,10 +1298,10 @@ export class ExplainBackModal extends Modal {
     ) {
       const depthPass = shouldRunExplainBackDepthPass(grading.verdict) ? 'run' : 'skipped';
       // `ol-l7ew` [DOS-C5a]: resolved from what this view rendered for this
-      // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above.
-      const supportLevelShown = supportLevelShownForExplainBack(
-        EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,
-      );
+      // attempt — see `EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN` above — and,
+      // `[D-416]`, `'guided'` for an answer given after she read an earlier
+      // attempt's graded result. Sealed at `submitAnswer`, never re-read here.
+      const supportLevelShown = support.supportLevelShown;
       try {
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
@@ -1333,7 +1373,22 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    attemptId: string,
+    support: SealedAttemptSupport,
   ): void {
+    // `[D-416]`: Try again sets this attempt aside; it never erases it. The
+    // attempt joins the sequence with its own id, its verdict (ids and a
+    // three-value verdict only, D-005) and the fact that she did not accept
+    // it, BEFORE the pending grading goes through its discard boundary. The
+    // next answer she submits is then sealed as following it.
+    this.attemptSequence = appendSetAsideAttempt(this.attemptSequence, {
+      attemptId,
+      outcome:
+        pending.grading.outcome === 'graded'
+          ? { kind: 'graded', verdict: pending.grading.verdict }
+          : { kind: 'unable-to-assess' },
+      support,
+    });
     discardExplainBackGrading(pending);
     // `ol-yj0k`: a fresh presentation for a fresh attempt — she is looking at
     // the question again, about to compose (or edit) another answer to it,
@@ -1424,6 +1479,7 @@ export class ExplainBackModal extends Modal {
           this.state.durationMs,
           this.state.attemptId,
           this.state.answerEdits,
+          this.state.support,
         );
         return;
       case 'refused':
@@ -1586,6 +1642,7 @@ export class ExplainBackModal extends Modal {
     durationMs: number | null,
     attemptId: string,
     answerEdits: ModalAnswerEdits,
+    support: SealedAttemptSupport,
   ): void {
     this.renderQuestion(root, prompt);
     const grading = pending.grading;
@@ -1599,7 +1656,7 @@ export class ExplainBackModal extends Modal {
     // union) — this early return is what the type forces, not an optional
     // style choice.
     if (grading.outcome === 'unable-to-assess') {
-      this.renderUnableToAssessPhase(root, prompt, answer, pending);
+      this.renderUnableToAssessPhase(root, prompt, answer, pending, attemptId, support);
       return;
     }
 
@@ -1635,10 +1692,21 @@ export class ExplainBackModal extends Modal {
     const accept = actions.createEl('button', { text: EXPLAIN_BACK_ACCEPT_LABEL });
     accept.addEventListener(
       'click',
-      () => void this.acceptGrading(prompt, answer, pending, durationMs, attemptId, answerEdits),
+      () =>
+        void this.acceptGrading(
+          prompt,
+          answer,
+          pending,
+          durationMs,
+          attemptId,
+          answerEdits,
+          support,
+        ),
     );
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
-    discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
+    discard.addEventListener('click', () =>
+      this.discardGrading(prompt, answer, pending, attemptId, support),
+    );
   }
 
   /**
@@ -1658,8 +1726,11 @@ export class ExplainBackModal extends Modal {
    * "recoverable... for the session" (D-321's close evidence) without
    * inventing a second control or a new phase: `discardExplainBackGrading`
    * (`olea-core`) returns `null` unconditionally, for either outcome, so
-   * nothing is written by taking it, and she is returned to a fresh
-   * `'answering'` phase for another attempt at THIS question.
+   * nothing is written to her log by taking it, and she is returned to a
+   * fresh `'answering'` phase for another attempt at THIS question.
+   * `[D-416]`: the attempt still joins the view's attempt sequence, with no
+   * verdict, and, having shown her no graded result, it does not by itself
+   * make the next answer guided (`./attempt-sequence.ts`).
    *
    * **Structurally, nothing downstream ever runs**: `acceptGrading` /
    * `computeAcceptGrading` — the one path to
@@ -1691,6 +1762,8 @@ export class ExplainBackModal extends Modal {
     prompt: ResolvedPrompt,
     answer: string,
     pending: PendingExplainBackGrading,
+    attemptId: string,
+    support: SealedAttemptSupport,
   ): void {
     root.createEl('p', {
       cls: 'olea-explain-back-feedback',
@@ -1698,7 +1771,9 @@ export class ExplainBackModal extends Modal {
     });
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
-    discard.addEventListener('click', () => this.discardGrading(prompt, answer, pending));
+    discard.addEventListener('click', () =>
+      this.discardGrading(prompt, answer, pending, attemptId, support),
+    );
   }
 
   /**

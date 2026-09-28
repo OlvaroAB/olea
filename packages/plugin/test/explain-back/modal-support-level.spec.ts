@@ -55,9 +55,13 @@ describe('an attempt made with no help on screen records the independent level, 
   });
 
   it('the resolved level rides to the writer on the same call the depth grade does, keyed on the same attempt', () => {
+    // `[D-416]` (`ol-egov.141.89.6.63`): the level is now sealed at submit from
+    // the answering phase's constant AND the attempt sequence, then carried to
+    // accept — see `modal-answer-after-feedback.spec.ts` for the after-feedback half.
     expect(modal).toMatch(
-      /const supportLevelShown = supportLevelShownForExplainBack\(\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,?\s*\);/,
+      /sealAttemptSupport\(this\.attemptSequence, EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN\)/,
     );
+    expect(modal).toMatch(/const supportLevelShown = support\.supportLevelShown;/);
     expect(modal).toMatch(
       /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,400}?attemptId,[\s\S]{0,400}?\.\.\.\(supportLevelShown !== undefined \? \{ supportLevelShown \} : \{\}\),/,
     );

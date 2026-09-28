@@ -119,14 +119,16 @@ describe('ExplainBackModal counter 6: editBursts lives on the modal instance and
   });
 
   it('answerEdits is threaded through the grading and graded phases, and to acceptGrading on Accept', () => {
+    // `[D-416]` (`ol-egov.141.89.6.63`) added the sealed `support` after
+    // `answerEdits` on each of these three; the order up to it is unchanged.
     expect(modal).toMatch(
-      /this\.state = \{ phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits \};/,
+      /this\.state = \{ phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits, support \};/,
     );
     expect(modal).toMatch(
-      /this\.state = \{ phase: 'graded', prompt, answer, pending, durationMs, attemptId, answerEdits \};/,
+      /this\.state = \{\s*phase: 'graded',\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*answerEdits,\s*support,?\s*\};/,
     );
     expect(modal).toMatch(
-      /this\.acceptGrading\(prompt, answer, pending, durationMs, attemptId, answerEdits\)/,
+      /this\.acceptGrading\(\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*answerEdits,\s*support,?\s*\)/,
     );
   });
 });
