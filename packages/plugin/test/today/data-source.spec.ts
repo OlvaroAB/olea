@@ -30,6 +30,7 @@ import type { StudyPlanEnvelope } from 'olea-contracts';
 import { GOVERNING_FRESH_FOR_SECONDS, GOVERNING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
 import type {
   ComposedStudySession,
+  CompositionRecord,
   ConceptReadCoverage,
   ConceptRelation,
   StudyPlanStore,
@@ -37,6 +38,7 @@ import type {
   VaultSource,
 } from 'olea-core';
 import {
+  appendCompositionRecord,
   appendDisputeRecord,
   appendReviewLogRecord,
   appendSuspendRecord,
@@ -46,6 +48,7 @@ import {
   createFsrsScheduler,
   EMPTY_REGISTRY_OVERRIDES,
   enumerateVaultInstruments,
+  parseCompositionRecord,
   provisionalConceptKey,
   pruneConcept,
   readReviewLogHistory,
@@ -69,6 +72,7 @@ import {
   readReviewHistory,
   type TodayInstrumentSource,
   type TodayRhythmSource,
+  type TodayTrendsSource,
   unavailableInstrumentSource,
 } from '../../src/today/data-source.js';
 import {
@@ -2520,5 +2524,194 @@ describe('createVaultTrendsSource#listCourseFloorShares', () => {
       now: () => pastHorizon,
     });
     expect(await source.listCourseFloorShares()).toEqual([]);
+  });
+});
+
+/**
+ * F6.5(b) (`ol-egov.141.89.11.20`): the Today trends source reads her composition log, and
+ * `loadTodayPanel` hands every record to the effort reading unchanged, so a window whose sessions
+ * were recorded is compared and one whose were not is withheld (`comparison-unavailable`), never
+ * compared against the current plan. Course ids and concept ids are coined letters.
+ */
+describe('F6.5(b) — the Today trends source reads the composition log (ol-egov.141.89.11.20)', () => {
+  /** A valid record, built through the strict parser so the fixture is itself checked. */
+  function compositionRecord(compositionId: string, course: string, composedAt: string) {
+    const parsed = parseCompositionRecord({
+      schemaVersion: 1,
+      kind: 'compose',
+      compositionId,
+      sessionId: compositionId,
+      parentCompositionId: null,
+      composedAt,
+      asOf: composedAt.slice(0, 10),
+      reentry: false,
+      focusPolicy: 'single',
+      course,
+      branch: 'deficit',
+      groupingSignal: 'none',
+      steering: { courses: null, conceptIds: null },
+      budgetMinutes: 20,
+      planVersion: 'sp1-aaaaaaaaaaaaaaaa',
+      policyVersions: {},
+      planAllocation: ['course-a', 'course-b'].map((courseId) => ({
+        courseId,
+        share: 0.5,
+        minBlockSeconds: 600,
+        contributions: [{ name: 'floor', value: 0.3 }],
+      })),
+      declaredConstants: {
+        urgencyOverrideThreshold: 0.07,
+        withinBlockProximityHalfLifeDays: 7,
+        materialArrivalCohortHalfLifeDays: 7,
+      },
+      chosen: [
+        {
+          instrumentId: 'i-1',
+          conceptKey: 'k-1',
+          obligationClass: null,
+          formatMatch: 'no-preference',
+          dedupeReason: null,
+          rankedReason: null,
+        },
+      ],
+      setAside: { courses: [], concepts: [], instruments: [] },
+    });
+    if (parsed === null) throw new Error('fixture is not a valid composition record');
+    return parsed;
+  }
+
+  describe('createVaultTrendsSource#listCompositionRecords', () => {
+    it('returns every record the composition log holds, as written', async () => {
+      const vault = memoryVault({});
+      const first = compositionRecord('composition-1', 'course-a', '2026-08-08T20:00:00-04:00');
+      const second = compositionRecord('composition-2', 'course-b', '2026-08-09T20:00:00-04:00');
+      await appendCompositionRecord(vault, first, DEVICE);
+      await appendCompositionRecord(vault, second, OTHER_DEVICE);
+      expect(await createVaultTrendsSource({ vault }).listCompositionRecords()).toEqual([
+        first,
+        second,
+      ]);
+    });
+
+    it('returns [] when no composition log has been written', async () => {
+      const source = createVaultTrendsSource({ vault: memoryVault({}) });
+      expect(await source.listCompositionRecords()).toEqual([]);
+    });
+
+    it('returns [] when the vault cannot be listed or read, without throwing', async () => {
+      await expect(
+        createVaultTrendsSource({ vault: unreadableVault() }).listCompositionRecords(),
+      ).resolves.toEqual([]);
+      const vault = memoryVault({});
+      await appendCompositionRecord(
+        vault,
+        compositionRecord('composition-1', 'course-a', '2026-08-08T20:00:00-04:00'),
+        DEVICE,
+      );
+      const readThrows = {
+        ...vault,
+        list: vault.list.bind(vault),
+        exists: vault.exists.bind(vault),
+        async read(): Promise<string> {
+          throw new Error('disk read failed');
+        },
+      } as VaultSource;
+      await expect(
+        createVaultTrendsSource({ vault: readThrows }).listCompositionRecords(),
+      ).resolves.toEqual([]);
+    });
+  });
+
+  describe('loadTodayPanel hands the records to the effort reading', () => {
+    const now = () => new Date(2026, 7, 10, 9, 15);
+    const DAYS = ['2026-08-06', '2026-08-07', '2026-08-08', '2026-08-09'];
+
+    /** Four twelve-review sessions, one a day, alternating course A and B, each linked to its record. */
+    function sessionLines(day: string, s: number): string {
+      const course = s % 2 === 0 ? 'a' : 'b';
+      const lines: string[] = [];
+      for (let r = 0; r < 12; r += 1) {
+        lines.push(
+          JSON.stringify({
+            schemaVersion: 6,
+            kind: 'review',
+            eventId: `e${s}-${r}`,
+            timestamp: `${day}T20:${String(r).padStart(2, '0')}:00-04:00`,
+            instrumentId: `qa:concept-${course}:${r}`,
+            instrumentType: 'qa',
+            rating: 'good',
+            wasUnsure: false,
+            durationMs: 60_000,
+            selectionContext: {
+              dueState: 'due',
+              examProximity: null,
+              yieldRank: null,
+              instrumentTypesOffered: ['qa'],
+              planVersion: null,
+            },
+            conceptIds: [`concept-${course}`],
+            compositionId: `composition-${s}`,
+          }),
+        );
+      }
+      return `${lines.join('\n')}\n`;
+    }
+
+    function trendsWith(records: readonly CompositionRecord[]): TodayTrendsSource {
+      return {
+        listConceptCourses: async () => [
+          { conceptId: 'concept-a', courses: ['course-a'], displayName: 'Concept A' },
+          { conceptId: 'concept-b', courses: ['course-b'], displayName: 'Concept B' },
+        ],
+        listCourseFloorShares: async () => [],
+        listCompositionRecords: async () => records,
+      };
+    }
+
+    const files = Object.fromEntries(
+      DAYS.map((day, s) => [logPath(day, DEVICE), sessionLines(day, s)] as const),
+    );
+    const records = DAYS.map((day, s) =>
+      compositionRecord(
+        `composition-${s}`,
+        s % 2 === 0 ? 'course-a' : 'course-b',
+        `${day}T19:59:00-04:00`,
+      ),
+    );
+
+    it('a recorded window is compared, against the floor shares frozen in its records', async () => {
+      const { vault } = fakeVault(files);
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        trends: trendsWith(records),
+      });
+      const effort = vm.insights?.effort;
+      expect(effort?.status).toBe('not-observed');
+      expect(effort?.measured?.windowCompositions.map((c) => c.compositionId)).toEqual([
+        'composition-0',
+        'composition-1',
+        'composition-2',
+        'composition-3',
+      ]);
+      expect(effort?.measured?.courses.map((c) => c.floorShare)).toEqual([0.3, 0.3]);
+    });
+
+    it('the same log with no records withholds the comparison, never reads not-observed', async () => {
+      const { vault } = fakeVault(files);
+      const vm = await loadTodayPanel({
+        vault,
+        deviceId: DEVICE,
+        instruments: unavailableInstrumentSource,
+        now,
+        windowDays: 30,
+        trends: trendsWith([]),
+      });
+      expect(vm.insights?.effort.status).toBe('comparison-unavailable');
+      expect(vm.insights?.effort.measured).toBeNull();
+    });
   });
 });

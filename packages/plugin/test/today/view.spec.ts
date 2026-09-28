@@ -145,3 +145,26 @@ describe('TodayView.renderLadderRow — the vitality breakdown is absent, not bl
     expect(dotsIndex).toBeLessThan(guardIndex);
   });
 });
+
+describe('TodayView.renderInsightsBody — a withheld effort comparison declines like too little history (ol-egov.141.89.11.20)', () => {
+  const BODY_START = VIEW.indexOf('private renderInsightsBody(');
+  const BODY_END = VIEW.indexOf('private insightLines(');
+  if (BODY_START === -1 || BODY_END === -1) {
+    throw new Error('view.spec.ts: renderInsightsBody markers moved in view.ts');
+  }
+  const BODY = VIEW.slice(BODY_START, BODY_END);
+
+  it("counts effort's comparison-unavailable as declined, beside not-enough-history", () => {
+    expect(BODY).toMatch(
+      /insights\.effort\.status === 'not-enough-history' \|\|\s*insights\.effort\.status === 'comparison-unavailable'/,
+    );
+  });
+
+  it('shows the same too-early note when spacing lacks history and effort is declined either way', () => {
+    expect(BODY).toMatch(
+      /allDeclined = insights\.spacing\.status === 'not-enough-history' && effortDeclined/,
+    );
+    // No new wording: the note is the one constant it always was.
+    expect(BODY).toMatch(/text: INSIGHTS_TOO_EARLY/);
+  });
+});

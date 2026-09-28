@@ -97,6 +97,7 @@ import {
   buildTodayPanel,
   type CalendarDay,
   type ComposedStudySession,
+  type CompositionRecord,
   type ConceptCourses,
   type ConceptReadCoverage,
   type ConceptRelation,
@@ -126,6 +127,7 @@ import {
   REVIEW_LOG_FOLDER,
   type RegistryOverrides,
   type RhythmCourseInput,
+  readCompositionLog,
   readReviewLogFile,
   readReviewLogHistory,
   resolvedDisplayName,
@@ -748,9 +750,11 @@ export function localToday(now: Date): CalendarDay {
 }
 
 /**
- * Where the trends half (F6.2's mastery overview, F6.5's insights) gets the two
- * things a review log cannot supply: which course a concept belongs to, and
- * what the plan's own windowed floor share says each course is owed.
+ * Where the trends half (F6.2's mastery overview, F6.5's insights) gets what a
+ * review log cannot supply: which course a concept belongs to, and the
+ * composition records that say which one course each session served and what
+ * floor share each course held when it was composed (`ol-egov.141.89.11.20`;
+ * the current plan's floor share is still read, but no longer consumed).
  *
  * **Optional on `TodayPanelDeps` — a panel built without one renders no trends
  * section at all.** `buildTodayPanel` leaves `mastery`/`insights` null and
@@ -796,8 +800,31 @@ export interface TodayTrendsSource {
    * client-side derivation of one. `createVaultTrendsSource` below reads it
    * through `deps.studyPlanStore` when supplied — see that deps field's own
    * doc for the production-wiring gap this change does not close.
+   *
+   * **No longer read by the effort insight** (`ol-egov.141.89.11.18`,
+   * `ol-egov.141.89.11.20`): a past window is compared with the floor
+   * shares frozen in the composition records that composed it
+   * ({@link listCompositionRecords}), never the current cached plan's.
+   * Still forwarded as the panel's deprecated `floorShares` until that
+   * field is removed.
    */
   listCourseFloorShares(): Promise<readonly CourseFloorShare[]>;
+  /**
+   * Every composition record she has (`[D-331]`, `[D-395]`), read from her
+   * composition log (`.olea/compositions/`, `readCompositionLog`), for the
+   * effort insight (F6.5(b), `ol-egov.141.89.11.20`): each window review is
+   * credited to its record's one course and compared with the floor shares
+   * frozen in that record. **Read, never recomputed**: the records are what
+   * the session composer wrote when each session began.
+   *
+   * `[]` is the honest answer to every failure, as `listCourseFloorShares`'s
+   * is: a log never written, a folder that cannot be listed, or a read that
+   * throws. The effort insight then withholds its comparison
+   * (`comparison-unavailable`) once there is enough history, rather than
+   * comparing against anything else. Lines that do not parse are skipped by
+   * `readCompositionLog` itself and cost only themselves.
+   */
+  listCompositionRecords(): Promise<readonly CompositionRecord[]>;
 }
 
 export interface VaultTrendsSourceDeps {
@@ -945,6 +972,20 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
         // schema one — `loadCachedStudyPlan` already never throws on a bad
         // blob) is the same "could not read" case `listConceptCourses`'s own
         // `catch` treats identically.
+        return [];
+      }
+    },
+    async listCompositionRecords() {
+      // The whole log, not a window: the effort reading picks its own window
+      // from the review log (C5.5's clustering) and resolves each review's
+      // record by id (`[D-395]` condition 5), so it needs every record a
+      // window review could name. `listFolder` inside `readCompositionLog`
+      // reaches `.olea/compositions/` through the host's `listUnder` where it
+      // has one (real Obsidian), the same routing every `.olea/` reader takes.
+      try {
+        const { records } = await readCompositionLog(deps.vault);
+        return records;
+      } catch {
         return [];
       }
     },
@@ -1556,7 +1597,9 @@ function withTendingDisplayNames(
  * tending line's naming costs no extra vault walk.
  */
 interface TrendsResolution {
-  readonly fields: Pick<TodayPanelInput, 'concepts' | 'floorShares'> | Record<string, never>;
+  readonly fields:
+    | Pick<TodayPanelInput, 'concepts' | 'floorShares' | 'compositions'>
+    | Record<string, never>;
   /** `conceptId` → her resolved display wording. Empty when `trends` is absent or could not enumerate — the same cases `fields` is `{}` for. */
   readonly conceptDisplayNames: ReadonlyMap<string, string>;
 }
@@ -1569,8 +1612,11 @@ async function resolveTrendsFields(
   const concepts = await trends.listConceptCourses();
   if (concepts === null) return empty;
   const floorShares = await trends.listCourseFloorShares();
+  // F6.5(b) (`ol-egov.141.89.11.20`): the effort insight's set-aside and
+  // course attribution come from these records, never from `floorShares`.
+  const compositions = await trends.listCompositionRecords();
   const conceptDisplayNames = new Map(concepts.map((c) => [c.conceptId, c.displayName] as const));
-  return { fields: { concepts, floorShares }, conceptDisplayNames };
+  return { fields: { concepts, floorShares, compositions }, conceptDisplayNames };
 }
 
 /** F6.9's half of `TodayPanelInput` — `{}` when `rhythm` is absent or could not enumerate. */

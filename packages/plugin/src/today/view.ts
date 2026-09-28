@@ -604,7 +604,8 @@ export class TodayView extends ItemView {
    *   things.
    * - **not-enough-history**, for *every* detector → `INSIGHTS_TOO_EARLY`. A
    *   confident empty chart here would be the exact claim the log cannot
-   *   support.
+   *   support. Effort's **comparison-unavailable** counts as declined here
+   *   too (`ol-egov.141.89.11.20`): withheld is never "not observed".
    */
   private renderInsights(parent: HTMLElement, vm: TodayViewModel): void {
     this.renderInsightsBody(parent, vm);
@@ -616,9 +617,16 @@ export class TodayView extends ItemView {
     if (insights === null) return;
 
     const lines = this.insightLines(insights);
-    const allDeclined =
-      insights.spacing.status === 'not-enough-history' &&
-      insights.effort.status === 'not-enough-history';
+    // F6.5(b) (`ol-egov.141.89.11.20`): effort's `comparison-unavailable` (no
+    // composition record behind a window session, `ol-egov.141.89.11.18`)
+    // declines exactly as `not-enough-history` does here, so the too-early
+    // note she saw before that status existed still shows; no new wording.
+    // Naming the withheld comparison on its own is vew.md section 10's open
+    // question, not this view's to answer.
+    const effortDeclined =
+      insights.effort.status === 'not-enough-history' ||
+      insights.effort.status === 'comparison-unavailable';
+    const allDeclined = insights.spacing.status === 'not-enough-history' && effortDeclined;
     if (lines.length === 0 && !allDeclined) return;
 
     const section = parent.createDiv({ cls: 'olea-today-insights' });
