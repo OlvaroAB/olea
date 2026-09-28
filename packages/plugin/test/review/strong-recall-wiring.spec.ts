@@ -407,6 +407,65 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
  * and wrongly offer the extra explain-back; the ratified cut must read
  * `tending` and decline it.
  */
+/**
+ * `ol-egov.141.89.9.61`: vitality is a CURRENT reading too (`[D-338]` item
+ * 3) — the reader already folds `invalidInstrumentIds` into `mastery`
+ * above (the `[D-281]`/`ol-a07q` suite just above proves that half), but
+ * fed `conceptVitalityInstruments`'s UNFILTERED list into `readVitality`,
+ * so a rejected instrument could still set the weakest reading and read the
+ * concept `tending` when it should read `holding` once its evidence is
+ * excluded.
+ */
+describe('createStrongRecallProposalReader — a rejected instrument no longer sets the weakest vitality reading (ol-egov.141.89.9.61)', () => {
+  it('a second, badly faded instrument reads `tending`; once its verdict is rejected, vitality reads `holding` again and the proposal returns', () => {
+    const strong = strongRecallLog('concept-mixed');
+    const faded = review({
+      eventId: 'faded-1',
+      // Six years stale with a miss — the real FSRS scheduler reads this as
+      // deeply faded, well under the holding cut.
+      timestamp: '2020-01-01T08:00:00+00:00',
+      conceptIds: ['concept-mixed'],
+      instrumentId: 'inst-faded',
+      rating: 'again',
+    });
+
+    const withoutRejection = createStrongRecallProposalReader({
+      entries: [...strong, faded],
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const decisionWithout = withoutRejection({ conceptIds: ['concept-mixed'] });
+    expect(decisionWithout).toEqual({ shouldPropose: false, because: 'recall-not-holding' });
+
+    const rejectedVerdict: ReviewLogEntry = {
+      schemaVersion: 6,
+      kind: 'verdict',
+      eventId: 'verdict-faded',
+      timestamp: '2020-01-02T08:00:00+00:00',
+      instrumentId: 'inst-faded',
+      instrumentType: 'qa',
+      conceptIds: ['concept-mixed'],
+      verdict: 'rejected',
+      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
+    } as ReviewLogEntry;
+
+    const withRejection = createStrongRecallProposalReader({
+      entries: [...strong, faded, rejectedVerdict],
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+    const decisionWith = withRejection({ conceptIds: ['concept-mixed'] });
+
+    // The exact regression this bead fixes: before the fix, `readVitality`
+    // was called over `conceptVitalityInstruments`'s unfiltered list, so
+    // the rejected instrument kept setting the weakest reading and the
+    // decision stayed `recall-not-holding` even after the rejection.
+    expect(decisionWith.shouldPropose).toBe(true);
+    if (!decisionWith.shouldPropose) return;
+    expect(decisionWith.reason.kind).toBe('strong-recall');
+  });
+});
+
 describe('createStrongRecallProposalReader — the no-override holding cut is the ratified 0.90, not 0.8 (ol-owyn)', () => {
   it('does not propose once retrievability has faded into the 0.8–0.9 gap — the ratified cut, not the old 0.8 guess', () => {
     const lastReviewedAt = new Date('2026-08-20T08:00:00+00:00');

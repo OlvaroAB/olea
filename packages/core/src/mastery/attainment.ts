@@ -481,8 +481,14 @@ export interface EligibleVitalityReading extends VitalityReading {
  * Vitality (R3, `[D-087]`) per concept over ELIGIBLE instruments: proven
  * invalid never counts; withheld per `[D-347]`'s option. The minimum stays,
  * naming the instrument that sets it; replays the log once for every concept.
- * The existing `readAllConceptVitality` (`./rollup.ts`) is unchanged for the
- * readers that call it today.
+ * **Stale note corrected (`ol-egov.141.89.9.61`): `readAllConceptVitality`
+ * (`./rollup.ts`) is no longer unchanged for its own readers** —
+ * `ol-egov.141.89.9.60` gave it an optional `validity` parameter defaulting
+ * to `projectInstrumentValidity(entries)`, so every reader now excludes
+ * proven-invalid evidence too. This function still differs from that
+ * default in the one way that matters here: it additionally applies
+ * `[D-347]`'s withheld-instrument policy, which `readAllConceptVitality`'s
+ * default does not.
  */
 export function readAllEligibleConceptVitality(
   entries: readonly ReviewLogEntry[],

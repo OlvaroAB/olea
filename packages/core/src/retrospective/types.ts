@@ -28,7 +28,7 @@
  * could not close.
  */
 
-import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, MasteryState, ReviewLogEntry } from 'olea-contracts';
 import type { VaultPath } from '../vault/types.js';
 
 /** One concept named in an assessment's resolved scope. */
@@ -228,4 +228,20 @@ export interface RetrospectiveInput {
   readonly sameAsLinks?: readonly import('../concept/same-as.js').SameAsLinkRecord[];
   /** The key store's canonical-key index (`[D-378]`), read with `sameAsLinks`. Optional. */
   readonly canonicalKeys?: import('../concept/key-store.js').ConceptKeyCanonicalIndex;
+  /**
+   * `[D-095]` grade-contest records, read alongside `entries` (`ol-egov.
+   * 141.89.9.61`) — same field, same rule as `../today/panel.ts`'s
+   * `TodayPanelInput.disputes`: a contest resolved `corrected` is a
+   * proven-invalid fact `[D-338]` item 3 says a CURRENT reading must
+   * exclude, and `held`/`faded`'s vitality partition above is exactly such
+   * a reading. Optional and defaults to none — a rejection already inside
+   * `entries` still excludes without this field; only the corrected-contest
+   * half, read apart from the log, needs it. **No production caller
+   * supplies this yet** — `packages/plugin/src/retrospective/provider.ts`'s
+   * `buildRetrospective` call sits outside this bead's `owns`; wiring it a
+   * discovered follow-up, the same "caller one hop further out" gap this
+   * package documents elsewhere (e.g. `../today/mastery-overview.ts`'s
+   * `MasteryOverviewInput.vitality` doc).
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
 }

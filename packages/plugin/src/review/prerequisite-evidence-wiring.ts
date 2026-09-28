@@ -180,8 +180,12 @@ function classifyPrerequisite(
   const mastery = computeAllConceptMastery(deps.entries, [prerequisiteConceptId], {
     invalidInstrumentIds,
   }).get(prerequisiteConceptId);
+  // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3)
+  // and must exclude proven-invalid evidence too — `validInstruments` above
+  // already filters for the `'defective'` check; reusing it here (instead of
+  // the unfiltered `evidenceInstruments`) is the fix.
   const vitality = readVitality({
-    instruments: evidenceInstruments,
+    instruments: validInstruments,
     scheduler: deps.scheduler,
     now: deps.now,
     holdingCut,

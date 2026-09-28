@@ -1,6 +1,7 @@
 import type { DisputeLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { contestClaim, resolveDispute } from '../review-log/contest.js';
+import type { Scheduler } from '../scheduler/types.js';
 import type { GroveCourseModel } from '../scope/grove.js';
 import type { VaultPath } from '../vault/types.js';
 import type { DueInstrument } from './due.js';
@@ -551,5 +552,83 @@ describe('buildTodayPanel — D-281 item 4: proven-invalid evidence excluded fro
       }),
     );
     expect(vm.mastery?.courses[0]?.distribution.counts.tree).toBe(1);
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3),
+ * so `input.disputes` must reach `mastery.courses[].vitality` too, not only
+ * `mastery.courses[].distribution`'s stage fold above — `masteryVitalityByStage`
+ * (`../mastery/sprig.js`) needs the same dispute-aware validity projection,
+ * merged in here from the top-level `input.disputes` this suite already
+ * exercises.
+ */
+function stubScheduler(byInstrument: Readonly<Record<string, number>>): Scheduler {
+  return {
+    schedule({ instrumentId, now }) {
+      return {
+        instrumentId,
+        state: {
+          schemaVersion: 1,
+          due: now.toISOString(),
+          stability: 1,
+          difficulty: 5,
+          scheduledDays: 1,
+          learningStepIndex: 0,
+          reps: 1,
+          lapses: 0,
+          learningState: 'review',
+          lastReview: now.toISOString(),
+        },
+        intervalDays: 1,
+      };
+    },
+    retrievability({ instrumentId }) {
+      const recallProbability = byInstrument[instrumentId];
+      if (recallProbability === undefined) {
+        throw new Error(`stubScheduler: no probability configured for ${instrumentId}`);
+      }
+      return { instrumentId, recallProbability };
+    },
+  };
+}
+
+describe('buildTodayPanel — a contest resolved corrected reaches vitality too (ol-egov.141.89.9.61)', () => {
+  const concepts = [{ conceptId: 'clast-imbrication', courses: ['BIOL204'] }];
+  const entries = [
+    review('2026-08-01', 'r-sound'),
+    { ...review('2026-08-01', 'r-faded'), instrumentId: 'qa:clast-imbrication:2' },
+  ];
+  const scheduler = stubScheduler({
+    'qa:clast-imbrication:1': 0.99,
+    'qa:clast-imbrication:2': 0.3,
+  });
+  const vitality = { scheduler, now: new Date('2026-08-10T12:00:00Z'), holdingCut: 0.9 };
+
+  it('baseline: the faded instrument sets the minimum and the concept reads tending', () => {
+    const vm = buildTodayPanel(input({ entries, concepts, vitality }));
+    expect(vm.mastery?.courses[0]?.vitality?.tending).toEqual([
+      {
+        conceptId: 'clast-imbrication',
+        state: 'sprout',
+        weakestInstrumentId: 'qa:clast-imbrication:2',
+      },
+    ]);
+  });
+
+  it('a grade contest against the faded instrument, resolved corrected — read from top-level `disputes`, not `vitality.disputes` — excludes it from the vitality tally too', () => {
+    const vm = buildTodayPanel(
+      input({
+        entries,
+        concepts,
+        vitality,
+        disputes: contestedGradeDisputes('corrected').map((record) =>
+          record.instrumentId === undefined
+            ? record
+            : { ...record, instrumentId: 'qa:clast-imbrication:2' },
+        ),
+      }),
+    );
+    expect(vm.mastery?.courses[0]?.vitality?.tending).toEqual([]);
   });
 });

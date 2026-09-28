@@ -218,6 +218,30 @@ describe('createPrerequisiteEvidenceReader — classifying the prerequisite’s 
     });
   });
 
+  it('strong stays strong once a proven-invalid sibling instrument is excluded from vitality, not just from mastery (ol-egov.141.89.9.61)', () => {
+    // Before the fix, `readVitality` was called over the UNFILTERED
+    // `evidenceInstruments` list even though `validInstruments` (proven-
+    // invalid excluded) was already computed for the `'defective'` check
+    // just above — so a badly faded, rejected sibling instrument could
+    // still set the weakest reading and read `tending`, downgrading this
+    // to `weak` even though the prerequisite's standing evidence is strong.
+    const entries = [
+      ...fourSpacedSuccesses('key-prereq', 'inst-good'),
+      review({
+        eventId: 'e-bad',
+        timestamp: '2020-01-01T08:00:00+00:00',
+        conceptIds: ['key-prereq'],
+        instrumentId: 'inst-bad',
+        rating: 'again',
+      }),
+      rejectedVerdict('inst-bad', '2020-01-02T08:00:00+00:00', 'v-bad'),
+    ];
+    expect(readerOver(entries)(['key-dependent'])).toEqual({
+      conceptId: 'key-prereq',
+      reading: 'strong',
+    });
+  });
+
   it('defective — every instrument that is evidence for the prerequisite has been proven invalid', () => {
     const entries = [
       review({

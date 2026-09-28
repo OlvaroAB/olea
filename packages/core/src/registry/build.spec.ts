@@ -950,3 +950,51 @@ describe('buildRegistryModel — the note-offer gate (F8.4a, [D-176])', () => {
     expect(model.concepts[0]?.noteOffer).toEqual({ eligible: true });
   });
 });
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3), so
+// a grade contest resolved `corrected` — read apart from the log, through
+// `input.disputes` — must exclude its instrument from `vitality`, not only
+// from `mastery`'s stage fold (already covered above, `[D-396]` suite).
+// ---------------------------------------------------------------------------
+
+function correctedGradeContest(instrumentId: string): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6 as const,
+    kind: 'dispute' as const,
+    timestamp: '2026-01-20T09:00:00-04:00',
+    claimKind: 'grade' as const,
+    claimRendering: 'explain-back-grade' as const,
+    conceptIds: ['concept-a'],
+    instrumentId,
+    evidenceBasis: 'evidence-fingerprint-1',
+    effect: 'quarantined' as const,
+  };
+  return [
+    { ...base, eventId: 'dispute-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'dispute-resolved',
+      timestamp: '2026-01-21T09:00:00-04:00',
+      resolves: 'dispute-open',
+      outcome: 'corrected' as const,
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('buildRegistryModel — a grade contest resolved corrected excludes its instrument from vitality too (ol-egov.141.89.9.61)', () => {
+  it('a dispute-only correction (not in `entries`) drops `vitality.instrumentsRead` by one', () => {
+    const entries = [
+      review({ eventId: 'r1', instrumentId: 'qa:concept-a:1' }),
+      review({ eventId: 'r2', instrumentId: 'qa:concept-a:2', conceptIds: ['concept-a'] }),
+    ];
+    const withoutDispute = buildFor({ entries });
+    expect(withoutDispute.concepts[0]?.vitality.instrumentsRead).toBe(2);
+
+    const withDispute = buildFor({
+      entries,
+      disputes: correctedGradeContest('qa:concept-a:2'),
+    });
+    expect(withDispute.concepts[0]?.vitality.instrumentsRead).toBe(1);
+  });
+});

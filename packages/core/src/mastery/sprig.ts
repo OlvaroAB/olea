@@ -40,7 +40,7 @@
  * module holds no Obsidian dependency and no styling").
  */
 
-import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
+import type { DisputeLogRecord, MasteryState, ReviewLogEntry } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { MASTERY_ORDER } from './display.js';
 import {
@@ -49,6 +49,7 @@ import {
   type MasteryRollupOptions,
   readAllConceptVitality,
 } from './rollup.js';
+import { projectInstrumentValidity } from './validity.js';
 import type { Vitality } from './vitality.js';
 
 /**
@@ -106,6 +107,19 @@ export interface MasteryVitalityInputs {
   readonly now: Date;
   /** The derived, never-defaulted cut (`[D-115]`) — see `./vitality.ts`'s module doc for why there is no default here either. */
   readonly holdingCut: number;
+  /**
+   * `[D-095]` grade-contest records, read alongside `entries` so a contest
+   * resolved `corrected` excludes its instrument from the vitality tally too
+   * — not only from growth stage (`ol-egov.141.89.9.60`/`.61`: vitality is a
+   * CURRENT reading and must exclude proven-invalid evidence the same way
+   * every other current reading does, `[D-338]` item 3). Optional and
+   * defaults to none, the same "absent means rejected-verdict exclusion
+   * only" resolution `../today/panel.ts`'s own `TodayPanelInput.disputes`
+   * takes — a rejection already inside `entries` still excludes without this
+   * field; only the corrected-contest half needs it, because a contest is
+   * read apart from the log.
+   */
+  readonly disputes?: readonly DisputeLogRecord[];
 }
 
 /**
@@ -193,6 +207,7 @@ export function masteryVitalityByStage(
     vitality.scheduler,
     vitality.now,
     vitality.holdingCut,
+    projectInstrumentValidity(entries, vitality.disputes ?? []),
   );
 
   const byStage = emptyByStage();

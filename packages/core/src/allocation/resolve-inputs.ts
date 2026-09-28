@@ -79,19 +79,15 @@
  *     count as readiness evidence here; and a `'seed'` concept (no evidence
  *     at all) was already excluded by the prior fix and stays excluded, now
  *     for the same underlying reason (no eligible instrument to read).
- *   - **What is still open, named rather than silently assumed closed.**
- *     `oracle/compose.ts`'s `resolveRetrievabilityScores` (the producer this
- *     value is threaded from, as of `ol-v7r5.53`) still folds through
- *     `mastery/rollup.ts`'s `readAllConceptVitality` — the plain
- *     `readVitality` fold, not `mastery/vitality.ts`'s new
- *     `readReadinessRecall` sibling (`ol-v7r5.52`) that applies `[D-264]`'s
- *     supported-only exclusion. So a concept whose only successes were
- *     supported (`'prompted'`/`'guided'`) still reads as eligible here today
- *     — the recall-tier filter is applied, the supported-only filter is
- *     not yet. Swapping `oracle/compose.ts`'s producer to
- *     `readReadinessRecall` closes this; it touches `oracle/compose.ts` and
- *     `mastery/rollup.ts`, neither owned by `ol-v7r5.53`, so it is filed
- *     rather than done here (see that bead's close evidence for the id).
+ *   - **Stale note corrected (`ol-egov.141.89.9.61`): this gap was already
+ *     closed before this comment was last touched.** `oracle/compose.ts`'s
+ *     `resolveRetrievabilityScores` no longer folds through `mastery/
+ *     rollup.ts`'s plain `readAllConceptVitality` — it folds through
+ *     `mastery/attainment.ts`'s `readAllConceptReadiness`, the C5.6/`[D-264]`
+ *     entry point, which DOES apply the supported-only exclusion (a concept
+ *     whose only successes were `'prompted'`/`'guided'` support is not
+ *     eligible recall evidence there). See `oracle/compose.ts`'s own
+ *     `resolveRetrievabilityScores` doc for the current account.
  *   - An **abstained** course (`status: 'abstained'`, P5-T03's "no evidence
  *     this pass") reads `readiness: 0, evidenceVolume: 0` — not a fallback
  *     guess but the honest floor: an abstained course by definition has

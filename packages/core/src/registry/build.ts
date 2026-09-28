@@ -99,7 +99,7 @@ import {
   conceptIdsInLog,
   readAllConceptVitality,
 } from '../mastery/rollup.js';
-import { rejectedInstrumentIds } from '../mastery/validity.js';
+import { projectInstrumentValidity, rejectedInstrumentIds } from '../mastery/validity.js';
 import type { CourseOracleRanking } from '../oracle/types.js';
 import {
   correctedGradeInstrumentIds,
@@ -591,12 +591,20 @@ export function buildRegistryModel(input: BuildRegistryModelInput): RegistryMode
   const masteryByConcept = computeAllConceptMastery(input.entries, [...idsForRollup], {
     invalidInstrumentIds: [...provenInvalidInstrumentIds(input.entries, input.disputes ?? [])],
   });
+  // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3),
+  // so a contest resolved `corrected` must exclude its instrument here too —
+  // not only from `masteryByConcept`'s stage fold above, which already
+  // reads `input.disputes` through `provenInvalidInstrumentIds`. Folded once
+  // and reused rather than defaulting to `readAllConceptVitality`'s own
+  // entries-only projection, which would see the rejection but not a
+  // contest read apart from the log.
   const vitalityByConcept = readAllConceptVitality(
     input.entries,
     [...idsForRollup],
     input.scheduler,
     input.now,
     input.holdingCut,
+    projectInstrumentValidity(input.entries, input.disputes ?? []),
   );
 
   const entries: RegistryConceptEntry[] = concepts.map((concept) => {

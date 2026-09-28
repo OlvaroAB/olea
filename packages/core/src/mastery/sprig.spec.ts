@@ -3,7 +3,7 @@
 // Concept ids are structural placeholders, never fixture vocabulary — INV-3.
 // (`conceptSprig`, once covered here for F2.3, was deleted per `ol-sp9v` —
 // see docs/dev/wiring-register.md's sprig section.)
-import type { ReviewLogRecord } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { Scheduler } from '../scheduler/types.js';
 import { MASTERY_ORDER } from './display.js';
@@ -218,5 +218,67 @@ describe('masteryVitalityByStage — `[VIT-2]` (`ol-a3hv`)', () => {
     for (const concept of result.tending) {
       expect(Object.keys(concept).sort()).toEqual(['conceptId', 'state', 'weakestInstrumentId']);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3), so
+// `masteryVitalityByStage` must exclude proven-invalid evidence too — not
+// only via a rejection already inside `entries` (already excluded by
+// `readAllConceptVitality`'s own default), but also a grade contest resolved
+// `corrected`, read apart from the log through `MasteryVitalityInputs.disputes`.
+// ---------------------------------------------------------------------------
+
+function correctedGradeContest(instrumentId: string): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6 as const,
+    kind: 'dispute' as const,
+    timestamp: '2026-01-20T09:00:00-04:00',
+    claimKind: 'grade' as const,
+    claimRendering: 'explain-back-grade' as const,
+    conceptIds: ['concept-a'],
+    instrumentId,
+    evidenceBasis: 'evidence-fingerprint-1',
+    effect: 'quarantined' as const,
+  };
+  return [
+    { ...base, eventId: 'dispute-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'dispute-resolved',
+      timestamp: '2026-01-21T09:00:00-04:00',
+      resolves: 'dispute-open',
+      outcome: 'corrected' as const,
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('masteryVitalityByStage — a contest resolved corrected excludes its instrument (ol-egov.141.89.9.61)', () => {
+  const entries = [
+    review({ eventId: 'sound', conceptIds: ['concept-a'], instrumentId: 'sound' }),
+    review({ eventId: 'faded', conceptIds: ['concept-a'], instrumentId: 'faded' }),
+  ];
+  const scheduler = stubScheduler({ sound: 0.99, faded: 0.3 });
+
+  it('baseline (no disputes): the faded instrument sets the minimum and the concept reads tending', () => {
+    const result = masteryVitalityByStage(entries, ['concept-a'], {
+      scheduler,
+      now: NOW,
+      holdingCut: 0.9,
+    });
+    expect(result.tending).toEqual([
+      { conceptId: 'concept-a', state: 'sprout', weakestInstrumentId: 'faded' },
+    ]);
+  });
+
+  it('a contest resolved `corrected`, read apart from the log via `disputes`, excludes the faded instrument — the concept reads holding, off the tending line', () => {
+    const result = masteryVitalityByStage(entries, ['concept-a'], {
+      scheduler,
+      now: NOW,
+      holdingCut: 0.9,
+      disputes: correctedGradeContest('faded'),
+    });
+    expect(result.tending).toEqual([]);
+    expect(result.byStage.sprout).toEqual({ holding: 1, tending: 0, early: 0 });
   });
 });

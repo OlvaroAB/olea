@@ -143,12 +143,19 @@ function buildCarriesEntry(
 export function buildRetrospective(input: RetrospectiveInput): RetrospectiveReading {
   const entries: readonly ReviewLogEntry[] = input.entries;
   const conceptIds = input.scope.map((c) => c.conceptId);
+  // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item 3),
+  // so a contest resolved `corrected` must exclude its instrument here too,
+  // when `input.disputes` supplies one — the same dispute-aware projection
+  // `registry/build.ts`'s own vitality read now folds. Defaults to none
+  // (`RetrospectiveInput.disputes`'s own doc): a rejection already inside
+  // `entries` still excludes without it.
   const vitalityByConceptId = readAllConceptVitality(
     entries,
     conceptIds,
     input.scheduler,
     input.now,
     input.holdingCut,
+    projectInstrumentValidity(entries, input.disputes ?? []),
   );
   // `[D-388]` condition 4 / `[D-402]`: one identity is the same key or a
   // CONFIRMED same-as link, nothing weaker; with no links the redirect is

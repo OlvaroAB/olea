@@ -2,7 +2,7 @@
  * F8.8's computation (`[POST-1]`, `[D-134]`). Fixture ids are opaque
  * (INV-3): no real course code or concept name anywhere in this file.
  */
-import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import type { DisputeLogRecord, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { ConceptCourses } from '../insights/types.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
@@ -238,6 +238,57 @@ describe('buildRetrospective', () => {
     // a rejected verdict never reached the fold and the displayed stage stayed
     // `tree`.
     expect(stageWith).not.toBe('tree');
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.61`: vitality is a CURRENT reading too (`[D-338]` item
+ * 3), and `buildRetrospective` had no way at all to read a grade contest
+ * that arrives apart from `entries` — `RetrospectiveInput` carried no
+ * `disputes` field, so a corrected contest could never reach either the
+ * `held`/`faded` partition (vitality) or the displayed stage. This suite
+ * covers the vitality half now that the field exists; the stage half stays
+ * the D-371 interim (`ol-egov.141.89.9.5`) and is untouched here.
+ */
+function correctedGradeContest(instrumentId: string): DisputeLogRecord[] {
+  const base = {
+    schemaVersion: 6 as const,
+    kind: 'dispute' as const,
+    timestamp: '2026-08-30T09:00:00+00:00',
+    claimKind: 'grade' as const,
+    claimRendering: 'explain-back-grade' as const,
+    conceptIds: ['c-faded'],
+    instrumentId,
+    evidenceBasis: 'evidence-fingerprint-1',
+    effect: 'quarantined' as const,
+  };
+  return [
+    { ...base, eventId: 'dispute-open' } as DisputeLogRecord,
+    {
+      ...base,
+      eventId: 'dispute-resolved',
+      timestamp: '2026-08-31T09:00:00+00:00',
+      resolves: 'dispute-open',
+      outcome: 'corrected' as const,
+    } as DisputeLogRecord,
+  ];
+}
+
+describe('buildRetrospective — a contest resolved corrected, read apart from the log via `disputes`, excludes its instrument from vitality', () => {
+  it('baseline (no disputes): `c-faded`s only instrument sets its vitality and it lands in `faded`', () => {
+    const result = buildRetrospective(baseInput());
+    expect(result.faded.map((c) => c.conceptId)).toEqual(['c-faded']);
+    expect(result.tooEarlyCount).toBe(1);
+  });
+
+  it('a contest against that same instrument, resolved corrected, drops it out of every current reading — `c-faded` has no eligible evidence left and moves to too-early, not `held`', () => {
+    const result = buildRetrospective(
+      baseInput({ disputes: correctedGradeContest('qa:c-faded:1') }),
+    );
+    expect(result.faded.map((c) => c.conceptId)).toEqual([]);
+    expect(result.held.map((c) => c.conceptId)).toEqual(['c-held']);
+    // c-early plus c-faded, now that its evidence is proven invalid.
+    expect(result.tooEarlyCount).toBe(2);
   });
 });
 

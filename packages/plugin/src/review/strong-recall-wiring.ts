@@ -205,6 +205,14 @@ export function createStrongRecallProposalReader(
     const mastery = computeAllConceptMastery(deps.entries, [conceptId], {
       invalidInstrumentIds,
     }).get(conceptId);
+    // `ol-egov.141.89.9.61`: vitality is a CURRENT reading (`[D-338]` item
+    // 3) and must exclude proven-invalid evidence the same way `mastery`
+    // above already does — `conceptVitalityInstruments` alone does not
+    // filter, so the same `invalidInstrumentIds` set feeds both folds.
+    const invalidSet = new Set(invalidInstrumentIds);
+    const validInstruments = conceptVitalityInstruments(deps.entries, conceptId, replayed).filter(
+      (instrument) => !invalidSet.has(instrument.instrumentId),
+    );
     const decision: StrongRecallProposalDecision =
       mastery === undefined
         ? { shouldPropose: false, because: 'stage-below-sapling' }
@@ -213,7 +221,7 @@ export function createStrongRecallProposalReader(
             state: mastery.state,
             evidence: mastery.evidence,
             vitality: readVitality({
-              instruments: conceptVitalityInstruments(deps.entries, conceptId, replayed),
+              instruments: validInstruments,
               scheduler: deps.scheduler,
               now: deps.now,
               holdingCut,
