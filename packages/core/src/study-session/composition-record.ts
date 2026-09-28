@@ -73,9 +73,10 @@ import { type CalendarDay, isCalendarDay } from '../today/calendar-day.js';
 import type { SessionFormatMatch, StudySessionItem } from './build.js';
 import {
   type ComposedStudySession,
-  FOCUS_BRANCH_SENTENCE,
+  FOCUS_BRANCH_TEMPLATE,
   type FocusBranch,
   type FocusPolicy,
+  focusReasonFor,
   MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS,
   type ObligationClass,
   URGENCY_OVERRIDE_THRESHOLD,
@@ -168,7 +169,13 @@ export interface CompositionRecord {
   readonly focusPolicy: FocusPolicy;
   /** The session's one course (C5.6, F2.18); `null` only under the harness's `'every-course'` baseline. */
   readonly course: string | null;
-  /** Which of C5.6's tests chose `course`; `null` exactly when `course` is. The sentence is rendered from it (`FOCUS_BRANCH_SENTENCE`), never stored. */
+  /**
+   * Which of C5.6's tests chose `course`; `null` exactly when `course` is. The sentence is rendered
+   * from it and `course` ({@link recordedFocusReason}), never stored. `'none-behind'` (`[D-418]`) is
+   * a value added within schema version 1: a record written before it carries one of the first
+   * three and still reads; a reader that predates it rejects a record carrying it, as it would any
+   * unknown value.
+   */
   readonly branch: FocusBranch | null;
   /** Which F2.19 signal decided the within-course grouping (`./types.ts`). */
   readonly groupingSignal: GroupingSignal;
@@ -226,7 +233,7 @@ export interface ExtendedCompositionRecordContext {
   readonly budgetMinutes: number;
 }
 
-const FOCUS_BRANCHES = Object.keys(FOCUS_BRANCH_SENTENCE) as readonly FocusBranch[];
+const FOCUS_BRANCHES = Object.keys(FOCUS_BRANCH_TEMPLATE) as readonly FocusBranch[];
 const FOCUS_POLICIES = Object.keys({
   single: true,
   'every-course': true,
@@ -736,4 +743,20 @@ export function buildExtendedCompositionRecord(
     }),
     'buildExtendedCompositionRecord',
   );
+}
+
+/**
+ * The course-why sentence body a record states (F2.22, `[D-331]`, `[D-418]`): `compose.ts`'s
+ * {@link focusReasonFor} over the record's own `branch` and `course`, the same function the
+ * composer used for the session's `focusReason`. The screens explain the active session from the
+ * frozen composition itself (the plugin's `session/composition-recorder.ts#explainActiveSession`);
+ * this is the durable copy's reading of the same two facts, so a record read back later (a
+ * history view, a harness) states exactly the sentence she was shown. An extension carries its
+ * parent's `branch` and `course` verbatim, so a keep going never changes it. `undefined` when the
+ * record names no course (the harness's `'every-course'` baseline).
+ */
+export function recordedFocusReason(record: CompositionRecord): string | undefined {
+  return record.branch !== null && record.course !== null
+    ? focusReasonFor(record.branch, record.course)
+    : undefined;
 }

@@ -201,38 +201,55 @@ export function homeScopeGrewLine(addedDocumentPath: VaultPath, addedCount: numb
 
 /**
  * F2.22 / F6.4 (`ol-egov.141.89.10.19`) — the ONE composition sentence: which
- * course, and why. `focusReason` is `ComposedStudySession.focusReason`
- * (`study-session/compose.ts`), itself `FOCUS_BRANCH_SENTENCE`'s ratified
- * fragment (`[D-244]` item 5, corrected by `[FOCUS-5]`) — that module's own
- * doc is explicit that it "does not compose prose... a caller assembling the
- * rendered sentence... has the exact wording ratified rather than inventing
- * a paraphrase." This function is that one caller-side assembly, and BOTH
- * surfaces F2.22 binds — Home (`./view.ts`) and the review session
- * (`../review/view.ts`) — call this exact function so the two can never
- * independently paraphrase the same reason (F2.22's "same statement...
- * never two independently computed accounts").
+ * course, and why. BOTH surfaces F2.22 binds — Home (`./view.ts`) and the
+ * review session (`../review/view.ts`) — call this exact function so the two
+ * can never independently paraphrase the same reason (F2.22's "same
+ * statement... never two independently computed accounts").
  *
- * **Why "this course" rather than the course's own name.** Every ratified
- * fragment is a "because ..." clause except `filter`'s own
- * ("this course because you asked for it"), which already names it
- * generically — she chose the course herself, so naming it again would be
- * the count-of-figures-shaped over-explanation F8.3's sibling bans elsewhere
- * guard against. The functional scope's own two illustrative quotes (F2.22,
- * F6.4) both read "this course because ...", never the course's own name, so
- * this function matches that literally: it prepends the generic lead-in only
- * when the fragment does not already carry it, then capitalises and
- * punctuates — nothing else. The screen that hosts this sentence already
- * names the course elsewhere (Home's course rows; the review header's own
- * progress line sits beside a session that is, by F2.18, about one course),
- * so this sentence carries only the "why", never inventing a display format
- * for a course identifier this module has no business formatting.
+ * **It names the course (`[D-417]`, ruled 2026-09-28, `ol-egov.141.89.10.92`).**
+ * `focusReason` is `ComposedStudySession.focusReason` — for the preview, and
+ * for the active session through `../session/composition-recorder.ts`'s
+ * `explainActiveSession`, which passes the frozen composition's own through —
+ * i.e. `olea-core`'s `study-session/compose.ts#focusReasonFor(branch, course)`,
+ * the branch's sentence with the course's own name in it (the name Home's
+ * course rows show). The record's `recordedFocusReason` reads the same two
+ * facts to the same string. The wording is `FOCUS_BRANCH_TEMPLATE`'s, PROPOSED through the
+ * copy pass (`docs/design/copy-pass-2026-09/planning-sentences.md`, service
+ * repo) and never re-worded here. This function only punctuates: the course
+ * name leads the sentence and is never re-cased, since a course id is shown
+ * exactly as it is everywhere else. The earlier "this course" rendering is
+ * superseded: on a screen that shows several courses it left her to infer
+ * which.
+ *
+ * **Transitional.** A course-less fragment (the deprecated
+ * `FOCUS_BRANCH_SENTENCE`, which no production path produces any more but
+ * test fixtures still pass) is rendered the old way rather than as a bare
+ * "because ..." clause. Remove this branch with that map.
  */
 export function sessionCompositionSentence(focusReason: string): string {
-  const withLeadIn = focusReason.startsWith('this course')
-    ? focusReason
-    : `this course ${focusReason}`;
-  return `${withLeadIn.charAt(0).toUpperCase()}${withLeadIn.slice(1)}.`;
+  if (focusReason.startsWith('this course') || focusReason.startsWith('because')) {
+    const withLeadIn = focusReason.startsWith('this course')
+      ? focusReason
+      : `this course ${focusReason}`;
+    return `${withLeadIn.charAt(0).toUpperCase()}${withLeadIn.slice(1)}.`;
+  }
+  return `${focusReason}.`;
 }
+
+/**
+ * The four course-why sentences as `sessionCompositionSentence` renders them for
+ * a fixture course, for `allHomeStrings`' honesty checks. Mirrors
+ * `olea-core`'s `FOCUS_BRANCH_TEMPLATE` word for word (PROPOSED); this module
+ * imports nothing at runtime (a plain Node harness loads it from source), so
+ * the mirror cannot be an import; `olea-core`'s `compose.spec.ts` reads this
+ * file and pins the four strings to the template.
+ */
+export const COURSE_WHY_SENTENCE_EXAMPLES: readonly string[] = [
+  'TESTC101, because you asked for it',
+  'TESTC101, because its assessment is close and the assessed material still needs work',
+  'TESTC101, because it is behind its share from your recent sessions',
+  'TESTC101, because no course with something to practise is behind its share, so the session goes to the one closest to falling behind, then to the one you have gone longest without, then by name',
+].map(sessionCompositionSentence);
 
 /** Every string this module can render, for `test/home/copy.spec.ts`'s honesty checks. */
 export function allHomeStrings(): readonly string[] {
@@ -256,10 +273,6 @@ export function allHomeStrings(): readonly string[] {
     emptyRankingQuietLine('every-assessment-passed'),
     emptyRankingQuietLine('nothing-to-practise'),
     homeScopeGrewLine('03 Research/Objectives.md', 3),
-    sessionCompositionSentence('this course because you asked for it'),
-    sessionCompositionSentence(
-      'because its assessment is close and the assessed material still needs work',
-    ),
-    sessionCompositionSentence('because it is behind its share from your recent sessions'),
+    ...COURSE_WHY_SENTENCE_EXAMPLES,
   ];
 }

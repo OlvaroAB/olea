@@ -20,7 +20,12 @@ import type {
   RankOracleEligibilityInput,
   RankOracleTiebreakInput,
 } from './rank.js';
-import { conceptEligibilityVeto, rankOracle } from './rank.js';
+import {
+  conceptEligibilityVeto,
+  decidingFactors,
+  RANK_REASON_PHRASES,
+  rankOracle,
+} from './rank.js';
 import type { ConceptPriority, RankOracleInput } from './types.js';
 
 /** `[D-410]`'s per-concept proximity term, typed in `./rank.ts` beside `OracleConceptFactors`. */
@@ -173,15 +178,14 @@ describe('rankOracle — a single well-evidenced concept', () => {
     expect(entry.factors.preMasteryScore).toBeCloseTo(expectedPreMastery, 12);
     expect(proximityOf(entry)).toBeCloseTo(proximityScore, 12);
     expect(entry.priorityScore).toBeCloseTo(expectedPriority, 10);
-    expect(entry.reasoning).toContain(`Priority score ${expectedPriority.toFixed(3)}`);
-    expect(entry.reasoning).toContain(
-      `Proximity ${proximityScore.toFixed(2)}, from the soonest dated assessment.`,
+    // `[D-417]`: the reason carries no score, weight, decimal or count — those stay on
+    // `factors`. The only concept ranked says so; its evidence basis and its unknown need are
+    // stated in words.
+    expect(entry.reasoning).toBe(
+      'concept-a (COURSEA) is the only concept ranked in this course. It appears in past ' +
+        'papers. How well you recall it is not known yet.',
     );
-    expect(entry.reasoning).toContain(
-      '(relevance weight 1.00, need weight 1.00, proximity weight 1.00)',
-    );
-    expect(entry.reasoning).toContain('Strongest link: Assessments/Quiz1.md');
-    expect(entry.reasoning).toContain(`due in ${daysUntilDue} days`);
+    expect(entry.reasoning).not.toMatch(/\d+\.\d+/);
   });
 });
 
@@ -221,10 +225,11 @@ describe('rankOracle — objectives-basis reasoning ([D-226] ruling 2 / ol-oxa2)
     // Presentation half — the bug this bead fixes.
     expect(entry.reasoning).not.toContain('0 citations');
     expect(entry.reasoning).not.toContain('0 past paper');
-    expect(entry.reasoning).toContain('declared in scope by 1 objectives document');
-    // Never wears a past paper's clothes: no invented citation count for
-    // objectives evidence, and no examiner-frequency framing.
-    expect(entry.reasoning).not.toContain('across 1 past paper');
+    // `[D-417]`: the basis is named in words, with no count of documents.
+    expect(entry.reasoning).toContain('Its course objectives name it.');
+    // Never wears a past paper's clothes: no past-paper claim and no
+    // examiner-frequency framing for objectives evidence.
+    expect(entry.reasoning).not.toContain('past paper');
   });
 
   it('a concept cited by both bases states each one, never blended', () => {
@@ -255,11 +260,14 @@ describe('rankOracle — objectives-basis reasoning ([D-226] ruling 2 / ol-oxa2)
 
     expect(entry.factors.distinctSourceCount).toBe(1);
     expect(entry.factors.distinctObjectivesSourceCount).toBe(2);
-    expect(entry.reasoning).toContain('1 citation across 1 past paper');
-    expect(entry.reasoning).toContain('declared in scope by 2 objectives documents');
+    // `[D-417]`: each basis stated for what it is, in words, never a count.
+    expect(entry.reasoning).toContain(
+      'It appears in past papers, and its course objectives name it.',
+    );
+    expect(entry.reasoning).not.toMatch(/\b\d+ (citations?|past papers?|objectives documents?)\b/);
   });
 
-  it('a plain past-paper concept keeps the pre-existing sentence unchanged (regression)', () => {
+  it('a plain past-paper concept names only its past-paper basis', () => {
     const input: RankOracleInput = {
       evidence: {
         edges: [edge()],
@@ -274,8 +282,8 @@ describe('rankOracle — objectives-basis reasoning ([D-226] ruling 2 / ol-oxa2)
     const entry = course.ranked[0];
     expect(entry?.factors.objectivesCitations).toEqual([]);
     expect(entry?.factors.distinctObjectivesSourceCount).toBe(0);
-    expect(entry?.reasoning).toContain('1 citation across 1 past paper');
-    expect(entry?.reasoning).not.toContain('objectives document');
+    expect(entry?.reasoning).toContain('It appears in past papers.');
+    expect(entry?.reasoning).not.toContain('objectives');
   });
 });
 
@@ -796,8 +804,10 @@ describe('rankOracle — reasoning cites the actual strongest contributor (deriv
     if (course?.status !== 'ranked') throw new Error('expected ranked');
     const entry = course.ranked[0];
     expect(entry?.factors.contributions[0]?.assessmentPath).toBe('Assessments/Strong.md');
-    expect(entry?.reasoning).toContain('Strongest link: Assessments/Strong.md');
-    expect(entry?.reasoning).not.toContain('Strongest link: Assessments/Weak.md');
+    // `[D-417]`: the strongest link stays on `factors` for any auditing caller; the reason
+    // itself names no assessment path, score or count.
+    expect(entry?.reasoning).not.toContain('Assessments/');
+    expect(entry?.reasoning).not.toMatch(/\d/);
   });
 });
 
@@ -1884,7 +1894,11 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
     expect('need' in unread.factors).toBe(false);
     expect(unread.factors.needOrderingInput).toBe(1);
     expect(unread.factors.retrievabilityWeight).toBeUndefined();
-    expect(unread.reasoning).toContain('Need unknown');
+    // `[D-417]`: unknown need decided its place over `faded` — worded as unknown, no number.
+    expect(unread.reasoning).toContain(
+      'is ranked above the next concept because there is no evidence yet of how well you recall it.',
+    );
+    expect(unread.reasoning).not.toMatch(/\d/);
     expect(unread.reasoning).not.toMatch(
       /\b(weak|weakness|struggling|forgotten|behind|low recall|needs work)\b/i,
     );
@@ -1915,7 +1929,11 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
       fallback.factors.preMasteryScore + 0.95 + proximityOf(fallback),
       12,
     );
-    expect(fallback.reasoning).toContain('Need 0.95, from current recall.');
+    // `[D-417]`: only need separates `faded` from `strong`, so need alone is named, in words.
+    expect(fallback.reasoning).toContain(
+      'is ranked above the next concept because you need to practise it more.',
+    );
+    expect(fallback.reasoning).not.toMatch(/\d|relevance|proximity/);
 
     const delivered = byKey(weighted(3, 0.5, 2), 'faded');
     expect(delivered.factors.blendWeights).toEqual({ relevance: 3, need: 0.5, proximity: 2 });
@@ -1923,9 +1941,9 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
       3 * delivered.factors.preMasteryScore + 0.5 * 0.95 + 2 * proximityOf(delivered),
       12,
     );
-    expect(delivered.reasoning).toContain(
-      '(relevance weight 3.00, need weight 0.50, proximity weight 2.00)',
-    );
+    // The weights move the score, never the words: no weight is quoted.
+    expect(delivered.reasoning).not.toMatch(/weight|\d/);
+    expect(delivered.reasoning).toBe(fallback.reasoning);
   });
 
   it('a delivered two-weight object ([D-332] shape) keeps the declared proximity weight ([D-410])', () => {
@@ -1987,7 +2005,8 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
     const base = withRecall(0.4);
     expect(base?.factors.need).toBeCloseTo(0.6, 12);
     expect(base?.factors.needSource).toBe('demand-aware-readiness');
-    expect(base?.reasoning).toContain('from demand-aware readiness');
+    // `[D-417]`: the reason names no need source and no number; `needSource` above is the audit.
+    expect(base?.reasoning).not.toMatch(/readiness|recall of it|\d/);
     for (const recall of [0.01, 0.2, 0.9, 1]) {
       const perturbed = withRecall(recall);
       expect(perturbed?.factors.need).toBe(base?.factors.need);
@@ -2077,7 +2096,14 @@ describe('rankOracle — proximity is its own blend term; undated evidence is ne
       noEdge?.priorityScore ?? Number.POSITIVE_INFINITY,
     );
     expect(rows.map((r) => r.conceptKey)).toEqual(['hasedge', 'a-noedge']);
-    expect(hasEdge?.reasoning).toContain('Proximity 0: no dated assessment');
+    // `[D-417]`: relevance alone separates them (need and proximity equal), so relevance alone
+    // is named; the no-edge concept, last, says it has no evidence yet.
+    expect(hasEdge?.reasoning).toContain(
+      'is ranked above the next concept because it counts for more in your assessments.',
+    );
+    expect(hasEdge?.reasoning).not.toMatch(/sooner|need to practise/);
+    expect(noEdge?.reasoning).toContain('is ranked last in this course.');
+    expect(noEdge?.reasoning).toContain('It has no assessment evidence recorded yet.');
   });
 
   it('R13: every arrival with an evidence edge precedes every arrival with none, at equal (unknown) need', () => {
@@ -2155,7 +2181,7 @@ describe('rankOracle — proximity is its own blend term; undated evidence is ne
     expect(all?.factors.preMasteryScore).toBeCloseTo(3 * (soon?.factors.preMasteryScore ?? 0), 12);
   });
 
-  it('only undated evidence: the concept ranks on relevance and need, and its reasoning says the missing date takes nothing away', () => {
+  it('only undated evidence: the concept ranks on relevance and need, and its reasoning claims nothing about a date', () => {
     const entry = ranked({
       evidence: {
         edges: [edge()],
@@ -2168,7 +2194,7 @@ describe('rankOracle — proximity is its own blend term; undated evidence is ne
     expect(entry?.factors.preMasteryScore).toBeCloseTo(0.2, 12);
     expect(proximityOf(entry)).toBe(0);
     expect(entry?.priorityScore).toBeCloseTo(0.2 + 0.5, 12);
-    expect(entry?.reasoning).toContain('takes nothing from relevance');
+    expect(entry?.reasoning).not.toMatch(/sooner|due|\d/);
   });
 });
 
@@ -2184,5 +2210,150 @@ describe('rankOracle — purity / rebuild equivalence', () => {
       asOf: ASOF,
     };
     expect(rankOracle(input)).toEqual(rankOracle(input));
+  });
+});
+
+// `[D-417]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the reason names a single deciding factor
+// only when that factor alone put the concept above the next one, every favouring factor when
+// several did, and carries no score, decimal or count. Words of each factor's phrase are checked
+// the way the planning benchmark's sentence check reads them (a factor's own word, or the
+// phrase's plain words).
+describe('rankOracle — the reason names what decided, from the actual factor values ([D-417])', () => {
+  const FACTOR_WORDS = {
+    need: /\bneed\b|\brecall it\b/i,
+    relevance: /\brelevance\b|counts for more|assessment evidence yet and/i,
+    proximity: /\bproximity\b|\bsooner\b/i,
+  } as const;
+  const named = (text: string) =>
+    (Object.keys(FACTOR_WORDS) as (keyof typeof FACTOR_WORDS)[]).filter((f) =>
+      FACTOR_WORDS[f].test(text),
+    );
+  // The planning benchmark's committed ban on a count of unmet material, and the ruling's
+  // "no raw scores or decimals".
+  const COUNT_OF_UNMET = /\b\d+\b(?:\s+\S+){0,3}?\s+(more|left|remaining|unmet|not\s+yet\s+met)\b/i;
+
+  function twoConcepts(opts: {
+    readonly recall?: readonly [number, number];
+    readonly due?: readonly [string, string];
+    readonly yieldRank?: readonly [number, number];
+  }) {
+    const due = opts.due ?? ['2026-09-01', '2026-09-01'];
+    const yieldRank = opts.yieldRank ?? [1, 1];
+    const result = rankOracle({
+      evidence: {
+        edges: [
+          edge({
+            conceptName: 'target',
+            assessmentPath: 'Assessments/T.md',
+            yieldRank: yieldRank[0],
+          }),
+          edge({
+            conceptName: 'reference',
+            assessmentPath: 'Assessments/R.md',
+            yieldRank: yieldRank[1],
+          }),
+        ],
+        assessmentsRead: readReport([
+          assessment({ path: 'Assessments/T.md', due: due[0] }),
+          assessment({ path: 'Assessments/R.md', due: due[1] }),
+        ]),
+        assessmentsWithNoEvidence: [],
+      },
+      ...(opts.recall !== undefined
+        ? {
+            retrievability: new Map([
+              ['target', opts.recall[0]],
+              ['reference', opts.recall[1]],
+            ]),
+          }
+        : {}),
+      asOf: ASOF,
+    });
+    const course = result.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    return course.ranked;
+  }
+
+  it('need alone moved it (the planning benchmark R10 construction): need alone is named', () => {
+    const [first, second] = twoConcepts({ recall: [0.3, 0.9] });
+    expect(first?.conceptKey).toBe('target');
+    expect(first?.reasoning).toBe(
+      'target (COURSEA) is ranked above the next concept because you need to practise it more. ' +
+        'It appears in past papers.',
+    );
+    expect(named(first?.reasoning ?? '')).toEqual(['need']);
+    expect(second?.reasoning).toBe(
+      'reference (COURSEA) is ranked last in this course. It appears in past papers.',
+    );
+  });
+
+  it('proximity alone moved it: only its sooner assessment is named', () => {
+    const [first] = twoConcepts({ recall: [0.5, 0.5], due: ['2026-08-20', '2026-10-30'] });
+    expect(first?.conceptKey).toBe('target');
+    expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.proximity}.`);
+    expect(named(first?.reasoning ?? '')).toEqual(['proximity']);
+  });
+
+  it('relevance alone moved it: only relevance is named', () => {
+    const [first] = twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4] });
+    expect(first?.conceptKey).toBe('target');
+    expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+    expect(named(first?.reasoning ?? '')).toEqual(['relevance']);
+  });
+
+  it('need and proximity both favour it: they decide jointly, and both are named', () => {
+    const [first] = twoConcepts({ recall: [0.3, 0.9], due: ['2026-08-20', '2026-10-30'] });
+    expect(first?.conceptKey).toBe('target');
+    expect(first?.reasoning).toContain(
+      `because ${RANK_REASON_PHRASES.need} and ${RANK_REASON_PHRASES.proximity}.`,
+    );
+    expect(named(first?.reasoning ?? '')).toEqual(['need', 'proximity']);
+  });
+
+  it('a factor weighing against it is not named: need favours it, relevance does not, need alone decided', () => {
+    // target: lower relevance (yield rank 2) but much less recalled.
+    const [first] = twoConcepts({ recall: [0.05, 0.95], yieldRank: [2, 1] });
+    expect(first?.conceptKey).toBe('target');
+    const ref = first?.factors;
+    expect(ref !== undefined && ref.preMasteryScore < 1).toBe(true);
+    expect(named(first?.reasoning ?? '')).toEqual(['need']);
+  });
+
+  it('an exact tie names no factor: the tie-break is said to have ordered them', () => {
+    const [first] = twoConcepts({ recall: [0.5, 0.5] });
+    expect(first?.reasoning).toBe(
+      `reference (COURSEA) ${RANK_REASON_PHRASES.tie}. It appears in past papers.`,
+    );
+    expect(named(first?.reasoning ?? '')).toEqual([]);
+  });
+
+  it('decidingFactors reads the weighted terms: a factor favours only when its weighted term is higher', () => {
+    const [first, second] = twoConcepts({ recall: [0.3, 0.9] });
+    if (first === undefined || second === undefined) throw new Error('expected two');
+    const withProximity = (f: typeof first.factors) =>
+      f as typeof f & {
+        proximityScore: number;
+        blendWeights: { relevance: number; need: number; proximity: number };
+      };
+    expect(decidingFactors(withProximity(first.factors), withProximity(second.factors))).toEqual([
+      'need',
+    ]);
+    expect(decidingFactors(withProximity(first.factors), withProximity(first.factors))).toBe('tie');
+  });
+
+  it('no reason carries a decimal, a percentage, a ratio, a weight or a count of unmet material', () => {
+    const fixtures = [
+      twoConcepts({ recall: [0.3, 0.9] }),
+      twoConcepts({ recall: [0.5, 0.5], due: ['2026-08-20', '2026-10-30'] }),
+      twoConcepts({}),
+      twoConcepts({ recall: [0.3, 0.9], yieldRank: [3, 1], due: ['2026-08-18', '2026-09-30'] }),
+    ];
+    for (const ranking of fixtures) {
+      for (const entry of ranking) {
+        expect(entry.reasoning).not.toMatch(/\d+\.\d+|%|\bpercent|\bratio\b|\bweight\b|\bscore\b/i);
+        expect(entry.reasoning).not.toMatch(COUNT_OF_UNMET);
+        expect(entry.reasoning).not.toMatch(/\bweak|struggling|behind\b/i);
+      }
+    }
   });
 });

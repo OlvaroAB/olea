@@ -1254,9 +1254,18 @@ export type FocusPolicy = 'every-course' | 'single';
  * `'deficit'` (it holds the largest accumulated window deficit among the
  * eligible courses). Travels on {@link ComposeSessionRowsResult} so the
  * `[FOCUS-4]` sweep can count sessions per branch, and is what item 5's
- * sentence names (see {@link FOCUS_BRANCH_SENTENCE}).
+ * sentence names (see {@link FOCUS_BRANCH_TEMPLATE}).
+ *
+ * **`'none-behind'` (`[D-418]`, `ol-egov.141.89.10.92`).** The deficit step
+ * (C5.6 step 3) chose the course, but no course it could have chosen is
+ * behind its share (see {@link readsBehind}): the first session of a term,
+ * or any session where every contender is paid up. The deficit sentence
+ * ("behind its share") would be false there, so the step's own order is
+ * stated instead. A persisted value (the composition record's `branch`);
+ * records written before it existed carry only the first three and still
+ * read.
  */
-export type FocusBranch = 'filter' | 'urgency' | 'deficit';
+export type FocusBranch = 'filter' | 'urgency' | 'deficit' | 'none-behind';
 
 /**
  * `[D-244]` item 6 / `findings/precommitment-focus-urgency.md` (`[FOCUS-2]`,
@@ -1282,12 +1291,76 @@ export const URGENCY_OVERRIDE_THRESHOLD = 1 / 14;
  * over, `build.ts`), it carries the one ratified fragment per branch so a
  * caller assembling the rendered sentence (naming the course) has the exact
  * wording ratified rather than inventing a paraphrase.
+ *
+ * **Superseded by {@link FOCUS_BRANCH_TEMPLATE} (`[D-417]`, `ol-egov.141.89.10.92`)**: these
+ * fragments never name the course, and the ruling is that the sentence does. No production code
+ * reads this map any more: the plugin's active-session explanation passes the composition's own
+ * `focusReason` through (`session/composition-recorder.ts`'s `explainActiveSession`). It stays,
+ * with a course-less fragment for `'none-behind'`, only because plugin test fixtures still import
+ * it; delete it when they move to {@link focusReasonFor}. Nothing in this module reads it.
+ *
+ * @deprecated Use {@link focusReasonFor}.
  */
 export const FOCUS_BRANCH_SENTENCE: Readonly<Record<FocusBranch, string>> = Object.freeze({
   filter: 'this course because you asked for it',
   urgency: 'because its assessment is close and the assessed material still needs work',
   deficit: 'because it is behind its share from your recent sessions',
+  'none-behind':
+    'because no course with something to practise is behind its share, so the session goes to the one closest to falling behind, then to the one you have gone longest without, then by name',
 });
+
+/** The slot in {@link FOCUS_BRANCH_TEMPLATE} that {@link focusReasonFor} fills with the course. */
+export const FOCUS_COURSE_SLOT = '{course}';
+
+/**
+ * `[D-417]`/`[D-418]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the course-why sentence per
+ * branch, naming the course. **PROPOSED** — the recommended candidate in each section of the
+ * copy pass `docs/design/copy-pass-2026-09/planning-sentences.md` (service repo), pending David's
+ * sign-off; ratification may change the words, never the rule each states.
+ *
+ * `filter`/`urgency`/`deficit` keep C5.6's ratified fragments and replace "this course" with the
+ * course's own name, the one Home's course rows show. `'none-behind'` states the step's real
+ * order when nobody is behind (see {@link selectDominantCourse}): largest window deficit (the
+ * course closest to falling behind), then the course served least recently, then course id
+ * ("by name": the id is the name Home shows). It says "then", not "next in turn": the order is a
+ * precedence of tie-breaks, not a rotation.
+ *
+ * No number, ratio or count appears in any of them (F8.3, F6.7).
+ */
+export const FOCUS_BRANCH_TEMPLATE: Readonly<Record<FocusBranch, string>> = Object.freeze({
+  filter: '{course}, because you asked for it',
+  urgency: '{course}, because its assessment is close and the assessed material still needs work',
+  deficit: '{course}, because it is behind its share from your recent sessions',
+  'none-behind':
+    '{course}, because no course with something to practise is behind its share, so the session goes to the one closest to falling behind, then to the one you have gone longest without, then by name',
+});
+
+/**
+ * The course-why sentence body for one composition (F2.22): {@link FOCUS_BRANCH_TEMPLATE} for
+ * `branch` with `course` in its slot. A pure function of the two facts the composition record
+ * persists (`course`, `branch`): the screens state `ComposedStudySession.focusReason` (the preview,
+ * and the active session through the plugin's `explainActiveSession`), and the record's
+ * `recordedFocusReason` reads the same string back from the durable copy, by construction. The plugin's `home/copy.ts#sessionCompositionSentence` punctuates
+ * it; nothing else is added.
+ */
+export function focusReasonFor(branch: FocusBranch, course: string): string {
+  return FOCUS_BRANCH_TEMPLATE[branch].split(FOCUS_COURSE_SLOT).join(course);
+}
+
+/**
+ * Whether one deficit-step reading says the course is **behind its share** — the claim the
+ * `'deficit'` sentence makes. Both readings {@link selectDominantCourse} is given agree on the
+ * direction ("bigger is more owed"):
+ * - the real window deficit (`./window.ts`) is behind when it is above 0; 0 or below is paid in
+ *   full or ahead;
+ * - the days-since-last-seen substitute is behind when it is a finite number above 0.
+ *
+ * `+Infinity` (the substitute's "never practised") is **not** behind: C5.6 says a course with no
+ * evidence yet is not behind, it has not started. The window reading is never infinite.
+ */
+export function readsBehind(reading: number): boolean {
+  return Number.isFinite(reading) && reading > 0;
+}
 
 /**
  * `urgency(course)` read off the plan's OWN inputs, never re-derived
@@ -1471,7 +1544,10 @@ export function fillWholeGroups(
  * when a caller supplied {@link ComposeSessionRowsInput.windowDeficit}, or
  * this module's own days-since-last-seen substitute otherwise (see
  * {@link composeFocusedSelection}'s call site). Both scales agree that
- * "bigger is more owed"; only the ordering matters here.
+ * "bigger is more owed"; the ordering decides the course, and {@link readsBehind} decides the
+ * branch: `'deficit'` when some contender reads behind its share (so the winner, holding the
+ * largest reading, does too), `'none-behind'` (`[D-418]`) when none does. The branch never
+ * changes which course wins.
  *
  * `[FOCUS-5]` (`ol-egov.137.4`, David's ruling 2026-09-11, C5.6): **at an
  * exact deficit tie, the course served LEAST RECENTLY wins** — "the one you
@@ -1572,7 +1648,14 @@ export function selectDominantCourse(
       byDeficit = { course, value: deficit, recency };
     }
   }
-  return byDeficit === undefined ? undefined : { course: byDeficit.course, branch: 'deficit' };
+  if (byDeficit === undefined) return undefined;
+  // `[D-418]`: the deficit sentence says the chosen course is behind its share. When no contender
+  // reads behind (`readsBehind`), that is false, and the course was chosen by the same step's
+  // order among courses none of which is owed: `'none-behind'` names that order instead. Read
+  // over `contenders`, the courses this step could choose: an unservable course that is owed
+  // cannot win it (`ol-egov.141.89.10.86`), so it cannot be why this course was chosen.
+  const anyBehind = contenders.some((course) => readsBehind(deficitByCourse.get(course) ?? 0));
+  return { course: byDeficit.course, branch: anyBehind ? 'deficit' : 'none-behind' };
 }
 
 /** {@link composeFocusedSelection}'s result — see that function's doc. */
@@ -1715,7 +1798,7 @@ function composeFocusedSelection(
     budgets,
     dominantCourse,
     focusBranch: branch,
-    focusReason: FOCUS_BRANCH_SENTENCE[branch],
+    focusReason: focusReasonFor(branch, dominantCourse),
   };
 }
 
@@ -2054,9 +2137,9 @@ export interface ComposeSessionRowsResult {
    * may be served) and in the degenerate case of no eligible course at all.
    */
   readonly dominantCourse?: string;
-  /** Which of item 2's three tests chose {@link dominantCourse} — see {@link FocusBranch}. `undefined` exactly when {@link dominantCourse} is. */
+  /** Which of item 2's three tests chose {@link dominantCourse}, and for the deficit test whether any course was behind (`'none-behind'`, `[D-418]`) — see {@link FocusBranch}. `undefined` exactly when {@link dominantCourse} is. */
   readonly focusBranch?: FocusBranch;
-  /** Item 5's ratified sentence fragment for {@link focusBranch} — see {@link FOCUS_BRANCH_SENTENCE}. `undefined` exactly when {@link focusBranch} is. */
+  /** The course-why sentence body naming {@link dominantCourse}: {@link focusReasonFor}`(focusBranch, dominantCourse)` (`[D-417]`). `undefined` exactly when {@link focusBranch} is. */
   readonly focusReason?: string;
   /**
    * The `'unknown'` citation-validity state, ACTIONED — see the module doc's "Citation validity"

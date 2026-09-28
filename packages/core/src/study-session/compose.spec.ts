@@ -11,6 +11,7 @@
  * against hand-built fixtures a reader can check by eye.
  */
 
+import { readFileSync } from 'node:fs';
 import type { StudyPlanAllocationEntry } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import { resolveAssessmentGroupingContext } from '../assessment/scope-concept-keys.js';
@@ -31,12 +32,23 @@ import {
   classifyObligation,
   composeSessionRows,
   extendComposedStudySession,
-  FOCUS_BRANCH_SENTENCE,
+  FOCUS_BRANCH_TEMPLATE,
+  FOCUS_COURSE_SLOT,
+  focusReasonFor,
   RETRIEVAL_BASELINE_STAGE_LADDER_DAYS,
+  readsBehind,
+  selectDominantCourse,
   URGENCY_OVERRIDE_THRESHOLD,
   withinBlockCohortAffinity,
   withinBlockCohortDecayWeight,
 } from './compose.js';
+import {
+  buildCompositionRecord,
+  mintOpaqueCompositionId,
+  parseCompositionRecord,
+  recordedFocusReason,
+  serializeCompositionRecord,
+} from './composition-record.js';
 import type { DurationModel } from './duration.js';
 import { buildConceptInstrumentIndex } from './instrument-index.js';
 import { computeWindowDeficit, type PastSessionRecord, type WindowDeficitEntry } from './window.js';
@@ -2509,7 +2521,8 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
 
       expect(result.dominantCourse).toBe('BETA');
       expect(result.focusBranch).toBe('filter');
-      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.filter);
+      expect(result.focusReason).toBe(focusReasonFor('filter', 'BETA'));
+      expect(result.focusReason).toBe('BETA, because you asked for it');
       expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['BETA']));
     });
 
@@ -2543,7 +2556,8 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
 
       expect(result.dominantCourse).toBe('BETA');
       expect(result.focusBranch).toBe('urgency');
-      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.urgency);
+      expect(result.focusReason).toBe(focusReasonFor('urgency', 'BETA'));
+      expect(result.focusReason?.startsWith('BETA, ')).toBe(true);
     });
 
     it('absent a filter or a crossed urgency threshold, the largest window deficit wins — branch "deficit"', () => {
@@ -2571,7 +2585,8 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
 
       expect(result.dominantCourse).toBe('ALPHA');
       expect(result.focusBranch).toBe('deficit');
-      expect(result.focusReason).toBe(FOCUS_BRANCH_SENTENCE.deficit);
+      expect(result.focusReason).toBe(focusReasonFor('deficit', 'ALPHA'));
+      expect(result.focusReason?.startsWith('ALPHA, ')).toBe(true);
     });
   });
 
@@ -2731,16 +2746,30 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
     expect(new Set(result.orderedRows.map((r) => r.course))).toEqual(new Set(['ALPHA']));
   });
 
-  it('FOCUS_BRANCH_SENTENCE holds the three ratified sentences, corrected by `[FOCUS-5]`', () => {
+  it("`[D-417]`/`[D-418]`: FOCUS_BRANCH_TEMPLATE keeps C5.6's ratified fragments, names the course once, and adds the fourth branch", () => {
     // `filter`'s "mostly" was true under the two-course rule and is false
-    // now a session is exactly one course — see `[FOCUS-5]`'s ruling.
-    expect(FOCUS_BRANCH_SENTENCE.filter).toBe('this course because you asked for it');
-    expect(FOCUS_BRANCH_SENTENCE.urgency).toBe(
-      'because its assessment is close and the assessed material still needs work',
+    // now a session is exactly one course — see `[FOCUS-5]`'s ruling. The
+    // three ratified fragments keep their words; "this course" becomes the
+    // course's own name (`[D-417]`).
+    expect(FOCUS_BRANCH_TEMPLATE.filter).toBe('{course}, because you asked for it');
+    expect(FOCUS_BRANCH_TEMPLATE.urgency).toBe(
+      '{course}, because its assessment is close and the assessed material still needs work',
     );
-    expect(FOCUS_BRANCH_SENTENCE.deficit).toBe(
-      'because it is behind its share from your recent sessions',
+    expect(FOCUS_BRANCH_TEMPLATE.deficit).toBe(
+      '{course}, because it is behind its share from your recent sessions',
     );
+    // `[D-418]`: the step's real order, stated as a precedence, never "next in turn".
+    expect(FOCUS_BRANCH_TEMPLATE['none-behind']).toBe(
+      '{course}, because no course with something to practise is behind its share, so the session goes to the one closest to falling behind, then to the one you have gone longest without, then by name',
+    );
+    expect(FOCUS_BRANCH_TEMPLATE['none-behind']).not.toMatch(/\bturn\b/);
+    for (const template of Object.values(FOCUS_BRANCH_TEMPLATE)) {
+      expect(template.split(FOCUS_COURSE_SLOT).length).toBe(2);
+      expect(template.startsWith(FOCUS_COURSE_SLOT)).toBe(true);
+      // No number, ratio or percentage (F8.3, F6.7).
+      expect(template).not.toMatch(/\d|%|\bratio\b|\bpercent/);
+    }
+    expect(focusReasonFor('filter', 'dev-course-x')).toBe('dev-course-x, because you asked for it');
   });
 });
 
@@ -3430,5 +3459,277 @@ describe('extendComposedStudySession (`[SESS-11]`)', () => {
 
     expect(extended.map((i) => i.instrumentId)).toEqual(['b1']);
     expect(extended.map((i) => i.position)).toEqual([1]);
+  });
+});
+
+// `[D-417]`/`[D-418]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the course-why sentence names
+// the course, and a course chosen by the deficit step when no contender is behind its share gets
+// the fourth branch, `'none-behind'`, whose sentence states the step's real order. Home and the
+// session read the same recorded branch. Every course id here is a fixture.
+describe('[D-418] none-behind: the deficit step when no course it could choose is behind its share', () => {
+  function twoCourseRows() {
+    const theRows = rows([
+      { conceptName: 'A1', course: 'ALPHA', gapScore: 9 },
+      { conceptName: 'B1', course: 'BETA', gapScore: 8 },
+    ]);
+    const instruments = buildConceptInstrumentIndex([qa('a1', ['A1']), qa('b1', ['B1'])]);
+    return { theRows, instruments };
+  }
+
+  it('readsBehind: a window deficit above 0 or a finite days reading above 0 is behind; 0, below 0 and never-practised (+Infinity) are not', () => {
+    expect(readsBehind(0.4)).toBe(true);
+    expect(readsBehind(12)).toBe(true);
+    expect(readsBehind(0)).toBe(false);
+    expect(readsBehind(-0.3)).toBe(false);
+    expect(readsBehind(Number.POSITIVE_INFINITY)).toBe(false);
+  });
+
+  it('first session of a term, no window history (days substitute): nothing practised, so none-behind; the course is the first by id, and the sentence names it', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+    });
+
+    expect(result.dominantCourse).toBe('ALPHA');
+    expect(result.focusBranch).toBe('none-behind');
+    expect(result.focusReason).toBe(focusReasonFor('none-behind', 'ALPHA'));
+    expect(result.focusReason).not.toContain('it is behind its share');
+  });
+
+  it('first session of a term, real window with no history (every deficit 0, never served): none-behind, first by id', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const windowDeficit = computeWindowDeficit(
+      [],
+      ['ALPHA', 'BETA'],
+      new Map([
+        ['ALPHA', 0.5],
+        ['BETA', 0.5],
+      ]),
+    );
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('ALPHA');
+    expect(result.focusBranch).toBe('none-behind');
+  });
+
+  it('paid-up courses tied at 0: none-behind, and the one served longest ago wins, as the sentence says', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+      ['ALPHA', { deficit: 0, sessionsSinceLastServed: 1 }],
+      ['BETA', { deficit: 0, sessionsSinceLastServed: 3 }],
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('BETA');
+    expect(result.focusBranch).toBe('none-behind');
+  });
+
+  it('every course ahead of its share, by different amounts: none-behind, and the one closest to falling behind wins, as the sentence says', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+      ['ALPHA', { deficit: -0.4, sessionsSinceLastServed: 5 }],
+      ['BETA', { deficit: -0.1, sessionsSinceLastServed: 0 }],
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('BETA');
+    expect(result.focusBranch).toBe('none-behind');
+  });
+
+  it('one course behind its share: the deficit branch, unchanged', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+      ['ALPHA', { deficit: -0.1, sessionsSinceLastServed: 0 }],
+      ['BETA', { deficit: 0.1, sessionsSinceLastServed: 1 }],
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('BETA');
+    expect(result.focusBranch).toBe('deficit');
+    expect(result.focusReason).toBe(focusReasonFor('deficit', 'BETA'));
+  });
+
+  it('a course that cannot be served is owed, but cannot be chosen: the servable winner is not behind, so none-behind (never the deficit sentence)', () => {
+    const theRows = rows([
+      { conceptName: 'N1', course: 'NOINST', gapScore: 5 },
+      { conceptName: 'G1', course: 'HASINST', gapScore: 5 },
+    ]);
+    // Only HASINST's concept has an instrument (`ol-egov.141.89.10.86`).
+    const instruments = buildConceptInstrumentIndex([qa('g1', ['G1'])]);
+    const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
+      ['NOINST', { deficit: 2, sessionsSinceLastServed: Number.POSITIVE_INFINITY }],
+      ['HASINST', { deficit: -2, sessionsSinceLastServed: 0 }],
+    ]);
+    const result = composeSessionRows({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      budgetSeconds: 600,
+      focusPolicy: 'single',
+      windowDeficit,
+    });
+
+    expect(result.dominantCourse).toBe('HASINST');
+    expect(result.focusBranch).toBe('none-behind');
+  });
+
+  it('the branch never changes which course wins: the same readings pick the same course whether or not any is behind', () => {
+    const none = new Set<string>();
+    const recency = new Map([
+      ['ALPHA', 2],
+      ['BETA', 7],
+    ]);
+    const paidUp = selectDominantCourse(
+      ['ALPHA', 'BETA'],
+      undefined,
+      new Map(),
+      new Map([
+        ['ALPHA', -1],
+        ['BETA', -1],
+      ]),
+      recency,
+      none,
+    );
+    const owed = selectDominantCourse(
+      ['ALPHA', 'BETA'],
+      undefined,
+      new Map(),
+      new Map([
+        ['ALPHA', 1],
+        ['BETA', 1],
+      ]),
+      recency,
+      none,
+    );
+    expect(paidUp).toEqual({ course: 'BETA', branch: 'none-behind' });
+    expect(owed).toEqual({ course: 'BETA', branch: 'deficit' });
+  });
+
+  it('the filter and urgency branches are untouched by it', () => {
+    const recency = new Map<string, number>();
+    const zero = new Map([
+      ['ALPHA', 0],
+      ['BETA', 0],
+    ]);
+    expect(
+      selectDominantCourse(['ALPHA', 'BETA'], ['BETA'], new Map(), zero, recency, new Set()),
+    ).toEqual({ course: 'BETA', branch: 'filter' });
+    expect(
+      selectDominantCourse(
+        ['ALPHA', 'BETA'],
+        undefined,
+        new Map([['ALPHA', 1]]),
+        zero,
+        recency,
+        new Set(),
+      ),
+    ).toEqual({ course: 'ALPHA', branch: 'urgency' });
+  });
+
+  it('Home and the session read the same recorded branch: the record round-trips none-behind, and its sentence equals the preview sentence byte for byte', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const session = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: emptyReplay(),
+      budgetMinutes: 10,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+    expect(session.focusBranch).toBe('none-behind');
+
+    const record = buildCompositionRecord(session, {
+      compositionId: mintOpaqueCompositionId(() => 'nonce-none-behind'),
+      composedAt: '2026-09-14T09:00:00.000+00:00',
+      planVersion: null,
+      reentry: false,
+    });
+    const line = serializeCompositionRecord(record);
+    const readBack = parseCompositionRecord(JSON.parse(line));
+    expect(readBack?.branch).toBe('none-behind');
+    expect(readBack !== null && serializeCompositionRecord(readBack)).toBe(line);
+    expect(readBack !== null && recordedFocusReason(readBack)).toBe(session.focusReason);
+  });
+
+  it('a record written before the fourth branch existed still reads, and states its course by name', () => {
+    const { theRows, instruments } = twoCourseRows();
+    const session = buildComposedStudySession({
+      rows: theRows,
+      instruments,
+      replay: replay({
+        a1: { lastReviewedDay: '2026-06-01', dueDay: '2099-01-01' },
+        b1: { lastReviewedDay: '2026-09-10', dueDay: '2099-01-01' },
+      }),
+      budgetMinutes: 10,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+    });
+    const record = buildCompositionRecord(session, {
+      compositionId: mintOpaqueCompositionId(() => 'nonce-old'),
+      composedAt: '2026-09-14T09:00:00.000+00:00',
+      planVersion: null,
+      reentry: false,
+    });
+    expect(record.branch).toBe('deficit');
+    const readBack = parseCompositionRecord(JSON.parse(serializeCompositionRecord(record)));
+    expect(readBack !== null && recordedFocusReason(readBack)).toBe(
+      'ALPHA, because it is behind its share from your recent sessions',
+    );
+    // An unknown branch value is still refused, whole.
+    const bogus = { ...JSON.parse(serializeCompositionRecord(record)), branch: 'next-in-turn' };
+    expect(parseCompositionRecord(bogus)).toBeNull();
+  });
+
+  it("the plugin's copy module mirrors the four templates word for word (it cannot import them at runtime)", () => {
+    const copy = readFileSync(new URL('../../../plugin/src/home/copy.ts', import.meta.url), 'utf8');
+    for (const branch of Object.keys(
+      FOCUS_BRANCH_TEMPLATE,
+    ) as (keyof typeof FOCUS_BRANCH_TEMPLATE)[]) {
+      expect(copy).toContain(`'${focusReasonFor(branch, 'TESTC101')}'`);
+    }
   });
 });

@@ -350,7 +350,7 @@ const DECLARED_FALLBACK_PROXIMITY_HALF_LIFE_DAYS = 14;
  * normalised at ingest (`../assessment/weight.ts`). Against fraction-basis
  * inputs a divisor of 100 pushed the whole weight factor into roughly
  * `[1e-4, 5e-3]` of its `[0, 1]` range — muted, and visible to her, because
- * `buildReasoning` renders this score at two decimal places and nearly every
+ * `buildReasoning` then rendered this score at two decimal places and nearly every
  * assessment then read as `weight score 0.00`.
  *
  * **Why 1, and why this is DECLARED rather than derived.** Once the input is
@@ -975,32 +975,6 @@ function conceptProximityScore(contributions: readonly OracleEdgeContribution[])
   return contributions.reduce((max, c) => Math.max(max, c.examProximityScore), 0);
 }
 
-/**
- * The need clause every reasoning string ends with. Unknown need is worded
- * as unknown and nothing else (registry §22, `[D-348]`): no deficit word,
- * no number standing in for a reading of her knowledge.
- */
-function buildNeedClause(factors: OracleConceptFactors & OracleProximityFactors): string {
-  const weights = factors.blendWeights;
-  const weightsClause =
-    `(relevance weight ${weights.relevance.toFixed(2)}, need weight ` +
-    `${weights.need.toFixed(2)}, proximity weight ${weights.proximity.toFixed(2)})`;
-  const needClause =
-    factors.needBasis === 'estimated' && factors.need !== undefined
-      ? `Need ${factors.need.toFixed(2)}, from ${
-          factors.needSource === 'demand-aware-readiness'
-            ? 'demand-aware readiness'
-            : 'current recall'
-        }.`
-      : 'Need unknown: no current evidence on this concept yet, so it is ordered at the ' +
-        `declared provisional value ${(factors.needOrderingInput ?? UNKNOWN_NEED_VALUE).toFixed(2)} ([D-348]).`;
-  const proximityClause =
-    factors.proximityScore > 0
-      ? `Proximity ${factors.proximityScore.toFixed(2)}, from the soonest dated assessment.`
-      : 'Proximity 0: no dated assessment, which adds nothing here and takes nothing from relevance.';
-  return `${needClause} ${proximityClause} Priority score ${factors.priorityScore.toFixed(3)} ${weightsClause}.`;
-}
-
 /** Deterministic order for `vetoedEdges`, matching `compareContributions`'s tie-break so purity/rebuild equivalence holds regardless of `Map` iteration order. */
 function compareVetoedEdges(a: OracleVetoedEdge, b: OracleVetoedEdge): number {
   return a.assessmentPath < b.assessmentPath ? -1 : a.assessmentPath > b.assessmentPath ? 1 : 0;
@@ -1109,84 +1083,173 @@ function compareContributions(a: OracleEdgeContribution, b: OracleEdgeContributi
 }
 
 /**
- * The reasoning string — mechanically assembled from `factors` and nothing
- * else. This is the property the bead's caution names directly: reasoning
- * that is DERIVED, not decorated. Every number quoted below is read off
- * `factors` itself, never recomputed or approximated, so a test that
- * independently recomputes `factors` and checks these exact substrings can
- * only pass if this function actually reports what drove the score.
+ * `[D-417]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the phrases the ranking reason is built
+ * from. **PROPOSED** — the recommended candidates in the copy pass
+ * `docs/design/copy-pass-2026-09/planning-sentences.md` (service repo), pending David's
+ * sign-off; ratification may change the words, never which fact each one states.
  *
- * **The opening evidence clause is basis-aware (`[D-226]` ruling 2,
- * `ol-oxa2`).** Before this bead, it always read `"N citations across M past
- * papers"`; for an objectives-only concept (`ol-af3j`'s admission of
- * objectives citations on their own basis) that produced a literal `"0
- * citations across 0 past papers"` — internally consistent, but it silently
- * dropped the objectives evidence that actually drove the score, which is
- * exactly the "reasoning matches what actually drove it" property this
- * function exists to guarantee. `buildEvidenceClause` below states each
- * basis present (past-paper as citation frequency; objectives as declared
- * scope, per its own attribution — never borrowing the past-paper clause's
- * frequency framing, "never wears a past paper's clothes") and states BOTH
- * when a concept is cited by both (F4.2: "each basis is stated for what it
- * is").
+ * No phrase carries a score, a decimal, a weight or a count (F8.3, F6.7; the registry's voice
+ * rules keep engineering numbers out of a reason). Need is worded with the plain verb only; an
+ * unknown need is worded as unknown, never as a deficit (registry §22, `[D-348]`).
  */
-function buildEvidenceClause(factors: OracleConceptFactors): string {
-  const objectivesCitations = factors.objectivesCitations ?? [];
-  const distinctObjectivesSourceCount = factors.distinctObjectivesSourceCount ?? 0;
-  const pastPaperClause =
-    factors.citations.length > 0
-      ? `${factors.citations.length} citation${factors.citations.length === 1 ? '' : 's'} ` +
-        `across ${factors.distinctSourceCount} past paper` +
-        `${factors.distinctSourceCount === 1 ? '' : 's'}`
-      : null;
-  // Never a citation count for objectives — an objectives document declares
-  // what is IN SCOPE, it does not evidence HOW OFTEN something is examined
-  // (F4.2, `[D-226]` ruling 2), so this names the document count only, never
-  // a mention/citation frequency that would read as examiner behaviour.
-  const objectivesClause =
-    objectivesCitations.length > 0
-      ? `declared in scope by ${distinctObjectivesSourceCount} objectives document` +
-        `${distinctObjectivesSourceCount === 1 ? '' : 's'}`
-      : null;
-  if (pastPaperClause !== null && objectivesClause !== null) {
-    return `${pastPaperClause}, and ${objectivesClause}`;
+export const RANK_REASON_PHRASES = Object.freeze({
+  /** Need decided, from an estimated reading (current recall or demand-aware readiness). */
+  need: 'you need to practise it more',
+  /** Need decided because this concept's need is unknown, ordered at `[D-348]`'s provisional maximum. */
+  needUnknown: 'there is no evidence yet of how well you recall it',
+  /** Relevance decided, from real assessment evidence. */
+  relevance: 'it counts for more in your assessments',
+  /** Relevance decided because this concept has no assessment evidence and sits at `[D-329]`'s declared middle, above the next concept's real relevance. */
+  relevanceUnknown:
+    "it has no assessment evidence yet and is placed in the middle, above the next concept's weaker evidence",
+  /** Proximity decided: its soonest dated assessment is sooner (`[D-410]`). */
+  proximity: 'its assessment comes sooner',
+  /** The concept ties the next one exactly; `rankOneCourse`'s tie-break ordered them. */
+  tie: 'is level with the next concept, and a fixed tie-break puts it first',
+  /** Last of several ranked concepts: nothing below it to have been placed above. */
+  last: 'is ranked last in this course',
+  /** The course's only ranked concept. */
+  only: 'is the only concept ranked in this course',
+  /** Evidence sentences — what the relevance reading rests on, never how much of it. */
+  evidencePastPapers: 'It appears in past papers.',
+  evidenceObjectives: 'Its course objectives name it.',
+  evidenceBoth: 'It appears in past papers, and its course objectives name it.',
+  evidenceOther: 'Its assessments point to it.',
+  evidenceNone: 'It has no assessment evidence recorded yet.',
+  /** Stated when need is unknown and the position clause has not already said so. */
+  recallUnknown: 'How well you recall it is not known yet.',
+});
+
+/** A ranked entry as `rankOneCourse` builds it: its `factors` carry the proximity term and weights the reason reads. */
+type RankedEntry = ConceptPriority & {
+  readonly factors: OracleConceptFactors & OracleProximityFactors;
+};
+
+/** The three blended factors, in the blend's own order. */
+type BlendFactor = 'relevance' | 'need' | 'proximity';
+
+/** One blended term's weighted value for `factors` — exactly the addend `blendPriority` sums. */
+function blendTerm(
+  factor: BlendFactor,
+  factors: OracleConceptFactors & OracleProximityFactors,
+): number {
+  const w = factors.blendWeights;
+  switch (factor) {
+    case 'relevance':
+      return w.relevance * factors.preMasteryScore;
+    case 'need':
+      return w.need * (factors.needOrderingInput ?? UNKNOWN_NEED_VALUE);
+    case 'proximity':
+      return w.proximity * factors.proximityScore;
   }
-  // The `?? ` fallback is unreachable in practice: `evidence-edge/build.ts`
-  // never emits an edge with no evidence at all (its own "evidential, not
-  // membership" rule), so a concept that reaches `buildReasoning` always has
-  // at least one non-empty clause. Typed defensively rather than asserted
-  // away, matching `top === undefined`'s handling just below.
-  return pastPaperClause ?? objectivesClause ?? 'no evidence recorded';
 }
 
+/**
+ * Which factors put `entry` above `next`, the concept ranked immediately after it, read from the
+ * actual factor values. For each blended term the difference `term(entry) - term(next)` is taken;
+ * a factor **favours** the entry when that difference is above zero. The priority difference is
+ * the sum of the three, so an entry ranked strictly above `next` has at least one favouring
+ * factor. `'tie'` when the two priority scores are equal: the blend put neither ahead and
+ * `rankOneCourse`'s tie-break decided.
+ *
+ * **One factor decides exactly when it is the only one favouring the entry** — every other term
+ * is equal or weighs against it, so without that one factor's difference the entry would not be
+ * ahead. With two or more favouring, they decide jointly and all of them are named. Uncertainty is
+ * not a term of the blend, so it is never named.
+ */
+export function decidingFactors(
+  entry: OracleConceptFactors & OracleProximityFactors,
+  next: OracleConceptFactors & OracleProximityFactors,
+): readonly BlendFactor[] | 'tie' {
+  if (entry.priorityScore === next.priorityScore) return 'tie';
+  const favouring = (['relevance', 'need', 'proximity'] as const).filter(
+    (factor) => blendTerm(factor, entry) > blendTerm(factor, next),
+  );
+  return favouring;
+}
+
+function factorPhrase(
+  factor: BlendFactor,
+  entry: OracleConceptFactors & OracleProximityFactors,
+): string {
+  switch (factor) {
+    case 'need':
+      return entry.needBasis === 'unknown'
+        ? RANK_REASON_PHRASES.needUnknown
+        : RANK_REASON_PHRASES.need;
+    case 'relevance':
+      return entry.contributions.length === 0
+        ? RANK_REASON_PHRASES.relevanceUnknown
+        : RANK_REASON_PHRASES.relevance;
+    case 'proximity':
+      return RANK_REASON_PHRASES.proximity;
+  }
+}
+
+/** `a`, `a and b`, `a, b and c`. */
+function joinPhrases(phrases: readonly string[]): string {
+  if (phrases.length <= 1) return phrases[0] ?? '';
+  return `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`;
+}
+
+/** What the relevance reading rests on, by basis present, never how much of it. */
+function evidenceSentence(factors: OracleConceptFactors): string {
+  if (factors.contributions.length === 0) return RANK_REASON_PHRASES.evidenceNone;
+  const pastPapers = factors.citations.length > 0;
+  const objectives = (factors.objectivesCitations ?? []).length > 0;
+  if (pastPapers && objectives) return RANK_REASON_PHRASES.evidenceBoth;
+  if (pastPapers) return RANK_REASON_PHRASES.evidencePastPapers;
+  if (objectives) return RANK_REASON_PHRASES.evidenceObjectives;
+  return RANK_REASON_PHRASES.evidenceOther;
+}
+
+/**
+ * The reasoning string (`[D-417]`, `ol-egov.141.89.10.92`): why this concept sits where it does
+ * in its course's order, and what that rests on. Built after the course is sorted, because the
+ * claim is relative: it names what put the concept above the one ranked immediately after it
+ * ({@link decidingFactors}), a single factor only when that factor alone decided, every
+ * favouring factor when several did, and the tie-break when the blend tied. The last concept
+ * (nothing below it) says so rather than inventing a reason. Then one sentence on the evidence's
+ * basis (past papers, objectives, or none yet — F4.2's "each basis is stated for what it is"),
+ * and, when her need on it is unknown and not already said, that it is unknown.
+ *
+ * **Derived, not decorated.** Every claim is read off `factors` of the two concepts; nothing is
+ * recomputed from anything else. What it no longer carries, by the ruling: the per-factor
+ * numbers, the blend weights, the priority score, the counts of citations, past papers and
+ * assessments, the strongest assessment's path and due-day count. They remain on `factors`
+ * (and `citations`) for any caller that audits a ranking; they are not part of the reason.
+ */
 function buildReasoning(
   conceptName: string,
   course: string,
   factors: OracleConceptFactors & OracleProximityFactors,
+  next: (OracleConceptFactors & OracleProximityFactors) | undefined,
+  rankedCount: number,
 ): string {
-  const top = factors.contributions[0];
-  if (top === undefined) {
-    // Unreachable in practice — a ConceptPriority is only ever built from a
-    // non-empty edge group — but typed defensively rather than asserted
-    // away, matching this codebase's "no silent empty" discipline.
-    throw new Error(`buildReasoning: ${conceptName} (${course}) has no contributing edges`);
+  let position: string;
+  let namesUnknownNeed = false;
+  if (next === undefined) {
+    position = rankedCount === 1 ? RANK_REASON_PHRASES.only : RANK_REASON_PHRASES.last;
+  } else {
+    const deciding = decidingFactors(factors, next);
+    if (deciding === 'tie') {
+      position = RANK_REASON_PHRASES.tie;
+    } else if (deciding.length === 0) {
+      // Unreachable while priorityScore is the sum of the three terms (a strictly higher score
+      // needs a strictly higher term); stated rather than guessed if the blend ever changes.
+      position = 'is ranked just above the next concept, on everything taken together';
+    } else {
+      namesUnknownNeed = deciding.includes('need') && factors.needBasis === 'unknown';
+      position = `is ranked above the next concept because ${joinPhrases(
+        deciding.map((factor) => factorPhrase(factor, factors)),
+      )}`;
+    }
   }
-  const assessmentCount = factors.contributions.length;
-  const dueClause =
-    top.daysUntilDue === null
-      ? 'due date unknown'
-      : top.daysUntilDue < 0
-        ? 'already past'
-        : `due in ${top.daysUntilDue} day${top.daysUntilDue === 1 ? '' : 's'}`;
-  const weightClause = top.assessmentWeightKnown
-    ? `weight score ${top.assessmentWeightScore.toFixed(2)}`
-    : 'weight unknown';
-  return (
-    `${conceptName} (${course}): ${buildEvidenceClause(factors)}, spanning ${assessmentCount} ` +
-    `assessment${assessmentCount === 1 ? '' : 's'}. Strongest link: ${top.assessmentPath} ` +
-    `(yield rank ${top.yieldRank}, confidence ${top.confidence.toFixed(2)}, ${weightClause}, ` +
-    `${dueClause}). ${buildNeedClause(factors)}`
-  );
+  const recall =
+    factors.needBasis === 'unknown' && !namesUnknownNeed
+      ? ` ${RANK_REASON_PHRASES.recallUnknown}`
+      : '';
+  return `${conceptName} (${course}) ${position}. ${evidenceSentence(factors)}${recall}`;
 }
 
 function buildAbstainDetail(course: string, assessmentPaths: readonly VaultPath[]): string {
@@ -1214,7 +1277,7 @@ function buildUnknownRelevanceEntry(
   retrievability: ReadonlyMap<string, number> | undefined,
   demandAwareReadiness: ReadonlyMap<string, number> | undefined,
   resolved: ResolvedOptions,
-): ConceptPriority {
+): RankedEntry {
   const masteryState = resolveMasteryState(mastery, conceptKey);
   const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
   const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
@@ -1251,26 +1314,9 @@ function buildUnknownRelevanceEntry(
     priorityScore: factors.priorityScore,
     factors,
     citations: [],
-    reasoning: buildUnknownRelevanceReasoning(conceptName, course, factors),
+    // Filled once the course is sorted: the reason is relative to the next concept.
+    reasoning: '',
   };
-}
-
-/**
- * `[D-329]`'s reasoning sibling of `buildReasoning` — a separate function
- * because `buildReasoning` reads `factors.contributions[0]` and throws when
- * it is absent (by design, for every ORDINARY entry that function builds);
- * an unknown-relevance entry has no contributing edge to quote, on purpose.
- */
-function buildUnknownRelevanceReasoning(
-  conceptName: string,
-  course: string,
-  factors: OracleConceptFactors & OracleProximityFactors,
-): string {
-  return (
-    `${conceptName} (${course}): no assessment evidence recorded yet. Relevance unknown, scored ` +
-    `at the declared middle value ${factors.preMasteryScore.toFixed(2)} ([D-329]) so it is ` +
-    `neither hidden by a zero nor favoured by its own absence. ${buildNeedClause(factors)}`
-  );
 }
 
 function rankOneCourse(
@@ -1327,7 +1373,7 @@ function rankOneCourse(
     edgesByConcept.set(conceptKey, [...dedupeVerbatimEdges(edgesForConcept)]);
   }
 
-  const entries: ConceptPriority[] = [];
+  const entries: RankedEntry[] = [];
   const vetoedConcepts: OracleVetoedConcept[] = [];
   for (const [conceptKey, edges] of edgesByConcept) {
     // Every edge in this group shares one conceptName by construction (see
@@ -1421,7 +1467,8 @@ function rankOneCourse(
       priorityScore: factors.priorityScore,
       factors,
       citations,
-      reasoning: buildReasoning(conceptName, course, factors),
+      // Filled once the course is sorted: the reason is relative to the next concept.
+      reasoning: '',
     });
   }
 
@@ -1475,7 +1522,17 @@ function rankOneCourse(
     if (aEligible !== bEligible) return aEligible ? -1 : 1;
     return a.conceptName < b.conceptName ? -1 : a.conceptName > b.conceptName ? 1 : 0;
   });
-  const ranked = entries.map((entry, index) => ({ ...entry, rank: index + 1 }));
+  const ranked = entries.map((entry, index) => ({
+    ...entry,
+    rank: index + 1,
+    reasoning: buildReasoning(
+      entry.conceptName,
+      course,
+      entry.factors,
+      entries[index + 1]?.factors,
+      entries.length,
+    ),
+  }));
   // Deterministic order — same reason `ranked` sorts, so two calls with the
   // same input produce byte-identical output (the purity/rebuild property).
   vetoedConcepts.sort((a, b) =>
