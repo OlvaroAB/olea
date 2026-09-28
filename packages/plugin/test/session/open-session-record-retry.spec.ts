@@ -16,7 +16,6 @@ import {
   type VaultInstrumentRecord,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import {
   COMPOSITION_LOG_FOLDER,
   readCompositionLog,
@@ -44,6 +43,8 @@ import { type MemoryVault, memoryVault } from '../review/memory-vault.js';
 const DEVICE = 'olea-testdevice1';
 const NOW = new Date('2026-08-10T14:00:00-04:00');
 const ENTERED = new Date('2026-08-10T13:59:00-04:00');
+/** The composer's sentence body for this hand-built composition; the read passes it through. */
+const REASON = 'because it is behind its share from your recent sessions';
 
 function qaVault(): MemoryVault {
   const note = (front: string) =>
@@ -137,7 +138,7 @@ function session(record: VaultInstrumentRecord): ComposedStudySession {
     focusPolicy: 'single',
     dominantCourse: 'TEST101',
     focusBranch: 'deficit',
-    focusReason: FOCUS_BRANCH_SENTENCE.deficit,
+    focusReason: REASON,
     groupingSignal: 'relatedness',
     setAside: { courses: [], concepts: [], instruments: [] },
     provenance: { planVersion: 'plan-v-opaque', reentry: false },
@@ -203,10 +204,10 @@ describe('openReviewSession retries a failed composition record under the same i
     // Served, stamped with the identity the record will be written under.
     expect(first.scheduledQueue.map((item) => item.compositionId)).toEqual([pendingId]);
     // The explanation both screens read does not wait on the write.
-    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE.deficit);
+    expect(recordedSessionReason(holder.getSitting())).toBe(REASON);
     expect(explainActiveSession(holder.getSitting())).toEqual({
       status: 'available',
-      courseReason: FOCUS_BRANCH_SENTENCE.deficit,
+      courseReason: REASON,
       groupingSentence: groupingWhySentence('relatedness'),
     });
 

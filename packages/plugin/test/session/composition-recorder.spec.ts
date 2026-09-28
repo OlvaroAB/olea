@@ -18,10 +18,7 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 // Not in the `olea-core` barrel (another live lane's file this round): imported by module path.
-import {
-  extendComposedStudySessionWithAccount,
-  FOCUS_BRANCH_SENTENCE,
-} from '../../../core/src/study-session/compose.js';
+import { extendComposedStudySessionWithAccount } from '../../../core/src/study-session/compose.js';
 import {
   COMPOSITION_LOG_FOLDER,
   readCompositionLog,
@@ -366,7 +363,7 @@ describe('[D-331]/[D-382] the active session explains itself from its frozen com
     expect(recordedSessionReason(idle)).toBeUndefined();
   });
 
-  it("an active recorded session states its composition's branch through the one sentence table, equal to its record's", async () => {
+  it("an active recorded session states its composition's own sentence, for the branch its record copies", async () => {
     const vault = memoryVault(oneCourseFiles());
     const { outcome } = await started(vault);
     if (outcome.status !== 'recorded') throw new Error('unreachable');
@@ -375,7 +372,8 @@ describe('[D-331]/[D-382] the active session explains itself from its frozen com
     expect(outcome.session.focusBranch).toBe(branch);
     const holder = createStudySessionHolder();
     holder.enter(NOW, outcome.session);
-    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE[branch]);
+    expect(outcome.session.focusReason).toBeDefined();
+    expect(recordedSessionReason(holder.getSitting())).toBe(outcome.session.focusReason);
     holder.exit();
     expect(recordedSessionReason(holder.getSitting())).toBeUndefined();
   });
@@ -383,8 +381,7 @@ describe('[D-331]/[D-382] the active session explains itself from its frozen com
   it('a failed record write never suppresses the explanation: both screens state the frozen composition’s sentence', async () => {
     const inner = memoryVault(oneCourseFiles());
     const { composed } = await compose(inner, 20);
-    const branch = composed.full.focusBranch;
-    if (branch === undefined) throw new Error('expected the one-course fixture to name a branch');
+    expect(composed.full.focusReason).toBeDefined();
     const vault = scriptedVault(inner, ['fail']);
     const outcome = await recorder(vault).recordStart(composed.full, NOW);
     expect(outcome).toMatchObject({ status: 'not-recorded', reason: 'write-failed' });
@@ -393,7 +390,7 @@ describe('[D-331]/[D-382] the active session explains itself from its frozen com
     const holder = createStudySessionHolder();
     holder.enter(NOW, outcome.session);
     // Home (`home/provider.ts`) and the review tab (`main.ts`) both call this one read.
-    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE[branch]);
+    expect(recordedSessionReason(holder.getSitting())).toBe(composed.full.focusReason);
   });
 
   it('Start before the review tab opened (nothing written yet) states the same sentence', async () => {
@@ -418,7 +415,7 @@ describe('[D-331]/[D-382] the active session explains itself from its frozen com
       ...outcome.session,
       compositionRecord: { ...outcome.record, branch: other },
     });
-    expect(recordedSessionReason(holder.getSitting())).toBe(FOCUS_BRANCH_SENTENCE[branch]);
+    expect(recordedSessionReason(holder.getSitting())).toBe(outcome.session.focusReason);
   });
 
   it('a composition that chose no course (the every-course baseline) states no course sentence', async () => {

@@ -53,7 +53,6 @@
 import type { ComposedStudySession, VaultPath, VaultSource } from 'olea-core';
 // Imported from their own module paths, never the `olea-core` barrel, which is another live
 // lane's file this round — the same stance `./holder.ts` takes for its own source-path import.
-import { FOCUS_BRANCH_SENTENCE } from '../../../core/src/study-session/compose.js';
 import {
   appendCompositionRecord,
   compositionLogPath,
@@ -83,8 +82,10 @@ import type { StudySessionSitting } from './holder.js';
  * - `'unavailable'`: the held session carries no composer account at all (`groupingSignal`, which
  *   `buildComposedStudySession` always sets, is absent: a hand-built session). Nothing is stated,
  *   and nothing is recomputed from anything else.
- * - `'available'`: `courseReason` is `FOCUS_BRANCH_SENTENCE`'s fragment for the composition's own
- *   `focusBranch`, absent when the composer chose no course (the every-course baseline);
+ * - `'available'`: `courseReason` is the composition's own `focusReason`, the sentence body the
+ *   composer rendered from its `focusBranch` (and, once the course-naming sentence lands, its
+ *   course) — the same two facts the record persists, so the record's own rendering of them
+ *   states the same string. Absent when the composer chose no course (the every-course baseline);
  *   `groupingSentence` is `groupingWhySentence`'s proposed sentence for the recorded grouping
  *   signal, absent when no grouping decision occurred (`'none'`, `[D-421]`).
  *
@@ -104,10 +105,7 @@ export function explainActiveSession(
   if (sitting.status !== 'active') return undefined;
   const composition = sitting.items;
   if (composition.groupingSignal === undefined) return { status: 'unavailable' };
-  const courseReason =
-    composition.focusBranch !== undefined
-      ? FOCUS_BRANCH_SENTENCE[composition.focusBranch]
-      : undefined;
+  const courseReason = composition.focusReason;
   const groupingSentence = groupingWhySentence(composition.groupingSignal);
   return {
     status: 'available',
