@@ -4,7 +4,11 @@
  * into the block she chose, through the same idempotent marker primitives `[D-030]`/`[D-177]`
  * already permit — and every doubt ends in a refusal that writes nothing (INV-6).
  *
- * Real in-memory vault, real `olea-core` parsing and enumeration, real `resolveRepairChoice`.
+ * The silent near-certain repair (`ol-v7r5.105`, `[D-090]` section 4) writes through the same
+ * core, from `buildRepairChoice`'s `'silent'` outcome, and re-checks near-certainty itself.
+ *
+ * Real in-memory vault, real `olea-core` parsing and enumeration, real `buildRepairChoice` and
+ * `resolveRepairChoice`.
  * INV-3: every fixture below is coined for this suite.
  */
 
@@ -14,7 +18,9 @@ import { describe, expect, it } from 'vitest';
 import { stampOnFirstSight } from '../../src/instrument-stamping/port.js';
 import {
   type WriteBackRecoveredIdInput,
+  type WriteBackSilentRepairInput,
   writeBackRecoveredInstrumentId,
+  writeBackSilentRepair,
 } from '../../src/instrument-stamping/repair-write-back.js';
 import {
   buildRepairChoice,
@@ -353,6 +359,113 @@ describe('writeBackRecoveredInstrumentId — refusals that write nothing', () =>
       currentRecords: records,
     });
     expect(result).toEqual({ kind: 'refused', reason: 'type-mismatch' });
+    expect(v.writes).toHaveLength(0);
+  });
+});
+
+describe('writeBackSilentRepair — the near-certain repair, no question asked', () => {
+  const vault = () =>
+    memoryVault({ [MCQ_NOTE]: [FRONTMATTER('[Alpha]'), '## Q1', '', MCQ_BLOCK, ''].join('\n') });
+
+  /** The ruling's own silent outcome, built by the production decision module. */
+  async function silentInput(
+    v: ReturnType<typeof memoryVault>,
+    recoveredId: string,
+  ): Promise<WriteBackSilentRepairInput> {
+    const records = await recordsOf(v);
+    const raw = rawOf(only(records, 'mcq', MCQ_NOTE));
+    const repair = buildRepairChoice({
+      instrumentId: recoveredId,
+      candidates: [{ notePath: MCQ_NOTE, meetsCertaintyTest: true }],
+      now: 1_000,
+    });
+    if (repair.kind !== 'silent') throw new Error('fixture expected a silent repair');
+    return {
+      repair,
+      deleted: { instrumentId: recoveredId, raw, notePath: MCQ_NOTE },
+      recoveredInstrumentType: 'mcq',
+      candidateRaw: raw,
+      currentRecords: records,
+    };
+  }
+
+  it('writes the recovered id into the successor, and a fresh walk reads it back', async () => {
+    const v = vault();
+    const before = v.contentOf(MCQ_NOTE) ?? '';
+    const result = await writeBackSilentRepair(v, await silentInput(v, 'mcq-recovered1'));
+
+    expect(result).toEqual({ kind: 'written', instrumentId: 'mcq-recovered1', notePath: MCQ_NOTE });
+    expect(only(await recordsOf(v), 'mcq').instrumentId).toBe('mcq-recovered1');
+    const after = v.contentOf(MCQ_NOTE) ?? '';
+    const start = after.indexOf('id: mcq-recovered1\n');
+    expect(removeSpans(after, [{ start, end: start + 'id: mcq-recovered1\n'.length }])).toBe(
+      before,
+    );
+  });
+
+  it('is idempotent', async () => {
+    const v = vault();
+    const input = await silentInput(v, 'mcq-recovered1');
+    await writeBackSilentRepair(v, input);
+    const again = await writeBackSilentRepair(v, { ...input, currentRecords: await recordsOf(v) });
+    expect(again.kind).toBe('already-carried');
+    expect(v.writes).toHaveLength(1);
+  });
+
+  it('re-checks near-certainty itself: changed text, another file or another id writes nothing', async () => {
+    const v = vault();
+    const input = await silentInput(v, 'mcq-recovered1');
+    const cases: WriteBackSilentRepairInput[] = [
+      { ...input, deleted: { ...input.deleted, raw: `${input.deleted.raw} (edited)` } },
+      { ...input, deleted: { ...input.deleted, notePath: OTHER_NOTE } },
+      { ...input, deleted: { ...input.deleted, instrumentId: 'mcq-someone-else' } },
+      { ...input, candidateRaw: input.candidateRaw.replace('Which', 'What') },
+    ];
+    for (const c of cases) {
+      expect(await writeBackSilentRepair(v, c)).toEqual({
+        kind: 'refused',
+        reason: 'not-near-certain',
+      });
+    }
+    expect(v.writes).toHaveLength(0);
+  });
+
+  it('refuses when the id is live in another note — a duplication case, not a repair', async () => {
+    const v = memoryVault({
+      [MCQ_NOTE]: [FRONTMATTER('[Alpha]'), '## Q1', '', MCQ_BLOCK, ''].join('\n'),
+      [OTHER_NOTE]: [
+        FRONTMATTER('[Alpha]'),
+        '## Q2',
+        '',
+        MCQ_BLOCK.replace(/\n```$/, '\nid: mcq-recovered1\n```'),
+        '',
+      ].join('\n'),
+    });
+    const result = await writeBackSilentRepair(v, await silentInput(v, 'mcq-recovered1'));
+    expect(result).toEqual({ kind: 'refused', reason: 'id-live-elsewhere' });
+    expect(v.writes).toHaveLength(0);
+  });
+
+  it('refuses when two identical blocks in the note could each be the successor', async () => {
+    const v = memoryVault({
+      [MCQ_NOTE]: [FRONTMATTER('[Alpha]'), '## Q1', '', MCQ_BLOCK, '', MCQ_BLOCK, ''].join('\n'),
+    });
+    const records = await recordsOf(v);
+    const raw = rawOf(records.find((r) => r.instrumentType === 'mcq') as VaultInstrumentRecord);
+    const repair = buildRepairChoice({
+      instrumentId: 'mcq-recovered1',
+      candidates: [{ notePath: MCQ_NOTE, meetsCertaintyTest: true }],
+      now: 1_000,
+    });
+    if (repair.kind !== 'silent') throw new Error('fixture expected a silent repair');
+    const result = await writeBackSilentRepair(v, {
+      repair,
+      deleted: { instrumentId: 'mcq-recovered1', raw, notePath: MCQ_NOTE },
+      recoveredInstrumentType: 'mcq',
+      candidateRaw: raw,
+      currentRecords: records,
+    });
+    expect(result).toEqual({ kind: 'refused', reason: 'candidate-ambiguous' });
     expect(v.writes).toHaveLength(0);
   });
 });

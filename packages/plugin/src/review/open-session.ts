@@ -238,6 +238,7 @@ import {
 } from '../grading/wiring.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
+import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
 import {
   type CompositionRecorder,
@@ -551,7 +552,7 @@ export interface OpenReviewSessionInput {
    * C5.3 / `[D-090]`'s deleted-id repair, the matching half's other input (`ol-v7r5.91`): what the
    * PREVIOUS open's own walk observed of every instrument, so THIS walk can find an id that
    * disappeared since and either repair it silently at near-certainty or — per `[D-392]` — offer
-   * her one grouped choice, persisted by {@link recordRepairChoiceProposals} into
+   * her one grouped choice, persisted by {@link resolveDeletedInstrumentIds} into
    * `./duplication-confirmation-store.ts`'s shared folder. {@link createReviewSessionOpener} is the
    * one caller that holds this across opens, in memory, for the SAME tab's lifetime — the identical
    * "in-memory, per-tab, between opens" role its own `scope`/`snapshot` already play, and the same
@@ -560,8 +561,11 @@ export interface OpenReviewSessionInput {
    * (see `safetyUnavailableInstrumentIds`'s own doc above for the identical call). Omitted — every
    * caller before this bead, and every FIRST open of a tab — runs no repair matching at all, exactly
    * today's behaviour: nothing here treats "nothing to compare against yet" as a deleted id.
+   *
+   * Each entry also carries the type the walk observed (`ol-v7r5.105`): the silent near-certain
+   * repair writes the id back only onto an item of the type that earned its history.
    */
-  readonly previousInstrumentEnumeration?: readonly DeletedInstrumentRecord[];
+  readonly previousInstrumentEnumeration?: readonly EnumeratedInstrument[];
 }
 
 export type OpenReviewSessionOutcome =
@@ -586,7 +590,7 @@ export type OpenReviewSessionOutcome =
        * createReviewSessionOpener} is the one caller that threads it through; every other caller
        * may ignore it. Every instrument this walk observed, whatever its duplication/repair fate.
        */
-      readonly instrumentEnumeration: readonly DeletedInstrumentRecord[];
+      readonly instrumentEnumeration: readonly EnumeratedInstrument[];
     }
   | { readonly ok: false; readonly error: unknown };
 
@@ -645,7 +649,7 @@ export async function openReviewSession(
     // `composed.queue` (`composeQueue`'s selection) is deliberately never
     // read below; row 6 (`ol-egov.132.6`) retires the call once nothing
     // production reads it anywhere. See the module doc.
-    const composed = await buildReviewSession({
+    const reviewSessionBuild: Parameters<typeof buildReviewSession>[0] = {
       vault: input.vault,
       scheduler: input.scheduler,
       now,
@@ -657,7 +661,30 @@ export async function openReviewSession(
       ...(input.filter !== undefined ? { filter: input.filter } : {}),
       ...(input.relations !== undefined ? { relations: input.relations } : {}),
       ...(input.assessments !== undefined ? { assessments: input.assessments } : {}),
-    });
+    };
+    let composed = await buildReviewSession(reviewSessionBuild);
+
+    // C5.3 / `[D-090]`/`[D-392]` (`ol-v7r5.91`, `ol-v7r5.105`): find every id that disappeared
+    // since `input.previousInstrumentEnumeration` and, for each with at least one candidate,
+    // decide silent repair vs. her grouped choice — see that field's own doc for why "no
+    // previous enumeration supplied" is an honest "nothing to compare against yet," never a
+    // guessed "nothing deleted." A grouped choice is only ever recorded; a silent near-certain
+    // repair writes the id back into its successor's own metadata position. When that write
+    // changed a note, the walk is taken once more, so THIS open already serves the item under
+    // its recovered id and history rather than logging a rating under a fresh identity; an open
+    // that wrote nothing walks once, exactly as before. Serving the raw candidate item itself
+    // while a choice is open is unruled (open question, not this bead's to invent): today's
+    // behaviour is unchanged — nothing here withholds or reorders a queue row the way
+    // `withholdLosingCopies` does for a duplicate.
+    if (input.previousInstrumentEnumeration !== undefined) {
+      const repair = await resolveDeletedInstrumentIds(
+        input.vault,
+        input.previousInstrumentEnumeration,
+        composed.instruments.records,
+        now.getTime(),
+      );
+      if (repair.wroteNote) composed = await buildReviewSession(reviewSessionBuild);
+    }
 
     // C5.3 / `[D-090]` (`ol-v7r5.88`): withhold every duplicated id's losing
     // copy, off the SAME kept enumeration, and record each losing note's
@@ -679,32 +706,8 @@ export async function openReviewSession(
     // `[D-090]`/`[D-392]` (`ol-v7r5.91`): this open's own enumeration, in the shape
     // `matchDeletedInstrumentIds` needs on BOTH sides — `input.previousInstrumentEnumeration`'s
     // next call reads it back as `previous` (see that field's own doc). Off the SAME
-    // `composed.instruments.records` above; no second walk.
-    const instrumentEnumeration: readonly DeletedInstrumentRecord[] =
-      composed.instruments.records.map((record) => ({
-        instrumentId: record.instrumentId,
-        raw: record.instrumentType === 'mcq' ? record.mcq.raw : record.card.raw,
-        notePath: record.notePath,
-      }));
-
-    // C5.3 / `[D-090]`/`[D-392]` (`ol-v7r5.91`): find every id that disappeared since
-    // `input.previousInstrumentEnumeration` and, for each with at least one candidate,
-    // decide silent repair vs. her grouped choice — see that field's own doc for why "no
-    // previous enumeration supplied" is an honest "nothing to compare against yet," never a
-    // guessed "nothing deleted." Serving the raw candidate item itself while a choice is open
-    // is unruled (open question, not this bead's to invent): today's behaviour is unchanged —
-    // this block only ever writes a confirmation record, never withholds or reorders a queue
-    // row the way `withholdLosingCopies` does for a duplicate.
-    if (input.previousInstrumentEnumeration !== undefined) {
-      await recordRepairChoiceProposals(
-        input.vault,
-        matchDeletedInstrumentIds({
-          previous: input.previousInstrumentEnumeration,
-          current: instrumentEnumeration,
-        }),
-        now.getTime(),
-      );
-    }
+    // `composed.instruments.records` above, after any repair write-back's re-walk.
+    const instrumentEnumeration = enumerateInstruments(composed.instruments.records);
     const duplicatedInstrumentIds = new Set(
       composed.duplicateInstrumentIds.map((duplicate) => duplicate.instrumentId),
     );
@@ -1178,33 +1181,68 @@ async function recordDuplicationConfirmations(
 }
 
 /**
- * `[D-090]`/`[D-392]` (`ol-v7r5.91`): for every deleted id `matchDeletedInstrumentIds` paired with
- * at least one candidate, decides silent repair vs. her grouped choice
- * (`./repair-choice.ts`'s `buildRepairChoice`) and persists only the `'choice-needed'` outcomes,
- * through `./duplication-confirmation-store.ts`'s shared folder (`[D-392]` part 2). Best-effort by
- * design, the same posture as {@link recordDuplicationConfirmations} just above: a failed write
- * must never turn into a review that will not open, and the store is idempotent, so the next open
- * writes what this one could not.
+ * One instrument as a walk observed it: {@link DeletedInstrumentRecord}'s three fields plus the
+ * type, so a later open can write a silently repaired id back only onto the same kind of item.
+ */
+export interface EnumeratedInstrument extends DeletedInstrumentRecord {
+  readonly instrumentType: VaultInstrumentRecord['instrumentType'];
+}
+
+function enumerateInstruments(
+  records: readonly VaultInstrumentRecord[],
+): readonly EnumeratedInstrument[] {
+  return records.map((record) => ({
+    instrumentId: record.instrumentId,
+    raw: record.instrumentType === 'mcq' ? record.mcq.raw : record.card.raw,
+    notePath: record.notePath,
+    instrumentType: record.instrumentType,
+  }));
+}
+
+function enumeratedKey(instrumentId: string, notePath: VaultPath): string {
+  return `${instrumentId}\u0000${notePath}`;
+}
+
+/**
+ * `[D-090]`/`[D-392]` (`ol-v7r5.91`, `ol-v7r5.105`): matches every id that disappeared between
+ * `previous` and `currentRecords`, and for each one `matchDeletedInstrumentIds` paired with at
+ * least one candidate decides silent repair vs. her grouped choice (`./repair-choice.ts`'s
+ * `buildRepairChoice`).
+ *
+ * - **`'choice-needed'`** is persisted through `./duplication-confirmation-store.ts`'s shared
+ *   folder (`[D-392]` part 2) and nothing else: her note is untouched until she answers.
+ * - **`'silent'`** is written back into the successor's own metadata position through
+ *   `../instrument-stamping/repair-write-back.ts`'s `writeBackSilentRepair`, which re-checks the
+ *   text and file conditions itself and refuses on any doubt. Only when the previous walk's type
+ *   for the deleted id is known; an unknown type writes nothing.
  *
  * **A deleted id with no candidate at all writes nothing** — `buildRepairChoice` throws on an
  * empty `candidates` array (there is nothing for her to choose among), so this never calls it for
  * one; `matchDeletedInstrumentIds`'s own doc names this as the honest "no candidate found" case.
  *
- * **The silent case is a decision this function makes correctly, not yet a note write.**
- * `buildRepairChoice`'s `'silent'` outcome names which candidate would carry the deleted id's
- * identity forward at near-certainty — but writing that recovered id back into her note (as
- * opposed to minting a fresh one) is `../instrument-stamping/port.ts`'s write path, outside this
- * bead's `owns`, and not itself. So today: a near-certain single candidate is computed, matches
- * `resolveInstrumentRepair`'s own `'repaired'` outcome, and produces no confirmation entry (she is
- * never asked about something near-certain) — but nothing yet reattaches the id. Follow-up for
- * whichever bead wires the actual reattachment.
+ * Best-effort by design, the same posture as {@link recordDuplicationConfirmations} above: a
+ * failed write must never turn into a review that will not open, and both writes are idempotent,
+ * so the next open writes what this one could not. `wroteNote` is true exactly when a note she
+ * authored now carries a recovered id it did not carry before.
  */
-async function recordRepairChoiceProposals(
+async function resolveDeletedInstrumentIds(
   vault: VaultSource,
-  matches: readonly DeletedInstrumentMatch[],
+  previous: readonly EnumeratedInstrument[],
+  currentRecords: readonly VaultInstrumentRecord[],
   now: number,
-): Promise<void> {
+): Promise<{ readonly wroteNote: boolean }> {
+  const matches: readonly DeletedInstrumentMatch[] = matchDeletedInstrumentIds({
+    previous,
+    current: enumerateInstruments(currentRecords),
+  });
+  const typeOf = new Map(
+    previous.map((record) => [
+      enumeratedKey(record.instrumentId, record.notePath),
+      record.instrumentType,
+    ]),
+  );
   const entries: RepairChoiceConfirmationEntryInput[] = [];
+  let wroteNote = false;
 
   for (const match of matches) {
     if (match.candidates.length === 0) continue; // no candidate found — nothing to propose.
@@ -1212,11 +1250,10 @@ async function recordRepairChoiceProposals(
     const choiceCandidates: RepairChoiceCandidate[] = match.candidates.map((candidate) => ({
       notePath: candidate.notePath,
       // `[D-090]`'s own three-condition test, computed by the REAL `resolveInstrumentRepair`
-      // rather than reimplemented here (this bead's follow-up from `ol-v7r5.100`, now closed by
-      // exporting `instrument/repair.js` through `olea-core`'s index): `'repaired'` is the only
-      // outcome that met all three conditions — `'duplication'` (claimed elsewhere) and
-      // `'surfaced'` (text changed or moved) both fall short of near-certainty and must go to
-      // her the same way, per `[D-392]`'s binding condition 3's "otherwise it too goes to her."
+      // rather than reimplemented here: `'repaired'` is the only outcome that met all three
+      // conditions — `'duplication'` (claimed elsewhere) and `'surfaced'` (text changed or
+      // moved) both fall short of near-certainty and must go to her the same way, per
+      // `[D-392]`'s binding condition 3's "otherwise it too goes to her."
       meetsCertaintyTest:
         resolveInstrumentRepair({ deletedId: match.deletedId, candidate, now }).kind === 'repaired',
     }));
@@ -1232,16 +1269,36 @@ async function recordRepairChoiceProposals(
         candidates: outcome.proposal.candidates,
         proposedAt: now,
       });
+      continue;
     }
-    // `'silent'`: see this function's own doc — a decision, not yet a note write.
+
+    const recoveredInstrumentType = typeOf.get(
+      enumeratedKey(match.deletedId.instrumentId, match.deletedId.notePath),
+    );
+    const [successor] = match.candidates;
+    if (recoveredInstrumentType === undefined || successor === undefined) continue;
+    try {
+      const written = await writeBackSilentRepair(vault, {
+        repair: outcome,
+        deleted: match.deletedId,
+        recoveredInstrumentType,
+        candidateRaw: successor.raw,
+        currentRecords,
+      });
+      if (written.kind === 'written') wroteNote = true;
+    } catch {
+      // Best-effort: the next open finds the same deleted id and tries again.
+    }
   }
 
-  if (entries.length === 0) return;
-  try {
-    await proposeRepairChoiceConfirmations(vault, entries);
-  } catch {
-    // Best-effort, the same posture as `recordDuplicationConfirmations`: retried on the next open.
+  if (entries.length > 0) {
+    try {
+      await proposeRepairChoiceConfirmations(vault, entries);
+    } catch {
+      // Best-effort, the same posture as `recordDuplicationConfirmations`: retried on the next open.
+    }
   }
+  return { wroteNote };
 }
 
 /**
@@ -1587,7 +1644,7 @@ export function createReviewSessionOpener(
   // after every successful `open`/`extend`, over that SAME call's own `instrumentEnumeration` —
   // never a second, independent vault walk. See `OpenReviewSessionInput
   // .previousInstrumentEnumeration`'s own doc.
-  let previousInstruments: readonly DeletedInstrumentRecord[] | undefined;
+  let previousInstruments: readonly EnumeratedInstrument[] | undefined;
 
   /** `undefined` exactly when there is nothing yet to compare against — an honest "nothing changed" the same way an omitted `staleness` already reads to `queue-adapter.ts`. */
   async function stalenessSinceLastCall(): Promise<SittingStalenessInput | undefined> {

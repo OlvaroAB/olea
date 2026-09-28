@@ -10,25 +10,24 @@
  * (in-memory) vault and a real walk:
  *
  *  - the first open of a tab runs no matching at all — an honest "nothing to compare against yet";
- *  - a single byte-identical, same-file candidate repairs silently: no confirmation record;
+ *  - a single byte-identical, same-file candidate repairs silently: no confirmation record, and the
+ *    deleted id is written back into the item's own metadata position (`ol-v7r5.105`), after which
+ *    the same open re-walks so the item is served under its recovered id;
  *  - anything short of that — one uncertain candidate, or more than one candidate at all — writes
  *    ONE grouped-choice proposal into the shared store, never one per candidate;
  *  - `createReviewSessionOpener` threads the previous walk's enumeration between opens on its own,
  *    without a caller ever supplying it;
- *  - nothing here is written into a note she authored (INV-6), and a store that cannot be written
+ *  - short of near-certainty nothing is written into a note she authored (INV-6) — only the silent
+ *    repair writes, and only the `[D-030]` identity marker — and a store that cannot be written
  *    never costs her the review.
  */
 
-import type {
-  ClozeIdAnchor,
-  ComposedStudySession,
-  DeletedInstrumentRecord,
-  VaultSource,
-} from 'olea-core';
+import type { ClozeIdAnchor, ComposedStudySession, VaultSource } from 'olea-core';
 import {
   calendarDayFromLocalDate,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  removeSpans,
   stampClozeId,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -38,6 +37,7 @@ import {
 } from '../../src/review/duplication-confirmation-store.js';
 import {
   createReviewSessionOpener,
+  type EnumeratedInstrument,
   type OpenReviewSessionInput,
   openReviewSession,
 } from '../../src/review/open-session.js';
@@ -121,7 +121,7 @@ function emptyComposition(): ComposedStudySession {
 
 async function input(
   vault: VaultSource,
-  opts: { readonly previousInstrumentEnumeration?: readonly DeletedInstrumentRecord[] } = {},
+  opts: { readonly previousInstrumentEnumeration?: readonly EnumeratedInstrument[] } = {},
 ): Promise<OpenReviewSessionInput> {
   return {
     vault,
@@ -173,18 +173,94 @@ describe('the first open of a tab', () => {
 });
 
 describe('a single near-certain candidate repairs silently', () => {
-  it('byte-identical, same file, id unclaimed: no confirmation record, nothing written to her note', async () => {
+  it('byte-identical, same file, id unclaimed: no confirmation record, and the id is written back', async () => {
     const notePath = 'Notes/Candidate.md';
     const before = orphanMcqNote('What is the mitochondria?');
     const vault: MemoryVault = memoryVault({ ...baseVaultFiles(), [notePath]: before });
     const raw = await rawAt(vault, notePath);
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw, notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw, notePath, instrumentType: 'mcq' },
     ];
 
-    await open(vault, { previousInstrumentEnumeration: previous });
+    const outcome = await open(vault, { previousInstrumentEnumeration: previous });
 
     expect(await listRepairChoiceConfirmationRecords(vault)).toHaveLength(0);
+    // The only change to her note is the recovered identity marker (INV-2 over the rest).
+    const after = vault.contentOf(notePath) ?? '';
+    const marker = 'id: mcq-deleted-1\n';
+    const start = after.indexOf(marker);
+    expect(start).toBeGreaterThan(-1);
+    expect(removeSpans(after, [{ start, end: start + marker.length }])).toBe(before);
+    // The same open re-walked: it already serves the item under its recovered id.
+    expect(outcome.instrumentEnumeration.map((r) => r.instrumentId)).toContain('mcq-deleted-1');
+    const { records } = await enumerateVaultInstruments(vault);
+    expect(records.filter((r) => r.notePath === notePath).map((r) => r.instrumentId)).toEqual([
+      'mcq-deleted-1',
+    ]);
+  });
+
+  it('a second open after the write-back writes nothing more and proposes nothing', async () => {
+    const notePath = 'Notes/Candidate.md';
+    const vault: MemoryVault = memoryVault({
+      ...baseVaultFiles(),
+      [notePath]: orphanMcqNote('What is the mitochondria?'),
+    });
+    const raw = await rawAt(vault, notePath);
+    const first = await open(vault, {
+      previousInstrumentEnumeration: [
+        { instrumentId: 'mcq-deleted-1', raw, notePath, instrumentType: 'mcq' },
+      ],
+    });
+    const noteWrites = () => vault.writes.filter((w) => w === notePath).length;
+    expect(noteWrites()).toBe(1);
+
+    await open(vault, { previousInstrumentEnumeration: first.instrumentEnumeration });
+
+    expect(noteWrites()).toBe(1);
+    expect(await listRepairChoiceConfirmationRecords(vault)).toHaveLength(0);
+  });
+
+  it('writes nothing when the previous walk saw the deleted id as a different type', async () => {
+    const notePath = 'Notes/Candidate.md';
+    const before = orphanMcqNote('What is the mitochondria?');
+    const vault: MemoryVault = memoryVault({ ...baseVaultFiles(), [notePath]: before });
+    const raw = await rawAt(vault, notePath);
+
+    await open(vault, {
+      previousInstrumentEnumeration: [
+        { instrumentId: 'mcq-deleted-1', raw, notePath, instrumentType: 'cloze' },
+      ],
+    });
+
+    expect(vault.contentOf(notePath)).toBe(before);
+    expect(await listRepairChoiceConfirmationRecords(vault)).toHaveLength(0);
+  });
+
+  it('a note that cannot be written never costs her the review', async () => {
+    const notePath = 'Notes/Candidate.md';
+    const before = orphanMcqNote('What is the mitochondria?');
+    const vault: MemoryVault = memoryVault({ ...baseVaultFiles(), [notePath]: before });
+    const raw = await rawAt(vault, notePath);
+    const refusing: VaultSource = {
+      ...vault,
+      list: vault.list.bind(vault),
+      read: vault.read.bind(vault),
+      exists: vault.exists.bind(vault),
+      async write(path, content) {
+        if (path === notePath) throw new Error('read-only note');
+        return vault.write(path, content);
+      },
+    };
+
+    const outcome = await openReviewSession(
+      await input(refusing, {
+        previousInstrumentEnumeration: [
+          { instrumentId: 'mcq-deleted-1', raw, notePath, instrumentType: 'mcq' },
+        ],
+      }),
+    );
+
+    expect(outcome.ok).toBe(true);
     expect(vault.contentOf(notePath)).toBe(before);
   });
 });
@@ -197,8 +273,8 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
       [notePath]: orphanMcqNote('What is the mitochondria?'),
     });
     const raw = await rawAt(vault, notePath);
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath, instrumentType: 'mcq' },
     ];
 
     await open(vault, { previousInstrumentEnumeration: previous });
@@ -228,8 +304,13 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
     });
     // Names neither candidate's text — both qualify only via the same-file dial, so this proves
     // "more than one candidate is never silent" independent of any individual certainty.
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: 'text matching neither candidate', notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      {
+        instrumentId: 'mcq-deleted-1',
+        raw: 'text matching neither candidate',
+        notePath,
+        instrumentType: 'mcq',
+      },
     ];
 
     await open(vault, { previousInstrumentEnumeration: previous });
@@ -241,8 +322,13 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
 
   it('a deleted id with no candidate anywhere writes nothing', async () => {
     const vault: MemoryVault = memoryVault(baseVaultFiles());
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: 'gone for good', notePath: 'Notes/Nowhere.md' },
+    const previous: readonly EnumeratedInstrument[] = [
+      {
+        instrumentId: 'mcq-deleted-1',
+        raw: 'gone for good',
+        notePath: 'Notes/Nowhere.md',
+        instrumentType: 'mcq',
+      },
     ];
 
     await open(vault, { previousInstrumentEnumeration: previous });
@@ -257,8 +343,8 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
       [notePath]: orphanMcqNote('What is the mitochondria?'),
     });
     const raw = await rawAt(vault, notePath);
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath, instrumentType: 'mcq' },
     ];
     await open(vault, { previousInstrumentEnumeration: previous });
     const writesBefore = vault.writes.length;
@@ -271,13 +357,13 @@ describe('anything short of near-certainty goes to her grouped choice, per [D-39
 });
 
 describe('where it writes, and what a failed write costs', () => {
-  it('every write lands under its own dot folder — never into a note she authored (INV-6)', async () => {
+  it('short of near-certainty every write lands under its own dot folder — never into a note she authored (INV-6)', async () => {
     const notePath = 'Notes/Candidate.md';
     const before = orphanMcqNote('What is the mitochondria?');
     const vault: MemoryVault = memoryVault({ ...baseVaultFiles(), [notePath]: before });
     const raw = await rawAt(vault, notePath);
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath, instrumentType: 'mcq' },
     ];
 
     await open(vault, { previousInstrumentEnumeration: previous });
@@ -294,8 +380,8 @@ describe('where it writes, and what a failed write costs', () => {
       [notePath]: orphanMcqNote('What is the mitochondria?'),
     });
     const raw = await rawAt(vault, notePath);
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath },
+    const previous: readonly EnumeratedInstrument[] = [
+      { instrumentId: 'mcq-deleted-1', raw: `${raw} (edited)`, notePath, instrumentType: 'mcq' },
     ];
     const refusing: VaultSource = {
       ...vault,
@@ -329,17 +415,27 @@ describe('a real round trip: a stamped cloze id disappears from the frontmatter 
     const record = records.find((r) => r.instrumentType === 'cloze');
     if (record === undefined) throw new Error('expected a cloze record');
     expect(record.instrumentId).toBe('cloze-orig-1');
-    const previous: readonly DeletedInstrumentRecord[] = [
-      { instrumentId: record.instrumentId, raw: record.card.raw, notePath: NOTE_PATH },
+    const previous: readonly EnumeratedInstrument[] = [
+      {
+        instrumentId: record.instrumentId,
+        raw: record.card.raw,
+        notePath: NOTE_PATH,
+        instrumentType: 'cloze',
+      },
     ];
 
     // The frontmatter map entry is gone (a sync artifact, a manual edit) — her card's own line is
     // byte-for-byte unchanged.
     const after: MemoryVault = memoryVault({ ...baseVaultFiles(), [NOTE_PATH]: UNSTAMPED });
 
-    await open(after, { previousInstrumentEnumeration: previous });
+    const outcome = await open(after, { previousInstrumentEnumeration: previous });
 
     expect(await listRepairChoiceConfirmationRecords(after)).toHaveLength(0);
+    // Written back into the frontmatter map, never the card line, and read back by the re-walk.
+    const content = after.contentOf(NOTE_PATH) ?? '';
+    expect(content).toContain('cloze-orig-1');
+    expect(content).toContain('A ==blank== in a sentence.\n');
+    expect(outcome.instrumentEnumeration.map((r) => r.instrumentId)).toContain('cloze-orig-1');
   });
 });
 

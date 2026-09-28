@@ -1,6 +1,7 @@
 /**
  * Writing a recovered instrument id back into her note once she has confirmed a deleted-id
- * repair (`ol-v7r5.103`) — the write half `ol-v7r5.91` left undone.
+ * repair (`ol-v7r5.103`), or once the ruling's near-certainty test repairs it silently
+ * (`ol-v7r5.105`) — the write half `ol-v7r5.91` left undone.
  *
  * ## The rulings this rests on
  *
@@ -26,6 +27,8 @@
  * leaves the note untouched:
  *
  * - **Not her confirmed answer** — anything but a `'confirmed'` resolution naming this id.
+ * - **Not near-certain** (the silent path only) — the successor's text or file differs from what
+ *   the deleted id was last observed with.
  * - **The id is live elsewhere** — `[D-090]`: a claimed id is a duplication case, not a repair.
  * - **The block cannot be pinned exactly** — the caller must hand the exact text of the block she
  *   was shown (`candidateRaw`), and exactly one instrument in the chosen note must still carry
@@ -44,17 +47,38 @@
  * Idempotent: a note that already carries the recovered marker is reported as such and not
  * written again.
  *
+ * ## The silent near-certain repair (`ol-v7r5.105`)
+ *
+ * C5.3 as ruled by `[D-090]` section 4 repairs a deleted id silently when, and only when, the
+ * successor's text is byte-identical, it is in the same file, and the id is unclaimed.
+ * {@link writeBackSilentRepair} is that path's write: it takes `../review/repair-choice.ts`'s
+ * `'silent'` outcome together with the deleted id's own last-observed record and re-checks the
+ * text and file conditions itself before writing, so a caller bug can never turn an uncertain
+ * match into a silent write; the unclaimed condition is the shared write's own id-live checks.
+ * The authority is the ruling itself rather than her answer, and the write is the same `[D-030]`
+ * marker, in the same position, through the same primitives as the confirmed path.
+ *
  * ## What it does not do
  *
  * It never moves scheduling history (history is keyed by id, so once the marker is back the next
- * vault walk reads the old id and its history follows), never resolves her answer, never persists
- * the proposal, and never runs for the near-certain silent repair (equally ruled by C5.3, but a
- * separate caller). **No production caller yet** (`[D-072]`): nothing in the plugin shows her the
- * grouped choice or reads her answer today (`../review/duplication-confirmation-store.ts`), so
+ * vault walk reads the old id and its history follows), never resolves her answer, and never
+ * persists the proposal.
+ *
+ * ## Callers (`[D-072]`)
+ *
+ * {@link writeBackSilentRepair}: `../review/open-session.ts`'s deleted-id repair step, on every
+ * review open that has a previous walk to compare against. {@link writeBackRecoveredInstrumentId}
+ * has no production caller yet: nothing in the plugin shows her the grouped choice or reads her
+ * answer, because the words that choice would show her are not yet in the vocabulary registry;
  * the surface that does is this function's caller.
  */
 
-import type { VaultInstrumentRecord, VaultPath, VaultSource } from 'olea-core';
+import type {
+  DeletedInstrumentRecord,
+  VaultInstrumentRecord,
+  VaultPath,
+  VaultSource,
+} from 'olea-core';
 import {
   PROVISIONAL_ID_PREFIX,
   parseCards,
@@ -62,7 +86,10 @@ import {
   provisionalInstrumentId,
   readClozeId,
 } from 'olea-core';
-import type { RepairChoiceAttachedResult } from '../review/repair-choice.js';
+import type {
+  RepairChoiceAttachedResult,
+  RepairChoiceSilentOutcome,
+} from '../review/repair-choice.js';
 import { stampOnFirstSight } from './port.js';
 
 export type RecoverableInstrumentType = VaultInstrumentRecord['instrumentType'];
@@ -78,8 +105,26 @@ export interface WriteBackRecoveredIdInput {
   readonly currentRecords: readonly VaultInstrumentRecord[];
 }
 
+/**
+ * The silent near-certain repair's write (`[D-090]` section 4) — see the module doc's "The silent
+ * near-certain repair".
+ */
+export interface WriteBackSilentRepairInput {
+  /** `buildRepairChoice`'s `'silent'` outcome for this deleted id. */
+  readonly repair: RepairChoiceSilentOutcome;
+  /** The deleted id as the previous walk last observed it — the certainty test's left-hand side. */
+  readonly deleted: DeletedInstrumentRecord;
+  /** The type the previous walk observed the deleted id as. */
+  readonly recoveredInstrumentType: RecoverableInstrumentType;
+  /** The successor block's exact text now, which pins it within its note. */
+  readonly candidateRaw: string;
+  /** Every instrument a fresh vault walk sees now. */
+  readonly currentRecords: readonly VaultInstrumentRecord[];
+}
+
 export type WriteBackRefusalReason =
   | 'not-confirmed'
+  | 'not-near-certain'
   | 'id-live-elsewhere'
   | 'candidate-not-found'
   | 'candidate-ambiguous'
@@ -179,17 +224,68 @@ export async function writeBackRecoveredInstrumentId(
   input: WriteBackRecoveredIdInput,
 ): Promise<WriteBackRecoveredIdResult> {
   const { resolution, recoveredInstrumentType, candidateRaw, currentRecords } = input;
-  const recoveredId = resolution.instrumentId;
-  const notePath = resolution.notePath;
 
   if (
     resolution.kind !== 'attached' ||
     resolution.proposal.status !== 'confirmed' ||
-    resolution.proposal.instrumentId !== recoveredId ||
-    resolution.proposal.resolvedNotePath !== notePath
+    resolution.proposal.instrumentId !== resolution.instrumentId ||
+    resolution.proposal.resolvedNotePath !== resolution.notePath
   ) {
     return refused('not-confirmed');
   }
+
+  return writeRecoveredId(vault, {
+    recoveredId: resolution.instrumentId,
+    notePath: resolution.notePath,
+    recoveredInstrumentType,
+    candidateRaw,
+    currentRecords,
+  });
+}
+
+/**
+ * Writes a silently repaired id back into its near-certain successor, or refuses and writes
+ * nothing. Re-checks `[D-090]`'s text and file conditions against `input.deleted` itself (refusing
+ * `'not-near-certain'`), then applies every refusal the confirmed path applies.
+ */
+export async function writeBackSilentRepair(
+  vault: VaultSource,
+  input: WriteBackSilentRepairInput,
+): Promise<WriteBackRecoveredIdResult> {
+  const { repair, deleted, recoveredInstrumentType, candidateRaw, currentRecords } = input;
+
+  if (
+    repair.kind !== 'silent' ||
+    repair.instrumentId !== deleted.instrumentId ||
+    repair.notePath !== deleted.notePath ||
+    candidateRaw !== deleted.raw
+  ) {
+    return refused('not-near-certain');
+  }
+
+  return writeRecoveredId(vault, {
+    recoveredId: repair.instrumentId,
+    notePath: repair.notePath,
+    recoveredInstrumentType,
+    candidateRaw,
+    currentRecords,
+  });
+}
+
+interface RecoveredIdWrite {
+  readonly recoveredId: string;
+  readonly notePath: VaultPath;
+  readonly recoveredInstrumentType: RecoverableInstrumentType;
+  readonly candidateRaw: string;
+  readonly currentRecords: readonly VaultInstrumentRecord[];
+}
+
+/** The write both authorities share, once each has established its own authority to write. */
+async function writeRecoveredId(
+  vault: VaultSource,
+  input: RecoveredIdWrite,
+): Promise<WriteBackRecoveredIdResult> {
+  const { recoveredId, notePath, recoveredInstrumentType, candidateRaw, currentRecords } = input;
 
   const carriers = currentRecords.filter((record) => record.instrumentId === recoveredId);
   if (carriers.some((record) => record.notePath !== notePath)) return refused('id-live-elsewhere');
@@ -220,7 +316,7 @@ export async function writeBackRecoveredInstrumentId(
 
   const value = markerValue;
   const refuseMint = (): string => {
-    throw new Error('writeBackRecoveredInstrumentId: minted for the wrong instrument type');
+    throw new Error('repair write-back: minted for the wrong instrument type');
   };
   const stamped = await stampOnFirstSight(vault, target, {
     generateMcqId: recoveredInstrumentType === 'mcq' ? () => value : refuseMint,
@@ -232,7 +328,5 @@ export async function writeBackRecoveredInstrumentId(
     return { kind: 'written', instrumentId: recoveredId, notePath };
   }
   if (stamped.instrumentId === target.instrumentId) return refused('candidate-moved');
-  throw new Error(
-    'writeBackRecoveredInstrumentId: the marker written does not reproduce the recovered id',
-  );
+  throw new Error('repair write-back: the marker written does not reproduce the recovered id');
 }
