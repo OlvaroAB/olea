@@ -104,13 +104,12 @@
  * instruments, the review log already in hand says which she suspended or
  * withdrew, and the caller may add ids it found ineligible for a citation
  * reason. The gap view and the note offer deliberately never pass it
- * (`[D-404]` condition 3). **No production caller passes it yet**
- * (`ol-egov.141.89.10.5`'s close evidence): `session-builder/provider.ts`
- * already holds the inventory (`enumeration.records`) and needs one line;
- * `plan/provider.ts` waits because a course whose every concept is vetoed
- * reaches `plan/build.ts`'s `toStudyPlanCourse` as ranked-and-empty, which
- * throws and fails the whole plan refresh — the same throw a course whose
- * assessments have all passed already hits today.
+ * (`[D-404]` condition 3). **Both callers that serve practice pass it**:
+ * the plugin's `session-builder/provider.ts` (`composeStudySessionForRequest`,
+ * `61bdf67`) and `plan/provider.ts` (`48d3067`), each as
+ * `enumeration.records`. A course whose every concept is vetoed stays in the
+ * plan with zero allocation and a named reason (`plan/build.ts`'s
+ * `emptyRankingReasonFor`, `[D-408]`), never a failed plan refresh.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
