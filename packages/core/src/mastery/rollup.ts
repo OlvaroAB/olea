@@ -66,6 +66,8 @@
  *    explain-back. An explain-back *attempt* with no verdict on it is
  *    recorded (`explainBackAttempts`) but is not evidence about what she
  *    knows — R7's word is success, not attempt — so it does not lift `seed`.
+ *    A verdict on correctness alone, with no depth grade, is a verdict: it
+ *    lifts `seed` to `sprout` and nothing further (`ol-ryrh`).
  * 2. **`sprout`** — "practised; recall is not holding yet" (vocabulary
  *    registry §1). Any scored review event exists, whatever its outcome.
  *    This is the floor once evidence exists: a run of outright misses reads
@@ -502,6 +504,19 @@ export interface ConceptMasteryEvidence {
   readonly explainBackAttempts: number;
   /** Explain-back review events for this concept that carry an `explainBackGrade`. */
   readonly gradedExplainBackCount: number;
+  /**
+   * Explain-back review events for this concept that carry an independent
+   * correctness verdict (`readExplainBackCorrectness`) and NO depth grade —
+   * what the accept path records when the depth pass was skipped (`[D-286]`
+   * skips it for an incorrect verdict) or unavailable (`ol-ryrh`). The ruling
+   * on `ol-ryrh` (2026-09-27): such a verdict does not count toward the
+   * explanation tier, and counts wherever correctness alone counts. In this
+   * fold that is the `seed`-to-`sprout` floor only (see `stageOf`); it never
+   * sets `tiersSucceeded.explanation`, the depth facts or the top stage.
+   * Optional, like `tiersSucceeded`, so literals built elsewhere still
+   * type-check; `computeConceptMastery` always sets it.
+   */
+  readonly correctnessOnlyExplainBackCount?: number;
   /** Every R7 tier at least one scored-or-attempted event for this concept demonstrated, whatever its outcome. */
   readonly tiersPracticed: Readonly<Record<EvidenceTier, boolean>>;
   /**
@@ -720,6 +735,7 @@ function conceptEvidence(
   let recognitionScoredCount = 0;
   let explainBackAttempts = 0;
   let gradedExplainBackCount = 0;
+  let correctnessOnlyExplainBackCount = 0;
   let deepestSoloLevel: SoloLevel | null = null;
   let topStageQualified = false;
   let topStageAttempt: {
@@ -763,6 +779,11 @@ function conceptEvidence(
     if (record.instrumentType === 'explain-back') {
       explainBackAttempts += 1;
       const grade = record.explainBackGrade;
+      if (grade === undefined && readExplainBackCorrectness(record) !== undefined) {
+        // `ol-ryrh`: a verdict with no depth grade is practice (the sprout
+        // floor) and nothing more — no explanation-tier success, no depth.
+        correctnessOnlyExplainBackCount += 1;
+      }
       if (grade !== undefined) {
         gradedExplainBackCount += 1;
         if (deepestSoloLevel === null || soloRank(grade.soloLevel) > soloRank(deepestSoloLevel)) {
@@ -825,6 +846,7 @@ function conceptEvidence(
     scoredSuccessCount,
     explainBackAttempts,
     gradedExplainBackCount,
+    correctnessOnlyExplainBackCount,
     tiersPracticed,
     tiersSucceeded,
     recognitionOnly: scoredEventCount > 0 && recognitionScoredCount === scoredEventCount,
@@ -867,7 +889,17 @@ function stageOf(evidence: ConceptMasteryEvidence, resolved: ResolvedOptions): M
   // so the stage can only rise — R3's "no implementation may express decay by
   // lowering it", held by construction rather than by a later check.
   let state: MasteryState = 'seed';
-  if (evidence.scoredEventCount > 0 || evidence.gradedExplainBackCount > 0) state = 'sprout';
+  // `sprout` is "practised" (vocabulary registry), whatever the outcome. An
+  // explain-back carrying a correctness verdict but no depth grade is
+  // practice on correctness alone (`ol-ryrh`: it counts wherever correctness
+  // alone counts), so it lifts the floor exactly as a depth-graded one does.
+  if (
+    evidence.scoredEventCount > 0 ||
+    evidence.gradedExplainBackCount > 0 ||
+    (evidence.correctnessOnlyExplainBackCount ?? 0) > 0
+  ) {
+    state = 'sprout';
+  }
   if (saplingReached(evidence, resolved)) state = 'sapling';
   // `[D-281]`: depth alone no longer grants the top stage — all four pieces of
   // qualifying evidence must sit on one un-superseded attempt.

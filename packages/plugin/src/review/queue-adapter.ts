@@ -275,11 +275,21 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * the ladder however deep the (possibly absent) depth pass went, and a
  * record with no `correctness` at all (`[D-281]`: unknown, never read as
  * correct) is capped at `'minor-slip'` — it never reads as the clean pass a
- * relational-but-unverified answer would otherwise produce. An
- * `explain-back` entry with no `soloLevel` at all (an ungraded or declined
- * attempt — `deriveFailureShape` throws on that shape, see its own doc's
- * "blank" section) is skipped, the same "no honest reading" treatment a
- * null recall rating gets.
+ * relational-but-unverified answer would otherwise produce.
+ *
+ * **A verdict with no depth grade counts where correctness alone counts**
+ * (`ol-ryrh`, ruled 2026-09-27). An `'incorrect'` verdict recorded without a
+ * depth grade — every incorrect explanation since `[D-286]` skips the depth
+ * pass for it — is a `'wrong-concept'` failure and escalates the explanation
+ * ladder: escalation needs a failure shape and nothing else (`[D-094]` item
+ * 5). A `'correct'` or `'partial'` verdict without a depth grade is skipped:
+ * support fades only on "strong recent recall together with depth evidence"
+ * (F2.20), so it is neither a clean session nor a break in a run of them. An
+ * `explain-back` entry with neither a depth grade nor a verdict (an ungraded
+ * or declined attempt — `deriveFailureShape` throws on that shape, see its
+ * own doc's "blank" section) is skipped, the same "no honest reading"
+ * treatment a null recall rating gets. `packages/core/src/support-level/
+ * history.ts` folds the same rule.
  *
  * Because `qa`/`cloze` and `explain-back` reviews of the SAME concept in one
  * sitting occupy different tiers (`[D-094]`'s ladders are per-tier), the
@@ -307,9 +317,10 @@ export function buildSupportLevelHistoryLookup(
         tier = 'recall';
         evidence = { instrumentType: review.instrumentType, rating: review.rating };
       } else if (review.instrumentType === 'explain-back') {
-        const grade = review.explainBackGrade;
-        if (grade === undefined || grade.soloLevel === undefined) continue;
+        const soloLevel = review.explainBackGrade?.soloLevel;
         const correctnessVerdict = readExplainBackCorrectness(review)?.verdict;
+        // `ol-ryrh`: without a depth grade only an incorrect verdict has a reading.
+        if (soloLevel === undefined && correctnessVerdict !== 'incorrect') continue;
         tier = 'explanation';
         evidence = {
           instrumentType: 'explain-back',
@@ -320,7 +331,7 @@ export function buildSupportLevelHistoryLookup(
           // here, matching `support-level-signal.spec.ts`'s own precedent
           // for this exact case.
           rating: 'again',
-          soloLevel: grade.soloLevel,
+          ...(soloLevel !== undefined ? { soloLevel } : {}),
           // `[D-386]`: top-level verdict first, legacy nested second.
           ...(correctnessVerdict !== undefined ? { correctness: correctnessVerdict } : {}),
         };

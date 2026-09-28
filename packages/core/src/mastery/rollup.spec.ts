@@ -402,6 +402,104 @@ describe('computeConceptMastery — tiersSucceeded (ol-lfhj, R7, review 3.4: "a 
   });
 });
 
+/**
+ * An explain-back review carrying only the independent correctness verdict
+ * (v6's top-level `explainBackCorrectness`, `[D-303]`) and no depth grade:
+ * what the accept path records when depth grading was skipped (`[D-286]`: an
+ * incorrect verdict never gets a depth pass) or was unavailable (`ol-ryrh`).
+ */
+function correctnessOnlyExplainBack(
+  verdict: 'correct' | 'partial' | 'incorrect',
+  overrides: Partial<ReviewLogRecord> = {},
+): ReviewLogRecord {
+  return review({
+    eventId: `eb-correctness-only-${verdict}`,
+    instrumentId: 'explain-back:concept-a',
+    instrumentType: 'explain-back',
+    rating: null,
+    supportLevelShown: 'independent',
+    explainBackCorrectness: {
+      verdict,
+      artifactProvenance: {
+        taskId: 'explain-back-correctness',
+        promptVersion: 'v0',
+        modelId: 'model-placeholder',
+      },
+    },
+    ...overrides,
+  });
+}
+
+// `ol-ryrh` (ruled 2026-09-27): a correctness verdict recorded without a depth
+// grade does not count toward the explanation tier; it counts wherever
+// correctness alone counts (`ol-egov.141.89.6.59`).
+describe('computeConceptMastery — a correctness-only explain-back record (ol-ryrh)', () => {
+  it('a correct verdict with no depth grade gives no explanation-tier success and never the top stage', () => {
+    const result = computeConceptMastery([correctnessOnlyExplainBack('correct')], 'concept-a');
+    expect(result.evidence.tiersPracticed.explanation).toBe(true);
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
+    expect(result.evidence.gradedExplainBackCount).toBe(0);
+    expect(result.evidence.deepestSoloLevel).toBeNull();
+    expect(result.evidence.depthGateCleared).toBe(false);
+    expect(result.evidence.topStageQualified).toBe(false);
+    expect(result.state).not.toBe('tree');
+  });
+
+  it('the same verdict WITH a depth grade does succeed at the explanation tier, so the test above can fail', () => {
+    const result = computeConceptMastery([gradedExplainBack('relational')], 'concept-a');
+    expect(result.evidence.tiersSucceeded?.explanation).toBe(true);
+  });
+
+  it('beside spaced recall, a correct correctness-only record leaves the stage where recall put it', () => {
+    const recall = onConsecutiveDays('2026-01-01', 5, () => ({
+      instrumentType: 'qa',
+      rating: 'good',
+    }));
+    const withRecord = [
+      ...recall,
+      correctnessOnlyExplainBack('correct', { timestamp: '2026-01-06T09:00:00-04:00' }),
+    ];
+    expect(computeConceptMastery(recall, 'concept-a').state).toBe('sapling');
+    expect(computeConceptMastery(withRecord, 'concept-a').state).toBe('sapling');
+  });
+
+  // The seed-to-sprout floor is a place where correctness alone counts:
+  // `sprout` is "Practised" (vocabulary registry, growth stage axis 1), the
+  // floor is outcome-independent ("any scored review, whatever its outcome"),
+  // and no clause puts a depth condition anywhere below the top stage (R7:
+  // the depth gate is the top stage's; `sapling` is reachable on any mix).
+  it.each(['correct', 'partial', 'incorrect'] as const)(
+    'a %s verdict with no depth grade lifts seed to sprout, and no further',
+    (verdict) => {
+      const result = computeConceptMastery([correctnessOnlyExplainBack(verdict)], 'concept-a');
+      expect(result.state).toBe('sprout');
+      expect(result.evidence.correctnessOnlyExplainBackCount).toBe(1);
+      expect(result.evidence.scoredEventCount).toBe(0);
+    },
+  );
+
+  it('an explain-back with neither a verdict nor a depth grade still stays at seed', () => {
+    const result = computeConceptMastery(
+      [
+        review({
+          instrumentId: 'explain-back:concept-a',
+          instrumentType: 'explain-back',
+          rating: null,
+        }),
+      ],
+      'concept-a',
+    );
+    expect(result.state).toBe('seed');
+    expect(result.evidence.correctnessOnlyExplainBackCount).toBe(0);
+  });
+
+  it('a record carrying a depth grade is counted as graded, not as correctness-only', () => {
+    const result = computeConceptMastery([gradedExplainBack('multistructural')], 'concept-a');
+    expect(result.evidence.gradedExplainBackCount).toBe(1);
+    expect(result.evidence.correctnessOnlyExplainBackCount).toBe(0);
+  });
+});
+
 describe('computeConceptMastery — the two declared constants are honoured and validated (MAT-6)', () => {
   it('the shipped defaults are the declared ones: 3 spaced days, and `relational` on the depth gate', () => {
     expect(MIN_SPACED_RETRIEVAL_DAYS).toBe(3);

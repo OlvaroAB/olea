@@ -18,6 +18,7 @@
 import type { ComposedQueue, PlannedQueueItem, RandomSource, VaultSource } from 'olea-core';
 import {
   buildReviewSession,
+  chooseSupportLevel,
   composeQueue,
   createFsrsScheduler,
   executeStudyPlan,
@@ -883,6 +884,8 @@ function reviewLogEntry(overrides: {
       | 'extended-abstract';
     readonly correctness?: 'correct' | 'partial' | 'incorrect';
   };
+  /** v6's top-level verdict (`[D-303]`), written with no depth grade for a correctness-only record (`ol-ryrh`). */
+  readonly explainBackCorrectness?: 'correct' | 'partial' | 'incorrect';
 }) {
   return {
     schemaVersion: 6 as const,
@@ -916,6 +919,18 @@ function reviewLogEntry(overrides: {
             ...(overrides.explainBackGrade.correctness !== undefined
               ? { correctness: overrides.explainBackGrade.correctness }
               : {}),
+          },
+        }
+      : {}),
+    ...(overrides.explainBackCorrectness !== undefined
+      ? {
+          explainBackCorrectness: {
+            verdict: overrides.explainBackCorrectness,
+            artifactProvenance: {
+              taskId: 'grade.explain-back-correctness.v1',
+              promptVersion: '2026-08-26',
+              modelId: 'workers-ai:test-model',
+            },
           },
         }
       : {}),
@@ -1203,6 +1218,57 @@ describe('explain-back reviews reach the support history, at the explanation tie
       { failureShape: 'wrong-concept', hintUptake: false },
     ]);
   });
+});
+
+// `ol-ryrh` (ruled 2026-09-27): a correctness verdict recorded without a depth
+// grade counts wherever correctness alone counts (`ol-egov.141.89.6.59`).
+// Escalation needs only a failure shape ([D-094] item 5), and [D-286] skips
+// the depth pass for an incorrect verdict, so before this change an incorrect
+// explanation never reached the explanation ladder at all. Fading needs depth
+// evidence (F2.20), so a correct or partial verdict without depth is skipped.
+describe('a correctness-only explain-back record on the support ladder (ol-ryrh, [D-094], [D-286], F2.20)', () => {
+  it('an incorrect verdict with no depth grade escalates the explanation ladder', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackCorrectness: 'incorrect',
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+    expect(chooseSupportLevel(lookup.outcomesFor('concept-a', 'explanation')).level).toBe('guided');
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it.each(['correct', 'partial'] as const)(
+    'a %s verdict with no depth grade is skipped, so it never recedes support',
+    (verdict) => {
+      const lookup = buildSupportLevelHistoryLookup([
+        reviewLogEntry({
+          eventId: 'e1',
+          timestamp: '2026-08-18T09:00:00+00:00',
+          instrumentType: 'explain-back',
+          rating: null,
+          conceptIds: ['concept-a'],
+          explainBackCorrectness: verdict,
+        }),
+        reviewLogEntry({
+          eventId: 'e2',
+          timestamp: '2026-08-19T09:00:00+00:00',
+          instrumentType: 'explain-back',
+          rating: null,
+          conceptIds: ['concept-a'],
+          explainBackCorrectness: verdict,
+        }),
+      ]);
+      expect(lookup.outcomesFor('concept-a', 'explanation')).toEqual([]);
+    },
+  );
 });
 
 describe('supportLevel threads through both adapters ([SUPP-3])', () => {

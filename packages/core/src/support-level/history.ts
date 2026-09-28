@@ -17,6 +17,18 @@
  * verdict before depth, so a relational but incorrect answer is a failure and
  * unknown correctness never reads as a clean pass.
  *
+ * **A verdict with no depth grade counts where correctness alone counts**
+ * (`ol-ryrh`, ruled 2026-09-27). Escalation is such a place: it needs a
+ * failure shape and nothing else (`[D-094]` item 5, "one session with a blank
+ * or wrong-concept failure"), and an `'incorrect'` verdict is one whatever
+ * depth says — `[D-286]` skips the depth pass for exactly that verdict, so
+ * skipping the record here would mean an incorrect explanation never
+ * escalates the explanation ladder. Recession is not such a place: support
+ * fades only on "strong recent recall together with depth evidence" (F2.20),
+ * so a `'correct'` or `'partial'` verdict without a depth grade has no
+ * reading here and is skipped, as before — it neither counts as a clean
+ * session nor breaks a run of them.
+ *
  * **Fixed at composition** (`[D-186]`): given the composition instant, the
  * fold reads only sessions CLOSED before it — reviews logged at or after it
  * are not yet history, and a cluster whose last review sits within the
@@ -117,8 +129,12 @@ function ladderEvidence(
     };
   }
   if (review.instrumentType === 'explain-back') {
-    const grade = review.explainBackGrade;
-    if (grade === undefined || grade.soloLevel === undefined) return null;
+    const correctness = correctnessEvidence(review);
+    const soloLevel = review.explainBackGrade?.soloLevel;
+    // No depth grade: only an `'incorrect'` verdict has a reading (`ol-ryrh`;
+    // see the module doc). Correct or partial without depth, or no verdict
+    // at all, is skipped.
+    if (soloLevel === undefined && correctness.correctness !== 'incorrect') return null;
     return {
       tier: 'explanation',
       evidence: {
@@ -128,8 +144,8 @@ function ladderEvidence(
         // shape requires one, so a placeholder is supplied, as the plugin's
         // fold and the signal's own spec do.
         rating: 'again',
-        soloLevel: grade.soloLevel,
-        ...correctnessEvidence(review),
+        ...(soloLevel === undefined ? {} : { soloLevel }),
+        ...correctness,
       },
     };
   }

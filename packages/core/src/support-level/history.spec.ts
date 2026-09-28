@@ -122,6 +122,69 @@ describe('tiers are separate ladders; explanations read correctness first (L8, [
   });
 });
 
+/** An explain-back carrying only the independent verdict, no depth grade (`[D-303]` top level). */
+function correctnessOnly(
+  minutes: number,
+  verdict: 'correct' | 'partial' | 'incorrect',
+): ReviewLogRecord {
+  return review(minutes, {
+    instrumentId: 'eb:a',
+    instrumentType: 'explain-back',
+    rating: null,
+    explainBackCorrectness: {
+      verdict,
+      artifactProvenance: { taskId: 'explain-back-correctness', promptVersion: 'v0', modelId: 'm' },
+    },
+  });
+}
+
+describe('a verdict with no depth grade counts where correctness alone counts (ol-ryrh, [D-094], F2.20)', () => {
+  it('an incorrect verdict with no depth pass is a wrong-concept session and escalates the explanation ladder', () => {
+    const history = buildSupportLevelHistory([correctnessOnly(0, 'incorrect')]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+    expect(chooseSupportLevel(history.outcomesFor('concept-a', 'explanation')).level).toBe(
+      'guided',
+    );
+  });
+
+  it('after support has receded, an incorrect correctness-only explanation brings it back', () => {
+    const history = buildSupportLevelHistory([
+      explainBack(0, 'correct', 'relational'),
+      explainBack(APART, 'correct', 'relational'),
+      correctnessOnly(2 * APART, 'incorrect'),
+    ]);
+    const outcomes = history.outcomesFor('concept-a', 'explanation');
+    expect(chooseSupportLevel(outcomes.slice(0, 2)).level).toBe('independent');
+    expect(chooseSupportLevel(outcomes).level).not.toBe('independent');
+  });
+
+  it('it fails the sitting it sits in, beside a clean depth-graded explanation', () => {
+    const history = buildSupportLevelHistory([
+      explainBack(0, 'correct', 'relational'),
+      correctnessOnly(4, 'incorrect'),
+    ]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+  });
+
+  it.each(['correct', 'partial'] as const)(
+    'a %s verdict with no depth grade is skipped: fading needs depth evidence (F2.20)',
+    (verdict) => {
+      const history = buildSupportLevelHistory([
+        correctnessOnly(0, verdict),
+        correctnessOnly(APART, verdict),
+      ]);
+      expect(history.outcomesFor('concept-a', 'explanation')).toEqual([]);
+      expect(chooseSupportLevel(history.outcomesFor('concept-a', 'explanation')).level).toBe(
+        'prompted',
+      );
+    },
+  );
+});
+
 describe('what has no ladder, or no honest reading, is skipped (L6)', () => {
   it('a quiz item has no ladder', () => {
     const history = buildSupportLevelHistory([
