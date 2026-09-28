@@ -211,10 +211,12 @@ import {
   evaluateCitedPassageRevision,
   hashText,
   type PendingRevalidationRecorder,
+  projectInstrumentValidity,
   type RelocationCandidate,
   type RevisionJudgeInput,
   type RevisionJudgePort,
   type RevisionJudgeVerdict,
+  readReviewLogHistory,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
@@ -524,7 +526,40 @@ export class CitationRevisionTrigger {
     const stored = await this.deps.store.loadAll();
     report.tracked = stored.size;
 
+    // `ol-egov.141.89.2.14` (C5.3 as amended by `[D-396]`): an instrument standing REJECTED is
+    // skipped before any judge call or write this pass touches — the same shared fold every
+    // other reader of rejection standing reads (`session-builder/provider.ts`,
+    // `review/open-session.ts`'s `projectInstrumentValidity(entries).provenInvalid`), so her
+    // restore (an `accepted` verdict naming the rejection in `restores`) lifts it here exactly as
+    // it does there. Only the `'rejected'` reason is read: a suspension recorded as `'defect'`
+    // (the fold's other `provenInvalid` reason) is left to this trigger's pre-existing behaviour,
+    // unchanged — this fix is about a standing rejection, never about defect suspension. A
+    // review-log read failure degrades to "nothing proven invalid" rather than blocking this
+    // whole batch pass, the same permissive posture every other read in this file already takes
+    // on failure.
+    let rejectedInstrumentIds: ReadonlySet<string>;
+    try {
+      const { entries } = await readReviewLogHistory(vault);
+      const provenInvalid = projectInstrumentValidity(entries).provenInvalid;
+      rejectedInstrumentIds = new Set(
+        [...provenInvalid]
+          .filter(([, fact]) => fact.reason === 'rejected')
+          .map(([instrumentId]) => instrumentId),
+      );
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision could not read the review log for rejection standing',
+        error,
+      );
+      rejectedInstrumentIds = new Set();
+    }
+
     for (const [instrumentId, previous] of stored) {
+      // `ol-egov.141.89.2.14`: a standing rejection wins over every other check this loop makes
+      // — no current-passage read, no judge dispatch, no store write, no suspend, no enqueue.
+      // Left tracked as-is: once she restores it, the ordinary revision check resumes from the
+      // same baseline, exactly as if this pass had never run for it.
+      if (rejectedInstrumentIds.has(instrumentId)) continue;
       // `[D-366]`: an id that WAS tracked but, under the current rule, no
       // longer is — e.g. a rule change since it was last baselined, since
       // `sourceProvenance` is write-once and cannot itself change underneath
@@ -692,6 +727,9 @@ export class CitationRevisionTrigger {
     // now, nothing to diff against yet.
     for (const [instrumentId, record] of currentByInstrumentId) {
       if (stored.has(instrumentId)) continue;
+      // `ol-egov.141.89.2.14`: a rejected instrument never gets a first baseline either — no
+      // write at all while it stands rejected (see the `rejectedInstrumentIds` doc above).
+      if (rejectedInstrumentIds.has(instrumentId)) continue;
       try {
         const path = citedPassagePath(record);
         const text = await materialFor(path);
