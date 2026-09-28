@@ -306,17 +306,17 @@ describe('legacy absent: a v5 record restamped to 6 is a valid v6 record, byte f
     }
   });
 
-  it('the v6 union carries the v5 union’s ten members and fourteen kind literals exactly', () => {
+  it('the v6 union carries the v5 union’s ten members and fourteen kind literals, plus the v6-only set-aside kind ([D-416])', () => {
     const kindsOf = (options: readonly { readonly shape: { readonly kind: unknown } }[]) =>
       options.flatMap((option) => {
         const kind = option.shape.kind as { readonly options?: readonly string[]; value?: string };
         return kind.options !== undefined ? [...kind.options] : [String(kind.value)];
       });
-    expect(reviewLogEntryV6.options).toHaveLength(10);
+    expect(reviewLogEntryV6.options).toHaveLength(11);
     expect(new Set(kindsOf(reviewLogEntryV6.options))).toEqual(
-      new Set(kindsOf(reviewLogEntryV5.options)),
+      new Set([...kindsOf(reviewLogEntryV5.options), 'explain-back-set-aside']),
     );
-    expect(kindsOf(reviewLogEntryV6.options)).toHaveLength(14);
+    expect(kindsOf(reviewLogEntryV6.options)).toHaveLength(15);
   });
 
   it('the non-v5 member schemas each require version 6', () => {

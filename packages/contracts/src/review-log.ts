@@ -2242,13 +2242,33 @@ export function readExplainBackCorrectness(record: {
 }
 
 /**
+ * `followsAttemptId` (`[D-416]`) appears only on an explain-back review: only
+ * the explain-back view has a Try again that sets an attempt aside.
+ */
+function refineFollowsAttemptIdInstrumentType(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly followsAttemptId?: string | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.followsAttemptId === undefined || value.instrumentType === 'explain-back') return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['followsAttemptId'],
+    message: 'followsAttemptId may only appear on an explain-back review ([D-416])',
+  });
+}
+
+/**
  * One review event, **schema version 6** (`ol-95vv.8`) — the current
  * version (see the v6 block's opening doc).
  *
  * Every v5 field, by derivation, with `masteryAtTime` widened in place to
  * `masteryAtTimeV6`, plus four optional top-level fields
  * (`explainBackCorrectness`, `hintOpened`, `presentedPassageDigest`,
- * `compositionId`). Every v5 refinement is re-applied unchanged (a refined
+ * `compositionId`), and `[D-416]`'s optional `followsAttemptId`, added later
+ * without a version bump. Every v5 refinement is re-applied unchanged (a refined
  * object's refinements do not travel with its `.shape`), plus the three v6
  * refinements. `[D-367]`'s `origin` is
  * a v5 field, so it arrives here with the spread, after `answerEdits` and
@@ -2302,6 +2322,28 @@ export const reviewLogRecordV6 = z
      * what was composed (D-005).
      */
     compositionId: z.string().min(1).optional(),
+    /**
+     * The attempt this accepted explain-back answer followed (`[D-416]`,
+     * `ol-egov.141.89.6.63`): the `attemptId` of the
+     * `explain-back-set-aside` record for the attempt she chose Try again on
+     * immediately before writing this answer. Walking each set-aside
+     * record's own `followsAttemptId` from there reads the whole attempt
+     * sequence back from her log alone.
+     *
+     * **Absent means the first attempt at the question, or not recorded** —
+     * on every record written before the field existed and on every review
+     * outside the explain-back view. Never synthesised by the v5 → v6 hop,
+     * and never inferred by time proximity. Explain-back reviews only
+     * (`refineFollowsAttemptIdInstrumentType`). It is a link, not evidence:
+     * no fold reads it, and the rung the retry was answered at is recorded
+     * where it always is, in `supportLevelShown`. Opaque: a minted id, never
+     * content (D-005).
+     *
+     * **Additive with no version bump**, for the reason `verdictLogRecordV6`'s
+     * doc gives: every line valid under v6 before this field existed is valid
+     * after it and means the same thing.
+     */
+    followsAttemptId: z.string().min(1).optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineVitalityAgreesWithConcepts)
@@ -2310,7 +2352,8 @@ export const reviewLogRecordV6 = z
   .superRefine(refineSchedulingObservationNotSubject)
   .superRefine(refineCorrectnessInstrumentType)
   .superRefine(refineAnswerEditsInstrumentType)
-  .superRefine(refineExplainBackCorrectness);
+  .superRefine(refineExplainBackCorrectness)
+  .superRefine(refineFollowsAttemptIdInstrumentType);
 export type ReviewLogRecordV6 = z.infer<typeof reviewLogRecordV6>;
 
 /**
@@ -2527,9 +2570,111 @@ export const sourceRegisteredLogRecordV6 = z.object({
 export type SourceRegisteredLogRecordV6 = z.infer<typeof sourceRegisteredLogRecordV6>;
 
 /**
+ * What the check returned for an explain-back attempt she set aside
+ * (`[D-416]`). `graded`: she was shown a correctness verdict, its feedback and
+ * the cited source; the record keeps the verdict and, where the correctness
+ * call surfaced one, its D7.3 stamp. `unable-to-assess` (`[D-321]`): she was
+ * shown none of those, only that the check could not tell, so there is no
+ * verdict to keep.
+ *
+ * **The stamp is optional here, unlike on a review's `explainBackCorrectness`,
+ * and that is deliberate.** On a review the verdict is evidence, so `[D-303]`
+ * records it with its own stamp or not at all. This record is never evidence,
+ * and dropping the verdict for want of a stamp would erase the grade `[D-416]`
+ * rules must be retained. The production judge caller refuses a reply without
+ * a usable stamp, so in practice the stamp is always present; absent means
+ * provenance unknown, never invented or borrowed from another call.
+ */
+export const explainBackSetAsideOutcome = z.discriminatedUnion('kind', [
+  z.object({
+    kind: z.literal('graded'),
+    verdict: explainBackCorrectnessVerdict,
+    artifactProvenance: artifactProvenance.optional(),
+  }),
+  z.object({ kind: z.literal('unable-to-assess') }),
+]);
+export type ExplainBackSetAsideOutcome = z.infer<typeof explainBackSetAsideOutcome>;
+
+/** A set-aside attempt never names itself as the attempt it followed. */
+function refineSetAsideNotSelfLinked(
+  value: { readonly attemptId: string; readonly followsAttemptId?: string | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.followsAttemptId !== value.attemptId) return;
+  ctx.addIssue({
+    code: 'custom',
+    path: ['followsAttemptId'],
+    message: 'an attempt follows an earlier attempt, never itself ([D-416])',
+  });
+}
+
+/**
+ * One explain-back attempt she **set aside** with Try again (`[D-416]`, ruled
+ * 2026-09-28, `ol-egov.141.89.6.63`; carrying `[D-318]`'s "any answer after
+ * feedback is recorded as a separate supported attempt"). New at v6, additive
+ * to the v6 discriminated union the way `nonAttemptLogRecordV5` was to v5 —
+ * no `schemaVersion` bump, because nothing about the shape the union already
+ * carries changes; a new literal `kind` value is what additive means here.
+ * There is no v5 form: no v5 writer ever produced one.
+ *
+ * **Why its own kind.** The review record is the accepted attempt and is read
+ * as evidence; writing an attempt she did not accept as a review would count
+ * an unaccepted grade. `revisionOf` means a re-grade of the same answer,
+ * `dispute` a contested claim and `non-attempt` a prompt left with no answer —
+ * none of them is this event.
+ *
+ * **What is recorded**: the attempt's own id, the attempt it followed (absent
+ * for the first attempt at the question), its outcome (a three-value verdict
+ * or *could not assess*), the fact that she did not accept it
+ * (`acceptance: 'not-accepted'`, the only value — an accepted attempt is the
+ * review record), the rung it was answered at, and how long it took. The
+ * accepted retry's review names the last set-aside attempt in its own
+ * `followsAttemptId`, so the sequence reads back from the log alone.
+ *
+ * **Never evidence** (`[D-416]`: an unaccepted grade need not count as
+ * learning evidence). No growth-stage fold, vitality reading, support-ladder
+ * reading, registry, retrospective or Today reading reads it, and the
+ * misconception matcher never sees it.
+ *
+ * **No content, per D-005**: no answer text, no feedback, no cited passage,
+ * no missed points. Opaque ids, one enum-valued outcome, one rung and one
+ * number. `'explain-back-set-aside'` is internal vocabulary and is never
+ * printed.
+ */
+export const explainBackSetAsideLogRecordV6 = z
+  .object({
+    schemaVersion: z.literal(6),
+    /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+    kind: z.literal('explain-back-set-aside'),
+    /** Stable unique id; makes two-device merges idempotent. */
+    eventId: z.string().min(1),
+    /** ISO-8601 with offset, the moment she chose Try again. */
+    timestamp: z.string().datetime({ offset: true }),
+    /** The explain-back instrument (or per-prompt id) the attempt answered — the same id the accepted retry's review carries. */
+    instrumentId: z.string().min(1),
+    /** Every concept the attempt was attributed to, as the accepted retry's review would name them. Non-empty. */
+    conceptIds: z.array(z.string().min(1)).min(1),
+    /** This attempt's own id, minted when she submitted it. */
+    attemptId: z.string().min(1),
+    /** The attempt this one followed; absent for the first attempt at the question. */
+    followsAttemptId: z.string().min(1).optional(),
+    /** What the check returned — see `explainBackSetAsideOutcome`. */
+    outcome: explainBackSetAsideOutcome,
+    /** She did not accept it. One value: an accepted attempt is recorded as the review. */
+    acceptance: z.literal('not-accepted'),
+    /** The rung sealed when she submitted it (`[D-094]`, `[D-416]`); absent means unknown, never unaided. */
+    supportLevelShown: supportLevel.optional(),
+    /** Presented-to-submitted milliseconds, `null` when nothing timed it — the review record's definition. */
+    durationMs: z.number().int().nonnegative().nullable(),
+  })
+  .superRefine(refineSetAsideNotSelfLinked);
+export type ExplainBackSetAsideLogRecordV6 = z.infer<typeof explainBackSetAsideLogRecordV6>;
+
+/**
  * Every shape a **v6** review-log line can take, discriminated by `kind` —
- * the same ten members as `reviewLogEntryV5`, each at version 6, and the
- * union readers parse current lines against (`reviewLogEntry`).
+ * the same ten members as `reviewLogEntryV5`, each at version 6, plus the
+ * v6-only `explain-back-set-aside` (`[D-416]`), and the union readers parse
+ * current lines against (`reviewLogEntry`).
  */
 export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   reviewLogRecordV6,
@@ -2542,6 +2687,7 @@ export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   nonAttemptLogRecordV6,
   misconceptionObservedLogRecordV6,
   sourceRegisteredLogRecordV6,
+  explainBackSetAsideLogRecordV6,
 ]);
 export type ReviewLogEntryV6 = z.infer<typeof reviewLogEntryV6>;
 
@@ -2572,6 +2718,8 @@ export const misconceptionObservedLogRecord = misconceptionObservedLogRecordV6;
 export type MisconceptionObservedLogRecord = z.infer<typeof misconceptionObservedLogRecordV6>;
 export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV6;
 export type SourceRegisteredLogRecord = z.infer<typeof sourceRegisteredLogRecordV6>;
+export const explainBackSetAsideLogRecord = explainBackSetAsideLogRecordV6;
+export type ExplainBackSetAsideLogRecord = z.infer<typeof explainBackSetAsideLogRecordV6>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 6 as const;
