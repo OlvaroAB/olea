@@ -45,6 +45,17 @@ import type {
   RetrospectiveScopeOrigin,
 } from 'olea-core';
 import { VITALITY_DISPLAY } from 'olea-core';
+// `RetrospectiveCarriesEntry`/`RetrospectiveCarryBasis` (landed `olea` 612d2c7)
+// are not yet re-exported from `olea-core`'s own root barrel (`src/index.ts`
+// still lists only the pre-612d2c7 `RetrospectiveCarriesLine`) — the same deep
+// import already used elsewhere in this package for a type the barrel has not
+// caught up to yet (`main.ts`'s `olea-core/src/study-session/compose.js`,
+// `wiring.ts`'s `olea-core/src/concept/merge-audit-store.js`). Filed as a gap
+// for the barrel, not fixed here (outside this bead's owns).
+import type {
+  RetrospectiveCarriesEntry,
+  RetrospectiveCarryBasis,
+} from 'olea-core/src/retrospective/types.js';
 
 export const RETROSPECTIVE_VIEW_TITLE = 'Assessment retrospective';
 
@@ -101,16 +112,36 @@ export function conceptLine(line: RetrospectiveConceptLine): string {
 }
 
 /**
- * One "what carries" line. `otherCourses` names every other course sharing
- * the concept (never narrowed to one, per F8.7's own rule); the same-course
- * fallback (D-134 Q3) reads against the term's last assessment instead.
+ * `[D-388]` condition 3's basis clause, reused per destination and for the
+ * same-course fallback (`courseLabel` is `'this course'` there). Drafted at
+ * `docs/design/copy-pass-2026-09/retrospective-what-carries.md` candidate
+ * (c)A, ratified by David 2026-09-28 in chat — reuses `scopeOriginLine`'s own
+ * stated-fact-vs-evidence-derived contrast device rather than a new one.
  */
-export function carriesLine(line: RetrospectiveCarriesLine): string {
-  if (line.otherCourses.length > 0) {
-    const courseNoun = line.otherCourses.length === 1 ? 'course' : 'courses';
-    return `${line.conceptName} — also in scope for ${line.otherCourses.join(', ')} (${courseNoun})`;
-  }
-  return `${line.conceptName} — carries into this course's own remaining assessment`;
+function carryBasisClause(courseLabel: string, basis: RetrospectiveCarryBasis): string {
+  return basis === 'declared-scope'
+    ? `${courseLabel}'s declared scope`
+    : `Olea's reading, not ${courseLabel}'s declared scope`;
+}
+
+/**
+ * One "what carries" line, ratified by David 2026-09-28 in chat from
+ * `docs/design/copy-pass-2026-09/retrospective-what-carries.md`'s
+ * recommended candidates ((a)A / (b)A / (c)A), landing `[D-388]` conditions 1
+ * and 3: `hasQualifyingPractice: false` states plainly that no qualifying
+ * practice history exists (never "not practised" — that would overclaim an
+ * absence recognition-tier-only practice does not support), and every
+ * destination names its own basis, visibly distinct from examiner authority.
+ *
+ * **Several destinations with mixed bases (Class B default, `[D-388]`'s own
+ * bead left this open):** one clause per destination, each stating its own
+ * basis, joined the same way `otherCourses` was already joined before this
+ * bead — comma-separated, no "and" — since every clause now carries its own
+ * parenthetical and needs no conjunction to stay unambiguous. Revisit if a
+ * real multi-destination, mixed-basis case reads awkwardly in practice.
+ */
+export function carriesLine(line: RetrospectiveCarriesEntry): string {
+  return `${line.conceptName} — ${carriesRowDetail(line)}`;
 }
 
 /**
@@ -118,8 +149,10 @@ export function carriesLine(line: RetrospectiveCarriesLine): string {
  * quiet column carrying the stage and vitality together
  * (`docs/design/dsn2-retrospective/retrospective-surface.html:90-93`, and the
  * rows in frames 04-06). `conceptLine` / `carriesLine` above are the one-line
- * form the vault note is written from (`note-writer.ts`) and are unchanged;
- * these four are the same content split for the screen.
+ * form the vault note is written from (`note-writer.ts`); these four are the
+ * same content split for the screen, now sharing `carriesLine`'s own
+ * `[D-388]`-condition-1/3 wording via `carriesRowDetail` below rather than
+ * holding a second copy of it.
  *
  * They are deliberately a PAIR. F2.11's co-presence rule (`[D-116]`) says a
  * surface carries both axes or neither, and the drawing's own note on frame 04
@@ -140,12 +173,28 @@ export function carriesRowName(line: RetrospectiveCarriesLine): string {
   return line.conceptName;
 }
 
-export function carriesRowDetail(line: RetrospectiveCarriesLine): string {
-  if (line.otherCourses.length > 0) {
-    const courseNoun = line.otherCourses.length === 1 ? 'course' : 'courses';
-    return `also in scope for ${line.otherCourses.join(', ')} (${courseNoun})`;
+export function carriesRowDetail(line: RetrospectiveCarriesEntry): string {
+  // `[D-388]` condition 1: stated plainly, never inferred, and never worded
+  // as faded/weak/forgotten (registry §22 checked by hand at the draft —
+  // see the copy-pass file cited above). `hasQualifyingPractice` alone
+  // decides this, not the entry's presence elsewhere on the screen.
+  const practicePrefix = line.hasQualifyingPractice ? '' : 'no qualifying practice history yet; ';
+  if (line.destinations.length > 0) {
+    const clauses = line.destinations.map(
+      (destination) =>
+        `${destination.course} (${carryBasisClause(destination.course, destination.basis)})`,
+    );
+    return `${practicePrefix}also in scope for ${clauses.join(', ')}`;
   }
-  return "carries into this course's own remaining assessment";
+  if (line.finalAssessmentBasis !== null) {
+    return `${practicePrefix}carries into this course's own remaining assessment (${carryBasisClause('this course', line.finalAssessmentBasis)})`;
+  }
+  // Unreachable given `buildRetrospective` (`../../../core/src/retrospective/
+  // build.ts`'s `buildCarriesEntry`): an entry always has either a
+  // destination or a final-assessment basis, never neither. Read as the
+  // pre-basis sentence rather than thrown, matching this package's own
+  // "an absent signal reads neutral/honest, never crashes the surface" rule.
+  return `${practicePrefix}carries into this course's own remaining assessment`;
 }
 
 /**

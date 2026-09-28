@@ -1,8 +1,7 @@
-import type {
-  RetrospectiveCarriesLine,
-  RetrospectiveConceptLine,
-  RetrospectiveReading,
-} from 'olea-core';
+import type { RetrospectiveConceptLine, RetrospectiveReading } from 'olea-core';
+// Same deep import `copy.ts` itself uses — `RetrospectiveCarriesEntry` (olea
+// 612d2c7) is not yet re-exported from `olea-core`'s root barrel.
+import type { RetrospectiveCarriesEntry } from 'olea-core/src/retrospective/types.js';
 import { describe, expect, it } from 'vitest';
 import {
   carriesLine,
@@ -31,6 +30,20 @@ function reading(overrides: Partial<RetrospectiveReading> = {}): RetrospectiveRe
     faded: [],
     tooEarlyCount: 0,
     carries: [],
+    ...overrides,
+  };
+}
+
+/** `[D-388]`'s carries entry — practised, one destination, declared scope, unless overridden. */
+function carriesEntry(
+  overrides: Partial<RetrospectiveCarriesEntry> & { conceptId: string; conceptName: string },
+): RetrospectiveCarriesEntry {
+  return {
+    otherCourses: [],
+    carriesToFinalAssessment: false,
+    destinations: [],
+    finalAssessmentBasis: null,
+    hasQualifyingPractice: true,
     ...overrides,
   };
 }
@@ -95,12 +108,12 @@ describe('retrospective copy — no score, no percentage, no verdict', () => {
   });
 
   it('the carries row split says where it carries, without re-asserting the name', () => {
-    const line: RetrospectiveCarriesLine = {
+    const line = carriesEntry({
       conceptId: 'c1',
       conceptName: 'Concept one',
       otherCourses: ['C2'],
-      carriesToFinalAssessment: false,
-    };
+      destinations: [{ course: 'C2', basis: 'declared-scope' }],
+    });
     expect(carriesRowName(line)).toBe('Concept one');
     expect(carriesRowDetail(line)).toContain('C2');
     expect(carriesRowDetail(line)).not.toContain('Concept one');
@@ -116,24 +129,120 @@ describe('retrospective copy — no score, no percentage, no verdict', () => {
     }
   });
 
-  it('a carries line never fabricates a single "the" other course', () => {
-    const line: RetrospectiveCarriesLine = {
+  // `[D-388]` condition 1, ratified by David 2026-09-28 in chat from
+  // `docs/design/copy-pass-2026-09/retrospective-what-carries.md` candidate
+  // (a)A / (b)A / (c)A. Exact strings, practised vs. not.
+  describe('the carries line — practised vs. no qualifying practice history (`[D-388]` condition 1)', () => {
+    it('a practised concept states only the destination and its basis — no practice disclosure', () => {
+      const line = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        otherCourses: ['C2'],
+        destinations: [{ course: 'C2', basis: 'declared-scope' }],
+        hasQualifyingPractice: true,
+      });
+      expect(carriesLine(line)).toBe("Concept one — also in scope for C2 (C2's declared scope)");
+      expect(carriesLine(line)).not.toMatch(/no qualifying practice/);
+    });
+
+    it('a not-yet-practised concept states plainly that no qualifying practice history exists, never "not practised"', () => {
+      const line = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        otherCourses: ['C2'],
+        destinations: [{ course: 'C2', basis: 'declared-scope' }],
+        hasQualifyingPractice: false,
+      });
+      expect(carriesLine(line)).toBe(
+        "Concept one — no qualifying practice history yet; also in scope for C2 (C2's declared scope)",
+      );
+      // Registry §22 / condition 2: never a deficit word for this case.
+      expect(carriesLine(line)).not.toMatch(/\b(weak|struggling|behind|faded|forgotten)\b/i);
+      expect(carriesLine(line)).not.toMatch(/not practised/i);
+    });
+  });
+
+  // `[D-388]` condition 3: the basis is named, visibly distinct from
+  // examiner authority, whichever practice state it is paired with.
+  describe("the carries line — declared scope vs. Olea's reading (`[D-388]` condition 3)", () => {
+    it("names the later course's declared scope when the basis is declared-scope", () => {
+      const line = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        otherCourses: ['C2'],
+        destinations: [{ course: 'C2', basis: 'declared-scope' }],
+      });
+      expect(carriesLine(line)).toContain("(C2's declared scope)");
+      expect(carriesLine(line)).not.toContain("Olea's reading");
+    });
+
+    it("names Olea's reading, explicitly distinct from the course's declared scope, when the basis is olea-reading", () => {
+      const line = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        otherCourses: ['C2'],
+        destinations: [{ course: 'C2', basis: 'olea-reading' }],
+      });
+      expect(carriesLine(line)).toBe(
+        "Concept one — also in scope for C2 (Olea's reading, not C2's declared scope)",
+      );
+    });
+
+    it('the same-course fallback names its own basis the same way, replacing the course with "this course"', () => {
+      const declared = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        carriesToFinalAssessment: true,
+        finalAssessmentBasis: 'declared-scope',
+      });
+      expect(carriesLine(declared)).toBe(
+        "Concept one — carries into this course's own remaining assessment (this course's declared scope)",
+      );
+      const reading = carriesEntry({
+        conceptId: 'c1',
+        conceptName: 'Concept one',
+        carriesToFinalAssessment: true,
+        finalAssessmentBasis: 'olea-reading',
+      });
+      expect(carriesLine(reading)).toBe(
+        "Concept one — carries into this course's own remaining assessment (Olea's reading, not this course's declared scope)",
+      );
+      expect(carriesLine(reading)).not.toMatch(/also in scope for/);
+    });
+  });
+
+  // The draft's own open question, settled by this bead as a Class B
+  // default: one clause per destination, each stating its own basis, joined
+  // the same way `otherCourses` was already joined (comma, no "and").
+  it('several destinations with mixed bases each carry their own clause (Class B default)', () => {
+    const line = carriesEntry({
       conceptId: 'c1',
       conceptName: 'Concept one',
       otherCourses: ['C2', 'C3'],
-      carriesToFinalAssessment: false,
-    };
-    expect(carriesLine(line)).toContain('C2, C3');
+      destinations: [
+        { course: 'C2', basis: 'declared-scope' },
+        { course: 'C3', basis: 'olea-reading' },
+      ],
+    });
+    expect(carriesLine(line)).toBe(
+      "Concept one — also in scope for C2 (C2's declared scope), C3 (Olea's reading, not C3's declared scope)",
+    );
   });
 
-  it('a same-course-fallback carries line never claims another course', () => {
-    const line: RetrospectiveCarriesLine = {
+  it('several destinations sharing the same basis each still name it, per destination', () => {
+    const line = carriesEntry({
       conceptId: 'c1',
       conceptName: 'Concept one',
-      otherCourses: [],
-      carriesToFinalAssessment: true,
-    };
-    expect(carriesLine(line)).not.toMatch(/also in scope for/);
+      otherCourses: ['C2', 'C3'],
+      destinations: [
+        { course: 'C2', basis: 'declared-scope' },
+        { course: 'C3', basis: 'declared-scope' },
+      ],
+      hasQualifyingPractice: false,
+    });
+    expect(carriesLine(line)).toBe(
+      "Concept one — no qualifying practice history yet; also in scope for C2 (C2's declared scope), C3 (C3's declared scope)",
+    );
   });
 
   it('scope-origin copy states which of the two D-134 Q6 paths produced the scope', () => {
