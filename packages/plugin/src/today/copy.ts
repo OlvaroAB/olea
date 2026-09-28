@@ -481,6 +481,37 @@ export const RHYTHM_LABEL = 'What has arrived';
  */
 export const INSIGHTS_TOO_EARLY = 'Not enough history yet to show a pattern here.';
 
+/**
+ * F6.5(b) (`ol-egov.141.89.11.23` — **PROPOSED, Class B, pending David's ratification**; David's
+ * ruling on `ol-egov.141.89.11.20`, 2026-09-28: "show a distinct comparison-unavailable
+ * explanation when records are missing or unreadable; reserve too early for genuinely
+ * insufficient history"). Shown in place of {@link INSIGHTS_TOO_EARLY} whenever the effort
+ * reading's own status is `comparison-unavailable` (`../../../olea-core/src/insights/effort.ts`):
+ * a session in the window it compares has no composition record, an id resolving to none or to
+ * more than one, a record naming no course, or one composed with no plan floor shares in force.
+ * That state is withheld, never computed from anything else and never "not observed" — and it is
+ * not the same fact `INSIGHTS_TOO_EARLY` states, so it is not that sentence: she may have plenty
+ * of history; what's missing is something behind one of her recent sessions that this comparison
+ * needs.
+ *
+ * **Says "entry" and "absent," never the ruling's own "record" and "missing."** This panel's own
+ * mechanical check (`test/today/copy.spec.ts`, "no gamification, pressure or compliance language
+ * anywhere") forbids the bare substrings "record" and "miss" across the whole Today corpus this
+ * string joins via {@link allTodayStrings} — "missing" trips the second as a substring match. The
+ * first draft used the ruling's exact words and failed that check; see this string's own drafting
+ * record for the rewrite.
+ *
+ * Never "not enough history" (the exact conflation this ruling fixes), never the internal words
+ * "withheld," "comparison unavailable," "composition record" or "floor share" (vocabulary
+ * registry §23, `[D-334]`: withholding vocabulary is internal, never printed as such), and never
+ * "effort" as a feature name (no string in this file has ever printed that word to her). Exact
+ * wording drafted, with its candidates and hand check against the registry and this panel's own
+ * mechanical check, at
+ * `../../../../olea-service/docs/design/copy-pass-2026-09/comparison-unavailable.md`.
+ */
+export const INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE =
+  "An entry for one of your recent sessions is absent or unreadable, so this comparison isn't shown.";
+
 /** One decimal, and no trailing `.0` — a rate, not a measurement claim. */
 function rate(value: number): string {
   if (!Number.isFinite(value)) return '—';
@@ -939,6 +970,7 @@ export function allTodayStrings(): readonly string[] {
     MASTERY_LABEL,
     INSIGHTS_LABEL,
     INSIGHTS_TOO_EARLY,
+    INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE,
     RHYTHM_LABEL,
     // Every one of F2.11's four words, at the two counts whose wording could
     // differ. Sampling the vocabulary rather than one state of it is what makes

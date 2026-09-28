@@ -146,7 +146,7 @@ describe('TodayView.renderLadderRow — the vitality breakdown is absent, not bl
   });
 });
 
-describe('TodayView.renderInsightsBody — a withheld effort comparison declines like too little history (ol-egov.141.89.11.20)', () => {
+describe("TodayView.renderInsightsBody — a withheld effort comparison gets its own explanation (ol-egov.141.89.11.23, David's ruling on ol-egov.141.89.11.20)", () => {
   const BODY_START = VIEW.indexOf('private renderInsightsBody(');
   const BODY_END = VIEW.indexOf('private insightLines(');
   if (BODY_START === -1 || BODY_END === -1) {
@@ -154,17 +154,42 @@ describe('TodayView.renderInsightsBody — a withheld effort comparison declines
   }
   const BODY = VIEW.slice(BODY_START, BODY_END);
 
-  it("counts effort's comparison-unavailable as declined, beside not-enough-history", () => {
+  it("reads effort's comparison-unavailable as its own condition, not folded into not-enough-history", () => {
     expect(BODY).toMatch(
-      /insights\.effort\.status === 'not-enough-history' \|\|\s*insights\.effort\.status === 'comparison-unavailable'/,
+      /effortComparisonUnavailable = insights\.effort\.status === 'comparison-unavailable'/,
     );
   });
 
-  it('shows the same too-early note when spacing lacks history and effort is declined either way', () => {
+  it('reserves too-early for both readings genuinely lacking history — never a withheld comparison', () => {
     expect(BODY).toMatch(
-      /allDeclined = insights\.spacing\.status === 'not-enough-history' && effortDeclined/,
+      /genuinelyTooEarly =\s*insights\.spacing\.status === 'not-enough-history' &&\s*insights\.effort\.status === 'not-enough-history'/,
     );
-    // No new wording: the note is the one constant it always was.
+    // `genuinelyTooEarly` is built from status equality checks alone — it
+    // never reads `effortComparisonUnavailable`, so a comparison-unavailable
+    // reading can never satisfy it (the exact conflation the prior wording,
+    // `allDeclined`, produced by folding comparison-unavailable into the same
+    // bucket as not-enough-history).
+    const genuinelyTooEarlyStart = BODY.indexOf('const genuinelyTooEarly =');
+    const genuinelyTooEarlySemicolon = BODY.indexOf(';', genuinelyTooEarlyStart);
+    expect(genuinelyTooEarlyStart, 'expected a genuinelyTooEarly declaration').toBeGreaterThan(-1);
+    const genuinelyTooEarlyExpr = BODY.slice(genuinelyTooEarlyStart, genuinelyTooEarlySemicolon);
+    expect(genuinelyTooEarlyExpr).not.toMatch(/effortComparisonUnavailable/);
+  });
+
+  it('renders the distinct comparison-unavailable explanation in its own guard, separate from the too-early branch', () => {
+    expect(BODY).toMatch(/text: INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE/);
+    const tooEarlyGuard = BODY.indexOf('if (lines.length === 0 && genuinelyTooEarly)');
+    const noteGuard = BODY.indexOf('if (effortComparisonUnavailable)');
+    expect(tooEarlyGuard, 'expected the too-early guard').toBeGreaterThan(-1);
+    expect(noteGuard, 'expected a guard rendering the distinct note').toBeGreaterThan(-1);
+    expect(noteGuard).not.toBe(tooEarlyGuard);
+    // The too-early guard returns before the distinct-note guard is ever
+    // reached, so the two renderings are mutually exclusive on that path.
+    const tooEarlyBlock = BODY.slice(tooEarlyGuard, noteGuard);
+    expect(tooEarlyBlock).toMatch(/return;/);
+  });
+
+  it('still renders the plain too-early note for the genuine case, unchanged wording', () => {
     expect(BODY).toMatch(/text: INSIGHTS_TOO_EARLY/);
   });
 });

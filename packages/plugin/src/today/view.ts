@@ -72,6 +72,7 @@ import {
   dueTodaySentence,
   earlyPullSentence,
   effortShareClause,
+  INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE,
   INSIGHTS_LABEL,
   INSIGHTS_TOO_EARLY,
   insightsScopeSentence,
@@ -595,17 +596,22 @@ export class TodayView extends ItemView {
   /**
    * F6.5 (`ol-p6t04`) — what the log shows, when it shows anything.
    *
-   * Three renderings for three statuses, and the middle one is the reason the
-   * status is not a boolean:
+   * Four renderings for the spacing/effort statuses this section reads,
+   * and the middle two are why status is not a boolean:
    *
    * - **observed** → the sentences, from `copy.ts`.
    * - **not-observed** → nothing. She was measured and the pattern is not
    *   there; a line saying so every day is noise on a panel F6.1 keeps to four
    *   things.
-   * - **not-enough-history**, for *every* detector → `INSIGHTS_TOO_EARLY`. A
+   * - **not-enough-history**, for *both* readings → `INSIGHTS_TOO_EARLY`. A
    *   confident empty chart here would be the exact claim the log cannot
-   *   support. Effort's **comparison-unavailable** counts as declined here
-   *   too (`ol-egov.141.89.11.20`): withheld is never "not observed".
+   *   support.
+   * - effort's **comparison-unavailable** → `INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE`,
+   *   its own explanation (David's ruling on `ol-egov.141.89.11.20`,
+   *   2026-09-28, `ol-egov.141.89.11.23`): a withheld comparison is not the
+   *   same fact as too little history, and no longer reads as one. She may
+   *   have plenty of history; what's missing is a readable record behind one
+   *   of her recent sessions.
    */
   private renderInsights(parent: HTMLElement, vm: TodayViewModel): void {
     this.renderInsightsBody(parent, vm);
@@ -617,22 +623,24 @@ export class TodayView extends ItemView {
     if (insights === null) return;
 
     const lines = this.insightLines(insights);
-    // F6.5(b) (`ol-egov.141.89.11.20`): effort's `comparison-unavailable` (no
-    // composition record behind a window session, `ol-egov.141.89.11.18`)
-    // declines exactly as `not-enough-history` does here, so the too-early
-    // note she saw before that status existed still shows; no new wording.
-    // Naming the withheld comparison on its own is vew.md section 10's open
-    // question, not this view's to answer.
-    const effortDeclined =
-      insights.effort.status === 'not-enough-history' ||
-      insights.effort.status === 'comparison-unavailable';
-    const allDeclined = insights.spacing.status === 'not-enough-history' && effortDeclined;
-    if (lines.length === 0 && !allDeclined) return;
+    // ol-egov.141.89.11.23 (David's ruling on ol-egov.141.89.11.20,
+    // 2026-09-28): effort's `comparison-unavailable` (no composition record
+    // behind a window session, `ol-egov.141.89.11.18`) gets its own
+    // explanation now, distinct from `not-enough-history`. `INSIGHTS_TOO_EARLY`
+    // is reserved for the case it actually describes: both readings
+    // genuinely short of history, never a withheld comparison — and it never
+    // falls back to today's plan allocation; there is no such fallback here
+    // to remove.
+    const effortComparisonUnavailable = insights.effort.status === 'comparison-unavailable';
+    const genuinelyTooEarly =
+      insights.spacing.status === 'not-enough-history' &&
+      insights.effort.status === 'not-enough-history';
+    if (lines.length === 0 && !genuinelyTooEarly && !effortComparisonUnavailable) return;
 
     const section = parent.createDiv({ cls: 'olea-today-insights' });
     section.createDiv({ cls: 'olea-today-insights-label', text: INSIGHTS_LABEL });
 
-    if (lines.length === 0) {
+    if (lines.length === 0 && genuinelyTooEarly) {
       section.createDiv({ cls: 'olea-today-note', text: INSIGHTS_TOO_EARLY });
       return;
     }
@@ -644,10 +652,20 @@ export class TodayView extends ItemView {
       }
       insight.createSpan({ cls: 'olea-today-insight-text', text: line.text });
     }
-    section.createDiv({
-      cls: 'olea-today-insight-scope',
-      text: insightsScopeSentence(),
-    });
+
+    if (effortComparisonUnavailable) {
+      section.createDiv({
+        cls: 'olea-today-note',
+        text: INSIGHTS_EFFORT_COMPARISON_UNAVAILABLE,
+      });
+    }
+
+    if (lines.length > 0) {
+      section.createDiv({
+        cls: 'olea-today-insight-scope',
+        text: insightsScopeSentence(),
+      });
+    }
   }
 
   /** Every sentence the insights section will draw, in order. All of them come from `copy.ts`. */
