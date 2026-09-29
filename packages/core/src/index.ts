@@ -717,6 +717,17 @@ export type {
   VoiceExemplars,
 } from './generate/voice-sources.js';
 export { assembleVoiceExemplars } from './generate/voice-sources.js';
+// `[D-437]` `ol-egov.141.89.2.26` (B4): the code check of a drafted question's demand against what
+// the request asked (design section 4.4), and the invalid-draft defect it adds. Caller:
+// `packages/plugin/src/generation/demand-target.ts`, from both materialisers at accept time. (The
+// rest of `./generation/authoring-outcome.js`, `classifyAuthoringOutcome`, is still not wired.)
+export type {
+  AuthoringDraftDefect,
+  DemandMismatchDefect,
+  DraftedDemandDisposition,
+  DraftedDemandFacts,
+} from './generation/authoring-outcome.js';
+export { judgeDraftedDemand } from './generation/authoring-outcome.js';
 // `[D-323]`'s repeated-failure instrument-standing check (`ol-egov.141.89.6.4`): rides
 // `misconception/confusion-routing.js`'s own `evaluateConfusionRouting` decision rather than
 // adding a second trigger — see `instrument-standing.ts`'s own module doc. Re-exported so the
@@ -879,6 +890,7 @@ export {
 // half only. See heading-offer/detect.ts's module doc for the rules, the
 // "has no card" coverage window, and the wiring seam this stops short of.
 export { detectHeadingOffers, isQuestionShapedHeading } from './heading-offer/detect.js';
+export { demandCues, demandForHeading } from './heading-offer/operation.js';
 export type { HeadingOfferCandidate, HeadingQuestionRule } from './heading-offer/types.js';
 export type {
   DocumentLedger,
@@ -1099,6 +1111,16 @@ export type {
   MatchDeletedInstrumentIdsInput,
 } from './instrument/deleted-id-match.js';
 export { matchDeletedInstrumentIds } from './instrument/deleted-id-match.js';
+export type {
+  InstrumentDemandReading,
+  InstrumentResponseForm,
+} from './instrument/demand-reading.js';
+export {
+  classifyInstrumentDemand,
+  projectInstrumentDemands,
+  readInstrumentDemand,
+  responseFormOf,
+} from './instrument/demand-reading.js';
 // `[D-220 / DIST-3]`'s distractor-provenance sidecar (`ol-egov.109`, `ol-0r92.52`) — beside the
 // citation sidecar above, keyed the same way. Write side: `generation/materialize-mcq.ts` (plugin
 // repo) at accept time, from `DraftQuestion.distractorGrounding`. Read side: `review/queue-adapter.ts`
@@ -1216,6 +1238,21 @@ export type {
   ResolveInstrumentRepairInput,
 } from './instrument/repair.js';
 export { resolveInstrumentRepair } from './instrument/repair.js';
+// `[D-437]` demand carriage (`ol-egov.141.89.2.25`, B1b; design
+// `olea-service/docs/dev/intelligence-build/demand-carriage.md` sections 1.2, 3.2, 4.1): the
+// instrument target record store (R1, `.olea/instrument-targets/`), the one reader of an
+// instrument's demand, and the ask, routing and word readings the practice-authoring path builds on.
+// Write side of R1: `packages/plugin/src/generation/materialize-{mcq,card}.ts` at accept time (and
+// paper hand-off, B7), the only callers `target-store-callers.spec.ts` allows. Read side: the
+// revision request (`revision-job-runner.ts`), and the attainment fold's supplier (B5).
+// `export *`, not a named list, for this one module, and deliberately: `target-store-callers.spec.ts`
+// (T7) pins the writer's callers by scanning every source file's TEXT for the writer's name, so a
+// named re-export here would put the name in this file and fail that scan. A re-export is not a
+// caller, and a real caller must still spell the name in its own file, which the scan catches, so
+// nothing is weakened. Exports: the record, read, origin, generator and specification types, the
+// schema-version, basis, origin and folder constants, the path builder, the runtime guard, the
+// question-binding digest, and the store's read and write (`[D-437]`, `ol-egov.141.89.2.25`, B1b).
+export * from './instrument/target-store.js';
 export type {
   CardInstrument,
   CardInvalidReason,
@@ -1670,6 +1707,7 @@ export {
   recordPaperResponse,
   retirePaper,
 } from './oracle/paper-store.js';
+// `[D-262]`'s five demand words: the one vocabulary every demand-carrying type above uses.
 // F4.11's practice-paper generation pipeline (`[D-250]`/`[D-252]`, component register row 2.11,
 // `[H-blueprint]` / `ol-0r92.75`, bead `[PAPER-3]`). No production caller yet — surfaces are a
 // separate lane's job (DP-7, `[D-255]`); see each module's own doc for the reachability note.
@@ -1681,6 +1719,7 @@ export type {
   PaperAssessment,
   PaperBlueprint,
   PaperBlueprintSlot,
+  PaperDemand,
   PaperEmptySlot,
   PaperExtent,
   PaperFormatClass,
@@ -1706,6 +1745,7 @@ export type {
 // F4.11's declared practice-paper purposes (`ol-egov.141.89.9.4`'s slot-weight
 // consumer) — see `./oracle/paper-types.js`'s own module doc.
 export {
+  PAPER_DEMANDS,
   PAPER_PURPOSES,
   PAPER_QUESTION_GROUP_KINDS,
   PAPER_STIMULUS_FORMS,
@@ -1962,6 +2002,7 @@ export {
 } from './retrieval/compositeSignals.js';
 export type { CosineHit } from './retrieval/cosine.js';
 export { cosinePercentile, cosineSimilarity, topKByCosine } from './retrieval/cosine.js';
+export { demandToJudgeOperation, judgeOperationToDemand } from './retrieval/demand.js';
 export type { EmbeddingCacheEngineDeps } from './retrieval/embeddingCache.js';
 export {
   EmbeddingCacheEngine,
@@ -2198,6 +2239,38 @@ export {
   appendSuspendRecord,
   appendVerdictRecord,
 } from './review-log/write.js';
+// The sweep's recall constant in the same module is deliberately NOT exported here (row 38: it is
+// authoring intent for the ordinary generation sweep and no other path, and
+// `routing/demand-ask-callers.spec.ts` pins its callers by scanning source text for its name), so
+// its one caller reaches it by a deliberate deep import.
+export type {
+  AskSource,
+  DemandAsk,
+  DemandMapping,
+  DemandOrigin,
+} from './routing/demand-ask.js';
+export {
+  askFromDemand,
+  askFromHeading,
+  askFromInstrumentReading,
+  NO_DEMAND_ASKED,
+  questionWordOf,
+} from './routing/demand-ask.js';
+export type {
+  AuthoringDemandFields,
+  DemandRouting,
+  DemandRoutingCount,
+  DemandRoutingReason,
+  UnmetAsk,
+} from './routing/demand-routing.js';
+export {
+  authoringDemandFields,
+  DEMAND_ROUTING_REASONS,
+  DemandRoutingCounter,
+  demandRoutingReasonOf,
+  routeDemandAsk,
+  unmetAskOf,
+} from './routing/demand-routing.js';
 // Component register row 2.2's KC-type-to-instrument routing policy
 // (`ol-tqd5`, `ol-dlr1`) — a pre-registered default, not a measured
 // baseline (n=1 has no power to test one). **No caller exists yet**,

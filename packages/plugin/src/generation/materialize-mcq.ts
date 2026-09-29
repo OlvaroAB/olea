@@ -218,6 +218,27 @@
  * guarded by a `vault.exists` check on that sidecar's own path first, so a sidecar a prior
  * interrupted attempt already wrote is left untouched (still correctly keyed, since the id
  * matches) and a retry only writes what it did not yet write, before writing the note itself.
+ *
+ * ## The demand record (`[D-437]`, `ol-egov.141.89.2.26`, demand-carriage design section 4.4)
+ *
+ * When `input.demand` is supplied (`accept.ts` forwards `DraftRecord.demand` and the draft's
+ * provenance stamp), the draft's demand is judged by `olea-core`'s `judgeDraftedDemand` (via
+ * `demand-target.ts`'s `planInstrumentDemand`) and, only for a demand the request asked, the server
+ * acknowledged and the question's own declaration agrees with, ONE target record is written under
+ * `.olea/instrument-targets/`, keyed by the frozen instrument id and bound to the block as
+ * inserted (`questionBindingOf`). It is written beside the sidecars above, before the note write,
+ * and is write-once: a retry that finds the record already there (the derived id converges) leaves
+ * it untouched, exactly as the citation sidecar's retry does. It never touches `stamped.content`
+ * and never lands in her note (INV-6). **Intent, not delivery**: the record's basis is the literal
+ * `authoring-intent` and an agreeing declaration certifies nothing (row 36); the produced block's
+ * response form is read from its answer options (a multiple-choice block reads `recognition`, so
+ * the sweep's recall intent on it is never free recall, row 38) and reported on the result, never
+ * stored. An unacknowledged demand (deployment skew) or a mismatching declaration writes no record
+ * and materialises the item as an unspecified instrument, reported on `result.demand`; a draft
+ * with no demand (every draft cached before this field, and every unspecified need) writes nothing
+ * and its result has no `demand` member. **This is one of the two production callers of the
+ * target-record writer that `target-store-callers.spec.ts` (T7) allows**; the other is
+ * `materialize-card.ts`.
  */
 
 import {
@@ -230,6 +251,7 @@ import {
   hashText,
   type InstrumentCitation,
   insertMcqBlock,
+  instrumentTargetStorePath,
   parseDocument,
   parseMcqBlocks,
   sealCitationPassage,
@@ -238,9 +260,15 @@ import {
   type VaultSource,
   writeDistractorProvenance,
   writeInstrumentCitation,
+  writeInstrumentTarget,
 } from 'olea-core';
 import { stampPredecessorField } from '../instrument-blocks/predecessor.js';
 import { isoWithLocalOffset } from '../review/ports.js';
+import {
+  type MaterializeDemandInput,
+  type MaterializedDemand,
+  planInstrumentDemand,
+} from './demand-target.js';
 import { sourceRevisionMatches } from './home-note.js';
 import type { DraftQuestion } from './types.js';
 
@@ -280,6 +308,15 @@ export interface MaterializeAcceptedDraftInput {
    * verbatim by `accept.ts`. `undefined` skips the check entirely.
    */
   readonly expectedSourceContentHash?: string;
+  /**
+   * `[D-437]` (`ol-egov.141.89.2.26`): the demand this draft's request carried and the response
+   * returned (`DraftRecord.demand`, `generation/types.ts`) with the generator stamp
+   * (`DraftRecord.provenance`), forwarded by `accept.ts`. Judged here, and recorded only for an
+   * acknowledged, agreeing demand — see the module doc's own section. `undefined` (every draft
+   * cached before this field, and every unspecified need) writes no record and adds no `demand`
+   * member to the result.
+   */
+  readonly demand?: MaterializeDemandInput;
 }
 
 /**
@@ -311,6 +348,8 @@ export interface MaterializeAcceptedDraftDeps {
 
 export interface MaterializeAcceptedDraftResult {
   readonly instrumentId: string;
+  /** Present only when `input.demand` was supplied: what became of the demand — see `MaterializedDemand`. */
+  readonly demand?: MaterializedDemand;
 }
 
 /**
@@ -456,9 +495,35 @@ export async function materializeAcceptedDraft(
     }
   }
 
+  // `[D-437]`: judge the draft's demand and, for one the request asked, the server acknowledged and
+  // the question's own declaration agrees with, write the ONE target record, keyed by the frozen id
+  // and bound to the block as inserted — see the module doc's own section. Planned here so a
+  // refusal is known before anything is written, but written just before the note itself (after
+  // the deviceId check below on the successor path), guarded by `vault.exists` so a retry that an
+  // interrupted attempt already reached leaves the record untouched, like the sidecars above.
+  const demandPlan =
+    input.demand === undefined
+      ? undefined
+      : await planInstrumentDemand({
+          instrumentId: stamped.id,
+          block: inserted,
+          demand: input.demand,
+          now: deps.now ?? (() => new Date()),
+        });
+  const recordDemand = async (): Promise<void> => {
+    if (demandPlan?.target === undefined) return;
+    if (await vault.exists(instrumentTargetStorePath(stamped.id))) return;
+    await writeInstrumentTarget(vault, demandPlan.target);
+  };
+  const resultOf = (): MaterializeAcceptedDraftResult =>
+    demandPlan === undefined
+      ? { instrumentId: stamped.id }
+      : { instrumentId: stamped.id, demand: demandPlan.demand };
+
   if (input.predecessorInstrumentId === undefined) {
+    await recordDemand();
     await vault.write(input.sourcePath, stamped.content);
-    return { instrumentId: stamped.id };
+    return resultOf();
   }
 
   if (deps.deviceId === undefined) {
@@ -482,6 +547,7 @@ export async function materializeAcceptedDraft(
     successor.span,
     input.predecessorInstrumentId,
   );
+  await recordDemand();
   await vault.write(input.sourcePath, predecessorStamp.content);
 
   const now = deps.now ?? (() => new Date());
@@ -501,5 +567,5 @@ export async function materializeAcceptedDraft(
     },
   );
 
-  return { instrumentId: stamped.id };
+  return resultOf();
 }

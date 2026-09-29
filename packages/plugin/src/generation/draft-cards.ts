@@ -56,6 +56,7 @@ import type {
 import {
   assembleVoiceExemplars,
   D112_GROUNDING_BAND,
+  demandToJudgeOperation,
   type GateStage,
   type GroundingRefusalReason,
   type JudgeRequestRecord,
@@ -64,8 +65,6 @@ import {
   type RetrieveOptions,
   retrieve,
 } from 'olea-core';
-// Not in the `olea-core` barrel yet — see `../retrieval/draft-quiz-cards.ts`'s note on the same import.
-import { demandToJudgeOperation } from 'olea-core/src/retrieval/demand.js';
 import type { GenerationPurpose, RegisterHint } from '../retrieval/draft-quiz-cards.js';
 import { WorkerGroundingJudge } from '../retrieval/workerGroundingJudge.js';
 

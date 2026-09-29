@@ -160,28 +160,24 @@
  */
 
 import {
+  type AuthoringDemandFields,
+  askFromInstrumentReading,
+  authoringDemandFields,
+  type DemandRoutingCounter,
   enumerateVaultInstruments,
   type InstrumentRevisionJobPayload,
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
   projectInstrumentValidity,
+  type QuestionBindingBlock,
+  readInstrumentDemand,
   readReviewLogHistory,
+  routeDemandAsk,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
-// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
-// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
-import { readInstrumentDemand } from 'olea-core/src/instrument/demand-reading.js';
-import type { QuestionBindingBlock } from 'olea-core/src/instrument/target-store.js';
-import { askFromInstrumentReading } from 'olea-core/src/routing/demand-ask.js';
-import {
-  type AuthoringDemandFields,
-  authoringDemandFields,
-  type DemandRoutingCounter,
-  routeDemandAsk,
-} from 'olea-core/src/routing/demand-routing.js';
 import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,

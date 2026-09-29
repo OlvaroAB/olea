@@ -90,23 +90,19 @@
  * outcome.
  */
 
-import type {
-  ConceptRecord,
-  GroundingRefusalReason,
-  HeadingOfferCandidate,
-  VaultPath,
-} from 'olea-core';
-// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
-// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
-import { askFromHeading } from 'olea-core/src/routing/demand-ask.js';
 import {
+  askFromHeading,
   authoringDemandFields,
+  type ConceptRecord,
   type DemandRouting,
   type DemandRoutingCounter,
+  type GroundingRefusalReason,
+  type HeadingOfferCandidate,
   routeDemandAsk,
   type UnmetAsk,
   unmetAskOf,
-} from 'olea-core/src/routing/demand-routing.js';
+  type VaultPath,
+} from 'olea-core';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { deriveDraftId } from '../generation/cache-store.js';
 import { demandRoutingCounterFor } from '../generation/pipeline.js';

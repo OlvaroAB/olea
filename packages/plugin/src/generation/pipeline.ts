@@ -186,16 +186,19 @@ import type {
   RoutingSelectionObservation,
   VaultSource,
 } from 'olea-core';
-import { courseFromPath, DEFAULT_COURSES_FOLDER, hashText } from 'olea-core';
-// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
-// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
-import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
 import {
   type AuthoringDemandFields,
   authoringDemandFields,
+  courseFromPath,
+  DEFAULT_COURSES_FOLDER,
   DemandRoutingCounter,
+  hashText,
   routeDemandAsk,
-} from 'olea-core/src/routing/demand-routing.js';
+} from 'olea-core';
+// The sweep's recall constant is deliberately NOT in the `olea-core` barrel (row 38: authoring
+// intent for this sweep and no other path; `packages/core/src/routing/demand-ask-callers.spec.ts`
+// pins its callers by source text), so this one import stays a deliberate deep one.
+import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,

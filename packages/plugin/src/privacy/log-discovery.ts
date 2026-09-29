@@ -57,6 +57,7 @@ import {
   calendarDaysEndingOn,
   DISTRACTOR_PROVENANCE_STORE_FOLDER,
   EDGE_DISPOSITION_FOLDER,
+  INSTRUMENT_TARGET_STORE_FOLDER,
   isValidDeviceId,
   isVaultPath,
   listFolder,
@@ -165,6 +166,13 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // the full delete removes it, like the composition records; never pruned. Probed by exact path for
   // this device too (`OLEA_PROBED_DAILY_STREAMS`), since its files are named by day.
   { folder: UNIT_MANIFEST_FOLDER, role: 'record' },
+  // `[D-437]` (`ol-egov.141.89.2.26`, B4): the instrument target records, one write-once file per
+  // newly authored instrument whose request carried an acknowledged demand, named by instrument id
+  // (`{ demandBasis: 'authoring-intent', declaredDemand, origin, questionBinding, generator }`: five
+  // demand words, a one-way digest and a task id, never her wording). Not a log, so F7.4 carries it
+  // as the exact text on disk and the full delete removes it; never pruned, and absence of a record
+  // is the permanent unspecified state, so a full delete leaves every instrument unspecified.
+  { folder: INSTRUMENT_TARGET_STORE_FOLDER, role: 'record' },
 ];
 
 /**

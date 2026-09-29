@@ -16,8 +16,7 @@
  *    dismissal is visible only through `isDismissed` on the SAME port
  *    instance (a fresh port remembers nothing).
  */
-import type { ConceptRecord, HeadingOfferCandidate } from 'olea-core';
-import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
+import { type ConceptRecord, DemandRoutingCounter, type HeadingOfferCandidate } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { demandRoutingCounterFor } from '../../src/generation/pipeline.js';

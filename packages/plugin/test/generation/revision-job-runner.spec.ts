@@ -20,14 +20,14 @@
  * treated as a job failure.
  */
 
-import { enumerateVaultInstruments } from 'olea-core';
 import {
+  DemandRoutingCounter,
+  enumerateVaultInstruments,
   instrumentTargetStorePath,
   type NewInstrumentTarget,
   questionBindingOf,
   writeInstrumentTarget,
-} from 'olea-core/src/instrument/target-store.js';
-import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
+} from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import type { DraftCardsResult } from '../../src/generation/draft-cards.js';

@@ -30,8 +30,12 @@
  * reads this field back.
  */
 import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
-import { checkRoutingReachesSelection, extractConcepts, hashText } from 'olea-core';
-import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
+import {
+  checkRoutingReachesSelection,
+  DemandRoutingCounter,
+  extractConcepts,
+  hashText,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';

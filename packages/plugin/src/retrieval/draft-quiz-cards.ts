@@ -152,6 +152,7 @@ import type {
 import {
   assembleVoiceExemplars,
   D112_GROUNDING_BAND,
+  demandToJudgeOperation,
   type GateStage,
   type GroundingRefusalReason,
   type JudgeRequestRecord,
@@ -160,9 +161,6 @@ import {
   type RetrieveOptions,
   retrieve,
 } from 'olea-core';
-// Not in the `olea-core` barrel (the barrel export of the demand surface is `ol-egov.141.89.2.25`'s
-// job); the same deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
-import { demandToJudgeOperation } from 'olea-core/src/retrieval/demand.js';
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**

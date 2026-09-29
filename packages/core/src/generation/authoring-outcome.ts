@@ -8,7 +8,14 @@
  * allows); `deferred` (unmet format, budget exhausted); `unavailable`
  * (transient)."
  *
- * **Not wired.** No production caller builds an `AuthoringAttempt` yet —
+ * **`classifyAuthoringOutcome` is not wired; `judgeDraftedDemand` (`[D-437]`, `ol-egov.141.89.2.26`,
+ * below) is.** The demand check is the one part of this module with a production caller:
+ * `packages/plugin/src/generation/demand-target.ts`, from both materialisers at accept time. A
+ * `'drafted'` attempt may carry `demand` facts, and then the same check makes a question that
+ * declares a different demand than the one asked an `invalid-draft` with the `demand-mismatch`
+ * defect (T5); an attempt without them classifies exactly as it always did.
+ *
+ * **Not wired (`classifyAuthoringOutcome`).** No production caller builds an `AuthoringAttempt` yet —
  * `[ILB-PRA-5]` is where the sweep (`packages/plugin/src/generation
  * /pipeline.ts`) and the heading-card offer (`packages/plugin/src/review
  * /heading-offer.ts`) would actually construct one from a live call, once
@@ -72,8 +79,83 @@
  * (`ol-egov.141.89.2.12` fixed `'no-hits'` reading as one).
  */
 
+import type { PaperDemand } from '../oracle/paper-types.js';
 import type { GroundingRefusalReason } from '../retrieval/groundedContext.js';
 import type { McqDraftDefect } from './mcq-draft-checks.js';
+
+// ---------------------------------------------------------------------------
+// The demand check (`[D-437]`, `ol-egov.141.89.2.26`, design sections 2, 4.3 and 4.4)
+// ---------------------------------------------------------------------------
+
+/**
+ * What one drafted question, and the request it answered, say about demand. Plain data the caller
+ * assembles from the drafting result: nothing here is read from the model except the two words the
+ * response carries (the server's acknowledgement and the question's own proposal).
+ */
+export interface DraftedDemandFacts {
+  /** The demand the request carried (`intendedDemand`). Absent when nothing was asked: an unspecified need, or an ask no generator serves, which sends neither field. */
+  readonly intendedDemand?: PaperDemand;
+  /** The server's `demandAcknowledgement.intendedDemand`: present exactly when it read the demand and applied it. Absent from an older Worker's response. */
+  readonly acknowledgedDemand?: PaperDemand;
+  /** This question's own `declaredDemand`: the author's proposal, consumed only to REFUSE. */
+  readonly declaredDemand?: PaperDemand;
+}
+
+/** The defect a question declaring a different demand than the one asked (or none) is refused with. Same `{kind, detail}` shape as `McqDraftDefect`; the detail is vocabulary words only, never her heading. */
+export interface DemandMismatchDefect {
+  readonly kind: 'demand-mismatch';
+  readonly detail: string;
+}
+
+/** Every defect an `invalid-draft` outcome can carry: the exact MCQ checks, and the demand check. */
+export type AuthoringDraftDefect = McqDraftDefect | DemandMismatchDefect;
+
+/**
+ * The reading of one drafted question's demand:
+ *  - `declared`: the request asked for `demand`, the server acknowledged it, and the question's
+ *    own declaration agrees. **This is authoring intent and no more** (`[D-277]` (h), row 36:
+ *    "declared intent does not certify delivered demand"): the agreeing declaration adds nothing,
+ *    so the result carries the demand that was ASKED and no basis but that. It is what the target
+ *    record stores under the literal basis `authoring-intent`.
+ *  - `unspecified`: nothing may be recorded. `none-asked`: the request carried no demand.
+ *    `not-acknowledged`: it did and the response did not acknowledge it (an old Worker, or an
+ *    acknowledgement of a different demand): deployment skew, not a defect, so the item
+ *    materialises unspecified, the need stays open, and the reason is what a count keys on.
+ *  - `refused`: the question declared a different demand than the one asked (or none): an invalid
+ *    draft, and nothing is recorded.
+ */
+export type DraftedDemandDisposition =
+  | { readonly kind: 'declared'; readonly demand: PaperDemand }
+  | { readonly kind: 'unspecified'; readonly reason: 'none-asked' | 'not-acknowledged' }
+  | { readonly kind: 'refused'; readonly defect: DemandMismatchDefect };
+
+/**
+ * Judges one drafted question's demand by code alone (`[D-310]`: no per-item demand judge, and
+ * demand match is not a candidate check). Pure and total.
+ *
+ * The order is load-bearing. **The acknowledgement is read first**: a response the server did not
+ * acknowledge is skew whatever else it carries, so an old Worker's item is never misread as a
+ * mismatch and a new caller never records as intended what an old server ignored. Only an
+ * acknowledged demand reaches the comparison, and the comparison only ever REFUSES: the
+ * author's own declaration equal to the ask is not consumable evidence (`[D-262]` ruling 1) and
+ * certifies nothing, while a missing one is not agreement.
+ */
+export function judgeDraftedDemand(facts: DraftedDemandFacts): DraftedDemandDisposition {
+  const asked = facts.intendedDemand;
+  if (asked === undefined) return { kind: 'unspecified', reason: 'none-asked' };
+  if (facts.acknowledgedDemand !== asked)
+    return { kind: 'unspecified', reason: 'not-acknowledged' };
+  if (facts.declaredDemand !== asked) {
+    return {
+      kind: 'refused',
+      defect: {
+        kind: 'demand-mismatch',
+        detail: `the request asked for ${asked} and the question declared ${facts.declaredDemand ?? 'no demand'}`,
+      },
+    };
+  }
+  return { kind: 'declared', demand: asked };
+}
 
 /**
  * One authoring attempt, restated as plain data — see the module doc for how
@@ -87,7 +169,15 @@ export type AuthoringAttempt =
   | { readonly kind: 'undecided' }
   | { readonly kind: 'draft-error' }
   | { readonly kind: 'unparseable' }
-  | { readonly kind: 'drafted'; readonly defects: readonly McqDraftDefect[] };
+  | {
+      readonly kind: 'drafted';
+      readonly defects: readonly McqDraftDefect[];
+      /**
+       * `[D-437]`: what the request and response say about demand, when the caller assembles it.
+       * Absent for an attempt that predates the carriage, which classifies exactly as it always did.
+       */
+      readonly demand?: DraftedDemandFacts;
+    };
 
 /** pra.md §3's `deferred` outcome names exactly these two reasons. */
 export type AuthoringDeferralReason = 'unmet-format' | 'budget';
@@ -126,7 +216,15 @@ export type AuthoringRefusalCause =
  * relevance-floor empty package, a composite veto from a below-band request.
  */
 export type AuthoringOutcome =
-  | { readonly status: 'eligible' }
+  | {
+      readonly status: 'eligible';
+      /**
+       * Present only for a drafted attempt that carried `demand` facts (`[D-437]`): `declared` (the
+       * demand may be recorded, as intent) or `unspecified` (it may not, and the reason is what a
+       * count keys on). Never `refused`: a refused demand makes the draft `invalid-draft`.
+       */
+      readonly demand?: Exclude<DraftedDemandDisposition, { readonly kind: 'refused' }>;
+    }
   | {
       readonly status: 'insufficient-evidence';
       readonly cause: 'source-insufficient';
@@ -137,7 +235,7 @@ export type AuthoringOutcome =
       readonly cause: 'threshold-blocked';
       readonly reason: 'below-composite-threshold' | 'below-band';
     }
-  | { readonly status: 'invalid-draft'; readonly defects: readonly McqDraftDefect[] }
+  | { readonly status: 'invalid-draft'; readonly defects: readonly AuthoringDraftDefect[] }
   | { readonly status: 'deferred'; readonly reason: AuthoringDeferralReason }
   | {
       readonly status: 'unavailable';
@@ -171,6 +269,22 @@ function classifyRefusal(reason: GroundingRefusalReason): AuthoringOutcome {
 }
 
 /**
+ * A drafted attempt: the exact MCQ defects first, then the demand check's, all in one
+ * `invalid-draft`. An attempt with no `demand` facts is exactly what it was before `[D-437]`.
+ */
+function classifyDrafted(
+  attempt: Extract<AuthoringAttempt, { kind: 'drafted' }>,
+): AuthoringOutcome {
+  const disposition = attempt.demand === undefined ? undefined : judgeDraftedDemand(attempt.demand);
+  const defects: AuthoringDraftDefect[] = [...attempt.defects];
+  if (disposition?.kind === 'refused') defects.push(disposition.defect);
+  if (defects.length > 0) return { status: 'invalid-draft', defects };
+  return disposition === undefined || disposition.kind === 'refused'
+    ? { status: 'eligible' }
+    : { status: 'eligible', demand: disposition };
+}
+
+/**
  * Classifies one authoring attempt into pra.md §3's outcome (five-way, plus
  * `not-assessed` for `[D-441]`). Pure:
  * the same `attempt` always produces the same outcome.
@@ -189,9 +303,7 @@ export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOu
     case 'unparseable':
       return { status: 'unavailable', retryable: true, cause: 'service-failure' };
     case 'drafted':
-      return attempt.defects.length === 0
-        ? { status: 'eligible' }
-        : { status: 'invalid-draft', defects: attempt.defects };
+      return classifyDrafted(attempt);
     default: {
       const exhaustive: never = attempt;
       throw new Error(

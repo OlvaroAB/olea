@@ -200,6 +200,22 @@
  * link lives in the review log and the cache's `predecessorInstrumentId`
  * today, not in the card's own bytes — see this bead's hand-back notes for
  * the proposed decision.
+ *
+ * ## The demand record (`[D-437]`, `ol-egov.141.89.2.26`, demand-carriage design section 4.4)
+ *
+ * The same section `materialize-mcq.ts`'s module doc states, for a card: when `input.demand` is
+ * supplied, the draft's demand is judged by `olea-core`'s `judgeDraftedDemand` (via
+ * `demand-target.ts`) and, only for a demand the request asked, the server acknowledged and the
+ * card's own declaration agrees with, ONE target record is written under
+ * `.olea/instrument-targets/`, keyed by the provisional instrument id computed below and bound to
+ * the card as inserted (`questionBindingOf`: front and back as parsed). Written beside the citation
+ * sidecar, before the note write, write-once and guarded by `vault.exists` so a retry leaves it
+ * untouched; never in her note. Intent, not delivery: the basis is the literal `authoring-intent`,
+ * and a card reads `free-recall` (no answer options), reported on the result and never stored. An
+ * unacknowledged demand or a mismatching declaration writes no record and materialises the card
+ * unspecified; a draft with no demand writes nothing and adds no `demand` member to the result.
+ * **One of the two production callers of the target-record writer T7
+ * (`target-store-callers.spec.ts`) allows**; the other is `materialize-mcq.ts`.
  */
 
 import {
@@ -210,6 +226,7 @@ import {
   type DocumentEdit,
   hashText,
   type InstrumentCitation,
+  instrumentTargetStorePath,
   MULTI_LINE_SEPARATOR,
   OLEA_UID_KEY,
   parseCards,
@@ -222,8 +239,14 @@ import {
   type VaultPath,
   type VaultSource,
   writeInstrumentCitation,
+  writeInstrumentTarget,
 } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
+import {
+  type MaterializeDemandInput,
+  type MaterializedDemand,
+  planInstrumentDemand,
+} from './demand-target.js';
 import { sourceRevisionMatches } from './home-note.js';
 import { StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
@@ -268,10 +291,18 @@ export interface MaterializeAcceptedCardDraftInput {
    * mechanism exists for one — a card is not Olea's own block format).
    */
   readonly predecessorInstrumentId?: string;
+  /**
+   * `[D-437]` (`ol-egov.141.89.2.26`): the demand this draft's request carried and the response
+   * returned, with the generator stamp — see `materialize-mcq.ts`'s identical field and this
+   * module's own section. `undefined` writes no record and adds no `demand` member to the result.
+   */
+  readonly demand?: MaterializeDemandInput;
 }
 
 export interface MaterializeAcceptedCardDraftResult {
   readonly instrumentId: string;
+  /** Present only when `input.demand` was supplied: what became of the demand — see `MaterializedDemand`. */
+  readonly demand?: MaterializedDemand;
 }
 
 /**
@@ -448,6 +479,29 @@ export async function materializeAcceptedCardDraft(
     await writeInstrumentCitation(vault, instrumentId, citation);
   }
 
+  // `[D-437]`: judge the draft's demand and, for one the request asked, the server acknowledged and
+  // the card's own declaration agrees with, write the ONE target record, keyed by the id above and
+  // bound to the card as inserted (front and back as parsed) — see the module doc's own section.
+  // Guarded by `vault.exists`, so a retry that an interrupted attempt already reached leaves the
+  // record untouched, like the citation sidecar just above.
+  if (found.type !== 'qa') {
+    throw new Error('materializeAcceptedCardDraft: the inserted card did not parse as a Q&A card');
+  }
+  const demandPlan =
+    input.demand === undefined
+      ? undefined
+      : await planInstrumentDemand({
+          instrumentId,
+          block: found,
+          demand: input.demand,
+          now: deps.now ?? (() => new Date()),
+        });
+  if (demandPlan?.target !== undefined) {
+    if (!(await vault.exists(instrumentTargetStorePath(instrumentId)))) {
+      await writeInstrumentTarget(vault, demandPlan.target);
+    }
+  }
+
   await vault.write(input.sourcePath, stamped.content);
 
   if (input.predecessorInstrumentId !== undefined) {
@@ -473,5 +527,5 @@ export async function materializeAcceptedCardDraft(
     );
   }
 
-  return { instrumentId };
+  return demandPlan === undefined ? { instrumentId } : { instrumentId, demand: demandPlan.demand };
 }

@@ -19,7 +19,12 @@
  */
 
 import type { InstrumentType } from 'olea-contracts';
-import type { InstrumentCitation } from 'olea-core';
+import {
+  type InstrumentCitation,
+  type InstrumentTargetOrigin,
+  PAPER_DEMANDS,
+  type PaperDemand,
+} from 'olea-core';
 
 /**
  * `[D-195]` (`ol-0r92.40`): a grounded distractor's provenance — the wrong
@@ -102,6 +107,55 @@ export interface DraftProvenance {
 }
 
 export type DraftStatus = 'pending' | 'accepted' | 'edited' | 'rejected';
+
+/**
+ * The origins a draft can come from — `InstrumentTargetOrigin` (`olea-core`'s target record) less
+ * `'paper-handoff'`, which is a paper item handed to ordinary review and never a cached draft.
+ * Closed: another origin is a persisted vocabulary change (Class C).
+ */
+export const DRAFT_DEMAND_ORIGINS = Object.freeze([
+  'heading-cue',
+  'sweep',
+  'planner-need',
+  'revision',
+] as const satisfies readonly InstrumentTargetOrigin[]);
+export type DraftDemandOrigin = (typeof DRAFT_DEMAND_ORIGINS)[number];
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.26`, demand-carriage design sections 4.1 to 4.4): what one drafted
+ * question carries about the demand its authoring request asked for, from the moment it is cached
+ * until it is accepted, when `materialize-mcq.ts` / `materialize-card.ts` judge it and write the
+ * instrument target record.
+ *
+ * **A plugin-local, additive, optional field on a cached record; not a wire field.**
+ * `packages/contracts` is untouched (the authoring wire's own fragment is
+ * `packages/contracts/src/authoring-demand.ts`, B2). A record cached before this field existed, and
+ * every record for a need that asked for nothing, carries none, and stays unspecified for ever
+ * (design section 3.1: absence is the unspecified state and it is permanent).
+ *
+ * **Facts, not a verdict.** The carriage records what the request said and what the response
+ * returned; it never records that the item delivers the demand (`[D-277]` (h), row 36: "declared
+ * intent does not certify delivered demand"). The judgement is `olea-core`'s `judgeDraftedDemand`,
+ * run at materialisation.
+ *
+ * **The heading is her wording, kept in her own vault and nowhere new.** `requestedAsk` is the
+ * heading exactly as the request carried it (row 35: the source heading survives downstream). It
+ * lives in the draft cache (`.olea/drafts/`, exported and deleted with the rest of her layer) and
+ * is NOT copied to the instrument target record, which stores no wording of hers (design Open
+ * question 3: storing it there would be a further persisted field and needs a ruling).
+ */
+export interface DraftDemandCarriage {
+  /** Which origin asked for it. `sweep` is the recall sweep's declared constant and no other origin uses it (row 38). */
+  readonly origin: DraftDemandOrigin;
+  /** The demand the request carried: authoring intent and nothing more. Present exactly when the request sent one, so a carriage exists only for a served ask. */
+  readonly intendedDemand: PaperDemand;
+  /** The heading and question word the request carried, when the need came from a heading. */
+  readonly requestedAsk?: { readonly heading: string; readonly questionWord?: string };
+  /** The server's `demandAcknowledgement`: present exactly when it read the demand and applied it. Absent from an older Worker's response (deployment skew). */
+  readonly acknowledgedDemand?: PaperDemand;
+  /** This question's own `declaredDemand`: the author's proposal, used only to refuse. */
+  readonly declaredDemand?: PaperDemand;
+}
 
 export interface DraftRecord {
   /** Stable identity for this one drafted question — the file name (`cache-store.ts`) and, until accepted, the review queue's synthetic `instrumentId` stand-in. */
@@ -211,6 +265,13 @@ export interface DraftRecord {
    * pending→accepted round-trip between drafting and her review decision.
    */
   readonly predecessorInstrumentId?: string;
+  /**
+   * `[D-437]` (`ol-egov.141.89.2.26`): the demand this draft's request carried and the response
+   * returned — see `DraftDemandCarriage`. Absent (never `null`) for a draft with no demand, which
+   * is every draft cached before this field existed. `accept.ts` forwards it to the materialiser,
+   * which validates it and, only for an acknowledged agreeing demand, writes the target record.
+   */
+  readonly demand?: DraftDemandCarriage;
 }
 
 /** Runtime shape guard for a `DraftRecord` read back from a vault file — never trust `JSON.parse`'s `any` past this. Mirrors the "fail closed, report rather than throw" posture `olea-core`'s review-log `parse.ts` uses for a corrupt line, at plugin scope. */
@@ -307,6 +368,42 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   }
   if (v.sourceCitation !== undefined && !isInstrumentCitationShape(v.sourceCitation)) return false;
   if (v.sourceContentHash !== undefined && typeof v.sourceContentHash !== 'string') return false;
+  if (v.demand !== undefined && !isDraftDemandCarriage(v.demand)) return false;
+  return true;
+}
+
+function isPaperDemandWord(value: unknown): value is PaperDemand {
+  return typeof value === 'string' && (PAPER_DEMANDS as readonly string[]).includes(value);
+}
+
+/**
+ * `DraftDemandCarriage`'s own shape: an origin from the closed draft list, a word from the five on
+ * every demand member, and a heading that is a non-blank string with an optional non-empty
+ * question word. Anything else is not a carriage, so a malformed one can never be read as a demand.
+ */
+function isDraftDemandCarriage(value: unknown): value is DraftDemandCarriage {
+  if (typeof value !== 'object' || value === null) return false;
+  const d = value as Record<string, unknown>;
+  if (
+    typeof d.origin !== 'string' ||
+    !(DRAFT_DEMAND_ORIGINS as readonly string[]).includes(d.origin)
+  ) {
+    return false;
+  }
+  if (!isPaperDemandWord(d.intendedDemand)) return false;
+  if (d.acknowledgedDemand !== undefined && !isPaperDemandWord(d.acknowledgedDemand)) return false;
+  if (d.declaredDemand !== undefined && !isPaperDemandWord(d.declaredDemand)) return false;
+  if (d.requestedAsk !== undefined) {
+    if (typeof d.requestedAsk !== 'object' || d.requestedAsk === null) return false;
+    const ask = d.requestedAsk as Record<string, unknown>;
+    if (typeof ask.heading !== 'string' || ask.heading.trim() === '') return false;
+    if (
+      ask.questionWord !== undefined &&
+      (typeof ask.questionWord !== 'string' || ask.questionWord === '')
+    ) {
+      return false;
+    }
+  }
   return true;
 }
 

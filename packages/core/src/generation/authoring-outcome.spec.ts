@@ -5,8 +5,14 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { PAPER_DEMANDS, type PaperDemand } from '../oracle/paper-types.js';
 import type { GroundingRefusalReason } from '../retrieval/groundedContext.js';
-import { type AuthoringAttempt, classifyAuthoringOutcome } from './authoring-outcome.js';
+import {
+  type AuthoringAttempt,
+  classifyAuthoringOutcome,
+  type DraftedDemandFacts,
+  judgeDraftedDemand,
+} from './authoring-outcome.js';
 import type { McqDraftDefect } from './mcq-draft-checks.js';
 
 describe('classifyAuthoringOutcome — routing and budget deferral', () => {
@@ -158,5 +164,156 @@ describe('classifyAuthoringOutcome — a drafted response, by its checkMcqDraft 
     ];
     const attempt: AuthoringAttempt = { kind: 'drafted', defects };
     expect(classifyAuthoringOutcome(attempt)).toEqual({ status: 'invalid-draft', defects });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-437]` demand carriage, B4 (`ol-egov.141.89.2.26`), test T5: the demand is validated by code
+// against what the request asked (`[D-310]`: no per-item demand judge), and the author's own
+// declaration is used only to REFUSE, never to certify (design sections 2 and 4.4, row 36).
+// ---------------------------------------------------------------------------
+
+describe('judgeDraftedDemand — code checks only, refusing and never certifying (T5)', () => {
+  const OTHERS = (demand: PaperDemand) => PAPER_DEMANDS.filter((word) => word !== demand);
+
+  it('reads nothing asked when the request carried no demand, whatever the response says', () => {
+    expect(judgeDraftedDemand({})).toEqual({ kind: 'unspecified', reason: 'none-asked' });
+    // A model that wrote an acknowledgement and a declaration for a request that asked for nothing
+    // has not been asked anything: the Worker strips both, and the client would ignore them anyway.
+    expect(
+      judgeDraftedDemand({ acknowledgedDemand: 'calculate', declaredDemand: 'calculate' }),
+    ).toEqual({ kind: 'unspecified', reason: 'none-asked' });
+  });
+
+  it('a response with no acknowledgement is unspecified (skew), not a defect, even when a declaration came back', () => {
+    // Deployment skew (design 4.3): an old Worker strips the unknown request keys and authors as
+    // before, so the response has no acknowledgement. A new caller must never record as intended
+    // what an old server ignored, and the draft is not thereby invalid.
+    expect(judgeDraftedDemand({ intendedDemand: 'recall-a-fact' })).toEqual({
+      kind: 'unspecified',
+      reason: 'not-acknowledged',
+    });
+    expect(
+      judgeDraftedDemand({ intendedDemand: 'recall-a-fact', declaredDemand: 'recall-a-fact' }),
+    ).toEqual({ kind: 'unspecified', reason: 'not-acknowledged' });
+  });
+
+  it('an acknowledgement of a different demand than the one sent is no acknowledgement of it', () => {
+    for (const other of OTHERS('recall-a-fact')) {
+      expect(
+        judgeDraftedDemand({
+          intendedDemand: 'recall-a-fact',
+          acknowledgedDemand: other,
+          declaredDemand: 'recall-a-fact',
+        }),
+      ).toEqual({ kind: 'unspecified', reason: 'not-acknowledged' });
+    }
+  });
+
+  it('a question declaring a different demand than asked is refused as demand-mismatch, for every pair of the five words', () => {
+    for (const asked of PAPER_DEMANDS) {
+      for (const declared of OTHERS(asked)) {
+        const disposition = judgeDraftedDemand({
+          intendedDemand: asked,
+          acknowledgedDemand: asked,
+          declaredDemand: declared,
+        });
+        expect(disposition.kind).toBe('refused');
+        if (disposition.kind !== 'refused') throw new Error('unreachable');
+        expect(disposition.defect.kind).toBe('demand-mismatch');
+        expect(disposition.defect.detail).toContain(asked);
+        expect(disposition.defect.detail).toContain(declared);
+      }
+    }
+  });
+
+  it('an acknowledged demand with no declaration on the question is a mismatch too: absence is not agreement', () => {
+    const disposition = judgeDraftedDemand({
+      intendedDemand: 'recall-a-fact',
+      acknowledgedDemand: 'recall-a-fact',
+    });
+    expect(disposition).toMatchObject({ kind: 'refused', defect: { kind: 'demand-mismatch' } });
+  });
+
+  it('a matching declaration adds nothing: the result carries the demand that was asked and no basis but that (row 36)', () => {
+    for (const asked of PAPER_DEMANDS) {
+      const disposition = judgeDraftedDemand({
+        intendedDemand: asked,
+        acknowledgedDemand: asked,
+        declaredDemand: asked,
+      });
+      // Exactly two keys: nothing says the item was checked to deliver the demand.
+      expect(disposition).toEqual({ kind: 'declared', demand: asked });
+      expect(Object.keys(disposition).sort()).toEqual(['demand', 'kind']);
+    }
+  });
+});
+
+describe('classifyAuthoringOutcome — a drafted response carrying demand facts (T5)', () => {
+  const asked: DraftedDemandFacts = {
+    intendedDemand: 'recall-a-fact',
+    acknowledgedDemand: 'recall-a-fact',
+    declaredDemand: 'recall-a-fact',
+  };
+
+  it('a drafted attempt with no demand facts classifies exactly as before this bead, with no demand member', () => {
+    expect(classifyAuthoringOutcome({ kind: 'drafted', defects: [] })).toEqual({
+      status: 'eligible',
+    });
+  });
+
+  it('a proposal declaring a different demand is invalid-draft with the demand-mismatch defect', () => {
+    const outcome = classifyAuthoringOutcome({
+      kind: 'drafted',
+      defects: [],
+      demand: { ...asked, declaredDemand: 'calculate' },
+    });
+    expect(outcome.status).toBe('invalid-draft');
+    if (outcome.status !== 'invalid-draft') throw new Error('unreachable');
+    expect(outcome.defects.map((defect) => defect.kind)).toEqual(['demand-mismatch']);
+  });
+
+  it('the demand-mismatch defect follows the exact MCQ defects, so both are reported in one invalid-draft', () => {
+    const mcq: readonly McqDraftDefect[] = [{ kind: 'empty-stem', detail: 'stem is empty' }];
+    const outcome = classifyAuthoringOutcome({
+      kind: 'drafted',
+      defects: mcq,
+      demand: { ...asked, declaredDemand: 'compare-or-choose' },
+    });
+    expect(outcome.status).toBe('invalid-draft');
+    if (outcome.status !== 'invalid-draft') throw new Error('unreachable');
+    expect(outcome.defects.map((defect) => defect.kind)).toEqual(['empty-stem', 'demand-mismatch']);
+  });
+
+  it('a response with no acknowledgement is eligible and unspecified, so the need stays open and the reason is counted as skew', () => {
+    const outcome = classifyAuthoringOutcome({
+      kind: 'drafted',
+      defects: [],
+      demand: { intendedDemand: 'recall-a-fact' },
+    });
+    expect(outcome).toEqual({
+      status: 'eligible',
+      demand: { kind: 'unspecified', reason: 'not-acknowledged' },
+    });
+  });
+
+  it('an acknowledged, agreeing draft is eligible and its demand is the one asked', () => {
+    expect(classifyAuthoringOutcome({ kind: 'drafted', defects: [], demand: asked })).toEqual({
+      status: 'eligible',
+      demand: { kind: 'declared', demand: 'recall-a-fact' },
+    });
+  });
+
+  it('exact MCQ defects alone still make an invalid-draft, and an unspecified demand adds nothing to it', () => {
+    const mcq: readonly McqDraftDefect[] = [
+      { kind: 'empty-feedback', detail: 'feedback is empty' },
+    ];
+    expect(
+      classifyAuthoringOutcome({
+        kind: 'drafted',
+        defects: mcq,
+        demand: { intendedDemand: 'recall-a-fact' },
+      }),
+    ).toEqual({ status: 'invalid-draft', defects: mcq });
   });
 });
