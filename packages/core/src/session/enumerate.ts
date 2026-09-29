@@ -47,34 +47,51 @@
  *   - **Nothing at all for a note with no instruments**, which is most of her
  *     vault, and is not a diagnostic.
  *
- * ## Multi-valued `topic:` — ruled (D-031 `ol-4ekt`, superseded by `ol-t3sd`)
- *
- * A note may name several `topic:` values. `concept/extract.ts` records the
- * note under every one of them, which is right: the note does contribute to all
- * of them. **An instrument bound to that note is evidence for all of them too**
- * — that is the ruling on `ol-t3sd`, and it is what evidence already means
- * everywhere else in the model.
- *
- * D-031 could not deliver it, and said so: the review-log record persisted one
- * `conceptId`, `QueueCandidate` held one field and F2.17's dedupe key was one
- * string, so the interim was bind-to-first, with the concepts that lost the
- * note's instruments recording the fact on `ConceptRecord.ambiguousTopicPaths`.
- * That was a placeholder from the day it was written. v3 of the record carries
- * a list (`contracts/review-log.ts`), the candidate carries a list, and the
- * dedupe key is the set — so the narrowing, and the diagnostic that existed
- * only to make the narrowing visible, are both gone.
- *
- * What survives is her **order**: `conceptIds` keeps the note's `topic:` values
- * exactly as she wrote them, because that is the only ordering in the data and
- * ours would be an invention. It no longer *selects* anything; it is the order
- * the concepts are recorded, offered and logged in.
- *
- * One thing this does **not** do, and must not: emit one candidate per
- * (instrument, concept) pair. The same `instrumentId` would then appear twice
- * in one session and be offered to her twice. One instrument, one candidate,
- * several concepts.
- *
- * ## `ol-8ae9`: a heading's ordinal counts every occupant, stamped or not
+ * ## Multi-valued `topic:` — one scored concept, the rest kept as context (`[D-419]`, `[D-423]`)
+
+A note may name several `topic:` values. `concept/extract.ts` records the
+note under every one of them, which is right: the note does contribute to all
+of them, and a note's body may link further concepts (`[D-248]`). **An
+instrument bound to that note is scored on exactly one of them** — her
+first-listed `topic:` value that resolves to a concept (C5.11: an instrument
+scores exactly one concept; `[D-336]`: its subject is fixed before its
+scenario). Naming several topics does not establish that every question tests
+every topic.
+
+`conceptIds` still carries **every** associated concept, in her order (`[D-423]`
+option D2): index 0 is the scored concept, every later id is a context
+concept. The later ids keep the instrument reachable from each of them (the
+study-session instrument index, the queue's per-concept dedupe, the concept
+lookups) and let the review record stamp what was believed about them, and they
+earn no credit. Credit readers do not read the list themselves: they ask
+`./scored-concept.js`, the one shared rule, and this module builds the list
+through the same file's `orderNoteConcepts` so the two halves cannot drift.
+
+History of this field, because the same list meant different things over time
+and the persisted log holds all of it. D-031 (`ol-4ekt`) bound an instrument to
+the first value because the review-log record persisted one `conceptId`.
+`ol-t3sd` widened both record and list to every concept the note names and made
+the instrument evidence for all of them; `[D-419]` reversed that reading — the
+list stayed, the credit went back to the first entry. What survives every
+version is her **order**: `conceptIds` keeps the note's `topic:` values exactly
+as she wrote them, because that is the only ordering in the data and ours would
+be an invention. It is the order the concepts are recorded, offered and logged
+in, and its first entry is the subject the review record carries. Reordering
+her topics later therefore changes what is enumerated and recorded from then
+on, and never the subject a past review recorded.
+
+When no `topic:` value resolves to a concept but the extractor still bound the
+note to one (a body link), index 0 is the first concept the extractor
+attested, as before: the ruling names her first-listed topic and is silent on a
+note with none, and withholding those instruments would change what she is
+offered, so the fallback is kept (an open question on `ol-egov.141.89.9.65`).
+
+One thing this does **not** do, and must not: emit one candidate per
+(instrument, concept) pair. The same `instrumentId` would then appear twice
+in one session and be offered to her twice. One instrument, one candidate,
+one scored concept, several context concepts.
+
+## `ol-8ae9`: a heading's ordinal counts every occupant, stamped or not
  *
  * A Q&A card's block id is both its identity carrier (rule 4 in `instrument-id.ts`) and, before
  * this fix, this walk's own ordinal-counting key — the same string doing two jobs. Two cards
@@ -138,6 +155,7 @@ import { OLEA_UID_KEY } from '../uid/stamp.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { InstrumentIdSource } from './instrument-id.js';
 import { provisionalInstrumentId } from './instrument-id.js';
+import { orderNoteConcepts } from './scored-concept.js';
 import type {
   InvalidCardReport,
   InvalidClozeReport,
@@ -602,21 +620,16 @@ export async function enumerateVaultInstruments(
 
     if (instruments.length === 0) continue;
 
-    // The note's concepts, ordered by her own `topic:` order. `noteConcepts` is
+    // The note's concepts, ordered by her own `topic:` order — `noteConcepts` is
     // what the extractor authoritatively recorded for this path; the order is
-    // hers.
+    // hers. The first entry is the instrument's scored concept (`[D-419]`), the
+    // rest are context; anything the extractor bound to this note that her
+    // `topic:` order did not reach — a drift between the two meaning paths, or a
+    // concept the note's body links — still travels, just after every topic.
+    // One shared rule, so the enumeration and every credit reader agree on
+    // which entry is which (`./scored-concept.ts`).
     const noteConcepts = byPath.get(notePath) ?? [];
-    const byName = new Map(noteConcepts.map((concept) => [concept.name, concept]));
-    const ordered: ConceptRecord[] = [];
-    for (const topic of topicsOf(source)) {
-      const concept = byName.get(topic);
-      if (concept !== undefined && !ordered.includes(concept)) ordered.push(concept);
-    }
-    // Anything the extractor bound to this note that her `topic:` order did not
-    // reach — a drift between the two meaning paths — still counts, just last.
-    for (const concept of noteConcepts) {
-      if (!ordered.includes(concept)) ordered.push(concept);
-    }
+    const ordered = orderNoteConcepts(topicsOf(source), noteConcepts);
 
     // An instrument in a note that resolves to no concept at all is still
     // reported rather than logged: `conceptIds` is non-empty by schema, and
@@ -641,6 +654,10 @@ export async function enumerateVaultInstruments(
     // `study-session/build.ts`'s instrument-index lookup. `concept.name`
     // remains available on `ConceptRecord` for display; nothing here renders
     // `conceptIds` to her, so the flip changes no student-visible surface.
+    // Index 0 is the instrument's scored concept, every later key a context
+    // concept (`[D-419]`, `[D-423]` D2): the list stays whole so lookups by
+    // concept still reach this instrument, and credit readers take the first
+    // through `./scored-concept.ts`, never by reading the list themselves.
     const conceptIds = ordered.map((concept) => concept.key);
     // F2.5's course membership follows concept membership: the instrument
     // belongs to every course any of its concepts belongs to (M:N, R1/R2 —

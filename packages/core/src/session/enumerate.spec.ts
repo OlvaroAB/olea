@@ -13,6 +13,12 @@ import { parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
 import { writeInstrumentCitation } from '../instrument/citation-store.js';
 import { enumerateVaultInstruments } from './enumerate.js';
 import type { InstrumentIdSource } from './instrument-id.js';
+import {
+  contextConceptIds,
+  creditsConcept,
+  scoredConceptId,
+  scoredConceptOf,
+} from './scored-concept.js';
 
 /**
  * `ol-63e1`: `VaultInstrumentRecord.conceptIds` now carries the opaque key
@@ -499,26 +505,29 @@ describe('the concept binding follows her `topic:` property', () => {
     expect(found.records[0]?.conceptIds).not.toEqual(found.records[1]?.conceptIds);
   });
 
-  it('a note naming two topics binds its instruments to BOTH, in her order', async () => {
+  it('a note naming two topics keeps BOTH on the instrument, in her order, the first as its scored concept', async () => {
     const vault = memoryVault({
       'Notes/one.md': [FRONTMATTER('[Beta, Alpha]'), 'Front::Back', ''].join('\n'),
     });
     const found = await enumerateVaultInstruments(vault);
-    // Her order, not ours: alphabetical would have put Alpha first. The order
-    // no longer *selects* anything — every value is bound — but it is still
-    // hers and is carried through as the opaque key derived from each name
-    // (R1/R2 governs the display name, not this join key — `ol-63e1`).
+    // Her order, not ours: alphabetical would have put Alpha first. Every
+    // value stays on the list (`[D-423]` D2), the first is the scored concept
+    // (`[D-419]`), and the list is carried through as the opaque key derived
+    // from each name (R1/R2 governs the display name, not this join key —
+    // `ol-63e1`).
     expect(found.records[0]?.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha')]);
   });
 
-  // D-031 (`ol-4ekt`), superseded by `ol-t3sd`. D-031 bound an instrument to
-  // her first `topic:` value because the review-log record persisted one
-  // `conceptId`, and recorded the loss on the concepts that missed out so that
-  // "this concept has no instruments" and "this concept lost its instruments to
-  // a co-listed one" stopped looking identical. v3 of the record persists a
-  // list, so there is no loss to record: an instrument is evidence for every
-  // concept its note names, and both the narrowing and its diagnostic are gone.
-  it('no concept loses a note’s instruments, so nothing is recorded as an ambiguity', async () => {
+  // D-031 (`ol-4ekt`), superseded by `ol-t3sd` and then narrowed again by
+  // `[D-419]`. D-031 bound an instrument to her first `topic:` value because the
+  // review-log record persisted one `conceptId`, and recorded the loss on the
+  // concepts that missed out so that "this concept has no instruments" and "this
+  // concept lost its instruments to a co-listed one" stopped looking identical.
+  // v3 of the record persists a list, so there is no loss to record: the
+  // instrument stays on every concept its note names (reachable from each, the
+  // navigation `[D-423]` D2 keeps), it is scored on the first, and both the
+  // narrowing and its diagnostic stay gone.
+  it('no concept loses a note’s instruments from its list, so nothing is recorded as an ambiguity', async () => {
     const vault = memoryVault({
       'Notes/one.md': [FRONTMATTER('[Beta, Alpha]'), 'Front::Back', ''].join('\n'),
     });
@@ -565,6 +574,104 @@ describe('the concept binding follows her `topic:` property', () => {
     const multi = found.records.find((r) => r.notePath === 'Notes/one.md');
     expect(multi?.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha')]);
     expect(multi?.courses).toEqual(['MUSTH104', 'geol204']);
+  });
+});
+
+// Scenarios: features/F2-review.md, "F2.14 — Instruments are enumerated from her
+// vault" — the `[D-419]` / `[D-423]` block (`ol-egov.141.89.9.65`),
+// `@auto:core/session/enumerate.spec`. One scored concept per ordinary
+// instrument: her first-listed topic; the rest of the list is context.
+describe('[D-419] / [D-423]: one scored concept per instrument, the other concepts kept as context', () => {
+  it('scores an instrument in a multi-topic note on her first-listed topic and keeps the other as context', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Beta, Alpha]'), 'Front::Back', ''].join('\n'),
+    });
+    const [record] = (await enumerateVaultInstruments(vault)).records;
+    if (record === undefined) throw new Error('expected one record');
+
+    // Alphabetical would have scored Alpha; hers scores Beta.
+    expect(scoredConceptOf(record)).toBe(unboundKey('Beta'));
+    expect(contextConceptIds(record.conceptIds)).toEqual([unboundKey('Alpha')]);
+    expect(creditsConcept(record, unboundKey('Beta'))).toBe(true);
+    // Reachable from the second topic, credited to none of the context.
+    expect(record.conceptIds).toContain(unboundKey('Alpha'));
+    expect(creditsConcept(record, unboundKey('Alpha'))).toBe(false);
+  });
+
+  it('a concept the note only links carries as context after every topic, and is never the scored one', async () => {
+    // `Gamma` is attested by a body link (`[D-248]`) in a course-folder note; it
+    // is not one of her `topic:` values. Bound to its Zettelkasten note (tier 1).
+    const vault = memoryVault({
+      '05 Zettelkasten/Gamma.md': '# Gamma\n',
+      '01 Courses/COURSEA/one.md': [
+        '---',
+        'topic: [Beta, Alpha]',
+        '---',
+        'A card that mentions [[Gamma]]::Back',
+        '',
+      ].join('\n'),
+    });
+    const [record] = (await enumerateVaultInstruments(vault)).records;
+    if (record === undefined) throw new Error('expected one record');
+
+    const gamma = provisionalConceptKey({
+      name: 'Gamma',
+      boundNotePath: '05 Zettelkasten/Gamma.md',
+    });
+    expect(record.conceptIds).toEqual([unboundKey('Beta'), unboundKey('Alpha'), gamma]);
+    expect(scoredConceptOf(record)).toBe(unboundKey('Beta'));
+    expect(contextConceptIds(record.conceptIds)).toEqual([unboundKey('Alpha'), gamma]);
+    expect(creditsConcept(record, gamma)).toBe(false);
+  });
+
+  it('every instrument in the note carries the same scored concept, one candidate each', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Beta, Alpha]'), 'First::a', '', 'Second::b', ''].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    expect(found.records).toHaveLength(2);
+    expect(found.records.map(scoredConceptOf)).toEqual([unboundKey('Beta'), unboundKey('Beta')]);
+  });
+
+  it('reordering the topics moves the scored concept of the next enumeration, never of the record already taken', async () => {
+    const vault = memoryVault({
+      'Notes/one.md': [FRONTMATTER('[Beta, Alpha]'), 'Front::Back', ''].join('\n'),
+    });
+    const before = await enumerateVaultInstruments(vault);
+    const recordedBefore = before.records[0];
+    if (recordedBefore === undefined) throw new Error('expected one record');
+    // What a review recorded now would carry — a value, held apart from the walk.
+    const recordedConceptIds = [...recordedBefore.conceptIds];
+
+    await vault.write('Notes/one.md', [FRONTMATTER('[Alpha, Beta]'), 'Front::Back', ''].join('\n'));
+    const after = await enumerateVaultInstruments(vault);
+    const recordedAfter = after.records[0];
+    if (recordedAfter === undefined) throw new Error('expected one record');
+
+    expect(scoredConceptOf(recordedAfter)).toBe(unboundKey('Alpha'));
+    // The same concepts, in her new order — nothing dropped, nothing invented.
+    expect([...recordedAfter.conceptIds].sort()).toEqual([...recordedConceptIds].sort());
+    // What was recorded under the old order still names its own subject.
+    expect(scoredConceptId(recordedConceptIds)).toBe(unboundKey('Beta'));
+    expect(scoredConceptOf(recordedBefore)).toBe(unboundKey('Beta'));
+  });
+
+  it('a note whose topics resolve to nothing but whose body links a concept keeps today’s fallback: the first attested concept is scored', async () => {
+    // Not ruled: `[D-423]` names her first-listed topic and is silent on a note
+    // with none. The walk keeps binding such a note's instruments (withholding
+    // them would change what she is offered) — an open question on
+    // `ol-egov.141.89.9.65`. This pins the behaviour so a change is deliberate.
+    const vault = memoryVault({
+      '05 Zettelkasten/Gamma.md': '# Gamma\n',
+      '01 Courses/COURSEA/one.md': ['A card that mentions [[Gamma]]::Back', ''].join('\n'),
+    });
+    const found = await enumerateVaultInstruments(vault);
+    const gamma = provisionalConceptKey({
+      name: 'Gamma',
+      boundNotePath: '05 Zettelkasten/Gamma.md',
+    });
+    expect(found.records.map((r) => r.conceptIds)).toEqual([[gamma]]);
+    expect(found.unbound).toEqual([]);
   });
 });
 

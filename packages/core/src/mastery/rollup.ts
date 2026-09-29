@@ -154,6 +154,7 @@ import type {
 import { readExplainBackCorrectness } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
+import { scoredConceptOf } from '../session/scored-concept.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
 import {
   type InstrumentValidityProjection,
@@ -657,12 +658,33 @@ export interface ConceptMasteryResult {
  * mount went from 149-348ms to 7.6-23.4s at some weeks (`ol-95vv.9`).
  *
  * The fix is a single pass that buckets every `kind: 'review'` entry by
- * every concept it is evidence for (D-031's many-to-many `conceptIds`), plus
- * the first-seen instrument type per concept (`conceptVitalityInstruments`'s
- * own tie-break, preserved exactly). Grouped-by-concept entries are still
- * folded through the SAME per-concept logic below — this changes only which
- * array is iterated, never the arithmetic, so the high-water-mark result for
- * any one concept is unchanged.
+ * the one concept it scores — the **recorded review subject**, the first id
+ * of the record's own `conceptIds` (`[D-419]`, `[D-423]`, through the shared
+ * rule `../session/scored-concept.ts`) — plus the first-seen instrument type
+ * per concept (`conceptVitalityInstruments`'s own tie-break, preserved
+ * exactly). Grouped-by-concept entries are still folded through the SAME
+ * per-concept logic below — this changes only which array is iterated, never
+ * the arithmetic, so the high-water-mark result for any one concept is
+ * unchanged.
+ *
+ * **Why the subject, not every id the record names.** A record's `conceptIds`
+ * holds every concept its instrument's note is associated with, in her order;
+ * the rest after the first are context, kept for navigation and for the
+ * per-concept belief stamped on the record (`masteryAtTime`), and they earn no
+ * evidence from it — a note naming several topics does not establish that the
+ * question tests each of them (C5.11: an instrument scores exactly one
+ * concept). Before `[D-419]` this pass bucketed the record under every id
+ * (`ol-t3sd`, D-031's many-to-many reading), so a concept she only mentioned
+ * beside another topic, or reached by a link, read as practised.
+ *
+ * **Historical records follow the subject they recorded.** The subject is read
+ * from the record as it sits in the log; nothing consults the instrument's
+ * present binding, so reordering a note's topics later changes what future
+ * reviews credit and never reassigns evidence already on the log. No record is
+ * rewritten: every shape the log holds carries a non-empty list (the one-id
+ * shapes were migrated to a one-element list, `../review-log/upgrade.ts`), and a
+ * record written under the every-concept reading is read as crediting only its
+ * first id.
  *
  * **Cached in a `WeakMap` keyed by the `entries` array's own identity, guarded
  * by the array's `length` at index-build time (`ol-i8ga`, fixing the
@@ -687,14 +709,15 @@ export interface ConceptMasteryResult {
  * semantics.
  */
 interface ReviewLogEntryIndex {
-  /** Every `kind: 'review'` record naming a given concept id, in log order. */
+  /** Every `kind: 'review'` record whose recorded subject is a given concept id, in log order. */
   readonly recordsByConcept: ReadonlyMap<string, readonly ReviewLogRecord[]>;
   /**
-   * Per concept, every instrument's type, first-seen order —
-   * `conceptVitalityInstruments`'s exact prior per-concept scan, batched.
+   * Per concept (keyed by recorded subject), every instrument's type,
+   * first-seen order — `conceptVitalityInstruments`'s exact prior per-concept
+   * scan, batched.
    */
   readonly instrumentTypesByConcept: ReadonlyMap<string, ReadonlyMap<string, InstrumentType>>;
-  /** `conceptIdsInLog`'s result — every concept id at least one entry names, sorted. */
+  /** `conceptIdsInLog`'s result — every concept id that is the recorded subject of at least one entry, sorted. */
   readonly conceptIds: readonly string[];
 }
 
@@ -716,23 +739,26 @@ function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
     const record: ReviewLogRecord = entry;
-    for (const conceptId of record.conceptIds) {
-      conceptIdSet.add(conceptId);
+    // The one concept this record scores: the subject it recorded (`[D-419]`,
+    // `[D-423]`) — never the rest of its list, which is context. The schema
+    // makes the list non-empty; a hand-built empty one credits nothing.
+    const conceptId = scoredConceptOf(record);
+    if (conceptId === undefined) continue;
+    conceptIdSet.add(conceptId);
 
-      const records = recordsByConcept.get(conceptId);
-      if (records === undefined) recordsByConcept.set(conceptId, [record]);
-      else records.push(record);
+    const records = recordsByConcept.get(conceptId);
+    if (records === undefined) recordsByConcept.set(conceptId, [record]);
+    else records.push(record);
 
-      let types = instrumentTypesByConcept.get(conceptId);
-      if (types === undefined) {
-        types = new Map<string, InstrumentType>();
-        instrumentTypesByConcept.set(conceptId, types);
-      }
-      // First-seen type wins — `conceptVitalityInstruments`'s own tie-break,
-      // preserved verbatim: an instrument's type does not change across its
-      // own review events.
-      if (!types.has(record.instrumentId)) types.set(record.instrumentId, record.instrumentType);
+    let types = instrumentTypesByConcept.get(conceptId);
+    if (types === undefined) {
+      types = new Map<string, InstrumentType>();
+      instrumentTypesByConcept.set(conceptId, types);
     }
+    // First-seen type wins — `conceptVitalityInstruments`'s own tie-break,
+    // preserved verbatim: an instrument's type does not change across its
+    // own review events.
+    if (!types.has(record.instrumentId)) types.set(record.instrumentId, record.instrumentType);
   }
 
   const index: ReviewLogEntryIndex = {
@@ -745,9 +771,11 @@ function indexEntries(entries: readonly ReviewLogEntry[]): ReviewLogEntryIndex {
 }
 
 /**
- * Folds `entries` into the evidence facts for `conceptId`
- * (D-031/`ol-t3sd`: many-to-many, so one event is evidence for every concept
- * its `conceptIds` names — this reads that list, never a singular field).
+ * Folds `entries` into the evidence facts for `conceptId` (`[D-419]`,
+ * `[D-423]`: one event scores exactly one concept, the subject its record
+ * carries — first of its `conceptIds` — so this counts only the records whose
+ * subject is `conceptId`; a concept named later in a record's list is context
+ * and earns nothing from it).
  * Suspend/unsuspend events are excluded, matching `../today/streak.ts`:
  * stopping study of something is not evidence about what she knows.
  *
@@ -1086,7 +1114,11 @@ export function foldConceptStage(
   return { conceptId, state: stageOf(evidence, resolved), evidence };
 }
 
-/** Every concept id at least one `kind: 'review'` entry in `entries` names. */
+/**
+ * Every concept id that is the recorded subject of at least one `kind:
+ * 'review'` entry in `entries` (`[D-419]`): a concept only ever named as
+ * context on a record is not in this list, because nothing scored it.
+ */
 export function conceptIdsInLog(entries: readonly ReviewLogEntry[]): readonly string[] {
   return indexEntries(entries).conceptIds;
 }
@@ -1105,11 +1137,12 @@ export function reviewRecordsForConcept(
 }
 
 /**
- * `computeConceptMastery` for every concept the log names. A convenience
- * fold, not a different algorithm — D-031's ruling that mastery is per
- * concept, never an aggregate, means there is no single number to compute
- * here either; this just runs the one-concept projection once per concept
- * and returns the per-concept map, keyed by concept id.
+ * `computeConceptMastery` for every concept the log scores (`conceptIdsInLog`)
+ * unless the caller supplies the set. A convenience fold, not a different
+ * algorithm — D-031's ruling that mastery is per concept, never an aggregate,
+ * means there is no single number to compute here either; this just runs the
+ * one-concept projection once per concept and returns the per-concept map,
+ * keyed by concept id.
  */
 export function computeAllConceptMastery(
   entries: readonly ReviewLogEntry[],
@@ -1156,9 +1189,10 @@ export function masteryAtTimeForConceptIds(
 // ---------------------------------------------------------------------------
 
 /**
- * Every instrument that is evidence for `conceptId` (D-031: many-to-many —
- * this reads `entry.conceptIds`, never a singular field, matching
- * `conceptScoredEvents` above), paired with its replayed scheduler state —
+ * Every instrument that is evidence for `conceptId` — one with at least one
+ * review whose recorded subject is `conceptId` (`[D-419]`: the first of the
+ * record's `conceptIds`, the same grouping `conceptEvidence` counts), paired
+ * with its replayed scheduler state —
  * exactly the shape `./vitality.ts`'s `readVitality` needs to see.
  *
  * `replayed` is expected to be `replaySchedulerStates` run over the **whole**

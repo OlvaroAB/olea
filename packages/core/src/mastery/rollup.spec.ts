@@ -40,6 +40,7 @@ import {
   masteryAtTimeForConceptIds,
   readAllConceptVitality,
   readConceptVitality,
+  reviewRecordsForConcept,
 } from './rollup.js';
 import { projectInstrumentValidity } from './validity.js';
 
@@ -687,9 +688,10 @@ describe('the high-water fold needs no event order at all (ol-y3ne, revisited by
 });
 
 describe('conceptIdsInLog', () => {
-  it('collects every concept named by a review event, sorted, ignoring suspend events', () => {
+  it('collects every concept a review event scores, sorted, ignoring suspend events and context concepts', () => {
     const entries: ReviewLogEntry[] = [
       review({ eventId: 'a', conceptIds: ['concept-b', 'concept-a'] }),
+      review({ eventId: 'a2', conceptIds: ['concept-d'] }),
       {
         schemaVersion: 6,
         kind: 'suspend',
@@ -699,7 +701,9 @@ describe('conceptIdsInLog', () => {
         conceptIds: ['concept-c'],
       },
     ];
-    expect(conceptIdsInLog(entries)).toEqual(['concept-a', 'concept-b']);
+    // `[D-419]`: 'concept-a' rides the first record as context only, so no
+    // review scored it and it is not in the log's scored set.
+    expect(conceptIdsInLog(entries)).toEqual(['concept-b', 'concept-d']);
   });
 });
 
@@ -1822,5 +1826,134 @@ describe('rule 5 (ol-egov.141.89.9.66): an operational failure is never read as 
     expect(result.state).toBe('sprout');
     expect(result.evidence.tiersSucceeded?.explanation).toBe(false);
     expect(result.evidence.topStageQualified).toBe(false);
+  });
+});
+
+// Scenarios: features/F2-review.md, "F2.14 — Instruments are enumerated from her
+// vault" — the `[D-419]` / `[D-423]` block, `@auto:core/mastery/rollup.spec`
+// (`ol-egov.141.89.9.65`). One review scores exactly one concept: the subject the
+// record carries, the first of its `conceptIds`; the rest of the list is context.
+describe('[D-419] / [D-423] — a review credits only its recorded subject (ol-egov.141.89.9.65)', () => {
+  // A note naming two topics: the review is recorded with her order, the
+  // scored concept first. `masteryAtTime` names every concept on the record
+  // (F2.11's per-concept belief), which is context, not credit.
+  const twoTopics = ['concept-a', 'concept-b'];
+
+  it('the first-listed concept reads the evidence; the co-listed concept reads none from that record', () => {
+    const entries: ReviewLogEntry[] = [review({ eventId: 'r1', conceptIds: twoTopics })];
+
+    const scored = computeConceptMastery(entries, 'concept-a');
+    expect(scored.state).toBe('sprout');
+    expect(scored.evidence.scoredEventCount).toBe(1);
+
+    const context = computeConceptMastery(entries, 'concept-b');
+    expect(context.state).toBe('seed');
+    expect(context.evidence.scoredEventCount).toBe(0);
+    expect(context.evidence.scoredSuccessCount).toBe(0);
+    expect(context.evidence.tiersPracticed).toEqual({
+      recognition: false,
+      recall: false,
+      explanation: false,
+    });
+  });
+
+  it('spaced successes on a two-topic instrument lift the scored concept and leave the context concept a seed', () => {
+    const entries = onConsecutiveDays('2026-01-01', MIN_SPACED_RETRIEVAL_DAYS, () => ({
+      conceptIds: twoTopics,
+      rating: 'good',
+    }));
+    const all = computeAllConceptMastery(entries, twoTopics);
+    expect(all.get('concept-a')?.state).toBe('sapling');
+    expect(all.get('concept-b')?.state).toBe('seed');
+  });
+
+  it('a graded explain-back on a two-concept record opens the depth gate for its subject only', () => {
+    const entries: ReviewLogEntry[] = [
+      ...onConsecutiveDays('2026-01-01', MIN_SPACED_RETRIEVAL_DAYS, () => ({
+        conceptIds: twoTopics,
+        rating: 'good',
+      })),
+      gradedExplainBack('relational', { conceptIds: twoTopics }),
+    ];
+    const scored = computeConceptMastery(entries, 'concept-a');
+    const context = computeConceptMastery(entries, 'concept-b');
+    expect(scored.state).toBe('tree');
+    expect(scored.evidence.gradedExplainBackCount).toBe(1);
+    expect(context.state).toBe('seed');
+    expect(context.evidence.gradedExplainBackCount).toBe(0);
+  });
+
+  it('the index the fold and the attainment scans read holds a record under its subject only', () => {
+    const entries: ReviewLogEntry[] = [review({ eventId: 'r1', conceptIds: twoTopics })];
+    expect(reviewRecordsForConcept(entries, 'concept-a').map((r) => r.eventId)).toEqual(['r1']);
+    expect(reviewRecordsForConcept(entries, 'concept-b')).toEqual([]);
+  });
+
+  it('the vitality axis lists the instrument under the scored concept only', () => {
+    const scheduler = stubScheduler({ 'qa:concept-a:1': 0.9 });
+    const entries: ReviewLogEntry[] = [review({ eventId: 'r1', conceptIds: twoTopics })];
+    const replayed = replaySchedulerStates(entries, scheduler);
+    expect(conceptVitalityInstruments(entries, 'concept-a', replayed)).toHaveLength(1);
+    expect(conceptVitalityInstruments(entries, 'concept-b', replayed)).toEqual([]);
+  });
+
+  it('the belief stamped on a new record still names every concept the record names', () => {
+    // Context concepts stay stamped (F2.11's per-concept belief the contract
+    // requires to agree with `conceptIds`); only credit narrowed.
+    const stamped = masteryAtTimeForConceptIds([], twoTopics);
+    expect(Object.keys(stamped.attribution === 'per-concept' ? stamped.byConcept : {})).toEqual(
+      twoTopics,
+    );
+  });
+
+  it('reordering the topics later never reassigns evidence already on the log', () => {
+    // Recorded while the note listed concept-a first: three spaced successes.
+    const before = onConsecutiveDays('2026-01-01', MIN_SPACED_RETRIEVAL_DAYS, (_day, i) => ({
+      eventId: `before-${i}`,
+      conceptIds: ['concept-a', 'concept-b'],
+      rating: 'good',
+    }));
+    // She then reorders the note's topics; the same instrument is reviewed once more.
+    const after = review({
+      eventId: 'after-0',
+      timestamp: '2026-02-01T09:00:00-04:00',
+      conceptIds: ['concept-b', 'concept-a'],
+      rating: 'good',
+    });
+    const entries: ReviewLogEntry[] = [...before, after];
+
+    const a = computeConceptMastery(entries, 'concept-a');
+    const b = computeConceptMastery(entries, 'concept-b');
+
+    // The earlier reviews keep the subject they carried...
+    expect(a.evidence.scoredEventCount).toBe(MIN_SPACED_RETRIEVAL_DAYS);
+    expect(a.state).toBe('sapling');
+    // ...and only the later review credits the new first concept.
+    expect(b.evidence.scoredEventCount).toBe(1);
+    expect(b.state).toBe('sprout');
+    expect(reviewRecordsForConcept(entries, 'concept-b').map((r) => r.eventId)).toEqual([
+      'after-0',
+    ]);
+  });
+
+  it('records from before the ruling read by the subject they carry, and none is rewritten', () => {
+    // A record migrated from the one-id shape (a one-element list) and a
+    // record written under the every-concept reading (`ol-t3sd`), side by side.
+    const migrated = review({ eventId: 'old-one', conceptIds: ['concept-a'] });
+    const everyConcept = review({
+      eventId: 'old-many',
+      timestamp: '2026-01-11T09:00:00-04:00',
+      instrumentId: 'qa:concept-c:1',
+      conceptIds: ['concept-c', 'concept-a', 'concept-b'],
+    });
+    const entries: ReviewLogEntry[] = [migrated, everyConcept];
+    const snapshot = JSON.stringify(entries);
+
+    expect(computeConceptMastery(entries, 'concept-a').evidence.scoredEventCount).toBe(1);
+    expect(computeConceptMastery(entries, 'concept-c').evidence.scoredEventCount).toBe(1);
+    expect(computeConceptMastery(entries, 'concept-b').evidence.scoredEventCount).toBe(0);
+    expect(conceptIdsInLog(entries)).toEqual(['concept-a', 'concept-c']);
+    // A pure reading: the log is exactly as it was handed in.
+    expect(JSON.stringify(entries)).toBe(snapshot);
   });
 });
