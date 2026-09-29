@@ -55,8 +55,10 @@
  * `submitAnswer`'s own doc for exactly which two moments are measured.
  *
  * It does NOT:
- * - Support relation-context prompts (F5.2a's neighbour-concept retrieval) —
- *   see `./request.ts`'s module doc for why this view is concept-only.
+ * - Choose the relation-context neighbour itself: F5.2a's neighbour-concept
+ *   retrieval is wired (`resolveGradingSourceBlocks` below), but which
+ *   neighbour a prompt names is decided upstream of this view, by
+ *   `./request.ts`'s `resolveExplainBackCausesPartner`.
  * - Fold an accepted attempt into F4.6's session time accounting
  *   (`study-session/explain-back.ts`'s own "Reachability" section already
  *   names this as separate, unstarted work: recognising a live acceptance
@@ -150,6 +152,7 @@ import {
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
+  type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
   shouldRunExplainBackDepthPass,
@@ -230,14 +233,20 @@ export interface ExplainBackModalDeps {
    * `ol-egov.141.89.6.33`: resolves the subject concept's live "causes"
    * partner (rel.md section 1's "Explain-back partner (causes)" row) from
    * the plugin's in-memory relation graph — `main.ts`'s wrapper around
-   * `explain-back/request.ts`'s `resolveExplainBackRelationEdge`, already
+   * `explain-back/request.ts`'s `resolveExplainBackCausesPartner`, already
    * gated on rel.md section 3 Default 4 freshness (a stale or absent edge
-   * resolves `undefined`, never served). `resolveGradingSourceBlocks` below
+   * resolves `undefined`, never served). `subjectConceptId` is the subject's
+   * concept KEY (`instrument.conceptIds[0]`), never a wording
+   * (`ol-egov.141.89.6.74`); the partner comes back naming the OTHER end both
+   * ways, key and wording, so this view never has to work out which end of
+   * the edge the subject is. `resolveGradingSourceBlocks` below
    * is the one caller. Optional and absent by default, same posture as
    * `getMasteryState`/`recordSoloGradeAndReview`: an omitted dep keeps the
    * pre-existing concept-only path exactly as it was.
    */
-  readonly resolveCausesPartner?: (subjectConceptId: string) => ConceptRelation | undefined;
+  readonly resolveCausesPartner?: (
+    subjectConceptId: string,
+  ) => ExplainBackRelationPartner | undefined;
   /**
    * `ol-egov.141.89.6.36`: the "targeted vault-read port" `resolveGradingSourceBlocks`'s
    * own doc (below) previously named as missing — turns ONE endpoint of a
@@ -518,9 +527,10 @@ export interface ExplainBackModalDeps {
  * concept-only branch is `buildGradingSourceMaterial`'s identity case
  * (`sourceBlocks` returned unchanged) — so a call that finds no resolvable
  * neighbour changes nothing observable. That is what keeps the judge's wire
- * shape unchanged for `causes`'s current, `RELATION_EMISSION_STATUS`
- * `'blocked-on-deferred-reader'` state (`concept/relation.ts`): a real
- * `no-op` outcome, not a bypass that skips calling either function.
+ * shape unchanged for a vault with no served `causes` edge (none is offered
+ * until the service prompt that offers `causes` is deployed,
+ * `ol-egov.141.89.4.26`): a real `no-op` outcome, not a bypass that skips
+ * calling either function.
  *
  * **A `null` subjectConceptId (the free-form topic entry point) never
  * builds a `GradingSourceMaterial`.** `buildGradingSourceMaterial` requires
@@ -532,16 +542,21 @@ export interface ExplainBackModalDeps {
  * unchanged — this path's exact pre-existing behaviour.
  *
  * **The neighbour's defining passages are retrieved through
- * `deps.retrieveSourceBlocks`, keyed by the neighbour's own concept
- * name.** The same retrieval port every entry point already uses for an
- * arbitrary natural-language string (`resolveTopicPrompt` already retrieves
- * against a topic she typed) — no second reader is invented.
- * `ConceptRelation.from`/`.to` (`olea-core`) are concept NAMES, its own
- * doc's wording — the identical vocabulary `subjectConceptId` already
- * carries everywhere else in this file (the mastery tag, the misconception
- * digest, the accept-time observation context all key on it the same way),
- * so this is consistent with every other consumer of that field, not a new
- * convention.
+ * `deps.retrieveSourceBlocks`, by the neighbour's WORDING, and the neighbour
+ * is named everywhere else by its KEY (`ol-egov.141.89.6.74`).** The same
+ * retrieval port every entry point already uses for an arbitrary
+ * natural-language string (`resolveTopicPrompt` already retrieves against a
+ * topic she typed) — no second reader is invented — takes the partner's
+ * `neighbourName`, a query. Everything that is an identity takes its
+ * `neighbourConceptId`, the concept key: the defining-passages record and the
+ * relation context here, and the F5.3a scheduling observation once the key is
+ * threaded to the review-log write (not yet: `ol-egov.141.89.6.75`), which
+ * `review/view.ts` compares with an instrument's `conceptIds`. That is the same
+ * vocabulary `subjectConceptId` carries everywhere else in this file — since
+ * the `ol-63e1` flip it is `instrument.conceptIds[0]`, a `ConceptRecord.key`,
+ * never a name (the mastery tag, the misconception digest and the accept-time
+ * observation context all key on it the same way). Which end of the edge the
+ * subject is on is settled in `resolveExplainBackCausesPartner`, not here.
  *
  * **The edge's own introducing passages, resolved the same way the
  * neighbour's are (`ol-egov.141.89.6.36`).** `ConceptRelation
@@ -552,6 +567,7 @@ export interface ExplainBackModalDeps {
  * file's earlier revision had no port for. `evidence: 'current'` is still
  * asserted directly rather than left for `resolveRelationProvenance` to
  * re-derive, because `deps.resolveCausesPartner` (main.ts's wrapper around
+ * `resolveExplainBackCausesPartner`, which re-confirms through
  * `resolveExplainBackRelationEdge`) already applies rel.md Default 4's
  * freshness gate before ever returning an edge — one reaching this function
  * is, by construction, already current. **No SEPARATE freshness check runs
@@ -645,7 +661,7 @@ export async function resolveGradingSourceBlocks(
   subjectConceptId: string | null,
   sourceBlocks: readonly ExplainBackSourceBlock[],
 ): Promise<ResolvedGradingSourceBlocks> {
-  const edge =
+  const partner =
     subjectConceptId !== null ? deps.resolveCausesPartner?.(subjectConceptId) : undefined;
 
   let named:
@@ -653,9 +669,11 @@ export async function resolveGradingSourceBlocks(
     | undefined;
   let neighbourBlocks: readonly ExplainBackSourceBlock[] = [];
   let introducingBlocks: readonly ExplainBackSourceBlock[] = [];
-  if (edge !== undefined && subjectConceptId !== null) {
-    const neighbourConceptId = edge.from === subjectConceptId ? edge.to : edge.from;
-    neighbourBlocks = await deps.retrieveSourceBlocks(neighbourConceptId);
+  if (partner !== undefined && subjectConceptId !== null) {
+    // The partner is the OTHER end of the edge from the subject, named by key (an identity) and by
+    // wording (a query): retrieval takes the wording, everything that identifies takes the key.
+    const { edge, neighbourConceptId, neighbourName } = partner;
+    neighbourBlocks = await deps.retrieveSourceBlocks(neighbourName);
     const alreadyPresentBlockIds = new Set(
       [...sourceBlocks, ...neighbourBlocks].map((entry) => entry.block.blockId),
     );

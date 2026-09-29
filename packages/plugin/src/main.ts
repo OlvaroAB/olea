@@ -103,9 +103,10 @@ import { ensureDeviceId } from './device/device-id.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
 import {
+  type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
-  resolveExplainBackRelationEdge,
+  resolveExplainBackCausesPartner,
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
@@ -4279,6 +4280,9 @@ export default class OleaPlugin extends Plugin {
         // at its one construction point, matching the field's own doc
         // (`explain-back/request.ts`) that names `this.relations` directly.
         relations: () => this.relations,
+        // `ol-egov.141.89.6.74`: the live concept records, for the same completeness
+        // (`retrieveExplainBackSourceBlocks` never reads it) and the same thunk reason.
+        conceptRecords: () => this.conceptRecords,
       },
       query,
     );
@@ -4286,40 +4290,31 @@ export default class OleaPlugin extends Plugin {
 
   /**
    * `ol-egov.141.89.6.33`: the composition-root half of rel.md section 1's
-   * "Explain-back partner (causes)" row. `explain-back/request.ts`'s
-   * `resolveExplainBackRelationEdge` needs a candidate `neighbourConceptId`
-   * handed in — "which neighbour a prompt names is decided upstream of
-   * retrieval," that function's own doc — and this method is that upstream
-   * decision: the first live 'causes' edge touching `subjectConceptId`,
-   * either endpoint, found via `servedRelations(this.relations)` (the SAME
-   * gated read `servedRelationEdges()` above already uses, never a second,
-   * ungated scan). `resolveExplainBackRelationEdge` is then called with the
-   * RAW `this.relations` thunk, never `servedRelationEdges()`'s
-   * already-filtered array, so the real, exported freshness gate (rel.md
-   * section 3 Default 4) is what actually decides currency here, not this
-   * method's own candidate search — a stale or superseded edge for the same
-   * pair is excluded there exactly as `servedRelations` excludes it for
-   * every other reader.
+   * "Explain-back partner (causes)" row — one call into
+   * `explain-back/request.ts`'s `resolveExplainBackCausesPartner`, which
+   * finds the first live 'causes' edge touching the subject, either end, and
+   * names the OTHER end. `subjectConceptId` is the subject's concept KEY
+   * (`instrument.conceptIds[0]`, `ol-63e1`); an edge's `from`/`to` are
+   * wordings, so the lookup joins by key (`fromKey`/`toKey`, else the name
+   * join over `this.conceptRecords`), never by comparing a wording with the
+   * key (`ol-egov.141.89.6.74`). Both live reads are thunks over the raw
+   * `this.relations` and `this.conceptRecords`, and the edge is read through
+   * `servedRelations`, the gated read `servedRelationEdges()` above also
+   * uses, so the freshness gate (rel.md section 3 Default 4) decides
+   * currency, never an ungated scan here.
    *
-   * `causes` is `RELATION_EMISSION_STATUS['blocked-on-deferred-reader']`
-   * (`concept/relation.ts`): no production reader mints one today, so every
-   * real vault resolves `undefined` here, unchanged from before this method
-   * existed. `explain-back/modal.ts`'s `resolveGradingSourceBlocks` is the
-   * real caller (via `ExplainBackModalDeps.resolveCausesPartner` below) that
-   * makes the day a reader ships one reachable without a second wiring pass.
+   * `causes` is `'emitted-via-corpus-stage'` (`concept/relation.ts`), but the
+   * service prompt that offers it (`1.3.0`) is not deployed
+   * (`ol-egov.141.89.4.26`), so a live vault resolves `undefined` here until
+   * that lands. `explain-back/modal.ts`'s `resolveGradingSourceBlocks` is the
+   * real caller (via `ExplainBackModalDeps.resolveCausesPartner` below).
    */
-  private resolveExplainBackCausesPartner(subjectConceptId: string): ConceptRelation | undefined {
-    if (this.relations === null) return undefined;
-    const candidate = servedRelations(this.relations).find(
-      (edge) =>
-        edge.type === 'causes' && (edge.from === subjectConceptId || edge.to === subjectConceptId),
-    );
-    if (candidate === undefined) return undefined;
-    const neighbourConceptId = candidate.from === subjectConceptId ? candidate.to : candidate.from;
-    return resolveExplainBackRelationEdge(
-      { relations: () => this.relations },
+  private resolveExplainBackCausesPartner(
+    subjectConceptId: string,
+  ): ExplainBackRelationPartner | undefined {
+    return resolveExplainBackCausesPartner(
+      { relations: () => this.relations, conceptRecords: () => this.conceptRecords },
       subjectConceptId,
-      neighbourConceptId,
     );
   }
 

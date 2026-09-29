@@ -28,6 +28,15 @@
  * `sourceBlocks`. This file's job is narrower and different in kind: proving
  * `main.ts`/`modal.ts` actually call those already-proven pure functions,
  * with the right arguments, from the real production path.
+ *
+ * `ol-egov.141.89.6.74`: the subject id these two files pass around is a concept
+ * KEY (`instrument.conceptIds[0]`), and an edge's `from`/`to` are wordings. The
+ * comparison of one with the other could never hold, so the pins below encode the
+ * repaired shape (`main.ts` makes one call into `request.ts`'s
+ * `resolveExplainBackCausesPartner`; `modal.ts` retrieves by the partner's
+ * WORDING and names the neighbour everywhere else by its KEY) and refuse the
+ * comparison itself in either file. What the repaired lookup does is proven
+ * behaviourally in `request.spec.ts` and `causes-partner-from-corpus-stage.spec.ts`.
  */
 
 import { readFileSync } from 'node:fs';
@@ -47,47 +56,42 @@ const main = codeOf('main.ts');
 const modal = codeOf('explain-back/modal.ts');
 
 describe('main.ts: resolveExplainBackCausesPartner (rel.md section 1, "Explain-back partner (causes)")', () => {
-  it('imports resolveExplainBackRelationEdge alongside the existing retrieveExplainBackSourceBlocks', () => {
+  it('imports resolveExplainBackCausesPartner alongside the existing retrieveExplainBackSourceBlocks', () => {
     expect(main).toMatch(
-      /import \{\s*type ExplainBackSourceBlock,\s*type FreeformTopicConceptMatch,\s*resolveExplainBackRelationEdge,\s*retrieveExplainBackSourceBlocks,\s*\} from '\.\/explain-back\/request\.js';/,
+      /import \{\s*type ExplainBackRelationPartner,\s*type ExplainBackSourceBlock,\s*type FreeformTopicConceptMatch,\s*resolveExplainBackCausesPartner,\s*retrieveExplainBackSourceBlocks,\s*\} from '\.\/explain-back\/request\.js';/,
     );
   });
 
-  it('composeExplainBackSourceBlocks supplies the raw this.relations thunk on ExplainBackRetrievalDeps', () => {
+  it('composeExplainBackSourceBlocks supplies the raw this.relations and this.conceptRecords thunks on ExplainBackRetrievalDeps', () => {
     const start = main.indexOf('private async composeExplainBackSourceBlocks(');
     const end = main.indexOf('private resolveExplainBackCausesPartner(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = main.slice(start, end);
     expect(body).toMatch(/relations: \(\) => this\.relations,/);
+    expect(body).toMatch(/conceptRecords: \(\) => this\.conceptRecords,/);
   });
 
-  it('finds a candidate causes edge through the SAME gated servedRelations(this.relations) read servedRelationEdges() uses, never an ungated scan', () => {
+  it('is one call into request.ts with the RAW this.relations and this.conceptRecords thunks (never servedRelationEdges()’s already-filtered array), passing the subject key through', () => {
     const start = main.indexOf('private resolveExplainBackCausesPartner(');
-    const end = main.indexOf('buildExplainBackObservationContextFor', start);
+    const end = main.indexOf('matchFreeformTopicConcept(topic', start);
     expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
     const body = main.slice(start, end);
     expect(body).toMatch(
-      /const candidate = servedRelations\(this\.relations\)\.find\(\s*\(edge\) =>\s*edge\.type === 'causes' &&\s*\(edge\.from === subjectConceptId \|\| edge\.to === subjectConceptId\),\s*\);/,
+      /return resolveExplainBackCausesPartner\(\s*\{ relations: \(\) => this\.relations, conceptRecords: \(\) => this\.conceptRecords \},\s*subjectConceptId,\s*\);/,
     );
+    // `request.ts`'s function is what reads `servedRelations` (rel.md Default 4); this method
+    // must not be a second, ungated scan of its own.
+    expect(body).not.toMatch(/servedRelations|servedRelationEdges/);
   });
 
-  it('resolves the neighbour as the OTHER endpoint from subjectConceptId, then re-confirms through resolveExplainBackRelationEdge with the RAW this.relations thunk (never servedRelationEdges()’s already-filtered array)', () => {
+  it('never compares an edge’s wording with the subject id: no from/to comparison is left in the resolver (ol-egov.141.89.6.74)', () => {
     const start = main.indexOf('private resolveExplainBackCausesPartner(');
-    const end = main.indexOf('buildExplainBackObservationContextFor', start);
+    const end = main.indexOf('matchFreeformTopicConcept(topic', start);
     const body = main.slice(start, end);
-    expect(body).toMatch(
-      /const neighbourConceptId =\s*candidate\.from === subjectConceptId \? candidate\.to : candidate\.from;/,
-    );
-    expect(body).toMatch(
-      /return resolveExplainBackRelationEdge\(\s*\{ relations: \(\) => this\.relations \},\s*subjectConceptId,\s*neighbourConceptId,\s*\);/,
-    );
-    // Never the already-gated array — `resolveExplainBackRelationEdge` must
-    // be the thing that applies rel.md Default 4, not a trusted upstream
-    // filter this method re-derives its own way.
-    expect(body).not.toMatch(
-      /resolveExplainBackRelationEdge\(\s*\{ relations: \(\) => servedRelationEdges/,
-    );
+    expect(body).not.toMatch(/\.(?:from|to)\s*(?:===|!==)/);
+    expect(body).not.toMatch(/(?:===|!==)\s*\w+\.(?:from|to)\b/);
   });
 
   it('openExplainBackModal wires resolveCausesPartner to the real method', () => {
@@ -109,7 +113,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
 
   it('declares resolveCausesPartner as an optional dep, absent by default (every pre-existing caller keeps its concept-only behaviour)', () => {
     expect(modal).toMatch(
-      /readonly resolveCausesPartner\?: \(subjectConceptId: string\) => ConceptRelation \| undefined;/,
+      /readonly resolveCausesPartner\?: \(\s*subjectConceptId: string,\s*\) => ExplainBackRelationPartner \| undefined;/,
     );
   });
 
@@ -120,15 +124,27 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
     expect(body).toMatch(
-      /subjectConceptId !== null \? deps\.resolveCausesPartner\?\.\(subjectConceptId\) : undefined;/,
+      /const partner =\s*subjectConceptId !== null \? deps\.resolveCausesPartner\?\.\(subjectConceptId\) : undefined;/,
     );
+    // The partner names the OTHER end from the subject; retrieval takes its WORDING (a query),
+    // and the material takes its KEY (an identity) — `ol-egov.141.89.6.74`.
     expect(body).toMatch(
-      /neighbourBlocks = await deps\.retrieveSourceBlocks\(neighbourConceptId\);/,
+      /const \{ edge, neighbourConceptId, neighbourName \} = partner;\s*neighbourBlocks = await deps\.retrieveSourceBlocks\(neighbourName\);/,
     );
+    expect(body).toMatch(/named = \{\s*neighbourConceptId,/);
+    expect(body).toMatch(/conceptId: named\.neighbourConceptId,/);
     expect(body).toMatch(
       /const relation: GradingRelationContext = resolveGradingRelationContext\(named\);/,
     );
     expect(body).toMatch(/const material = buildGradingSourceMaterial\(\{/);
+  });
+
+  it('never works out which end of the edge the subject is: no from/to comparison is left in resolveGradingSourceBlocks (ol-egov.141.89.6.74)', () => {
+    const start = modal.indexOf('export async function resolveGradingSourceBlocks(');
+    const end = modal.indexOf('interface ResolvedPrompt', start);
+    const body = modal.slice(start, end);
+    expect(body).not.toMatch(/\.(?:from|to)\s*(?:===|!==)/);
+    expect(body).not.toMatch(/(?:===|!==)\s*\w+\.(?:from|to)\b/);
   });
 
   it('a null subjectConceptId (the topic entry point) short-circuits to the unchanged sourceBlocks, never calling buildGradingSourceMaterial', () => {

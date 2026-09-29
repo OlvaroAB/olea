@@ -45,11 +45,13 @@
  *   `context.sourceBlocks` alone — see `buildGradeSoloInputFromTypedAnswer`
  *   below for the accepted fix (an optional pass-through parameter) and
  *   this bead's report for the exact `modal.ts`/`solo-review.ts` follow-up
- *   that would start supplying it. The whole causes-edge path stays
- *   observably dormant regardless: `concept/relation.ts`'s
- *   `RELATION_EMISSION_STATUS.causes` is still `'blocked-on-deferred-reader'`
- *   — no production reader ever emits a causes edge, so `resolveCausesPartner`
- *   is live and called but never resolves one today.
+ *   that would start supplying it. The causes-edge path yields a partner only
+ *   when the corpus stage has produced a `causes` edge:
+ *   `concept/relation.ts`'s `RELATION_EMISSION_STATUS.causes` is
+ *   `'emitted-via-corpus-stage'` (`ol-egov.141.89.4.23`), but the service prompt
+ *   that offers `causes` (`1.3.0`) is not deployed, so no live vault carries one
+ *   yet. Until `ol-egov.141.89.6.74` the lookup also compared an edge's WORDINGS
+ *   with a concept KEY and could never resolve one even then.
  * - **No synthesized reference answer.** `explainBackJudgeRequest`'s
  *   `referenceAnswer` is documented service-side as "synthesized ground
  *   truth", distinct from `sourceBlocks`. No generation task exists to
@@ -62,6 +64,7 @@
  */
 
 import {
+  type ConceptRecord,
   type ConceptRelation,
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
@@ -69,6 +72,7 @@ import {
   type GradingSourceMaterial,
   type RelationSet,
   type RetrieveDeps,
+  resolveRelatedConceptKeys,
   retrieve,
   type SourceBlockRef,
   servedRelations,
@@ -100,6 +104,32 @@ export interface ExplainBackRetrievalDeps {
    * path, unchanged from before this field existed.
    */
   readonly relations?: () => RelationSet | null;
+  /**
+   * `ol-egov.141.89.6.74`: the plugin's live concept records (main.ts's
+   * `this.conceptRecords`), read only to resolve a relation edge endpoint to its
+   * concept KEY when the edge carries none of its own (an older or key-less edge:
+   * `resolveRelatedConceptKeys`' exact name join), and to give the neighbour's
+   * current wording for retrieval. A thunk for the same "never a captured value"
+   * reason `relations` is one. Absent or `null` reads as "no records": an edge
+   * that carries its own `fromKey`/`toKey` still resolves, a key-less one does not.
+   */
+  readonly conceptRecords?: () => readonly ConceptRecord[] | null;
+}
+
+/** The two live reads the causes-partner lookup needs; see {@link ExplainBackRetrievalDeps}. */
+export type ExplainBackPartnerDeps = Pick<ExplainBackRetrievalDeps, 'relations' | 'conceptRecords'>;
+
+/**
+ * A resolved causes partner: the edge, and the OTHER end from the subject named
+ * both ways. **Keep the two apart** (`ol-egov.141.89.6.74`): `neighbourConceptId`
+ * is the neighbour's concept KEY, the identity that the grading material, the
+ * F5.3a scheduling observation and `review/view.ts` compare with an instrument's
+ * `conceptIds`; `neighbourName` is its wording, a retrieval query and nothing else.
+ */
+export interface ExplainBackRelationPartner {
+  readonly edge: ConceptRelation;
+  readonly neighbourConceptId: string;
+  readonly neighbourName: string;
 }
 
 /**
@@ -143,20 +173,80 @@ export async function retrieveExplainBackSourceBlocks(
  * `neighbourConceptId` is handed in, never chosen here: F5.2a says which
  * neighbour a prompt names is decided upstream of retrieval, the same
  * constraint `GradingRelationContext`'s own doc states on the core side.
+ *
+ * **Identity is compared with identity (`ol-egov.141.89.6.74`).** Both ids are
+ * concept KEYS (an instrument's `conceptIds[0]` is a `ConceptRecord.key`); an
+ * edge's `from`/`to` are wordings, so they are never compared with a key. An
+ * endpoint's key is resolved by `olea-core`'s `resolveRelatedConceptKeys`, the
+ * one reader that already applies the shared order: the edge's own
+ * `fromKey`/`toKey` first, else the exact name join over the concept records,
+ * an endpoint that resolves to neither never matching.
  */
 export function resolveExplainBackRelationEdge(
-  deps: Pick<ExplainBackRetrievalDeps, 'relations'>,
+  deps: ExplainBackPartnerDeps,
   subjectConceptId: string,
   neighbourConceptId: string,
 ): ConceptRelation | undefined {
   const relationSet = deps.relations?.() ?? null;
   if (relationSet === null) return undefined;
+  const records = deps.conceptRecords?.() ?? [];
   return servedRelations(relationSet).find(
     (edge) =>
-      edge.type === 'causes' &&
-      ((edge.from === subjectConceptId && edge.to === neighbourConceptId) ||
-        (edge.from === neighbourConceptId && edge.to === subjectConceptId)),
+      edge.type === 'causes' && otherEndKey(edge, subjectConceptId, records) === neighbourConceptId,
   );
+}
+
+/**
+ * The concept key at the end of `edge` that is NOT `subjectConceptId`, or
+ * `undefined` when the edge does not touch the subject (or an endpoint resolves
+ * to no key). `resolveRelatedConceptKeys` over the one edge yields the symmetric
+ * adjacency of its two resolved keys, so the subject's entry is its other end.
+ */
+function otherEndKey(
+  edge: ConceptRelation,
+  subjectConceptId: string,
+  records: readonly ConceptRecord[],
+): string | undefined {
+  const adjacency = resolveRelatedConceptKeys([edge], records).relatedConceptKeys;
+  const others = adjacency.get(subjectConceptId);
+  return others === undefined ? undefined : [...others][0];
+}
+
+/**
+ * The composition-root half of the same row (`ol-egov.141.89.6.74`): the first
+ * served `causes` edge touching `subjectConceptId` at either end, with the OTHER
+ * end named by key and by wording. Which end that is depends on which end the
+ * subject is, not on the edge's direction: a subject on the cause side has the
+ * effect as its partner and the other way round, so the neighbour is never read
+ * off `edge.from` or `edge.to` by position.
+ *
+ * The candidate search reads `servedRelations` (the gated read) and the edge is
+ * then re-confirmed through {@link resolveExplainBackRelationEdge}, so the gate
+ * that decides currency is that function's, exactly as before this bead. An
+ * edge whose other end matches no known concept record has no wording to
+ * retrieve by and is skipped: an unresolved endpoint never matches, and the
+ * prompt stays the ordinary concept-only one. `neighbourName` is the record's
+ * current wording for the neighbour, which can differ from the wording the edge
+ * was minted with.
+ */
+export function resolveExplainBackCausesPartner(
+  deps: ExplainBackPartnerDeps,
+  subjectConceptId: string,
+): ExplainBackRelationPartner | undefined {
+  const relationSet = deps.relations?.() ?? null;
+  if (relationSet === null) return undefined;
+  const records = deps.conceptRecords?.() ?? [];
+  for (const candidate of servedRelations(relationSet)) {
+    if (candidate.type !== 'causes') continue;
+    const neighbourConceptId = otherEndKey(candidate, subjectConceptId, records);
+    if (neighbourConceptId === undefined) continue;
+    const neighbourName = records.find((record) => record.key === neighbourConceptId)?.name;
+    if (neighbourName === undefined) continue;
+    const edge = resolveExplainBackRelationEdge(deps, subjectConceptId, neighbourConceptId);
+    if (edge === undefined) continue;
+    return { edge, neighbourConceptId, neighbourName };
+  }
+  return undefined;
 }
 
 function joinSourceText(blocks: readonly ExplainBackSourceBlock[]): string {

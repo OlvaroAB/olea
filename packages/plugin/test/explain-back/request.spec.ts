@@ -5,6 +5,7 @@
  */
 
 import {
+  type ConceptRecord,
   type ConceptRelation,
   EmbeddingCacheEngine,
   type EmbeddingCacheStore,
@@ -23,6 +24,7 @@ import {
   buildGradeSoloInputFromTypedAnswer,
   type FreeformTopicConceptCandidate,
   matchFreeformTopicToConcept,
+  resolveExplainBackCausesPartner,
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
   shouldRunExplainBackDepthPass,
@@ -329,12 +331,29 @@ describe('buildGradeSoloInputFromTypedAnswer (ol-cqz8)', () => {
 // row, resolved through the SAME gated read (`servedRelations`) every other
 // reader uses — a stale endpoint is excluded there, never by a second,
 // hand-rolled filter in this file (rel.md section 3 Default 4).
+//
+// `ol-egov.141.89.6.74`: the fixtures are production-shaped. An instrument's
+// subject id is a concept KEY, never a wording, and an edge's `from`/`to` are
+// wordings with the keys on the optional `fromKey`/`toKey`; every id below is a
+// key that equals no wording. An earlier revision used the wording as the id and
+// built edges with no keys, which made the comparison under test unable to fail.
 describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partner (causes)")', () => {
-  function causesEdge(from: string, to: string): ConceptRelation {
+  const COUGH = 'cough';
+  const BRONCHITIS = 'bronchitis';
+  const COUGH_KEY = 'concept-key1:nonce-cough';
+  const BRONCHITIS_KEY = 'concept-key1:nonce-bronchitis';
+  const OTHER_KEY = 'concept-key1:nonce-other';
+  const WHEEZE = 'wheeze';
+  const WHEEZE_KEY = 'concept-key1:nonce-wheeze';
+
+  type KeyedEdge = ConceptRelation & { readonly fromKey?: string; readonly toKey?: string };
+
+  function causesEdge(from: string, to: string, keys?: { from: string; to: string }): KeyedEdge {
     return {
       type: 'causes',
       from,
       to,
+      ...(keys === undefined ? {} : { fromKey: keys.from, toKey: keys.to }),
       provenance: 'model-proposed',
       confidence: 0.8,
       introducingPassages: {
@@ -343,6 +362,27 @@ describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partne
       },
     };
   }
+
+  /** The cough causes bronchitis edge as the corpus stage produces it: wordings, and their keys beside them. */
+  const keyedEdge = (): KeyedEdge =>
+    causesEdge(COUGH, BRONCHITIS, { from: COUGH_KEY, to: BRONCHITIS_KEY });
+
+  function conceptRecord(name: string, key: string): ConceptRecord {
+    return {
+      key,
+      name,
+      aliases: [],
+      courses: [],
+      sources: [],
+      firstSeen: '2026-08-01T00:00:00.000Z',
+    } as unknown as ConceptRecord;
+  }
+
+  const RECORDS: readonly ConceptRecord[] = [
+    conceptRecord(COUGH, COUGH_KEY),
+    conceptRecord(BRONCHITIS, BRONCHITIS_KEY),
+    conceptRecord(WHEEZE, WHEEZE_KEY),
+  ];
 
   function relationSetEntry(
     edge: ConceptRelation,
@@ -362,61 +402,190 @@ describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partne
     return { entries, mergedDuplicates: 0, contradictions: 0, droppedUnemittable: 0 };
   }
 
-  it('a current causes edge between the subject and the named neighbour resolves', () => {
-    const edge = causesEdge('cough', 'bronchitis');
+  function depsFor(relations: RelationSet | null) {
+    return { relations: () => relations, conceptRecords: () => RECORDS };
+  }
+
+  it('a current causes edge between the subject and the named neighbour resolves, whichever end the subject is', () => {
+    const edge = keyedEdge();
     const relations = relationSetOf([relationSetEntry(edge, 'current')]);
 
-    const found = resolveExplainBackRelationEdge(
-      { relations: () => relations },
-      'bronchitis',
-      'cough',
+    expect(resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, COUGH_KEY)).toEqual(
+      edge,
     );
+    expect(resolveExplainBackRelationEdge(depsFor(relations), COUGH_KEY, BRONCHITIS_KEY)).toEqual(
+      edge,
+    );
+  });
 
-    expect(found).toEqual(edge);
+  it('an edge that carries its own keys resolves with no concept records at all', () => {
+    const edge = keyedEdge();
+    const relations = relationSetOf([relationSetEntry(edge, 'current')]);
+
+    expect(
+      resolveExplainBackRelationEdge({ relations: () => relations }, BRONCHITIS_KEY, COUGH_KEY),
+    ).toEqual(edge);
+  });
+
+  it('an edge with wordings only (an older replay) resolves through the exact name join over the concept records', () => {
+    const edge = causesEdge(COUGH, BRONCHITIS);
+    const relations = relationSetOf([relationSetEntry(edge, 'current')]);
+
+    expect(resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, COUGH_KEY)).toEqual(
+      edge,
+    );
+  });
+
+  it('an endpoint that resolves to no key never matches: wordings only and no records is no partner', () => {
+    const relations = relationSetOf([relationSetEntry(causesEdge(COUGH, BRONCHITIS), 'current')]);
+
+    expect(
+      resolveExplainBackRelationEdge({ relations: () => relations }, BRONCHITIS_KEY, COUGH_KEY),
+    ).toBeUndefined();
+    expect(
+      resolveExplainBackRelationEdge(
+        { relations: () => relations, conceptRecords: () => [] },
+        BRONCHITIS_KEY,
+        COUGH_KEY,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('a wording is not an identity: the same edge does not resolve when the ids are the wordings', () => {
+    const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+
+    expect(resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS, COUGH)).toBeUndefined();
+  });
+
+  it('an edge between the subject and some other concept is not the edge for the named pair', () => {
+    const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+
+    expect(
+      resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, OTHER_KEY),
+    ).toBeUndefined();
   });
 
   // Beside the current case directly above: same edge shape, only
   // `evidence` differs — a stale endpoint is excluded, never served, exactly
   // as if no edge existed at all (Default 4's abstention).
   it('a stale causes edge between the same pair is excluded, resolving to undefined', () => {
-    const edge = causesEdge('cough', 'bronchitis');
-    const relations = relationSetOf([relationSetEntry(edge, 'stale')]);
-
-    const found = resolveExplainBackRelationEdge(
-      { relations: () => relations },
-      'bronchitis',
-      'cough',
-    );
-
-    expect(found).toBeUndefined();
-  });
-
-  it('a current edge of a different type (not causes) between the same pair is not served here', () => {
-    const nonCausesEdge: ConceptRelation = {
-      ...causesEdge('x', 'y'),
-      type: 'contrasts-with',
-    };
-    const relations = relationSetOf([relationSetEntry(nonCausesEdge, 'current')]);
+    const relations = relationSetOf([relationSetEntry(keyedEdge(), 'stale')]);
 
     expect(
-      resolveExplainBackRelationEdge({ relations: () => relations }, 'x', 'y'),
+      resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, COUGH_KEY),
     ).toBeUndefined();
   });
+
+  it.each(['contrasts-with', 'prerequisite'] as const)(
+    'a current %s edge between the same pair is not served here: no clause has this reader consume it',
+    (type) => {
+      const relations = relationSetOf([relationSetEntry({ ...keyedEdge(), type }, 'current')]);
+
+      expect(
+        resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, COUGH_KEY),
+      ).toBeUndefined();
+    },
+  );
 
   it('no candidate edge for the pair at all resolves to undefined, unaffected by freshness', () => {
     const relations = relationSetOf([]);
 
     expect(
-      resolveExplainBackRelationEdge({ relations: () => relations }, 'a', 'b'),
+      resolveExplainBackRelationEdge(depsFor(relations), BRONCHITIS_KEY, COUGH_KEY),
     ).toBeUndefined();
   });
 
   it('an absent relations reader (no production caller wired yet) resolves to undefined, never throws', () => {
-    expect(resolveExplainBackRelationEdge({}, 'a', 'b')).toBeUndefined();
+    expect(resolveExplainBackRelationEdge({}, BRONCHITIS_KEY, COUGH_KEY)).toBeUndefined();
   });
 
   it('a null RelationSet (no corpus-relation batch has folded one in yet) resolves to undefined', () => {
-    expect(resolveExplainBackRelationEdge({ relations: () => null }, 'a', 'b')).toBeUndefined();
+    expect(
+      resolveExplainBackRelationEdge(depsFor(null), BRONCHITIS_KEY, COUGH_KEY),
+    ).toBeUndefined();
+  });
+
+  describe('resolveExplainBackCausesPartner: the neighbour is the OTHER end from the subject', () => {
+    it('a subject on the effect side has the cause as its neighbour, by key and by wording', () => {
+      const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+
+      const partner = resolveExplainBackCausesPartner(depsFor(relations), BRONCHITIS_KEY);
+
+      expect(partner?.neighbourConceptId).toBe(COUGH_KEY);
+      expect(partner?.neighbourName).toBe(COUGH);
+      expect(partner?.edge).toEqual(keyedEdge());
+    });
+
+    it('a subject on the cause side has the effect as its neighbour, never itself', () => {
+      const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+
+      const partner = resolveExplainBackCausesPartner(depsFor(relations), COUGH_KEY);
+
+      expect(partner?.neighbourConceptId).toBe(BRONCHITIS_KEY);
+      expect(partner?.neighbourName).toBe(BRONCHITIS);
+    });
+
+    it('an edge of wordings only resolves the same way through the name join', () => {
+      const relations = relationSetOf([relationSetEntry(causesEdge(COUGH, BRONCHITIS), 'current')]);
+
+      const partner = resolveExplainBackCausesPartner(depsFor(relations), COUGH_KEY);
+
+      expect(partner?.neighbourConceptId).toBe(BRONCHITIS_KEY);
+      expect(partner?.neighbourName).toBe(BRONCHITIS);
+    });
+
+    it('the neighbour’s wording is the record’s current one, which can differ from the wording the edge was minted with', () => {
+      const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+      const renamed = {
+        relations: () => relations,
+        conceptRecords: () => [
+          conceptRecord(COUGH, COUGH_KEY),
+          conceptRecord('acute bronchitis', BRONCHITIS_KEY),
+        ],
+      };
+
+      const partner = resolveExplainBackCausesPartner(renamed, COUGH_KEY);
+
+      expect(partner?.neighbourConceptId).toBe(BRONCHITIS_KEY);
+      expect(partner?.neighbourName).toBe('acute bronchitis');
+    });
+
+    it('a neighbour with no concept record has no wording to retrieve by and is not a partner', () => {
+      const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+      const missingNeighbour = {
+        relations: () => relations,
+        conceptRecords: () => [conceptRecord(COUGH, COUGH_KEY)],
+      };
+
+      expect(resolveExplainBackCausesPartner(missingNeighbour, COUGH_KEY)).toBeUndefined();
+    });
+
+    it('other edge types touching the subject are skipped, and the causes edge after them is found', () => {
+      const relations = relationSetOf([
+        relationSetEntry({ ...causesEdge(COUGH, WHEEZE), type: 'prerequisite' }, 'current'),
+        relationSetEntry(
+          {
+            ...causesEdge(COUGH, WHEEZE, { from: COUGH_KEY, to: WHEEZE_KEY }),
+            type: 'contrasts-with',
+          },
+          'current',
+        ),
+        relationSetEntry(keyedEdge(), 'current'),
+      ]);
+
+      const partner = resolveExplainBackCausesPartner(depsFor(relations), COUGH_KEY);
+
+      expect(partner?.neighbourConceptId).toBe(BRONCHITIS_KEY);
+      expect(partner?.edge.type).toBe('causes');
+    });
+
+    it('a stale edge, an absent reader and a null graph all yield no partner', () => {
+      const stale = relationSetOf([relationSetEntry(keyedEdge(), 'stale')]);
+
+      expect(resolveExplainBackCausesPartner(depsFor(stale), COUGH_KEY)).toBeUndefined();
+      expect(resolveExplainBackCausesPartner({}, COUGH_KEY)).toBeUndefined();
+      expect(resolveExplainBackCausesPartner(depsFor(null), COUGH_KEY)).toBeUndefined();
+    });
   });
 });
 
