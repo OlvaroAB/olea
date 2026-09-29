@@ -359,12 +359,27 @@ export interface PaperBlueprintSlot {
  *   generator can produce, never about grounding. Distinct from `'generator-refused'`: that code
  *   means the generator was asked and refused at generation time; this one means no generator
  *   kind was ever asked, because none declares the demand.
+ * - `'no-held-stimulus'` — `[D-430]` (ruled 2026-09-29): the slot sits in a question group whose
+ *   template needs a shared stimulus (a scenario, extract, table, figure or data set) and no held,
+ *   non-sealed source supplies one. Named at the slot, so the group reads as a named empty group
+ *   (`olea-service/docs/dev/intelligence-build/scp.md` section 2.6). A stimulus with values in it
+ *   never comes from the model-extended margin (F4.11, `[D-262]`).
+ * - `'depends-on-empty-part'` — `[D-430]`: the slot's part states a dependency on an earlier part
+ *   that ended empty, so it ends empty with this reason and is never filled standalone as though it
+ *   were independent. `PaperEmptySlot.causedBySlotId` names the empty slot at the root of the chain.
+ *
+ * **What is deliberately NOT a reason code: an outage.** A service that could not be reached (after
+ * the one retry) is work owed, never a fact about her material or the course's shape, so it is never
+ * recorded here (`./paper-journal.ts`: the unfinished paper is retained and resumed instead).
+ * `[D-438]`'s `source-support-refused` joins this union with the demand-carriage build, not here.
  */
 export type PaperEmptySlotReasonCode =
   | 'no-held-source'
   | 'generator-refused'
   | 'rank-excluded'
-  | 'demand-unsupported';
+  | 'demand-unsupported'
+  | 'no-held-stimulus'
+  | 'depends-on-empty-part';
 
 /** A ranked, eligible concept the blueprint could not fill — F4.10's never-invent rule, named rather than silently dropped (mirrors `playback-paper.mjs`'s `emptySlots`). */
 export interface PaperEmptySlot {
@@ -373,6 +388,8 @@ export interface PaperEmptySlot {
   readonly conceptName: string;
   readonly reasonCode: PaperEmptySlotReasonCode;
   readonly reason: string;
+  /** `[D-430]`: present exactly when `reasonCode` is `'depends-on-empty-part'` — the empty slot at the root of the dependency chain (never itself a `'depends-on-empty-part'` slot). */
+  readonly causedBySlotId?: string;
 }
 
 /** The blueprint's own free parameter — the coverage/mastery weighting share (mirrors `playback-paper.mjs`'s `BLUEPRINT_WEIGHTING_SETTINGS_DECLARED`; the same three declared points, not re-declared as a distinct constant — see `./paper-blueprint.ts`). */
@@ -427,4 +444,207 @@ export interface PaperBlueprint {
   readonly unbuiltDemand: PaperFaceDemandGap | null;
   /** `true` exactly when `unbuiltDemand !== null` — a named field for the word the ruling and vocabulary registry §13/§4 both use ("the paper is partial"), rather than asking every reader to null-check `unbuiltDemand` to learn it. */
   readonly partial: boolean;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The structured, resumable shape — `[D-430]` (David, 2026-09-29, decision sheet row 17)
+// ---------------------------------------------------------------------------------------------
+//
+// A NEW versioned shape BESIDE today's flat blueprint (`PaperBlueprint`, `'paper-blueprint-v1'`),
+// never a replacement: a flat blueprint, and every `PaperRecord` written from one, keep reading and
+// writing exactly as before. The structured shape adds the grouping, marks, dependency, shared-
+// material and choice layer over the same slots — **a part is a slot**, so a part's id is the id of
+// the `PaperBlueprintSlot` (or `PaperEmptySlot`) that fills it, and one id space serves both.
+//
+// Design authority: `olea-service/docs/dev/intelligence-build/scp.md` sections 2.2 and 2.6, and
+// `docs/dev/intelligence-build/demand-carriage.md` section 5 (whose per-part demand basis, original
+// structure slot count and unmet-part-keeps-its-demand conditions this shape carries, `[D-438]`).
+// Pure types only: nothing here does I/O or reaches a model. The pure logic over these types is
+// `./paper-structure.ts`; the resumable journal is `./paper-journal.ts`.
+
+/**
+ * Marks as the paper prints them. **Unknown stays unknown** (`[D-431]`, `[D-430]`): a part or
+ * section whose marks the paper does not state is never counted as zero, never averaged, and never
+ * estimated from an item count, and a total that disagrees with its parts becomes unknown rather
+ * than corrected (`./paper-structure.ts`'s `reconcilePaperStructureMarks`).
+ */
+export type PaperMarks =
+  | { readonly status: 'stated'; readonly value: number }
+  | { readonly status: 'unknown' };
+
+/**
+ * A part's dependency on earlier parts of the same paper, by the ids of the slots that fill them.
+ * **A dependency the paper does not state is `'unknown'`, never independent** (scp.md 2.2): a
+ * reader that cannot see one has not shown there is none. `'unknown'` adds no ordering edge and no
+ * empty-propagation edge — it is carried so the composition account can say how many parts' order
+ * is a guess, never so a consumer can treat the part as freestanding.
+ */
+export type PaperPartDependency =
+  | { readonly status: 'stated'; readonly onSlotIds: readonly string[] }
+  | { readonly status: 'unknown' };
+
+/**
+ * An "answer k of n" choice (scp.md 2.6, "Optional sections"): the group is reproduced with all `n`
+ * alternatives, and totals count `k`. `choose` is `null` when the paper offers the choice but does
+ * not state how many to answer, in which case the group's counted marks are unknown.
+ */
+export interface PaperChoicePattern {
+  readonly alternatives: number;
+  readonly choose: number | null;
+}
+
+/**
+ * What the template says about a group's shared material: needed (with its form when the paper
+ * names one), positively not needed, or not identified — the same three-way honesty
+ * `PaperStimulus` keeps at the reading grain, so "no stimulus was seen" never reads as "none".
+ */
+export type PaperGroupStimulusNeed =
+  | { readonly status: 'needed'; readonly form: PaperStimulusForm | null }
+  | { readonly status: 'not-needed' }
+  | { readonly status: 'not-identified' };
+
+/**
+ * The shared stimulus a composition chose for a group: one held, non-sealed source's passage
+ * (`chunkIndex` into that held source's own chunk list — never a copy of its text, so nothing of
+ * hers is duplicated into the paper's structure). Never drawn from the model-extended margin.
+ */
+export interface PaperHeldStimulus {
+  readonly form: PaperStimulusForm;
+  readonly sourceId: string;
+  readonly chunkIndex: number;
+}
+
+/**
+ * A part's demand, **as read**, kept as the original reading whatever a generator can serve
+ * (`[D-438]` condition 3: an unmet part keeps its original demand and is never silently replaced
+ * with recall). Four states, none collapsed:
+ *
+ * - `'read'` — one of `PAPER_DEMANDS`;
+ * - `'unsupported'` — an operation outside the declared vocabulary, with the paper's command word
+ *   kept verbatim (`commandWord`, when one was read); never coerced into a `PaperDemand`;
+ * - `'cannot-tell'` — the reader looked and could not say;
+ * - `'not-read'` — no reading yet (pending or unavailable): work owed, not a verdict.
+ *
+ * A compound part (two demands) is decomposed into two dependent parts by the composer, so this
+ * type carries one demand per part.
+ */
+export type PaperPartDemandReading =
+  | { readonly status: 'read'; readonly demand: PaperDemand }
+  | { readonly status: 'unsupported'; readonly commandWord?: string }
+  | { readonly status: 'cannot-tell' }
+  | { readonly status: 'not-read' };
+
+/** `[D-438]` P1's per-part basis: `'read'` for a demand the paper's own reading supplied (a decided demand or an unsupported operation), `'not-read'` for cannot-tell and pending. */
+export type PaperIntendedDemandBasis = 'read' | 'not-read';
+
+/** One part of a structured paper — the unit a slot fills. */
+export interface PaperStructuredPart {
+  /** The id of the slot that fills this part. */
+  readonly slotId: string;
+  /** The innermost group the part sits in — a part is never judged or composed outside its group. */
+  readonly groupId: string;
+  /** How the paper numbers the part ("2(b)"), local content, never logged (D-005). */
+  readonly label: string;
+  /** The paper's own descriptor of the question form, verbatim — never an invented taxonomy. */
+  readonly questionForm: string;
+  readonly marks: PaperMarks;
+  readonly dependsOn: PaperPartDependency;
+  readonly demand: PaperPartDemandReading;
+}
+
+/** One question group: the four kinds `PAPER_QUESTION_GROUP_KINDS` names, nested by `parentGroupId`. */
+export interface PaperStructuredGroup {
+  readonly groupId: string;
+  readonly kind: PaperQuestionGroupKind;
+  /** The section the group sits in, `null` for a paper with no sections. */
+  readonly sectionId: string | null;
+  readonly parentGroupId?: string;
+  /** The paper's own heading or instruction wording for the group, local content. */
+  readonly label: string;
+  /** The parts the group directly holds, in printed order. */
+  readonly slotIds: readonly string[];
+  /** Present on a choice group only. */
+  readonly choice?: PaperChoicePattern;
+  readonly stimulusNeed: PaperGroupStimulusNeed;
+  /** The stimulus this composition chose; `null` when none is held. A group whose need is `'needed'` and whose held stimulus is `null` is a named empty group. */
+  readonly heldStimulus: PaperHeldStimulus | null;
+}
+
+/** One section of a structured paper. */
+export interface PaperStructuredSection {
+  readonly sectionId: string;
+  readonly label: string;
+  readonly marks: PaperMarks;
+  /** The outermost groups in the section, in printed order. */
+  readonly groupIds: readonly string[];
+}
+
+/**
+ * Which readings the template came from — the composition account says so (scp.md 2.6, Class B):
+ * historical papers enter only when no current or transitional reading exists.
+ */
+export type PaperStructureBasis = 'current-or-transitional' | 'historical-fallback' | 'none-read';
+
+/** The paper's time allowance, where every paper of the template states one. */
+export type PaperTimeAllowance =
+  | { readonly status: 'stated'; readonly minutes: number }
+  | { readonly status: 'unknown' };
+
+/** Bumped only on a breaking change to `PaperStructuredShape`. */
+export const PAPER_STRUCTURE_FORMAT_VERSION = 'paper-structure-v1';
+
+/**
+ * The structured shape: sections, groups, parts, and the paper-level facts (total marks, time),
+ * over the slots of one blueprint. Carried on the persisted `PaperRecord` (`./paper-store.ts`) as
+ * an optional field, beside — never instead of — the flat composition account.
+ */
+export interface PaperStructuredShape {
+  readonly formatVersion: typeof PAPER_STRUCTURE_FORMAT_VERSION;
+  readonly structureBasis: PaperStructureBasis;
+  /**
+   * `[D-438]` P1: the extent target before any rank, eligibility, stimulus or support exclusion —
+   * "the slots the template called for" — so yield is always reportable against the ORIGINAL
+   * structure (`./paper-structure.ts`'s `paperYieldAgainstStructure`), never against only what was
+   * serviceable.
+   */
+  readonly structureSlotCount: number;
+  readonly sections: readonly PaperStructuredSection[];
+  readonly groups: readonly PaperStructuredGroup[];
+  readonly parts: readonly PaperStructuredPart[];
+  readonly totalMarks: PaperMarks;
+  readonly timeAllowance: PaperTimeAllowance;
+}
+
+/**
+ * Which kind of shortfall qualifies a partial paper. `'source'`: her material cannot support the
+ * part (no held source, no held stimulus, a support refusal, a grounding refusal). `'capability'`:
+ * no generator serves the part's demand. **An outage is neither** — it is work owed, so a paper
+ * with an outage is not a partial paper at all, it is an unfinished one (`./paper-journal.ts`).
+ */
+export type PaperGapKind = 'source' | 'capability';
+
+/**
+ * A finished paper's completeness. `'qualified-partial'` is an explicit, named state the face may
+ * state honestly (F4.11, `[D-262]` ruling 4, `[D-430]`); `gaps` says which kinds of shortfall
+ * qualify it, so a source gap and a capability gap are never blurred into one "partial".
+ */
+export type PaperCompletion =
+  | { readonly status: 'complete' }
+  | { readonly status: 'qualified-partial'; readonly gaps: readonly PaperGapKind[] };
+
+/**
+ * The four things a resumed paper must still agree on (`[D-430]`: "Reuse must check compatible
+ * source versions, scope, structure and authoring specifications, not merely unchanged course
+ * settings"). Each is a digest of its own input (`./paper-structure.ts`'s `paperReuseFingerprint`),
+ * so a change in any one is named, not merely detected.
+ */
+export interface PaperReuseFingerprint {
+  /** The held sources the slots ground in, and the revisions of the structure readings the template came from. */
+  readonly sourceVersions: string;
+  /** The eligible concepts and the declared scope (Outcomes and their concepts) the paper was composed over. */
+  readonly scope: string;
+  /** The structure and the slot plan: sections, groups, parts, dependencies, and which slot holds which concept, task and demand. */
+  readonly structure: string;
+  /** Purpose, extent, emphasis, weighting, format class and the generator tasks — what the authoring was asked to do. */
+  readonly authoringSpec: string;
 }

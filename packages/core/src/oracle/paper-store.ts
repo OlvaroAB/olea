@@ -51,7 +51,14 @@ import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
-import type { PaperBlueprint, PaperEmptySlot } from './paper-types.js';
+import {
+  PAPER_STRUCTURE_FORMAT_VERSION,
+  type PaperBlueprint,
+  type PaperCompletion,
+  type PaperEmptySlot,
+  type PaperGapKind,
+  type PaperStructuredShape,
+} from './paper-types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/outcomes/`, `.olea/concepts/`, `.olea/reviews/`. */
 export const PAPER_STORE_FOLDER: VaultPath = '.olea/papers';
@@ -117,11 +124,31 @@ export interface PaperRecord {
   readonly handoffs: readonly PaperHandoffRecord[];
   readonly explanationResults: readonly PaperExplanationRecord[];
   readonly status: PaperStatus;
+  /**
+   * `[D-430]` (ruled 2026-09-29): the structured shape — sections, groups, parts, marks,
+   * dependencies, shared material, choices — beside the flat composition account, never instead of
+   * it. Absent on every paper composed from a flat blueprint (and on every record written before
+   * this field existed), so absent is not empty: it says the paper has no structured reading, not
+   * that its structure was empty. Fixed at creation like `items` (ruling 6: never recomposes).
+   */
+  readonly structure?: PaperStructuredShape;
+  /**
+   * `[D-430]`: whether the paper is complete or an explicitly qualified partial (a source gap, a
+   * capability gap, or both). **An outage is not a value here**: a paper with work owed is never
+   * created (`./paper-journal.ts` keeps it unfinished), so a record's `completion` only ever says
+   * something about her material and the generators. Absent on a paper composed without one.
+   */
+  readonly completion?: PaperCompletion;
+  /** `[D-430]`: the resumable journal this paper was finished from, so a retried finish never mints a second paper for one journal. Absent on a paper composed in one pass. */
+  readonly journalId?: string;
   readonly schemaVersion: number;
 }
 
-/** Bumped only on a breaking change to `PaperRecord`'s shape. */
+/** Bumped only on a breaking change to `PaperRecord`'s shape. A flat paper is written at this version, exactly as before `[D-430]`. */
 export const PAPER_RECORD_SCHEMA_VERSION = 1;
+
+/** The version a record carries when it holds a structure, a completion or a journal link (`[D-430]`): additive over version 1, so a version-1 reader that ignores unknown fields still reads it. */
+export const PAPER_RECORD_STRUCTURED_SCHEMA_VERSION = 2;
 
 interface PaperEventCommon {
   readonly schemaVersion: 1;
@@ -137,6 +164,12 @@ export interface PaperGeneratedEvent extends PaperEventCommon {
   readonly compositionAccount: PaperCompositionAccount;
   readonly items: readonly PaperGeneratedItem[];
   readonly emptySlots: readonly PaperEmptySlot[];
+  /** `[D-430]`: see `PaperRecord.structure`. Omitted, never `undefined`, on a flat paper. */
+  readonly structure?: PaperStructuredShape;
+  /** `[D-430]`: see `PaperRecord.completion`. */
+  readonly completion?: PaperCompletion;
+  /** `[D-430]`: see `PaperRecord.journalId`. */
+  readonly journalId?: string;
 }
 
 export interface PaperResponseRecordedEvent extends PaperEventCommon {
@@ -178,6 +211,10 @@ function applyGenerated(
   // Ruling 6: "never recomposes." A duplicate `generated` for an id that already has a record
   // changes nothing — mirrors `../outcome/project.ts`'s `applyCreated` idempotence.
   if (existing !== undefined) return existing;
+  const structured =
+    event.structure !== undefined ||
+    event.completion !== undefined ||
+    event.journalId !== undefined;
   return {
     id: event.paperId,
     course: event.course,
@@ -190,7 +227,12 @@ function applyGenerated(
     handoffs: [],
     explanationResults: [],
     status: 'active',
-    schemaVersion: PAPER_RECORD_SCHEMA_VERSION,
+    ...(event.structure !== undefined ? { structure: event.structure } : {}),
+    ...(event.completion !== undefined ? { completion: event.completion } : {}),
+    ...(event.journalId !== undefined ? { journalId: event.journalId } : {}),
+    schemaVersion: structured
+      ? PAPER_RECORD_STRUCTURED_SCHEMA_VERSION
+      : PAPER_RECORD_SCHEMA_VERSION,
   };
 }
 
@@ -323,7 +365,37 @@ export function isPaperRecord(value: unknown): value is PaperRecord {
   if (!Array.isArray(v.explanationResults)) return false;
   if (v.status !== 'active' && v.status !== 'retired') return false;
   if (typeof v.schemaVersion !== 'number') return false;
+  if (v.structure !== undefined && !isPaperStructuredShape(v.structure)) return false;
+  if (v.completion !== undefined && !isPaperCompletion(v.completion)) return false;
+  if (v.journalId !== undefined && !isNonEmptyString(v.journalId)) return false;
   return true;
+}
+
+/** Shallow validation of a persisted structure — its format version and that its four collections are arrays; deeper well-formedness is `./paper-structure.ts`'s `validatePaperStructure`, run by a caller that means to use the shape. */
+function isPaperStructuredShape(value: unknown): value is PaperStructuredShape {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  return (
+    v.formatVersion === PAPER_STRUCTURE_FORMAT_VERSION &&
+    Array.isArray(v.sections) &&
+    Array.isArray(v.groups) &&
+    Array.isArray(v.parts) &&
+    typeof v.structureSlotCount === 'number'
+  );
+}
+
+const PAPER_GAP_KINDS: readonly PaperGapKind[] = ['source', 'capability'];
+
+function isPaperCompletion(value: unknown): value is PaperCompletion {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (v.status === 'complete') return true;
+  return (
+    v.status === 'qualified-partial' &&
+    Array.isArray(v.gaps) &&
+    v.gaps.length > 0 &&
+    v.gaps.every((gap) => PAPER_GAP_KINDS.includes(gap as PaperGapKind))
+  );
 }
 
 export interface CreatePaperInput {
@@ -332,6 +404,12 @@ export interface CreatePaperInput {
   readonly compositionAccount: PaperCompositionAccount;
   readonly items: readonly PaperGeneratedItem[];
   readonly emptySlots: readonly PaperEmptySlot[];
+  /** `[D-430]`: the structured shape, when the paper was composed from a structured blueprint. */
+  readonly structure?: PaperStructuredShape;
+  /** `[D-430]`: complete, or an explicitly qualified partial. Never an outage (see `PaperRecord.completion`). */
+  readonly completion?: PaperCompletion;
+  /** `[D-430]`: the journal this paper was finished from (`./paper-journal.ts`). */
+  readonly journalId?: string;
 }
 
 export interface PaperStoreOptions {
@@ -366,6 +444,9 @@ export async function createPaper(
     compositionAccount: input.compositionAccount,
     items: input.items,
     emptySlots: input.emptySlots,
+    ...(input.structure !== undefined ? { structure: input.structure } : {}),
+    ...(input.completion !== undefined ? { completion: input.completion } : {}),
+    ...(input.journalId !== undefined ? { journalId: input.journalId } : {}),
   };
   const record = applyPaperEvent(undefined, event);
   if (record === undefined) {

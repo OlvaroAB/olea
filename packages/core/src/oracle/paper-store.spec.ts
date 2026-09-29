@@ -21,6 +21,7 @@ import {
   recordPaperResponse,
   retirePaper,
 } from './paper-store.js';
+import { PAPER_STRUCTURE_FORMAT_VERSION, type PaperStructuredShape } from './paper-types.js';
 
 // Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Practice paper product scope", the
 // vault-object lifecycle block, tagged `@auto:core/oracle/paper-store.spec`.
@@ -454,5 +455,189 @@ describe('isPaperRecord', () => {
 describe('PAPER_STORE_FOLDER', () => {
   it('is the dot-prefixed Olea layer, sibling to .olea/outcomes', () => {
     expect(PAPER_STORE_FOLDER).toBe('.olea/papers');
+  });
+});
+
+// ---- [D-430]: the structured shape and completion ride on the record, beside the flat account ----
+
+const STRUCTURE: PaperStructuredShape = {
+  formatVersion: PAPER_STRUCTURE_FORMAT_VERSION,
+  structureBasis: 'current-or-transitional',
+  structureSlotCount: 2,
+  sections: [
+    { sectionId: 's1', label: 'Section one', marks: { status: 'unknown' }, groupIds: ['g1'] },
+  ],
+  groups: [
+    {
+      groupId: 'g1',
+      kind: 'parent-question',
+      sectionId: 's1',
+      label: 'Question one',
+      slotIds: ['slot-0', 'slot-1'],
+      stimulusNeed: { status: 'not-needed' },
+      heldStimulus: null,
+    },
+  ],
+  parts: [
+    {
+      slotId: 'slot-0',
+      groupId: 'g1',
+      label: '1(a)',
+      questionForm: 'short answer',
+      marks: { status: 'stated', value: 2 },
+      dependsOn: { status: 'unknown' },
+      demand: { status: 'read', demand: 'recall-a-fact' },
+    },
+    {
+      slotId: 'slot-1',
+      groupId: 'g1',
+      label: '1(b)',
+      questionForm: 'short answer',
+      marks: { status: 'unknown' },
+      dependsOn: { status: 'stated', onSlotIds: ['slot-0'] },
+      demand: { status: 'unsupported', commandWord: 'discuss' },
+    },
+  ],
+  totalMarks: { status: 'unknown' },
+  timeAllowance: { status: 'unknown' },
+};
+
+describe('a structured paper record ([D-430])', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-paper-store-structured-'));
+    vault = new FolderSource(root);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it('keeps a flat paper exactly as it was: schema version 1, no structure, no completion', async () => {
+    const record = await createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [item({ slotId: 'slot-0' })],
+      emptySlots: [],
+    });
+    expect(record.schemaVersion).toBe(1);
+    expect('structure' in record).toBe(false);
+    expect('completion' in record).toBe(false);
+    expect('journalId' in record).toBe(false);
+  });
+
+  it('carries the structure, the completion and the journal link, as schema version 2, and reads them back', async () => {
+    const record = await createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [item({ slotId: 'slot-0' })],
+      emptySlots: [
+        {
+          slotId: 'slot-1',
+          conceptKey: 'k1',
+          conceptName: 'c1',
+          reasonCode: 'demand-unsupported',
+          reason: 'no generator serves the demand',
+        },
+      ],
+      structure: STRUCTURE,
+      completion: { status: 'qualified-partial', gaps: ['capability'] },
+      journalId: 'paper-journal-key1:j1',
+    });
+    expect(record.schemaVersion).toBe(2);
+    expect(record.structure).toEqual(STRUCTURE);
+    expect(record.completion).toEqual({ status: 'qualified-partial', gaps: ['capability'] });
+    expect(record.journalId).toBe('paper-journal-key1:j1');
+
+    const [listed] = await listPaperRecords(vault);
+    expect(listed?.record).toEqual(record);
+  });
+
+  it('keeps an unsupported part demand and its command word on the record, never replaced with recall (D-438 condition 3)', async () => {
+    const record = await createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [],
+      emptySlots: [],
+      structure: STRUCTURE,
+    });
+    expect(record.structure?.parts[1]?.demand).toEqual({
+      status: 'unsupported',
+      commandWord: 'discuss',
+    });
+  });
+
+  it('still accepts every flat record written before this shape existed (version 1 validates and folds)', () => {
+    const legacy = {
+      id: 'paper-key1:legacy',
+      course: 'COURSEA',
+      generatedAt: '2026-09-16T00:00:00.000Z',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [],
+      emptySlots: [],
+      responses: [],
+      handoffs: [],
+      explanationResults: [],
+      status: 'active',
+      schemaVersion: 1,
+    };
+    expect(isPaperRecord(legacy)).toBe(true);
+  });
+
+  it('refuses a record whose structure or completion is not the shape it claims', () => {
+    const base = {
+      id: 'paper-key1:x',
+      course: 'COURSEA',
+      generatedAt: '2026-09-16T00:00:00.000Z',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [],
+      emptySlots: [],
+      responses: [],
+      handoffs: [],
+      explanationResults: [],
+      status: 'active',
+      schemaVersion: 2,
+    };
+    expect(isPaperRecord({ ...base, structure: STRUCTURE })).toBe(true);
+    expect(isPaperRecord({ ...base, structure: { ...STRUCTURE, formatVersion: 'other' } })).toBe(
+      false,
+    );
+    expect(isPaperRecord({ ...base, structure: { ...STRUCTURE, parts: 'nope' } })).toBe(false);
+    expect(isPaperRecord({ ...base, completion: { status: 'complete' } })).toBe(true);
+    expect(isPaperRecord({ ...base, completion: { status: 'outage' } })).toBe(false);
+    expect(
+      isPaperRecord({ ...base, completion: { status: 'qualified-partial', gaps: ['weather'] } }),
+    ).toBe(false);
+    expect(isPaperRecord({ ...base, journalId: '' })).toBe(false);
+  });
+
+  it('a duplicate generated event changes nothing, structure included (never recomposes)', () => {
+    const generated = {
+      kind: 'generated' as const,
+      schemaVersion: 1 as const,
+      eventId: 'e1',
+      timestamp: '2026-09-16T00:00:00.000Z',
+      paperId: 'paper-key1:p',
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: ACCOUNT,
+      items: [],
+      emptySlots: [],
+      structure: STRUCTURE,
+    };
+    const first = applyPaperEvent(undefined, generated);
+    const second = applyPaperEvent(first, {
+      ...generated,
+      structure: { ...STRUCTURE, structureSlotCount: 9 },
+    });
+    expect(second).toBe(first);
+    expect(second?.structure?.structureSlotCount).toBe(2);
   });
 });
