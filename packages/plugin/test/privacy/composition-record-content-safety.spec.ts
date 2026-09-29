@@ -67,6 +67,7 @@ const BRANCH_KINDS = [
   'none-behind',
   'none-behind-tie-recency',
   'none-behind-tie-name',
+  'passed-over-behind',
   'longest-without',
   'longest-without-tie-name',
 ];

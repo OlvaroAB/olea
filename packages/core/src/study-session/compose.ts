@@ -1268,6 +1268,11 @@ export type FocusPolicy = 'every-course' | 'single';
  *   it read closest to that (`none-behind`), or it tied on that reading and was served longest
  *   ago (`-tie-recency`), or tied on both and course id decided (`-tie-name`). A tie is said to be
  *   a tie, with no pedagogical reason invented for it.
+ * - `'passed-over-behind'` (row 31, `ol-egov.141.89.10.86`): no course it could choose is below its
+ *   planned share, but a course that was eligible and had nothing ready to practise this pass is
+ *   (it could not be chosen, so it is not among the contenders). The reason is read over every
+ *   eligible course, so the sentence never says nobody is behind when somebody is. The choice
+ *   among the contenders is unchanged.
  * - `'longest-without'`, `'longest-without-tie-name'`: no window history was supplied, so the
  *   deficit step ordered by days since last practised; no share is claimed. It was the longest
  *   (never practised counts as the longest), or tied on it and course id decided.
@@ -1292,6 +1297,7 @@ export type FocusReasonKind =
   | 'none-behind'
   | 'none-behind-tie-recency'
   | 'none-behind-tie-name'
+  | 'passed-over-behind'
   | 'longest-without'
   | 'longest-without-tie-name';
 
@@ -1340,6 +1346,12 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
     'no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it',
   'none-behind-tie-name':
     'no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name',
+  // HELD DRAFT (row 31; wording drafted by the orchestrator, not ruled, `ol-egov.141.89.10.86`):
+  // says a course was passed over because nothing was ready to practise in it. Never the word
+  // "behind" (the siblings above use the share wording). Ratification may change the words,
+  // never the fact: some eligible course is below its planned share and had nothing ready.
+  'passed-over-behind':
+    'other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
   'longest-without': 'you have gone longest without practising it',
   'longest-without-tie-name':
     'you have gone equally long without practising another course, so it comes first by name',
@@ -1698,7 +1710,8 @@ export interface DominantCourseContext {
  *
  * - With the real window reading (`context.deficitMeasure` `'window'`, the default): `'deficit'`
  *   when some contender reads behind ({@link readsBehind}; the winner, holding the largest
- *   reading, does too); otherwise `'none-behind'` when the winner's reading is the only one at the
+ *   reading, does too); otherwise `'passed-over-behind'` when an eligible course that had nothing
+ *   ready (so not a contender) reads behind; otherwise `'none-behind'` when the winner's reading is the only one at the
  *   top, `'none-behind-tie-recency'` when it tied there and was served least recently, and
  *   `'none-behind-tie-name'` when it tied on both and course id decided.
  * - With the days-since-last-seen substitute (`'days'`, when no window history was supplied): no
@@ -1839,6 +1852,17 @@ export function selectDominantCourse(
   }
   if (contenders.some((course) => readsBehind(deficitByCourse.get(course) ?? 0))) {
     return finish(winner, 'deficit');
+  }
+  // Row 31: read the reason over every eligible course, not only those with something ready. A
+  // course below its planned share that was passed over because nothing was ready to practise in
+  // it is a fact the sentence must not deny ("no course has had less than its share").
+  const contenderSet = new Set(contenders);
+  if (
+    eligibleCourses.some(
+      (course) => !contenderSet.has(course) && readsBehind(deficitByCourse.get(course) ?? 0),
+    )
+  ) {
+    return finish(winner, 'passed-over-behind');
   }
   if (atTop.length === 1) return finish(winner, 'none-behind');
   const stillTied = atTop.filter(

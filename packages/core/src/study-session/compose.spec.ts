@@ -3743,6 +3743,64 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       ).toEqual({ course: 'HASINST', branch: 'only-course' });
     });
 
+    // Row 31 (`ol-egov.141.89.10.86`): the reason is read over every eligible course.
+    it('two courses have something ready and neither is below its share, but a third with nothing ready is: `passed-over-behind`, never `none-behind`', () => {
+      expect(
+        pick({
+          eligible: ['ALPHA', 'BETA', 'NOINST'],
+          deficit: { ALPHA: -0.4, BETA: -0.1, NOINST: 0.5 },
+          recency: { ALPHA: 5, BETA: 0, NOINST: Number.POSITIVE_INFINITY },
+          servable: ['ALPHA', 'BETA'],
+        }),
+      ).toEqual({ course: 'BETA', branch: 'passed-over-behind' });
+    });
+
+    it('the choice among the contenders is unchanged by the reason: the same course wins with or without the passed-over course', () => {
+      const withPassedOver = pick({
+        eligible: ['ALPHA', 'BETA', 'NOINST'],
+        deficit: { ALPHA: -0.4, BETA: -0.1, NOINST: 0.5 },
+        recency: { ALPHA: 5, BETA: 0 },
+        servable: ['ALPHA', 'BETA'],
+      });
+      const without = pick({
+        eligible: ['ALPHA', 'BETA'],
+        deficit: { ALPHA: -0.4, BETA: -0.1 },
+        recency: { ALPHA: 5, BETA: 0 },
+        servable: ['ALPHA', 'BETA'],
+      });
+      expect(withPassedOver?.course).toBe(without?.course);
+    });
+
+    it('a passed-over course that is not below its share leaves `none-behind` as it was', () => {
+      expect(
+        pick({
+          eligible: ['ALPHA', 'BETA', 'NOINST'],
+          deficit: { ALPHA: -0.4, BETA: -0.1, NOINST: -0.2 },
+          recency: { ALPHA: 5, BETA: 0 },
+          servable: ['ALPHA', 'BETA'],
+        }),
+      ).toEqual({ course: 'BETA', branch: 'none-behind' });
+    });
+
+    it('without a window reading (days), no share is claimed, so the passed-over reason is never used', () => {
+      expect(
+        pick({
+          eligible: ['ALPHA', 'BETA', 'NOINST'],
+          deficit: { ALPHA: 3, BETA: 9, NOINST: 20 },
+          servable: ['ALPHA', 'BETA'],
+          context: { deficitMeasure: 'days' },
+        }),
+      ).toEqual({ course: 'BETA', branch: 'longest-without' });
+    });
+
+    it('the sentence says a course was passed over, and never that no course has had less than its share', () => {
+      const sentence = focusReasonFor('passed-over-behind', 'BETA');
+      expect(sentence).toBe(
+        'BETA, because other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
+      );
+      expect(sentence).not.toMatch(/no course/);
+    });
+
     it('through the composer, with a real window: nobody below their share and one clear leader', () => {
       const { theRows, instruments } = twoCourseRows();
       const windowDeficit: ReadonlyMap<string, WindowDeficitEntry> = new Map([
@@ -3833,6 +3891,14 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
         ['deficit', { deficit: { ALPHA: 0, BETA: 1 } }],
         ['only-course', { eligible: ['BETA'] }],
         ['none-behind', { deficit: { ALPHA: -1, BETA: 0 } }],
+        [
+          'passed-over-behind',
+          {
+            eligible: ['ALPHA', 'BETA', 'NOINST'],
+            deficit: { ALPHA: -1, BETA: 0, NOINST: 1 },
+            servable: ['ALPHA', 'BETA'],
+          },
+        ],
         [
           'none-behind-tie-recency',
           { deficit: { ALPHA: 0, BETA: 0 }, recency: { ALPHA: 1, BETA: 2 } },

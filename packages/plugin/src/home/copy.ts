@@ -254,6 +254,7 @@ export const COURSE_WHY_SENTENCE_EXAMPLES: readonly string[] = [
   'TESTC101, because no course has had less than its planned share of recent practice, and it is the closest to doing so',
   'TESTC101, because no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it',
   'TESTC101, because no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name',
+  'TESTC101, because other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
   'TESTC101, because you have gone longest without practising it',
   'TESTC101, because you have gone equally long without practising another course, so it comes first by name',
   "TESTC101 is selected next, because you asked for it. You haven't practised this course in Olea yet",
@@ -264,6 +265,7 @@ export const COURSE_WHY_SENTENCE_EXAMPLES: readonly string[] = [
   "TESTC101 is selected next, because no course has had less than its planned share of recent practice, and it is the closest to doing so. You haven't practised this course in Olea yet",
   "TESTC101 is selected next, because no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it. You haven't practised this course in Olea yet",
   "TESTC101 is selected next, because no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet. You haven't practised this course in Olea yet",
   "TESTC101 is selected next, because you have gone longest without practising it. You haven't practised this course in Olea yet",
   "TESTC101 is selected next, because you have gone equally long without practising another course, so it comes first by name. You haven't practised this course in Olea yet",
 ].map(sessionCompositionSentence);
