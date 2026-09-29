@@ -22,6 +22,17 @@
  * `retrieve()` already threads `request.conceptName` through as the band's
  * `query` for escalation; this call site does not need to repeat it.
  *
+ * **Every request at or above the lower bar reaches the sufficiency judge
+ * (`[D-442]`, David's ruling on decision-sheet row 44, 2026-09-29,
+ * implementing `[D-301]`).** The band is a cost filter: below the lower bar
+ * refuses from numbers with nothing sent; at or above it — in the band, or
+ * above the upper bar — `retrieve()` sends the query and the retrieved
+ * passages to the judge and this call site drafts only on a supported
+ * verdict. The upper bar used to skip the judge ("generate from the cheap
+ * signals"); a retrieval band never certifies support, so it does not any
+ * more. The lower bar and the composite veto below are unchanged here; both
+ * are re-derived once the retrieval targets lock.
+ *
  * ===========================================================================
  * THE COMPOSITE LOWER-BAR VETO (`[D-192]` / `ol-0r92.39`)
  * ===========================================================================
@@ -38,7 +49,9 @@
  * (`eval/THRESHOLDS.md`'s composite section, `olea-service`, private).
  * Veto-only, provisional: it can never grant a pass on its own, so a query
  * the composite does not refuse still goes through `D112_GROUNDING_BAND`'s
- * band/judge path exactly as before this bead.
+ * band/judge path (and, since `[D-442]`, reaches the judge above the upper
+ * bar too). A veto is a threshold-blocked refusal, not a checked verdict
+ * about her notes (`[D-441]`, ruled 2026-09-29).
  *
  * ===========================================================================
  * PERSONALIZATION CONTEXT (`[D-008]`, F3.8/F3.9, `ol-p3t07c`)
@@ -239,7 +252,19 @@ export interface DraftQuizCardsRequest {
 export type DraftQuizCardsResult =
   | {
       readonly status: 'refused';
-      /** Which `GroundingRefusalReason` fired — since the band switch this includes `'below-band'`, `'judge-rejected'` and `'judge-unavailable'` alongside the single-gate reasons, and since `[D-192]`'s composite veto this also includes `'below-composite-threshold'` (the composite's own lower-bar refusal, reached before the band or the judge ever run). `ol-riwn`'s transient reasons (`'composite-check-unavailable'`, `'judge-unavailable'`) distinguish "we could not check" from "checked and found nothing," and a caller surfacing this to her must keep that distinction rather than collapsing both into one "your notes don't cover this" message ([D-089]). */
+      /**
+       * Which `GroundingRefusalReason` fired, kept as its own value end to end
+       * (`[D-441]`, ruled 2026-09-29): a caller surfacing this to her must not
+       * flatten reasons that mean different things. Only `'judge-rejected'` is
+       * a checked insufficiency (the judge read the query and the passages).
+       * `'no-hits'` and `'below-relevance-threshold'` are a retrieval failure;
+       * `'below-composite-threshold'` and `'below-band'` are threshold-blocked,
+       * not assessed (decided from numbers with nothing sent); and
+       * `'composite-check-unavailable'`, `'judge-unavailable'` mean the check
+       * could not run (`ol-riwn`, `[D-089]`). None of these but the first may be
+       * worded as "your notes don't cover this". `draft-cards-copy.ts`'s
+       * `describeRefusal` is the one mapping from reason to words.
+       */
       readonly reason: GroundingRefusalReason;
     }
   | {
@@ -312,7 +337,9 @@ export interface DraftQuizCardsDeps {
  * generative call unless `request.conceptName` clears BOTH: `[D-192]`'s
  * composite lower-bar veto (`RECOMMENDED_COMPOSITE_THRESHOLDS`) checked
  * first, and `[D-089]`'s two-threshold band against her indexed material, at
- * the operating point `[D-112]` ratified, checked after.
+ * the operating point `[D-112]` ratified, checked after — and then the
+ * sufficiency judge says the passages support it (`[D-442]`: at or above the
+ * lower bar the judge is always consulted, the upper bar no longer skips it).
  *
  * `band: D112_GROUNDING_BAND` is passed EXPLICITLY on every call — never
  * omitted in favour of `retrieve`'s own default (no band at all, per

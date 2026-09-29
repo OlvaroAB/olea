@@ -31,15 +31,36 @@
  * notes ("you didn't take enough notes" is exactly the wrong reading — the
  * limit is Olea's reach into the material, never her effort).
  *
- * **Reads `GroundingRefusalReason` as a family, not a fixed list of five.**
+ * **Reads `GroundingRefusalReason` as a family, not a fixed list.**
  * `[D-089]`'s band posture (landed in `olea-core` concurrently with this
  * bead) added `'below-band'`, `'judge-rejected'` and `'judge-unavailable'`
  * to the four `draftQuizCardsForConcept` could already produce, and this
- * package does not own that file. `describeRefusal` below classifies by a
- * `TRANSIENT_REASONS` set rather than an exhaustive switch, so a reason this
- * file has never seen defaults to the *safer* family — "not enough
- * grounding" — rather than silently claiming a transient failure that was
- * never named as one.
+ * package does not own that file. `describeRefusal` below classifies by
+ * reason sets rather than an exhaustive switch, so a reason this file has
+ * never seen defaults to `source-insufficient` — "not enough grounding".
+ * Only `judge-rejected` reaches that family on purpose: it is the one reason
+ * where a judge read her material together with the query.
+ *
+ * **What each reason is allowed to say (`[D-289]`, `[D-441]`).** David's
+ * ruling on decision-sheet row 15 (2026-09-29) split the reasons that
+ * used to share the "not enough grounding" words:
+ *
+ *  - `no-hits` and `below-relevance-threshold` are a retrieval failure: a
+ *    package the relevance floor emptied is equivalent to an empty package;
+ *  - `below-composite-threshold` and `below-band` are threshold-blocked, not
+ *    assessed: they score retrieval signals, and what those scores
+ *    demonstrate about her material has not been established, so no words may
+ *    claim her notes lack the material;
+ *  - `judge-rejected` alone is a checked insufficiency.
+ *
+ * **The threshold-blocked wording is a stand-in, and a gap.** No approved
+ * sentence exists for "blocked by a threshold, not assessed" (the
+ * vocabulary registry and the copy pass carry none). The previous words,
+ * "didn't find enough grounding in your notes", are themselves an
+ * insufficiency claim, so they cannot stay. The one approved could-not-check
+ * sentence is reused until a decision approves a sentence that says
+ * "not assessed" outright. Every outcome keeps its own `outcome` value, so
+ * the words can change without any consumer re-deriving the reason.
  */
 
 export const DRAFT_CARDS_MODAL_TITLE = 'Draft quiz cards';
@@ -83,31 +104,30 @@ export interface DraftedQuestionView {
 }
 
 /**
- * The four refusal outcomes `evd.md` §3 and `[D-289]` keep apart
- * (`ol-egov.141.89.1.44`). Only `source-insufficient` is a checked verdict
- * about her material; the other three are operational.
+ * The refusal outcomes `evd.md` §3, `[D-289]` and `[D-441]` keep apart
+ * (`ol-egov.141.89.1.44`, `ol-egov.141.89.1.5`). Only `source-insufficient` is
+ * a checked verdict about her material; every other outcome is operational or
+ * not assessed. `threshold-blocked` is the composite veto or the band's lower
+ * bar deciding from numbers alone, which row 15 (2026-09-29) does not let
+ * stand as a checked insufficiency.
  */
 export type RefusalOutcome =
   | 'retrieval-failure'
   | 'source-insufficient'
   | 'judgment-uncertain'
   | 'service-failure'
-  /**
-   * `below-relevance-threshold`, `below-composite-threshold`, `below-band`.
-   * Unclassified: whether these are retrieval failures or checked
-   * insufficiency is not ruled, so they keep their previous words and
-   * non-transient flag under their own value, pending a decision.
-   */
-  | 'below-threshold';
+  | 'threshold-blocked';
 
 export interface RefusalCopy {
   readonly headline: string;
-  /** Which of the four outcomes this is; stays distinct even where two share words. */
+  /** Which classified outcome this is; stays distinct even where two share words. */
   readonly outcome: RefusalOutcome;
   /**
-   * `true` for every operational outcome (all but `source-insufficient`) —
-   * the caller can offer a retry rather than treating the refusal as a
-   * verdict about her material, without re-deriving it from the reason.
+   * `true` for every outcome that is not a checked verdict (all but
+   * `source-insufficient`) — the caller can offer a retry rather than treating
+   * the refusal as a verdict about her material, without re-deriving it from
+   * the reason. For `threshold-blocked` it means "not assessed, and never
+   * worded as a verdict", not that the same request will pass on a retry.
    */
   readonly transient: boolean;
 }
@@ -117,20 +137,21 @@ const NOT_ENOUGH_GROUNDING_HEADLINE =
 const COULD_NOT_CHECK_HEADLINE = 'Olea couldn’t check your notes just now — try again in a moment.';
 
 /*
- * The vocabulary registry has no wording of its own for the three operational
+ * The vocabulary registry has no wording of its own for the operational
  * outcomes; `evd.md` §3 names "Olea could not check right now" as the
- * operational sentence, so all three reuse today's approved could-not-check
- * string. The `outcome` value keeps them distinct underneath.
+ * operational sentence, so all of them (and the threshold-blocked stand-in,
+ * see the module doc) reuse today's approved could-not-check string. The
+ * `outcome` value keeps them distinct underneath.
  */
 const SOURCE_INSUFFICIENT: RefusalCopy = {
   headline: NOT_ENOUGH_GROUNDING_HEADLINE,
   outcome: 'source-insufficient',
   transient: false,
 };
-const BELOW_THRESHOLD: RefusalCopy = {
-  headline: NOT_ENOUGH_GROUNDING_HEADLINE,
-  outcome: 'below-threshold',
-  transient: false,
+const THRESHOLD_BLOCKED: RefusalCopy = {
+  headline: COULD_NOT_CHECK_HEADLINE,
+  outcome: 'threshold-blocked',
+  transient: true,
 };
 const RETRIEVAL_FAILURE: RefusalCopy = {
   headline: COULD_NOT_CHECK_HEADLINE,
@@ -148,12 +169,14 @@ const SERVICE_FAILURE: RefusalCopy = {
   transient: true,
 };
 
-/** An empty package: retrieval gave the judge nothing (`[D-289]` point 2). */
-const RETRIEVAL_FAILURE_REASONS: ReadonlySet<string> = new Set(['no-hits']);
-
-/** Classification waits on a decision; see `BELOW_THRESHOLD`. */
-const BELOW_THRESHOLD_REASONS: ReadonlySet<string> = new Set([
+/** An empty package (`[D-289]` point 2), or one the relevance floor emptied (`[D-441]`): retrieval gave the judge nothing usable. */
+const RETRIEVAL_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  'no-hits',
   'below-relevance-threshold',
+]);
+
+/** Blocked from numbers alone, not assessed (`[D-441]`): the composite veto and the band's lower bar. */
+const THRESHOLD_BLOCKED_REASONS: ReadonlySet<string> = new Set([
   'below-composite-threshold',
   'below-band',
 ]);
@@ -168,16 +191,31 @@ const SERVICE_FAILURE_REASONS: ReadonlySet<string> = new Set([
  * Maps a `GroundingRefusalReason` (`olea-core`'s `groundedContext.ts`), or
  * the judge's `could-not-decide`, to copy for the modal. Only the judge's own
  * rejection (`judge-rejected`) is "checked, and there isn't enough here"; an
- * empty or irrelevant retrieval is operational (`[D-289]` point 2), never a
- * verdict about her notes. A reason this file has never seen defaults to
- * `source-insufficient`, the family that claims no failure it cannot name.
+ * empty or irrelevant retrieval is operational (`[D-289]` point 2, `[D-441]`),
+ * a composite or band refusal is threshold-blocked and not assessed
+ * (`[D-441]`), and neither is ever a verdict about her notes. A reason this
+ * file has never seen defaults to `source-insufficient`.
  */
 export function describeRefusal(reason: string): RefusalCopy {
   if (RETRIEVAL_FAILURE_REASONS.has(reason)) return RETRIEVAL_FAILURE;
-  if (BELOW_THRESHOLD_REASONS.has(reason)) return BELOW_THRESHOLD;
+  if (THRESHOLD_BLOCKED_REASONS.has(reason)) return THRESHOLD_BLOCKED;
   if (SERVICE_FAILURE_REASONS.has(reason)) return SERVICE_FAILURE;
   if (reason === 'could-not-decide') return JUDGMENT_UNCERTAIN;
   return SOURCE_INSUFFICIENT;
+}
+
+/** How a classified refusal reads as a row: a checked insufficiency, not assessed (threshold-blocked), or a transient failure. */
+export type RefusalStateModifier = 'insufficient' | 'not-assessed' | 'transient';
+
+/**
+ * The row state for a classified refusal, keyed on its `outcome` rather than
+ * re-derived from `transient`, so a threshold-blocked refusal can never render
+ * under the checked-insufficiency state (`[D-441]`).
+ */
+export function refusalStateModifier(copy: RefusalCopy): RefusalStateModifier {
+  if (copy.outcome === 'source-insufficient') return 'insufficient';
+  if (copy.outcome === 'threshold-blocked') return 'not-assessed';
+  return 'transient';
 }
 
 export type ParsedDraftResponse =

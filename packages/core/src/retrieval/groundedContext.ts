@@ -25,26 +25,35 @@
  * is a success of this pipeline, not a fault (see `errorCode`'s
  * `grounding-refused` in `olea-service/contracts/worker.ts`).
  *
- * ## The two-threshold band (`[D-089]`)
+ * ## The two-threshold band (`[D-089]`, amended by `[D-301]` / `[D-442]`)
  *
  * `assembleGroundedContext` above is the single-gate mechanism. `[D-089]`
  * ratified a different posture on top of the same signals, and it lives in
  * this file beside the old one rather than replacing it, because the old one
  * still has a production caller and the band's operating point is not ruled
- * yet:
+ * yet. **Since `[D-442]` (David's ruling on decision-sheet row 44,
+ * 2026-09-29, implementing `[D-301]`) the band is a cost filter, never a
+ * support verdict:**
  *
- * - **above the upper bar** — ground from the cheap numeric signals alone; no
- *   judge runs, because running one above the bar buys nothing;
  * - **below the lower bar** — refuse from the numeric signals alone, and send
  *   *nothing* over the network. This tier is what lets the per-tier network
  *   promise be kept at all, so the classification has to happen before any
  *   port is touched — which is why `assembleBandedGroundedContext` is pure and
  *   synchronous and `resolveGroundedContext` is the only thing that can call
- *   out;
- * - **inside the band** — escalate to the grounding judge, which reads the
- *   query and the retrieved passages *together*. A band query is therefore a
- *   query that leaves the device and may still be refused; that is the ruled
+ *   out. Such a refusal was not assessed: no judgement about her material was
+ *   made (`[D-441]`, ruled 2026-09-29);
+ * - **at or above the lower bar, in the band or above the upper bar** —
+ *   escalate to the grounding judge, which reads the query and the retrieved
+ *   passages *together*. **The upper bar no longer skips the decision:** high
+ *   similarity is exactly the case a support check exists for (her notes
+ *   NAMING a topic is not her notes ANSWERING it), so a retrieval band never
+ *   certifies support and `resolveGroundedContext` never returns `grounded`
+ *   without a supported verdict. Any request at or above the lower bar
+ *   therefore leaves the device and may still be refused; that is the ruled
  *   price of judging content by reading it, restated per tier in C4.7.
+ *
+ * The lower bar and the composite veto stay as they are for now; both are
+ * re-derived once the retrieval targets lock (`[D-301]` point 2, `[D-442]`).
  *
  * **This module still never touches the network itself.** The judge arrives as
  * an injected `GroundingJudgePort`, the same shape as every other provider in
@@ -113,15 +122,28 @@ export interface JudgeRequestRecord {
 export type GroundingRefusalReason =
   /** Retrieval produced no hits at all — an empty index, or a query with no keyword or semantic match whatsoever. */
   | 'no-hits'
-  /** Retrieval produced hits, but none cleared the relevance bar — present in the index, but not actually about the query. Confabulation's actual failure mode: a model handed these chunks would have "context," just not relevant context. */
+  /**
+   * Retrieval produced hits, but none cleared the relevance bar — present in the index, but not actually about the query. Confabulation's actual failure mode: a model handed these chunks would have "context," just not relevant context.
+   *
+   * **A retrieval or checking failure, not a verdict about her notes**
+   * (`[D-441]`, David's ruling on decision-sheet row 15, 2026-09-29): a
+   * package emptied by the relevance floor is equivalent to an empty package
+   * (`no-hits`), so `[D-289]` point 2's reading applies — operational wording,
+   * and no claim that her material lacks the topic.
+   */
   | 'below-relevance-threshold'
   /**
    * `options.requireComposite` was set, the semantic signal WAS computed, and
    * the query's `CompositeGroundingSignals` (`compositeSignals.ts`) still did
    * not clear every clause of `options.compositeThresholds` — `ol-azo7`.
-   * "Checked and found nothing": her material genuinely does not support
-   * this query at the ratified operating point. Distinct from
-   * `below-relevance-threshold`, which is about individual hits failing a
+   * A **threshold-blocked, not-assessed** refusal (`[D-441]`, David's ruling
+   * on decision-sheet row 15, 2026-09-29): the veto scores retrieval signals,
+   * and what those scores demonstrate about her material has not been
+   * established, so it is **not** "checked: her material does not support
+   * this query" — no judgement about her notes was made, and no caller may
+   * word it as one. (An earlier version of this comment called it exactly
+   * that, a checked negative; the ruling replaced that reading.) Distinct
+   * from `below-relevance-threshold`, which is about individual hits failing a
    * per-hit filter rather than a single whole-query gate evaluated before
    * per-hit filtering runs at all — and distinct from
    * `composite-check-unavailable`, below, which is about the check never
@@ -157,21 +179,26 @@ export type GroundingRefusalReason =
    * BAND PATH ONLY (`[D-089]`). Every numeric signal sat below the band's
    * lower bar, so the refusal was decided from numbers alone and **nothing
    * left the device** — not the query, not a passage, not a scoring call.
-   * Distinct from `below-composite-threshold`, which is the single-gate
-   * mechanism's verdict, and from `judge-rejected`, which is a refusal that
-   * was reached by sending her material for judgment.
+   * A **threshold-blocked, not-assessed** refusal (`[D-441]`, ruled
+   * 2026-09-29): no judge read her material, so this is not a checked
+   * insufficiency and no caller may word it as one. Distinct from
+   * `below-composite-threshold`, which is the composite veto's threshold
+   * refusal, and from `judge-rejected`, which is a refusal that was reached
+   * by sending her material for judgment.
    */
   | 'below-band'
   /**
-   * BAND PATH ONLY (`[D-089]`). The query fell inside the band, the grounding
-   * judge read the query and the retrieved passages together, and judged the
+   * BAND PATH ONLY (`[D-089]`). The request reached the grounding judge (in
+   * the band or, since `[D-442]`, above the upper bar), which read the query
+   * and the retrieved passages together, and judged the
    * passages not to support it. "Checked, by reading it, and found not
    * enough" — the one refusal reason in this union that implies her material
    * was sent for judgment.
    */
   | 'judge-rejected'
   /**
-   * BAND PATH ONLY (`[D-089]` §5). The query fell inside the band and the
+   * BAND PATH ONLY (`[D-089]` §5). The request was due at the grounding judge
+   * (in the band or, since `[D-442]`, above the upper bar) and the
    * judge could not be consulted — no port wired, an error, a timeout, or a
    * verdict that did not typecheck. **Fail closed:** the band refuses, and it
    * says so with a TRANSIENT reason. This exists precisely so an error never
@@ -460,11 +487,17 @@ export type GateStage =
   | 'composite-veto'
   /** `top1` sat below the band's lower bar; nothing left the device. */
   | 'below-band'
-  /** `top1` cleared the band's upper bar — grounded from numbers alone, no judge consulted. */
+  /**
+   * `top1` cleared the band's upper bar and at least one hit is citable. The
+   * stage records the numeric TIER only: since `[D-442]` this request is still
+   * sent to the judge by `resolveGroundedContext`, so it is not grounded from
+   * numbers alone any more. Counts of this stage are requests the judge also
+   * saw, which the `escalated-to-judge` count alone no longer covers.
+   */
   | 'above-band'
   /** The tier passed (above- or in-band) but no hit cleared the per-hit relevance filter, so there is nothing to cite or hand a judge. */
   | 'relevance-empty'
-  /** The tier landed in-band and at least one hit is citable: this is the one stage that reaches the judge. */
+  /** The tier landed in-band and at least one hit is citable: the band's own escalation to the judge (an above-band request reaches the judge too since `[D-442]`, and is recorded as `above-band`). */
   | 'escalated-to-judge';
 
 export interface AssembleBandedGroundedContextOptions extends AssembleGroundedContextOptions {
@@ -487,6 +520,15 @@ export interface AssembleBandedGroundedContextOptions extends AssembleGroundedCo
  * the three tiers — `escalate` is the one the single-gate mechanism has no
  * equivalent of, and it carries everything the judge needs so that the caller
  * that DOES touch the network never has to re-derive it.
+ *
+ * **`grounded` here is the numeric filter's outcome, not a support verdict**
+ * (`[D-442]`): it means "cleared the upper bar and something is citable", the
+ * cost filter's pass. It is what `assembleBandedGroundedContext` reports for
+ * the above-band tier so measurement can still classify that tier from
+ * numbers alone; `resolveGroundedContext` never returns it as its own final
+ * answer, it sends those chunks to the judge like an `escalate`. A caller that
+ * generates from this arm without a judge verdict bypasses the sufficiency
+ * decision the ruling removed the bypass for.
  */
 export type BandDecision =
   | { readonly status: 'grounded'; readonly chunks: readonly GroundedChunk[] }
@@ -647,10 +689,11 @@ export interface GroundingJudgePort {
 
 export interface ResolveGroundedContextOptions extends AssembleBandedGroundedContextOptions {
   /**
-   * Consulted for band queries only. **Absent is not "skip the check"** — a
-   * band query with no judge wired refuses (`judge-unavailable`), because an
-   * escalation that silently became a generation is exactly the confabulation
-   * the invariant is about.
+   * Consulted for every request at or above the lower bar — in the band, and
+   * since `[D-442]` above the upper bar too. **Absent is not "skip the
+   * check"** — such a request with no judge wired refuses
+   * (`judge-unavailable`), because an escalation that silently became a
+   * generation is exactly the confabulation the invariant is about.
    */
   readonly judge?: GroundingJudgePort;
   /** Fail-closed budget for the judge call. Defaults to 20s — above the measured tail, so a timeout means something is actually wrong rather than merely slow. Declared, not fitted. */
@@ -682,20 +725,35 @@ export interface ResolveGroundedContextOptions extends AssembleBandedGroundedCon
 const DEFAULT_JUDGE_TIMEOUT_MS = 20_000;
 
 /**
- * The full band path: classify from numbers, then — for band queries only —
- * consult the judge and fold its verdict into a `GroundingResult`.
+ * The full band path: classify from numbers, then — for every request at or
+ * above the lower bar — consult the judge and fold its verdict into a
+ * `GroundingResult`.
  *
  * Returns the same `GroundingResult` union `assembleGroundedContext` and
  * `retrieve` already return, so nothing downstream has to learn a second
  * result shape. The `escalate` arm exists inside this function and never
  * escapes it: a caller sees grounded or refused, exactly as before.
+ *
+ * **`[D-442]`: a retrieval band never certifies support.** The pure numeric
+ * step reports the above-band tier as `grounded` (the cost filter's pass, so
+ * measurement can classify tiers from numbers), and this function does not
+ * hand that back: it sends those chunks to the judge exactly as it does for
+ * the in-band tier, so `grounded` leaves here only on a supported verdict.
+ * The below-band refusal still sends nothing.
  */
 export async function resolveGroundedContext(
   hits: readonly HybridHit[],
   options: ResolveGroundedContextOptions,
 ): Promise<GroundingResult> {
-  const decision = assembleBandedGroundedContext(hits, options);
-  if (decision.status !== 'escalate') return decision;
+  const numeric = assembleBandedGroundedContext(hits, options);
+  if (numeric.status === 'refused') return numeric;
+  const decision: {
+    readonly chunks: readonly GroundedChunk[];
+    readonly diagnostic: GroundingDiagnostic;
+  } =
+    numeric.status === 'escalate'
+      ? numeric
+      : { chunks: numeric.chunks, diagnostic: buildDiagnostic(hits) };
 
   const query = options.query;
   if (!options.judge || query === undefined || query.trim() === '') {

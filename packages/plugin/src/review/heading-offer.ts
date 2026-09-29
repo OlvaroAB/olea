@@ -44,7 +44,12 @@
  * accepting the offer does not guarantee a card, exactly as an automatic
  * sweep candidate can refuse. `describeRefusal` (`retrieval/draft-cards-copy.ts`)
  * is reused verbatim for that copy rather than inventing a second refusal
- * vocabulary.
+ * vocabulary. **The specific refusal `reason` travels beside the copy**, never
+ * flattened into it: a caller keying on the reason (a retry, a funnel) sees
+ * `no-hits`, `below-relevance-threshold`, `below-composite-threshold`,
+ * `below-band`, `judge-rejected` and the could-not-check reasons as the
+ * separate facts they are (`[D-441]`, ruled 2026-09-29), and only a judge
+ * rejection is worded as her notes falling short.
  *
  * **`dismiss` persists nothing.** D7.1's six authorised additions
  * (`docs/Olea_alpha_functional_scope.md` §7, `[D-109]`/`[D-117]`) name
@@ -132,7 +137,7 @@ export type HeadingOfferAcceptOutcome =
       readonly kind: 'not-configured';
     }
   | {
-      /** `[D-089]`'s grounding band refused before any generative call — the honest "nothing to draft from" outcome, not an error. */
+      /** `[D-089]`'s grounding band refused before any generative call — the honest "nothing to draft from" outcome, not an error. `reason` is the specific refusal, kept apart from `copy.outcome`'s classification. */
       readonly kind: 'refused';
       readonly reason: GroundingRefusalReason;
       readonly copy: RefusalCopy;

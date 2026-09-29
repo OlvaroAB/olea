@@ -25,33 +25,37 @@ describe('classifyAuthoringOutcome — routing and budget deferral', () => {
   });
 });
 
-describe('classifyAuthoringOutcome — the four refusal outcomes stay distinct (evd.md §3, D-289)', () => {
-  it('maps no-hits (an empty package) to unavailable with cause retrieval-failure (D-289)', () => {
-    expect(classifyAuthoringOutcome({ kind: 'refused', reason: 'no-hits' })).toEqual({
-      status: 'unavailable',
-      retryable: true,
-      cause: 'retrieval-failure',
-    });
-  });
-
-  // Classification of the below-* reasons is not ruled: previous status kept, own cause.
-  for (const reason of [
-    'below-relevance-threshold',
-    'below-composite-threshold',
-    'below-band',
-  ] as const) {
-    it(`keeps ${reason} as insufficient-evidence under its own below-threshold cause`, () => {
+describe('classifyAuthoringOutcome — refusal outcomes stay distinct, each keeping its own reason (evd.md §3, D-289, D-441)', () => {
+  // Retrieval failure (D-289 point 2, D-441 as ruled 2026-09-29): an empty
+  // package, or one the relevance floor emptied. Operational, never a
+  // verdict about her notes.
+  for (const reason of ['no-hits', 'below-relevance-threshold'] as const) {
+    it(`maps ${reason} to unavailable with cause retrieval-failure, carrying the reason`, () => {
       expect(classifyAuthoringOutcome({ kind: 'refused', reason })).toEqual({
-        status: 'insufficient-evidence',
-        cause: 'below-threshold',
+        status: 'unavailable',
+        retryable: true,
+        cause: 'retrieval-failure',
+        reason,
       });
     });
   }
 
-  it('maps the judge rejecting the sources (judge-rejected) to insufficient-evidence, source-insufficient', () => {
+  // Threshold-blocked (D-441 as ruled 2026-09-29): the composite veto and the
+  // band's lower bar decided from numbers alone. Not assessed, and never
+  // 'insufficient-evidence': no judgement about her notes was made.
+  for (const reason of ['below-composite-threshold', 'below-band'] as const) {
+    it(`maps ${reason} to not-assessed / threshold-blocked, never to insufficient-evidence`, () => {
+      const outcome = classifyAuthoringOutcome({ kind: 'refused', reason });
+      expect(outcome).toEqual({ status: 'not-assessed', cause: 'threshold-blocked', reason });
+      expect(outcome.status).not.toBe('insufficient-evidence');
+    });
+  }
+
+  it('maps the judge rejecting the sources (judge-rejected) to insufficient-evidence, the one checked verdict', () => {
     expect(classifyAuthoringOutcome({ kind: 'refused', reason: 'judge-rejected' })).toEqual({
       status: 'insufficient-evidence',
       cause: 'source-insufficient',
+      reason: 'judge-rejected',
     });
   });
 
@@ -68,14 +72,60 @@ describe('classifyAuthoringOutcome — the four refusal outcomes stay distinct (
     'composite-check-unavailable',
   ];
   for (const reason of SERVICE_REASONS) {
-    it(`maps a "could not check" refusal (${reason}) to unavailable with cause service-failure`, () => {
+    it(`maps a "could not check" refusal (${reason}) to unavailable with cause service-failure, carrying the reason`, () => {
       expect(classifyAuthoringOutcome({ kind: 'refused', reason })).toEqual({
         status: 'unavailable',
         retryable: true,
         cause: 'service-failure',
+        reason,
       });
     });
   }
+
+  // One row per reason in the union: a new reason has to be classified here on
+  // purpose (the switch is exhaustive), and no reason may share both its cause
+  // and its reason value with another.
+  const ALL_REASONS: readonly GroundingRefusalReason[] = [
+    'no-hits',
+    'below-relevance-threshold',
+    'below-composite-threshold',
+    'composite-check-unavailable',
+    'below-band',
+    'judge-rejected',
+    'judge-unavailable',
+  ];
+
+  it('preserves the specific refusal reason on the outcome for every reason in the union', () => {
+    for (const reason of ALL_REASONS) {
+      const outcome = classifyAuthoringOutcome({ kind: 'refused', reason });
+      expect('reason' in outcome && outcome.reason).toBe(reason);
+    }
+  });
+
+  it('only a judge rejection is a checked insufficiency: every other refusal reason avoids insufficient-evidence', () => {
+    const checked = ALL_REASONS.filter(
+      (reason) =>
+        classifyAuthoringOutcome({ kind: 'refused', reason }).status === 'insufficient-evidence',
+    );
+    expect(checked).toEqual(['judge-rejected']);
+  });
+
+  it('the three kinds of "nothing was decided about her notes" stay apart by status and cause', () => {
+    const kinds = new Set(
+      ALL_REASONS.map((reason) => {
+        const outcome = classifyAuthoringOutcome({ kind: 'refused', reason });
+        return `${outcome.status}/${'cause' in outcome ? outcome.cause : ''}`;
+      }),
+    );
+    expect(kinds).toEqual(
+      new Set([
+        'unavailable/retrieval-failure',
+        'not-assessed/threshold-blocked',
+        'insufficient-evidence/source-insufficient',
+        'unavailable/service-failure',
+      ]),
+    );
+  });
 });
 
 describe('classifyAuthoringOutcome — transient generation failure', () => {

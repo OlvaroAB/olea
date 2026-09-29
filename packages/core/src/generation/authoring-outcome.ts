@@ -43,22 +43,33 @@
  *    carrying whatever `./mcq-draft-checks.js`'s `checkMcqDraft` found for it
  *    — `defects: []` is a clean draft.
  *
- * **The refused → insufficient-evidence / unavailable split** reads
- * `GroundingRefusalReason`'s own documented distinction (`groundedContext.ts`):
- * `'judge-unavailable'` and `'composite-check-unavailable'` are the two
- * reasons that module's own doc states as "we could not check just now,"
- * never "her notes don't cover this". `'no-hits'` joins them for a different
- * reason, not a transient one: it means retrieval returned nothing at all, so
- * no model was ever asked — `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules an
- * empty evidence package an operational outcome, never a verdict about her
- * material, and `docs/dev/intelligence-build/pipelines/pra.json`'s evidence
- * step spells this out for this exact chain: "an empty package ... is never a
- * verdict ... it is unavailable here, to be retried, not read as a fact about
- * her notes." Every other reason in the union is a checked, negative verdict.
- * This module reads that distinction rather than re-deciding it: the three
- * operational reasons map to `unavailable`, everything else to
- * `insufficient-evidence` (`ol-egov.141.89.2.12` fixed `'no-hits'` reading as
- * a checked verdict here).
+ * **The refused split** reads `GroundingRefusalReason`'s own documented
+ * distinctions (`groundedContext.ts`) and keeps four apart, each carrying the
+ * specific `reason` it came from so a funnel can still separate them
+ * (`[D-441]`, David's ruling on decision-sheet row 15, 2026-09-29):
+ *
+ *  - **retrieval failure → `unavailable`** (`no-hits`, `below-relevance-threshold`):
+ *    retrieval gave nothing usable. `[D-289]` point 2 (`ol-egov.141.89.1.6`)
+ *    rules an empty evidence package an operational outcome, never a verdict
+ *    about her material, and a package the relevance floor emptied is
+ *    equivalent to an empty one
+ *    (`docs/dev/intelligence-build/pipelines/pra.json`'s evidence step: "an
+ *    empty package ... is never a verdict ... it is unavailable here, to be
+ *    retried, not read as a fact about her notes");
+ *  - **service failure → `unavailable`** (`judge-unavailable`,
+ *    `composite-check-unavailable`): the check itself could not run;
+ *  - **threshold-blocked → `not-assessed`** (`below-composite-threshold`,
+ *    `below-band`): the composite veto and the band's lower bar decided from
+ *    numbers alone. Row 15 asks what those scores demonstrate and does not let
+ *    them stand as "checked insufficiency" merely because some passages were
+ *    retrieved, so this keeps its own status and never claims her notes lack
+ *    the material;
+ *  - **checked insufficiency → `insufficient-evidence`** (`judge-rejected`
+ *    only): the judge read the query and the passages together.
+ *
+ * The switch over the reason is exhaustive: a new reason has to be classified
+ * here on purpose, never defaulted into a verdict about her notes
+ * (`ol-egov.141.89.2.12` fixed `'no-hits'` reading as one).
  */
 
 import type { GroundingRefusalReason } from '../retrieval/groundedContext.js';
@@ -82,66 +93,86 @@ export type AuthoringAttempt =
 export type AuthoringDeferralReason = 'unmet-format' | 'budget';
 
 /**
- * The four refusal outcomes `evd.md` §3 and `[D-289]` keep apart, carried as a
- * value beside the five-way status so no site merges them (`ol-egov.141.89.1.44`):
- *  - `retrieval-failure`: retrieval gave the judge nothing usable (empty package,
- *    or hits that failed the relevance, composite or band bar) — operational,
+ * The refusal outcomes `evd.md` §3, `[D-289]` and `[D-441]` keep apart,
+ * carried as a value beside the status so no site merges them
+ * (`ol-egov.141.89.1.44`, `ol-egov.141.89.1.5`):
+ *  - `retrieval-failure`: retrieval gave the judge nothing usable — an empty
+ *    package, or one the relevance floor emptied (`[D-441]`). Operational,
  *    never a verdict about her notes;
  *  - `source-insufficient`: the judge ran and found the sources do not support
  *    the operation — the only cause that is a checked verdict;
  *  - `judgment-uncertain`: the judge ran and could not decide;
  *  - `service-failure`: a call could not be reached, timed out or came back
  *    malformed;
- *  - `below-threshold`: hits existed but failed the relevance, composite or
- *    band bar. **Unclassified: whether these are retrieval failures or checked
- *    insufficiency is not ruled** (`[D-289]` rules only the empty package), so
- *    they keep their previous `insufficient-evidence` status and stay apart
- *    from a genuine judge rejection until a decision classifies them.
+ *  - `threshold-blocked`: hits existed but the composite veto or the band's
+ *    lower bar blocked the request from numbers alone (`[D-441]`, ruled
+ *    2026-09-29). Not assessed: no judgement about her notes was made, so it
+ *    is never `source-insufficient` and never worded as her notes lacking the
+ *    material.
  */
 export type AuthoringRefusalCause =
   | 'retrieval-failure'
   | 'source-insufficient'
   | 'judgment-uncertain'
   | 'service-failure'
-  | 'below-threshold';
+  | 'threshold-blocked';
 
-/** pra.md §3's five-way authoring outcome. */
+/**
+ * pra.md §3's five-way authoring outcome, plus `not-assessed` (`[D-441]`,
+ * ruled 2026-09-29): a threshold-blocked request is neither a checked
+ * `insufficient-evidence` nor a transient `unavailable`. **Every outcome that
+ * came from a refusal carries the specific `reason` it came from**, so the
+ * funnel and the `[D-414]` measures can still tell an empty package from a
+ * relevance-floor empty package, a composite veto from a below-band request.
+ */
 export type AuthoringOutcome =
   | { readonly status: 'eligible' }
   | {
       readonly status: 'insufficient-evidence';
-      readonly cause: 'source-insufficient' | 'below-threshold';
+      readonly cause: 'source-insufficient';
+      readonly reason: 'judge-rejected';
+    }
+  | {
+      readonly status: 'not-assessed';
+      readonly cause: 'threshold-blocked';
+      readonly reason: 'below-composite-threshold' | 'below-band';
     }
   | { readonly status: 'invalid-draft'; readonly defects: readonly McqDraftDefect[] }
   | { readonly status: 'deferred'; readonly reason: AuthoringDeferralReason }
   | {
       readonly status: 'unavailable';
       readonly retryable: true;
-      readonly cause: Exclude<AuthoringRefusalCause, 'source-insufficient' | 'below-threshold'>;
+      readonly cause: Exclude<AuthoringRefusalCause, 'source-insufficient' | 'threshold-blocked'>;
+      /** Present when the outcome came from a refusal; absent for a judge that could not decide and for a drafting-call failure. */
+      readonly reason?: GroundingRefusalReason;
     };
 
+/** One refusal reason, classified. Exhaustive over the union, so a new reason cannot silently default into a verdict about her notes. */
+function classifyRefusal(reason: GroundingRefusalReason): AuthoringOutcome {
+  switch (reason) {
+    case 'no-hits':
+    case 'below-relevance-threshold':
+      return { status: 'unavailable', retryable: true, cause: 'retrieval-failure', reason };
+    case 'below-composite-threshold':
+    case 'below-band':
+      return { status: 'not-assessed', cause: 'threshold-blocked', reason };
+    case 'judge-unavailable':
+    case 'composite-check-unavailable':
+      return { status: 'unavailable', retryable: true, cause: 'service-failure', reason };
+    case 'judge-rejected':
+      return { status: 'insufficient-evidence', cause: 'source-insufficient', reason };
+    default: {
+      const exhaustive: never = reason;
+      throw new Error(
+        `classifyAuthoringOutcome: unclassified refusal reason ${String(exhaustive)}`,
+      );
+    }
+  }
+}
+
 /**
- * The one `GroundingRefusalReason` ruled to be retrieval failure: no hits at
- * all, an empty package (`[D-289]` point 2). Operational, never a verdict
- * about her notes.
- */
-const RETRIEVAL_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set(['no-hits']);
-
-/** Classification of these waits on a decision (see `below-threshold` above); status is as before. */
-const BELOW_THRESHOLD_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
-  'below-relevance-threshold',
-  'below-composite-threshold',
-  'below-band',
-]);
-
-/** The two reasons that mean the check itself could not run. */
-const SERVICE_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
-  'judge-unavailable',
-  'composite-check-unavailable',
-]);
-
-/**
- * Classifies one authoring attempt into pra.md §3's five-way outcome. Pure:
+ * Classifies one authoring attempt into pra.md §3's outcome (five-way, plus
+ * `not-assessed` for `[D-441]`). Pure:
  * the same `attempt` always produces the same outcome.
  */
 export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOutcome {
@@ -151,16 +182,7 @@ export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOu
     case 'budget-exhausted':
       return { status: 'deferred', reason: 'budget' };
     case 'refused':
-      if (RETRIEVAL_FAILURE_REASONS.has(attempt.reason)) {
-        return { status: 'unavailable', retryable: true, cause: 'retrieval-failure' };
-      }
-      if (BELOW_THRESHOLD_REASONS.has(attempt.reason)) {
-        return { status: 'insufficient-evidence', cause: 'below-threshold' };
-      }
-      if (SERVICE_FAILURE_REASONS.has(attempt.reason)) {
-        return { status: 'unavailable', retryable: true, cause: 'service-failure' };
-      }
-      return { status: 'insufficient-evidence', cause: 'source-insufficient' };
+      return classifyRefusal(attempt.reason);
     case 'undecided':
       return { status: 'unavailable', retryable: true, cause: 'judgment-uncertain' };
     case 'draft-error':

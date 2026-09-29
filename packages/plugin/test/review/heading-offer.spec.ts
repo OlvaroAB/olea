@@ -158,6 +158,34 @@ describe('accept — F2.10/[D-170]: creates the draft through the real per-conce
     expect(await cache.listPending()).toHaveLength(0);
   });
 
+  // D-441 (ruled 2026-09-29) and D-289: each specific reason survives to the
+  // caller with its own classification, and only a judge rejection is worded
+  // as her notes falling short.
+  const REFUSAL_CASES = [
+    { reason: 'no-hits', outcome: 'retrieval-failure', insufficiency: false },
+    { reason: 'below-relevance-threshold', outcome: 'retrieval-failure', insufficiency: false },
+    { reason: 'below-composite-threshold', outcome: 'threshold-blocked', insufficiency: false },
+    { reason: 'below-band', outcome: 'threshold-blocked', insufficiency: false },
+    { reason: 'judge-rejected', outcome: 'source-insufficient', insufficiency: true },
+    { reason: 'judge-unavailable', outcome: 'service-failure', insufficiency: false },
+    { reason: 'composite-check-unavailable', outcome: 'service-failure', insufficiency: false },
+  ] as const;
+
+  for (const { reason, outcome: expectedOutcome, insufficiency } of REFUSAL_CASES) {
+    it(`a ${reason} refusal keeps its own reason and reads as ${expectedOutcome}${insufficiency ? '' : ', never as her notes falling short'}`, async () => {
+      const { cache, port } = setUp(async () => ({ status: 'refused', reason }));
+
+      const outcome = await port.accept(candidateFixture(), contextFixture());
+
+      expect(outcome).toMatchObject({ kind: 'refused', reason });
+      if (outcome.kind !== 'refused') throw new Error('unreachable');
+      expect(outcome.copy.outcome).toBe(expectedOutcome);
+      const claimsShortfall = /enough|grounding/i.test(outcome.copy.headline);
+      expect(claimsShortfall).toBe(insufficiency);
+      expect(await cache.listPending()).toHaveLength(0);
+    });
+  }
+
   it('an unparseable response caches nothing', async () => {
     const { cache, port } = setUp(async () => ({
       status: 'drafted',

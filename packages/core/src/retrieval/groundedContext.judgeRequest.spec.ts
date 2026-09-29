@@ -66,22 +66,30 @@ describe('onJudgeRequest', () => {
     }
   });
 
-  it('does not fire for requests the numbers decide, above or below the band', async () => {
-    const onJudgeRequest = vi.fn();
-    await resolveGroundedContext([hit('fixtures/alpha.md', 0, 0.95)], {
+  it('fires for a request above the upper bar too, since the band never certifies support (D-442)', async () => {
+    const seen: JudgeRequestRecord[] = [];
+    const result = await resolveGroundedContext([hit('fixtures/alpha.md', 0, 0.95)], {
       band: BAND,
       compositeSignals: ABOVE_BAND,
       judge: supportingJudge,
       query: 'fixture question',
-      onJudgeRequest,
+      onJudgeRequest: (record) => seen.push(record),
     });
-    await resolveGroundedContext([hit('fixtures/alpha.md', 0, 0.1)], {
+    expect(result.status).toBe('grounded');
+    expect(seen).toHaveLength(1);
+    expect(seen[0]?.refs).toEqual([{ path: 'fixtures/alpha.md', blockIndex: 0 }]);
+  });
+
+  it('does not fire for a request the numbers refuse below the lower bar, since nothing leaves the device', async () => {
+    const onJudgeRequest = vi.fn();
+    const result = await resolveGroundedContext([hit('fixtures/alpha.md', 0, 0.1)], {
       band: BAND,
       compositeSignals: BELOW_BAND,
       judge: supportingJudge,
       query: 'fixture question',
       onJudgeRequest,
     });
+    expect(result).toMatchObject({ status: 'refused', reason: 'below-band' });
     expect(onJudgeRequest).not.toHaveBeenCalled();
   });
 

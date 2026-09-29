@@ -8,6 +8,7 @@ import {
   AI_NOT_CONFIGURED_NOTICE,
   describeRefusal,
   parseDraftedResponse,
+  refusalStateModifier,
 } from '../../src/retrieval/draft-cards-copy.js';
 
 describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)', () => {
@@ -18,20 +19,48 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
     expect(copy.headline.toLowerCase()).toContain('grounding');
   });
 
-  it('no-hits is retrieval-failure: operational, never a verdict about her notes', () => {
-    const copy = describeRefusal('no-hits');
-    expect(copy.outcome).toBe('retrieval-failure');
-    expect(copy.transient).toBe(true);
-    expect(copy.headline.toLowerCase()).not.toContain('enough');
-    expect(copy.headline.toLowerCase()).not.toContain('grounding in your notes');
+  it('no-hits and below-relevance-threshold are retrieval-failure: operational, never a verdict about her notes (D-289, D-441)', () => {
+    for (const reason of ['no-hits', 'below-relevance-threshold']) {
+      const copy = describeRefusal(reason);
+      expect(copy.outcome).toBe('retrieval-failure');
+      expect(copy.transient).toBe(true);
+      expect(copy.headline.toLowerCase()).not.toContain('enough');
+      expect(copy.headline.toLowerCase()).not.toContain('grounding in your notes');
+    }
   });
 
-  it('the below-* reasons keep their previous words and non-transient flag under their own value (classification pending a decision)', () => {
-    for (const reason of ['below-relevance-threshold', 'below-composite-threshold', 'below-band']) {
+  it('below-composite-threshold and below-band are threshold-blocked: not assessed, never a claim that her notes lack the material (D-441)', () => {
+    for (const reason of ['below-composite-threshold', 'below-band']) {
       const copy = describeRefusal(reason);
-      expect(copy.outcome).toBe('below-threshold');
-      expect(copy.transient).toBe(false);
-      expect(copy.headline).toBe(describeRefusal('judge-rejected').headline);
+      expect(copy.outcome).toBe('threshold-blocked');
+      expect(copy.transient).toBe(true);
+      expect(copy.headline).toBe(describeRefusal('no-hits').headline);
+      expect(copy.headline.toLowerCase()).not.toContain('enough');
+      expect(copy.headline.toLowerCase()).not.toContain('grounding');
+      expect(copy.headline).not.toBe(describeRefusal('judge-rejected').headline);
+    }
+  });
+
+  it('only the judge rejecting the sources makes an insufficiency claim: every other reason in the union avoids it', () => {
+    const reasons = [
+      'no-hits',
+      'below-relevance-threshold',
+      'below-composite-threshold',
+      'composite-check-unavailable',
+      'below-band',
+      'judge-rejected',
+      'judge-unavailable',
+      'could-not-decide',
+    ];
+    const insufficient = reasons.filter(
+      (reason) => describeRefusal(reason).outcome === 'source-insufficient',
+    );
+    expect(insufficient).toEqual(['judge-rejected']);
+    for (const reason of reasons.filter((r) => r !== 'judge-rejected')) {
+      const headline = describeRefusal(reason).headline.toLowerCase();
+      expect(headline).not.toContain('enough');
+      expect(headline).not.toContain('grounding');
+      expect(describeRefusal(reason).transient).toBe(true);
     }
   });
 
@@ -49,7 +78,7 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
     }
   });
 
-  it('the four outcome values are pairwise distinct even where the words are shared', () => {
+  it('the outcome values are pairwise distinct even where the words are shared', () => {
     const outcomes = [
       'judge-rejected',
       'no-hits',
@@ -70,11 +99,43 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
   });
 
   it('every refusal headline names Olea as the actor, never "the system" ([D-096] V1)', () => {
-    for (const reason of ['no-hits', 'judge-rejected', 'could-not-decide', 'judge-unavailable']) {
+    for (const reason of [
+      'no-hits',
+      'below-relevance-threshold',
+      'below-composite-threshold',
+      'below-band',
+      'judge-rejected',
+      'could-not-decide',
+      'judge-unavailable',
+    ]) {
       const headline = describeRefusal(reason).headline;
       expect(headline).toContain('Olea');
       expect(headline.toLowerCase()).not.toContain('the system');
       expect(headline.toLowerCase()).not.toContain('sorry');
+    }
+  });
+});
+
+describe('refusalStateModifier — which row state a classified refusal renders as (D-441)', () => {
+  it('only the judge rejecting the sources renders as insufficient', () => {
+    expect(refusalStateModifier(describeRefusal('judge-rejected'))).toBe('insufficient');
+  });
+
+  it('a threshold-blocked refusal renders as not-assessed, never as insufficient', () => {
+    for (const reason of ['below-composite-threshold', 'below-band']) {
+      expect(refusalStateModifier(describeRefusal(reason))).toBe('not-assessed');
+    }
+  });
+
+  it('retrieval, judgment and service failures render as transient', () => {
+    for (const reason of [
+      'no-hits',
+      'below-relevance-threshold',
+      'could-not-decide',
+      'judge-unavailable',
+      'composite-check-unavailable',
+    ]) {
+      expect(refusalStateModifier(describeRefusal(reason))).toBe('transient');
     }
   });
 });

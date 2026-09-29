@@ -387,8 +387,22 @@ describe('[D-089] the band classifies from the cheap signals alone', () => {
   });
 });
 
-describe('[D-089] above the upper bar, generation proceeds from the cheap signals alone', () => {
-  it('grounds and consults no judge', async () => {
+describe('[D-442] above the upper bar, the request still reaches the sufficiency judge (a retrieval band never certifies support)', () => {
+  it('sends the query and the retrieved passages for judgment, and grounds only on a supported verdict', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'the query',
+      judge: judge.port,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls[0]?.query).toBe('the query');
+    expect(judge.calls[0]?.context).toContain('some retrieved text');
+    expect(result.status).toBe('grounded');
+  });
+
+  it('a judge rejection above the upper bar refuses as judge-rejected, keeping the diagnostic hits', async () => {
     const judge = countingJudge(false);
     const result = await resolveGroundedContext(bandHits, {
       band: BAND,
@@ -396,8 +410,67 @@ describe('[D-089] above the upper bar, generation proceeds from the cheap signal
       judge: judge.port,
       compositeSignals: bandSignals(ABOVE_BAND_TOP1),
     });
-    expect(result.status).toBe('grounded');
+    expect(judge.calls).toHaveLength(1);
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-rejected' });
+    if (result.status === 'refused') {
+      expect(result.diagnostic?.found.map((hitRef) => hitRef.path)).toEqual(['a.md', 'b.md']);
+    }
+  });
+
+  it('never grounds above the upper bar without a verdict: no judge wired refuses as judge-unavailable', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('a judge that throws above the upper bar refuses as judge-unavailable, never as generation', async () => {
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: {
+        judge: async () => {
+          throw new Error('unreachable');
+        },
+      },
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('a query with no text to send cannot be judged, so it refuses above the upper bar too', async () => {
+    const judge = countingJudge(true);
+    const result = await resolveGroundedContext(bandHits, {
+      band: BAND,
+      judge: judge.port,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
     expect(judge.calls).toHaveLength(0);
+    expect(result).toMatchObject({ status: 'refused', reason: 'judge-unavailable' });
+  });
+
+  it('the recorder sees the request reach the judge above the upper bar (onJudgeRequest)', async () => {
+    const judge = countingJudge(true);
+    const seen: number[] = [];
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+      onJudgeRequest: (record) => seen.push(record.refs.length),
+    });
+    expect(seen).toEqual([2]);
+  });
+
+  it('the pure numeric classification still says above-band and consults nothing: it is a cost filter, not a support verdict', () => {
+    const decision = assembleBandedGroundedContext(bandHits, {
+      band: BAND,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(decision.status).toBe('grounded');
+    expect(classifyGroundingBand(bandSignals(ABOVE_BAND_TOP1), BAND)).toBe('above-band');
   });
 });
 
@@ -471,7 +544,7 @@ describe('[D-089] inside the band, the composite is consulted and may still refu
     expect(result).toMatchObject({ status: 'refused', reason: 'judge-rejected' });
   });
 
-  it('the composite is band-scoped: it runs for the middle set only', async () => {
+  it('the judge runs at or above the lower bar only: never for a below-band request (D-442)', async () => {
     const judge = countingJudge(true);
     for (const top1 of [ABOVE_BAND_TOP1, BELOW_BAND_TOP1, IN_BAND_TOP1, ABOVE_BAND_TOP1]) {
       await resolveGroundedContext(bandHits, {
@@ -481,7 +554,7 @@ describe('[D-089] inside the band, the composite is consulted and may still refu
         compositeSignals: bandSignals(top1),
       });
     }
-    expect(judge.calls).toHaveLength(1);
+    expect(judge.calls).toHaveLength(3);
   });
 });
 
@@ -716,11 +789,13 @@ describe('[D-192] the composite composes with the band as an additional lower-ba
       // above would fail the composite's lex clause if it ran.
       compositeSignals: bandSignals(ABOVE_BAND_TOP1, 0.05),
     });
+    // Above the upper bar the request still reaches the judge (D-442): the
+    // band never certifies support, so a supported verdict is what grounds it.
     expect(result.status).toBe('grounded');
-    expect(judge.calls).toHaveLength(0);
+    expect(judge.calls).toHaveLength(1);
   });
 
-  it('the above-band path is unchanged when the composite ALSO clears every clause — grounds directly, no judge consulted', async () => {
+  it('the above-band path, when the composite ALSO clears every clause, still reaches the judge and grounds on its supported verdict (D-442)', async () => {
     const judge = countingJudge(true);
     const result = await resolveGroundedContext(bandHits, {
       band: BAND,
@@ -731,7 +806,7 @@ describe('[D-192] the composite composes with the band as an additional lower-ba
       compositeSignals: bandSignals(ABOVE_BAND_TOP1), // default lexBest 0.4 clears 0.18
     });
     expect(result.status).toBe('grounded');
-    expect(judge.calls).toHaveLength(0);
+    expect(judge.calls).toHaveLength(1);
   });
 
   it('the in-band, judge-supported path is unchanged when the composite ALSO clears every clause', async () => {
@@ -748,9 +823,10 @@ describe('[D-192] the composite composes with the band as an additional lower-ba
     expect(judge.calls).toHaveLength(1);
   });
 
-  it('a composite veto reads as an "insufficient notes" reason, never a transient one', () => {
-    // Same reason family assertion `[D-089] §5`'s block makes for `below-band`
-    // and `judge-rejected` — a composite veto is "checked and found nothing,"
+  it('a composite veto is decided from numbers alone: a threshold refusal, never a judge verdict and never the could-not-check reasons (D-441)', () => {
+    // Row 15 (D-441, ruled 2026-09-29): what the composite scores demonstrate
+    // has not been established, so the veto keeps its own reason and is not
+    // read as a checked "her material does not support this". It is also
     // categorically different from `composite-check-unavailable` /
     // `judge-unavailable`, which mean the check never ran at all.
     const decision = assembleBandedGroundedContext(bandHits, {
@@ -761,7 +837,9 @@ describe('[D-192] the composite composes with the band as an additional lower-ba
     });
     expect(decision).toMatchObject({ reason: 'below-composite-threshold' });
     if (decision.status === 'refused') {
-      expect(['composite-check-unavailable', 'judge-unavailable']).not.toContain(decision.reason);
+      expect(['composite-check-unavailable', 'judge-unavailable', 'judge-rejected']).not.toContain(
+        decision.reason,
+      );
     }
   });
 });
@@ -889,6 +967,20 @@ describe('[JEV-11] onStage attributes every band-gate request to exactly one sta
       compositeSignals: bandSignals(BELOW_BAND_TOP1),
     });
     expect(rec.stages).toEqual(['below-band']);
+  });
+
+  it('an above-bar request keeps its above-band stage even though resolveGroundedContext then sends it to the judge (D-442)', async () => {
+    const rec = recorder();
+    const judge = countingJudge(true);
+    await resolveGroundedContext(bandHits, {
+      band: BAND,
+      query: 'q',
+      judge: judge.port,
+      onStage: rec.onStage,
+      compositeSignals: bandSignals(ABOVE_BAND_TOP1),
+    });
+    expect(rec.stages).toEqual(['above-band']);
+    expect(judge.calls).toHaveLength(1);
   });
 
   it('attributes an above-bar top1 with a citable hit to above-band', () => {

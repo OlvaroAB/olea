@@ -168,7 +168,7 @@ async function makeRetrieveDeps(
 }
 
 const REQUEST = { courseCode: 'COGS214', conceptName: QUERY_TEXT };
-const ABOVE_BAND_COSINE = 1.0; // clears the band's upper bar (0.8) and the composite — auto-grounds, no judge escalation
+const ABOVE_BAND_COSINE = 1.0; // clears the band's upper bar (0.8) and the composite — still reaches the judge since [D-442]
 
 describe('draftCardsForConcept (ol-0r92.116)', () => {
   it('a completely empty index refuses and NEVER calls transport.send — the load-bearing property, per draft-quiz-cards.spec.ts', async () => {
@@ -197,8 +197,12 @@ describe('draftCardsForConcept (ol-0r92.116)', () => {
     const result = await draftCardsForConcept(deps, REQUEST);
 
     expect(result.status).toBe('drafted');
-    expect(transport.calls).toHaveLength(1);
-    expect(transport.calls[0]?.taskId).toBe('cards.generate.v1');
+    // `[D-442]`: above the upper bar the request still reaches the sufficiency
+    // judge first, so the card call is the second send.
+    expect(transport.calls.map((call) => call.taskId)).toEqual([
+      'grounding.judge.v1',
+      'cards.generate.v1',
+    ]);
     if (result.status === 'drafted') {
       expect(result.request.courseCode).toBe('COGS214');
       expect(result.request.conceptName).toBe(QUERY_TEXT);

@@ -39,15 +39,23 @@ describe('BulkReviewView renders a classified refusal ([H-1.8a])', () => {
     expect(viewCode).toMatch(/text:\s*notice\.copy\.headline/);
   });
 
-  it('the two states get distinct modifier classes keyed on the transient flag', () => {
-    expect(viewCode).toMatch(/notice\.copy\.transient\s*\?\s*'transient'\s*:\s*'insufficient'/);
+  it('the row modifier is keyed on the classified outcome through refusalStateModifier, not re-derived from the transient flag alone', () => {
+    expect(viewCode).toMatch(/refusalStateModifier\(notice\.copy\)/);
     expect(viewCode).toMatch(/olea-bulk-review-refusal-row--\$\{stateModifier\}/);
+    expect(viewCode).not.toMatch(/notice\.copy\.transient\s*\?\s*'transient'\s*:\s*'insufficient'/);
   });
 
   it('the transient flag reaches the DOM as its own attribute, not only as a class', () => {
     expect(viewCode).toMatch(
       /setAttr\('data-olea-bulk-refusal-transient',\s*String\(notice\.copy\.transient\)\)/,
     );
+  });
+
+  it('the classified outcome and the specific refusal reason reach the DOM as their own attributes (D-441: each reason is preserved end to end)', () => {
+    expect(viewCode).toMatch(
+      /setAttr\('data-olea-bulk-refusal-outcome',\s*notice\.copy\.outcome\)/,
+    );
+    expect(viewCode).toMatch(/setAttr\('data-olea-bulk-refusal-reason',\s*notice\.reason\)/);
   });
 
   it('never rolls the list into a standalone count (F6.7) — each notice renders individually', () => {

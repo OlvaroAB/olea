@@ -21,20 +21,29 @@
  * - `eligible` or `invalid-draft`: the draft and its receipt (`written` or
  *   `refused`). The caller supplies the draft on a `drafted` attempt, since
  *   the seam's attempt carries only its defects.
- * - `insufficient-evidence`: `declined`, basis `upstream-refused`: the
- *   evidence step refused and nothing was written.
+ * - `insufficient-evidence` (the judge rejecting the sources, the one checked
+ *   verdict): `declined`, basis `upstream-refused`, rule `evidence-refused`:
+ *   the evidence step refused and nothing was written.
+ * - `not-assessed` (`[D-441]`, ruled 2026-09-29: the composite veto or the
+ *   band's lower bar blocked the request from numbers alone): `declined`,
+ *   basis `upstream-refused`, but under the code rule `threshold-blocked`, not
+ *   `evidence-refused`. The writing contract has no arm for "not assessed",
+ *   so the rule name is what keeps it apart from a judged insufficiency; a
+ *   reader must not word it as her notes lacking the material.
  * - `unavailable`: cause `upstream-unavailable` when the evidence check
  *   could not run, `call-failed` for a drafting-call error, `malformed` for
  *   a response that did not parse. **Except** a `refused` attempt whose
- *   `reason` is `'no-hits'`: the seam's own classifier
- *   (`classifyAuthoringOutcome`) still reports this as `unavailable`
- *   (retryable), but `[D-289]` point 2 (`ol-egov.141.89.2.12`) rules an empty
- *   evidence package undecided, never an outage — so this adapter reads
- *   `attempt.reason` (present on every `refused` attempt) to refine that one
- *   case past the seam's own status into `declined`, basis
- *   `nothing-to-write-from`: there was nothing to write from, not a call
- *   that failed. `'judge-unavailable'`/`'composite-check-unavailable'` keep
- *   the `unavailable`/`upstream-unavailable` reading — those genuinely are a
+ *   `reason` is `'no-hits'` or `'below-relevance-threshold'`: the seam's own
+ *   classifier (`classifyAuthoringOutcome`) still reports these as
+ *   `unavailable` (retrieval failure, retryable), but `[D-289]` point 2
+ *   (`ol-egov.141.89.2.12`) rules an empty evidence package undecided, never
+ *   an outage, and `[D-441]` reads a package the relevance floor emptied the
+ *   same way — so this adapter reads `attempt.reason` (present on every
+ *   `refused` attempt) to refine those into `declined`, basis
+ *   `nothing-to-write-from`, under a rule named for the reason: there was
+ *   nothing to write from, not a call that failed.
+ *   `'judge-unavailable'`/`'composite-check-unavailable'` keep the
+ *   `unavailable`/`upstream-unavailable` reading — those genuinely are a
  *   check that could not run.
  * - `deferred` (no deliverable format, or the sweep's budget reached): the
  *   writing step never ran, so there is no writing outcome and this returns
@@ -115,6 +124,21 @@ export const EVIDENCE_REFUSED_RULE = 'evidence-refused';
  */
 export const NO_HITS_RULE = 'no-hits';
 
+/**
+ * The code rule named when the relevance floor emptied the package
+ * (`'below-relevance-threshold'`): read like an empty package
+ * (`[D-441]`, ruled 2026-09-29) but kept under its own rule, so the two
+ * reasons stay separable.
+ */
+export const BELOW_RELEVANCE_RULE = 'below-relevance-threshold';
+
+/**
+ * The code rule named when the composite veto or the band's lower bar blocked
+ * the request from numbers alone (`'below-composite-threshold'`,
+ * `'below-band'`): not assessed, never a checked insufficiency (`[D-441]`).
+ */
+export const THRESHOLD_BLOCKED_RULE = 'threshold-blocked';
+
 export function writingFromAuthoringAttempt<D>(
   attempt: AuthoringAttemptWithDraft<D>,
   context: StageSeamContext,
@@ -135,16 +159,26 @@ export function writingFromAuthoringAttempt<D>(
         basis: 'upstream-refused',
         provenance: codeProvenance(EVIDENCE_REFUSED_RULE, context.evidenceDigests),
       };
+    case 'not-assessed':
+      return {
+        kind: 'declined',
+        basis: 'upstream-refused',
+        provenance: codeProvenance(THRESHOLD_BLOCKED_RULE, context.evidenceDigests),
+      };
     case 'unavailable':
       if (attempt.kind === 'refused') {
         // D-289 point 2: an empty evidence package is undecided, never an
         // outage — refine past the seam's own `unavailable` status for
-        // exactly this reason. See this module's doc.
-        if (attempt.reason === 'no-hits') {
+        // exactly this reason, and (D-441) for the relevance floor emptying
+        // the package. See this module's doc.
+        if (attempt.reason === 'no-hits' || attempt.reason === 'below-relevance-threshold') {
           return {
             kind: 'declined',
             basis: 'nothing-to-write-from',
-            provenance: codeProvenance(NO_HITS_RULE, context.evidenceDigests),
+            provenance: codeProvenance(
+              attempt.reason === 'no-hits' ? NO_HITS_RULE : BELOW_RELEVANCE_RULE,
+              context.evidenceDigests,
+            ),
           };
         }
         return {

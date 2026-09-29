@@ -168,6 +168,11 @@ function fakeTransport(responders: {
   };
 }
 
+/** The `quiz.generate.v1` call among a fake transport's recorded calls. Since D-442 an above-band request is judged first, so the quiz call is no longer always the first one. */
+function quizCallOf(transport: { readonly calls: readonly WorkerTaskRequest[] }) {
+  return transport.calls.find((call) => call.taskId === 'quiz.generate.v1');
+}
+
 function defaultQuizResponse(): unknown {
   return {
     ok: true,
@@ -311,10 +316,10 @@ describe('draftQuizCardsForConcept — INV-5 zero-transport-sends on refusal (ol
   });
 });
 
-describe('draftQuizCardsForConcept — above the upper bar, generation proceeds with no judge consulted', () => {
-  it('sends exactly one transport call (quiz.generate.v1 only), carrying the retrieved chunk text and the frozen task id', async () => {
+describe('draftQuizCardsForConcept — above the upper bar the request still reaches the sufficiency judge (`[D-442]`, `[D-301]`)', () => {
+  it('a supported verdict proceeds to the generative call — two sends, judge before quiz, the quiz carrying the retrieved chunk text and the frozen task id', async () => {
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
-    const transport = fakeTransport({});
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
     const deps: DraftQuizCardsDeps = {
       retrieve: await makeRetrieveDeps(keywordIndex, provider),
       transport,
@@ -323,9 +328,11 @@ describe('draftQuizCardsForConcept — above the upper bar, generation proceeds 
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
     expect(result.status).toBe('drafted');
-    expect(transport.calls).toHaveLength(1);
-    expect(transport.calls[0]?.taskId).toBe('quiz.generate.v1');
-    const payload = transport.calls[0]?.payload as {
+    expect(transport.calls.map((call) => call.taskId)).toEqual([
+      'grounding.judge.v1',
+      'quiz.generate.v1',
+    ]);
+    const payload = quizCallOf(transport)?.payload as {
       courseCode: string;
       conceptName: string;
       sourceChunks: readonly string[];
@@ -333,6 +340,77 @@ describe('draftQuizCardsForConcept — above the upper bar, generation proceeds 
     expect(payload.courseCode).toBe('COGS214');
     expect(payload.conceptName).toBe(QUERY_TEXT);
     expect(payload.sourceChunks).toContain(TARGET_TEXT);
+  });
+
+  it('an unsupported verdict above the upper bar refuses as judge-rejected BEFORE any generative call: one send, never two', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({
+      judge: judgeVerdict(false, 'the passages name it but do not answer it'),
+    });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'judge-rejected' });
+    expect(transport.calls.map((call) => call.taskId)).toEqual(['grounding.judge.v1']);
+  });
+
+  it('a high retrieval band never certifies support: an unreachable judge above the upper bar refuses as judge-unavailable and never generates', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({
+      judge: () => {
+        throw new Error('network down');
+      },
+    });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'judge-unavailable' });
+    expect(quizCallOf(transport)).toBeUndefined();
+  });
+
+  it('a judge answer that is not a verdict, above the upper bar, also refuses without generating', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({
+      judge: () => ({
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: 'v1', modelId: 'fake-model' },
+        result: { unexpected: true },
+      }),
+    });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result).toEqual({ status: 'refused', reason: 'judge-unavailable' });
+    expect(quizCallOf(transport)).toBeUndefined();
+  });
+
+  it('the judge request above the upper bar carries the concept name and the retrieved passage text', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    const judgeCall = transport.calls[0];
+    expect(judgeCall?.taskId).toBe('grounding.judge.v1');
+    const payload = judgeCall?.payload as { query: string; context: string };
+    expect(payload.query).toBe(QUERY_TEXT);
+    expect(payload.context).toContain(TARGET_TEXT);
   });
 });
 
@@ -422,9 +500,10 @@ describe('draftQuizCardsForConcept — refusal and "grounded but zero cards" are
     expect(refused.status).toBe('refused');
     expect(refusedTransport.calls).toHaveLength(0);
 
-    // Grounded (above the upper bar, no judge involved), but the model
-    // legitimately produced zero questions: one transport send DID happen,
-    // even though the end result also has zero cards to show her.
+    // Grounded (above the upper bar, judged supported), but the model
+    // legitimately produced zero questions: the Worker WAS reached (the judge
+    // and then the generative call), even though the end result also has zero
+    // cards to show her.
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
     const groundedTransport = fakeTransport({ quiz: zeroQuestionsResponse });
     const grounded = await draftQuizCardsForConcept(
@@ -432,7 +511,7 @@ describe('draftQuizCardsForConcept — refusal and "grounded but zero cards" are
       REQUEST,
     );
     expect(grounded.status).toBe('drafted');
-    expect(groundedTransport.calls).toHaveLength(1);
+    expect(groundedTransport.calls).toHaveLength(2);
     if (grounded.status === 'drafted') {
       const response = grounded.response as { result: { questions: readonly unknown[] } };
       expect(response.result.questions).toHaveLength(0);
@@ -451,7 +530,7 @@ describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, 
 
     await draftQuizCardsForConcept(deps, REQUEST);
 
-    const payload = transport.calls[0]?.payload as {
+    const payload = quizCallOf(transport)?.payload as {
       personalization?: { voiceExemplars: { phrasing: string[]; terminology: string[] } };
     };
     expect(payload.personalization?.voiceExemplars).toEqual({ phrasing: [], terminology: [] });
@@ -471,7 +550,7 @@ describe('draftQuizCardsForConcept — F3.8 personalization context (`[D-008]`, 
 
     await draftQuizCardsForConcept(deps, REQUEST);
 
-    const payload = transport.calls[0]?.payload as {
+    const payload = quizCallOf(transport)?.payload as {
       personalization?: { voiceExemplars: { phrasing: string[]; terminology: string[] } };
     };
     expect(payload.personalization?.voiceExemplars.phrasing).toEqual([TARGET_TEXT]);
@@ -510,7 +589,7 @@ describe('draftQuizCardsForConcept — purpose/registerHint passthrough (`[D-188
 
     await draftQuizCardsForConcept(deps, REQUEST);
 
-    const payload = transport.calls[0]?.payload as {
+    const payload = quizCallOf(transport)?.payload as {
       purpose?: unknown;
       registerHint?: unknown;
     };
@@ -534,7 +613,7 @@ describe('draftQuizCardsForConcept — purpose/registerHint passthrough (`[D-188
       registerHint: RICH_HINT,
     });
 
-    const payload = transport.calls[0]?.payload as {
+    const payload = quizCallOf(transport)?.payload as {
       purpose?: string;
       registerHint?: RegisterHint;
     };
@@ -552,7 +631,7 @@ describe('draftQuizCardsForConcept — purpose/registerHint passthrough (`[D-188
 
     await draftQuizCardsForConcept(deps, REQUEST); // no purpose, no registerHint
 
-    const payload = transport.calls[0]?.payload as { registerHint?: unknown };
+    const payload = quizCallOf(transport)?.payload as { registerHint?: unknown };
     expect(payload.registerHint).toBeUndefined();
   });
 
@@ -613,18 +692,15 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
 
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
-    // The refusal copy this reason maps to (`draft-cards-copy.ts`'s
-    // `describeRefusal`) is `NOT_ENOUGH_GROUNDING`, the same
-    // "Olea didn't find enough grounding in your notes for this yet."
-    // sentence every other insufficient-notes reason gets — REFUSAL WORDING
-    // IS UNCHANGED per `[D-192]`'s own ruling text. `'below-composite-threshold'`
-    // is not in that file's `TRANSIENT_REASONS` set, so it already falls
-    // through to that copy with no change needed there.
+    // The reason reaches the caller as its own value; `describeRefusal`
+    // (`draft-cards-copy.ts`) reads it as threshold-blocked, not as a checked
+    // insufficiency (`[D-441]`, ruled 2026-09-29), and the asserted result
+    // below keeps the specific reason end to end.
     expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
     expect(transport.calls).toHaveLength(0);
   });
 
-  it('the ABOVE-band path is unchanged when the composite also clears every clause — one transport send, no judge', async () => {
+  it('the ABOVE-band path, when the composite also clears every clause, still goes judge then quiz — two sends (`[D-442]`)', async () => {
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
     const transport = fakeTransport({});
     const deps: DraftQuizCardsDeps = {
@@ -635,8 +711,9 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
     expect(result.status).toBe('drafted');
-    expect(transport.calls).toHaveLength(1);
-    expect(transport.calls[0]?.taskId).toBe('quiz.generate.v1');
+    expect(transport.calls).toHaveLength(2);
+    expect(transport.calls[0]?.taskId).toBe('grounding.judge.v1');
+    expect(transport.calls[1]?.taskId).toBe('quiz.generate.v1');
   });
 
   it('the IN-band, judge-supported path is unchanged when the composite also clears every clause — judge then quiz, two sends', async () => {
@@ -721,7 +798,7 @@ describe('draftQuizCardsForConcept — [JEV-11] onStage attributes the real call
     expect(rec.stages).toEqual(['below-band']);
   });
 
-  it('attributes an above-the-upper-bar grant to above-band, exactly once', async () => {
+  it('attributes an above-the-upper-bar request to above-band, exactly once, even though the judge then decides it (`[D-442]`)', async () => {
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
     const transport = fakeTransport({});
     const rec = recorder();

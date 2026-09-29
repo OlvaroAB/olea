@@ -96,6 +96,7 @@
  */
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
+import { refusalStateModifier } from '../retrieval/draft-cards-copy.js';
 import { REGISTRY_ENTRY_ACTION } from '../review/copy.js';
 import type { BulkReviewController } from './bulk-review.js';
 import {
@@ -596,14 +597,20 @@ export class BulkReviewView extends ItemView {
    * unrendered. Reads `getRefusals` fresh, same reasoning `pendingDraftIds`
    * reads the controller's view model fresh rather than caching it.
    *
-   * **The two states render distinct copy** (`RefusalCopy.headline` differs
-   * by construction, `draft-cards-copy.spec.ts`'s own guard) **and the
-   * transient flag is visible, not merely carried**: every row gets a
-   * `--transient`/`--insufficient` modifier class and a
-   * `data-olea-bulk-refusal-transient` attribute a future retry affordance
-   * could key on, rather than requiring a caller to re-derive the mapping
-   * from `reason` (the exact duplication `RefusalCopy.transient`'s own doc
-   * says it exists to avoid).
+   * **The states render distinct copy where the classification says they
+   * differ** (`RefusalCopy.headline` differs between a checked insufficiency
+   * and every other outcome by construction, `draft-cards-copy.spec.ts`'s own
+   * guard) **and the classification is visible, not merely carried**: every
+   * row gets a `--insufficient`/`--not-assessed`/`--transient` modifier class
+   * (`refusalStateModifier`, keyed on the classified outcome, so a
+   * threshold-blocked refusal can never render as a checked insufficiency,
+   * `[D-441]`) and `data-olea-bulk-refusal-transient`,
+   * `data-olea-bulk-refusal-outcome` and `data-olea-bulk-refusal-reason`
+   * attributes a future retry affordance or funnel could key on, rather than
+   * requiring a caller to re-derive the mapping from `reason` (the exact
+   * duplication `RefusalCopy.transient`'s own doc says it exists to avoid).
+   * The reason attribute is the specific `GroundingRefusalReason` name, never
+   * content, so each refusal reason is preserved to the last consumer.
    *
    * **No standalone count (F6.7, matching this file's own batch-button and
    * empty-state rule above):** each refusal is named individually, by
@@ -625,11 +632,13 @@ export class BulkReviewView extends ItemView {
     if (refusals.length === 0) return;
     const section = root.createDiv({ cls: 'olea-bulk-review-refusals' });
     for (const notice of refusals) {
-      const stateModifier = notice.copy.transient ? 'transient' : 'insufficient';
+      const stateModifier = refusalStateModifier(notice.copy);
       const row = section.createDiv({
         cls: `olea-bulk-review-refusal-row olea-bulk-review-refusal-row--${stateModifier}`,
       });
       row.setAttr('data-olea-bulk-refusal-transient', String(notice.copy.transient));
+      row.setAttr('data-olea-bulk-refusal-outcome', notice.copy.outcome);
+      row.setAttr('data-olea-bulk-refusal-reason', notice.reason);
       row.createSpan({
         cls: 'olea-bulk-review-refusal-source',
         text: `${notice.courseCode} · ${notice.conceptName}`,

@@ -83,16 +83,17 @@ describe('mcqExactCheckResults and writingFromMcqDraft', () => {
 });
 
 describe('writingFromAuthoringAttempt', () => {
-  // `'no-hits'` is deliberately excluded from this list: the seam
-  // (`classifyAuthoringOutcome`) still classes it `unavailable` (it is one
-  // of `OPERATIONAL_REFUSAL_REASONS`), but the adapter reads `attempt.reason`
-  // to refine it further, past D-289, into `declined`/`nothing-to-write-from`
-  // — see the dedicated describe block below. Every other reason keeps this
+  // `'no-hits'` and `'below-relevance-threshold'` are deliberately excluded
+  // from this list: the seam (`classifyAuthoringOutcome`) classes both
+  // `unavailable` (retrieval failure), but the adapter reads `attempt.reason`
+  // to refine them past D-289, into `declined`/`nothing-to-write-from` — see
+  // the dedicated describe blocks below. Every other reason keeps this
   // generic agreement.
   const attempts: AuthoringAttemptWithDraft<GeneratedMcqCandidate>[] = [
     { kind: 'drafted', defects: [], draft: clean },
     { kind: 'drafted', defects: checkMcqDraft(broken), draft: broken },
     { kind: 'refused', reason: 'below-band' },
+    { kind: 'refused', reason: 'below-composite-threshold' },
     { kind: 'refused', reason: 'judge-rejected' },
     { kind: 'refused', reason: 'judge-unavailable' },
     { kind: 'refused', reason: 'composite-check-unavailable' },
@@ -107,6 +108,7 @@ describe('writingFromAuthoringAttempt', () => {
       eligible: 'written',
       'invalid-draft': 'refused',
       'insufficient-evidence': 'declined',
+      'not-assessed': 'declined',
       unavailable: 'unavailable',
       deferred: null,
     } as const;
@@ -128,10 +130,14 @@ describe('writingFromAuthoringAttempt', () => {
     expect(cause({ kind: 'unparseable' })).toBe('malformed');
   });
 
-  it('reads an evidence refusal as declined, upstream-refused, and a deferral as no writing outcome', () => {
+  it('reads a judge rejection as declined, upstream-refused, and a deferral as no writing outcome', () => {
     expect(
-      writingFromAuthoringAttempt({ kind: 'refused', reason: 'below-band' }, context),
-    ).toMatchObject({ kind: 'declined', basis: 'upstream-refused' });
+      writingFromAuthoringAttempt({ kind: 'refused', reason: 'judge-rejected' }, context),
+    ).toMatchObject({
+      kind: 'declined',
+      basis: 'upstream-refused',
+      provenance: { producer: { kind: 'code', rule: 'evidence-refused' } },
+    });
     expect(writingFromAuthoringAttempt({ kind: 'routed-away' }, context)).toBeNull();
     expect(writingFromAuthoringAttempt({ kind: 'budget-exhausted' }, context)).toBeNull();
   });
@@ -142,6 +148,45 @@ describe('writingFromAuthoringAttempt', () => {
       context,
     );
     expect(outcome?.kind === 'written' && outcome.draft).toBe(clean);
+  });
+
+  describe('threshold-blocked refusals are not a checked insufficiency (D-441, ruled 2026-09-29)', () => {
+    for (const reason of ['below-composite-threshold', 'below-band'] as const) {
+      it(`${reason} reads as declined under the threshold-blocked rule, never under the judge-rejection rule`, () => {
+        const outcome = writingFromAuthoringAttempt({ kind: 'refused', reason }, context);
+        expect(outcome).toMatchObject({
+          kind: 'declined',
+          basis: 'upstream-refused',
+          provenance: { producer: { kind: 'code', rule: 'threshold-blocked' } },
+        });
+        expect(outcome !== null && writingEnvelopeProblems(outcome)).toEqual([]);
+      });
+    }
+  });
+
+  describe('a package the relevance floor emptied reads like an empty package (D-441, ruled 2026-09-29)', () => {
+    it('below-relevance-threshold maps to declined, nothing-to-write-from, under its own rule', () => {
+      const outcome = writingFromAuthoringAttempt(
+        { kind: 'refused', reason: 'below-relevance-threshold' },
+        context,
+      );
+      expect(outcome).toMatchObject({
+        kind: 'declined',
+        basis: 'nothing-to-write-from',
+        provenance: { producer: { kind: 'code', rule: 'below-relevance-threshold' } },
+      });
+      expect(outcome !== null && writingEnvelopeProblems(outcome)).toEqual([]);
+    });
+
+    it('keeps no-hits under its own rule, so the two reasons stay separable', () => {
+      expect(
+        writingFromAuthoringAttempt({ kind: 'refused', reason: 'no-hits' }, context),
+      ).toMatchObject({
+        kind: 'declined',
+        basis: 'nothing-to-write-from',
+        provenance: { producer: { kind: 'code', rule: 'no-hits' } },
+      });
+    });
   });
 
   describe('an empty evidence package (no-hits) reads as declined, not unavailable', () => {
