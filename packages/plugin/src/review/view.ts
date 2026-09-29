@@ -647,8 +647,17 @@ export class ReviewView extends ItemView {
         break;
     }
     this.render();
-    // The withheld-question notice (session.takeWithheldNotice()) is deliberately not rendered:
-    // no clause defines a surface or wording for it, so it awaits David's ruling (D-343).
+    // `[D-455]` (C5.3): the withheld-question notice, a passive line on the screen that follows,
+    // never a control. `takeWithheldNotice()` returns text only for the ruled wording; the held
+    // variants (failed check, brief later line, note-only) return null and render nothing.
+    const withheldNotice = session.takeWithheldNotice();
+    if (withheldNotice !== null) {
+      const line = this.contentEl.createDiv({
+        cls: 'olea-prose olea-review-withheld-notice',
+        text: withheldNotice,
+      });
+      line.setAttr('role', 'status');
+    }
   }
 
   private moveFocus(direction: 'up' | 'down'): void {

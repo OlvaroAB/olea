@@ -296,3 +296,15 @@ describe('ReviewView.render — F2.21’s banner is synced and drawn where the o
     expect(renderBody).toMatch(/this\.renderStrongRecallBanner\(\);/);
   });
 });
+
+describe('ReviewView.dispatch — the withheld-question notice is a passive line (D-455, C5.3)', () => {
+  it('takes the session notice after render and draws it as a status line with no control beside it', () => {
+    const start = VIEW.indexOf('private async dispatch(');
+    const body = VIEW.slice(start, VIEW.indexOf('private moveFocus(', start));
+    expect(body).toMatch(/session\.takeWithheldNotice\(\)/);
+    expect(body).toMatch(/olea-review-withheld-notice/);
+    expect(body).toMatch(/setAttr\('role', 'status'\)/);
+    const noticeBlock = body.slice(body.indexOf('takeWithheldNotice'));
+    expect(noticeBlock).not.toMatch(/createEl\('button'|addEventListener/);
+  });
+});

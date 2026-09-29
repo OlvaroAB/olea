@@ -565,9 +565,34 @@ type InternalPhase =
   | 'mcq-answered'
   | 'complete';
 
-/** Plain words for a withheld draft: what happened to the question and to her answer. */
-export const WITHHELD_STALE_SOURCE_NOTICE =
-  'That question was written from a note that has changed since, so it was set aside and your answer was not recorded.';
+/**
+ * The line she reads when an open session sets a question aside because its source changed
+ * (`[D-455]`, C5.3; ruled 2026-09-29, row 41 of olea-service
+ * `docs/direction/20260929_decision_sheet_responses.md`). Her own sentence, exactly, for a change
+ * that was established; the answer clause is dropped when she submitted none.
+ *
+ * Held for David, deliberately not built (each has no ruled words): the failed-check sentence, the
+ * brief line for a later set-aside in the same session, and any sentence for the case where only
+ * the note is known to have changed (today's guard is note-grain). Each returns `null` here.
+ */
+export const WITHHELD_PASSAGE_CHANGED_NOTICE =
+  "The passage this question relies on has changed, so we set the question aside and didn't record your answer.";
+export const WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE =
+  'The passage this question relies on has changed, so we set the question aside.';
+
+/** What a set-aside established: the passage changed, only the note is known to have, or the check failed. */
+export type WithheldEstablished = 'passage-changed' | 'note-changed' | 'check-failed';
+
+/** The ruled full explanation for what was established, or `null` where the ruling gave no words. */
+export function withheldNoticeText(
+  established: WithheldEstablished,
+  answerSubmitted: boolean,
+): string | null {
+  if (established !== 'passage-changed') return null;
+  return answerSubmitted
+    ? WITHHELD_PASSAGE_CHANGED_NOTICE
+    : WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE;
+}
 
 export class ReviewSession {
   private items: ReviewQueueItem[];
@@ -575,6 +600,8 @@ export class ReviewSession {
   private index = 0;
   private phase: InternalPhase = 'loading';
   private withheldNotice: string | null = null;
+  /** `[D-455]`: the full explanation is shown once per session. */
+  private withheldExplained = false;
   private mcqSelectedIndex: number | null = null;
   private wasUnsure = false;
   private presentedAtMs: number | null = null;
@@ -791,7 +818,7 @@ export class ReviewSession {
    */
   async rate(rating: Rating): Promise<void> {
     if (this.phase !== 'reveal') return;
-    const item = await this.resolveDraftAt(this.index, 'accepted');
+    const item = await this.resolveDraftAt(this.index, 'accepted', true);
     if (item === null) return;
     await this.logAndAdvance(item, rating, false);
   }
@@ -840,7 +867,7 @@ export class ReviewSession {
   async acceptEditDraft(): Promise<void> {
     const item = this.currentItem;
     if (item === null || item.instrument.draftId === null) return;
-    const resolved = await this.resolveDraftAt(this.index, 'edited');
+    const resolved = await this.resolveDraftAt(this.index, 'edited', false);
     if (resolved === null) return;
     await this.deps.editPort.edit(resolved.instrument);
   }
@@ -931,7 +958,7 @@ export class ReviewSession {
     const port = this.deps.gradeContestPort;
     if (port === undefined) return;
 
-    const item = await this.resolveDraftAt(this.index, 'accepted');
+    const item = await this.resolveDraftAt(this.index, 'accepted', true);
     if (item === null) return;
     const instrument = this.requireMcq(item);
     if (this.contestedGrades.has(instrument.instrumentId)) return;
@@ -976,7 +1003,7 @@ export class ReviewSession {
    */
   async mcqNext(): Promise<void> {
     if (this.phase !== 'mcq-answered') return;
-    const item = await this.resolveDraftAt(this.index, 'accepted');
+    const item = await this.resolveDraftAt(this.index, 'accepted', true);
     if (item === null) return;
     const instrument = this.requireMcq(item);
     const rating = this.mcqRating(instrument, this.mcqSelectedIndex);
@@ -1412,6 +1439,7 @@ export class ReviewSession {
   private async resolveDraftAt(
     index: number,
     verdict: 'accepted' | 'edited',
+    answerSubmitted: boolean,
   ): Promise<ReviewQueueItem | null> {
     const item = this.items[index];
     if (item === undefined) {
@@ -1428,9 +1456,18 @@ export class ReviewSession {
       // so it is withheld before it counts — never a crash, never a silent
       // rejection. Nothing was written (`accept` refused before any write);
       // the rest of the session keeps its order and no replacement is
-      // inserted. Her answer was not recorded, and the notice says so.
+      // inserted. Whether her answer was submitted (`answerSubmitted`) decides whether the line says so.
       this.items.splice(index, 1);
-      this.withheldNotice = WITHHELD_STALE_SOURCE_NOTICE;
+      // `[D-455]`: the full explanation once per session; the brief line for a later set-aside is
+      // held wording, so a later one carries none rather than a repeat or an invented sentence.
+      const text = this.withheldExplained
+        ? null
+        : withheldNoticeText(
+            err.grain === 'passage' ? 'passage-changed' : 'note-changed',
+            answerSubmitted,
+          );
+      if (text !== null) this.withheldExplained = true;
+      this.withheldNotice = text;
       await this.presentCurrent();
       return null;
     }

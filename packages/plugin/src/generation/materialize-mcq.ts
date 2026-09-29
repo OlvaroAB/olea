@@ -326,9 +326,18 @@ export interface MaterializeAcceptedDraftInput {
  * `accept.ts` is the one caller that catches it today, to do the reject bookkeeping.
  */
 export class StaleSourceRevisionError extends Error {
-  constructor(message: string) {
+  /**
+   * What the guard established (`[D-455]`). `'note'` is today's only grain: the guard hashes the
+   * whole note, so it knows the note changed, not that the passage the question relies on did.
+   * A guard that gains passage grain throws `'passage'`, and only then may the review session say
+   * the passage changed.
+   */
+  readonly grain: 'note' | 'passage';
+
+  constructor(message: string, grain: 'note' | 'passage' = 'note') {
     super(message);
     this.name = 'StaleSourceRevisionError';
+    this.grain = grain;
   }
 }
 

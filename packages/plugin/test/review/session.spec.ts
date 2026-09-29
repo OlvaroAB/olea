@@ -13,7 +13,9 @@ import type { GradeContestPort } from '../../src/review/contest.js';
 import {
   ReviewSession,
   type ReviewSessionDeps,
-  WITHHELD_STALE_SOURCE_NOTICE,
+  WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE,
+  WITHHELD_PASSAGE_CHANGED_NOTICE,
+  withheldNoticeText,
 } from '../../src/review/session.js';
 import {
   clozeFixture,
@@ -2284,7 +2286,74 @@ describe('a draft refused for a changed source is withheld, never a crash (ol-eg
     expect(vm.phase).toBe('mcq-open');
     if (vm.phase === 'mcq-open') expect(vm.instrument.instrumentId).toBe('inst-next');
     expect(reviewLog.calls).toEqual([]);
-    expect(session.takeWithheldNotice()).toBe(WITHHELD_STALE_SOURCE_NOTICE);
+    // Today's guard is note-grain: it does not establish that the passage changed, so no ruled
+    // sentence applies (row 41 words only an established passage change) and none is shown.
+    expect(session.takeWithheldNotice()).toBeNull();
+  });
+
+  // `[D-455]` (row 41): the ruled sentence, exactly, and the answer clause only when submitted.
+  it('the ruled sentence, exactly, for an established passage change; the answer clause only when an answer was submitted', () => {
+    expect(withheldNoticeText('passage-changed', true)).toBe(
+      "The passage this question relies on has changed, so we set the question aside and didn't record your answer.",
+    );
+    expect(withheldNoticeText('passage-changed', false)).toBe(
+      'The passage this question relies on has changed, so we set the question aside.',
+    );
+    expect(WITHHELD_PASSAGE_CHANGED_NOTICE).toContain("didn't record your answer");
+    expect(WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE).not.toMatch(/answer/);
+  });
+
+  it('the held variants (failed check, note only) carry no words yet', () => {
+    for (const submitted of [true, false]) {
+      expect(withheldNoticeText('check-failed', submitted)).toBeNull();
+      expect(withheldNoticeText('note-changed', submitted)).toBeNull();
+    }
+  });
+
+  it('mcqNext with an established passage change: the ruled sentence with the answer clause, taken once', async () => {
+    const stale = queueItem(mcqFixture({ draftId: 'draft-stale', instrumentId: 'inst-stale' }));
+    const next = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-next' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept).mockRejectedValueOnce(
+      new StaleSourceRevisionError('passage changed', 'passage'),
+    );
+    const session = new ReviewSession(baseDeps({ queue: [stale, next], draftAcceptPort }));
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NOTICE);
+    expect(session.takeWithheldNotice()).toBeNull();
+  });
+
+  it('a one-tap edit submits no answer, so the line does not say one was not recorded', async () => {
+    const stale = queueItem(qaFixture({ draftId: 'draft-qa-stale' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept).mockRejectedValueOnce(
+      new StaleSourceRevisionError('passage changed', 'passage'),
+    );
+    const session = new ReviewSession(
+      baseDeps({ queue: [stale], draftAcceptPort, editPort: fakeEditPort() }),
+    );
+    await session.start();
+    await session.acceptEditDraft();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE);
+  });
+
+  it('once per session: a later set-aside repeats no full explanation and invents no brief line (held wording)', async () => {
+    const a = queueItem(mcqFixture({ draftId: 'draft-a', instrumentId: 'inst-a' }));
+    const b = queueItem(mcqFixture({ draftId: 'draft-b', instrumentId: 'inst-b' }));
+    const c = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-c' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept)
+      .mockRejectedValueOnce(new StaleSourceRevisionError('passage changed', 'passage'))
+      .mockRejectedValueOnce(new StaleSourceRevisionError('passage changed', 'passage'));
+    const session = new ReviewSession(baseDeps({ queue: [a, b, c], draftAcceptPort }));
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NOTICE);
+    await session.mcqAnswer(0);
+    await session.mcqNext();
     expect(session.takeWithheldNotice()).toBeNull();
   });
 
