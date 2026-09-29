@@ -94,6 +94,23 @@
  * still means "not captured," never a fabricated zero.
  *
  * ===========================================================================
+ * THE NEIGHBOUR'S KEY, AND WHAT A MISSING ONE COSTS (`ol-egov.141.89.6.75`)
+ * ===========================================================================
+ * For a relational prompt (`relationExpected`), the depth judge may report
+ * that her answer used the neighbour correctly, and F5.3a records that as a
+ * scheduling observation carrying only the neighbour's concept KEY
+ * (`params.neighbourConceptId`, decided when the prompt was composed). The key
+ * is forwarded to `recordGradedExplainBackReview`; it is never read off the
+ * response and never guessed. **A missing key never costs the attempt its
+ * depth record**: the writer records the grade without the observation and its
+ * outcome says `not-recorded`, which this module surfaces on
+ * `RecordSoloGradeAndReviewOutcome.schedulingObservation` (four outcomes:
+ * recorded, not-observed, not-recorded, not-run) and announces with a
+ * content-free log line. Before this bead the write threw and the depth record
+ * and the observation were both lost. `modal.ts` is the caller that knows the
+ * key (it resolves the partner); handing it over is that file's last hop.
+ *
+ * ===========================================================================
  * DISCLOSED GAP: `conceptIds` REQUIRES A KNOWN CONCEPT (DF-20)
  * ===========================================================================
  * `reviewLogRecordV5.conceptIds` is non-empty by schema — an instrument with
@@ -343,6 +360,30 @@ export interface RecordSoloGradeAndReviewParams {
    */
   readonly relationExpected?: boolean;
   /**
+   * **`ol-egov.141.89.6.75` (F5.3a, C5.11): the neighbour's concept KEY** — the
+   * opaque `ConceptRecord.key` of the other end of the causes edge the prompt
+   * was composed from (`./request.ts`'s `resolveExplainBackCausesPartner`
+   * returns it as `neighbourConceptId`), never its wording. It is decided when
+   * the prompt is composed and handed in here, never read off the model's
+   * response (which carries no field a neighbour could be identified by) and
+   * never guessed from the subject. Forwarded verbatim to
+   * `recordGradedExplainBackReview`, where it becomes
+   * `schedulingObservation.neighbourConceptId` exactly when the depth judge
+   * reports that her answer used the neighbour correctly. The review view
+   * compares that value with instrument `conceptIds`, which are keys, so a
+   * wording here would name a neighbour nothing could match.
+   *
+   * Optional, same structural-typing accommodation `durationMs` above
+   * documents (`main.ts`'s inline params type does not name it; the object
+   * reaches this function unreconstructed). Absent — every call whose prompt
+   * has no causes partner, and, until `modal.ts` hands it over, every call —
+   * means no observation can be recorded: if the judge nonetheless reports
+   * neighbour use, the depth record is still written whole and the outcome's
+   * `schedulingObservation` says `not-recorded` (see
+   * {@link SoloSchedulingObservationOutcome}).
+   */
+  readonly neighbourConceptId?: string;
+  /**
    * **`ol-ryrh` (`[D-286]`, `[D-320]`): whether the depth pass runs for this
    * attempt at all.** `'skipped'` when the caller has already decided, from
    * the correctness verdict she accepted, that no depth call is made
@@ -386,7 +427,34 @@ export interface RecordSoloGradeAndReviewOutcome {
    * ruling keeps them apart; neither is ever a complete assessment.
    */
   readonly depth: 'graded' | 'unavailable' | 'skipped';
+  /**
+   * **`ol-egov.141.89.6.75`: what became of F5.3a's scheduling observation on
+   * this write** — always present, so a caller can never mistake a failure for
+   * an absence. See {@link SoloSchedulingObservationOutcome}.
+   */
+  readonly schedulingObservation: SoloSchedulingObservationOutcome;
 }
+
+/**
+ * **`ol-egov.141.89.6.75`: the four outcomes of the scheduling observation,
+ * kept apart.** The first three are the writer's own words
+ * (`recordGradedExplainBackReview`'s `SchedulingObservationOutcome`); the
+ * fourth is this module's, for an attempt with no depth grade at all:
+ *
+ * - `recorded`: the judge reported neighbour use, the neighbour key was
+ *   handed in, and the event carries the observation.
+ * - `not-observed`: no neighbour use was reported (or none was asked for).
+ *   An honest absence.
+ * - `not-recorded`: neighbour use WAS reported and the observation could not
+ *   be put on the record (`reason` is a closed word, never content). **A
+ *   failure, kept distinct and never silent**, and never a reason to lose the
+ *   depth grade, which is written regardless; a content-free line is logged.
+ * - `not-run`: no depth grade was made (`depth` is `'skipped'` or
+ *   `'unavailable'`), so there was no judgement to record.
+ */
+export type SoloSchedulingObservationOutcome =
+  | Awaited<ReturnType<typeof recordGradedExplainBackReview>>['schedulingObservation']
+  | { readonly status: 'not-run' };
 
 /**
  * What an explain-back view had on screen while she was composing her
@@ -523,12 +591,30 @@ export async function recordSoloGradeAndReview(
       artifactProvenance: outcome.artifactProvenance,
       studentAnswer: params.answer,
       attemptId,
+      // `ol-egov.141.89.6.75`: the neighbour's KEY, when the prompt named one — the one thing
+      // F5.3a's observation is built from. Spread only when supplied; never derived here.
+      ...(params.neighbourConceptId !== undefined
+        ? { neighbourConceptId: params.neighbourConceptId }
+        : {}),
       ...(explainBackCorrectness !== undefined ? { explainBackCorrectness } : {}),
     },
     options,
   );
 
-  return { result, soloLevel: accepted.soloLevel, depth: 'graded' };
+  if (result.schedulingObservation.status === 'not-recorded') {
+    // D-005: a closed reason word only, never her wording, the grader's, or a concept key. The
+    // depth record above is whole; this is the one place the lost observation is announced.
+    console.error('Olea: the depth grade was recorded without its scheduling observation', {
+      reason: result.schedulingObservation.reason,
+    });
+  }
+  const { schedulingObservation, ...written } = result;
+  return {
+    result: written,
+    soloLevel: accepted.soloLevel,
+    depth: 'graded',
+    schedulingObservation,
+  };
 }
 
 /**
@@ -577,7 +663,8 @@ async function recordCorrectnessOnly(
     ...(fields.followsAttemptId !== undefined ? { followsAttemptId: fields.followsAttemptId } : {}),
   };
   const result = await appendReviewLogRecord(deps.vault, record, options);
-  return { result, depth };
+  // No depth grade was made, so there was no neighbour-use judgement to record.
+  return { result, depth, schedulingObservation: { status: 'not-run' } };
 }
 
 /**

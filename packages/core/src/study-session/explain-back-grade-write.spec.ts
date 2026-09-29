@@ -367,3 +367,160 @@ describe('composeGradedExplainBackReviewRecord — [D-281] the independent corre
     expect(record).not.toHaveProperty('explainBackCorrectness');
   });
 });
+
+// Scenario: features/F5-explain-it-back.md — "F5.3a / F5.2a — the neighbour's demonstrated use
+// survives the accept write, by concept key, and never costs the attempt its depth record"
+// (ol-egov.141.89.6.75; row 40 of the 2026-09-29 decision-sheet responses).
+describe('recordGradedExplainBackReview — the scheduling observation is one of three outcomes, and a failure to record it never costs the depth record (ol-egov.141.89.6.75)', () => {
+  let tempRoot: string;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-explain-back-observation-outcome-'));
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const provenance = { taskId: 'explain-back.solo.v1', promptVersion: '1.0.0', modelId: 'm' };
+  const NEIGHBOUR_KEY = 'concept-key1:neighbour-nonce';
+
+  it('reports recorded when the judge reported neighbour use and the write was handed the neighbour key', async () => {
+    const vault = new FolderSource(tempRoot);
+
+    const result = await recordGradedExplainBackReview(
+      vault,
+      {
+        subject: subject(),
+        accepted: ACCEPTED_WITH_NEIGHBOUR,
+        studentAnswer: 'x',
+        revisionOf: null,
+        artifactProvenance: provenance,
+        neighbourConceptId: NEIGHBOUR_KEY,
+        attemptId: 'attempt-recorded',
+      },
+      { deviceId: 'desktop-1' },
+    );
+
+    expect(result.record.schedulingObservation).toEqual({ neighbourConceptId: NEIGHBOUR_KEY });
+    expect(result.schedulingObservation).toEqual({ status: 'recorded' });
+  });
+
+  it('reports not-observed, an honest absence, when the judge reported no neighbour use', async () => {
+    const vault = new FolderSource(tempRoot);
+
+    const result = await recordGradedExplainBackReview(
+      vault,
+      {
+        subject: subject(),
+        accepted: ACCEPTED,
+        studentAnswer: 'x',
+        revisionOf: null,
+        artifactProvenance: provenance,
+        neighbourConceptId: NEIGHBOUR_KEY,
+        attemptId: 'attempt-not-observed',
+      },
+      { deviceId: 'desktop-1' },
+    );
+
+    expect(result.record).not.toHaveProperty('schedulingObservation');
+    expect(result.schedulingObservation).toEqual({ status: 'not-observed' });
+  });
+
+  it('a judge that reported use of a neighbour the write was never told about: the depth grade is still recorded, without the observation, and the outcome names the reason', async () => {
+    const vault = new FolderSource(tempRoot);
+
+    // Red before ol-egov.141.89.6.75: this rejected, and the attempt's depth record was lost.
+    const result = await recordGradedExplainBackReview(
+      vault,
+      {
+        subject: subject(),
+        accepted: ACCEPTED_WITH_NEIGHBOUR,
+        studentAnswer: 'Answer text — never logged, only ever written to the content store.',
+        revisionOf: null,
+        artifactProvenance: provenance,
+        attemptId: 'attempt-no-key',
+      },
+      { deviceId: 'desktop-1', generateEventId: () => 'event-no-key' },
+    );
+
+    expect(result.record.eventId).toBe('event-no-key');
+    expect(result.record.explainBackGrade?.soloLevel).toBe('relational');
+    expect(result.record).not.toHaveProperty('schedulingObservation');
+    expect(result.schedulingObservation).toEqual({
+      status: 'not-recorded',
+      reason: 'no-neighbour-concept-id',
+    });
+
+    // The depth record is whole: the content the grade cites is on disk, so nothing is orphaned.
+    const stored = await readContentRecord(vault, result.record.explainBackGrade?.contentRef ?? '');
+    expect(stored.status).toBe('found');
+  });
+
+  it('the observation is never guessed from the subject: no neighbour key means no observation, not the subject standing in for it', async () => {
+    const vault = new FolderSource(tempRoot);
+
+    const result = await recordGradedExplainBackReview(
+      vault,
+      {
+        subject: subject({ conceptIds: ['subject-key'] }),
+        accepted: ACCEPTED_WITH_NEIGHBOUR,
+        studentAnswer: 'x',
+        revisionOf: null,
+        artifactProvenance: provenance,
+        attemptId: 'attempt-no-guess',
+      },
+      { deviceId: 'desktop-1' },
+    );
+
+    expect(result.record.conceptIds).toEqual(['subject-key']);
+    expect(result.record).not.toHaveProperty('schedulingObservation');
+  });
+
+  it('a replay of an attempt that was recorded without its observation reports the same failure, and appends nothing', async () => {
+    const vault = new FolderSource(tempRoot);
+    const input = {
+      subject: subject(),
+      accepted: ACCEPTED_WITH_NEIGHBOUR,
+      studentAnswer: 'x',
+      revisionOf: null,
+      artifactProvenance: provenance,
+      attemptId: 'attempt-replay',
+    };
+
+    const first = await recordGradedExplainBackReview(vault, input, { deviceId: 'desktop-1' });
+    const replay = await recordGradedExplainBackReview(vault, input, { deviceId: 'desktop-1' });
+
+    expect(replay.record.eventId).toBe(first.record.eventId);
+    expect(replay.schedulingObservation).toEqual({
+      status: 'not-recorded',
+      reason: 'no-neighbour-concept-id',
+    });
+  });
+
+  it('a replay that now has the key cannot amend the append-only event, and says so rather than claiming it recorded the observation', async () => {
+    const vault = new FolderSource(tempRoot);
+    const input = {
+      subject: subject(),
+      accepted: ACCEPTED_WITH_NEIGHBOUR,
+      studentAnswer: 'x',
+      revisionOf: null,
+      artifactProvenance: provenance,
+      attemptId: 'attempt-replay-later-key',
+    };
+
+    const first = await recordGradedExplainBackReview(vault, input, { deviceId: 'desktop-1' });
+    const replay = await recordGradedExplainBackReview(
+      vault,
+      { ...input, neighbourConceptId: NEIGHBOUR_KEY },
+      { deviceId: 'desktop-1' },
+    );
+
+    expect(replay.record.eventId).toBe(first.record.eventId);
+    expect(replay.record).not.toHaveProperty('schedulingObservation');
+    expect(replay.schedulingObservation).toEqual({
+      status: 'not-recorded',
+      reason: 'already-recorded-without-it',
+    });
+  });
+});

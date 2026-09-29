@@ -270,6 +270,42 @@ export interface RecordGradedExplainBackReviewInput
 }
 
 /**
+ * **`ol-egov.141.89.6.75` (F5.3a, C5.11): what became of the scheduling
+ * observation on one write — three outcomes, kept apart, never one word.**
+ *
+ * - `recorded`: the judge reported that her answer used the neighbour
+ *   correctly, the write was handed the neighbour's concept key, and the
+ *   record carries `schedulingObservation` naming it.
+ * - `not-observed`: the judge reported no neighbour use (or was not asked),
+ *   so there is nothing to record. An honest absence, not a failure.
+ * - `not-recorded`: the judge DID report neighbour use, but the observation
+ *   could not be put on the record. **A failure, kept distinct from the
+ *   absence above and never silent** — and never a reason to lose the depth
+ *   grade she has already accepted, which is written regardless. `reason`
+ *   is a closed word, never content (D-005): `no-neighbour-concept-id` (the
+ *   write was not handed the neighbour's key, and this module will not guess
+ *   one from the subject or read one off the model's response, C5.11), or
+ *   `already-recorded-without-it` (a replay found this attempt's event
+ *   already written without an observation, and a review-log event is
+ *   append-only, so it cannot be amended now).
+ *
+ * The reason is in the outcome, never on the record: the frozen review-log
+ * schema has no field for it, and adding one is a schema change (Class C).
+ */
+export type SchedulingObservationOutcome =
+  | { readonly status: 'recorded' }
+  | { readonly status: 'not-observed' }
+  | {
+      readonly status: 'not-recorded';
+      readonly reason: 'no-neighbour-concept-id' | 'already-recorded-without-it';
+    };
+
+/** {@link recordGradedExplainBackReview}'s result: the appended (or already-recorded) event, plus what became of its scheduling observation. */
+export interface RecordGradedExplainBackReviewResult extends AppendReviewLogResult {
+  readonly schedulingObservation: SchedulingObservationOutcome;
+}
+
+/**
  * `ol-0r92.94` [DOS-C1]: the `[D-077]` content id this attempt's evidence is
  * (or will be) filed under. Deterministic in `attemptId` — never random —
  * which is what makes both halves of durable idempotency possible below: a
@@ -352,12 +388,38 @@ function attemptContentId(deviceId: string, attemptId: string): string {
  * `attemptId`, minted at its own submit) and is never suppressed as a
  * duplicate of the one it revises — this function's dedup is scoped to one
  * `attemptId`, never to `instrumentId` or `revisionOf`.
+ *
+ * ===========================================================================
+ * `ol-egov.141.89.6.75`: THE DEPTH RECORD IS NEVER LOST TO THE OBSERVATION
+ * ===========================================================================
+ * The judge may report that her answer used the neighbour correctly
+ * (`accepted.neighbourUseDemonstrated`), and F5.3a's observation then needs
+ * the neighbour's concept KEY, which only the caller knows (C5.11: decided
+ * when the prompt was composed, never read off the response). Before this
+ * bead a write handed no key threw from `buildSchedulingObservationField`
+ * AFTER the content record was written, and the accepted depth grade was
+ * lost. Now the case is decided before anything is written: with no key the
+ * event is written whole, without the observation, and the returned
+ * `schedulingObservation` outcome says `not-recorded` and why — a failure
+ * kept distinct from `not-observed` and never silent. The key is never
+ * guessed (not from the subject, not from the response).
+ * `composeGradedExplainBackReviewRecord` itself still throws on that input:
+ * it is the pure builder, and reaching it that way is a caller bug.
  */
 export async function recordGradedExplainBackReview(
   vault: VaultSource,
   input: RecordGradedExplainBackReviewInput,
   options: AppendReviewLogOptions & WriteContentOptions,
-): Promise<AppendReviewLogResult> {
+): Promise<RecordGradedExplainBackReviewResult> {
+  // `ol-egov.141.89.6.75`: decided BEFORE anything is written, so a failure to build the
+  // observation can never leave a content record with no event citing it, or lose the event.
+  const observationReported = input.accepted.neighbourUseDemonstrated === true;
+  const neighbourConceptId = input.neighbourConceptId;
+  const observationUnbuildable = observationReported && !neighbourConceptId;
+  const accepted: AcceptedSoloGrading = observationUnbuildable
+    ? withoutNeighbourUse(input.accepted)
+    : input.accepted;
+
   const contentId = attemptContentId(options.deviceId, input.attemptId);
   const dateOf = input.subject.timestamp.slice(0, input.subject.timestamp.indexOf('T'));
   const path = reviewLogPath(dateOf, options.deviceId);
@@ -368,8 +430,17 @@ export async function recordGradedExplainBackReview(
   );
   if (alreadyRecorded !== undefined) {
     // Guarantee 1: this exact attempt is already durably recorded — return
-    // it verbatim rather than writing anything a second time.
-    return { record: alreadyRecorded, path };
+    // it verbatim rather than writing anything a second time. What became of
+    // its observation is read off the event that is there, never assumed.
+    return {
+      record: alreadyRecorded,
+      path,
+      schedulingObservation: replayedObservationOutcome(
+        observationReported,
+        alreadyRecorded.schedulingObservation !== undefined,
+        neighbourConceptId !== undefined && neighbourConceptId !== '',
+      ),
+    };
   }
 
   let contentRef: string;
@@ -377,7 +448,7 @@ export async function recordGradedExplainBackReview(
     contentRef = await writeSoloGradingContent(
       vault,
       {
-        accepted: input.accepted,
+        accepted,
         studentAnswer: input.studentAnswer,
         ...(input.misconceptionDetail !== undefined
           ? { misconceptionDetail: input.misconceptionDetail }
@@ -402,13 +473,11 @@ export async function recordGradedExplainBackReview(
 
   const record = composeGradedExplainBackReviewRecord({
     subject: input.subject,
-    accepted: input.accepted,
+    accepted,
     contentRef,
     revisionOf: input.revisionOf,
     artifactProvenance: input.artifactProvenance,
-    ...(input.neighbourConceptId !== undefined
-      ? { neighbourConceptId: input.neighbourConceptId }
-      : {}),
+    ...(neighbourConceptId !== undefined ? { neighbourConceptId } : {}),
     // `[D-281]`: forwarded, never defaulted — absent here means the caller had
     // no independent correctness verdict for this attempt, which the mastery
     // fold reads as unknown.
@@ -417,5 +486,44 @@ export async function recordGradedExplainBackReview(
       : {}),
   });
 
-  return appendReviewLogRecord(vault, record, options);
+  const appended = await appendReviewLogRecord(vault, record, options);
+  return {
+    ...appended,
+    schedulingObservation: observationUnbuildable
+      ? { status: 'not-recorded', reason: 'no-neighbour-concept-id' }
+      : observationReported
+        ? { status: 'recorded' }
+        : { status: 'not-observed' },
+  };
+}
+
+/**
+ * `accepted` with the judge's neighbour-use report removed — the one thing
+ * `buildSchedulingObservationField` refuses to build without a neighbour key.
+ * Everything else about the grading (level, rationale, citations) is kept, so
+ * the depth record is written whole.
+ */
+function withoutNeighbourUse(accepted: AcceptedSoloGrading): AcceptedSoloGrading {
+  const { neighbourUseDemonstrated: _reported, ...rest } = accepted;
+  return rest;
+}
+
+/**
+ * What a replay reports about an attempt whose event is already on the log:
+ * `recorded` only when that event actually carries the observation; a report
+ * of neighbour use against an event without one is a failure kept distinct
+ * (the event is append-only, so it cannot be amended now), and no report at
+ * all is the ordinary absence.
+ */
+function replayedObservationOutcome(
+  reported: boolean,
+  eventCarriesObservation: boolean,
+  keyKnown: boolean,
+): SchedulingObservationOutcome {
+  if (eventCarriesObservation) return { status: 'recorded' };
+  if (!reported) return { status: 'not-observed' };
+  return {
+    status: 'not-recorded',
+    reason: keyKnown ? 'already-recorded-without-it' : 'no-neighbour-concept-id',
+  };
 }
