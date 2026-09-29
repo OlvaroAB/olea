@@ -29,6 +29,7 @@ import {
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
 import type { WorkerConfig } from '../../src/worker/transport.js';
+import { numberingShownInFull } from './wire-numbering.js';
 
 // ---- shared fakes -----------------------------------------------------
 
@@ -125,9 +126,12 @@ describe('buildConceptWiring — a configured Worker builds a real, usable Conce
       token: 'secret-token',
     });
     let seenConfig: WorkerConfig | null = null;
-    const transport = fakeTransport(() => ({
+    const transport = fakeTransport((request) => ({
       ok: true,
-      result: { concepts: [{ name: 'Concept X', anchorIndex: 1 }] },
+      result: {
+        concepts: [{ name: 'Concept X', anchorIndex: 1 }],
+        numbering: numberingShownInFull(request),
+      },
     }));
 
     const wiring = await buildConceptWiring({
@@ -186,6 +190,7 @@ describe('readConceptsFromVault', () => {
             name: `Concept from passage ${i + 1}`,
             anchorIndex: i + 1,
           })),
+          numbering: numberingShownInFull(request),
         },
       };
     });

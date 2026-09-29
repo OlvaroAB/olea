@@ -54,6 +54,7 @@ import type {
 } from '../../src/ingestion/materiality/types.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
+import { numberingShownInFull } from './wire-numbering.js';
 
 // ---- shared fakes (mirrors wiring.spec.ts) --------------------------------
 
@@ -815,6 +816,7 @@ function twoStageTransport() {
               { name: 'Scale', aliases: [], anchorIndex: 2, alsoInIndexes: [] },
             ],
             relations: [{ type: 'is-a', fromIndex: 1, toIndex: 2, confidence: 0.6 }],
+            numbering: numberingShownInFull(request),
           },
         };
       }
@@ -1243,6 +1245,7 @@ function fixtureTransport(conventionNames: readonly string[]) {
               alsoInIndexes: [],
             })),
             relations: [],
+            numbering: numberingShownInFull(request),
           },
         };
       }

@@ -29,10 +29,26 @@
  * `ConceptPassage[]` and the response — is what turns a grounded index back
  * into the real `Provenance` the request already carried. The Worker's own
  * `groundConcepts` (`olea-service/src/tasks/conceptsExtract.ts`) already
- * drops any `anchorIndex` that does not name a chunk it actually sent; this
+ * drops any `anchorIndex` that does not name a chunk it actually showed; this
  * class does not re-trust that on faith and throws rather than silently
  * mis-anchoring if an index still fails to resolve — a response is never
  * trusted twice over the same boundary without a check on this side too.
+ *
+ * **The number a model cites is a position in the list it was SHOWN, not in the
+ * list this class sent** (`ol-egov.141.89.3.32`). The Worker leaves
+ * furniture-only chunks (a bare rule, an empty bullet) out of the numbered
+ * prompt, so `anchorIndex` counts only the chunks that survived that drop. This
+ * class used to index its own unfiltered `passages` with the model's number, so
+ * a furniture-only chunk ahead of a citation attached the concept to a
+ * different passage, and because the number was in range on both sides nothing
+ * flagged it (104 of 125 proposals on the development set of the 2026-09-29
+ * verification run). The Worker now returns `result.numbering`
+ * (`conceptsExtractNumbering`): for each shown number, the position of that
+ * chunk in the `sourceChunks` sent, and its length. This class resolves every
+ * cited number through it and holds NO copy of the Worker's filter, so the two
+ * cannot drift apart. It refuses, rather than guesses, when the numbering is
+ * absent (a Worker from before the field), malformed, or names a passage whose
+ * length is not the length of the passage sent at that position.
  *
  * **Why the task id and contract version are local constants** — mirroring
  * `workerProvider.ts`'s own reasoning, restated for this seam: `olea-contracts`'
@@ -205,12 +221,75 @@ function readProposals(
     );
   }
 
-  return rawConcepts.map((raw, index) => toProposedConcept(raw, passages, index));
+  // Nothing proposed means nothing to anchor, so an absent numbering is only a refusal when a
+  // number is about to be resolved.
+  const shown = rawConcepts.length === 0 ? [] : readNumbering(response, passages);
+  return rawConcepts.map((raw, index) => toProposedConcept(raw, passages, shown, index));
+}
+
+/**
+ * `result.numbering` (`conceptsExtractNumbering`, `olea-service/src/tasks/conceptsExtract.ts`):
+ * the passages the model was SHOWN, in the order and with the numbers it saw them, each as the
+ * 0-based index into `passages` (the batch this class sent) it stands for. `shown[k - 1]` is the
+ * passage the model cited as `[k]`.
+ *
+ * Refuses (a `WorkerConceptReaderError`, so `readConcepts` reports `reader-failed`) rather than
+ * falling back to "the number is a position in what I sent": that fallback IS the defect
+ * (`ol-egov.141.89.3.32`), and nothing on this side can tell which case it is in. The checks:
+ * the field is present; every entry names a passage of this batch, in strictly increasing order
+ * (the Worker walks the list once, so anything else is not the Worker's numbering); and the
+ * passage's length is the length the Worker recorded, so a Worker that numbered a trimmed, split
+ * or re-ordered copy of the batch cannot pass for one that numbered the batch sent.
+ */
+function readNumbering(
+  response: Record<string, unknown>,
+  passages: readonly ConceptPassage[],
+): readonly number[] {
+  const numbering = readResult(response).numbering;
+  const chunks =
+    typeof numbering === 'object' && numbering !== null
+      ? (numbering as Record<string, unknown>).chunks
+      : undefined;
+  if (!Array.isArray(chunks)) {
+    throw new WorkerConceptReaderError(
+      'WorkerConceptReader: the Worker response carried no `result.numbering`, so a passage number cannot be tied to a passage. ' +
+        'Refusing to guess: the Worker numbers only the passages it shows, and that is not the list this reader sent. ' +
+        'A Worker from before `numbering` needs updating.',
+    );
+  }
+
+  const shown: number[] = [];
+  let previous = 0;
+  chunks.forEach((raw, k) => {
+    const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+    const sentIndex = entry.sentIndex;
+    const length = entry.length;
+    if (
+      typeof sentIndex !== 'number' ||
+      !Number.isInteger(sentIndex) ||
+      sentIndex <= previous ||
+      sentIndex > passages.length
+    ) {
+      throw new WorkerConceptReaderError(
+        `WorkerConceptReader: \`result.numbering\` entry ${k + 1} is not a position among the ${passages.length} passages sent, later than the entry before it.`,
+      );
+    }
+    const sent = passages[sentIndex - 1];
+    if (typeof length !== 'number' || sent === undefined || sent.text.length !== length) {
+      throw new WorkerConceptReaderError(
+        `WorkerConceptReader: \`result.numbering\` entry ${k + 1} says its passage has a length that is not the length of the passage sent at position ${sentIndex}; the Worker numbered a different list.`,
+      );
+    }
+    previous = sentIndex;
+    shown.push(sentIndex - 1);
+  });
+  return shown;
 }
 
 function toProposedConcept(
   raw: unknown,
   passages: readonly ConceptPassage[],
+  shown: readonly number[],
   index: number,
 ): ProposedConcept {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -225,14 +304,14 @@ function toProposedConcept(
       `WorkerConceptReader: concept ${index} ("${name}") carried no numeric anchorIndex.`,
     );
   }
-  const anchorPassage = passages[anchorIndex - 1];
+  const anchorPassage = passageShownAs(anchorIndex, passages, shown);
   if (anchorPassage === undefined) {
     // The Worker's own `groundConcepts` already drops an anchorIndex it never
-    // sent a passage for. Reaching here means that check did not run or this
+    // showed a passage for. Reaching here means that check did not run or this
     // adapter's index accounting has drifted from the Worker's — either way
     // a loud failure, not a silent mis-anchor onto the wrong passage.
     throw new WorkerConceptReaderError(
-      `WorkerConceptReader: concept ${index} ("${name}") cited passage ${anchorIndex}, which was never sent.`,
+      `WorkerConceptReader: concept ${index} ("${name}") cited passage ${anchorIndex}, which was never shown.`,
     );
   }
 
@@ -248,12 +327,22 @@ function toProposedConcept(
   const alsoIn: Provenance[] = Array.isArray(alsoInRaw)
     ? alsoInRaw
         .filter((value): value is number => typeof value === 'number' && Number.isInteger(value))
-        .map((value) => passages[value - 1])
+        .map((value) => passageShownAs(value, passages, shown))
         .filter((passage): passage is ConceptPassage => passage !== undefined)
         .map((passage) => passage.anchor)
     : [];
 
   return { name, aliases, anchor: anchorPassage.anchor, alsoIn };
+}
+
+/** The passage the model cited as `[number]`, through the Worker's numbering; `undefined` if it showed no such number. */
+function passageShownAs(
+  number: number,
+  passages: readonly ConceptPassage[],
+  shown: readonly number[],
+): ConceptPassage | undefined {
+  const at = shown[number - 1];
+  return at === undefined ? undefined : passages[at];
 }
 
 /**

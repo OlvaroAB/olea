@@ -26,8 +26,19 @@ class RecordingTransport {
   }
 }
 
-function okResponse(result: unknown) {
-  return { ok: true, stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' }, result };
+function okResponse(result: Record<string, unknown>) {
+  return {
+    ok: true,
+    stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' },
+    // Unless a test scripts its own, the Worker reports the numbering of a batch it showed in full:
+    // `result.numbering` is how the reader ties a cited number to a sent passage (`ol-egov.141.89.3.32`).
+    result: 'numbering' in result ? result : { ...result, numbering: identityNumbering(passages) },
+  };
+}
+
+/** The Worker's `result.numbering` for a batch in which nothing was dropped: number k is position k. */
+function identityNumbering(sent: readonly { readonly text: string }[]) {
+  return { chunks: sent.map((passage, i) => ({ sentIndex: i + 1, length: passage.text.length })) };
 }
 
 const passages = [
@@ -376,6 +387,150 @@ describe('WorkerConceptReader — refuses rather than mis-anchors on a confabula
     const reader = new WorkerConceptReader({ transport });
 
     await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+  });
+});
+
+/**
+ * `ol-egov.141.89.3.32`. The Worker numbers only the passages it shows the model, and leaves
+ * furniture-only ones (a bare rule, an empty bullet, a bare quote marker) out. The number the model
+ * cites is therefore a position in the SHOWN list. The reader used to index its own, unfiltered list
+ * with it, so a furniture-only chunk ahead of a citation attached the concept to a different passage
+ * and nothing flagged it, because the number was in range on both sides.
+ */
+describe('WorkerConceptReader — a cited number is resolved through the Worker numbering, never through the sent list (`ol-egov.141.89.3.32`)', () => {
+  // A realistic unit: furniture-only blocks ahead of and between the content blocks. Coined words.
+  const texts = [
+    '---',
+    '-',
+    '# Zorbic flux\n\nZorbic flux is the drift of a settled fluid under a slow field.',
+    '***',
+    'Dornith is the process by which a system settles into its lowest-energy state.',
+    '>',
+    'Quenlar drift is what remains after Dornith has finished.',
+  ];
+  const furnitureFirst = texts.map((text, unit) => ({
+    text,
+    anchor: { sourcePath: 'Courses/COINED/unit.md', location: { page: 1, unit } },
+    course: 'COINED',
+  }));
+  /** What the Worker reports for `furnitureFirst`: the three content chunks, sent at 3, 5 and 7. */
+  const shown = {
+    chunks: [3, 5, 7].map((sentIndex) => ({
+      sentIndex,
+      length: texts[sentIndex - 1]?.length ?? -1,
+    })),
+  };
+  const read = (concepts: unknown[], numbering: unknown = shown) =>
+    new WorkerConceptReader({
+      transport: new RecordingTransport(() => okResponse({ concepts, numbering })),
+    }).read({ passages: furnitureFirst });
+
+  it('anchors each concept to the passage the model numbered, not to the passage at that position in the sent list', async () => {
+    const result = await read([
+      { name: 'Zorbic flux', anchorIndex: 1 },
+      { name: 'Dornith', anchorIndex: 2 },
+      { name: 'Quenlar drift', anchorIndex: 3 },
+    ]);
+
+    expect(result.concepts.map((concept) => concept.anchor)).toEqual([
+      furnitureFirst[2]?.anchor,
+      furnitureFirst[4]?.anchor,
+      furnitureFirst[6]?.anchor,
+    ]);
+    // The defect, named: indexing the sent list with the model's number lands on furniture.
+    expect(result.concepts[0]?.anchor).not.toEqual(furnitureFirst[0]?.anchor);
+    expect(result.concepts[2]?.anchor).not.toEqual(furnitureFirst[2]?.anchor);
+  });
+
+  it('resolves alsoInIndexes through the same numbering', async () => {
+    const result = await read([{ name: 'Dornith', anchorIndex: 2, alsoInIndexes: [1, 3] }]);
+
+    expect(result.concepts[0]?.alsoIn).toEqual([
+      furnitureFirst[2]?.anchor,
+      furnitureFirst[6]?.anchor,
+    ]);
+  });
+
+  it('a number the model was never shown is refused for an anchor and filtered for an also-in', async () => {
+    await expect(read([{ name: 'Invented', anchorIndex: 4 }])).rejects.toThrow(/never shown/);
+
+    const result = await read([{ name: 'Dornith', anchorIndex: 2, alsoInIndexes: [4, 99] }]);
+    expect(result.concepts[0]?.alsoIn).toEqual([]);
+  });
+
+  it('refuses a Worker answer that carries concepts but no numbering, and says why, rather than guessing', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [{ name: 'Dornith', anchorIndex: 2 }], numbering: undefined }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    const failure = await reader
+      .read({ passages: furnitureFirst })
+      .catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(WorkerConceptReaderError);
+    expect((failure as Error).message).toMatch(/numbering/);
+  });
+
+  it('needs no numbering when nothing was proposed: there is no number to resolve', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({ concepts: [], numbering: undefined }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    expect((await reader.read({ passages: furnitureFirst })).concepts).toEqual([]);
+  });
+
+  it.each([
+    ['not an object', 'shown'],
+    ['no chunks array', {}],
+    ['an entry that is not an object', { chunks: [null] }],
+    ['a sentIndex that is not an integer', { chunks: [{ sentIndex: 2.5, length: 3 }] }],
+    ['a sentIndex past the passages sent', { chunks: [{ sentIndex: 8, length: 3 }] }],
+    ['a sentIndex of zero', { chunks: [{ sentIndex: 0, length: 3 }] }],
+    [
+      'a repeated sentIndex',
+      {
+        chunks: [
+          { sentIndex: 3, length: texts[2]?.length },
+          { sentIndex: 3, length: texts[2]?.length },
+        ],
+      },
+    ],
+    [
+      'entries out of order',
+      {
+        chunks: [
+          { sentIndex: 5, length: texts[4]?.length },
+          { sentIndex: 3, length: texts[2]?.length },
+        ],
+      },
+    ],
+  ])('refuses a malformed numbering: %s', async (_label, numbering) => {
+    await expect(read([{ name: 'Dornith', anchorIndex: 1 }], numbering)).rejects.toThrow(
+      WorkerConceptReaderError,
+    );
+  });
+
+  it('refuses a numbering whose chunk is not the length of the passage sent at that position', async () => {
+    // The Worker says shown number 1 is the chunk at position 3, but of a different length: it
+    // numbered a trimmed, split or reordered copy of the batch, not the batch this reader sent.
+    const drifted = { chunks: [{ sentIndex: 3, length: (texts[2]?.length ?? 0) - 1 }] };
+
+    await expect(read([{ name: 'Zorbic flux', anchorIndex: 1 }], drifted)).rejects.toThrow(
+      /length/,
+    );
+  });
+
+  it('with nothing dropped, the numbering is the identity and a number is a position in the sent list', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        concepts: [{ name: 'P300', anchorIndex: 2 }],
+        numbering: identityNumbering(passages),
+      }),
+    );
+    const reader = new WorkerConceptReader({ transport });
+
+    expect((await reader.read({ passages })).concepts[0]?.anchor).toEqual(passages[1]?.anchor);
   });
 });
 

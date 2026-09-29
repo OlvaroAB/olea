@@ -50,6 +50,7 @@ import type {
 } from '../../src/ingestion/materiality/types.js';
 import type { PersistedWorkerConfig } from '../../src/worker/config-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../../src/worker/config-store.js';
+import { numberingShownInFull } from './wire-numbering.js';
 
 // ---- shared fakes -----------------------------------------------------------
 
@@ -345,6 +346,7 @@ function twoStageTransport() {
               { name: 'Sepal', aliases: [], anchorIndex: 2, alsoInIndexes: [] },
             ],
             relations: [],
+            numbering: numberingShownInFull(request),
           },
         };
       }
