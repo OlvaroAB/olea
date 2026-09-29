@@ -17,6 +17,8 @@
  * end to end, just not the vault-walk step that produces the concepts in production.
  */
 
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { VaultSource } from 'olea-core';
 import {
   addManualAssessmentEntry,
@@ -26,19 +28,27 @@ import {
   createPaper,
   enumerateVaultInstruments,
   fillPaperBlueprintSlots,
+  listPaperRecords,
   type PaperCompositionAccount,
   type PaperGeneratedItem,
   type PaperItemGenerationPort,
+  type PaperItemGenerationRequest,
   type PaperRecord,
   readInstrumentCitation,
   resolveOutcome,
 } from 'olea-core';
+import { listPaperJournals } from 'olea-core/src/oracle/paper-journal.js';
 import { describe, expect, it } from 'vitest';
+import type {
+  PaperItemPortOutcome,
+  PaperSlotOutcomePort,
+} from '../../src/oracle/paper-item-port.js';
 import { buildBlueprintInputForCourse } from '../../src/paper/assemble.js';
 import {
   buildReadyStateFromRecord,
   type CreateLocalPracticePaperProviderDeps,
   createLocalPracticePaperProvider,
+  PracticePaperUnfinishedError,
 } from '../../src/paper/provider.js';
 import { memoryVault } from '../review/memory-vault.js';
 
@@ -474,5 +484,260 @@ describe('createLocalPracticePaperProvider — handOffItem()', () => {
     expect(content).toContain('Calvin cycle');
     // Two distinct instruments, one note.
     expect((content.match(/```olea-mcq/g) ?? []).length).toBe(2);
+  });
+});
+
+/**
+ * `[D-430]` (row 17, `ol-egov.141.89.7.5`): `requestPaper` composes through the resumable journal
+ * and the three-outcome port. The journal and the fingerprint are exercised in
+ * `journal-composition.spec.ts`; this suite proves the provider's own seam: what it hands the view,
+ * what it throws, that a repeat request resumes, and that nothing the view can see has changed.
+ */
+describe('createLocalPracticePaperProvider — requestPaper() through the journal ([D-430])', () => {
+  const CONCEPT_NOTE = '05 Zettelkasten/Widget theory.md';
+
+  function requestVault(): VaultSource {
+    return fakeVault({
+      [CONCEPT_NOTE]: '# Widget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: COURSEA',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-09-22'),
+    });
+  }
+
+  let nonce = 0;
+  const port = (
+    answer: (request: PaperItemGenerationRequest) => PaperItemPortOutcome,
+  ): { readonly port: PaperSlotOutcomePort; readonly calls: PaperItemGenerationRequest[] } => {
+    const calls: PaperItemGenerationRequest[] = [];
+    return {
+      calls,
+      port: async (request) => {
+        calls.push(request);
+        return answer(request);
+      },
+    };
+  };
+  const generatedAnswer = (request: PaperItemGenerationRequest): PaperItemPortOutcome => ({
+    status: 'generated',
+    taskId: request.taskId,
+    promptVersion: 'v1',
+    response: { ok: true, result: { cards: [{ front: 'q', back: 'a' }] } },
+  });
+  const OUTAGE: PaperItemPortOutcome = { status: 'unavailable', reason: 'transport-failure' };
+
+  function providerWith(vault: VaultSource, generationPort: PaperSlotOutcomePort | null) {
+    return createLocalPracticePaperProvider({
+      ...baseDeps({ vault }),
+      generationPort: async () => generationPort,
+      now: () => new Date(`2026-09-19T00:00:00.${String(nonce++ % 1000).padStart(3, '0')}Z`),
+    });
+  }
+
+  it('a finished journal hands the view the same ready state it always got: items, empty slots, and a record that says complete', async () => {
+    const vault = requestVault();
+    const scripted = port(generatedAnswer);
+    const state = await providerWith(vault, scripted.port).requestPaper('COURSEA');
+    if (state.kind !== 'ready') throw new Error(`expected ready, got ${state.kind}`);
+    expect(state.items.length).toBeGreaterThan(0);
+    expect(state.record.completion).toEqual({ status: 'complete' });
+    expect(state.record.journalId).toBeDefined();
+    expect(Object.keys(state).sort()).toEqual(
+      ['course', 'emptySlots', 'items', 'kind', 'partial', 'partialStatement', 'record'].sort(),
+    );
+    expect(scripted.calls).toHaveLength(state.items.length);
+  });
+
+  it('an outage rejects with an unfinished error carrying counts and an id only, and keeps the journal; no paper exists', async () => {
+    const vault = requestVault();
+    const down = port(() => OUTAGE);
+    const provider = providerWith(vault, down.port);
+    const caught = await provider.requestPaper('COURSEA').then(
+      () => null,
+      (error: unknown) => error,
+    );
+    expect(caught).toBeInstanceOf(PracticePaperUnfinishedError);
+    const unfinished = caught as PracticePaperUnfinishedError;
+    expect(unfinished).toMatchObject({
+      course: 'COURSEA',
+      reason: 'service-unavailable',
+    });
+    expect(unfinished.owedSlotCount).toBeGreaterThan(0);
+    expect(unfinished.journalId).toMatch(/^paper-journal-key1:/);
+    // Content-free (D-005): the message names counts, never a concept, a note or a reason string.
+    expect(unfinished.message).not.toMatch(/Widget|transport-failure/);
+    expect((await listPaperRecords(vault)).length).toBe(0);
+  });
+
+  it('the next request resumes the kept journal and finishes it, drafting only what was owed', async () => {
+    const vault = requestVault();
+    await providerWith(vault, port(() => OUTAGE).port)
+      .requestPaper('COURSEA')
+      .catch(() => undefined);
+
+    const up = port(generatedAnswer);
+    const state = await providerWith(vault, up.port).requestPaper('COURSEA');
+    expect(state.kind).toBe('ready');
+    expect(up.calls.length).toBeGreaterThan(0);
+    expect((await listPaperRecords(vault)).length).toBe(1);
+  });
+
+  it('the declared scope reaches the fingerprint: an Outcome attached after the outage discards the kept journal, naming scope', async () => {
+    const vault = requestVault();
+    await providerWith(vault, port(() => OUTAGE).port)
+      .requestPaper('COURSEA')
+      .catch(() => undefined);
+
+    const enumeration = await enumerateVaultInstruments(vault);
+    const conceptKey = enumeration.concepts.find((c) => c.courses.includes('COURSEA'))?.key;
+    if (conceptKey === undefined)
+      throw new Error('fixture note did not yield a concept — check it');
+    const outcome = await resolveOutcome(vault, {
+      courses: ['COURSEA'],
+      source: { path: CONCEPT_NOTE, blockIndex: 0 },
+      label: 'Cellular respiration',
+      provenance: { promptVersion: 'v1', modelVersion: 'model-a' },
+    });
+    await attachConceptToOutcome(vault, outcome.id, conceptKey);
+
+    const up = port(generatedAnswer);
+    const state = await providerWith(vault, up.port).requestPaper('COURSEA');
+    expect(state.kind).toBe('ready');
+    const discarded = (await listPaperJournals(vault)).filter(
+      (entry) => entry.record.status === 'discarded',
+    );
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]?.record.discard).toMatchObject({
+      reason: 'reuse-incompatible',
+      changed: ['scope'],
+    });
+  });
+
+  it('a concept added to the course after the outage changes the eligible scope: the kept journal is discarded, naming scope', async () => {
+    const vault = requestVault();
+    await providerWith(vault, port(() => OUTAGE).port)
+      .requestPaper('COURSEA')
+      .catch(() => undefined);
+
+    await vault.write('05 Zettelkasten/Gadget theory.md', '# Gadget theory\n');
+    await vault.write(
+      'Notes/two.md',
+      ['---', 'topic: [Gadget theory]', 'course: COURSEA', '---', '', 'Front::Back', ''].join('\n'),
+    );
+
+    const state = await providerWith(vault, port(generatedAnswer).port).requestPaper('COURSEA');
+    expect(state.kind).toBe('ready');
+    const discarded = (await listPaperJournals(vault)).filter(
+      (entry) => entry.record.status === 'discarded',
+    );
+    expect(discarded).toHaveLength(1);
+    expect(discarded[0]?.record.discard?.changed).toContain('scope');
+  });
+
+  it('a grounding refusal is handed over as a qualified partial by source gap, and is not an outage', async () => {
+    const vault = requestVault();
+    const state = await providerWith(
+      vault,
+      port(() => ({ status: 'refused', reason: 'empty-result' })).port,
+    ).requestPaper('COURSEA');
+    if (state.kind !== 'ready') throw new Error(`expected ready, got ${state.kind}`);
+    expect(state.record.completion).toEqual({ status: 'qualified-partial', gaps: ['source'] });
+    expect(state.items).toEqual([]);
+    expect(state.emptySlots.map((slot) => slot.reasonCode)).toContain('generator-refused');
+  });
+
+  it('a second press while the first is composing shares its work: one call per slot, one paper, one journal', async () => {
+    const vault = requestVault();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const calls: PaperItemGenerationRequest[] = [];
+    const slow: PaperSlotOutcomePort = async (request) => {
+      calls.push(request);
+      await gate;
+      return generatedAnswer(request);
+    };
+    const provider = providerWith(vault, slow);
+    const first = provider.requestPaper('COURSEA');
+    const second = provider.requestPaper('COURSEA');
+    release();
+    const [a, b] = await Promise.all([first, second]);
+    if (a.kind !== 'ready' || b.kind !== 'ready') throw new Error('expected ready');
+    expect(b.record.id).toBe(a.record.id);
+    expect(calls.length).toBe(a.items.length);
+    expect((await listPaperRecords(vault)).length).toBe(1);
+  });
+
+  it('once a request has settled, the next press composes a fresh paper (F4.11 ruling 5)', async () => {
+    const vault = requestVault();
+    const provider = providerWith(vault, port(generatedAnswer).port);
+    const first = await provider.requestPaper('COURSEA');
+    const second = await provider.requestPaper('COURSEA');
+    if (first.kind !== 'ready' || second.kind !== 'ready') throw new Error('expected ready');
+    expect(second.record.id).not.toBe(first.record.id);
+  });
+
+  it('still greys out to ai-unavailable, reading no vault, when no Worker is configured', async () => {
+    const vault = requestVault();
+    const reads: string[] = [];
+    const originalRead = vault.read.bind(vault);
+    vault.read = async (path: string) => {
+      reads.push(path);
+      return originalRead(path);
+    };
+    const result = await providerWith(vault, null).requestPaper('COURSEA');
+    expect(result.kind).toBe('ai-unavailable');
+    expect(reads).toEqual([]);
+    expect((await listPaperRecords(vault)).length).toBe(0);
+  });
+});
+
+describe('the paper path uses the three-outcome port and the view is unchanged ([D-430], ol-egov.141.89.7.5)', () => {
+  const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
+  const codeOf = (path: string) =>
+    readFileSync(srcDir + path, 'utf8')
+      .replace(/\/\*[\s\S]*?\*\//g, '')
+      .replace(/\/\/.*$/gm, '');
+
+  it('the paper generation port is built from createWorkerPaperSlotOutcomePort, not the flat adapter', () => {
+    const port = codeOf('paper/generation-port.ts');
+    expect(port).toMatch(/createWorkerPaperSlotOutcomePort\(\{ transport \}\)/);
+    expect(port).not.toMatch(/createWorkerPaperItemGenerationPort/);
+  });
+
+  it('requestPaper composes through the journal and no longer fills the blueprint in one flat pass', () => {
+    const provider = codeOf('paper/provider.ts');
+    expect(provider).toMatch(/composePaperThroughJournal\(/);
+    expect(provider).not.toMatch(/fillPaperBlueprintSlots/);
+    expect(provider).not.toMatch(/\bcreatePaper\(/);
+  });
+
+  it('the flat adapter has no production caller left on the paper path', () => {
+    for (const file of ['paper/provider.ts', 'paper/wiring.ts', 'paper/generation-port.ts']) {
+      expect(codeOf(file)).not.toMatch(/createWorkerPaperItemGenerationPort/);
+    }
+  });
+
+  it('never calls the core classifier directly: the outcome port owns the zero-question rule', () => {
+    for (const file of [
+      'paper/provider.ts',
+      'paper/journal-composition.ts',
+      'paper/generation-port.ts',
+    ]) {
+      expect(codeOf(file)).not.toMatch(/classifyPaperSlotWorkerResult/);
+    }
+  });
+
+  it('adds no student-visible state: the view neither names the journal nor the unfinished error', () => {
+    const view = codeOf('paper/view.ts');
+    expect(view).not.toMatch(/PracticePaperUnfinishedError|unfinished|journal|completion/i);
   });
 });

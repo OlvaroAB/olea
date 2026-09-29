@@ -26,28 +26,27 @@
 
 import {
   buildPaperBlueprint,
-  createPaper,
   enumerateVaultInstruments,
-  fillPaperBlueprintSlots,
   handOffPaperItem,
+  isEligiblePaperConcept,
   listOutcomeRecords,
   outcomeConceptCoverage,
   type PaperEmptySlot,
   type PaperGroundingLabel,
   type PaperHandoffResult,
-  type PaperItemGenerationPort,
   type PaperRecord,
-  paperCompositionAccountFromBlueprint,
   resolveAssessments,
   type VaultSource,
   writeInstrumentCitation,
 } from 'olea-core';
 import { ensureHomeNoteForConcept } from '../generation/home-note.js';
+import type { PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { PartialPaperStatement } from './copy.js';
 import { buildPartialPaperStatement } from './copy.js';
 import type { PaperDemand } from './demand.js';
+import { composePaperThroughJournal } from './journal-composition.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
 
 /**
@@ -119,7 +118,12 @@ export type PracticePaperCourseState =
 export interface CreateLocalPracticePaperProviderDeps {
   readonly vault: VaultSource;
   readonly settingsStore: { load(): Promise<PersistedStudyPlanConfig> };
-  readonly generationPort: () => Promise<PaperItemGenerationPort | null>;
+  /**
+   * The three-outcome port (`[D-430]`): a slot's call ends `generated`, `refused` or `unavailable`
+   * and never throws, so the journal can keep an outage apart from a refusal. `null` is F7.8's
+   * grey-out (no Worker configured).
+   */
+  readonly generationPort: () => Promise<PaperSlotOutcomePort | null>;
   readonly now: () => Date;
 }
 
@@ -222,6 +226,47 @@ export function buildReadyStateFromRecord(
   };
 }
 
+/**
+ * `[D-430]`: thrown by `requestPaper` when work is owed and no paper was created. The unfinished
+ * paper is KEPT in the resumable journal (`./journal-composition.ts`) and the next request resumes
+ * it, drafting only the missing parts; nothing is handed over in the meantime, because a paper with
+ * holes because the service was down does not exist (only an explicitly qualified partial, a source
+ * or capability gap, is ever handed over, and that is a `ready` state).
+ *
+ * **Data only, and the view is unchanged.** `paper/view.ts`'s `pullPaper` has no failure handling: a
+ * rejected `requestPaper` leaves the "Composing" pane, exactly as a transport failure always has.
+ * What she is told when a paper could not be finished is a student-visible surface whose clause has
+ * to be verified before any wording is written (`ol-egov.141.89.7.5` records the gap), so this error
+ * carries counts and an id and no words for her. Content-free (D-005): no concept, note or reason
+ * string.
+ */
+export class PracticePaperUnfinishedError extends Error {
+  readonly course: string;
+  /** `'service-unavailable'`: a part stayed unavailable after its retry. `'authoring-spec-changed'`: a resumed part came back under another prompt version, so the journal was set aside and the next request starts afresh. */
+  readonly reason: 'service-unavailable' | 'authoring-spec-changed';
+  readonly journalId: string;
+  readonly plannedSlotCount: number;
+  readonly owedSlotCount: number;
+
+  constructor(params: {
+    readonly course: string;
+    readonly reason: 'service-unavailable' | 'authoring-spec-changed';
+    readonly journalId: string;
+    readonly plannedSlotCount: number;
+    readonly owedSlotCount: number;
+  }) {
+    super(
+      `The practice paper is not finished: ${params.owedSlotCount} of ${params.plannedSlotCount} parts are still owed, so nothing was handed over.`,
+    );
+    this.name = 'PracticePaperUnfinishedError';
+    this.course = params.course;
+    this.reason = params.reason;
+    this.journalId = params.journalId;
+    this.plannedSlotCount = params.plannedSlotCount;
+    this.owedSlotCount = params.owedSlotCount;
+  }
+}
+
 export interface PracticePaperViewDeps {
   /** Loads the CURRENT state for `course` — locked/unlocked/absent, never a composed paper (that only happens on `requestPaper`, F4.11 ruling 5: "she pulls it"). */
   readonly load: (course: string) => Promise<PracticePaperCourseState>;
@@ -247,46 +292,87 @@ export interface PracticePaperViewDeps {
   ) => Promise<PaperHandoffResult>;
 }
 
+type RequestedPaper =
+  | PracticePaperReadyState
+  | { readonly kind: 'ai-unavailable'; readonly course: string };
+
+/**
+ * One `requestPaper`: the blueprint from the live vault, then the paper composed through the
+ * resumable journal (`./journal-composition.ts`, `[D-430]`). Finished (complete or an explicitly
+ * qualified partial) becomes the ready state; work owed throws `PracticePaperUnfinishedError`.
+ */
+async function composeRequestedPaper(
+  deps: CreateLocalPracticePaperProviderDeps,
+  course: string,
+): Promise<RequestedPaper> {
+  const port = await deps.generationPort();
+  if (port === null) return { kind: 'ai-unavailable', course };
+
+  const config = await deps.settingsStore.load();
+  const asOf = isoToday(deps.now());
+  const [{ records }, enumeration, outcomeRecords] = await Promise.all([
+    resolveAssessments(deps.vault, config.assignmentsBasePath),
+    // `[D-357]`: the permanent concept key, the one her review log carries.
+    enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
+    listOutcomeRecords(deps.vault),
+  ]);
+
+  const input = await buildBlueprintInputForCourse(
+    deps.vault,
+    enumeration.concepts,
+    records,
+    course,
+    asOf,
+    outcomeRecords.map((entry) => entry.record),
+  );
+  const blueprint = buildPaperBlueprint(input);
+
+  const composed = await composePaperThroughJournal({
+    vault: deps.vault,
+    blueprint,
+    scope: {
+      eligibleConceptKeys: input.concepts
+        .filter(isEligiblePaperConcept)
+        .map((concept) => concept.conceptKey),
+      outcomes: (input.outcomes ?? []).map((outcome) => ({
+        outcomeId: outcome.outcomeId,
+        conceptKeys: outcome.conceptKeys,
+      })),
+    },
+    port,
+  });
+  if (composed.kind === 'unfinished') {
+    throw new PracticePaperUnfinishedError({
+      course,
+      reason: composed.reason,
+      journalId: composed.journalId,
+      plannedSlotCount: composed.plannedSlotCount,
+      owedSlotCount: composed.owedSlotCount,
+    });
+  }
+  return buildReadyStateFromRecord(course, composed.record);
+}
+
 /** The production `PracticePaperViewDeps` — see the module doc. */
 export function createLocalPracticePaperProvider(
   deps: CreateLocalPracticePaperProviderDeps,
 ): PracticePaperViewDeps {
+  const inFlight = new Map<string, Promise<RequestedPaper>>();
   return {
     load: (course) => loadCourseState(deps, course),
 
-    async requestPaper(course) {
-      const port = await deps.generationPort();
-      if (port === null) return { kind: 'ai-unavailable', course };
-
-      const config = await deps.settingsStore.load();
-      const asOf = isoToday(deps.now());
-      const [{ records }, enumeration, outcomeRecords] = await Promise.all([
-        resolveAssessments(deps.vault, config.assignmentsBasePath),
-        // `[D-357]`: the permanent concept key, the one her review log carries.
-        enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
-        listOutcomeRecords(deps.vault),
-      ]);
-
-      const input = await buildBlueprintInputForCourse(
-        deps.vault,
-        enumeration.concepts,
-        records,
-        course,
-        asOf,
-        outcomeRecords.map((entry) => entry.record),
-      );
-      const blueprint = buildPaperBlueprint(input);
-      const filled = await fillPaperBlueprintSlots(blueprint, port);
-
-      const record = await createPaper(deps.vault, {
-        course,
-        asOf,
-        compositionAccount: paperCompositionAccountFromBlueprint(blueprint),
-        items: filled.items,
-        emptySlots: filled.emptySlots,
+    requestPaper(course) {
+      // One composition per course at a time: a second press while the first is composing shares
+      // its work (the journal is single-writer, and two runs over one journal would spend twice
+      // and race each other's whole-file rewrites). Cleared when the request settles, so the next
+      // press, after a finished paper, composes a fresh one (F4.11 ruling 5).
+      const running = inFlight.get(course);
+      if (running !== undefined) return running;
+      const request = composeRequestedPaper(deps, course).finally(() => {
+        inFlight.delete(course);
       });
-
-      return buildReadyStateFromRecord(course, record);
+      inFlight.set(course, request);
+      return request;
     },
 
     async handOffItem(course, paperId, slotId, conceptName) {
