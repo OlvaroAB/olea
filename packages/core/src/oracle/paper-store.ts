@@ -32,6 +32,10 @@
  *   file's removal. **It never writes into her review log** (`[D-367]`'s clarification): the
  *   review record that carries `origin: 'practice-paper'` is written later, by the ordinary review
  *   path, for the first review after the act — reading the block's field, not this sidecar.
+ *   **When the paper READ the slot's demand, the hand-off also writes the instrument's target
+ *   record** (`[D-437]`, `../instrument/target-store.ts`; see `handedOffItemDemand` for the rule):
+ *   this module is one of the writer's three allow-listed callers
+ *   (`../instrument/target-store-callers.spec.ts`).
  * - `explanationResults` — one per free-response item, the depth reading (never a mark) ruling 2's
  *   explain-yourself route returns, recorded here as data (F5's five-level depth vocabulary,
  *   D-217) — this module does not run the grading itself (component register row 2.3's job); it
@@ -48,6 +52,11 @@ import { parseDocument } from '../block/parse.js';
 import { hashText } from '../ingestion/hash.js';
 import { insertMcqBlock, parseMcqBlocks, stampMcqPaperOrigin } from '../instrument/mcq-format.js';
 import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
+import {
+  instrumentTargetStorePath,
+  questionBindingOf,
+  writeInstrumentTarget,
+} from '../instrument/target-store.js';
 import { listFolder } from '../vault/list-folder.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
@@ -55,6 +64,7 @@ import {
   PAPER_STRUCTURE_FORMAT_VERSION,
   type PaperBlueprint,
   type PaperCompletion,
+  type PaperDemand,
   type PaperEmptySlot,
   type PaperGapKind,
   type PaperStructuredShape,
@@ -539,6 +549,43 @@ export async function paperItemInstrumentId(paperId: string, slotId: string): Pr
 }
 
 /**
+ * The demand a handed-off item was authored for, when the paper READ it (`[D-437]` R1, `[D-438]`
+ * P1; design `demand-carriage.md` sections 4.1 and 5.1), or `undefined` for every other case, which
+ * hands the item off UNSPECIFIED: no record, and never a default put in a reading's place.
+ *
+ * - **A structured paper (`[D-430]`)**: the basis lives on each part, so the part that slot fills
+ *   decides, and the flat account's basis is not consulted. Only a part whose demand status is
+ *   `'read'` counts: `'not-read'` and `'cannot-tell'` are no reading, and `'unsupported'` is an
+ *   operation outside the vocabulary that never becomes a `declaredDemand` (a slot for it is an
+ *   empty slot, so no item of it can be handed off; refused here regardless). A slot with no part is
+ *   not read.
+ * - **A flat paper**: the composition account's `intendedDemandBasis` is exactly `'read'`. `'default-no-reading'`
+ *   is the recall fallback recorded as a default; and a paper written before P1 has no basis at all,
+ *   which is never read as `'read'` (legacy stays unspecified, row 36).
+ * - **The reading must be the demand the item was authored for.** The record states what the
+ *   author was asked (`item.intendedDemand`, carried from the slot). A part that read a different
+ *   demand than the one this item was generated under certifies nothing about it, so the item is
+ *   unspecified rather than recorded under either word.
+ *
+ * The basis is read structurally (not through `PaperBlueprint`'s type) so a record written before
+ * the field existed, and a hand-edited value, both fall through to unspecified.
+ */
+function handedOffItemDemand(
+  record: PaperRecord,
+  item: PaperGeneratedItem,
+): PaperDemand | undefined {
+  if (record.structure !== undefined) {
+    const part = record.structure.parts.find((p) => p.slotId === item.slotId);
+    if (part === undefined || part.demand.status !== 'read') return undefined;
+    return part.demand.demand === item.intendedDemand ? item.intendedDemand : undefined;
+  }
+  const { intendedDemandBasis } = record.compositionAccount as {
+    readonly intendedDemandBasis?: unknown;
+  };
+  return intendedDemandBasis === 'read' ? item.intendedDemand : undefined;
+}
+
+/**
  * Hands ONE item to ordinary review — never the whole paper (module doc) — and enters it as a real
  * instrument carrying its paper and slot (`[D-407]`).
  *
@@ -555,11 +602,21 @@ export async function paperItemInstrumentId(paperId: string, slotId: string): Pr
  *    since, which a repeated press must not undo.
  * 4. Else the quiz block is inserted — after the note's frontmatter when it opens with one, the
  *    same placement `materialize-mcq.ts` uses so the note's concept binding survives — carrying
- *    `id:` and `paper-origin:` in one write, every other byte of the note untouched.
+ *    `id:` and `paper-origin:` in one write, every other byte of the note untouched. When the paper
+ *    read this item's demand (`handedOffItemDemand`), its target record (`[D-437]`, origin
+ *    `paper-handoff`) is written first, once, bound to the block as inserted, behind an exists
+ *    guard so a retry that an interrupted attempt already reached leaves it untouched.
  * 5. Finally the paper's own hand-off event is recorded (a repeat changes nothing).
  *
  * The note is written before the paper record, so a recorded hand-off always has its instrument.
  * No review-log record is written here (`[D-367]`).
+ *
+ * **The target record is written on step 4 only, never on a repeat.** A repeat (step 2 or 3) finds
+ * the instrument already entered, or the hand-off already recorded, and writes no record: an item
+ * handed off before this record existed stays unspecified for good and is never backfilled
+ * (`[D-277]` (f); `../instrument/target-store-callers.spec.ts`). An item whose demand the paper did
+ * not read (a defaulted basis, a part not read, a paper written before the basis existed) hands
+ * off unspecified in the same way.
  */
 export async function handOffPaperItem(
   vault: VaultSource,
@@ -593,6 +650,21 @@ export async function handOffPaperItem(
       afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
       fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
     });
+    const declaredDemand = handedOffItemDemand(record, item);
+    if (declaredDemand !== undefined) {
+      const entered = parseMcqBlocks(content).instruments.find((i) => i.id === instrumentId);
+      const targetPath = instrumentTargetStorePath(instrumentId);
+      if (entered !== undefined && !(await vault.exists(targetPath))) {
+        await writeInstrumentTarget(vault, {
+          instrumentId,
+          declaredDemand,
+          origin: 'paper-handoff',
+          questionBinding: await questionBindingOf(entered),
+          authoredAt: now(),
+          generator: { taskId: item.taskId, promptVersion: item.promptVersion },
+        });
+      }
+    }
     await vault.write(target.notePath, content);
     instrumentWritten = true;
   }

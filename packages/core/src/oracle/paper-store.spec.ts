@@ -1,11 +1,18 @@
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { parseMcqBlocks } from '../instrument/mcq-format.js';
+import { readInstrumentDemand } from '../instrument/demand-reading.js';
+import { insertMcqBlock, parseMcqBlocks } from '../instrument/mcq-format.js';
+import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
+import {
+  instrumentTargetStorePath,
+  questionBindingOf,
+  readInstrumentTarget,
+} from '../instrument/target-store.js';
 import { FolderSource } from '../vault/folder-source.js';
-import type { PaperGeneratedItem } from './paper-items.js';
-import type { PaperCompositionAccount } from './paper-store.js';
+import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
+import type { PaperCompositionAccount, PaperRecord } from './paper-store.js';
 import {
   applyPaperEvent,
   createPaper,
@@ -21,7 +28,11 @@ import {
   recordPaperResponse,
   retirePaper,
 } from './paper-store.js';
-import { PAPER_STRUCTURE_FORMAT_VERSION, type PaperStructuredShape } from './paper-types.js';
+import {
+  PAPER_STRUCTURE_FORMAT_VERSION,
+  type PaperPartDemandReading,
+  type PaperStructuredShape,
+} from './paper-types.js';
 
 // Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Practice paper product scope", the
 // vault-object lifecycle block, tagged `@auto:core/oracle/paper-store.spec`.
@@ -639,5 +650,419 @@ describe('a structured paper record ([D-430])', () => {
     });
     expect(second).toBe(first);
     expect(second?.structure?.structureSlotCount).toBe(2);
+  });
+});
+
+// ---- [D-437] / [D-407] / T17: the hand-off writes the target record for a demand it read ----
+//
+// Scenarios: olea-service/docs/dev/intelligence-build/demand-carriage.md, sections 4.1 (the paper
+// hand-off row), 5.1 (P1, the demand basis) and 6 (T17); rows 36 and 38 of
+// docs/direction/20260929_decision_sheet_responses.md.
+//
+// The paper's flat composition account carries `intendedDemandBasis` (P1, added to the blueprint by
+// ol-egov.141.89.2.23); a structured paper carries the reading on each part. These fixtures set the
+// account field through a spread so this file keeps type-checking whether or not the shared type
+// has grown it yet, and a paper written before P1 has no basis at all (the legacy case below).
+const READ_ACCOUNT = { ...ACCOUNT, intendedDemandBasis: 'read' as const };
+const DEFAULT_ACCOUNT = { ...ACCOUNT, intendedDemandBasis: 'default-no-reading' as const };
+const HANDOFF_NOW = '2026-09-17T08:30:00.000Z';
+
+describe('handOffPaperItem — writes the instrument target record for a demand it read (T17)', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-paper-handoff-demand-'));
+    vault = new FolderSource(root);
+    await vault.write(NOTE_PATH, NOTE);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  async function paperWith(
+    account: object,
+    extra: {
+      readonly items?: readonly PaperGeneratedItem[];
+      readonly structure?: PaperStructuredShape;
+    } = {},
+  ): Promise<PaperRecord> {
+    return createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: account as PaperCompositionAccount,
+      items: extra.items ?? [item({ slotId: 'slot-0' }), item({ slotId: 'slot-1' })],
+      emptySlots: [],
+      ...(extra.structure === undefined ? {} : { structure: extra.structure }),
+    });
+  }
+
+  async function targetFiles(): Promise<string[]> {
+    try {
+      return (await readdir(join(root, '.olea/instrument-targets'))).sort();
+    } catch {
+      return [];
+    }
+  }
+
+  async function enteredBlock() {
+    const [entered] = parseMcqBlocks(await vault.read(NOTE_PATH)).instruments;
+    if (entered === undefined) throw new Error('no block was entered into the note');
+    return entered;
+  }
+
+  function spyOnWrites(): string[] {
+    const writes: string[] = [];
+    const realWrite = vault.write.bind(vault);
+    vault.write = async (path, content) => {
+      writes.push(path);
+      return realWrite(path, content);
+    };
+    return writes;
+  }
+
+  /** A hand-off as the code before this bead did it: the block and the paper's own event, no target record. */
+  async function handOffAsBeforeTheRecordExisted(
+    paper: PaperRecord,
+    keepBlock: boolean,
+  ): Promise<void> {
+    const first = paper.items[0];
+    if (first === undefined) throw new Error('fixture paper has no item');
+    const instrumentId = await paperItemInstrumentId(paper.id, first.slotId);
+    if (keepBlock) {
+      const { content } = insertMcqBlock({
+        source: NOTE,
+        afterBlockIndex: 0,
+        fields: {
+          ...acceptGeneratedMcq(paperItemMcqCandidate(first, 0), instrumentId),
+          paperOrigin: { paperId: paper.id, slotId: first.slotId },
+        },
+      });
+      await vault.write(NOTE_PATH, content);
+    }
+    const handed = applyPaperEvent(paper, {
+      kind: 'item-handed-off',
+      schemaVersion: 1,
+      eventId: 'e-legacy',
+      timestamp: '2026-09-16T00:00:00.000Z',
+      paperId: paper.id,
+      slotId: first.slotId,
+    });
+    await vault.write(paperRecordPath(paper.id), `${JSON.stringify(handed, null, 2)}\n`);
+  }
+
+  it('a read demand writes exactly one record, with origin paper-handoff, bound to the block as entered', async () => {
+    const paper = await paperWith(READ_ACCOUNT);
+
+    const result = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET, {
+      now: () => HANDOFF_NOW,
+    });
+
+    expect(await targetFiles()).toEqual([
+      instrumentTargetStorePath(result.instrumentId).split('/').pop(),
+    ]);
+    const read = await readInstrumentTarget(vault, result.instrumentId);
+    expect(read.kind).toBe('record');
+    if (read.kind !== 'record') return;
+    expect(read.record).toEqual({
+      schemaVersion: 'instrument-target.v1',
+      instrumentId: result.instrumentId,
+      demandBasis: 'authoring-intent',
+      declaredDemand: 'recall-a-fact',
+      origin: 'paper-handoff',
+      questionBinding: await questionBindingOf(await enteredBlock()),
+      authoredAt: HANDOFF_NOW,
+      generator: { taskId: 'quiz.generate.v1', promptVersion: 'v1' },
+    });
+    // The one reader agrees: a declared demand, and a multiple-choice block reads recognition.
+    expect(await readInstrumentDemand(vault, result.instrumentId, await enteredBlock())).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'paper-handoff',
+      responseForm: 'recognition',
+    });
+  });
+
+  it('records the demand the item was authored for, one record per handed-off slot', async () => {
+    const paper = await paperWith(READ_ACCOUNT, {
+      items: [
+        item({ slotId: 'slot-0', intendedDemand: 'calculate' }),
+        item({ slotId: 'slot-1', intendedDemand: 'compare-or-choose' }),
+      ],
+    });
+
+    const a = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const b = await handOffPaperItem(vault, paper.id, 'slot-1', { ...TARGET, questionIndex: 1 });
+
+    expect(await targetFiles()).toHaveLength(2);
+    const [readA, readB] = await Promise.all([
+      readInstrumentTarget(vault, a.instrumentId),
+      readInstrumentTarget(vault, b.instrumentId),
+    ]);
+    expect(readA.kind === 'record' && readA.record.declaredDemand).toBe('calculate');
+    expect(readB.kind === 'record' && readB.record.declaredDemand).toBe('compare-or-choose');
+  });
+
+  it('a second hand-off writes nothing: the record, the note and the paper stay byte-identical', async () => {
+    const paper = await paperWith(READ_ACCOUNT);
+    const first = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET, {
+      now: () => HANDOFF_NOW,
+    });
+    const targetPath = join(root, instrumentTargetStorePath(first.instrumentId));
+    const recordBefore = await readFile(targetPath, 'utf8');
+    const noteBefore = await vault.read(NOTE_PATH);
+    const paperBefore = await readFile(join(root, paperRecordPath(paper.id)), 'utf8');
+    const writes = spyOnWrites();
+
+    const second = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET, {
+      now: () => '2026-09-18T09:00:00.000Z',
+    });
+
+    expect(second.instrumentWritten).toBe(false);
+    expect(writes).toEqual([]);
+    expect(await readFile(targetPath, 'utf8')).toBe(recordBefore);
+    expect(await vault.read(NOTE_PATH)).toBe(noteBefore);
+    expect(await readFile(join(root, paperRecordPath(paper.id)), 'utf8')).toBe(paperBefore);
+    expect(await targetFiles()).toHaveLength(1);
+  });
+
+  it('a hand-off that was interrupted before the note was written converges on one record, bound to the block that lands', async () => {
+    const paper = await paperWith(READ_ACCOUNT);
+    const realWrite = vault.write.bind(vault);
+    let interrupt = true;
+    vault.write = async (path, content) => {
+      if (interrupt && path === NOTE_PATH) {
+        interrupt = false;
+        throw new Error('simulated restart');
+      }
+      return realWrite(path, content);
+    };
+
+    await expect(
+      handOffPaperItem(vault, paper.id, 'slot-0', TARGET, { now: () => HANDOFF_NOW }),
+    ).rejects.toThrow('simulated restart');
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    const [midway] = await targetFiles();
+    const midwayBytes = await readFile(
+      join(root, '.olea/instrument-targets', midway ?? ''),
+      'utf8',
+    );
+
+    const retry = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET, {
+      now: () => '2026-09-18T09:00:00.000Z',
+    });
+
+    expect(retry.instrumentWritten).toBe(true);
+    expect(await targetFiles()).toEqual([midway]);
+    expect(await readFile(join(root, instrumentTargetStorePath(retry.instrumentId)), 'utf8')).toBe(
+      midwayBytes,
+    );
+    expect(
+      await readInstrumentDemand(vault, retry.instrumentId, await enteredBlock()),
+    ).toMatchObject({ kind: 'declared', origin: 'paper-handoff' });
+  });
+
+  it('a hand edit to the entered question makes the reading stale and leaves the record untouched (the record is immutable)', async () => {
+    const paper = await paperWith(READ_ACCOUNT);
+    const { instrumentId } = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const recordPath = join(root, instrumentTargetStorePath(instrumentId));
+    const before = await readFile(recordPath, 'utf8');
+    const note = await vault.read(NOTE_PATH);
+    await vault.write(
+      NOTE_PATH,
+      note.replace('Which synthetic layer sits lowest?', 'A changed stem?'),
+    );
+
+    expect(await readInstrumentDemand(vault, instrumentId, await enteredBlock())).toEqual({
+      kind: 'stale',
+      demand: 'recall-a-fact',
+    });
+    expect(await readFile(recordPath, 'utf8')).toBe(before);
+  });
+
+  it('a defaulted demand hands off unspecified: the block is entered, no record is written', async () => {
+    const paper = await paperWith(DEFAULT_ACCOUNT);
+
+    const result = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(result.instrumentWritten).toBe(true);
+    expect(await targetFiles()).toEqual([]);
+    expect((await readInstrumentTarget(vault, result.instrumentId)).kind).toBe('absent');
+    expect(await readInstrumentDemand(vault, result.instrumentId, await enteredBlock())).toEqual({
+      kind: 'unspecified',
+    });
+  });
+
+  it('a paper written before the demand basis existed stays unspecified: no basis is never read as read', async () => {
+    const paper = await paperWith(ACCOUNT);
+    expect('intendedDemandBasis' in paper.compositionAccount).toBe(false);
+
+    const result = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(result.instrumentWritten).toBe(true);
+    expect(await targetFiles()).toEqual([]);
+  });
+
+  it('a basis that is neither of the two words is not a reading', async () => {
+    const paper = await paperWith({ ...ACCOUNT, intendedDemandBasis: 'Read' });
+    await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    expect(await targetFiles()).toEqual([]);
+  });
+
+  it('legacy items stay unspecified: a repeat never backfills an item handed off before the record existed', async () => {
+    const withBlock = await paperWith(READ_ACCOUNT);
+    await handOffAsBeforeTheRecordExisted(withBlock, true);
+    const noteWithBlock = await vault.read(NOTE_PATH);
+
+    const repeat = await handOffPaperItem(vault, withBlock.id, 'slot-0', TARGET);
+
+    expect(repeat.instrumentWritten).toBe(false);
+    expect(await vault.read(NOTE_PATH)).toBe(noteWithBlock);
+    expect(await targetFiles()).toEqual([]);
+
+    // The same when she has since moved or removed the block: still nothing to backfill.
+    await vault.write(NOTE_PATH, NOTE);
+    const removed = await paperWith(READ_ACCOUNT);
+    await handOffAsBeforeTheRecordExisted(removed, false);
+    await handOffPaperItem(vault, removed.id, 'slot-0', TARGET);
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+    expect(await targetFiles()).toEqual([]);
+  });
+
+  it('a repair of a missing paper-origin line on an entered block writes no record either', async () => {
+    const paper = await paperWith(DEFAULT_ACCOUNT);
+    await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+    const withOrigin = await vault.read(NOTE_PATH);
+    await vault.write(NOTE_PATH, withOrigin.replace(`paper-origin: ${paper.id} slot-0\n`, ''));
+
+    const repair = await handOffPaperItem(vault, paper.id, 'slot-0', TARGET);
+
+    expect(repair.instrumentWritten).toBe(true);
+    expect(await targetFiles()).toEqual([]);
+  });
+
+  it('a refused hand-off (a card item, an unknown slot) writes no record', async () => {
+    const paper = await paperWith(READ_ACCOUNT, {
+      items: [item({ slotId: 'slot-card', taskId: 'cards.generate.v1' })],
+    });
+    await expect(handOffPaperItem(vault, paper.id, 'slot-card', TARGET)).rejects.toThrow(
+      /cards\.generate\.v1/,
+    );
+    await expect(handOffPaperItem(vault, paper.id, 'slot-nope', TARGET)).rejects.toThrow(
+      /not an item/,
+    );
+    expect(await targetFiles()).toEqual([]);
+    expect(await vault.read(NOTE_PATH)).toBe(NOTE);
+  });
+
+  it('nothing lands in her note because a demand was carried: the block is the same with and without one', async () => {
+    const read = await paperWith(READ_ACCOUNT);
+    const readResult = await handOffPaperItem(vault, read.id, 'slot-0', TARGET);
+    const noteWithRecord = await vault.read(NOTE_PATH);
+
+    await vault.write(NOTE_PATH, NOTE);
+    const defaulted = await paperWith(DEFAULT_ACCOUNT);
+    const defaultResult = await handOffPaperItem(vault, defaulted.id, 'slot-0', TARGET);
+    const noteWithout = await vault.read(NOTE_PATH);
+
+    const normalise = (text: string, paperId: string, instrumentId: string) =>
+      text.replaceAll(paperId, 'PAPER').replaceAll(instrumentId, 'INSTRUMENT');
+    expect(normalise(noteWithRecord, read.id, readResult.instrumentId)).toBe(
+      normalise(noteWithout, defaulted.id, defaultResult.instrumentId),
+    );
+    expect(await targetFiles()).toEqual([
+      instrumentTargetStorePath(readResult.instrumentId).split('/').pop(),
+    ]);
+  });
+});
+
+describe('handOffPaperItem — a structured paper ([D-430]) reads the demand on the part, not the account', () => {
+  let root: string;
+  let vault: FolderSource;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-paper-handoff-structured-demand-'));
+    vault = new FolderSource(root);
+    await vault.write(NOTE_PATH, NOTE);
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  function structureWith(demand: PaperPartDemandReading): PaperStructuredShape {
+    return {
+      ...STRUCTURE,
+      parts: STRUCTURE.parts.map((part) => (part.slotId === 'slot-0' ? { ...part, demand } : part)),
+    };
+  }
+
+  async function handOffSlot0(
+    account: object,
+    structure: PaperStructuredShape,
+    demandOfItem: PaperGeneratedItem['intendedDemand'] = 'recall-a-fact',
+    slotId = 'slot-0',
+  ) {
+    const paper = await createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: account as PaperCompositionAccount,
+      items: [item({ slotId: 'slot-0', intendedDemand: demandOfItem })],
+      emptySlots: [],
+      structure,
+    });
+    const result = await handOffPaperItem(vault, paper.id, slotId, TARGET);
+    return { paper, result, read: await readInstrumentTarget(vault, result.instrumentId) };
+  }
+
+  it('a part whose demand was read writes the record, whatever the flat account says (the basis moved to the part)', async () => {
+    const { read } = await handOffSlot0(
+      ACCOUNT,
+      structureWith({ status: 'read', demand: 'recall-a-fact' }),
+    );
+    expect(read.kind === 'record' && read.record.origin).toBe('paper-handoff');
+    expect(read.kind === 'record' && read.record.declaredDemand).toBe('recall-a-fact');
+
+    const second = await handOffSlot0(
+      DEFAULT_ACCOUNT,
+      structureWith({ status: 'read', demand: 'recall-a-fact' }),
+    );
+    expect(second.read.kind).toBe('record');
+  });
+
+  it.each([
+    ['not-read', { status: 'not-read' }],
+    ['cannot-tell', { status: 'cannot-tell' }],
+    ['unsupported', { status: 'unsupported', commandWord: 'discuss' }],
+  ] as const)(
+    'a part reading of %s writes no record, even when the flat account says read',
+    async (_name, demand) => {
+      const { read } = await handOffSlot0(READ_ACCOUNT, structureWith(demand));
+      expect(read.kind).toBe('absent');
+    },
+  );
+
+  it('a part that reads a different demand than the item was authored for is not certified: no record', async () => {
+    const { read } = await handOffSlot0(
+      READ_ACCOUNT,
+      structureWith({ status: 'read', demand: 'calculate' }),
+      'recall-a-fact',
+    );
+    expect(read.kind).toBe('absent');
+  });
+
+  it('a slot with no part in the structure is not read: no record', async () => {
+    const paper = await createPaper(vault, {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      compositionAccount: READ_ACCOUNT as PaperCompositionAccount,
+      items: [item({ slotId: 'slot-9' })],
+      emptySlots: [],
+      structure: STRUCTURE,
+    });
+    const result = await handOffPaperItem(vault, paper.id, 'slot-9', TARGET);
+    expect(result.instrumentWritten).toBe(true);
+    expect((await readInstrumentTarget(vault, result.instrumentId)).kind).toBe('absent');
   });
 });
