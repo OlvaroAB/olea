@@ -28,6 +28,14 @@
  * (`resolveGradingRelationContext`, `buildGradingSourceMaterial`), never re-implemented, fed
  * with what the real reader returned. No model call, no network.
  *
+ * **Identity, and why the first describe below is not enough on its own (`ol-egov.141.89.6.71`,
+ * open question; bug bead `ol-egov.141.89.6.74`).** The first two describes hand the reader
+ * concept NAMES as the subject and neighbour ids (`EFFECT`, `CAUSE`), so an edge endpoint's name
+ * and the id compared with it are the same string and the comparison cannot fail. Production
+ * never does that: the subject id is `instrument.conceptIds[0]`, the opaque `ConceptRecord.key`
+ * (`ol-63e1`, `core/src/session/enumerate.ts`), while `ConceptRelation.from`/`.to` are names, with
+ * the keys only on `fromKey`/`toKey`. The third describe uses those production identities.
+ *
  * INV-3: every string is coined. No course code, note title or wording from any real vault.
  */
 
@@ -39,6 +47,7 @@ import {
   type CorpusRelationVerdictPort,
   type CorpusVerdict,
   deriveRelationSet,
+  mintOpaqueConceptKey,
   type RelationSet,
   resolveGradingRelationContext,
   runCorpusRelationBatch,
@@ -271,5 +280,97 @@ describe('what the grader is handed for a corpus-produced causes partner (F5.2a,
       'omissionDenominator',
       'sourceBlocks',
     ]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Production identities: the subject id is a concept record key, not a name
+// ---------------------------------------------------------------------------
+
+/** Minted through the one opaque-key seam production uses, with a fixed nonce so the value is stable: `concept-key1:<nonce>`, never equal to any wording. */
+const CAUSE_KEY = mintOpaqueConceptKey(() => 'nonce-3f9a-cause');
+const EFFECT_KEY = mintOpaqueConceptKey(() => 'nonce-7c21-effect');
+
+function keyedConcept(name: string, key: string, sourcePath: string): CorpusConcept {
+  return { ...concept(name, sourcePath), key };
+}
+
+/**
+ * The corpus stage exactly as production runs it (`corpusConceptsFrom` threads `ReadConcept.key`
+ * onto every candidate, `ol-282w`), the verdict echoing each candidate's key as the wire adapter
+ * does, folded the way the ingestion tick folds it.
+ */
+async function foldedKeyedRelationSet(verdict: CorpusVerdict): Promise<RelationSet> {
+  const cause = keyedConcept(CAUSE, CAUSE_KEY, 'Lecture 3.md');
+  const effect = keyedConcept(EFFECT, EFFECT_KEY, 'Lecture 4.md');
+  const result = await runCorpusRelationBatch(portReturning([verdict]), {
+    newConcepts: [cause],
+    allConcepts: [cause, effect],
+    signals: [{ kind: 'embedding-proximity', a: CAUSE, b: EFFECT }],
+    passageText: (c) => `passage text for ${c.name}`,
+  });
+  return deriveRelationSet([], result.relations);
+}
+
+const KEYED_CAUSES_A_TO_B: CorpusVerdict = {
+  ...CAUSES_A_TO_B,
+  aKey: CAUSE_KEY,
+  bKey: EFFECT_KEY,
+};
+
+describe('the partner reader is given production identities: the subject and neighbour are concept keys (ol-egov.141.89.6.74)', () => {
+  it('what the corpus stage produces names the endpoints by wording and carries their keys beside them, and no key equals a name', async () => {
+    const set = await foldedKeyedRelationSet(KEYED_CAUSES_A_TO_B);
+
+    const edge = set.entries[0]?.edge as ConceptRelation & {
+      readonly fromKey?: string;
+      readonly toKey?: string;
+    };
+
+    expect([edge.from, edge.to]).toEqual([CAUSE, EFFECT]);
+    expect([edge.fromKey, edge.toKey]).toEqual([CAUSE_KEY, EFFECT_KEY]);
+    // The fact that hid the defect: the comparison in the reader can only hold if these were equal.
+    expect(CAUSE_KEY).not.toBe(CAUSE);
+    expect(EFFECT_KEY).not.toBe(EFFECT);
+  });
+
+  // KNOWN DEFECT, pinned with `it.fails` so the tree stays green until the fix lands. These two
+  // bodies are the required behaviour: an edge is a partner of a subject when the subject's KEY is
+  // the edge's key at one end (`fromKey`/`toKey` first, then the name -> key join over the concept
+  // records, the order every other relation reader uses). Today `resolveExplainBackRelationEdge`
+  // (and `main.ts`'s `resolveExplainBackCausesPartner` before it) compares `edge.from`/`.to` (names)
+  // with the key, so the edge is never found. When the fix lands these two go red as "expected to
+  // fail, passed": change `it.fails` to `it`.
+  it.fails('finds the edge for a subject given by its key, whichever end of the edge the subject is', async () => {
+    const set = await foldedKeyedRelationSet(KEYED_CAUSES_A_TO_B);
+
+    const asEffect = resolveExplainBackRelationEdge(
+      { relations: () => set },
+      EFFECT_KEY,
+      CAUSE_KEY,
+    );
+    const asCause = resolveExplainBackRelationEdge({ relations: () => set }, CAUSE_KEY, EFFECT_KEY);
+
+    expect(asEffect?.type).toBe('causes');
+    expect(asCause).toEqual(asEffect);
+  });
+
+  it.fails('a stale edge is still withheld and a current one served, when the ids are keys', async () => {
+    const set = await foldedKeyedRelationSet(KEYED_CAUSES_A_TO_B);
+
+    expect(
+      resolveExplainBackRelationEdge(
+        { relations: () => withEvidence(set, 'current') },
+        EFFECT_KEY,
+        CAUSE_KEY,
+      ),
+    ).toBeDefined();
+    expect(
+      resolveExplainBackRelationEdge(
+        { relations: () => withEvidence(set, 'stale') },
+        EFFECT_KEY,
+        CAUSE_KEY,
+      ),
+    ).toBeUndefined();
   });
 });
