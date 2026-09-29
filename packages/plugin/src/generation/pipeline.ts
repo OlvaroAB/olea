@@ -149,6 +149,16 @@
  * the whole sweep; `undefined` is exactly the "no snapshot, no gate" signal
  * `materialize-mcq.ts` already treats every other optional field on
  * `DraftRecord` as.
+ *
+ * **`sourceCitation.passageDigest` (`[D-446]` option (a), `ol-egov.141.89.2.5`).** The citation
+ * this sweep builds names the source and page only. A passage digest is added at draft time
+ * (`grounding-passage.ts`) exactly where the passage the drafted items rest on can be named
+ * without guessing: the request supplied ONE chunk, and that chunk stands as exactly one passage
+ * of the cited markdown note (the shared rule, `olea-core`'s `citePassage`). With several chunks
+ * (the usual case) nothing in the response says which one an item used, so no digest is written
+ * and the item keeps whole-note grain (or the accept-time seal's single-passage mint) — the
+ * top-ranked chunk is never taken. Naming it for those drafts needs the response to cite its
+ * chunk: a wire change, filed as a bead.
  */
 
 import type {
@@ -170,6 +180,7 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
+import { withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
 import type { GenerationRoutingDeps } from './routing.js';
@@ -887,7 +898,20 @@ export async function runGenerationSweep(
           (unit) => unit.provenance.embeddedIn?.notePath === embeddingNotePath,
         );
       }
-      const sourceCitation = sourceUnit === undefined ? undefined : citationFromUnit(sourceUnit);
+      // `[D-446]` option (a) (`ol-egov.141.89.2.5`): the passage digest, recorded only where the
+      // passage this draft rests on can be named without guessing — see `grounding-passage.ts`.
+      // Today that is the request supplying exactly one chunk; a response that cites its chunk is
+      // a wire change, not built. Several chunks, no digest: the accept-time seal then mints one
+      // only for a source with a single body passage, and everything else keeps whole-note grain.
+      const sourceCitation =
+        sourceUnit === undefined
+          ? undefined
+          : await withGroundingPassage(
+              deps.vault,
+              citationFromUnit(sourceUnit),
+              notePath,
+              result.request.sourceChunks,
+            );
 
       // `ol-0r92.87`: the snapshot the drafted questions were actually
       // grounded against — see the module doc's own section. Read once per
