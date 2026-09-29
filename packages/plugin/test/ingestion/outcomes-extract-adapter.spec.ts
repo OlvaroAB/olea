@@ -19,13 +19,37 @@ import {
 import { scopePaperStructureFrom } from '../../src/scope-reading/persistence.js';
 import { errorEnvelope, successEnvelope } from '../oracle/worker-envelope-fixtures.js';
 
-/** Records what was sent and answers with whatever the test scripted. */
+/**
+ * The numbering the Worker returns when nothing it was sent was furniture-only: shown number k is
+ * the chunk sent at position k, with that chunk's length (`ol-egov.141.89.7.38`).
+ */
+function identityNumbering(request: WorkerTaskRequest) {
+  const chunks = (request.payload as { sourceChunks: string[] }).sourceChunks;
+  return { chunks: chunks.map((chunk, i) => ({ sentIndex: i + 1, length: chunk.length })) };
+}
+
+/**
+ * Records what was sent and answers with whatever the test scripted. A success envelope whose
+ * result carries no `numbering` key gets the identity numbering, because the Worker always returns
+ * one (`groundOutcomes`); a test that wants something else scripts `numbering` itself, or passes
+ * `{ numbering: 'omit' }` to model a Worker from before the field existed.
+ */
 class RecordingTransport {
   readonly sent: WorkerTaskRequest[] = [];
-  constructor(private readonly reply: (request: WorkerTaskRequest) => unknown) {}
+  constructor(
+    private readonly reply: (request: WorkerTaskRequest) => unknown,
+    private readonly options: { readonly numbering?: 'identity' | 'omit' } = {},
+  ) {}
   async send(request: WorkerTaskRequest): Promise<unknown> {
     this.sent.push(request);
-    return this.reply(request);
+    const envelope = this.reply(request);
+    if (this.options.numbering === 'omit') return envelope;
+    if (typeof envelope !== 'object' || envelope === null) return envelope;
+    const body = envelope as { ok?: unknown; result?: unknown };
+    if (body.ok !== true || typeof body.result !== 'object' || body.result === null)
+      return envelope;
+    if ('numbering' in body.result) return envelope;
+    return { ...body, result: { ...body.result, numbering: identityNumbering(request) } };
   }
 }
 
@@ -696,6 +720,234 @@ describe('WorkerOutcomesExtractReader — unknown marks, parts, total and time (
       expect(stored.totalMarks).toEqual({ status: 'stated', value: 60 });
       expect(stored.timeAllowance).toEqual({ status: 'stated', minutes: 90 });
     });
+  });
+});
+
+describe('WorkerOutcomesExtractReader — the model cites the passages it was SHOWN, and the Worker says which those were (ol-egov.141.89.7.38)', () => {
+  /**
+   * Seven passages as the landed units come: furniture-only blocks (a bare rule, an empty bullet, a
+   * bare quote marker) ahead of and between three that hold something. The Worker numbers only those
+   * three, so the model's number 1, 2 and 3 stand for the passages sent at positions 3, 5 and 7.
+   */
+  const SENT = [
+    '---',
+    '-',
+    'Time allowed: 90 minutes. Total marks: 60.',
+    '***',
+    'Section A. Answer ALL questions on the invented alloy.',
+    '>',
+    '1 (a) State one property of the invented alloy.',
+  ];
+  const PASSAGES = SENT.map((text, i) => ({ text, anchor: { blockIndex: i } }));
+  const at = (position: number) => ({ blockIndex: position - 1 });
+  /** What the Worker sends for SENT: shown number k is the chunk at `[3, 5, 7][k - 1]`. */
+  const NUMBERING = {
+    chunks: [3, 5, 7].map((sentIndex) => ({ sentIndex, length: SENT[sentIndex - 1]?.length })),
+  };
+  const read = async (
+    result: Record<string, unknown>,
+    options: { numbering?: unknown; documentKind?: 'objectives' | 'past-paper' } = {},
+  ) =>
+    new WorkerOutcomesExtractReader({
+      transport: new RecordingTransport(() =>
+        okResponse({
+          ...result,
+          ...('numbering' in options ? { numbering: options.numbering } : { numbering: NUMBERING }),
+        }),
+      ),
+    }).read({ documentKind: options.documentKind ?? 'past-paper', passages: PASSAGES });
+
+  const SECTION = { label: 'Section A', questionForm: 'structured', itemCount: 1 };
+  const GROUP = { id: 'g1', kind: 'parent-question', label: '1', memberLabels: ['1(a)'] };
+
+  it('resolves an outcome to the passage the model numbered, not to the one at that position in what was sent', async () => {
+    const result = await read(
+      {
+        outcomes: [
+          { label: 'First.', confidence: 0.9, anchorIndex: 1 },
+          { label: 'Second.', confidence: 0.9, anchorIndex: 2 },
+          { label: 'Third.', confidence: 0.9, anchorIndex: 3 },
+        ],
+      },
+      { documentKind: 'objectives' },
+    );
+    expect(result.outcomes.map((outcome) => outcome.anchor)).toEqual([at(3), at(5), at(7)]);
+  });
+
+  it('resolves a section, a question group, its stimulus and a part instruction through the same numbering', async () => {
+    const result = await read({
+      paperStructure: {
+        sections: [{ ...SECTION, anchorIndex: 2 }],
+        questionGroups: [
+          {
+            ...GROUP,
+            anchorIndex: 3,
+            stimulus: { status: 'identified', form: 'figure', anchorIndex: 2 },
+          },
+        ],
+        questionParts: [
+          {
+            id: 'p1',
+            label: '1(a)',
+            groupId: 'g1',
+            instructionAnchorIndex: 3,
+            questionForm: 'short answer',
+          },
+        ],
+      },
+    });
+    const structure = result.paperStructure;
+    expect(structure.sections[0]?.anchor).toEqual(at(5));
+    expect(structure.questionGroups?.[0]?.anchor).toEqual(at(7));
+    expect(structure.questionGroups?.[0]?.stimulus).toEqual({
+      status: 'identified',
+      form: 'figure',
+      anchor: at(5),
+    });
+    expect(structure.questionParts?.[0]?.instructionAnchor).toEqual(at(7));
+  });
+
+  it('accepts a total and a time allowance cited on a shown number, and refuses one cited on a number never shown', async () => {
+    const shown = await read({
+      paperStructure: {
+        sections: [],
+        totalMarks: { value: 60, anchorIndex: 1 },
+        timeAllowanceMinutes: { value: 90, anchorIndex: 1 },
+      },
+    });
+    expect(shown.paperStructure.totalMarks).toBe(60);
+    expect(shown.paperStructure.timeAllowanceMinutes).toBe(90);
+
+    // Seven chunks were sent but three were shown, so 4 names a passage of what was sent that the
+    // model never saw: in range of the sent list, absent from the shown one.
+    await expect(
+      read({ paperStructure: { sections: [], totalMarks: { value: 60, anchorIndex: 4 } } }),
+    ).rejects.toThrow(/never shown/);
+    await expect(
+      read({
+        paperStructure: { sections: [], timeAllowanceMinutes: { value: 90, anchorIndex: 4 } },
+      }),
+    ).rejects.toThrow(/never shown/);
+  });
+
+  it('refuses a number the Worker never showed for every kind of anchor', async () => {
+    const refuse = (
+      result: Record<string, unknown>,
+      documentKind: 'objectives' | 'past-paper' = 'past-paper',
+    ) => expect(read(result, { documentKind })).rejects.toThrow(OutcomesExtractReaderError);
+    await refuse({ outcomes: [{ label: 'X.', confidence: 0.9, anchorIndex: 4 }] }, 'objectives');
+    await refuse({ paperStructure: { sections: [{ ...SECTION, anchorIndex: 4 }] } });
+    await refuse({ paperStructure: { questionGroups: [{ ...GROUP, anchorIndex: 4 }] } });
+    await refuse({
+      paperStructure: {
+        questionGroups: [
+          {
+            ...GROUP,
+            anchorIndex: 1,
+            stimulus: { status: 'identified', form: 'table', anchorIndex: 4 },
+          },
+        ],
+      },
+    });
+    await refuse({
+      paperStructure: {
+        questionGroups: [{ ...GROUP, anchorIndex: 1 }],
+        questionParts: [
+          { id: 'p1', label: '1(a)', groupId: 'g1', instructionAnchorIndex: 4, questionForm: 'f' },
+        ],
+      },
+    });
+  });
+
+  it('with nothing dropped the numbering is the identity and reads as it always did (control)', async () => {
+    const passages = SENT.filter((_, i) => [2, 4, 6].includes(i)).map((text, i) => ({
+      text,
+      anchor: { blockIndex: i },
+    }));
+    const result = await new WorkerOutcomesExtractReader({
+      transport: new RecordingTransport(() =>
+        okResponse({ outcomes: [{ label: 'X.', confidence: 0.9, anchorIndex: 3 }] }),
+      ),
+    }).read({ documentKind: 'objectives', passages });
+    expect(result.outcomes[0]?.anchor).toEqual({ blockIndex: 2 });
+  });
+
+  it('refuses a response with no numbering when a number is about to be resolved: it does not guess that number is a position in what was sent', async () => {
+    const transport = new RecordingTransport(
+      () => okResponse({ outcomes: [{ label: 'X.', confidence: 0.9, anchorIndex: 1 }] }),
+      { numbering: 'omit' },
+    );
+    await expect(
+      new WorkerOutcomesExtractReader({ transport }).read({
+        documentKind: 'objectives',
+        passages: PASSAGES,
+      }),
+    ).rejects.toThrow(/numbering/);
+    // and each other kind of anchor is refused the same way
+    for (const paperStructure of [
+      { sections: [{ ...SECTION, anchorIndex: 1 }] },
+      { questionGroups: [{ ...GROUP, anchorIndex: 1 }] },
+      { totalMarks: { value: 60, anchorIndex: 1 } },
+      { timeAllowanceMinutes: { value: 90, anchorIndex: 1 } },
+    ]) {
+      await expect(
+        new WorkerOutcomesExtractReader({
+          transport: new RecordingTransport(() => okResponse({ paperStructure }), {
+            numbering: 'omit',
+          }),
+        }).read({ documentKind: 'past-paper', passages: PASSAGES }),
+      ).rejects.toBeInstanceOf(OutcomesExtractReaderError);
+    }
+  });
+
+  it('a response that cites nothing needs no numbering, so an older Worker reading an empty document is not refused', async () => {
+    const transport = new RecordingTransport(() => okResponse({ outcomes: [] }), {
+      numbering: 'omit',
+    });
+    const result = await new WorkerOutcomesExtractReader({ transport }).read({
+      documentKind: 'objectives',
+      passages: PASSAGES,
+    });
+    expect(result.outcomes).toEqual([]);
+  });
+
+  it('refuses a numbering it cannot trust, rather than reading through it', async () => {
+    const cited = { outcomes: [{ label: 'X.', confidence: 0.9, anchorIndex: 1 }] };
+    const refuse = (numbering: unknown) =>
+      expect(read(cited, { numbering, documentKind: 'objectives' })).rejects.toThrow(
+        OutcomesExtractReaderError,
+      );
+    const [first, second, third] = NUMBERING.chunks;
+    await refuse('three');
+    await refuse(null);
+    await refuse({});
+    await refuse({ chunks: 'all' });
+    await refuse({ chunks: [null] });
+    await refuse({ chunks: [{ sentIndex: 3 }] }); // no length
+    await refuse({ chunks: [{ sentIndex: '3', length: first?.length }] });
+    await refuse({ chunks: [{ sentIndex: 0, length: SENT[0]?.length }] }); // positions count from 1
+    await refuse({ chunks: [{ sentIndex: 1.5, length: 1 }] });
+    await refuse({ chunks: [{ sentIndex: 8, length: 1 }] }); // beyond the seven sent
+    await refuse({ chunks: [second, first, third] }); // out of order
+    await refuse({ chunks: [first, first] }); // a position twice
+  });
+
+  it('refuses a numbering whose recorded length is not the length of the passage sent there: the Worker numbered a different list', async () => {
+    await expect(
+      read(
+        { outcomes: [{ label: 'X.', confidence: 0.9, anchorIndex: 1 }] },
+        {
+          numbering: { chunks: [{ sentIndex: 3, length: (SENT[2]?.length ?? 0) + 1 }] },
+          documentKind: 'objectives',
+        },
+      ),
+    ).rejects.toThrow(/different list/);
+  });
+
+  it('never leaks the numbering into the result the caller receives', async () => {
+    const result = await read({ paperStructure: { sections: [{ ...SECTION, anchorIndex: 1 }] } });
+    expect(Object.keys(result)).toEqual(['outcomes', 'paperStructure']);
+    expect(JSON.stringify(result)).not.toContain('sentIndex');
   });
 });
 

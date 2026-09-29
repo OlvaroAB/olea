@@ -83,6 +83,19 @@
  * As with `questionGroups`, every new key is present in the result only when the response carried
  * it: a 1.0.0 or 1.1.0 response reads to the very object it read to before, and **absent is not
  * empty** (an empty `questionParts` list means a reader that looked and found none).
+ *
+ * **Passage numbers are positions in the list the model was SHOWN, not in the list this reader sent
+ * (`ol-egov.141.89.7.38`).** The Worker leaves furniture-only chunks (a bare rule, an empty bullet, a
+ * bare quote marker) out of the numbered list it prints, so a number in any `anchorIndex` or
+ * `instructionAnchorIndex` counts only the chunks it kept. Indexing `passages` with that number
+ * moved every later anchor onto a different passage whenever such a chunk came first, and the
+ * number was in range on both sides, so nothing flagged it. The Worker now returns
+ * `result.numbering` (for each shown number, the position of that chunk among the passages sent,
+ * and its length); this reader resolves EVERY cited number through it (outcomes, sections, groups,
+ * stimuli, part instructions, the total and the time allowance) and holds no copy of the Worker's
+ * filter. It refuses, rather than guesses, a response that cites a passage but carries no
+ * numbering, a malformed numbering, a number the Worker never showed, or a numbering whose recorded
+ * length is not the length of the passage sent at that position.
  */
 
 import type {
@@ -272,20 +285,21 @@ export class WorkerOutcomesExtractReader {
     }
 
     const response = readResponseBody(body);
-    const outcomes = readOutcomeProposals(response, passages);
-    const sections = readSectionProposals(response, passages);
-    const questionGroups = readQuestionGroupProposals(response, passages);
-    const questionParts = readQuestionPartProposals(response, passages);
+    const resolver = passageResolver(response, passages);
+    const outcomes = readOutcomeProposals(response, resolver);
+    const sections = readSectionProposals(response, resolver);
+    const questionGroups = readQuestionGroupProposals(response, resolver);
+    const questionParts = readQuestionPartProposals(response, resolver);
     const totalMarks = readStatedPaperNumber(
       response,
-      passages,
+      resolver,
       'totalMarks',
       'total marks',
       false,
     );
     const timeAllowanceMinutes = readStatedPaperNumber(
       response,
-      passages,
+      resolver,
       'timeAllowanceMinutes',
       'time allowance',
       true,
@@ -343,7 +357,7 @@ function readResult(response: Record<string, unknown>): Record<string, unknown> 
 
 function readOutcomeProposals<TAnchor>(
   response: Record<string, unknown>,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
 ): readonly OutcomeCandidate<TAnchor>[] {
   const raw = readResult(response).outcomes;
   if (raw === undefined) return [];
@@ -352,12 +366,12 @@ function readOutcomeProposals<TAnchor>(
       'WorkerOutcomesExtractReader: the Worker response carried a `result.outcomes` that was not an array.',
     );
   }
-  return raw.map((entry, index) => toOutcomeCandidate(entry, passages, index));
+  return raw.map((entry, index) => toOutcomeCandidate(entry, resolver, index));
 }
 
 function toOutcomeCandidate<TAnchor>(
   raw: unknown,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   index: number,
 ): OutcomeCandidate<TAnchor> {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -373,13 +387,13 @@ function toOutcomeCandidate<TAnchor>(
       `WorkerOutcomesExtractReader: outcome ${index} ("${label}") carried no numeric confidence.`,
     );
   }
-  const anchorPassage = resolveAnchor(entry.anchorIndex, passages, `outcome ${index} ("${label}")`);
+  const anchorPassage = resolver.resolve(entry.anchorIndex, `outcome ${index} ("${label}")`);
   return { label, confidence, anchor: anchorPassage.anchor };
 }
 
 function readSectionProposals<TAnchor>(
   response: Record<string, unknown>,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
 ): readonly PaperSectionCandidate<TAnchor>[] {
   const paperStructure = readResult(response).paperStructure;
   const container =
@@ -393,12 +407,12 @@ function readSectionProposals<TAnchor>(
       'WorkerOutcomesExtractReader: the Worker response carried a `result.paperStructure.sections` that was not an array.',
     );
   }
-  return raw.map((entry, index) => toSectionCandidate(entry, passages, index));
+  return raw.map((entry, index) => toSectionCandidate(entry, resolver, index));
 }
 
 function toSectionCandidate<TAnchor>(
   raw: unknown,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   index: number,
 ): PaperSectionCandidate<TAnchor> {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -421,11 +435,7 @@ function toSectionCandidate<TAnchor>(
     );
   }
   const marks = readOptionalMarks(entry.marks, `paper section ${index} ("${label}")`);
-  const anchorPassage = resolveAnchor(
-    entry.anchorIndex,
-    passages,
-    `paper section ${index} ("${label}")`,
-  );
+  const anchorPassage = resolver.resolve(entry.anchorIndex, `paper section ${index} ("${label}")`);
   return {
     label,
     questionForm,
@@ -453,7 +463,7 @@ function readOptionalMarks(marks: unknown, describe: string): number | undefined
 
 function readQuestionGroupProposals<TAnchor>(
   response: Record<string, unknown>,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
 ): readonly PaperQuestionGroup<TAnchor>[] | undefined {
   const paperStructure = readResult(response).paperStructure;
   const container =
@@ -467,12 +477,12 @@ function readQuestionGroupProposals<TAnchor>(
       'WorkerOutcomesExtractReader: the Worker response carried a `result.paperStructure.questionGroups` that was not an array.',
     );
   }
-  return raw.map((entry, index) => toQuestionGroup(entry, passages, index));
+  return raw.map((entry, index) => toQuestionGroup(entry, resolver, index));
 }
 
 function toQuestionGroup<TAnchor>(
   raw: unknown,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   index: number,
 ): PaperQuestionGroup<TAnchor> {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -513,7 +523,7 @@ function toQuestionGroup<TAnchor>(
       `WorkerOutcomesExtractReader: ${describe} carried an invalid choose.`,
     );
   }
-  const anchor = resolveAnchor(entry.anchorIndex, passages, describe).anchor;
+  const anchor = resolver.resolve(entry.anchorIndex, describe).anchor;
   return {
     id,
     kind: kind as PaperQuestionGroupKind,
@@ -522,7 +532,7 @@ function toQuestionGroup<TAnchor>(
     memberLabels: memberLabels as string[],
     ...(choose !== undefined ? { choose } : {}),
     anchor,
-    stimulus: toStimulus(entry.stimulus, passages, describe),
+    stimulus: toStimulus(entry.stimulus, resolver, describe),
   };
 }
 
@@ -536,7 +546,7 @@ function readPaperStructureContainer(response: Record<string, unknown>): Record<
 /** `undefined` (absent, not empty) when the response carried no `questionParts`. */
 function readQuestionPartProposals<TAnchor>(
   response: Record<string, unknown>,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
 ): readonly QuestionPartCandidate<TAnchor>[] | undefined {
   const raw = readPaperStructureContainer(response).questionParts;
   if (raw === undefined) return undefined;
@@ -545,12 +555,12 @@ function readQuestionPartProposals<TAnchor>(
       'WorkerOutcomesExtractReader: the Worker response carried a `result.paperStructure.questionParts` that was not an array.',
     );
   }
-  return raw.map((entry, index) => toQuestionPart(entry, passages, index));
+  return raw.map((entry, index) => toQuestionPart(entry, resolver, index));
 }
 
 function toQuestionPart<TAnchor>(
   raw: unknown,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   index: number,
 ): QuestionPartCandidate<TAnchor> {
   const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
@@ -575,9 +585,8 @@ function toQuestionPart<TAnchor>(
     );
   }
   const marks = readOptionalMarks(entry.marks, describe);
-  const instructionAnchor = resolveAnchor(
+  const instructionAnchor = resolver.resolve(
     entry.instructionAnchorIndex,
-    passages,
     `${describe} instruction`,
   ).anchor;
   return {
@@ -622,7 +631,7 @@ function toPartDependency(raw: unknown, describe: string): PartDependencyCandida
  */
 function readStatedPaperNumber<TAnchor>(
   response: Record<string, unknown>,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   field: 'totalMarks' | 'timeAllowanceMinutes',
   describe: string,
   wholeMinutes: boolean,
@@ -640,14 +649,14 @@ function readStatedPaperNumber<TAnchor>(
       `WorkerOutcomesExtractReader: the paper's ${describe} carried no valid value.`,
     );
   }
-  resolveAnchor(entry.anchorIndex, passages, `the paper's ${describe}`);
+  resolver.resolve(entry.anchorIndex, `the paper's ${describe}`);
   return value;
 }
 
 /** An absent stimulus is unknown, never "none" — the Worker's own default, restated. */
 function toStimulus<TAnchor>(
   raw: unknown,
-  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  resolver: PassageResolver<TAnchor>,
   describe: string,
 ): PaperStimulus<TAnchor> {
   if (raw === undefined) return { status: 'not-identified' };
@@ -661,7 +670,7 @@ function toStimulus<TAnchor>(
         `WorkerOutcomesExtractReader: ${describe} carried an identified stimulus with no valid form.`,
       );
     }
-    const anchor = resolveAnchor(entry.anchorIndex, passages, `${describe} stimulus`).anchor;
+    const anchor = resolver.resolve(entry.anchorIndex, `${describe} stimulus`).anchor;
     return { status: 'identified', form: form as PaperStimulusForm, anchor };
   }
   if (status === 'not-identified') {
@@ -680,28 +689,98 @@ function toStimulus<TAnchor>(
 }
 
 /**
- * Resolves a 1-based `anchorIndex` back onto the passage the caller actually
- * sent. The Worker's own `groundOutcomes` (`outcomesExtract.ts`) already
- * drops any `anchorIndex` that does not name a chunk it actually sent; this
- * class does not re-trust that on faith and throws rather than silently
- * mis-anchoring if an index still fails to resolve — same posture
- * `WorkerConceptReader.toProposedConcept` holds for its own `anchorIndex`.
+ * Resolves a cited passage number back onto the passage the caller sent, through the Worker's own
+ * numbering (`ol-egov.141.89.7.38`). One resolver serves a whole response: the numbering is read,
+ * validated and remembered the first time a number is resolved, so a response that cites nothing
+ * needs none (nothing is proposed, so nothing can be misanchored), and one that cites anything and
+ * carries none is refused.
  */
-function resolveAnchor<TAnchor>(
-  anchorIndex: unknown,
+interface PassageResolver<TAnchor> {
+  resolve(anchorIndex: unknown, describe: string): OutcomeSourcePassage<TAnchor>;
+}
+
+function passageResolver<TAnchor>(
+  response: Record<string, unknown>,
   passages: readonly OutcomeSourcePassage<TAnchor>[],
-  describe: string,
-): OutcomeSourcePassage<TAnchor> {
-  if (typeof anchorIndex !== 'number' || !Number.isInteger(anchorIndex)) {
+): PassageResolver<TAnchor> {
+  let shown: readonly number[] | undefined;
+  return {
+    resolve(anchorIndex, describe) {
+      if (typeof anchorIndex !== 'number' || !Number.isInteger(anchorIndex)) {
+        throw new OutcomesExtractReaderError(
+          `WorkerOutcomesExtractReader: ${describe} carried no numeric anchorIndex.`,
+        );
+      }
+      shown ??= readNumbering(response, passages);
+      const at = shown[anchorIndex - 1];
+      const passage = at === undefined ? undefined : passages[at];
+      if (passage === undefined) {
+        // The Worker's own `groundOutcomes` already drops a number it never showed. Reaching here
+        // means that check did not run or this reader's accounting has drifted from the Worker's:
+        // a loud failure, never a silent mis-anchor onto some other passage.
+        throw new OutcomesExtractReaderError(
+          `WorkerOutcomesExtractReader: ${describe} cited passage ${anchorIndex}, which was never shown.`,
+        );
+      }
+      return passage;
+    },
+  };
+}
+
+/**
+ * `result.numbering` (`outcomesExtractNumbering`, `olea-service/src/tasks/outcomesExtract.ts`): the
+ * passages the model was SHOWN, in the order and with the numbers it saw them, each as the 0-based
+ * index into `passages` (the list this reader sent) it stands for. `shown[k - 1]` is the passage the
+ * model cited as `[k]`.
+ *
+ * Refuses rather than falling back to "the number is a position in what I sent": that fallback IS
+ * the defect, and nothing on this side can tell which case it is in. The checks: the field is
+ * present; every entry names a passage of this request, in strictly increasing order (the Worker
+ * walks the list once, so anything else is not the Worker's numbering); and the passage's length is
+ * the length the Worker recorded, so a Worker that numbered a trimmed, split or re-ordered copy of
+ * the request cannot pass for one that numbered the request sent.
+ */
+function readNumbering<TAnchor>(
+  response: Record<string, unknown>,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+): readonly number[] {
+  const numbering = readResult(response).numbering;
+  const chunks =
+    typeof numbering === 'object' && numbering !== null
+      ? (numbering as Record<string, unknown>).chunks
+      : undefined;
+  if (!Array.isArray(chunks)) {
     throw new OutcomesExtractReaderError(
-      `WorkerOutcomesExtractReader: ${describe} carried no numeric anchorIndex.`,
+      'WorkerOutcomesExtractReader: the Worker response carried no `result.numbering`, so a passage number cannot be tied to a passage. ' +
+        'Refusing to guess: the Worker numbers only the passages it shows, and that is not the list this reader sent. ' +
+        'A Worker from before `numbering` needs updating.',
     );
   }
-  const passage = passages[anchorIndex - 1];
-  if (passage === undefined) {
-    throw new OutcomesExtractReaderError(
-      `WorkerOutcomesExtractReader: ${describe} cited passage ${anchorIndex}, which was never sent.`,
-    );
-  }
-  return passage;
+
+  const shown: number[] = [];
+  let previous = 0;
+  chunks.forEach((raw, k) => {
+    const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+    const sentIndex = entry.sentIndex;
+    const length = entry.length;
+    if (
+      typeof sentIndex !== 'number' ||
+      !Number.isInteger(sentIndex) ||
+      sentIndex <= previous ||
+      sentIndex > passages.length
+    ) {
+      throw new OutcomesExtractReaderError(
+        `WorkerOutcomesExtractReader: \`result.numbering\` entry ${k + 1} is not a position among the ${passages.length} passages sent, later than the entry before it.`,
+      );
+    }
+    const sent = passages[sentIndex - 1];
+    if (typeof length !== 'number' || sent === undefined || sent.text.length !== length) {
+      throw new OutcomesExtractReaderError(
+        `WorkerOutcomesExtractReader: \`result.numbering\` entry ${k + 1} says its passage has a length that is not the length of the passage sent at position ${sentIndex}; the Worker numbered a different list.`,
+      );
+    }
+    previous = sentIndex;
+    shown.push(sentIndex - 1);
+  });
+  return shown;
 }

@@ -148,13 +148,31 @@ function unconfiguredHost(): FakeDataHost {
   return new FakeDataHost();
 }
 
+/**
+ * The Worker always returns `result.numbering` (`groundOutcomes`, `ol-egov.141.89.7.38`): for each
+ * passage number it showed the model, the position of that chunk among the chunks sent. With no
+ * furniture-only chunk among them it is the identity, which is what every document here sends. Added
+ * to a scripted success envelope that carries none, so a fixture stays the answer a Worker gives.
+ */
+function withWorkerNumbering(request: WorkerTaskRequest, envelope: unknown): unknown {
+  if (typeof envelope !== 'object' || envelope === null) return envelope;
+  const body = envelope as { ok?: unknown; result?: unknown };
+  if (body.ok !== true || typeof body.result !== 'object' || body.result === null) return envelope;
+  if ('numbering' in body.result) return envelope;
+  const chunks = (request.payload as { sourceChunks: string[] }).sourceChunks;
+  const numbering = {
+    chunks: chunks.map((chunk, i) => ({ sentIndex: i + 1, length: chunk.length })),
+  };
+  return { ...body, result: { ...body.result, numbering } };
+}
+
 function fakeTransport(reply: (request: WorkerTaskRequest) => unknown) {
   const calls: WorkerTaskRequest[] = [];
   return {
     calls,
     send: async (request: WorkerTaskRequest) => {
       calls.push(request);
-      return reply(request);
+      return withWorkerNumbering(request, reply(request));
     },
   };
 }
