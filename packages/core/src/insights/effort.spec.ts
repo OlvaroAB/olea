@@ -547,3 +547,30 @@ describe('effort: the shortfall ratio is reachable at every course count ([DOS-C
     expect(result.status).toBe('not-observed');
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is a course review when the concept it
+// scored (the first id of its own list) belongs to a course — not when a context concept does.
+describe('effort: a course review is one whose scored concept has a course ([D-423])', () => {
+  const enough = MIN_TIMED_REVIEWS + 10;
+  const withConcepts = (conceptIds: string[]) => {
+    const { entries } = world([{ course: 'A', reviews: enough, link: 'none' }]);
+    return entries.map((entry) => (entry.kind === 'review' ? { ...entry, conceptIds } : entry));
+  };
+
+  it('counts a review whose first-listed concept belongs to a course', () => {
+    const result = detectEffortImbalance({
+      entries: withConcepts(['a-1', 'no-course']),
+      concepts: CONCEPTS,
+    });
+    // Enough course reviews to pass the whole-log gate; the log then has no composition record.
+    expect(result.status).toBe('comparison-unavailable');
+  });
+
+  it('does not count a review whose only course-bearing concept is named as context', () => {
+    const result = detectEffortImbalance({
+      entries: withConcepts(['no-course', 'a-1']),
+      concepts: CONCEPTS,
+    });
+    expect(result.status).toBe('not-enough-history');
+  });
+});

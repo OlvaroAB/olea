@@ -297,3 +297,57 @@ describe('pastSessionsFromReviewLog', () => {
     expect(pastSessionsFromReviewLog([], input)).toEqual([]);
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review counts toward the courses of the one
+// concept it scored (the first id of its own list) and toward no course that only a context
+// concept belongs to. A scored concept in two courses still splits the time between both.
+describe("a review counts toward its scored concept's courses alone ([D-423])", () => {
+  const input = { coursesOfConcept: COURSES, runningCourses: ['course-a', 'course-b'] };
+
+  it("gives a two-topic review's time to the first-listed concept's course only", () => {
+    const [record] = pastSessionsFromReviewLog(
+      [
+        review({
+          timestamp: '2026-06-01T09:00:00.000+01:00',
+          conceptIds: ['k-a1', 'k-b1'],
+          durationMs: 60_000,
+        }),
+      ],
+      input,
+    );
+    expect(record?.received.get('course-a')).toBe(60);
+    expect(record?.received.get('course-b')).toBeUndefined();
+    // course-b was never scored, so it did not appear in this session at all.
+    expect(record?.eligibleCourses).toEqual(['course-a']);
+  });
+
+  it('follows the order the record was written in', () => {
+    const [record] = pastSessionsFromReviewLog(
+      [
+        review({
+          timestamp: '2026-06-01T09:00:00.000+01:00',
+          conceptIds: ['k-b1', 'k-a1'],
+          durationMs: 60_000,
+        }),
+      ],
+      input,
+    );
+    expect(record?.received.get('course-b')).toBe(60);
+    expect(record?.received.get('course-a')).toBeUndefined();
+  });
+
+  it('still splits the time when the scored concept itself belongs to two courses', () => {
+    const [record] = pastSessionsFromReviewLog(
+      [
+        review({
+          timestamp: '2026-06-01T09:00:00.000+01:00',
+          conceptIds: ['k-both', 'k-a1'],
+          durationMs: 60_000,
+        }),
+      ],
+      input,
+    );
+    expect(record?.received.get('course-a')).toBe(30);
+    expect(record?.received.get('course-b')).toBe(30);
+  });
+});

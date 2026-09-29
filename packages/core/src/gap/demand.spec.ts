@@ -193,3 +193,40 @@ describe('the declared demands are the question; nothing is inferred (R7, N5)', 
     );
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is evidence for the one concept it
+// scored — the first id of its own list — and for no concept it merely names. A demand is met
+// for a concept only by a review that scored that concept.
+describe('a review credits only its scored concept ([D-423])', () => {
+  const twoTopics = review({ conceptIds: ['concept-a', 'concept-b'] });
+
+  it('meets the demand for the first-listed (scored) concept', () => {
+    const result = met('qualifying-review', [twoTopics], ['recall-a-fact'], RECALL_FACT);
+    expect([...result.met]).toEqual(['recall-a-fact']);
+  });
+
+  it('meets nothing for a concept the record names only as context', () => {
+    for (const rule of ['qualifying-review', 'any-past-success'] as const) {
+      const result = demandsMetNow(
+        {
+          conceptId: 'concept-b',
+          declaredDemands: ['recall-a-fact'],
+          instrumentDemands: RECALL_FACT,
+          entries: [twoTopics],
+          validity: projectInstrumentValidity([twoTopics]),
+          scheduler,
+          now: SOON,
+        },
+        rule,
+      );
+      expect([...result.met], rule).toEqual([]);
+      expect(result.unmet, rule).toEqual(['recall-a-fact']);
+    }
+  });
+
+  it('a record written with another concept first credits that one, whatever the note lists today', () => {
+    const reordered = review({ conceptIds: ['concept-b', 'concept-a'] });
+    const result = met('qualifying-review', [reordered], ['recall-a-fact'], RECALL_FACT);
+    expect([...result.met]).toEqual([]);
+  });
+});

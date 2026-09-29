@@ -89,7 +89,9 @@ import {
   calendarDayFromLocalDate,
   calendarDayOfTimestamp,
   checkItemValidation,
+  creditsConcept,
   readInstrumentCitation,
+  scoredConceptOf,
 } from 'olea-core';
 import { proposeItemValidationConfirmations } from './duplication-confirmation-store.js';
 
@@ -138,7 +140,8 @@ export function dayOutcomesForConcept(
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
     if (!isFsrsRatedType(entry.instrumentType)) continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
+    // `[D-423]`: a day's outcome for a concept is read from the reviews that scored it.
+    if (!creditsConcept(entry, conceptId)) continue;
     if (calendarDayOfTimestamp(entry.timestamp) !== day) continue;
     const outcome = outcomeOfRating(entry.rating);
     if (outcome === undefined) continue;
@@ -265,20 +268,22 @@ export async function resolveSameClaimMismatch(
     outcome,
   };
 
-  for (const conceptId of justGraded.conceptIds) {
-    const todaysOutcomes = dayOutcomesForConcept(deps.entries, conceptId, day);
-    for (const candidate of todaysOutcomes.values()) {
-      if (candidate.instrumentId === justGraded.instrumentId) continue;
-      const pair = pairAsHarderEasier(justGradedSide, candidate);
-      if (pair === undefined) continue;
-      const sameClaim = await citationsShareClaim(
-        deps.vault,
-        pair.harderInstrumentId,
-        pair.easierInstrumentId,
-      );
-      if (!sameClaim) continue;
-      return { ...pair, sameDay: true, sameClaim: true };
-    }
+  // `[D-423]`: "the same concept" is the concept the just-graded instrument scored (the first id of
+  // its own list); a concept it only names as context pairs it with nothing.
+  const conceptId = scoredConceptOf(justGraded);
+  if (conceptId === undefined) return undefined;
+  const todaysOutcomes = dayOutcomesForConcept(deps.entries, conceptId, day);
+  for (const candidate of todaysOutcomes.values()) {
+    if (candidate.instrumentId === justGraded.instrumentId) continue;
+    const pair = pairAsHarderEasier(justGradedSide, candidate);
+    if (pair === undefined) continue;
+    const sameClaim = await citationsShareClaim(
+      deps.vault,
+      pair.harderInstrumentId,
+      pair.easierInstrumentId,
+    );
+    if (!sameClaim) continue;
+    return { ...pair, sameDay: true, sameClaim: true };
   }
   return undefined;
 }

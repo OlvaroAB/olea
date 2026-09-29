@@ -205,6 +205,34 @@ describe('buildRegistryModel — browse (F8.4)', () => {
     expect(row?.explainBack).toEqual({ attempted: true, attemptCount: 1 });
     expect(row?.instruments).toEqual([]);
   });
+
+  // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): an explain-back record carries one concept id
+  // today, so this reading does not change; the rule still reads the first id only, so a record
+  // that ever carried a list would credit its scored concept and never one named as context.
+  it('an attempt counts for the concept it scored, never one a record lists after it ([D-423])', () => {
+    const entries = [
+      review({
+        eventId: 'r-eb',
+        instrumentId: 'explain:concept-a:1',
+        instrumentType: 'explain-back',
+        conceptIds: ['concept-a', 'concept-b'],
+        rating: null,
+      }),
+    ];
+    const model = buildFor({
+      concepts: [concept(), concept({ key: 'concept-b', name: 'Concept B' })],
+      entries,
+      instrumentRecords: [],
+    });
+    expect(model.concepts.find((c) => c.key === 'concept-a')?.explainBack).toEqual({
+      attempted: true,
+      attemptCount: 1,
+    });
+    expect(model.concepts.find((c) => c.key === 'concept-b')?.explainBack).toEqual({
+      attempted: false,
+      attemptCount: 0,
+    });
+  });
 });
 
 /**

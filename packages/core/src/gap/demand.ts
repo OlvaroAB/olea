@@ -51,6 +51,7 @@ import { isRecallTier } from '../mastery/vitality.js';
 import type { PaperDemand } from '../oracle/paper-types.js';
 import type { Scheduler } from '../scheduler/types.js';
 import { replaySchedulerStates } from '../session/replay.js';
+import { creditsConcept } from '../session/scored-concept.js';
 
 /** `[D-349]`'s options this function implements. See the module doc. */
 export type DemandRule = 'qualifying-review' | 'any-past-success';
@@ -114,7 +115,8 @@ export function demandsMetNow(input: DemandsMetInput, rule: DemandRule): Demands
 
   for (const entry of input.entries) {
     if (entry.kind !== 'review') continue;
-    if (!entry.conceptIds.includes(input.conceptId)) continue;
+    // `[D-423]`: a review is evidence only for its scored concept, never for one it names as context.
+    if (!creditsConcept(entry, input.conceptId)) continue;
     const declaresHere = input.instrumentDemands.get(entry.instrumentId) ?? [];
     if (declaresHere.length === 0) continue;
     if (excludedFromCurrent(entry.instrumentId, 'need', input.validity, policy)) continue;

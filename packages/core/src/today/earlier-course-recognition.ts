@@ -147,6 +147,7 @@ import {
 } from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
 import type { VitalityReading } from '../mastery/vitality.js';
+import { creditsConcept } from '../session/scored-concept.js';
 import { type CalendarDay, calendarDayOfTimestamp } from './calendar-day.js';
 import {
   type CourseCutoffRecord,
@@ -307,7 +308,8 @@ function evidenceFor(
 
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
+    // `[D-423]`: evidence is the reviews that scored the concept, never ones that name it as context.
+    if (!creditsConcept(entry, conceptId)) continue;
 
     if (entry.instrumentType === 'explain-back') {
       explainedBack = true;

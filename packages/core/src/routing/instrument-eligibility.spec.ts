@@ -256,3 +256,42 @@ describe('[D-396]: rejection without provenance, and the deliberate restore (ol-
     expect(hasDifferentEligibleOrdinaryInstrument(entries, 'widget-theory', other)).toBe(true);
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): an instrument is "known for" the one concept its
+// reviews scored — the first id of each record — never one a record names only as context.
+describe('an instrument counts for its scored concept only ([D-423])', () => {
+  const twoTopics: readonly ReviewLogEntry[] = [
+    review({ instrumentId: 'qa:widget-theory:1', conceptIds: ['widget-theory', 'gadget-theory'] }),
+    review({ instrumentId: 'qa:widget-theory:2', conceptIds: ['widget-theory', 'gadget-theory'] }),
+  ];
+
+  it('is a different eligible instrument for the scored (first-listed) concept', () => {
+    expect(
+      hasDifferentEligibleOrdinaryInstrument(
+        twoTopics,
+        'widget-theory',
+        new Set(['qa:widget-theory:1']),
+      ),
+    ).toBe(true);
+  });
+
+  it('is never one for a concept the records name only as context', () => {
+    expect(hasDifferentEligibleOrdinaryInstrument(twoTopics, 'gadget-theory', new Set())).toBe(
+      false,
+    );
+  });
+
+  it('follows the order each record was written in', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      review({ instrumentId: 'qa:a:1', conceptIds: ['widget-theory', 'gadget-theory'] }),
+      review({ instrumentId: 'qa:b:1', conceptIds: ['gadget-theory', 'widget-theory'] }),
+    ];
+    // Only the second instrument scored the second concept, so excluding it leaves none.
+    expect(
+      hasDifferentEligibleOrdinaryInstrument(entries, 'gadget-theory', new Set(['qa:b:1'])),
+    ).toBe(false);
+    expect(
+      hasDifferentEligibleOrdinaryInstrument(entries, 'widget-theory', new Set(['qa:a:1'])),
+    ).toBe(false);
+  });
+});

@@ -635,3 +635,45 @@ describe('createLocalRetrospectiveProvider — disputes forwarded into vitality 
     expect(result.reading.tooEarlyCount).toBe(1);
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): the evidenced set is the course concepts a review
+// scored (the first id of its own list); a concept a review only names as context is not evidence.
+describe('createLocalRetrospectiveProvider — the evidenced scope counts a review for its scored concept only (ol-egov.141.89.9.73, D-423)', () => {
+  async function evidencedNames(conceptNamesInRecord: readonly string[]): Promise<string[]> {
+    const vault = memoryVault({
+      ...CONCEPT_FILES,
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': assessmentNote({ due: '2026-08-20' }), // no `scope:` line
+    });
+    const concepts = await extractConceptsFromVault(vault, {});
+    const keyByName = new Map(concepts.map((c) => [c.name, c.key] as const));
+    const conceptIds = conceptNamesInRecord.map((name) => {
+      const key = keyByName.get(name);
+      if (key === undefined) throw new Error(`no concept minted for "${name}"`);
+      return key;
+    });
+    const record: ReviewLogRecord = { ...reviewRecord('unused'), conceptIds };
+    await vault.write(reviewLogPath(REVIEW_DAY, DEVICE), JSON.stringify(record));
+
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+    expect(result.reading.scopeOrigin).toBe('evidenced');
+    expect(result.reading.scopeCount).toBe(1);
+    return [...result.reading.held, ...result.reading.faded].map((l) => l.conceptName).sort();
+  }
+
+  it('lists the first-listed concept of a two-topic review, and not the second', async () => {
+    expect(await evidencedNames(['Photosynthesis', 'Respiration'])).toEqual(['Photosynthesis']);
+  });
+
+  it('follows the order the record was written in', async () => {
+    expect(await evidencedNames(['Respiration', 'Photosynthesis'])).toEqual(['Respiration']);
+  });
+});

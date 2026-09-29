@@ -91,7 +91,12 @@ import type {
   VaultSource,
   WindowDeficitEntry,
 } from 'olea-core';
-import { calendarDaysEndingOn, readReviewLogHistory, reviewLogPath } from 'olea-core';
+import {
+  calendarDaysEndingOn,
+  readReviewLogHistory,
+  reviewLogPath,
+  scoredConceptOf,
+} from 'olea-core';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19` follow-up): threaded straight through to
@@ -422,10 +427,12 @@ async function findCourseAvoidanceQuestion(
     for (const entry of entries.filter(isReviewEntry)) {
       const at = Date.parse(entry.timestamp);
       if (Number.isNaN(at)) continue;
-      for (const conceptId of entry.conceptIds) {
-        const existing = reviewedAtMsByConceptKey.get(conceptId);
-        if (existing === undefined || at > existing) reviewedAtMsByConceptKey.set(conceptId, at);
-      }
+      // `[D-423]`: a review is activity for the one concept it scored, never for a concept (and so
+      // a course) it only names as context.
+      const conceptId = scoredConceptOf(entry);
+      if (conceptId === undefined) continue;
+      const existing = reviewedAtMsByConceptKey.get(conceptId);
+      if (existing === undefined || at > existing) reviewedAtMsByConceptKey.set(conceptId, at);
     }
 
     const activity = courseActivityFromGrove(sections, reviewedAtMsByConceptKey);

@@ -2405,6 +2405,17 @@ export {
   replaySchedulerStates,
   replayUnconsumedSchedulingObservations,
 } from './session/replay.js';
+// The one rule for which concept an ordinary instrument or review record scores
+// (`[D-419]`/`[D-423]`, `ol-egov.141.89.9.65`, `ol-egov.141.89.9.73`): index 0 of its own
+// concept list is the scored concept, every later id is context and earns no credit.
+export type { ConceptListCarrier } from './session/scored-concept.js';
+export {
+  contextConceptIds,
+  creditsConcept,
+  orderNoteConcepts,
+  scoredConceptId,
+  scoredConceptOf,
+} from './session/scored-concept.js';
 export type {
   ClozeInstrumentRecord,
   InvalidCardReport,

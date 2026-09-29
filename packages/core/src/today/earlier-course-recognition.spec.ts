@@ -597,3 +597,40 @@ describe('buildEarlierCourseRecognitions — the ruled validity scope (ol-egov.1
     expect(lifted?.state).toBe('tree');
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): the evidence a recognition carries is the reviews
+// that scored the concept (the first id of their own list), never those that merely name it.
+describe('recognition evidence counts a review for its scored concept only ([D-423])', () => {
+  const concepts: readonly ConceptCourses[] = [
+    { conceptId: 'c1', courses: ['NEW1', 'OLD1'] },
+    { conceptId: 'c2', courses: ['NEW1', 'OLD1'] },
+  ];
+
+  it('recognises the first-listed concept and not one the review names as context', () => {
+    const entries = [review('c1', '2026-01-10', 'e1', { conceptIds: ['c1', 'c2'] })];
+    const result = buildEarlierCourseRecognitions({ newCourse: 'NEW1', entries, concepts });
+    expect(result.map((r) => r.conceptId)).toEqual(['c1']);
+    expect(result[0]?.evidence.reviewCount).toBe(1);
+  });
+
+  it('follows the order each record was written in', () => {
+    const entries = [review('c1', '2026-01-10', 'e1', { conceptIds: ['c2', 'c1'] })];
+    const result = buildEarlierCourseRecognitions({ newCourse: 'NEW1', entries, concepts });
+    expect(result.map((r) => r.conceptId)).toEqual(['c2']);
+  });
+
+  it('counts an explain-back attempt only for the concept it scored', () => {
+    const attempt = {
+      ...review('c1', '2026-01-10', 'eb-1', { conceptIds: ['c1', 'c2'] }),
+      instrumentType: 'explain-back',
+      instrumentId: 'eb:c1:1',
+      rating: null,
+    } as unknown as ReviewLogRecord;
+    const result = buildEarlierCourseRecognitions({
+      newCourse: 'NEW1',
+      entries: [attempt],
+      concepts,
+    });
+    expect(result.map((r) => [r.conceptId, r.evidence.explainedBack])).toEqual([['c1', true]]);
+  });
+});

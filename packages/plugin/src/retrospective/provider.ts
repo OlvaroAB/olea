@@ -85,6 +85,7 @@ import {
   resolveAssessments,
   resolveRetrospectiveOfferStatus,
   type SameAsLinkRecord,
+  scoredConceptOf,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -128,7 +129,7 @@ export interface RetrospectiveProviderDeps {
   readonly holdingCut?: number;
 }
 
-/** Every course concept with at least one review-log entry — D-134 Q6's "evidenced concept set, drawn from her review history". */
+/** Every course concept with at least one review-log entry that scored it — D-134 Q6's "evidenced concept set, drawn from her review history" (`[D-423]`: a review scores the first id of its own list). */
 function evidencedCourseScope(
   concepts: readonly ConceptRecord[],
   course: string,
@@ -137,7 +138,9 @@ function evidencedCourseScope(
   const reviewedConceptIds = new Set<string>();
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
-    for (const id of entry.conceptIds) reviewedConceptIds.add(id);
+    // `[D-423]`: a concept is evidenced by the reviews that scored it, never by one that names it as context.
+    const scored = scoredConceptOf(entry);
+    if (scored !== undefined) reviewedConceptIds.add(scored);
   }
   return concepts
     .filter((c) => c.courses.includes(course) && reviewedConceptIds.has(c.key))

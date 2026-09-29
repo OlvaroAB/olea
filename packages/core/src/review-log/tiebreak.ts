@@ -69,6 +69,7 @@
 
 import type { InstrumentType, Rating, ReviewLogEntry, SupportLevel } from 'olea-contracts';
 import { daysBetween } from '../dates.js';
+import { scoredConceptOf } from '../session/scored-concept.js';
 
 /**
  * DECLARED (not derived — n=1 cannot fit this, the same register test
@@ -112,17 +113,19 @@ function collectObservations(entries: readonly ReviewLogEntry[]): readonly Recal
     if (!ORDINARY_TIER_TYPES.has(entry.instrumentType)) continue;
     const instant = Date.parse(entry.timestamp);
     if (Number.isNaN(instant)) continue;
-    for (const conceptKey of entry.conceptIds) {
-      observations.push({
-        conceptKey,
-        instrumentId: entry.instrumentId,
-        instrumentType: entry.instrumentType as OrdinaryInstrumentType,
-        supportLevelShown: entry.supportLevelShown,
-        success: isSuccessRating(entry.rating),
-        instant,
-        eventId: entry.eventId,
-      });
-    }
+    // `[D-423]`: one review is one observation, of the concept it scored — never also of a concept
+    // the record only names as context.
+    const conceptKey = scoredConceptOf(entry);
+    if (conceptKey === undefined) continue;
+    observations.push({
+      conceptKey,
+      instrumentId: entry.instrumentId,
+      instrumentType: entry.instrumentType as OrdinaryInstrumentType,
+      supportLevelShown: entry.supportLevelShown,
+      success: isSuccessRating(entry.rating),
+      instant,
+      eventId: entry.eventId,
+    });
   }
   return observations;
 }

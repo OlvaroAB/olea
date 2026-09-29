@@ -48,6 +48,7 @@ import { compareByInstantThenEventId } from '../review-log/merge.js';
 import type { PastSessionRecord } from '../study-session/window.js';
 import type { CalendarDay } from '../today/calendar-day.js';
 import { calendarDayOfTimestamp } from '../today/calendar-day.js';
+import { scoredConceptOf } from './scored-concept.js';
 
 /**
  * C5.5's clustering gap: the silence, in seconds, above which two reviews
@@ -310,17 +311,22 @@ export function pastSessionsFromReviewLog(
   return records;
 }
 
-/** The running courses a review is evidence for — its concepts' courses, deduplicated, restricted to what is running now. */
+/**
+ * The running courses a review is evidence for — the courses of the one concept it scored
+ * (`[D-423]`: the first id of its own list, never a concept the record only names as context),
+ * deduplicated, restricted to what is running now. A scored concept in two courses counts toward
+ * both, as before.
+ */
 function coursesOf(
   review: ReviewLogRecord,
   coursesOfConcept: ReadonlyMap<string, readonly string[]>,
   running: ReadonlySet<string>,
 ): readonly string[] {
+  const scored = scoredConceptOf(review);
+  if (scored === undefined) return [];
   const courses = new Set<string>();
-  for (const conceptId of review.conceptIds) {
-    for (const course of coursesOfConcept.get(conceptId) ?? []) {
-      if (running.has(course)) courses.add(course);
-    }
+  for (const course of coursesOfConcept.get(scored) ?? []) {
+    if (running.has(course)) courses.add(course);
   }
   return [...courses];
 }

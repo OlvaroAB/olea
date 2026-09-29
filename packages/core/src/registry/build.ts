@@ -105,6 +105,7 @@ import {
   type ExplainBackHistoryEntry,
   explainBackGradeHistoryByInstrument,
 } from '../review-log/explain-back-history.js';
+import { creditsConcept } from '../session/scored-concept.js';
 import { aliasesFor, isConceptPruned, resolvedDisplayName } from './overrides.js';
 import type {
   BuildRegistryModelInput,
@@ -403,7 +404,9 @@ function explainBackSummaryFor(
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
     if (entry.instrumentType !== 'explain-back') continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
+    // `[D-423]`: an explain-back record carries one id today, so this reading does not change;
+    // read through the shared rule so a record that carried a list would credit only its first.
+    if (!creditsConcept(entry, conceptId)) continue;
     attemptCount += 1;
   }
   return { attempted: attemptCount > 0, attemptCount };

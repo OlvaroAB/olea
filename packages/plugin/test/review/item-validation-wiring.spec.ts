@@ -117,6 +117,16 @@ describe('dayOutcomesForConcept', () => {
       'failed',
     );
   });
+
+  // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a day's outcome for a concept is read from the
+  // reviews that scored it (the first id of their own list), never from ones that only name it.
+  it('reads a review for its scored concept only, never one it lists after it ([D-423])', () => {
+    const entries: readonly ReviewLogEntry[] = [
+      review({ instrumentId: 'qa-1', conceptIds: ['concept-a', 'concept-b'] }),
+    ];
+    expect(dayOutcomesForConcept(entries, 'concept-a', '2026-01-10').has('qa-1')).toBe(true);
+    expect(dayOutcomesForConcept(entries, 'concept-b', '2026-01-10').size).toBe(0);
+  });
 });
 
 describe('resolveSameClaimMismatch', () => {
@@ -284,6 +294,68 @@ describe('resolveSameClaimMismatch', () => {
       justGraded({ instrumentId: 'mcq-1', instrumentType: 'mcq', rating: 'again' }),
     );
     expect(mismatch).toBeUndefined();
+  });
+
+  // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): "same concept" is the concept each instrument
+  // scored, so a topic only one of them names as context never pairs them.
+  describe('same concept means the scored concept ([D-423])', () => {
+    async function citedVault() {
+      const vault = memoryVault();
+      await writeInstrumentCitation(vault, 'qa-1', { sourcePath: 'Courses/A/notes.md', page: 3 });
+      await writeInstrumentCitation(vault, 'mcq-1', { sourcePath: 'Courses/A/notes.md', page: 3 });
+      return vault;
+    }
+
+    it('pairs two instruments that scored one concept, whatever else either names', async () => {
+      const vault = await citedVault();
+      const entries: readonly ReviewLogEntry[] = [
+        review({ instrumentId: 'qa-1', conceptIds: ['concept-a', 'concept-b'], rating: 'good' }),
+      ];
+      const mismatch = await resolveSameClaimMismatch(
+        { entries, vault },
+        justGraded({
+          instrumentId: 'mcq-1',
+          instrumentType: 'mcq',
+          conceptIds: ['concept-a', 'concept-c'],
+          rating: 'again',
+        }),
+      );
+      expect(mismatch?.harderInstrumentId).toBe('qa-1');
+    });
+
+    it('never pairs them through a concept the just-graded instrument names only as context', async () => {
+      const vault = await citedVault();
+      const entries: readonly ReviewLogEntry[] = [
+        review({ instrumentId: 'qa-1', conceptIds: ['concept-b'], rating: 'good' }),
+      ];
+      const mismatch = await resolveSameClaimMismatch(
+        { entries, vault },
+        justGraded({
+          instrumentId: 'mcq-1',
+          instrumentType: 'mcq',
+          conceptIds: ['concept-a', 'concept-b'],
+          rating: 'again',
+        }),
+      );
+      expect(mismatch).toBeUndefined();
+    });
+
+    it('never pairs them through a concept the other instrument names only as context', async () => {
+      const vault = await citedVault();
+      const entries: readonly ReviewLogEntry[] = [
+        review({ instrumentId: 'qa-1', conceptIds: ['concept-b', 'concept-a'], rating: 'good' }),
+      ];
+      const mismatch = await resolveSameClaimMismatch(
+        { entries, vault },
+        justGraded({
+          instrumentId: 'mcq-1',
+          instrumentType: 'mcq',
+          conceptIds: ['concept-a'],
+          rating: 'again',
+        }),
+      );
+      expect(mismatch).toBeUndefined();
+    });
   });
 });
 

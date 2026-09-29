@@ -827,6 +827,35 @@ describe('createLocalHomeProvider — F4.6 course-avoidance question ([D-265], [
   });
 });
 
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is activity for the one concept it scored
+// (the first id of its own list). A course reached only through a concept the review names as
+// context saw no review, so the once-asked question can still be about it.
+describe('createLocalHomeProvider — course activity counts a review for its scored concept only ([D-423])', () => {
+  async function questionAfterOneReviewNaming(
+    firstName: string,
+    secondName: string,
+  ): Promise<string | undefined> {
+    const vault = twoCourseVault();
+    const line = JSON.parse(
+      reviewLine(await conceptKey(vault, firstName), '2026-09-01T09:00:00Z', 'e1'),
+    ) as { conceptIds: string[] };
+    line.conceptIds = [await conceptKey(vault, firstName), await conceptKey(vault, secondName)];
+    await vault.write(reviewLogPath('2026-09-01', DEVICE), `${JSON.stringify(line)}\n`);
+    const state = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
+    return state.avoidanceQuestion?.course;
+  }
+
+  it("a two-topic review across two courses is activity for the first-listed concept's course only", async () => {
+    expect(await questionAfterOneReviewNaming('Widget0', 'Gadget0')).toBe('TESTC202');
+  });
+
+  it('follows the order the record was written in', async () => {
+    expect(await questionAfterOneReviewNaming('Gadget0', 'Widget0')).toBe('TESTC101');
+  });
+});
+
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): `home/view.ts`'s own module doc named
 // this as the missing DATA path — `provider.ts`'s `load()` had no read of `session/holder.ts`'s
 // shared `StudySessionHolder` at all, so `HomeViewState.activeSession` was always `undefined`.

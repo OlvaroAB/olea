@@ -98,9 +98,27 @@ describe('detectSpacingByCourse', () => {
     expect(kc?.insight.status).toBe('not-enough-history');
   });
 
-  it('a review whose concepts sit in two courses belongs to each course’s reading; one no course holds belongs to none', () => {
+  it('a review belongs to its scored concept’s courses alone: a course held only by a concept it names as context gets none (`[D-423]`, `ol-egov.141.89.9.73`); one no course holds belongs to none', () => {
     const log = [review(['ka-1', 'kb-1'], 3, 10), review(['kz-unjoined'], 4, 10)];
     const readings = detectSpacingByCourse(log, JOIN);
+    expect(readings.map((r) => [r.course, r.reviewCount])).toEqual([
+      ['KA', 1],
+      ['KB', 0],
+    ]);
+    // The order the record was written in decides, not the order of the join.
+    const flipped = detectSpacingByCourse([review(['kb-1', 'ka-1'], 3, 10)], JOIN);
+    expect(flipped.map((r) => [r.course, r.reviewCount])).toEqual([
+      ['KA', 0],
+      ['KB', 1],
+    ]);
+  });
+
+  it('a review whose scored concept sits in two courses belongs to each course’s reading', () => {
+    const both: readonly ConceptCourses[] = [
+      { conceptId: 'k-shared', courses: ['KA', 'KB'] },
+      { conceptId: 'kb-1', courses: ['KB'] },
+    ];
+    const readings = detectSpacingByCourse([review(['k-shared', 'kb-1'], 3, 10)], both);
     expect(readings.map((r) => [r.course, r.reviewCount])).toEqual([
       ['KA', 1],
       ['KB', 1],

@@ -82,6 +82,7 @@
  */
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
+import { scoredConceptOf } from '../session/scored-concept.js';
 import {
   type CalendarDay,
   calendarDayOfTimestamp,
@@ -480,8 +481,9 @@ export interface CourseSpacingReading {
  * Per course, the concentration reading over that course's own reviews and
  * assessments, sorted by course id (an order for determinism, never a
  * ranking). A course with no review at all still gets a reading, abstaining,
- * when the join names it; a review whose concepts no course holds belongs to
- * no course's reading. Pure; reads no clock.
+ * when the join names it; a review whose scored concept no course holds belongs
+ * to no course's reading (`[D-423]`: a review is read through the one concept it
+ * scored, the first id of its own list). Pure; reads no clock.
  *
  * Nothing calls this yet: Today still draws the pooled `detectSpacing` line.
  * Moving Today to one line per course is the wiring bead's
@@ -507,11 +509,13 @@ export function detectSpacingByCourse(
   const reviewsByCourse = new Map<string, ReviewLogRecord[]>();
   for (const course of allCourses) reviewsByCourse.set(course, []);
   for (const record of reviewsOf(entries)) {
-    const courses = new Set<string>();
-    for (const conceptId of record.conceptIds) {
-      for (const course of coursesByConcept.get(conceptId) ?? []) courses.add(course);
+    // `[D-423]`: a review belongs to the courses of the one concept it scored, never to a course
+    // only a concept it names as context belongs to. A scored concept in two courses is in both.
+    const scored = scoredConceptOf(record);
+    if (scored === undefined) continue;
+    for (const course of coursesByConcept.get(scored) ?? []) {
+      reviewsByCourse.get(course)?.push(record);
     }
-    for (const course of courses) reviewsByCourse.get(course)?.push(record);
   }
 
   return [...reviewsByCourse.keys()].sort().map((course) => {

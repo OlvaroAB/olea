@@ -371,3 +371,42 @@ describe('findComparableObservationDisagreements', () => {
     ).toBe(0);
   });
 });
+
+// `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is one recall observation, for the one
+// concept it scored (the first id of its own list) — never one for a concept it only names.
+describe('a review is a recall observation for its scored concept only ([D-423])', () => {
+  const pair = (conceptIds: readonly string[]): readonly ReviewLogEntry[] => [
+    review({
+      eventId: 'r1',
+      timestamp: '2026-08-08T09:00:00-04:00',
+      conceptIds: [...conceptIds],
+      rating: 'good',
+      supportLevelShown: 'independent',
+    }),
+    review({
+      eventId: 'r2',
+      timestamp: '2026-08-12T09:00:00-04:00',
+      conceptIds: [...conceptIds],
+      rating: 'again',
+      supportLevelShown: 'independent',
+    }),
+  ];
+
+  it('flags the scored (first-listed) concept and no other concept the records name', () => {
+    const result = findComparableObservationDisagreements({
+      entries: pair(['widget-theory', 'gadget-theory']),
+      asOf: ASOF,
+      resolveSourceVersion: SAME_SOURCE,
+    });
+    expect([...result.keys()]).toEqual(['widget-theory']);
+  });
+
+  it('follows the order each record was written in, not the alphabet or a later reorder', () => {
+    const result = findComparableObservationDisagreements({
+      entries: pair(['gadget-theory', 'widget-theory']),
+      asOf: ASOF,
+      resolveSourceVersion: SAME_SOURCE,
+    });
+    expect([...result.keys()]).toEqual(['gadget-theory']);
+  });
+});

@@ -41,17 +41,24 @@ interface VaultInstrumentCommon {
   /** Persisted identity (R3). Minted by the one `InstrumentIdSource` seam — see `instrument-id.ts`. */
   readonly instrumentId: string;
   /**
-   * Every concept this instrument practises, in her authored `topic:` order —
+   * Every concept this instrument's note is associated with, in her authored `topic:` order —
    * F2.17's dedupe key (a set) and the `conceptIds` written to the review log
    * (`ol-t3sd`).
    *
-   * **All of them, not one chosen from several.** A note may name more than one
-   * `topic:`, every one of them is a real concept the note contributes to
-   * (`concept/extract.ts` records the note under all of them), and the
-   * instrument is evidence for all of them. The predecessor field was a single
-   * `conceptId` holding her *first* value — a narrowing D-031 was forced into
-   * by a review-log record that could persist only one id, and removed by the
-   * ruling on `ol-t3sd` once it could persist a list.
+   * **One is scored; the rest are context (`[D-419]`, `[D-423]`).** Index 0 — her
+   * first-listed `topic:` value that resolves to a concept — is the instrument's **scored
+   * concept**: the one concept a review of it is evidence for (C5.11: an instrument scores exactly
+   * one concept). Every later id is a **context concept**: it keeps the instrument reachable from
+   * that concept (navigation, F2.17's dedupe, the per-concept lookups) and is stamped on the
+   * review record, and it earns no credit. A note naming several topics does not establish that
+   * every question tests every topic. Every credit reader decides through
+   * `./scored-concept.ts` (`scoredConceptOf`, `creditsConcept`), never by reading this list itself;
+   * a record keeps the subject it was written with, so reordering a note's topics later never
+   * reassigns evidence already on the log.
+   *
+   * The predecessor field was a single `conceptId` holding her *first* value — a narrowing D-031
+   * was forced into by a review-log record that could persist only one id. `ol-t3sd` widened it to
+   * this list; `[D-423]` keeps the list whole and makes the first entry the scored one.
    *
    * Non-empty: an instrument whose note resolves to no concept appears in
    * `unbound`, never here with an invented entry.

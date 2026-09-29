@@ -81,6 +81,7 @@
 
 import type { ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { clusterReviewSessions, RECEIVED_SECONDS_PER_ITEM_CAP } from '../session/cluster.js';
+import { scoredConceptOf } from '../session/scored-concept.js';
 import { windowWidthSessions } from '../study-session/window.js';
 import type { ConceptCourses, InsightId, InsightStatus } from './types.js';
 
@@ -297,15 +298,17 @@ export function detectEffortImbalance(
   const sessions = clusterReviewSessions(input.entries);
 
   // 1. Enough history at all, over the whole log. A course review is one its record places on a
-  // course, or, with no record, one whose concepts belong to some course. Counted once each.
+  // course, or, with no record, one whose scored concept belongs to some course. Counted once each.
   let timedReviewCount = 0;
   for (const session of sessions) {
     for (const review of session.reviews) {
       if (receivedMsOf(review) === 0) continue;
       const record = resolve(review);
+      // `[D-423]`: the concept it scored decides, never one the record only names as context.
+      const scored = scoredConceptOf(review);
       const isCourseReview =
         record?.course != null ||
-        review.conceptIds.some((id) => (coursesOfConcept.get(id) ?? []).length > 0);
+        (scored !== undefined && (coursesOfConcept.get(scored) ?? []).length > 0);
       if (isCourseReview) timedReviewCount += 1;
     }
   }

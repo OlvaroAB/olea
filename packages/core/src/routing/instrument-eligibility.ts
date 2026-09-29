@@ -49,6 +49,7 @@
 import type { InstrumentType, ReviewLogEntry } from 'olea-contracts';
 import { rejectedInstrumentIds } from '../mastery/validity.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
+import { creditsConcept } from '../session/scored-concept.js';
 
 /** C5.10's "ordinary" instrument — every schedulable type except `explain-back` (see module doc). Same set `../review-log/tiebreak.ts` filters recall observations to. */
 export const ORDINARY_INSTRUMENT_TYPES: ReadonlySet<InstrumentType> = new Set([
@@ -65,7 +66,8 @@ function knownOrdinaryInstrumentsForConcept(
   for (const entry of entries) {
     if (entry.kind !== 'review') continue;
     if (!ORDINARY_INSTRUMENT_TYPES.has(entry.instrumentType)) continue;
-    if (!entry.conceptIds.includes(conceptKey)) continue;
+    // `[D-423]`: an instrument is known for the one concept its review scored, never one the record only names.
+    if (!creditsConcept(entry, conceptKey)) continue;
     found.add(entry.instrumentId);
   }
   return found;
