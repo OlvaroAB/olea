@@ -51,29 +51,25 @@
 
 import {
   DEFAULT_PAPER_PURPOSE,
+  finalizePaperFromJournal,
   hashText,
+  openPaperJournal,
+  PAPER_STRUCTURE_FORMAT_VERSION,
   type PaperBlueprint,
   type PaperBlueprintSlot,
   type PaperGeneratedItem,
-  type PaperRecord,
-  type PaperStoreOptions,
-  paperCompositionAccountFromBlueprint,
-  type VaultSource,
-} from 'olea-core';
-import {
-  finalizePaperFromJournal,
-  openPaperJournal,
   type PaperJournalOpenDecision,
   type PaperJournalPlanSlot,
+  type PaperRecord,
   type PaperSlotGenerator,
-  paperJournalOwedSlotIds,
-  runPaperJournal,
-} from 'olea-core/src/oracle/paper-journal.js';
-import { paperReuseFingerprint } from 'olea-core/src/oracle/paper-structure.js';
-import {
-  PAPER_STRUCTURE_FORMAT_VERSION,
+  type PaperStoreOptions,
   type PaperStructuredShape,
-} from 'olea-core/src/oracle/paper-types.js';
+  paperCompositionAccountFromBlueprint,
+  paperJournalOwedSlotIds,
+  paperReuseFingerprint,
+  runPaperJournal,
+  type VaultSource,
+} from 'olea-core';
 import type { PaperItemPortOutcome, PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 
 /** The scope the paper was composed over: what the fingerprint's `scope` component digests. */

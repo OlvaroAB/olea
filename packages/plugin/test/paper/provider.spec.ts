@@ -28,6 +28,7 @@ import {
   createPaper,
   enumerateVaultInstruments,
   fillPaperBlueprintSlots,
+  listPaperJournals,
   listPaperRecords,
   type PaperCompositionAccount,
   type PaperGeneratedItem,
@@ -37,7 +38,6 @@ import {
   readInstrumentCitation,
   resolveOutcome,
 } from 'olea-core';
-import { listPaperJournals } from 'olea-core/src/oracle/paper-journal.js';
 import { describe, expect, it } from 'vitest';
 import type {
   PaperItemPortOutcome,

@@ -23,11 +23,11 @@ import {
   buildPaperBlueprint,
   type ConceptRecord,
   fillPaperBlueprintSlots,
+  listPaperJournals,
   listPaperRecords,
   type PaperBlueprint,
   type PaperItemGenerationRequest,
 } from 'olea-core';
-import { listPaperJournals } from 'olea-core/src/oracle/paper-journal.js';
 import { describe, expect, it } from 'vitest';
 import type {
   PaperItemPortOutcome,
