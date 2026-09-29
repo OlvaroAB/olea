@@ -3820,7 +3820,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       expect(result.dominantCourse).toBe('BETA');
       expect(result.focusBranch).toBe('none-behind');
       expect(result.focusReason).toBe(
-        'BETA, because no course has had less than its planned share of recent practice, and it is the closest to doing so',
+        'BETA, because no course is below its planned share, and it is the closest to it',
       );
     });
   });
@@ -3996,7 +3996,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       expect(result.dominantCourse).toBe('ALPHA');
       expect(result.focusBranch).toBe('longest-without-tie-name+never-practised');
       expect(result.focusReason).toBe(
-        "ALPHA is selected next, because you have gone equally long without practising another course, so it comes first by name. You haven't practised this course in Olea yet",
+        "ALPHA is selected next, because you have gone equally long without another course, so it comes first by name. You haven't practised this course in Olea yet",
       );
     });
   });

@@ -1332,6 +1332,9 @@ export const URGENCY_OVERRIDE_THRESHOLD = 1 / 14;
  * number, ratio or count (F8.3, F6.7), and none uses the word "behind" (registry section 22 bans
  * it for a concept whose need is unknown; a course's share is a different reading, and the
  * sentence needs no such word).
+ *
+ * The `none-behind*`, `longest-without-tie-name` clauses were shortened 2026-09-30 to follow row 31
+ * ("concisely"); they are lane-written drafts awaiting David's wording, the facts they state unchanged.
  */
 export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Object.freeze({
   filter: 'you asked for it',
@@ -1340,12 +1343,11 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
     "its assessment is close and we haven't checked your recall of some assessed material yet",
   deficit: 'it has had less than its planned share of recent practice',
   'only-course': 'it is the only course with something to practise right now',
-  'none-behind':
-    'no course has had less than its planned share of recent practice, and it is the closest to doing so',
+  'none-behind': 'no course is below its planned share, and it is the closest to it',
   'none-behind-tie-recency':
-    'no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it',
+    'it is level with another course on planned share, and you have gone longer without it',
   'none-behind-tie-name':
-    'no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name',
+    'it is level with another course on planned share, so it comes first by name',
   // HELD DRAFT (row 31; wording drafted by the orchestrator, not ruled, `ol-egov.141.89.10.86`):
   // says a course was passed over because nothing was ready to practise in it. Never the word
   // "behind" (the siblings above use the share wording). Ratification may change the words,
@@ -1354,7 +1356,7 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
     'other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
   'longest-without': 'you have gone longest without practising it',
   'longest-without-tie-name':
-    'you have gone equally long without practising another course, so it comes first by name',
+    'you have gone equally long without another course, so it comes first by name',
 });
 
 /** Every {@link FocusReasonKind}, in the table's order. */
