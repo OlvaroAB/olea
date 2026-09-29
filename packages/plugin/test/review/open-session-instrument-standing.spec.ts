@@ -12,9 +12,12 @@
  *
  * Two of D-323's six named concerns have a real, wired reader unconditionally
  * (`open-session.ts`'s own `readInstrumentStanding`): `contested` (an open,
- * unresolved grade dispute) and `rejected` (a `rejected` verdict, or a grade
- * dispute resolved `corrected` — folded onto the same concern; see that
- * function's doc for why). Two more are real, wired reads that are
+ * unresolved grade dispute) and `rejected` (a `rejected` verdict or a defect
+ * suspension; **a grade dispute resolved `corrected` is not folded onto it —
+ * row 14 of David's 2026-09-29 rulings, `ol-egov.141.89.9.71`: a grading
+ * error alone does not mark the instrument suspect**, and an instrument that
+ * carries a rejection is never served at all, so it never reaches this
+ * check). Two more are real, wired reads that are
  * conditional on a caller supplying their own optional input
  * (`ol-egov.141.89.6.54`): `pending-revalidation` reads a real
  * `ObsidianCitationHashStore` when `citationHashStore` is supplied, and
@@ -180,6 +183,49 @@ async function sessionInputFor(
   };
 }
 
+/**
+ * An opening grade contest and its resolution `corrected`, both written to her log through the
+ * real writer. `reviewId` is row 48's optional name for the contested review.
+ */
+async function appendCorrectedGradeContest(
+  vault: ReturnType<typeof memoryVault>,
+  instrumentId: string,
+  conceptId: string,
+  reviewId?: string,
+): Promise<void> {
+  const named = reviewId === undefined ? {} : { reviewId };
+  const opened = await appendDisputeRecord(
+    vault,
+    {
+      timestamp: NOW.toISOString(),
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      conceptIds: [conceptId],
+      instrumentId,
+      evidenceBasis: 'fp-1',
+      effect: 'quarantined',
+      ...named,
+    },
+    { deviceId: DEVICE },
+  );
+  await appendDisputeRecord(
+    vault,
+    {
+      timestamp: NOW.toISOString(),
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      conceptIds: [conceptId],
+      instrumentId,
+      evidenceBasis: 'fp-1',
+      effect: 'quarantined',
+      resolves: opened.record.eventId,
+      outcome: 'corrected',
+      ...named,
+    },
+    { deviceId: DEVICE },
+  );
+}
+
 /** Rates the current `qa` item `'good'` — the one action that reaches `logAndAdvance`'s `[D-323]` call site. */
 async function rateCurrentItem(session: ReviewSession): Promise<void> {
   session.reveal();
@@ -226,8 +272,9 @@ describe('openReviewSession — [D-323] instrument standing over the real review
   // rejected and then routed it to item repair after a rating. C5.3 as amended by `[D-396]` rules
   // that a rejection keeps the item out of circulation until her own deliberate restore, so
   // `openReviewSession` no longer serves it at all (its present-time check reads the same
-  // validity fold `readInstrumentStanding` does). The `rejected` concern is still reached on this
-  // path through a grade dispute resolved `corrected`, the next case.
+  // validity fold `readInstrumentStanding` does), so no served instrument reaches the `rejected`
+  // concern on this path. Row 14 (`ol-egov.141.89.9.71`) also removed the one other route to it, a
+  // grade dispute resolved `corrected`: the two cases after this one pin that down.
   it('an instrument with a rejected verdict is not served, so it never reaches the standing check', async () => {
     const vault = qaVault();
     const enumeration = await enumerateVaultInstruments(vault);
@@ -262,53 +309,75 @@ describe('openReviewSession — [D-323] instrument standing over the real review
     expect(outcome.session.getPendingItemRepairReferral()).toBeNull();
   });
 
-  it("a grade dispute resolved 'corrected' also reads suspect, folded onto the same 'rejected' concern (Class B — see readInstrumentStanding's doc)", async () => {
+  // Row 14 of David's 2026-09-29 rulings (`ol-egov.141.89.9.71`): this case used to expect the
+  // instrument routed to item repair on the `rejected` concern (`ol-egov.141.89.9.66`'s default,
+  // "Class B"). A grading error alone no longer marks the instrument suspect.
+  it("a grade dispute resolved 'corrected' alone leaves the instrument clear: the ordinary offer stands and it is not sent to item repair (row 14)", async () => {
     const vault = qaVault();
     const enumeration = await enumerateVaultInstruments(vault);
     const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
     if (qa === undefined) throw new Error('expected one qa instrument');
     const conceptId = qa.conceptIds[0];
     if (conceptId === undefined) throw new Error('expected a concept');
+    await appendCorrectedGradeContest(vault, qa.instrumentId, conceptId);
 
-    const opened = await appendDisputeRecord(
-      vault,
-      {
-        timestamp: NOW.toISOString(),
-        claimKind: 'grade',
-        claimRendering: 'explain-back-grade',
-        conceptIds: [conceptId],
-        instrumentId: qa.instrumentId,
-        evidenceBasis: 'fp-1',
-        effect: 'quarantined',
-      },
-      { deviceId: DEVICE },
+    const outcome = await openReviewSession(await sessionInputFor(vault));
+    if (!outcome.ok) throw new Error('expected a composed session');
+    // Still served: nothing recorded about the instrument itself changed.
+    expect(outcome.scheduledQueue.map((item) => item.instrument.instrumentId)).toContain(
+      qa.instrumentId,
     );
-    await appendDisputeRecord(
-      vault,
-      {
-        timestamp: NOW.toISOString(),
-        claimKind: 'grade',
-        claimRendering: 'explain-back-grade',
-        conceptIds: [conceptId],
-        instrumentId: qa.instrumentId,
-        evidenceBasis: 'fp-1',
-        effect: 'quarantined',
-        resolves: opened.record.eventId,
-        outcome: 'corrected',
-      },
-      { deviceId: DEVICE },
-    );
+    await outcome.session.start();
+    await rateCurrentItem(outcome.session);
+
+    expect(outcome.session.getConfusionRoutingOffer()?.promptText).toBe('offer text');
+    expect(outcome.session.getPendingItemRepairReferral()).toBeNull();
+  });
+
+  it('a corrected contest that names its review reads the same: clear, and still served (rows 14 and 48)', async () => {
+    const vault = qaVault();
+    const enumeration = await enumerateVaultInstruments(vault);
+    const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
+    if (qa === undefined) throw new Error('expected one qa instrument');
+    const conceptId = qa.conceptIds[0];
+    if (conceptId === undefined) throw new Error('expected a concept');
+    await appendCorrectedGradeContest(vault, qa.instrumentId, conceptId, 'a-review-the-log-lacks');
 
     const outcome = await openReviewSession(await sessionInputFor(vault));
     if (!outcome.ok) throw new Error('expected a composed session');
     await outcome.session.start();
     await rateCurrentItem(outcome.session);
 
-    expect(outcome.session.getConfusionRoutingOffer()).toBeNull();
-    expect(outcome.session.getPendingItemRepairReferral()).toEqual({
-      instrumentId: qa.instrumentId,
-      concerns: ['rejected'],
-    });
+    expect(outcome.session.getConfusionRoutingOffer()?.promptText).toBe('offer text');
+    expect(outcome.session.getPendingItemRepairReferral()).toBeNull();
+  });
+
+  it('the same corrected contest beside a recorded rejection is what takes the instrument out: the instrument-level fact is the rejection, never the correction', async () => {
+    const vault = qaVault();
+    const enumeration = await enumerateVaultInstruments(vault);
+    const qa = enumeration.records.find((r) => r.instrumentType === 'qa');
+    if (qa === undefined) throw new Error('expected one qa instrument');
+    const conceptId = qa.conceptIds[0];
+    if (conceptId === undefined) throw new Error('expected a concept');
+    await appendCorrectedGradeContest(vault, qa.instrumentId, conceptId);
+    await appendVerdictRecord(
+      vault,
+      {
+        timestamp: NOW.toISOString(),
+        instrumentId: qa.instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [conceptId],
+        verdict: 'rejected',
+        artifactProvenance: { taskId: 'task-1', promptVersion: '1.0.0', modelId: 'model-1' },
+      },
+      { deviceId: DEVICE },
+    );
+
+    const outcome = await openReviewSession(await sessionInputFor(vault));
+    if (!outcome.ok) throw new Error('expected a composed session');
+    expect(outcome.scheduledQueue.map((item) => item.instrument.instrumentId)).not.toContain(
+      qa.instrumentId,
+    );
   });
 
   it("an instrument the caller's citation hash store confirms is pending revalidation reads suspect and routes to item repair, once a store is supplied (ol-egov.141.89.6.54, [D-351])", async () => {

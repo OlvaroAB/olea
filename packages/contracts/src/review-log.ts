@@ -2529,9 +2529,47 @@ export const successionLogRecordV6 = z.object({
 });
 export type SuccessionLogRecordV6 = z.infer<typeof successionLogRecordV6>;
 
-/** One dispute event, **schema version 6**: `disputeLogRecordV5`, version restamped, pairings kept. */
+/**
+ * One dispute event, **schema version 6**: `disputeLogRecordV5`, version
+ * restamped, pairings kept, with row 48's one optional field (David,
+ * 2026-09-29, `ol-egov.141.89.9.72`).
+ *
+ * **`reviewId`: the review a grade contest is about, named directly.** Until
+ * this field a dispute named its instrument and an opaque evidence
+ * fingerprint, never a review event, so every reader that needed the review
+ * (`olea-core`'s `mastery/validity.ts`, the plugin's corrective re-grade)
+ * inferred it by a fixed rule. A new grade contest writes the review's event
+ * id where the writer knows the review, and a reader that finds it uses it
+ * instead of the rule. Opaque: an event id, never content (D-005).
+ *
+ * - **Optional, and absent means unknown, never "the latest".** A writer that
+ *   cannot name the review at the moment of the contest (the review is not
+ *   yet written) writes none, and a reader then falls back to the recorded
+ *   inference rule for that record alone. A record whose review the log
+ *   cannot confirm stays unattributed; the rule never guesses at a name that
+ *   failed to resolve.
+ * - **Only a grade contest carries one.** `contestClaim` (`olea-core`) sets it
+ *   only when the claim routes to `grade`. The schema does not refuse it on
+ *   another kind: a stricter line would turn a whole record invalid over an
+ *   extra field, and no reader looks at it there.
+ * - **A resolution carries the opening's id.** `resolveDispute` copies it, so a
+ *   correction stays attributable when the opening record is missing (a
+ *   device file not yet merged). The opening's own id is read first.
+ * - **No version bump**, the same argument `verdictLogRecordV6`'s `restores`
+ *   gives: every line valid under v6 before is valid after and means the same
+ *   thing, and no existing record needs migrating. A build from before meets
+ *   a new line and zod's object parse drops the field it does not know, so no
+ *   line becomes invalid and no reader of that build sees a meaning move.
+ *   A v5 dispute has no such field and never gains one (`upgradeV5` restamps
+ *   it unchanged); no v5 writer exists.
+ */
 export const disputeLogRecordV6 = z
-  .object({ ...disputeLogRecordV5.shape, schemaVersion: z.literal(6) })
+  .object({
+    ...disputeLogRecordV5.shape,
+    schemaVersion: z.literal(6),
+    /** The `eventId` of the review a grade contest is about; absent when the writer could not name it ([D-095], row 48). */
+    reviewId: z.string().min(1).optional(),
+  })
   .superRefine(refineDisputeResolutionPairing)
   .superRefine(refineOpenRoutingPairing);
 export type DisputeLogRecordV6 = z.infer<typeof disputeLogRecordV6>;

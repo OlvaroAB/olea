@@ -37,6 +37,7 @@ import {
   appendDisputeRecord,
   contestClaim,
   type DisputeLogRecord,
+  explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
   quarantinedGradeInstrumentIds,
   resolveDispute,
@@ -56,11 +57,22 @@ export interface GradeContestPort {
    * Contests the grade on one instrument. Returns the written record, because
    * the caller needs its `eventId` — that id is what the compensating event
    * names as its catalyst.
+   *
+   * `reviewId` (row 48, `ol-egov.141.89.9.72`) is the event id of the review
+   * whose grade is contested, for a caller that knows it at the moment of the
+   * contest; the record then names it directly and readers stop inferring the
+   * review. A caller that cannot name it (the review is not written yet)
+   * omits it, and the record carries none. **No production caller supplies
+   * it today:** `ReviewSession.contestGrade` (`./session.ts`) contests an
+   * answered quiz item before that item's review event exists, so there is
+   * no id to name until the session pre-mints the review's event id; that is
+   * the follow-up named on `ol-egov.141.89.9.72`.
    */
   contestGrade(input: {
     readonly instrumentId: string;
     readonly conceptIds: readonly string[];
     readonly evidenceBasis: string;
+    readonly reviewId?: string;
   }): Promise<DisputeLogRecord>;
 
   /** Records how the async re-derivation landed. Both outcomes are recorded. */
@@ -93,6 +105,9 @@ export function createVaultGradeContestPort(
           conceptIds: [...input.conceptIds],
           instrumentId: input.instrumentId,
           evidenceBasis: input.evidenceBasis,
+          // Row 48: named only when the caller knew the review. `contestClaim`
+          // records it on a grade claim, which this always is.
+          ...(input.reviewId === undefined ? {} : { reviewId: input.reviewId }),
         },
         timestamp: now(),
       });
@@ -172,6 +187,35 @@ export function originalGradeEventIdFor(
   return latestExplainBackGradeByInstrument(records).get(instrumentId)?.eventId ?? null;
 }
 
+/**
+ * The graded explain-back review one contest is about, for the corrective
+ * re-grade's `revisionOf` (row 48, `ol-egov.141.89.9.72`).
+ *
+ * **A contest that names its review** (`dispute.reviewId`) **is read as
+ * written:** the graded explain-back review of THIS instrument carrying that
+ * event id, or `null` — never the standing grade as a fallback. A name that
+ * does not resolve (no such review, another instrument's review, or a review
+ * that carries no explain-back grade, so there is nothing to revise) is
+ * "nothing to revise", exactly as an unresolved name reads in
+ * `olea-core`'s `mastery/validity.ts`; guessing the standing grade instead
+ * could revise a review the contest was not about.
+ *
+ * **A contest that names none** (every record written before the field, and
+ * a writer that could not name it) keeps the rule `originalGradeEventIdFor`
+ * states: the grade standing on the instrument now.
+ */
+export function contestedGradeEventIdFor(
+  dispute: DisputeLogRecord,
+  records: readonly (ReviewLogEntry | DisputeLogRecord)[],
+): string | null {
+  if (dispute.instrumentId === undefined) return null;
+  if (dispute.reviewId === undefined) {
+    return originalGradeEventIdFor(dispute.instrumentId, records);
+  }
+  const attempts = explainBackGradeHistoryByInstrument(records).get(dispute.instrumentId) ?? [];
+  return attempts.find((attempt) => attempt.eventId === dispute.reviewId)?.eventId ?? null;
+}
+
 /** What one contest resolution and its corrective re-grade (if any) produced. */
 export interface ResolveContestedGradeAndRegradeResult {
   /** The resolution record `resolveContestedGrade` appended. */
@@ -244,7 +288,9 @@ export async function resolveContestedGradeAndRegrade(input: {
     return { resolution, revisionOf: null };
   }
 
-  const revisionOf = originalGradeEventIdFor(input.dispute.instrumentId, input.records);
+  // Row 48: the review the contest names, or (a contest that names none) the
+  // grade standing on the instrument — see `contestedGradeEventIdFor`.
+  const revisionOf = contestedGradeEventIdFor(input.dispute, input.records);
   if (revisionOf !== null) {
     await input.appendCorrectiveRegrade(revisionOf);
   }

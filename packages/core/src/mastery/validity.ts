@@ -29,6 +29,21 @@
  *   a contest resolved `corrected` was about. Every other review of the same
  *   instrument keeps counting.
  *
+ * **The cause decides which scope a correction reaches (row 14, David,
+ * 2026-09-29, `ol-egov.141.89.9.71`).** A grading error alone does not mark
+ * the instrument defective: the review and the evidence built on it are
+ * corrected (standing 4), and the instrument's own standing does not move. An
+ * instrument-level concern is kept only when the correction reveals a problem
+ * with the question, the answer key, the source or the grading
+ * specification, and that is standing 1 (a rejection or a defect suspension,
+ * each a recorded fact about the instrument), never something a corrected
+ * contest implies by itself. **A contest resolution carries no cause today**
+ * (`olea-contracts`' `disputeLogRecordV6` has `outcome` only), so a corrected
+ * contest is read as a grading error alone; recording a cause on the
+ * resolution would be a persisted-schema change, noted as an open question on
+ * `ol-egov.141.89.9.71`. Nothing here reads a cause, and nothing here spreads
+ * a correction over the instrument.
+ *
  * ## The standings, and why they stay apart
  *
  * 1. **Proven invalid (the instrument)** — something in the log shows the
@@ -73,10 +88,21 @@
  *    its place), is what counts, and where none was recorded nothing does.
  *    The instrument's other reviews are never touched.
  *
- *    **Which review a contest was about.** A dispute names its instrument and
- *    an opaque evidence fingerprint, never a review event (`olea-contracts`'
- *    `disputeLogRecordV5`), so the review is read off the log by one fixed
- *    rule, never guessed per case:
+ *    **Which review a contest was about.** A new grade contest names its review
+ *    directly (`reviewId` on `olea-contracts`' `disputeLogRecordV6`, row 48,
+ *    `ol-egov.141.89.9.72`), and that name is read as written: the review of
+ *    THIS instrument whose event id it is, whatever the times say. **A name
+ *    the log cannot confirm** (no such review, or a review of another
+ *    instrument) **leaves the correction unattributed, never inferred** — the
+ *    rule below is never used to guess at a name that failed to resolve. The
+ *    opening dispute's `reviewId` is read first, the resolution's own copy
+ *    when the opening is not in the log.
+ *
+ *    A contest written before the field, or by a writer that could not name a
+ *    review (an answered quiz item is contested before its review is
+ *    written), names none. A dispute then names only its instrument and an
+ *    opaque evidence fingerprint (`disputeLogRecordV5`), so the review is read
+ *    off the log by one fixed rule, never guessed per case:
  *    - a re-grade that names a review of the instrument in `revisionOf`
  *      names it exactly;
  *    - otherwise, for an explanation, the grade standing when she contested
@@ -363,7 +389,13 @@ export function projectInstrumentValidity(
 
   // Every grade contest resolved `corrected`, in log order, with the instant
   // she opened it (the resolution's own when the opening is missing).
-  const corrections: { instant: number; openedAt: number; record: DisputeLogRecord }[] = [];
+  const corrections: {
+    instant: number;
+    openedAt: number;
+    /** The review the contest names directly (row 48), the opening's first; `undefined` when it names none. */
+    reviewId: string | undefined;
+    record: DisputeLogRecord;
+  }[] = [];
   for (const record of disputeRecords) {
     if (record.claimKind !== 'grade') continue;
     if (record.resolves === undefined || record.outcome !== 'corrected') continue;
@@ -378,6 +410,7 @@ export function projectInstrumentValidity(
     corrections.push({
       instant,
       openedAt: Number.isFinite(openedAt) ? openedAt : instant,
+      reviewId: opening?.reviewId ?? record.reviewId,
       record,
     });
   }
@@ -410,11 +443,21 @@ export function projectInstrumentValidity(
   for (const correction of corrections) {
     const instrumentId = correction.record.instrumentId as string;
     const reviews = reviewsByInstrument.get(instrumentId) ?? [];
-    const regradedEventIds = reviews
-      .filter((timed) => timed.instant >= correction.openedAt)
-      .map((timed) => timed.record.explainBackGrade?.revisionOf)
-      .filter((id): id is string => typeof id === 'string');
-    const review = contestedReview(reviews, correction.openedAt, regradedEventIds);
+    const namedReviewId = correction.reviewId;
+    // Row 48: a contest that names its review is tied to exactly that review of
+    // this instrument, or to none. A name that does not resolve is never handed
+    // to the inference rule below: the rule exists for records that carry no
+    // name, and using it here would guess at one that failed.
+    let review: TimedReview | undefined;
+    if (namedReviewId !== undefined) {
+      review = reviews.find((timed) => timed.record.eventId === namedReviewId);
+    } else {
+      const regradedEventIds = reviews
+        .filter((timed) => timed.instant >= correction.openedAt)
+        .map((timed) => timed.record.explainBackGrade?.revisionOf)
+        .filter((id): id is string => typeof id === 'string');
+      review = contestedReview(reviews, correction.openedAt, regradedEventIds);
+    }
     if (review === undefined) {
       unattributedCorrectionCount += 1;
       continue;

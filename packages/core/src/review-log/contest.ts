@@ -327,6 +327,15 @@ export interface ContestedClaim {
    * arbitrary, and forever lets one bad day shadow a concept.
    */
   readonly evidenceBasis: string;
+  /**
+   * The `eventId` of the review this claim's grade belongs to, when the caller
+   * knows it at the moment of the contest (row 48, `ol-egov.141.89.9.72`).
+   * Recorded on the dispute only for a claim that routes to `grade`; a caller
+   * that cannot name the review (it is not written yet) leaves it out, and
+   * readers then tie the contest to a review by the recorded inference rule
+   * (`../mastery/validity.ts`). Never a guess: absent means unknown.
+   */
+  readonly reviewId?: string;
 }
 
 /** The input side of one contest gesture. One gesture, one event. */
@@ -429,6 +438,12 @@ export function contestClaim(input: ContestInput): ContestOutcome {
       ...(input.claim.instrumentId === undefined ? {} : { instrumentId: input.claim.instrumentId }),
       evidenceBasis: input.claim.evidenceBasis,
       effect,
+      // Row 48 (`ol-egov.141.89.9.72`): the review a GRADE contest is about,
+      // named directly. Only a grade carries one; on a reading or a
+      // structural claim the id would name nothing, so it is not recorded.
+      ...(routing.kind === 'grade' && input.claim.reviewId !== undefined
+        ? { reviewId: input.claim.reviewId }
+        : {}),
     },
   };
 }
@@ -464,6 +479,11 @@ export function resolveDispute(input: {
     // is not reachable in production yet; it stays correct rather than
     // assuming it never will be.
     ...(dispute.routingStatus === undefined ? {} : { routingStatus: dispute.routingStatus }),
+    // Row 48: the resolution names the same review its opening did, so a
+    // correction stays attributable even where the opening record is not in
+    // the log a reader holds (a device file not yet merged). Absent on an
+    // opening that named none — never filled in here.
+    ...(dispute.reviewId === undefined ? {} : { reviewId: dispute.reviewId }),
     resolves: dispute.eventId,
     outcome: input.outcome,
   };
@@ -605,6 +625,20 @@ export function quarantinedGradeInstrumentIds(
  * Instruments whose grade dispute resolved `corrected` — `[D-338]`'s
  * proven-invalid evidence, the grade half (`ol-egov.141.89.9.21`,
  * `docs/dev/intelligence-build/att.md` item 7, `olea-service`).
+ *
+ * **Superseded as an instrument-level fact by row 14 (David, 2026-09-29,
+ * `ol-egov.141.89.9.71`): a grading error alone does not mark the instrument
+ * defective.** A corrected contest corrects the one review it was about and
+ * the evidence built on it (`../mastery/validity.ts`'s `correctedEvidence`);
+ * the instrument becomes suspect only on a recorded problem with the
+ * question, the answer key, the source or the grading specification, which
+ * is a rejection or a defect suspension, never this. This function has no
+ * production caller since that ruling (its one reader,
+ * `packages/plugin/src/review/open-session.ts`'s `readInstrumentStanding`,
+ * stopped folding it onto the rejected concern); it stays as the plain,
+ * log-only answer to "which instruments carry a corrected grade contest",
+ * and the text below is the history of why it was written, not a rule any
+ * reader still applies.
  *
  * **Why this exists, and why `quarantinedGradeInstrumentIds` alone was not
  * enough.** Until a resolution lands, a disputed grade is THIN evidence

@@ -149,10 +149,9 @@
  * belongs here, where the whole review log is already in hand. Two of the
  * ruling's six named concerns are real, wired production reads today,
  * unconditionally: `rejected` (a `rejected` verdict or a defect suspension —
- * `validity.provenInvalid` — folded together with a grade dispute that
- * resolved `corrected` — `correctedGradeInstrumentIds(disputes)`, pending
- * David's ruling on whether it belongs here at all; see {@link
- * readInstrumentStanding}'s own doc for why) folds straight off the SAME
+ * `validity.provenInvalid`; **a grade dispute resolved `corrected` is NOT
+ * folded onto it since row 14 of David's 2026-09-29 rulings**, see {@link
+ * readInstrumentStanding}'s own doc) folds straight off the SAME
  * `composed.entries` this module already reads for
  * `replayUnconsumedSchedulingObservations`/
  * `buildSupportLevelHistoryLookup`, no second parse. `contested` (an open,
@@ -214,7 +213,6 @@ import type {
 import {
   buildReviewSession,
   calendarDaysEndingOn,
-  correctedGradeInstrumentIds,
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlanOverComposedRows,
@@ -1035,7 +1033,6 @@ export async function openReviewSession(
       // their input.
       resolveInstrumentStanding: readInstrumentStanding(
         instrumentValidity,
-        disputes,
         pendingRevalidationInstrumentIds,
         input.safetyUnavailableInstrumentIds ?? EMPTY_INSTRUMENT_ID_SET,
       ),
@@ -1456,28 +1453,34 @@ async function disputesFromReviewLog(
  *   grade dispute (`[D-095]`'s "quarantines"; `review-log/contest.ts`'s
  *   `quarantinedGradeInstrumentIds`). This is exactly D-323's own "a
  *   contest" ground.
- * - `rejected`: the projection's `provenInvalid` map (a verdict of
- *   `rejected`, D-323's own "a rejection" ground, named literally, or a
- *   suspension recorded as a defect) folded together with
- *   `correctedGradeInstrumentIds(disputes)` (`../../core/review-log/
- *   contest.ts`; a grade dispute that resolved `corrected`,
- *   `'corrected-on-contest'`, not literally named by the ruling's six-way
- *   vocabulary). **As of the ruling of 2026-09-28 on `ol-egov.141.89.9.66`
- *   (wired by `ol-egov.141.89.9.68`), a corrected contest proves only ONE
- *   review's grade wrong — it is no longer in `provenInvalid`, which now
- *   holds only `rejected`/`defect`; it lives in `validity.correctedEvidence`,
- *   keyed by the corrected review's event id, and ONLY when the log can tie
- *   the correction to a review at all (`unattributedCorrectionCount`
- *   otherwise).** `readInstrumentStanding` below reads the closing dispute's
- *   own `instrumentId` field directly instead (`correctedGradeInstrumentIds`)
- *   — attribution or not, the SAME direct read the pre-ruling whole-
- *   instrument rule used — to keep today's reading exactly: an ordinary
- *   explain-back offered on an instrument with a corrected grade is exactly
- *   what D-323 exists to prevent, whichever of the two facts proved it —
- *   pending David's ruling on whether a corrected contest should still mark
- *   the instrument suspect at all now that `[D-338]` reads it as a narrower
- *   fact than a standing rejection; see `readInstrumentStanding`'s own
- *   comment. Flagged for review rather than left undone.
+ * - `rejected`: the projection's `provenInvalid` map alone — a verdict of
+ *   `rejected` (D-323's own "a rejection" ground, named literally) or a
+ *   suspension recorded as a defect. Each is a recorded fact about the
+ *   instrument itself. (The present-time check at the top of this open,
+ *   `ol-egov.141.89.2.14`, already keeps such an instrument out of the
+ *   sitting it composes, so this read is the standing-side statement of the
+ *   same fact rather than a second gate.)
+ *
+ *   **A grade dispute resolved `corrected` does NOT raise `rejected`
+ *   (row 14 of David's rulings of 2026-09-29, `ol-egov.141.89.9.71`; it
+ *   changes the earlier default of `ol-egov.141.89.9.66`).** A grading error
+ *   alone does not mark the instrument defective: the correction lives in
+ *   `validity.correctedEvidence`, keyed by the one corrected review's event
+ *   id (`ol-egov.141.89.9.68`), and that review and the evidence built on it
+ *   stay corrected wherever `validity` is read. An instrument-level concern
+ *   is kept only when the correction shows a problem with the question, the
+ *   answer key, the source or the grading specification — the cause decides
+ *   what becomes suspect — and that is exactly a rejection or a defect
+ *   suspension, which `provenInvalid` already carries. **No surface records
+ *   a cause on a contest today** (a contest resolution carries `outcome`
+ *   only, so a cause would be a persisted-schema change), so a corrected
+ *   contest is read as a grading error alone; the gap is an open question on
+ *   `ol-egov.141.89.9.71`. The earlier fold onto `rejected`
+ *   (`correctedGradeInstrumentIds`, the closing dispute's own `instrumentId`
+ *   read directly, attribution or not) is gone, and with it the case where
+ *   an UNATTRIBUTABLE correction still withheld an explain-back offer:
+ *   `validity.unattributedCorrectionCount` counts that correction and
+ *   nothing more, which is the ruling's "preserve historical ambiguity".
  *
  * **A third is a real, wired read, conditional on a caller actually
  * supplying its input (`ol-egov.141.89.6.54`):**
@@ -1548,32 +1551,19 @@ async function disputesFromReviewLog(
  */
 function readInstrumentStanding(
   validity: InstrumentValidityProjection,
-  disputes: readonly DisputeLogRecord[],
   pendingRevalidationInstrumentIds: ReadonlySet<string>,
   safetyUnavailableInstrumentIds: ReadonlySet<string>,
 ): (instrumentId: string) => InstrumentStanding {
-  // Pending David's ruling on the batch-4 question (`ol-egov.141.89.9.66`'s
-  // own follow-up, restated in `ol-egov.141.89.9.69`'s notes): should a
-  // corrected contest still mark the instrument suspect for `[D-323]`, now
-  // that `ol-egov.141.89.9.68` moved it out of `validity.provenInvalid`
-  // (which today reads only `rejected`/`defect`) and into a projection keyed
-  // by the corrected REVIEW's event id (`validity.correctedEvidence`), which
-  // an UNATTRIBUTABLE correction (no review the log can tie it to — see
-  // `mastery/validity.ts`'s own `unattributedCorrectionCount` doc) never
-  // enters at all? Until ruled, this keeps TODAY'S behaviour exactly —
-  // `../../core/review-log/contest.ts`'s `correctedGradeInstrumentIds`, the
-  // SAME direct read of a closing dispute's own `instrumentId` field the
-  // pre-`ol-egov.141.89.9.66` whole-instrument rule used, attribution or
-  // not — rather than `validity.correctedEvidence`, which would silently
-  // drop the unattributable case this test fixture exercises.
-  const correctedInstrumentIds = new Set(correctedGradeInstrumentIds(disputes));
-
   return (instrumentId: string): InstrumentStanding => {
     const concerns: InstrumentStandingConcern[] = [];
     if (validity.contested.has(instrumentId)) concerns.push('contested');
-    if (validity.provenInvalid.has(instrumentId) || correctedInstrumentIds.has(instrumentId)) {
-      concerns.push('rejected');
-    }
+    // Row 14 (`ol-egov.141.89.9.71`): `provenInvalid` ONLY. A corrected grade
+    // contest is a grading error alone — it corrects one review through
+    // `validity.correctedEvidence` and marks nothing here; an instrument-level
+    // concern needs a recorded fact about the instrument (a rejection or a
+    // defect suspension), which is what `provenInvalid` holds. See this
+    // function's doc, "`rejected`".
+    if (validity.provenInvalid.has(instrumentId)) concerns.push('rejected');
     if (pendingRevalidationInstrumentIds.has(instrumentId)) concerns.push('pending-revalidation');
     if (safetyUnavailableInstrumentIds.has(instrumentId)) {
       concerns.push('safety-information-unavailable');

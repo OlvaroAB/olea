@@ -882,3 +882,145 @@ describe('the dispute survives a round trip through her vault', () => {
     ).rejects.toThrow(/conceptIds/);
   });
 });
+
+describe('row 48 — a new grade contest names the review it is about (ol-egov.141.89.9.72)', () => {
+  const NOW = '2026-09-29T09:00:00-04:00';
+  const LATER = '2026-09-30T09:00:00-04:00';
+
+  it('a grade claim that names its review records that id, and the record validates as written', () => {
+    const outcome = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: [CONCEPT_A],
+        instrumentId: 'i1',
+        evidenceBasis: 'basis-1',
+        reviewId: 'review-1',
+      },
+      timestamp: NOW,
+    });
+    expect(outcome.kind).toBe('grade');
+    expect(outcome.record.reviewId).toBe('review-1');
+    const stamped = { schemaVersion: 6, kind: 'dispute', eventId: 'd1', ...outcome.record };
+    const parsed = safeParseDisputeLogRecord(stamped);
+    expect(parsed.success).toBe(true);
+    if (parsed.success) expect(parsed.data.reviewId).toBe('review-1');
+  });
+
+  it('a grade claim that names no review records none — absent means unknown, never the latest', () => {
+    const outcome = contestClaim({
+      claim: {
+        rendering: 'explain-back-grade',
+        conceptIds: [CONCEPT_A],
+        instrumentId: 'i1',
+        evidenceBasis: 'basis-1',
+      },
+      timestamp: NOW,
+    });
+    expect('reviewId' in outcome.record).toBe(false);
+  });
+
+  it('a reading, a structural claim and an open-routed claim handed a review id record none', () => {
+    for (const rendering of [
+      'mastery-reading',
+      'concept-relation-edge',
+      'trend-sentence',
+    ] as const) {
+      const outcome = contestClaim({
+        claim: {
+          rendering,
+          conceptIds: [CONCEPT_A],
+          evidenceBasis: 'basis-1',
+          reviewId: 'review-1',
+        },
+        timestamp: NOW,
+      });
+      expect('reviewId' in outcome.record).toBe(false);
+    }
+  });
+
+  it('the resolution carries the review id its opening named, and none when the opening named none', () => {
+    const named = dispute({
+      eventId: 'd1',
+      claimKind: 'grade',
+      claimRendering: 'explain-back-grade',
+      effect: 'quarantined',
+      instrumentId: 'i1',
+      reviewId: 'review-1',
+    });
+    const resolvedNamed = resolveDispute({
+      dispute: named,
+      outcome: 'corrected',
+      timestamp: LATER,
+    });
+    expect(resolvedNamed.reviewId).toBe('review-1');
+    expect(resolvedNamed.resolves).toBe('d1');
+
+    const { reviewId: _dropped, ...unnamed } = named;
+    const resolvedUnnamed = resolveDispute({
+      dispute: unnamed as DisputeLogRecord,
+      outcome: 'corrected',
+      timestamp: LATER,
+    });
+    expect('reviewId' in resolvedUnnamed).toBe(false);
+  });
+
+  describe('through her vault', () => {
+    let dir = '';
+
+    beforeEach(async () => {
+      dir = await mkdtemp(join(tmpdir(), 'olea-contest-review-id-'));
+    });
+    afterEach(async () => {
+      await rm(dir, { recursive: true, force: true });
+    });
+
+    it('an opening that names its review and its resolution both read back carrying it; an older line reads without', async () => {
+      const vault = new FolderSource(dir);
+      const opening = contestClaim({
+        claim: {
+          rendering: 'explain-back-grade',
+          conceptIds: [CONCEPT_A],
+          instrumentId: 'i1',
+          evidenceBasis: 'basis-1',
+          reviewId: 'review-1',
+        },
+        timestamp: NOW,
+      });
+      const written = await appendDisputeRecord(vault, opening.record, {
+        deviceId: 'device-1',
+        generateEventId: () => 'd1',
+      });
+      await appendDisputeRecord(
+        vault,
+        resolveDispute({ dispute: written.record, outcome: 'corrected', timestamp: NOW }),
+        { deviceId: 'device-1', generateEventId: () => 'd2' },
+      );
+      // An older contest, written with no review id at all.
+      await appendDisputeRecord(
+        vault,
+        contestClaim({
+          claim: {
+            rendering: 'explain-back-grade',
+            conceptIds: [CONCEPT_A],
+            instrumentId: 'i2',
+            evidenceBasis: 'basis-2',
+          },
+          timestamp: NOW,
+        }).record,
+        { deviceId: 'device-1', generateEventId: () => 'd3' },
+      );
+
+      const text = await readFile(join(dir, reviewLogPath('2026-09-29', 'device-1')), 'utf8');
+      const read = parseReviewLog(text);
+      expect(read.invalidLines).toEqual([]);
+      const byId = new Map(read.disputes.map((record) => [record.eventId, record]));
+      expect(byId.get('d1')?.reviewId).toBe('review-1');
+      expect(byId.get('d2')?.reviewId).toBe('review-1');
+      expect(byId.get('d3') !== undefined && 'reviewId' in (byId.get('d3') as object)).toBe(false);
+      // The old line is text-identical to what a writer without the field produced.
+      const oldLine = text.split('\n').find((line) => line.includes('"d3"'));
+      expect(oldLine).toBeDefined();
+      expect(oldLine).not.toContain('reviewId');
+    });
+  });
+});

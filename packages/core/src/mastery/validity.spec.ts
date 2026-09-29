@@ -138,6 +138,8 @@ function gradeDispute(
   eventId: string,
   timestamp: string,
   resolution?: { resolves: string; outcome: 'upheld' | 'corrected' },
+  /** Row 48: the review a new contest names directly; absent on every record written before the field. */
+  reviewId?: string,
 ): DisputeLogRecord {
   return {
     schemaVersion: 6,
@@ -151,6 +153,7 @@ function gradeDispute(
     evidenceBasis: 'basis-1',
     effect: 'quarantined',
     ...(resolution ?? {}),
+    ...(reviewId === undefined ? {} : { reviewId }),
   } as DisputeLogRecord;
 }
 
@@ -666,5 +669,194 @@ describe('rule 2: a corrected contest is tied to the one review it was about', (
     );
     expect(v.correctedEvidence.size).toBe(0);
     expect(v.unattributedCorrectionCount).toBe(0);
+  });
+});
+
+describe('rule 3: a contest that names its review is tied to it, and a name that fails to resolve stays untied (row 48, ol-egov.141.89.9.72)', () => {
+  const opened = T2;
+  const resolved = T3;
+  /** An opening and its `corrected` resolution, the opening naming `reviewId` (or none). */
+  const correctedNaming = (instrumentId: string, reviewId?: string) => [
+    gradeDispute(instrumentId, 'd1', opened, undefined, reviewId),
+    gradeDispute(instrumentId, 'd2', resolved, { resolves: 'd1', outcome: 'corrected' }, reviewId),
+  ];
+
+  it('the named review is the one corrected, whatever the times say — never the nearer one the rule would pick', () => {
+    const entries = [
+      reviewOf('qa:1', 'named', T0),
+      // Logged right beside the contest: the inference rule alone would choose this one.
+      reviewOf('qa:1', 'nearer', plus(opened, MINUTE)),
+    ];
+    const byRule = projectInstrumentValidity(entries, correctedNaming('qa:1'));
+    expect([...byRule.correctedEvidence.keys()]).toEqual(['nearer']);
+
+    const named = projectInstrumentValidity(entries, correctedNaming('qa:1', 'named'));
+    expect([...named.correctedEvidence.keys()]).toEqual(['named']);
+    expect(named.unattributedCorrectionCount).toBe(0);
+  });
+
+  it('a name outranks a corrective re-grade that points elsewhere: the contest said which review it was about', () => {
+    const entries = [
+      reviewOf('eb:1', 'named', T0, 'explain-back'),
+      reviewOf('eb:1', 'standing', T1, 'explain-back'),
+      reviewOf('eb:1', 'regrade', plus(resolved, MINUTE), 'explain-back', {
+        explainBackGrade: {
+          soloLevel: 'relational',
+          contentRef: 'content-ref-placeholder',
+          revisionOf: 'standing',
+          artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+        },
+      }),
+    ];
+    const v = projectInstrumentValidity(entries, correctedNaming('eb:1', 'named'));
+    expect([...v.correctedEvidence.keys()]).toEqual(['named']);
+  });
+
+  it('the named review corrects only itself: the instrument stands and its other reviews keep counting', () => {
+    const entries: ReviewLogEntry[] = [
+      reviewOf('qa:1', 'named', T0),
+      reviewOf('qa:1', 'other-1', T1),
+      reviewOf('qa:1', 'other-2', plus(opened, MINUTE)),
+    ];
+    const v = projectInstrumentValidity(entries, correctedNaming('qa:1', 'named'));
+    expect(v.provenInvalid.has('qa:1')).toBe(false);
+    expect(withoutCorrectedEvidence(entries, v.correctedEvidence).map((e) => e.eventId)).toEqual([
+      'other-1',
+      'other-2',
+    ]);
+  });
+
+  it('a review with no grade is still the review a contest names: the name is read as written', () => {
+    const entries = [
+      reviewOf('eb:1', 'graded', T0, 'explain-back'),
+      reviewOf('eb:1', 'ungraded', T1, 'explain-back', { explainBackCorrectness: undefined }),
+    ];
+    const v = projectInstrumentValidity(entries, correctedNaming('eb:1', 'ungraded'));
+    expect([...v.correctedEvidence.keys()]).toEqual(['ungraded']);
+  });
+
+  it('a named review the log does not carry leaves the correction untied and counted — the rule is never used to guess', () => {
+    const entries = [reviewOf('qa:1', 'the-rule-would-pick-this', plus(opened, MINUTE))];
+    const v = projectInstrumentValidity(entries, correctedNaming('qa:1', 'not-in-the-log'));
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(1);
+    expect(v.provenInvalid.size).toBe(0);
+  });
+
+  it("a named review that belongs to another instrument leaves the correction untied and touches neither instrument's reviews", () => {
+    const entries = [
+      reviewOf('qa:1', 'mine', plus(opened, MINUTE)),
+      reviewOf('qa:2', 'theirs', plus(opened, MINUTE)),
+    ];
+    const v = projectInstrumentValidity(entries, correctedNaming('qa:1', 'theirs'));
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(1);
+  });
+
+  it('the opening names the review first; the resolution carries its own copy for when the opening is not in the log', () => {
+    const entries = [
+      reviewOf('qa:1', 'named', T0),
+      reviewOf('qa:1', 'nearer', plus(opened, MINUTE)),
+    ];
+    const resolutionOnly = [
+      gradeDispute('qa:1', 'd2', resolved, { resolves: 'd1', outcome: 'corrected' }, 'named'),
+    ];
+    const alone = projectInstrumentValidity(entries, resolutionOnly);
+    expect([...alone.correctedEvidence.keys()]).toEqual(['named']);
+
+    const disagreeing = [
+      gradeDispute('qa:1', 'd1', opened, undefined, 'named'),
+      gradeDispute('qa:1', 'd2', resolved, { resolves: 'd1', outcome: 'corrected' }, 'nearer'),
+    ];
+    const both = projectInstrumentValidity(entries, disagreeing);
+    expect([...both.correctedEvidence.keys()]).toEqual(['named']);
+  });
+
+  it('contests written before the field read exactly as they did: one the rule can tie, one it cannot stay untied', () => {
+    const entries = [reviewOf('qa:1', 'tied-by-rule', plus(opened, MINUTE))];
+    const v = projectInstrumentValidity(entries, [
+      ...correctedNaming('qa:1'),
+      // A second instrument with no review of its own for the rule to find.
+      gradeDispute('qa:2', 'd3', opened),
+      gradeDispute('qa:2', 'd4', resolved, { resolves: 'd3', outcome: 'corrected' }),
+    ]);
+    expect([...v.correctedEvidence.keys()]).toEqual(['tied-by-rule']);
+    expect(v.unattributedCorrectionCount).toBe(1);
+  });
+
+  it('an upheld contest that names a review ties nothing to it', () => {
+    const v = projectInstrumentValidity(
+      [reviewOf('qa:1', 'named', T1)],
+      [
+        gradeDispute('qa:1', 'd1', opened, undefined, 'named'),
+        gradeDispute('qa:1', 'd2', resolved, { resolves: 'd1', outcome: 'upheld' }, 'named'),
+      ],
+    );
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(0);
+  });
+});
+
+describe('row 14: a corrected grade alone leaves the instrument standing; only a recorded problem with the instrument does not (ol-egov.141.89.9.71)', () => {
+  const opened = T2;
+  const resolved = T3;
+  const corrected = (instrumentId: string) => [
+    gradeDispute(instrumentId, 'd1', opened),
+    gradeDispute(instrumentId, 'd2', resolved, { resolves: 'd1', outcome: 'corrected' }),
+  ];
+
+  it('a corrected contest corrects that one review and proves nothing about the instrument', () => {
+    const entries: ReviewLogEntry[] = [
+      reviewOf('qa:1', 'first', T0),
+      reviewOf('qa:1', 'contested', plus(opened, MINUTE)),
+    ];
+    const v = projectInstrumentValidity(entries, corrected('qa:1'));
+    expect([...v.correctedEvidence.keys()]).toEqual(['contested']);
+    expect(v.provenInvalid.size).toBe(0);
+    expect(v.withheld.size).toBe(0);
+    expect(rejectedInstrumentIds(entries)).toEqual(new Set());
+  });
+
+  it('a recorded defect is what makes the instrument invalid, and the corrected review stays corrected beside it', () => {
+    const entries: ReviewLogEntry[] = [
+      reviewOf('qa:1', 'first', T0),
+      reviewOf('qa:1', 'contested', plus(opened, MINUTE)),
+      suspension('suspend', 'qa:1', plus(resolved, MINUTE), 's1', 'defect'),
+    ];
+    const withDefect = projectInstrumentValidity(entries, corrected('qa:1'));
+    expect(withDefect.provenInvalid.get('qa:1')?.reason).toBe('defect');
+    expect(withDefect.provenInvalid.get('qa:1')?.eventId).toBe('s1');
+    expect([...withDefect.correctedEvidence.keys()]).toEqual(['contested']);
+
+    // The same corrected contest without the suspension proves nothing about the instrument.
+    const withoutDefect = projectInstrumentValidity(entries.slice(0, 2), corrected('qa:1'));
+    expect(withoutDefect.provenInvalid.has('qa:1')).toBe(false);
+  });
+
+  it('a recorded rejection is likewise the instrument-level fact, whether or not a grade was corrected', () => {
+    const entries: ReviewLogEntry[] = [
+      reviewOf('qa:1', 'contested', plus(opened, MINUTE)),
+      verdict('qa:1', 'rejected', plus(resolved, MINUTE), 'v1'),
+    ];
+    const v = projectInstrumentValidity(entries, corrected('qa:1'));
+    expect(v.provenInvalid.get('qa:1')?.reason).toBe('rejected');
+    expect([...v.correctedEvidence.keys()]).toEqual(['contested']);
+  });
+
+  it('a corrected contest on one instrument never marks another, even one that shares its concepts', () => {
+    const entries: ReviewLogEntry[] = [
+      reviewOf('qa:1', 'mine', plus(opened, MINUTE)),
+      reviewOf('qa:2', 'sibling', plus(opened, MINUTE)),
+    ];
+    const v = projectInstrumentValidity(entries, corrected('qa:1'));
+    expect(v.provenInvalid.size).toBe(0);
+    expect([...v.correctedEvidence.keys()]).toEqual(['mine']);
+  });
+
+  it('a corrected contest the log cannot tie to a review excludes nothing and marks nothing, and is counted', () => {
+    const v = projectInstrumentValidity([], corrected('qa:1'));
+    expect(v.correctedEvidence.size).toBe(0);
+    expect(v.provenInvalid.size).toBe(0);
+    expect(v.unattributedCorrectionCount).toBe(1);
   });
 });
