@@ -318,11 +318,17 @@ describe('[D-395] writing a record is never study activity', () => {
   });
 });
 
+/** A daily composition log, `<day>.<device>.jsonl`; the unresolved-writes journal beside it is not one. */
+const DAILY_LOG_FILE_RE = /\/\d{4}-\d{2}-\d{2}\.[^/]+\.jsonl$/;
+
 /**
- * A vault over `inner` whose composition-log writes follow `plan`, one entry per write call:
+ * A vault over `inner` whose DAILY composition-log writes follow `plan`, one entry per write call:
  * `'fail'` throws without writing, `'land-then-fail'` writes and then throws (a write that landed
- * but reported failure), `'ok'` writes. Writes past the end of `plan` succeed. Counts every
- * composition-log write call, attempted or not.
+ * but reported failure), `'ok'` writes. Writes past the end of `plan` succeed. Counts every daily
+ * composition-log write call, attempted or not. The unresolved-writes journal
+ * (`ol-egov.141.89.10.97`) is another file in the same folder and passes through unscripted:
+ * these cases model "the daily file refuses", not "the whole layer is gone" (the reconciliation
+ * suite covers that).
  */
 function scriptedVault(
   inner: MemoryVault,
@@ -334,7 +340,9 @@ function scriptedVault(
     read: (path) => inner.read(path),
     exists: (path) => inner.exists(path),
     async write(path, content) {
-      if (!path.startsWith(`${COMPOSITION_LOG_FOLDER}/`)) return inner.write(path, content);
+      if (!path.startsWith(`${COMPOSITION_LOG_FOLDER}/`) || !DAILY_LOG_FILE_RE.test(path)) {
+        return inner.write(path, content);
+      }
       const step = plan[calls] ?? 'ok';
       calls += 1;
       if (step === 'fail') throw new Error('write refused');

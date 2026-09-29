@@ -273,6 +273,7 @@ import {
   activeSessionGroupingSentence,
   recordedSessionReason,
 } from './session/composition-recorder.js';
+import { reconcileUnresolvedCompositionWrites } from './session/composition-write-reconciliation.js';
 import { createStudySessionHolder, type StudySessionHolder } from './session/holder.js';
 import { computeSharedSittingStaleness } from './session/shared-sitting-staleness.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from './session-builder/copy.js';
@@ -1001,6 +1002,11 @@ export default class OleaPlugin extends Plugin {
     // first has to happen — `ensureDeviceId` is idempotent and writes only on
     // the run that mints.
     const deviceId = await ensureDeviceId(this);
+
+    // `ol-egov.141.89.10.97` (row 52): the plugin start that lands any composition record a
+    // previous run could not write, under the identity it was built with. Idempotent, never
+    // throws, never blocks `onload`; writes only under `.olea/`, through the sealed source.
+    void reconcileUnresolvedCompositionWrites({ vault, deviceId });
 
     // `this` satisfies `ObsidianDataHost` (`loadData`/`saveData`) — same
     // narrow-port pattern `ObsidianQueueStore` and `ObsidianKeywordIndexStore`

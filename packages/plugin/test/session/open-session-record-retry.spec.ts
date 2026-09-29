@@ -34,8 +34,14 @@ import {
   compositionIdentityOf,
   createCompositionRecorder,
   explainActiveSession,
+  MAX_COMPOSITION_WRITE_ATTEMPTS,
   recordedSessionReason,
 } from '../../src/session/composition-recorder.js';
+import {
+  readUnresolvedCompositionWrites,
+  reconcileUnresolvedCompositionWrites,
+  resolveCompositionReference,
+} from '../../src/session/composition-write-reconciliation.js';
 import { createStudySessionHolder, type StudySessionHolder } from '../../src/session/holder.js';
 import { groupingWhySentence } from '../../src/session-builder/copy.js';
 import { type MemoryVault, memoryVault } from '../review/memory-vault.js';
@@ -63,14 +69,21 @@ function qaVault(): MemoryVault {
   });
 }
 
-/** Composition-log writes refused while `refuse()` is true; every other write goes through. */
+/**
+ * Daily composition-log writes refused while `refuse()` is true; every other write goes through,
+ * the unresolved-writes journal beside the daily files included (`ol-egov.141.89.10.97`).
+ */
 function refusingVault(inner: MemoryVault, refuse: () => boolean): MemoryVault {
   return {
     ...inner,
     read: (path) => inner.read(path),
     exists: (path) => inner.exists(path),
     async write(path, content) {
-      if (path.startsWith(`${COMPOSITION_LOG_FOLDER}/`) && refuse()) {
+      if (
+        path.startsWith(`${COMPOSITION_LOG_FOLDER}/`) &&
+        /\/\d{4}-\d{2}-\d{2}\.[^/]+\.jsonl$/.test(path) &&
+        refuse()
+      ) {
         throw new Error('write refused');
       }
       await inner.write(path, content);
@@ -226,5 +239,46 @@ describe('openReviewSession retries a failed composition record under the same i
     // Recorded, nothing queued: a third opening writes nothing more.
     await openReviewSession(input(vault, holder));
     expect((await readCompositionLog(inner)).records).toHaveLength(1);
+  });
+});
+
+describe('a spent retry bound leaves an explicit unresolved write, and the next start reconciles it (ol-egov.141.89.10.97)', () => {
+  it('every opening serves the same reference; the id names the unresolved write until a restart lands the record under it', async () => {
+    const inner = qaVault();
+    const record = await onlyQa(inner);
+    const vault = refusingVault(inner, () => true);
+    const holder = createStudySessionHolder();
+    holder.enter(ENTERED, session(record));
+
+    let pendingId: string | undefined;
+    for (let opening = 0; opening < MAX_COMPOSITION_WRITE_ATTEMPTS + 1; opening += 1) {
+      const opened = await openReviewSession(input(vault, holder));
+      if (!opened.ok) throw new Error('expected a composed session');
+      pendingId ??= compositionIdentityOf(held(holder));
+      // Never a fresh identity, never none: the reviews keep the one reference they started with.
+      expect(compositionIdentityOf(held(holder))).toBe(pendingId);
+      expect(opened.scheduledQueue.map((item) => item.compositionId)).toEqual([pendingId]);
+    }
+    expect((await readCompositionLog(inner)).records).toEqual([]);
+    const [unresolved] = (await readUnresolvedCompositionWrites(inner, DEVICE)).open;
+    expect(unresolved).toMatchObject({ compositionId: pendingId, state: 'exhausted' });
+    expect(await resolveCompositionReference(inner, DEVICE, pendingId ?? '')).toMatchObject({
+      status: 'unresolved',
+    });
+    // Still served and explained from memory while unresolved.
+    expect(recordedSessionReason(holder.getSitting())).toBe(REASON);
+
+    // The plugin restarts: a fresh holder (idle), and the vault accepts the daily file again. The
+    // one startup call reconciles.
+    const restarted = await reconcileUnresolvedCompositionWrites({
+      vault: inner,
+      deviceId: DEVICE,
+    });
+    expect(restarted).toMatchObject({ examined: 1, written: 1, stillUnresolved: 0 });
+    const { records } = await readCompositionLog(inner);
+    expect(records.map((entry) => entry.compositionId)).toEqual([pendingId]);
+    expect(await resolveCompositionReference(inner, DEVICE, pendingId ?? '')).toMatchObject({
+      status: 'recorded',
+    });
   });
 });

@@ -45,9 +45,19 @@
  *
  * **The identity travels whether or not the write has landed** ({@link compositionIdentityOf}):
  * a review served from a session whose record is still pending carries the id the record will be
- * written under, so it resolves once the retry lands, and never needs a join by time. If the
- * bound is exhausted the id resolves to nothing, which every reader already treats as no record.
- * The reasons carry no ids or text (D-005).
+ * written under, so it resolves once the retry lands, and never needs a join by time. The reasons
+ * carry no ids or text (D-005).
+ *
+ * **What a spent bound leaves behind is an explicit unresolved write, never a dangling id**
+ * (`ol-egov.141.89.10.97`, David's ruling 2026-09-29, row 52). The record still queued for a retry
+ * is also journaled in Olea's own layer as it first fails, and journaled again as `exhausted` when
+ * the bound is spent (`./composition-write-reconciliation.ts`, which says where and why). A review's
+ * id then resolves to that unresolved write until a restart's reconciliation lands the record under
+ * the same identity, and a retry that lands inside this run marks the journaled write resolved.
+ * Journaling is best effort and never blocks or throws: a layer that refuses the journal too leaves
+ * the state explicit in memory ({@link unresolvedCompositionWritesOf}, `persisted: false`) and is
+ * tried again at the next failure. The state is data only; no wording for it exists, and none is
+ * shown to her.
  */
 
 import type { ComposedStudySession, VaultPath, VaultSource } from 'olea-core';
@@ -62,11 +72,18 @@ import {
   buildExtendedCompositionRecord,
   type CompositionRecord,
   mintOpaqueCompositionId,
-  parseCompositionLog,
 } from '../../../core/src/study-session/composition-record.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import { groupingWhySentence } from '../session-builder/copy.js';
 import { localToday } from '../today/data-source.js';
+import {
+  compositionRecordLanded,
+  journalResolvedCompositionWrite,
+  journalUnresolvedCompositionWrite,
+  summarizeUnresolvedWrite,
+  type UnresolvedCompositionWrite,
+  type UnresolvedWriteState,
+} from './composition-write-reconciliation.js';
 import type { StudySessionSitting } from './holder.js';
 
 /**
@@ -145,10 +162,15 @@ export function activeSessionGroupingSentence(sitting: StudySessionSitting): str
  */
 export const MAX_COMPOSITION_WRITE_ATTEMPTS = 3;
 
-/** One session's records not yet confirmed written, in append order, and the attempts spent. */
+/**
+ * One session's records not yet confirmed written, in append order, and the attempts spent.
+ * `journaled` holds, per record id, the state last journaled for it in Olea's own layer
+ * (`./composition-write-reconciliation.ts`); an id absent from it is unresolved in memory only.
+ */
 interface UnwrittenRecords {
   readonly records: readonly CompositionRecord[];
   readonly failedAttempts: number;
+  readonly journaled: ReadonlyMap<string, UnresolvedWriteState>;
 }
 
 // Keyed by the session object the caller holds (the shared holder keeps exactly that object), so
@@ -168,6 +190,38 @@ export function compositionIdentityOf(session: ComposedStudySession): string | u
   return (
     unwritten?.[unwritten.length - 1]?.compositionId ?? session.compositionRecord?.compositionId
   );
+}
+
+/**
+ * A composition write that has not landed, as the running plugin holds it: the data-only summary
+ * `./composition-write-reconciliation.ts` journals, and whether the journal line reached the vault
+ * (`persisted`). `persisted: false` means the state is explicit in memory only, and a restart
+ * before it lands would not find it.
+ */
+export interface HeldUnresolvedCompositionWrite extends UnresolvedCompositionWrite {
+  readonly persisted: boolean;
+}
+
+/**
+ * The unresolved writes `session` carries, in append order: every record queued for a retry,
+ * `retrying` while the bound is not spent and `exhausted` once it is. Empty for a session with
+ * nothing pending (a preview, a recorded session). Data only: ids, a kind, a time and a state,
+ * never a sentence (`ol-egov.141.89.10.97`).
+ */
+export function unresolvedCompositionWritesOf(
+  session: ComposedStudySession,
+): readonly HeldUnresolvedCompositionWrite[] {
+  const queued = unwrittenBySession.get(session);
+  if (queued === undefined) return [];
+  const state = exhaustedState(queued.failedAttempts);
+  return queued.records.map((record) => ({
+    ...summarizeUnresolvedWrite(record, state),
+    persisted: queued.journaled.get(record.compositionId) === state,
+  }));
+}
+
+function exhaustedState(failedAttempts: number): UnresolvedWriteState {
+  return failedAttempts >= MAX_COMPOSITION_WRITE_ATTEMPTS ? 'exhausted' : 'retrying';
 }
 
 export interface CompositionRecorderDeps {
@@ -272,14 +326,36 @@ export function createCompositionRecorder(deps: CompositionRecorderDeps): Compos
 
   /** Writes `record` unless a retry finds it already landed (a write that reported failure). */
   async function writeOnce(record: CompositionRecord, isRetry: boolean): Promise<VaultPath> {
-    if (isRetry) {
-      const path = compositionLogPath(record.composedAt.slice(0, 10), deps.deviceId);
-      if (await deps.vault.exists(path)) {
-        const { records } = parseCompositionLog(await deps.vault.read(path));
-        if (records.some((landed) => landed.compositionId === record.compositionId)) return path;
-      }
+    if (isRetry && (await compositionRecordLanded(deps.vault, deps.deviceId, record))) {
+      return compositionLogPath(record.composedAt.slice(0, 10), deps.deviceId);
     }
     return (await appendCompositionRecord(deps.vault, record, deps.deviceId)).path;
+  }
+
+  /**
+   * Journals each of `records` as an unresolved write in `state` where the journal does not
+   * already say so, and returns what the journal now says, for exactly those records. Best effort:
+   * a line the vault refuses is left out of the result, so the next failure tries it again.
+   */
+  async function journalUnresolved(
+    records: readonly CompositionRecord[],
+    state: UnresolvedWriteState,
+    journaled: ReadonlyMap<string, UnresolvedWriteState>,
+  ): Promise<ReadonlyMap<string, UnresolvedWriteState>> {
+    const next = new Map<string, UnresolvedWriteState>();
+    for (const record of records) {
+      const known = journaled.get(record.compositionId);
+      if (known === state) {
+        next.set(record.compositionId, state);
+      } else if (
+        await journalUnresolvedCompositionWrite(deps.vault, deps.deviceId, record, state)
+      ) {
+        next.set(record.compositionId, state);
+      } else if (known !== undefined) {
+        next.set(record.compositionId, known);
+      }
+    }
+    return next;
   }
 
   /**
@@ -302,11 +378,22 @@ export function createCompositionRecorder(deps: CompositionRecorderDeps): Compos
         session = withLatestWritten(session, record);
         written = { record, path };
       } catch {
-        unwrittenBySession.set(session, {
-          records: queued.records.slice(index),
-          failedAttempts: queued.failedAttempts + 1,
-        });
+        const remaining = queued.records.slice(index);
+        const failedAttempts = queued.failedAttempts + 1;
+        // `ol-egov.141.89.10.97`: what could not be written is journaled now, so a restart before
+        // the bound is spent finds it too, and marked exhausted the moment the bound is.
+        const journaled = await journalUnresolved(
+          remaining,
+          exhaustedState(failedAttempts),
+          queued.journaled,
+        );
+        unwrittenBySession.set(session, { records: remaining, failedAttempts, journaled });
         return { status: 'not-recorded', session, reason: 'write-failed' };
+      }
+      // A record that had been journaled as unresolved is resolved now. A mark that does not
+      // land is found landed, and marked, by the next reconciliation.
+      if (queued.journaled.has(record.compositionId)) {
+        await journalResolvedCompositionWrite(deps.vault, deps.deviceId, record.compositionId);
       }
     }
     if (written === undefined) return { status: 'unchanged', session };
@@ -332,7 +419,9 @@ export function createCompositionRecorder(deps: CompositionRecorderDeps): Compos
       } catch {
         return { status: 'not-recorded', session, reason: 'invalid-composition' };
       }
-      return once(session, () => flush(session, { records: [record], failedAttempts: 0 }));
+      return once(session, () =>
+        flush(session, { records: [record], failedAttempts: 0, journaled: new Map() }),
+      );
     },
 
     async recordExtension(previous, extended, now) {
@@ -369,6 +458,7 @@ export function createCompositionRecorder(deps: CompositionRecorderDeps): Compos
         flush(underParent, {
           records: [...(queued?.records ?? []), record],
           failedAttempts: queued?.failedAttempts ?? 0,
+          journaled: queued?.journaled ?? new Map(),
         }),
       );
     },
