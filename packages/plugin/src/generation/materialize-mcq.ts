@@ -240,6 +240,7 @@ import {
 } from 'olea-core';
 import { stampPredecessorField } from '../instrument-blocks/predecessor.js';
 import { isoWithLocalOffset } from '../review/ports.js';
+import { sourceRevisionMatches } from './home-note.js';
 import type { DraftQuestion } from './types.js';
 
 export interface MaterializeAcceptedDraftInput {
@@ -373,8 +374,7 @@ export async function materializeAcceptedDraft(
   // Checked before anything else so a mismatch never reaches `insertMcqBlock`
   // or `vault.write`: nothing is written to her vault on this path.
   if (input.expectedSourceContentHash !== undefined) {
-    const currentHash = await hashText(source);
-    if (currentHash !== input.expectedSourceContentHash) {
+    if (!(await sourceRevisionMatches(source, input.expectedSourceContentHash))) {
       throw new StaleSourceRevisionError(
         `materializeAcceptedDraft: ${input.sourcePath} changed since this draft was cached — refusing to accept against content that was never reviewed (F3.3)`,
       );

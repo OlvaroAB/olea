@@ -139,7 +139,7 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
-import { ensureHomeNoteForConcept } from './home-note.js';
+import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
 import type { GenerationRoutingDeps } from './routing.js';
 import {
@@ -584,7 +584,7 @@ export async function runGenerationSweep(
       // throws" promise above; `undefined` (no hash) is the same "no
       // signal" this record already uses for `sourceCitation`.
       const sourceContentHash = (await deps.vault.exists(notePath))
-        ? await hashText(await deps.vault.read(notePath))
+        ? await hashSourceRevision(await deps.vault.read(notePath))
         : undefined;
 
       const createdAt = now().toISOString();

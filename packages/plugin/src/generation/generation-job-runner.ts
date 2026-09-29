@@ -84,7 +84,6 @@ import {
   DEFAULT_COURSES_FOLDER,
   extractConcepts,
   type GenerationJobPayload,
-  hashText,
   isGenerationJobPayload,
   type JobRunnerView,
   type JobRunOutcome,
@@ -98,6 +97,7 @@ import type {
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
+import { hashSourceRevision } from './home-note.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
 import type { DraftRecord } from './types.js';
 
@@ -237,7 +237,7 @@ export async function runGenerationDraftJob(
   // `ol-0r92.87`'s stale-input guard, the same snapshot-at-draft-time
   // `pipeline.ts` takes — see that module's own doc.
   const sourceContentHash = (await deps.vault.exists(sourcePath))
-    ? await hashText(await deps.vault.read(sourcePath))
+    ? await hashSourceRevision(await deps.vault.read(sourcePath))
     : undefined;
 
   const createdAt = now().toISOString();

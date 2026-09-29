@@ -223,6 +223,7 @@ import {
   writeInstrumentCitation,
 } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
+import { sourceRevisionMatches } from './home-note.js';
 import { StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
 
@@ -334,8 +335,7 @@ export async function materializeAcceptedCardDraft(
   // `ol-0r92.87`'s stale-input guard — see the module doc. Checked before
   // anything else so a mismatch never reaches the insert or `vault.write`.
   if (input.expectedSourceContentHash !== undefined) {
-    const currentHash = await hashText(source);
-    if (currentHash !== input.expectedSourceContentHash) {
+    if (!(await sourceRevisionMatches(source, input.expectedSourceContentHash))) {
       throw new StaleSourceRevisionError(
         `materializeAcceptedCardDraft: ${input.sourcePath} changed since this draft was cached — refusing to accept against content that was never reviewed (F3.3)`,
       );

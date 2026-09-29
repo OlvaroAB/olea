@@ -123,6 +123,7 @@ import { GapView, VIEW_TYPE_OLEA_GAP } from './gap/view.js';
 import { createBulkReviewController } from './generation/bulk-review.js';
 import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
 import { buildFormatMatch, type FormatMatchDecision } from './generation/format-match.js';
+import { isOleaHomeNote } from './generation/home-note.js';
 import type { GenerationRefusalNotice } from './generation/pipeline.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
@@ -2373,6 +2374,11 @@ export default class OleaPlugin extends Plugin {
       console.error('Olea: materiality trigger could not read a modified path', error);
       return;
     }
+    // `ol-egov.141.6.27`: Olea's own home-note writes (topic growth, an accepted
+    // item landing) are not a change to her material — the free gate read them as
+    // one and each set off another sweep. Skipped before evaluation; her source
+    // and authored notes are what the gate exists for.
+    if (isOleaHomeNote(currentText)) return;
     const previousText = this.materialityPreviousText.get(path);
     try {
       const result = await this.materiality.evaluate(path, currentText, previousText);

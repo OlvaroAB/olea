@@ -47,6 +47,7 @@ import {
 // same-shaped gap.
 import { decideResolutionEvidence } from '../../../core/src/misconception/resolution-evidence-decision.js';
 import type { DraftAcceptPort } from '../generation/accept.js';
+import { StaleSourceRevisionError } from '../generation/materialize-mcq.js';
 import type { StampOnFirstSightPort } from '../instrument-stamping/port.js';
 import type { GradeContestPort } from './contest.js';
 import { CONTEST_GESTURE_LABEL, CONTEST_QUARANTINE_BADGE } from './copy.js';
@@ -564,11 +565,16 @@ type InternalPhase =
   | 'mcq-answered'
   | 'complete';
 
+/** Plain words for a withheld draft: what happened to the question and to her answer. */
+export const WITHHELD_STALE_SOURCE_NOTICE =
+  'That question was written from a note that has changed since, so it was set aside and your answer was not recorded.';
+
 export class ReviewSession {
   private items: ReviewQueueItem[];
   private readonly startedWithItems: boolean;
   private index = 0;
   private phase: InternalPhase = 'loading';
+  private withheldNotice: string | null = null;
   private mcqSelectedIndex: number | null = null;
   private wasUnsure = false;
   private presentedAtMs: number | null = null;
@@ -739,6 +745,16 @@ export class ReviewSession {
     }
   }
 
+  /**
+   * One-shot: the truthful line for a question just withheld because its note
+   * changed under it (`[D-343]`), or `null`. The view shows it once, passively.
+   */
+  takeWithheldNotice(): string | null {
+    const notice = this.withheldNotice;
+    this.withheldNotice = null;
+    return notice;
+  }
+
   reveal(): void {
     if (this.phase !== 'front') return;
     this.phase = 'reveal';
@@ -758,6 +774,7 @@ export class ReviewSession {
   async rate(rating: Rating): Promise<void> {
     if (this.phase !== 'reveal') return;
     const item = await this.resolveDraftAt(this.index, 'accepted');
+    if (item === null) return;
     await this.logAndAdvance(item, rating, false);
   }
 
@@ -806,6 +823,7 @@ export class ReviewSession {
     const item = this.currentItem;
     if (item === null || item.instrument.draftId === null) return;
     const resolved = await this.resolveDraftAt(this.index, 'edited');
+    if (resolved === null) return;
     await this.deps.editPort.edit(resolved.instrument);
   }
 
@@ -886,6 +904,7 @@ export class ReviewSession {
     if (port === undefined) return;
 
     const item = await this.resolveDraftAt(this.index, 'accepted');
+    if (item === null) return;
     const instrument = this.requireMcq(item);
     if (this.contestedGrades.has(instrument.instrumentId)) return;
 
@@ -923,6 +942,7 @@ export class ReviewSession {
   async mcqNext(): Promise<void> {
     if (this.phase !== 'mcq-answered') return;
     const item = await this.resolveDraftAt(this.index, 'accepted');
+    if (item === null) return;
     const instrument = this.requireMcq(item);
     const rating = this.mcqRating(instrument, this.mcqSelectedIndex);
     const correctness = this.mcqCorrectness(instrument, this.mcqSelectedIndex);
@@ -1330,17 +1350,28 @@ export class ReviewSession {
   private async resolveDraftAt(
     index: number,
     verdict: 'accepted' | 'edited',
-  ): Promise<ReviewQueueItem> {
+  ): Promise<ReviewQueueItem | null> {
     const item = this.items[index];
     if (item === undefined) {
       throw new Error(`ReviewSession: no item at index ${index} to resolve`);
     }
     if (item.instrument.draftId === null) return item;
 
-    const { instrumentId } = await this.deps.draftAcceptPort.accept(
-      item.instrument.draftId,
-      verdict,
-    );
+    let instrumentId: string;
+    try {
+      ({ instrumentId } = await this.deps.draftAcceptPort.accept(item.instrument.draftId, verdict));
+    } catch (err) {
+      if (!(err instanceof StaleSourceRevisionError)) throw err;
+      // `[D-343]`: the note this question was written from has changed since,
+      // so it is withheld before it counts — never a crash, never a silent
+      // rejection. Nothing was written (`accept` refused before any write);
+      // the rest of the session keeps its order and no replacement is
+      // inserted. Her answer was not recorded, and the notice says so.
+      this.items.splice(index, 1);
+      this.withheldNotice = WITHHELD_STALE_SOURCE_NOTICE;
+      await this.presentCurrent();
+      return null;
+    }
     const resolved: ReviewQueueItem = {
       ...item,
       instrument: { ...item.instrument, instrumentId, draftId: null },

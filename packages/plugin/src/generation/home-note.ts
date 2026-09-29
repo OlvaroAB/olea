@@ -76,6 +76,7 @@
 
 import type { VaultPath, VaultSource } from 'olea-core';
 import {
+  hashText,
   parseDocument,
   parseFrontmatter,
   readList,
@@ -223,4 +224,38 @@ export async function ensureHomeNoteForConcept(
 
   await ensureTopicIncludes(vault, notePath, conceptName);
   return notePath;
+}
+
+/**
+ * The text a draft's `sourceContentHash` is taken over (`ol-egov.141.6.27`,
+ * `[D-292]`/`[D-343]`: staleness is about what she could have changed under a
+ * draft, never about Olea's own bookkeeping).
+ *
+ * For an ordinary note this is the whole content, unchanged. For one of
+ * Olea's own home notes it is only the orientation paragraph: the note's
+ * `topic:` list grows with every later concept and every accepted item is
+ * inserted into it, so a whole-note hash made every earlier draft stale the
+ * moment a sibling concept was drafted or accepted, and the review view then
+ * refused her first answers. A home-note draft is grounded on the SOURCE
+ * document (whose own change is `[D-343]`'s citation-digest job), not on the
+ * note's frontmatter or on sibling items.
+ */
+export function sourceRevisionText(content: string): string {
+  if (!isOleaHomeNote(content)) return content;
+  return /^\*Olea created this note[\s\S]*?\*$/m.exec(content)?.[0] ?? '';
+}
+
+/** SHA-256 hex of `sourceRevisionText(content)` — what `DraftRecord.sourceContentHash` now stores. */
+export function hashSourceRevision(content: string): Promise<string> {
+  return hashText(sourceRevisionText(content));
+}
+
+/**
+ * Whether `expected` (a stored `sourceContentHash`) still describes `content`.
+ * Also accepts the pre-fix whole-content hash, so a draft cached before this
+ * change and never disturbed is not refused merely for the hash's new basis.
+ */
+export async function sourceRevisionMatches(content: string, expected: string): Promise<boolean> {
+  if ((await hashSourceRevision(content)) === expected) return true;
+  return (await hashText(content)) === expected;
 }

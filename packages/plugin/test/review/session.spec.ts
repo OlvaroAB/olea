@@ -8,8 +8,13 @@
  */
 import { type DisputeLogRecord, mapMcqRating } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
+import { StaleSourceRevisionError } from '../../src/generation/materialize-mcq.js';
 import type { GradeContestPort } from '../../src/review/contest.js';
-import { ReviewSession, type ReviewSessionDeps } from '../../src/review/session.js';
+import {
+  ReviewSession,
+  type ReviewSessionDeps,
+  WITHHELD_STALE_SOURCE_NOTICE,
+} from '../../src/review/session.js';
 import {
   clozeFixture,
   fakeDraftAcceptPort,
@@ -2255,5 +2260,41 @@ describe('F2.21 — the strong-recall proposal, wired into the reveal-screen mom
     await wired.start();
     wired.recordStrongRecallOfferDeclined(offer, null);
     expect(explainBackOfferLog.declined).toEqual([]);
+  });
+});
+
+describe('a draft refused for a changed source is withheld, never a crash (ol-egov.141.6.27, D-343)', () => {
+  it('mcqNext: the stale draft leaves the queue, no rating is logged, the next item is presented, and a truthful notice is offered once', async () => {
+    const stale = queueItem(mcqFixture({ draftId: 'draft-stale', instrumentId: 'inst-stale' }));
+    const next = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-next' }));
+    const reviewLog = fakeReviewLog();
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept).mockRejectedValueOnce(
+      new StaleSourceRevisionError('note changed'),
+    );
+    const session = new ReviewSession(
+      baseDeps({ queue: [stale, next], reviewLog, draftAcceptPort }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+
+    await expect(session.mcqNext()).resolves.toBeUndefined();
+
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('mcq-open');
+    if (vm.phase === 'mcq-open') expect(vm.instrument.instrumentId).toBe('inst-next');
+    expect(reviewLog.calls).toEqual([]);
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_STALE_SOURCE_NOTICE);
+    expect(session.takeWithheldNotice()).toBeNull();
+  });
+
+  it('a non-stale accept failure is still surfaced, not swallowed', async () => {
+    const item = queueItem(mcqFixture({ draftId: 'draft-x' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept).mockRejectedValueOnce(new Error('disk full'));
+    const session = new ReviewSession(baseDeps({ queue: [item], draftAcceptPort }));
+    await session.start();
+    await session.mcqAnswer(0);
+    await expect(session.mcqNext()).rejects.toThrow('disk full');
   });
 });

@@ -128,3 +128,19 @@ describe('a first sighting can never itself dispatch a paid materiality judge ca
     expect(judgeCall).not.toHaveBeenCalled();
   });
 });
+
+describe("Olea's own home-note writes never enter the materiality gate (ol-egov.141.6.27)", () => {
+  it("evaluateMaterialityChange returns before evaluating when the text is one of Olea's home notes, so the self-write cannot count as a change to her material or set off another sweep", () => {
+    const body = main.slice(main.indexOf('private async evaluateMaterialityChange'));
+    const guard = body.indexOf('isOleaHomeNote(currentText)');
+    const evaluate = body.indexOf('this.materiality.evaluate(');
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard).toBeLessThan(evaluate);
+  });
+
+  it('the predicate recognises an Olea home note and never one she authored', async () => {
+    const { isOleaHomeNote } = await import('../src/generation/home-note.js');
+    expect(isOleaHomeNote('---\ntopic:\n  - X\nolea-home-note: true\n---\n\nbody\n')).toBe(true);
+    expect(isOleaHomeNote('---\ntopic: [X]\n---\n\nher note\n')).toBe(false);
+  });
+});

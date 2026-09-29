@@ -8,12 +8,17 @@
  */
 import { parseDocument, parseFrontmatter, readList } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { createDraftAcceptPort } from '../../src/generation/accept.js';
+import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import {
   ensureHomeNoteForConcept,
   HOME_NOTE_MARKER_KEY,
+  hashSourceRevision,
   homeNotePathForSource,
   isOleaHomeNote,
 } from '../../src/generation/home-note.js';
+import { StaleSourceRevisionError } from '../../src/generation/materialize-mcq.js';
+import type { DraftRecord } from '../../src/generation/types.js';
 import { MemoryVaultSource } from './fakes.js';
 
 function frontmatterOf(content: string): ReturnType<typeof parseFrontmatter> {
@@ -137,5 +142,75 @@ describe('ensureHomeNoteForConcept', () => {
     expect(isOleaHomeNote(homeContent)).toBe(true);
     const fm = frontmatterOf(homeContent);
     expect(readList(fm, 'topic').items).toEqual(['Osmosis']);
+  });
+});
+
+describe('ol-egov.141.6.27 — several concepts drafted into one home note stay answerable', () => {
+  const SOURCE = '01 Courses/GEOL204/Lecture 4.pdf';
+  const CONCEPTS = ['Osmosis', 'Diffusion', 'Tonicity'];
+
+  function draftFor(name: string, hash: string, index: number): DraftRecord {
+    return {
+      draftId: `draft-${index}`,
+      status: 'pending',
+      courseCode: 'GEOL204',
+      conceptName: name,
+      conceptIds: [`key-${index}`],
+      sourcePath: homeNotePathForSource(SOURCE),
+      sourceContentHash: hash,
+      createdAt: '2026-09-29T09:00:00-07:00',
+      question: {
+        stem: `Question about ${name}?`,
+        correctAnswer: 'Right',
+        distractors: ['A', 'B', 'C', 'D'],
+        feedback: 'See the source.',
+      },
+      provenance: { taskId: 'quiz.generate.v1', promptVersion: '1.0.0', modelId: 'test-model' },
+      firstServedAt: null,
+    };
+  }
+
+  async function draftAll() {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    let e = 0;
+    const port = createDraftAcceptPort({
+      vault,
+      cache,
+      deviceId: 'device-a',
+      now: () => new Date('2026-09-29T10:00:00-07:00'),
+      generateEventId: () => `event-${++e}`,
+    });
+    // Exactly the pipeline's order per concept: ensure the note, hash it, cache the draft.
+    for (const [i, name] of CONCEPTS.entries()) {
+      const notePath = await ensureHomeNoteForConcept(vault, SOURCE, name);
+      if (notePath === null) throw new Error('home note unexpectedly refused');
+      const hash = await hashSourceRevision(await vault.read(notePath));
+      await cache.put(draftFor(name, hash, i));
+    }
+    return { vault, port };
+  }
+
+  it('answering the FIRST concept after the later ones grew the note accepts, not StaleSourceRevisionError', async () => {
+    const { port } = await draftAll();
+    await expect(port.accept('draft-0', 'accepted')).resolves.toMatchObject({
+      instrumentId: expect.any(String),
+    });
+  });
+
+  it('every draft is accepted in turn even though each accept inserts an item into the shared note', async () => {
+    const { vault, port } = await draftAll();
+    for (const i of [0, 1, 2]) {
+      await expect(port.accept(`draft-${i}`, 'accepted')).resolves.toBeDefined();
+    }
+    expect(vault.raw(homeNotePathForSource(SOURCE))).toContain('Question about Tonicity?');
+  });
+
+  it('a real change to a note she wrote is still refused (the guard is not weakened)', async () => {
+    const { vault, port } = await draftAll();
+    const path = homeNotePathForSource(SOURCE);
+    const note = vault.raw(path) ?? '';
+    await vault.write(path, note.replace('Olea created this note', 'Someone rewrote this note'));
+    await expect(port.accept('draft-0', 'accepted')).rejects.toThrow(StaleSourceRevisionError);
   });
 });
