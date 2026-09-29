@@ -23,15 +23,24 @@
 import {
   DemandRoutingCounter,
   enumerateVaultInstruments,
+  INSTRUMENT_TARGET_STORE_FOLDER,
   instrumentTargetStorePath,
   type NewInstrumentTarget,
+  type PaperDemand,
+  parseCards,
+  parseMcqBlocks,
   questionBindingOf,
+  readInstrumentDemand,
   writeInstrumentTarget,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
+import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
-import { demandRoutingCounterFor } from '../../src/generation/pipeline.js';
+import {
+  demandRoutingCounterFor,
+  draftDemandRefusalCounterFor,
+} from '../../src/generation/pipeline.js';
 import {
   createRevisionAwareJobRunner,
   isInstrumentRevisionJobPayload,
@@ -667,5 +676,293 @@ describe('runInstrumentRevisionJob: the predecessor demand is restated as the su
     );
 
     expect(demandRoutingCounterFor(cache).total('served')).toBe(1);
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.30`), design `demand-carriage.md` sections 4.3, 4.4 and 6: the revision
+ * runner stamps `DraftRecord.demand` (origin `revision`) on the successor it caches, for the quiz
+ * successor and the cards successor, from the request it sent and the response it got. The
+ * predecessor's demand is the ask; the successor is a new instrument and gains its record only at
+ * accept, from the materialiser. A successor for an unspecified predecessor carries no demand.
+ */
+describe('runInstrumentRevisionJob: the successor carries its demand on the cached draft (`[D-437]`)', () => {
+  const QA_NOTE_PATH = 'Courses/GEO101/Week 4.md';
+  const QA_NOTE = [
+    '---',
+    'topic: [Sediment layering]',
+    'course: GEO101',
+    '---',
+    '',
+    'What preserves the storm record?',
+    '?',
+    'Hummocky stratification',
+    '',
+  ].join('\n');
+
+  async function declareDemandFor(
+    vault: MemoryVaultSource,
+    instrumentId: string,
+    taskId: 'quiz.generate.v1' | 'cards.generate.v1',
+  ): Promise<void> {
+    const { records } = await enumerateVaultInstruments(vault);
+    const record = records.find((r) => r.instrumentId === instrumentId);
+    if (record === undefined) throw new Error('test fixture error: predecessor not enumerated');
+    const block = record.instrumentType === 'mcq' ? record.mcq : record.card;
+    if (block.type === 'cloze') throw new Error('test fixture error: no cloze predecessor here');
+    const target: NewInstrumentTarget = {
+      instrumentId,
+      declaredDemand: 'recall-a-fact',
+      origin: 'sweep',
+      questionBinding: await questionBindingOf(block),
+      authoredAt: '2026-09-01T10:00:00Z',
+      generator: { taskId, promptVersion: '2.4.0' },
+    };
+    await writeInstrumentTarget(vault, target);
+  }
+
+  /** What a new Worker returns for a quiz request: echoes the payload, acknowledges, declares per question. */
+  function quizResult(
+    request: { readonly intendedDemand?: PaperDemand },
+    declared: readonly (string | undefined)[],
+    acknowledged = true,
+  ): DraftQuizCardsResult {
+    return {
+      status: 'drafted',
+      request: {
+        courseCode: 'GEO101',
+        conceptName: 'Sediment layering',
+        sourceChunks: ['chunk'],
+        ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+      },
+      response: {
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: '2.4.0', modelId: 'test-model' },
+        result: {
+          ...(acknowledged && request.intendedDemand !== undefined
+            ? { demandAcknowledgement: { intendedDemand: request.intendedDemand } }
+            : {}),
+          questions: declared.map((word, i) => ({
+            stem: `Question ${i}`,
+            correctAnswer: 'A',
+            distractors: ['B', 'C', 'D'],
+            feedback: 'because',
+            ...(word === undefined ? {} : { declaredDemand: word }),
+          })),
+        },
+      },
+    };
+  }
+
+  /** The same for a cards request: the declaration sits on each CARD, not on a question. */
+  function cardsResult(
+    request: { readonly intendedDemand?: PaperDemand },
+    declared: readonly (string | undefined)[],
+    acknowledged = true,
+  ): DraftCardsResult {
+    return {
+      status: 'drafted',
+      request: {
+        courseCode: 'GEO101',
+        conceptName: 'Sediment layering',
+        sourceChunks: ['chunk'],
+        personalization: { voiceExemplars: { phrasing: [], terminology: [] } },
+        ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+      },
+      response: {
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: '1.8.0', modelId: 'test-model' },
+        result: {
+          ...(acknowledged && request.intendedDemand !== undefined
+            ? { demandAcknowledgement: { intendedDemand: request.intendedDemand } }
+            : {}),
+          cards: declared.map((word, i) => ({
+            front: `Front ${i}`,
+            back: `Back ${i}`,
+            subject: 'Sediment layering',
+            ...(word === undefined ? {} : { declaredDemand: word }),
+          })),
+        },
+      },
+    };
+  }
+
+  async function reviseMcq(
+    declared: readonly (string | undefined)[],
+    options: { readonly declaredPredecessor?: boolean; readonly acknowledged?: boolean } = {},
+  ) {
+    const { declaredPredecessor = true, acknowledged = true } = options;
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    if (declaredPredecessor) await declareDemandFor(vault, PREDECESSOR_ID, 'quiz.generate.v1');
+    const cache = createVaultDraftCacheStore(vault);
+    let ids = 0;
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftForConcept: async (_deps, request) => quizResult(request, declared, acknowledged),
+        generateDraftId: () => `successor-${++ids}`,
+      },
+      payload(),
+    );
+    return { vault, cache, outcome };
+  }
+
+  async function reviseCard(
+    declared: readonly (string | undefined)[],
+    options: { readonly declaredPredecessor?: boolean; readonly acknowledged?: boolean } = {},
+  ) {
+    const { declaredPredecessor = true, acknowledged = true } = options;
+    const vault = new MemoryVaultSource({ [QA_NOTE_PATH]: QA_NOTE });
+    const { records } = await enumerateVaultInstruments(vault);
+    const predecessorId = records.find((r) => r.notePath === QA_NOTE_PATH)?.instrumentId;
+    if (predecessorId === undefined) throw new Error('test fixture error: no qa instrument');
+    if (declaredPredecessor) await declareDemandFor(vault, predecessorId, 'cards.generate.v1');
+    const cache = createVaultDraftCacheStore(vault);
+    let ids = 0;
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftForConcept: async () => {
+          throw new Error('the mcq seam must not be called for a qa predecessor');
+        },
+        draftCardForConcept: async (_deps, request) => cardsResult(request, declared, acknowledged),
+        generateDraftId: () => `card-successor-${++ids}`,
+      },
+      { kind: 'instrument-revision', predecessorInstrumentId: predecessorId, newPassageText: 't' },
+    );
+    return { vault, cache, outcome, predecessorId };
+  }
+
+  it('a quiz successor for a declared predecessor is cached with the revision origin, the acknowledgement and its own declaration, and no heading', async () => {
+    const { cache } = await reviseMcq(['recall-a-fact']);
+
+    const [record] = await cache.listPending();
+    expect(record?.demand).toEqual({
+      origin: 'revision',
+      intendedDemand: 'recall-a-fact',
+      acknowledgedDemand: 'recall-a-fact',
+      declaredDemand: 'recall-a-fact',
+    });
+    expect(record?.predecessorInstrumentId).toBe(PREDECESSOR_ID);
+  });
+
+  it('each quiz successor question carries its own declaration by position, and a mismatching one is not cached, and is counted', async () => {
+    const { cache } = await reviseMcq(['calculate', 'recall-a-fact']);
+
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.demand?.declaredDemand).toBe('recall-a-fact');
+    expect(draftDemandRefusalCounterFor(cache).counts()).toEqual([
+      { conceptKey: expect.any(String), count: 1 },
+    ]);
+  });
+
+  it('when every quiz successor question is refused nothing is cached and the job still succeeds, like a refused or empty draft', async () => {
+    const { cache, outcome } = await reviseMcq(['calculate']);
+
+    expect(outcome).toEqual({ ok: true });
+    expect(await cache.listPending()).toEqual([]);
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(1);
+  });
+
+  it('an unspecified predecessor sends no demand, so its successor is cached with no demand key', async () => {
+    const { cache } = await reviseMcq(['recall-a-fact'], { declaredPredecessor: false });
+
+    const [record] = await cache.listPending();
+    expect(record).toBeDefined();
+    expect('demand' in (record ?? {})).toBe(false);
+  });
+
+  it('an old Worker (no acknowledgement) leaves the successor cached carrying the demand it was asked, unacknowledged', async () => {
+    const { cache } = await reviseMcq([undefined], { acknowledged: false });
+
+    const [record] = await cache.listPending();
+    expect(record?.demand).toEqual({ origin: 'revision', intendedDemand: 'recall-a-fact' });
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(0);
+  });
+
+  it('a cards successor reads its declaration off the CARD, and is cached with the revision origin', async () => {
+    const { cache } = await reviseCard(['recall-a-fact']);
+
+    const [record] = await cache.listPending();
+    expect(record?.instrumentType).toBe('qa');
+    expect(record?.demand).toEqual({
+      origin: 'revision',
+      intendedDemand: 'recall-a-fact',
+      acknowledgedDemand: 'recall-a-fact',
+      declaredDemand: 'recall-a-fact',
+    });
+  });
+
+  it('a cards successor declaring a different demand than asked, or none, is not cached and is counted', async () => {
+    const { cache } = await reviseCard(['calculate', undefined, 'recall-a-fact']);
+
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.demand?.declaredDemand).toBe('recall-a-fact');
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(2);
+  });
+
+  it('a cards successor for an unspecified predecessor, or an old Worker, is handled like the quiz one', async () => {
+    const unspecified = await reviseCard(['recall-a-fact'], { declaredPredecessor: false });
+    const [plain] = await unspecified.cache.listPending();
+    expect('demand' in (plain ?? {})).toBe(false);
+
+    const skew = await reviseCard([undefined], { acknowledged: false });
+    const [record] = await skew.cache.listPending();
+    expect(record?.demand).toEqual({ origin: 'revision', intendedDemand: 'recall-a-fact' });
+  });
+
+  it('the production path end to end for a quiz successor: revise, accept in review, one record under the successor id, declared recognition, origin revision', async () => {
+    const { vault, cache } = await reviseMcq(['recall-a-fact']);
+    const predecessorRecords = await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER });
+    const [draft] = await cache.listPending();
+    if (draft === undefined) throw new Error('nothing was cached');
+    const port = createDraftAcceptPort({ vault, cache, deviceId: 'device-a' });
+
+    const { instrumentId } = await port.accept(draft.draftId, 'accepted');
+
+    expect(instrumentId).not.toBe(PREDECESSOR_ID);
+    expect(await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER })).toEqual(
+      [...predecessorRecords, instrumentTargetStorePath(instrumentId)].sort(),
+    );
+    const successor = parseMcqBlocks(vault.raw(COURSE_NOTE_PATH) ?? '').instruments.find(
+      (b) => b.id === instrumentId,
+    );
+    if (successor === undefined) throw new Error('successor block was not written');
+    expect(await readInstrumentDemand(vault, instrumentId, successor)).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'revision',
+      responseForm: 'recognition',
+    });
+  });
+
+  it('the production path end to end for a cards successor: the record reads declared free recall', async () => {
+    const { vault, cache, predecessorId } = await reviseCard(['recall-a-fact']);
+    const [draft] = await cache.listPending();
+    if (draft === undefined) throw new Error('nothing was cached');
+    const port = createDraftAcceptPort({ vault, cache, deviceId: 'device-a' });
+
+    const { instrumentId } = await port.accept(draft.draftId, 'accepted');
+
+    expect(instrumentId).not.toBe(predecessorId);
+    const files = await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER });
+    expect(files).toContain(instrumentTargetStorePath(instrumentId));
+    // The successor is the card the fake Worker authored (its own front), not the predecessor's.
+    const written = parseCards(vault.raw(QA_NOTE_PATH) ?? '').find(
+      (c) => c.type === 'qa' && c.front === 'Front 0',
+    );
+    if (written === undefined || written.type !== 'qa') throw new Error('no card was written');
+    expect(await readInstrumentDemand(vault, instrumentId, written)).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'revision',
+      responseForm: 'free-recall',
+    });
   });
 });

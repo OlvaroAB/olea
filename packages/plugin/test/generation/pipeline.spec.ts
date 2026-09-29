@@ -35,13 +35,19 @@ import {
   DemandRoutingCounter,
   extractConcepts,
   hashText,
+  INSTRUMENT_TARGET_STORE_FOLDER,
+  instrumentTargetStorePath,
+  parseMcqBlocks,
+  readInstrumentDemand,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
 import { HOME_NOTE_MARKER_KEY, homeNotePathForSource } from '../../src/generation/home-note.js';
 import {
   demandRoutingCounterFor,
+  draftDemandRefusalCounterFor,
   runGenerationSweep,
   sweepDemandKey,
 } from '../../src/generation/pipeline.js';
@@ -1096,5 +1102,183 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
     expect(sweepDemandKey({ registerHint: { terminology: ['t'] } }, {})).toBe(
       'readiness:{"terminology":["t"]}',
     );
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.30`), design `demand-carriage.md` sections 4.3, 4.4 and 6: the sweep
+ * stamps `DraftRecord.demand` on each draft it caches, from the request it sent and the response it
+ * got, so the accept path can write the target record. The demand is stamped exactly when the request
+ * carried one; a question whose own declaration disagrees with the demand asked is an invalid draft at
+ * draft time (Class B default: not cached, counted, revisited next sweep like an unparseable reply).
+ */
+describe('the sweep stamps the demand on each draft it caches (`[D-437]`, `ol-egov.141.89.2.30`)', () => {
+  const NOTE_TEXT = '# Week 2\n\nher prose\n';
+
+  /** What a new Worker returns for the sweep's served recall ask, one declaration per question. */
+  function demandedResponse(
+    name: string,
+    declared: readonly (string | undefined)[],
+    options: { readonly acknowledged?: boolean; readonly askedDemand?: boolean } = {},
+  ): DraftQuizCardsResult {
+    const { acknowledged = true, askedDemand = true } = options;
+    return {
+      status: 'drafted',
+      request: {
+        courseCode: 'COGS214',
+        conceptName: name,
+        sourceChunks: ['chunk'],
+        ...(askedDemand ? { intendedDemand: 'recall-a-fact' as const } : {}),
+      },
+      response: {
+        ok: true,
+        stamp: { contractVersion: 1, promptVersion: '2.4.0', modelId: 'test-model' },
+        result: {
+          ...(acknowledged ? { demandAcknowledgement: { intendedDemand: 'recall-a-fact' } } : {}),
+          questions: declared.map((word, index) => ({
+            stem: `${name} ${index}`,
+            correctAnswer: 'A',
+            distractors: ['B', 'C', 'D'],
+            feedback: 'because',
+            ...(word === undefined ? {} : { declaredDemand: word }),
+          })),
+        },
+      },
+    };
+  }
+
+  async function sweepWith(
+    respond: (name: string) => DraftQuizCardsResult,
+    names: readonly string[] = ['Working memory'],
+  ) {
+    const vault = new MemoryVaultSource({ [COURSE_FOLDER_NOTE]: NOTE_TEXT });
+    const cache = createVaultDraftCacheStore(vault);
+    const run = () =>
+      runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+        vault,
+        cache,
+        draftDeps: {} as never,
+        listConceptsForCourse: async () => names.map((name) => concept(name)),
+        draftForConcept: async (_deps, request) => respond(request.conceptName),
+      });
+    const report = await run();
+    return { vault, cache, report, run };
+  }
+
+  it('a served, acknowledged, agreeing draft is cached with the sweep origin, the intent, the acknowledgement and its own declaration, and no heading', async () => {
+    const { cache } = await sweepWith((name) => demandedResponse(name, ['recall-a-fact']));
+
+    const [record] = await cache.listPending();
+    expect(record?.demand).toEqual({
+      origin: 'sweep',
+      intendedDemand: 'recall-a-fact',
+      acknowledgedDemand: 'recall-a-fact',
+      declaredDemand: 'recall-a-fact',
+    });
+    // The sweep's ask has no source heading, so none is stamped.
+    expect(record?.demand !== undefined && 'requestedAsk' in record.demand).toBe(false);
+  });
+
+  it("reads each question's declaration by its own position in the response", async () => {
+    const { cache, report } = await sweepWith((name) =>
+      demandedResponse(name, ['recall-a-fact', 'recall-a-fact']),
+    );
+
+    const pending = await cache.listPending();
+    expect(report.drafted).toBe(1);
+    expect(pending).toHaveLength(2);
+    expect(pending.map((r) => r.demand?.declaredDemand)).toEqual([
+      'recall-a-fact',
+      'recall-a-fact',
+    ]);
+  });
+
+  it('a request that carried no demand is cached with no demand key at all', async () => {
+    const { cache } = await sweepWith((name) =>
+      demandedResponse(name, ['recall-a-fact'], { askedDemand: false }),
+    );
+
+    const [record] = await cache.listPending();
+    expect(record).toBeDefined();
+    expect('demand' in (record ?? {})).toBe(false);
+  });
+
+  it('an old Worker (no acknowledgement) is cached carrying the demand it was asked, unacknowledged: deployment skew is not a refusal', async () => {
+    const { cache, report } = await sweepWith((name) =>
+      demandedResponse(name, [undefined], { acknowledged: false }),
+    );
+
+    const [record] = await cache.listPending();
+    expect(report.drafted).toBe(1);
+    expect(record?.demand).toEqual({ origin: 'sweep', intendedDemand: 'recall-a-fact' });
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(0);
+  });
+
+  it('a question declaring a different demand than asked is an invalid draft: not cached, counted, and the agreeing one beside it is kept', async () => {
+    const { cache, report } = await sweepWith((name) =>
+      demandedResponse(name, ['calculate', 'recall-a-fact']),
+    );
+
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.demand?.declaredDemand).toBe('recall-a-fact');
+    expect(report.drafted).toBe(1);
+    expect(draftDemandRefusalCounterFor(cache).counts()).toEqual([
+      { conceptKey: 'key-Working memory', count: 1 },
+    ]);
+  });
+
+  it('a question that declares nothing, or a word outside the five, when a demand was acknowledged is refused the same way', async () => {
+    const { cache } = await sweepWith((name) =>
+      demandedResponse(name, [undefined, 'memorise-it', 'recall-a-fact']),
+    );
+
+    expect(await cache.listPending()).toHaveLength(1);
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(2);
+  });
+
+  it('when every question is refused nothing is cached, the concept is not counted as drafted, and the next sweep asks again', async () => {
+    const { cache, report, run } = await sweepWith((name) => demandedResponse(name, ['calculate']));
+
+    expect(await cache.listPending()).toEqual([]);
+    expect(report).toMatchObject({ attempted: 1, drafted: 0, skippedDuplicate: 0 });
+    const again = await run();
+    expect(again).toMatchObject({ attempted: 1, drafted: 0, skippedDuplicate: 0 });
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(2);
+  });
+
+  it('the production path end to end: the sweep caches, accept materialises, one target record reads declared recognition', async () => {
+    const { vault, cache } = await sweepWith((name) => demandedResponse(name, ['recall-a-fact']));
+    const port = createDraftAcceptPort({ vault, cache, deviceId: 'device-a' });
+    const [record] = await cache.listPending();
+    if (record === undefined) throw new Error('the sweep cached nothing');
+
+    const { instrumentId } = await port.accept(record.draftId, 'accepted');
+
+    expect(await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER })).toEqual([
+      instrumentTargetStorePath(instrumentId),
+    ]);
+    const block = parseMcqBlocks(vault.raw(COURSE_FOLDER_NOTE) ?? '').instruments[0];
+    if (block === undefined) throw new Error('no block was written');
+    expect(await readInstrumentDemand(vault, instrumentId, block)).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'sweep',
+      // Row 38: the sweep's recall intent on a multiple-choice block is intent, and reads recognition.
+      responseForm: 'recognition',
+    });
+  });
+
+  it('the same end to end path with an old-Worker response leaves no record and the instrument unspecified', async () => {
+    const { vault, cache } = await sweepWith((name) =>
+      demandedResponse(name, [undefined], { acknowledged: false }),
+    );
+    const port = createDraftAcceptPort({ vault, cache, deviceId: 'device-a' });
+    const [record] = await cache.listPending();
+    if (record === undefined) throw new Error('the sweep cached nothing');
+
+    await port.accept(record.draftId, 'accepted');
+
+    expect(await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER })).toEqual([]);
   });
 });

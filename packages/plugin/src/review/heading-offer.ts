@@ -83,6 +83,17 @@
  * count per concept and reason goes to the demand counter. The draft made for
  * an unserved ask is authored exactly as an unspecified need is (no demand, no
  * heading, no target record) and is never the unserved ask's fulfilment.
+ *
+ * **The demand travels on each cached draft (`[D-437]`, `ol-egov.141.89.2.30`).** A draft made for a
+ * served ask is cached with `DraftRecord.demand` (origin `heading-cue`): the mapping, the whole heading
+ * with its question word (row 35: the heading survives in the draft cache, inside her own vault, and
+ * never in the target record), the server's acknowledgement and that question's own declaration, read
+ * off the request the drafting call sent and the response it returned. `accept.ts` forwards it and the
+ * materialisers write the one target record when she resolves the draft in review. A draft for any
+ * other ask carries no `demand`. A question whose own declaration disagrees with the demand asked is an
+ * invalid draft (design section 4.4, Class B): it is not cached and is counted
+ * (`draftDemandRefusalCounterFor`). When that leaves nothing cached the outcome is `unparseable`, the
+ * existing honest report that no card arrived, and no new outcome kind or wording is added.
  * **No student-visible surface is built here:** the label on a narrower
  * alternative needs a clause and registry wording first (design Open question
  * 1), so today's presentation is unchanged: a draft is created for an unmet
@@ -105,7 +116,12 @@ import {
 } from 'olea-core';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { deriveDraftId } from '../generation/cache-store.js';
-import { demandRoutingCounterFor } from '../generation/pipeline.js';
+import {
+  demandRoutingCounterFor,
+  draftDemandForQuestion,
+  draftDemandRefusalCounterFor,
+  draftedDemandCarryOf,
+} from '../generation/pipeline.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from '../generation/response.js';
 import type { DraftRecord } from '../generation/types.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
@@ -308,10 +324,20 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
         return { kind: 'unparseable', ...carried };
       }
 
+      // `[D-437]`: what the request carried and the response returned about demand, split per question.
+      const demandCarry = draftedDemandCarryOf(result.request, result.response);
+
       const createdAt = now().toISOString();
       const draftIds: string[] = [];
       let sequence = 0;
-      for (const question of questions) {
+      for (const [questionIndex, question] of questions.entries()) {
+        // An invalid draft (a declaration that disagrees with the demand asked) is counted and not
+        // cached. `sequence` counts only the records cached; the declaration was read by position.
+        const stamped = draftDemandForQuestion(demandCarry, questionIndex, 'heading-cue');
+        if (stamped.kind === 'refused') {
+          draftDemandRefusalCounterFor(deps.cache).record(context.concept.key);
+          continue;
+        }
         const draftId = await deriveDraftId(context.courseCode, context.concept.name, sequence);
         const record: DraftRecord = {
           draftId,
@@ -324,6 +350,8 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
           question,
           provenance,
           firstServedAt: null,
+          // `[D-437]`: present exactly when this ask was served and its request carried a demand.
+          ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
         };
         await deps.cache.put(record);
         draftIds.push(draftId);

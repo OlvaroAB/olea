@@ -168,14 +168,26 @@
  * origin (a heading offer, a revision, a planner need, a paper slot) sends the constant
  * (`olea-core`'s `demand-ask-callers.spec.ts` pins the caller list), and whether the produced
  * instrument offers answer options, hence reads as recognition rather than free recall, is read
- * from the block, never stored (`instrument/demand-reading.ts`). Nothing in a draft records the
- * intent yet: writing it into a target record at accept time is `ol-egov.141.89.2.26`'s. The intent
- * is part of the refusal memory's demand key (`sweepDemandKey`) so a changed intent reads as a
- * changed demand, and each ask is counted per concept and reason
- * (`GenerationPipelineDeps.demandCounter`). The sufficiency judge is also told the operation
- * (`intendedOperation: 'define'`), which adds one line to the judge's prompt: a stratification input
- * by the service's own account, and a change to what the judge reads that the operating-point
- * measurement should be aware of.
+ * from the block, never stored (`instrument/demand-reading.ts`). The intent is part of the refusal
+ * memory's demand key (`sweepDemandKey`) so a changed intent reads as a changed demand, and each ask
+ * is counted per concept and reason (`GenerationPipelineDeps.demandCounter`). The sufficiency judge
+ * is also told the operation (`intendedOperation: 'define'`), which adds one line to the judge's
+ * prompt: a stratification input by the service's own account, and a change to what the judge reads
+ * that the operating-point measurement should be aware of.
+ *
+ * **The demand travels on each cached draft (`[D-437]`, `ol-egov.141.89.2.30`).** Each record this
+ * sweep caches carries `DraftRecord.demand` (origin `sweep`), stamped by {@link draftDemandForQuestion}
+ * from the request the drafting call actually sent (`result.request`) and the response it returned:
+ * the intent, the server's acknowledgement (absent from an older Worker) and that question's own
+ * declaration, by position. A request that carried no demand stamps nothing, so the record has no
+ * `demand` key and stays unspecified. `accept.ts` forwards the field and the materialisers write the
+ * one target record, judging it there; the sweep decides only the one thing that is a draft-time
+ * fact. **A question whose own declaration disagrees with the demand asked is an invalid draft
+ * (design section 4.4; Class B, reversible):** the client sweep has no repair loop, so it is not
+ * cached, is counted in {@link draftDemandRefusalCounterFor}, and the concept is revisited next
+ * sweep exactly as after an unparseable reply (a concept whose every question is refused is not
+ * counted as drafted). An old Worker's response is never a mismatch: with no acknowledgement the
+ * draft is cached unacknowledged and materialises unspecified.
  */
 
 import type {
@@ -193,6 +205,8 @@ import {
   DEFAULT_COURSES_FOLDER,
   DemandRoutingCounter,
   hashText,
+  judgeDraftedDemand,
+  type PaperDemand,
   routeDemandAsk,
 } from 'olea-core';
 // The sweep's recall constant is deliberately NOT in the `olea-core` barrel (row 38: authoring
@@ -209,6 +223,12 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
+import {
+  type DraftedDemandCarry,
+  draftDemandCarriage,
+  draftedDemandFactsOf,
+  extractDraftedDemand,
+} from './draft-demand.js';
 import { withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
@@ -220,7 +240,7 @@ import {
   EMPTY_INVENTORY,
   quizDeficit,
 } from './routing.js';
-import type { DraftRecord } from './types.js';
+import type { DraftDemandCarriage, DraftDemandOrigin, DraftRecord } from './types.js';
 
 export type { GenerationRoutingDeps };
 
@@ -561,6 +581,123 @@ export function demandRoutingCounterFor(cache: DraftCacheStore): DemandRoutingCo
     demandCounterByCache.set(cache, counter);
   }
   return counter;
+}
+
+/**
+ * How many drafted questions were refused at draft time for declaring a different demand than the
+ * one asked (`[D-437]`, design section 4.4), per opaque concept key. Local and in memory, like
+ * `DemandRoutingCounter` (D-005: keys only, never content); nothing is persisted or sent, and nothing
+ * reads it yet beyond the tests, exactly as the routing counter's own doc says of that one. A
+ * question is counted where it is refused, once, by whichever origin drafted it.
+ */
+export class DraftDemandRefusalCounter {
+  private readonly counts_ = new Map<string, number>();
+
+  /** Counts one refused question against `conceptKey`. */
+  record(conceptKey: string): void {
+    this.counts_.set(conceptKey, (this.counts_.get(conceptKey) ?? 0) + 1);
+  }
+
+  /** Every non-zero count, ordered by concept key. */
+  counts(): readonly { readonly conceptKey: string; readonly count: number }[] {
+    return [...this.counts_.keys()].sort().map((conceptKey) => ({
+      conceptKey,
+      count: this.counts_.get(conceptKey) ?? 0,
+    }));
+  }
+
+  /** The count across every concept. */
+  total(): number {
+    let total = 0;
+    for (const count of this.counts_.values()) total += count;
+    return total;
+  }
+}
+
+const draftDemandRefusalCounterByCache = new WeakMap<DraftCacheStore, DraftDemandRefusalCounter>();
+
+/**
+ * The refusal counter every origin uses: one per draft cache instance, so the sweep, the heading
+ * offer and the revision runner (each handed the one cache `wiring.ts` builds per plugin session)
+ * count into one place with no caller threading it through. The same lifetime argument as
+ * `demandRoutingCounterFor`.
+ */
+export function draftDemandRefusalCounterFor(cache: DraftCacheStore): DraftDemandRefusalCounter {
+  let counter = draftDemandRefusalCounterByCache.get(cache);
+  if (counter === undefined) {
+    counter = new DraftDemandRefusalCounter();
+    draftDemandRefusalCounterByCache.set(cache, counter);
+  }
+  return counter;
+}
+
+/**
+ * The demand members of a drafting request payload as the payload types them: the authoring wire's
+ * optional members can be present-and-`undefined`, which `extractDraftedDemand`'s stricter reader
+ * (`exactOptionalPropertyTypes`) does not accept.
+ */
+export interface SentDemandFields {
+  readonly intendedDemand?: PaperDemand | undefined;
+  readonly requestedAsk?:
+    | { readonly heading: string; readonly questionWord?: string | undefined }
+    | undefined;
+}
+
+/**
+ * What one drafting call carried and returned about demand (`[D-437]`, `ol-egov.141.89.2.30`):
+ * `extractDraftedDemand` over the request payload the call actually sent (`result.request`) and the
+ * raw response, with the payload's members copied only where present. The one adapter all three
+ * builders read through, so none of them types the request twice.
+ */
+export function draftedDemandCarryOf(
+  request: SentDemandFields,
+  response: unknown,
+): DraftedDemandCarry {
+  const ask = request.requestedAsk;
+  return extractDraftedDemand(
+    {
+      ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+      ...(ask === undefined
+        ? {}
+        : {
+            requestedAsk: {
+              heading: ask.heading,
+              ...(ask.questionWord === undefined ? {} : { questionWord: ask.questionWord }),
+            },
+          }),
+    },
+    response,
+  );
+}
+
+/**
+ * What a draft builder does with the question at `questionIndex` of one drafting call (`[D-437]`,
+ * `ol-egov.141.89.2.30`): cache it, with the demand it carries when the request carried one, or
+ * refuse it at draft time.
+ *
+ * `questionIndex` is the question's POSITION in the response (the same order `extractDraftedQuestions`
+ * walks), never a count of records cached so far, because a refused question earlier in the list
+ * must not shift the declaration read for a later one.
+ *
+ * The only refusal is `olea-core`'s own check, `judgeDraftedDemand`: an acknowledged demand whose
+ * question declared a different one, or none. A request with no demand, and a response with no
+ * acknowledgement (an older Worker), are never refused; the first stamps nothing and the second
+ * stamps the carriage unacknowledged, which the materialiser reads as unspecified. This function
+ * only moves facts and applies that one check; it records nothing as delivered (row 36).
+ */
+export function draftDemandForQuestion(
+  carry: DraftedDemandCarry,
+  questionIndex: number,
+  origin: DraftDemandOrigin,
+):
+  | { readonly kind: 'cache'; readonly demand?: DraftDemandCarriage }
+  | { readonly kind: 'refused' } {
+  const demand = draftDemandCarriage(carry, questionIndex, origin);
+  if (demand === undefined) return { kind: 'cache' };
+  if (judgeDraftedDemand(draftedDemandFactsOf(demand)).kind === 'refused') {
+    return { kind: 'refused' };
+  }
+  return { kind: 'cache', demand };
 }
 
 /**
@@ -951,6 +1088,9 @@ export async function runGenerationSweep(
       const questions = extractDraftedQuestions(result.response);
       const provenance = extractDraftedProvenance(result.response);
       if (questions === null || provenance === null) continue; // unparseable — nothing content-bearing to cache; revisited next sweep
+      // `[D-437]` (`ol-egov.141.89.2.30`): what the request carried and the response returned about
+      // demand, read once per candidate and split per question below.
+      const demandCarry = draftedDemandCarryOf(result.request, result.response);
 
       let notePath = courseNotePath;
       // `[D-181]`: the unit that resolved this course's drafting target for this sweep — the same
@@ -1007,7 +1147,17 @@ export async function runGenerationSweep(
 
       const createdAt = now().toISOString();
       let sequence = 0;
-      for (const question of questions) {
+      let refusedForDemand = 0;
+      for (const [questionIndex, question] of questions.entries()) {
+        // `[D-437]`: an invalid draft (a declaration that disagrees with the demand asked) is
+        // counted and not cached; the concept is then revisited next sweep. `sequence` counts only
+        // the records cached, so ids stay consecutive; the declaration was read by `questionIndex`.
+        const stamped = draftDemandForQuestion(demandCarry, questionIndex, 'sweep');
+        if (stamped.kind === 'refused') {
+          draftDemandRefusalCounterFor(deps.cache).record(candidate.key);
+          refusedForDemand += 1;
+          continue;
+        }
         // D-381: a genuinely-first-ever draft keeps the plain, probeable
         // 3-argument id (`deps.generateDraftId`, unchanged — every caller
         // before this bead, and every first-time draft this bead's own
@@ -1034,11 +1184,16 @@ export async function runGenerationSweep(
           question,
           provenance,
           firstServedAt: null,
+          // `[D-437]`: present exactly when the request carried a demand; a draft with none has no
+          // key at all and reads unspecified for ever (design section 3.1).
+          ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
         };
         await deps.cache.put(record);
         sequence += 1;
       }
-      drafted += 1;
+      // A concept whose every question was refused for its demand cached nothing, so it is not
+      // drafted. (A response with no questions at all is counted as before this bead.)
+      if (sequence > 0 || refusedForDemand === 0) drafted += 1;
     }
   }
 

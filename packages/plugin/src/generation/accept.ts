@@ -74,6 +74,17 @@
  * `DraftAcceptPortDeps.materializers`, which overrides this module's
  * default), so those tests are unaffected by this default now being real —
  * `materialize-card.spec.ts` is what tests the real one.
+ *
+ * ## `[D-437]` (`ol-egov.141.89.2.30`): the demand a draft carries is forwarded, and only then
+ *
+ * A cached draft may carry `DraftRecord.demand`, stamped at draft time by the three builders
+ * (`pipeline.ts`, `review/heading-offer.ts`, `revision-job-runner.ts`). Both registered
+ * materialisers forward it (`materializeDemandOf`), with the draft's own provenance task id and
+ * prompt version as the generator stamp, and the materialiser (`materialize-mcq.ts`,
+ * `materialize-card.ts`) judges it and writes the ONE target record for the id this port returns.
+ * This file judges nothing and writes nothing itself. **A draft with no `demand` forwards nothing**,
+ * exactly as before this bead: nothing is written and the instrument reads unspecified for ever (a
+ * legacy draft, a draft for an unspecified need, a draft for an ask no generator serves).
  */
 
 import type { InstrumentType } from 'olea-contracts';
@@ -81,6 +92,7 @@ import type { VaultSource } from 'olea-core';
 import { appendVerdictRecord } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
 import type { DraftCacheStore } from './cache-store.js';
+import type { MaterializeDemandInput } from './demand-target.js';
 import { materializeAcceptedCardDraft } from './materialize-card.js';
 import { materializeAcceptedDraft, StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftRecord } from './types.js';
@@ -107,6 +119,27 @@ export type DraftMaterializeFn = (
 ) => Promise<{ readonly instrumentId: string }>;
 
 /**
+ * `[D-437]` (`ol-egov.141.89.2.30`, demand-carriage design sections 4.3 and 4.4): the demand a cached
+ * draft carries, as the input both materialisers take. The carriage is forwarded whole and the
+ * generator stamp is the draft's own provenance task id and prompt version (D7.3: the model id is not
+ * part of the target record). **Only when the draft carries one:** a legacy draft, a draft for an
+ * unspecified need and a draft for an ask no generator serves have no `demand`, so this returns
+ * `undefined`, the spread below adds no key, and the materialiser writes no target record, exactly as
+ * before this bead. Judging the carriage (acknowledged, agreeing) is the materialiser's, never this
+ * file's: this forwards facts and decides nothing.
+ */
+function materializeDemandOf(record: DraftRecord): MaterializeDemandInput | undefined {
+  if (record.demand === undefined) return undefined;
+  return {
+    carriage: record.demand,
+    generator: {
+      taskId: record.provenance.taskId,
+      promptVersion: record.provenance.promptVersion,
+    },
+  };
+}
+
+/**
  * The pre-`ol-0r92.88` behaviour, unchanged, now expressed as one entry in
  * `DRAFT_MATERIALIZERS` instead of `accept()`'s only path: reads
  * `record.question` (required for an `'mcq'`/`undefined`-kind record — see
@@ -119,6 +152,7 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
       `createDraftAcceptPort: draft ${record.draftId} has instrumentType 'mcq' but no question`,
     );
   }
+  const demand = materializeDemandOf(record);
   return materializeAcceptedDraft(
     vault,
     {
@@ -151,6 +185,10 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
       ...(record.sourceContentHash !== undefined
         ? { expectedSourceContentHash: record.sourceContentHash }
         : {}),
+      // `[D-437]` (`ol-egov.141.89.2.30`): the demand the draft carried, forwarded to the ONE
+      // production call that writes the target record (`materialize-mcq.ts`), only when there is
+      // one — see `materializeDemandOf`.
+      ...(demand === undefined ? {} : { demand }),
     },
     {
       deviceId: deps.deviceId,
@@ -182,6 +220,7 @@ const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
       `createDraftAcceptPort: draft ${record.draftId} has instrumentType 'qa' but no card`,
     );
   }
+  const demand = materializeDemandOf(record);
   return materializeAcceptedCardDraft(
     vault,
     {
@@ -202,6 +241,9 @@ const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
       ...(record.predecessorInstrumentId !== undefined
         ? { predecessorInstrumentId: record.predecessorInstrumentId }
         : {}),
+      // `[D-437]` (`ol-egov.141.89.2.30`): see `materializeMcqDraft`'s identical forward above;
+      // the card materialiser (`materialize-card.ts`) writes the record, and reads it free recall.
+      ...(demand === undefined ? {} : { demand }),
     },
     {
       // `materializeAcceptedCardDraft` only actually requires `deviceId`

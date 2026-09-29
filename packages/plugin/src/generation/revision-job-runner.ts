@@ -157,6 +157,17 @@
  * one only at accept time, from `materialize-*.ts` (`ol-egov.141.89.2.26`), and the predecessor
  * never gains one. No heading is sent (a revision has none), and no other origin's constant is used.
  * Each ask made is counted per concept and reason (`RevisionJobRunnerDeps.demandCounter`).
+ *
+ * **The successor's draft carries the demand (`[D-437]`, `ol-egov.141.89.2.30`).** When the ask was
+ * sent, each cached successor carries `DraftRecord.demand` (origin `revision`): the intent, the
+ * server's acknowledgement and that item's own declaration, read off the request the drafting call
+ * sent and the response it returned (`questions[i].declaredDemand` for a quiz, `cards[i].declaredDemand`
+ * for a card: the two responses hold the same fact under different keys). `accept.ts` forwards it and
+ * the materialiser writes the successor's record when she resolves the draft. A successor whose
+ * request carried no demand (an unspecified, stale, unreadable or unserved predecessor) has no
+ * `demand` key. An item whose own declaration disagrees with the demand asked is an invalid draft
+ * (design section 4.4, Class B): not cached, counted (`draftDemandRefusalCounterFor`), and when that
+ * leaves nothing the job ends `ok` with nothing cached, as after a refused or empty draft.
  */
 
 import {
@@ -169,6 +180,8 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  PAPER_DEMANDS,
+  type PaperDemand,
   projectInstrumentValidity,
   type QuestionBindingBlock,
   readInstrumentDemand,
@@ -187,7 +200,14 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
-import { demandRoutingCounterFor } from './pipeline.js';
+import type { DraftedDemandCarry } from './draft-demand.js';
+import {
+  demandRoutingCounterFor,
+  draftDemandForQuestion,
+  draftDemandRefusalCounterFor,
+  draftedDemandCarryOf,
+  type SentDemandFields,
+} from './pipeline.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -347,7 +367,41 @@ type SuccessorDraftOutcome<TContent> =
       readonly kind: 'drafted';
       readonly contents: readonly TContent[];
       readonly provenance: DraftProvenance;
+      /** `[D-437]`: what the request carried and the response returned about demand, split per item by position. */
+      readonly demand: DraftedDemandCarry;
     };
+
+/**
+ * `draftedDemandCarryOf` for a `cards.generate.v1` response (`[D-437]`, `ol-egov.141.89.2.30`). The
+ * request members and the server's acknowledgement are read exactly as for a quiz, by
+ * `draftedDemandCarryOf`; only the per-item declarations differ in where they sit: on `result.cards[i]`,
+ * where a quiz response has `result.questions[i]`. Positions align with `extractDraftedCards`, which
+ * walks the same array and is all-or-nothing. A word outside the five is read as absent, never
+ * coerced, as everywhere else the carriage is read.
+ */
+function extractDraftedCardDemand(
+  request: SentDemandFields,
+  response: unknown,
+): DraftedDemandCarry {
+  const carry = draftedDemandCarryOf(request, response);
+  const cards =
+    typeof response === 'object' && response !== null && (response as { ok?: unknown }).ok === true
+      ? ((response as { result?: { cards?: unknown } }).result?.cards ?? null)
+      : null;
+  if (!Array.isArray(cards)) return { ...carry, declaredDemands: [] };
+  return {
+    ...carry,
+    declaredDemands: cards.map((card): PaperDemand | undefined => {
+      const word =
+        typeof card === 'object' && card !== null
+          ? (card as { declaredDemand?: unknown }).declaredDemand
+          : undefined;
+      return typeof word === 'string' && (PAPER_DEMANDS as readonly string[]).includes(word)
+        ? (word as PaperDemand)
+        : undefined;
+    }),
+  };
+}
 
 /**
  * Drafts an `'mcq'`-kind successor via `quiz.generate.v1` — the pre-`[D-366]`
@@ -399,7 +453,12 @@ async function draftMcqSuccessor(
     return { kind: 'nothing-to-cache' };
   }
 
-  return { kind: 'drafted', contents: questions, provenance };
+  return {
+    kind: 'drafted',
+    contents: questions,
+    provenance,
+    demand: draftedDemandCarryOf(result.request, result.response),
+  };
 }
 
 /**
@@ -438,7 +497,12 @@ async function draftQaSuccessor(
     return { kind: 'nothing-to-cache' };
   }
 
-  return { kind: 'drafted', contents: cards, provenance };
+  return {
+    kind: 'drafted',
+    contents: cards,
+    provenance,
+    demand: extractDraftedCardDemand(result.request, result.response),
+  };
 }
 
 /**
@@ -508,7 +572,14 @@ export async function runInstrumentRevisionJob(
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
     const createdAt = now().toISOString();
-    for (const card of drafted.contents) {
+    for (const [index, card] of drafted.contents.entries()) {
+      // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
+      // counted, not cached. The declaration is read by the item's position in the response.
+      const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
+      if (stamped.kind === 'refused') {
+        draftDemandRefusalCounterFor(deps.cache).record(target.conceptKey);
+        continue;
+      }
       const record: DraftRecord = {
         draftId: generateDraftId(),
         status: 'pending',
@@ -526,6 +597,8 @@ export async function runInstrumentRevisionJob(
         // legitimately produces either kind, so leaving it implicit would
         // be a guess about which default applies, not a fact already known.
         instrumentType: 'qa',
+        // `[D-437]`: present exactly when the successor request carried a demand.
+        ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
     }
@@ -546,7 +619,13 @@ export async function runInstrumentRevisionJob(
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
     const createdAt = now().toISOString();
-    for (const question of drafted.contents) {
+    for (const [index, question] of drafted.contents.entries()) {
+      // `[D-437]`: see the cards loop above.
+      const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
+      if (stamped.kind === 'refused') {
+        draftDemandRefusalCounterFor(deps.cache).record(target.conceptKey);
+        continue;
+      }
       const record: DraftRecord = {
         draftId: generateDraftId(),
         status: 'pending',
@@ -559,6 +638,8 @@ export async function runInstrumentRevisionJob(
         provenance: drafted.provenance,
         firstServedAt: null,
         predecessorInstrumentId: payload.predecessorInstrumentId,
+        // `[D-437]`: present exactly when the successor request carried a demand.
+        ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
     }

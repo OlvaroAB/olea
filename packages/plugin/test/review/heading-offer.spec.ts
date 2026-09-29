@@ -16,10 +16,23 @@
  *    dismissal is visible only through `isDismissed` on the SAME port
  *    instance (a fresh port remembers nothing).
  */
-import { type ConceptRecord, DemandRoutingCounter, type HeadingOfferCandidate } from 'olea-core';
+import {
+  type ConceptRecord,
+  DemandRoutingCounter,
+  type HeadingOfferCandidate,
+  INSTRUMENT_TARGET_STORE_FOLDER,
+  instrumentTargetStorePath,
+  parseMcqBlocks,
+  readInstrumentDemand,
+  readInstrumentTarget,
+} from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
-import { demandRoutingCounterFor } from '../../src/generation/pipeline.js';
+import {
+  demandRoutingCounterFor,
+  draftDemandRefusalCounterFor,
+} from '../../src/generation/pipeline.js';
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
@@ -490,5 +503,210 @@ describe('accept — [D-437]: the heading offer carries the heading through rout
     expect(demandRoutingCounterFor(cache).counts()).toEqual([
       { conceptKey: 'concept-key-chunking', reason: 'served', count: 1 },
     ]);
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.30`), design `demand-carriage.md` sections 4.3, 4.4 and 6 (row 35, T6):
+ * the heading offer stamps `DraftRecord.demand` on each draft it caches, from the request it sent
+ * (the mapping AND the whole heading) and the response it got, so accepting the draft in review
+ * writes the target record. The heading stays in the draft cache and never reaches the target record.
+ */
+describe('accept — [D-437]: the heading offer stamps the demand on each cached draft', () => {
+  const SERVED_HEADING = 'What is chunking?';
+  const DEFERRED_HEADING = 'How many items fit in working memory?';
+
+  /** What a new Worker returns for the request it was sent: it echoes the request payload, acknowledges the demand, declares per question. */
+  function workerResult(
+    request: DraftQuizCardsRequest,
+    declared: readonly (string | undefined)[],
+    options: { readonly acknowledged?: boolean } = {},
+  ): DraftQuizCardsResult {
+    const acknowledged = options.acknowledged ?? request.intendedDemand !== undefined;
+    return {
+      status: 'drafted',
+      request: {
+        courseCode: request.courseCode,
+        conceptName: request.conceptName,
+        sourceChunks: ['her prose about chunking'],
+        ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+        ...(request.requestedAsk === undefined ? {} : { requestedAsk: request.requestedAsk }),
+      },
+      response: {
+        ok: true,
+        stamp: { promptVersion: '2.4.0', modelId: 'test-model' },
+        result: {
+          ...(acknowledged ? { demandAcknowledgement: { intendedDemand: 'recall-a-fact' } } : {}),
+          questions: declared.map((word, i) => ({
+            stem: `Stem ${i}`,
+            correctAnswer: 'Correct',
+            distractors: ['A', 'B', 'C', 'D'],
+            feedback: 'Feedback',
+            ...(word === undefined ? {} : { declaredDemand: word }),
+          })),
+        },
+      },
+    };
+  }
+
+  it('a served heading is cached with the heading-cue origin, the mapping, the whole heading with its question word, the acknowledgement and its own declaration', async () => {
+    const { cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, ['recall-a-fact']),
+    );
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    const record = await cache.get(outcome.draftIds[0] ?? '');
+    expect(record?.demand).toEqual({
+      origin: 'heading-cue',
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: { heading: SERVED_HEADING, questionWord: 'What' },
+      acknowledgedDemand: 'recall-a-fact',
+      declaredDemand: 'recall-a-fact',
+    });
+  });
+
+  it('each question of a served heading carries its own declaration, by position', async () => {
+    const { cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, ['recall-a-fact', 'recall-a-fact']),
+    );
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    expect(outcome.draftIds).toHaveLength(2);
+    const records = await Promise.all(outcome.draftIds.map((id) => cache.get(id)));
+    expect(records.map((r) => r?.demand?.declaredDemand)).toEqual([
+      'recall-a-fact',
+      'recall-a-fact',
+    ]);
+  });
+
+  it('an unserved, unspecified or yes/no heading is cached with no demand key: its request carried none', async () => {
+    for (const heading of [DEFERRED_HEADING, 'Why does chunking help recall?']) {
+      const { cache, port } = setUp(async (_deps, request) => workerResult(request, [undefined]));
+      const outcome = await port.accept(
+        candidateFixture({ headingText: heading, rule: 'wh-inversion' }),
+        contextFixture(),
+      );
+      if (outcome.kind !== 'drafted') throw new Error('unreachable');
+      const record = await cache.get(outcome.draftIds[0] ?? '');
+      expect(record).not.toBeNull();
+      expect('demand' in (record ?? {})).toBe(false);
+    }
+    const { cache, port } = setUp(async (_deps, request) => workerResult(request, [undefined]));
+    const yesNo = await port.accept(candidateFixture(), contextFixture());
+    if (yesNo.kind !== 'drafted') throw new Error('unreachable');
+    expect('demand' in ((await cache.get(yesNo.draftIds[0] ?? '')) ?? {})).toBe(false);
+  });
+
+  it('an old Worker (no acknowledgement) is cached carrying the demand it was asked, unacknowledged, and is not dropped', async () => {
+    const { cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, [undefined], { acknowledged: false }),
+    );
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    const record = await cache.get(outcome.draftIds[0] ?? '');
+    expect(record?.demand).toEqual({
+      origin: 'heading-cue',
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: { heading: SERVED_HEADING, questionWord: 'What' },
+    });
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(0);
+  });
+
+  it('a question declaring a different demand than asked is not cached and is counted; the agreeing one beside it is kept', async () => {
+    const { cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, ['calculate', 'recall-a-fact']),
+    );
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    expect(outcome.draftIds).toHaveLength(1);
+    expect(await cache.listPending()).toHaveLength(1);
+    expect(draftDemandRefusalCounterFor(cache).counts()).toEqual([
+      { conceptKey: 'concept-key-chunking', count: 1 },
+    ]);
+  });
+
+  it('when every question is refused nothing is cached and the outcome is the honest nothing-arrived one, with the routing still carried', async () => {
+    const { cache, port } = setUp(async (_deps, request) => workerResult(request, ['calculate']));
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    expect(outcome).toMatchObject({
+      kind: 'unparseable',
+      demandRouting: { kind: 'served', demand: 'recall-a-fact' },
+    });
+    expect(await cache.listPending()).toEqual([]);
+    expect(draftDemandRefusalCounterFor(cache).total()).toBe(1);
+  });
+
+  it('the production path end to end: accept the offer, accept the draft in review, one record keyed by the returned id and read back as declared recognition', async () => {
+    const { vault, cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, ['recall-a-fact']),
+    );
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    const accept = createDraftAcceptPort({ vault, cache, deviceId: 'device-a', now: () => NOW });
+
+    const { instrumentId } = await accept.accept(outcome.draftIds[0] ?? '', 'accepted');
+
+    expect(await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER })).toEqual([
+      instrumentTargetStorePath(instrumentId),
+    ]);
+    const block = parseMcqBlocks(vault.raw(NOTE_PATH) ?? '').instruments[0];
+    if (block === undefined) throw new Error('no block was written');
+    expect(await readInstrumentDemand(vault, instrumentId, block)).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'heading-cue',
+      responseForm: 'recognition',
+    });
+    // Row 35: the whole heading is in the draft cache; the target record stores none of her wording.
+    const record = await readInstrumentTarget(vault, instrumentId);
+    if (record.kind !== 'record') throw new Error('expected a record');
+    expect(JSON.stringify(record.record)).not.toContain(SERVED_HEADING);
+    expect((await cache.get(outcome.draftIds[0] ?? ''))?.demand?.requestedAsk?.heading).toBe(
+      SERVED_HEADING,
+    );
+  });
+
+  it('an unserved heading accepted in review leaves no record: the narrower draft is never the unserved ask’s fulfilment', async () => {
+    const { vault, cache, port } = setUp(async (_deps, request) =>
+      workerResult(request, [undefined]),
+    );
+    const outcome = await port.accept(
+      candidateFixture({ headingText: DEFERRED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    const accept = createDraftAcceptPort({ vault, cache, deviceId: 'device-a', now: () => NOW });
+
+    await accept.accept(outcome.draftIds[0] ?? '', 'accepted');
+
+    expect(await vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER })).toEqual([]);
   });
 });

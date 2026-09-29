@@ -35,16 +35,20 @@ import {
   composeQueue,
   createFsrsScheduler,
   hashText,
+  INSTRUMENT_TARGET_STORE_FOLDER,
+  instrumentTargetStorePath,
   parseCards,
   parseMcqBlocks,
   provisionalConceptKey,
+  readInstrumentDemand,
+  readInstrumentTarget,
   reviewLogPath,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { StaleSourceRevisionError } from '../../src/generation/materialize-mcq.js';
-import type { DraftRecord } from '../../src/generation/types.js';
+import type { DraftDemandCarriage, DraftRecord } from '../../src/generation/types.js';
 import { MemoryVaultSource } from './fakes.js';
 
 const NOTE_PATH = '01 Courses/COGS214/Week 2.md';
@@ -505,5 +509,215 @@ describe('createDraftAcceptPort — ol-0r92.87 stale-input guard', () => {
 
     const { instrumentId } = await port.accept('draft-1', 'accepted');
     expect(instrumentId).toMatch(/^mcq-/);
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.30`), design `demand-carriage.md` sections 4.3, 4.4 and 6 (T6): the
+ * accept path forwards a cached draft's demand to the materialiser, which writes the ONE target
+ * record, keyed by the instrument id `accept` returns. A draft with no demand forwards nothing, so
+ * nothing is written and the instrument reads unspecified for ever. Uses the port's REAL registered
+ * materialisers, through the real `olea-core` reader, so this is the production hop end to end.
+ * Every fixture is invented.
+ */
+describe('createDraftAcceptPort: the demand a cached draft carries reaches the target record ([D-437], T6)', () => {
+  const HEADING = 'What is an invented chunking heading?';
+
+  function carriage(overrides: Partial<DraftDemandCarriage> = {}): DraftDemandCarriage {
+    return {
+      origin: 'heading-cue',
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: { heading: HEADING, questionWord: 'What' },
+      acknowledgedDemand: 'recall-a-fact',
+      declaredDemand: 'recall-a-fact',
+      ...overrides,
+    };
+  }
+
+  function cardRecord(overrides: Partial<DraftRecord> = {}): DraftRecord {
+    // A card draft carries `card` and no `question` (types.ts: mutually exclusive).
+    const { question: _question, ...rest } = baseRecord();
+    return {
+      ...rest,
+      instrumentType: 'qa',
+      card: { front: 'What limits working memory capacity?', back: 'Chunking' },
+      provenance: {
+        taskId: 'cards.generate.v1',
+        promptVersion: '1.8.0',
+        modelId: 'test-model',
+      },
+      ...overrides,
+    };
+  }
+
+  function targetFiles(vault: MemoryVaultSource) {
+    return vault.list({ under: INSTRUMENT_TARGET_STORE_FOLDER });
+  }
+
+  function mcqBlockOf(vault: MemoryVaultSource) {
+    const block = parseMcqBlocks(vault.raw(NOTE_PATH) ?? '').instruments[0];
+    if (block === undefined) throw new Error('no mcq block was written');
+    return block;
+  }
+
+  function qaBlockOf(vault: MemoryVaultSource) {
+    const card = parseCards(vault.raw(NOTE_PATH) ?? '').find((c) => c.type === 'qa');
+    if (card === undefined || card.type !== 'qa') throw new Error('no qa card was written');
+    return card;
+  }
+
+  it('an accepted multiple-choice draft with an acknowledged, agreeing demand leaves one record under the returned id, read back as recognition', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseRecord({ demand: carriage() }));
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+    expect(await targetFiles(vault)).toEqual([instrumentTargetStorePath(instrumentId)]);
+    expect(await readInstrumentDemand(vault, instrumentId, mcqBlockOf(vault))).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'heading-cue',
+      responseForm: 'recognition',
+    });
+  });
+
+  it('the record carries the draft provenance task and prompt version as its generator, never the model id, and never her heading', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(
+      baseRecord({
+        provenance: { taskId: 'quiz.generate.v1', promptVersion: '2.4.0', modelId: 'a-model' },
+        demand: carriage(),
+      }),
+    );
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+    const read = await readInstrumentTarget(vault, instrumentId);
+    if (read.kind !== 'record') throw new Error('expected a record');
+    expect(read.record.generator).toEqual({ taskId: 'quiz.generate.v1', promptVersion: '2.4.0' });
+    expect(read.record.origin).toBe('heading-cue');
+    // Row 35: the heading survives in the draft cache only; the target record stores none of her wording.
+    expect(vault.raw(instrumentTargetStorePath(instrumentId))).not.toContain(HEADING);
+    expect((await cache.get('draft-1'))?.demand?.requestedAsk?.heading).toBe(HEADING);
+  });
+
+  it('an accepted card draft with an acknowledged, agreeing demand leaves one record under the returned id, read back as free recall', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(cardRecord({ demand: carriage({ origin: 'revision' }) }));
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+    expect(await targetFiles(vault)).toEqual([instrumentTargetStorePath(instrumentId)]);
+    expect(await readInstrumentDemand(vault, instrumentId, qaBlockOf(vault))).toEqual({
+      kind: 'declared',
+      demand: 'recall-a-fact',
+      origin: 'revision',
+      responseForm: 'free-recall',
+    });
+    const read = await readInstrumentTarget(vault, instrumentId);
+    if (read.kind !== 'record') throw new Error('expected a record');
+    expect(read.record.generator).toEqual({ taskId: 'cards.generate.v1', promptVersion: '1.8.0' });
+  });
+
+  it("the sweep origin's recall intent on a multiple-choice draft reads recognition, never free recall (row 38)", async () => {
+    const { vault, cache, port } = setUp();
+    const { requestedAsk: _heading, ...sweepAsk } = carriage({ origin: 'sweep' });
+    await cache.put(baseRecord({ demand: sweepAsk }));
+
+    const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+    const reading = await readInstrumentDemand(vault, instrumentId, mcqBlockOf(vault));
+    expect(reading).toMatchObject({
+      kind: 'declared',
+      origin: 'sweep',
+      responseForm: 'recognition',
+    });
+  });
+
+  it('edited resolves the same way accepted does: the record is written once for the returned id', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseRecord({ demand: carriage() }));
+
+    const { instrumentId } = await port.accept('draft-1', 'edited');
+
+    expect(await targetFiles(vault)).toEqual([instrumentTargetStorePath(instrumentId)]);
+    // A second accept on the resolved draft is the idempotent no-op: it writes nothing more.
+    await port.accept('draft-1', 'edited');
+    expect(await targetFiles(vault)).toEqual([instrumentTargetStorePath(instrumentId)]);
+  });
+
+  describe.each([
+    ['multiple-choice', (o: Partial<DraftRecord>) => baseRecord(o), mcqBlockOf],
+    ['card', (o: Partial<DraftRecord>) => cardRecord(o), qaBlockOf],
+  ] as const)('a %s draft that must leave no record', (_kind, build, blockOf) => {
+    it('an old-Worker response (no acknowledgement) leaves none, and the instrument reads unspecified', async () => {
+      const { vault, cache, port } = setUp();
+      const { acknowledgedDemand: _ack, ...unacknowledged } = carriage();
+      await cache.put(build({ demand: unacknowledged }));
+
+      const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+      expect(await targetFiles(vault)).toEqual([]);
+      expect(await readInstrumentDemand(vault, instrumentId, blockOf(vault))).toEqual({
+        kind: 'unspecified',
+      });
+    });
+
+    it('a mismatching declaration leaves none, and the accept still succeeds', async () => {
+      const { vault, cache, port } = setUp();
+      await cache.put(build({ demand: carriage({ declaredDemand: 'calculate' }) }));
+
+      const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+      expect(await targetFiles(vault)).toEqual([]);
+      expect((await cache.get('draft-1'))?.status).toBe('accepted');
+      expect(await readInstrumentDemand(vault, instrumentId, blockOf(vault))).toEqual({
+        kind: 'unspecified',
+      });
+    });
+
+    it('a legacy draft (no demand field at all) leaves none and reads unspecified for ever', async () => {
+      const { vault, cache, port } = setUp();
+      await cache.put(build({}));
+      expect('demand' in ((await cache.get('draft-1')) ?? {})).toBe(false);
+
+      const { instrumentId } = await port.accept('draft-1', 'accepted');
+
+      expect(await targetFiles(vault)).toEqual([]);
+      expect(await readInstrumentDemand(vault, instrumentId, blockOf(vault))).toEqual({
+        kind: 'unspecified',
+      });
+    });
+
+    it('a rejected draft writes no record: nothing was materialised', async () => {
+      const { vault, cache, port } = setUp();
+      await cache.put(build({ demand: carriage() }));
+
+      await port.reject('draft-1');
+
+      expect(await targetFiles(vault)).toEqual([]);
+    });
+  });
+
+  it('a stale-source refusal writes no record', async () => {
+    const { vault, cache, port } = setUp();
+    await cache.put(baseRecord({ sourceContentHash: 'not-the-hash', demand: carriage() }));
+
+    await expect(port.accept('draft-1', 'accepted')).rejects.toThrow(StaleSourceRevisionError);
+
+    expect(await targetFiles(vault)).toEqual([]);
+  });
+
+  it('carrying a demand changes nothing in her note: it is byte-identical with and without one (INV-6)', async () => {
+    const withDemand = setUp();
+    const without = setUp();
+    await withDemand.cache.put(baseRecord({ demand: carriage() }));
+    await without.cache.put(baseRecord());
+
+    await withDemand.port.accept('draft-1', 'accepted');
+    await without.port.accept('draft-1', 'accepted');
+
+    expect(withDemand.vault.raw(NOTE_PATH)).toBe(without.vault.raw(NOTE_PATH));
+    expect(withDemand.vault.raw(NOTE_PATH)).not.toContain('recall-a-fact');
   });
 });
