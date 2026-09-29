@@ -131,6 +131,21 @@ export interface ExtractTier3EvidenceOptions extends RegisterSourcesOptions {
    * feeds it too; that caller never reaches this default.
    */
   readonly vocabulary?: readonly string[];
+  /**
+   * `ol-egov.141.89.7.36` (F1.5, F4.2): cite a registered `role: 'objectives'`
+   * document that is not markdown (a PDF, deck or docx) as `kind: 'objectives'`
+   * — name-matched against the vocabulary page by page, exactly as a markdown
+   * objectives note is name-matched block by block — instead of as
+   * `kind: 'generated-content'`, the one kind no evidence basis admits.
+   *
+   * **Off by default, and deliberately.** `kind: 'objectives'` is also the kind
+   * `../scope/grove.ts` counts as the examiner's declaration, so turning it on
+   * changes the count the grove shows. `buildConceptAssessmentEdges` (the
+   * ranking's edge builder) sets it; every other caller, the grove included,
+   * keeps today's reading until that change is ruled. See `./build.js`'s
+   * `derivedTextCitations`.
+   */
+  readonly binaryObjectivesAsObjectives?: boolean;
 }
 
 /**

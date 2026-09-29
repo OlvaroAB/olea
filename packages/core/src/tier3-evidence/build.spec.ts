@@ -589,6 +589,108 @@ describe('extractTier3Evidence — registration without an embedding note (F3.1,
     expect(row?.limitations).toEqual([]);
   });
 
+  // `ol-egov.141.89.7.36` (F1.5, F4.2): a registered objectives document that is a PDF was read
+  // only into `generated-content` citations, the one kind `buildConceptAssessmentEdges` admits no
+  // basis for — so it declared nothing to the ranking or the grove, where the same document as a
+  // markdown note does. The same verbatim word-bounded name match, now under the role's own kind.
+  it('with binaryObjectivesAsObjectives, a registered PDF objectives document cites via kind: "objectives", never doubling into generated-content (ol-egov.141.89.7.36)', async () => {
+    await zettel('Sediment transport');
+    await writePdf('Objectives/COURSEA.pdf', [
+      'By the end of the course you can describe sediment transport in rivers.',
+    ]);
+
+    const result = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSEA.pdf', role: 'objectives', course: 'COURSEA' }],
+      binaryObjectivesAsObjectives: true,
+    });
+    const objectives = result.citations.filter((c) => c.kind === 'objectives');
+    expect(objectives.map((c) => c.conceptName)).toEqual(['Sediment transport']);
+    expect(objectives[0]?.course).toBe('COURSEA');
+    expect(objectives[0]?.sourcePath).toBe('Objectives/COURSEA.pdf');
+    // Page-level provenance from the extractor, never a fabricated block range.
+    expect(objectives[0]?.provenance.location.page).toBe(1);
+    expect(objectives[0]?.provenance.location.charRange?.end).toBeGreaterThan(
+      objectives[0]?.provenance.location.charRange?.start ?? 0,
+    );
+    // The same exclusivity a markdown objectives note gets for free: one reading, one kind.
+    expect(result.citations.filter((c) => c.kind === 'generated-content')).toEqual([]);
+    // Never a past-paper citation: an objectives document is no question source.
+    expect(result.citations.filter((c) => c.kind === 'past-paper')).toEqual([]);
+    expect(result.pastPaperClusters).toEqual([]);
+    const row = result.sourceCoverage.find((r) => r.sourcePath === 'Objectives/COURSEA.pdf');
+    expect(row?.role).toBe('objectives');
+    expect(row?.citations).toBe(1);
+    expect(row?.limitations).toEqual([]);
+  });
+
+  it("by default a registered PDF objectives document is still read as generated-content: the grove's declared count does not move (ol-egov.141.89.7.36)", async () => {
+    await zettel('Sediment transport');
+    await writePdf('Objectives/COURSEA.pdf', [
+      'By the end of the course you can describe sediment transport in rivers.',
+    ]);
+
+    const result = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSEA.pdf', role: 'objectives', course: 'COURSEA' }],
+    });
+    // The grove reads its examiner's declaration from `kind: 'objectives'` and `'past-paper'`
+    // (`scope/grove.ts`); this call is the grove's shape, and it still sees neither.
+    expect(result.citations.map((c) => c.kind)).toEqual(['generated-content']);
+    const explicitOff = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSEA.pdf', role: 'objectives', course: 'COURSEA' }],
+      binaryObjectivesAsObjectives: false,
+    });
+    expect(explicitOff.citations.map((c) => c.kind)).toEqual(['generated-content']);
+  });
+
+  it('a registered PDF objectives document naming no vocabulary term yields no citation but keeps its own coverage row (ol-egov.141.89.7.36)', async () => {
+    await zettel('Sediment transport');
+    await writePdf('Objectives/COURSEA.pdf', ['Nothing in here matches the vocabulary.']);
+
+    const result = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSEA.pdf', role: 'objectives', course: 'COURSEA' }],
+      binaryObjectivesAsObjectives: true,
+    });
+    expect(result.citations).toEqual([]);
+    const row = result.sourceCoverage.find((r) => r.sourcePath === 'Objectives/COURSEA.pdf');
+    expect(row).toBeDefined();
+    expect(row?.citations).toBe(0);
+    expect(row?.role).toBe('objectives');
+    expect(row?.outcome).toBe('extracted');
+  });
+
+  it('a registered PDF that is course material keeps reading as generated-content: only the objectives role changes kind (ol-egov.141.89.7.36)', async () => {
+    await zettel('Sediment transport');
+    await writePdf('Objectives/COURSEA.pdf', ['Describe sediment transport in rivers.']);
+
+    const result = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSEA.pdf', role: 'course-material' }],
+      binaryObjectivesAsObjectives: true,
+    });
+    expect(result.citations.map((c) => c.kind)).toEqual(['generated-content']);
+  });
+
+  it('objectives pages are read against the same template-furniture rule as every other derived page (ol-egov.141.89.7.36)', async () => {
+    await zettel('Overview');
+    // Three embedded decks and the registered objectives document all open with one template
+    // phrase: four distinct documents make it furniture, so a name that only the phrase
+    // carries must not become objectives evidence either.
+    const head = 'Overview and aims for this session';
+    for (const course of ['COURSEA', 'COURSEB', 'COURSEC']) {
+      await writePdf(`01 Courses/${course}/WEEK 1/Deck.pdf`, [head, `Body slide for ${course}`]);
+      await writeText(
+        `01 Courses/${course}/WEEK 1/Notes.md`,
+        `---\ntopic: [Something]\n---\n\n![[01 Courses/${course}/WEEK 1/Deck.pdf]]\n`,
+      );
+    }
+    await writePdf('Objectives/COURSED.pdf', [head, 'Body slide for COURSED']);
+
+    const withRegistration = await extractTier3Evidence(source, {
+      registeredFiles: [{ path: 'Objectives/COURSED.pdf', role: 'objectives', course: 'COURSED' }],
+      binaryObjectivesAsObjectives: true,
+    });
+    expect(withRegistration.citations.filter((c) => c.kind === 'objectives')).toEqual([]);
+  });
+
   it('boilerplate suppression sees registered and embedded pages as one corpus', async () => {
     await zettel('Overview');
     // Three embedded decks plus one REGISTERED deck all open with the same

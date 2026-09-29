@@ -460,7 +460,11 @@ export async function buildConceptAssessmentEdges(
 ): Promise<BuildConceptAssessmentEdgesResult> {
   const [assessmentsRead, tier3] = await Promise.all([
     resolveAssessments(vault, options.basePath),
-    extractTier3Evidence(vault, options),
+    // `ol-egov.141.89.7.36` (F4.2): a registered objectives document that is a PDF is read into
+    // `kind: 'objectives'` citations here, so it can become an objectives-basis edge. Opt-in on
+    // `extractTier3Evidence` because the same kind is the grove's denominator; only the ranking's
+    // edge builder asks for it, and a caller can still turn it off with an explicit `false`.
+    extractTier3Evidence(vault, { binaryObjectivesAsObjectives: true, ...options }),
   ]);
 
   // `ol-63e1`: the opaque join key for each vocabulary/concept name matched

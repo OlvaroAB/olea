@@ -715,6 +715,76 @@ describe('buildConceptAssessmentEdges — a registered PDF past paper (ol-3ux7.1
     expect(result.edges.some((e) => e.assessmentPath === '02 Assignments/Quiz 1.md')).toBe(false);
     expect(result.assessmentsWithNoEvidence).toEqual(['02 Assignments/Quiz 1.md']);
   });
+
+  // `ol-egov.141.89.7.36` (F4.2 "objectives count as ranking evidence, on their own basis"): a
+  // registered objectives PDF used to read only as generated content, which no basis admits, so a
+  // course whose only registered source was an objectives PDF stayed unranked.
+  it('a registered objectives PDF yields an objectives-basis edge, and never a past-paper one (ol-egov.141.89.7.36)', async () => {
+    await writePdf(
+      '03 Research/Objectives.pdf',
+      'Students will be able to explain Widget theory in context.',
+    );
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: PDF_BASE_PATH,
+      concepts: NO_CONCEPTS,
+      registeredFiles: [
+        { path: '03 Research/Objectives.pdf', role: 'objectives', course: 'TESTP101' },
+      ],
+    });
+
+    const edges = result.edges.filter(
+      (e) => e.assessmentPath === '02 Assignments/Quiz 1.md' && e.conceptName === 'Widget theory',
+    );
+    expect(edges).toHaveLength(1);
+    const edge = edges[0];
+    expect(edge?.basis).toBe('objectives');
+    expect(edge?.citations).toEqual([]);
+    expect(edge?.objectivesCitations).toHaveLength(1);
+    expect(edge?.objectivesCitations?.[0]?.sourcePath).toBe('03 Research/Objectives.pdf');
+    expect(edge?.objectivesCitations?.[0]?.provenance.location.page).toBe(1);
+    expect(edge?.confidence).toBe(1);
+    expect(result.edges.some((e) => e.basis === 'past-paper')).toBe(false);
+    expect(result.assessmentsWithNoEvidence).toEqual([]);
+  });
+
+  it('a registered objectives PDF naming no vocabulary term yields no edge, reported as no-evidence (ol-egov.141.89.7.36)', async () => {
+    await writePdf('03 Research/Objectives.pdf', 'Nothing here names anything the student has.');
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: PDF_BASE_PATH,
+      concepts: NO_CONCEPTS,
+      registeredFiles: [
+        { path: '03 Research/Objectives.pdf', role: 'objectives', course: 'TESTP101' },
+      ],
+    });
+
+    expect(result.edges.some((e) => e.assessmentPath === '02 Assignments/Quiz 1.md')).toBe(false);
+    expect(result.assessmentsWithNoEvidence).toEqual(['02 Assignments/Quiz 1.md']);
+  });
+
+  it('a past paper and an objectives PDF for one course each keep their own basis (ol-egov.141.89.7.36)', async () => {
+    await writePdf('03 Research/2023.pdf', 'Question 1. Explain Widget theory. (10 marks)');
+    await writePdf(
+      '03 Research/Objectives.pdf',
+      'Students will be able to explain Widget theory in context.',
+    );
+
+    const result = await buildConceptAssessmentEdges(source, {
+      basePath: PDF_BASE_PATH,
+      concepts: NO_CONCEPTS,
+      registeredFiles: [
+        { path: '03 Research/2023.pdf', role: 'past-paper', course: 'TESTP101' },
+        { path: '03 Research/Objectives.pdf', role: 'objectives', course: 'TESTP101' },
+      ],
+    });
+
+    const bases = result.edges
+      .filter((e) => e.assessmentPath === '02 Assignments/Quiz 1.md')
+      .map((e) => e.basis)
+      .sort();
+    expect(bases).toEqual(['objectives', 'past-paper']);
+  });
 });
 
 describe('buildQuestionIndex — a registered PDF past paper re-extracts and re-segments independently (ol-3ux7.10)', () => {

@@ -649,11 +649,48 @@ async function collectDerivedSources(
   return sources;
 }
 
-function generatedContentCitations(
+/**
+ * Citations for every derived (non-markdown) page: `kind: 'generated-content'`
+ * for course material and for a past paper that did not segment; and, only when
+ * `objectivesAsObjectives` is set, `kind: 'objectives'` for a source registered
+ * `role: 'objectives'` (`ol-egov.141.89.7.36`, F1.5, F4.2).
+ *
+ * **Why an objectives PDF is cited as objectives at all.** A markdown objectives
+ * note is read block by block into `kind: 'objectives'` citations
+ * (`objectivesCitations`), which is the only kind `buildConceptAssessmentEdges`
+ * turns into an objectives-basis edge. The same document as a PDF was read only
+ * into `generated-content`, which no basis admits, so a course whose one
+ * registered source was an objectives PDF was never ranked on it. There is no
+ * block structure in extracted PDF text, so the unit is the extractor's own
+ * page, cited at that page's provenance — the same verbatim, word-bounded,
+ * case-insensitive name match the markdown reader makes, no model and no new
+ * reading. Read against the same template-furniture rule as every other derived
+ * page, so a name carried only by a shared slide header is not evidence here
+ * either.
+ *
+ * **Why it is opt-in.** `kind: 'objectives'` is also what `../scope/grove.ts`
+ * counts as the examiner's declaration (its denominator, F8.1). Turning a
+ * registered objectives PDF into that kind by default would change the count the
+ * grove shows for a course, which no ruling has approved (Class C: what the
+ * student sees). The ranking's edge builder sets the option; the grove and every
+ * other caller keep today's reading. The grove half is filed separately.
+ *
+ * **One reading, one kind**, exactly the exclusivity a markdown objectives note
+ * has by never reaching this leg: with the option set an objectives page is not
+ * also counted as generated content, so the source's citation count on its
+ * coverage row is unchanged by the re-kind, only its kind.
+ */
+function derivedTextCitations(
   derived: readonly DerivedSource[],
   vocabulary: readonly string[],
+  objectivesAsObjectives: boolean,
 ): readonly ConceptCitation[] {
   const pages = derived.flatMap((s) => s.pages);
+  const objectivesSourcePaths = new Set(
+    objectivesAsObjectives
+      ? derived.filter((s) => s.role === 'objectives').map((s) => s.sourcePath)
+      : [],
+  );
   // Boilerplate detection runs across ALL derived pages at once, embedded and
   // registered together. It has to: the rule is "a leading phrase shared by
   // four or more distinct documents is template furniture", and running it
@@ -685,7 +722,7 @@ function generatedContentCitations(
       for (const course of page.courses) {
         citations.push({
           conceptName: term,
-          kind: 'generated-content',
+          kind: objectivesSourcePaths.has(page.sourcePath) ? 'objectives' : 'generated-content',
           sourcePath: page.sourcePath,
           course,
           provenance: page.provenance,
@@ -820,10 +857,11 @@ export async function extractTier3Evidence(
   // Markdown sources keep their role-specific readers: a markdown past paper
   // segments into addressable questions via the block parser
   // (`segmentPastPaper`), a markdown objectives document is read
-  // block-by-block. A binary objectives document has neither reader
-  // available and goes to the derived-text route below instead — a real
-  // difference in what can be read, so it is reported on the coverage row
-  // rather than papered over. A binary past paper gets its OWN addressable-
+  // block-by-block. A binary objectives document has no block structure to
+  // read, so it goes to the derived-text route below: cited from its extracted
+  // pages as generated content, or, when the caller opts in
+  // (`binaryObjectivesAsObjectives`, `ol-egov.141.89.7.36`), under its own
+  // `kind: 'objectives'` — see `derivedTextCitations`. A binary past paper gets its OWN addressable-
   // question route below too now (`ol-3ux7.10`,
   // `segmentPlainTextPastPaper`) — see `collectDerivedSources` and
   // `binaryPastPaperCitations` — so this markdown-only loop is not the whole
@@ -839,7 +877,9 @@ export async function extractTier3Evidence(
   }
 
   const derived = await collectDerivedSources(vault, coursesFolder, sourcesReport.sources);
-  citationLists.push(generatedContentCitations(derived, vocabulary));
+  citationLists.push(
+    derivedTextCitations(derived, vocabulary, options.binaryObjectivesAsObjectives === true),
+  );
   for (const source of derived) {
     if (source.role === 'past-paper') {
       citationLists.push(binaryPastPaperCitations(source, vocabulary));
