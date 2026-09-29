@@ -32,8 +32,9 @@
 // bead carries which, and why.
 //
 // **`[SESS-16]` (`ol-egov.132.18`): the composed session over this fixture
-// vault is three Q&A items, every round, and claim 2 below is not exercised
-// here.** Measured directly against the real pipeline (not re-derived):
+// vault is three Q&A items in round 1 (later rounds: see the `[D-447]` note
+// further down), and claim 2 below is not exercised here.** Measured directly
+// against the real pipeline (not re-derived):
 // `composeOracleRanking` scopes the gap view to concepts `buildConceptAssessmentEdges`
 // found ASSESSMENT EVIDENCE for (its own module doc, "Which concepts get a
 // mastery lookup" — P5-T03's join is course-and-evidence only, a pre-existing,
@@ -78,6 +79,20 @@
 // see their own comments for what they check instead — while claim 2's own
 // text above stays accurate: this fixture still does not exist to give
 // cloze/mcq a *guaranteed* row, it merely may, depending on today's date.
+//
+// **`[D-447]` (`ol-egov.141.89.10.98`, 2026-09-29): "three, every round" is now
+// true of round 1 only.** Round 1 ranks five concepts (four the past papers cite,
+// plus one from a course with material and no assessment record, served on need
+// alone under `[D-373]`) and composes three items. Rating that session practises
+// two more concepts of the assessed course that no assessment cites; the next
+// ranking admits them at need-only (`composeOracleRanking`'s
+// `admitPractisedUnlinkedConcepts`, which the session composition takes), the
+// universe goes from five to seven, and later sessions compose more than three
+// items. The count is not a constant (three then five on one run, three then
+// seven on another, with the date and with other work in the tree), so no
+// assertion below pins one; the convergence test states what does hold. Every
+// "`[SESS-16]`: three, not four" comment below is a floor for round 1 and still
+// true as one.
 //
 // Four claims, and each is the reason a different failure would be invisible:
 //
@@ -254,6 +269,28 @@ function composeDefaultStudySession(source: FolderSource) {
     );
     return result?.composed.full ?? null;
   };
+}
+
+/**
+ * The concept keys the oracle chain ranks for the composer right now, sorted: the rows
+ * `composeStudySessionForRequest` fills a session from, over the vault as it stands. The composed
+ * session is a budgeted choice out of exactly this set, so it is what the convergence test reads
+ * to tell a session that grew because its universe grew (`[D-447]`: practice admits concepts no
+ * assessment reaches) from one that grew for no reason.
+ */
+async function rankedUniverse(source: FolderSource): Promise<readonly string[]> {
+  const result = await composeStudySessionForRequest(
+    {
+      vault: source,
+      deviceId: DEVICE,
+      settingsHost: new FakeSettingsHost(),
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+    },
+    { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+    NOW,
+  );
+  return (result?.composedInput.rows ?? []).map((row) => row.conceptKey).sort();
 }
 
 /** Deterministic PRNG (mulberry32), so MCQ option sampling is reproducible. */
@@ -590,6 +627,13 @@ const ROUNDS = 4;
 
 interface SessionRound {
   readonly composedCount: number;
+  /**
+   * The concept keys the ranking offered the composer at the start of this round, sorted — the
+   * universe the session is a budgeted choice from. Since `[D-447]` it is not fixed: rating a
+   * session practises concepts, and the next ranking admits the practised ones no assessment
+   * reaches (see the convergence test).
+   */
+  readonly rankedConcepts: readonly string[];
   readonly deferredCount: number;
   readonly rated: readonly RatedItem[];
   /** What actually reached the vault this session — see `ports()`'s `logged` doc. */
@@ -654,12 +698,16 @@ beforeAll(async () => {
   // with material in it does not reach zero, so "loop until it empties" is not a
   // terminating condition any more. `ROUNDS` is the claim's own shape.
   for (let round = 1; round <= ROUNDS; round += 1) {
+    // The ranked universe this round composes from: read from the same log state, immediately
+    // before the composition below, with nothing written in between. See `rankedUniverse`.
+    const rankedConcepts = await rankedUniverse(vault());
     const { outcome, logged: roundLog } = composeCapturingLog();
     const opened = await outcome;
     if (!opened.ok) throw opened.error;
     if (opened.itemCount === 0) break;
     rounds.push({
       composedCount: opened.itemCount,
+      rankedConcepts,
       deferredCount: opened.deferredCount,
       rated: await driveToCompletion(opened.session, round),
       logged: roundLog,
@@ -799,10 +847,33 @@ describe('complete passes through the real ReviewSession', () => {
     // replaces "drained to zero".
     expect(last).toBe(penultimate);
 
-    // Bounded, not growing: no session composes more than the first did.
-    for (const round of rounds) {
-      expect(round.composedCount).toBeLessThanOrEqual(rounds[0]?.composedCount ?? 0);
-    }
+    // Bounded, not growing. This used to read "no session composes more than the first did",
+    // which held only while the ranking's universe was fixed by assessment edges, so that nothing
+    // she did could put a concept into it. It was an artefact of that admission rule, not the
+    // claim: `[SESS-12]`'s claim is that repeated sessions converge on a stable set rather than
+    // grow without bound, and `[D-447]` option (b) (ruled 2026-09-29, `ol-egov.141.89.10.98`)
+    // makes the universe legitimately widen once, by design, when the first session's practice
+    // reaches concepts no assessment does: they are admitted at need-only instead of dropping out
+    // of planning. Measured over this fixture: the first ranking holds five concepts and composes
+    // three items; after the first session it holds seven and composes more; then nothing moves.
+    // The property that survives, and would still catch a session that grows for no reason:
+    //
+    //  - no session composes more items than the vault holds instruments (a ceiling that does not
+    //    depend on any admission rule);
+    //  - a session may be larger than the one before it only if the ranked universe it was chosen
+    //    from was larger too, so a rise in items is always a rise in what she may be asked about;
+    //  - the universe itself stands still by the end, like the composed set.
+    const ceiling = enumeratedPanel.due?.total ?? 0;
+    expect(ceiling).toBeGreaterThan(0);
+    for (const round of rounds) expect(round.composedCount).toBeLessThanOrEqual(ceiling);
+    rounds.forEach((round, index) => {
+      const previous = rounds[index - 1];
+      if (previous === undefined || round.composedCount <= previous.composedCount) return;
+      expect(round.rankedConcepts.length).toBeGreaterThan(previous.rankedConcepts.length);
+    });
+    const lastRound = rounds[rounds.length - 1];
+    const penultimateRound = rounds[rounds.length - 2];
+    expect(lastRound?.rankedConcepts).toEqual(penultimateRound?.rankedConcepts);
   });
 
   // Replaces the deleted "offered each instrument exactly once across every

@@ -374,6 +374,23 @@ export function createLocalStudyPlanProvider(
         // here on those grounds (the session's own fill still withholds
         // them, `study-session/compose.ts`).
         instrumentInventory: enumeration.records,
+        // `[D-447]` option (b) (ruled 2026-09-29; core half `ol-egov.141.89.10.96`)
+        // is DELIBERATELY NOT opted into here, and cannot be until
+        // `ol-egov.141.89.10.99`'s contract question is answered. Passing
+        // `admitPractisedUnlinkedConcepts: true` would rank a practised concept
+        // no assessment reaches at need-only, with no citation (`[D-329]`), and
+        // `buildStudyPlan` below would throw: `packages/contracts/src/study-plan.ts`
+        // requires every planned concept to carry at least one citation ("a
+        // ranked concept with no evidence is the case that abstains", written
+        // before `[D-329]`). `refreshStudyPlan` swallows the throw and keeps the
+        // old plan, so the plan would stop refreshing for as long as any such
+        // concept existed. The session composition takes the door
+        // (`session-builder/provider.ts`) because it never builds this
+        // artifact. Pinned by `test/plan/practised-unlinked-agreement.d-447.spec.ts`
+        // (`it.fails`), which goes red the day the opt-in works, to be flipped.
+        // `gap/provider.ts` and `registry/provider.ts` stay out for the reason
+        // `oracle/compose.ts` gives: they read scope and coverage, not practice
+        // to serve.
       });
 
       // `[DOS-C4-a]` / `ol-feza`: `sittingsSinceFloorMet`'s two inputs,
