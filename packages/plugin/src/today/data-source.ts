@@ -125,6 +125,7 @@ import {
   loadCachedStudyPlan,
   parseReviewLog,
   projectInstrumentValidity,
+  projectRegisteredFiles,
   REVIEW_LOG_FOLDER,
   type RegistryOverrides,
   type RhythmCourseInput,
@@ -1319,12 +1320,19 @@ export function createVaultScopeSource(deps: VaultScopeSourceDeps): TodayScopeSo
         );
 
         const vocabulary = [...new Set(enumeration.concepts.map((concept) => concept.name))];
+        // F1.5 / F8.1 (`ol-egov.141.89.7.40`): the documents she has registered, folded from the
+        // "source registered" events already in `entries` — the same projection
+        // `../grove/provider.ts` reads, and the same one the four ranking callers now pass
+        // (`ol-egov.141.89.7.35`). A registered PDF cannot carry frontmatter, so it becomes a
+        // source only through this event; without it the grove counted a past paper she
+        // registered and this reading never did, two answers about the same course.
+        const registeredFiles = projectRegisteredFiles(entries);
         // `disputesFromFiles` re-reads the same `files` this walk already
         // read — see that function's own doc for why `readReviewLogHistory`
         // itself cannot supply this. Independent of `extractTier3Evidence`,
         // so paid concurrently.
         const [tier3, disputes] = await Promise.all([
-          extractTier3Evidence(deps.vault, { vocabulary }),
+          extractTier3Evidence(deps.vault, { vocabulary, registeredFiles }),
           disputesFromFiles(deps.vault, files),
         ]);
 
