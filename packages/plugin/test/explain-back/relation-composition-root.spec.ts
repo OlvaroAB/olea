@@ -153,10 +153,11 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     const body = modal.slice(start, end);
     // `ol-egov.141.89.6.50`: widened from a bare `return sourceBlocks;` to a
     // full `ResolvedGradingSourceBlocks` object literal — `sourceMaterial`
-    // and `relationExpected` must be threaded here too, not just the blocks.
+    // and `relationExpected` must be threaded here too, not just the blocks;
+    // `ol-egov.141.89.6.75` added the neighbour key, `undefined` here (no subject, so no partner).
     const earlyReturnMarker = 'if (subjectConceptId === null) {';
     expect(body).toMatch(
-      /if \(subjectConceptId === null\) \{\s*return \{ sourceBlocks, sourceMaterial: undefined, relationExpected: false \};\s*\}/,
+      /if \(subjectConceptId === null\) \{\s*return \{\s*sourceBlocks,\s*sourceMaterial: undefined,\s*relationExpected: false,\s*neighbourConceptId: undefined,\s*\};\s*\}/,
     );
     // The early return textually precedes the buildGradingSourceMaterial call.
     expect(body.indexOf(earlyReturnMarker)).toBeLessThan(
@@ -182,6 +183,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
     // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
     // `sourceMaterial`/`relationExpected`, carried to accept time;
+    // `ol-egov.141.89.6.75` added `neighbourConceptId`, the resolved partner's key, beside them;
     // `ol-egov.141.89.6.4` (`[D-322]`) added `practiceOnly`, always `false`
     // here; `[STY-9]` (`ol-l5og.18.19`) added `courseCode`/`noteTitle`, the
     // seeding instrument's own fields, real data for the identity strip —
@@ -189,7 +191,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     // future field slipping in unnoticed still fails this assertion instead
     // of silently passing through a loose wildcard.
     expect(body).toMatch(
-      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
+      /const prompt: ResolvedPrompt = \{\s*context,\s*subjectConceptId,\s*practiceOnly: false,\s*originInstrumentId: instrument\.instrumentId,\s*sourceBlocks,\s*conceptIds: instrument\.conceptIds,\s*query,\s*sourceMaterial: resolvedGrading\.sourceMaterial,\s*relationExpected: resolvedGrading\.relationExpected,\s*neighbourConceptId: resolvedGrading\.neighbourConceptId,\s*courseCode: instrument\.courseCode,\s*noteTitle: instrument\.noteTitle,\s*\};/,
     );
   });
 

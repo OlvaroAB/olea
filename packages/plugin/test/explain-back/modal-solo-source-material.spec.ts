@@ -14,6 +14,11 @@
  * `buildGradeSoloInputFromTypedAnswer`'s `resolved` argument correctly — is
  * covered directly, with no source-extraction needed, in
  * `solo-review-source-material.spec.ts`.
+ *
+ * `ol-egov.141.89.6.75` adds the neighbour's concept KEY to the same hand-off: the resolved partner's
+ * `neighbourConceptId` rides on `ResolvedGradingSourceBlocks` and `ResolvedPrompt` beside
+ * `sourceMaterial`, and reaches the write in the accepted-attempt call (the pins below), so the
+ * F5.3a scheduling observation can name the neighbour by key.
  */
 
 import { readFileSync } from 'node:fs';
@@ -32,7 +37,7 @@ function codeOf(relativePath: string): string {
 const modal = codeOf('explain-back/modal.ts');
 
 describe('resolveGradingSourceBlocks returns the material and relationExpected, not just the flattened blocks', () => {
-  it('declares ResolvedGradingSourceBlocks with sourceBlocks, sourceMaterial and relationExpected', () => {
+  it('declares ResolvedGradingSourceBlocks with sourceBlocks, sourceMaterial, relationExpected and the neighbour key', () => {
     const start = modal.indexOf('export interface ResolvedGradingSourceBlocks {');
     expect(start).toBeGreaterThan(-1);
     const end = modal.indexOf('export async function resolveGradingSourceBlocks(', start);
@@ -41,43 +46,46 @@ describe('resolveGradingSourceBlocks returns the material and relationExpected, 
     expect(body).toMatch(/readonly sourceBlocks: readonly ExplainBackSourceBlock\[\];/);
     expect(body).toMatch(/readonly sourceMaterial: GradingSourceMaterial \| undefined;/);
     expect(body).toMatch(/readonly relationExpected: boolean;/);
+    expect(body).toMatch(/readonly neighbourConceptId: string \| undefined;/);
   });
 
-  it('the null-subjectConceptId early return carries sourceMaterial: undefined, relationExpected: false — never a bare blocks array', () => {
+  it('the null-subjectConceptId early return carries sourceMaterial: undefined, relationExpected: false and no neighbour key — never a bare blocks array', () => {
     const start = modal.indexOf('export async function resolveGradingSourceBlocks(');
     const end = modal.indexOf('interface ResolvedPrompt', start);
     const body = modal.slice(start, end);
     expect(body).toMatch(
-      /if \(subjectConceptId === null\) \{\s*return \{ sourceBlocks, sourceMaterial: undefined, relationExpected: false \};\s*\}/,
+      /if \(subjectConceptId === null\) \{\s*return \{\s*sourceBlocks,\s*sourceMaterial: undefined,\s*relationExpected: false,\s*neighbourConceptId: undefined,\s*\};\s*\}/,
     );
   });
 
-  it('the relation-resolved path returns the real material and relationExpected computed from relation.kind, never hardcoded', () => {
+  it('the relation-resolved path returns the real material, relationExpected computed from relation.kind (never hardcoded) and the partner key it composed the relation from', () => {
     const start = modal.indexOf('export async function resolveGradingSourceBlocks(');
     const end = modal.indexOf('interface ResolvedPrompt', start);
     const body = modal.slice(start, end);
     expect(body).toMatch(
-      /return \{\s*sourceBlocks: flattenedSourceBlocks,\s*sourceMaterial: material,\s*relationExpected: relation\.kind === 'relation',\s*\};/,
+      /return \{\s*sourceBlocks: flattenedSourceBlocks,\s*sourceMaterial: material,\s*relationExpected: relation\.kind === 'relation',\s*neighbourConceptId: named\?\.neighbourConceptId,\s*\};/,
     );
   });
 });
 
-describe('ResolvedPrompt carries sourceMaterial and relationExpected to accept time', () => {
-  it('interface ResolvedPrompt declares both fields', () => {
+describe('ResolvedPrompt carries sourceMaterial, relationExpected and the neighbour key to accept time', () => {
+  it('interface ResolvedPrompt declares all three fields', () => {
     const start = modal.indexOf('interface ResolvedPrompt {');
     expect(start).toBeGreaterThan(-1);
     const end = modal.indexOf('}', modal.indexOf('readonly relationExpected: boolean;', start));
     const body = modal.slice(start, end);
     expect(body).toMatch(/readonly sourceMaterial: GradingSourceMaterial \| undefined;/);
     expect(body).toMatch(/readonly relationExpected: boolean;/);
+    expect(body).toMatch(/readonly neighbourConceptId: string \| undefined;/);
   });
 
-  it('resolveInstrumentPrompt threads resolvedGrading.sourceMaterial/.relationExpected onto the constructed prompt', () => {
+  it('resolveInstrumentPrompt threads resolvedGrading.sourceMaterial/.relationExpected/.neighbourConceptId onto the constructed prompt', () => {
     const start = modal.indexOf('private async resolveInstrumentPrompt(');
     const end = modal.indexOf('private async resolveTopicPrompt(');
     const body = modal.slice(start, end);
     expect(body).toMatch(/sourceMaterial: resolvedGrading\.sourceMaterial,/);
     expect(body).toMatch(/relationExpected: resolvedGrading\.relationExpected,/);
+    expect(body).toMatch(/neighbourConceptId: resolvedGrading\.neighbourConceptId,/);
   });
 
   it('resolveTopicPrompt threads them onto BOTH prompts it constructs (the insufficient-notes refusal and the answering phase)', () => {
@@ -88,13 +96,16 @@ describe('ResolvedPrompt carries sourceMaterial and relationExpected to accept t
       body.match(/sourceMaterial: resolvedGrading\.sourceMaterial,/g) ?? [];
     const relationExpectedHits =
       body.match(/relationExpected: resolvedGrading\.relationExpected,/g) ?? [];
+    const neighbourConceptIdHits =
+      body.match(/neighbourConceptId: resolvedGrading\.neighbourConceptId,/g) ?? [];
     expect(sourceMaterialHits).toHaveLength(2);
     expect(relationExpectedHits).toHaveLength(2);
+    expect(neighbourConceptIdHits).toHaveLength(2);
   });
 });
 
-describe('ExplainBackModalDeps.recordSoloGradeAndReview declares sourceMaterial/relationExpected as optional params', () => {
-  it('declares both fields on the params object type', () => {
+describe('ExplainBackModalDeps.recordSoloGradeAndReview declares sourceMaterial/relationExpected/neighbourConceptId as optional params', () => {
+  it('declares all three fields on the params object type', () => {
     const start = modal.indexOf('readonly recordSoloGradeAndReview?: (params: {');
     expect(start).toBeGreaterThan(-1);
     const end = modal.indexOf('}) => Promise<SoloLevel | undefined>;', start);
@@ -102,10 +113,11 @@ describe('ExplainBackModalDeps.recordSoloGradeAndReview declares sourceMaterial/
     const body = modal.slice(start, end);
     expect(body).toMatch(/readonly sourceMaterial\?: GradingSourceMaterial;/);
     expect(body).toMatch(/readonly relationExpected\?: boolean;/);
+    expect(body).toMatch(/readonly neighbourConceptId\?: string;/);
   });
 });
 
-describe('computeAcceptGrading forwards prompt.sourceMaterial (conditionally) and prompt.relationExpected (always) to deps.recordSoloGradeAndReview', () => {
+describe('computeAcceptGrading forwards prompt.sourceMaterial and prompt.neighbourConceptId (conditionally) and prompt.relationExpected (always) to deps.recordSoloGradeAndReview', () => {
   it('spreads sourceMaterial conditionally — absent, never an explicit undefined, when prompt.sourceMaterial is undefined', () => {
     const start = modal.indexOf('private async computeAcceptGrading(');
     const end = modal.indexOf('private discardGrading(');
@@ -124,7 +136,16 @@ describe('computeAcceptGrading forwards prompt.sourceMaterial (conditionally) an
     expect(body).toMatch(/relationExpected: prompt\.relationExpected,/);
   });
 
-  it('both appear inside the SAME recordSoloGradeAndReview call that already sends answerEdits and durationMs', () => {
+  it('spreads neighbourConceptId conditionally — absent, never an explicit undefined, when no causes partner resolved (F5.3a)', () => {
+    const start = modal.indexOf('private async computeAcceptGrading(');
+    const end = modal.indexOf('private discardGrading(');
+    const body = modal.slice(start, end);
+    expect(body).toMatch(
+      /\.\.\.\(prompt\.neighbourConceptId !== undefined\s*\?\s*\{ neighbourConceptId: prompt\.neighbourConceptId \}\s*:\s*\{\}\),/,
+    );
+  });
+
+  it('all of them appear inside the SAME recordSoloGradeAndReview call that already sends answerEdits and durationMs', () => {
     const start = modal.indexOf('private async computeAcceptGrading(');
     const end = modal.indexOf('private discardGrading(');
     const body = modal.slice(start, end);
@@ -139,5 +160,6 @@ describe('computeAcceptGrading forwards prompt.sourceMaterial (conditionally) an
     expect(call).toMatch(/answerEdits,/);
     expect(call).toMatch(/sourceMaterial: prompt\.sourceMaterial/);
     expect(call).toMatch(/relationExpected: prompt\.relationExpected,/);
+    expect(call).toMatch(/neighbourConceptId: prompt\.neighbourConceptId/);
   });
 });

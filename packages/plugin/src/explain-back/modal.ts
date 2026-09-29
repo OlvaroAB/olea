@@ -376,6 +376,18 @@ export interface ExplainBackModalDeps {
      */
     readonly relationExpected?: boolean;
     /**
+     * `ol-egov.141.89.6.75` (F5.3a, C5.11): `prompt.neighbourConceptId` — the causes partner's
+     * concept KEY (the opaque `ConceptRecord.key` of the other end of the edge this prompt was
+     * composed from, never its wording), forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.neighbourConceptId`, where it becomes the F5.3a scheduling
+     * observation's only field exactly when the depth judge reports that she used the neighbour
+     * correctly. Decided once, here, when the partner resolved, never read off the model's reply.
+     * Optional, same structural-typing accommodation `sourceMaterial` above takes (`main.ts`'s
+     * wrapper passes the object through unreconstructed); `undefined` exactly when no causes
+     * partner resolved, which is also exactly when `relationExpected` is `false`.
+     */
+    readonly neighbourConceptId?: string;
+    /**
      * `ol-ryrh` (`[D-286]`, `[D-320]`): `'skipped'` when the accepted verdict
      * means no depth pass runs (`./request.ts`'s
      * `shouldRunExplainBackDepthPass`), forwarded to `solo-review.ts`'s
@@ -651,6 +663,14 @@ export interface ResolvedGradingSourceBlocks {
    * `false` when `sourceMaterial` is `undefined`.
    */
   readonly relationExpected: boolean;
+  /**
+   * `ol-egov.141.89.6.75` (F5.3a, C5.11): the resolved causes partner's concept KEY — the identity
+   * `named.neighbourConceptId` the relation was composed from, never the partner's wording (which
+   * is a retrieval query and nothing else). Carried forward so the write can name the neighbour in
+   * the scheduling observation. `undefined` exactly when `relationExpected` is `false`: no partner
+   * resolved, or the free-form topic entry point (`subjectConceptId === null`).
+   */
+  readonly neighbourConceptId: string | undefined;
 }
 
 export async function resolveGradingSourceBlocks(
@@ -690,7 +710,12 @@ export async function resolveGradingSourceBlocks(
 
   const relation: GradingRelationContext = resolveGradingRelationContext(named);
   if (subjectConceptId === null) {
-    return { sourceBlocks, sourceMaterial: undefined, relationExpected: false };
+    return {
+      sourceBlocks,
+      sourceMaterial: undefined,
+      relationExpected: false,
+      neighbourConceptId: undefined,
+    };
   }
 
   const subjectDefiningPassages: ConceptDefiningPassages = {
@@ -723,6 +748,7 @@ export async function resolveGradingSourceBlocks(
     sourceBlocks: flattenedSourceBlocks,
     sourceMaterial: material,
     relationExpected: relation.kind === 'relation',
+    neighbourConceptId: named?.neighbourConceptId,
   };
 }
 
@@ -782,6 +808,13 @@ interface ResolvedPrompt {
    * for this prompt, carried the same way as `sourceMaterial` above.
    */
   readonly relationExpected: boolean;
+  /**
+   * `ol-egov.141.89.6.75`: `resolveGradingSourceBlocks`'s own `neighbourConceptId` for this prompt
+   * (the causes partner's concept KEY, never its wording), carried to accept time the same way as
+   * `sourceMaterial` above so `computeAcceptGrading` can hand it to `deps.recordSoloGradeAndReview`.
+   * `undefined` when no partner resolved and for the free-form topic entry point.
+   */
+  readonly neighbourConceptId: string | undefined;
   /**
    * `[STY-9]` (`ol-l5og.18.19`): the seeding instrument's own `courseCode` (`../review/types.js`'s
    * `ReviewInstrumentCommon`) — real data already flowing into `resolveInstrumentPrompt`, never
@@ -1077,6 +1110,7 @@ export class ExplainBackModal extends Modal {
       // .sourceMaterial`'s own doc.
       sourceMaterial: resolvedGrading.sourceMaterial,
       relationExpected: resolvedGrading.relationExpected,
+      neighbourConceptId: resolvedGrading.neighbourConceptId,
       // `[STY-9]`: real, already-available instrument fields — see `ResolvedPrompt.courseCode`'s
       // own doc for why this is honest here and `null` for the freeform entry point below.
       courseCode: instrument.courseCode,
@@ -1132,6 +1166,7 @@ export class ExplainBackModal extends Modal {
         conceptIds,
         sourceMaterial: resolvedGrading.sourceMaterial,
         relationExpected: resolvedGrading.relationExpected,
+        neighbourConceptId: resolvedGrading.neighbourConceptId,
         // `[STY-9]`: a freeform topic has no seeding instrument, so genuinely no course to
         // report — see `ResolvedPrompt.courseCode`'s own doc.
         courseCode: null,
@@ -1163,6 +1198,7 @@ export class ExplainBackModal extends Modal {
       conceptIds,
       sourceMaterial: resolvedGrading.sourceMaterial,
       relationExpected: resolvedGrading.relationExpected,
+      neighbourConceptId: resolvedGrading.neighbourConceptId,
       // `[STY-9]`: same as the insufficient-notes branch above — no instrument, no course.
       courseCode: null,
       noteTitle: null,
@@ -1447,6 +1483,14 @@ export class ExplainBackModal extends Modal {
           // Always a real boolean on `prompt` (never itself `undefined`) —
           // always sent, same posture `answerEdits` takes.
           relationExpected: prompt.relationExpected,
+          // `ol-egov.141.89.6.75` (F5.3a, C5.11): the resolved partner's concept KEY, never its
+          // wording — the write records the neighbour's demonstrated use as a scheduling
+          // observation only when it holds this. Spread conditionally (absent, never an explicit
+          // `undefined` key under `exactOptionalPropertyTypes`) because no partner resolved for
+          // most prompts and for the free-form topic entry point.
+          ...(prompt.neighbourConceptId !== undefined
+            ? { neighbourConceptId: prompt.neighbourConceptId }
+            : {}),
           depthPass,
           // `[D-416]`: the link to the attempt this answer followed, sealed at
           // submit; absent for a first attempt, never a `null` key.

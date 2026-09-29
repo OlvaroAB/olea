@@ -100,9 +100,10 @@ describe('ol-egov.141.89.6.16: the accept-time recheck reuses the frozen build-t
     const body = bodyBetween('private async resolveTopicPrompt(', 'private async submitAnswer(');
     expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(topic\);/);
     // Widened from 200 to 400 chars when `ol-egov.141.89.6.50` appended
-    // `sourceMaterial`/`relationExpected` onto both constructed prompts.
+    // `sourceMaterial`/`relationExpected` onto both constructed prompts, and to 500 when
+    // `ol-egov.141.89.6.75` appended `neighbourConceptId` beside them.
     const promptConstructions =
-      body.match(/const prompt: ResolvedPrompt = \{[\s\S]{0,400}?\n\s*\};/g) ?? [];
+      body.match(/const prompt: ResolvedPrompt = \{[\s\S]{0,500}?\n\s*\};/g) ?? [];
     expect(promptConstructions).toHaveLength(2);
     for (const construction of promptConstructions) {
       expect(construction).toMatch(/query: topic,/);

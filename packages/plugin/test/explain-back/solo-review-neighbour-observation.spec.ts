@@ -276,9 +276,9 @@ describe('a relational attempt whose depth judge reports neighbour use (ol-egov.
   it('a neighbour key that never reached the write costs the attempt its observation and nothing else: the depth record is written whole, and the outcome says why', async () => {
     const attempt = await relationalAttempt();
 
-    // The state of the plugin today between this bead and the modal handing the key over: the
-    // material and the relational flag arrive, the key does not. Red before this bead: the write
-    // threw, and the attempt's depth record was lost.
+    // The defensive path, kept after the modal began handing the key over: the material and the
+    // relational flag arrive, the key does not (a caller that forgot it). Red before this bead: the
+    // write threw, and the attempt's depth record was lost.
     const { outcome, records, vault } = await write(
       wiringReplying(RELATIONAL_REPLY_USING_NEIGHBOUR),
       {
@@ -461,13 +461,7 @@ describe('the modal hands the neighbour key to the write (ol-egov.141.89.6.75)',
     expect(body).toMatch(/named = \{\s*neighbourConceptId,/);
   });
 
-  // HELD, `it.fails`, the way `ol-egov.141.89.6.74` held its proof: the lane that wrote this spec
-  // did not own `modal.ts` (another lane had just changed it), so the last hop is not built here.
-  // When the modal lane lands it (ResolvedGradingSourceBlocks and ResolvedPrompt carry the
-  // partner's neighbourConceptId beside sourceMaterial; the call below passes it), this goes red
-  // as an expected failure that passed, and `it.fails` becomes `it`. Until then the write records
-  // the depth grade and reports the observation as not recorded, which the tests above pin.
-  it.fails('the accepted-attempt call to recordSoloGradeAndReview carries prompt.neighbourConceptId beside the material', () => {
+  it('the accepted-attempt call to recordSoloGradeAndReview carries prompt.neighbourConceptId beside the material', () => {
     const start = modal.indexOf('this.deps.recordSoloGradeAndReview({');
     expect(start).toBeGreaterThan(-1);
     const end = modal.indexOf('});', start);
