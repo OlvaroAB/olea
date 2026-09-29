@@ -64,7 +64,19 @@
  * `packages/core/src/outcome/`.
  */
 
-import type { WorkerTaskTransport } from 'olea-core';
+import type {
+  PaperQuestionGroup,
+  PaperQuestionGroupKind,
+  PaperStimulus,
+  PaperStimulusForm,
+  PaperStimulusNotIdentifiedReason,
+  WorkerTaskTransport,
+} from 'olea-core';
+import {
+  PAPER_QUESTION_GROUP_KINDS,
+  PAPER_STIMULUS_FORMS,
+  PAPER_STIMULUS_NOT_IDENTIFIED_REASONS,
+} from 'olea-core';
 
 /** `TASK_IDS.OUTCOMES_EXTRACT`-to-be — see this file's module doc. Pinned by this adapter's own spec. */
 export const OUTCOMES_EXTRACT_TASK_ID = 'outcomes.extract.v1';
@@ -109,7 +121,16 @@ export interface OutcomesExtractReadRequest<TAnchor> {
 
 export interface OutcomesExtractReadResult<TAnchor> {
   readonly outcomes: readonly OutcomeCandidate<TAnchor>[];
-  readonly paperStructure: { readonly sections: readonly PaperSectionCandidate<TAnchor>[] };
+  readonly paperStructure: {
+    readonly sections: readonly PaperSectionCandidate<TAnchor>[];
+    /**
+     * The Worker's question groups (`ol-egov.141.89.7.21`), each anchor (and an identified
+     * stimulus's anchor) resolved onto the caller's own anchor. ABSENT when the response carried
+     * none: absent is not empty — an older Worker that never said is not a paper with no groups.
+     * Carried in memory only; where they are stored waits on `[D-429]`.
+     */
+    readonly questionGroups?: readonly PaperQuestionGroup<TAnchor>[];
+  };
 }
 
 /**
@@ -191,7 +212,11 @@ export class WorkerOutcomesExtractReader {
     const response = readResponseBody(body);
     const outcomes = readOutcomeProposals(response, passages);
     const sections = readSectionProposals(response, passages);
-    return { outcomes, paperStructure: { sections } };
+    const questionGroups = readQuestionGroupProposals(response, passages);
+    return {
+      outcomes,
+      paperStructure: questionGroups === undefined ? { sections } : { sections, questionGroups },
+    };
   }
 }
 
@@ -322,6 +347,116 @@ function toSectionCandidate<TAnchor>(
     `paper section ${index} ("${label}")`,
   );
   return { label, questionForm, itemCount, marks, anchor: anchorPassage.anchor };
+}
+
+function readQuestionGroupProposals<TAnchor>(
+  response: Record<string, unknown>,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+): readonly PaperQuestionGroup<TAnchor>[] | undefined {
+  const paperStructure = readResult(response).paperStructure;
+  const container =
+    typeof paperStructure === 'object' && paperStructure !== null
+      ? (paperStructure as Record<string, unknown>)
+      : {};
+  const raw = container.questionGroups;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new OutcomesExtractReaderError(
+      'WorkerOutcomesExtractReader: the Worker response carried a `result.paperStructure.questionGroups` that was not an array.',
+    );
+  }
+  return raw.map((entry, index) => toQuestionGroup(entry, passages, index));
+}
+
+function toQuestionGroup<TAnchor>(
+  raw: unknown,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  index: number,
+): PaperQuestionGroup<TAnchor> {
+  const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const describe = `question group ${index}`;
+  const { id, label, kind, parentGroupId, memberLabels, choose } = entry;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new OutcomesExtractReaderError(`WorkerOutcomesExtractReader: ${describe} carried no id.`);
+  }
+  if (typeof label !== 'string' || label.length === 0) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no label.`,
+    );
+  }
+  if (!(PAPER_QUESTION_GROUP_KINDS as readonly unknown[]).includes(kind)) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried an unknown kind.`,
+    );
+  }
+  if (
+    !Array.isArray(memberLabels) ||
+    memberLabels.length === 0 ||
+    !memberLabels.every((m) => typeof m === 'string' && m.length > 0)
+  ) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no valid memberLabels.`,
+    );
+  }
+  if (parentGroupId !== undefined && (typeof parentGroupId !== 'string' || parentGroupId === '')) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried an invalid parentGroupId.`,
+    );
+  }
+  if (
+    choose !== undefined &&
+    (typeof choose !== 'number' || !Number.isInteger(choose) || choose < 1)
+  ) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried an invalid choose.`,
+    );
+  }
+  const anchor = resolveAnchor(entry.anchorIndex, passages, describe).anchor;
+  return {
+    id,
+    kind: kind as PaperQuestionGroupKind,
+    label,
+    ...(parentGroupId !== undefined ? { parentGroupId } : {}),
+    memberLabels: memberLabels as string[],
+    ...(choose !== undefined ? { choose } : {}),
+    anchor,
+    stimulus: toStimulus(entry.stimulus, passages, describe),
+  };
+}
+
+/** An absent stimulus is unknown, never "none" — the Worker's own default, restated. */
+function toStimulus<TAnchor>(
+  raw: unknown,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  describe: string,
+): PaperStimulus<TAnchor> {
+  if (raw === undefined) return { status: 'not-identified' };
+  const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const { status, form, reason } = entry;
+  const validForm = (PAPER_STIMULUS_FORMS as readonly unknown[]).includes(form);
+  if (status === 'none') return { status: 'none' };
+  if (status === 'identified') {
+    if (!validForm) {
+      throw new OutcomesExtractReaderError(
+        `WorkerOutcomesExtractReader: ${describe} carried an identified stimulus with no valid form.`,
+      );
+    }
+    const anchor = resolveAnchor(entry.anchorIndex, passages, `${describe} stimulus`).anchor;
+    return { status: 'identified', form: form as PaperStimulusForm, anchor };
+  }
+  if (status === 'not-identified') {
+    const validReason = (PAPER_STIMULUS_NOT_IDENTIFIED_REASONS as readonly unknown[]).includes(
+      reason,
+    );
+    return {
+      status: 'not-identified',
+      ...(validForm ? { form: form as PaperStimulusForm } : {}),
+      ...(validReason ? { reason: reason as PaperStimulusNotIdentifiedReason } : {}),
+    };
+  }
+  throw new OutcomesExtractReaderError(
+    `WorkerOutcomesExtractReader: ${describe} carried a stimulus with an unknown status.`,
+  );
 }
 
 /**

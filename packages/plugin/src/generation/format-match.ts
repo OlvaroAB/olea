@@ -73,12 +73,14 @@ import type {
   AssessmentRecord,
   CalendarDay,
   QuestionBlock,
+  TextPaperQuestionGrouping,
   VaultPath,
   VaultSource,
 } from 'olea-core';
 import {
   assessmentFormatOf,
   calendarDayFromLocalDate,
+  groupMarkdownPastPaper,
   isCalendarDay,
   parseDocument,
   registerSources,
@@ -242,6 +244,12 @@ export interface FormatMatchDeps {
   readonly sourcesFolder?: VaultPath;
   /** Defaults to `() => new Date()`. Injectable so a caller (and this module's own spec) can pin "today" rather than racing the clock. */
   readonly now?: () => Date;
+  /**
+   * Receives the question groups (sections, choices, shared stimuli, parent questions) read from
+   * each markdown past paper this sweep segments, beside the splitter (`ol-egov.141.89.7.21`).
+   * In memory only: nothing here stores them — where they live waits on `[D-429]`. Omit to skip.
+   */
+  readonly onPaperGroups?: (sourcePath: VaultPath, grouping: TextPaperQuestionGrouping) => void;
 }
 
 /**
@@ -304,7 +312,10 @@ export async function buildFormatMatch(
     const pastPaperQuestions: QuestionBlock[] = [];
     for (const source of pastPaperSources) {
       const content = await deps.vault.read(source.path);
-      pastPaperQuestions.push(...segmentPastPaper(source.path, content).questions);
+      const segmentation = segmentPastPaper(source.path, content);
+      pastPaperQuestions.push(...segmentation.questions);
+      // The production caller of `groupMarkdownPastPaper` (`ol-egov.141.89.7.21`).
+      deps.onPaperGroups?.(source.path, groupMarkdownPastPaper(segmentation, content));
     }
 
     decisions.set(course, {

@@ -185,6 +185,98 @@ describe('WorkerOutcomesExtractReader — resolving paper sections back onto the
   });
 });
 
+describe('WorkerOutcomesExtractReader — question groups (ol-egov.141.89.7.21)', () => {
+  const TWO_PASSAGES = [
+    { text: 'Section B: answer ONE question.', anchor: fixtureAnchor('g1') },
+    { text: 'Table 1 shows the data.', anchor: fixtureAnchor('g2') },
+  ];
+  const read = async (result: unknown, passages = TWO_PASSAGES) =>
+    new WorkerOutcomesExtractReader({
+      transport: new RecordingTransport(() => okResponse(result)),
+    }).read({ documentKind: 'past-paper', passages });
+
+  it('carries groups through, resolving group and stimulus anchors onto the caller anchors', async () => {
+    const result = await read({
+      paperStructure: {
+        sections: [],
+        questionGroups: [
+          {
+            id: 'g1',
+            kind: 'choice',
+            label: 'Answer ONE',
+            memberLabels: ['4', '5'],
+            choose: 1,
+            anchorIndex: 1,
+            stimulus: { status: 'identified', form: 'table', anchorIndex: 2 },
+          },
+          {
+            id: 'g2',
+            kind: 'parent-question',
+            label: 'Question 4',
+            parentGroupId: 'g1',
+            memberLabels: ['4(a)'],
+            anchorIndex: 2,
+            stimulus: { status: 'not-identified', form: 'figure', reason: 'figure-not-in-text' },
+          },
+        ],
+      },
+    });
+    expect(result.paperStructure.questionGroups).toEqual([
+      {
+        id: 'g1',
+        kind: 'choice',
+        label: 'Answer ONE',
+        memberLabels: ['4', '5'],
+        choose: 1,
+        anchor: fixtureAnchor('g1'),
+        stimulus: { status: 'identified', form: 'table', anchor: fixtureAnchor('g2') },
+      },
+      {
+        id: 'g2',
+        kind: 'parent-question',
+        label: 'Question 4',
+        parentGroupId: 'g1',
+        memberLabels: ['4(a)'],
+        anchor: fixtureAnchor('g2'),
+        stimulus: { status: 'not-identified', form: 'figure', reason: 'figure-not-in-text' },
+      },
+    ]);
+  });
+
+  it('absent questionGroups stays absent (not an empty list); an empty list stays empty', async () => {
+    const absent = await read({ paperStructure: { sections: [] } });
+    expect('questionGroups' in absent.paperStructure).toBe(false);
+    const empty = await read({ paperStructure: { sections: [], questionGroups: [] } });
+    expect(empty.paperStructure.questionGroups).toEqual([]);
+  });
+
+  it('a group with no stimulus reads as not-identified, never none', async () => {
+    const result = await read({
+      paperStructure: {
+        questionGroups: [
+          { id: 'a', kind: 'section', label: 'Section A', memberLabels: ['1'], anchorIndex: 1 },
+        ],
+      },
+    });
+    expect(result.paperStructure.questionGroups?.[0]?.stimulus).toEqual({
+      status: 'not-identified',
+    });
+  });
+
+  it('rejects an unresolvable anchor, an unknown kind, and non-array groups', async () => {
+    const group = { id: 'a', kind: 'section', label: 'S', memberLabels: ['1'], anchorIndex: 1 };
+    await expect(
+      read({ paperStructure: { questionGroups: [{ ...group, anchorIndex: 9 }] } }),
+    ).rejects.toThrow(OutcomesExtractReaderError);
+    await expect(
+      read({ paperStructure: { questionGroups: [{ ...group, kind: 'bogus' }] } }),
+    ).rejects.toThrow(OutcomesExtractReaderError);
+    await expect(read({ paperStructure: { questionGroups: {} } })).rejects.toThrow(
+      OutcomesExtractReaderError,
+    );
+  });
+});
+
 describe('WorkerOutcomesExtractReader — availability mapping ([D-068]-shaped)', () => {
   it('maps a transport failure onto OutcomesExtractReaderUnavailableError("offline")', async () => {
     const transport = { send: async () => Promise.reject(new Error('network down')) };

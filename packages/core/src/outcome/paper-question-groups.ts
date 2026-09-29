@@ -62,8 +62,10 @@
  * each part on its own. It reads no metadata and logs nothing (D-005). Group labels are the paper's own
  * wording, which is her material: local only, never sent to telemetry.
  *
- * **Reachability.** No production caller yet; the consumer is built by `ol-egov.141.89.7.4`. The
- * barrel export (`../index.ts`) is left to the orchestrator, since that file is shared.
+ * **Reachability.** `groupMarkdownPastPaper` has its production caller in
+ * `packages/plugin/src/generation/format-match.ts` (`buildFormatMatch`, beside `segmentPastPaper`),
+ * carried in memory through `onPaperGroups`; no stored shape yet, which waits on `[D-429]`.
+ * The extracted-text sibling (`groupPlainTextPastPaper`) has no caller yet.
  */
 
 import type { CharRange, ExtractionResult } from '../extract/types.js';
