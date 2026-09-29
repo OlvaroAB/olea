@@ -206,8 +206,18 @@ export interface GapRow {
   readonly need?: NeedReading;
   /**
    * The assessment's declared demands not met now for this concept, passed
-   * through from `BuildGapViewInput.unmetDemands` — present exactly when the
-   * caller supplied them (`[D-349]`, open; `./demand.ts`).
+   * through from `BuildGapViewInput.unmetDemands` (`[D-349]`, ruled;
+   * `./demand.ts`). **Absent is not empty.** Present exactly when the supplier
+   * read this concept's declared demands: `[]` then means "read, and nothing
+   * left to meet", and a non-empty list names what no qualifying review shows
+   * now. A concept whose demands were not read carries no field at all, so
+   * "not yet known" never reads "all met" (`ol-egov.141.89.2.27`).
+   *
+   * **Data only, and never a reason.** It states a reading of her practice
+   * evidence. It does not say her material is insufficient, that the
+   * assessment's operation is unknown or unsupported, or that she cannot do
+   * it; no gap-view wording reads it (a row that would need new wording is
+   * held, `ol-egov.141.89.9.70`).
    */
   readonly unmetDemands?: readonly PaperDemand[];
   readonly readiness: ReadinessFactors;
@@ -311,11 +321,21 @@ export interface BuildGapViewInput {
   readonly need?: ReadonlyMap<string, NeedReading>;
   /**
    * Per concept KEY: the assessment's declared demands not met now
-   * (`./demand.ts`'s `demandsMetNow`, `[D-349]` open). Supplied, a concept
-   * with any unmet demand gets no recognition credit (the chain spec's
-   * section 2.5: the credit needs nothing unmet), and the row carries the
-   * list. Omitted means today's behaviour; nothing supplies it until declared
-   * demands reach the client (`ol-2zfj.153`).
+   * (`./demand.ts`'s `unmetDemandsByConcept`, which runs `demandsMetNow` under
+   * the ruled `'qualifying-review'` rule, `[D-349]`). Supplied, a concept with
+   * any unmet demand gets no recognition credit (the chain spec's section 2.5:
+   * the credit needs nothing unmet), and its row carries the list.
+   *
+   * **Absent is not empty, at both levels.** The map omitted means today's
+   * behaviour. A concept missing from a supplied map is a concept whose
+   * declared demands were NOT read: its row omits `unmetDemands`, and its
+   * credit is not touched, so an unread concept never reads "nothing unmet".
+   * An entry, even `[]`, means the demands were read.
+   *
+   * Its one production supplier is `plugin/src/gap/provider.ts`, which passes
+   * the map `unmetDemandsByConcept` builds. Declared demands do not reach that
+   * provider in production yet, so today the map it passes has no entry for
+   * any concept.
    */
   readonly unmetDemands?: ReadonlyMap<string, readonly PaperDemand[]>;
 }
@@ -416,8 +436,10 @@ function buildRow(
 
   // The credit needs nothing unmet (the attainment chain spec's section 2.5):
   // a supplied, non-empty unmet list withholds it whatever the quiz evidence.
-  const unmetDemands =
-    input.unmetDemands === undefined ? undefined : (input.unmetDemands.get(entry.conceptKey) ?? []);
+  // A concept missing from a supplied map was not read: it stays `undefined`
+  // (never `[]`), so its row carries no `unmetDemands` and its credit is
+  // untouched. Absent is not empty (`ol-egov.141.89.2.27`).
+  const unmetDemands = input.unmetDemands?.get(entry.conceptKey);
   const currentRecognition =
     unmetDemands !== undefined && unmetDemands.length > 0
       ? false

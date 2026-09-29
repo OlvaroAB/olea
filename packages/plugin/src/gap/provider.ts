@@ -41,7 +41,30 @@
  * every open, visibly, rather than hiding the cost behind a cache this
  * project has no persisted home for.
  *
- * ## Unavailable, for two different reasons, one state
+ * ## The demand rule's composition root (`ol-egov.141.89.2.27`, `[D-437]` B5, `[D-349]`)
+
+`buildGapView`'s `unmetDemands` input is supplied here and nowhere else. The chain is:
+
+1. `deps.readDeclaredDemands` returns the assessment's declared demands per concept KEY, present
+   only for a concept whose demands were read (see its doc). **Production passes no such reader
+   yet**: the examiner-scope stores (`[D-429]`) exist, but nothing turns them into per-concept
+   declared demands, so today every concept is unread.
+2. For the instruments that scored a concept with declared demands, `readInstrumentDemand`
+   (`[D-437]`'s reading, never throws) compares the instrument's target record with its CURRENT
+   block, and `projectInstrumentDemands` keeps the `declared` readings: `instrumentDemands`.
+   Instruments are read only when there is a declared demand for them to meet; with nothing
+   declared, the vault is not asked for a single target record.
+3. `unmetDemandsByConcept` (`olea-core`'s `gap/demand.ts`) runs the ruled `qualifying-review` rule
+   and answers **only for concepts whose declared demands were read**; the map goes to
+   `buildGapView` as `unmetDemands`, and a concept not in it carries no field on its row.
+   **Absent is not empty.**
+
+Nothing here writes: the reads assign no demand to any instrument (no backfill, `[D-277]` (f)),
+and the provider never names the target record's writer. Nothing here is worded: the view's copy
+reads no `unmetDemands`, and this bead adds no surface. A reader that throws is the same as one
+that read nothing, so a failing optional reader never takes the whole view down.
+
+## Unavailable, for two different reasons, one state
  *
  * `GapViewState` (`./view.ts`) is `{kind:'model', model} | {kind:'unavailable'}`
  * — two states, not three, and this module is not the place to widen that
@@ -56,12 +79,16 @@
  * does not make (`GapViewState` has no field to carry which case it was).
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   ConceptMaterialPresence,
   DisputeLogRecord,
   GapRow,
+  InstrumentDemandReading,
+  PaperDemand,
   RankOracleOptions,
   Scheduler,
+  VaultInstrumentRecord,
   VaultPath,
   VaultSource,
 } from 'olea-core';
@@ -72,10 +99,18 @@ import {
   composeOracleRanking,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  projectInstrumentDemands,
+  projectInstrumentValidity,
+  readInstrumentDemand,
   readReviewLogFile,
   readReviewLogHistory,
   reviewLogPath,
+  scoredConceptId,
 } from 'olea-core';
+// By module path, not the barrel: `unmetDemandsByConcept` is new in this bead and the barrel
+// (`packages/core/src/index.ts`) is not this bead's file. `scope-reading/persistence.ts` imports its
+// core modules the same way for the same reason; the barrel bead switches this to `olea-core`.
+import { unmetDemandsByConcept } from '../../../core/src/gap/demand.js';
 import {
   isStudyPlanConfigured,
   type ObsidianDataHost,
@@ -135,6 +170,25 @@ export interface CreateLocalGapProviderDeps {
    * without risking drift from another call site's instance.
    */
   readonly scheduler?: Scheduler;
+  /**
+   * `[D-437]` B5 (`ol-egov.141.89.2.27`), the assessment's declared demands, per concept KEY
+   * (`GapRow.conceptKey`), **present only for a concept whose demands were read** from the
+   * examiner-scope reading (`[D-429]`). The map is the gap view's question: for each concept in
+   * it, which of these demands does no qualifying review show now.
+   *
+   * **Absent is not empty.** Omitted, resolving `undefined`, or throwing all mean nothing was
+   * read, and every row then omits `unmetDemands`; a concept with no entry is not read as "asks
+   * nothing". An entry of `[]` means the concept was read and states no demand. Only a decided
+   * demand belongs here: an operation no word covers, a part whose demand could not be read, and
+   * material too thin for a known operation are three different things, none of them a
+   * `PaperDemand`, and none of them is ever supplied as one.
+   *
+   * **No production reader exists yet.** `main.ts` passes none, so this view shows no demand
+   * today; the per-concept reader over the `[D-429]` stores is the follow-up that fills it.
+   */
+  readonly readDeclaredDemands?: () => Promise<
+    ReadonlyMap<string, readonly PaperDemand[]> | undefined
+  >;
 }
 
 /**
@@ -171,6 +225,93 @@ async function disputesFromFiles(
 }
 
 /**
+ * The declared demands, or `undefined` (nothing read) when there is no reader or it failed. A
+ * failing optional reader must not take the whole view down, and must never read as "no demands".
+ */
+async function readDeclared(
+  deps: CreateLocalGapProviderDeps,
+): Promise<ReadonlyMap<string, readonly PaperDemand[]> | undefined> {
+  if (deps.readDeclaredDemands === undefined) return undefined;
+  try {
+    return await deps.readDeclaredDemands();
+  } catch (error) {
+    console.error('Olea: could not read the declared demands; the gap view shows none', error);
+    return undefined;
+  }
+}
+
+/**
+ * `instrumentDemands` (`[D-437]`): every instrument that scored a concept with declared demands,
+ * read against its CURRENT block and projected to `declared` readings only. An instrument the
+ * vault no longer holds has no block to compare and declares none.
+ */
+async function readInstrumentDemands(
+  vault: VaultSource,
+  records: readonly VaultInstrumentRecord[],
+  entries: readonly ReviewLogEntry[],
+  askedConcepts: ReadonlySet<string>,
+): Promise<ReadonlyMap<string, readonly PaperDemand[]>> {
+  const wanted = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== 'review') continue;
+    const scored = scoredConceptId(entry.conceptIds);
+    if (scored !== undefined && askedConcepts.has(scored)) wanted.add(entry.instrumentId);
+  }
+  const blocks = new Map(
+    records
+      .filter((record) => wanted.has(record.instrumentId))
+      .map((record) => [
+        record.instrumentId,
+        record.instrumentType === 'mcq' ? record.mcq : record.card,
+      ]),
+  );
+  const readings = new Map<string, InstrumentDemandReading>(
+    await Promise.all(
+      [...blocks].map(
+        async ([instrumentId, block]) =>
+          [instrumentId, await readInstrumentDemand(vault, instrumentId, block)] as const,
+      ),
+    ),
+  );
+  return projectInstrumentDemands(readings);
+}
+
+/**
+ * The gap view's `unmetDemands`: per concept whose declared demands were read, the demands no
+ * qualifying review shows now (`[D-349]`). A concept not read has no entry. With nothing declared
+ * the map is empty and no instrument is read.
+ */
+async function unmetDemandsFor(input: {
+  readonly vault: VaultSource;
+  readonly declaredDemands: ReadonlyMap<string, readonly PaperDemand[]> | undefined;
+  readonly records: readonly VaultInstrumentRecord[];
+  readonly entries: readonly ReviewLogEntry[];
+  readonly disputes: readonly DisputeLogRecord[];
+  readonly scheduler: Scheduler;
+  readonly now: Date;
+}): Promise<ReadonlyMap<string, readonly PaperDemand[]>> {
+  const { declaredDemands } = input;
+  // Nothing read: no concept can be asked, so no fold runs and no instrument is looked up.
+  if (declaredDemands === undefined || declaredDemands.size === 0) return new Map();
+  const asked = new Set<string>(
+    [...declaredDemands].filter(([, demands]) => demands.length > 0).map(([key]) => key),
+  );
+  const instrumentDemands =
+    asked.size === 0
+      ? new Map<string, readonly PaperDemand[]>()
+      : await readInstrumentDemands(input.vault, input.records, input.entries, asked);
+  return unmetDemandsByConcept({
+    declaredDemands,
+    instrumentDemands,
+    entries: input.entries,
+    // The same dispute-aware projection `composeOracleRanking` folds (it does not return it).
+    validity: projectInstrumentValidity(input.entries, input.disputes),
+    scheduler: input.scheduler,
+    now: input.now,
+  });
+}
+
+/**
  * A `GapViewDeps` whose `load` composes a fresh `GapViewModel` from the vault
  * and the review log, entirely on-device, no Worker call — the gap-view twin
  * of `createLocalStudyPlanProvider`.
@@ -202,11 +343,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // concurrently rather than paying their latency serially, the same
         // discipline `plan/provider.ts` uses for its own three-way
         // `Promise.all`.
-        const [{ entries, files }, enumeration, options] = await Promise.all([
+        const [{ entries, files }, enumeration, options, declaredDemands] = await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           // `[D-357]`: the permanent concept key, the one her review log carries.
           enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
           deps.readRankWeights?.() ?? Promise.resolve(undefined),
+          readDeclared(deps),
         ]);
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
@@ -241,11 +383,27 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
             instrumentCountsByNotePath(enumeration.records),
           );
 
+        // `[D-437]` B5, `[D-349]`: the demand rule's two inputs, supplied here and nowhere else —
+        // the instruments' declared demands (read through the target-record reading) and the
+        // assessment's, per concept. A concept whose demands were not read has no entry (absent is
+        // not empty), so today, with no declared-demands reader in production, no row carries the
+        // field. See the module doc's section on the composition root.
+        const unmetDemands = await unmetDemandsFor({
+          vault: deps.vault,
+          declaredDemands,
+          records: enumeration.records,
+          entries,
+          disputes,
+          scheduler,
+          now,
+        });
+
         const model = buildGapView({
           ranking,
           assessments: edges.assessmentsRead.records,
           mastery,
           materialPresence,
+          unmetDemands,
           // `tier3.sourceCoverage`, unmodified — `ol-cvsc`'s scope statement
           // (`GapViewModel.scope`) is only as honest as this pass-through.
           // N-013 mutation test: deleting this line and passing `[]` instead

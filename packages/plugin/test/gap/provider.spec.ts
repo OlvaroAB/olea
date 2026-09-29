@@ -11,20 +11,29 @@
  * the honest pass-through of `sourceCoverage` into `model.scope`.
  */
 import { studyPlanEnvelope } from 'olea-contracts';
-import type { Scheduler } from 'olea-core';
+import type { PaperDemand, Scheduler } from 'olea-core';
 import {
   createFsrsScheduler,
   daysBetween,
+  enumerateVaultInstruments,
   extractConcepts,
+  instrumentTargetStorePath,
+  questionBindingOf,
   type RetrievabilityInput,
   type RetrievabilityOutput,
+  writeInstrumentTarget,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE,
   gapRowBasisKey,
+  gapRowLine,
+  masteryGapLine,
+  masteryGapMeta,
+  masteryGapNarrative,
   OBJECTIVES_ATTRIBUTION_CLAUSE,
   rankedCourseFraming,
+  readinessNote,
 } from '../../src/gap/copy.js';
 import { createLocalGapProvider } from '../../src/gap/provider.js';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
@@ -993,5 +1002,349 @@ describe("createLocalGapProvider — threads the ranking edges' evidence bases t
     const sentence = framing.join(' ');
     expect(sentence).toContain(ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE);
     expect(sentence).not.toContain(OBJECTIVES_ATTRIBUTION_CLAUSE);
+  });
+});
+
+/**
+ * `ol-egov.141.89.2.27` (B5, `[D-437]` design section 4.7 and 4.8, `[D-349]`): the demand rule's
+ * composition root. The gap view's provider reads each instrument's demand through the B1 reading
+ * (`readInstrumentDemand` against the instrument's CURRENT block), projects it, and gives the
+ * ruled rule the declared demands, so each concept whose declared demands were read carries the
+ * demands not met now on its row. A concept whose declared demands were not read carries
+ * NOTHING: absent is not empty.
+ *
+ * The declared demands come through `readDeclaredDemands`, which production does not pass yet
+ * (the examiner-scope reading has no per-concept reader), so the first describe below is what
+ * production runs today. Target records are written here with the writer, in a spec file; the
+ * provider's own source never names it.
+ */
+describe('createLocalGapProvider — the demand rule, live ([D-437] B5, [D-349])', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+  const CURRENT = fixedRetrievabilityScheduler(1);
+  const STALE = fixedRetrievabilityScheduler(0.1);
+
+  /** The fixture vault with one independent, successful review of its one card, yesterday. */
+  async function reviewedCardWorld() {
+    const vault = gapVault();
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const record = enumeration.records[0];
+    if (record === undefined || record.instrumentType !== 'qa') {
+      throw new Error('fixture vault has no card');
+    }
+    const conceptKey = record.conceptIds[0];
+    if (conceptKey === undefined) throw new Error('fixture card names no concept');
+    await vault.write(
+      '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+      `${JSON.stringify({
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'r1',
+        timestamp: '2026-08-09T09:00:00-04:00',
+        instrumentId: record.instrumentId,
+        instrumentType: 'qa',
+        conceptIds: [conceptKey],
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['qa'],
+          planVersion: null,
+        },
+      })}\n`,
+    );
+    async function declare(demand: PaperDemand): Promise<void> {
+      await writeInstrumentTarget(vault, {
+        instrumentId: record?.instrumentId ?? '',
+        declaredDemand: demand,
+        origin: 'heading-cue',
+        questionBinding: await questionBindingOf(
+          record?.instrumentType === 'qa' ? record.card : { type: 'qa', front: '', back: '' },
+        ),
+        authoredAt: '2026-08-01T10:00:00.000Z',
+        generator: { taskId: 'cards.generate.v1', promptVersion: '1.8.0' },
+      });
+    }
+    return { vault, conceptKey, instrumentId: record.instrumentId, declare };
+  }
+
+  type Loaded = Awaited<ReturnType<ReturnType<typeof createLocalGapProvider>['load']>>;
+
+  function widgetRow(state: Loaded) {
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    if (row === undefined) throw new Error('expected the Widget theory row');
+    return row;
+  }
+
+  function providerFor(
+    vault: ReturnType<typeof gapVault>,
+    extra: Partial<Parameters<typeof createLocalGapProvider>[0]> = {},
+  ) {
+    return createLocalGapProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler: CURRENT,
+      ...extra,
+    });
+  }
+
+  describe('the declared demands were read: each concept carries what is not met now', () => {
+    it('a card declaring recall-a-fact, reviewed and current, meets it and leaves calculate unmet', async () => {
+      const world = await reviewedCardWorld();
+      await world.declare('recall-a-fact');
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['recall-a-fact', 'calculate'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual(['calculate']);
+    });
+
+    it('a card declaring the demand meets it: the row carries [], because the demands were read', async () => {
+      const world = await reviewedCardWorld();
+      await world.declare('calculate');
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () => new Map([[world.conceptKey, ['calculate'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual([]);
+    });
+
+    it('an instrument with no target record is unspecified: its success meets nothing', async () => {
+      const world = await reviewedCardWorld();
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['recall-a-fact'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual(['recall-a-fact']);
+      // Reading assigned it nothing.
+      expect(await world.vault.exists(instrumentTargetStorePath(world.instrumentId))).toBe(false);
+    });
+
+    it('a success that is no longer current (the ruled qualifying-review rule) does not meet it', async () => {
+      const world = await reviewedCardWorld();
+      await world.declare('recall-a-fact');
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          scheduler: STALE,
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['recall-a-fact'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual(['recall-a-fact']);
+    });
+
+    it('a concept whose demands were read but has no review at all has every declared demand unmet', async () => {
+      const vault = gapVault();
+      const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+        (concept) => concept.name === 'Widget theory',
+      )?.key;
+      if (key === undefined) throw new Error('fixture vault has no Widget theory concept');
+      const row = widgetRow(
+        await providerFor(vault, {
+          readDeclaredDemands: async () => new Map([[key, ['recall-a-fact'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual(['recall-a-fact']);
+    });
+
+    it('a concept the reader named no demands for is absent from the row, never []', async () => {
+      const world = await reviewedCardWorld();
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([['concept-key1:some-other-concept', ['calculate'] as const]]),
+        }).load(),
+      );
+      expect(row).not.toHaveProperty('unmetDemands');
+    });
+  });
+
+  describe('a multiple-choice instrument is read against its own block (row 38)', () => {
+    /** The fixture plus a second note holding one multiple-choice block on the same concept, reviewed successfully yesterday. */
+    async function reviewedQuizWorld() {
+      const vault = gapVault();
+      await vault.write(
+        'Notes/two.md',
+        [
+          '---',
+          'topic: [Widget theory]',
+          'course: TESTC101',
+          '---',
+          '',
+          '```olea-mcq',
+          'stem: Which one is it?',
+          'answer: Alpha',
+          'distractor: Beta',
+          'distractor: Gamma',
+          '```',
+          '',
+        ].join('\n'),
+      );
+      const enumeration = await enumerateVaultInstruments(vault, {
+        concepts: { stampConceptKeys: true },
+      });
+      const record = enumeration.records.find((r) => r.instrumentType === 'mcq');
+      if (record === undefined || record.instrumentType !== 'mcq') {
+        throw new Error('fixture vault has no multiple-choice block');
+      }
+      const conceptKey = record.conceptIds[0];
+      if (conceptKey === undefined) throw new Error('fixture block names no concept');
+      await vault.write(
+        '.olea/reviews/2026-08-09.olea-testdevice1.jsonl',
+        `${JSON.stringify({
+          schemaVersion: 5,
+          kind: 'review',
+          eventId: 'q1',
+          timestamp: '2026-08-09T09:00:00-04:00',
+          instrumentId: record.instrumentId,
+          instrumentType: 'mcq',
+          conceptIds: [conceptKey],
+          rating: 'good',
+          wasUnsure: false,
+          durationMs: 1200,
+          selectionContext: {
+            dueState: 'due',
+            examProximity: null,
+            yieldRank: null,
+            instrumentTypesOffered: ['mcq'],
+            planVersion: null,
+          },
+        })}\n`,
+      );
+      async function declare(demand: PaperDemand, origin: 'sweep' | 'heading-cue') {
+        await writeInstrumentTarget(vault, {
+          instrumentId: record?.instrumentId ?? '',
+          declaredDemand: demand,
+          origin,
+          questionBinding: await questionBindingOf(
+            record?.instrumentType === 'mcq' ? record.mcq : { type: 'mcq', stem: '', answer: '' },
+          ),
+          authoredAt: '2026-08-01T10:00:00.000Z',
+          generator: { taskId: 'quiz.generate.v1', promptVersion: '2.4.0' },
+        });
+      }
+      return { vault, conceptKey, declare };
+    }
+
+    it("the sweep's recall intent on a multiple-choice block is intent that meets nothing: a quiz answer never shows unaided recall", async () => {
+      const world = await reviewedQuizWorld();
+      await world.declare('recall-a-fact', 'sweep');
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['recall-a-fact'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual(['recall-a-fact']);
+    });
+
+    it('a multiple-choice block declaring another demand meets it, since recognition has no ladder', async () => {
+      const world = await reviewedQuizWorld();
+      await world.declare('compare-or-choose', 'heading-cue');
+      const row = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['compare-or-choose'] as const]]),
+        }).load(),
+      );
+      expect(row.unmetDemands).toEqual([]);
+    });
+  });
+
+  describe('the declared demands were not read (production today): absent is not empty', () => {
+    it('with no reader, no row carries unmetDemands, and no target record is even looked for', async () => {
+      const world = await reviewedCardWorld();
+      await world.declare('recall-a-fact');
+      const touched: string[] = [];
+      const exists = world.vault.exists.bind(world.vault);
+      const read = world.vault.read.bind(world.vault);
+      world.vault.exists = async (path) => {
+        touched.push(path);
+        return exists(path);
+      };
+      world.vault.read = async (path) => {
+        touched.push(path);
+        return read(path);
+      };
+      const row = widgetRow(await providerFor(world.vault).load());
+      expect(row).not.toHaveProperty('unmetDemands');
+      expect(touched.filter((path) => path.startsWith('.olea/instrument-targets'))).toEqual([]);
+    });
+
+    it('a reader that resolves undefined (nothing read) reads the same as no reader', async () => {
+      const world = await reviewedCardWorld();
+      const row = widgetRow(
+        await providerFor(world.vault, { readDeclaredDemands: async () => undefined }).load(),
+      );
+      expect(row).not.toHaveProperty('unmetDemands');
+    });
+
+    it('a reader that throws degrades to nothing read: the view still composes, and shows no demand', async () => {
+      const world = await reviewedCardWorld();
+      const state = await providerFor(world.vault, {
+        readDeclaredDemands: async () => {
+          throw new Error('simulated reader failure');
+        },
+      }).load();
+      expect(state.kind).toBe('model');
+      expect(widgetRow(state)).not.toHaveProperty('unmetDemands');
+    });
+  });
+
+  describe('what she sees does not change (no new wording; D-414 guards are ol-egov.141.89.9.70)', () => {
+    it('every line the view writes for a row is byte-identical whether or not the row carries unmet demands', async () => {
+      const world = await reviewedCardWorld();
+      await world.declare('recall-a-fact');
+      const without = widgetRow(await providerFor(world.vault).load());
+      const withUnmet = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () =>
+            new Map([[world.conceptKey, ['recall-a-fact', 'calculate'] as const]]),
+        }).load(),
+      );
+      expect(withUnmet.unmetDemands).toEqual(['calculate']);
+      const wording = (row: typeof without) =>
+        JSON.stringify([
+          gapRowLine(row),
+          masteryGapLine(row),
+          masteryGapMeta(row),
+          masteryGapNarrative(row),
+          readinessNote(row),
+        ]);
+      expect(wording(withUnmet)).toBe(wording(without));
+    });
+
+    it('T9 at the view: target records and declared demands change unmetDemands only, never the ranking or the mastery reading', async () => {
+      const world = await reviewedCardWorld();
+      const baseline = widgetRow(await providerFor(world.vault).load());
+      await world.declare('recall-a-fact');
+      const live = widgetRow(
+        await providerFor(world.vault, {
+          readDeclaredDemands: async () => new Map([[world.conceptKey, ['calculate'] as const]]),
+        }).load(),
+      );
+      expect(live.unmetDemands).toEqual(['calculate']);
+      expect(live.masteryState).toBe(baseline.masteryState);
+      expect(live.priorityScore).toBe(baseline.priorityScore);
+      expect(live.assessmentRelevance).toBe(baseline.assessmentRelevance);
+      expect(live.oracleRank).toBe(baseline.oracleRank);
+      expect(live.rank).toBe(baseline.rank);
+      expect(live.gapScore).toBe(baseline.gapScore);
+    });
   });
 });

@@ -5,6 +5,8 @@ import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import { buildCoursePopulation } from '../coverage/population.js';
 import type { CoursePopulationInput } from '../coverage/types.js';
+import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import type { PaperDemand } from '../oracle/paper-types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
 import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -565,5 +567,117 @@ describe('the gap view gate takes the population where a course declares a scope
     const scope = withPopulation([population({ documents: [], declarations: [] })]);
     expect(scope.canStateExhaustiveness).toBe(true);
     expect(scope.declaredUnitCount).toBeNull();
+  });
+});
+
+// `ol-egov.141.89.2.27` (B5), test T12 (`[D-437]` design section 4.8, `[D-349]`): the gate on the
+// recognition credit, and "absent is not empty". A concept the supplier did not read declared
+// demands for is omitted from a supplied map, and its row then carries NO `unmetDemands` at all:
+// `[]` would read "nothing unmet" for a concept whose demands nobody read (the attainment chain
+// spec's "an empty set standing for no demands when nothing was read reads not yet known").
+// Ids are structural placeholders (INV-3).
+describe('unmetDemands: a non-empty list withholds credit, and absent is not empty (T12)', () => {
+  const QUIZ_ASSESSMENT: AssessmentRecord = {
+    path: ASSESSMENT_PATH,
+    course: 'CRS101',
+    type: 'Quiz',
+    weight: 20,
+    weightRaw: '20',
+    due: '2026-09-01',
+    status: 'todo',
+  };
+  const PRESENCE = new Map<string, ConceptMaterialPresence>([
+    ['Alpha', { notePaths: ['05 Zettelkasten/Alpha.md' as VaultPath], instrumentCount: 3 }],
+    ['Beta', { notePaths: ['05 Zettelkasten/Beta.md' as VaultPath], instrumentCount: 3 }],
+  ]);
+
+  function pastRecognition(conceptId: string): ConceptMasteryResult {
+    return {
+      conceptId,
+      state: 'sprout',
+      evidence: {
+        scoredEventCount: 1,
+        scoredSuccessCount: 1,
+        explainBackAttempts: 0,
+        tiersPracticed: { recognition: true, recall: false, explanation: false },
+        tiersSucceeded: { recognition: true, recall: false, explanation: false },
+        gradedExplainBackCount: 0,
+        recognitionOnly: true,
+        successfulScoredDays: 1,
+        deepestSoloLevel: null,
+        depthGateCleared: false,
+        topStageQualified: false,
+      },
+    };
+  }
+
+  function rowsFor(unmetDemands?: ReadonlyMap<string, readonly PaperDemand[]>) {
+    const view = buildGapView({
+      ranking: ranking([entry('Alpha', 1, 1), entry('Beta', 2, 1)]),
+      assessments: [QUIZ_ASSESSMENT],
+      mastery: new Map([
+        ['Alpha', pastRecognition('Alpha')],
+        ['Beta', pastRecognition('Beta')],
+      ]),
+      materialPresence: PRESENCE,
+      sourceCoverage: COVERAGE,
+      currentRecognition: new Map([
+        ['Alpha', true],
+        ['Beta', true],
+      ]),
+      ...(unmetDemands !== undefined ? { unmetDemands } : {}),
+    });
+    const course = view.courses[0];
+    const rows = course?.status === 'ranked' ? course.rows : [];
+    const byKey = (key: string) => {
+      const row = rows.find((r) => r.conceptKey === key);
+      if (row === undefined) throw new Error(`no row for ${key}`);
+      return row;
+    };
+    return { alpha: byKey('Alpha'), beta: byKey('Beta') };
+  }
+
+  it('a non-empty unmet list withholds the credit and rides the row', () => {
+    const { alpha, beta } = rowsFor(new Map([['Alpha', ['calculate'] as const]]));
+    expect(alpha.readiness.applied).toBe(false);
+    expect(alpha.unmetDemands).toEqual(['calculate']);
+    // The other concept's evidence is not touched by Alpha's unmet demand.
+    expect(beta.readiness.applied).toBe(true);
+  });
+
+  it('a concept the supplier read with nothing unmet keeps its credit and carries the empty list: read, and nothing left to meet', () => {
+    const { alpha } = rowsFor(new Map([['Alpha', []]]));
+    expect(alpha.readiness.applied).toBe(true);
+    expect(alpha.unmetDemands).toEqual([]);
+  });
+
+  it('a concept missing from a supplied map has no unmetDemands on its row, never []; its credit is untouched', () => {
+    const { alpha, beta } = rowsFor(new Map([['Alpha', ['calculate'] as const]]));
+    expect(beta).not.toHaveProperty('unmetDemands');
+    expect(beta.unmetDemands).toBeUndefined();
+    expect(beta.readiness.applied).toBe(true);
+    // The read concept still carries its own list beside it.
+    expect(alpha.unmetDemands).toEqual(['calculate']);
+  });
+
+  it('a map supplied for no concept at all (nothing was read anywhere) leaves every row without the field', () => {
+    const { alpha, beta } = rowsFor(new Map());
+    expect(alpha).not.toHaveProperty('unmetDemands');
+    expect(beta).not.toHaveProperty('unmetDemands');
+    expect(alpha.readiness.applied).toBe(true);
+    expect(beta.readiness.applied).toBe(true);
+  });
+
+  it('an omitted input is today: no row carries the field and the credit reads as it did', () => {
+    const { alpha, beta } = rowsFor();
+    expect(alpha).not.toHaveProperty('unmetDemands');
+    expect(beta).not.toHaveProperty('unmetDemands');
+    expect(alpha.readiness.applied).toBe(true);
+  });
+
+  it('an unread concept and a read-and-met concept are told apart on the row (absent versus [])', () => {
+    const { alpha, beta } = rowsFor(new Map([['Alpha', []]]));
+    expect(alpha.unmetDemands).toEqual([]);
+    expect(beta.unmetDemands).toBeUndefined();
   });
 });
