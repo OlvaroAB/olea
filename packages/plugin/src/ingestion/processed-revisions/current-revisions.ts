@@ -70,11 +70,11 @@ export interface CurrentRevisionsDeps {
 }
 
 /** True for a path with a dot-prefixed segment: Olea's own layer, Obsidian's config, the trash. Never her material. */
-function isHidden(path: VaultPath): boolean {
+export function isHidden(path: VaultPath): boolean {
   return path.split('/').some((segment) => segment.startsWith('.'));
 }
 
-function isMarkdown(path: VaultPath): boolean {
+export function isMarkdown(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
 }
 
@@ -118,6 +118,20 @@ function stateOfManifest(manifest: UnitManifest): ProcessingState {
   }
 }
 
+/**
+ * A source's verified reading: its fingerprint (the manifest's revision digest, the same
+ * `hashContent` a queue job is keyed by) and its folded state. `null` for the unknown manifest
+ * (digest `unverified`): nothing has read these bytes, so there is nothing to say about them. The
+ * one fold the rebuild and a job settling both use, so a version recorded when its job finished and
+ * the same version found later read the same.
+ */
+export function verifiedManifestRevision(
+  manifest: UnitManifest,
+): { readonly fingerprint: string; readonly state: ProcessingState } | null {
+  if (manifest.revisionDigest === UNVERIFIED_REVISION_DIGEST) return null;
+  return { fingerprint: manifest.revisionDigest, state: stateOfManifest(manifest) };
+}
+
 /** Every course file the vault holds now, with its fingerprint and state. Rejects if any could not be read. */
 export async function listCurrentRevisions(
   deps: CurrentRevisionsDeps,
@@ -150,13 +164,9 @@ export async function listCurrentRevisions(
     const course = courseFromPath(path, coursesFolder);
     if (course === undefined) continue;
     const manifest = manifests?.get(path);
-    if (manifest !== undefined && manifest.revisionDigest !== UNVERIFIED_REVISION_DIGEST) {
-      out.push({
-        path,
-        courses: [course],
-        fingerprint: manifest.revisionDigest,
-        state: stateOfManifest(manifest),
-      });
+    const verified = manifest === undefined ? null : verifiedManifestRevision(manifest);
+    if (verified !== null) {
+      out.push({ path, courses: [course], ...verified });
       continue;
     }
     // No verified reading of these bytes: fingerprint them here. Pending when a reading exists but

@@ -22,7 +22,6 @@ import {
   type ConfusionRoutingDecision,
   type ConfusionRoutingInput,
   type CourseDetectionProposal,
-  calendarDayFromLocalDate,
   computeAllConceptMastery,
   computeWindowDeficit,
   corroborateConfusionPairings,
@@ -43,10 +42,7 @@ import {
   loadCachedStudyPlan,
   type MisconceptionResolutionEvidenceEvent,
   type NonAttemptLogRecordInput,
-  notePathCourses,
   type PendingExplainBackGrading,
-  parseDocument,
-  parseFrontmatter,
   pastSessionsFromReviewLog,
   pickNextExplainBackInvitation,
   projectRegisteredFiles,
@@ -54,7 +50,6 @@ import {
   type RegistryOverrides,
   type RelationSet,
   readConceptKeyCanonicalIndex,
-  readList,
   readReviewLogFile,
   readReviewLogHistory,
   refreshStudyPlan,
@@ -182,6 +177,11 @@ import {
   type ProcessNowAction,
   processNowNotice,
 } from './ingestion/process-now.js';
+import {
+  createProcessedRevisionFeed,
+  type ProcessedRevisionFeed,
+} from './ingestion/processed-revisions/feed.js';
+import { ObsidianProcessedRevisionStore } from './ingestion/processed-revisions/store.js';
 import { ObsidianQueueStore } from './ingestion/queue-store.js';
 import {
   buildFirstReadFolderViews,
@@ -301,7 +301,6 @@ import {
   localToday,
   readReviewHistory,
 } from './today/data-source.js';
-import { ObsidianMaterialArrivalStore } from './today/material-arrival-store.js';
 import { refreshOpenTodayViews } from './today/refresh.js';
 import { ObsidianTermWindowStore } from './today/term-window-store.js';
 import { TodayView, VIEW_TYPE_OLEA_TODAY } from './today/view.js';
@@ -722,13 +721,20 @@ export default class OleaPlugin extends Plugin {
    */
   private citationHashStore: ObsidianCitationHashStore | null = null;
   /**
-   * F6.9's per-course material-arrival timestamps (`ol-v7r5.6`) — a local
-   * `data.json` projection, fed by `recordMaterialArrivalIfObserved` below on
-   * the same materiality trigger path as `this.materiality`. Built
-   * unconditionally in `onload`, same posture as `materiality` itself: a
-   * local persisted store needs no Worker token.
+   * F6.9's processed-revision record (`[D-426]`, `ol-egov.141.89.11.27`) — a local `data.json`
+   * projection holding, per file version, its fingerprint, the day it was first processed and
+   * its processing state; read by `today/data-source.ts`'s `createRhythmSource`. Replaced the
+   * verdict-gated per-course arrival store. Built unconditionally in `onload`, same posture as
+   * `materiality` itself: a local persisted store needs no Worker token.
    */
-  private materialArrivals: ObsidianMaterialArrivalStore | null = null;
+  private processedRevisions: ObsidianProcessedRevisionStore | null = null;
+  /**
+   * What fills `processedRevisions`: called at each processing moment (a note clearing the free
+   * checks, a drained pending edit, an embedded source queued and settled) and started once to
+   * rebuild the record from current content. Never throws, never blocks its caller
+   * (`ingestion/processed-revisions/feed.ts`).
+   */
+  private processedRevisionFeed: ProcessedRevisionFeed | null = null;
   /**
    * F6.9's asked-once term window (`ol-v7r5.6`) — read by
    * `today/data-source.ts`'s `createRhythmSource` on every panel open.
@@ -1478,10 +1484,10 @@ export default class OleaPlugin extends Plugin {
             // unconditionally in `onload`, same as `materiality` itself, so
             // this is absent only before `onload` has run — never in a
             // reachable production render.
-            ...(this.materialArrivals !== null && this.termWindowStore !== null
+            ...(this.processedRevisions !== null && this.termWindowStore !== null
               ? {
                   rhythm: createRhythmSource({
-                    materialArrivals: this.materialArrivals,
+                    processedRevisions: this.processedRevisions,
                     termWindow: this.termWindowStore,
                   }),
                 }
@@ -2041,6 +2047,23 @@ export default class OleaPlugin extends Plugin {
       },
     });
 
+    // `[D-426]` (`ol-egov.141.89.11.27`, row 25 of the 2026-09-29 rulings): the processed-revision
+    // record and its feed, built the instant `this.ingestion` exists. Not before: the rebuild asks
+    // the unit manifest to enumerate sources, and `extractOptions` above reads `this.ingestion`, so
+    // an earlier start would enumerate with the wrong routing. The rebuild is not awaited (it reads
+    // the vault and the manifest's reader boundary); every processing moment waits for it inside
+    // the feed. Its callers: `evaluateMaterialityChange` and `drainPendingMaterialityEdits` (notes),
+    // the two enqueuers below (an embedded source queued) and the two ticks (its job settled).
+    const processedRevisions = new ObsidianProcessedRevisionStore(this, this.now);
+    const processedRevisionFeed = createProcessedRevisionFeed({
+      store: processedRevisions,
+      vault,
+      manifestsFor: (paths) => unitManifests.manifestsFor(paths),
+    });
+    this.processedRevisions = processedRevisions;
+    this.processedRevisionFeed = processedRevisionFeed;
+    void processedRevisionFeed.start();
+
     // `ol-0r92.21` [D-152]: the manual process-now timing override, built the
     // instant `this.ingestion` exists — it needs the real engine's own
     // `enqueue`/`tick` (see `process-now.ts`'s module doc for why it cannot,
@@ -2050,8 +2073,12 @@ export default class OleaPlugin extends Plugin {
     const ingestionForProcessNow = this.ingestion;
     this.processNowAction = createProcessNowAction({
       vault,
-      enqueuer: ingestionForProcessNow.engine,
-      tick: () => ingestionForProcessNow.engine.tick(),
+      enqueuer: processedRevisionFeed.observeEnqueues(ingestionForProcessNow.engine),
+      tick: async () => {
+        const ran = await ingestionForProcessNow.engine.tick();
+        void processedRevisionFeed.jobRan(ran, ingestionForProcessNow.engine.list());
+        return ran;
+      },
       onAuthoredNoteUnits: (units) => this.onUnitsLanded(units),
       isOnline: () => navigator.onLine,
     });
@@ -2100,7 +2127,7 @@ export default class OleaPlugin extends Plugin {
     this.register(
       buildIngestionArrivalWatch({
         vault,
-        enqueuer: this.ingestion.engine,
+        enqueuer: processedRevisionFeed.observeEnqueues(this.ingestion.engine),
         watch: (handler) => vault.watch(handler),
         clock: { now: () => this.now().getTime() },
       }),
@@ -2258,7 +2285,9 @@ export default class OleaPlugin extends Plugin {
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`
     // above — no Worker token needed for either.
-    this.materialArrivals = new ObsidianMaterialArrivalStore(this);
+    //
+    // `[D-426]`: the arrivals half is the processed-revision record, built with its feed right
+    // after `this.ingestion` (`buildIngestionRunner` above), where its callers are wired.
     this.termWindowStore = new ObsidianTermWindowStore(this);
 
     // `ol-r5j4`: prime the registry-overrides cache once at load — see this
@@ -2404,12 +2433,14 @@ export default class OleaPlugin extends Plugin {
    * `'modify'` — see the caller's own comment for why a created file's
    * first sighting cannot itself trigger a paid judge call.
    *
-   * TRG-1's verdict has **two** consumers from this one evaluation: F6.9's
-   * material-arrival timestamp (`recordMaterialArrivalIfObserved`, original),
-   * and, per `ol-0r92.12` [AUTH-1b] (David's ruled mechanism, 2026-08-28),
-   * F3.3's generation sweep for the authored-note case
-   * (`triggerAuthoredNoteGenerationIfObserved`). Both read the same
-   * `observedMaterialChange` verdict — the materiality gate is the one churn
+   * TRG-1's evaluation has **two** consumers. F6.9's processed-revision record
+   * (`processedRevisionFeed.noteEvaluated`, `[D-426]`, `ol-egov.141.89.11.27`)
+   * takes the raw result: a version is recorded whenever the free checks
+   * cleared, whatever the judge said (a verdict of either kind, or no judge, an
+   * outage included). And, per `ol-0r92.12` [AUTH-1b] (David's ruled mechanism,
+   * 2026-08-28), F3.3's generation sweep for the authored-note case
+   * (`triggerAuthoredNoteGenerationIfObserved`) reads the
+   * `observedMaterialChange` verdict — the materiality gate stays the one churn
    * control for both, not a second, independent one.
    *
    * Never lets a read or evaluation failure propagate: the same
@@ -2435,7 +2466,9 @@ export default class OleaPlugin extends Plugin {
     try {
       const result = await this.materiality.evaluate(path, currentText, previousText);
       const materialChangeObserved = this.observedMaterialChange(result);
-      await this.recordMaterialArrivalIfObserved(path, currentText, materialChangeObserved);
+      // `[D-426]`: recorded as processed whenever the free checks cleared, whatever the judge said;
+      // the feed never throws and is not awaited (it queues behind the start's rebuild).
+      void this.processedRevisionFeed?.noteEvaluated(path, currentText, result);
       await this.triggerAuthoredNoteGenerationIfObserved(path, currentText, materialChangeObserved);
     } catch (error) {
       console.error('Olea: materiality trigger evaluation failed', error);
@@ -2456,7 +2489,7 @@ export default class OleaPlugin extends Plugin {
    *
    * `ol-egov.141.89.5.29`: a drained verdict now reaches the SAME two
    * consumers `evaluateMaterialityChange` already routes a direct verdict
-   * through (`recordMaterialArrivalIfObserved`,
+   * through (`processedRevisionFeed`, since `[D-426]`,
    * `triggerAuthoredNoteGenerationIfObserved`), per `[D-293]`. Before this,
    * `drainDuePendingEdits`'s return value was discarded here -- a same-length
    * edit or an autosave burst that only ever resolves through this drain
@@ -2474,8 +2507,8 @@ export default class OleaPlugin extends Plugin {
    * neighbouring ticks (`tickCitationRevisions`'s own doc argues the same
    * for its own tick), same "last line of defence, not the primary
    * error-handling path" posture `drainEmbeddings`'s doc states outright.
-   * Both consumer methods already swallow their own failures internally
-   * (`recordMaterialArrivalIfObserved`'s own try/catch;
+   * Both consumers already swallow their own failures internally
+   * (the feed never throws;
    * `triggerAuthoredNoteGenerationIfObserved`'s `onUnitsLanded` never lets a
    * sweep failure propagate either), so one bad path in a drained batch
    * cannot abort the rest of it -- this method's own try/catch is the same
@@ -2487,7 +2520,7 @@ export default class OleaPlugin extends Plugin {
     try {
       const drained = await this.materiality.drainDuePendingEdits(this.now().getTime());
       for (const { verdict, currentText } of drained) {
-        await this.recordMaterialArrivalIfObserved(verdict.path, currentText, verdict.material);
+        void this.processedRevisionFeed?.noteProcessed(verdict.path, currentText);
         await this.triggerAuthoredNoteGenerationIfObserved(
           verdict.path,
           currentText,
@@ -2501,11 +2534,11 @@ export default class OleaPlugin extends Plugin {
 
   /**
    * Whether one `MaterialityTrigger.evaluate` result counts as a real
-   * content change — the single reading both of row 1.4's consumers
-   * (`recordMaterialArrivalIfObserved` for F6.9, `triggerAuthoredNoteGeneration
-   * IfObserved` for F3.3's authored-note case, `ol-0r92.12`) key on, so the
-   * free gates (hash/debounce/floor) stay the one churn control rather than
-   * each consumer inventing its own. `'judge-unavailable'` counts the same
+   * content change — the reading `triggerAuthoredNoteGenerationIfObserved`
+   * (F3.3's authored-note case, `ol-0r92.12`) keys on, so the free gates
+   * (hash/debounce/floor) stay the one churn control rather than each
+   * consumer inventing its own. (F6.9's processed-revision record, since
+   * `[D-426]`, reads the raw result instead: see `evaluateMaterialityChange`.) `'judge-unavailable'` counts the same
    * way a `'verdict'` with `material: true` does — no `MaterialityJudge` is
    * wired in production today (`this.materiality`'s own construction,
    * above), so the free gates clearing is what "material changed" means
@@ -2521,57 +2554,6 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
-   * F6.9's per-course material-arrival timestamp (`ol-v7r5.6`) — recorded the
-   * moment row 1.4's free gates (hash/debounce/floor) judge an edit
-   * significant enough that a judge call would follow. See
-   * `observedMaterialChange` for exactly what counts.
-   *
-   * Course association follows F1.3 exactly — her own `course` frontmatter
-   * first, the course folder the path sits under otherwise
-   * (`notePathCourses`) — the same derivation `concept/extract.ts` already
-   * uses, so a path this fires for and a path concept extraction reads agree
-   * on which course it belongs to. A path resolving to no course records
-   * nothing: F6.9's reading is per-course, and there is no course to
-   * attribute an arrival to.
-   *
-   * Never lets a parse or store failure propagate — same "a downstream
-   * failure must never make the trigger look like it misfired" posture the
-   * caller already holds for `materiality.evaluate` itself.
-   *
-   * `ol-egov.141.89.5.29`: takes the already-computed `materialChangeObserved`
-   * boolean rather than a raw `MaterialityEvaluationResult`, so this ONE
-   * consumer body serves both callers — `evaluateMaterialityChange` (which
-   * derives it via `observedMaterialChange` from a direct `evaluate()`
-   * result) and `drainPendingMaterialityEdits` (which derives it from a
-   * drained `MaterialityVerdictEvent.material` — always an actual verdict,
-   * never `'judge-unavailable'`/`'stale-response-dropped'`, so there is
-   * nothing else for that caller to fold in).
-   */
-  private async recordMaterialArrivalIfObserved(
-    path: VaultPath,
-    currentText: string,
-    materialChangeObserved: boolean,
-  ): Promise<void> {
-    if (this.materialArrivals === null) return;
-    if (!materialChangeObserved) return;
-
-    try {
-      const doc = parseDocument(currentText);
-      const first = doc.blocks[0];
-      const fm = first?.kind === 'frontmatter' ? parseFrontmatter(first.inner) : null;
-      const courses = notePathCourses(path, fm === null ? [] : readList(fm, 'course').items);
-      if (courses.length === 0) return;
-
-      const today = calendarDayFromLocalDate(this.now());
-      for (const course of courses) {
-        await this.materialArrivals.recordArrival(course, today);
-      }
-    } catch (error) {
-      console.error('Olea: could not record a material arrival', error);
-    }
-  }
-
-  /**
    * `ol-0r92.12` [AUTH-1b]'s second consumer of TRG-1's material verdict —
    * David's ruled mechanism (2026-08-28) for closing the authored-note gap
    * `findings/sis4-authored-generation.md` (private, `olea-service`) traced:
@@ -2583,9 +2565,9 @@ export default class OleaPlugin extends Plugin {
    *
    * **No fifth ingestion format, no markdown ingestion path.** TRG-1 already
    * runs its free gates on every note vault-wide; this reuses that verdict
-   * (the same `observedMaterialChange` reading `recordMaterialArrivalIfObserved`
-   * above uses, so the materiality gate — not a second, independent debounce
-   * — is the one churn control for both consumers) as a second caller of
+   * (the same free-gate result F6.9's processed-revision record reads, so the
+   * materiality gate — not a second, independent debounce — is the one churn
+   * control for both consumers) as a second caller of
    * `onUnitsLanded`, the SAME hook the ingestion path already drives. It
    * synthesises exactly one `ExtractedUnit` whose `provenance.sourcePath` is
    * the note's OWN path and whose `provenance.embeddedIn` is ABSENT.
@@ -2619,9 +2601,11 @@ export default class OleaPlugin extends Plugin {
    * widen that scope. Delegates to `onUnitsLanded`, which already never lets
    * a sweep failure propagate.
    *
-   * `ol-egov.141.89.5.29`: same `materialChangeObserved` boolean parameter
-   * `recordMaterialArrivalIfObserved` takes, for the same reason — see that
-   * method's own doc.
+   * `ol-egov.141.89.5.29`: takes the already-computed `materialChangeObserved`
+   * boolean rather than a raw `MaterialityEvaluationResult`, so this ONE
+   * consumer body serves both callers — `evaluateMaterialityChange` (which
+   * derives it via `observedMaterialChange`) and `drainPendingMaterialityEdits`
+   * (a drained `MaterialityVerdictEvent.material`, always an actual verdict).
    */
   private async triggerAuthoredNoteGenerationIfObserved(
     path: VaultPath,
@@ -2930,7 +2914,12 @@ export default class OleaPlugin extends Plugin {
    */
   private async tickIngestionAndMaybeRunCorpusRelations(): Promise<void> {
     const previous = this.lastIngestionSnapshot;
-    await this.ingestion?.engine.tick();
+    const ran = await this.ingestion?.engine.tick();
+    // `[D-426]`: an embedded source's job settling is a processing moment. The queue is read at
+    // this call, before the next tick moves it on; the feed never throws and is not awaited.
+    if (ran !== undefined) {
+      void this.processedRevisionFeed?.jobRan(ran, this.ingestion?.engine.list() ?? []);
+    }
     const current = this.ingestion?.engine.snapshot() ?? null;
     if (current === null) return;
     this.lastIngestionSnapshot = current;

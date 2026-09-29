@@ -20,7 +20,7 @@
  * two smoke scenarios in `features/F2-review.md` are exactly it.
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -1104,47 +1104,88 @@ describe('ol-egov.141.89.6.54: buildReviewSessionInput threads the SAME citation
   });
 });
 
-describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6)', () => {
+describe('F6.9 rhythm plumbing has real production wiring (ol-v7r5.6, rewritten by ol-egov.141.89.11.27, [D-426])', () => {
   // `packages/core/src/today/rhythm.ts`'s own module doc named the one input
-  // with anywhere to come from — a per-course last-material-arrival
-  // timestamp — and said nothing built it. These are the source-level checks
-  // that `main.ts` actually records one, on the materiality trigger path, and
-  // actually threads the result into the Today panel.
+  // with anywhere to come from — what has arrived, per course — and said
+  // nothing built it. `[D-426]` (row 25 of `docs/direction/
+  // 20260929_decision_sheet_responses.md`) replaced the verdict-gated
+  // per-course timestamp with the processed-revision record: fingerprint,
+  // first-processed day and state per file version. These are the
+  // source-level checks that `main.ts` composes it, calls it at every
+  // processing moment, rebuilds it at start and threads it into the Today
+  // panel; the behaviour behind each call is `test/ingestion/processed-
+  // revisions/feed.spec.ts` and `test/today/rhythm-processed-feed.spec.ts`.
 
-  it('builds both rhythm stores unconditionally in onload, alongside the materiality trigger', () => {
-    expect(main).toMatch(/this\.materialArrivals\s*=\s*new ObsidianMaterialArrivalStore\(this\);/);
+  it('builds the processed-revision record and its feed in onload, right after this.ingestion, and starts the rebuild there', () => {
+    expect(main).toMatch(
+      /const processedRevisions = new ObsidianProcessedRevisionStore\(this, this\.now\);\s*const processedRevisionFeed = createProcessedRevisionFeed\(\{\s*store: processedRevisions,\s*vault,\s*manifestsFor: \(paths\) => unitManifests\.manifestsFor\(paths\),\s*\}\);\s*this\.processedRevisions = processedRevisions;\s*this\.processedRevisionFeed = processedRevisionFeed;\s*void processedRevisionFeed\.start\(\);/,
+    );
+    // After `this.ingestion` exists, never before: the rebuild asks the unit manifest to
+    // enumerate sources with `extractOptions`, which reads `this.ingestion`.
+    expect(main.indexOf('this.ingestion = await buildIngestionRunner(')).toBeGreaterThan(-1);
+    expect(main.indexOf('void processedRevisionFeed.start();')).toBeGreaterThan(
+      main.indexOf('this.ingestion = await buildIngestionRunner('),
+    );
     expect(main).toMatch(/this\.termWindowStore\s*=\s*new ObsidianTermWindowStore\(this\);/);
   });
 
-  it('records an arrival from the real materiality-evaluation result, not on every raw edit', () => {
-    // `ol-egov.141.89.5.29`: `evaluateMaterialityChange` now computes the
-    // `materialChangeObserved` boolean once (via `observedMaterialChange`)
-    // and passes it to both consumers, rather than handing each its own copy
-    // of the raw `result` — see the same describe block below ("the new
-    // consumer is gated on the SAME observedMaterialChange reading").
+  it('records a note from the real materiality-evaluation result, before the generation consumer, not on every raw edit', () => {
+    // The feed takes the raw result and decides which kinds are a processing
+    // moment (`feed.spec.ts` proves each kind); `main.ts` must hand it the
+    // result of THE evaluation, not a re-derived verdict.
     expect(main).toMatch(
-      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, materialChangeObserved\);/,
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*void this\.processedRevisionFeed\?\.noteEvaluated\(path, currentText, result\);/,
     );
     expect(main).toMatch(
       /result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)/,
     );
   });
 
-  it('derives course association the same way concept extraction does — her frontmatter, then the course folder', () => {
+  it('records a drained pending edit too: a real verdict on a real version', () => {
     expect(main).toMatch(
-      /notePathCourses\(path, fm === null \? \[\] : readList\(fm, 'course'\)\.items\)/,
+      /for \(const \{ verdict, currentText \} of drained\) \{\s*void this\.processedRevisionFeed\?\.noteProcessed\(verdict\.path, currentText\);/,
     );
   });
 
-  it("the Today panel's load call is given the real rhythm source, not omitted", () => {
+  it('records an embedded source when its job is queued (the arrival watch and the process-now override) and when it settles (the interval tick and the process-now tick)', () => {
     expect(main).toMatch(
-      /rhythm:\s*createRhythmSource\(\{\s*materialArrivals:\s*this\.materialArrivals,\s*termWindow:\s*this\.termWindowStore,\s*\}\),/,
+      /buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer: processedRevisionFeed\.observeEnqueues\(this\.ingestion\.engine\),/,
+    );
+    expect(main).toMatch(
+      /enqueuer: processedRevisionFeed\.observeEnqueues\(ingestionForProcessNow\.engine\),\s*tick: async \(\) => \{\s*const ran = await ingestionForProcessNow\.engine\.tick\(\);\s*void processedRevisionFeed\.jobRan\(ran, ingestionForProcessNow\.engine\.list\(\)\);\s*return ran;\s*\},/,
+    );
+    expect(main).toMatch(
+      /const ran = await this\.ingestion\?\.engine\.tick\(\);\s*if \(ran !== undefined\) \{\s*void this\.processedRevisionFeed\?\.jobRan\(ran, this\.ingestion\?\.engine\.list\(\) \?\? \[\]\);\s*\}/,
     );
   });
 
-  it('imports the real stores and composer, not stubs', () => {
+  it('the verdict-gated per-course store is gone: no field, no construction, no recorder, no import', () => {
+    expect(main).not.toMatch(/materialArrivals/);
+    expect(main).not.toMatch(/MaterialArrival/);
+    expect(main).not.toMatch(/recordMaterialArrivalIfObserved/);
+    expect(main).not.toMatch(/material-arrival-store/);
+    expect(existsSync(`${srcDir}today/material-arrival-store.ts`)).toBe(false);
+  });
+
+  it('derives course association the same way concept extraction does — her frontmatter, then the course folder — in the one place both the moment and the rebuild use', () => {
+    const revisions = codeOf('ingestion/processed-revisions/current-revisions.ts');
+    expect(revisions).toMatch(
+      /notePathCourses\(\s*path,\s*frontmatter === null \? \[\] : readList\(frontmatter, 'course'\)\.items,\s*coursesFolder,\s*\)/,
+    );
+  });
+
+  it("the Today panel's load call is given the real rhythm source over the record, not omitted", () => {
     expect(main).toMatch(
-      /import\s*\{\s*ObsidianMaterialArrivalStore\s*\}\s*from\s*'\.\/today\/material-arrival-store\.js'/,
+      /rhythm:\s*createRhythmSource\(\{\s*processedRevisions: this\.processedRevisions,\s*termWindow: this\.termWindowStore,\s*\}\),/,
+    );
+  });
+
+  it('imports the real stores, the feed and the composer, not stubs', () => {
+    expect(main).toMatch(
+      /import\s*\{\s*ObsidianProcessedRevisionStore\s*\}\s*from\s*'\.\/ingestion\/processed-revisions\/store\.js'/,
+    );
+    expect(main).toMatch(
+      /import\s*\{\s*createProcessedRevisionFeed,\s*type ProcessedRevisionFeed,?\s*\}\s*from\s*'\.\/ingestion\/processed-revisions\/feed\.js'/,
     );
     expect(main).toMatch(
       /import\s*\{\s*ObsidianTermWindowStore\s*\}\s*from\s*'\.\/today\/term-window-store\.js'/,
@@ -1209,13 +1250,13 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
   // source-level checks that the second caller actually exists and reuses
   // the same materiality gate rather than inventing its own.
 
-  it('evaluateMaterialityChange calls the new consumer right alongside the F6.9 one, from the same verdict', () => {
+  it('evaluateMaterialityChange calls the new consumer right alongside the F6.9 record, from the same evaluation', () => {
     expect(main).toMatch(
-      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*await this\.recordMaterialArrivalIfObserved\(path, currentText, materialChangeObserved\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(path, currentText, materialChangeObserved\);/,
+      /const result = await this\.materiality\.evaluate\(path, currentText, previousText\);\s*const materialChangeObserved = this\.observedMaterialChange\(result\);\s*void this\.processedRevisionFeed\?\.noteEvaluated\(path, currentText, result\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(path, currentText, materialChangeObserved\);/,
     );
   });
 
-  it('the new consumer is gated on the SAME observedMaterialChange reading as F6.9 — no independent debounce', () => {
+  it('the new consumer is gated on observedMaterialChange, the free gates’ own reading — no independent debounce', () => {
     expect(main).toMatch(
       /private observedMaterialChange\(result: MaterialityEvaluationResult\): boolean \{\s*return \(\s*result\.kind === 'judge-unavailable' \|\| \(result\.kind === 'verdict' && result\.verdict\.material\)\s*\);\s*\}/,
     );
@@ -1225,9 +1266,6 @@ describe("TRG-1's material verdict is a second consumer feeding F3.3's generatio
     // `MaterialityEvaluationResult` of its own to hand them, only a
     // `MaterialityVerdictEvent`) reuse the SAME two consumer bodies instead
     // of duplicating their logic.
-    expect(main).toMatch(
-      /private async recordMaterialArrivalIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*materialChangeObserved: boolean,\s*\): Promise<void> \{\s*if \(this\.materialArrivals === null\) return;\s*if \(!materialChangeObserved\) return;/,
-    );
     expect(main).toMatch(
       /private async triggerAuthoredNoteGenerationIfObserved\(\s*path: VaultPath,\s*currentText: string,\s*materialChangeObserved: boolean,\s*\): Promise<void> \{\s*if \(!materialChangeObserved\) return;/,
     );
@@ -1380,7 +1418,7 @@ describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is
 
   it('builds the watch against the real engine buildIngestionRunner returned, registered for teardown', () => {
     expect(main).toMatch(
-      /this\.register\(\s*buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer:\s*this\.ingestion\.engine,\s*watch:\s*\(handler\)\s*=>\s*vault\.watch\(handler\),\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*this\.now\(\)\.getTime\(\)\s*\},\s*\}\),\s*\);/,
+      /this\.register\(\s*buildIngestionArrivalWatch\(\{\s*vault,\s*enqueuer:\s*processedRevisionFeed\.observeEnqueues\(this\.ingestion\.engine\),\s*watch:\s*\(handler\)\s*=>\s*vault\.watch\(handler\),\s*clock:\s*\{\s*now:\s*\(\)\s*=>\s*this\.now\(\)\.getTime\(\)\s*\},\s*\}\),\s*\);/,
     );
   });
 
@@ -1544,7 +1582,7 @@ describe('the manual process-now timing override is registered and reachable ([D
 
   it('builds the process-now action once ingestion exists, wired to the real engine and onUnitsLanded', () => {
     expect(main).toMatch(
-      /const ingestionForProcessNow = this\.ingestion;\s*this\.processNowAction = createProcessNowAction\(\{\s*vault,\s*enqueuer:\s*ingestionForProcessNow\.engine,\s*tick:\s*\(\)\s*=>\s*ingestionForProcessNow\.engine\.tick\(\),\s*onAuthoredNoteUnits:\s*\(units\)\s*=>\s*this\.onUnitsLanded\(units\),\s*isOnline:\s*\(\)\s*=>\s*navigator\.onLine,\s*\}\);/,
+      /const ingestionForProcessNow = this\.ingestion;\s*this\.processNowAction = createProcessNowAction\(\{\s*vault,\s*enqueuer:\s*processedRevisionFeed\.observeEnqueues\(ingestionForProcessNow\.engine\),\s*tick:\s*async\s*\(\)\s*=>\s*\{\s*const ran = await ingestionForProcessNow\.engine\.tick\(\);\s*void processedRevisionFeed\.jobRan\(ran, ingestionForProcessNow\.engine\.list\(\)\);\s*return ran;\s*\},\s*onAuthoredNoteUnits:\s*\(units\)\s*=>\s*this\.onUnitsLanded\(units\),\s*isOnline:\s*\(\)\s*=>\s*navigator\.onLine,\s*\}\);/,
     );
   });
 
@@ -2243,7 +2281,7 @@ describe('ol-egov.141.89.5.29: a drained materiality verdict now reaches both TR
 
   it('calls both consumers per drained verdict, keyed on verdict.material — the same boolean observedMaterialChange derives for a direct call-judge verdict', () => {
     expect(main).toMatch(
-      /for \(const \{ verdict, currentText \} of drained\) \{\s*await this\.recordMaterialArrivalIfObserved\(verdict\.path, currentText, verdict\.material\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(\s*verdict\.path,\s*currentText,\s*verdict\.material,\s*\);\s*\}/,
+      /for \(const \{ verdict, currentText \} of drained\) \{\s*void this\.processedRevisionFeed\?\.noteProcessed\(verdict\.path, currentText\);\s*await this\.triggerAuthoredNoteGenerationIfObserved\(\s*verdict\.path,\s*currentText,\s*verdict\.material,\s*\);\s*\}/,
     );
   });
 });

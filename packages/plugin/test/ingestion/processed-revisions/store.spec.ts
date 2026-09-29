@@ -17,6 +17,12 @@ import {
   PROCESSED_REVISION_STORAGE_KEY,
   type ProcessedRevisionInput,
 } from '../../../src/ingestion/processed-revisions/store.js';
+import {
+  CONTENT_DERIVED_SETTINGS_KEYS,
+  clearContentDerivedSettings,
+  readContentDerivedSettings,
+  settingsKeyEntry,
+} from '../../../src/privacy/data-manifest.js';
 
 class FakeDataHost {
   blob: Record<string, unknown> = {};
@@ -343,7 +349,7 @@ describe('a store that has never been rebuilt cannot say, and is not read as not
     corrupted.blob = { [PROCESSED_REVISION_STORAGE_KEY]: { version: 2, revisions: 'nope' } };
     expect(await rowsOf(corrupted)).toEqual(EMPTY_PROCESSED_REVISIONS);
 
-    // The verdict-gated store this one replaces (`today/material-arrival-store.ts`, version 1).
+    // An older record shape found under this store's own key.
     const older = new FakeDataHost();
     older.blob = {
       [PROCESSED_REVISION_STORAGE_KEY]: {
@@ -409,5 +415,45 @@ describe('a store that has never been rebuilt cannot say, and is not read as not
     await store.recordProcessed(input());
     expect(host.blob.keep).toBe(1);
     expect((await store.load()).revisions[PATH_A]?.firstProcessedDay).toBe('2026-09-10');
+  });
+});
+
+describe('the record is a local projection under its own key, covered by a full delete and the export', () => {
+  it('lives in data.json under its own key, not the one the retired verdict-gated store used', () => {
+    expect(PROCESSED_REVISION_STORAGE_KEY).toBe('processedRevisions');
+    expect(PROCESSED_REVISION_STORAGE_KEY).not.toBe('materialArrivals');
+  });
+
+  it('is classified content-derived in the settings manifest, so a full delete clears it and the export carries it', async () => {
+    expect(settingsKeyEntry(PROCESSED_REVISION_STORAGE_KEY)?.classification).toBe(
+      'content-derived',
+    );
+    expect(CONTENT_DERIVED_SETTINGS_KEYS).toContain(PROCESSED_REVISION_STORAGE_KEY);
+
+    const host = new FakeDataHost();
+    const store = new ObsidianProcessedRevisionStore(host, () => new Date('2026-09-10T12:00:00'));
+    await store.recordProcessed(input());
+    expect(Object.keys(await readContentDerivedSettings(host))).toContain(
+      PROCESSED_REVISION_STORAGE_KEY,
+    );
+    const cleared = await clearContentDerivedSettings(host);
+    expect(cleared.clearedKeys).toContain(PROCESSED_REVISION_STORAGE_KEY);
+    expect(host.blob[PROCESSED_REVISION_STORAGE_KEY]).toBeUndefined();
+    // After the delete the record reads as never rebuilt, and the next start's rebuild marks every
+    // file it finds unknown.
+    expect((await store.load()).rebuiltOn).toBeNull();
+  });
+
+  it('the retired store’s record is left where it is and read by nothing: nothing migrates, and writing here never touches it', async () => {
+    const retired = { version: 1, lastArrivalByCourse: { 'CRS-A': '2026-09-01' } };
+    const host = new FakeDataHost();
+    host.blob = { materialArrivals: retired };
+    const store = new ObsidianProcessedRevisionStore(host, () => new Date('2026-09-10T12:00:00'));
+    // Never rebuilt: it cannot say, whatever the retired record held.
+    expect(await store.load()).toEqual(EMPTY_PROCESSED_REVISIONS);
+    await store.rebuild([input()]);
+    await store.recordProcessed(input({ path: PATH_B, fingerprint: 'fp-2' }));
+    expect(host.blob.materialArrivals).toEqual(retired);
+    expect((await store.load()).revisions[PATH_A]?.firstProcessedDay).toBeNull();
   });
 });

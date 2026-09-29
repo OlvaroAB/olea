@@ -75,6 +75,7 @@ import { HOME_AVOIDANCE_STORAGE_KEY } from '../home/avoidance.js';
 import { HOME_SCOPE_GROWTH_STORAGE_KEY } from '../home/scope-growth-store.js';
 import { CITATION_ANCHOR_STORAGE_KEY } from '../ingestion/materiality/citation-hash-store.js';
 import { MATERIALITY_HASH_STORAGE_KEY } from '../ingestion/materiality/hash-store.js';
+import { PROCESSED_REVISION_STORAGE_KEY } from '../ingestion/processed-revisions/store.js';
 import { INGESTION_QUEUE_STORAGE_KEY } from '../ingestion/queue-store.js';
 import { KEYWORD_INDEX_STORAGE_KEY } from '../keyword-index/store.js';
 import { MISCONCEPTION_EMBEDDING_CACHE_STORAGE_KEY } from '../misconception-embedder.js';
@@ -91,7 +92,6 @@ import {
 import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import { EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY } from '../settings/explain-back-audit-gate.js';
 import { HEADING_OFFER_SETTING_STORAGE_KEY } from '../settings/heading-offer-setting.js';
-import { MATERIAL_ARRIVAL_STORAGE_KEY } from '../today/material-arrival-store.js';
 import { TERM_WINDOW_STORAGE_KEY } from '../today/term-window-store.js';
 import { USAGE_LOG_STORAGE_KEY } from '../usage/log-store.js';
 import { WORKER_CONFIG_STORAGE_KEY } from '../worker/config-store.js';
@@ -178,9 +178,10 @@ export const SETTINGS_KEY_MANIFEST: readonly SettingsKeyEntry[] = [
     holds: 'citation revision anchors and pending revalidations per instrument',
   },
   {
-    key: MATERIAL_ARRIVAL_STORAGE_KEY,
+    key: PROCESSED_REVISION_STORAGE_KEY,
     classification: 'content-derived',
-    holds: 'the day material last arrived, per course',
+    holds:
+      'per file version in her course folders: its fingerprint, the day it was first processed (unknown after a loss) and its processing state',
   },
   {
     key: GROVE_GROUND_STREAKS_STORAGE_KEY,

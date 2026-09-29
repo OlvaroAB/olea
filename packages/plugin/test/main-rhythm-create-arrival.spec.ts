@@ -1,12 +1,13 @@
 /**
  * Scenario: `features/F6-today.md`'s F6.9 data-plumbing block (`olea-service`,
- * "a material-arrival timestamp is recorded only on a real, gate-cleared
- * edit") — the same scenario `main-wiring.spec.ts` tags `@auto:plugin/
- * main-wiring.spec` for its own arrival-recording checks. This file adds the
- * one case that scenario's own wording did not yet cover: a note's very
- * FIRST save (a created file, never before observed this session), which
- * `ol-egov.141.89.11.13` (`docs/dev/intelligence-build/vew.md`) found never
- * reached the trigger at all.
+ * "a note that clears the free checks is recorded as processed, whatever the
+ * judge says") — the same block `main-wiring.spec.ts` tags `@auto:plugin/
+ * main-wiring.spec` for its own recording checks. This file adds the one case
+ * that block's wording did not yet cover: a note's very FIRST save (a created
+ * file, never before observed this session), which `ol-egov.141.89.11.13`
+ * (`docs/dev/intelligence-build/vew.md`) found never reached the trigger at
+ * all, and which `ol-egov.141.89.11.27` (`[D-426]`) now records through the
+ * processed-revision feed.
  *
  * Two things had to both be true for `main.ts`'s fix (accepting `'create'`
  * alongside `'modify'` on register row 1.4's `vault.watch`) to be safe, not
@@ -32,6 +33,9 @@ import type {
   MaterialityJudgeVerdict,
 } from '../src/ingestion/materiality/types.js';
 import { buildMaterialityWiring } from '../src/ingestion/materiality/wiring.js';
+import { createProcessedRevisionFeed } from '../src/ingestion/processed-revisions/feed.js';
+import type { ProcessedRevisionInput } from '../src/ingestion/processed-revisions/store.js';
+import { memoryVault } from './review/memory-vault.js';
 
 const srcDir = fileURLToPath(new URL('../src/', import.meta.url));
 
@@ -57,6 +61,25 @@ describe("main.ts's materiality watch reaches a created file, not only a modifie
     );
   });
 });
+
+/** A feed over an empty vault and a store that only collects what is recorded: the one seam these checks assert against. */
+function feedOverNothing() {
+  const recorded: ProcessedRevisionInput[] = [];
+  const feed = createProcessedRevisionFeed({
+    store: {
+      async load() {
+        throw new Error('not read here');
+      },
+      async recordProcessed(input) {
+        recorded.push(input);
+      },
+      async rebuild() {},
+    },
+    vault: memoryVault(),
+    manifestsFor: async () => new Map(),
+  });
+  return { feed, recorded };
+}
 
 describe('a first sighting can never itself dispatch a paid materiality judge call (the safety property the fix above depends on)', () => {
   // `main.ts`'s `materialityPreviousText.get(path)` returns `undefined` for
@@ -102,30 +125,27 @@ describe('a first sighting can never itself dispatch a paid materiality judge ca
     expect(judgeCall).not.toHaveBeenCalled();
   });
 
-  it("'judge-unavailable' is exactly the outcome recordMaterialArrivalIfObserved's observedMaterialChange reads as a real change — this first sighting DOES count as an arrival", () => {
-    // The literal boolean `main.ts`'s `observedMaterialChange` implements —
-    // duplicated here (six lines) rather than imported, for the same reason
-    // every other source-level pin in this package copies main.ts's own
-    // logic rather than importing it: main.ts cannot be imported at all
-    // under Vitest. Kept honest by the source-level pin in main-wiring.spec.ts
-    // ("records an arrival from the real materiality-evaluation result").
-    function observedMaterialChange(result: {
-      readonly kind: string;
-      readonly verdict?: { readonly material: boolean };
-    }): boolean {
-      return (
-        result.kind === 'judge-unavailable' ||
-        (result.kind === 'verdict' && result.verdict?.material === true)
-      );
-    }
-    expect(observedMaterialChange({ kind: 'judge-unavailable' })).toBe(true);
+  it("the feed records that first sighting as processed: 'judge-unavailable' is a processing moment, so a created note counts", async () => {
+    const { trigger } = buildTriggerWithSpyJudge();
+    const { feed, recorded } = feedOverNothing();
+    await feed.start();
+    const path = '01 Courses/FIXTURE101/lecture-3.md';
+    const text = 'Some genuinely new material about a concept.';
+    const result = await trigger.evaluate(path, text, undefined);
+    await feed.noteEvaluated(path, text, result);
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({ path, courses: ['FIXTURE101'], state: 'read' });
   });
 
-  it("an EMPTY first sighting (a genuinely blank created note) resolves to 'no-groundable-content' instead — still never a judge call, and never read as an arrival", async () => {
+  it("an EMPTY first sighting (a genuinely blank created note) resolves to 'no-groundable-content' instead — still never a judge call, and never recorded as processed", async () => {
     const { trigger, judgeCall } = buildTriggerWithSpyJudge();
     const result = await trigger.evaluate('Courses/PSYCH326/new-blank-note.md', '', undefined);
     expect(result.kind).toBe('no-groundable-content');
     expect(judgeCall).not.toHaveBeenCalled();
+    const { feed, recorded } = feedOverNothing();
+    await feed.start();
+    await feed.noteEvaluated('01 Courses/FIXTURE101/new-blank-note.md', '', result);
+    expect(recorded).toEqual([]);
   });
 });
 

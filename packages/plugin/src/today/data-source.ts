@@ -151,7 +151,6 @@ import type { ObsidianProcessedRevisionStore } from '../ingestion/processed-revi
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
 import type { StudySessionHolder } from '../session/holder.js';
-import type { ObsidianMaterialArrivalStore } from './material-arrival-store.js';
 import type { ObsidianTermWindowStore } from './term-window-store.js';
 
 /**
@@ -1091,16 +1090,11 @@ export interface TodayRhythmSource {
 
 export interface RhythmSourceDeps {
   /**
-   * The processed-revision record (`[D-426]`): what the rhythm reads when it is supplied. Structural,
-   * so a test or a workbench can hand it any `load()`.
+   * The processed-revision record (`[D-426]`): what the rhythm reads. Structural, so a test or a
+   * workbench can hand it any `load()`. The verdict-gated per-course store it replaced is retired
+   * (`ol-egov.141.89.11.27`); `main.ts` composes this one.
    */
-  readonly processedRevisions?: Pick<ObsidianProcessedRevisionStore, 'load'>;
-  /**
-   * The verdict-gated store the record replaces. Read only while `processedRevisions` is absent, so
-   * that `main.ts` (which still composes only this one; the follow-up on `ol-egov.141.89.11.24`
-   * swaps it) keeps today's behaviour until then. Retired with `today/material-arrival-store.ts`.
-   */
-  readonly materialArrivals?: ObsidianMaterialArrivalStore;
+  readonly processedRevisions: Pick<ObsidianProcessedRevisionStore, 'load'>;
   readonly termWindow: ObsidianTermWindowStore;
 }
 
@@ -1125,26 +1119,17 @@ async function rhythmInputsFromRecord(
 }
 
 /**
- * The real source. With `processedRevisions` supplied, `listCourseMaterialArrivals` reads the
- * processed-revision record (`[D-426]`): every course with a processed file version on record, its
- * latest first-processed day, and `unreadable` for a course whose latest version is unread or
- * still pending; a course with nothing on record is simply not listed. Without it, it keeps
- * reading exactly the courses the verdict-gated arrival store has ever heard from, as before
- * (see `material-arrival-store.ts`'s module doc): a course with no observed arrival ever is not in
- * the list, which `detectRhythm`'s own `not-enough-history` status already covers.
+ * The real source. `listCourseMaterialArrivals` reads the processed-revision record (`[D-426]`):
+ * every course with a processed file version on record, its latest first-processed day, and
+ * `unreadable` for a course whose latest version is unread or still pending; a course with nothing
+ * on record is simply not listed, which `detectRhythm`'s own `not-enough-history` status already
+ * covers. A record that has never been rebuilt, or cannot be read, is `null`: it cannot say.
  */
 export function createRhythmSource(deps: RhythmSourceDeps): TodayRhythmSource {
   return {
     async listCourseMaterialArrivals() {
       try {
-        if (deps.processedRevisions !== undefined) {
-          return await rhythmInputsFromRecord(deps.processedRevisions);
-        }
-        if (deps.materialArrivals === undefined) return null;
-        const persisted = await deps.materialArrivals.load();
-        return Object.entries(persisted.lastArrivalByCourse).map(
-          ([course, lastMaterialArrivalDay]) => ({ course, lastMaterialArrivalDay }),
-        );
+        return await rhythmInputsFromRecord(deps.processedRevisions);
       } catch {
         return null;
       }
@@ -1688,10 +1673,10 @@ async function resolveScopeFields(
  * Class C stop 1 forbids any persisted cache of the parsed schedule, and this
  * function does none: `discoverScheduleEvents` re-scans the vault every call.
  *
- * `courseMaterialArrivals` is the "last arrival per course" fact
- * `resolveRhythmFields` already read from the arrival store — passed in
- * rather than re-read, and its absence (`null`) is treated the same way that
- * function treats it: no rhythm source wired yet, or its store unreadable, is
+ * `courseMaterialArrivals` is the "last processed day per course" fact
+ * `resolveRhythmFields` already read from the processed-revision record —
+ * passed in rather than re-read, and its absence (`null`) is treated the same
+ * way that function treats it: a record never rebuilt, or unreadable, is
  * "cannot say" for this signal too, never a computed answer.
  *
  * The known-course roster comes from `discoverScheduleEvents`'s own

@@ -59,7 +59,10 @@ import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
 import { ObsidianGroveReadCompletenessStore } from '../../src/grove/read-completeness-store.js';
-import { ObsidianProcessedRevisionStore } from '../../src/ingestion/processed-revisions/store.js';
+import {
+  ObsidianProcessedRevisionStore,
+  PROCESSED_REVISION_STORAGE_KEY,
+} from '../../src/ingestion/processed-revisions/store.js';
 import { ObsidianRegistryOverridesStore } from '../../src/registry/overrides-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
 import { rhythmQuietLine } from '../../src/today/copy.js';
@@ -78,10 +81,6 @@ import {
   type TodayTrendsSource,
   unavailableInstrumentSource,
 } from '../../src/today/data-source.js';
-import {
-  EMPTY_MATERIAL_ARRIVALS,
-  ObsidianMaterialArrivalStore,
-} from '../../src/today/material-arrival-store.js';
 import { ObsidianTermWindowStore } from '../../src/today/term-window-store.js';
 import { memoryVault, unreadableVault } from '../review/memory-vault.js';
 
@@ -2340,7 +2339,7 @@ describe('createRhythmSource — over the processed-revision record (D-426, ol-e
       fingerprint: 'fp-p',
       state: 'read',
     });
-    delete host.blob.materialArrivals; // the loss
+    delete host.blob[PROCESSED_REVISION_STORAGE_KEY]; // the loss
     at('2026-09-20');
     await store.rebuild([
       { path: PDF, courses: ['CRS-A'], fingerprint: 'fp-p', state: 'read' },
@@ -2366,24 +2365,6 @@ describe('createRhythmSource — over the processed-revision record (D-426, ol-e
       },
       termWindow: termWindow(),
     });
-    expect(await source.listCourseMaterialArrivals()).toBeNull();
-  });
-
-  it('when the record is supplied it is what the rhythm reads, not the verdict-gated store it replaces', async () => {
-    const arrivalStore = new ObsidianMaterialArrivalStore(new FakeDataHost());
-    await arrivalStore.recordArrival('OLD-COURSE', '2026-08-01');
-    const { store } = recordOn(new FakeDataHost(), '2026-08-05');
-    await store.rebuild([]);
-    const source = createRhythmSource({
-      processedRevisions: store,
-      materialArrivals: arrivalStore,
-      termWindow: termWindow(),
-    });
-    expect(await source.listCourseMaterialArrivals()).toEqual([]);
-  });
-
-  it('with neither store supplied there is nothing to read: null', async () => {
-    const source = createRhythmSource({ termWindow: termWindow() });
     expect(await source.listCourseMaterialArrivals()).toBeNull();
   });
 });
@@ -2444,7 +2425,7 @@ describe('the rhythm reading through Today over the processed-revision record (D
       fingerprint: 'fp',
       state: 'read',
     });
-    delete host.blob.materialArrivals; // the loss
+    delete host.blob[PROCESSED_REVISION_STORAGE_KEY]; // the loss
     const rebuild = new ObsidianProcessedRevisionStore(host, () => new Date('2026-08-09T12:00:00'));
     await rebuild.rebuild([
       { path: PDF, courses: ['FIXTURE101'], fingerprint: 'fp', state: 'read' },
@@ -2464,39 +2445,21 @@ describe('the rhythm reading through Today over the processed-revision record (D
   });
 });
 
-describe('createRhythmSource — the real source, over the two persisted stores', () => {
-  it('lists exactly the courses the arrival store has ever heard from', async () => {
-    const arrivalStore = new ObsidianMaterialArrivalStore(new FakeDataHost());
-    await arrivalStore.recordArrival('GEO101', '2026-08-01');
-    await arrivalStore.recordArrival('MUS101', '2026-08-10');
-    const source = createRhythmSource({
-      materialArrivals: arrivalStore,
-      termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
-    });
-    const arrivals = await source.listCourseMaterialArrivals();
-    expect(arrivals).toEqual(
-      expect.arrayContaining([
-        { course: 'GEO101', lastMaterialArrivalDay: '2026-08-01' },
-        { course: 'MUS101', lastMaterialArrivalDay: '2026-08-10' },
-      ]),
+describe('createRhythmSource — the term window, beside the processed-revision record', () => {
+  async function rebuiltRecord(): Promise<ObsidianProcessedRevisionStore> {
+    const store = new ObsidianProcessedRevisionStore(
+      new FakeDataHost(),
+      () => new Date('2026-08-01T12:00:00'),
     );
-    expect(arrivals).toHaveLength(2);
-  });
-
-  it('a fresh install lists no courses at all — the empty state, not a failure', async () => {
-    const source = createRhythmSource({
-      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
-      termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
-    });
-    expect(await source.listCourseMaterialArrivals()).toEqual([]);
-    expect(EMPTY_MATERIAL_ARRIVALS.lastArrivalByCourse).toEqual({});
-  });
+    await store.rebuild([]);
+    return store;
+  }
 
   it('resolves a recorded term window through resolveTermBoundary', async () => {
     const termStore = new ObsidianTermWindowStore(new FakeDataHost());
     await termStore.save({ start: '2026-08-01', end: '2026-12-15' });
     const source = createRhythmSource({
-      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
+      processedRevisions: await rebuiltRecord(),
       termWindow: termStore,
     });
     expect(await source.resolveTermWindow()).toEqual({ start: '2026-08-01', end: '2026-12-15' });
@@ -2504,7 +2467,7 @@ describe('createRhythmSource — the real source, over the two persisted stores'
 
   it('no recorded term window resolves to null — F6.9 never blocks on it', async () => {
     const source = createRhythmSource({
-      materialArrivals: new ObsidianMaterialArrivalStore(new FakeDataHost()),
+      processedRevisions: await rebuiltRecord(),
       termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
     });
     expect(await source.resolveTermWindow()).toBeNull();

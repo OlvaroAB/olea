@@ -3,29 +3,29 @@
  * row 25 of `docs/direction/20260929_decision_sheet_responses.md`; `ol-egov.141.89.11.24`): one
  * replacement store holding, per file version, its **fingerprint**, the **day it was first
  * processed** and its **processing state**. It is the input the rhythm reading's arrivals stage
- * (`olea-core`'s `today/arrivals.ts`) reads, and it replaces the verdict-gated
- * `today/material-arrival-store.ts` rather than sitting beside it.
+ * (`olea-core`'s `today/arrivals.ts`) reads, and it replaced the verdict-gated per-course store
+ * (`today/material-arrival-store.ts`, retired by `ol-egov.141.89.11.27`) rather than sitting beside it.
+ * `./feed.ts` is what `main.ts` calls to fill it at each processing moment and to rebuild it at start.
  *
  * ## Where it lives, and why there
  *
  * One top-level key in the plugin's `data.json`, exactly as `[D-426]` option (a) names: a local
  * projection over her vault, never a server (C6, the boundary document's section 1), never her
  * authored notes (INV-6). The vault's own `.olea/` layer was the other candidate (the unit
- * manifest's append-only per-device files, `grove/unit-manifest-store.ts`); it does not fit here
- * for two reasons. A new `.olea/` folder must be registered with the F7.4 export and full delete
- * (`privacy/log-discovery.ts`), a path this build does not own, and a `data.json` key is already
- * cleared and exported by the settings manifest (`privacy/data-manifest.ts`) with no further
- * change. And what the unit manifest's pattern buys (a merge across devices) needs a per-device
- * file; this record is one per install, by `[D-426]`.
+ * manifest's append-only per-device files, `grove/unit-manifest-store.ts`); it does not fit here.
+ * A `data.json` key is already cleared and exported by the settings manifest
+ * (`privacy/data-manifest.ts`), and what the unit manifest's pattern buys (a merge across devices)
+ * needs a per-device file; this record is one per install, by `[D-426]`.
  *
- * **The key is the one the store it replaces used** (`'materialArrivals'`, classified
- * `content-derived` in that manifest), at a new record version. That is deliberate and temporary:
- * it keeps the delete and export coverage exact with no privacy-file edit, and it is the
- * "replacement" the ruling asks for. The follow-up that composes this store in `main.ts` and
- * deletes the old one renames the key and rewrites the manifest's `holds` text in the same
- * change (`ol-egov.141.89.11.24`'s close evidence names it). Until then nothing composes both:
- * the old store's own version check reads this record as "nothing observed", and writing it would
- * overwrite this one.
+ * **The key is its own** (`'processedRevisions'`, classified `content-derived` in that manifest).
+ * It was built under the key of the store it replaces (`'materialArrivals'`, the verdict-gated
+ * per-course day) so that nothing had to change in the privacy files until it was composed;
+ * `ol-egov.141.89.11.27` composed it in `main.ts`, retired that store, and renamed the key with the
+ * manifest's `holds` text in the same change. Nothing migrates: the retired record held one day per
+ * course, gated on a materiality verdict, and cannot say which file or version a day belongs to. It
+ * is left where it is, untouched and read by nothing (a full delete clears it as an unlisted
+ * content-derived key, and the export does not carry it), and this record starts as a store that has
+ * never been rebuilt, which the next rebuild turns into unknown days.
  *
  * ## What the day is
  *
@@ -60,8 +60,8 @@
  * ## Two fields beyond the three the ruling names, flagged for review
  *
  * The ruling names fingerprint, first-processed day and state. Three more are here because the
- * reading cannot be sound without them, and none has reached a user's disk yet (nothing composes
- * this store in production; see `ol-egov.141.89.11.24`): `courses` (which courses a file counts
+ * reading cannot be sound without them (the three are open for David's ratification, on
+ * `ol-egov.141.89.11.24`'s notes; until then they stay): `courses` (which courses a file counts
  * for: a note's own `course` list can differ from its folder), `noLaterThan` (on an unknown day
  * only: the day the version was found, so an unknown-day row found before a known day cannot be
  * mistaken for a newer one, and never used as a day itself), and `rebuiltOn` (the store level
@@ -86,10 +86,10 @@ export interface ObsidianDataHost {
 }
 
 /**
- * The top-level key this store owns inside `data.json`. The same key the store it replaces used,
- * at a new record version: see the module doc for why, and for the follow-up that renames it.
+ * The top-level key this store owns inside `data.json`. Not the key the retired verdict-gated
+ * store used (`'materialArrivals'`): see the module doc for what happens to that record.
  */
-export const PROCESSED_REVISION_STORAGE_KEY = 'materialArrivals';
+export const PROCESSED_REVISION_STORAGE_KEY = 'processedRevisions';
 
 /** Whether a processed version's reading succeeded: `[D-426]`'s read, unreadable or pending. */
 export type ProcessingState = 'read' | 'unreadable' | 'pending';
@@ -293,7 +293,7 @@ export class ObsidianProcessedRevisionStore {
   /**
    * A file version was processed just now. Records its first-processed day once, keeps it on a
    * reprocess, and gives a new version its own. Read-modify-write, with the decision inside the
-   * queued step, exactly like the store this replaces (`today/material-arrival-store.ts`).
+   * queued step, exactly like the store this replaced.
    */
   async recordProcessed(processed: ProcessedRevisionInput): Promise<void> {
     const day = calendarDayFromLocalDate(this.now());
