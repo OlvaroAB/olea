@@ -39,29 +39,26 @@
  * INV-1 (no `obsidian` import) and C6 (no server-side state) hold by construction.
  */
 
-import type { PaperQuestionGroup, VaultSource } from 'olea-core';
-import {
-  type DocumentStateView,
-  documentStateView,
-  type ReadingPolicy,
-  type ScopeReadingProjection,
-  type StructureView,
-  structureView,
-} from '../../../core/src/outcome/scope-reading-project.js';
 import {
   createScopeReadingStore,
+  type DocumentStateView,
+  documentStateView,
+  type PaperQuestionGroup,
+  type ReadingPolicy,
+  type ScopeDocumentKind,
+  type ScopePaperStructure,
+  type ScopePartDependency,
+  type ScopePendingReason,
+  type ScopeReaderProvenance,
+  type ScopeReadingAnchor,
+  type ScopeReadingProjection,
   type ScopeReadingStore,
-} from '../../../core/src/outcome/scope-reading-store.js';
-import type {
-  ScopeDocumentKind,
-  ScopePaperStructure,
-  ScopePartDependency,
-  ScopePendingReason,
-  ScopeReaderProvenance,
-  ScopeReadingAnchor,
-  ScopeStructurePart,
-  ScopeStructureSection,
-} from '../../../core/src/outcome/scope-reading-types.js';
+  type ScopeStructurePart,
+  type ScopeStructureSection,
+  type StructureView,
+  structureView,
+  type VaultSource,
+} from 'olea-core';
 
 /** The response stamp's provenance fields (`olea-contracts` `responseStamp`: `promptVersion`, `modelId`), which is what a caller has after one call. */
 export interface ExtractionStamp {

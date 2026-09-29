@@ -106,11 +106,8 @@ import {
   readReviewLogHistory,
   reviewLogPath,
   scoredConceptId,
+  unmetDemandsByConcept,
 } from 'olea-core';
-// By module path, not the barrel: `unmetDemandsByConcept` is new in this bead and the barrel
-// (`packages/core/src/index.ts`) is not this bead's file. `scope-reading/persistence.ts` imports its
-// core modules the same way for the same reason; the barrel bead switches this to `olea-core`.
-import { unmetDemandsByConcept } from '../../../core/src/gap/demand.js';
 import {
   isStudyPlanConfigured,
   type ObsidianDataHost,

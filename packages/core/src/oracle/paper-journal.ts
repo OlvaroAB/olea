@@ -44,10 +44,12 @@
  * **Wire notes for the caller** (`packages/plugin/src/paper/provider.ts`, not this lane's file):
  * `requestPaper` composes the blueprint, computes the fingerprint, calls `openPaperJournal`, then
  * `runPaperJournal` with a generator built from the port, then `finalizePaperFromJournal` on
- * `ready`; on `unfinished` it hands over nothing. The port MUST report the three outcomes apart
- * (`classifyPaperSlotWorkerResult` reads the real Worker envelope): today's
- * `createWorkerPaperItemGenerationPort` reads a different envelope and folds a refusal and an outage
- * into one word, so it cannot serve this driver unchanged.
+ * `ready`; on `unfinished` it hands over nothing. The port MUST report the three outcomes apart, and
+ * the plugin's `createWorkerPaperSlotOutcomePort` (`packages/plugin/src/oracle/paper-item-port.ts`)
+ * does: it reads the real Worker envelope through `classifyPaperSlotWorkerResult` below and reports
+ * `generated`, `refused` and `unavailable` apart, never throwing. The flat path's adapter,
+ * `createWorkerPaperItemGenerationPort`, reads the same envelope through the same classifier, passes
+ * `generated` and `refused` through and throws on an outage, so it is not the port for this driver.
  */
 
 import { canonicalJson } from '../outcome/canonical-json.js';
@@ -521,9 +523,11 @@ export type PaperSlotWorkerResult =
  *   expired token, a plugin below the floor, a bad request — none of these says anything about her
  *   notes, so none may become an empty slot.
  *
- * (Today's `createWorkerPaperItemGenerationPort` checks `{ success, error }`, which is not this
- * envelope, so a real error body falls through to `generated` there. Recorded as a difference on
- * the D-430 build bead.)
+ * This is the one envelope reader: the plugin's `createWorkerPaperSlotOutcomePort` and
+ * `createWorkerPaperItemGenerationPort` (`packages/plugin/src/oracle/paper-item-port.ts`) both read
+ * a body through it and add no second reader. (An earlier version of the flat adapter checked
+ * `{ success, error }`, which is not this envelope, so a real error body fell through to
+ * `generated`; that is fixed, `ol-egov.141.89.7.29`.)
  */
 export function classifyPaperSlotWorkerResult(body: unknown): PaperSlotWorkerResult {
   if (typeof body !== 'object' || body === null) {

@@ -42,8 +42,7 @@
  * top-level `promptVersion`, a shape the Worker never sends (its specs agreed with it, so they stayed
  * green): a real error body fell through to `generated`, and every prompt version read `unknown`.
  * The envelope is now read by ONE classifier, `olea-core`'s `classifyPaperSlotWorkerResult`
- * (`oracle/paper-journal.ts`, deep-imported like the other `olea-core/src/...` reads in this
- * package because the barrel does not carry it yet); this file adds no second envelope reader.
+ * (`oracle/paper-journal.ts`, read through the `olea-core` barrel); this file adds no second envelope reader.
  *
  * - `generated`: `ok: true` with a stamped prompt version (`stamp.promptVersion`, D7.3), carrying at
  *   least one artefact. The whole body is kept as the item's `response`.
@@ -79,7 +78,7 @@ import type {
   PaperItemGenerationResult,
   WorkerTaskTransport,
 } from 'olea-core';
-import { classifyPaperSlotWorkerResult } from 'olea-core/src/oracle/paper-journal.js';
+import { classifyPaperSlotWorkerResult } from 'olea-core';
 
 export interface WorkerPaperItemGenerationPortDeps {
   readonly transport: WorkerTaskTransport;

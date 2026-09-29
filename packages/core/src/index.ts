@@ -683,8 +683,15 @@ export {
 } from './gap/coverage.js';
 // [ILB-ATT] Whether a concept's demand rule is currently met
 // (`ol-egov.141.89.9.4`) — see `./gap/demand.js`'s own module doc.
-export type { DemandRule, DemandsMetInput, DemandsMetReading } from './gap/demand.js';
-export { demandsMetNow } from './gap/demand.js';
+// `unmetDemandsByConcept` is the gap view's unmet-demand reader (`ol-egov.141.89.2.27`, `[D-437]`);
+// `packages/plugin/src/gap/provider.ts` reaches it through here (`ol-egov.141.89.2.31`).
+export type {
+  DemandRule,
+  DemandsMetInput,
+  DemandsMetReading,
+  UnmetDemandsInput,
+} from './gap/demand.js';
+export { demandsMetNow, unmetDemandsByConcept } from './gap/demand.js';
 export type { AssessmentFormat, ReadinessFactors, ReadinessOptions } from './gap/readiness.js';
 export {
   assessmentFormatOf,
@@ -1674,6 +1681,46 @@ export type {
   PaperItemGenerationResult,
 } from './oracle/paper-items.js';
 export { fillPaperBlueprintSlots, paperItemMcqCandidate } from './oracle/paper-items.js';
+// The practice paper's resumable journal (`[D-430]`, `ol-egov.141.89.7.23`): the driver over the
+// slot calls, the Worker-envelope classifier, and the finalize step. See `./oracle/paper-journal.js`'s
+// own module doc. `packages/plugin/src/oracle/paper-item-port.ts` reads the envelope through
+// `classifyPaperSlotWorkerResult` from here (`ol-egov.141.89.7.32`).
+export type {
+  FinalizePaperFromJournalInput,
+  OpenPaperJournalInput,
+  PaperJournalDiscard,
+  PaperJournalDiscardReason,
+  PaperJournalEvent,
+  PaperJournalOpenDecision,
+  PaperJournalOpenResult,
+  PaperJournalPlanSlot,
+  PaperJournalRecord,
+  PaperJournalRunResult,
+  PaperJournalSlotOutcome,
+  PaperJournalStatus,
+  PaperSlotGenerationOutcome,
+  PaperSlotGenerationRequest,
+  PaperSlotGenerator,
+  PaperSlotWorkerResult,
+  RunPaperJournalInput,
+} from './oracle/paper-journal.js';
+export {
+  applyPaperJournalEvent,
+  classifyPaperSlotWorkerResult,
+  discardPaperJournal,
+  finalizePaperFromJournal,
+  isPaperJournalRecord,
+  listPaperJournals,
+  OPAQUE_PAPER_JOURNAL_ID_PREFIX,
+  openPaperJournal,
+  PAPER_JOURNAL_FOLDER,
+  PAPER_JOURNAL_SCHEMA_VERSION,
+  PAPER_SLOT_RETRIES_DECLARED,
+  PaperJournalUnfinishedError,
+  paperJournalOwedSlotIds,
+  paperJournalPath,
+  runPaperJournal,
+} from './oracle/paper-journal.js';
 export type {
   CreatePaperInput,
   PaperCompositionAccount,
@@ -1707,6 +1754,34 @@ export {
   recordPaperResponse,
   retirePaper,
 } from './oracle/paper-store.js';
+// Pure logic over the structured paper shape (`[D-430]`, `ol-egov.141.89.7.23`): validation,
+// dependency order, empty propagation, counted marks, completion, yield against the original
+// structure, and the reuse fingerprint. See `./oracle/paper-structure.js`'s own module doc.
+export type {
+  PaperClassifiableReasonCode,
+  PaperCountedMarks,
+  PaperEmptyOutcome,
+  PaperMarksDisagreements,
+  PaperReuseComparison,
+  PaperReuseInputs,
+  PaperReuseSlotPlanEntry,
+  PaperStructureProblem,
+  PaperStructureProblemCode,
+} from './oracle/paper-structure.js';
+export {
+  classifyPaperCompletion,
+  comparePaperReuseFingerprints,
+  countedPaperMarks,
+  emptySlotGapKind,
+  paperBlueprintDigest,
+  paperIntendedDemandBasis,
+  paperPartsInDependencyOrder,
+  paperReuseFingerprint,
+  paperYieldAgainstStructure,
+  propagatePaperEmptiness,
+  reconcilePaperStructureMarks,
+  validatePaperStructure,
+} from './oracle/paper-structure.js';
 // `[D-262]`'s five demand words: the one vocabulary every demand-carrying type above uses.
 // F4.11's practice-paper generation pipeline (`[D-250]`/`[D-252]`, component register row 2.11,
 // `[H-blueprint]` / `ol-0r92.75`, bead `[PAPER-3]`). No production caller yet — surfaces are a
@@ -1719,27 +1794,46 @@ export type {
   PaperAssessment,
   PaperBlueprint,
   PaperBlueprintSlot,
+  PaperChoicePattern,
+  PaperCompletion,
   PaperDemand,
+  PaperDemandReading,
   PaperEmptySlot,
+  PaperEmptySlotReasonCode,
   PaperExtent,
+  PaperFaceDemandGap,
   PaperFormatClass,
+  PaperGapKind,
   PaperGeneratorTaskId,
   PaperGroundingLabel,
   PaperGroundingTier,
+  PaperGroupStimulusNeed,
   PaperHeldSource,
+  PaperHeldStimulus,
+  PaperIntendedDemandBasis,
+  PaperMarks,
+  PaperPartDemandReading,
+  PaperPartDependency,
   PaperPurpose,
   PaperQuestionGroup,
   PaperQuestionGroupKind,
   PaperRecoveredSection,
   PaperRecoveredSitting,
   PaperRecoveredStructure,
+  PaperReuseFingerprint,
   PaperScopeConcept,
   PaperScopeOutcome,
   PaperSteering,
   PaperStimulus,
   PaperStimulusForm,
   PaperStimulusNotIdentifiedReason,
+  PaperStructureBasis,
+  PaperStructuredGroup,
+  PaperStructuredPart,
+  PaperStructuredSection,
+  PaperStructuredShape,
   PaperTaughtSignal,
+  PaperTimeAllowance,
   PaperWeightingAlpha,
 } from './oracle/paper-types.js';
 // F4.11's declared practice-paper purposes (`ol-egov.141.89.9.4`'s slot-weight
@@ -1750,6 +1844,7 @@ export {
   PAPER_QUESTION_GROUP_KINDS,
   PAPER_STIMULUS_FORMS,
   PAPER_STIMULUS_NOT_IDENTIFIED_REASONS,
+  PAPER_STRUCTURE_FORMAT_VERSION,
 } from './oracle/paper-types.js';
 export type { PaperUnlockInput, PaperUnlockResult } from './oracle/paper-unlock.js';
 export {
@@ -1776,6 +1871,9 @@ export type {
   RankOracleOptions,
   RankOracleResult,
 } from './oracle/types.js';
+// The canonical JSON text of a value (object keys sorted at every depth): the one serialiser the
+// scope-reading event ids and the paper reuse fingerprint hash over (`ol-egov.141.89.7.32`).
+export { canonicalJson } from './outcome/canonical-json.js';
 // The Outcome node (`[ONT-R5]`, knowledge model §4, functional scope F4.1, component register
 // row 1.1b): an examiner-declared unit of scope, the parent of the concepts inferred from how it
 // is taught and examined. `[D-253 / OUT-1]` proposes the field set for ratification; the module
@@ -1804,6 +1902,8 @@ export type {
   TextPaperGroupingInput,
   TextPaperQuestionGroup,
   TextPaperQuestionGrouping,
+  UnresolvedStructure,
+  UnresolvedStructureKind,
 } from './outcome/paper-question-groups.js';
 export {
   groupMarkdownPastPaper,
@@ -1831,6 +1931,89 @@ export {
 } from './outcome/reconcile.js';
 export type { OutcomeConceptCoverage } from './outcome/reconcile-coverage.js';
 export { outcomeConceptCoverage } from './outcome/reconcile-coverage.js';
+// The examiner-scope reading store (`[D-429]`, `ol-egov.141.89.7.22`): the typed API over the
+// scope-reading log, its projection and views, and the payload types. See each module's own doc.
+// `packages/plugin/src/scope-reading/persistence.ts` reaches all of it through here
+// (`ol-egov.141.89.7.32`).
+export type {
+  AppendScopeReadingOptions,
+  AppendScopeReadingResult,
+  ReadScopeReadingLogOptions,
+  ScopeReadingDraft,
+  ScopeReadingEvent,
+  ScopeReadingLogEntry,
+  ScopeReadingStoreName,
+} from './outcome/scope-reading-log.js';
+export {
+  appendScopeReadingEvents,
+  latestEntryPerKey,
+  orderScopeReadingEntries,
+  readScopeReadingLog,
+  SCOPE_READING_FOLDER,
+  SCOPE_READING_LOG_SCHEMA_VERSION,
+  SCOPE_READING_STORES,
+  scopeReadingEventId,
+  scopeReadingLogPath,
+} from './outcome/scope-reading-log.js';
+export type {
+  AlignmentCurrentDigests,
+  AlignmentQuery,
+  AlignmentResultView,
+  DocumentStateView,
+  PartDemandView,
+  ReadingPolicy,
+  ScopeReadingLogs,
+  ScopeReadingProjection,
+  ScopeRevisionRef,
+  StructureView,
+} from './outcome/scope-reading-project.js';
+export {
+  alignmentFreshness,
+  alignmentResultKey,
+  alignmentResultsForDocument,
+  alignmentResultView,
+  documentStateKey,
+  documentStateView,
+  isAlignmentResultPayload,
+  isDocumentStatePayload,
+  isPaperStructurePayload,
+  isPartDemandPayload,
+  paperStructureKey,
+  partDemandKey,
+  partDemandView,
+  projectScopeReadings,
+  structureView,
+} from './outcome/scope-reading-project.js';
+export type {
+  RecordOutcome,
+  ScopeReadingStore,
+  ScopeReadingStoreOptions,
+} from './outcome/scope-reading-store.js';
+export { createScopeReadingStore } from './outcome/scope-reading-store.js';
+export type {
+  AlignmentCoverageNote,
+  AlignmentDigests,
+  AlignmentFreshness,
+  AlignmentOmissionReason,
+  AlignmentResult,
+  AlignmentResultPayload,
+  DocumentProcessingState,
+  DocumentStatePayload,
+  PaperStructurePayload,
+  PartDemandPayload,
+  ScopeDocumentKind,
+  ScopePaperStructure,
+  ScopePartDemand,
+  ScopePartDependency,
+  ScopePendingReason,
+  ScopeReaderProvenance,
+  ScopeReadingAnchor,
+  ScopeReadingFreshness,
+  ScopeSourceRef,
+  ScopeStructurePart,
+  ScopeStructureSection,
+} from './outcome/scope-reading-types.js';
+export { SCOPE_READING_SCHEMA_VERSION } from './outcome/scope-reading-types.js';
 export type {
   OpaqueIdNonceSource,
   ResolveOutcomeInput,

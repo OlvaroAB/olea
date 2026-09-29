@@ -19,8 +19,7 @@ import type {
   PaperItemGenerationRequest,
   WorkerTaskTransport,
 } from 'olea-core';
-import { fillPaperBlueprintSlots } from 'olea-core';
-import { classifyPaperSlotWorkerResult } from 'olea-core/src/oracle/paper-journal.js';
+import { classifyPaperSlotWorkerResult, fillPaperBlueprintSlots } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   createWorkerPaperItemGenerationPort,
