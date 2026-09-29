@@ -19,14 +19,25 @@ const DAY_1: CalendarDay = '2026-09-01';
 const DAY_2: CalendarDay = '2026-09-10';
 const DAY_3: CalendarDay = '2026-09-20';
 
-function read(arrivedDay: CalendarDay): ProcessedRevision {
-  return { arrivedDay, readState: 'read' };
+function read(firstProcessedDay: CalendarDay): ProcessedRevision {
+  return { firstProcessedDay, readState: 'read' };
 }
-function unreadable(arrivedDay: CalendarDay): ProcessedRevision {
-  return { arrivedDay, readState: 'unreadable' };
+function unreadable(firstProcessedDay: CalendarDay): ProcessedRevision {
+  return { firstProcessedDay, readState: 'unreadable' };
 }
-function pending(arrivedDay: CalendarDay): ProcessedRevision {
-  return { arrivedDay, readState: 'pending' };
+function pending(firstProcessedDay: CalendarDay): ProcessedRevision {
+  return { firstProcessedDay, readState: 'pending' };
+}
+/** A revision whose first-processed day was lost, found (by rereading) on or before `noLaterThan`. */
+function dayUnknown(
+  noLaterThan: CalendarDay | undefined,
+  readState: ProcessedRevision['readState'] = 'read',
+): ProcessedRevision {
+  return {
+    firstProcessedDay: null,
+    ...(noLaterThan === undefined ? {} : { noLaterThan }),
+    readState,
+  };
 }
 
 describe('detectCourseArrivals', () => {
@@ -95,8 +106,8 @@ describe('detectCourseArrivals', () => {
     expect(result.lastArrivalDay).toBe(DAY_3);
   });
 
-  it('R7 — a burst upload of older material is dated by when it reached the vault, not by any content date', () => {
-    // `ProcessedRevision` carries only `arrivedDay`; there is no authored- or
+  it('R7 — a burst upload of older material is dated by when it was processed, not by any content date', () => {
+    // `ProcessedRevision` carries only `firstProcessedDay`; there is no authored- or
     // content-date field for a caller to have supplied instead.
     const result = detectCourseArrivals({ course: 'C1', revisions: [read(DAY_3)] });
     expect(result.lastArrivalDay).toBe(DAY_3);
@@ -211,6 +222,104 @@ describe('arrivals feeding detectRhythm end to end', () => {
     const result = detectRhythm({ today: TODAY, courses });
 
     expect(result.status).toBe('observed');
+    expect(result.measured?.quietestCourse).toBe('GONE_QUIET');
+  });
+});
+
+// `ol-egov.141.89.11.24`, `[D-426]` (row 25, 2026-09-29): the day on a processed revision is the day
+// Olea first processed it, never an exact arrival time, and after the record is lost it is unknown.
+describe('an unknown first-processed day (D-426, ol-egov.141.89.11.24)', () => {
+  it("a course whose only revisions have an unknown day reads 'day-unknown': not quiet, not 'no-arrivals', no day", () => {
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [dayUnknown(DAY_2), dayUnknown(DAY_2, 'unreadable')],
+    });
+    expect(result.status).toBe('day-unknown');
+    expect(result.lastArrivalDay).toBeNull();
+    // The two states it must never collapse into: nothing ever arrived, and arrived-but-unreadable.
+    expect(result.status).not.toBe('no-arrivals');
+    expect(result.status).not.toBe('unreadable');
+  });
+
+  it("'day-unknown' reaches the rhythm reading as no day plus the unknown flag, never as unreadable or a quiet course", () => {
+    const arrival = detectCourseArrivals({ course: 'C1', revisions: [dayUnknown(DAY_2)] });
+    expect(toRhythmCourseInput(arrival)).toEqual({
+      course: 'C1',
+      lastMaterialArrivalDay: null,
+      arrivalDayUnknown: true,
+      unreadable: false,
+    });
+  });
+
+  it('an unknown-day revision found no later than the latest known day does not hide it', () => {
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [dayUnknown(DAY_2), read(DAY_3), dayUnknown(DAY_3)],
+    });
+    expect(result.status).toBe('arrived');
+    expect(result.lastArrivalDay).toBe(DAY_3);
+  });
+
+  it('an unknown-day revision found after the latest known day makes the day unknown: it may be the newest', () => {
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [read(DAY_1), dayUnknown(DAY_3)],
+    });
+    expect(result.status).toBe('day-unknown');
+    expect(result.lastArrivalDay).toBeNull();
+  });
+
+  it('an unknown-day revision with no bound at all is never assumed old', () => {
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [read(DAY_3), dayUnknown(undefined)],
+    });
+    expect(result.status).toBe('day-unknown');
+  });
+
+  it('an unparseable day is treated as unknown, never skipped into an empty reading', () => {
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [{ firstProcessedDay: 'not-a-day' as CalendarDay, readState: 'read' }],
+    });
+    expect(result.status).toBe('day-unknown');
+    expect(result.status).not.toBe('no-arrivals');
+  });
+
+  it('an unknown-day revision found on the latest day does not lift an unreadable latest day to arrived', () => {
+    // Its own day could be that day or earlier; nothing here proves it read on the latest day.
+    const result = detectCourseArrivals({
+      course: 'C1',
+      revisions: [unreadable(DAY_3), dayUnknown(DAY_3, 'read')],
+    });
+    expect(result.status).toBe('unreadable');
+    expect(result.lastArrivalDay).toBe(DAY_3);
+  });
+
+  it('pending is not empty: a pending revision has a day and reads unreadable, while no revision reads no-arrivals', () => {
+    const pendingReading = detectCourseArrivals({ course: 'C1', revisions: [pending(DAY_2)] });
+    const emptyReading = detectCourseArrivals({ course: 'C1', revisions: [] });
+    expect(pendingReading.status).toBe('unreadable');
+    expect(pendingReading.lastArrivalDay).toBe(DAY_2);
+    expect(emptyReading.status).toBe('no-arrivals');
+    expect(emptyReading.lastArrivalDay).toBeNull();
+  });
+
+  it('a course whose day is unknown is never the quietest course, and never blocks the others', () => {
+    const TODAY: CalendarDay = '2026-11-30';
+    const arrivals = detectArrivals([
+      { course: 'LOST_RECORD', revisions: [dayUnknown('2026-08-01')] },
+      { course: 'GONE_QUIET', revisions: [read('2026-09-01')] },
+    ]);
+    const courses = arrivals
+      .map((a) => toRhythmCourseInput(a))
+      .filter((c): c is NonNullable<typeof c> => c !== null);
+    const result = detectRhythm({ today: TODAY, courses });
+
+    const lost = result.measured?.courses.find((c) => c.course === 'LOST_RECORD');
+    expect(lost?.status).toBe('not-enough-history');
+    expect(lost?.quietDays).toBeNull();
+    expect(lost?.reason).toMatch(/not known/);
     expect(result.measured?.quietestCourse).toBe('GONE_QUIET');
   });
 });

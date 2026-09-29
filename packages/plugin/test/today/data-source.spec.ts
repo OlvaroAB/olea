@@ -59,8 +59,10 @@ import { describe, expect, it } from 'vitest';
 import { extractConceptsFromVault } from '../../src/concept/wiring.js';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
 import { ObsidianGroveReadCompletenessStore } from '../../src/grove/read-completeness-store.js';
+import { ObsidianProcessedRevisionStore } from '../../src/ingestion/processed-revisions/store.js';
 import { ObsidianRegistryOverridesStore } from '../../src/registry/overrides-store.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
+import { rhythmQuietLine } from '../../src/today/copy.js';
 import {
   createRhythmSource,
   createVaultInstrumentSource,
@@ -2155,6 +2157,81 @@ describe('loadTodayPanel', () => {
         }),
       ]);
     });
+
+    // `ol-egov.141.89.11.24`, `[D-426]` (row 25): a course whose material was processed but whose
+    // first-processed day is unknown (the record was lost) must draw no "hasn't shown up" claim:
+    // that material may have landed after those sessions.
+    describe('a course whose first-processed day is unknown (D-426, ol-egov.141.89.11.24)', () => {
+      const calendar = {
+        '01 Courses/FIXTURE101/Lecture notes.md': 'Just a note — never scanned for events.',
+        'UNIVERSITY/Calendar/calendar-events.md': [
+          '- [ ] FIXTURE101 Mon 09:00-10:00 📅 2026-08-03',
+          '- [ ] FIXTURE101 Wed 09:00-10:00 📅 2026-08-05',
+        ].join('\n'),
+      };
+      const rhythmOf = (
+        arrivals: Awaited<ReturnType<TodayRhythmSource['listCourseMaterialArrivals']>>,
+      ): TodayRhythmSource => ({
+        async listCourseMaterialArrivals() {
+          return arrivals;
+        },
+        async resolveTermWindow() {
+          return null;
+        },
+      });
+
+      it('draws no yardstick claim, where the same course with no arrival on record does', async () => {
+        const { vault } = fakeVault(calendar, { listSeesDotFolder: true });
+        const load = (arrivals: Parameters<typeof rhythmOf>[0]) =>
+          loadTodayPanel({
+            vault,
+            deviceId: DEVICE,
+            instruments: unavailableInstrumentSource,
+            now,
+            windowDays: 30,
+            rhythm: rhythmOf(arrivals),
+          });
+
+        const unknown = await load([
+          { course: 'FIXTURE101', lastMaterialArrivalDay: null, arrivalDayUnknown: true },
+        ]);
+        expect(unknown.courseFreshness).toEqual([]);
+
+        const nothingOnRecord = await load([]);
+        expect(nothingOnRecord.courseFreshness).toEqual([
+          expect.objectContaining({
+            courseCode: 'FIXTURE101',
+            status: 'not-arrived-with-yardstick',
+          }),
+        ]);
+      });
+
+      it('leaves another course’s reading alone', async () => {
+        const { vault } = fakeVault(
+          {
+            ...calendar,
+            '01 Courses/FIXTURE202/Lecture notes.md': 'Another note.',
+            'UNIVERSITY/Calendar/other-events.md': [
+              '- [ ] FIXTURE202 Mon 09:00-10:00 📅 2026-08-03',
+              '- [ ] FIXTURE202 Wed 09:00-10:00 📅 2026-08-05',
+            ].join('\n'),
+          },
+          { listSeesDotFolder: true },
+        );
+        const vm = await loadTodayPanel({
+          vault,
+          deviceId: DEVICE,
+          instruments: unavailableInstrumentSource,
+          now,
+          windowDays: 30,
+          rhythm: rhythmOf([
+            { course: 'FIXTURE101', lastMaterialArrivalDay: null, arrivalDayUnknown: true },
+            { course: 'FIXTURE202', lastMaterialArrivalDay: '2026-08-01' },
+          ]),
+        });
+        expect(vm.courseFreshness?.map((reading) => reading.courseCode)).toEqual(['FIXTURE202']);
+      });
+    });
   });
 });
 
@@ -2167,6 +2244,225 @@ class FakeDataHost {
     this.blob = data as Record<string, unknown>;
   }
 }
+
+describe('createRhythmSource — over the processed-revision record (D-426, ol-egov.141.89.11.24)', () => {
+  const PDF = '01 Courses/CRS-A/deck.pdf';
+  const NOTE = '01 Courses/CRS-B/week 1.md';
+
+  function recordOn(
+    host: FakeDataHost,
+    iso: string,
+  ): { store: ObsidianProcessedRevisionStore; at: (day: string) => void } {
+    let current = new Date(`${iso}T12:00:00`);
+    const store = new ObsidianProcessedRevisionStore(host, () => current);
+    return {
+      store,
+      at: (day) => {
+        current = new Date(`${day}T12:00:00`);
+      },
+    };
+  }
+
+  const termWindow = () => new ObsidianTermWindowStore(new FakeDataHost());
+
+  it('a fresh install cannot say: null (could not read), never an empty list of courses', async () => {
+    const { store } = recordOn(new FakeDataHost(), '2026-08-01');
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    expect(await source.listCourseMaterialArrivals()).toBeNull();
+  });
+
+  it('a store that has rows but was never rebuilt still cannot say', async () => {
+    const { store } = recordOn(new FakeDataHost(), '2026-08-01');
+    await store.recordProcessed({
+      path: PDF,
+      courses: ['CRS-A'],
+      fingerprint: 'fp',
+      state: 'read',
+    });
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    expect(await source.listCourseMaterialArrivals()).toBeNull();
+  });
+
+  it('a rebuilt store with nothing in it says so: an empty list, not null', async () => {
+    const { store } = recordOn(new FakeDataHost(), '2026-08-01');
+    await store.rebuild([]);
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    expect(await source.listCourseMaterialArrivals()).toEqual([]);
+  });
+
+  it('a new file counts: a first-processed day is an arrival, whatever the materiality verdict', async () => {
+    const { store, at } = recordOn(new FakeDataHost(), '2026-08-01');
+    await store.rebuild([]);
+    at('2026-08-05');
+    await store.recordProcessed({
+      path: NOTE,
+      courses: ['CRS-B'],
+      fingerprint: 'fp-n',
+      state: 'read',
+    });
+    at('2026-08-09');
+    await store.recordProcessed({
+      path: PDF,
+      courses: ['CRS-A'],
+      fingerprint: 'fp-p',
+      state: 'read',
+    });
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    expect(await source.listCourseMaterialArrivals()).toEqual([
+      { course: 'CRS-A', lastMaterialArrivalDay: '2026-08-09', unreadable: false },
+      { course: 'CRS-B', lastMaterialArrivalDay: '2026-08-05', unreadable: false },
+    ]);
+  });
+
+  it('a pending version is arrived-but-unread, distinct from a course with nothing on record', async () => {
+    const { store } = recordOn(new FakeDataHost(), '2026-08-05');
+    await store.rebuild([]);
+    await store.recordProcessed({
+      path: PDF,
+      courses: ['CRS-A'],
+      fingerprint: 'fp-p',
+      state: 'pending',
+    });
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    const arrivals = await source.listCourseMaterialArrivals();
+    expect(arrivals).toEqual([
+      { course: 'CRS-A', lastMaterialArrivalDay: '2026-08-05', unreadable: true },
+    ]);
+    expect(arrivals?.some((course) => course.course === 'CRS-EMPTY')).toBe(false);
+  });
+
+  it('after loss every course reads day-unknown: no day, flagged, and never today', async () => {
+    const host = new FakeDataHost();
+    const { store, at } = recordOn(host, '2026-08-01');
+    await store.recordProcessed({
+      path: PDF,
+      courses: ['CRS-A'],
+      fingerprint: 'fp-p',
+      state: 'read',
+    });
+    delete host.blob.materialArrivals; // the loss
+    at('2026-09-20');
+    await store.rebuild([
+      { path: PDF, courses: ['CRS-A'], fingerprint: 'fp-p', state: 'read' },
+      { path: NOTE, courses: ['CRS-B'], fingerprint: 'fp-n', state: 'read' },
+    ]);
+    const source = createRhythmSource({ processedRevisions: store, termWindow: termWindow() });
+    const arrivals = await source.listCourseMaterialArrivals();
+    expect(arrivals).toEqual([
+      { course: 'CRS-A', lastMaterialArrivalDay: null, arrivalDayUnknown: true, unreadable: false },
+      { course: 'CRS-B', lastMaterialArrivalDay: null, arrivalDayUnknown: true, unreadable: false },
+    ]);
+    for (const course of arrivals ?? []) {
+      expect(course.lastMaterialArrivalDay).not.toBe('2026-09-20');
+    }
+  });
+
+  it('a store that cannot be read is null, never an empty answer', async () => {
+    const source = createRhythmSource({
+      processedRevisions: {
+        async load() {
+          throw new Error('unreadable');
+        },
+      },
+      termWindow: termWindow(),
+    });
+    expect(await source.listCourseMaterialArrivals()).toBeNull();
+  });
+
+  it('when the record is supplied it is what the rhythm reads, not the verdict-gated store it replaces', async () => {
+    const arrivalStore = new ObsidianMaterialArrivalStore(new FakeDataHost());
+    await arrivalStore.recordArrival('OLD-COURSE', '2026-08-01');
+    const { store } = recordOn(new FakeDataHost(), '2026-08-05');
+    await store.rebuild([]);
+    const source = createRhythmSource({
+      processedRevisions: store,
+      materialArrivals: arrivalStore,
+      termWindow: termWindow(),
+    });
+    expect(await source.listCourseMaterialArrivals()).toEqual([]);
+  });
+
+  it('with neither store supplied there is nothing to read: null', async () => {
+    const source = createRhythmSource({ termWindow: termWindow() });
+    expect(await source.listCourseMaterialArrivals()).toBeNull();
+  });
+});
+
+describe('the rhythm reading through Today over the processed-revision record (D-426, ol-egov.141.89.11.24)', () => {
+  const PDF = '01 Courses/FIXTURE101/deck.pdf';
+  const calendar = {
+    '01 Courses/FIXTURE101/Lecture notes.md': 'Just a note — never scanned for events.',
+    'UNIVERSITY/Calendar/calendar-events.md': [
+      '- [ ] FIXTURE101 Mon 09:00-10:00 📅 2026-08-03',
+      '- [ ] FIXTURE101 Wed 09:00-10:00 📅 2026-08-05',
+    ].join('\n'),
+  };
+
+  async function panelOver(host: FakeDataHost, todayIso: string) {
+    const { vault } = fakeVault(calendar, { listSeesDotFolder: true });
+    const store = new ObsidianProcessedRevisionStore(host, () => new Date(`${todayIso}T12:00:00`));
+    return loadTodayPanel({
+      vault,
+      deviceId: DEVICE,
+      instruments: unavailableInstrumentSource,
+      now: () => new Date(`${todayIso}T12:00:00`),
+      windowDays: 30,
+      rhythm: createRhythmSource({
+        processedRevisions: store,
+        termWindow: new ObsidianTermWindowStore(new FakeDataHost()),
+      }),
+    });
+  }
+
+  it('a quiet course reads as quiet by its first-processed day, as a day count only', async () => {
+    const host = new FakeDataHost();
+    const early = new ObsidianProcessedRevisionStore(host, () => new Date('2026-07-01T12:00:00'));
+    await early.rebuild([]);
+    await early.recordProcessed({
+      path: PDF,
+      courses: ['FIXTURE101'],
+      fingerprint: 'fp',
+      state: 'read',
+    });
+    const vm = await panelOver(host, '2026-08-10');
+    expect(vm.rhythm?.status).toBe('observed');
+    const reading = vm.rhythm?.measured?.courses[0];
+    expect(reading?.quietDays).toBe(40);
+    // What Today can say from it is the day count and nothing dated: the first-processed day is a
+    // processing day and never appears as an arrival date.
+    const line = rhythmQuietLine('FIXTURE101', reading?.quietDays ?? 0);
+    expect(line.text).not.toMatch(/\d{4}-\d{2}-\d{2}/);
+    expect(line.text).not.toContain('2026-07-01');
+  });
+
+  it('after the record is lost the same course reads no claim at all: not quiet, and no schedule claim', async () => {
+    const host = new FakeDataHost();
+    const early = new ObsidianProcessedRevisionStore(host, () => new Date('2026-07-01T12:00:00'));
+    await early.recordProcessed({
+      path: PDF,
+      courses: ['FIXTURE101'],
+      fingerprint: 'fp',
+      state: 'read',
+    });
+    delete host.blob.materialArrivals; // the loss
+    const rebuild = new ObsidianProcessedRevisionStore(host, () => new Date('2026-08-09T12:00:00'));
+    await rebuild.rebuild([
+      { path: PDF, courses: ['FIXTURE101'], fingerprint: 'fp', state: 'read' },
+    ]);
+
+    const vm = await panelOver(host, '2026-08-10');
+    expect(vm.rhythm?.status).toBe('not-enough-history');
+    expect(vm.rhythm?.measured?.courses[0]?.quietDays).toBeNull();
+    expect(vm.rhythm?.measured?.quietestCourse).toBeNull();
+    expect(vm.courseFreshness).toEqual([]);
+  });
+
+  it('a store never rebuilt draws no rhythm at all and no schedule claim: it cannot say', async () => {
+    const vm = await panelOver(new FakeDataHost(), '2026-08-10');
+    expect(vm.rhythm).toBeNull();
+    expect(vm.courseFreshness).toBeNull();
+  });
+});
 
 describe('createRhythmSource — the real source, over the two persisted stores', () => {
   it('lists exactly the courses the arrival store has ever heard from', async () => {

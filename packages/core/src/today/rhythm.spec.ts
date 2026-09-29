@@ -233,3 +233,39 @@ describe("detectRhythm — 'unreadable' input (ol-egov.141.89.11.4, vew.md §2.5
     expect(result.measured?.quietestCourse).toBeNull();
   });
 });
+
+describe("detectRhythm — 'arrivalDayUnknown' input (ol-egov.141.89.11.24, [D-426])", () => {
+  it('reads not-enough-history with a reason that says the day is not known, never quiet', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [{ course: 'C1', lastMaterialArrivalDay: null, arrivalDayUnknown: true }],
+    });
+    const reading = result.measured?.courses[0];
+    expect(reading?.status).toBe('not-enough-history');
+    expect(reading?.quietDays).toBeNull();
+    expect(reading?.reason).toMatch(/not known/);
+    expect(result.status).toBe('not-enough-history');
+  });
+
+  it('is never picked as the quietest course, and never blocks a verdict about others', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [
+        { course: 'LOST_RECORD', lastMaterialArrivalDay: null, arrivalDayUnknown: true },
+        course('GONE_QUIET', 30),
+      ],
+    });
+    expect(result.status).toBe('observed');
+    expect(result.measured?.quietestCourse).toBe('GONE_QUIET');
+  });
+
+  it('an unreadable flag still takes priority over an unknown day', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [
+        { course: 'C1', lastMaterialArrivalDay: null, unreadable: true, arrivalDayUnknown: true },
+      ],
+    });
+    expect(result.measured?.courses[0]?.status).toBe('unreadable');
+  });
+});

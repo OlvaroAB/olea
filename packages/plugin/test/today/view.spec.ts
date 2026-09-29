@@ -193,3 +193,52 @@ describe("TodayView.renderInsightsBody — a withheld effort comparison gets its
     expect(BODY).toMatch(/text: INSIGHTS_TOO_EARLY/);
   });
 });
+
+// `ol-egov.141.89.11.24`, `[D-426]` (row 25 of the 2026-09-29 rulings): the rhythm section is fed
+// first-processed days, which are processing days and never an exact arrival time. Same
+// source-text constraint as above (`today/view.ts` cannot be loaded under Vitest), so this pins
+// what `renderRhythmBody` is allowed to do with the reading rather than mounting it; the
+// reading's own behaviour is `core/today/arrivals.spec` and `today/data-source.spec`'s.
+// @auto:plugin/today/view.spec
+describe('TodayView.renderRhythmBody — never words a processing day as an arrival (D-426, ol-egov.141.89.11.24)', () => {
+  const START = VIEW.indexOf('private renderRhythmBody(');
+  const END = VIEW.indexOf('private renderTermDatesPointer(');
+  if (START === -1 || END === -1) {
+    throw new Error('view.spec.ts: renderRhythmBody markers moved in view.ts');
+  }
+  const BODY = VIEW.slice(START, END);
+  /** The string and template literals in the body: the only place the view could put words of its own. */
+  const LITERALS = [...BODY.matchAll(/(['"`])(?:\\.|(?!\1)[^\\])*\1/g)].map((match) => match[0]);
+
+  it('takes every sentence from copy.ts, never from a string of its own', () => {
+    expect(BODY).toMatch(/rhythmQuietLine\(reading\.course, reading\.quietDays\)/);
+    expect(BODY).toMatch(/rhythmYardstickLine\(/);
+    expect(BODY).toMatch(/text: line\.text/);
+    // Only class names and the section label constant are written here.
+    for (const literal of LITERALS) {
+      expect(literal, 'a sentence written in the view').not.toMatch(/arriv|process|since|on \d/i);
+    }
+  });
+
+  it('reads a quiet course’s day count and nothing that carries a processing day', () => {
+    expect(BODY).toMatch(/reading\.quietDays/);
+    for (const field of [
+      'lastMaterialArrivalDay',
+      'firstProcessedDay',
+      'noLaterThan',
+      'arrivedDay',
+    ]) {
+      expect(BODY, `the view reads ${field}`).not.toContain(field);
+    }
+  });
+
+  it('draws nothing for a reading that is not a measured quiet finding: pending, unreadable and unknown-day courses stay silent', () => {
+    // Everything but `'observed'` returns before any DOM is built for the quiet reading, which is
+    // what leaves `'not-enough-history'` (an unknown day) and `'unreadable'` (a pending or failed
+    // version) without a line: no sentence exists for either, and none is added here.
+    const guard = BODY.indexOf("rhythm === null || rhythm.status !== 'observed'");
+    const dom = BODY.indexOf('createDiv', guard);
+    expect(guard, 'expected the observed-only guard').toBeGreaterThan(-1);
+    expect(BODY.slice(guard, dom)).toMatch(/return;/);
+  });
+});

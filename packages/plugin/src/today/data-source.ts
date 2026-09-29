@@ -112,6 +112,7 @@ import {
   DEFAULT_COURSES_FOLDER,
   type DisputeLogRecord,
   type DueInstrument,
+  detectArrivals,
   discoverScheduleEvents,
   EMPTY_REGISTRY_OVERRIDES,
   type ExtractConceptsOptions,
@@ -139,11 +140,14 @@ import {
   type TodayPanelInput,
   type TodayViewModel,
   toDueInstruments,
+  toRhythmCourseInput,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import { ObsidianGroveReadCompletenessStore } from '../grove/read-completeness-store.js';
+import { courseArrivalInputs } from '../ingestion/processed-revisions/facts.js';
+import type { ObsidianProcessedRevisionStore } from '../ingestion/processed-revisions/store.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
 import type { StudySessionHolder } from '../session/holder.js';
@@ -1060,17 +1064,20 @@ export function createVaultTrendsSource(deps: VaultTrendsSourceDeps): TodayTrend
 
 /**
  * Where the panel gets F6.9's rhythm reading's two inputs (`ol-v7r5.6`):
- * every course a material arrival was ever observed for, and her recorded
- * term window, if any. Implemented for real by `createRhythmSource` below,
- * over `material-arrival-store.ts`'s and `term-window-store.ts`'s persisted
- * `data.json` stores — never the vault, never a server (C6).
+ * what has arrived, per course, and her recorded term window, if any.
+ * Implemented for real by `createRhythmSource` below, over the
+ * processed-revision record (`../ingestion/processed-revisions/store.ts`,
+ * `[D-426]`, `ol-egov.141.89.11.24`) and `term-window-store.ts`'s persisted
+ * `data.json` stores: never the vault, never a server (C6).
  */
 export interface TodayRhythmSource {
   /**
-   * `null` means "could not read the arrival store", the same third state
+   * `null` means "could not read what has arrived", the same third state
    * `TodayInstrumentSource.listDueCandidates` and `TodayTrendsSource.
-   * listConceptCourses` already draw: not the same as `[]`, which is a real,
-   * common answer for an install that has never observed an arrival yet.
+   * listConceptCourses` already draw: not the same as `[]`, which is a real
+   * answer (a record that was rebuilt and holds no course file). A record that
+   * has never been rebuilt, or cannot be read, is `null` too: it cannot say
+   * whether anything has arrived, and an empty list would say nothing has.
    */
   listCourseMaterialArrivals(): Promise<readonly RhythmCourseInput[] | null>;
   /**
@@ -1083,24 +1090,57 @@ export interface TodayRhythmSource {
 }
 
 export interface RhythmSourceDeps {
-  readonly materialArrivals: ObsidianMaterialArrivalStore;
+  /**
+   * The processed-revision record (`[D-426]`): what the rhythm reads when it is supplied. Structural,
+   * so a test or a workbench can hand it any `load()`.
+   */
+  readonly processedRevisions?: Pick<ObsidianProcessedRevisionStore, 'load'>;
+  /**
+   * The verdict-gated store the record replaces. Read only while `processedRevisions` is absent, so
+   * that `main.ts` (which still composes only this one; the follow-up on `ol-egov.141.89.11.24`
+   * swaps it) keeps today's behaviour until then. Retired with `today/material-arrival-store.ts`.
+   */
+  readonly materialArrivals?: ObsidianMaterialArrivalStore;
   readonly termWindow: ObsidianTermWindowStore;
 }
 
 /**
- * The real source. `listCourseMaterialArrivals` reads exactly the courses the
- * arrival store has ever heard from — a course with no observed arrival ever
- * simply is not in the list, rather than appearing with a `null` day, which
- * is a considered simplification (see `material-arrival-store.ts`'s module
- * doc) rather than an oversight: F6.9 has nothing to call "quiet" for a
- * course Olea has never once seen material from, and `detectRhythm`'s own
- * `not-enough-history` status already covers that case for the courses it IS
- * given.
+ * The rhythm reading's per-course arrivals from the processed-revision record, or `null` when the
+ * record cannot say. Rows to the arrivals stage (`detectArrivals`) to the rhythm reading's input
+ * (`toRhythmCourseInput`), and nothing else: the day it carries is a first-processed day and is
+ * never worded as an arrival date (`arrivals.ts`'s module doc); an unknown day arrives flagged and
+ * dayless.
+ */
+async function rhythmInputsFromRecord(
+  record: Pick<ObsidianProcessedRevisionStore, 'load'>,
+): Promise<readonly RhythmCourseInput[] | null> {
+  const persisted = await record.load();
+  // Never rebuilt: a fresh install, a lost or unreadable record, an older record shape. It cannot
+  // say whether anything has arrived, so it says so, rather than reading as "nothing has".
+  if (persisted.rebuiltOn === null) return null;
+  return detectArrivals(courseArrivalInputs(persisted)).flatMap((reading) => {
+    const input = toRhythmCourseInput(reading);
+    return input === null ? [] : [input];
+  });
+}
+
+/**
+ * The real source. With `processedRevisions` supplied, `listCourseMaterialArrivals` reads the
+ * processed-revision record (`[D-426]`): every course with a processed file version on record, its
+ * latest first-processed day, and `unreadable` for a course whose latest version is unread or
+ * still pending; a course with nothing on record is simply not listed. Without it, it keeps
+ * reading exactly the courses the verdict-gated arrival store has ever heard from, as before
+ * (see `material-arrival-store.ts`'s module doc): a course with no observed arrival ever is not in
+ * the list, which `detectRhythm`'s own `not-enough-history` status already covers.
  */
 export function createRhythmSource(deps: RhythmSourceDeps): TodayRhythmSource {
   return {
     async listCourseMaterialArrivals() {
       try {
+        if (deps.processedRevisions !== undefined) {
+          return await rhythmInputsFromRecord(deps.processedRevisions);
+        }
+        if (deps.materialArrivals === undefined) return null;
         const persisted = await deps.materialArrivals.load();
         return Object.entries(persisted.lastArrivalByCourse).map(
           ([course, lastMaterialArrivalDay]) => ({ course, lastMaterialArrivalDay }),
@@ -1679,7 +1719,15 @@ async function resolveScheduleFreshness(
     const lastArrivalByCourse = new Map(
       courseMaterialArrivals.map((c) => [c.course, c.lastMaterialArrivalDay] as const),
     );
-    return computeScheduleFreshness(association.matched, lastArrivalByCourse, today);
+    // `[D-426]` (`ol-egov.141.89.11.24`): a course whose material was processed but whose
+    // first-processed day is unknown (the record was lost) is left out. "A session hasn't shown up
+    // in your vault yet" is only true of a course with no material after the session, and this one
+    // may have material from after it; "cannot say" draws no line, never a false one.
+    const dayUnknown = new Set(
+      courseMaterialArrivals.filter((c) => c.arrivalDayUnknown === true).map((c) => c.course),
+    );
+    const matched = association.matched.filter((m) => !dayUnknown.has(m.courseCode));
+    return computeScheduleFreshness(matched, lastArrivalByCourse, today);
   } catch {
     // A vault read failure here is the same "cannot say" every other source
     // in this file returns `null` for — never surfaced to her as an error

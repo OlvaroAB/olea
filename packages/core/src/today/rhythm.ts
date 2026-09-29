@@ -216,6 +216,19 @@ export interface RhythmCourseInput {
    * `toRhythmCourseInput`; not set by any caller today.
    */
   readonly unreadable?: boolean;
+  /**
+   * `ol-egov.141.89.11.24`, `[D-426]` (row 25, 2026-09-29). True when the
+   * arrivals stage (`./arrivals.js#detectCourseArrivals`, status
+   * `'day-unknown'`) found processed material for this course whose first-
+   * processed day is not known (the record was lost and current content
+   * reread), so no last-arrival day is supplied. The reading says nothing
+   * about such a course: `'not-enough-history'`, never quiet and never the
+   * `'unreadable'` state, and a caller filters the course out of any claim
+   * built on "nothing has shown up" (`plugin/src/today/data-source.ts` does
+   * for the calendar-schedule signal). Omitted or `false` otherwise. Built by
+   * `./arrivals.js`'s `toRhythmCourseInput`.
+   */
+  readonly arrivalDayUnknown?: boolean;
 }
 
 export interface RhythmCourseReading {
@@ -314,6 +327,19 @@ function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourse
       quietDays: null,
       quietDaysThreshold,
       reason: 'the most recent processed revision for this course could not be read',
+    };
+  }
+
+  if (course.arrivalDayUnknown === true) {
+    // `[D-426]`: material was processed for this course, but its day is not known. That is neither
+    // "never observed" nor a gap that can be measured, so nothing is claimed either way.
+    return {
+      course: course.course,
+      status: 'not-enough-history',
+      quietDays: null,
+      quietDaysThreshold,
+      reason:
+        'material from this course was processed, but the day it was first processed is not known',
     };
   }
 

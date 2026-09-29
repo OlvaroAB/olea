@@ -15,21 +15,22 @@
  * chain's own trace, vew.md item 9. This module is the pure-logic stage the
  * reading needs instead: given, per course, every PROCESSED revision (a new
  * source processed, or an existing one's new revision processed past the
- * free gates — "CHG's revision record", dated by when it reached her vault),
- * it reports whether material is arriving, independent of any materiality
- * verdict, and never reads her review log.
+ * free gates — "CHG's revision record", dated by the day Olea first processed
+ * it, never as an exact arrival time), it reports whether material is arriving,
+ * independent of any materiality verdict, and never reads her review log.
  *
- * **No wired producer exists yet for `ProcessedRevision`.** Exactly like
- * `rhythm.ts`'s own `tempoWeight` and `termWindow` inputs, this module takes
- * its input as already resolved and says so rather than inventing a producer
- * here: no "CHG revision record" type is built anywhere in this codebase yet
- * (`UnitManifest` carries a `revisionDigest`, a content hash, not a date;
- * `Source` carries `course` but no date). Replacing `main.ts`'s
- * materiality-gated call site with one that also fires on a new file and
- * dates by processing time rather than edit-observation time is
- * `ol-egov.141.89.11.5`'s — this bead's own "left undone".
+ * **The producer, and what its day means (`ol-egov.141.89.11.24`, `[D-426]`).** The plugin's
+ * processed-revision store (`packages/plugin/src/ingestion/processed-revisions/`) holds, per file
+ * version, its fingerprint, the day it was FIRST PROCESSED and its processing state, and maps its rows
+ * to `ProcessedRevision` below. **That day is a processing day, never an exact arrival time**
+ * (row 25 of the 2026-09-29 rulings): a file reaches her vault, and Olea processes it when it next
+ * looks, so the day is never earlier than the arrival and may be later. This stage therefore never
+ * words it as an arrival date: its output is a day count that can only understate how long a course
+ * has been quiet, and it says nothing when the day is not known. Current content can be reread after a
+ * loss of the record, but the day it was first processed cannot, so it is marked unknown
+ * (`firstProcessedDay: null`) and never given the day of the rebuild.
  *
- * ## The two operational states, kept apart per vew.md §2.5
+ * ## The operational states, kept apart per vew.md §2.5
  *
  * `'unreadable'` — the course's most recent processed revision's reading
  * failed or is still pending (`[D-196]`'s three reasons, or an unsettled
@@ -45,6 +46,14 @@
  * a harness can assert the invariant, but `toRhythmCourseInput` below
  * returns `null` for it — a course in this state must never reach
  * `detectRhythm`'s per-course input, and so never be read as quiet.
+ *
+ * `'day-unknown'` — at least one processed revision's first-processed day is
+ * unknown (the record was lost and its content reread) and it cannot be shown
+ * to be older than the latest known day. It DID arrive, but the reading cannot
+ * say when, so it makes no claim: `toRhythmCourseInput` gives it no day and
+ * flags it, and the rhythm reading reads it as `'not-enough-history'`, never
+ * as quiet and never as "nothing ever arrived". Distinct from `'no-arrivals'`
+ * (nothing on record) exactly as pending is distinct from empty.
  *
  * ## What this module never reads
  *
@@ -65,20 +74,38 @@ export type ProcessedRevisionReadState = 'read' | 'unreadable' | 'pending';
 
 /**
  * One processed revision: a new source processed, or a new revision of an
- * existing one processed past CHG's free gates (vew.md §2.5). `arrivedDay`
- * is the day it reached her vault, never a content or authored date —
- * failure class R7: a burst upload of older material is an arrival on the
- * day it arrived, not on whatever date its content claims. This type has no
- * materiality field and no review-log field, on purpose: there is nothing
- * for a caller to gate arrival recognition on (failure class R5) or to read
- * from her practice (failure class R1).
+ * existing one processed past CHG's free gates (vew.md §2.5).
+ * `firstProcessedDay` is the day Olea FIRST PROCESSED this version — never a
+ * content or authored date (failure class R7: a burst upload of older
+ * material is dated by when it was processed, not by whatever date its
+ * content claims), and **never an exact arrival time** (`[D-426]`): the file
+ * reached her vault no later than this day. `null` means unknown — the record
+ * was lost and this version was found again by rereading current content —
+ * and it is never filled with the day of the rebuild.
+ *
+ * This type has no materiality field and no review-log field, on purpose:
+ * there is nothing for a caller to gate arrival recognition on (failure class
+ * R5) or to read from her practice (failure class R1).
  */
 export interface ProcessedRevision {
-  readonly arrivedDay: CalendarDay;
+  readonly firstProcessedDay: CalendarDay | null;
+  /**
+   * Only for an unknown `firstProcessedDay`: the last day this version could
+   * have been first processed, i.e. the day it was found by rereading. Used
+   * for exactly one decision — that an unknown-day revision found no later
+   * than the latest KNOWN day cannot be newer than it — and never as a day
+   * itself. Absent means no bound, so the revision is never assumed old.
+   */
+  readonly noLaterThan?: CalendarDay;
   readonly readState: ProcessedRevisionReadState;
 }
 
-export type CourseArrivalStatus = 'arrived' | 'unreadable' | 'unreachable' | 'no-arrivals';
+export type CourseArrivalStatus =
+  | 'arrived'
+  | 'unreadable'
+  | 'unreachable'
+  | 'no-arrivals'
+  | 'day-unknown';
 
 export interface CourseArrivalsInput {
   readonly course: string;
@@ -112,27 +139,47 @@ export interface CourseArrivalsReading {
 }
 
 /**
- * The most recent calendar day among `revisions`, and whether at least one
- * revision arriving on that day itself reads (Class A default: when several
+ * The most recent calendar day among `revisions`, whether at least one
+ * revision processed on that day itself reads (Class A default: when several
  * revisions land the same day, one readable revision is enough for the day
  * to count as "arrived" rather than "could not be read" — a tie-break that
  * only matters once more than one source per course is processed on the
- * same day, unreachable in the reference vault today). `null` when
- * `revisions` is empty or every entry's `arrivedDay` fails to parse.
+ * same day, unreachable in the reference vault today), and whether the day
+ * can be trusted as the latest at all.
+ *
+ * `dayKnown: false` when no revision has a known day, or an unknown-day
+ * revision could be newer than the latest known day (no bound, an unparseable
+ * bound, or a bound after it). An unparseable `firstProcessedDay` is unknown,
+ * never skipped: skipping it would read a course with material on record as
+ * one with none. `null` only when `revisions` is empty.
  */
 function latestRevisionOn(
   revisions: readonly ProcessedRevision[],
-): { day: CalendarDay; readableArrived: boolean } | null {
+): { day: CalendarDay | null; readableArrived: boolean; dayKnown: boolean } | null {
+  if (revisions.length === 0) return null;
   let latestDay: CalendarDay | null = null;
+  const unknown: ProcessedRevision[] = [];
   for (const revision of revisions) {
-    if (!isCalendarDay(revision.arrivedDay)) continue;
-    if (latestDay === null || revision.arrivedDay > latestDay) latestDay = revision.arrivedDay;
+    const day = revision.firstProcessedDay;
+    if (day === null || !isCalendarDay(day)) {
+      unknown.push(revision);
+      continue;
+    }
+    if (latestDay === null || day > latestDay) latestDay = day;
   }
-  if (latestDay === null) return null;
-  const readableArrived = revisions.some(
-    (revision) => revision.arrivedDay === latestDay && revision.readState === 'read',
+  if (latestDay === null) return { day: null, readableArrived: false, dayKnown: false };
+  const latest = latestDay;
+  const couldBeNewer = unknown.some(
+    (revision) =>
+      revision.noLaterThan === undefined ||
+      !isCalendarDay(revision.noLaterThan) ||
+      revision.noLaterThan > latest,
   );
-  return { day: latestDay, readableArrived };
+  if (couldBeNewer) return { day: null, readableArrived: false, dayKnown: false };
+  const readableArrived = revisions.some(
+    (revision) => revision.firstProcessedDay === latest && revision.readState === 'read',
+  );
+  return { day: latest, readableArrived, dayKnown: true };
 }
 
 /**
@@ -161,6 +208,16 @@ export function detectCourseArrivals(input: CourseArrivalsInput): CourseArrivals
     };
   }
 
+  if (!latest.dayKnown || latest.day === null) {
+    return {
+      course: input.course,
+      status: 'day-unknown',
+      lastArrivalDay: null,
+      reason:
+        'material from this course was processed, but the day it was first processed is not known',
+    };
+  }
+
   if (!latest.readableArrived) {
     return {
       course: input.course,
@@ -174,7 +231,7 @@ export function detectCourseArrivals(input: CourseArrivalsInput): CourseArrivals
     course: input.course,
     status: 'arrived',
     lastArrivalDay: latest.day,
-    reason: `the most recently processed revision reached the vault on ${latest.day}`,
+    reason: `the most recently processed revision was first processed on ${latest.day}`,
   };
 }
 
@@ -205,7 +262,11 @@ export function toRhythmCourseInput(
   if (arrival.status === 'unreachable') return null;
   return {
     course: arrival.course,
-    lastMaterialArrivalDay: arrival.status === 'no-arrivals' ? null : arrival.lastArrivalDay,
+    lastMaterialArrivalDay:
+      arrival.status === 'no-arrivals' || arrival.status === 'day-unknown'
+        ? null
+        : arrival.lastArrivalDay,
+    ...(arrival.status === 'day-unknown' ? { arrivalDayUnknown: true } : {}),
     unreadable: arrival.status === 'unreadable',
     ...(tempoWeight === undefined ? {} : { tempoWeight }),
   };
