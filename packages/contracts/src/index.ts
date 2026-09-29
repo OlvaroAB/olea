@@ -68,6 +68,26 @@ export {
   visionRouteBody,
   visionRouteEnvelope,
 } from './artifact-envelope.js';
+// The demand-carriage wire fragment on `quiz.generate.v1` / `cards.generate.v1` — `[D-437]`
+// (`ol-egov.141.89.57`), design section 4.3 of `docs/dev/intelligence-build/demand-carriage.md`
+// (service repo, cited by path), amended by the 2026-09-29 rulings on rows 35 to 38. The
+// vocabulary IS `explainBackJudgeDemand`; what this adds is the served-demand declaration, the
+// primary heading ask and the acknowledgement. See the module's own header.
+export {
+  AUTHORING_DEMAND_TASK_IDS,
+  AUTHORING_SERVED_DEMANDS,
+  type AuthoringDemand,
+  type AuthoringDemandAcknowledgement,
+  type AuthoringDemandTaskId,
+  type AuthoringRequestedAsk,
+  authoringDeclaredDemandField,
+  authoringDemand,
+  authoringDemandAcknowledgement,
+  authoringDemandServed,
+  authoringIntendedDemandField,
+  authoringRequestedAsk,
+  authoringRequestedAskField,
+} from './authoring-demand.js';
 // `explain-back.judge.v1`'s optional learning-target bundle and its
 // response-envelope acknowledgement — `[D-277 / TARGET-1]` (`ol-egov.141.87`),
 // landed by TARGET-2 (`ol-0r92.92`). See the module's own header for why this
