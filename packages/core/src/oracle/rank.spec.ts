@@ -10,6 +10,7 @@ import { describe, expect, it } from 'vitest';
 import type { AssessmentReadReport, AssessmentRecord } from '../assessment/types.js';
 import type {
   ConceptAssessmentEdge,
+  EvidenceBriefCitation,
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
@@ -78,6 +79,26 @@ function objectivesCitation(
       location: { page: 1 },
     },
     ...overrides,
+  };
+}
+
+function briefCitation(assessmentPath: string): EvidenceBriefCitation {
+  return {
+    sourcePath: assessmentPath,
+    provenance: { sourcePath: assessmentPath, location: { page: 1 } },
+  };
+}
+
+/**
+ * A link with a CURRENT basis (`ol-egov.141.89.10.102`): what this term's own assessment note
+ * declares it covers (`[D-247]`, the assessment-brief basis), as against a past-paper edge, which
+ * is history attached to every assessment in the course.
+ */
+function briefBasis(assessmentPath: string): Partial<ConceptAssessmentEdge> {
+  return {
+    basis: 'assessment-brief',
+    citations: [],
+    briefCitations: [briefCitation(assessmentPath)],
   };
 }
 
@@ -2335,12 +2356,39 @@ describe('rankOracle — the reason names what decided, from the actual factor v
   });
 
   describe('row 32: "counts for more in your assessments" needs recorded assessment weight', () => {
-    it('relevance alone moved it, and every assessment behind it has a recorded weight: the phrase is used', () => {
-      const [first] = twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4], weight: [20, 20] });
+    // A concept's link to an assessment has a CURRENT basis when its own term's evidence declares
+    // it: the assessment note's declared scope (a brief) or a course objectives document. A
+    // past-paper edge is history, attached to every assessment in its course, so it never carries
+    // the weight claim (`ol-egov.141.89.10.102`, row 32 and row 33). The target's link is
+    // therefore a brief here wherever the weight clause is expected.
+    const TARGET_BRIEF = briefBasis('Assessments/T.md');
+
+    it('relevance alone moved it, its link to the assessment is current, and every weight behind it is recorded: the phrase is used', () => {
+      const [first] = twoConcepts({
+        recall: [0.5, 0.5],
+        yieldRank: [1, 4],
+        weight: [20, 20],
+        targetEdge: TARGET_BRIEF,
+      });
       expect(first?.conceptKey).toBe('target');
       expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
       expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
       expect(named(first?.reasoning ?? '')).toEqual(['relevance']);
+    });
+
+    it('an objectives link is current too: the phrase is used', () => {
+      const [first] = twoConcepts({
+        recall: [0.5, 0.5],
+        yieldRank: [1, 4],
+        weight: [20, 20],
+        targetEdge: {
+          basis: 'objectives',
+          citations: [],
+          objectivesCitations: [objectivesCitation()],
+        },
+      });
+      expect(first?.conceptKey).toBe('target');
+      expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
     });
 
     it('the weight is not recorded, but the assessment evidence alone is stronger: the reason says the evidence is, not the weight', () => {
@@ -2348,6 +2396,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
         recall: [0.5, 0.5],
         yieldRank: [1, 4],
         weight: [undefined, undefined],
+        targetEdge: TARGET_BRIEF,
       });
       expect(first?.conceptKey).toBe('target');
       expect(first?.factors.contributions.every((c) => !c.assessmentWeightKnown)).toBe(true);
@@ -2363,6 +2412,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
         recall: [0.5, 0.5],
         yieldRank: [1, 1],
         weight: [undefined, 10],
+        targetEdge: TARGET_BRIEF,
       });
       expect(first?.conceptKey).toBe('target');
       expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevanceAssumed}.`);
@@ -2375,10 +2425,178 @@ describe('rankOracle — the reason names what decided, from the actual factor v
         recall: [0.5, 0.5],
         yieldRank: [1, 4],
         weight: [50, undefined],
+        targetEdge: TARGET_BRIEF,
       });
       expect(first?.conceptKey).toBe('target');
       expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
       expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+    });
+
+    describe('a concept whose only link is a past-paper edge (`ol-egov.141.89.10.102`, rows 32 and 33): the weight is real, the link is history, so the weight is never claimed', () => {
+      it('every weight recorded and relevance alone moved it: it is worded from the evidence, never that it counts for more', () => {
+        // The exact shape the bug had: nothing about the assessments is unrecorded, and the old
+        // rule ("every assessment weight recorded") said the weight clause anyway.
+        const [first] = twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4], weight: [20, 20] });
+        expect(first?.conceptKey).toBe('target');
+        expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
+        expect(first?.factors.objectivesCitations).toEqual([]);
+        expect(first?.reasoning).not.toContain('counts for more');
+        expect(first?.reasoning).not.toContain('in your assessments');
+        expect(first?.reasoning).toBe(
+          `target (COURSEA) is ranked above the next concept because ${RANK_REASON_PHRASES.relevanceEvidence}. ` +
+            'It appears in past papers.',
+        );
+        expect(named(first?.reasoning ?? '')).toEqual(['relevance']);
+      });
+
+      it('never claims the weight, whatever the weights recorded on the assessments it is attached to', () => {
+        for (const weight of [
+          [20, 20],
+          [50, undefined],
+          [undefined, undefined],
+          [10, 40],
+        ] as const) {
+          for (const entry of twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4], weight })) {
+            expect(entry.reasoning).not.toContain(RANK_REASON_PHRASES.relevance);
+          }
+        }
+      });
+
+      it('the past-paper edge attaches to every assessment in the course, and every one of those weights recorded still is not a claim', () => {
+        // The construction the evidence-edge builder makes (course-level coarse-graining): one
+        // concept, an edge to each of three assessments, all with a recorded weight.
+        const paths = ['Assessments/A1.md', 'Assessments/A2.md', 'Assessments/A3.md'];
+        const result = rankOracle({
+          evidence: {
+            edges: [
+              ...paths.map((assessmentPath) =>
+                edge({ conceptName: 'target', assessmentPath, yieldRank: 1 }),
+              ),
+              ...paths.map((assessmentPath) =>
+                edge({ conceptName: 'reference', assessmentPath, yieldRank: 4 }),
+              ),
+            ],
+            assessmentsRead: readReport(
+              paths.map((path) =>
+                assessment({ path, weight: 30, weightRaw: '30', due: '2026-09-01' }),
+              ),
+            ),
+            assessmentsWithNoEvidence: [],
+          },
+          retrievability: new Map([
+            ['target', 0.5],
+            ['reference', 0.5],
+          ]),
+          asOf: ASOF,
+        });
+        const course = result.courses[0];
+        if (course?.status !== 'ranked') throw new Error('expected ranked');
+        const target = course.ranked.find((r) => r.conceptKey === 'target');
+        expect(target?.factors.contributions).toHaveLength(3);
+        expect(target?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
+        expect(target?.reasoning).not.toContain('counts for more');
+        expect(target?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevanceEvidence}.`);
+      });
+
+      it('its relevance leads only through the weights of the assessments its history is attached to: no phrase is true, so the reason carries no because clause and the evidence sentence stands', () => {
+        // Same yield and confidence on both, weights recorded and different: the ranking is
+        // decided by the weight of a course-wide attachment, which is not a claim about her
+        // current assessments and not "stronger evidence" either.
+        const [first, second] = twoConcepts({
+          recall: [0.5, 0.5],
+          yieldRank: [1, 1],
+          weight: [40, 10],
+        });
+        expect(first?.conceptKey).toBe('target');
+        expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
+        expect(first?.reasoning).toBe(
+          'target (COURSEA) is ranked above the next concept. It appears in past papers.',
+        );
+        expect(named(first?.reasoning ?? '')).toEqual([]);
+        expect(second?.reasoning).toBe(
+          'reference (COURSEA) is ranked last in this course. It appears in past papers.',
+        );
+      });
+
+      it('a factor with no honest phrase is left out and the others are still named', () => {
+        // Recall favours the target, and so does the weight of the attachment; only recall is worded.
+        const [first] = twoConcepts({ recall: [0.2, 0.9], yieldRank: [1, 1], weight: [40, 10] });
+        expect(first?.conceptKey).toBe('target');
+        expect(first?.reasoning).toBe(
+          `target (COURSEA) is ranked above the next concept because ${RANK_REASON_PHRASES.need}. ` +
+            'It appears in past papers.',
+        );
+      });
+
+      it('an unrecorded weight on a past-paper-only link is not turned into the assumption sentence either: that sentence is about an assessment it appears in', () => {
+        const [first] = twoConcepts({
+          recall: [0.5, 0.5],
+          yieldRank: [1, 1],
+          weight: [undefined, 10],
+        });
+        expect(first?.conceptKey).toBe('target');
+        expect(first?.reasoning).not.toContain(RANK_REASON_PHRASES.relevanceAssumed);
+        expect(first?.reasoning).not.toContain('counts for more');
+      });
+    });
+
+    describe('the current basis is read per assessment', () => {
+      // The target has a brief on T (its own term's declared scope) and a past-paper edge on P;
+      // the reference sits on R at a lower yield rank.
+      function briefAndPastPaper(weight: {
+        readonly T: number | undefined;
+        readonly P: number | undefined;
+      }) {
+        const result = rankOracle({
+          evidence: {
+            edges: [
+              edge({
+                conceptName: 'target',
+                assessmentPath: 'Assessments/T.md',
+                yieldRank: 1,
+                ...briefBasis('Assessments/T.md'),
+              }),
+              edge({ conceptName: 'target', assessmentPath: 'Assessments/P.md', yieldRank: 1 }),
+              edge({ conceptName: 'reference', assessmentPath: 'Assessments/R.md', yieldRank: 4 }),
+            ],
+            assessmentsRead: readReport([
+              assessment({
+                path: 'Assessments/T.md',
+                weight: weight.T,
+                weightRaw: weight.T === undefined ? undefined : String(weight.T),
+              }),
+              assessment({
+                path: 'Assessments/P.md',
+                weight: weight.P,
+                weightRaw: weight.P === undefined ? undefined : String(weight.P),
+              }),
+              assessment({ path: 'Assessments/R.md', weight: 20, weightRaw: '20' }),
+            ]),
+            assessmentsWithNoEvidence: [],
+          },
+          retrievability: new Map([
+            ['target', 0.5],
+            ['reference', 0.5],
+          ]),
+          asOf: ASOF,
+        });
+        const course = result.courses[0];
+        if (course?.status !== 'ranked') throw new Error('expected ranked');
+        const target = course.ranked.find((r) => r.conceptKey === 'target');
+        if (target === undefined) throw new Error('expected the target');
+        return target;
+      }
+
+      it('the assessment its link is current on has a recorded weight: the phrase is used, whatever the past-paper-only assessment holds', () => {
+        const target = briefAndPastPaper({ T: 20, P: undefined });
+        expect(target.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+      });
+
+      it('the assessment its link is current on has no recorded weight: the phrase is not used, even where the past-paper-only assessment has one', () => {
+        const target = briefAndPastPaper({ T: undefined, P: 20 });
+        expect(target.reasoning).not.toContain('counts for more');
+        expect(target.reasoning).toContain('It appears in past papers');
+      });
     });
   });
 
@@ -2436,6 +2654,8 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     function linkedAndUnlinked(opts: {
       readonly recall: readonly [number | undefined, number | undefined];
       readonly yieldRank?: number;
+      /** The linked concept's edge, past-paper unless overridden. */
+      readonly linkedEdge?: Partial<ConceptAssessmentEdge>;
     }) {
       const result = rankOracle({
         evidence: {
@@ -2444,6 +2664,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
               conceptName: 'hasedge',
               assessmentPath: 'Assessments/R.md',
               yieldRank: opts.yieldRank ?? 6,
+              ...opts.linkedEdge,
             }),
           ],
           assessmentsRead: readReport([
@@ -2504,8 +2725,18 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     });
 
     it('a linked concept ahead of an unlinked one is not said to be ahead on assessment evidence the other lacks unless its weights are recorded', () => {
-      const { hasedge } = linkedAndUnlinked({ recall: [0.5, 0.5], yieldRank: 1 });
+      const { hasedge } = linkedAndUnlinked({
+        recall: [0.5, 0.5],
+        yieldRank: 1,
+        linkedEdge: briefBasis('Assessments/R.md'),
+      });
       expect(hasedge?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+    });
+
+    it('a concept linked only through a past-paper edge, ahead of an unlinked one, is worded from the evidence, never that it counts for more', () => {
+      const { hasedge } = linkedAndUnlinked({ recall: [0.5, 0.5], yieldRank: 1 });
+      expect(hasedge?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevanceEvidence}.`);
+      expect(hasedge?.reasoning).not.toContain('counts for more');
     });
   });
 

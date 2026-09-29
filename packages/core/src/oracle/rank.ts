@@ -298,6 +298,7 @@ import { normalizeAssessmentWeight } from '../assessment/weight.js';
 import { daysBetween } from '../dates.js';
 import type {
   ConceptAssessmentEdge,
+  ConceptEvidenceBasis,
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
@@ -1095,12 +1096,20 @@ function compareContributions(a: OracleEdgeContribution, b: OracleEdgeContributi
  *   is none, and an unknown need is worded as unknown, never as a deficit (registry section 22,
  *   `[D-348]`). Wording follows the fact, not the planning benchmark: the benchmark reads the
  *   phrases each factor is declared to use (`scripts/harness/ilb-pln`), never a fixed word.
- * - `relevance` ("counts for more in your assessments") is used only when every assessment behind
- *   the concept's relevance has a recorded weight. Otherwise the reason describes what drove the
- *   ranking: `relevanceEvidence` when the assessment evidence alone is stronger, `relevanceAssumed`
- *   when the relevance edge exists only because an unrecorded weight is counted in full (a
- *   planning assumption, never evidence). `relevanceUnknown` is a concept with no assessment link:
- *   the middle place is a default, said to be one (`[D-329]`).
+ * - `relevance` ("counts for more in your assessments") is used only when the concept's link to
+ *   an assessment has a CURRENT basis (its objectives, or that assessment's own declared scope, a
+ *   brief) and every such assessment has a recorded weight (`ol-egov.141.89.10.102`). A past-paper
+ *   edge is history attached to every assessment in its course, so a link that is only that never
+ *   carries the weight claim, whatever weights are recorded (row 32: "requires actual
+ *   assessment-weight evidence"; row 33: historical evidence never becomes a prediction of
+ *   current scope). Otherwise the reason describes what drove the ranking: `relevanceEvidence`
+ *   when the assessment evidence alone is stronger (also the past-paper-only phrase),
+ *   `relevanceAssumed` when the relevance edge exists only because an unrecorded weight is
+ *   counted in full (a planning assumption, never evidence). A past-paper-only concept whose lead
+ *   is not stronger evidence has no drafted phrase that is true of it, so its reason carries no
+ *   because clause for relevance and the evidence sentence stands alone (the gap is recorded on
+ *   `ol-egov.141.89.10.95`). `relevanceUnknown` is a concept with no assessment link: the middle
+ *   place is a default, said to be one (`[D-329]`).
  * - `proximity` needs a date on both sides; `proximityDated` is the entry having one and the
  *   next concept not.
  * - Objectives: `evidenceObjectives` ("name it") only for an explicit name match;
@@ -1115,9 +1124,9 @@ export const RANK_REASON_PHRASES = Object.freeze({
   need: 'your recall of it is lower',
   /** Need decided because this concept's need is unknown, ordered at `[D-348]`'s provisional maximum for ordering only. */
   needUnknown: 'there is no evidence yet of how well you recall it',
-  /** Relevance decided, and every assessment behind it has a recorded weight. */
+  /** Relevance decided, its link to an assessment is current (objectives or a brief), and every such assessment has a recorded weight. Never a past-paper-only link. */
   relevance: 'it counts for more in your assessments',
-  /** Relevance decided; some assessment weight is not recorded, but the assessment evidence alone is stronger. */
+  /** Relevance decided, and the assessment evidence alone is stronger: where a current link's weight is not recorded, and for a concept linked only through past papers. */
   relevanceEvidence: 'the assessment evidence for it is stronger',
   /** Relevance decided only through an unrecorded weight counted in full: a planning assumption. */
   relevanceAssumed:
@@ -1197,41 +1206,91 @@ export function decidingFactors(
 }
 
 /**
- * The relevance phrase (rows 32 and 33): "counts for more in your assessments" only where the
- * assessment weight behind it is recorded. An unrecorded weight is counted in full (declared
- * neutral, never a silent 0), which is a planning assumption; a reason resting on it says what
- * actually drove the ranking instead.
+ * The evidence sentence's own strength for a concept, without the weight: the sum of yield and
+ * confidence across its surviving contributions. What "the assessment evidence for it is
+ * stronger" is compared on.
+ */
+function evidenceStrengthOf(factors: OracleConceptFactors): number {
+  return factors.contributions.reduce((sum, c) => sum + c.evidenceStrength, 0);
+}
+
+/**
+ * The evidence bases whose link to an assessment is about her CURRENT term: an objectives
+ * document and an assessment's own declared scope (a brief, `[D-247]`). A past-paper edge is
+ * history: it says the concept appeared before, and the evidence-edge builder attaches it to every
+ * assessment in its course (course-level coarse-graining), so it says nothing about how that
+ * assessment weighs the concept (`[D-433]`: historical alignment can inform ranking without
+ * becoming proof of current assessment scope).
+ */
+const CURRENT_EVIDENCE_BASES: ReadonlySet<ConceptEvidenceBasis> = new Set([
+  'objectives',
+  'assessment-brief',
+]);
+
+/** The assessments a concept has a surviving edge to whose basis is current, out of `edges`. */
+function currentBasisAssessments(edges: readonly ConceptAssessmentEdge[]): ReadonlySet<VaultPath> {
+  const paths = new Set<VaultPath>();
+  for (const edge of edges) {
+    if (CURRENT_EVIDENCE_BASES.has(edge.basis ?? 'past-paper')) paths.add(edge.assessmentPath);
+  }
+  return paths;
+}
+
+/**
+ * The relevance phrase (rows 32 and 33): "counts for more in your assessments" only where a
+ * CURRENT basis links the concept to an assessment and the weight of every such assessment is
+ * recorded (`ol-egov.141.89.10.102`). Both halves are needed: the weight says how much the
+ * assessment counts, the current basis says the concept is in it now. A past-paper-only link never
+ * carries the claim: the past-paper edge attaches to every assessment in its course, so every
+ * weight being recorded is not evidence that the concept is weighted by her assessments. An
+ * unrecorded weight is counted in full (declared neutral, never a silent 0), which is a planning
+ * assumption; a reason resting on it says what actually drove the ranking instead.
+ *
+ * `undefined` is a real answer: a concept linked only through past papers, ahead on the weights of
+ * the assessments its history is attached to rather than on stronger evidence, has no drafted
+ * phrase that is true of it (none is invented here), so its reason carries no clause for
+ * relevance and the evidence sentence stands alone.
+ *
+ * @param currentLinks the assessments the concept has a current-basis edge to (`currentBasisAssessments`).
  */
 function relevancePhrase(
   entry: OracleConceptFactors & OracleProximityFactors,
   next: OracleConceptFactors & OracleProximityFactors,
-): string {
+  currentLinks: ReadonlySet<VaultPath>,
+): string | undefined {
   if (entry.contributions.length === 0) return RANK_REASON_PHRASES.relevanceUnknown;
-  if (entry.contributions.every((c) => c.assessmentWeightKnown)) {
+  // Compared on the weight-free evidence strength (yield rank and confidence): the assessment
+  // evidence is only called stronger when it is, with any weight taken out. An unlinked next
+  // concept has none.
+  const evidenceIsStronger = evidenceStrengthOf(entry) > evidenceStrengthOf(next);
+  const currentContributions = entry.contributions.filter((c) =>
+    currentLinks.has(c.assessmentPath),
+  );
+  if (currentContributions.length === 0) {
+    return evidenceIsStronger ? RANK_REASON_PHRASES.relevanceEvidence : undefined;
+  }
+  if (currentContributions.every((c) => c.assessmentWeightKnown)) {
     return RANK_REASON_PHRASES.relevance;
   }
-  // Some weight is assumed, so compare on the weight-free evidence strength (yield rank and
-  // confidence): the assessment evidence is only called stronger when it is, with the assumption
-  // taken out. An unlinked next concept has none.
-  const strengthOf = (factors: OracleConceptFactors) =>
-    factors.contributions.reduce((sum, c) => sum + c.evidenceStrength, 0);
-  return strengthOf(entry) > strengthOf(next)
+  return evidenceIsStronger
     ? RANK_REASON_PHRASES.relevanceEvidence
     : RANK_REASON_PHRASES.relevanceAssumed;
 }
 
+/** One factor's phrase, or `undefined` where no drafted phrase is true of it (only relevance, see {@link relevancePhrase}). */
 function factorPhrase(
   factor: BlendFactor,
   entry: OracleConceptFactors & OracleProximityFactors,
   next: OracleConceptFactors & OracleProximityFactors,
-): string {
+  currentLinks: ReadonlySet<VaultPath>,
+): string | undefined {
   switch (factor) {
     case 'need':
       return entry.needBasis === 'unknown'
         ? RANK_REASON_PHRASES.needUnknown
         : RANK_REASON_PHRASES.need;
     case 'relevance':
-      return relevancePhrase(entry, next);
+      return relevancePhrase(entry, next, currentLinks);
     case 'proximity':
       // A proximity of exactly 0 is an undated assessment (`computeExamProximityScore`): "sooner"
       // would compare a date with none.
@@ -1240,6 +1299,9 @@ function factorPhrase(
         : RANK_REASON_PHRASES.proximity;
   }
 }
+
+/** The position clause's fixed head, before any because clause. */
+const RANK_ABOVE_NEXT = 'is ranked above the next concept';
 
 /** `a`, `a and b`, `a, b and c`. */
 function joinPhrases(phrases: readonly string[]): string {
@@ -1295,8 +1357,9 @@ function evidenceSentence(factors: OracleConceptFactors): string {
  *
  * **Each claim is checked against the evidence it would rest on (rows 32 and 33,
  * `ol-egov.141.89.10.92`)**: relevance is said to "count for more in your assessments" only where
- * the assessment weights are recorded, and otherwise says what drove the ranking
- * ({@link relevancePhrase}); an unknown value given a default is worded as a default, never as
+ * a current basis links the concept to an assessment and the weights are recorded, and otherwise
+ * says what drove the ranking, or nothing where no drafted phrase is true of it
+ * ({@link relevancePhrase}, `ol-egov.141.89.10.102`); an unknown value given a default is worded as a default, never as
  * importance; a concept with no assessment link is worded from what it has (its recall, and a
  * middle place said to be a default), never from an assessment it does not have; and objectives
  * are said to "name" a concept only for an explicit name match ({@link objectivesAlignmentOf}).
@@ -1313,6 +1376,8 @@ function buildReasoning(
   factors: OracleConceptFactors & OracleProximityFactors,
   next: (OracleConceptFactors & OracleProximityFactors) | undefined,
   rankedCount: number,
+  // The assessments this concept has a current-basis edge to; see `currentBasisAssessments`.
+  currentLinks: ReadonlySet<VaultPath>,
 ): string {
   let position: string;
   let namesUnknownNeed = false;
@@ -1328,9 +1393,15 @@ function buildReasoning(
       position = 'is ranked just above the next concept, on everything taken together';
     } else {
       namesUnknownNeed = deciding.includes('need') && factors.needBasis === 'unknown';
-      position = `is ranked above the next concept because ${joinPhrases(
-        deciding.map((factor) => factorPhrase(factor, factors, next)),
-      )}`;
+      // A factor with no drafted phrase true of it is left out, never given a false one; when
+      // none is left the reason names no cause and the evidence sentence carries what it rests on.
+      const phrases = deciding
+        .map((factor) => factorPhrase(factor, factors, next, currentLinks))
+        .filter((phrase): phrase is string => phrase !== undefined);
+      position =
+        phrases.length === 0
+          ? RANK_ABOVE_NEXT
+          : `${RANK_ABOVE_NEXT} because ${joinPhrases(phrases)}`;
     }
   }
   const recall =
@@ -1463,6 +1534,10 @@ function rankOneCourse(
 
   const entries: RankedEntry[] = [];
   const vetoedConcepts: OracleVetoedConcept[] = [];
+  // Per concept, the assessments it has a surviving current-basis edge to: what the weight clause of
+  // its reason may rest on (`relevancePhrase`). Kept beside `entries`, not on `factors`, so the
+  // delivered ranking carries no new field.
+  const currentLinksByConcept = new Map<string, ReadonlySet<VaultPath>>();
   for (const [conceptKey, edges] of edgesByConcept) {
     // Every edge in this group shares one conceptName by construction (see
     // above) — restated from the first for display purposes only.
@@ -1483,6 +1558,7 @@ function rankOneCourse(
       .map((o) => o.vetoedEdge)
       .sort(compareVetoedEdges);
     const survivingEdges = edges.filter((_, index) => outcomes[index]?.kind === 'contribution');
+    currentLinksByConcept.set(conceptKey, currentBasisAssessments(survivingEdges));
     const contributions = outcomes
       .filter((o): o is Extract<EdgeOutcome, { kind: 'contribution' }> => o.kind === 'contribution')
       .map((o) => o.contribution)
@@ -1619,6 +1695,8 @@ function rankOneCourse(
       entry.factors,
       entries[index + 1]?.factors,
       entries.length,
+      // A concept with no edge (the unknown-relevance entry) has no current link and never reads it.
+      currentLinksByConcept.get(entry.conceptKey) ?? new Set<VaultPath>(),
     ),
   }));
   // Deterministic order — same reason `ranked` sorts, so two calls with the
