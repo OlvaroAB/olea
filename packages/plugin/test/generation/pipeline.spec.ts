@@ -31,11 +31,16 @@
  */
 import type { ConceptRecord, ExtractedUnit, KnowledgeKindClassifierPort } from 'olea-core';
 import { checkRoutingReachesSelection, extractConcepts, hashText } from 'olea-core';
+import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
 import { HOME_NOTE_MARKER_KEY, homeNotePathForSource } from '../../src/generation/home-note.js';
-import { runGenerationSweep } from '../../src/generation/pipeline.js';
+import {
+  demandRoutingCounterFor,
+  runGenerationSweep,
+  sweepDemandKey,
+} from '../../src/generation/pipeline.js';
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
@@ -939,5 +944,153 @@ describe('the row 2.2 health check reads the sweep it actually ran (`[MOM-8.1 / 
     expect(await vault.read(CONCEPT_NOTE)).toBe(source);
     const written = (await vault.list()).filter((path) => path !== CONCEPT_NOTE);
     expect(written.every((path) => path.startsWith('.olea/'))).toBe(true);
+  });
+});
+
+/**
+ * `[D-437]` row 38 (`ol-egov.141.89.2.20`): the ordinary sweep sends explicit recall intent as
+ * authoring intent only, and no other origin does (`demand-ask-callers.spec.ts` in `olea-core` pins
+ * the caller list). It establishes neither recall coverage nor recall evidence: the response form is
+ * read from the produced block (`demand-reading.ts`), which is not this suite's concern. What is
+ * pinned here is the request, the count, and that the refusal memory's demand key moves with it.
+ */
+describe('the sweep carries explicit recall intent as authoring intent only (row 38, `[D-437]`)', () => {
+  it('every request the sweep makes carries intendedDemand recall-a-fact and no heading', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const seen: Record<string, unknown>[] = [];
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        concept('Working memory', 'key-1'),
+        concept('Long-term potentiation', 'key-2'),
+      ],
+      draftForConcept: async (_deps, request) => {
+        seen.push({ ...request });
+        return groundedResponse(request.conceptName);
+      },
+    });
+
+    expect(seen).toHaveLength(2);
+    for (const request of seen) {
+      expect(request.intendedDemand).toBe('recall-a-fact');
+      expect('requestedAsk' in request).toBe(false);
+      // Nothing else about the request changed: no purpose without a format match.
+      expect('purpose' in request).toBe(false);
+      expect('registerHint' in request).toBe(false);
+    }
+  });
+
+  it('a format-matched course carries the same intent beside its purpose', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    let seen: Record<string, unknown> | undefined;
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory')],
+      draftForConcept: async (_deps, request) => {
+        seen = { ...request };
+        return groundedResponse(request.conceptName);
+      },
+      formatMatch: () => ({}),
+    });
+
+    expect(seen?.purpose).toBe('readiness');
+    expect(seen?.intendedDemand).toBe('recall-a-fact');
+  });
+
+  it('counts one served outcome per concept asked, refused or drafted, and none for a concept not asked', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const counter = new DemandRoutingCounter();
+    // 'Cached concept' already has a draft, so the sweep skips it without asking.
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Cached concept', 'key-cached')],
+      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+      demandCounter: new DemandRoutingCounter(),
+    });
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        concept('Cached concept', 'key-cached'),
+        concept('Drafted concept', 'key-drafted'),
+        concept('Refused concept', 'key-refused'),
+      ],
+      draftForConcept: async (_deps, request) =>
+        request.conceptName === 'Refused concept'
+          ? refusedResponse
+          : groundedResponse(request.conceptName),
+      demandCounter: counter,
+    });
+
+    expect(report.skippedDuplicate).toBe(1);
+    expect(report.attempted).toBe(2);
+    expect(counter.counts()).toEqual([
+      { conceptKey: 'key-drafted', reason: 'served', count: 1 },
+      { conceptKey: 'key-refused', reason: 'served', count: 1 },
+    ]);
+  });
+
+  it('with no counter supplied, counts into the session counter the draft cache stands for', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+
+    await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'key-1')],
+      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+    });
+
+    expect(demandRoutingCounterFor(cache).counts()).toEqual([
+      { conceptKey: 'key-1', reason: 'served', count: 1 },
+    ]);
+    expect(demandRoutingCounterFor(cache)).toBe(demandRoutingCounterFor(cache));
+  });
+
+  it('a concept the routing consultation skips is never asked, so it is not counted', async () => {
+    const vault = new MemoryVaultSource();
+    const cache = createVaultDraftCacheStore(vault);
+    const counter = new DemandRoutingCounter();
+
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [concept('Working memory', 'key-1')],
+      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+      routing: { classifier: null },
+      demandCounter: counter,
+    });
+
+    expect(report.skippedRouting).toBe(1);
+    expect(counter.counts()).toEqual([]);
+  });
+
+  it('the refusal memory key moves with the intent: a changed demand must read as changed', () => {
+    const noIntent = sweepDemandKey(undefined, {});
+    const recall = sweepDemandKey(undefined, { intendedDemand: 'recall-a-fact' });
+    const calculate = sweepDemandKey(undefined, { intendedDemand: 'calculate' });
+    expect(new Set([noIntent, recall, calculate]).size).toBe(3);
+    // Readiness and learning stay distinct under the same intent.
+    expect(sweepDemandKey({}, { intendedDemand: 'recall-a-fact' })).not.toBe(recall);
+    // Absent intent keeps the key exactly as it was before the sweep carried one.
+    expect(noIntent).toBe('learning');
+    expect(sweepDemandKey({ registerHint: { terminology: ['t'] } }, {})).toBe(
+      'readiness:{"terminology":["t"]}',
+    );
   });
 });

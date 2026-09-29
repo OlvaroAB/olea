@@ -66,6 +66,28 @@
  * re-offering a heading she just declined without re-scanning her intent
  * into anything durable. Reopening the vault (or Obsidian) forgets every
  * dismissal, which is the honest shape of "not persisted."
+ *
+ * **What she asked is carried, not replaced by the concept name (`[D-437]`,
+ * `ol-egov.141.89.2.20`; rows 35 and 37 of the 2026-09-29 rulings).** `accept`
+ * builds the ask from the heading (`olea-core`'s `askFromHeading`, the
+ * production caller of `demandForHeading`): the whole heading and its
+ * question word are the primary request, the mapping onto the five demand
+ * words the secondary reading. It routes the ask against `quiz.generate.v1`
+ * (`routeDemandAsk`) and sends a demand ONLY when the routing is `served`:
+ * `intendedDemand` and `requestedAsk` (the whole heading) on the drafting
+ * request, and the operation to the sufficiency judge. Every other outcome
+ * sends neither, so the request is exactly what it was before. **An ask no
+ * generator serves is recorded as unmet, never dropped and never counted as
+ * fulfilled:** every accept outcome carries `demandRouting` (with the source
+ * heading intact) and, for a deferred or unsupported ask, `unmetAsk`, and the
+ * count per concept and reason goes to the demand counter. The draft made for
+ * an unserved ask is authored exactly as an unspecified need is (no demand, no
+ * heading, no target record) and is never the unserved ask's fulfilment.
+ * **No student-visible surface is built here:** the label on a narrower
+ * alternative needs a clause and registry wording first (design Open question
+ * 1), so today's presentation is unchanged: a draft is created for an unmet
+ * ask as before, with the routing available as data to whatever consumes the
+ * outcome.
  */
 
 import type {
@@ -74,8 +96,20 @@ import type {
   HeadingOfferCandidate,
   VaultPath,
 } from 'olea-core';
+// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
+// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
+import { askFromHeading } from 'olea-core/src/routing/demand-ask.js';
+import {
+  authoringDemandFields,
+  type DemandRouting,
+  type DemandRoutingCounter,
+  routeDemandAsk,
+  type UnmetAsk,
+  unmetAskOf,
+} from 'olea-core/src/routing/demand-routing.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { deriveDraftId } from '../generation/cache-store.js';
+import { demandRoutingCounterFor } from '../generation/pipeline.js';
 import { extractDraftedProvenance, extractDraftedQuestions } from '../generation/response.js';
 import type { DraftRecord } from '../generation/types.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
@@ -126,26 +160,42 @@ export interface HeadingOfferContext {
   readonly sourcePath: VaultPath;
 }
 
-export type HeadingOfferAcceptOutcome =
-  | {
-      /** At least one question was drafted and cached as a `status: 'pending'` `DraftRecord` — same shape an automatic sweep produces. */
-      readonly kind: 'drafted';
-      readonly draftIds: readonly string[];
-    }
-  | {
-      /** F7.8: no Worker connection configured — the same "grey out, don't crash" outcome `sweep()` already gives a `null` for; nothing was attempted, nothing cached. */
-      readonly kind: 'not-configured';
-    }
-  | {
-      /** `[D-089]`'s grounding band refused before any generative call — the honest "nothing to draft from" outcome, not an error. `reason` is the specific refusal, kept apart from `copy.outcome`'s classification. */
-      readonly kind: 'refused';
-      readonly reason: GroundingRefusalReason;
-      readonly copy: RefusalCopy;
-    }
-  | {
-      /** The Worker responded but not with a shape `extractDraftedQuestions`/`extractDraftedProvenance` can use — nothing cached, matching `pipeline.ts`'s own "unparseable — revisited next sweep" posture (there is no next sweep here, but nothing is silently lost: she can re-trigger the offer). */
-      readonly kind: 'unparseable';
-    };
+/**
+ * What every accept outcome carries about the heading's ask (`[D-437]`, rows 35 and 37): the routing
+ * it came out as, with its source (the whole heading and question word) intact, and, for an ask no
+ * generator serves, that routing again as the unmet ask. Data only: nothing here is worded for her,
+ * and the accept path's own results are unchanged by it. `demandRouting` is always set by the port
+ * this module builds; it is optional in the type so an outcome built by hand (a test fake of the
+ * banner's accept) stays valid.
+ */
+export interface HeadingOfferDemandCarried {
+  readonly demandRouting?: DemandRouting;
+  /** Present exactly when `demandRouting` is `deferred` or `unsupported`. Never a fulfilment: no draft made for another purpose meets it. */
+  readonly unmetAsk?: UnmetAsk;
+}
+
+export type HeadingOfferAcceptOutcome = HeadingOfferDemandCarried &
+  (
+    | {
+        /** At least one question was drafted and cached as a `status: 'pending'` `DraftRecord` — same shape an automatic sweep produces. */
+        readonly kind: 'drafted';
+        readonly draftIds: readonly string[];
+      }
+    | {
+        /** F7.8: no Worker connection configured — the same "grey out, don't crash" outcome `sweep()` already gives a `null` for; nothing was attempted, nothing cached. */
+        readonly kind: 'not-configured';
+      }
+    | {
+        /** `[D-089]`'s grounding band refused before any generative call — the honest "nothing to draft from" outcome, not an error. `reason` is the specific refusal, kept apart from `copy.outcome`'s classification. */
+        readonly kind: 'refused';
+        readonly reason: GroundingRefusalReason;
+        readonly copy: RefusalCopy;
+      }
+    | {
+        /** The Worker responded but not with a shape `extractDraftedQuestions`/`extractDraftedProvenance` can use — nothing cached, matching `pipeline.ts`'s own "unparseable — revisited next sweep" posture (there is no next sweep here, but nothing is silently lost: she can re-trigger the offer). */
+        readonly kind: 'unparseable';
+      }
+  );
 
 export interface HeadingOfferPort {
   /**
@@ -202,6 +252,14 @@ export interface HeadingOfferPortDeps {
     deps: DraftQuizCardsDeps,
     request: DraftQuizCardsRequest,
   ) => Promise<DraftQuizCardsResult>;
+  /**
+   * Where `accept` counts each attempted ask's routing outcome per concept and per reason
+   * (`[D-437]`). Absent, the port uses `demandRoutingCounterFor(deps.cache)`, the session counter the
+   * generation sweep shares (one per draft cache, as long-lived as the plugin session). An ask that
+   * was never attempted (no Worker connection) is not counted. Local and in memory, keyed by the
+   * opaque concept key (D-005); nothing is persisted or sent.
+   */
+  readonly demandCounter?: DemandRoutingCounter;
 }
 
 function dismissalKey(candidate: HeadingOfferCandidate, sourcePath: VaultPath): string {
@@ -211,26 +269,47 @@ function dismissalKey(candidate: HeadingOfferCandidate, sourcePath: VaultPath): 
 export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOfferPort {
   const now = deps.now ?? (() => new Date());
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
+  const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
   const dismissed = new Set<string>();
 
   return {
-    async accept(_candidate, context) {
+    async accept(candidate, context) {
+      // `[D-437]`: the ask, from the whole heading, routed against the one generator this path
+      // drafts through. Pure, so it is safe to compute before knowing whether an ask is attempted.
+      const routing = routeDemandAsk(askFromHeading(candidate.headingText), 'quiz.generate.v1');
+      const unmet = unmetAskOf(routing);
+      const carried: HeadingOfferDemandCarried = {
+        demandRouting: routing,
+        ...(unmet === null ? {} : { unmetAsk: unmet }),
+      };
+
       const draftDeps = deps.draftDeps();
-      if (draftDeps === null) return { kind: 'not-configured' };
+      if (draftDeps === null) return { kind: 'not-configured', ...carried };
+
+      // Counted where the ask is made, so a retry after `not-configured` is not counted twice.
+      demandCounter.record(context.concept.key, routing);
 
       const result = await draftForConcept(draftDeps, {
         courseCode: context.courseCode,
         conceptName: context.concept.name,
+        // Only a served ask sends anything: the mapping and the whole heading. An unserved,
+        // underspecified or empty ask sends neither, and the request is exactly today's.
+        ...authoringDemandFields(routing),
       });
 
       if (result.status === 'refused') {
-        return { kind: 'refused', reason: result.reason, copy: describeRefusal(result.reason) };
+        return {
+          kind: 'refused',
+          reason: result.reason,
+          copy: describeRefusal(result.reason),
+          ...carried,
+        };
       }
 
       const questions = extractDraftedQuestions(result.response);
       const provenance = extractDraftedProvenance(result.response);
       if (questions === null || provenance === null) {
-        return { kind: 'unparseable' };
+        return { kind: 'unparseable', ...carried };
       }
 
       const createdAt = now().toISOString();
@@ -259,9 +338,9 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
       // with zero questions is treated the same as unparseable, rather than
       // a silent no-op "accepted, drafted nothing" — she asked for a card,
       // and this is the honest report that none arrived.
-      if (draftIds.length === 0) return { kind: 'unparseable' };
+      if (draftIds.length === 0) return { kind: 'unparseable', ...carried };
 
-      return { kind: 'drafted', draftIds };
+      return { kind: 'drafted', draftIds, ...carried };
     },
 
     dismiss(candidate, sourcePath) {

@@ -21,9 +21,17 @@
  */
 
 import { enumerateVaultInstruments } from 'olea-core';
+import {
+  instrumentTargetStorePath,
+  type NewInstrumentTarget,
+  questionBindingOf,
+  writeInstrumentTarget,
+} from 'olea-core/src/instrument/target-store.js';
+import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
 import { describe, expect, it, vi } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
+import { demandRoutingCounterFor } from '../../src/generation/pipeline.js';
 import {
   createRevisionAwareJobRunner,
   isInstrumentRevisionJobPayload,
@@ -403,5 +411,261 @@ describe('runInstrumentRevisionJob: same-kind successor', () => {
     expect(draftForConcept).not.toHaveBeenCalled();
     expect(draftCardForConcept).not.toHaveBeenCalled();
     expect(await cache.listPending()).toEqual([]);
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.20`), design `demand-carriage.md` §4.1's revision row and §3.2's
+ * revision-request row: the predecessor's declared demand is restated as the successor's ask
+ * (origin `revision`), routed like any other ask, and an unspecified, stale or unreadable
+ * predecessor restates nothing, so its successor is authored exactly as today. History is never
+ * upgraded: the successor is a new instrument, and the predecessor never gains a record here.
+ */
+describe('runInstrumentRevisionJob: the predecessor demand is restated as the successor ask (`[D-437]`)', () => {
+  const QA_NOTE_PATH = 'Courses/GEO101/Week 4.md';
+  const QA_NOTE = [
+    '---',
+    'topic: [Sediment layering]',
+    'course: GEO101',
+    '---',
+    '',
+    'What preserves the storm record?',
+    '?',
+    'Hummocky stratification',
+    '',
+  ].join('\n');
+
+  async function recordFor(
+    vault: MemoryVaultSource,
+    instrumentId: string,
+    overrides: Partial<NewInstrumentTarget> = {},
+  ): Promise<void> {
+    const { records } = await enumerateVaultInstruments(vault);
+    const record = records.find((r) => r.instrumentId === instrumentId);
+    if (record === undefined) throw new Error('test fixture error: predecessor not enumerated');
+    const block = record.instrumentType === 'mcq' ? record.mcq : record.card;
+    if (block.type === 'cloze') throw new Error('test fixture error: no cloze predecessor here');
+    await writeInstrumentTarget(vault, {
+      instrumentId,
+      declaredDemand: 'recall-a-fact',
+      origin: 'sweep',
+      questionBinding: await questionBindingOf(block),
+      authoredAt: '2026-09-01T10:00:00Z',
+      generator: { taskId: 'quiz.generate.v1', promptVersion: '2.4.0' },
+      ...overrides,
+    });
+  }
+
+  async function qaPredecessorId(vault: MemoryVaultSource): Promise<string> {
+    const { records } = await enumerateVaultInstruments(vault);
+    const id = records.find((r) => r.notePath === QA_NOTE_PATH)?.instrumentId;
+    if (id === undefined) throw new Error('test fixture error: no qa instrument enumerated');
+    return id;
+  }
+
+  async function reviseMcq(
+    vault: MemoryVaultSource,
+    counter = new DemandRoutingCounter(),
+  ): Promise<{
+    readonly requests: Record<string, unknown>[];
+    readonly counter: DemandRoutingCounter;
+  }> {
+    const requests: Record<string, unknown>[] = [];
+    await runInstrumentRevisionJob(
+      {
+        vault,
+        cache: createVaultDraftCacheStore(vault),
+        draftDeps: () => ({}) as never,
+        draftForConcept: async (_deps, request) => {
+          requests.push({ ...request });
+          return groundedResponse('Sediment layering');
+        },
+        demandCounter: counter,
+      },
+      payload(),
+    );
+    return { requests, counter };
+  }
+
+  it('a declared predecessor demand is sent on the successor request, with no heading', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    await recordFor(vault, PREDECESSOR_ID);
+
+    const { requests, counter } = await reviseMcq(vault);
+
+    expect(requests).toEqual([
+      { courseCode: 'GEO101', conceptName: 'Sediment layering', intendedDemand: 'recall-a-fact' },
+    ]);
+    expect(counter.counts()).toEqual([
+      { conceptKey: expect.any(String), reason: 'served', count: 1 },
+    ]);
+  });
+
+  it('an unspecified predecessor (no record) restates nothing: the request is exactly today, counted as none asked', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+
+    const { requests, counter } = await reviseMcq(vault);
+
+    expect(requests).toEqual([{ courseCode: 'GEO101', conceptName: 'Sediment layering' }]);
+    expect(counter.counts()).toEqual([
+      { conceptKey: expect.any(String), reason: 'none-asked', count: 1 },
+    ]);
+  });
+
+  it('a stale record (the block was edited after it was written) restates nothing', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    await recordFor(vault, PREDECESSOR_ID, { questionBinding: 'a-binding-of-another-question' });
+
+    const { requests, counter } = await reviseMcq(vault);
+
+    expect(requests).toEqual([{ courseCode: 'GEO101', conceptName: 'Sediment layering' }]);
+    expect(counter.total('served')).toBe(0);
+    expect(counter.total('none-asked')).toBe(1);
+  });
+
+  it('an unreadable record restates nothing, and is left exactly as it is', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const path = instrumentTargetStorePath(PREDECESSOR_ID);
+    await vault.write(path, '{ this is not a record');
+    const before = await vault.read(path);
+
+    const { requests } = await reviseMcq(vault);
+
+    expect(requests).toEqual([{ courseCode: 'GEO101', conceptName: 'Sediment layering' }]);
+    expect(await vault.read(path)).toBe(before);
+  });
+
+  it('a declared demand no generator serves is recorded as unmet and is not sent (deferred, never served)', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    await recordFor(vault, PREDECESSOR_ID, { declaredDemand: 'calculate' });
+
+    const { requests, counter } = await reviseMcq(vault);
+
+    expect(requests).toEqual([{ courseCode: 'GEO101', conceptName: 'Sediment layering' }]);
+    expect(counter.total('no-generator-serves')).toBe(1);
+    expect(counter.total('served')).toBe(0);
+  });
+
+  it('writes no target record: the revision restates the demand and never records one (history is not upgraded)', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    await recordFor(vault, PREDECESSOR_ID);
+    const before = (await vault.list()).filter((path) =>
+      path.startsWith('.olea/instrument-targets'),
+    );
+
+    await reviseMcq(vault);
+
+    const after = (await vault.list()).filter((path) =>
+      path.startsWith('.olea/instrument-targets'),
+    );
+    expect(after).toEqual(before);
+    expect(after).toEqual([instrumentTargetStorePath(PREDECESSOR_ID)]);
+  });
+
+  it("a 'qa' predecessor's declared demand goes to the cards request", async () => {
+    const vault = new MemoryVaultSource({ [QA_NOTE_PATH]: QA_NOTE });
+    const predecessorId = await qaPredecessorId(vault);
+    await recordFor(vault, predecessorId, {
+      generator: { taskId: 'cards.generate.v1', promptVersion: '1.8.0' },
+    });
+    const requests: Record<string, unknown>[] = [];
+
+    await runInstrumentRevisionJob(
+      {
+        vault,
+        cache: createVaultDraftCacheStore(vault),
+        draftDeps: () => ({}) as never,
+        draftForConcept: async () => {
+          throw new Error('the mcq seam must not be called for a qa predecessor');
+        },
+        draftCardForConcept: async (_deps, request) => {
+          requests.push({ ...request });
+          return {
+            status: 'drafted',
+            request: { courseCode: 'GEO101', conceptName: 'x', sourceChunks: ['chunk'] },
+            response: {
+              ok: true,
+              stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'test-model' },
+              result: { cards: [{ front: 'f', back: 'b', subject: 's' }] },
+            },
+          };
+        },
+        demandCounter: new DemandRoutingCounter(),
+      },
+      { kind: 'instrument-revision', predecessorInstrumentId: predecessorId, newPassageText: 't' },
+    );
+
+    expect(requests).toEqual([
+      { courseCode: 'GEO101', conceptName: 'Sediment layering', intendedDemand: 'recall-a-fact' },
+    ]);
+  });
+
+  it('a cloze predecessor makes no ask and counts nothing', async () => {
+    const CLOZE_PATH = 'Courses/GEO101/Week 5.md';
+    const vault = new MemoryVaultSource({
+      [CLOZE_PATH]: [
+        '---',
+        'topic: [Sediment layering]',
+        'course: GEO101',
+        '---',
+        '',
+        'The ==hummocky stratification== preserves the storm record.',
+        '',
+      ].join('\n'),
+    });
+    const { records } = await enumerateVaultInstruments(vault);
+    const counter = new DemandRoutingCounter();
+
+    await runInstrumentRevisionJob(
+      {
+        vault,
+        cache: createVaultDraftCacheStore(vault),
+        draftDeps: () => ({}) as never,
+        demandCounter: counter,
+      },
+      {
+        kind: 'instrument-revision',
+        predecessorInstrumentId: records[0]?.instrumentId ?? 'missing',
+        newPassageText: 't',
+      },
+    );
+
+    expect(counter.counts()).toEqual([]);
+  });
+
+  it('the Worker not configured makes no ask and counts nothing', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const counter = new DemandRoutingCounter();
+
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache: createVaultDraftCacheStore(vault),
+        draftDeps: () => null,
+        demandCounter: counter,
+      },
+      payload(),
+    );
+
+    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(counter.counts()).toEqual([]);
+  });
+
+  it('with no counter supplied, counts into the session counter the draft cache stands for', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    await recordFor(vault, PREDECESSOR_ID);
+
+    await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        draftForConcept: async () => groundedResponse('Sediment layering'),
+      },
+      payload(),
+    );
+
+    expect(demandRoutingCounterFor(cache).total('served')).toBe(1);
   });
 });

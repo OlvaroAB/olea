@@ -33,6 +33,7 @@ import {
   type EmbeddingProvider,
   type EmbedRequest,
   type EmbedResult,
+  type JudgeRequestRecord,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
   type WorkerTaskRequest,
@@ -107,6 +108,14 @@ function fakeTransport(cardsResponse?: () => unknown) {
     },
     calls,
   };
+}
+
+/** The payload of the grounding-judge send among a fake transport's recorded calls. */
+function judgePayloadOf(transport: {
+  readonly calls: readonly WorkerTaskRequest[];
+}): Record<string, unknown> {
+  const call = transport.calls.find((entry) => entry.taskId === 'grounding.judge.v1');
+  return (call?.payload ?? {}) as Record<string, unknown>;
 }
 
 function defaultCardsResponse(): unknown {
@@ -234,5 +243,77 @@ describe('draftCardsForConcept (ol-0r92.116)', () => {
       expect(result.request.purpose).toBe('readiness');
       expect(result.request.registerHint).toEqual({ terminology: ['mitosis'] });
     }
+  });
+});
+
+/**
+ * T3 for the card path (`[D-437]`, `ol-egov.141.89.2.20`) and the forwarding half of
+ * `ol-egov.141.89.1.47`, mirroring `../retrieval/draft-quiz-cards.spec.ts`. INV-3: invented headings.
+ */
+describe('draftCardsForConcept — the demand carried to retrieval, the judge and the request (ol-egov.141.89.2.20)', () => {
+  const ASK = { heading: 'What is a mitochondrion?', questionWord: 'What' } as const;
+
+  async function draftWith(
+    request: Parameters<typeof draftCardsForConcept>[1],
+    extra: Partial<DraftCardsDeps> = {},
+  ) {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport();
+    const deps: DraftCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      ...extra,
+    };
+    const result = await draftCardsForConcept(deps, request);
+    return { result, transport };
+  }
+
+  it('a served need sends intendedDemand and the whole requestedAsk, and the judge is asked about the operation', async () => {
+    const { result, transport } = await draftWith({
+      ...REQUEST,
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: ASK,
+    });
+
+    expect(result.status).toBe('drafted');
+    const cardsCall = transport.calls.find((call) => call.taskId === 'cards.generate.v1');
+    const payload = cardsCall?.payload as Record<string, unknown>;
+    expect(payload.intendedDemand).toBe('recall-a-fact');
+    expect(payload.requestedAsk).toEqual(ASK);
+    expect(judgePayloadOf(transport).intendedOperation).toBe('define');
+    if (result.status === 'drafted') {
+      expect(result.request.intendedDemand).toBe('recall-a-fact');
+      expect(result.request.requestedAsk).toEqual(ASK);
+    }
+  });
+
+  it('an unspecified need sends neither field and no operation: the request as it was', async () => {
+    const { transport } = await draftWith(REQUEST);
+
+    const cardsCall = transport.calls.find((call) => call.taskId === 'cards.generate.v1');
+    const payload = cardsCall?.payload as Record<string, unknown>;
+    expect(Object.keys(payload).sort()).toEqual([
+      'conceptName',
+      'courseCode',
+      'personalization',
+      'sourceChunks',
+    ]);
+    expect('intendedOperation' in judgePayloadOf(transport)).toBe(false);
+  });
+
+  it('forwards the JEV-6 recorder and the operation through retrieve()', async () => {
+    const records: JudgeRequestRecord[] = [];
+    await draftWith(
+      { ...REQUEST, intendedDemand: 'recall-a-fact' },
+      { onJudgeRequest: (record) => records.push(record) },
+    );
+
+    expect(records).toEqual([
+      {
+        query: QUERY_TEXT,
+        refs: [{ path: TARGET_PATH, blockIndex: 0 }],
+        intendedOperation: 'define',
+      },
+    ]);
   });
 });

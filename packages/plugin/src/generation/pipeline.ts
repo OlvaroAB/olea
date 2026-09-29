@@ -159,6 +159,23 @@
  * and the item keeps whole-note grain (or the accept-time seal's single-passage mint) — the
  * top-ranked chunk is never taken. Naming it for those drafts needs the response to cite its
  * chunk: a wire change, filed as a bead.
+ *
+ * **Explicit recall intent, for this sweep only (`[D-437]`, decision-sheet row 38,
+ * `ol-egov.141.89.2.20`).** Every ask the sweep makes carries `intendedDemand: 'recall-a-fact'`
+ * (`SWEEP_RECALL_ASK`, routed against `quiz.generate.v1` like any other ask, and sent through
+ * `authoringDemandFields`), because the sweep is meant to generate recall practice. It is
+ * **authoring intent only**: it does not establish recall coverage or recall evidence, no other
+ * origin (a heading offer, a revision, a planner need, a paper slot) sends the constant
+ * (`olea-core`'s `demand-ask-callers.spec.ts` pins the caller list), and whether the produced
+ * instrument offers answer options, hence reads as recognition rather than free recall, is read
+ * from the block, never stored (`instrument/demand-reading.ts`). Nothing in a draft records the
+ * intent yet: writing it into a target record at accept time is `ol-egov.141.89.2.26`'s. The intent
+ * is part of the refusal memory's demand key (`sweepDemandKey`) so a changed intent reads as a
+ * changed demand, and each ask is counted per concept and reason
+ * (`GenerationPipelineDeps.demandCounter`). The sufficiency judge is also told the operation
+ * (`intendedOperation: 'define'`), which adds one line to the judge's prompt: a stratification input
+ * by the service's own account, and a change to what the judge reads that the operating-point
+ * measurement should be aware of.
  */
 
 import type {
@@ -170,6 +187,15 @@ import type {
   VaultSource,
 } from 'olea-core';
 import { courseFromPath, DEFAULT_COURSES_FOLDER, hashText } from 'olea-core';
+// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
+// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
+import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
+import {
+  type AuthoringDemandFields,
+  authoringDemandFields,
+  DemandRoutingCounter,
+  routeDemandAsk,
+} from 'olea-core/src/routing/demand-routing.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
@@ -255,6 +281,15 @@ export interface GenerationPipelineDeps {
    * caller that wants an isolated or shared memory supplies its own.
    */
   readonly refusalMemory?: GenerationRefusalMemory;
+  /**
+   * Where this sweep counts each ask's routing outcome, per concept and per reason
+   * (`[D-437]`, design §4.1). Absent, the sweep uses `demandRoutingCounterFor(deps.cache)`: one
+   * counter per draft cache instance, as long-lived as the plugin session in production, the same
+   * arrangement as `refusalMemory` above. Local and in memory, keyed by the opaque concept key
+   * (D-005): never persisted and never sent anywhere. No production reader of the counts exists yet
+   * (an instrumentation surface is a later bead); the counter is what one would read.
+   */
+  readonly demandCounter?: DemandRoutingCounter;
 }
 
 /**
@@ -508,6 +543,43 @@ export function refusalMemoryFor(cache: DraftCacheStore): GenerationRefusalMemor
   return memory;
 }
 
+const demandCounterByCache = new WeakMap<DraftCacheStore, DemandRoutingCounter>();
+
+/**
+ * The demand-routing counter an origin uses when it has none injected: one per draft cache
+ * instance. `wiring.ts` builds the cache once per plugin session, so the sweep and the heading offer
+ * (which is handed the same cache) share one count without any caller threading it through. The
+ * same lifetime argument as `refusalMemoryFor`.
+ */
+export function demandRoutingCounterFor(cache: DraftCacheStore): DemandRoutingCounter {
+  let counter = demandCounterByCache.get(cache);
+  if (counter === undefined) {
+    counter = new DemandRoutingCounter();
+    demandCounterByCache.set(cache, counter);
+  }
+  return counter;
+}
+
+/**
+ * The refusal memory's demand key for a sweep ask: what is being asked for, so a refusal is held
+ * only while the ask is unchanged. `purpose` and `registerHint` as before (`learning`, or
+ * `readiness:` and the hint), plus the intended demand now that the sweep sends one, so a changed
+ * intent reads as a changed demand and is not held. With no intent the key is exactly what it was
+ * before the sweep carried one.
+ */
+export function sweepDemandKey(
+  courseFormatMatch: FormatMatchDecision | undefined,
+  fields: AuthoringDemandFields,
+): string {
+  const purposeKey =
+    courseFormatMatch === undefined
+      ? 'learning'
+      : `readiness:${JSON.stringify(courseFormatMatch.registerHint ?? null)}`;
+  return fields.intendedDemand === undefined
+    ? purposeKey
+    : `${purposeKey}|intended:${fields.intendedDemand}`;
+}
+
 function defaultGenerateDraftId(
   courseCode: string,
   conceptName: string,
@@ -619,6 +691,11 @@ export async function runGenerationSweep(
   const formatMatch = deps.formatMatch;
   const memory = deps.refusalMemory ?? refusalMemoryFor(deps.cache);
   const sweepOrdinal = memory.beginSweep();
+  // `[D-437]` row 38: the sweep's explicit recall intent, routed like any other ask. Routed once:
+  // the constant and the generator are both fixed for the whole sweep.
+  const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
+  const sweepRouting = routeDemandAsk(SWEEP_RECALL_ASK, 'quiz.generate.v1');
+  const sweepDemandFields = authoringDemandFields(sweepRouting);
 
   // Built at most once per sweep, and only if routing was actually opted
   // into — a real vault walk (`enumerateVaultInstruments`) is not worth
@@ -712,14 +789,10 @@ export async function runGenerationSweep(
     // material that landed for this course this sweep, the embedding note, and the
     // concept's own source notes — and what is being asked for. A refusal that reached
     // the judge is held only while nothing here is new (`GenerationRefusalMemory.holds`).
-    // The demand is `purpose`/`registerHint` because those are all this sweep sends today.
-    // When it starts sending an intended operation (decision-sheet row 38's explicit recall
-    // intent for the sweep), that value MUST join this key, or a changed demand would read
-    // as unchanged and stay held.
-    const demand =
-      courseFormatMatch === undefined
-        ? 'learning'
-        : `readiness:${JSON.stringify(courseFormatMatch.registerHint ?? null)}`;
+    // The demand is `purpose`/`registerHint` and, since decision-sheet row 38, the sweep's
+    // explicit recall intent (`ol-egov.141.89.2.20`): an intent that joined the ask must join
+    // this key, or a changed demand would read as unchanged and stay held.
+    const demand = sweepDemandKey(courseFormatMatch, sweepDemandFields);
     let courseUnitPieces: Promise<readonly string[]> | null = null;
     const evidencePieces = async (candidate: ConceptRecord): Promise<readonly string[]> => {
       courseUnitPieces ??= unitEvidencePieces(units, courseCode, coursesFolder);
@@ -817,6 +890,9 @@ export async function runGenerationSweep(
 
       attempted += 1;
       memory.noteAsked(courseCode, candidate.key, sweepOrdinal);
+      // Counted where the ask is made: a concept skipped as a duplicate, as held or by routing
+      // makes no ask and is not counted. Whether the ask then drafts or refuses is another fact.
+      demandCounter.record(candidate.key, sweepRouting);
       // Taken BEFORE the ask, so a refusal is remembered against the evidence it was
       // actually made on, never against something that changed while the call was out.
       const pieces = await evidencePieces(candidate);
@@ -825,6 +901,9 @@ export async function runGenerationSweep(
         result = await draftForConcept(deps.draftDeps, {
           courseCode,
           conceptName: candidate.name,
+          // `[D-437]` row 38: the sweep's recall intent, authoring intent only — see the module
+          // doc. No heading is sent: the sweep's ask has no source.
+          ...sweepDemandFields,
           // F4.8/`[D-188]`: `purpose`/`registerHint` are set together, only
           // when this course's nearest assessment is format-matched — see
           // `deps.formatMatch`'s doc. Every other course omits both, so

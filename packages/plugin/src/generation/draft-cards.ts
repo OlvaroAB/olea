@@ -40,7 +40,12 @@
  * into a `DraftRecord.card`.
  */
 
-import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
+import {
+  type AuthoringDemand,
+  type AuthoringRequestedAsk,
+  CONTRACT_VERSION,
+  TASK_IDS,
+} from 'olea-contracts';
 import type {
   ClassifiedPassage,
   PassageAuthorship,
@@ -56,8 +61,11 @@ import {
   type JudgeRequestRecord,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
+  type RetrieveOptions,
   retrieve,
 } from 'olea-core';
+// Not in the `olea-core` barrel yet — see `../retrieval/draft-quiz-cards.ts`'s note on the same import.
+import { demandToJudgeOperation } from 'olea-core/src/retrieval/demand.js';
 import type { GenerationPurpose, RegisterHint } from '../retrieval/draft-quiz-cards.js';
 import { WorkerGroundingJudge } from '../retrieval/workerGroundingJudge.js';
 
@@ -85,6 +93,10 @@ export interface CardsGenerateRequestPayload {
   };
   readonly purpose?: GenerationPurpose;
   readonly registerHint?: RegisterHint;
+  /** `[D-437]` — see `QuizGenerateRequestPayload.intendedDemand` (`../retrieval/draft-quiz-cards.ts`); `cards.generate.v1` serves `recall-a-fact` only too. */
+  readonly intendedDemand?: AuthoringDemand;
+  /** `[D-437]`, row 35 — see `QuizGenerateRequestPayload.requestedAsk`. */
+  readonly requestedAsk?: AuthoringRequestedAsk;
 }
 
 /**
@@ -110,6 +122,10 @@ export interface DraftCardsRequest {
   readonly purpose?: GenerationPurpose;
   /** `[D-188]`'s register hint — see `DraftQuizCardsRequest`'s own doc for the identical field. */
   readonly registerHint?: RegisterHint;
+  /** `[D-437]` — see `DraftQuizCardsRequest.intendedDemand`'s own doc for the identical field. */
+  readonly intendedDemand?: AuthoringDemand;
+  /** `[D-437]`, row 35 — see `DraftQuizCardsRequest.requestedAsk`'s own doc for the identical field. */
+  readonly requestedAsk?: AuthoringRequestedAsk;
 }
 
 export type DraftCardsResult =
@@ -157,14 +173,20 @@ export async function draftCardsForConcept(
   deps: DraftCardsDeps,
   request: DraftCardsRequest,
 ): Promise<DraftCardsResult> {
-  const grounding = await retrieve(deps.retrieve, request.conceptName, {
+  // `ol-egov.141.89.1.47`: typed, every field written out — see `draftQuizCardsForConcept`.
+  const retrieveOptions: RetrieveOptions = {
     band: D112_GROUNDING_BAND,
     requireComposite: true,
     compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
-    ...(deps.onStage !== undefined ? { onStage: deps.onStage } : {}),
-    ...(deps.onJudgeRequest !== undefined ? { onJudgeRequest: deps.onJudgeRequest } : {}),
-  });
+    onStage: deps.onStage,
+    onJudgeRequest: deps.onJudgeRequest,
+    intendedOperation:
+      request.intendedDemand === undefined
+        ? undefined
+        : demandToJudgeOperation(request.intendedDemand),
+  };
+  const grounding = await retrieve(deps.retrieve, request.conceptName, retrieveOptions);
 
   if (grounding.status === 'refused') {
     // THE load-bearing line — see `draftQuizCardsForConcept`'s own doc: the
@@ -189,6 +211,9 @@ export async function draftCardsForConcept(
     personalization: { voiceExemplars },
     ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
     ...(request.registerHint === undefined ? {} : { registerHint: request.registerHint }),
+    // `[D-437]`: verbatim, omitted when absent — see `draftQuizCardsForConcept`.
+    ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+    ...(request.requestedAsk === undefined ? {} : { requestedAsk: request.requestedAsk }),
   };
 
   const response = await deps.transport.send({

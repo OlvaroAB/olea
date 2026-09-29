@@ -136,7 +136,12 @@
  * into an accept-ready `McqFields` is `ol-p3t07a`'s job.
  */
 
-import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
+import {
+  type AuthoringDemand,
+  type AuthoringRequestedAsk,
+  CONTRACT_VERSION,
+  TASK_IDS,
+} from 'olea-contracts';
 import type {
   ClassifiedPassage,
   PassageAuthorship,
@@ -152,8 +157,12 @@ import {
   type JudgeRequestRecord,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
+  type RetrieveOptions,
   retrieve,
 } from 'olea-core';
+// Not in the `olea-core` barrel (the barrel export of the demand surface is `ol-egov.141.89.2.25`'s
+// job); the same deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
+import { demandToJudgeOperation } from 'olea-core/src/retrieval/demand.js';
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**
@@ -208,6 +217,20 @@ export interface QuizGenerateRequestPayload {
   };
   readonly purpose?: GenerationPurpose;
   readonly registerHint?: RegisterHint;
+  /**
+   * `[D-437]` (`ol-egov.141.89.2.19`, the authoring wire): the SECONDARY mapping of the practice
+   * need's ask onto `[D-262]`'s five words. Present only when the need routed as served, so
+   * `quiz.generate.v1` (which serves `recall-a-fact` only, `AUTHORING_SERVED_DEMANDS`) never
+   * receives one it refuses. Authoring intent and nothing more: the produced item is not thereby
+   * recorded as delivering the demand. Absent means today's request, byte for byte.
+   */
+  readonly intendedDemand?: AuthoringDemand;
+  /**
+   * The PRIMARY request (row 35): the heading exactly as she wrote it and the question word read
+   * from it. Sent whenever a served need came from a heading; absent for a need that did not
+   * (the sweep's constant, a revision), and absent for every unserved or underspecified ask.
+   */
+  readonly requestedAsk?: AuthoringRequestedAsk;
 }
 
 /**
@@ -247,6 +270,18 @@ export interface DraftQuizCardsRequest {
    * assembles both need not conditionally omit this one.
    */
   readonly registerHint?: RegisterHint;
+  /**
+   * `[D-437]` — the mapping of the practice need's ask, set ONLY by a caller whose routing
+   * (`olea-core`'s `routeDemandAsk`) came out `served` for this generator; the caller's
+   * `authoringDemandFields(routing)` is the one way to build this and `requestedAsk` below, so an
+   * unserved, deferred or underspecified ask sends neither (design §4.2). Sent on the request, and
+   * also handed to retrieval as the sufficiency judge's operation (`demandToJudgeOperation`:
+   * stratification only, until `[D-289]`'s wire change). Absent: the request and the judge call are
+   * exactly what they were before this field existed.
+   */
+  readonly intendedDemand?: AuthoringDemand;
+  /** `[D-437]`, row 35 — the heading as she wrote it and its question word; see `QuizGenerateRequestPayload.requestedAsk`. */
+  readonly requestedAsk?: AuthoringRequestedAsk;
 }
 
 export type DraftQuizCardsResult =
@@ -361,14 +396,24 @@ export async function draftQuizCardsForConcept(
   deps: DraftQuizCardsDeps,
   request: DraftQuizCardsRequest,
 ): Promise<DraftQuizCardsResult> {
-  const grounding = await retrieve(deps.retrieve, request.conceptName, {
+  // `ol-egov.141.89.1.47`: typed, and every field written out as a property, so an option
+  // `retrieve()` does not declare is a compile error here. A conditional spread of the recorder
+  // was silently dropped for as long as `RetrieveOptions` lacked the field.
+  const retrieveOptions: RetrieveOptions = {
     band: D112_GROUNDING_BAND,
     requireComposite: true,
     compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
-    ...(deps.onStage !== undefined ? { onStage: deps.onStage } : {}),
-    ...(deps.onJudgeRequest !== undefined ? { onJudgeRequest: deps.onJudgeRequest } : {}),
-  });
+    onStage: deps.onStage,
+    onJudgeRequest: deps.onJudgeRequest,
+    // `[D-437]`: the need's demand as the judge's operation, when it has one (a printed-result
+    // reading has none) and only for a need that carried a demand at all.
+    intendedOperation:
+      request.intendedDemand === undefined
+        ? undefined
+        : demandToJudgeOperation(request.intendedDemand),
+  };
+  const grounding = await retrieve(deps.retrieve, request.conceptName, retrieveOptions);
 
   if (grounding.status === 'refused') {
     // THE load-bearing line (see module doc): the GENERATIVE `transport.send`
@@ -408,6 +453,11 @@ export async function draftQuizCardsForConcept(
     // discipline `questionCount` above already uses.
     ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
     ...(request.registerHint === undefined ? {} : { registerHint: request.registerHint }),
+    // `[D-437]`: passed through verbatim, never decided here (the caller's routing decides), and
+    // omitted entirely when absent so the request stays byte-identical for every caller that
+    // carries no demand.
+    ...(request.intendedDemand === undefined ? {} : { intendedDemand: request.intendedDemand }),
+    ...(request.requestedAsk === undefined ? {} : { requestedAsk: request.requestedAsk }),
   };
 
   const response = await deps.transport.send({

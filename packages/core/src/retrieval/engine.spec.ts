@@ -3,6 +3,11 @@ import type { PersistedKeywordIndex } from '../keyword-index/types.js';
 import { EmbeddingCacheEngine } from './embeddingCache.js';
 import { retrieve } from './engine.js';
 import type {
+  GroundingJudgePort,
+  GroundingJudgeRequest,
+  JudgeRequestRecord,
+} from './groundedContext.js';
+import type {
   EmbeddingCacheStore,
   EmbeddingProvider,
   EmbedRequest,
@@ -406,6 +411,123 @@ describe('retrieve — grounded path', () => {
     );
 
     const result = await retrieve(deps, 'mitochondria');
+
+    expect(result.status).toBe('grounded');
+  });
+});
+
+/**
+ * `ol-egov.141.89.1.47`: `retrieve()` used to accept neither `onJudgeRequest` nor `intendedOperation`
+ * and dropped both on the band path, so the JEV-6 capture recorded nothing through it and the
+ * intended operation could not reach the judge. The two production callers pass both by a
+ * conditional spread, which the typechecker does not read as an excess property, so the drop was
+ * silent. These cases pin the forwarding at the one place it is lost.
+ */
+describe('retrieve — the band path forwards the recorder and the intended operation', () => {
+  /** Every request reaches the judge: the lower bar is zero and the upper bar is above any cosine. */
+  const EVERY_REQUEST_JUDGED = { lower: 0, upper: 1 } as const;
+
+  function recordingJudge(): {
+    readonly judge: GroundingJudgePort;
+    readonly requests: GroundingJudgeRequest[];
+  } {
+    const requests: GroundingJudgeRequest[] = [];
+    return {
+      requests,
+      judge: {
+        async judge(request) {
+          requests.push(request);
+          return { supported: true, reason: 'supported' };
+        },
+      },
+    };
+  }
+
+  const NOTE_INDEX = index([
+    { path: 'course/lecture-1.md', blocks: ['Mitochondria is the powerhouse of the cell.'] },
+  ]);
+
+  it('calls the recorder once, with the query, the chunk references and the operation', async () => {
+    const { deps } = await makeDeps(NOTE_INDEX);
+    const { judge } = recordingJudge();
+    const records: JudgeRequestRecord[] = [];
+
+    const result = await retrieve(deps, 'mitochondria', {
+      band: EVERY_REQUEST_JUDGED,
+      judge,
+      intendedOperation: 'define',
+      onJudgeRequest: (record) => records.push(record),
+    });
+
+    expect(result.status).toBe('grounded');
+    expect(records).toEqual([
+      {
+        query: 'mitochondria',
+        refs: [{ path: 'course/lecture-1.md', blockIndex: 0 }],
+        intendedOperation: 'define',
+      },
+    ]);
+  });
+
+  it('puts the intended operation on the judge request', async () => {
+    const { deps } = await makeDeps(NOTE_INDEX);
+    const { judge, requests } = recordingJudge();
+
+    await retrieve(deps, 'mitochondria', {
+      band: EVERY_REQUEST_JUDGED,
+      judge,
+      intendedOperation: 'calculate',
+    });
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.intendedOperation).toBe('calculate');
+  });
+
+  it('sends no operation and records none when the caller supplied none (the request as it was before)', async () => {
+    const { deps } = await makeDeps(NOTE_INDEX);
+    const { judge, requests } = recordingJudge();
+    const records: JudgeRequestRecord[] = [];
+
+    await retrieve(deps, 'mitochondria', {
+      band: EVERY_REQUEST_JUDGED,
+      judge,
+      onJudgeRequest: (record) => records.push(record),
+    });
+
+    expect(requests).toHaveLength(1);
+    expect('intendedOperation' in (requests[0] ?? {})).toBe(false);
+    expect(records).toHaveLength(1);
+    expect('intendedOperation' in (records[0] ?? {})).toBe(false);
+  });
+
+  it('does not call the recorder for a request that never reaches the judge', async () => {
+    const { deps } = await makeDeps(NOTE_INDEX);
+    const { judge, requests } = recordingJudge();
+    const records: JudgeRequestRecord[] = [];
+
+    // A lower bar no cosine can clear: the request refuses from numbers, and nothing is sent.
+    const result = await retrieve(deps, 'mitochondria', {
+      band: { lower: 2, upper: 2 },
+      judge,
+      onJudgeRequest: (record) => records.push(record),
+    });
+
+    expect(result.status).toBe('refused');
+    expect(requests).toEqual([]);
+    expect(records).toEqual([]);
+  });
+
+  it('a recorder that throws cannot turn a draftable request into a refusal', async () => {
+    const { deps } = await makeDeps(NOTE_INDEX);
+    const { judge } = recordingJudge();
+
+    const result = await retrieve(deps, 'mitochondria', {
+      band: EVERY_REQUEST_JUDGED,
+      judge,
+      onJudgeRequest: () => {
+        throw new Error('the capture failed');
+      },
+    });
 
     expect(result.status).toBe('grounded');
   });

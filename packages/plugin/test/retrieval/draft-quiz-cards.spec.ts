@@ -76,6 +76,7 @@ import {
   type EmbedRequest,
   type EmbedResult,
   type GateStage,
+  type JudgeRequestRecord,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
   RECOMMENDED_COMPOSITE_THRESHOLDS,
@@ -171,6 +172,14 @@ function fakeTransport(responders: {
 /** The `quiz.generate.v1` call among a fake transport's recorded calls. Since D-442 an above-band request is judged first, so the quiz call is no longer always the first one. */
 function quizCallOf(transport: { readonly calls: readonly WorkerTaskRequest[] }) {
   return transport.calls.find((call) => call.taskId === 'quiz.generate.v1');
+}
+
+/** The payload of the grounding-judge send among a fake transport's recorded calls (the first, since `[D-442]` judges every request above the lower bar before generating). */
+function judgePayloadOf(transport: {
+  readonly calls: readonly WorkerTaskRequest[];
+}): Record<string, unknown> {
+  const call = transport.calls.find((entry) => entry.taskId === 'grounding.judge.v1');
+  return (call?.payload ?? {}) as Record<string, unknown>;
 }
 
 function defaultQuizResponse(): unknown {
@@ -862,5 +871,170 @@ describe('draftQuizCardsForConcept — [JEV-11] onStage attributes the real call
     for (const stage of rec.stages) {
       expect(JSON.stringify(stage)).not.toContain(sentinel);
     }
+  });
+});
+
+/**
+ * T3 of `docs/dev/intelligence-build/demand-carriage.md` (`[D-437]`, `ol-egov.141.89.2.20`), and the
+ * forwarding half of `ol-egov.141.89.1.47`. A need that routed as served sends its demand, the
+ * whole heading it was read from and, through the retrieval request, the operation the sufficiency
+ * judge is asked about; a need that did not sends none of the three and the request is today's,
+ * byte for byte. INV-3: every heading here is invented.
+ */
+describe('draftQuizCardsForConcept — the demand carried to retrieval, the judge and the request (T3, ol-egov.141.89.2.20)', () => {
+  const ASK = { heading: 'What is a mitochondrion?', questionWord: 'What' } as const;
+
+  async function draftWith(
+    request: Parameters<typeof draftQuizCardsForConcept>[1],
+    extra: Partial<DraftQuizCardsDeps> = {},
+  ) {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      ...extra,
+    };
+    const result = await draftQuizCardsForConcept(deps, request);
+    return { result, transport };
+  }
+
+  it('a served need sends intendedDemand and the whole requestedAsk, and the judge is asked about the operation', async () => {
+    const { result, transport } = await draftWith({
+      ...REQUEST,
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: ASK,
+    });
+
+    expect(result.status).toBe('drafted');
+    const payload = quizCallOf(transport)?.payload as Record<string, unknown>;
+    expect(payload.intendedDemand).toBe('recall-a-fact');
+    expect(payload.requestedAsk).toEqual(ASK);
+    const judgePayload = judgePayloadOf(transport);
+    expect(transport.calls[0]?.taskId).toBe('grounding.judge.v1');
+    expect(judgePayload.intendedOperation).toBe('define');
+    // The request that came back names the same fields (a caller reads what was sent from it).
+    if (result.status === 'drafted') {
+      expect(result.request.intendedDemand).toBe('recall-a-fact');
+      expect(result.request.requestedAsk).toEqual(ASK);
+    }
+  });
+
+  it('a served need with no heading behind it (the sweep) sends the demand alone', async () => {
+    const { transport } = await draftWith({ ...REQUEST, intendedDemand: 'recall-a-fact' });
+
+    const payload = quizCallOf(transport)?.payload as Record<string, unknown>;
+    expect(payload.intendedDemand).toBe('recall-a-fact');
+    expect('requestedAsk' in payload).toBe(false);
+    expect(judgePayloadOf(transport).intendedOperation).toBe('define');
+  });
+
+  it('an unspecified or unserved need sends neither field and no operation: the request as it was', async () => {
+    const { transport } = await draftWith(REQUEST);
+
+    const payload = quizCallOf(transport)?.payload as Record<string, unknown>;
+    expect('intendedDemand' in payload).toBe(false);
+    expect('requestedAsk' in payload).toBe(false);
+    expect('intendedOperation' in judgePayloadOf(transport)).toBe(false);
+    expect(Object.keys(payload).sort()).toEqual([
+      'conceptName',
+      'courseCode',
+      'personalization',
+      'sourceChunks',
+    ]);
+  });
+
+  it('a demand with no judge operation (a printed-result reading) sends the demand but no operation', async () => {
+    const { transport } = await draftWith({
+      ...REQUEST,
+      intendedDemand: 'interpret-printed-result',
+    });
+
+    const payload = quizCallOf(transport)?.payload as Record<string, unknown>;
+    expect(payload.intendedDemand).toBe('interpret-printed-result');
+    expect('intendedOperation' in judgePayloadOf(transport)).toBe(false);
+  });
+
+  it('a heading with no demand is passed through as given: the caller decides what is sent', async () => {
+    const { transport } = await draftWith({ ...REQUEST, requestedAsk: ASK });
+
+    // The caller decides what to send (`authoringDemandFields`); this function passes what it is
+    // given. A heading with no demand is still passed through, and the judge sees no operation.
+    const payload = quizCallOf(transport)?.payload as Record<string, unknown>;
+    expect(payload.requestedAsk).toEqual(ASK);
+    expect('intendedDemand' in payload).toBe(false);
+    expect('intendedOperation' in judgePayloadOf(transport)).toBe(false);
+  });
+
+  it('a refusal is unchanged by a demand: a below-band request with a demand still sends nothing', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
+    const transport = fakeTransport({});
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, {
+      ...REQUEST,
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: ASK,
+    });
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(transport.calls).toHaveLength(0);
+  });
+});
+
+describe('draftQuizCardsForConcept — the JEV-6 capture reaches its recorder through retrieve() (ol-egov.141.89.1.47)', () => {
+  it('calls deps.onJudgeRequest once, with the query, the chunk references and the operation', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const records: JudgeRequestRecord[] = [];
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onJudgeRequest: (record) => records.push(record),
+    };
+
+    await draftQuizCardsForConcept(deps, { ...REQUEST, intendedDemand: 'recall-a-fact' });
+
+    expect(records).toEqual([
+      {
+        query: QUERY_TEXT,
+        refs: [{ path: TARGET_PATH, blockIndex: 0 }],
+        intendedOperation: 'define',
+      },
+    ]);
+  });
+
+  it('records no operation when the need carried no demand, and still records the case', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const records: JudgeRequestRecord[] = [];
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onJudgeRequest: (record) => records.push(record),
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(records).toHaveLength(1);
+    expect('intendedOperation' in (records[0] ?? {})).toBe(false);
+  });
+
+  it('does not record a request that never reaches the judge (a below-band refusal)', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_ONLY_COSINE);
+    const transport = fakeTransport({});
+    const records: JudgeRequestRecord[] = [];
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+      onJudgeRequest: (record) => records.push(record),
+    };
+
+    await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(records).toEqual([]);
   });
 });

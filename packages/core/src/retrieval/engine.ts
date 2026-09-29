@@ -67,6 +67,8 @@ import {
   type GroundingBandThresholds,
   type GroundingJudgePort,
   type GroundingResult,
+  type IntendedOperation,
+  type JudgeRequestRecord,
   resolveGroundedContext,
 } from './groundedContext.js';
 import { hybridRetrieve } from './hybrid.js';
@@ -143,8 +145,35 @@ export interface RetrieveOptions {
    * inert unless a caller has also opted into the band. Optional and inert
    * on the decision itself, same posture as `judge` — a caller that never
    * supplies it sees byte-identical behaviour to before this option existed.
+   *
+   * Declared `| undefined` (as `onJudgeRequest` and `intendedOperation` are) so a
+   * caller can write the property out beside its siblings in a literal typed
+   * `RetrieveOptions`: a field this interface lacks is then a compile error,
+   * where a conditional spread of it is not (`ol-egov.141.89.1.47`).
    */
-  readonly onStage?: (stage: GateStage) => void;
+  readonly onStage?: ((stage: GateStage) => void) | undefined;
+  /**
+   * Recording only (`[JEV-6]`, `ol-3ux7.89`) — forwarded to `resolveGroundedContext` when `band`
+   * is set: called at most once per call, immediately before the sufficiency judge is consulted
+   * and on no other path, so it sees exactly the requests that reached the judge. Inert on the
+   * decision (a throwing recorder is swallowed there) and inert without `band`, where nothing is
+   * ever judged. A caller that never supplies it sees byte-identical behaviour.
+   *
+   * **Until `ol-egov.141.89.1.47` this option did not exist**: `RetrieveOptions` declared neither it
+   * nor `intendedOperation`, and the band path built its options from a fixed list that omitted
+   * both, so the production callers' conditional spread of `onJudgeRequest` was dropped without a
+   * type error and the case capture recorded nothing.
+   */
+  readonly onJudgeRequest?: ((record: JudgeRequestRecord) => void) | undefined;
+  /**
+   * The operation the caller is about to perform with the grounded context (`[JEV-5]`,
+   * `ol-3ux7.88`), forwarded to `resolveGroundedContext` when `band` is set: it rides on the judge
+   * request and on the `onJudgeRequest` record. A stratification input for measurement and, until
+   * `[D-289]`'s four-verdict wire replaces it with a demand field, the way a practice need's
+   * operation reaches the judge (`demandToJudgeOperation`, `./demand.js`). Optional, and inert
+   * without `band`. Omitting it sends the request exactly as before.
+   */
+  readonly intendedOperation?: IntendedOperation | undefined;
 }
 
 /**
@@ -196,6 +225,11 @@ export async function retrieve(
       ...(options.judge !== undefined ? { judge: options.judge } : {}),
       ...(options.judgeTimeoutMs !== undefined ? { judgeTimeoutMs: options.judgeTimeoutMs } : {}),
       ...(options.onStage !== undefined ? { onStage: options.onStage } : {}),
+      // `ol-egov.141.89.1.47`: the two options the band path used to drop.
+      ...(options.onJudgeRequest !== undefined ? { onJudgeRequest: options.onJudgeRequest } : {}),
+      ...(options.intendedOperation !== undefined
+        ? { intendedOperation: options.intendedOperation }
+        : {}),
       // `[D-192]`: composed with the band, not replaced by it — see
       // `AssembleBandedGroundedContextOptions`'s `requireComposite` doc.
       ...(options.requireComposite !== undefined

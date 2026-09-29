@@ -142,6 +142,21 @@
  * suspension: an item found defective is the case a successor exists to
  * repair. A predecessor restored after this job ran gets its successor from
  * the next edit, since this job is done.
+ *
+ * ## The predecessor's demand is restated on the successor (`[D-437]`, `ol-egov.141.89.2.20`)
+ *
+ * Design `demand-carriage.md` §4.1's revision row: the predecessor's `declared` demand
+ * (`olea-core`'s `readInstrumentDemand`, read against the predecessor's CURRENT block) is restated as
+ * the successor's ask, origin `revision`, routed against the generator the successor is drafted
+ * through and sent only when it is served. An `unspecified` predecessor (no record: history is never
+ * upgraded), a `stale` one (the block was edited after the record was written, so the demand no
+ * longer describes the block being replaced: a conservative reading of §3.2's revision row, recorded
+ * on the bead) and an `unreadable` one restate NOTHING, so their successor is authored exactly as it
+ * was before this section. A declared demand no generator serves is recorded as unmet (counted, not
+ * sent), never turned into a different demand. This job writes NO target record: a successor gains
+ * one only at accept time, from `materialize-*.ts` (`ol-egov.141.89.2.26`), and the predecessor
+ * never gains one. No heading is sent (a revision has none), and no other origin's constant is used.
+ * Each ask made is counted per concept and reason (`RevisionJobRunnerDeps.demandCounter`).
  */
 
 import {
@@ -156,6 +171,17 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+// Not in the `olea-core` barrel yet (the barrel export is `ol-egov.141.89.2.25`'s job): the
+// deep-import form `main.ts` and the review wiring use for other unbarrelled modules.
+import { readInstrumentDemand } from 'olea-core/src/instrument/demand-reading.js';
+import type { QuestionBindingBlock } from 'olea-core/src/instrument/target-store.js';
+import { askFromInstrumentReading } from 'olea-core/src/routing/demand-ask.js';
+import {
+  type AuthoringDemandFields,
+  authoringDemandFields,
+  type DemandRoutingCounter,
+  routeDemandAsk,
+} from 'olea-core/src/routing/demand-routing.js';
 import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,
@@ -165,6 +191,7 @@ import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
+import { demandRoutingCounterFor } from './pipeline.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -224,6 +251,13 @@ export interface RevisionJobRunnerDeps {
   ) => Promise<DraftCardsResult>;
   readonly generateDraftId?: () => string;
   readonly now?: () => Date;
+  /**
+   * Where this runner counts each successor ask's routing outcome, per concept and per reason
+   * (`[D-437]`). Absent, `demandRoutingCounterFor(deps.cache)`: the session counter the sweep and
+   * the heading offer share. An ask that was never made (a rejected predecessor, no Worker, a cloze
+   * predecessor) is not counted. Local and in memory (D-005); nothing is persisted or sent.
+   */
+  readonly demandCounter?: DemandRoutingCounter;
 }
 
 interface RevisionTarget {
@@ -233,6 +267,8 @@ interface RevisionTarget {
   readonly sourcePath: VaultPath;
   /** `[D-366]`: which kind of successor to draft — see the module doc's section. */
   readonly instrumentType: VaultInstrumentRecord['instrumentType'];
+  /** `[D-437]`: the predecessor's block as it stands now, against which its demand record is read (a record whose binding no longer matches reads stale). */
+  readonly block: QuestionBindingBlock;
 }
 
 /**
@@ -270,7 +306,29 @@ async function resolveRevisionTarget(
     conceptKey,
     sourcePath: record.notePath,
     instrumentType: record.instrumentType,
+    block: record.instrumentType === 'mcq' ? record.mcq : record.card,
   };
+}
+
+/**
+ * The successor's demand fields (`[D-437]`): the predecessor's declared demand restated as the
+ * ask, routed against the generator the successor goes through, counted, and reduced to what the
+ * request carries. Empty (and the request today's) unless the predecessor declared a demand the
+ * generator serves. Reads the predecessor's record and writes nothing.
+ */
+async function successorDemandFields(
+  vault: VaultSource,
+  counter: DemandRoutingCounter,
+  target: RevisionTarget,
+  predecessorInstrumentId: string,
+  taskId: 'quiz.generate.v1' | 'cards.generate.v1',
+): Promise<AuthoringDemandFields> {
+  const reading = await readInstrumentDemand(vault, predecessorInstrumentId, target.block);
+  const routing = counter.record(
+    target.conceptKey,
+    routeDemandAsk(askFromInstrumentReading(reading), taskId),
+  );
+  return authoringDemandFields(routing);
 }
 
 /**
@@ -307,12 +365,15 @@ async function draftMcqSuccessor(
     request: DraftQuizCardsRequest,
   ) => Promise<DraftQuizCardsResult>,
   target: RevisionTarget,
+  demandFields: AuthoringDemandFields,
 ): Promise<SuccessorDraftOutcome<DraftQuestion>> {
   let result: DraftQuizCardsResult;
   try {
     result = await draftForConcept(draftDeps, {
       courseCode: target.courseCode,
       conceptName: target.conceptName,
+      // `[D-437]`: the predecessor's declared demand, when it declared one this generator serves.
+      ...demandFields,
     });
   } catch {
     // A generative call failing outright (network, malformed transport
@@ -357,12 +418,15 @@ async function draftQaSuccessor(
     request: DraftCardsRequest,
   ) => Promise<DraftCardsResult>,
   target: RevisionTarget,
+  demandFields: AuthoringDemandFields,
 ): Promise<SuccessorDraftOutcome<DraftCardContent>> {
   let result: DraftCardsResult;
   try {
     result = await draftCardForConcept(draftDeps, {
       courseCode: target.courseCode,
       conceptName: target.conceptName,
+      // `[D-437]`: see `draftMcqSuccessor`.
+      ...demandFields,
     });
   } catch {
     return { kind: 'thrown' };
@@ -425,6 +489,7 @@ export async function runInstrumentRevisionJob(
 
   const generateDraftId = deps.generateDraftId ?? defaultGenerateDraftId;
   const now = deps.now ?? (() => new Date());
+  const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
 
   if (target.instrumentType === 'qa') {
     // Held behind the spend decision (`[D-261]`): a Q&A successor is drafted
@@ -435,7 +500,14 @@ export async function runInstrumentRevisionJob(
     // the intended supplier then).
     const draftCardForConcept = deps.draftCardForConcept;
     if (draftCardForConcept === undefined) return { ok: true };
-    const drafted = await draftQaSuccessor(draftDeps, draftCardForConcept, target);
+    const demandFields = await successorDemandFields(
+      deps.vault,
+      demandCounter,
+      target,
+      payload.predecessorInstrumentId,
+      'cards.generate.v1',
+    );
+    const drafted = await draftQaSuccessor(draftDeps, draftCardForConcept, target, demandFields);
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
@@ -466,7 +538,14 @@ export async function runInstrumentRevisionJob(
 
   if (target.instrumentType === 'mcq') {
     const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
-    const drafted = await draftMcqSuccessor(draftDeps, draftForConcept, target);
+    const demandFields = await successorDemandFields(
+      deps.vault,
+      demandCounter,
+      target,
+      payload.predecessorInstrumentId,
+      'quiz.generate.v1',
+    );
+    const drafted = await draftMcqSuccessor(draftDeps, draftForConcept, target, demandFields);
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 

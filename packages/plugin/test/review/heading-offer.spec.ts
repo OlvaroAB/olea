@@ -17,8 +17,11 @@
  *    instance (a fresh port remembers nothing).
  */
 import type { ConceptRecord, HeadingOfferCandidate } from 'olea-core';
+import { DemandRoutingCounter } from 'olea-core/src/routing/demand-routing.js';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
+import { demandRoutingCounterFor } from '../../src/generation/pipeline.js';
+import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,
@@ -200,7 +203,7 @@ describe('accept — F2.10/[D-170]: creates the draft through the real per-conce
 
     const outcome = await port.accept(candidateFixture(), contextFixture());
 
-    expect(outcome).toEqual({ kind: 'unparseable' });
+    expect(outcome).toMatchObject({ kind: 'unparseable' });
     expect(await cache.listPending()).toHaveLength(0);
   });
 
@@ -209,7 +212,7 @@ describe('accept — F2.10/[D-170]: creates the draft through the real per-conce
 
     const outcome = await port.accept(candidateFixture(), contextFixture());
 
-    expect(outcome).toEqual({ kind: 'unparseable' });
+    expect(outcome).toMatchObject({ kind: 'unparseable' });
     expect(await cache.listPending()).toHaveLength(0);
   });
 
@@ -229,7 +232,7 @@ describe('accept — F2.10/[D-170]: creates the draft through the real per-conce
 
     const outcome = await port.accept(candidateFixture(), contextFixture());
 
-    expect(outcome).toEqual({ kind: 'not-configured' });
+    expect(outcome).toMatchObject({ kind: 'not-configured' });
     expect(called).toBe(false);
     expect(await cache.listPending()).toHaveLength(0);
   });
@@ -271,5 +274,222 @@ describe('dismiss — [D-170]: declines the offer itself, persists nothing (D7.1
     expect(port.isDismissed(candidate, NOTE_PATH)).toBe(true);
     expect(port.isDismissed(otherHeading, NOTE_PATH)).toBe(false);
     expect(port.isDismissed(candidate, 'Other/Note.md')).toBe(false);
+  });
+});
+
+/**
+ * `[D-437]` (`ol-egov.141.89.2.20`), design `demand-carriage.md` §4.1, rows 35 and 37: the accept path
+ * builds the ask from the heading (the whole heading and its question word are the primary request,
+ * the mapping the secondary), routes it against `quiz.generate.v1`, sends the demand only when it was
+ * served, and returns the routing on the outcome as data. Nothing student-visible changes: no copy,
+ * no label, no held draft (design Open question 1).
+ */
+describe('accept — [D-437]: the heading offer carries the heading through routing and the request', () => {
+  const SERVED_HEADING = 'What is chunking?';
+  const DEFERRED_HEADING = 'How many items fit in working memory?';
+  const UNDERSPECIFIED_HEADING = 'Why does chunking help recall?';
+
+  it('a served heading sends the mapping and the whole heading with its question word (T3)', async () => {
+    let calledWith: DraftQuizCardsRequest | null = null;
+    const { port } = setUp(async (_deps, request) => {
+      calledWith = request;
+      return draftedResult(1);
+    });
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    expect(calledWith).toEqual({
+      courseCode: 'COGS214',
+      conceptName: 'Chunking',
+      intendedDemand: 'recall-a-fact',
+      requestedAsk: { heading: SERVED_HEADING, questionWord: 'What' },
+    });
+    expect(outcome).toMatchObject({
+      kind: 'drafted',
+      demandRouting: {
+        kind: 'served',
+        demand: 'recall-a-fact',
+        source: { heading: SERVED_HEADING, questionWord: 'What' },
+      },
+    });
+    expect(outcome.unmetAsk).toBeUndefined();
+  });
+
+  it('a heading whose word no generator serves is recorded as unmet with the heading kept, and nothing about it is sent (T18)', async () => {
+    let calledWith: DraftQuizCardsRequest | null = null;
+    const { cache, port } = setUp(async (_deps, request) => {
+      calledWith = request;
+      return draftedResult(1);
+    });
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: DEFERRED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    // The request is today's: no demand, no heading. The narrower practice is authored exactly as
+    // an unspecified need is, and it is not the unserved ask.
+    expect(calledWith).toEqual({ courseCode: 'COGS214', conceptName: 'Chunking' });
+    // Today's presentation is unchanged: the draft is created and cached as before.
+    expect(outcome.kind).toBe('drafted');
+    expect(await cache.listPending()).toHaveLength(1);
+    // The unmet ask travels on the outcome with its source, and is not served.
+    expect(outcome.demandRouting).toEqual({
+      kind: 'deferred',
+      demand: 'calculate',
+      source: { heading: DEFERRED_HEADING, questionWord: 'How' },
+    });
+    expect(outcome.unmetAsk).toEqual(outcome.demandRouting);
+  });
+
+  it('the cached draft of an unmet ask records no demand: nothing counts it as meeting the ask', async () => {
+    const { cache, port } = setUp(async () => draftedResult(1));
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: DEFERRED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    if (outcome.kind !== 'drafted') throw new Error('unreachable');
+    const record = await cache.get(outcome.draftIds[0] ?? '');
+    const serialised = JSON.stringify(record);
+    expect(serialised).not.toContain('calculate');
+    expect(serialised).not.toContain(DEFERRED_HEADING);
+    expect(serialised).not.toContain('declaredDemand');
+    expect(serialised).not.toContain('intendedDemand');
+  });
+
+  it('a bare why is unspecified with its source kept, sends nothing, and is not called unsupported', async () => {
+    let calledWith: DraftQuizCardsRequest | null = null;
+    const { port } = setUp(async (_deps, request) => {
+      calledWith = request;
+      return draftedResult(1);
+    });
+
+    const outcome = await port.accept(
+      candidateFixture({ headingText: UNDERSPECIFIED_HEADING, rule: 'wh-inversion' }),
+      contextFixture(),
+    );
+
+    expect(calledWith).toEqual({ courseCode: 'COGS214', conceptName: 'Chunking' });
+    expect(outcome.demandRouting).toEqual({
+      kind: 'unspecified',
+      reason: 'underspecified',
+      source: { heading: UNDERSPECIFIED_HEADING, questionWord: 'Why' },
+    });
+    expect(outcome.unmetAsk).toBeUndefined();
+  });
+
+  it('a yes/no heading is unspecified with no question word, and the request is exactly the sweep-shaped one', async () => {
+    let calledWith: DraftQuizCardsRequest | null = null;
+    const { port } = setUp(async (_deps, request) => {
+      calledWith = request;
+      return draftedResult(1);
+    });
+
+    const outcome = await port.accept(candidateFixture(), contextFixture());
+
+    expect(calledWith).toEqual({ courseCode: 'COGS214', conceptName: 'Chunking' });
+    expect(outcome.demandRouting).toMatchObject({
+      kind: 'unspecified',
+      reason: 'underspecified',
+      source: { questionWord: null },
+    });
+  });
+
+  it('every outcome kind carries the routing: a refusal, an unparseable reply and not-configured', async () => {
+    const heading = candidateFixture({ headingText: SERVED_HEADING, rule: 'wh-inversion' });
+    const expected = {
+      kind: 'served',
+      demand: 'recall-a-fact',
+      source: { heading: SERVED_HEADING, questionWord: 'What' },
+    };
+
+    const refused = await setUp(async () => ({
+      status: 'refused',
+      reason: 'judge-rejected',
+    })).port.accept(heading, contextFixture());
+    expect(refused).toMatchObject({ kind: 'refused', demandRouting: expected });
+    // The refusal copy is unchanged by the demand (no new wording, no label).
+    if (refused.kind !== 'refused') throw new Error('unreachable');
+    expect(refused.copy).toEqual(describeRefusal('judge-rejected'));
+
+    const unparseable = await setUp(async () => ({
+      status: 'drafted',
+      request: {
+        courseCode: 'COGS214',
+        conceptName: 'Chunking',
+        sourceChunks: [],
+      },
+      response: { ok: false },
+    })).port.accept(heading, contextFixture());
+    expect(unparseable).toMatchObject({ kind: 'unparseable', demandRouting: expected });
+
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: '# Week 2\n\nher prose\n' });
+    const notConfigured = await createHeadingOfferPort({
+      draftDeps: () => null,
+      cache: createVaultDraftCacheStore(vault),
+      now: () => NOW,
+    }).accept(heading, contextFixture());
+    expect(notConfigured).toMatchObject({ kind: 'not-configured', demandRouting: expected });
+  });
+
+  it('counts each attempted ask per concept and per reason, and an unmet ask never counts as served', async () => {
+    const counter = new DemandRoutingCounter();
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: '# Week 2\n\nher prose\n' });
+    const port = createHeadingOfferPort({
+      draftDeps: () => ({}) as DraftQuizCardsDeps,
+      cache: createVaultDraftCacheStore(vault),
+      now: () => NOW,
+      draftForConcept: async () => draftedResult(1),
+      demandCounter: counter,
+    });
+
+    await port.accept(candidateFixture({ headingText: SERVED_HEADING }), contextFixture());
+    await port.accept(candidateFixture({ headingText: DEFERRED_HEADING }), contextFixture());
+    await port.accept(candidateFixture({ headingText: DEFERRED_HEADING }), contextFixture());
+    await port.accept(candidateFixture({ headingText: UNDERSPECIFIED_HEADING }), contextFixture());
+
+    expect(counter.counts()).toEqual([
+      { conceptKey: 'concept-key-chunking', reason: 'served', count: 1 },
+      { conceptKey: 'concept-key-chunking', reason: 'no-generator-serves', count: 2 },
+      { conceptKey: 'concept-key-chunking', reason: 'underspecified', count: 1 },
+    ]);
+    expect(counter.total('served')).toBe(1);
+  });
+
+  it('does not count an ask that was never attempted: no Worker connection', async () => {
+    const counter = new DemandRoutingCounter();
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: '# Week 2\n\nher prose\n' });
+    const port = createHeadingOfferPort({
+      draftDeps: () => null,
+      cache: createVaultDraftCacheStore(vault),
+      now: () => NOW,
+      demandCounter: counter,
+    });
+
+    await port.accept(candidateFixture({ headingText: SERVED_HEADING }), contextFixture());
+
+    expect(counter.counts()).toEqual([]);
+  });
+
+  it('with no counter supplied, counts into the session counter the draft cache stands for', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: '# Week 2\n\nher prose\n' });
+    const cache = createVaultDraftCacheStore(vault);
+    const port = createHeadingOfferPort({
+      draftDeps: () => ({}) as DraftQuizCardsDeps,
+      cache,
+      now: () => NOW,
+      draftForConcept: async () => draftedResult(1),
+    });
+
+    await port.accept(candidateFixture({ headingText: SERVED_HEADING }), contextFixture());
+
+    expect(demandRoutingCounterFor(cache).counts()).toEqual([
+      { conceptKey: 'concept-key-chunking', reason: 'served', count: 1 },
+    ]);
   });
 });
