@@ -586,6 +586,24 @@ export class ReviewSession {
    * set is a render cache, never the truth.
    */
   private readonly contestedGrades = new Set<string>();
+  /**
+   * Row 48 (`ol-egov.141.89.9.74`): the event id the CURRENT item's review will
+   * be written with, minted at the moment she contests its grade — before that
+   * review exists — so the dispute can name it. `contestGrade` sets it and
+   * hands it to the contest record; `mcqNext` hands the same id to the review
+   * write, which is the only writer of the record it names; `logAndAdvance`
+   * clears it once that write has succeeded (the id is used by at most one
+   * write). `null` whenever no contest is pending on this item, which is every
+   * review that was not contested first — those mint their own id at the write,
+   * exactly as before.
+   *
+   * Keyed to the item it was minted for and dropped by `presentCurrent`, so an
+   * item she suspends or rejects after contesting (a review never written)
+   * leaves nothing behind for the next item to pick up: the dispute then names
+   * an id no review carries, which every reader treats as unconfirmed and never
+   * guesses at.
+   */
+  private pendingReview: { readonly instrumentId: string; readonly eventId: string } | null = null;
 
   private reviewedCount = 0;
   private readonly courseCodesSeen = new Set<string>();
@@ -873,6 +891,16 @@ export class ReviewSession {
    * in that case, so she is never offered a gesture that would drop her
    * dispute.
    *
+   * **The dispute names its review (row 48, `ol-egov.141.89.9.74`).** The
+   * review this answer becomes is written by `mcqNext`, after this method
+   * returns, so its event id is minted here (`reserveReviewEventId`), written
+   * onto the dispute as `reviewId`, and handed to that later write, which lands
+   * the review under exactly that id. Nothing is written earlier and the
+   * review's content is unchanged: only the id is decided sooner. If no review
+   * is ever written (she suspends or rejects the item, or closes the sitting),
+   * the dispute names an id no record carries, which every reader treats as
+   * unconfirmed — the id is never re-pointed at another review.
+   *
    * **Reachable while the current item is still a pending draft**
    * (`instrument.draftId !== null`) — `[D-189]`/`ol-0r92.42` defers an MCQ
    * draft's materialization to `mcqNext` specifically so the edit/reject
@@ -908,9 +936,16 @@ export class ReviewSession {
     const instrument = this.requireMcq(item);
     if (this.contestedGrades.has(instrument.instrumentId)) return;
 
+    // Row 48 (`ol-egov.141.89.9.74`): this answer's review is not written until
+    // `mcqNext`, so its event id is minted HERE and named by both writes — the
+    // dispute below and, later, the review itself. Reused when a contest that
+    // failed to record is tapped again, so a retry names the same review.
+    const reviewEventId = this.reserveReviewEventId(instrument.instrumentId);
+
     const dispute = await port.contestGrade({
       instrumentId: instrument.instrumentId,
       conceptIds: instrument.conceptIds,
+      reviewId: reviewEventId,
       // The evidence this grade rests on is the answer she gave to this
       // instrument, in this session — an opaque fingerprint, never her text
       // (D-005). A re-derivation on the same answer shares it; a later,
@@ -950,7 +985,34 @@ export class ReviewSession {
       instrument,
       this.mcqSelectedIndex,
     );
-    await this.logAndAdvance(item, rating, this.wasUnsure, correctness, misconceptionDistractor);
+    // Row 48: the id minted when she contested this answer, if she did — the
+    // review is written with it, so the dispute's name resolves to this record.
+    const reviewEventId =
+      this.pendingReview?.instrumentId === instrument.instrumentId
+        ? this.pendingReview.eventId
+        : undefined;
+    await this.logAndAdvance(
+      item,
+      rating,
+      this.wasUnsure,
+      correctness,
+      misconceptionDistractor,
+      reviewEventId,
+    );
+  }
+
+  /**
+   * The event id this item's review will carry, minted once per contested
+   * answer: the one already reserved for `instrumentId` when a contest is being
+   * retried, otherwise a fresh one. `globalThis.crypto.randomUUID()` is exactly
+   * what `appendReviewLogRecord` itself mints with when nobody names an id, so
+   * a pre-minted id is indistinguishable in shape from one minted at the write.
+   */
+  private reserveReviewEventId(instrumentId: string): string {
+    if (this.pendingReview?.instrumentId === instrumentId) return this.pendingReview.eventId;
+    const eventId = globalThis.crypto.randomUUID();
+    this.pendingReview = { instrumentId, eventId };
+    return eventId;
   }
 
   async suspend(): Promise<void> {
@@ -1423,6 +1485,7 @@ export class ReviewSession {
     this.mcqSelectedIndex = null;
     this.wasUnsure = false;
     this.mcqIntervalLabel = '';
+    this.pendingReview = null;
     this.presentedAtMs = this.deps.clock.now().getTime();
     this.phase = item.instrument.type === 'mcq' ? 'mcq-open' : 'front';
   }
@@ -1455,6 +1518,7 @@ export class ReviewSession {
     wasUnsure: boolean,
     correctness?: McqCorrectness,
     misconceptionDistractor?: McqMisconceptionProvenance,
+    reviewEventId?: string,
   ): Promise<void> {
     // Stamped BEFORE the review-log write or the scheduler call below, so a
     // marker minted this exact moment is what both of them key on — never
@@ -1564,7 +1628,16 @@ export class ReviewSession {
       // Conditional spread, same `exactOptionalPropertyTypes` discipline as
       // `supportLevel` above.
       ...(stamped.compositionId !== undefined ? { compositionId: stamped.compositionId } : {}),
+      // Row 48: the id a contest on this answer already named, when there was
+      // one — the review lands under exactly that id and its content is what it
+      // would have been without it. Absent for every review nobody contested
+      // first, which mints its own id at the write as before.
+      ...(reviewEventId !== undefined ? { reviewEventId } : {}),
     });
+    // Written: the id has done its one job. (A write that threw never reaches
+    // here, so a retry of `mcqNext` writes the review under the SAME id the
+    // dispute already names.)
+    if (reviewEventId !== undefined) this.pendingReview = null;
 
     // Called directly (rather than through `previewSingleInterval`) because
     // F2.12 needs the resulting `SchedulerState.lapses` this same call

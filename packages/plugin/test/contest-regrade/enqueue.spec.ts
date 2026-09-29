@@ -126,6 +126,94 @@ describe('enqueueContestRegradeJobOnDispute', () => {
     expect(enqueuer.calls).toEqual([]);
   });
 
+  describe('follows the review a dispute names (row 48, ol-egov.141.89.9.74)', () => {
+    /** Two graded attempts on one instrument: the dispute is about the earlier one, the later one is the standing grade. */
+    const EARLIER = gradedExplainBackReview({ eventId: 'eb-earlier' });
+    const LATER = gradedExplainBackReview({
+      eventId: 'eb-later',
+      timestamp: '2026-08-22T09:00:00+02:00',
+    });
+
+    /** The one job the enqueuer was handed, or a failure naming that none was. */
+    function queuedPayload(enqueuer: RecordingEnqueuer): ContestRegradeJobPayload {
+      const call = enqueuer.calls[0];
+      if (call === undefined) throw new Error('expected one enqueued job');
+      return call.payload as ContestRegradeJobPayload;
+    }
+
+    async function contest(reviewId?: string) {
+      const port = createVaultGradeContestPort(
+        memoryVault(),
+        'device-1',
+        () => '2026-08-23T09:00:00+02:00',
+      );
+      return port.contestGrade({
+        instrumentId: INSTRUMENT,
+        conceptIds: CONCEPTS,
+        evidenceBasis: 'mcq|instrument-1|2|false',
+        ...(reviewId === undefined ? {} : { reviewId }),
+      });
+    }
+
+    it('aims the job at the named review, not at the grade standing since', async () => {
+      const opening = await contest('eb-earlier');
+      expect(opening.reviewId).toBe('eb-earlier');
+
+      const enqueuer = new RecordingEnqueuer();
+      const result = await enqueueContestRegradeJobOnDispute(enqueuer, opening, [EARLIER, LATER]);
+
+      expect(result).toEqual({ status: 'queued' });
+      expect(queuedPayload(enqueuer).originalGradeEventId).toBe('eb-earlier');
+    });
+
+    it('a dispute that names no review keeps the standing grade, exactly as before', async () => {
+      const opening = await contest();
+      expect(Object.hasOwn(opening, 'reviewId')).toBe(false);
+
+      const enqueuer = new RecordingEnqueuer();
+      await enqueueContestRegradeJobOnDispute(enqueuer, opening, [EARLIER, LATER]);
+
+      expect(queuedPayload(enqueuer).originalGradeEventId).toBe('eb-later');
+    });
+
+    it('a named review the log does not hold enqueues nothing, and never falls back to the standing grade', async () => {
+      // The quiz path: the contest names a review that is written only when she
+      // moves on, so at enqueue time the name resolves to nothing yet.
+      const opening = await contest('review-not-written-yet');
+
+      const enqueuer = new RecordingEnqueuer();
+      const result = await enqueueContestRegradeJobOnDispute(enqueuer, opening, [EARLIER, LATER]);
+
+      expect(result).toEqual({ status: 'no-standing-grade' });
+      expect(enqueuer.calls).toEqual([]);
+    });
+
+    it("a named review that is another instrument's, or carries no explain-back grade, enqueues nothing", async () => {
+      const otherInstrument = gradedExplainBackReview({
+        eventId: 'eb-other',
+        instrumentId: 'instrument-2',
+      });
+      const ungraded = gradedExplainBackReview({ eventId: 'review-ungraded' });
+      delete (ungraded as { explainBackGrade?: unknown }).explainBackGrade;
+
+      const enqueuer = new RecordingEnqueuer();
+      const otherResult = await enqueueContestRegradeJobOnDispute(
+        enqueuer,
+        await contest('eb-other'),
+        [EARLIER, LATER, otherInstrument],
+      );
+      const ungradedResult = await enqueueContestRegradeJobOnDispute(
+        enqueuer,
+        await contest('review-ungraded'),
+        [EARLIER, LATER, ungraded],
+      );
+
+      expect(otherResult).toEqual({ status: 'no-standing-grade' });
+      expect(ungradedResult).toEqual({ status: 'no-standing-grade' });
+      expect(enqueuer.calls).toEqual([]);
+    });
+  });
+
   it("a second dispute on the same evidence produces the identical contentHash — idempotent under the engine's own dedup", async () => {
     const vault = memoryVault();
     const port = createVaultGradeContestPort(vault, 'device-1', () => '2026-08-21T09:00:00+02:00');

@@ -716,3 +716,119 @@ describe('createVaultReviewLogPort — the [D-202] misconception-observed write 
     expect(observed[0].misconceptionId).not.toBe(observed[1].misconceptionId);
   });
 });
+
+describe('createVaultReviewLogPort — the named-review-id write seam (row 48, ol-egov.141.89.9.74)', () => {
+  const DEVICE = 'ports-spec-named-review-device';
+
+  const INSTRUMENT: ReviewInstrument = {
+    instrumentId: 'inst-mcq-named-1',
+    conceptIds: ['concept-d'],
+    courseCode: 'COGS214',
+    noteTitle: 'Sample note',
+    sourcePath: 'Courses/COGS214/Note.md',
+    blockId: null,
+    draftId: null,
+    type: 'mcq',
+    stem: 'Which of these?',
+    options: [
+      { id: 'opt-1', label: 'Not this one', correct: false },
+      { id: 'opt-2', label: 'This one', correct: true },
+    ],
+    feedback: 'Correct — this one.',
+  };
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['mcq'],
+    planVersion: null,
+  };
+
+  const BASE = {
+    instrument: INSTRUMENT,
+    rating: 'again',
+    wasUnsure: false,
+    durationMs: 800,
+    selectionContext: SELECTION_CONTEXT,
+    correctness: { chosenIndex: 0, matchedKey: false },
+  } as const;
+
+  function todaysLogPath(): string {
+    return reviewLogPath(calendarDayFromLocalDate(new Date()), DEVICE);
+  }
+
+  it('writes the record under the id the caller named, verbatim', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({ ...BASE, reviewEventId: 'named-review-event-1' });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.invalidLines).toEqual([]);
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.records[0]?.kind).toBe('review');
+    expect(parsed.records[0]?.eventId).toBe('named-review-event-1');
+  });
+
+  it('mints its own id when none is named, a fresh one per write, exactly as before', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview(BASE);
+    await port.recordReview(BASE);
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    const ids = parsed.records.map((record) => record.eventId);
+    expect(ids).toHaveLength(2);
+    expect(ids[0]).not.toBe(ids[1]);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('changes nothing but the id: a named write is the record an unnamed write would have been', async () => {
+    const namedVault = memoryVault();
+    const plainVault = memoryVault();
+    const at = () => new Date('2026-08-21T09:05:00+02:00');
+    await createVaultReviewLogPort(namedVault, DEVICE, at).recordReview({
+      ...BASE,
+      reviewEventId: 'named-review-event-2',
+    });
+    await createVaultReviewLogPort(plainVault, DEVICE, at).recordReview(BASE);
+
+    const day = '2026-08-21';
+    const named = parseReviewLog(namedVault.contentOf(reviewLogPath(day, DEVICE)) ?? '');
+    const plain = parseReviewLog(plainVault.contentOf(reviewLogPath(day, DEVICE)) ?? '');
+    const { eventId: namedId, ...namedRest } = named.records[0] as Record<string, unknown>;
+    const { eventId: plainId, ...plainRest } = plain.records[0] as Record<string, unknown>;
+    expect(namedRest).toEqual(plainRest);
+    expect(namedId).toBe('named-review-event-2');
+    expect(plainId).not.toBe('named-review-event-2');
+  });
+
+  it('the misconception-observed event follows the named id, so it names the record that carries that id', async () => {
+    const vault = memoryVault();
+    const port = createVaultReviewLogPort(vault, DEVICE);
+
+    await port.recordReview({
+      ...BASE,
+      reviewEventId: 'named-review-event-3',
+      misconceptionDistractor: {
+        text: 'Not this one',
+        believes: 'a wrong belief this distractor encodes',
+        source_says: 'what the source material actually says instead',
+      },
+    });
+
+    const parsed = parseReviewLog(vault.contentOf(todaysLogPath()) ?? '');
+    expect(parsed.records.map((record) => record.kind)).toEqual([
+      'review',
+      'misconception-observed',
+    ]);
+    const [review, observed] = parsed.records;
+    if (observed?.kind !== 'misconception-observed') throw new Error('expected an observation');
+    expect(review?.eventId).toBe('named-review-event-3');
+    expect(observed.reviewEventId).toBe('named-review-event-3');
+    // Only the review took the named id; the observation is its own event.
+    expect(observed.eventId).not.toBe('named-review-event-3');
+  });
+});

@@ -127,6 +127,24 @@ export interface RecordReviewInput {
    * `[D-395]` is explicit that absence here is never a prompt to guess.
    */
   readonly compositionId?: string;
+  /**
+   * Row 48 (`ol-egov.141.89.9.74`): the event id this review is to be written
+   * WITH, for a caller that named it before the write. `session.ts`'s
+   * `contestGrade` contests an answered quiz item before that item's review
+   * exists, so it pre-mints the review's id, hands it to the contest record
+   * (`GradeContestPort.contestGrade`'s `reviewId`), and hands the same id
+   * here; the dispute then names this exact record, never one a reader has to
+   * infer. `createVaultReviewLogPort` passes it to `appendReviewLogRecord` as
+   * its `generateEventId`, so it is the id the record carries, and the
+   * `misconception-observed` append below names it too.
+   *
+   * `undefined` for every review nobody named beforehand (every review that
+   * was not contested first): the append mints its own id exactly as it always
+   * did, so the record is byte-for-byte what it was before this field. Only
+   * the id is supplied: the port reads nothing else from a pre-minted
+   * reference, and the record's content is decided the same way either way.
+   */
+  readonly reviewEventId?: string;
 }
 
 /** Writes one D7.1 review-log record. The real implementation is `createVaultReviewLogPort` below. */
@@ -256,6 +274,14 @@ export function createVaultReviewLogPort(
       // function's own doc, above `createVaultReviewLogPort`, for why.
       const originCandidate = await practiceOriginCandidate(vault, input.instrument);
 
+      // Row 48: the caller's pre-minted id, when it named one, is the id the
+      // record is written with; otherwise the append mints its own, as before.
+      const namedEventId = input.reviewEventId;
+      const appendOptions =
+        namedEventId === undefined
+          ? { deviceId }
+          : { deviceId, generateEventId: () => namedEventId };
+
       const reviewResult = await appendReviewLogRecord(
         vault,
         {
@@ -293,7 +319,7 @@ export function createVaultReviewLogPort(
           // `practiceOriginCandidate` and this function's own doc.
           ...(originCandidate !== undefined ? { origin: originCandidate } : {}),
         },
-        { deviceId },
+        appendOptions,
       );
 
       // `[D-202]` (`ol-egov.92`): a SEPARATE append, never a field on the
