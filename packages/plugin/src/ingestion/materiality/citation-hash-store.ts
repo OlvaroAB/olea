@@ -137,7 +137,33 @@ export interface PendingRevalidation {
    * `retryExhausted` count). Absent means the retry has not fired yet.
    */
   readonly retriedAt?: number;
+  /**
+   * `[D-446]` option (a) / row 45 (`ol-egov.141.89.5.32`): WHY this instrument is withheld, when
+   * the reason is not "a difference at its passage is awaiting the judge". Absent (every record
+   * written before this field, and every judge-pending fact) means exactly that: a real difference
+   * was seen and the check has not completed. Present means the passage-grain reader could not
+   * settle where the passage stands, and withholds protectively without claiming any change was
+   * established:
+   *  - `passage-missing`: the passage is not where the anchor saw it and nothing exact or
+   *    resembling was found (or only a re-bind proposal was);
+   *  - `passage-ambiguous`: the same text stands in two or more places, or more than one segment
+   *    resembles an edited passage, so which one was cited cannot be told;
+   *  - `passage-rule-unsupported`: the anchor's segmentation rule is no longer registered and the
+   *    passage could not be re-found cleanly under the current one.
+   * A withheld-for-a-reason fact is cleared by the reader the pass the passage is found again; it
+   * never enters the judge's dispatch budget, and it is never read as a confirmed change.
+   */
+  readonly reason?: PendingReason;
 }
+
+/** See {@link PendingRevalidation.reason}. */
+export type PendingReason = 'passage-missing' | 'passage-ambiguous' | 'passage-rule-unsupported';
+
+const PENDING_REASONS: ReadonlySet<string> = new Set<PendingReason>([
+  'passage-missing',
+  'passage-ambiguous',
+  'passage-rule-unsupported',
+]);
 
 /** One instrument's last-observed citation anchor. */
 export interface CitationAnchorRecord {
@@ -159,6 +185,17 @@ export interface CitationAnchorRecord {
    * "current," never treated as an error or migrated on read.
    */
   readonly pendingRevalidation?: PendingRevalidation;
+  /**
+   * `[D-446]` option (a) (`ol-egov.141.89.5.32`): present exactly when this anchor tracks ONE PASSAGE
+   * of the source rather than the whole note — the versioned digest (`olea-core`'s
+   * `source/passage-identity.ts`, `p<version>:<sha-256 hex>`) of `text` under the segmentation rule
+   * that found it. Then {@link text} is that passage's own text, and the reader re-finds it by the
+   * shared rule on every pass. Absent (every record written before this field, and every
+   * instrument whose citation carries no digest) means the legacy whole-note grain, read exactly as
+   * before. Local projection state, like the rest of this record: nothing is added to the vault's
+   * citation sidecar, and no note text beyond what `text` already held is stored.
+   */
+  readonly passageDigest?: string;
 }
 
 export interface CitationHashStore {
@@ -183,6 +220,7 @@ export interface CitationHashStore {
     instrumentId: string,
     sourceContentHash: string,
     since: number,
+    reason?: PendingReason,
   ): Promise<void>;
   /**
    * `[D-351]`: true when this instrument's PERSISTED `pendingRevalidation`
@@ -260,6 +298,13 @@ function isPendingRevalidation(value: unknown): value is PendingRevalidation {
   if (candidate.retriedAt !== undefined && typeof candidate.retriedAt !== 'number') {
     return false;
   }
+  // `[D-446]`: optional, and if present one of the known reasons.
+  if (
+    candidate.reason !== undefined &&
+    !(typeof candidate.reason === 'string' && PENDING_REASONS.has(candidate.reason))
+  ) {
+    return false;
+  }
   return true;
 }
 
@@ -284,6 +329,10 @@ function isCitationAnchorRecord(value: unknown): value is CitationAnchorRecord {
     candidate.pendingRevalidation !== undefined &&
     !isPendingRevalidation(candidate.pendingRevalidation)
   ) {
+    return false;
+  }
+  // `[D-446]`: optional; present only for a passage-grain anchor.
+  if (candidate.passageDigest !== undefined && typeof candidate.passageDigest !== 'string') {
     return false;
   }
   return true;
@@ -378,6 +427,7 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     instrumentId: string,
     sourceContentHash: string,
     since: number,
+    reason?: PendingReason,
   ): Promise<void> {
     const merge = (existing: unknown): Record<string, unknown> => {
       const blob: Record<string, unknown> =
@@ -410,7 +460,11 @@ export class ObsidianCitationHashStore implements CitationHashStore {
       const pendingRevalidation: PendingRevalidation =
         existingPending?.sinceContentHash === sourceContentHash
           ? existingPending
-          : { sinceContentHash: sourceContentHash, since };
+          : {
+              sinceContentHash: sourceContentHash,
+              since,
+              ...(reason !== undefined ? { reason } : {}),
+            };
       table[instrumentId] = { ...currentEntry, pendingRevalidation };
       blob[CITATION_ANCHOR_STORAGE_KEY] = table;
       return blob;

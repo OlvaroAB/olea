@@ -109,6 +109,28 @@
  * only an authored note's own source note is ever substituted in.
  *
  * ===========================================================================
+ * `[D-446]` PASSAGE GRAIN — WHEN THE CITATION CARRIES A PASSAGE DIGEST
+ * (`ol-egov.141.89.5.32`)
+ * ===========================================================================
+ * Everything above describes the WHOLE-NOTE grain, which stays exactly as it was for every
+ * instrument whose citation carries no `passageDigest`. For one that does — minted at authoring
+ * by the shared segmentation rule (`olea-core`'s `source/passage-identity.ts`, called from
+ * `materialize-mcq.ts`/`materialize-card.ts`) — the first pass baselines the anchor AT that
+ * passage (`CitationAnchorRecord.text` is the passage, `.passageDigest` its versioned digest), and
+ * every later pass asks `passage-grain.ts`'s `resolveAnchoredPassage` where the passage stands
+ * now. A note edited elsewhere, or the passage moved, reformatted or healed to another note, is
+ * settled there with NO judge call; only a passage whose own words changed, and which nothing
+ * else in its note resembles, reaches the judge, as an old-passage/new-passage pair. What cannot
+ * be located — gone, the same text standing twice, a retired rule — is left UNRESOLVED and
+ * WITHHELD before its next presentation with its own recorded reason (`PendingRevalidation.reason`:
+ * `passage-missing`, `passage-ambiguous`, `passage-rule-unsupported`), which is distinct from a
+ * change confirmed by the judge (suspension) and from a check still awaiting or failing to reach
+ * the judge (a pending fact with no reason); none of the three reads as another. The withholding
+ * never enters the `[D-400]` dispatch budget, and lifts the pass the passage is found again.
+ * Where no digest resolves to exactly one passage at first sighting, the whole-note baseline is
+ * taken as before (`report.passageSeedUnresolved`), never a guessed passage.
+ *
+ * ===========================================================================
  * `[D-400]` — ONE AUTOMATIC RETRY PER ORIGINAL CHECK, NEVER A FRESH
  * ALLOWANCE ON RESTART; A PROVIDER ERROR IS RECOVERED THE SAME WAY
  * ===========================================================================
@@ -206,24 +228,39 @@ import {
   type CitedPassageRevisionOutcome,
   type Clock,
   type CurrentPassageState,
+  digestPassage,
   type EnqueueInput,
   enumerateVaultInstruments,
   evaluateCitedPassageRevision,
   hashText,
+  locatePassageByDigest,
+  PASSAGE_RULES,
+  type PassageRule,
   type PendingRevalidationRecorder,
+  parsePassageDigest,
   projectInstrumentValidity,
   type RelocationCandidate,
   type RevisionJudgeInput,
   type RevisionJudgePort,
   type RevisionJudgeVerdict,
+  readInstrumentCitation,
   readReviewLogHistory,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
 import { canonicalizeForMateriality } from './canonical.js';
-import type { CitationAnchorRecord, CitationHashStore } from './citation-hash-store.js';
+import type {
+  CitationAnchorRecord,
+  CitationHashStore,
+  PendingReason,
+} from './citation-hash-store.js';
 import { stripInstrumentSpans } from './citation-material.js';
+import {
+  type PassageNotes,
+  type PassageResolution,
+  resolveAnchoredPassage,
+} from './passage-grain.js';
 import type { MaterialityJudge } from './types.js';
 
 /** `RevisionJudgePort` is `{previousText, currentText}` only; `MaterialityJudge` also requires `path`, unused inside `WorkerMaterialityJudge.judge` (see that file's own doc: "`path` never leaves this method"). Adapts explicitly rather than relying on TS's method-bivariance to paper over the shape gap. */
@@ -311,6 +348,24 @@ export interface CitationRevisionTickReport {
    * read.
    */
   readonly retryExhausted: number;
+  /**
+   * `[D-446]` option (a) (`ol-egov.141.89.5.32`), passage grain: how many passage-tracked
+   * instruments THIS PASS could not settle because the same text stands in two or more places, or
+   * more than one segment resembles an edited passage. Withheld with the reason
+   * `passage-ambiguous`; no judge call, no change claimed (row 45).
+   */
+  readonly passageAmbiguous: number;
+  /**
+   * The anchor's segmentation rule version is no longer registered and the passage could not be
+   * re-found cleanly under the current one. Withheld as `passage-rule-unsupported`.
+   */
+  readonly passageRuleUnsupported: number;
+  /**
+   * A citation carried a passage digest that could not be resolved to exactly one passage at first
+   * sighting (ambiguous, absent, or an unsupported rule); the instrument fell back to the legacy
+   * whole-note baseline rather than guessing a passage.
+   */
+  readonly passageSeedUnresolved: number;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -341,6 +396,11 @@ export interface CitationRevisionTriggerDeps {
    * behaviour unchanged.
    */
   readonly isOnline?: () => boolean;
+  /**
+   * The passage segmentation rules this trigger can read (`olea-core`'s `PASSAGE_RULES`, the
+   * production registry, when omitted). Injectable so a test can prove what a rule change does.
+   */
+  readonly passageRules?: readonly PassageRule[];
 }
 
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
@@ -412,6 +472,9 @@ function isTrackedForRevision(record: VaultInstrumentRecord): boolean {
   return record.sourceProvenance !== undefined;
 }
 
+/** A path with a hidden (dot-prefixed) segment — Obsidian's own folders, the trash, Olea's own layer: never a note her passage moved into. */
+const HIDDEN_PATH_SEGMENT = /(^|\/)\./;
+
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
 interface MutableTickReport {
   tracked: number;
@@ -427,6 +490,38 @@ interface MutableTickReport {
   exemptSelfContained: number;
   authorshipUnverified: number;
   retryExhausted: number;
+  passageAmbiguous: number;
+  passageRuleUnsupported: number;
+  passageSeedUnresolved: number;
+}
+
+/** Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read to every write that advances the anchor. */
+interface PassageContext {
+  readonly sourcePath: VaultPath;
+  readonly rule: PassageRule;
+}
+
+/** The pending fact an anchor may keep across a write: one awaiting the judge stays; one raised for a passage reason is cleared by the pass that finds the passage again. */
+function carriedPending(
+  previous: CitationAnchorRecord,
+): Pick<CitationAnchorRecord, 'pendingRevalidation'> {
+  return previous.pendingRevalidation !== undefined &&
+    previous.pendingRevalidation.reason === undefined
+    ? { pendingRevalidation: previous.pendingRevalidation }
+    : {};
+}
+
+function digestVersionOf(record: CitationAnchorRecord): number | undefined {
+  return record.passageDigest === undefined
+    ? undefined
+    : (parsePassageDigest(record.passageDigest)?.version ?? undefined);
+}
+
+async function passageFields(
+  passage: PassageContext | undefined,
+  text: string,
+): Promise<Pick<CitationAnchorRecord, 'passageDigest'>> {
+  return passage === undefined ? {} : { passageDigest: await digestPassage(text, passage.rule) };
 }
 
 export class CitationRevisionTrigger {
@@ -454,7 +549,11 @@ export class CitationRevisionTrigger {
       exemptSelfContained: 0,
       authorshipUnverified: 0,
       retryExhausted: 0,
+      passageAmbiguous: 0,
+      passageRuleUnsupported: 0,
+      passageSeedUnresolved: 0,
     };
+    const rules = this.deps.passageRules ?? PASSAGE_RULES;
 
     // See this module's own "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET"
     // doc section: read once per pass, not per instrument — reachability
@@ -520,6 +619,21 @@ export class CitationRevisionTrigger {
       return material;
     };
 
+    // `[D-446]`: the passage-grain reader's view of the vault — the SAME per-pass cached material
+    // reads, plus the one vault-wide listing it needs when a passage is not where it was. Lazy: a
+    // pass with no passage-grain instrument (or none whose passage moved) never lists the vault.
+    let markdownPathsOnce: Promise<readonly VaultPath[]> | undefined;
+    const passageNotes: PassageNotes = {
+      exists: (path) => vault.exists(path),
+      material: materialFor,
+      markdownPaths: () => {
+        markdownPathsOnce ??= vault
+          .list({ extensions: ['md'] })
+          .then((paths) => paths.filter((path) => !HIDDEN_PATH_SEGMENT.test(path)));
+        return markdownPathsOnce;
+      },
+    };
+
     const currentByInstrumentId = new Map(
       trackedRecords.map((record) => [record.instrumentId, record] as const),
     );
@@ -578,12 +692,48 @@ export class CitationRevisionTrigger {
 
       const currentRecord = currentByInstrumentId.get(instrumentId);
       let current: CurrentPassageState;
+      // `[D-446]`: set only for a passage-grain anchor whose passage was found in a note this pass.
+      let passage: PassageContext | undefined;
       try {
-        if (currentRecord !== undefined) {
+        if (currentRecord !== undefined && previous.passageDigest !== undefined) {
+          // Passage grain: ask WHERE the anchored passage stands now, by the shared rule. Only a
+          // passage found in place (unchanged, reformatted, or edited-and-unmistakable) continues
+          // into the ordinary compare-and-judge below; a moved, missing or ambiguous passage is
+          // settled here, with no judge call.
+          const resolution = await resolveAnchoredPassage(
+            {
+              text: previous.text,
+              passageDigest: previous.passageDigest,
+              anchorPath: previous.sourcePath,
+              citedPath: citedPassagePath(currentRecord),
+            },
+            passageNotes,
+            rules,
+          );
+          if (resolution.kind !== 'present') {
+            await this.applyPassageResolution(
+              instrumentId,
+              previous,
+              currentRecord,
+              resolution,
+              passageNotes,
+              actions,
+              report,
+            );
+            continue;
+          }
+          current = { kind: 'found-at-anchor', text: resolution.text };
+          passage = { sourcePath: resolution.sourcePath, rule: resolution.rule };
+        } else if (currentRecord !== undefined) {
           current = {
             kind: 'found-at-anchor',
             text: await materialFor(citedPassagePath(currentRecord)),
           };
+        } else if (previous.passageDigest !== undefined) {
+          // The instrument itself is gone: there is no passage to judge, and relocating a
+          // passage-grain anchor among whole notes would compare the wrong grain.
+          report.stranded += 1;
+          continue;
         } else {
           current = {
             kind: 'not-found',
@@ -614,15 +764,16 @@ export class CitationRevisionTrigger {
         report.formattingOnly += 1;
         try {
           await this.deps.store.save(instrumentId, {
-            sourcePath: citedPassagePath(currentRecord),
+            sourcePath: passage?.sourcePath ?? citedPassagePath(currentRecord),
             text: current.text,
             // [D-351]: a formatting-only edit is not a resolution — carry
             // over whatever pending-revalidation fact was already recorded
             // (from an earlier, still-unresolved real difference) rather
-            // than silently clearing it via this unrelated write.
-            ...(previous.pendingRevalidation !== undefined
-              ? { pendingRevalidation: previous.pendingRevalidation }
-              : {}),
+            // than silently clearing it via this unrelated write. (A fact
+            // raised for a passage reason is the one exception: finding the
+            // passage again is its resolution — `carriedPending`.)
+            ...carriedPending(previous),
+            ...(await passageFields(passage, current.text)),
             conceptIds: currentRecord.conceptIds,
           });
         } catch (error) {
@@ -715,6 +866,7 @@ export class CitationRevisionTrigger {
         outcome,
         actions,
         report,
+        passage,
       );
     }
 
@@ -732,6 +884,22 @@ export class CitationRevisionTrigger {
       if (rejectedInstrumentIds.has(instrumentId)) continue;
       try {
         const path = citedPassagePath(record);
+        // `[D-446]`: an instrument whose citation carries a passage digest that resolves to exactly
+        // one passage is baselined AT that passage. Anything less (no digest, an ambiguous or absent
+        // one, a rule this build does not carry) keeps today's whole-note baseline — never a guessed
+        // passage.
+        const seeded = await seedPassageAnchor(vault, instrumentId, path, materialFor, rules);
+        if (seeded === 'unresolved') report.passageSeedUnresolved += 1;
+        if (seeded !== undefined && seeded !== 'unresolved') {
+          await this.deps.store.save(instrumentId, {
+            sourcePath: path,
+            text: seeded.text,
+            passageDigest: seeded.digest,
+            conceptIds: record.conceptIds,
+          });
+          report.newlyBaselined += 1;
+          continue;
+        }
         const text = await materialFor(path);
         await this.deps.store.save(instrumentId, {
           sourcePath: path,
@@ -747,6 +915,85 @@ export class CitationRevisionTrigger {
     return report;
   }
 
+  /**
+   * `[D-446]` option (a): the outcomes of the passage-grain read that are settled WITHOUT a judge
+   * call. `present` never arrives here (the caller carries it into the ordinary compare-and-judge).
+   *
+   *  - `relocated`: the passage stands, exactly, in another note — heal the anchor there silently
+   *    (`[D-093]`), clearing any fact raised for a passage reason.
+   *  - `proposal`, `unresolved`: the passage cannot be located. The instrument is WITHHELD before
+   *    its next presentation (`[D-343]`) with the actual reason recorded on the pending fact
+   *    (`passage-missing`, `passage-ambiguous`, `passage-rule-unsupported`) — protective, and
+   *    never a claim that a material change was established (row 45). No baseline is adopted, no
+   *    judge is called, nothing is suspended or regenerated.
+   */
+  private async applyPassageResolution(
+    instrumentId: string,
+    previous: CitationAnchorRecord,
+    currentRecord: VaultInstrumentRecord,
+    resolution: Exclude<PassageResolution, { kind: 'present' }>,
+    notes: PassageNotes,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<void> {
+    if (resolution.kind === 'relocated') {
+      report.relocated += 1;
+      try {
+        await this.deps.store.save(instrumentId, {
+          sourcePath: resolution.sourcePath,
+          text: resolution.text,
+          passageDigest: await digestPassage(resolution.text, resolution.rule),
+          ...carriedPending(previous),
+          conceptIds: currentRecord.conceptIds,
+        });
+      } catch (error) {
+        console.error('Olea: citation-revision passage relocation-heal write failed', error);
+      }
+      return;
+    }
+
+    let reason: PendingReason;
+    if (resolution.kind === 'proposal') {
+      report.relocationProposed += 1;
+      reason = 'passage-missing';
+      try {
+        actions.onRelocationProposed?.(instrumentId, resolution.candidate);
+      } catch (error) {
+        console.error('Olea: citation-revision relocation-proposed hook failed', error);
+      }
+    } else if (resolution.reason === 'missing') {
+      report.stranded += 1;
+      reason = 'passage-missing';
+    } else if (resolution.reason === 'ambiguous') {
+      report.passageAmbiguous += 1;
+      reason = 'passage-ambiguous';
+    } else {
+      report.passageRuleUnsupported += 1;
+      reason = 'passage-rule-unsupported';
+    }
+
+    try {
+      // Keyed to the state being checked ([D-351]): the reason plus what the anchor's own note
+      // says now, so a further edit to that note raises a fresh fact rather than resting on a
+      // stale one, while an unchanged state re-records as a no-op every pass.
+      let observed = '';
+      try {
+        if (await notes.exists(previous.sourcePath))
+          observed = await notes.material(previous.sourcePath);
+      } catch {
+        observed = '';
+      }
+      await this.deps.store.setPendingRevalidation(
+        instrumentId,
+        await hashText(`${reason}\n${observed}`),
+        this.deps.clock.now(),
+        reason,
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision passage withhold write failed', error);
+    }
+  }
+
   private async applyOutcome(
     instrumentId: string,
     previous: CitationAnchorRecord,
@@ -755,9 +1002,32 @@ export class CitationRevisionTrigger {
     outcome: CitedPassageRevisionOutcome,
     actions: CitationRevisionActions,
     report: MutableTickReport,
+    passage?: PassageContext,
   ): Promise<void> {
     switch (outcome.kind) {
       case 'unchanged':
+        // `[D-446]`: a passage-grain anchor withheld for a passage reason (missing, ambiguous, rule)
+        // that now stands unchanged is resolved: clear the fact. A pending fact awaiting the judge
+        // is never touched here, exactly as before. Likewise an anchor whose digest names a retired
+        // rule, re-found cleanly under the current one, is re-seated on it.
+        if (
+          passage !== undefined &&
+          (previous.pendingRevalidation?.reason !== undefined ||
+            digestVersionOf(previous) !== passage.rule.version) &&
+          currentRecord !== undefined &&
+          current.kind === 'found-at-anchor'
+        ) {
+          try {
+            await this.deps.store.save(instrumentId, {
+              sourcePath: passage.sourcePath,
+              text: current.text,
+              conceptIds: currentRecord.conceptIds,
+              ...(await passageFields(passage, current.text)),
+            });
+          } catch (error) {
+            console.error('Olea: citation-revision passage-resolved clear write failed', error);
+          }
+        }
         return;
       case 'judge-unavailable':
         // Grey-out, never advance state on an unanswered check — the same
@@ -828,9 +1098,10 @@ export class CitationRevisionTrigger {
               return;
             }
             await this.deps.store.save(instrumentId, {
-              sourcePath: citedPassagePath(currentRecord),
+              sourcePath: passage?.sourcePath ?? citedPassagePath(currentRecord),
               text: current.text,
               conceptIds: currentRecord.conceptIds,
+              ...(await passageFields(passage, current.text)),
               // pendingRevalidation omitted -- restored to current [D-351].
             });
           } catch (error) {
@@ -878,6 +1149,28 @@ export class CitationRevisionTrigger {
 }
 
 /**
+ * `[D-446]`: the passage a citation's digest names, when it resolves to exactly one segment of
+ * `path`'s material — the text and digest a passage-grain anchor is first saved with. `undefined`
+ * when the citation carries no digest (the legacy grain: nothing to say); `'unresolved'` when it
+ * carries one that does not resolve to exactly one passage (ambiguous, absent, unsupported rule,
+ * malformed) — counted by the caller, which then keeps the whole-note baseline.
+ */
+async function seedPassageAnchor(
+  vault: VaultSource,
+  instrumentId: string,
+  path: VaultPath,
+  materialFor: (path: VaultPath) => Promise<string>,
+  rules: readonly PassageRule[],
+): Promise<{ readonly text: string; readonly digest: string } | 'unresolved' | undefined> {
+  const citation = await readInstrumentCitation(vault, instrumentId);
+  const digest = citation?.passageDigest;
+  if (digest === undefined) return undefined;
+  if (!isMarkdownVaultPath(path)) return 'unresolved';
+  const located = await locatePassageByDigest(await materialFor(path), digest, rules);
+  return located.status === 'unique' ? { text: located.segment.text, digest } : 'unresolved';
+}
+
+/**
  * Every currently-TRACKED instrument's material, one `RelocationCandidate`
  * each — `location` is a placeholder whole-text range, the same "never read
  * past `embeddedIn.notePath`/`sourcePath`" posture `main.ts`'s
@@ -920,6 +1213,8 @@ export interface CitationRevisionWiringDeps {
   readonly clock: Clock;
   /** See `CitationRevisionTriggerDeps.isOnline`'s own doc. */
   readonly isOnline?: () => boolean;
+  /** See `CitationRevisionTriggerDeps.passageRules`'s own doc. */
+  readonly passageRules?: readonly PassageRule[];
 }
 
 export function buildCitationRevisionWiring(

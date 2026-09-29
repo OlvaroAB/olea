@@ -2441,6 +2441,36 @@ export {
   structuralNotHersFragment,
   UNKNOWN_MATERIALITY,
 } from './source/materiality.js';
+// `[D-446]` option (a) (`ol-egov.141.89.5.32`): the ONE versioned passage segmentation and
+// normalisation rule authoring and reading share. See `./source/passage-identity.js`'s module doc.
+export type {
+  CitationPassageOutcome,
+  DigestLocation,
+  PassageCitation,
+  PassageKind,
+  PassageLevel,
+  PassageLocation,
+  PassageRule,
+  PassageSegment,
+} from './source/passage-identity.js';
+export {
+  CURRENT_PASSAGE_RULE,
+  citePassage,
+  currentPassageRule,
+  digestPassage,
+  locatePassageByDigest,
+  locatePassageByText,
+  normalisePassageText,
+  PASSAGE_RESEMBLANCE_FLOOR,
+  PASSAGE_RULE_V1,
+  PASSAGE_RULE_VERSION,
+  PASSAGE_RULES,
+  parsePassageDigest,
+  passageRecall,
+  sealCitationPassage,
+  segmentPassages,
+  soleBlockPassage,
+} from './source/passage-identity.js';
 export {
   DEFAULT_SOURCES_FOLDER,
   isRegisterableDocument,

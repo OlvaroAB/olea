@@ -232,6 +232,7 @@ import {
   insertMcqBlock,
   parseDocument,
   parseMcqBlocks,
+  sealCitationPassage,
   stampMcqId,
   type VaultPath,
   type VaultSource,
@@ -422,7 +423,8 @@ export async function materializeAcceptedDraft(
 
   // `[D-181]`: the sidecar, never text written into her notes — see the
   // module doc's own section. `ol-v7r5.106`, Class B: never skipped any
-  // more — a supplied citation is written verbatim, an absent one falls
+  // more — a supplied citation is written as supplied (apart from its
+  // `[D-446]` passage digest, sealed or dropped below), an absent one falls
   // back to a self-referential citation naming this MCQ's own note, so an
   // absent sidecar never again means "authorship unknown" for a real
   // materialized item. Skipped only when a prior, interrupted attempt
@@ -431,8 +433,15 @@ export async function materializeAcceptedDraft(
   // store and taking its "already has a record" throw — so a retry
   // converges cleanly instead of failing on work an earlier attempt already
   // finished.
-  const citation: InstrumentCitation = input.sourceCitation ?? { sourcePath: input.sourcePath };
+  const proposedCitation: InstrumentCitation = input.sourceCitation ?? {
+    sourcePath: input.sourcePath,
+  };
   if (!(await vault.exists(citationStorePath(stamped.id)))) {
+    // `[D-446]` option (a): seal the passage digest by the shared segmentation rule, so the batch
+    // pass can find this passage again wherever it moves. A digest the draft carried that does not
+    // resolve to exactly one passage now is dropped, never written; a source note with one body
+    // passage gets that passage's digest; anything else keeps the whole-note grain.
+    const { citation } = await sealCitationPassage(vault, proposedCitation, input.sourcePath);
     await writeInstrumentCitation(vault, stamped.id, citation);
   }
 

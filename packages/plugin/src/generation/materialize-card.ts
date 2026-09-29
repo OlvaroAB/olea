@@ -217,6 +217,7 @@ import {
   parseFrontmatter,
   provisionalInstrumentId,
   readScalar,
+  sealCitationPassage,
   stampQaCardBlockId,
   type VaultPath,
   type VaultSource,
@@ -438,8 +439,12 @@ export async function materializeAcceptedCardDraft(
   // minimum its own note — and `page`/`section` are never guessed, only
   // omitted, exactly as `writeInstrumentCitation`'s own field-by-field
   // "absent means unavailable" convention already requires.
-  const citation: InstrumentCitation = input.sourceCitation ?? { sourcePath: input.sourcePath };
+  const proposedCitation: InstrumentCitation = input.sourceCitation ?? {
+    sourcePath: input.sourcePath,
+  };
   if (!(await vault.exists(citationStorePath(instrumentId)))) {
+    // `[D-446]` option (a): see `materialize-mcq.ts`'s identical call.
+    const { citation } = await sealCitationPassage(vault, proposedCitation, input.sourcePath);
     await writeInstrumentCitation(vault, instrumentId, citation);
   }
 
