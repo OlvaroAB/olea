@@ -463,3 +463,237 @@ describe("groupPaperQuestions — never changes the splitter's questions", () =>
     });
   });
 });
+
+// ---- Row 51 (decision sheet, 2026-09-29): the declared patterns and cutoffs are provisional
+// development defaults, not validated by being declared. These are the development checks: short
+// shared material, tables and long headings, plus the rule that structure a cue names but this pass
+// cannot place is preserved, never silently dropped. Synthetic wording only (INV-3).
+
+const words = (n: number): string => Array.from({ length: n }, (_, i) => `word${i + 1}`).join(' ');
+
+const stemPaper = (bodyWords: number): string =>
+  [
+    '## Question 1',
+    '',
+    `Read the following scenario carefully. ${words(bodyWords)}`,
+    '',
+    '(a) Identify one cost.',
+    '',
+    '(b) Explain one benefit.',
+    '',
+  ].join('\n');
+
+describe('development checks (row 51): short shared material', () => {
+  it('keeps a shared stimulus a few words long as a located stimulus under its heading, not dropped for being short', () => {
+    const source = [
+      '## Extract A',
+      '',
+      'Short text here.',
+      '',
+      '## Question 1',
+      '',
+      'Identify the theme.',
+      '',
+    ].join('\n');
+    const grouping = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, source), source);
+    const group = grouping.groups.find((g) => g.kind === 'shared-stimulus');
+    expect(group?.memberLabels).toEqual(['1']);
+    expect(group?.stimulus).toMatchObject({ status: 'identified', form: 'extract' });
+    expect(grouping.unresolved).toBeUndefined();
+  });
+
+  it('a stem stimulus needs the declared word cutoff: one word under it reads not located, at it reads identified', () => {
+    const under = stemPaper(7);
+    const at = stemPaper(8);
+    const groupUnder = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, under), under);
+    const groupAt = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, at), at);
+    expect(groupOf(groupUnder, 'question:1').stimulus).toMatchObject({
+      status: 'not-identified',
+      reason: 'referenced-not-located',
+    });
+    expect(groupOf(groupAt, 'question:1').stimulus).toMatchObject({
+      status: 'identified',
+      form: 'scenario',
+    });
+  });
+});
+
+describe('development checks (row 51): tables', () => {
+  it('a table under a table heading is a located stimulus whose anchor reaches into the table', () => {
+    const source = [
+      '## Table 1',
+      '',
+      '| Sample | Mass |',
+      '| --- | --- |',
+      '| S1 | 4.2 |',
+      '',
+      '## Question 1',
+      '',
+      'Which sample is heaviest?',
+      '',
+    ].join('\n');
+    const grouping = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, source), source);
+    const group = grouping.groups.find((g) => g.kind === 'shared-stimulus');
+    expect(group?.stimulus.status).toBe('identified');
+    if (group?.stimulus.status !== 'identified') return;
+    expect(group.stimulus.form).toBe('table');
+    expect(source.slice(group.stimulus.anchor.start, group.stimulus.anchor.end)).toContain(
+      '| S1 | 4.2 |',
+    );
+  });
+
+  it('a table in a stem is carried by its parent group, and a table a part points back at but no stem prints is not located', () => {
+    const printed = groupMarkdownPastPaper(
+      segmentPastPaper(MD_PATH, MARKDOWN_SECTIONS_PAPER),
+      MARKDOWN_SECTIONS_PAPER,
+    );
+    expect(groupOf(printed, 'question:2').stimulus).toMatchObject({
+      status: 'identified',
+      form: 'table',
+    });
+    const pointedAt = groupMarkdownPastPaper(
+      segmentPastPaper(MD_PATH, MARKDOWN_STIMULUS_PAPER),
+      MARKDOWN_STIMULUS_PAPER,
+    );
+    expect(groupOf(pointedAt, 'question:4').stimulus).toMatchObject({
+      status: 'not-identified',
+      form: 'table',
+      reason: 'referenced-not-located',
+    });
+  });
+});
+
+describe('development checks (row 51): long headings', () => {
+  const LONG_WORDING =
+    'Answer ONE of the following questions on any of the topics covered in the second half of the term and write in full sentences throughout';
+
+  it('markdown has no length cutoff on a heading: a long section heading is read whole, with its choice count', () => {
+    const heading = `## Section B — ${LONG_WORDING}`;
+    expect(heading.length).toBeGreaterThan(120);
+    const source = [
+      heading,
+      '',
+      '## Question 1',
+      '',
+      'Discuss tides.',
+      '',
+      '## Question 2',
+      '',
+      'Discuss waves.',
+      '',
+    ].join('\n');
+    const grouping = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, source), source);
+    const section = grouping.groups.find((g) => g.kind === 'section');
+    expect(section?.label).toBe(heading.replace(/^## /, ''));
+    expect(grouping.groups.find((g) => g.kind === 'choice')?.choose).toBe(1);
+    expect(grouping.unresolved).toBeUndefined();
+  });
+
+  it('extracted text has the declared length cutoff: a section line over it is not read as a heading, and is reported unresolved, not dropped', () => {
+    const line = `SECTION B - ${LONG_WORDING}`;
+    expect(line.length).toBeGreaterThan(120);
+    const ex = extraction([
+      [line, '', '1. Discuss tides.', '', '2. Discuss waves.', ''].join('\n'),
+    ]);
+    const segmentation = segmentPlainTextPastPaper(ex);
+    const grouping = groupPlainTextPastPaper(ex, segmentation);
+    expect(grouping.groups.filter((g) => g.kind === 'section')).toEqual([]);
+    expect(grouping.unresolved).toHaveLength(1);
+    const [note] = grouping.unresolved ?? [];
+    expect(note?.kind).toBe('section-line-too-long');
+    expect(plainTextPaperText(ex).slice(note?.anchor.start, note?.anchor.end)).toBe(line);
+    expect(grouping.placements.map((p) => p.label)).toEqual(
+      segmentation.questions.map((q) => q.label),
+    );
+  });
+
+  it('a line at the cutoff still reads as a section, and a long prose line that only begins "Part B of" is neither a section nor unresolved', () => {
+    const atCutoff = `SECTION B ${'X'.repeat(120 - 'SECTION B '.length)}`;
+    expect(atCutoff.length).toBe(120);
+    const exSection = extraction([
+      [atCutoff, '', '1. Discuss tides.', '', '2. Discuss waves.', ''].join('\n'),
+    ]);
+    const sectionGrouping = groupPlainTextPastPaper(
+      exSection,
+      segmentPlainTextPastPaper(exSection),
+    );
+    expect(sectionGrouping.groups.filter((g) => g.kind === 'section')).toHaveLength(1);
+    const prose = `Part B of the experiment used a second beaker and ${words(30)}`;
+    expect(prose.length).toBeGreaterThan(120);
+    const exProse = extraction([
+      [prose, '', '1. Discuss tides.', '', '2. Discuss waves.', ''].join('\n'),
+    ]);
+    const proseGrouping = groupPlainTextPastPaper(exProse, segmentPlainTextPastPaper(exProse));
+    expect(proseGrouping.groups.filter((g) => g.kind === 'section')).toEqual([]);
+    expect(proseGrouping.unresolved).toBeUndefined();
+  });
+});
+
+describe('unresolved structure is preserved, not silently dropped (row 51)', () => {
+  it("a section heading and a stimulus heading with no question under them are reported, with the paper's own wording as the anchor", () => {
+    const source = [
+      '## Section A',
+      '',
+      '## Question 1',
+      '',
+      'Define density.',
+      '',
+      '## Section C',
+      '',
+      '## Case study',
+      '',
+    ].join('\n');
+    const grouping = groupMarkdownPastPaper(segmentPastPaper(MD_PATH, source), source);
+    const kinds = (grouping.unresolved ?? []).map((u) => u.kind).sort();
+    expect(kinds).toEqual(['section-without-questions', 'stimulus-heading-without-questions']);
+    for (const note of grouping.unresolved ?? []) {
+      expect(source.slice(note.anchor.start, note.anchor.end)).toContain(note.label);
+    }
+    // Nothing that was placed changed: the one question is still placed exactly once.
+    expect(grouping.placements.map((p) => p.label)).toEqual(['1']);
+  });
+
+  it('a question range naming no segmented question is reported unresolved as well as forming no group', () => {
+    const pages = [
+      ...PLAIN_SECTIONS_PAGES.slice(0, 2),
+      `${PLAIN_SECTIONS_PAGES[2]}\n\nQuestions 8 to 9 refer to the table below.`,
+    ];
+    const ex = extraction(pages);
+    const grouping = groupPlainTextPastPaper(ex, segmentPlainTextPastPaper(ex));
+    expect((grouping.unresolved ?? []).map((u) => u.kind)).toEqual([
+      'stimulus-range-without-questions',
+    ]);
+    expect(grouping.unresolved?.[0]?.label).toBe('Questions 8 to 9 refer to the table below.');
+  });
+
+  it('an instruction to choose within a section the paper does not have is reported, not dropped', () => {
+    const ex = extraction([
+      [
+        'Answer ONE question from Section D.',
+        '',
+        'SECTION A',
+        '1. Define speed.',
+        '',
+        '2. Define velocity.',
+        '',
+        'SECTION B',
+        '3. Define mass.',
+        '',
+        '4. Define weight.',
+        '',
+      ].join('\n'),
+    ]);
+    const grouping = groupPlainTextPastPaper(ex, segmentPlainTextPastPaper(ex));
+    expect((grouping.unresolved ?? []).map((u) => u.kind)).toEqual([
+      'choice-instruction-without-group',
+    ]);
+  });
+
+  it('reports nothing when nothing was left unresolved, so an absent field means a clean pass', () => {
+    const grouping = groupMarkdownPastPaper(
+      segmentPastPaper(MD_PATH, MARKDOWN_SECTIONS_PAPER),
+      MARKDOWN_SECTIONS_PAPER,
+    );
+    expect('unresolved' in grouping).toBe(false);
+  });
+});

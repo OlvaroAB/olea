@@ -62,10 +62,24 @@
  * each part on its own. It reads no metadata and logs nothing (D-005). Group labels are the paper's own
  * wording, which is her material: local only, never sent to telemetry.
  *
+ * **Provisional development defaults (David, 2026-09-29, decision sheet row 51).** Every declared
+ * pattern and cutoff in this pass — `STIMULUS_BODY_MIN_WORDS`, `SECTION_LINE_MAX_LENGTH`, and the
+ * section, choice, stimulus and question-range expressions — is a reasonable starting point and
+ * nothing more: it is not validated by being declared. What checks it is the development cases in
+ * `paper-question-groups.spec.ts`, which include short shared material at and beside the word
+ * cutoff, tables, and headings beside and beyond the length cutoff. Structure a cue names but this
+ * pass cannot place is PRESERVED in `unresolved`, never silently dropped (a section line over the
+ * length cutoff, a section or stimulus heading with no question under it, a question range naming
+ * no segmented question, a choice instruction naming a section that is not there). A concrete need
+ * found in development evidence is a change to the extraction prompt or to a rule here, made
+ * openly, not a quiet widening of a cutoff.
+ *
  * **Reachability.** `groupMarkdownPastPaper` has its production caller in
  * `packages/plugin/src/generation/format-match.ts` (`buildFormatMatch`, beside `segmentPastPaper`),
- * carried in memory through `onPaperGroups`; no stored shape yet, which waits on `[D-429]`.
- * The extracted-text sibling (`groupPlainTextPastPaper`) has no caller yet.
+ * carried in memory through `onPaperGroups`. It is not stored: the stored structure reading is the
+ * Worker's (`[D-429]`, `./scope-reading-store.ts`), and this pass is its corroboration and its
+ * fallback while a reading is pending (scp.md 2.2). The extracted-text sibling
+ * (`groupPlainTextPastPaper`) has no caller yet.
  */
 
 import type { CharRange, ExtractionResult } from '../extract/types.js';
@@ -97,11 +111,41 @@ export interface QuestionPlacement {
   readonly isStem: boolean;
 }
 
+/**
+ * Structure a cue names that this pass could not place (decision sheet row 51: preserve unresolved
+ * structure instead of silently dropping it):
+ *
+ * - `'section-line-too-long'` — an extracted-text line that opens as a section ("SECTION B ...") but
+ *   is over `SECTION_LINE_MAX_LENGTH`, so it was not read as a heading;
+ * - `'section-without-questions'` — a section heading with no top-level question under it;
+ * - `'stimulus-range-without-questions'` — "Questions 4 to 6 refer to the scenario below" where none
+ *   of those questions was segmented;
+ * - `'stimulus-heading-without-questions'` — a heading that names a stimulus form with no question
+ *   under it;
+ * - `'choice-instruction-without-group'` — an instruction to answer some of a section's questions
+ *   that names a section which is not in the paper.
+ */
+export type UnresolvedStructureKind =
+  | 'section-line-too-long'
+  | 'section-without-questions'
+  | 'stimulus-range-without-questions'
+  | 'stimulus-heading-without-questions'
+  | 'choice-instruction-without-group';
+
+export interface UnresolvedStructure {
+  readonly kind: UnresolvedStructureKind;
+  /** The paper's own wording of the cue, cut to `UNRESOLVED_LABEL_MAX_LENGTH`: local content, never logged (D-005). */
+  readonly label: string;
+  readonly anchor: CharRange;
+}
+
 export interface TextPaperQuestionGrouping {
   /** Outer groups before the groups inside them, in document order. */
   readonly groups: readonly TextPaperQuestionGroup[];
   /** One entry per segmented question, in the splitter's own (document) order. */
   readonly placements: readonly QuestionPlacement[];
+  /** Present only when something was left unresolved: absent means nothing was, not that nothing was checked. */
+  readonly unresolved?: readonly UnresolvedStructure[];
 }
 
 export interface TextPaperGroupingInput {
@@ -118,14 +162,18 @@ export interface TextPaperGroupingInput {
 }
 
 /**
- * Declared, not fitted: a stimulus printed in a stem holds at least a sentence's worth of words
- * beyond the sentence that names it. Fewer, and the stem only mentions a stimulus it does not
- * print ("Refer to the scenario on the insert") — reported as not located rather than claimed.
+ * Declared, not fitted (a provisional development default, row 51): a stimulus printed in a stem
+ * holds at least a sentence's worth of words beyond the sentence that names it. Fewer, and the stem
+ * only mentions a stimulus it does not print ("Refer to the scenario on the insert") — reported as
+ * not located rather than claimed.
  */
 const STIMULUS_BODY_MIN_WORDS = 8;
 
-/** Declared: a section line in extracted text is a heading-length line, not a sentence of prose. */
+/** Declared: a section line in extracted text is a heading-length line, not a sentence of prose. A provisional development default (row 51). */
 const SECTION_LINE_MAX_LENGTH = 120;
+
+/** Declared: how much of the paper's own wording an unresolved cue keeps as its label. */
+const UNRESOLVED_LABEL_MAX_LENGTH = 200;
 
 /**
  * "Section B", "Part 2", "PART IV" — then the line ends, or goes on with punctuation or a capital
@@ -311,6 +359,21 @@ function headingLabel(line: string): string {
   return line.replace(/^#{1,6}\s*/, '').trim();
 }
 
+/** Records one cue this pass could not place (row 51). The label is the paper's own wording, cut short. */
+function noteUnresolved(
+  unresolved: UnresolvedStructure[],
+  kind: UnresolvedStructureKind,
+  text: string,
+  anchor: CharRange,
+): void {
+  const trimmed = trimRange(text, anchor);
+  unresolved.push({
+    kind,
+    label: text.slice(trimmed.start, trimmed.end).slice(0, UNRESOLVED_LABEL_MAX_LENGTH),
+    anchor: trimmed,
+  });
+}
+
 function rangeOf(question: QuestionBlock): CharRange {
   const range = question.provenance.location.charRange;
   return range ?? { start: 0, end: 0 };
@@ -402,7 +465,10 @@ function isSectionHeading(text: string): boolean {
   );
 }
 
-function findSections(input: TextPaperGroupingInput): SectionDraft[] {
+function findSections(
+  input: TextPaperGroupingInput,
+  unresolved: UnresolvedStructure[],
+): SectionDraft[] {
   const { text } = input;
   if (input.nonQuestionHeadings !== undefined) {
     return input.nonQuestionHeadings
@@ -420,7 +486,14 @@ function findSections(input: TextPaperGroupingInput): SectionDraft[] {
     const range = { start: cursor, end: cursor + line.length };
     cursor += line.length + 1;
     const trimmed = line.trim();
-    if (trimmed === '' || trimmed.length > SECTION_LINE_MAX_LENGTH) continue;
+    if (trimmed === '') continue;
+    if (trimmed.length > SECTION_LINE_MAX_LENGTH) {
+      // Over the heading-length cutoff, so not read as a heading — but if it opens as one, say so.
+      if (sectionTokenOf(trimmed) !== undefined) {
+        noteUnresolved(unresolved, 'section-line-too-long', text, range);
+      }
+      continue;
+    }
     const token = sectionTokenOf(trimmed);
     if (token === undefined || seen.has(token)) continue;
     seen.add(token);
@@ -440,6 +513,7 @@ interface PlacedSection {
 function buildSections(
   paper: PaperIndex,
   drafts: readonly SectionDraft[],
+  unresolved: UnresolvedStructure[],
 ): {
   groups: DraftGroup[];
   placed: PlacedSection[];
@@ -454,7 +528,10 @@ function buildSections(
       return start >= draft.heading.start && start < limit;
     });
     const first = members[0];
-    if (first === undefined) return;
+    if (first === undefined) {
+      noteUnresolved(unresolved, 'section-without-questions', paper.text, draft.heading);
+      return;
+    }
     const id = `section:${placed.length + 1}`;
     const stem = trimRange(paper.text, { start: draft.heading.start, end: rangeOf(first).start });
     placed.push({ id, token: draft.token, members, stem });
@@ -500,7 +577,11 @@ function firstChoiceCue(
   return undefined;
 }
 
-function buildChoices(paper: PaperIndex, sections: readonly PlacedSection[]): DraftGroup[] {
+function buildChoices(
+  paper: PaperIndex,
+  sections: readonly PlacedSection[],
+  unresolved: UnresolvedStructure[],
+): DraftGroup[] {
   const groups: DraftGroup[] = [];
   const chosenSections = new Set<string>();
 
@@ -566,12 +647,16 @@ function buildChoices(paper: PaperIndex, sections: readonly PlacedSection[]): Dr
     if (group !== undefined) {
       groups.push(group);
       paperWideTaken = true;
+    } else if (named !== undefined) {
+      // An instruction to choose within a section this paper does not have, and no paper-wide
+      // choice to fall back on: kept as unresolved, never dropped.
+      noteUnresolved(unresolved, 'choice-instruction-without-group', paper.text, sentence);
     }
   }
   return groups;
 }
 
-function buildRangeStimuli(paper: PaperIndex): DraftGroup[] {
+function buildRangeStimuli(paper: PaperIndex, unresolved: UnresolvedStructure[]): DraftGroup[] {
   const groups: DraftGroup[] = [];
   for (const match of paper.text.matchAll(QUESTION_RANGE_RE)) {
     const from = Number(match[1]);
@@ -586,7 +671,10 @@ function buildRangeStimuli(paper: PaperIndex): DraftGroup[] {
       return Number.isInteger(n) && n >= from && n <= to;
     });
     const first = members[0];
-    if (first === undefined) continue;
+    if (first === undefined) {
+      noteUnresolved(unresolved, 'stimulus-range-without-questions', paper.text, line);
+      continue;
+    }
     const firstStart = rangeOf(first).start;
     const bodyRange = line.start < firstStart ? { start: line.end, end: firstStart } : undefined;
     groups.push({
@@ -605,6 +693,7 @@ function buildHeadingStimuli(
   paper: PaperIndex,
   headings: readonly NonQuestionHeading[],
   firstId: number,
+  unresolved: UnresolvedStructure[],
 ): DraftGroup[] {
   const groups: DraftGroup[] = [];
   const sorted = [...headings].sort((a, b) => a.charRange.start - b.charRange.start);
@@ -618,7 +707,15 @@ function buildHeadingStimuli(
       return start >= heading.charRange.start && start < limit;
     });
     const first = members[0];
-    if (first === undefined) return;
+    if (first === undefined) {
+      noteUnresolved(
+        unresolved,
+        'stimulus-heading-without-questions',
+        paper.text,
+        heading.charRange,
+      );
+      return;
+    }
     groups.push({
       id: `stimulus:${firstId + groups.length}`,
       kind: 'shared-stimulus',
@@ -711,12 +808,17 @@ function isSuperset(outer: ReadonlySet<string>, inner: ReadonlySet<string>): boo
  */
 export function groupPaperQuestions(input: TextPaperGroupingInput): TextPaperQuestionGrouping {
   const paper = indexPaper(input);
-  const { groups: sectionGroups, placed } = buildSections(paper, findSections(input));
-  const rangeStimuli = buildRangeStimuli(paper);
+  const unresolved: UnresolvedStructure[] = [];
+  const { groups: sectionGroups, placed } = buildSections(
+    paper,
+    findSections(input, unresolved),
+    unresolved,
+  );
+  const rangeStimuli = buildRangeStimuli(paper, unresolved);
   const headingStimuli =
     input.nonQuestionHeadings === undefined
       ? []
-      : buildHeadingStimuli(paper, input.nonQuestionHeadings, rangeStimuli.length + 1);
+      : buildHeadingStimuli(paper, input.nonQuestionHeadings, rangeStimuli.length + 1, unresolved);
 
   const drafts: DraftGroup[] = [];
   const seenShapes = new Set<string>();
@@ -724,7 +826,7 @@ export function groupPaperQuestions(input: TextPaperGroupingInput): TextPaperQue
     ...sectionGroups,
     ...rangeStimuli,
     ...headingStimuli,
-    ...buildChoices(paper, placed),
+    ...buildChoices(paper, placed, unresolved),
     ...buildParents(paper),
   ]) {
     const shape = `${group.kind}|${group.memberLabels.join('\u0000')}`;
@@ -768,7 +870,11 @@ export function groupPaperQuestions(input: TextPaperGroupingInput): TextPaperQue
     isStem: (paper.childrenOf.get(question.label)?.length ?? 0) > 0,
   }));
 
-  return { groups, placements };
+  return {
+    groups,
+    placements,
+    ...(unresolved.length > 0 ? { unresolved } : {}),
+  };
 }
 
 /** Groups for a markdown past paper, from `segmentPastPaper`'s result and the note's own source text. */
