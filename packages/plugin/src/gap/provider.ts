@@ -101,6 +101,7 @@ import {
   enumerateVaultInstruments,
   projectInstrumentDemands,
   projectInstrumentValidity,
+  projectRegisteredFiles,
   readInstrumentDemand,
   readReviewLogFile,
   readReviewLogHistory,
@@ -361,6 +362,11 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // (`ol-63e1`) — already extracted by the instrument walk above, so
           // this pays no second walk.
           concepts: enumeration.concepts,
+          // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from
+          // the "source registered" events already in `entries` — the same projection
+          // `grove/provider.ts` reads. Without it a registered past-paper PDF never became a
+          // ranking edge, and `edges.tier3.sourceCoverage` below never listed it as read.
+          registeredFiles: projectRegisteredFiles(entries),
           // C5.6/`[D-264]` (`ol-egov.141.89.10.22`): thread the same
           // `retrievability` input `plan/provider.ts` and
           // `session-builder/provider.ts` already pass, so this view's

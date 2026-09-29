@@ -68,6 +68,7 @@ import {
   enumerateVaultInstruments,
   loadCachedStudyPlan,
   pastSessionsFromReviewLog,
+  projectRegisteredFiles,
   readReviewLogFile,
   readReviewLogHistory,
   resolveAssessments,
@@ -358,6 +359,12 @@ export function createLocalStudyPlanProvider(
         disputes,
         asOf: today,
         concepts,
+        // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered — the "source
+        // registered" events already in `entries` — folded into the `RegisteredFileSpec[]` the
+        // evidence-edge builder reads, exactly as `grove/provider.ts` folds them for its own
+        // tier-3 read. Without this a past-paper PDF she registers (a file that cannot carry a
+        // `role` property) never became a ranking edge: it reached the grove and stopped there.
+        registeredFiles: projectRegisteredFiles(entries),
         // C5.6/`[D-264]` items 3-4 (`ol-v7r5.53`): this was the one production
         // caller `oracle/compose.ts`'s own module doc named as still omitting
         // `retrievability` — every ranked concept's `retrievabilityWeight`

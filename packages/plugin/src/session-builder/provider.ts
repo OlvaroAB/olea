@@ -268,6 +268,7 @@ import {
   IDLE_SITTING,
   isCalendarDay,
   projectInstrumentValidity,
+  projectRegisteredFiles,
   readInstrumentCitation,
   readReviewLogFile,
   readReviewLogHistory,
@@ -1047,6 +1048,11 @@ export async function composeStudySessionForRequest(
     // (`ol-63e1`) — already extracted by the instrument walk above, so
     // this pays no second walk.
     concepts: enumeration.concepts,
+    // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from the
+    // "source registered" events already in `entries` — the same projection `grove/provider.ts`
+    // reads. Without it a registered past-paper PDF never became a ranking edge, so a course
+    // whose only evidence was that paper had no concept to serve from it.
+    registeredFiles: projectRegisteredFiles(entries),
     // `[D-404]` (`ol-egov.141.89.10.5`): the session path serves practice,
     // so it supplies the real inventory — `enumeration.records` already
     // holds `instrumentId`/`conceptIds` for every instrument the walk

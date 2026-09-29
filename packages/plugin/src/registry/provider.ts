@@ -195,6 +195,7 @@ import {
   listSameAsLinkRecords,
   type ProvenInvalidFact,
   projectInstrumentValidity,
+  projectRegisteredFiles,
   pruneConcept as pruneConceptOverride,
   type RankOracleOptions,
   type RegistryConceptEntry,
@@ -685,6 +686,12 @@ async function courseRankingsForNoteOffer(
       disputes,
       asOf,
       concepts,
+      // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from the
+      // "source registered" events already in `entries` — the same projection
+      // `grove/provider.ts` reads. Without it the note-offer gate ranked without the past
+      // papers she registered, so a concept only a registered PDF evidences could not reach
+      // its course's top band.
+      registeredFiles: projectRegisteredFiles(entries),
       // C5.6/`[D-264]` (`ol-egov.141.89.10.22`): the same `retrievability`
       // input `plan/provider.ts` and `session-builder/provider.ts` already
       // pass, so F4.2's note-offer ranking reads her real recall state
