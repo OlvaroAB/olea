@@ -26,8 +26,15 @@
  * produces, the round trip returns the seam's value unchanged, which is the
  * proof that a consumer reading through the contract sees exactly what it
  * saw before (`assess-support.spec.ts`).
+ *
+ * `sufficiencyAnswerFromDecision` is the second consumer's reading
+ * (`[D-414]`'s re-ask on arrival, `ol-egov.141.89.5.26`, `../../gap/demand-gap.ts`):
+ * a verdict is a verdict at the demand asked; every non-verdict outcome is a
+ * re-check that could not run, each under its own reason, and none of them can
+ * be read as a verdict about her material.
  */
 
+import type { SufficiencyAnswer } from '../../gap/demand-gap.js';
 import type {
   AssessSupportOutcome,
   AssessSupportPort,
@@ -138,4 +145,38 @@ export function assessSupportSeat(
       return decisionFromAssessSupport(outcome, context);
     },
   };
+}
+
+/**
+ * The re-ask's reading of a decision (`[D-414]`, `ol-egov.141.89.5.26`). Pure.
+ *
+ * - `verdict` is the verdict, carrying `evidenceFingerprint` (the digest of the
+ *   evidence the decision was asked over, computed by the caller with
+ *   `fingerprintJudgedEvidence`). **The payload does not travel**: the judge's
+ *   own statement of what is missing (`missing`, `reason`) never reaches the
+ *   answer, so it can never reach the gap sentence (registry section 25:
+ *   naming the missing content is forbidden, and the sentence is worded from
+ *   what retrieval returned, never from the judge's account of what is
+ *   absent).
+ * - `undecided` with basis `nothing-to-decide-from` is an empty evidence
+ *   package, an operational outcome (`[D-289]`, `[D-441]`): `retrieval-failed`.
+ *   Every other basis is the step not settling it: `could-not-decide`.
+ * - `unavailable` is `check-unavailable`.
+ */
+export function sufficiencyAnswerFromDecision(
+  decision: AssessSupportDecision,
+  evidenceFingerprint: string,
+): SufficiencyAnswer {
+  switch (decision.kind) {
+    case 'verdict':
+      return { kind: 'verdict', verdict: decision.verdict, evidenceFingerprint };
+    case 'undecided':
+      return {
+        kind: 'not-run',
+        reason:
+          decision.basis === 'nothing-to-decide-from' ? 'retrieval-failed' : 'could-not-decide',
+      };
+    case 'unavailable':
+      return { kind: 'not-run', reason: 'check-unavailable' };
+  }
 }

@@ -584,3 +584,185 @@ describe('the feed never throws and never says what it holds', () => {
     expect(held?.firstProcessedDay).not.toBeNull();
   });
 });
+
+// `ol-egov.141.89.5.26` ([D-414]): the feed's one arrival signal. A processed revision that has
+// just become READABLE and is new (a version the record did not already hold as read) is told to
+// each subscriber, after it is recorded. This is the arrival path the demand-grain re-ask rides on
+// (`../../../src/gap/demand-gap-reask.ts`), and it is the ONLY new thing the feed does: a rebuild,
+// a pending or unreadable source, and a reprocess of a version already read tell nobody.
+describe('the arrival signal: a new readable revision, told after it is recorded', () => {
+  const enqueuer = {
+    async enqueue() {
+      return { status: 'queued' } as const;
+    },
+  };
+
+  type Arrival = Parameters<Parameters<ReturnType<typeof harness>['feed']['subscribe']>[0]>[0];
+
+  function listening(h: ReturnType<typeof harness>) {
+    const heard: Arrival[] = [];
+    h.feed.subscribe((arrival) => {
+      heard.push(arrival);
+    });
+    return heard;
+  }
+
+  it('a note that clears the free checks is told once, with its path, courses, fingerprint and state', async () => {
+    const h = harness();
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    expect(heard).toEqual([
+      {
+        path: NOTE,
+        courses: ['CRS-A'],
+        fingerprint: await hashText(TEXT),
+        state: 'read',
+      },
+    ]);
+  });
+
+  it('is told after the record holds the version, so a subscriber reads the row it was told about', async () => {
+    const h = harness();
+    let seen: unknown;
+    h.feed.subscribe(async (arrival) => {
+      seen = (await h.store.load()).revisions[arrival.path]?.fingerprint;
+    });
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(seen).toBe(await hashText(TEXT));
+  });
+
+  it('the same version again tells nobody; an edited version tells again', async () => {
+    const h = harness();
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'judge-unavailable' });
+    await h.feed.noteProcessed(NOTE, TEXT);
+    expect(heard).toHaveLength(1);
+    await h.feed.noteEvaluated(NOTE, `${TEXT} And an edit.`, { kind: 'verdict' });
+    expect(heard).toHaveLength(2);
+    expect(heard[1]?.fingerprint).toBe(await hashText(`${TEXT} And an edit.`));
+  });
+
+  it('a result that records nothing tells nobody', async () => {
+    const h = harness();
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'below-floor' });
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'unchanged' });
+    expect(heard).toEqual([]);
+  });
+
+  it('a queued source is pending and tells nobody; its job settling READ tells once; UNREADABLE tells nobody', async () => {
+    const h = harness();
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.observeEnqueues(enqueuer).enqueue({
+      contentHash: 'hash-deck',
+      label: DECK,
+      payload: { kind: 'source', sourcePath: DECK, format: 'pdf' },
+    });
+    await h.feed.idle();
+    expect(heard).toEqual([]);
+
+    h.manifests.set(DECK, manifestOf(DECK, 'hash-deck', [READ, READ]));
+    await h.feed.jobRan(ran('hash-deck', 'done'), [
+      job('hash-deck', { kind: 'source', sourcePath: DECK, format: 'pdf' }),
+    ]);
+    expect(heard).toEqual([
+      { path: DECK, courses: ['CRS-A'], fingerprint: 'hash-deck', state: 'read' },
+    ]);
+
+    h.manifests.set(SCAN, manifestOf(SCAN, 'hash-scan', [BLANK]));
+    await h.feed.jobRan(ran('hash-scan', 'done'), [
+      job('hash-scan', { kind: 'source', sourcePath: SCAN, format: 'image' }),
+    ]);
+    expect(heard).toHaveLength(1);
+  });
+
+  it('a source read a second time (a page reading settling) tells nobody again', async () => {
+    const h = harness();
+    const heard = listening(h);
+    await h.feed.start();
+    h.manifests.set(DECK, manifestOf(DECK, 'hash-deck', [READ]));
+    const settled = [job('hash-deck', { kind: 'source', sourcePath: DECK, format: 'pdf' })];
+    await h.feed.jobRan(ran('hash-deck', 'done'), settled);
+    await h.feed.jobRan(ran('hash-deck', 'done'), settled);
+    expect(heard).toHaveLength(1);
+  });
+
+  it('start rebuilds the record and tells nobody: what was already there is not an arrival', async () => {
+    const h = harness({ files: { [NOTE]: TEXT } });
+    const heard = listening(h);
+    await h.feed.start();
+    expect((await h.record()).revisions[NOTE]?.firstProcessedDay).toBeNull();
+    expect(heard).toEqual([]);
+    // The vault-load event for that same file, after the rebuild, is the same version: still nobody.
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'judge-unavailable' });
+    expect(heard).toEqual([]);
+  });
+
+  it('a session whose rebuild failed records nothing and tells nobody', async () => {
+    const vault = memoryVault({});
+    vault.list = async () => {
+      throw new Error('cannot read');
+    };
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const h = harness({ vault });
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    expect(heard).toEqual([]);
+  });
+
+  it('a throwing subscriber never stops the record, the other subscribers, or the feed', async () => {
+    const h = harness();
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    h.feed.subscribe(() => {
+      throw new Error('a subscriber failed');
+    });
+    h.feed.subscribe(async () => {
+      throw new Error('an async subscriber failed');
+    });
+    const heard = listening(h);
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    await h.feed.noteEvaluated(OTHER_NOTE, TEXT, { kind: 'verdict' });
+    expect(heard.map((arrival) => arrival.path)).toEqual([NOTE, OTHER_NOTE]);
+    expect(Object.keys((await h.record()).revisions).sort()).toEqual([NOTE, OTHER_NOTE]);
+  });
+
+  it('unsubscribing stops the signal', async () => {
+    const h = harness();
+    const heard: string[] = [];
+    const unsubscribe = h.feed.subscribe((arrival) => {
+      heard.push(arrival.path);
+    });
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    unsubscribe();
+    await h.feed.noteEvaluated(OTHER_NOTE, TEXT, { kind: 'verdict' });
+    expect(heard).toEqual([NOTE]);
+  });
+
+  it('does not wait for a subscriber: a slow one never holds up recording', async () => {
+    const h = harness();
+    let release: () => void = () => undefined;
+    h.feed.subscribe(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    await h.feed.start();
+    await h.feed.noteEvaluated(NOTE, TEXT, { kind: 'verdict' });
+    await h.feed.noteEvaluated(OTHER_NOTE, TEXT, { kind: 'verdict' });
+    await h.feed.idle();
+    expect(Object.keys((await h.record()).revisions).sort()).toEqual([NOTE, OTHER_NOTE]);
+    release();
+  });
+});

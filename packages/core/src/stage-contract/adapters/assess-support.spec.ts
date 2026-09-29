@@ -25,6 +25,7 @@ import {
   assessSupportSeat,
   decisionFromAssessSupport,
   EMPTY_EVIDENCE_PACKAGE_RULE,
+  sufficiencyAnswerFromDecision,
 } from './assess-support.js';
 
 const context: StageSeamContext = {
@@ -150,5 +151,72 @@ describe('assessSupportSeat: the candidate and fallback behind one interface', (
     };
     const decision = await assessSupportSeat(throwing, context).decide(request);
     expect(decision).toMatchObject({ kind: 'unavailable', cause: 'call-failed' });
+  });
+});
+
+describe('sufficiencyAnswerFromDecision: the four-verdict seam as the re-ask reads it (`ol-egov.141.89.5.26`, [D-414])', () => {
+  const read = (outcome: AssessSupportOutcome) =>
+    sufficiencyAnswerFromDecision(decisionFromAssessSupport(outcome, context), 'fp-1');
+
+  it.each(['sufficient', 'partial', 'insufficient', 'conflicting'] as const)(
+    'a %s verdict is that verdict, carrying the fingerprint it was asked over',
+    (verdict) => {
+      expect(
+        read({ status: 'assessed', supported: verdict === 'sufficient', reason: 'r', verdict }),
+      ).toEqual({ kind: 'verdict', verdict, evidenceFingerprint: 'fp-1' });
+    },
+  );
+
+  it('the judge naming what is missing never reaches the answer (registry section 25)', () => {
+    const answer = read({
+      status: 'assessed',
+      supported: false,
+      reason: 'a step is missing',
+      verdict: 'partial',
+      missing: ['a condition', 'a value'],
+    });
+    expect(answer).toEqual({ kind: 'verdict', verdict: 'partial', evidenceFingerprint: 'fp-1' });
+    expect(JSON.stringify(answer)).not.toContain('condition');
+    expect(JSON.stringify(answer)).not.toContain('a step is missing');
+  });
+
+  it('an abstention is could-not-decide, never a verdict', () => {
+    expect(read({ status: 'could-not-decide' })).toEqual({
+      kind: 'not-run',
+      reason: 'could-not-decide',
+    });
+  });
+
+  it('an empty evidence package is a retrieval failure, never an insufficiency ([D-289], [D-441])', () => {
+    expect(read({ status: 'insufficient-evidence' })).toEqual({
+      kind: 'not-run',
+      reason: 'retrieval-failed',
+    });
+  });
+
+  it('an outage is an outage, never an insufficiency', () => {
+    expect(read({ status: 'unavailable' })).toEqual({
+      kind: 'not-run',
+      reason: 'check-unavailable',
+    });
+  });
+
+  it('every undecided basis the contract defines maps to a not-run reason, and none to a verdict', () => {
+    for (const basis of [
+      'abstained',
+      'below-confidence-bar',
+      'voided-by-check',
+      'nothing-to-decide-from',
+    ] as const) {
+      const answer = sufficiencyAnswerFromDecision(
+        {
+          kind: 'undecided',
+          basis,
+          provenance: decisionFromAssessSupport({ status: 'could-not-decide' }, context).provenance,
+        },
+        'fp-1',
+      );
+      expect(answer.kind).toBe('not-run');
+    }
   });
 });

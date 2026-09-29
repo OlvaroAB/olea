@@ -47,6 +47,19 @@
  * rebuild succeeds. The cost is a session without new arrivals, and it is retried at the next
  * start. The record reads as never rebuilt meanwhile, so Today claims nothing either way.
  *
+ * ## The arrival signal (`ol-egov.141.89.5.26`, `[D-414]`)
+ *
+ * {@link ProcessedRevisionFeed.subscribe} tells a listener about one thing: a file version that has
+ * just become **readable** and that the record did not already hold as read. A note that cleared the
+ * free checks, a drained pending edit, and an embedded source whose job settled `read` are each such
+ * a moment; a queued (`pending`) source, an `unreadable` one, a rebuild, and a reprocess of a version
+ * already read are not. It is the arrival path the demand-grain re-ask rides on
+ * (`../../gap/demand-gap-reask.ts`): new material bearing on a concept that holds an open sufficiency
+ * verdict is what asks the question again. The listener is told **after** the version is recorded,
+ * is never awaited (it cannot hold up recording), and a listener that throws or rejects is swallowed
+ * with a fixed sentence, so it can never stop the record, another listener, or the moments above.
+ * Nothing is told about a session whose rebuild failed, because nothing is recorded then.
+ *
  * ## What the day is
  *
  * A **processing day**, never an exact arrival time (`store.ts`): the store takes it from its own
@@ -79,6 +92,12 @@ import {
 } from './current-revisions.js';
 import type { ObsidianProcessedRevisionStore, ProcessedRevisionInput } from './store.js';
 
+/**
+ * One file version that just became readable: what a subscriber is told. The same four facts the
+ * record keeps for it, nothing about its content.
+ */
+export type ProcessedArrival = ProcessedRevisionInput;
+
 export interface ProcessedRevisionFeedDeps {
   readonly store: Pick<ObsidianProcessedRevisionStore, 'load' | 'recordProcessed' | 'rebuild'>;
   readonly vault: VaultSource;
@@ -105,6 +124,11 @@ export interface ProcessedRevisionFeed {
   observeEnqueues(inner: JobEnqueuer): JobEnqueuer;
   /** One `engine.tick()` result, with the queue as it stands right after it. */
   jobRan(tick: TickResult, jobs: readonly PersistedJob[]): Promise<void>;
+  /**
+   * Tells `listener` each time a file version becomes readable and is new to the record (see the
+   * module doc). Not awaited; a throw or a rejection is swallowed. Returns what unsubscribes it.
+   */
+  subscribe(listener: (arrival: ProcessedArrival) => void | Promise<void>): () => void;
   /** Resolves when every queued record has been written (or given up on). For tests and shutdown. */
   idle(): Promise<void>;
 }
@@ -167,11 +191,52 @@ export function createProcessedRevisionFeed(
     return next;
   };
 
-  /** Waits for the start's rebuild, then records. Nothing is written when the rebuild failed. */
+  const listeners = new Set<(arrival: ProcessedArrival) => void | Promise<void>>();
+
+  /** Tells every listener, never awaiting one and never letting one's failure out. */
+  const announce = (arrival: ProcessedArrival): void => {
+    for (const listener of [...listeners]) {
+      try {
+        void Promise.resolve(listener(arrival)).catch((error: unknown) => {
+          console.error(
+            `Olea: an arrival subscriber failed; the record is unaffected (${failureClass(error)})`,
+          );
+        });
+      } catch (error) {
+        console.error(
+          `Olea: an arrival subscriber failed; the record is unaffected (${failureClass(error)})`,
+        );
+      }
+    }
+  };
+
+  /**
+   * Waits for the start's rebuild, then records. Nothing is written when the rebuild failed. A
+   * version that is readable and that the record did not already hold as read is announced, after
+   * it is recorded.
+   */
   const record = async (input: ProcessedRevisionInput | null): Promise<void> => {
     if (input === null) return;
     if (!(await gate)) return;
+    // Only for the arrival signal, and never allowed to get in the way of recording: a load that
+    // fails here just means the version is announced as new.
+    const before =
+      listeners.size > 0 && input.state === 'read'
+        ? await deps.store.load().then(
+            (loaded) => loaded.revisions[input.path],
+            () => undefined,
+          )
+        : undefined;
     await deps.store.recordProcessed(input);
+    if (input.state !== 'read' || listeners.size === 0) return;
+    if (
+      before !== undefined &&
+      before.fingerprint === input.fingerprint &&
+      before.state === 'read'
+    ) {
+      return;
+    }
+    announce(input);
   };
 
   /** A course file the queue would ingest: under the courses folder, not in a hidden folder. */
@@ -212,6 +277,13 @@ export function createProcessedRevisionFeed(
     },
 
     noteProcessed,
+
+    subscribe(listener) {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
 
     observeEnqueues(inner) {
       return {

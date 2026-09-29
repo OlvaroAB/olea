@@ -86,6 +86,7 @@ import type {
 import type { SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
 import { type CoverageScope, summariseCoverageScope } from './coverage.js';
+import type { DemandGapReading } from './demand-gap.js';
 import {
   type AssessmentFormat,
   assessmentFormatOf,
@@ -220,6 +221,24 @@ export interface GapRow {
    * held, `ol-egov.141.89.9.70`).
    */
   readonly unmetDemands?: readonly PaperDemand[];
+  /**
+   * The demand-grain reading of her MATERIAL for this concept (`[D-414]`, `./demand-gap.ts`),
+   * passed through from `BuildGapViewInput.demandGaps`. **Absent is not empty**: present exactly when
+   * the supplier had a reading for this concept, and never `[]`.
+   *
+   * **A different signal from {@link unmetDemands}, and never derived from it.** `unmetDemands`
+   * reads her PRACTICE evidence (which declared demands no qualifying review shows now);
+   * `demandGap` reads the last sufficiency verdict on her material at the demand the assessment
+   * asks for. Neither implies, replaces or feeds the other.
+   *
+   * **Data only, and it moves nothing.** It never enters `gapScore`, `need`, `readiness` or the
+   * recognition credit (G4), adds no affordance (the affordance set is the class's own, and there is
+   * no draft in the union), and no gap-view line reads it: the registry's section 25 fixes the
+   * sentence's shape and leaves its copy to a design pass, so a row that would need wording is held
+   * (`ol-egov.141.89.9.70`; `demand-gap-registry-25.spec.ts`). It appears on the gap view and the
+   * grove and nowhere else (`demand-gap-surfaces.spec.ts`).
+   */
+  readonly demandGap?: DemandGapReading;
   readonly readiness: ReadinessFactors;
   /**
    * The oracle's mastery reading, verbatim. **Never rewritten by the readiness
@@ -338,6 +357,16 @@ export interface BuildGapViewInput {
    * any concept.
    */
   readonly unmetDemands?: ReadonlyMap<string, readonly PaperDemand[]>;
+  /**
+   * Per concept KEY: the demand-grain reading of her material (`./demand-gap.ts`'s `readDemandGap`,
+   * `[D-414]`). **Omitted means today's row, and so does a concept missing from a supplied map**:
+   * that concept's row carries no `demandGap` at all. Passed through verbatim and read by nothing
+   * else here: no score, need, readiness, credit or affordance depends on it.
+   *
+   * No production supplier yet. The cached verdicts it is read from have no store and no first
+   * writer, and the demand per concept comes from the examiner-scope chain (`ol-egov.141.89.5.26`).
+   */
+  readonly demandGaps?: ReadonlyMap<string, DemandGapReading>;
 }
 
 /**
@@ -455,6 +484,8 @@ function buildRow(
 
   const presence = input.materialPresence.get(entry.conceptKey);
   const gapClass = classifyGap(presence);
+  // Data only: read here, passed through below, and used by nothing between (G4).
+  const demandGap = input.demandGaps?.get(entry.conceptKey);
 
   // Need supplied: relevance × need × credit, never the ranking's priority
   // (mastery counted once). A concept missing from the map reads unknown.
@@ -478,6 +509,7 @@ function buildRow(
     gapScore,
     ...(need !== undefined ? { need } : {}),
     ...(unmetDemands !== undefined ? { unmetDemands } : {}),
+    ...(demandGap !== undefined ? { demandGap } : {}),
     readiness,
     masteryState: entry.factors.masteryState,
     targetAssessmentPath,
