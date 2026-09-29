@@ -88,8 +88,19 @@ export const CONCEPTS_RELATIONS_TASK_ID = 'concepts.relations.v1';
 /** `CONTRACT_VERSION`, mirrored on the same terms and pinned by the same test. */
 export const CONCEPTS_RELATIONS_CONTRACT_VERSION = 2;
 
-/** The two types this stage may emit — mirrors `CORPUS_STAGE_EMITTABLE_TYPES` (`olea-core`) without importing a `Set` across the wire boundary. */
-const CORPUS_ELIGIBLE_WIRE_TYPES: ReadonlySet<string> = new Set(['prerequisite', 'contrasts-with']);
+/**
+ * The types this stage may emit — mirrors `CORPUS_STAGE_EMITTABLE_TYPES` (`olea-core`) without importing a `Set` across the wire boundary.
+ *
+ * **`causes` joined in `ol-egov.141.89.4.23` (`[D-296]`).** Left out of this list, a service that
+ * offers `causes` (`concepts.relations` prompt 1.3.0) would make `toCorpusVerdict` throw on the
+ * first causes verdict and lose the WHOLE batch — every prerequisite and contrasts-with verdict in
+ * the same response included. This list and the service's response enum must move together.
+ */
+const CORPUS_ELIGIBLE_WIRE_TYPES: ReadonlySet<string> = new Set([
+  'prerequisite',
+  'contrasts-with',
+  'causes',
+]);
 
 /**
  * Anything that went wrong reaching the Worker or reading its reply — a

@@ -229,6 +229,67 @@ describe('WorkerCorpusRelationVerdict — the response it reads', () => {
     ]);
   });
 
+  it('parses a directed verdict (causes) with its direction and echoed keys — ol-egov.141.89.4.23', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'causes',
+            direction: 'b-to-a',
+            confidence: 0.8,
+            aKey: 'ck-a',
+            bKey: 'ck-b',
+          },
+        ],
+      }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    const result = await port.verdict(request);
+
+    expect(result.verdicts).toEqual([
+      {
+        a: 'Type I error',
+        b: 'Type II error',
+        type: 'causes',
+        direction: 'b-to-a',
+        confidence: 0.8,
+        aKey: 'ck-a',
+        bKey: 'ck-b',
+      },
+    ]);
+  });
+
+  it('one causes verdict does not cost the batch: a causes and a prerequisite verdict in one response both come back', async () => {
+    const transport = new RecordingTransport(() =>
+      okResponse({
+        verdicts: [
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'causes',
+            direction: 'a-to-b',
+            confidence: 0.7,
+          },
+          {
+            a: 'Type I error',
+            b: 'Type II error',
+            type: 'prerequisite',
+            direction: 'a-to-b',
+            confidence: 0.6,
+          },
+        ],
+      }),
+    );
+    const port = new WorkerCorpusRelationVerdict({ transport });
+
+    const result = await port.verdict(request);
+
+    expect(result.verdicts.map((v) => v.type)).toEqual(['causes', 'prerequisite']);
+  });
+
   it('parses a symmetric verdict (contrasts-with) with no direction field at all', async () => {
     const transport = new RecordingTransport(() =>
       okResponse({
@@ -317,15 +378,17 @@ describe('WorkerCorpusRelationVerdict — refuses rather than mis-parses a confa
     await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
   });
 
-  it('throws when a verdict names a type outside prerequisite/contrasts-with', async () => {
-    const transport = new RecordingTransport(() =>
-      okResponse({
-        verdicts: [{ a: 'Type I error', b: 'Type II error', type: 'is-a', confidence: 0.5 }],
-      }),
-    );
-    const port = new WorkerCorpusRelationVerdict({ transport });
+  it('throws when a verdict names a type outside prerequisite/contrasts-with/causes', async () => {
+    for (const type of ['is-a', 'part-of', 'related']) {
+      const transport = new RecordingTransport(() =>
+        okResponse({
+          verdicts: [{ a: 'Type I error', b: 'Type II error', type, confidence: 0.5 }],
+        }),
+      );
+      const port = new WorkerCorpusRelationVerdict({ transport });
 
-    await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
+      await expect(port.verdict(request)).rejects.toThrow(WorkerCorpusRelationVerdictError);
+    }
   });
 
   it('throws when a verdict carries an unrecognised direction', async () => {

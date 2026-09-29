@@ -43,6 +43,41 @@ describe('classifyPropositionVerdict', () => {
     expect(outcome).toEqual({ kind: 'related', fromKey: 'ck-b', toKey: 'ck-a', confidence: 0.7 });
   });
 
+  it('causes is directed like prerequisite: b-to-a puts the cause second, and a related causes verdict with no direction is malformed (ol-egov.141.89.4.23)', () => {
+    const reversed = classifyPropositionVerdict(candidate, {
+      pairId: 'RLP-1',
+      predicate: 'causes',
+      outcome: 'related',
+      direction: 'b-to-a',
+      confidence: 0.8,
+      aKey: 'ck-a',
+      bKey: 'ck-b',
+    });
+    expect(reversed).toEqual({ kind: 'related', fromKey: 'ck-b', toKey: 'ck-a', confidence: 0.8 });
+
+    const directionless = classifyPropositionVerdict(candidate, {
+      pairId: 'RLP-1',
+      predicate: 'causes',
+      outcome: 'related',
+      confidence: 0.8,
+      aKey: 'ck-a',
+      bKey: 'ck-b',
+    });
+    expect(directionless).toEqual({ kind: 'failed', reason: 'malformed' });
+  });
+
+  it('a symmetric predicate (contrasts-with) still needs no direction — the directedness table, not a local list, decides', () => {
+    const outcome = classifyPropositionVerdict(candidate, {
+      pairId: 'RLP-1',
+      predicate: 'contrasts-with',
+      outcome: 'related',
+      confidence: 0.6,
+      aKey: 'ck-a',
+      bKey: 'ck-b',
+    });
+    expect(outcome).toEqual({ kind: 'related', fromKey: 'ck-a', toKey: 'ck-b', confidence: 0.6 });
+  });
+
   it('passes through none and insufficient-evidence directly, no key claim required', () => {
     expect(
       classifyPropositionVerdict(candidate, {
@@ -195,6 +230,10 @@ describe('Default 1 — every corpus-eligible predicate, independently', () => {
     expect(corpusEligiblePredicates().length).toBeGreaterThan(1);
     expect(corpusEligiblePredicates()).toContain('prerequisite');
     expect(corpusEligiblePredicates()).toContain('contrasts-with');
+  });
+
+  it('corpusEligiblePredicates offers causes since ol-egov.141.89.4.23, and exactly three predicates — no is-a, part-of or related', () => {
+    expect([...corpusEligiblePredicates()]).toEqual(['causes', 'contrasts-with', 'prerequisite']);
   });
 
   it('propositionsForCandidates offers every eligible predicate per candidate, not one pick', () => {

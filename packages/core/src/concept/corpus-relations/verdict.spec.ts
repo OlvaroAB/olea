@@ -132,10 +132,10 @@ describe('reconcileCorpusVerdicts — every emitted edge carries both endpoints�
     expect(result.dropped['no-relation']).toBe(1);
   });
 
-  it('drops a verdict naming a type this stage may not emit (is-a, part-of, causes, related)', () => {
+  it('drops a verdict naming a type this stage may not emit (is-a, part-of, related)', () => {
     const a = concept('Osmosis');
     const b = concept('Diffusion basics');
-    for (const type of ['is-a', 'part-of', 'causes', 'related'] as const) {
+    for (const type of ['is-a', 'part-of', 'related'] as const) {
       const result = reconcileCorpusVerdicts(
         [verdict({ a: 'Osmosis', b: 'Diffusion basics', type, direction: 'a-to-b' })],
         [candidate(a, b)],
@@ -447,5 +447,92 @@ describe('reconcileCorpusVerdicts — endpointRevisions stamping at judgment tim
     );
     const result = reconcileCorpusVerdicts([verdict()], [candidate(osmosis, diffusion)], stamping);
     expect(result.relations[0]?.endpointRevisions).toBeUndefined();
+  });
+});
+
+// `ol-egov.141.89.4.23` (row 40 of the 2026-09-29 decision-sheet responses, `[D-296]`): the
+// corpus stage now offers `causes` behind the same judge. Every string is coined (INV-3).
+describe('reconcileCorpusVerdicts — causes (ol-egov.141.89.4.23)', () => {
+  const heat = concept('Sustained heating', { anchor: anchor('Lecture 3.md', 0, 8) });
+  const expansion = concept('Volume expansion', { anchor: anchor('Lecture 4.md', 20, 30) });
+
+  function causes(overrides: Partial<CorpusVerdict> = {}): CorpusVerdict {
+    return {
+      a: 'Sustained heating',
+      b: 'Volume expansion',
+      type: 'causes',
+      direction: 'a-to-b',
+      confidence: 0.8,
+      ...overrides,
+    };
+  }
+
+  it('a causes verdict is emitted, not dropped as a type this stage may not emit', () => {
+    const result = reconcileCorpusVerdicts([causes()], [candidate(heat, expansion)]);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.type).toBe('causes');
+    expect(result.dropped['not-corpus-eligible-type']).toBeUndefined();
+  });
+
+  it('a-to-b reads as "a causes b": from is the cause, to is the effect, and the passages follow the endpoints', () => {
+    // The canonical reading `../relation.js`'s `ProposedRelation` doc states
+    // for `causes` (subject causes/is-mechanism-of object, `from: subject,
+    // to: object`): a named example, so a swapped edge cannot pass silently.
+    const result = reconcileCorpusVerdicts([causes()], [candidate(heat, expansion)]);
+    expect(result.relations[0]?.from).toBe('Sustained heating');
+    expect(result.relations[0]?.to).toBe('Volume expansion');
+    expect(result.relations[0]?.introducingPassages).toEqual({
+      from: anchor('Lecture 3.md', 0, 8),
+      to: anchor('Lecture 4.md', 20, 30),
+    });
+  });
+
+  it('b-to-a reverses the edge: the pair is presented in one order but the cause is the second concept', () => {
+    const result = reconcileCorpusVerdicts(
+      [causes({ direction: 'b-to-a' })],
+      [candidate(heat, expansion)],
+    );
+    expect(result.relations[0]?.from).toBe('Volume expansion');
+    expect(result.relations[0]?.to).toBe('Sustained heating');
+    expect(result.relations[0]?.introducingPassages).toEqual({
+      from: anchor('Lecture 4.md', 20, 30),
+      to: anchor('Lecture 3.md', 0, 8),
+    });
+  });
+
+  it('a causes verdict with no direction is dropped as no-relation, never guessed — causes needs a stated direction', () => {
+    const { direction: _omitted, ...withoutDirection } = causes();
+    const result = reconcileCorpusVerdicts([withoutDirection], [candidate(heat, expansion)]);
+    expect(result.relations).toHaveLength(0);
+    expect(result.dropped['no-relation']).toBe(1);
+  });
+
+  it('a causes verdict and a prerequisite verdict on the same pair are two edges: each predicate is judged and kept on its own (rel.md Default 1)', () => {
+    const result = reconcileCorpusVerdicts(
+      [
+        causes(),
+        {
+          a: 'Sustained heating',
+          b: 'Volume expansion',
+          type: 'prerequisite',
+          direction: 'a-to-b',
+          confidence: 0.6,
+        },
+      ],
+      [candidate(heat, expansion)],
+    );
+    expect(result.relations.map((r) => r.type).sort()).toEqual(['causes', 'prerequisite']);
+  });
+
+  it('carries the endpoint keys after the direction swap, and stamps her-link provenance, exactly as the other directed type does', () => {
+    const keyedHeat = concept('Sustained heating', { key: 'ck-heat' });
+    const keyedExpansion = concept('Volume expansion', { key: 'ck-expansion' });
+    const result = reconcileCorpusVerdicts(
+      [causes({ direction: 'b-to-a', aKey: 'ck-heat', bKey: 'ck-expansion' })],
+      [candidate(keyedHeat, keyedExpansion, ['her-link'])],
+    );
+    expect(result.relations[0]?.fromKey).toBe('ck-expansion');
+    expect(result.relations[0]?.toKey).toBe('ck-heat');
+    expect(result.relations[0]?.provenance).toBe('hers');
   });
 });

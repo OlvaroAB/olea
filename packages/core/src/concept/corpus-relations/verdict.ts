@@ -22,7 +22,7 @@
  * system has, because the expensive judgement ("these two ideas belong
  * together") is a link she authored, not an inference from adjacency. Every
  * other candidate still reconciles to `'model-proposed'`. The TYPE
- * (`prerequisite` / `contrasts-with`) is model-inferred from the sentence
+ * (`prerequisite` / `contrasts-with` / `causes`) is model-inferred from the sentence
  * either way — provenance answers "who vouches this pair is related", type
  * answers "what the relation is", and this module keeps the two answers
  * separate rather than letting one imply the other. This is `reconcileCorpusVerdicts`
@@ -110,6 +110,7 @@
 import type { Provenance } from '../../extract/types.js';
 import type { VaultPath } from '../../vault/types.js';
 import type { RelationProvenanceKind, RelationType } from '../relation.js';
+import { RELATION_DIRECTEDNESS } from '../relation.js';
 import type { PathRevisionLookup } from './endpoint-revision-lookup.js';
 import { computeConceptRevision } from './endpoint-revision-lookup.js';
 import type {
@@ -201,7 +202,7 @@ export interface CorpusVerdictRequest {
 /**
  * One candidate's outcome. `type`/`direction`/`confidence` are present only
  * when the model found a relation; an abstention (the material does not
- * support any of the two corpus-eligible types) is a candidate with no
+ * support any of the corpus-eligible types) is a candidate with no
  * verdict entry at all, not a zero-confidence one — silence is the honest
  * value, same posture `../read.js`'s empty-list handling already takes.
  */
@@ -212,8 +213,10 @@ export interface CorpusVerdict {
   /**
    * `contrasts-with` is symmetric (`../relation.js`'s
    * `RELATION_DIRECTEDNESS`) — direction is meaningless for it and MUST be
-   * omitted. `prerequisite` is directed and MUST supply it: `'a-to-b'` reads
-   * as "a is prerequisite to b" (a must be solid before b).
+   * omitted. `prerequisite` and `causes` are directed and MUST supply it:
+   * `'a-to-b'` reads as "a is prerequisite to b" (a must be solid before b)
+   * and, for `causes`, as "a causes b" — a is the cause or the mechanism, b
+   * what it produces (`ol-egov.141.89.4.23`).
    */
   readonly direction?: 'a-to-b' | 'b-to-a';
   readonly confidence: number;
@@ -427,12 +430,20 @@ export function reconcileCorpusVerdicts(
       continue;
     }
 
-    const directed = verdict.type !== 'contrasts-with';
+    // Read off the ruled directedness table rather than restated as
+    // `type !== 'contrasts-with'`: once `causes` joined the corpus stage
+    // (`ol-egov.141.89.4.23`) a second literal list of "the directed corpus
+    // types" would be a second place to drift. `prerequisite` and `causes` are
+    // directed; `contrasts-with` is the one symmetric corpus type.
+    const directed = RELATION_DIRECTEDNESS[verdict.type] === 'directed';
     if (directed && verdict.direction === undefined) {
       // A directed type with no stated direction is not a fact the material
       // supports — the same "fully provenanced or it does not ship"
       // discipline `../reconcile.js` states for passage grain applies here
-      // to direction.
+      // to direction. For `causes` this is also the client half of "a stated
+      // direction is required": the service prompt asks for one, and a
+      // causes verdict that arrives without it is dropped here, never
+      // guessed (`ol-egov.141.89.4.23`).
       bump('no-relation');
       continue;
     }

@@ -9,6 +9,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
 import type { VaultPath } from '../../vault/types.js';
+import { deriveRelationSet, servedRelations } from '../relation.js';
 import { runCorpusRelationBatch } from './batch.js';
 import {
   CORPUS_RELATIONS_CANDIDATE_CAP_PER_CALL_DECLARED_PENDING,
@@ -224,5 +225,61 @@ describe('runCorpusRelationBatch', () => {
     });
     expect(result.candidatesNominated).toBe(1);
     expect(result.candidatesCappedOut).toBe(0);
+  });
+});
+
+// `ol-egov.141.89.4.23` (`[D-296]`, row 40 of the 2026-09-29 responses): `causes` is produced by the
+// corpus stage behind the SAME judge port as the other two corpus types, and survives the fold into
+// the served set — the two halves the explain-back partner reader needs before it can be handed one.
+describe('runCorpusRelationBatch — causes (ol-egov.141.89.4.23)', () => {
+  it('a causes verdict from the port becomes a causes edge that the fold serves with its direction intact', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({
+        verdicts: [
+          {
+            a: 'Membrane transport',
+            b: 'Osmosis',
+            type: 'causes',
+            direction: 'b-to-a',
+            confidence: 0.85,
+          },
+        ],
+      }),
+    };
+
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+
+    expect(result.relations).toHaveLength(1);
+    expect(result.relations[0]?.type).toBe('causes');
+    expect(result.dropped['not-corpus-eligible-type']).toBe(0);
+
+    const set = deriveRelationSet([], result.relations);
+    expect(set.droppedUnemittable).toBe(0);
+    expect(servedRelations(set).map((e) => [e.type, e.from, e.to])).toEqual([
+      ['causes', 'Osmosis', 'Membrane transport'],
+    ]);
+  });
+
+  it('a causes verdict with no stated direction never reaches the fold — it is counted as no-relation', async () => {
+    const port: CorpusRelationVerdictPort = {
+      verdict: vi.fn().mockResolvedValue({
+        verdicts: [{ a: 'Osmosis', b: 'Membrane transport', type: 'causes', confidence: 0.85 }],
+      }),
+    };
+
+    const result = await runCorpusRelationBatch(port, {
+      newConcepts: [concept('Osmosis')],
+      allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+      signals: [{ kind: 'embedding-proximity', a: 'Osmosis', b: 'Membrane transport' }],
+      passageText: () => 'some passage text',
+    });
+
+    expect(result.relations).toEqual([]);
+    expect(result.dropped['no-relation']).toBe(1);
   });
 });

@@ -10,7 +10,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import type { NominationSignal, NominationSignalKind } from './types.js';
+import {
+  CORPUS_STAGE_EMITTABLE_TYPES,
+  type NominationSignal,
+  type NominationSignalKind,
+} from './types.js';
 
 describe('NominationSignalKind — explain-back-relation-demonstrated (ol-95vv.3)', () => {
   it('is a valid member usable in a NominationSignal literal', () => {
@@ -34,5 +38,21 @@ describe('NominationSignalKind — explain-back-relation-demonstrated (ol-95vv.3
     // if every one of these five literals is still assignable to the union.
     expect(kinds).toHaveLength(5);
     expect(new Set(kinds).size).toBe(5);
+  });
+});
+
+describe('CORPUS_STAGE_EMITTABLE_TYPES — offers causes since ol-egov.141.89.4.23 ([D-296])', () => {
+  it('is exactly contrasts-with, prerequisite and causes, derived from the relation table', () => {
+    expect([...CORPUS_STAGE_EMITTABLE_TYPES].sort()).toEqual([
+      'causes',
+      'contrasts-with',
+      'prerequisite',
+    ]);
+  });
+
+  it('leaves the per-document types and the reader-less type out', () => {
+    for (const type of ['is-a', 'part-of', 'related'] as const) {
+      expect(CORPUS_STAGE_EMITTABLE_TYPES.has(type)).toBe(false);
+    }
   });
 });

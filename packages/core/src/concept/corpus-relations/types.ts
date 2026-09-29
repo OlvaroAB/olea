@@ -43,7 +43,8 @@ import {
 } from '../relation.js';
 
 /**
- * The two types this stage — and only this stage — may emit, derived from
+ * The types this stage — and only this stage — may emit (`contrasts-with`,
+ * `prerequisite`, and, since `ol-egov.141.89.4.23`, `causes`), derived from
  * `../relation.js`'s own emission table rather than restated as a second
  * literal list. If that table's `'emitted-via-corpus-stage'` entries ever
  * change, this set moves with it instead of silently drifting out of sync.
@@ -51,9 +52,11 @@ import {
  * (Renamed from checking `'blocked-on-corpus-stage'` — `ol-2zfj.16`,
  * 2026-08-26: that literal implied the corpus stage was still unbuilt, which
  * stopped being true when `[EXT-11]`/`ol-kw4a` wired a real production
- * caller on 2026-08-25. The derivation itself, and this set's membership,
- * are unchanged — only the status literal it keys off was renamed to say
- * what is actually true today.)
+ * caller on 2026-08-25. The derivation itself was unchanged by that
+ * rename — only the status literal it keys off was renamed to say what is
+ * actually true today. Membership grew by `causes` when the relation table
+ * moved it to `'emitted-via-corpus-stage'` (`ol-egov.141.89.4.23`,
+ * `[D-296]`); nothing in this file restates that.)
  */
 export const CORPUS_STAGE_EMITTABLE_TYPES: ReadonlySet<RelationType> = new Set(
   RELATION_TYPES.filter((type) => RELATION_EMISSION_STATUS[type] === 'emitted-via-corpus-stage'),
@@ -214,8 +217,9 @@ export interface CorpusRelationCandidate {
  * - `'unknown-concept'` — a verdict names an endpoint outside the candidate
  *   set that was actually sent (`./verdict.js`'s "the candidate set is
  *   authoritative").
- * - `'not-corpus-eligible-type'` — a verdict's type is not one of the two
- *   this stage may emit (`CORPUS_STAGE_EMITTABLE_TYPES`).
+ * - `'not-corpus-eligible-type'` — a verdict's type is not one this stage
+ *   may emit (`CORPUS_STAGE_EMITTABLE_TYPES`: `contrasts-with`,
+ *   `prerequisite`, `causes`).
  * - `'missing-passage-provenance'` — an endpoint reached reconciliation
  *   without an anchor; belt-and-braces, since `CorpusConcept.anchor` is
  *   required at the type level.

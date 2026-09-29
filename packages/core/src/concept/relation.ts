@@ -28,12 +28,21 @@
  *   checks/relation-reader-health.ts` is where that is checked, and as of
  *   2026-08-26 it reports these two types' edges are produced and folded
  *   but not yet read by anything production-reachable.
- * - **`causes` (causes / mechanism-of)** — a named reader exists
- *   (relationship elaboration, the deferred "how does X relate to Y"
- *   instrument, `[REL-3]` / `ol-2jod.14`) but the reader itself is deferred
- *   post-v0.9. A deferred named reader is still a named reader (knowledge
- *   model §5), so the type is defined now and **emitted only when that
- *   instrument ships.**
+ * - **`causes` (causes / mechanism-of)** — two named readers exist: the
+ *   deferred relationship-elaboration instrument (`[REL-3]` /
+ *   `ol-2jod.14`), and — a v0.9 reader, `[D-083]`, knowledge model §5 — the
+ *   relation-aware explain-back prompt ("explain X, including how it
+ *   relates to Y"), which reads a causes edge to select Y. **Emitted by the
+ *   corpus-level stage** (`./corpus-relations/`, `[D-296]`, ruled
+ *   2026-09-23 and accepted again 2026-09-29; `ol-egov.141.89.4.23`): the
+ *   judge is offered `causes` beside `prerequisite` and `contrasts-with`,
+ *   and its prompt requires a **stated** causal link with a stated
+ *   direction, refusing association, co-occurrence, order and dependency of
+ *   understanding (`olea-service`'s `prompts/concepts.relations/`). Knowledge
+ *   model §5 (`[D-125]`) assigns causes to the per-document stage; that
+ *   clause and this table disagree until the clause lane reconciles them
+ *   (filed on `ol-egov.141.89.4.23`) — the per-document stage still emits
+ *   only `is-a` and `part-of` (`PER_DOCUMENT_EMITTABLE_TYPES`).
  * - **`related`** — no reader at all, deferred or otherwise (`ol-m81u`,
  *   ruled: park it). Defined and **never emitted** until one is named.
  *
@@ -103,7 +112,11 @@ export const RELATION_DIRECTEDNESS: Readonly<Record<RelationType, 'directed' | '
  *   relation-reader-health.ts` for that stricter, separate question.
  * - `'blocked-on-deferred-reader'` — reader exists and is named, but the
  *   reader itself is a deferred post-v0.9 instrument; defined, not emitted,
- *   until that instrument ships.
+ *   until that instrument ships. **No type carries this status since
+ *   `ol-egov.141.89.4.23`** (`causes` moved to `'emitted-via-corpus-stage'`
+ *   once F2.21's relation-aware explain-back, a v0.9 reader, was ruled
+ *   `[D-083]`/`[D-296]`); the member stays in the union so a future type
+ *   with only a deferred reader has a status to name.
  * - `'no-reader'` — defined, not emitted, and not tracked toward emission by
  *   any bead — emitting it is a decision, not an implementation detail
  *   (`ol-m81u`).
@@ -120,7 +133,7 @@ export const RELATION_EMISSION_STATUS: Readonly<Record<RelationType, RelationEmi
     'part-of': 'emitted',
     'contrasts-with': 'emitted-via-corpus-stage',
     prerequisite: 'emitted-via-corpus-stage',
-    causes: 'blocked-on-deferred-reader',
+    causes: 'emitted-via-corpus-stage',
     related: 'no-reader',
   });
 
@@ -129,8 +142,9 @@ export const RELATION_EMISSION_STATUS: Readonly<Record<RelationType, RelationEmi
  * eligible to emit — `is-a` and `part-of` only, because C7.10 draws the
  * two-stage split on exactly this line: those two are visible inside a
  * single document, and the other four either need cross-document context
- * (`contrasts-with`, `prerequisite`) or are withheld regardless
- * (`causes`, `related`). A relation of any other type reaching this stage —
+ * (`contrasts-with`, `prerequisite`), are judged by the corpus stage
+ * (`causes`, `[D-296]`), or are withheld regardless (`related`). A relation
+ * of any other type reaching this stage —
  * from a reader response, however that came about — is not a per-document
  * fact and is dropped rather than emitted; see `./read.js`'s use of this
  * set and `./reconcile.js` for the unknown-concept half of that same
@@ -177,9 +191,11 @@ export const PER_DOCUMENT_EMITTABLE_TYPES: ReadonlySet<RelationType> = new Set([
  * - **`contrasts-with`, `related`** — symmetric; `from`/`to` carry no
  *   direction at all (`RELATION_DIRECTEDNESS`).
  * - **`causes`** — directed (subject causes/is-mechanism-of object, `from:
- *   subject, to: object`), but deferred: no reader mints one yet
- *   (`RELATION_EMISSION_STATUS.causes`), so this is stated for completeness
- *   rather than pinned by any running code today.
+ *   subject, to: object`). Fixed by `./corpus-relations/verdict.js`'s
+ *   `CorpusVerdict.direction`, the same way `prerequisite` is: `'a-to-b'`
+ *   reads as "a causes b" and reconciles to `from: a, to: b`;
+ *   `verdict.spec.ts` pins a named canonical example
+ *   (`ol-egov.141.89.4.23`).
  */
 export interface ProposedRelation {
   readonly type: RelationType;
@@ -301,7 +317,7 @@ export interface ConceptRelation {
  * `./corpus-relations/types.js`'s `CORPUS_STAGE_EMITTABLE_TYPES` already
  * uses, so a change to the emission table moves both together.
  *
- * `undefined` for a type no stage may emit today (`causes`, `related`). An
+ * `undefined` for a type no stage may emit today (`related`). An
  * edge of such a type reaching the fold is a producer defect — both
  * reconcilers already refuse it — and is dropped and counted here rather
  * than trusted a second time over the same boundary.
@@ -462,13 +478,14 @@ export interface RelationSet {
   /**
    * Directed pairs where both `A→B` and `B→A` of the same type survived —
    * a real contradiction (nothing is both a kind of and an instance of the
-   * other), counted once per pair. **Reported, never resolved**: picking a
+   * other), counted once per pair. `causes` is exempt: a causal loop can be
+   * a true fact about the material (`ol-egov.141.89.4.23`). **Reported, never resolved**: picking a
    * winner would be a judgement about her material this module has no
    * evidence for. It is component register row 1.2a's health check made
    * countable.
    */
   readonly contradictions: number;
-  /** Edges of a type no stage may emit (`causes`, `related`) — a producer defect, dropped. */
+  /** Edges of a type no stage may emit (`related`) — a producer defect, dropped. */
   readonly droppedUnemittable: number;
 }
 
@@ -593,6 +610,12 @@ export function deriveRelationSet(...groups: readonly (readonly ConceptRelation[
   let contradictions = 0;
   for (const entry of entries) {
     if (RELATION_DIRECTEDNESS[entry.edge.type] === 'symmetric') continue;
+    // `causes` is exempt: a loop between two concepts can be a true fact
+    // about the material (feedback), not a defect — rel.md §3 Default 2,
+    // `relation-governance-plan-2026-09.md` §4.6, "causes non-transitive,
+    // cycles legal" (`ol-egov.141.89.4.23`). Counting it would report a
+    // legitimate mechanism as a contradiction the moment causes is emitted.
+    if (entry.edge.type === 'causes') continue;
     // A split entry's reverse is the same identity pair swapped; an unsplit
     // entry's is the plain reversed name key, as always.
     const reversedPair = splitKeys.has(entry.key) ? endpointKeyPair(entry.edge, true) : undefined;

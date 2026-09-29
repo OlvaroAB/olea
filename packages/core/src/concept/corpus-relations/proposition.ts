@@ -31,7 +31,7 @@
  */
 
 import type { VaultPath } from '../../vault/types.js';
-import type { RelationType } from '../relation.js';
+import { RELATION_DIRECTEDNESS, type RelationType } from '../relation.js';
 import { computeConceptRevision, type PathRevisionLookup } from './endpoint-revision-lookup.js';
 import { corpusEligiblePredicates } from './types.js';
 
@@ -114,8 +114,6 @@ export type PropositionOutcome =
   | { readonly kind: 'insufficient-evidence' }
   | { readonly kind: 'failed'; readonly reason: PropositionFailureReason };
 
-const DIRECTED_PREDICATES: ReadonlySet<RelationType> = new Set(['prerequisite']);
-
 /**
  * Classify one predicate's verdict for one candidate. Default 5: a verdict that omits either
  * endpoint's key, or whose keys do not match this candidate's own, is `'failed'` —
@@ -147,11 +145,11 @@ export function classifyPropositionVerdict(
   if (!keysMatch) return { kind: 'failed', reason: 'keyless-verdict' };
 
   if (verdict.confidence === undefined) return { kind: 'failed', reason: 'malformed' };
-  const directed =
-    DIRECTED_PREDICATES.has(verdict.predicate) ||
-    verdict.predicate === 'causes' ||
-    verdict.predicate === 'is-a' ||
-    verdict.predicate === 'part-of';
+  // Read off the ruled directedness table, not a local list: the four directed
+  // types (`is-a`, `part-of`, `prerequisite`, `causes`) are exactly what
+  // `RELATION_DIRECTEDNESS` says, and `causes` is now a corpus-eligible
+  // predicate offered to the judge (`ol-egov.141.89.4.23`).
+  const directed = RELATION_DIRECTEDNESS[verdict.predicate] === 'directed';
   if (directed && verdict.direction === undefined) return { kind: 'failed', reason: 'malformed' };
 
   const [fromKey, toKey] =

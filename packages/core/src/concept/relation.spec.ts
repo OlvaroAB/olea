@@ -79,8 +79,18 @@ describe('RELATION_EMISSION_STATUS — the governing test, per type', () => {
     expect(RELATION_EMISSION_STATUS.prerequisite).toBe('emitted-via-corpus-stage');
   });
 
-  it('causes is blocked on its deferred reader — defined now, not a withheld type', () => {
-    expect(RELATION_EMISSION_STATUS.causes).toBe('blocked-on-deferred-reader');
+  it('causes is emitted via the corpus-level stage — its v0.9 reader is the relation-aware explain-back prompt ([D-083], [D-296], ol-egov.141.89.4.23)', () => {
+    // Was 'blocked-on-deferred-reader' until `ol-egov.141.89.4.23` (row 40 of
+    // the 2026-09-29 decision-sheet responses): the deferred reader
+    // (relationship elaboration) is still deferred, but F2.21's relation-aware
+    // explain-back is a v0.9 reader of the same edge type (knowledge model §5).
+    expect(RELATION_EMISSION_STATUS.causes).toBe('emitted-via-corpus-stage');
+  });
+
+  it('no type carries the deferred-reader status now — the union member stays for a future type', () => {
+    for (const type of SIX_RULED_TYPES) {
+      expect(RELATION_EMISSION_STATUS[type]).not.toBe('blocked-on-deferred-reader');
+    }
   });
 
   it('related has no reader at all — the one type with no path to emission named', () => {
@@ -93,7 +103,7 @@ describe('RELATION_EMISSION_STATUS — the governing test, per type', () => {
         RELATION_EMISSION_STATUS[t] === 'emitted' ||
         RELATION_EMISSION_STATUS[t] === 'emitted-via-corpus-stage',
     );
-    expect(emitted.sort()).toEqual(['contrasts-with', 'is-a', 'part-of', 'prerequisite']);
+    expect(emitted.sort()).toEqual(['causes', 'contrasts-with', 'is-a', 'part-of', 'prerequisite']);
   });
 
   it('is exactly the set stageForRelationType routes to a stage — the two tables agree by construction (ol-2zfj.16)', () => {
@@ -167,13 +177,13 @@ describe('stageForRelationType — derived from the emission table, never restat
     expect(stageForRelationType('part-of')).toBe('per-document');
   });
 
-  it('routes the two cross-document facts to the corpus stage', () => {
+  it('routes the two cross-document facts, and causes (ol-egov.141.89.4.23), to the corpus stage', () => {
     expect(stageForRelationType('contrasts-with')).toBe('corpus');
     expect(stageForRelationType('prerequisite')).toBe('corpus');
+    expect(stageForRelationType('causes')).toBe('corpus');
   });
 
   it('has no stage for a type v0.9 does not emit at all', () => {
-    expect(stageForRelationType('causes')).toBeUndefined();
     expect(stageForRelationType('related')).toBeUndefined();
   });
 });
@@ -225,12 +235,39 @@ describe('deriveRelationSet — the merge of both producers', () => {
   });
 
   it('drops an edge of a type no stage may emit, and counts it — a producer defect, never trusted twice', () => {
-    const set = deriveRelationSet([
-      edge('causes', 'Bud', 'Shoot'),
-      edge('related', 'Bud', 'Scale'),
-    ]);
+    const set = deriveRelationSet([edge('related', 'Bud', 'Scale')]);
     expect(set.entries).toEqual([]);
-    expect(set.droppedUnemittable).toBe(2);
+    expect(set.droppedUnemittable).toBe(1);
+  });
+
+  it('a causes edge survives the fold as a corpus-stage entry, served to a reader, and keeps its direction (ol-egov.141.89.4.23)', () => {
+    // Before `ol-egov.141.89.4.23` the fold dropped every causes edge as
+    // unemittable, so the explain-back partner reader could never be served
+    // one however the corpus stage was configured — the table, not the
+    // reader, was the blocker.
+    const set = deriveRelationSet([], [edge('causes', 'Bud', 'Shoot')]);
+    expect(set.droppedUnemittable).toBe(0);
+    expect(set.entries).toHaveLength(1);
+    expect(set.entries[0]?.stage).toBe('corpus');
+    expect(servedRelations(set).map((e) => [e.type, e.from, e.to])).toEqual([
+      ['causes', 'Bud', 'Shoot'],
+    ]);
+  });
+
+  it('causes is directed: A causes B and B causes A are two entries, and a causal loop is NOT a contradiction (rel.md Default 2, "cycles legal")', () => {
+    const set = deriveRelationSet(
+      [],
+      [edge('causes', 'Bud', 'Shoot'), edge('causes', 'Shoot', 'Bud')],
+    );
+    expect(set.entries).toHaveLength(2);
+    expect(set.contradictions).toBe(0);
+    // The same shape on a type whose loop IS a defect still counts, so the
+    // exemption above is causes-specific rather than a loosened counter.
+    const prerequisite = deriveRelationSet(
+      [],
+      [edge('prerequisite', 'Bud', 'Shoot'), edge('prerequisite', 'Shoot', 'Bud')],
+    );
+    expect(prerequisite.contradictions).toBe(1);
   });
 
   it('folds the same edge from both producers into one entry, keeping both attestations', () => {
