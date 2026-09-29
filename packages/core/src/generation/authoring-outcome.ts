@@ -72,6 +72,8 @@ export type AuthoringAttempt =
   | { readonly kind: 'routed-away' }
   | { readonly kind: 'budget-exhausted' }
   | { readonly kind: 'refused'; readonly reason: GroundingRefusalReason }
+  /** The sufficiency judge ran and could not settle the question (`could-not-decide`, `evd.md` §3). Not a refusal reason: it is judgment uncertainty. */
+  | { readonly kind: 'undecided' }
   | { readonly kind: 'draft-error' }
   | { readonly kind: 'unparseable' }
   | { readonly kind: 'drafted'; readonly defects: readonly McqDraftDefect[] };
@@ -79,26 +81,53 @@ export type AuthoringAttempt =
 /** pra.md §3's `deferred` outcome names exactly these two reasons. */
 export type AuthoringDeferralReason = 'unmet-format' | 'budget';
 
+/**
+ * The four refusal outcomes `evd.md` §3 and `[D-289]` keep apart, carried as a
+ * value beside the five-way status so no site merges them (`ol-egov.141.89.1.44`):
+ *  - `retrieval-failure`: retrieval gave the judge nothing usable (empty package,
+ *    or hits that failed the relevance, composite or band bar) — operational,
+ *    never a verdict about her notes;
+ *  - `source-insufficient`: the judge ran and found the sources do not support
+ *    the operation — the only cause that is a checked verdict;
+ *  - `judgment-uncertain`: the judge ran and could not decide;
+ *  - `service-failure`: a call could not be reached, timed out or came back
+ *    malformed.
+ */
+export type AuthoringRefusalCause =
+  | 'retrieval-failure'
+  | 'source-insufficient'
+  | 'judgment-uncertain'
+  | 'service-failure';
+
 /** pra.md §3's five-way authoring outcome. */
 export type AuthoringOutcome =
   | { readonly status: 'eligible' }
-  | { readonly status: 'insufficient-evidence' }
+  | { readonly status: 'insufficient-evidence'; readonly cause: 'source-insufficient' }
   | { readonly status: 'invalid-draft'; readonly defects: readonly McqDraftDefect[] }
   | { readonly status: 'deferred'; readonly reason: AuthoringDeferralReason }
-  | { readonly status: 'unavailable'; readonly retryable: true };
+  | {
+      readonly status: 'unavailable';
+      readonly retryable: true;
+      readonly cause: Exclude<AuthoringRefusalCause, 'source-insufficient'>;
+    };
 
 /**
- * `GroundingRefusalReason`'s own non-verdict subset — see the module doc.
- * `'judge-unavailable'` and `'composite-check-unavailable'` are "we could not
- * check just now"; `'no-hits'` is "there was nothing to check" (`[D-289]`
- * point 2: an empty package is never a verdict). Every other member of the
- * union is a checked, negative verdict and classifies as
- * `insufficient-evidence`.
+ * `GroundingRefusalReason`s where retrieval, not the judge, is why nothing
+ * could be authored: no hits at all (`[D-289]` point 2), hits below the
+ * relevance bar, and the composite and band bars that gate the judge.
+ * Operational, never a verdict about her notes.
  */
-const OPERATIONAL_REFUSAL_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
+const RETRIEVAL_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
+  'no-hits',
+  'below-relevance-threshold',
+  'below-composite-threshold',
+  'below-band',
+]);
+
+/** The two reasons that mean the check itself could not run. */
+const SERVICE_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
   'judge-unavailable',
   'composite-check-unavailable',
-  'no-hits',
 ]);
 
 /**
@@ -112,12 +141,18 @@ export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOu
     case 'budget-exhausted':
       return { status: 'deferred', reason: 'budget' };
     case 'refused':
-      return OPERATIONAL_REFUSAL_REASONS.has(attempt.reason)
-        ? { status: 'unavailable', retryable: true }
-        : { status: 'insufficient-evidence' };
+      if (RETRIEVAL_FAILURE_REASONS.has(attempt.reason)) {
+        return { status: 'unavailable', retryable: true, cause: 'retrieval-failure' };
+      }
+      if (SERVICE_FAILURE_REASONS.has(attempt.reason)) {
+        return { status: 'unavailable', retryable: true, cause: 'service-failure' };
+      }
+      return { status: 'insufficient-evidence', cause: 'source-insufficient' };
+    case 'undecided':
+      return { status: 'unavailable', retryable: true, cause: 'judgment-uncertain' };
     case 'draft-error':
     case 'unparseable':
-      return { status: 'unavailable', retryable: true };
+      return { status: 'unavailable', retryable: true, cause: 'service-failure' };
     case 'drafted':
       return attempt.defects.length === 0
         ? { status: 'eligible' }

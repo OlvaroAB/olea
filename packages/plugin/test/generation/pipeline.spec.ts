@@ -409,7 +409,7 @@ describe('runGenerationSweep', () => {
     ]);
     // `ol-riwn` / `[D-089]`'s whole point: never conflated with "not enough grounding".
     expect(report.refusals[0]?.copy.transient).toBe(true);
-    expect(report.refusals[0]?.copy.headline).not.toBe(describeRefusal('no-hits').headline);
+    expect(report.refusals[0]?.copy.headline).not.toBe(describeRefusal('judge-rejected').headline);
   });
 
   it('a concept the course listing does not name for THIS course is skipped', async () => {

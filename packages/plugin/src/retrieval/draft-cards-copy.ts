@@ -82,54 +82,87 @@ export interface DraftedQuestionView {
   readonly feedback: string;
 }
 
+/**
+ * The four refusal outcomes `evd.md` §3 and `[D-289]` keep apart
+ * (`ol-egov.141.89.1.44`). Only `source-insufficient` is a checked verdict
+ * about her material; the other three are operational.
+ */
+export type RefusalOutcome =
+  | 'retrieval-failure'
+  | 'source-insufficient'
+  | 'judgment-uncertain'
+  | 'service-failure';
+
 export interface RefusalCopy {
   readonly headline: string;
+  /** Which of the four outcomes this is; stays distinct even where two share words. */
+  readonly outcome: RefusalOutcome;
   /**
-   * `true` for `'composite-check-unavailable'` only — the caller can use
-   * this to offer a retry affordance rather than treating the refusal as a
-   * verdict about her material, without needing to re-derive the mapping
-   * from the reason string itself.
+   * `true` for every operational outcome (all but `source-insufficient`) —
+   * the caller can offer a retry rather than treating the refusal as a
+   * verdict about her material, without re-deriving it from the reason.
    */
   readonly transient: boolean;
 }
 
-const NOT_ENOUGH_GROUNDING: RefusalCopy = {
-  headline: "Olea didn't find enough grounding in your notes for this yet.",
+const NOT_ENOUGH_GROUNDING_HEADLINE =
+  "Olea didn't find enough grounding in your notes for this yet.";
+const COULD_NOT_CHECK_HEADLINE = 'Olea couldn’t check your notes just now — try again in a moment.';
+
+/*
+ * The vocabulary registry has no wording of its own for the three operational
+ * outcomes; `evd.md` §3 names "Olea could not check right now" as the
+ * operational sentence, so all three reuse today's approved could-not-check
+ * string. The `outcome` value keeps them distinct underneath.
+ */
+const SOURCE_INSUFFICIENT: RefusalCopy = {
+  headline: NOT_ENOUGH_GROUNDING_HEADLINE,
+  outcome: 'source-insufficient',
   transient: false,
 };
-
-const COULD_NOT_CHECK: RefusalCopy = {
-  headline: 'Olea couldn’t check your notes just now — try again in a moment.',
+const RETRIEVAL_FAILURE: RefusalCopy = {
+  headline: COULD_NOT_CHECK_HEADLINE,
+  outcome: 'retrieval-failure',
+  transient: true,
+};
+const JUDGMENT_UNCERTAIN: RefusalCopy = {
+  headline: COULD_NOT_CHECK_HEADLINE,
+  outcome: 'judgment-uncertain',
+  transient: true,
+};
+const SERVICE_FAILURE: RefusalCopy = {
+  headline: COULD_NOT_CHECK_HEADLINE,
+  outcome: 'service-failure',
   transient: true,
 };
 
-/**
- * The `GroundingRefusalReason` members that mean "the check itself could not
- * run" (`ol-riwn`, `[D-089]` §5) rather than "checked, and it doesn't cover
- * this" — `composite-check-unavailable` (the single-gate mechanism) and its
- * band-path sibling `judge-unavailable`. Every other current and future
- * reason falls through to `NOT_ENOUGH_GROUNDING` by default — see the module
- * doc for why that default direction is the safe one.
- */
-const TRANSIENT_REASONS: ReadonlySet<string> = new Set([
+/** Retrieval gave the judge nothing usable: empty package, or hits failing the relevance, composite or band bar. */
+const RETRIEVAL_FAILURE_REASONS: ReadonlySet<string> = new Set([
+  'no-hits',
+  'below-relevance-threshold',
+  'below-composite-threshold',
+  'below-band',
+]);
+
+/** The check itself could not run (`ol-riwn`, `[D-089]` §5). */
+const SERVICE_FAILURE_REASONS: ReadonlySet<string> = new Set([
   'composite-check-unavailable',
   'judge-unavailable',
 ]);
 
 /**
- * Maps a `GroundingRefusalReason` (`olea-core`'s `groundedContext.ts`) to
- * copy for the modal. Most reasons are "checked, and there isn't enough
- * here" in different ways — no hits at all, hits that don't clear the
- * per-hit relevance bar, hits that don't clear `[D-042]`'s composite, every
- * numeric signal below the band's lower bar, or the judge reading the
- * passages and finding they don't support the query. She does not need
- * those told apart, and collapsing them into one honest sentence is a
- * feature, not a corner cut. `TRANSIENT_REASONS` above is categorically
- * different — the check never ran at all — and `ol-riwn` is the whole reason
- * this function does not fold those into the rest.
+ * Maps a `GroundingRefusalReason` (`olea-core`'s `groundedContext.ts`), or
+ * the judge's `could-not-decide`, to copy for the modal. Only the judge's own
+ * rejection (`judge-rejected`) is "checked, and there isn't enough here"; an
+ * empty or irrelevant retrieval is operational (`[D-289]` point 2), never a
+ * verdict about her notes. A reason this file has never seen defaults to
+ * `source-insufficient`, the family that claims no failure it cannot name.
  */
 export function describeRefusal(reason: string): RefusalCopy {
-  return TRANSIENT_REASONS.has(reason) ? COULD_NOT_CHECK : NOT_ENOUGH_GROUNDING;
+  if (RETRIEVAL_FAILURE_REASONS.has(reason)) return RETRIEVAL_FAILURE;
+  if (SERVICE_FAILURE_REASONS.has(reason)) return SERVICE_FAILURE;
+  if (reason === 'could-not-decide') return JUDGMENT_UNCERTAIN;
+  return SOURCE_INSUFFICIENT;
 }
 
 export type ParsedDraftResponse =

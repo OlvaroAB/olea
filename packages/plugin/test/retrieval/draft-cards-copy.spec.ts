@@ -10,36 +10,62 @@ import {
   parseDraftedResponse,
 } from '../../src/retrieval/draft-cards-copy.js';
 
-describe('describeRefusal — ol-riwn / [D-089]: a transient "could not check" is never the same fact as "not enough material"', () => {
-  it('the three checked-and-found-nothing reasons all read as "not enough grounding" and are not marked transient', () => {
-    const reasons = ['no-hits', 'below-relevance-threshold', 'below-composite-threshold'] as const;
-    for (const reason of reasons) {
-      const copy = describeRefusal(reason);
-      expect(copy.transient).toBe(false);
-      expect(copy.headline.toLowerCase()).toContain('grounding');
-    }
+describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)', () => {
+  it('judge-rejected is the only source-insufficient refusal: "not enough grounding", not transient', () => {
+    const copy = describeRefusal('judge-rejected');
+    expect(copy.outcome).toBe('source-insufficient');
+    expect(copy.transient).toBe(false);
+    expect(copy.headline.toLowerCase()).toContain('grounding');
   });
 
-  it('composite-check-unavailable is marked transient and its headline is textually distinct from the other three', () => {
-    const transientCopy = describeRefusal('composite-check-unavailable');
-    expect(transientCopy.transient).toBe(true);
-
-    const groundingCopy = describeRefusal('no-hits');
-    expect(transientCopy.headline).not.toBe(groundingCopy.headline);
-    // The specific failure ol-riwn diagnosed: a could-not-check reason must
-    // never be told to her as a fact about her material.
-    expect(transientCopy.headline.toLowerCase()).not.toContain('enough');
-    expect(transientCopy.headline.toLowerCase()).not.toContain('grounding in your notes');
-  });
-
-  it('every refusal headline names Olea as the actor, never "the system" ([D-096] V1)', () => {
+  it('no-hits and relevance/composite/band failures are retrieval-failure: operational, never a verdict about her notes', () => {
     const reasons = [
       'no-hits',
       'below-relevance-threshold',
       'below-composite-threshold',
-      'composite-check-unavailable',
-    ] as const;
+      'below-band',
+    ];
     for (const reason of reasons) {
+      const copy = describeRefusal(reason);
+      expect(copy.outcome).toBe('retrieval-failure');
+      expect(copy.transient).toBe(true);
+      expect(copy.headline.toLowerCase()).not.toContain('enough');
+      expect(copy.headline.toLowerCase()).not.toContain('grounding in your notes');
+    }
+  });
+
+  it('could-not-decide is judgment-uncertain, operational', () => {
+    const copy = describeRefusal('could-not-decide');
+    expect(copy.outcome).toBe('judgment-uncertain');
+    expect(copy.transient).toBe(true);
+  });
+
+  it('composite-check-unavailable and judge-unavailable are service-failure, operational', () => {
+    for (const reason of ['composite-check-unavailable', 'judge-unavailable']) {
+      const copy = describeRefusal(reason);
+      expect(copy.outcome).toBe('service-failure');
+      expect(copy.transient).toBe(true);
+    }
+  });
+
+  it('the four outcome values are pairwise distinct even where the words are shared', () => {
+    const outcomes = ['judge-rejected', 'no-hits', 'could-not-decide', 'judge-unavailable'].map(
+      (r) => describeRefusal(r).outcome,
+    );
+    expect(new Set(outcomes).size).toBe(4);
+    // the operational three deliberately share one approved sentence
+    expect(describeRefusal('no-hits').headline).toBe(describeRefusal('judge-unavailable').headline);
+    expect(describeRefusal('judge-rejected').headline).not.toBe(
+      describeRefusal('judge-unavailable').headline,
+    );
+  });
+
+  it('an unrecognised reason defaults to source-insufficient, never claiming a named failure', () => {
+    expect(describeRefusal('some-future-reason').outcome).toBe('source-insufficient');
+  });
+
+  it('every refusal headline names Olea as the actor, never "the system" ([D-096] V1)', () => {
+    for (const reason of ['no-hits', 'judge-rejected', 'could-not-decide', 'judge-unavailable']) {
       const headline = describeRefusal(reason).headline;
       expect(headline).toContain('Olea');
       expect(headline.toLowerCase()).not.toContain('the system');

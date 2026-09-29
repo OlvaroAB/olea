@@ -13,9 +13,9 @@
  *
  * **The mapping, verbatim from the spec:** `sufficient` → `{author: true}`;
  * `partial` and `insufficient` → `not-enough-in-notes`; `conflicting` →
- * `notes-disagree`; `unavailable`, `could-not-decide` and
- * `insufficient-evidence` (the package was empty before any model ran) →
- * `could-not-check`. `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules an empty
+ * `notes-disagree`; `insufficient-evidence` (the package was empty
+ * before any model ran) → `nothing-retrieved`, `could-not-decide` →
+ * `could-not-decide`, `unavailable` → `could-not-check`. `[D-289]` point 2 (`ol-egov.141.89.1.6`) rules an empty
  * package an operational outcome, grouped with `unavailable` and
  * `could-not-decide`, and never a verdict about her material — so it may
  * not read to her as "there wasn't enough in your notes for this," the
@@ -26,7 +26,22 @@
 
 import type { AssessSupportOutcome } from './groundedContext.js';
 
-export type DraftingRefusalReason = 'not-enough-in-notes' | 'notes-disagree' | 'could-not-check';
+/**
+ * `ol-egov.141.89.1.44`: the four non-authoring causes stay distinct values
+ * (`could-not-check` is service failure only). Where a surface shows two of
+ * them in the same words, the value still stays distinct underneath.
+ *  - `not-enough-in-notes`: source insufficiency (partial or insufficient verdict);
+ *  - `notes-disagree`: a conflicting verdict;
+ *  - `nothing-retrieved`: retrieval failure, the empty package (`insufficient-evidence`);
+ *  - `could-not-decide`: judgment uncertainty;
+ *  - `could-not-check`: service failure (`unavailable`).
+ */
+export type DraftingRefusalReason =
+  | 'not-enough-in-notes'
+  | 'notes-disagree'
+  | 'nothing-retrieved'
+  | 'could-not-decide'
+  | 'could-not-check';
 
 export type DraftingEligibility =
   | { readonly author: true }
@@ -46,8 +61,14 @@ export function draftingEligibility(outcome: AssessSupportOutcome): DraftingElig
     }
   }
 
-  // outcome.status is 'insufficient-evidence' | 'unavailable' | 'could-not-decide':
-  // all three are operational outcomes, never a verdict about her notes (`[D-289]`
-  // point 2) — `insufficient-evidence` is the empty-package case (see module doc).
-  return { author: false, refusal: 'could-not-check' };
+  // Non-verdict outcomes, each its own value (`[D-289]` point 2): never a verdict
+  // about her notes, and never merged with one another.
+  switch (outcome.status) {
+    case 'insufficient-evidence':
+      return { author: false, refusal: 'nothing-retrieved' };
+    case 'could-not-decide':
+      return { author: false, refusal: 'could-not-decide' };
+    case 'unavailable':
+      return { author: false, refusal: 'could-not-check' };
+  }
 }

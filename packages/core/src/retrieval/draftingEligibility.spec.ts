@@ -41,10 +41,10 @@ describe('draftingEligibility (`[ILB-EVD-4]`, evd.md §3)', () => {
   // "not enough in her notes", the same message a genuinely thin-but-present
   // package gets, which is exactly the fact-about-her-notes claim D-289
   // forbids for an operational outcome.
-  it('refuses could-not-check on insufficient-evidence (an empty package, not a claim about her notes)', () => {
+  it('refuses nothing-retrieved on insufficient-evidence (retrieval failure: an empty package, not a claim about her notes)', () => {
     expect(draftingEligibility({ status: 'insufficient-evidence' })).toEqual({
       author: false,
-      refusal: 'could-not-check',
+      refusal: 'nothing-retrieved',
     });
   });
 
@@ -55,11 +55,21 @@ describe('draftingEligibility (`[ILB-EVD-4]`, evd.md §3)', () => {
     });
   });
 
-  it('refuses could-not-check on could-not-decide', () => {
+  it('refuses could-not-decide on could-not-decide (judgment uncertainty, not a service failure)', () => {
     expect(draftingEligibility({ status: 'could-not-decide' })).toEqual({
       author: false,
-      refusal: 'could-not-check',
+      refusal: 'could-not-decide',
     });
+  });
+
+  it('keeps the four non-authoring outcomes pairwise distinct', () => {
+    const refusals = [
+      draftingEligibility(assessed('insufficient')),
+      draftingEligibility({ status: 'insufficient-evidence' }),
+      draftingEligibility({ status: 'could-not-decide' }),
+      draftingEligibility({ status: 'unavailable' }),
+    ].map((e) => (e.author ? null : e.refusal));
+    expect(new Set(refusals).size).toBe(4);
   });
 
   it('is pure: the same outcome always maps to the same eligibility', () => {
