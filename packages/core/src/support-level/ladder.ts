@@ -40,6 +40,13 @@
  * `hintUptake` as a field independent of `failureShape` rather than folding
  * it into a single tri-state outcome.
  *
+ * `[D-350]` (ruled 2026-09-25): hint state is itself three-valued, and an
+ * UNKNOWN one ("absence of a record cannot establish unaided performance")
+ * is not unhinted either. It holds the level like an opened hint: it never
+ * escalates, never counts toward the clean streak, and restarts the streak.
+ * Only a hint recorded as not opened (or an answer shown at independent
+ * support, which has none to open) counts as unhinted.
+ *
  * ## The snap-back doubling
  *
  * `[D-094]`'s "fast readmission on immediate failure after a recession"
@@ -117,8 +124,9 @@ export function initialSupportLevelState(): SupportLevelState {
  *    raises the level immediately, regardless of the current streak.
  * 2. A clean, unhinted session advances the recession streak, and recedes
  *    the level once the streak reaches `requiredCleanStreak`.
- * 3. Anything else (a minor slip, or a clean session where a hint WAS used)
- *    breaks the streak without moving the level — the ratchet.
+ * 3. Anything else (a minor slip, or a clean session where a hint WAS used,
+ *    or whose hint state is unknown) breaks the streak without moving the
+ *    level — the ratchet.
  */
 export function advanceSupportLevel(
   state: SupportLevelState,
@@ -136,7 +144,9 @@ export function advanceSupportLevel(
     };
   }
 
-  const isCleanUnhinted = outcome.failureShape === 'none' && !outcome.hintUptake;
+  // `[D-350]`: only a hint recorded as not opened is unhinted. An unknown hint state certifies
+  // nothing, so it holds the level exactly as an opened hint does.
+  const isCleanUnhinted = outcome.failureShape === 'none' && outcome.hintUptake === false;
   if (isCleanUnhinted) {
     const streak = state.cleanUnhintedStreak + 1;
     if (streak >= state.requiredCleanStreak && state.level !== 'independent') {
@@ -150,7 +160,8 @@ export function advanceSupportLevel(
     return { ...state, cleanUnhintedStreak: streak, justRecessioned: false };
   }
 
-  // A minor slip, or a clean-but-hinted session: the ratchet holds the
-  // level and breaks the streak, but neither escalates nor recedes.
+  // A minor slip, or a clean session whose hint was opened or whose hint state is
+  // unknown: the ratchet holds the level and breaks the streak, but neither
+  // escalates nor recedes.
   return { ...state, cleanUnhintedStreak: 0, justRecessioned: false };
 }

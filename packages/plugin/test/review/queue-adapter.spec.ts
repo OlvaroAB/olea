@@ -887,6 +887,13 @@ function reviewLogEntry(overrides: {
   };
   /** v6's top-level verdict (`[D-303]`), written with no depth grade for a correctness-only record (`ol-ryrh`). */
   readonly explainBackCorrectness?: 'correct' | 'partial' | 'incorrect';
+  /**
+   * `[D-350]`: a review written today records an explicit true or false, so this defaults to
+   * `false`; `'absent'` is a record older than the field, or a surface that did not observe it.
+   */
+  readonly hintOpened?: boolean | 'absent';
+  /** Written only when given, as a real record's is only when a level was chosen. */
+  readonly supportLevelShown?: 'independent' | 'prompted' | 'guided';
 }) {
   return {
     schemaVersion: 6 as const,
@@ -906,6 +913,10 @@ function reviewLogEntry(overrides: {
       planVersion: null,
     },
     conceptIds: [...overrides.conceptIds],
+    ...(overrides.hintOpened === 'absent' ? {} : { hintOpened: overrides.hintOpened ?? false }),
+    ...(overrides.supportLevelShown !== undefined
+      ? { supportLevelShown: overrides.supportLevelShown }
+      : {}),
     ...(overrides.explainBackGrade !== undefined
       ? {
           explainBackGrade: {
@@ -1777,5 +1788,162 @@ describe('buildSupportLevelHistoryLookup — only her own failures move the ladd
       { failureShape: 'none', hintUptake: false },
       { failureShape: 'none', hintUptake: false },
     ]);
+  });
+});
+
+// `[D-350]` (ol-egov.141.89.9.13, ruled 2026-09-25; built in ol-egov.141.89.9.83). The ruling's
+// operative sentences: "Change the legacy default. Add the hint-opened field, but treat a missing
+// value as unknown." and "Absence of a record cannot establish unaided performance. ... record
+// explicit true or false for new reviews." This is the production fold (wired at
+// `review/open-session.ts` and `session-builder/provider.ts`); the core fold folds the same rule.
+describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350])', () => {
+  const day = (n: number) => `2026-08-${String(10 + n).padStart(2, '0')}T09:00:00+00:00`;
+  const recallReview = (
+    n: number,
+    extra: Partial<Parameters<typeof reviewLogEntry>[0]> = {},
+  ): LadderEntry =>
+    reviewLogEntry({
+      eventId: `h${n}`,
+      timestamp: day(n),
+      instrumentType: 'qa',
+      rating: 'good',
+      conceptIds: ['concept-a'],
+      supportLevelShown: 'prompted',
+      ...extra,
+    }) as unknown as LadderEntry;
+  const levelOf = (entries: LadderEntry[], concept = 'concept-a') =>
+    chooseSupportLevel(buildSupportLevelHistoryLookup(entries).outcomesFor(concept, 'recall'))
+      .level;
+
+  it('an opened hint on a prompted recall success reads as taken; a recorded not-opened as not taken', () => {
+    expect(
+      buildSupportLevelHistoryLookup([recallReview(0, { hintOpened: true })]).outcomesFor(
+        'concept-a',
+        'recall',
+      ),
+    ).toEqual([{ failureShape: 'none', hintUptake: true }]);
+    expect(
+      buildSupportLevelHistoryLookup([recallReview(0, { hintOpened: false })]).outcomesFor(
+        'concept-a',
+        'recall',
+      ),
+    ).toEqual([{ failureShape: 'none', hintUptake: false }]);
+  });
+
+  it('an absent value on a prompted or guided answer is unknown, never not opened', () => {
+    for (const supportLevelShown of ['prompted', 'guided'] as const) {
+      const lookup = buildSupportLevelHistoryLookup([
+        recallReview(0, { hintOpened: 'absent', supportLevelShown }),
+      ]);
+      expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+        { failureShape: 'none', hintUptake: 'unknown' },
+      ]);
+    }
+  });
+
+  it('an absent value on a record with no support level is unknown, never inferred', () => {
+    const entry = reviewLogEntry({
+      eventId: 'h0',
+      timestamp: day(0),
+      instrumentType: 'qa',
+      rating: 'good',
+      conceptIds: ['concept-a'],
+      hintOpened: 'absent',
+    }) as unknown as LadderEntry;
+    expect(buildSupportLevelHistoryLookup([entry]).outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: 'unknown' },
+    ]);
+  });
+
+  it('an answer shown at independent support has no hint to open: absent reads not opened (J5)', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      recallReview(0, { hintOpened: 'absent', supportLevelShown: 'independent' }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('the explanation tier reads the field the same way', () => {
+    const explanation = (n: number, hintOpened: boolean | 'absent') =>
+      reviewLogEntry({
+        eventId: `x${n}`,
+        timestamp: day(n),
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a'],
+        explainBackGrade: { soloLevel: 'relational', correctness: 'correct' },
+        supportLevelShown: 'prompted',
+        hintOpened,
+      }) as unknown as LadderEntry;
+    const lookup = buildSupportLevelHistoryLookup([
+      explanation(0, true),
+      explanation(2, 'absent'),
+      explanation(4, false),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation').map((o) => o.hintUptake)).toEqual([
+      true,
+      'unknown',
+      false,
+    ]);
+  });
+
+  it('one session reads the worst state shown: opened, then unknown, then not opened', () => {
+    const sitting = (states: readonly (boolean | 'absent')[]) =>
+      states.map((hintOpened, i) =>
+        reviewLogEntry({
+          eventId: `s${i}`,
+          timestamp: `2026-08-10T09:0${i}:00+00:00`,
+          instrumentType: 'qa',
+          rating: 'good',
+          conceptIds: ['concept-a'],
+          supportLevelShown: 'prompted',
+          hintOpened,
+        }),
+      ) as unknown as LadderEntry[];
+    const read = (states: readonly (boolean | 'absent')[]) =>
+      buildSupportLevelHistoryLookup(sitting(states)).outcomesFor('concept-a', 'recall')[0]
+        ?.hintUptake;
+    expect(read([false, false])).toBe(false);
+    expect(read([false, 'absent'])).toBe('unknown');
+    expect(read([false, true])).toBe(true);
+    expect(read(['absent', true])).toBe(true);
+  });
+
+  it('two clean sessions with the hint recorded not opened recede; opened or unknown hold the level', () => {
+    expect(levelOf([recallReview(0), recallReview(2)])).toBe('independent');
+    expect(
+      levelOf([recallReview(0, { hintOpened: true }), recallReview(2, { hintOpened: true })]),
+    ).toBe('prompted');
+    expect(
+      levelOf([
+        recallReview(0, { hintOpened: 'absent' }),
+        recallReview(2, { hintOpened: 'absent' }),
+      ]),
+    ).toBe('prompted');
+    expect(
+      levelOf([recallReview(0), recallReview(2, { hintOpened: 'absent' }), recallReview(4)]),
+    ).toBe('prompted');
+  });
+
+  it('absence of a record never recedes a guided cell, and a failure escalates whatever the state', () => {
+    const failure = recallReview(0, { rating: 'again', hintOpened: 'absent' });
+    expect(levelOf([failure])).toBe('guided');
+    expect(
+      levelOf([
+        failure,
+        ...[2, 4, 6].map((n) =>
+          recallReview(n, { supportLevelShown: 'guided', hintOpened: 'absent' }),
+        ),
+      ]),
+    ).toBe('guided');
+    expect(
+      levelOf([
+        failure,
+        ...[2, 4, 6].map((n) =>
+          recallReview(n, { supportLevelShown: 'guided', hintOpened: false }),
+        ),
+      ]),
+    ).toBe('prompted');
   });
 });

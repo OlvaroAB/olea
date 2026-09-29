@@ -325,9 +325,18 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * a clean recall answer must never paper over a failing explanation of the
  * same concept in the same sitting, or the reverse.
  *
- * `hintUptake` is always `false` — `deriveFailureShape`'s own module doc: no
- * review-log field records hint use, so the honest default is "not used",
- * never a fabricated positive.
+ * **Hint state is read, three-valued** (`[D-350]`, ruled 2026-09-25: "treat a
+ * missing value as unknown"; `ol-egov.141.89.9.83`; the core fold's module doc
+ * states the same rule): a review's `hintOpened`, when recorded, is opened or
+ * not opened; an absent value is `'unknown'`, never read as not opened
+ * ("absence of a record cannot establish unaided performance") and never
+ * inferred from `supportLevelShown`, which records that a hint was offered,
+ * not taken. The one exception is judgement J5 of the locked attainment
+ * targets: an answer shown at independent support has no hint to open, so it
+ * reads not opened with no field. A session's outcome carries the worst state
+ * of its answers (opened, then unknown, then not opened), and only a `false`
+ * one counts toward a recession (`support-level/ladder.ts`). The state is read
+ * from the answer as she gave it, never from a corrective re-grade of it.
  */
 export function buildSupportLevelHistoryLookup(
   entries: readonly ReviewLogEntry[],
@@ -352,6 +361,7 @@ export function buildSupportLevelHistoryLookup(
 
   for (const session of clusterReviewSessions(entries)) {
     const shapeByKey = new Map<string, FailureShape>();
+    const hintByKey = new Map<string, SessionSupportOutcome['hintUptake']>();
     for (const sessionReview of session.reviews) {
       if (replacing.has(sessionReview.eventId)) continue;
       if (validity.provenInvalid.has(sessionReview.instrumentId)) continue;
@@ -395,10 +405,18 @@ export function buildSupportLevelHistoryLookup(
       const key = `${conceptId}:${tier}`;
       const existing = shapeByKey.get(key);
       shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
+      // `[D-350]`: the state of the answer as she gave it (`sessionReview`), not of its re-grade.
+      const uptake = hintUptakeOf(sessionReview);
+      const priorUptake = hintByKey.get(key);
+      hintByKey.set(key, priorUptake === undefined ? uptake : worseHintUptake(priorUptake, uptake));
     }
 
     for (const [key, failureShape] of shapeByKey) {
-      const outcome: SessionSupportOutcome = { failureShape, hintUptake: false };
+      // Every key in `shapeByKey` was set together with its hint state just above.
+      const outcome: SessionSupportOutcome = {
+        failureShape,
+        hintUptake: hintByKey.get(key) ?? 'unknown',
+      };
       const bucket = byKey.get(key);
       if (bucket === undefined) byKey.set(key, [outcome]);
       else bucket.push(outcome);
@@ -410,6 +428,29 @@ export function buildSupportLevelHistoryLookup(
       return byKey.get(`${conceptId}:${tier}`) ?? [];
     },
   };
+}
+
+/**
+ * Whether she opened the hint on this answer (`[D-350]`; see
+ * {@link buildSupportLevelHistoryLookup}): the recorded `hintOpened` when there
+ * is one, otherwise not opened for an answer shown at independent support (no
+ * hint on offer; judgement J5) and unknown for everything else, including a
+ * record with no support level. The same rule as `olea-core`'s
+ * `support-level/history.ts`.
+ */
+function hintUptakeOf(review: ReviewLogRecord): SessionSupportOutcome['hintUptake'] {
+  if (review.hintOpened !== undefined) return review.hintOpened;
+  return review.supportLevelShown === 'independent' ? false : 'unknown';
+}
+
+/** Opened is worse than unknown, and unknown is worse than a recorded not-opened: only the last may count toward a recession. */
+function worseHintUptake(
+  a: SessionSupportOutcome['hintUptake'],
+  b: SessionSupportOutcome['hintUptake'],
+): SessionSupportOutcome['hintUptake'] {
+  if (a === true || b === true) return true;
+  if (a === 'unknown' || b === 'unknown') return 'unknown';
+  return false;
 }
 
 /**

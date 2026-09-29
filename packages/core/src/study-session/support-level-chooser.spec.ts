@@ -28,6 +28,11 @@ describe('chooseSupportLevel — recession is evidence-gated, never a timer', ()
     const history = [outcome({ hintUptake: true }), outcome({ hintUptake: true })];
     expect(chooseSupportLevel(history)).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
   });
+
+  it('a clean session whose hint state is unknown freezes the level too ([D-350])', () => {
+    const history = [outcome({ hintUptake: 'unknown' }), outcome({ hintUptake: 'unknown' })];
+    expect(chooseSupportLevel(history)).toEqual({ level: 'prompted', provenance: 'evidence-thin' });
+  });
 });
 
 describe('chooseSupportLevel — escalation is fast (thinness)', () => {

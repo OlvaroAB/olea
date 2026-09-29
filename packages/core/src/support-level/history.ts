@@ -64,9 +64,19 @@
  * as of its session's original composition instant and so reads exactly the
  * levels the session was composed with, whatever she has answered since.
  *
- * **Hint use is not recorded** (`[D-350]`, open): every outcome reads
- * `hintUptake: false` — never a fabricated positive — so the ratchet's
- * "a hint taken holds a level" half cannot fire until the field exists.
+ * **Hint state is read, three-valued** (`[D-350]`, ruled 2026-09-25: "treat a
+ * missing value as unknown"; `ol-egov.141.89.9.83`): a review's `hintOpened`,
+ * when recorded, is opened (`true`) or not opened (`false`); an absent value is
+ * `'unknown'`, never read as not opened ("absence of a record cannot establish
+ * unaided performance") and never inferred from `supportLevelShown`, which
+ * records that a hint was offered, not taken. The one exception is judgement J5
+ * of the locked attainment targets: an answer shown at independent support has
+ * no hint to open, so its present support record reads not opened with no
+ * field. A session's outcome carries the worst state of its answers (opened,
+ * then unknown, then not opened), and the ladder counts a session toward
+ * recession only when that state is `false`; opened and unknown both hold the
+ * level. The state is read from the answer as she gave it, never from a
+ * corrective re-grade of it, which replaces the verdict and not the answer.
  *
  * **The recognition tier has no ladder** (`[D-094]` item 4): this module
  * builds history for `'recall'` and `'explanation'` only, per
@@ -97,7 +107,12 @@ import {
   deriveFailureShape,
   type GradedReviewEvidence,
 } from '../study-session/support-level-signal.js';
-import type { FailureShape, SessionSupportOutcome, SupportLadderTier } from './types.js';
+import type {
+  FailureShape,
+  HintUptake,
+  SessionSupportOutcome,
+  SupportLadderTier,
+} from './types.js';
 
 /** The chooser's input, per concept and tier — the shape `study-session/build.ts` reads. */
 export interface SupportLevelHistory {
@@ -156,6 +171,24 @@ const FAILURE_SHAPE_SEVERITY: Readonly<Record<FailureShape, number>> = {
 
 function worse(a: FailureShape, b: FailureShape): FailureShape {
   return FAILURE_SHAPE_SEVERITY[b] > FAILURE_SHAPE_SEVERITY[a] ? b : a;
+}
+
+/**
+ * Whether she opened the hint on this answer (`[D-350]`; see the module doc):
+ * the recorded `hintOpened` when there is one, otherwise not opened for an
+ * answer shown at independent support (no hint on offer; judgement J5) and
+ * unknown for everything else, including a record with no support level.
+ */
+function hintUptakeOf(review: ReviewLogRecord): HintUptake {
+  if (review.hintOpened !== undefined) return review.hintOpened;
+  return review.supportLevelShown === 'independent' ? false : 'unknown';
+}
+
+/** Opened is worse than unknown, and unknown is worse than a recorded not-opened: only the last may count toward a recession. */
+function worseHintUptake(a: HintUptake, b: HintUptake): HintUptake {
+  if (a === true || b === true) return true;
+  if (a === 'unknown' || b === 'unknown') return 'unknown';
+  return false;
 }
 
 /** The ladder tier and graded evidence of one review, or `null` when it has no ladder or no honest reading. */
@@ -283,6 +316,7 @@ export function buildSupportLevelHistory(
   const byCell = new Map<string, SessionSupportOutcome[]>();
   for (const session of closed) {
     const shapeByCell = new Map<string, FailureShape>();
+    const hintByCell = new Map<string, HintUptake>();
     for (const review of session.reviews) {
       if (replacing.has(review.eventId)) continue;
       if (invalidInstrumentIds.has(review.instrumentId)) continue;
@@ -299,9 +333,18 @@ export function buildSupportLevelHistory(
       const cell = `${conceptId}\u0000${read.tier}`;
       const prior = shapeByCell.get(cell);
       shapeByCell.set(cell, prior === undefined ? shape : worse(prior, shape));
+      // `[D-350]`: the state of the answer as she gave it (`review`), not of its re-grade (`source`).
+      const uptake = hintUptakeOf(review);
+      const priorUptake = hintByCell.get(cell);
+      hintByCell.set(
+        cell,
+        priorUptake === undefined ? uptake : worseHintUptake(priorUptake, uptake),
+      );
     }
     for (const [cell, failureShape] of shapeByCell) {
-      const outcome: SessionSupportOutcome = { failureShape, hintUptake: false };
+      // Every cell in `shapeByCell` was set together with its hint state just above.
+      const hintUptake = hintByCell.get(cell) ?? 'unknown';
+      const outcome: SessionSupportOutcome = { failureShape, hintUptake };
       const bucket = byCell.get(cell);
       if (bucket === undefined) byCell.set(cell, [outcome]);
       else bucket.push(outcome);

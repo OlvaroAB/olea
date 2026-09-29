@@ -88,10 +88,29 @@ export type SupportLadderTier = 'recall' | 'explanation';
  */
 export type FailureShape = 'none' | 'minor-slip' | 'blank' | 'wrong-concept';
 
+/**
+ * Whether she opened the hint on an answer, three-valued (`[D-350]`, ruled
+ * 2026-09-25: "treat a missing value as unknown"; the review record's
+ * `hintOpened`, absent meaning unknown):
+ *
+ * - `true` — recorded opened.
+ * - `false` — recorded not opened, or an answer shown at independent support,
+ *   which has no hint to open.
+ * - `'unknown'` — the record is silent. It certifies nothing and condemns
+ *   nothing: never read as not opened ("absence of a record cannot establish
+ *   unaided performance") and never as opened.
+ */
+export type HintUptake = boolean | 'unknown';
+
 export interface SessionSupportOutcome {
   readonly failureShape: FailureShape;
-  /** Whether a hint or source expansion offered at the current level was used this session, regardless of the outcome. */
-  readonly hintUptake: boolean;
+  /**
+   * Whether a hint offered at the level shown was opened this session,
+   * regardless of the outcome; the worst state of the session's answers
+   * (opened, then unknown, then not opened). Only `false` lets the session
+   * count toward a recession streak.
+   */
+  readonly hintUptake: HintUptake;
 }
 
 /** `[D-094]`'s two escalation-triggering shapes, named once so `ladder.ts` and its tests read off the same list rather than repeating the literal comparison. */

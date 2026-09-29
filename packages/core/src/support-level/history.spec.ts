@@ -44,8 +44,18 @@ function review(minutes: number, overrides: Partial<ReviewLogRecord> = {}): Revi
       planVersion: null,
     },
     supportLevelShown: 'prompted',
+    // `[D-350]`: a review written today records an explicit true or false. Tests that mean a
+    // record older than the field, or a surface that did not observe it, drop the key with
+    // `withoutHintField`; nothing else in this file is about hint state.
+    hintOpened: false,
     ...overrides,
   };
+}
+
+/** A record with no hint-opened value at all: the legacy shape, and any surface that did not observe it. */
+function withoutHintField(record: ReviewLogRecord): ReviewLogRecord {
+  const { hintOpened: _absent, ...rest } = record;
+  return rest;
 }
 
 function explainBack(
@@ -269,12 +279,199 @@ describe("the recognition tier's level is the ruled sentinel, never a ladder col
   });
 });
 
-describe('hint use is not recorded yet ([D-350] open): read as not taken (L1)', () => {
-  it('every outcome says no hint was taken, never a fabricated positive', () => {
-    const history = buildSupportLevelHistory([review(0), review(APART, { rating: 'again' })]);
-    for (const outcome of history.outcomesFor('concept-a', 'recall')) {
-      expect(outcome.hintUptake).toBe(false);
+// `[D-350]` (ol-egov.141.89.9.13, ruled 2026-09-25; built in ol-egov.141.89.9.83). The ruling's
+// operative sentences: "Change the legacy default. Add the hint-opened field, but treat a missing
+// value as unknown." and, as its clarification, "Absence of a record cannot establish unaided
+// performance. Preserve historical awards unless there is evidence warranting correction; record
+// explicit true or false for new reviews." The contract's field doc adds that an absent value is
+// "never `false` and never inferred from `supportLevelShown`, which records that a hint was
+// *offered*, not taken". Locked targets: eval/data/ilb/att, classes L1 and L2, matching-rule
+// section 6 (judgement J5: an answer shown at independent support has no hint to open).
+describe('hint state is three-valued: opened, not opened, unknown ([D-350], L1, L2)', () => {
+  it('"add the hint-opened field": an opened hint on a prompted recall success reads as taken', () => {
+    const history = buildSupportLevelHistory([review(0, { hintOpened: true })]);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: true },
+    ]);
+  });
+
+  it('"record explicit true or false": a recorded not-opened reads as not taken', () => {
+    const history = buildSupportLevelHistory([review(0, { hintOpened: false })]);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: false },
+    ]);
+  });
+
+  it('"treat a missing value as unknown": an absent value on a prompted answer is neither true nor false', () => {
+    const history = buildSupportLevelHistory([withoutHintField(review(0))]);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'none', hintUptake: 'unknown' },
+    ]);
+  });
+
+  it('an absent value on a guided answer is unknown as well', () => {
+    const history = buildSupportLevelHistory([
+      withoutHintField(review(0, { supportLevelShown: 'guided' })),
+    ]);
+    expect(history.outcomesFor('concept-a', 'recall')[0]?.hintUptake).toBe('unknown');
+  });
+
+  it('an absent value on a record with no support level either is unknown, never inferred', () => {
+    const { supportLevelShown: _shown, ...noLevel } = withoutHintField(review(0));
+    const history = buildSupportLevelHistory([noLevel]);
+    expect(history.outcomesFor('concept-a', 'recall')[0]?.hintUptake).toBe('unknown');
+  });
+
+  // J5 (locked v2 targets, matching-rule section 6): independent support is no hints, so the
+  // present support record shows the answer unhinted; nothing is inferred from a missing field.
+  it('an answer shown at independent support has no hint to open: absent reads not opened (J5)', () => {
+    const history = buildSupportLevelHistory([
+      withoutHintField(review(0, { supportLevelShown: 'independent' })),
+    ]);
+    expect(history.outcomesFor('concept-a', 'recall')[0]?.hintUptake).toBe(false);
+  });
+
+  it('an explicit value always wins, even against the support level shown', () => {
+    const history = buildSupportLevelHistory([
+      review(0, { supportLevelShown: 'independent', hintOpened: true }),
+    ]);
+    expect(history.outcomesFor('concept-a', 'recall')[0]?.hintUptake).toBe(true);
+  });
+
+  it('the explanation tier reads the field the same way', () => {
+    const opened = { ...explainBack(0, 'correct'), hintOpened: true };
+    const unknown = withoutHintField(explainBack(APART, 'correct'));
+    const history = buildSupportLevelHistory([opened, unknown]);
+    expect(history.outcomesFor('concept-a', 'explanation').map((o) => o.hintUptake)).toEqual([
+      true,
+      'unknown',
+    ]);
+  });
+
+  it('one session reads the worst state shown: opened, then unknown, then not opened', () => {
+    const cases: readonly [readonly (boolean | undefined)[], boolean | 'unknown'][] = [
+      [[false, false], false],
+      [[false, undefined], 'unknown'],
+      [[false, true], true],
+      [[undefined, true], true],
+      [[undefined, undefined], 'unknown'],
+    ];
+    for (const [states, expected] of cases) {
+      const entries = states.map((state, i) =>
+        state === undefined
+          ? withoutHintField(review(i * 2))
+          : review(i * 2, { hintOpened: state }),
+      );
+      const outcomes = buildSupportLevelHistory(entries).outcomesFor('concept-a', 'recall');
+      expect(outcomes).toHaveLength(1);
+      expect(outcomes[0]?.hintUptake).toBe(expected);
     }
+  });
+
+  it('the hint state is read from the answer she gave, not from a corrective re-grade of it', () => {
+    const original = { ...explainBack(0, 'correct', 'relational'), hintOpened: true };
+    const regrade = review(APART * 3, {
+      instrumentId: 'eb:a',
+      instrumentType: 'explain-back',
+      rating: null,
+      hintOpened: false,
+      explainBackGrade: {
+        soloLevel: 'multistructural',
+        contentRef: 'content-ref-placeholder',
+        revisionOf: original.eventId,
+        artifactProvenance: { taskId: 'explain-back-grade', promptVersion: 'v0', modelId: 'm' },
+      },
+      explainBackCorrectness: {
+        verdict: 'partial',
+        artifactProvenance: { taskId: 'c', promptVersion: 'v0', modelId: 'm' },
+      },
+    });
+    const history = buildSupportLevelHistory([original, regrade]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toEqual([
+      { failureShape: 'minor-slip', hintUptake: true },
+    ]);
+  });
+});
+
+describe('what the ladder does with each hint state ([D-350], [D-094] items 5 and 6; L1, L2)', () => {
+  const level = (entries: readonly ReviewLogEntry[], concept = 'concept-a') =>
+    chooseSupportLevel(buildSupportLevelHistory(entries).outcomesFor(concept, 'recall')).level;
+
+  it('L1: two clean sessions with the hint recorded not opened recede', () => {
+    expect(level([review(0), review(APART)])).toBe('independent');
+  });
+
+  it('L1: two clean sessions with the hint opened hold the level: uptake never raises, never recedes', () => {
+    expect(level([review(0, { hintOpened: true }), review(APART, { hintOpened: true })])).toBe(
+      'prompted',
+    );
+  });
+
+  it('L1: an opened hint between two unopened ones restarts the streak', () => {
+    expect(level([review(0), review(APART, { hintOpened: true }), review(2 * APART)])).toBe(
+      'prompted',
+    );
+  });
+
+  it('L2: after a failure, every later clean session with the hint opened holds guided', () => {
+    const entries = [
+      review(0, { rating: 'again' }),
+      ...[1, 2, 3, 4].map((n) =>
+        review(n * APART, { supportLevelShown: 'guided', hintOpened: true }),
+      ),
+    ];
+    expect(level(entries)).toBe('guided');
+  });
+
+  it('"absence of a record cannot establish unaided performance": absent values never recede a prompted answer', () => {
+    expect(level([withoutHintField(review(0)), withoutHintField(review(APART))])).toBe('prompted');
+    expect(
+      level([
+        withoutHintField(review(0)),
+        withoutHintField(review(APART)),
+        withoutHintField(review(2 * APART)),
+        withoutHintField(review(3 * APART)),
+      ]),
+    ).toBe('prompted');
+  });
+
+  it('absent values never recede a guided cell either', () => {
+    const entries = [
+      review(0, { rating: 'again' }),
+      ...[1, 2, 3].map((n) => withoutHintField(review(n * APART, { supportLevelShown: 'guided' }))),
+    ];
+    expect(level(entries)).toBe('guided');
+  });
+
+  it('an unknown session neither escalates nor recedes, and it restarts the streak', () => {
+    expect(level([review(0), withoutHintField(review(APART)), review(2 * APART)])).toBe('prompted');
+    expect(
+      level([review(0), withoutHintField(review(APART)), review(2 * APART), review(3 * APART)]),
+    ).toBe('independent');
+  });
+
+  it('a failure escalates whatever the hint state: unknown never blocks the fast half of the ladder', () => {
+    expect(level([withoutHintField(review(0, { rating: 'again' }))])).toBe('guided');
+    expect(level([review(0, { rating: 'again', hintOpened: true })])).toBe('guided');
+  });
+
+  it('answers shown at independent support with no field still count as unhinted (J5)', () => {
+    const independent = (minutes: number) =>
+      withoutHintField(review(minutes, { supportLevelShown: 'independent' }));
+    expect(level([review(0), review(APART), independent(2 * APART), independent(3 * APART)])).toBe(
+      'independent',
+    );
+  });
+
+  it('is per concept: one concept with hints opened does not hold another', () => {
+    const entries = [
+      review(0),
+      review(0, { conceptIds: ['concept-b'], hintOpened: true, instrumentId: 'qa:b:1' }),
+      review(APART),
+      review(APART, { conceptIds: ['concept-b'], hintOpened: true, instrumentId: 'qa:b:1' }),
+    ];
+    expect(level(entries, 'concept-a')).toBe('independent');
+    expect(level(entries, 'concept-b')).toBe('prompted');
   });
 });
 

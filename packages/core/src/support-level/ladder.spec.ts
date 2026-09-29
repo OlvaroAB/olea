@@ -136,6 +136,50 @@ describe('advanceSupportLevel — the hint-uptake ratchet', () => {
   });
 });
 
+// `[D-350]`: "treat a missing value as unknown"; "Absence of a record cannot establish unaided
+// performance." An unknown hint state is not unhinted, so it holds the level like an opened hint.
+describe('advanceSupportLevel — an unknown hint state ([D-350])', () => {
+  it('a clean session whose hint state is unknown does NOT count toward the recession streak', () => {
+    const outcomes = Array.from({ length: RECESSION_CLEAN_STREAK_THRESHOLD }, () =>
+      outcome({ hintUptake: 'unknown' }),
+    );
+    const state = advanceMany(initialSupportLevelState(), outcomes);
+    expect(state.level).toBe('prompted'); // never receded
+    expect(state.cleanUnhintedStreak).toBe(0); // never accrued either
+  });
+
+  it('an unknown hint state never raises the level, and never blocks an escalation', () => {
+    const held = advanceSupportLevel(
+      initialSupportLevelState(),
+      outcome({ hintUptake: 'unknown' }),
+    );
+    expect(held.level).toBe('prompted');
+    const escalated = advanceSupportLevel(
+      initialSupportLevelState(),
+      outcome({ failureShape: 'wrong-concept', hintUptake: 'unknown' }),
+    );
+    expect(escalated.level).toBe('guided');
+  });
+
+  it('one unknown session in the middle of an otherwise-clean run breaks the streak', () => {
+    const state = advanceMany(initialSupportLevelState(), [
+      outcome(),
+      outcome({ hintUptake: 'unknown' }),
+      outcome(),
+    ]);
+    expect(state.level).toBe('prompted');
+    expect(state.cleanUnhintedStreak).toBe(1);
+  });
+
+  it('a guided cell whose sessions are all unknown never recedes', () => {
+    const state = advanceMany(
+      advanceSupportLevel(initialSupportLevelState(), outcome({ failureShape: 'blank' })),
+      Array.from({ length: 6 }, () => outcome({ hintUptake: 'unknown' })),
+    );
+    expect(state.level).toBe('guided');
+  });
+});
+
 describe('advanceSupportLevel — snap-back doubling', () => {
   it('an immediate failure right after a recession escalates (fast readmission)', () => {
     const recessionOutcomes = Array.from({ length: RECESSION_CLEAN_STREAK_THRESHOLD }, () =>

@@ -116,17 +116,16 @@
  * ## What this module is NOT: hint uptake
  *
  * `SessionSupportOutcome.hintUptake` is the other half `[D-094]` admits
- * ("failure shape AND recovery behaviour"), and **no field anywhere in the
- * review log records whether an offered hint or source expansion was used.**
- * This is a genuine gap, not an oversight this module can close: adding that
- * field is a review-log schema change (the schema is FROZEN at v5,
- * `[D-117]`), which is this component's `boundary: split` policy half
- * touching a shape only the schema's own decision bead can grow — Class C,
- * out of this module's reach and out of `study-session/`'s ownership.
- * Every caller of the chooser (`./support-level-chooser.js`) must supply
- * `hintUptake` itself; until a real signal exists, the honest default is
- * `false` (never assume a hint was used — that keeps the ratchet's freeze
- * behaviour from firing on a fabricated positive).
+ * ("failure shape AND recovery behaviour"), and it is not read here: this
+ * module derives a failure shape from one graded answer and nothing else.
+ * The review record carries the signal since schema version 6 (`hintOpened`,
+ * `[D-350]`, ruled 2026-09-25: an explicit true or false, and an absent value
+ * means UNKNOWN, never not opened), and the two folds that build a session's
+ * outcome read it: `../support-level/history.ts` (core) and the plugin's
+ * `review/queue-adapter.ts` (`buildSupportLevelHistoryLookup`). A caller that
+ * builds a `SessionSupportOutcome` by hand must still supply `hintUptake`
+ * itself, and must not default an unrecorded hint to `false` — an unknown one
+ * is `'unknown'`, which holds the ladder's level exactly as an opened hint does.
  */
 import type { InstrumentType, Rating, SoloLevel } from 'olea-contracts';
 import type { FailureShape } from '../support-level/types.js';
