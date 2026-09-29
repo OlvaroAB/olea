@@ -20,12 +20,19 @@
  * ## Which concepts get a mastery lookup, and why not "every concept in the
  * log"
  *
- * Mastery is computed for exactly the concepts `buildConceptAssessmentEdges`
- * found evidence for — the ranking's own universe — rather than for every
- * concept `conceptIdsInLog` finds. A concept she has reviewed but that no
- * assessment cites never appears in a `ConceptPriority` at all (P5-T03's join
- * is course-and-evidence only), so computing its mastery would be work with
- * no reader. A concept with an edge but no review history still gets a real
+ * Mastery is computed for exactly the concepts the ranking's universe holds
+ * — the concepts `buildConceptAssessmentEdges` found evidence for, plus the
+ * concepts the need-only doors below admit — rather than for every concept
+ * `conceptIdsInLog` finds. A concept she has reviewed but that no assessment
+ * cites and no need-only door admits never appears in a `ConceptPriority` at
+ * all (P5-T03's join is course-and-evidence only), so computing its mastery
+ * would be work with no reader. **Since `[D-447]` option (b)** (ruled
+ * 2026-09-29, `ol-egov.141.89.10.96`) a caller that opts into need-only
+ * ranking has one more door: a concept she HAS practised, in a course that
+ * has assessment records but where no assessment reaches it, is admitted at
+ * need-only (see {@link ComposeOracleRankingInput.admitPractisedUnlinkedConcepts}),
+ * so it does not disappear from planning because alignment is incomplete. A
+ * concept with an edge but no review history still gets a real
  * `computeConceptMastery` call and reads `'seed'` — which is the correct,
  * *not* `'unknown'`, answer: mastery data was supplied for it, it simply
  * shows no scored evidence yet (see `rank.ts`'s `resolveMasteryState` doc for
@@ -113,22 +120,26 @@
  */
 
 import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
+import { readDeclaredScope } from '../assessment/scope.js';
+import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptRecord } from '../concept/types.js';
+import { daysBetween } from '../dates.js';
 import { buildConceptAssessmentEdges } from '../evidence-edge/build.js';
 import type {
   BuildConceptAssessmentEdgesOptions,
   BuildConceptAssessmentEdgesResult,
+  ConceptAssessmentEdge,
 } from '../evidence-edge/types.js';
 import { readAllConceptReadiness } from '../mastery/attainment.js';
-import type { ConceptMasteryResult } from '../mastery/rollup.js';
-import { computeAllConceptMastery } from '../mastery/rollup.js';
+import type { ConceptMasteryResult, MasteryRollupOptions } from '../mastery/rollup.js';
+import { computeAllConceptMastery, foldConceptStage } from '../mastery/rollup.js';
 import type { InstrumentValidityProjection } from '../mastery/validity.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
 import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
 import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
 import type { Scheduler } from '../scheduler/types.js';
-import type { VaultSource } from '../vault/types.js';
+import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { ConceptInstrumentEligibilityFact } from './rank.js';
 import { rankOracle } from './rank.js';
 import type { RankOracleOptions, RankOracleResult } from './types.js';
@@ -319,17 +330,61 @@ export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOp
    * ranking altogether. Their keys also join the mastery and readiness folds
    * below, so need reads her own review evidence rather than none.
    *
-   * **Only courses with no assessment record.** A course with a record keeps
-   * its ordinary reading, abstain or veto included: a course whose every
-   * assessment has passed is completed-course maintenance, which `[D-373]`
-   * hands to a separate reading and this field never touches; a course with
-   * records but no evidence edge keeps abstaining. Omitted or `false`,
-   * `courseConcepts` is never supplied and the ranking is byte-identical to
-   * before. Supply it from a caller that serves practice (the session
-   * composition); a scope or coverage reader has no need-only reading to
-   * show.
+   * **This door is for courses with no assessment record.** A course with
+   * records keeps its ordinary reading, abstain or veto included, except for
+   * the practised concepts {@link admitPractisedUnlinkedConcepts} admits
+   * (`[D-447]` option (b), below): a course whose every assessment has passed
+   * is completed-course maintenance, which `[D-373]` hands to a separate
+   * reading and neither door touches. Omitted or `false`, `courseConcepts` is
+   * never supplied and the ranking is byte-identical to before. Supply it
+   * from a caller that serves practice (the session composition); a scope or
+   * coverage reader has no need-only reading to show.
    */
   readonly serveCoursesWithoutAssessmentsOnNeed?: boolean;
+  /**
+   * `[D-447]` option (b), ruled 2026-09-29 (`ol-egov.141.89.10.96`): in a
+   * course that HAS assessment records, admit a concept she has practised but
+   * that no assessment edge in the course reaches, at `[D-329]`'s need-only
+   * treatment, instead of leaving it out of the ranking because the course's
+   * assessment alignment is incomplete. An otherwise eligible course concept
+   * does not disappear from ordinary planning for that reason.
+   *
+   * **What is admitted.** A concept for which all of these hold:
+   *  - it belongs to a course with at least one assessment record;
+   *  - no edge in that course reaches it, live or vetoed (a linked concept,
+   *    including one whose only assessment has passed, keeps its current
+   *    treatment: this door never overrides a real edge);
+   *  - she has practised it, on evidence that stands: the mastery fold reads
+   *    above the never-practised floor with every instrument the log proves
+   *    invalid left out (`[D-345]`). A blank or skipped attempt, or practice
+   *    only on a defective instrument, admits nothing; a withdrawal is not
+   *    invalidity, so earlier practice on a withdrawn instrument still counts
+   *    (the `[D-404]` veto below still removes the concept when nothing
+   *    remains to serve);
+   *  - the course is not completed: some assessment of it is undated,
+   *    unreadably dated, or due today or later (`[D-373]`);
+   *  - no explicit assessment scope leaves it out: the course is closed to this
+   *    door when EVERY assessment of it still to come states its scope in a
+   *    scope property (`[D-399]`'s declared scope; body prose is never a
+   *    filter). A concept the scope names has an edge and never reaches here.
+   *    When any assessment still to come states none, the concept's relevance
+   *    to that one is unknown, and unknown stays unknown.
+   *
+   * **What the entry says.** It rides `rankOracle`'s unknown-relevance entry
+   * (`[D-329]`): no contribution, no citation, proximity nil. Its relevance is
+   * a declared planning placement, never evidence that the concept matters to
+   * an assessment; any reason built from it must not claim otherwise (rows 32
+   * and 33 of the 2026-09-29 rulings). Never-practised unlinked concepts in a
+   * course with records stay absent, as before: the ruling names practised
+   * ones.
+   *
+   * Follows {@link serveCoursesWithoutAssessmentsOnNeed} when omitted, so the
+   * one production caller that opts into need-only ranking (the session
+   * composition) takes it. Passing `false` restores the earlier reading for a
+   * before/after comparison; passing `true` alone opens this door without the
+   * no-assessment-course one.
+   */
+  readonly admitPractisedUnlinkedConcepts?: boolean;
 }
 
 /**
@@ -357,6 +412,100 @@ export function coursesWithoutAssessmentRecords(
     }
   }
   return universe;
+}
+
+/**
+ * What {@link practisedUnlinkedConceptsByCourse} reads. Plain values, so the rule is testable
+ * without a vault; `composeOracleRanking` resolves each one from its own inputs.
+ */
+export interface PractisedUnlinkedAdmissionInput {
+  readonly concepts: readonly ConceptRecord[];
+  /** Every assessment record read, whatever its course. */
+  readonly assessmentRecords: readonly AssessmentRecord[];
+  /** Only the two fields the rule reads: an edge links a concept to its course's assessments. */
+  readonly edges: readonly Pick<ConceptAssessmentEdge, 'course' | 'conceptKey'>[];
+  /** The calendar day the composition is read at; the same day `rankOracle` measures a due date from. */
+  readonly asOf: string;
+  /** Whether she has practised the concept on evidence that stands (see the option's doc). */
+  readonly isPractised: (conceptKey: string) => boolean;
+  /** Paths of assessment notes that state their scope in a scope property (`readDeclaredScope`). */
+  readonly declaredScopePaths: ReadonlySet<VaultPath>;
+}
+
+const ADMISSION_CALENDAR_DAY = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Whether `record`'s due date has passed at `asOf`: the same fact `rank.ts`'s date veto
+ * (`checkEdgeVeto`, `'assessment-passed'`) acts on, restated here because the composition must
+ * know a course is completed before it decides what to admit. A due date that is absent or
+ * unreadable has not passed: "we do not know when this is due" is not a veto there either, and
+ * the parity cases in `compose.practised-unlinked.d-447.spec.ts` hold the two together.
+ */
+function assessmentHasPassed(record: AssessmentRecord, asOf: string): boolean {
+  const { due } = record;
+  if (due === undefined || !ADMISSION_CALENDAR_DAY.test(due)) return false;
+  if (!ADMISSION_CALENDAR_DAY.test(asOf)) return false;
+  const dueDate = new Date(`${due}T00:00:00.000Z`);
+  const asOfDate = new Date(`${asOf}T00:00:00.000Z`);
+  if (Number.isNaN(dueDate.getTime()) || Number.isNaN(asOfDate.getTime())) return false;
+  return daysBetween(asOfDate, dueDate) < 0;
+}
+
+/**
+ * `[D-447]` option (b): for each course that has assessment records, the concepts to admit at
+ * need-only, keyed course to concept key to concept name (the shape `rankOracle`'s
+ * `courseConcepts` reads). See {@link ComposeOracleRankingInput.admitPractisedUnlinkedConcepts}
+ * for the rule. A course with nothing to admit is left out of the result entirely: an empty entry
+ * would flip an abstaining course to `'ranked'` with nothing in it.
+ *
+ * The two-step reading of a course's live assessments (completed, then explicitly scoped) is
+ * deliberate. A course with no assessment still to come is completed-course maintenance
+ * (`[D-373]`) and is skipped whatever its scope statements say; a course whose every upcoming
+ * assessment states its scope has told us what it covers, so a concept outside that statement is
+ * not unknown but known-out, and stays out.
+ *
+ * Exported for `compose.practised-unlinked.d-447.spec.ts`.
+ */
+export function practisedUnlinkedConceptsByCourse(
+  input: PractisedUnlinkedAdmissionInput,
+): ReadonlyMap<string, ReadonlyMap<string, string>> {
+  const recordsByCourse = new Map<string, AssessmentRecord[]>();
+  for (const record of input.assessmentRecords) {
+    if (record.course === undefined) continue;
+    const list = recordsByCourse.get(record.course);
+    if (list === undefined) recordsByCourse.set(record.course, [record]);
+    else list.push(record);
+  }
+  const linked = new Map<string, Set<string>>();
+  for (const edge of input.edges) {
+    const keys = linked.get(edge.course);
+    if (keys === undefined) linked.set(edge.course, new Set([edge.conceptKey]));
+    else keys.add(edge.conceptKey);
+  }
+
+  const eligibleCourses = new Set<string>();
+  for (const [course, records] of recordsByCourse) {
+    const upcoming = records.filter((record) => !assessmentHasPassed(record, input.asOf));
+    if (upcoming.length === 0) continue; // completed: its own reading (D-373)
+    // Not vacuous: `every` over nothing is true, and a completed course must not read as scoped.
+    const everyUpcomingStatesScope =
+      upcoming.length > 0 && upcoming.every((record) => input.declaredScopePaths.has(record.path));
+    if (everyUpcomingStatesScope) continue; // an explicit scope: known-out, not unknown
+    eligibleCourses.add(course);
+  }
+
+  const admitted = new Map<string, Map<string, string>>();
+  for (const concept of input.concepts) {
+    for (const course of concept.courses) {
+      if (!eligibleCourses.has(course)) continue;
+      if (linked.get(course)?.has(concept.key) === true) continue;
+      if (!input.isPractised(concept.key)) continue;
+      const inner = admitted.get(course) ?? new Map<string, string>();
+      if (!inner.has(concept.key)) inner.set(concept.key, concept.name);
+      admitted.set(course, inner);
+    }
+  }
+  return admitted;
 }
 
 /**
@@ -403,6 +552,18 @@ export interface ComposeOracleRankingResult {
    * `ol-egov.142.2` gives `oracle.rank.v1` a caller to source it from.
    */
   readonly rankedReasons: ReadonlyMap<string, string>;
+  /**
+   * `[D-447]` option (b) (`ol-egov.141.89.10.96`): per course that has assessment
+   * records, the concept keys admitted at need-only because she has practised
+   * them and no assessment reaches them — see
+   * {@link ComposeOracleRankingInput.admitPractisedUnlinkedConcepts}. Empty
+   * when the door was closed or nothing qualified. A key listed here can still
+   * be absent from `ranking`'s `ranked` list: the `[D-404]` eligibility veto
+   * applies to it exactly as to any concept, and it then appears under
+   * `vetoedConcepts` with its reason. Additive; a caller reading only
+   * `ranking`/`edges`/`mastery` is unaffected.
+   */
+  readonly practisedUnlinkedAdmitted: ReadonlyMap<string, readonly string[]>;
 }
 
 /**
@@ -491,6 +652,7 @@ export async function composeOracleRanking(
     instrumentInventory,
     otherIneligibleInstrumentIds,
     serveCoursesWithoutAssessmentsOnNeed,
+    admitPractisedUnlinkedConcepts,
     ...edgeOptions
   } = input;
   const rawEdges = await buildConceptAssessmentEdges(vault, edgeOptions);
@@ -503,29 +665,51 @@ export async function composeOracleRanking(
   // exactly the value `session/enumerate.ts` now mints into a review-log
   // record's `conceptIds`, so this is the join that used to silently miss
   // every entry before the coordinated flip.
+  // `ol-a07q` (`[D-281]` item 4), at the ruled scope (`ol-egov.141.89.9.66`,
+  // `ol-egov.141.89.9.68`): one dispute-aware validity projection, folded
+  // once here and threaded to the need-only door below, the mastery join and
+  // readiness. An instrument proven invalid (a standing rejection, a defect
+  // suspension) qualifies nothing at the top stage and leaves readiness; a
+  // review a corrected contest proved wrong is practice only, with any
+  // re-grade read in its place, and readiness replays without it. Never a
+  // withdrawal.
+  const validity = projectInstrumentValidity(reviewLog, disputes ?? []);
+  const masteryOptions: MasteryRollupOptions = {
+    invalidInstrumentIds: [...validity.provenInvalid.keys()],
+    correctedEventIds: [...validity.correctedEvidence.keys()],
+  };
   // `ol-76pt`: courses with material but no assessment record, served on
   // need alone — empty (and nothing supplied to `rankOracle`) unless the
   // caller opted in.
-  const courseConcepts =
+  const noAssessmentCourseConcepts =
     serveCoursesWithoutAssessmentsOnNeed === true
       ? coursesWithoutAssessmentRecords(edgeOptions.concepts, edges.assessmentsRead.records)
       : new Map<string, ReadonlyMap<string, string>>();
+  // `[D-447]` option (b): in a course that HAS records, the practised concepts
+  // no assessment reaches, at the same need-only treatment. The two doors name
+  // disjoint courses (a course has records or it does not). It follows the
+  // first door's opt-in unless a caller says otherwise.
+  const practisedUnlinked =
+    (admitPractisedUnlinkedConcepts ?? serveCoursesWithoutAssessmentsOnNeed === true)
+      ? await resolvePractisedUnlinkedConcepts({
+          vault,
+          concepts: edgeOptions.concepts,
+          edges,
+          asOf,
+          reviewLog,
+          masteryOptions,
+          invalidInstrumentIds: new Set(validity.provenInvalid.keys()),
+        })
+      : new Map<string, ReadonlyMap<string, string>>();
+  const courseConcepts = new Map<string, ReadonlyMap<string, string>>([
+    ...noAssessmentCourseConcepts,
+    ...practisedUnlinked,
+  ]);
   const needOnlyKeys = [...courseConcepts.values()].flatMap((inner) => [...inner.keys()]);
   const conceptKeys = [
     ...new Set([...edges.edges.map((edge) => edge.conceptKey), ...needOnlyKeys]),
   ].sort();
-  // `ol-a07q` (`[D-281]` item 4), at the ruled scope (`ol-egov.141.89.9.66`,
-  // `ol-egov.141.89.9.68`): one dispute-aware validity projection, folded
-  // once here and threaded to both the mastery join and readiness below. An
-  // instrument proven invalid (a standing rejection, a defect suspension)
-  // qualifies nothing at the top stage and leaves readiness; a review a
-  // corrected contest proved wrong is practice only, with any re-grade read in
-  // its place, and readiness replays without it. Never a withdrawal.
-  const validity = projectInstrumentValidity(reviewLog, disputes ?? []);
-  const mastery = computeAllConceptMastery(reviewLog, conceptKeys, {
-    invalidInstrumentIds: [...validity.provenInvalid.keys()],
-    correctedEventIds: [...validity.correctedEvidence.keys()],
-  });
+  const mastery = computeAllConceptMastery(reviewLog, conceptKeys, masteryOptions);
   const retrievabilityScores = resolveRetrievabilityScores(
     reviewLog,
     conceptKeys,
@@ -579,7 +763,66 @@ export async function composeOracleRanking(
     edges,
     mastery,
     rankedReasons: resolveRankedReasonsByKey(edges, rankedReasons),
+    practisedUnlinkedAdmitted: new Map(
+      [...practisedUnlinked].map(([course, inner]) => [course, [...inner.keys()].sort()]),
+    ),
   };
+}
+
+/**
+ * `[D-447]` option (b)'s resolver: what {@link practisedUnlinkedConceptsByCourse} needs that only
+ * this composition can supply. "Practised" is the stage fold over her review log with every
+ * instrument the log proves invalid taken out of it at every stage (`[D-345]`): above the
+ * never-practised floor means at least one rated attempt, or a graded or verdict-carrying
+ * explanation, on an instrument that stands. A blank or skipped attempt establishes nothing
+ * (ruling of 2026-09-28 on `ol-egov.141.89.6.59`), and neither does practice only on a defective
+ * instrument.
+ *
+ * The scope statements are read only for the courses that survive the rest of the rule, so a
+ * composition with nothing to admit (the ordinary case for a caller with no practice yet) reads no
+ * assessment note here. A note gone from the vault, or one with no frontmatter or scope property,
+ * states no scope: `readDeclaredScope` returns `undefined` for all three, and that keeps the
+ * course open to the door, since a scope nobody stated cannot leave a concept out.
+ */
+async function resolvePractisedUnlinkedConcepts(args: {
+  readonly vault: VaultSource;
+  readonly concepts: readonly ConceptRecord[];
+  readonly edges: BuildConceptAssessmentEdgesResult;
+  readonly asOf: string;
+  readonly reviewLog: readonly ReviewLogEntry[];
+  readonly masteryOptions: MasteryRollupOptions;
+  readonly invalidInstrumentIds: ReadonlySet<string>;
+}): Promise<ReadonlyMap<string, ReadonlyMap<string, string>>> {
+  const { vault, concepts, edges, asOf, reviewLog, masteryOptions, invalidInstrumentIds } = args;
+  const practised = new Map<string, boolean>();
+  const isPractised = (conceptKey: string): boolean => {
+    const known = practised.get(conceptKey);
+    if (known !== undefined) return known;
+    const reading = foldConceptStage(reviewLog, conceptKey, masteryOptions, {
+      excludedInstrumentIds: invalidInstrumentIds,
+    });
+    const result = reading.state !== 'seed';
+    practised.set(conceptKey, result);
+    return result;
+  };
+  const rule = {
+    concepts,
+    assessmentRecords: edges.assessmentsRead.records,
+    edges: edges.edges,
+    asOf,
+    isPractised,
+  };
+  // First pass with every course open: if nothing qualifies there, no scope can add anything.
+  const open = practisedUnlinkedConceptsByCourse({ ...rule, declaredScopePaths: new Set() });
+  if (open.size === 0) return open;
+  const declaredScopePaths = new Set<VaultPath>();
+  for (const record of edges.assessmentsRead.records) {
+    if (record.course === undefined || !open.has(record.course)) continue;
+    if ((await readDeclaredScope(vault, record.path)) !== undefined) {
+      declaredScopePaths.add(record.path);
+    }
+  }
+  return practisedUnlinkedConceptsByCourse({ ...rule, declaredScopePaths });
 }
 
 /**
