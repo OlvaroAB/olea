@@ -93,6 +93,7 @@ import {
   createFsrsScheduler,
   type EffortInput,
   HOLDING_CUT,
+  scoredConceptOf,
   type TodayPanelInput,
   type TodayViewModel,
 } from 'olea-core';
@@ -371,8 +372,9 @@ export const TRENDS_PLAN_ALLOCATION: TrendsComposition['planAllocation'] =
  * each sitting (C5.5's clustering, the same one the effort reading windows by) gets **one record
  * per course it served**, naming that course and carrying {@link TRENDS_PLAN_ALLOCATION} frozen:
  * the reading the product would make had she sat those courses as back-to-back one-course
- * sessions. A review's course is its concept's (every synthetic concept has exactly one). Nothing
- * else about the stream changes; a review with no known course is left unlinked.
+ * sessions. A review's course is its scored concept's (`[D-423]`; every synthetic concept has
+ * exactly one). Nothing else about the stream changes; a review with no known course is left
+ * unlinked.
  *
  * N-015: fabricated, like everything here. The records exist so the effort reading exercises its
  * recorded path; they are evidence of nothing about her.
@@ -389,9 +391,11 @@ export function recordSyntheticSessions(entries: readonly ReviewLogEntry[]): {
   clusterReviewSessions(entries).forEach((session, index) => {
     const idByCourse = new Map<string, string>();
     for (const review of session.reviews) {
-      const course = review.conceptIds
-        .map((conceptId) => courseOfConcept.get(conceptId))
-        .find((c) => c !== undefined);
+      // `[D-423]`: a review's course is its scored concept's, as the product's session reader
+      // takes it (`olea-core`'s `session/cluster.ts`) — never the first course found among
+      // every listed concept, which would link a review through a concept it only names.
+      const scored = scoredConceptOf(review);
+      const course = scored === undefined ? undefined : courseOfConcept.get(scored);
       if (course === undefined) continue;
       let compositionId = idByCourse.get(course);
       if (compositionId === undefined) {

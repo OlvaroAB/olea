@@ -328,6 +328,35 @@ describe('replayUnconsumedSchedulingObservations — F5.3a / `[D-087]`, R7', () 
     expect(result.has('concept-y')).toBe(false);
   });
 
+  // `ol-egov.141.89.9.76` (`[D-419]`, `[D-423]`): the reciprocal prompt is the one whose subject
+  // is the neighbour, and an explain-back's subject is its first-listed (scored) concept. A record
+  // that names the neighbour only as context is not that prompt taken.
+  it('an explain-back that names the neighbour only as context does NOT consume the observation', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      review('e2', '2026-08-11T09:00:00+00:00', 'inst-z-eb', null, 'explain-back', {
+        conceptIds: ['concept-z', 'concept-y'],
+      }),
+    ]);
+    expect(result.get('concept-y')?.sourceEventId).toBe('e1');
+  });
+
+  it('an explain-back whose scored concept is the neighbour consumes it, whatever else it names', () => {
+    const result = replayUnconsumedSchedulingObservations([
+      review('e1', '2026-08-10T09:00:00+00:00', 'inst-eb', null, 'explain-back', {
+        conceptIds: ['concept-x'],
+        schedulingObservation: { neighbourConceptId: 'concept-y' },
+      }),
+      review('e2', '2026-08-11T09:00:00+00:00', 'inst-y-eb', null, 'explain-back', {
+        conceptIds: ['concept-y', 'concept-z'],
+      }),
+    ]);
+    expect(result.has('concept-y')).toBe(false);
+  });
+
   it('a reciprocal explain-back BEFORE the observation is recorded cannot consume it — chronological order, not array order', () => {
     // e1 (an explain-back on concept-y) happens first; the observation naming
     // concept-y as a neighbour is only recorded afterwards, by e2. Handed to

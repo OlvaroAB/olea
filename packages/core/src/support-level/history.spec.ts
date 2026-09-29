@@ -212,11 +212,41 @@ describe('what has no ladder, or no honest reading, is skipped (L6)', () => {
     expect(history.outcomesFor('concept-a', 'explanation')).toEqual([]);
   });
 
-  it('an instrument naming several concepts contributes to each', () => {
+  // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is a session outcome for the one concept
+  // it scored — the first id of its own list — and for no concept it merely names as context.
+  it('a record naming several concepts is an outcome for its scored concept only', () => {
     const history = buildSupportLevelHistory([
-      review(0, { conceptIds: ['concept-a', 'concept-b'] }),
+      review(0, { conceptIds: ['concept-a', 'concept-b'], rating: 'again' }),
+    ]);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([
+      { failureShape: 'wrong-concept', hintUptake: false },
+    ]);
+    expect(history.outcomesFor('concept-b', 'recall')).toEqual([]);
+  });
+
+  it('a record written with another concept first credits that one, whatever the note lists today', () => {
+    const history = buildSupportLevelHistory([
+      review(0, { conceptIds: ['concept-b', 'concept-a'], rating: 'again' }),
     ]);
     expect(history.outcomesFor('concept-b', 'recall')).toHaveLength(1);
+    expect(history.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('an explanation of a two-concept record is read at its scored concept only', () => {
+    const history = buildSupportLevelHistory([
+      review(0, {
+        instrumentId: 'eb:a',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a', 'concept-b'],
+        explainBackCorrectness: {
+          verdict: 'incorrect',
+          artifactProvenance: { taskId: 't', promptVersion: 'v0', modelId: 'm' },
+        },
+      }),
+    ]);
+    expect(history.outcomesFor('concept-a', 'explanation')).toHaveLength(1);
+    expect(history.outcomesFor('concept-b', 'explanation')).toEqual([]);
   });
 });
 

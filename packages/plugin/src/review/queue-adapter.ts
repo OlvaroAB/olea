@@ -185,6 +185,7 @@ import {
   mathRandomSource,
   presentMcq,
   projectInstrumentValidity,
+  scoredConceptOf,
 } from 'olea-core';
 import { localToday } from '../today/data-source.js';
 import type { McqOption, ReviewInstrument, ReviewQueueItem, SelectionContextV4 } from './types.js';
@@ -313,6 +314,11 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * history: a withdrawal is not invalidity. `validity` defaults to the
  * projection of `entries`.
  *
+ * **A review is an outcome for its scored concept only** (`[D-419]`, `[D-423]`,
+ * `ol-egov.141.89.9.73`): the first id of the record's own `conceptIds`, through
+ * `olea-core`'s `scoredConceptOf`, the core fold's and the mastery rollup's rule.
+ * A concept a record names only as context gets no outcome from it.
+ *
  * Because `qa`/`cloze` and `explain-back` reviews of the SAME concept in one
  * sitting occupy different tiers (`[D-094]`'s ladders are per-tier), the
  * per-session fold below is keyed by concept AND tier, not concept alone —
@@ -382,11 +388,13 @@ export function buildSupportLevelHistoryLookup(
       }
 
       const shape = deriveFailureShape(evidence);
-      for (const conceptId of sessionReview.conceptIds) {
-        const key = `${conceptId}:${tier}`;
-        const existing = shapeByKey.get(key);
-        shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
-      }
+      // `[D-423]`: a review is a session outcome for the concept it scored — the first id of the
+      // record as written, never a concept it names only as context (the core fold's rule).
+      const conceptId = scoredConceptOf(sessionReview);
+      if (conceptId === undefined) continue;
+      const key = `${conceptId}:${tier}`;
+      const existing = shapeByKey.get(key);
+      shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
     }
 
     for (const [key, failureShape] of shapeByKey) {

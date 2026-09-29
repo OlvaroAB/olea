@@ -84,6 +84,7 @@ import type {
 import {
   computeAllConceptMastery,
   conceptVitalityInstruments,
+  creditsConcept,
   evaluateStrongRecallProposal,
   HOLDING_CUT,
   projectInstrumentValidity,
@@ -160,7 +161,9 @@ function misconceptionSinceLastGradedExplainBack(
     if (entry.kind === 'review') {
       if (entry.instrumentType !== 'explain-back') continue;
       if (entry.explainBackGrade === undefined) continue;
-      if (!entry.conceptIds.includes(conceptId)) continue;
+      // `[D-423]`: an explanation is the last explanation of the one concept it scored — its
+      // first id — not of a concept it names only as context.
+      if (!creditsConcept(entry, conceptId)) continue;
       const at = Date.parse(entry.timestamp);
       if (!Number.isFinite(at)) continue;
       if (lastGradedExplainBackAt === null || at > lastGradedExplainBackAt) {
@@ -184,7 +187,12 @@ function misconceptionSinceLastGradedExplainBack(
  * Builds the evaluator `open-session.ts` threads onto `ReviewSessionDeps`.
  *
  * Returns the FIRST concept that proposes, reading the graded instrument's
- * `conceptIds` in order (D-031: an instrument may be evidence for several).
+ * `conceptIds` in order. That loop is deliberately still over the whole list,
+ * not the scored concept only (`[D-423]`): it decides which concept's offer to
+ * make, and reading only the first would change which explain-back offers she is
+ * shown, which no ruling covers — filed as an Open question on
+ * `ol-egov.141.89.9.76`, today's behaviour kept. The credit reads below (each
+ * concept's own mastery, and its last graded explanation) are scored-concept only.
  * When none proposes, the decision returned is the first concept's — an
  * honest `shouldPropose: false` carrying `because`, which is what
  * `NoProposalReason` exists for, rather than a bare `undefined` a caller

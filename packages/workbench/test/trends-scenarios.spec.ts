@@ -24,6 +24,7 @@
 // plateau rule). Every count here is exact so that a change in either the
 // detector or the generator turns this file red instead of quietly shifting.
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import { detectEffortImbalance, detectSpacing, SHORTFALL_RATIO_K } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { DUE_UNAVAILABLE, NOTHING_DUE } from '../src/plugin-bridge.js';
@@ -125,6 +126,42 @@ describe('F6.5(b): each synthetic sitting is recorded (ol-egov.141.89.11.20)', (
     expect(reviews).toBeGreaterThan(0);
     // Nothing but the link changes: same entries, same order, same count.
     expect(entries.map((e) => e.eventId)).toEqual(stream.entries.map((e) => e.eventId));
+  });
+
+  // `ol-egov.141.89.9.76` (`[D-419]`, `[D-423]`): the product's session reader gives a review the
+  // courses of its scored concept only, so the scenario builder must link a review the same way:
+  // by the first-listed concept, never by the first course found among every listed concept.
+  it('links a review by its scored concept only: a course found only through a context concept links nothing', () => {
+    const knownConcept = TRENDS_CONCEPTS[0]?.conceptId ?? '';
+    expect(knownConcept).not.toBe('');
+    const review = (eventId: string, conceptIds: readonly string[]): ReviewLogEntry => ({
+      schemaVersion: 6,
+      kind: 'review',
+      eventId,
+      timestamp: '2026-10-17T09:00:00+00:00',
+      instrumentId: `inst-${eventId}`,
+      instrumentType: 'qa',
+      conceptIds: [...conceptIds],
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 4000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['qa'],
+        planVersion: null,
+      },
+    });
+    const { entries } = recordSyntheticSessions([
+      review('context-only', ['concept-with-no-course', knownConcept]),
+      review('scored', [knownConcept, 'concept-with-no-course']),
+    ]);
+    const linked = new Map(
+      entries.flatMap((e) => (e.kind === 'review' ? [[e.eventId, e.compositionId] as const] : [])),
+    );
+    expect(linked.get('context-only')).toBeUndefined();
+    expect(linked.get('scored')).toBeDefined();
   });
 
   it('no trends state reads the withheld comparison: every one is compared or too early', () => {

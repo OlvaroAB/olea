@@ -12,6 +12,13 @@
  * explanation are separate ladders, so a clean recall answer never papers
  * over a failing explanation of the same concept in the same sitting.
  *
+ * **A review is an outcome for its scored concept only** (`[D-419]`, `[D-423]`,
+ * `ol-egov.141.89.9.73`): the first id of the record's own `conceptIds`, through
+ * `../session/scored-concept.ts`, the rule the mastery rollup reads. A concept a
+ * record names only as context gets no outcome from it, and a record keeps the
+ * subject it was written with, so reordering a note's topics later never moves
+ * an old outcome to another concept.
+ *
  * **Explanations read correctness first** (`[D-286]`, `[D-281]`):
  * `../study-session/support-level-signal.ts`'s `deriveFailureShape` reads the
  * verdict before depth, so a relational but incorrect answer is a failure and
@@ -85,6 +92,7 @@ import {
   projectInstrumentValidity,
 } from '../mastery/validity.js';
 import { clusterReviewSessions, SESSION_CLUSTERING_GAP_SECONDS } from '../session/cluster.js';
+import { scoredConceptOf } from '../session/scored-concept.js';
 import {
   deriveFailureShape,
   type GradedReviewEvidence,
@@ -283,11 +291,14 @@ export function buildSupportLevelHistory(
       const read = ladderEvidence(source);
       if (read === null) continue;
       const shape = deriveFailureShape(read.evidence);
-      for (const conceptId of review.conceptIds) {
-        const cell = `${conceptId}\u0000${read.tier}`;
-        const prior = shapeByCell.get(cell);
-        shapeByCell.set(cell, prior === undefined ? shape : worse(prior, shape));
-      }
+      // `[D-423]`: a review is a session outcome for the concept it scored — the first id of the
+      // record as written, never a concept it names only as context, and never re-read against
+      // today's note (a corrective re-grade replaces the verdict, not the subject).
+      const conceptId = scoredConceptOf(review);
+      if (conceptId === undefined) continue;
+      const cell = `${conceptId}\u0000${read.tier}`;
+      const prior = shapeByCell.get(cell);
+      shapeByCell.set(cell, prior === undefined ? shape : worse(prior, shape));
     }
     for (const [cell, failureShape] of shapeByCell) {
       const outcome: SessionSupportOutcome = { failureShape, hintUptake: false };

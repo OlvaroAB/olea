@@ -1001,7 +1001,9 @@ describe('buildSupportLevelHistoryLookup — folds raw review-log entries into r
     expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
   });
 
-  it('a multi-concept review is folded into every one of its concepts', () => {
+  // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): a review is a session outcome for the one concept
+  // it scored — the first id of its own record — and for no concept it merely names as context.
+  it('a multi-concept review is folded into its scored concept only, never into a context concept', () => {
     const lookup = buildSupportLevelHistoryLookup([
       reviewLogEntry({
         eventId: 'e1',
@@ -1012,7 +1014,36 @@ describe('buildSupportLevelHistoryLookup — folds raw review-log entries into r
       }),
     ]);
     expect(lookup.outcomesFor('concept-a', 'recall')).toHaveLength(1);
+    expect(lookup.outcomesFor('concept-b', 'recall')).toEqual([]);
+  });
+
+  it('a record written with another concept first credits that one, whatever the note lists today', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'qa',
+        rating: 'again',
+        conceptIds: ['concept-b', 'concept-a'],
+      }),
+    ]);
     expect(lookup.outcomesFor('concept-b', 'recall')).toHaveLength(1);
+    expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([]);
+  });
+
+  it('an explanation of a two-concept record is read at its scored concept only', () => {
+    const lookup = buildSupportLevelHistoryLookup([
+      reviewLogEntry({
+        eventId: 'e1',
+        timestamp: '2026-08-18T09:00:00+00:00',
+        instrumentType: 'explain-back',
+        rating: null,
+        conceptIds: ['concept-a', 'concept-b'],
+        explainBackCorrectness: 'incorrect',
+      }),
+    ]);
+    expect(lookup.outcomesFor('concept-a', 'explanation')).toHaveLength(1);
+    expect(lookup.outcomesFor('concept-b', 'explanation')).toEqual([]);
   });
 
   it('outcomes come back oldest-first, matching the entries’ own order', () => {

@@ -257,6 +257,49 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     });
   });
 
+  // `ol-egov.141.89.9.76` (`[D-419]`, `[D-423]`): a graded explain-back is the last explanation OF
+  // the one concept it scored — the first id of its own record. A record that names the concept
+  // only as context is not an explanation of it, so it never moves "fresh" past a misconception.
+  it('a graded explain-back that names the concept only as context is not its last explanation', () => {
+    const entries: ReviewLogEntry[] = [
+      ...strongRecallLog('concept-tree'),
+      review({
+        eventId: 'eb-1',
+        timestamp: '2026-08-19T10:00:00+00:00',
+        conceptIds: ['concept-tree'],
+        instrumentType: 'explain-back',
+        instrumentId: 'inst-eb-1',
+        rating: null,
+        explainBackGrade: { soloLevel: 'relational' },
+      }),
+      misconception({
+        eventId: 'm-1',
+        timestamp: '2026-08-19T12:00:00+00:00',
+        conceptIds: ['concept-tree'],
+      }),
+      review({
+        eventId: 'eb-2',
+        timestamp: '2026-08-19T14:00:00+00:00',
+        conceptIds: ['concept-other', 'concept-tree'],
+        instrumentType: 'explain-back',
+        instrumentId: 'inst-eb-2',
+        rating: null,
+        explainBackGrade: { soloLevel: 'relational' },
+      }),
+    ];
+    const read = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    const decision = read({ conceptIds: ['concept-tree'] });
+
+    expect(decision.shouldPropose).toBe(true);
+    if (!decision.shouldPropose) return;
+    expect(decision.reason.kind).toBe('reopened-by-misconception');
+  });
+
   it('a misconception on another concept never reopens this one', () => {
     const entries: ReviewLogEntry[] = [
       ...strongRecallLog('concept-tree'),

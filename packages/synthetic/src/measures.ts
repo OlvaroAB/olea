@@ -24,6 +24,7 @@ import type {
   ReviewLogEntry,
   ReviewLogRecord,
 } from 'olea-contracts';
+import { scoredConceptOf } from 'olea-core';
 import { CARD_TYPES, courseOfConcept, type ScheduledType } from './vocabulary.js';
 
 /** Review events only — suspend/unsuspend entries are facts about the deck, not reviews. */
@@ -177,17 +178,18 @@ export interface CourseLapseRate {
 }
 
 /**
- * The distinct course ids among a record's `conceptIds` — v3's many-to-many
- * evidence resolved into the set of courses that record actually touches.
- * `Set` semantics matter here: two of a record's concepts sharing a course
- * must not double-count that course for this one record.
+ * The course a record counts toward: the course of its scored concept — the first id of its own
+ * `conceptIds` (`[D-423]`, the same rule `olea-core` reads through `scoredConceptOf`) — as a set,
+ * so the type still says "the courses this record touches" and a caller never assumes one. A
+ * concept the record names only as context earns its course nothing, which is what the product's
+ * `insights/effort.ts` and `insights/spacing.ts` read; a measure that credited every listed
+ * concept would let a persona assertion and the product reading of one stream disagree.
  */
 function distinctCoursesOf(record: ReviewLogRecord): ReadonlySet<string> {
   const courseIds = new Set<string>();
-  for (const conceptId of record.conceptIds) {
-    const courseId = courseOfConcept(conceptId);
-    if (courseId !== undefined) courseIds.add(courseId);
-  }
+  const scored = scoredConceptOf(record);
+  const courseId = scored === undefined ? undefined : courseOfConcept(scored);
+  if (courseId !== undefined) courseIds.add(courseId);
   return courseIds;
 }
 
@@ -196,12 +198,11 @@ function distinctCoursesOf(record: ReviewLogRecord): ReadonlySet<string> {
  * no rating (F2.16) and counting it as a non-lapse would dilute exactly the
  * course the routing fires on.
  *
- * A record's evidence is many-to-many (v3, D-020/`ol-t3sd`): one instrument can
- * be evidence for concepts in more than one course, and it is counted once for
- * each *distinct* course among them — never twice for the same course because
- * two of its concepts happen to share it. So `reviews` totalled across courses
- * no longer necessarily sums to the record count: a review naming concepts in
- * two courses is a review for each of those courses.
+ * A record is counted toward the course of its scored concept only (`[D-423]`,
+ * `ol-egov.141.89.9.76`; v3's many-to-many list is kept for navigation, and the
+ * every-concept reading it once carried is retired). A concept it names only as
+ * context earns its course neither a review nor a lapse, so `reviews` totalled
+ * across courses sums to the record count, as it did before v3.
  */
 export function lapseRateByCourse(
   entries: readonly ReviewLogEntry[],
@@ -227,10 +228,10 @@ export function lapseRateByCourse(
 /**
  * Reviews per course — the counting half of F6.5(b), effort imbalance.
  *
- * As with `lapseRateByCourse`, a record is counted once per *distinct* course
- * among its `conceptIds` (v3's many-to-many evidence), so the per-course totals
- * no longer necessarily sum to the review count: a review whose instrument is
- * evidence for concepts in two courses counts toward both.
+ * As with `lapseRateByCourse`, a record is counted toward the course of its
+ * scored concept only (`[D-423]`): a review whose note names concepts in two
+ * courses counts for the first-listed one's course, and the per-course totals
+ * sum to the review count.
  */
 export function reviewCountByCourse(
   entries: readonly ReviewLogEntry[],
@@ -247,11 +248,9 @@ export function reviewCountByCourse(
 /**
  * Milliseconds spent per course — the time half of F6.5(b).
  *
- * Same many-to-many rule as `reviewCountByCourse`: the record's full
- * `durationMs` is attributed to every distinct course among its `conceptIds`,
- * not split between them — the time really was spent, and it really is
- * evidence for each of those courses. So the per-course totals no longer
- * necessarily sum to a figure derivable from the review count alone.
+ * Same rule as `reviewCountByCourse` (`[D-423]`): the record's full
+ * `durationMs` is attributed to the course of its scored concept — not split
+ * with a course it names only as context.
  */
 export function timeSpentMsByCourse(
   entries: readonly ReviewLogEntry[],
@@ -275,10 +274,9 @@ export function timeSpentMsByCourse(
  * anyone to reuse, whereas a share is a statement about the *split*, which is
  * what "effort imbalance" means and what survives a change of stream length.
  *
- * Note the denominator is the sum of the per-course totals, which (v3's
- * many-to-many evidence) is not the same as the total time in the log: a record
- * naming concepts in two courses contributes its duration to both. So these
- * shares are shares of *attributed* time and sum to 1 by construction.
+ * Note the denominator is the sum of the per-course totals: time on a record
+ * whose scored concept has no course is not attributed to any. So these shares
+ * are shares of *attributed* time and sum to 1 by construction.
  */
 export function timeShareByCourse(entries: readonly ReviewLogEntry[]): ReadonlyMap<string, number> {
   const totals = timeSpentMsByCourse(entries);
@@ -330,11 +328,10 @@ export function disputeEvents(entries: readonly ReviewLogEntry[]): readonly Disp
  * in the only form a review log can carry it: the same concept rated `again`
  * repeatedly.
  *
- * An `again` on an instrument that is evidence for several concepts
- * (`conceptIds`, v3) is a failure signal for *each* of them, so the counter
- * increments once per entry in `conceptIds` rather than once per record — the
- * same many-to-many rule the v2→v3 schema change established for review-log
- * evidence generally.
+ * An `again` is a failure signal for the one concept the review scored — the
+ * first id of its own `conceptIds` (`[D-423]`) — never for a concept the note
+ * names only as context, so the counter increments once per record, on its
+ * scored concept, the same rule the product's credit readers read.
  */
 export function recurringFailureConceptIds(
   entries: readonly ReviewLogEntry[],
@@ -342,9 +339,9 @@ export function recurringFailureConceptIds(
   const counts = new Map<string, number>();
   for (const record of reviewsOf(entries)) {
     if (record.rating !== 'again') continue;
-    for (const conceptId of record.conceptIds) {
-      counts.set(conceptId, (counts.get(conceptId) ?? 0) + 1);
-    }
+    const conceptId = scoredConceptOf(record);
+    if (conceptId === undefined) continue;
+    counts.set(conceptId, (counts.get(conceptId) ?? 0) + 1);
   }
   return new Map([...counts.entries()].filter(([, n]) => n > 1));
 }

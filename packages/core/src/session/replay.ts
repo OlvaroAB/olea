@@ -58,6 +58,7 @@
 import type { ReviewLogEntry } from 'olea-contracts';
 import { compareByInstantThenEventId } from '../review-log/merge.js';
 import type { Scheduler, SchedulerState } from '../scheduler/types.js';
+import { scoredConceptOf } from './scored-concept.js';
 
 /**
  * One instrument's replayed state and how it got there. Returned alongside the
@@ -198,8 +199,13 @@ export function replayUnconsumedSchedulingObservations(
     // observation was waiting for it — checked before this entry might also
     // (in principle) carry its own fresh observation below, so a record can
     // both consume one relation and open another in the same pass.
+    // `[D-423]`: the reciprocal prompt is the explain-back whose subject is the neighbour, and an
+    // explain-back's subject is its scored (first-listed) concept — a record naming the neighbour
+    // only as context is not that prompt taken. `subjectConceptIds` below still carries the whole
+    // list as recorded: it describes the observation for its reader and credits nothing.
     if (entry.instrumentType === 'explain-back') {
-      for (const conceptId of entry.conceptIds) live.delete(conceptId);
+      const scored = scoredConceptOf(entry);
+      if (scored !== undefined) live.delete(scored);
     }
 
     if (entry.schedulingObservation !== undefined) {
