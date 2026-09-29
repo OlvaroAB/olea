@@ -15,6 +15,9 @@ import {
   type ConceptRelation,
   type GroveCourseModel,
   type Provenance,
+  stableUnitId,
+  type UnitManifest,
+  type VaultPath,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
@@ -863,6 +866,63 @@ describe('createLocalGroveProvider — unreadable files ([D-196], F1.5(b), F8.1,
     expect(byPath.get('03 Research/TESTC101 Field Trip Slides.pptx')).toBe('image-only-no-text');
     expect(byPath.get('03 Research/TESTC101 Scanned Handout.png')).toBe('not-linked');
     expect(c101.unreadableFiles).toHaveLength(3);
+  });
+
+  describe('with the unit manifest ([D-326], ol-egov.141.89.8.42)', () => {
+    const SLIDES = '03 Research/TESTC101 Field Trip Slides.pptx' as VaultPath;
+    const manifestWith = (
+      readingState: UnitManifest['entries'][number]['readingState'],
+    ): ReadonlyMap<VaultPath, UnitManifest> =>
+      new Map([
+        [
+          SLIDES,
+          {
+            sourcePath: SLIDES,
+            revisionDigest: 'rev-1',
+            entries: [
+              {
+                unitId: stableUnitId(SLIDES, 1),
+                sourcePath: SLIDES,
+                page: 1,
+                readingState,
+                conceptExtractionState: 'not-started',
+              },
+            ],
+          },
+        ],
+      ]);
+    const load = async (manifests: ReadonlyMap<VaultPath, UnitManifest>) => {
+      const provider = createLocalGroveProvider({
+        vault: fixtureVaultWithUnreadableFiles(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: () => NOW,
+        unitManifests: () => manifests,
+      });
+      const c101 = (await sectionsFrom(await provider.load())).find((c) => c.course === 'TESTC101');
+      if (c101 === undefined) throw new Error('expected TESTC101');
+      return c101;
+    };
+
+    it('a file the vision pass has read is no longer listed as "no text found"', async () => {
+      const c101 = await load(manifestWith({ kind: 'read', method: 'image' }));
+      expect(c101.unreadableFiles.map((f) => f.path)).not.toContain(SLIDES);
+      expect(c101.notYetReadFiles ?? []).not.toContain(SLIDES);
+    });
+
+    it('a file whose pages are still pending reads as not read yet, never as absent or broken', async () => {
+      const c101 = await load(manifestWith({ kind: 'pending', reason: 'budget' }));
+      expect(c101.unreadableFiles.map((f) => f.path)).not.toContain(SLIDES);
+      expect(c101.notYetReadFiles).toEqual([SLIDES]);
+    });
+
+    it('without a manifest the census is unchanged (re-extraction)', async () => {
+      const c101 = await load(new Map());
+      expect(c101.unreadableFiles.find((f) => f.path === SLIDES)?.reason).toBe(
+        'image-only-no-text',
+      );
+      expect(c101.notYetReadFiles).toEqual([]);
+    });
   });
 
   it('a course with none of these files gets an empty, not absent, list', async () => {

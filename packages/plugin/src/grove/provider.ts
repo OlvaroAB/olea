@@ -185,6 +185,7 @@ import {
   findUnreadableFiles,
   type GroveCourseModel,
   HOLDING_CUT,
+  hasPendingUnits,
   type InvalidCardReport,
   type InvalidClozeReport,
   type InvalidMcqReport,
@@ -195,6 +196,7 @@ import {
   resolveAssessments,
   reviewLogPath,
   suspendedInstrumentIds,
+  type UnitManifest,
   type UnreadableFile,
   type VaultPath,
   type VaultSource,
@@ -246,6 +248,17 @@ export interface CreateLocalGroveProviderDeps {
    * own module doc), which is today's unchanged behaviour.
    */
   readonly relations?: () => readonly ConceptRelation[];
+  /**
+   * `[D-326]`, `ol-egov.141.89.8.42`: the per-source unit manifests, keyed by
+   * path — handed to the unreadable-file census so a file whose pages the
+   * perception pass has read (an image read by the vision runner) is not
+   * re-classified from its empty text layer as "no text found", and a file
+   * whose pass has not settled is recorded as not yet read rather than left
+   * out. **A thunk**, same reason as `relations`. No durable manifest store
+   * exists yet (`olea-core`'s export note), so `main.ts` supplies none and
+   * omitting it keeps today's re-extraction census unchanged.
+   */
+  readonly unitManifests?: () => ReadonlyMap<VaultPath, UnitManifest>;
 }
 
 /** The data half of `GroveViewDeps` — `main.ts` adds `openRetrospective` at the construction site. */
@@ -390,7 +403,11 @@ async function unreadableFilesByCourse(
   vault: VaultSource,
   sourcesReport: Awaited<ReturnType<typeof extractTier3Evidence>>['sourcesReport'],
   courseNames: ReadonlySet<string>,
-): Promise<ReadonlyMap<string, readonly UnreadableFile[]>> {
+  manifests?: ReadonlyMap<VaultPath, UnitManifest>,
+): Promise<{
+  readonly unreadable: ReadonlyMap<string, readonly UnreadableFile[]>;
+  readonly notYetRead: ReadonlyMap<string, readonly VaultPath[]>;
+}> {
   const [allPaths, notePaths] = await Promise.all([
     vault.list(),
     vault.list({ extensions: ['md'] }),
@@ -423,11 +440,28 @@ async function unreadableFilesByCourse(
         ...sourcesReport.sources.filter((s) => s.course === course).map((s) => s.path),
         ...(skippedByCourse.get(course) ?? []),
       ];
-      const unreadable = await findUnreadableFiles(vault, { files, linkedPaths });
-      return [course, unreadable] as const;
+      const unreadable = await findUnreadableFiles(vault, {
+        files,
+        linkedPaths,
+        ...(manifests !== undefined ? { manifests } : {}),
+      });
+      // The census leaves a file whose pass has not settled out of its list
+      // (it is not broken, only unfinished) — which would read as absent.
+      // Keep it as its own record: not read yet, never missing.
+      const notYetRead =
+        manifests === undefined
+          ? []
+          : files.filter((path) => {
+              const manifest = manifests.get(path);
+              return manifest !== undefined && hasPendingUnits(manifest);
+            });
+      return [course, unreadable, notYetRead] as const;
     }),
   );
-  return new Map(entries);
+  return {
+    unreadable: new Map(entries.map(([course, unreadable]) => [course, unreadable] as const)),
+    notYetRead: new Map(entries.map(([course, , notYetRead]) => [course, notYetRead] as const)),
+  };
 }
 
 /**
@@ -683,11 +717,13 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // scope reading rather than inside the render, so a course whose
         // grove never renders (no concepts, no offer cards) still gets a
         // real answer rather than an unattempted one.
-        const unreadableByCourse = await unreadableFilesByCourse(
-          deps.vault,
-          tier3.sourcesReport,
-          courseNames,
-        );
+        const { unreadable: unreadableByCourse, notYetRead: notYetReadByCourse } =
+          await unreadableFilesByCourse(
+            deps.vault,
+            tier3.sourcesReport,
+            courseNames,
+            deps.unitManifests?.(),
+          );
         // `[D-226]` ruling 1, S1: computed once per course, same reasoning
         // as `unreadableByCourse` immediately above.
         const registerCandidatesByCourseMap = await registerCandidatesByCourse(
@@ -751,6 +787,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             model,
             offerCards: allCards.filter((card) => card.course === course),
             unreadableFiles: unreadableByCourse.get(course) ?? [],
+            notYetReadFiles: notYetReadByCourse.get(course) ?? [],
             registerCandidates: registerCandidatesByCourseMap.get(course) ?? [],
             ...(scopeCorrectionReceipt !== undefined ? { scopeCorrectionReceipt } : {}),
           };

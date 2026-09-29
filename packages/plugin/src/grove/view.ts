@@ -155,6 +155,14 @@ export interface GroveCourseSection {
    */
   readonly unreadableFiles: readonly UnreadableFile[];
   /**
+   * `[D-326]`, `ol-egov.141.89.8.42`: files whose unit manifest still has
+   * pages awaiting a reading — not read yet, which is neither unreadable nor
+   * absent. Data only: no student-facing wording for "not read" exists in the
+   * registry or plugin yet, so `renderCourse` does not show it (wording gap
+   * reported on the bead).
+   */
+  readonly notYetReadFiles?: readonly VaultPath[];
+  /**
    * `[D-184]`, F8.1, `ol-v7r5.32`: present only when `./provider.ts` found
    * both a shrink AND a document to name for it this read — see
    * `GroveScopeCorrectionReceipt`'s own doc. Only ever set alongside
