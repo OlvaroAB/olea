@@ -118,6 +118,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
     });
@@ -143,6 +144,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
@@ -307,6 +309,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       refusals: [],
       skippedDuplicate: 1,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
     });
@@ -363,6 +366,7 @@ describe('runGenerationSweep', () => {
         },
       ],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
@@ -437,6 +441,7 @@ describe('runGenerationSweep', () => {
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
     });
@@ -470,6 +475,7 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
     });
@@ -616,6 +622,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: false }],
     });
@@ -661,6 +668,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: true, kind: 'category', deficit: 2, generated: true }],
     });
@@ -717,6 +725,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
+      skippedRefused: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: false }],
     });

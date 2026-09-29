@@ -53,13 +53,43 @@
  * **A refused concept gets no cache entry, by construction (F4.5's
  * grounded-by-construction argument).** `draftQuizCardsForConcept` already
  * guarantees zero transport sends on refusal (`ol-odb0.3`); this module adds
- * nothing on top except "don't cache a draft for it" — which means a refused
- * concept is retried on a LATER sweep once more material has landed for its
- * course, rather than being permanently skipped. That retry costs a local
- * `retrieve()` call and nothing else on every sweep it keeps refusing
- * (bounded by the same `MAX_CONCEPTS_PER_SWEEP` cap), which is the honest
- * price of not inventing a "give up after N refusals" policy nobody asked
- * for.
+ * nothing on top except "don't cache a draft for it". Whether a refused concept
+ * is asked AGAIN on a later sweep depends on the KIND of refusal
+ * (`ol-egov.141.89.2.17`; the paragraph below this one).
+ *
+ * **A refused concept is not re-asked on unchanged evidence, by kind
+ * (`ol-egov.141.89.2.17`; `[D-289]`'s distinct refusal outcomes, `[D-400]`/`[D-420]`'s
+ * bounded-retry shape).** Before this bead every refused concept was asked again on
+ * every later sweep. When the ask reached the judge that repeated a model call for no
+ * new evidence, and because the per-sweep cap counts every ask, the same first few
+ * refused concepts (name order) took the whole cap every time, so the concepts after
+ * them were never reached. The sweep now remembers, per (course, concept), what a
+ * refusal that reached the judge was and what evidence it was made on
+ * (`GenerationRefusalMemory`, below):
+ *
+ *  - `judge-rejected` (the judge read the material and found it not enough — the one
+ *    checked verdict): held until the evidence or the demand changes, or an explicit
+ *    `release`. New or changed material for the course, a changed concept source note,
+ *    or a different demand (`purpose`/`registerHint`) lifts it.
+ *  - `judge-unavailable` (the judge could not be consulted): retried once on unchanged
+ *    evidence (`MAX_JUDGE_UNAVAILABLE_ATTEMPTS`), then held the same way; additionally
+ *    lifted for one more retry whenever a judge answer (a verdict or a draft) is seen
+ *    for any concept, since that is direct evidence the judge is back.
+ *  - every other reason (`no-hits`, `below-relevance-threshold`,
+ *    `below-composite-threshold`, `below-band`, `composite-check-unavailable`) and a
+ *    thrown or unparseable drafting call: NOT held. Nothing was sent to a judge, so a
+ *    re-ask costs a local retrieval, and each can be cured without any source edit (the
+ *    index catching up, the connection returning). Decision-sheet row 15 asks that the
+ *    threshold refusals not be read as "her notes lack this", so they are not treated as
+ *    a completed judgment here either. They rotate instead: among asked concepts the
+ *    one asked longest ago goes first, so retryable refusals do not starve the concepts
+ *    after them of the cap.
+ *
+ * A held concept is not asked, does not use the cap, and is reported (`refusals`, with
+ * the same copy, and `skippedRefused`) so what she sees is unchanged. The memory is
+ * in-process, scoped to the draft cache instance (one plugin session in production): a
+ * restart forgets it and each held concept is asked once more. Persisting it would be a
+ * persisted schema and is not done here (see the bead's open question).
  *
  * **A refused concept is classified, not just counted (`[H-1.8a]` /
  * `ol-0r92.71`, component register row 1.8a, C4.7 / `[D-089]`).** Before this
@@ -124,6 +154,7 @@
 import type {
   ConceptRecord,
   ExtractedUnit,
+  GroundingRefusalReason,
   InstrumentCitation,
   RoutingSelectionObservation,
   VaultSource,
@@ -204,6 +235,15 @@ export interface GenerationPipelineDeps {
    * voice, unchanged from before this bead.
    */
   readonly formatMatch?: (courseCode: string) => FormatMatchDecision | undefined;
+  /**
+   * What earlier sweeps learned about refusals that reached the judge
+   * (`ol-egov.141.89.2.17`) — see `GenerationRefusalMemory`. Absent, the sweep uses
+   * `refusalMemoryFor(deps.cache)`: one memory per draft cache instance, which is
+   * exactly as long-lived as the plugin session in production (`wiring.ts` builds the
+   * cache once), so no caller has to thread anything for the fix to apply. A test or a
+   * caller that wants an isolated or shared memory supplies its own.
+   */
+  readonly refusalMemory?: GenerationRefusalMemory;
 }
 
 /**
@@ -225,9 +265,10 @@ export interface FormatMatchDecision {
  * — one refused concept's classification, computed by `describeRefusal`
  * (`draft-cards-copy.ts`) instead of being dropped with only a count. *Not
  * a cache entry* — a refused concept still gets none (F4.5's
- * grounded-by-construction argument, unchanged by this bead) and is still
- * retried next sweep; this is purely the copy a caller could render for the
- * refusal she would otherwise never see.
+ * grounded-by-construction argument, unchanged by this bead); this is
+ * purely the copy a caller could render for the refusal she would otherwise
+ * never see. Whether it is asked again next sweep depends on the refusal's
+ * kind (module doc, `ol-egov.141.89.2.17`).
  */
 export interface GenerationRefusalNotice {
   readonly courseCode: string;
@@ -241,11 +282,14 @@ export interface GenerationSweepReport {
   readonly attempted: number;
   /** Of those, how many produced a cached draft. */
   readonly drafted: number;
-  /** Of those, how many refused (no transport send, per `draftQuizCardsForConcept`'s own guarantee) — retried on a later sweep. */
+  /** Of those, how many refused (no transport send, per `draftQuizCardsForConcept`'s own guarantee) — whether a later sweep asks again depends on the kind of refusal (module doc). */
   readonly refused: number;
   /**
    * `[H-1.8a]` (`ol-0r92.71`): one entry per concept counted in `refused`
-   * above, carrying `describeRefusal`'s classified two-headline copy —
+   * above — plus, since `ol-egov.141.89.2.17`, one per concept counted in
+   * `skippedRefused` below (a standing refusal carried from memory rather than
+   * re-asked, so the list she sees does not lose an entry the sweep chose not to
+   * pay for again) — carrying `describeRefusal`'s classified two-headline copy —
    * component register row 1.8a's own falsifier is that this classification
    * happens at all, rather than the refusal being dropped silently.
    * `BulkReviewView` (`generation/bulk-review-view.ts`) can now render this
@@ -262,6 +306,14 @@ export interface GenerationSweepReport {
   readonly refusals: readonly GenerationRefusalNotice[];
   /** Concepts skipped because the cache already has a record for that (course, concept) pair. */
   readonly skippedDuplicate: number;
+  /**
+   * `ol-egov.141.89.2.17`: concepts NOT asked this sweep because an earlier sweep's
+   * refusal that reached the judge still stands on unchanged evidence and demand (see
+   * the module doc). Not counted in `attempted` or `refused` — no ask was made — but
+   * each has its notice in `refusals`. `attempted` + `skippedDuplicate` + `skippedRouting`
+   * + `skippedRefused` account for every candidate the sweep reached, each once.
+   */
+  readonly skippedRefused: number;
   /** Concepts routing (`deps.routing`) determined do not currently warrant this sweep's one generation capability — never drafted, never cached, so re-consulted next sweep. Always `0` when `deps.routing` is absent. */
   readonly skippedRouting: number;
   /**
@@ -285,10 +337,165 @@ const ZERO_REPORT: GenerationSweepReport = {
   drafted: 0,
   refused: 0,
   skippedDuplicate: 0,
+  skippedRefused: 0,
   skippedRouting: 0,
   routingObservations: [],
   refusals: [],
 };
+
+/**
+ * How many times a concept refused `judge-unavailable` is asked on unchanged evidence
+ * before the sweep stops asking: the original plus one automatic retry — the same shape
+ * `[D-400]` rules for a lost materiality check ("one additional automatic retry per
+ * original check", then a recoverable deferred state and no further automatic retry).
+ * Declared, not fitted: one retry rides out a transient outage without a second paid
+ * call for the same absent evidence. (Its home by convention is `constants.ts`, which
+ * this bead does not own.)
+ */
+export const MAX_JUDGE_UNAVAILABLE_ATTEMPTS = 2;
+
+/** The two refusal kinds that reach the judge, and so are held rather than retried each sweep. */
+type StandingKind = 'checked-insufficient' | 'judge-unavailable';
+
+function standingKindOf(reason: GroundingRefusalReason): StandingKind | null {
+  if (reason === 'judge-rejected') return 'checked-insufficient';
+  if (reason === 'judge-unavailable') return 'judge-unavailable';
+  return null;
+}
+
+interface StandingRefusal {
+  readonly reason: GroundingRefusalReason;
+  readonly kind: StandingKind;
+  /** What was being asked for (`purpose`/`registerHint`); a different demand is a new question. */
+  readonly demand: string;
+  /** Every evidence piece present at some refusal of this kind under this demand — opaque digests, never content. */
+  readonly seen: ReadonlySet<string>;
+  /** Consecutive asks on unchanged evidence that ended in this kind. */
+  readonly attempts: number;
+  /** `GenerationRefusalMemory.judgeAnswers` when this was last recorded (`judge-unavailable`'s release signal). */
+  readonly epoch: number;
+}
+
+/**
+ * What the sweep has learned about refusals that reached the judge (`ol-egov.141.89.2.17`)
+ * — see the module doc for the policy this carries out. In-process only: never persisted,
+ * never sent anywhere, holding only opaque keys and digests (INV-3, D-005).
+ *
+ * The sweep is the only caller of everything except `release`. `release` is the seam for
+ * an explicit retry (`[D-420]`'s shape for the materiality recheck): no surface calls it
+ * today, and adding one needs its own clause (CLAUDE.md, "No user-visible affordance
+ * without a clause").
+ */
+export class GenerationRefusalMemory {
+  private readonly standing = new Map<string, StandingRefusal>();
+  private readonly lastAsked = new Map<string, number>();
+  private sweeps = 0;
+  private judgeAnswers = 0;
+
+  private static key(courseCode: string, conceptKey: string): string {
+    return `${courseCode}\u0000${conceptKey}`;
+  }
+
+  /** Starts a sweep and returns its ordinal (1 for the first). */
+  beginSweep(): number {
+    this.sweeps += 1;
+    return this.sweeps;
+  }
+
+  /** The sweep ordinal this concept was last asked in, `0` if never — the rotation order. */
+  lastAskedAt(courseCode: string, conceptKey: string): number {
+    return this.lastAsked.get(GenerationRefusalMemory.key(courseCode, conceptKey)) ?? 0;
+  }
+
+  noteAsked(courseCode: string, conceptKey: string, sweep: number): void {
+    this.lastAsked.set(GenerationRefusalMemory.key(courseCode, conceptKey), sweep);
+  }
+
+  standingFor(courseCode: string, conceptKey: string): StandingRefusal | undefined {
+    return this.standing.get(GenerationRefusalMemory.key(courseCode, conceptKey));
+  }
+
+  /** Whether a standing refusal still applies to this ask: same demand, no evidence piece not yet seen, and (for `judge-unavailable`) attempts spent with no judge answer since. */
+  holds(
+    courseCode: string,
+    conceptKey: string,
+    demand: string,
+    pieces: readonly string[],
+  ): boolean {
+    const entry = this.standingFor(courseCode, conceptKey);
+    if (entry === undefined) return false;
+    if (entry.demand !== demand) return false;
+    if (!pieces.every((piece) => entry.seen.has(piece))) return false;
+    if (entry.kind === 'checked-insufficient') return true;
+    return entry.attempts >= MAX_JUDGE_UNAVAILABLE_ATTEMPTS && entry.epoch === this.judgeAnswers;
+  }
+
+  /** Records how an ask ended: a standing kind is remembered, anything else clears the concept's entry. */
+  recordOutcome(
+    courseCode: string,
+    conceptKey: string,
+    outcome: { readonly reason: GroundingRefusalReason } | null,
+    demand: string,
+    pieces: readonly string[],
+  ): void {
+    const key = GenerationRefusalMemory.key(courseCode, conceptKey);
+    const kind = outcome === null ? null : standingKindOf(outcome.reason);
+    if (outcome === null || kind === null) {
+      this.standing.delete(key);
+      return;
+    }
+    const previous = this.standing.get(key);
+    const sameDemand = previous !== undefined && previous.demand === demand;
+    const unchanged =
+      sameDemand && previous.kind === kind && pieces.every((piece) => previous.seen.has(piece));
+    this.standing.set(key, {
+      reason: outcome.reason,
+      kind,
+      demand,
+      seen: new Set([...(sameDemand ? previous.seen : []), ...pieces]),
+      attempts: unchanged ? previous.attempts + 1 : 1,
+      epoch: this.judgeAnswers,
+    });
+  }
+
+  /** The judge answered something (a verdict or a draft): a `judge-unavailable` concept has earned one more retry. */
+  noteJudgeAnswered(): void {
+    this.judgeAnswers += 1;
+  }
+
+  /**
+   * Explicit retry: forgets the standing refusal for one concept (`conceptKey`), one
+   * course (`courseCode` alone) or everything (no filter), so the next sweep asks again.
+   * Returns how many were released.
+   */
+  release(filter: { readonly courseCode?: string; readonly conceptKey?: string } = {}): number {
+    let released = 0;
+    for (const key of [...this.standing.keys()]) {
+      const [courseCode, conceptKey] = key.split('\u0000');
+      if (filter.courseCode !== undefined && filter.courseCode !== courseCode) continue;
+      if (filter.conceptKey !== undefined && filter.conceptKey !== conceptKey) continue;
+      this.standing.delete(key);
+      released += 1;
+    }
+    return released;
+  }
+}
+
+const memoryByCache = new WeakMap<DraftCacheStore, GenerationRefusalMemory>();
+
+/**
+ * The refusal memory a sweep uses when `deps.refusalMemory` is absent: one per draft
+ * cache instance. `wiring.ts` builds the cache once per plugin session, so every sweep
+ * of a session shares it without any caller threading it through.
+ */
+export function refusalMemoryFor(cache: DraftCacheStore): GenerationRefusalMemory {
+  let memory = memoryByCache.get(cache);
+  if (memory === undefined) {
+    memory = new GenerationRefusalMemory();
+    memoryByCache.set(cache, memory);
+  }
+  return memory;
+}
 
 function defaultGenerateDraftId(
   courseCode: string,
@@ -338,6 +545,35 @@ function citationFromUnit(unit: ExtractedUnit): InstrumentCitation {
 }
 
 /**
+ * `ol-egov.141.89.2.17`: one opaque digest per unit that landed for `courseCode` in this
+ * sweep — its source, page and extracted text — so new or changed material (and only
+ * that) reads as new evidence. Never the text itself (INV-3, D-005).
+ */
+async function unitEvidencePieces(
+  units: readonly ExtractedUnit[],
+  courseCode: string,
+  coursesFolder: string,
+): Promise<readonly string[]> {
+  const pieces: string[] = [];
+  for (const unit of units) {
+    const home = unit.provenance.embeddedIn?.notePath ?? unit.provenance.sourcePath;
+    if (courseFromPath(home, coursesFolder) !== courseCode) continue;
+    const { sourcePath, location } = unit.provenance;
+    pieces.push(`unit:${await hashText(`${sourcePath}\u0000${location.page}\u0000${unit.text}`)}`);
+  }
+  return pieces;
+}
+
+/** A content digest of one vault path, `absent` when it cannot be read — never throws ("never throws" holds for the whole sweep). */
+async function digestOfPath(vault: VaultSource, path: string): Promise<string> {
+  try {
+    return (await vault.exists(path)) ? await hashText(await vault.read(path)) : 'absent';
+  } catch {
+    return 'absent';
+  }
+}
+
+/**
  * Runs one sweep over the units one ingestion job just produced (or, when a
  * caller wants a course-wide catch-up, any batch of previously-accumulated
  * units — see `wiring.ts`). Never throws: a drafting call's own failure
@@ -370,6 +606,8 @@ export async function runGenerationSweep(
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
   const routing = deps.routing;
   const formatMatch = deps.formatMatch;
+  const memory = deps.refusalMemory ?? refusalMemoryFor(deps.cache);
+  const sweepOrdinal = memory.beginSweep();
 
   // Built at most once per sweep, and only if routing was actually opted
   // into — a real vault walk (`enumerateVaultInstruments`) is not worth
@@ -390,6 +628,7 @@ export async function runGenerationSweep(
   let drafted = 0;
   let refused = 0;
   let skippedDuplicate = 0;
+  let skippedRefused = 0;
   let skippedRouting = 0;
   // `[H-1.8a]`: one classified entry per refusal — see `GenerationSweepReport.refusals`' own doc.
   const refusals: GenerationRefusalNotice[] = [];
@@ -401,6 +640,18 @@ export async function runGenerationSweep(
     // Stable order (by name) so which concepts win the per-sweep cap does
     // not depend on `extractConcepts`' own internal iteration order.
     const sorted = [...candidates].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+    // `ol-egov.141.89.2.17`: among concepts asked before, the one asked longest ago goes
+    // first (never-asked concepts, name order, before all of them), so refusals that stay
+    // retryable rotate through the cap instead of the same first few taking it every
+    // sweep. With no memory of earlier asks this is exactly the name order above.
+    const rotated = sorted
+      .map((candidate, index) => ({
+        candidate,
+        index,
+        askedAt: memory.lastAskedAt(courseCode, candidate.key),
+      }))
+      .sort((a, b) => a.askedAt - b.askedAt || a.index - b.index)
+      .map((entry) => entry.candidate);
 
     // F4.8/`[D-188]`'s purpose-at-build capability (`ol-0r92.35`), opt-in —
     // see the module doc's own section on `deps.formatMatch`. Called once
@@ -446,9 +697,54 @@ export async function runGenerationSweep(
         ? undefined
         : { sourceContentHash: courseSourceContentHash };
 
+    // `ol-egov.141.89.2.17`: what this ask would be made on, as opaque digests — the
+    // material that landed for this course this sweep, the embedding note, and the
+    // concept's own source notes — and what is being asked for. A refusal that reached
+    // the judge is held only while nothing here is new (`GenerationRefusalMemory.holds`).
+    const demand =
+      courseFormatMatch === undefined
+        ? 'learning'
+        : `readiness:${JSON.stringify(courseFormatMatch.registerHint ?? null)}`;
+    let courseUnitPieces: Promise<readonly string[]> | null = null;
+    const evidencePieces = async (candidate: ConceptRecord): Promise<readonly string[]> => {
+      courseUnitPieces ??= unitEvidencePieces(units, courseCode, coursesFolder);
+      const pieces = [...(await courseUnitPieces), `note:${courseSourceContentHash ?? 'absent'}`];
+      for (const path of candidate.sourcePaths) {
+        pieces.push(`source:${await hashText(path)}:${await digestOfPath(deps.vault, path)}`);
+      }
+      return pieces;
+    };
+
+    // Held first, for the whole course and before the cap: a held concept costs no ask and
+    // uses no cap, and reporting all of them here keeps the refusal list she sees the same
+    // whichever concepts the cap then reaches.
+    const held = new Set<string>();
     for (const candidate of sorted) {
+      if (!candidate.courses.includes(courseCode)) continue;
+      const standing = memory.standingFor(courseCode, candidate.key);
+      if (standing === undefined) continue;
+      // A cached draft wins over any memory of a refusal — the loop below counts it as a duplicate.
+      if (
+        (await deps.cache.findByKey(courseCode, candidate.name, courseVersionExpectation)) !== null
+      ) {
+        continue;
+      }
+      if (!memory.holds(courseCode, candidate.key, demand, await evidencePieces(candidate)))
+        continue;
+      held.add(candidate.key);
+      skippedRefused += 1;
+      refusals.push({
+        courseCode,
+        conceptName: candidate.name,
+        reason: standing.reason,
+        copy: describeRefusal(standing.reason),
+      });
+    }
+
+    for (const candidate of rotated) {
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
       if (!candidate.courses.includes(courseCode)) continue;
+      if (held.has(candidate.key)) continue;
 
       const existing = await deps.cache.findByKey(
         courseCode,
@@ -505,6 +801,10 @@ export async function runGenerationSweep(
       }
 
       attempted += 1;
+      memory.noteAsked(courseCode, candidate.key, sweepOrdinal);
+      // Taken BEFORE the ask, so a refusal is remembered against the evidence it was
+      // actually made on, never against something that changed while the call was out.
+      const pieces = await evidencePieces(candidate);
       let result: Awaited<ReturnType<typeof draftQuizCardsForConcept>>;
       try {
         result = await draftForConcept(deps.draftDeps, {
@@ -527,12 +827,16 @@ export async function runGenerationSweep(
       } catch {
         // A generative call failing outright (network, malformed transport
         // response) is not a refusal (which never throws) and not cached —
-        // the concept is simply revisited next sweep, same as a refusal.
+        // the concept is simply revisited next sweep. Not held: see the module doc.
+        memory.recordOutcome(courseCode, candidate.key, null, demand, pieces);
         continue;
       }
 
       if (result.status === 'refused') {
         refused += 1;
+        memory.recordOutcome(courseCode, candidate.key, result, demand, pieces);
+        // A verdict from the judge is proof it answered; `judge-unavailable` is the opposite.
+        if (result.reason === 'judge-rejected') memory.noteJudgeAnswered();
         // `[H-1.8a]`: classify rather than drop — see `GenerationRefusalNotice`'s own doc.
         refusals.push({
           courseCode,
@@ -542,6 +846,10 @@ export async function runGenerationSweep(
         });
         continue;
       }
+
+      // A draft came back, so the judge was consulted (or not needed) and nothing is held for this concept.
+      memory.recordOutcome(courseCode, candidate.key, null, demand, pieces);
+      memory.noteJudgeAnswered();
 
       const questions = extractDraftedQuestions(result.response);
       const provenance = extractDraftedProvenance(result.response);
@@ -629,6 +937,7 @@ export async function runGenerationSweep(
     drafted,
     refused,
     skippedDuplicate,
+    skippedRefused,
     skippedRouting,
     routingObservations,
     refusals,
