@@ -109,7 +109,10 @@ import {
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
-import { createRecordSetAsideAttempt } from './explain-back/set-aside-record.js';
+import {
+  createReadLoggedAttemptState,
+  createRecordSetAsideAttempt,
+} from './explain-back/set-aside-record.js';
 import { recordSoloGradeAndReview } from './explain-back/solo-review.js';
 import { hasExplainBackSourceFingerprintChanged } from './explain-back/source-fingerprint-staleness.js';
 import { frozenCourseOrTopicFilter } from './extend-outrun-course-filter.js';
@@ -4663,6 +4666,11 @@ export default class OleaPlugin extends Plugin {
           vault: this.vaultSource,
           deviceId: () => ensureDeviceId(this),
         }),
+        // Row 50 (`ol-egov.141.89.6.72`): reads her log for the earlier attempts at this
+        // question, so a revision in a LATER session is sealed guided when a graded attempt
+        // she set aside was never followed to acceptance. One whole-log read when an
+        // instrument-seeded question is opened; no write, no surface.
+        readLoggedAttemptState: createReadLoggedAttemptState({ vault: this.vaultSource }),
         loadMisconceptionDigest: (conceptIds) =>
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,

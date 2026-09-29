@@ -2492,3 +2492,44 @@ describe('[ILB-PER-4] part 3 (ol-egov.141.89.8.4): the PDF page renderer is comp
     expect(main).toMatch(/pageRenderer: createObsidianPageRenderer\(\),/);
   });
 });
+
+describe('row 50 (ol-egov.141.89.6.72): a later session reads the explain-back feedback exposure from her log', () => {
+  // `ol-egov.141.89.6.69` built the reader (`createReadLoggedAttemptState`,
+  // `explain-back/set-aside-record.ts`) and the view's optional
+  // `readLoggedAttemptState` dep, but `openExplainBackModal`'s deps literal
+  // passed neither, so only the in-session note was live and a revision in a
+  // later session was sealed as if nothing had been shown. The behaviour is
+  // proved end to end in `test/explain-back/feedback-exposure-later-session.spec.ts`;
+  // these are the source-level pins that `main.ts` supplies the reader, over
+  // the SAME vault the set-aside writer appends to.
+
+  it('imports createReadLoggedAttemptState beside createRecordSetAsideAttempt, from the tested module', () => {
+    expect(main).toMatch(
+      /import \{\s*createReadLoggedAttemptState,\s*createRecordSetAsideAttempt,?\s*\} from '\.\/explain-back\/set-aside-record\.js';/,
+    );
+  });
+
+  it("supplies readLoggedAttemptState as ExplainBackModal's dep, built over the plugin's vault source", () => {
+    expect(main).toMatch(
+      /readLoggedAttemptState:\s*createReadLoggedAttemptState\(\{\s*vault:\s*this\.vaultSource\s*\}\),/,
+    );
+  });
+
+  it('builds the reader in the same deps literal as the writer, so both see one log', () => {
+    const start = main.indexOf('recordSetAsideAttempt: createRecordSetAsideAttempt({');
+    expect(start).toBeGreaterThan(-1);
+    const end = main.indexOf('loadMisconceptionDigest:', start);
+    expect(end).toBeGreaterThan(start);
+    const literal = main.slice(start, end);
+    expect(literal).toMatch(/vault:\s*this\.vaultSource/);
+    expect(literal).toMatch(/readLoggedAttemptState:\s*createReadLoggedAttemptState\(/);
+  });
+
+  it('builds exactly one reader: no second call site with a different vault', () => {
+    expect(main.match(/createReadLoggedAttemptState\(/g)).toHaveLength(1);
+  });
+
+  it('adds no write: the only append in the explain-back deps literal is the set-aside writer', () => {
+    expect(main.match(/createRecordSetAsideAttempt\(/g)).toHaveLength(1);
+  });
+});
