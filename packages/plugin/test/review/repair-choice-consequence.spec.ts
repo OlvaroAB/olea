@@ -1,6 +1,6 @@
 /**
  * Row 11 of David's 2026-09-29 rulings (`ol-v7r5.111`): the grouped choice's wording states what
- * "None of these." actually does, "established from the implementation". `repair-choice.spec.ts`
+ * "None of these" actually does, "established from the implementation". `repair-choice.spec.ts`
  * pins the strings; this file pins each claim those strings make, against the production open path
  * (`openReviewSession`) and the shared store, over a real (in-memory) vault:
  *
@@ -210,7 +210,7 @@ async function historyOf(vault: VaultSource, instrumentId: string) {
   return entries.filter((entry) => entry.kind === 'review' && entry.instrumentId === instrumentId);
 }
 
-describe('"None of these." — what the implementation produces (row 11, ol-v7r5.111)', () => {
+describe('"None of these" — what the implementation produces (row 11, ol-v7r5.111)', () => {
   it('while the choice is open, nothing carries the deleted id: it is not among the passages a walk finds', async () => {
     const { vault } = await world();
 

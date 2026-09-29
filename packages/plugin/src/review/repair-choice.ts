@@ -78,13 +78,13 @@ import { hashText } from 'olea-core';
  * `test/review/repair-choice-consequence.spec.ts` pins each claim they make against the real open
  * path and store).
  *
- * The question deliberately does not presuppose that the card moved: "None of these." is a live
+ * The question deliberately does not presuppose that the card moved: "None of these" is a live
  * answer, not a fallback.
  */
 export const REPAIR_CHOICE_QUESTION = 'Which of these passages does this card refer to?';
 
-/** The second choice. The clause's own phrase (C5.3 as amended, `[D-392]`), with the ruled full stop. */
-export const REPAIR_CHOICE_NONE_OF_THESE_LABEL = 'None of these.';
+/** The second choice. The clause's own phrase (C5.3 as amended, `[D-392]`), with no full stop, matching its sibling labels ("Check again", "Edit it"); Class A, ol-v7r5.111. */
+export const REPAIR_CHOICE_NONE_OF_THESE_LABEL = 'None of these';
 
 /**
  * Shown under the question, whichever she picks. It says the practice history is kept with the
@@ -98,7 +98,7 @@ export const REPAIR_CHOICE_HISTORY_LINE =
   'Its practice history stays with the card, whichever you choose.';
 
 /**
- * What "None of these." does, read off the implementation (each clause pinned in
+ * What "None of these" does, read off the implementation (each clause pinned in
  * `test/review/repair-choice-consequence.spec.ts`):
  *
  * - the card ends up **without a passage**: nothing in her notes carries its id any more, so it is

@@ -152,7 +152,7 @@ describe('resolveRepairChoice', () => {
 describe('the grouped choice wording (ruled 2026-09-29, row 11)', () => {
   it('asks the ruled question and offers the ruled option, exactly', () => {
     expect(REPAIR_CHOICE_QUESTION).toBe('Which of these passages does this card refer to?');
-    expect(REPAIR_CHOICE_NONE_OF_THESE_LABEL).toBe('None of these.');
+    expect(REPAIR_CHOICE_NONE_OF_THESE_LABEL).toBe('None of these');
   });
 
   it('the question does not presuppose that the card moved: it names no destination and no yes-or-no', () => {
@@ -161,7 +161,7 @@ describe('the grouped choice wording (ruled 2026-09-29, row 11)', () => {
     expect(REPAIR_CHOICE_QUESTION.endsWith('?')).toBe(true);
   });
 
-  it('states the consequence of "None of these." as the state the code produces, not the drafted "leaves it as it is"', () => {
+  it('states the consequence of "None of these" as the state the code produces, not the drafted "leaves it as it is"', () => {
     expect(REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE).toBe(
       "None of these leaves the card without a passage: it won't be shown, and you won't be asked again.",
     );
