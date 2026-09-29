@@ -272,6 +272,7 @@ import {
 import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
+import { documentReadingBasisFromManifest } from './scope-reading/basis.js';
 import {
   activeSessionGroupingSentence,
   recordedSessionReason,
@@ -2013,6 +2014,19 @@ export default class OleaPlugin extends Plugin {
         createTransport: createRecordingTransport,
         registeredDocumentFor: (sourcePath) =>
           this.registeredOutcomesDocumentFor(vault, sourcePath),
+        // `[D-429]` (decision sheet row 16, `ol-egov.141.89.7.5`): the trigger records the scope
+        // reading it produces (processing state per document revision, and a past paper's
+        // structure) in Olea's own layer. It needs two facts only `main.ts` holds: this install's
+        // device id, and the document revision and read coverage, which are the unit manifest's
+        // (`[D-445]`) so a reading is keyed by the document's own digest. No second store, no
+        // Worker call.
+        scopeReading: {
+          deviceId: async () => deviceId,
+          readingBasisFor: async (sourcePath) => {
+            const manifest = (await unitManifests.manifestsFor([sourcePath])).get(sourcePath);
+            return manifest === undefined ? null : documentReadingBasisFromManifest(manifest);
+          },
+        },
       },
       // `ol-15f8`/`ol-ua2f`: the standalone-image vision runner (C3.1/C3.3),
       // wired the same F7.8 way every other Worker-backed port in this

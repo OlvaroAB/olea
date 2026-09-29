@@ -130,6 +130,11 @@ import { type QueueStatusCounts, summarizeQueueStatusCounts } from '../commands/
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
+import type { DocumentReadingBasis } from '../scope-reading/basis.js';
+import {
+  createScopeReadingPersistence,
+  type ScopeReadingPersistence,
+} from '../scope-reading/persistence.js';
 import {
   isWorkerConfigured,
   type ObsidianDataHost,
@@ -155,6 +160,7 @@ import type {
 } from './outcomes-extract-adapter.js';
 import {
   OUTCOMES_EXTRACT_TASK_ID,
+  OutcomesExtractReaderUnavailableError,
   WorkerOutcomesExtractReader,
 } from './outcomes-extract-adapter.js';
 import type { PageRenderPort } from './page-render/types.js';
@@ -352,6 +358,109 @@ export interface OutcomesExtractTriggerDeps {
     readonly documentKind: OutcomesExtractDocumentKind;
     readonly courses: readonly string[];
   } | null>;
+  /**
+   * `[D-429]` (decision sheet row 16, `ol-egov.141.89.7.5`): when present, the trigger records the
+   * examiner-scope reading it produces in Olea's own layer (`../scope-reading/persistence.ts`):
+   * one processing state per document revision (recorded, read-states-nothing, partly-read, or
+   * pending with a reason) and, for a past paper, its structure reading, each with the reader stamp.
+   * Omitted (every caller before this bead) leaves the trigger exactly as it was: the structure
+   * half of the answer is dropped and no processing state is written.
+   */
+  readonly scopeReading?: ScopeReadingTriggerDeps;
+}
+
+/**
+ * What the trigger needs to write the scope reading. `readingBasisFor` is the one fact the trigger
+ * cannot know itself: the document revision's digest and how much of the document has been read
+ * (`../scope-reading/basis.ts`). `null` means it cannot say, and then nothing is recorded: no record
+ * is never read as no scope.
+ */
+export interface ScopeReadingTriggerDeps {
+  /** This install's stable device id (`../device/device-id.ts`), resolved per write. */
+  readonly deviceId: () => Promise<string>;
+  readonly readingBasisFor: (sourcePath: VaultPath) => Promise<DocumentReadingBasis | null>;
+  /** Injectable for deterministic tests. */
+  readonly now?: () => string;
+}
+
+/** Why an extraction is owed, as `../scope-reading/persistence.ts` names it. */
+type ScopePendingReasonName = Parameters<ScopeReadingPersistence['recordPending']>[1];
+
+/** A reader error kept apart by what it says about the service: unreachable, over budget, or failed. Never a claim about the document. */
+function pendingReasonForReaderError(error: unknown): ScopePendingReasonName {
+  if (error instanceof OutcomesExtractReaderUnavailableError) {
+    return error.reason === 'budget-exhausted' ? 'over-budget' : 'unavailable';
+  }
+  return 'failed';
+}
+
+/**
+ * The trigger's scope-reading writer for one document: built once per landed batch, every write
+ * best effort. A failed write is logged (content-free, D-005) and swallowed: recording the reading
+ * must never fail the ingestion job, block the Outcome records, or skip the next document.
+ */
+interface ScopeReadingWriter {
+  pending(reason: ScopePendingReasonName): Promise<void>;
+  extraction(result: {
+    readonly declarationCount: number;
+    readonly paperStructure: OutcomesExtractReadResult<OutcomeSourceReference>['paperStructure'];
+    readonly stamp: { readonly promptVersion: string; readonly modelId: string };
+  }): Promise<void>;
+}
+
+async function openScopeReadingWriter(
+  vault: VaultSource,
+  deps: ScopeReadingTriggerDeps | undefined,
+  sourcePath: VaultPath,
+  documentKind: OutcomesExtractDocumentKind,
+): Promise<ScopeReadingWriter | null> {
+  if (deps === undefined) return null;
+  let basis: DocumentReadingBasis | null;
+  try {
+    basis = await deps.readingBasisFor(sourcePath);
+  } catch (error) {
+    console.error('Olea: scope reading basis could not be read; nothing recorded', { error });
+    return null;
+  }
+  if (basis === null) {
+    console.error('Olea: scope reading not recorded: no revision basis for this document');
+    return null;
+  }
+  const known = basis;
+  let persistence: ScopeReadingPersistence | null = null;
+  const open = async (): Promise<ScopeReadingPersistence> => {
+    persistence ??= createScopeReadingPersistence({
+      vault,
+      deviceId: await deps.deviceId(),
+      ...(deps.now !== undefined ? { now: deps.now } : {}),
+    });
+    return persistence;
+  };
+  const ref = { sourcePath, documentKind, revisionDigest: known.revisionDigest } as const;
+  return {
+    async pending(reason) {
+      try {
+        await (await open()).recordPending(ref, reason);
+      } catch (error) {
+        console.error('Olea: scope reading was not recorded (ingestion unaffected)', { error });
+      }
+    },
+    async extraction(result) {
+      try {
+        await (await open()).recordExtraction({
+          sourcePath,
+          documentKind,
+          revisionDigest: known.revisionDigest,
+          coverage: { unitsRead: known.unitsRead, unitsTotal: known.unitsTotal },
+          declarationCount: result.declarationCount,
+          paperStructure: result.paperStructure,
+          stamp: result.stamp,
+        });
+      } catch (error) {
+        console.error('Olea: scope reading was not recorded (ingestion unaffected)', { error });
+      }
+    },
+  };
 }
 
 /**
@@ -525,9 +634,23 @@ async function triggerOutcomesExtractForLandedUnit(
   const registered = await deps.registeredDocumentFor(sourcePath);
   if (registered === null) return;
 
+  // `[D-429]`: the revision and coverage basis is read once, before the call, so the reading is
+  // keyed by the document as it stood when the units were sent.
+  const scope = await openScopeReadingWriter(
+    vault,
+    deps.scopeReading,
+    sourcePath,
+    registered.documentKind,
+  );
+
   const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
   const config = await configStore.load();
-  if (!isWorkerConfigured(config)) return; // F7.8 grey-out: honest skip, not a failure.
+  if (!isWorkerConfigured(config)) {
+    // F7.8 grey-out: honest skip, not a failure. The extraction is owed, and is recorded as owed
+    // (`[D-429]`: pending is never empty), never as a document that states nothing.
+    await scope?.pending('unavailable');
+    return;
+  }
 
   let stamp: OutcomeProvenance | null = null;
   const innerTransport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
@@ -549,16 +672,25 @@ async function triggerOutcomesExtractForLandedUnit(
     anchor: { path: sourcePath, blockIndex: index },
   }));
 
-  const result: OutcomesExtractReadResult<OutcomeSourceReference> = await reader.read({
-    documentKind: registered.documentKind,
-    passages,
-  });
+  let result: OutcomesExtractReadResult<OutcomeSourceReference>;
+  try {
+    result = await reader.read({
+      documentKind: registered.documentKind,
+      passages,
+    });
+  } catch (error) {
+    // The failure still propagates as before (`withOutcomesExtractHook` logs it); the revision is
+    // additionally recorded as owed, with the reason the service gave (`[D-429]`).
+    await scope?.pending(pendingReasonForReaderError(error));
+    throw error;
+  }
 
   if (stamp === null) {
     console.error(
       'Olea: outcomes-extract response carried no D7.3 stamp (promptVersion/modelId) — extraction discarded, not guessed',
       { taskId: OUTCOMES_EXTRACT_TASK_ID },
     );
+    await scope?.pending('failed');
     return;
   }
   const provenance: OutcomeProvenance = stamp;
@@ -570,6 +702,13 @@ async function triggerOutcomesExtractForLandedUnit(
   };
   const resolved = await resolveOutcomeCandidates(vault, result, options);
   await reconcileResolvedOutcomes(vault, resolved, options);
+  // `[D-429]`: after the Outcome records, so a `recorded` state never outruns the declarations it
+  // stands for. The structure half of the answer, dropped here before this bead, is kept.
+  await scope?.extraction({
+    declarationCount: result.outcomes.length,
+    paperStructure: result.paperStructure,
+    stamp: { promptVersion: provenance.promptVersion, modelId: provenance.modelVersion },
+  });
 }
 
 /**

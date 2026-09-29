@@ -59,3 +59,35 @@ describe('outcomes.extract.v1 is wired into the real ingestion runner, not left 
     expect(main).toMatch(/readReviewLogHistory,/);
   });
 });
+
+describe('[D-429] (row 16, ol-egov.141.89.7.5): the trigger writes the examiner-scope reading, and main.ts supplies what it needs', () => {
+  // `persistence.ts` and the three stores were built with no production writer; the trigger's
+  // discard point now calls them (`outcomes-extract-scope-reading.spec.ts` proves that end to
+  // end). These are the source-level pins that `main.ts` hands the trigger its two facts: the
+  // stable device id and the reading basis, and that the basis is the unit manifest's, never a
+  // second, differently keyed digest.
+
+  it('the outcomes option carries a scopeReading dep', () => {
+    expect(main).toMatch(/outcomes:\s*\{[\s\S]*?scopeReading:\s*\{/);
+  });
+
+  it('scopeReading names the same device id the rest of onload uses, not a fresh mint', () => {
+    expect(main).toMatch(/scopeReading:\s*\{\s*deviceId:\s*async \(\) => deviceId,/);
+  });
+
+  it("the reading basis is the unit manifest's own answer for that source, through the tested helper", () => {
+    expect(main).toMatch(
+      /readingBasisFor:\s*async \(sourcePath\) => \{\s*const manifest = \(await unitManifests\.manifestsFor\(\[sourcePath\]\)\)\.get\(sourcePath\);\s*return manifest === undefined \? null : documentReadingBasisFromManifest\(manifest\);\s*\},/,
+    );
+  });
+
+  it('imports documentReadingBasisFromManifest from the scope-reading module', () => {
+    expect(main).toMatch(
+      /import \{ documentReadingBasisFromManifest \} from '\.\/scope-reading\/basis\.js';/,
+    );
+  });
+
+  it('adds no Worker call and no second writer: the only scope-reading persistence is the trigger', () => {
+    expect(main).not.toMatch(/createScopeReadingPersistence/);
+  });
+});
