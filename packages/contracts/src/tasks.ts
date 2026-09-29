@@ -180,6 +180,47 @@ export const TASK_IDS = {
    */
   OUTCOMES_EXTRACT: 'outcomes.extract.v1',
   /**
+   * W6 · Slot J — the examiner-scope alignment decision: given one batch of
+   * records read out of a registered document (objectives declarations,
+   * past-paper question parts inside their question groups, or an assessment's
+   * stated-scope entries) and one batch of a course's concepts, which listed
+   * concepts does each record attest (`[D-431]`, ruled 2026-09-29 on decision-sheet
+   * row 18; `olea-service`'s `docs/dev/intelligence-build/scp.md` sections S.3,
+   * S.4 and S.14, cited by path, private repo). A verdict over material already
+   * given — a record plus a closed concept list — not a generation, so it is
+   * grouped with W6 alongside `concepts.classify.v1` and `grounding.judge.v1`.
+   *
+   * **Stateless.** The Worker takes the batch as transient context, decides,
+   * and forgets: aggregation into an aligned / pending / cannot-tell /
+   * not-aligned result, the omission ledger and any stored result are client
+   * code (`[D-429]`, `[D-069]`), never this task. An answer names a batch id
+   * and the coverage digest it was given and the Worker refuses one that
+   * echoes either differently. Payload/response fixed by
+   * `olea-service/src/tasks/outcomesAlign.ts`'s `outcomesAlignRequest` /
+   * `outcomesAlignResponse`. A named production caller is the wire stage
+   * (`ol-egov.141.89.7.5`); this id is that stage's join key.
+   */
+  OUTCOMES_ALIGN: 'outcomes.align.v1',
+  /**
+   * W6 · Slot J — the demand of one past-paper question part, read in its full
+   * context (`[D-431]`, `[D-262]`'s five-word vocabulary, `olea-service`'s
+   * `docs/dev/intelligence-build/scp.md` section 2.3): the part's own
+   * instruction, its section's instruction, its group's stem and stimulus
+   * status and the parts it depends on — never an instruction verb alone. The
+   * verdict is one of the five demands, a compound of two in the order the part
+   * asks them, `unsupported` (an operation outside the vocabulary, its command
+   * word kept verbatim and never coerced into a demand), or cannot-tell with a
+   * reason; an unavailable call is operational and is never a verdict. A
+   * verdict over material already given, so grouped with W6 for the same reason
+   * as `outcomes.align.v1` above. The vocabulary is unchanged: a sixth demand is
+   * a separate decision. Payload/response fixed by
+   * `olea-service/src/tasks/demandClassify.ts`'s `demandClassifyRequest` /
+   * `demandClassifyResponse`; the verdict is stored per part beside the
+   * structure reading by the client (`[D-429]`). A named production caller is
+   * the wire stage (`ol-egov.141.89.7.5`).
+   */
+  DEMAND_CLASSIFY: 'demand.classify.v1',
+  /**
    * Slot A — audio transcription for F5.1's spoken explain-back input
    * (`ol-p4t01`, `[D-007]`). Carries no W-number the way W1–W7 do: the cost
    * model doc's own Slot A entry

@@ -18,7 +18,7 @@ import {
 } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these twenty-two ids, spelled exactly this way', () => {
+  it('is exactly these twenty-four ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -27,6 +27,7 @@ describe('the closed task-id catalogue', () => {
       'concepts.classify.v1',
       'concepts.extract.v1',
       'concepts.relations.v1',
+      'demand.classify.v1',
       'explain-back.author.v1',
       'explain-back.judge.v1',
       'explain-back.solo.v1',
@@ -34,6 +35,7 @@ describe('the closed task-id catalogue', () => {
       'grounding.judge.v1',
       'materiality.judge.v1',
       'oracle.rank.v1',
+      'outcomes.align.v1',
       'outcomes.extract.v1',
       'plan.governor.v1',
       'probe-application.generate.v1',
@@ -128,13 +130,23 @@ describe('the closed task-id catalogue', () => {
     // production caller is still owed by `[PROBE-5]` (`ol-v7r5.46`)'s
     // still-open design ruling.
     //
+    // `outcomes.align.v1` and `demand.classify.v1` (`[D-431]`, ruled 2026-09-29 on
+    // decision-sheet row 18, built by `ol-egov.141.89.7.24`) are two more W6
+    // judgments: a verdict over records and a closed concept list (which listed
+    // concepts a record attests), and a verdict over one question part read in
+    // its full context (which of `[D-262]`'s five demands, a compound of two,
+    // unsupported, or cannot-tell). Both judge material already given rather
+    // than generate, so they sit with `concepts.classify.v1` and
+    // `grounding.judge.v1`. See each id's own doc comment in `tasks.ts`; the
+    // client production caller is the wire stage (`ol-egov.141.89.7.5`).
+    //
     // `vision.extract.v2` (`[D-325]`, `ol-egov.141.89.8.7`, registered by
     // `ol-egov.141.89.8.18`) is NOT a second workload shape — it is W2's
     // same perception entry, served beside `v1` only because this file's own
     // naming rule gives an incompatible response shape a new id rather than
     // breaking `v1`'s live client consumer. See `vision.extract.v2`'s own
     // doc comment in `tasks.ts` for what the shape change is.
-    expect(ALL_TASK_IDS).toHaveLength(22);
+    expect(ALL_TASK_IDS).toHaveLength(24);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
