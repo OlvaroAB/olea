@@ -62,6 +62,27 @@
  * `WorkerEmbeddingProvider`, `WorkerJudgeCaller` and `WorkerTranscriptionCaller`
  * already share, so reusing it here adds no coupling to the lane building
  * `packages/core/src/outcome/`.
+ *
+ * **Unknown marks, parts, total and time (`[D-431]`, `ol-egov.141.89.7.33`).** The Worker's
+ * `outcomes.extract.v1` at prompt 1.2.0 keeps what a paper does not state as unknown instead of
+ * dropping it, and this reader accepts both that response and every earlier one unchanged:
+ *
+ * - a section with NO `marks` field is kept, with `marks` absent (the store mapping,
+ *   `scope-reading/persistence.ts`, turns absent into unknown): never zero, never estimated from
+ *   the item count, never a failure that loses the whole paper. A stated value, including a
+ *   printed `0`, is still read as stated; an explicit `null` reads as unknown as well, since the
+ *   only thing it can mean is "not stated";
+ * - `paperStructure.questionParts` are read like groups (each part's instruction anchor resolved
+ *   onto the caller's own passage, the original wording staying in her source), with `marks`
+ *   stated or absent and `dependsOn` stated (naming part ids) or unknown, which is what an absent
+ *   `dependsOn` means: a dependency nobody stated is never independent. No demand is read here,
+ *   ever: a part's demand is `demand.classify.v1`'s (`./demand-classify-adapter.ts`);
+ * - `totalMarks` and `timeAllowanceMinutes` come back as plain numbers (their anchor must still
+ *   resolve onto a sent passage, and the stored shape keeps none).
+ *
+ * As with `questionGroups`, every new key is present in the result only when the response carried
+ * it: a 1.0.0 or 1.1.0 response reads to the very object it read to before, and **absent is not
+ * empty** (an empty `questionParts` list means a reader that looked and found none).
  */
 
 import type {
@@ -110,8 +131,40 @@ export interface PaperSectionCandidate<TAnchor> {
   readonly label: string;
   readonly questionForm: string;
   readonly itemCount: number;
-  readonly marks: number;
+  /**
+   * ABSENT means the paper does not state the section's marks (`[D-431]`): unknown, never zero and
+   * never worked out from the item count. A stated value, a printed `0` included, is present.
+   */
+  readonly marks?: number;
   readonly anchor: TAnchor;
+}
+
+/**
+ * A part's dependency on other parts of the same reading, by the Worker's part ids. `unknown` is
+ * what a dependency nobody stated is: never independent. Structurally the stored
+ * `ScopePartDependency` (`packages/core/src/outcome/scope-reading-types.ts`).
+ */
+export type PartDependencyCandidate =
+  | { readonly status: 'stated'; readonly onPartIds: readonly string[] }
+  | { readonly status: 'unknown' };
+
+/**
+ * One labelled question part inside a kept group (`[D-431]`). The instruction is a REFERENCE: the
+ * anchor of the one passage that carries it, so the original wording stays in her source and is
+ * never copied or forced into a taxonomy. Carries no demand (`demand.classify.v1` reads that).
+ * Structurally the fields of `ExtractedPaperStructure['questionParts']` in
+ * `scope-reading/persistence.ts`.
+ */
+export interface QuestionPartCandidate<TAnchor> {
+  readonly id: string;
+  readonly label: string;
+  readonly groupId: string;
+  readonly instructionAnchor: TAnchor;
+  /** The paper's own descriptor, verbatim. */
+  readonly questionForm: string;
+  /** Absent means the paper prints no marks on or beside the part: unknown, never zero. */
+  readonly marks?: number;
+  readonly dependsOn: PartDependencyCandidate;
 }
 
 export interface OutcomesExtractReadRequest<TAnchor> {
@@ -130,6 +183,15 @@ export interface OutcomesExtractReadResult<TAnchor> {
      * Carried in memory only; where they are stored waits on `[D-429]`.
      */
     readonly questionGroups?: readonly PaperQuestionGroup<TAnchor>[];
+    /**
+     * The Worker's question parts (`[D-431]`, prompt 1.2.0), each instruction anchor resolved onto
+     * the caller's own anchor. ABSENT when the response carried none: absent is not empty.
+     */
+    readonly questionParts?: readonly QuestionPartCandidate<TAnchor>[];
+    /** The paper's stated total marks. ABSENT when the paper states none: unknown, never zero. */
+    readonly totalMarks?: number;
+    /** The paper's stated time allowance in whole minutes. ABSENT when the paper states none. */
+    readonly timeAllowanceMinutes?: number;
   };
 }
 
@@ -213,9 +275,32 @@ export class WorkerOutcomesExtractReader {
     const outcomes = readOutcomeProposals(response, passages);
     const sections = readSectionProposals(response, passages);
     const questionGroups = readQuestionGroupProposals(response, passages);
+    const questionParts = readQuestionPartProposals(response, passages);
+    const totalMarks = readStatedPaperNumber(
+      response,
+      passages,
+      'totalMarks',
+      'total marks',
+      false,
+    );
+    const timeAllowanceMinutes = readStatedPaperNumber(
+      response,
+      passages,
+      'timeAllowanceMinutes',
+      'time allowance',
+      true,
+    );
     return {
       outcomes,
-      paperStructure: questionGroups === undefined ? { sections } : { sections, questionGroups },
+      // Every key past `sections` is present only when the response carried it, so a response
+      // from before it existed reads to exactly the object it always did.
+      paperStructure: {
+        sections,
+        ...(questionGroups !== undefined ? { questionGroups } : {}),
+        ...(questionParts !== undefined ? { questionParts } : {}),
+        ...(totalMarks !== undefined ? { totalMarks } : {}),
+        ...(timeAllowanceMinutes !== undefined ? { timeAllowanceMinutes } : {}),
+      },
     };
   }
 }
@@ -335,18 +420,35 @@ function toSectionCandidate<TAnchor>(
       `WorkerOutcomesExtractReader: paper section ${index} ("${label}") carried no valid itemCount.`,
     );
   }
-  const marks = entry.marks;
-  if (typeof marks !== 'number' || Number.isNaN(marks) || marks < 0) {
-    throw new OutcomesExtractReaderError(
-      `WorkerOutcomesExtractReader: paper section ${index} ("${label}") carried no valid marks.`,
-    );
-  }
+  const marks = readOptionalMarks(entry.marks, `paper section ${index} ("${label}")`);
   const anchorPassage = resolveAnchor(
     entry.anchorIndex,
     passages,
     `paper section ${index} ("${label}")`,
   );
-  return { label, questionForm, itemCount, marks, anchor: anchorPassage.anchor };
+  return {
+    label,
+    questionForm,
+    itemCount,
+    ...(marks !== undefined ? { marks } : {}),
+    anchor: anchorPassage.anchor,
+  };
+}
+
+/**
+ * Marks the paper states, or `undefined` for marks it does not (`[D-431]`): an absent field, and an
+ * explicit `null`, are both "not stated" and never become zero. Anything else that is not a
+ * non-negative number is a stated value this reader cannot trust, and is refused rather than read
+ * as unknown (guessing which it was would be inventing). A printed `0` is a stated value.
+ */
+function readOptionalMarks(marks: unknown, describe: string): number | undefined {
+  if (marks === undefined || marks === null) return undefined;
+  if (typeof marks !== 'number' || Number.isNaN(marks) || marks < 0) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no valid marks.`,
+    );
+  }
+  return marks;
 }
 
 function readQuestionGroupProposals<TAnchor>(
@@ -422,6 +524,124 @@ function toQuestionGroup<TAnchor>(
     anchor,
     stimulus: toStimulus(entry.stimulus, passages, describe),
   };
+}
+
+function readPaperStructureContainer(response: Record<string, unknown>): Record<string, unknown> {
+  const paperStructure = readResult(response).paperStructure;
+  return typeof paperStructure === 'object' && paperStructure !== null
+    ? (paperStructure as Record<string, unknown>)
+    : {};
+}
+
+/** `undefined` (absent, not empty) when the response carried no `questionParts`. */
+function readQuestionPartProposals<TAnchor>(
+  response: Record<string, unknown>,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+): readonly QuestionPartCandidate<TAnchor>[] | undefined {
+  const raw = readPaperStructureContainer(response).questionParts;
+  if (raw === undefined) return undefined;
+  if (!Array.isArray(raw)) {
+    throw new OutcomesExtractReaderError(
+      'WorkerOutcomesExtractReader: the Worker response carried a `result.paperStructure.questionParts` that was not an array.',
+    );
+  }
+  return raw.map((entry, index) => toQuestionPart(entry, passages, index));
+}
+
+function toQuestionPart<TAnchor>(
+  raw: unknown,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  index: number,
+): QuestionPartCandidate<TAnchor> {
+  const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  const describe = `question part ${index}`;
+  const { id, label, groupId, questionForm } = entry;
+  if (typeof id !== 'string' || id.length === 0) {
+    throw new OutcomesExtractReaderError(`WorkerOutcomesExtractReader: ${describe} carried no id.`);
+  }
+  if (typeof label !== 'string' || label.length === 0) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no label.`,
+    );
+  }
+  if (typeof groupId !== 'string' || groupId.length === 0) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no groupId.`,
+    );
+  }
+  if (typeof questionForm !== 'string' || questionForm.length === 0) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: ${describe} carried no questionForm.`,
+    );
+  }
+  const marks = readOptionalMarks(entry.marks, describe);
+  const instructionAnchor = resolveAnchor(
+    entry.instructionAnchorIndex,
+    passages,
+    `${describe} instruction`,
+  ).anchor;
+  return {
+    id,
+    label,
+    groupId,
+    instructionAnchor,
+    questionForm,
+    ...(marks !== undefined ? { marks } : {}),
+    dependsOn: toPartDependency(entry.dependsOn, describe),
+  };
+}
+
+/** An absent dependency is unknown, never independent — the Worker's own default, restated. */
+function toPartDependency(raw: unknown, describe: string): PartDependencyCandidate {
+  if (raw === undefined) return { status: 'unknown' };
+  const entry = typeof raw === 'object' && raw !== null ? (raw as Record<string, unknown>) : {};
+  if (entry.status === 'unknown') return { status: 'unknown' };
+  if (entry.status === 'stated') {
+    const ids = entry.onPartIds;
+    if (
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      !ids.every((id) => typeof id === 'string' && id.length > 0)
+    ) {
+      throw new OutcomesExtractReaderError(
+        `WorkerOutcomesExtractReader: ${describe} carried a stated dependency with no valid onPartIds.`,
+      );
+    }
+    return { status: 'stated', onPartIds: ids as string[] };
+  }
+  throw new OutcomesExtractReaderError(
+    `WorkerOutcomesExtractReader: ${describe} carried a dependency with an unknown status.`,
+  );
+}
+
+/**
+ * `paperStructure.totalMarks` or `.timeAllowanceMinutes`: `{ value, anchorIndex }` on the wire, a
+ * plain number here (the stored shape keeps no anchor, but the anchor must still name a passage
+ * that was sent, or the value is refused as ungrounded). `undefined` (absent, or an explicit
+ * `null`) means the paper states none: unknown, never zero.
+ */
+function readStatedPaperNumber<TAnchor>(
+  response: Record<string, unknown>,
+  passages: readonly OutcomeSourcePassage<TAnchor>[],
+  field: 'totalMarks' | 'timeAllowanceMinutes',
+  describe: string,
+  wholeMinutes: boolean,
+): number | undefined {
+  const raw = readPaperStructureContainer(response)[field];
+  if (raw === undefined || raw === null) return undefined;
+  const entry = typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
+  const value = entry.value;
+  const valid =
+    typeof value === 'number' &&
+    Number.isFinite(value) &&
+    (wholeMinutes ? Number.isInteger(value) && value >= 1 : value >= 0);
+  if (!valid) {
+    throw new OutcomesExtractReaderError(
+      `WorkerOutcomesExtractReader: the paper's ${describe} carried no valid value.`,
+    );
+  }
+  resolveAnchor(entry.anchorIndex, passages, `the paper's ${describe}`);
+  return value;
 }
 
 /** An absent stimulus is unknown, never "none" — the Worker's own default, restated. */
