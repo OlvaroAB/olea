@@ -3,20 +3,24 @@
  * `PaperItemGenerationPort` (`olea-core`'s `oracle/paper-items.ts`), F4.11's practice-paper
  * pipeline (`[D-250]`/`[D-252]`, component register row 2.11, `[H-blueprint]` / `ol-0r92.75`).
  *
- * **Reachability, stated plainly (`[D-072]` clause 5), updated from this file's original note.**
- * `createWorkerPaperItemGenerationPort` (below) is reached in production: `./generation-port.ts`'s
- * `buildPracticePaperGenerationPort` (line 34) calls it directly; `./wiring.ts`'s
- * `buildPracticePaperProvider` composes that into `createLocalPracticePaperProvider`
- * (`./provider.ts`), whose `requestPaper` calls `olea-core`'s `fillPaperBlueprintSlots`
- * (`oracle/paper-items.ts`) once per filled slot — the actual call site of this port. The
- * course-scoped entry command (`OLEA_COMMAND_PRACTICE_PAPER_OPEN`, `./ids.ts`) and the
- * `PaperView` registration reach that provider from `main.ts` (`this.addCommand` around line
- * 1011, `this.registerView(VIEW_TYPE_OLEA_PAPER, ...)` around line 1197,
- * `revealPracticePaperView` around line 3916) — `[PAPER-10]` / `ol-0r92.75.1`'s wiring, landed
- * after this file's original "nothing calls it yet" note. A slot's own `taskId` (`'cards.generate.v1'`
- * for the `written`/`practical` route, `'quiz.generate.v1'` for `recall-style` —
- * `oracle/paper-blueprint.ts`'s `taskIdForFormatClass`) decides which generator this port's single
- * request shape reaches; both are exercised through this one port, not two.
+ * **Reachability, stated plainly (`[D-072]` clause 5), corrected after `ol-egov.141.89.7.5` (`[D-430]`).**
+ * The production caller is the THREE-OUTCOME port, `createWorkerPaperSlotOutcomePort` (below), not the
+ * flat adapter. `../paper/generation-port.ts`'s `buildPracticePaperGenerationPort` builds it;
+ * `../paper/wiring.ts`'s `buildPracticePaperProvider` composes that into
+ * `createLocalPracticePaperProvider` (`../paper/provider.ts`), whose `requestPaper` calls
+ * `composePaperThroughJournal` (`../paper/journal-composition.ts`), which drives `olea-core`'s
+ * `runPaperJournal` (`oracle/paper-journal.ts`) and calls this port once per slot. `main.ts` reaches
+ * that provider through `buildPracticePaperProvider` (the course-scoped entry command
+ * `OLEA_COMMAND_PRACTICE_PAPER_OPEN`, `../paper/ids.ts`, and the `PaperView` registration).
+ * `createWorkerPaperItemGenerationPort` (the flat adapter, for `olea-core`'s `fillPaperBlueprintSlots`,
+ * `oracle/paper-items.ts`) has NO production caller since the paper path moved to the journal: only
+ * this file's specs (`test/oracle/paper-item-port*.spec.ts`) call it, and `test/paper/provider.spec.ts`
+ * pins that the paper path files do not name it. Whether to remove it (with `fillPaperBlueprintSlots`,
+ * which is likewise called by no production file) is `ol-egov.141.89.7.5`'s to decide.
+ * A slot's own `taskId` (`'cards.generate.v1'` for the `written`/`practical` route,
+ * `'quiz.generate.v1'` for `recall-style` — `oracle/paper-blueprint.ts`'s `taskIdForFormatClass`)
+ * decides which generator the port's single request shape reaches; both are exercised through the one
+ * port, not two.
  *
  * **Why this is a NEW file rather than a call to `draftQuizCardsForConcept`
  * (`../retrieval/draft-quiz-cards.ts`).** That function does its own retrieval — it turns a

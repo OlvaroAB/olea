@@ -55,9 +55,13 @@
  * `quiz.generate.v1`. A workbench caller would not discharge it.
  */
 
-import type { PaperDemand, PaperStimulusForm, WorkerTaskTransport } from 'olea-core';
+import type {
+  PaperDemand,
+  PaperStimulusForm,
+  ScopePartDemand,
+  WorkerTaskTransport,
+} from 'olea-core';
 import { PAPER_DEMANDS } from 'olea-core';
-import type { ScopePartDemand } from '../../../core/src/outcome/scope-reading-types.js';
 
 /** `TASK_IDS.DEMAND_CLASSIFY` (`olea-contracts`, `f1ed01e`), mirrored so this module loads from plain Node. Pinned by this adapter's spec. */
 export const DEMAND_CLASSIFY_TASK_ID = 'demand.classify.v1';
