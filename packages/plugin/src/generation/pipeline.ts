@@ -701,6 +701,10 @@ export async function runGenerationSweep(
     // material that landed for this course this sweep, the embedding note, and the
     // concept's own source notes — and what is being asked for. A refusal that reached
     // the judge is held only while nothing here is new (`GenerationRefusalMemory.holds`).
+    // The demand is `purpose`/`registerHint` because those are all this sweep sends today.
+    // When it starts sending an intended operation (decision-sheet row 38's explicit recall
+    // intent for the sweep), that value MUST join this key, or a changed demand would read
+    // as unchanged and stay held.
     const demand =
       courseFormatMatch === undefined
         ? 'learning'
