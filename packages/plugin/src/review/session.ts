@@ -39,6 +39,7 @@ import {
   evaluateRepeatedFailureStandingCheck,
   mapMcqRating,
   STRONG_RECALL_PROPOSAL_TRIGGER,
+  scoredConceptId,
 } from 'olea-core';
 // `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
 // from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
@@ -1587,44 +1588,48 @@ export class ReviewSession {
     // `decideResolutionEvidence` — never for `'mcq'` (that instrument type
     // is unrepresentable in its candidate union; recognition never counts,
     // M2/R7) and never for a failed ('again') recall (that function's own
-    // allowlist). One concept at a time, mirroring D-031's "an instrument
-    // may be evidence for several concepts" — each of `stamped.instrument
-    // .conceptIds` gets its own open-misconception read and its own
-    // decision, since a misconception record is per-concept. Both ports are
+    // allowlist). The scored concept only (D-423, ruling row 24, ol-egov.141.89.9.76):
+    // a card that lists several topics demonstrates understanding of its first-listed
+    // topic, so a correct answer can resolve a misconception on that topic and never on a
+    // context topic (M2: resolution needs demonstrated understanding, not a passed related
+    // card). The same shared rule every other credit reader uses (`scoredConceptId`). Both ports are
     // optional and absent by default (`ports.ts`): an absent lookup reads as
     // "no open misconception known" (the pure decision then always returns
     // `null`, its own fail-closed default), and an absent append port means
     // a `null`-or-not verdict is simply never recorded — this block finds
     // nothing to do either way, the same "simply cannot offer it" posture
     // every other optional port in this method already has.
-    if (stamped.instrument.type === 'qa' || stamped.instrument.type === 'cloze') {
-      for (const conceptId of stamped.instrument.conceptIds) {
-        const hasOpenMisconceptionOnConcept =
-          this.deps.misconceptionLookup?.hasOpenMisconceptionOnConcept(conceptId) ?? false;
-        const evidenceKind = decideResolutionEvidence({
-          source: 'recall',
+    const scoredConcept = scoredConceptId(stamped.instrument.conceptIds);
+    if (
+      scoredConcept !== undefined &&
+      (stamped.instrument.type === 'qa' || stamped.instrument.type === 'cloze')
+    ) {
+      const conceptId = scoredConcept;
+      const hasOpenMisconceptionOnConcept =
+        this.deps.misconceptionLookup?.hasOpenMisconceptionOnConcept(conceptId) ?? false;
+      const evidenceKind = decideResolutionEvidence({
+        source: 'recall',
+        conceptId,
+        instrumentType: stamped.instrument.type,
+        rating,
+        hasOpenMisconceptionOnConcept,
+      });
+      if (evidenceKind !== null && this.deps.resolutionEvidenceAppend !== undefined) {
+        const event = buildResolutionEvidenceEvent({
           conceptId,
-          instrumentType: stamped.instrument.type,
-          rating,
-          hasOpenMisconceptionOnConcept,
+          evidenceKind,
+          originInstrumentId: stamped.instrument.instrumentId,
+          // `ReviewLogPort.recordReview` below returns `Promise<void>`,
+          // never the review record's own `eventId` — unlike `[D-202]`'s
+          // misconception-observed append, which lives INSIDE
+          // `createVaultReviewLogPort` for exactly the reason that only
+          // the port itself sees the record it just wrote. This class has
+          // no review-log event id to attach; `null` is the honest value,
+          // never a fabricated one.
+          originReviewEventId: null,
+          timestamp: isoWithLocalOffset(now),
         });
-        if (evidenceKind !== null && this.deps.resolutionEvidenceAppend !== undefined) {
-          const event = buildResolutionEvidenceEvent({
-            conceptId,
-            evidenceKind,
-            originInstrumentId: stamped.instrument.instrumentId,
-            // `ReviewLogPort.recordReview` below returns `Promise<void>`,
-            // never the review record's own `eventId` — unlike `[D-202]`'s
-            // misconception-observed append, which lives INSIDE
-            // `createVaultReviewLogPort` for exactly the reason that only
-            // the port itself sees the record it just wrote. This class has
-            // no review-log event id to attach; `null` is the honest value,
-            // never a fabricated one.
-            originReviewEventId: null,
-            timestamp: isoWithLocalOffset(now),
-          });
-          await this.deps.resolutionEvidenceAppend.appendResolutionEvidence(event);
-        }
+        await this.deps.resolutionEvidenceAppend.appendResolutionEvidence(event);
       }
     }
 

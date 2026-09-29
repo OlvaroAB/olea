@@ -114,6 +114,41 @@ describe('M2 resolution evidence — recall reviews', () => {
     });
   });
 
+  // D-423 (ruling row 24, ol-egov.141.89.9.76): one scored concept per card. A context topic
+  // earns no resolution evidence, however its own misconception stands.
+  it('a multi-topic card resolves the scored (first-listed) topic only: a context topic with an open misconception is neither read nor credited', async () => {
+    const misconceptionLookup = fakeMisconceptionLookup(['concept-ctx', 'concept-1']);
+    const resolutionEvidenceAppend = fakeResolutionEvidenceAppend();
+    const item = queueItem(qaFixture({ conceptIds: ['concept-1', 'concept-ctx'] }));
+    const session = new ReviewSession(
+      baseDeps({ queue: [item], misconceptionLookup, resolutionEvidenceAppend }),
+    );
+    await session.start();
+    session.reveal();
+
+    await session.rate('good');
+
+    expect(misconceptionLookup.asked).toEqual(['concept-1']);
+    expect(resolutionEvidenceAppend.events.map((e) => e.conceptId)).toEqual(['concept-1']);
+  });
+
+  it('a multi-topic card whose only open misconception is on a context topic appends nothing; reordering the topics moves the credit with them', async () => {
+    const run = async (conceptIds: string[]) => {
+      const misconceptionLookup = fakeMisconceptionLookup(['concept-ctx']);
+      const resolutionEvidenceAppend = fakeResolutionEvidenceAppend();
+      const item = queueItem(qaFixture({ conceptIds }));
+      const session = new ReviewSession(
+        baseDeps({ queue: [item], misconceptionLookup, resolutionEvidenceAppend }),
+      );
+      await session.start();
+      session.reveal();
+      await session.rate('good');
+      return resolutionEvidenceAppend.events.map((e) => e.conceptId);
+    };
+    expect(await run(['concept-1', 'concept-ctx'])).toEqual([]);
+    expect(await run(['concept-ctx', 'concept-1'])).toEqual(['concept-ctx']);
+  });
+
   it('a failed ("again") recall never appends, even with an open misconception', async () => {
     const misconceptionLookup = fakeMisconceptionLookup(['concept-1']);
     const resolutionEvidenceAppend = fakeResolutionEvidenceAppend();
