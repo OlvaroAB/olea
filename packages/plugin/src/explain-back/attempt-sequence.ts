@@ -30,8 +30,23 @@
  * `followsAttemptId`, so the sequence reads back from the log alone. The rule
  * for WHICH attempt a retry follows, and at what rung it was answered, has its
  * one home here; the writers only persist what this module decided.
+ *
+ * **Exposure to feedback is a recorded fact** (row 50, `ol-egov.141.89.6.69`,
+ * `./feedback-exposure.ts`): each attempt is sealed with whether she had been
+ * shown the feedback for this question, one of shown, not shown or unknown,
+ * and the rung follows from it. The fact is read from this sequence first, and
+ * for the first attempt in a view from what is known about the question
+ * beforehand (an earlier view this session, or her log), so a revision in a
+ * later view is no longer sealed as unaided just because the sequence started
+ * empty.
  */
 import type { ExplainBackCorrectnessVerdict, SupportLevel } from 'olea-contracts';
+import {
+  type FeedbackExposure,
+  NO_PRIOR_ATTEMPT,
+  type PriorAttemptState,
+  supportLevelForExposure,
+} from './feedback-exposure.js';
 import type { ExplainBackSupportShown } from './solo-review.js';
 import { supportLevelShownForExplainBack } from './solo-review.js';
 
@@ -53,6 +68,12 @@ export interface SetAsideAttempt {
   readonly supportLevelShown: SupportLevel | undefined;
   /** The attempt this one followed, or `null` for the first attempt at the question. */
   readonly followsAttemptId: string | null;
+  /**
+   * Whether she had been shown the feedback for this question when this attempt
+   * was submitted (row 50). Held in the view only: on her log the fact is the
+   * rung above (`guided` for shown, absent for unknown).
+   */
+  readonly feedbackExposure: FeedbackExposure;
 }
 
 /** Oldest first. Only ever grown by {@link appendSetAsideAttempt}. */
@@ -67,6 +88,8 @@ export const EMPTY_ATTEMPT_SEQUENCE: ExplainBackAttemptSequence = [];
 export interface SealedAttemptSupport {
   readonly supportLevelShown: SupportLevel | undefined;
   readonly followsAttemptId: string | null;
+  /** The exposure the rung was derived from (row 50): shown, not shown or unknown. */
+  readonly feedbackExposure: FeedbackExposure;
 }
 
 /** True when an earlier attempt in this sequence showed her a graded result. */
@@ -75,23 +98,50 @@ export function feedbackShownBefore(sequence: ExplainBackAttemptSequence): boole
 }
 
 /**
+ * Whether she has been shown the feedback for this question at the point a new
+ * attempt is sealed: a graded result in this view's own sequence is confirmed
+ * and outranks whatever was known beforehand (`prior`); otherwise what was
+ * known beforehand stands, unknown included. An attempt the check could not
+ * assess showed her nothing, so it changes nothing.
+ */
+export function feedbackExposureAt(
+  sequence: ExplainBackAttemptSequence,
+  prior: FeedbackExposure,
+): FeedbackExposure {
+  return feedbackShownBefore(sequence) ? 'shown' : prior;
+}
+
+/**
  * The rung and link for the attempt she is submitting now. After feedback the
  * rung is `'guided'`, whatever the answering phase itself shows: it is the top
  * of the ladder, so no other affordance can raise it, and the fact that she
  * read a graded result is known even when the answering phase's own
- * presentation is not (`shown === null`). Otherwise the answering phase's own
- * reading stands, unknown included.
+ * presentation is not (`shown === null`). Where exposure cannot be confirmed
+ * (`'unknown'`) no rung is recorded, which withholds independent credit
+ * without claiming assistance nobody confirmed; see
+ * `./feedback-exposure.ts`'s `supportLevelForExposure`. Otherwise the
+ * answering phase's own reading stands, unknown included.
+ *
+ * `prior` is what was known about the question before this view's own
+ * sequence: from an earlier view this session or from her log. It defaults to
+ * nothing known, which is exactly the behaviour before it existed. The attempt
+ * this one follows is the last one in this sequence, or else the last one in
+ * `prior`'s open exchange.
  */
 export function sealAttemptSupport(
   sequence: ExplainBackAttemptSequence,
   shown: ExplainBackSupportShown | null,
+  prior: PriorAttemptState = NO_PRIOR_ATTEMPT,
 ): SealedAttemptSupport {
   const last = sequence[sequence.length - 1];
+  const feedbackExposure = feedbackExposureAt(sequence, prior.exposure);
   return {
-    supportLevelShown: feedbackShownBefore(sequence)
-      ? 'guided'
-      : supportLevelShownForExplainBack(shown),
-    followsAttemptId: last === undefined ? null : last.attemptId,
+    supportLevelShown: supportLevelForExposure(
+      feedbackExposure,
+      supportLevelShownForExplainBack(shown),
+    ),
+    followsAttemptId: last === undefined ? prior.lastAttemptId : last.attemptId,
+    feedbackExposure,
   };
 }
 
@@ -116,6 +166,7 @@ export function appendSetAsideAttempt(
       acceptance: 'not-accepted',
       supportLevelShown: attempt.support.supportLevelShown,
       followsAttemptId: attempt.support.followsAttemptId,
+      feedbackExposure: attempt.support.feedbackExposure,
     },
   ];
 }

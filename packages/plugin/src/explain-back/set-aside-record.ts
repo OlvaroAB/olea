@@ -13,16 +13,28 @@
  * **No content (D-005).** Ids, a three-value verdict with its call's stamp,
  * the rung and a duration. The input type has no place for her answer, the
  * feedback or a cited passage.
+ *
+ * **Read back (row 50, `ol-egov.141.89.6.69`).** The record used to be
+ * written and never read by anything that seals an attempt, so a later view
+ * knew nothing of the feedback she had read. {@link createReadLoggedAttemptState}
+ * reads her log for one question and hands `./feedback-exposure.ts` what it
+ * needs to say whether she was shown the feedback and which attempt a new one
+ * follows. It reads the log's own facts and adds none.
  */
 import {
   appendExplainBackSetAsideRecord,
   EXPLAIN_BACK_JUDGE_TASK_ID,
   type ExplainBackSetAsideLogRecordInput,
   type PendingExplainBackGrading,
+  readReviewLogHistory,
   type VaultSource,
 } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
 import type { SetAsideAttempt } from './attempt-sequence.js';
+import {
+  classifyLoggedFeedbackExposure,
+  type ReadLoggedAttemptState,
+} from './feedback-exposure.js';
 
 export interface SetAsideRecordParams {
   /** The id the accepted retry's review would carry (`ResolvedPrompt.originInstrumentId`). */
@@ -105,5 +117,27 @@ export function createRecordSetAsideAttempt(
 ): (input: ExplainBackSetAsideLogRecordInput) => Promise<void> {
   return async (input) => {
     await appendExplainBackSetAsideRecord(deps.vault, input, { deviceId: await deps.deviceId() });
+  };
+}
+
+export interface ReadLoggedAttemptStateDeps {
+  readonly vault: VaultSource;
+}
+
+/**
+ * The `ExplainBackModalDeps.readLoggedAttemptState` implementation the
+ * composition root wires: one whole-log read (`olea-core`'s
+ * `readReviewLogHistory`, the reader every other whole-log consumer uses),
+ * classified for the one question by `classifyLoggedFeedbackExposure`.
+ *
+ * A read that throws rejects; the view reads a rejection as unknown exposure
+ * (`resolvePriorAttemptState`), never as not shown.
+ */
+export function createReadLoggedAttemptState(
+  deps: ReadLoggedAttemptStateDeps,
+): ReadLoggedAttemptState {
+  return async (instrumentId) => {
+    const history = await readReviewLogHistory(deps.vault);
+    return classifyLoggedFeedbackExposure(history, instrumentId);
   };
 }

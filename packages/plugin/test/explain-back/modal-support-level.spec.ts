@@ -59,7 +59,7 @@ describe('an attempt made with no help on screen records the independent level, 
     // the answering phase's constant AND the attempt sequence, then carried to
     // accept — see `modal-answer-after-feedback.spec.ts` for the after-feedback half.
     expect(modal).toMatch(
-      /sealAttemptSupport\(this\.attemptSequence, EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN\)/,
+      /sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\)/,
     );
     expect(modal).toMatch(/const supportLevelShown = support\.supportLevelShown;/);
     expect(modal).toMatch(

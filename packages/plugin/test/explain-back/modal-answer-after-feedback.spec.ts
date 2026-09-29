@@ -85,6 +85,8 @@ describe('the rung is sealed when she submits, not when she accepts', () => {
     expect(sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, UNAIDED)).toEqual({
       supportLevelShown: 'independent',
       followsAttemptId: null,
+      // Row 50: nothing known beforehand reads as not shown, so the rung is the answering phase's own.
+      feedbackExposure: 'not-shown',
     });
     expect(sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, null).supportLevelShown).toBeUndefined();
   });
@@ -95,7 +97,7 @@ describe('the rung is sealed when she submits, not when she accepts', () => {
       modal.indexOf('private acceptGrading('),
     );
     expect(submit).toMatch(
-      /const support = sealAttemptSupport\(this\.attemptSequence, EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN\);[\s\S]*?phase: 'grading'[\s\S]*?support \}[\s\S]*?this\.deps\.grade\(input\)/,
+      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?phase: 'grading'[\s\S]*?support \}[\s\S]*?this\.deps\.grade\(input\)/,
     );
     expect(submit).toMatch(/phase: 'graded',[\s\S]{0,200}?support,/);
   });
@@ -118,6 +120,7 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
         acceptance: 'not-accepted',
         supportLevelShown: 'independent',
         followsAttemptId: null,
+        feedbackExposure: 'not-shown',
       },
       {
         attemptId: 'at-2',
@@ -125,6 +128,7 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
         acceptance: 'not-accepted',
         supportLevelShown: 'guided',
         followsAttemptId: 'at-1',
+        feedbackExposure: 'shown',
       },
     ]);
   });
@@ -149,6 +153,7 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
     expect(Object.keys(entry ?? {}).sort()).toEqual([
       'acceptance',
       'attemptId',
+      'feedbackExposure',
       'followsAttemptId',
       'outcome',
       'supportLevelShown',
@@ -202,6 +207,7 @@ describe('an answer the check could not assess is kept but gives no feedback', (
     expect(sealAttemptSupport(sequence, UNAIDED)).toEqual({
       supportLevelShown: 'independent',
       followsAttemptId: 'at-1',
+      feedbackExposure: 'not-shown',
     });
   });
 

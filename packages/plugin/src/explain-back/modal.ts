@@ -137,6 +137,14 @@ import {
   EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
   explainBackDepthHeading,
 } from './copy.js';
+import {
+  type FeedbackExposureLedger,
+  NO_PRIOR_ATTEMPT,
+  type PriorAttemptState,
+  type ReadLoggedAttemptState,
+  resolvePriorAttemptState,
+  sessionFeedbackExposureLedger,
+} from './feedback-exposure.js';
 import { isConfirmedFirstFullDepth } from './first-full-depth.js';
 import {
   buildExplainBackPromptContextFromInstrument,
@@ -427,6 +435,27 @@ export interface ExplainBackModalDeps {
    * delays the return to answering.
    */
   readonly recordSetAsideAttempt?: (input: ExplainBackSetAsideLogRecordInput) => Promise<void>;
+  /**
+   * Row 50 (`ol-egov.141.89.6.69`): reads her log for the earlier attempts at
+   * one question, so a view opened in a later session knows whether she was
+   * shown the feedback and which attempt a new one follows —
+   * `./set-aside-record.ts`'s `createReadLoggedAttemptState`. Read once, when
+   * the question is resolved, never at submit.
+   *
+   * Optional, same posture as `recordSetAsideAttempt`: unwired, the view
+   * knows only this view's own sequence and the session note, exactly as
+   * before this field existed. Wired, a read that fails is unknown exposure
+   * (no rung recorded), never not shown and never guided.
+   */
+  readonly readLoggedAttemptState?: ReadLoggedAttemptState;
+  /**
+   * Row 50: the session note of graded results already shown (see
+   * `./feedback-exposure.ts`'s `FeedbackExposureLedger`), injectable for a
+   * test. Defaults to the one every view in this plugin session shares, which
+   * is what lets a view opened again after she read the feedback and closed
+   * it, or after a set-aside write was lost, still know.
+   */
+  readonly feedbackExposureLedger?: FeedbackExposureLedger;
   /** Fires once, on close, however the modal was resolved — see the module doc's "hand-off" section. */
   readonly onClosed?: () => void;
   /**
@@ -932,9 +961,22 @@ export class ExplainBackModal extends Modal {
    */
   private attemptSequence: ExplainBackAttemptSequence = EMPTY_ATTEMPT_SEQUENCE;
 
+  /**
+   * Row 50 (`ol-egov.141.89.6.69`): what was known about the current question
+   * before this view's own sequence began — resolved once, in
+   * `resolveInstrumentPrompt`, before the answering phase appears — and sealed
+   * into every attempt at `submitAnswer`. A freeform topic has a fresh id
+   * every time, so it always starts from nothing.
+   */
+  private priorAttemptState: PriorAttemptState = NO_PRIOR_ATTEMPT;
+
+  /** Row 50: `deps.feedbackExposureLedger`, or the session-wide one. */
+  private readonly feedbackExposureLedger: FeedbackExposureLedger;
+
   constructor(app: App, deps: ExplainBackModalDeps, seed: ExplainBackSeed) {
     super(app);
     this.deps = deps;
+    this.feedbackExposureLedger = deps.feedbackExposureLedger ?? sessionFeedbackExposureLedger;
     this.seed = seed;
     this.now = deps.now ?? (() => new Date());
     this.state = seed.kind === 'freeform' ? { phase: 'topic', topic: '' } : { phase: 'loading' };
@@ -1022,6 +1064,13 @@ export class ExplainBackModal extends Modal {
       courseCode: instrument.courseCode,
       noteTitle: instrument.noteTitle,
     };
+    // Row 50: resolved BEFORE the answering phase appears, so the first submit
+    // stays synchronous and the fact is settled before she can write anything.
+    this.priorAttemptState = await resolvePriorAttemptState({
+      instrumentId: prompt.originInstrumentId,
+      ledger: this.feedbackExposureLedger,
+      readLogged: this.deps.readLoggedAttemptState,
+    });
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
     this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
@@ -1100,6 +1149,8 @@ export class ExplainBackModal extends Modal {
       courseCode: null,
       noteTitle: null,
     };
+    // Row 50: a topic she typed has a fresh id every time, so nothing earlier can be about it.
+    this.priorAttemptState = NO_PRIOR_ATTEMPT;
     this.presentedAtMs = this.now().getTime();
     this.firstEditAtMs = null;
     this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;
@@ -1149,7 +1200,11 @@ export class ExplainBackModal extends Modal {
     // graded result. An earlier graded attempt in the sequence makes this one
     // guided; otherwise the answering phase's own reading stands. See
     // `./attempt-sequence.ts`'s module doc.
-    const support = sealAttemptSupport(this.attemptSequence, EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN);
+    const support = sealAttemptSupport(
+      this.attemptSequence,
+      EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,
+      this.priorAttemptState,
+    );
     this.state = { phase: 'grading', prompt, answer, durationMs, attemptId, answerEdits, support };
     this.render();
 
@@ -1167,6 +1222,12 @@ export class ExplainBackModal extends Modal {
         };
         this.render();
         return;
+      }
+      // Row 50: a graded result is about to be shown to her, so the session now
+      // knows she was exposed, whatever she does next (accept, Try again, or
+      // close). An attempt the check could not assess shows her no feedback.
+      if (pending.grading.outcome === 'graded') {
+        this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
       }
       this.state = {
         phase: 'graded',
@@ -1278,6 +1339,11 @@ export class ExplainBackModal extends Modal {
       attemptId,
     };
     const result = await this.deps.acceptWithObservation(pending, context);
+    // Row 50: an accepted attempt ends the exchange, so a later offer of this
+    // question is not a revision. A stale or failed accept ends nothing.
+    if (result !== null && result.status === 'accepted') {
+      this.feedbackExposureLedger.settle(prompt.originInstrumentId);
+    }
     // `[D-217]`: whatever level comes back (or doesn't) is what
     // `renderAcceptedPhase` renders the depth heading from — see this file's
     // module doc and the deps field's own doc for why `void`/`undefined`
