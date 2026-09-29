@@ -31,13 +31,7 @@
  * same instrument, each over 45 minutes apart (C5.5), rated 'good': the first is the honest,
  * unaided-by-nothing cold start (`[D-094]`'s `'prompted'`); the third is where the real ladder
  * (`support-level/ladder.ts`, `RECESSION_CLEAN_STREAK_THRESHOLD = 2`) recedes to `'independent'`
- * after two clean, unhinted prior sessions — never a hand-asserted string. "Unhinted" is a
- * recorded fact since `[D-350]` (an absent hint state is unknown and holds the level; absence
- * of a record cannot establish unaided performance), and no review surface writes the hint
- * state yet, so the unaided suite stands in for one that does: `recordHintNotOpened` writes the
- * explicit `hintOpened: false` a surface that observed it would have recorded, onto the real
- * log lines the real sessions appended. The last test in this file pins the other half: real
- * sessions with no hint state recorded never recede.
+ * after two clean, unhinted prior sessions — never a hand-asserted string.
  *
  * The study-plan surface needs one evidence edge (`ConceptAssessmentEdge`) and one assessment
  * record to rank against — `rankOracle`'s real input shape (P5-T03's own result), hand-built here
@@ -237,25 +231,6 @@ async function openAndRateOneItem(vault: ReturnType<typeof memoryVault>, now: Da
 }
 
 /**
- * `[D-350]`: a review written by a surface that observed the hint records an explicit
- * `hintOpened`. No surface does yet, so this adds `hintOpened: false` to every review line in the
- * vault's log that has no hint state — the lines the real sessions above appended, otherwise
- * untouched.
- */
-async function recordHintNotOpened(vault: ReturnType<typeof memoryVault>): Promise<void> {
-  for (const path of await vault.list({ extensions: ['jsonl'] })) {
-    const lines = (await vault.read(path)).split('\n');
-    const rewritten = lines.map((line) => {
-      if (line.trim() === '') return line;
-      const record = JSON.parse(line) as { kind?: string; hintOpened?: boolean };
-      if (record.kind !== 'review' || record.hintOpened !== undefined) return line;
-      return JSON.stringify({ ...record, hintOpened: false });
-    });
-    await vault.write(path, rewritten.join('\n'));
-  }
-}
-
-/**
  * Hand-built exactly like `session/build.ts`'s item above: `rankOracle`'s real input shape
  * (P5-T03's own `ConceptAssessmentEdge`/`AssessmentReadReport` result), for one concept cited by
  * one past paper — enough for the real `rankOracle` → `buildStudyPlan` join to place this
@@ -318,9 +293,7 @@ describe('one real review under the permanent key reaches every consumer, in one
     const T0 = new Date('2026-09-26T09:00:00-04:00');
     const GAP_MS = 46 * 60 * 1000;
     await openAndRateOneItem(vault, T0);
-    await recordHintNotOpened(vault);
     await openAndRateOneItem(vault, new Date(T0.getTime() + GAP_MS));
-    await recordHintNotOpened(vault);
     await openAndRateOneItem(vault, new Date(T0.getTime() + 2 * GAP_MS));
 
     const { entries } = await readReviewLogHistory(vault, {});
@@ -408,41 +381,6 @@ describe('one real review under the permanent key reaches every consumer, in one
     // Readiness correctly reads no weakest recall estimate: a prompted review is not an unaided
     // success (D-264), so it is honestly absent, never folded in as a measured zero.
     const dayAfter = new Date(Date.parse(reviewEntries[0]?.timestamp as string) + 86_400_000);
-    const readiness = readAllConceptReadiness(
-      entries,
-      [key],
-      createFsrsScheduler(),
-      dayAfter,
-      projectInstrumentValidity(entries),
-    );
-    expect(readiness.get(key)?.weakest).toBeNull();
-  });
-
-  // `[D-350]`, the ruling's operative sentences: "treat a missing value as unknown" and "Absence
-  // of a record cannot establish unaided performance". No review surface writes `hintOpened`
-  // yet (`ol-egov.141.63`), so this is what the real production path does today: the ladder
-  // holds at its cold start however many clean sessions she completes, and readiness, which
-  // counts only an unaided success (D-264), reads nothing.
-  it('real sessions with no hint state recorded never recede, so readiness stays absent ([D-350])', async () => {
-    const vault = fixtureVault();
-    const T0 = new Date('2026-09-26T09:00:00-04:00');
-    const GAP_MS = 46 * 60 * 1000;
-    for (let i = 0; i < 4; i++)
-      await openAndRateOneItem(vault, new Date(T0.getTime() + i * GAP_MS));
-
-    const { entries } = await readReviewLogHistory(vault, {});
-    const reviewEntries = entries.filter((entry) => entry.kind === 'review');
-    expect(reviewEntries).toHaveLength(4);
-    expect(reviewEntries.map((entry) => entry.supportLevelShown)).toEqual([
-      'prompted',
-      'prompted',
-      'prompted',
-      'prompted',
-    ]);
-    expect(reviewEntries.every((entry) => entry.hintOpened === undefined)).toBe(true);
-
-    const key = reviewEntries[0]?.conceptIds[0] as string;
-    const dayAfter = new Date(Date.parse(reviewEntries[3]?.timestamp as string) + 86_400_000);
     const readiness = readAllConceptReadiness(
       entries,
       [key],

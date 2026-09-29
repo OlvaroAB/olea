@@ -248,6 +248,29 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
 }
 
 /**
+ * Whether production reads the review record's `hintOpened` at all (`[D-350]`,
+ * `ol-egov.141.89.9.83`). **Held off, on purpose, until a writer exists.**
+ *
+ * The ruling reads an absent value as unknown and lets an unknown hold the
+ * level, and it assumes the field is being written ("record explicit true or
+ * false for new reviews"). No review surface writes it yet: its writer is
+ * `ol-egov.141.63`, blocked. Reading the field with no writer means every real
+ * review is unknown, so her support level can never recede: a replay of
+ * simulated terms found support cells changing level with none ending
+ * independent, and readiness and demand-met reading less. That is a worse experience than the
+ * ruling intended, so the reader is shipped behind this switch (Class C, held
+ * by the orchestrator, 2026-09-29): while it is `false`, every outcome reads
+ * hint uptake `false`, exactly as before the reader was built.
+ *
+ * Flip to `true` when ol-egov.141.63's writer lands (D-350). In the same commit,
+ * delete the "production default while the [D-350] reading is held" block in
+ * `test/review/queue-adapter.spec.ts` and put back the explicit
+ * `hintOpened: false` on the real prior sessions in
+ * `test/concept/permanent-key-consumers.spec.ts` (`git show bd56859f` has both).
+ */
+export const HINT_UPTAKE_RECORDED = false;
+
+/**
  * Build a `SupportLevelHistoryLookup` from raw review-log entries — this
  * queue's equivalent of what `session-builder/provider.ts` demonstrates for
  * the F4.6 preview path.
@@ -325,22 +348,31 @@ function worseFailureShape(a: FailureShape, b: FailureShape): FailureShape {
  * a clean recall answer must never paper over a failing explanation of the
  * same concept in the same sitting, or the reverse.
  *
- * **Hint state is read, three-valued** (`[D-350]`, ruled 2026-09-25: "treat a
- * missing value as unknown"; `ol-egov.141.89.9.83`; the core fold's module doc
- * states the same rule): a review's `hintOpened`, when recorded, is opened or
- * not opened; an absent value is `'unknown'`, never read as not opened
- * ("absence of a record cannot establish unaided performance") and never
- * inferred from `supportLevelShown`, which records that a hint was offered,
- * not taken. The one exception is judgement J5 of the locked attainment
- * targets: an answer shown at independent support has no hint to open, so it
- * reads not opened with no field. A session's outcome carries the worst state
- * of its answers (opened, then unknown, then not opened), and only a `false`
- * one counts toward a recession (`support-level/ladder.ts`). The state is read
- * from the answer as she gave it, never from a corrective re-grade of it.
+ * **Hint state is read, three-valued — when {@link HINT_UPTAKE_RECORDED} is on**
+ * (`[D-350]`, ruled 2026-09-25: "treat a missing value as unknown";
+ * `ol-egov.141.89.9.83`; the core fold's module doc states the same rule): a
+ * review's `hintOpened`, when recorded, is opened or not opened; an absent
+ * value is `'unknown'`, never read as not opened ("absence of a record cannot
+ * establish unaided performance") and never inferred from `supportLevelShown`,
+ * which records that a hint was offered, not taken. The one exception is
+ * judgement J5 of the locked attainment targets: an answer shown at
+ * independent support has no hint to open, so it reads not opened with no
+ * field. A session's outcome carries the worst state of its answers (opened,
+ * then unknown, then not opened), and only a `false` one counts toward a
+ * recession (`support-level/ladder.ts`). The state is read from the answer as
+ * she gave it, never from a corrective re-grade of it.
+ *
+ * **While the switch is off (today), every outcome's `hintUptake` is `false`**,
+ * whatever the record carries: the reading production had before the D-350
+ * reader was built. That is the one reading under which her level can still
+ * recede when nothing yet writes the field; see {@link HINT_UPTAKE_RECORDED}.
+ * `hintUptakeRecorded` is a parameter only so the ruled reading stays under
+ * test; production callers pass nothing.
  */
 export function buildSupportLevelHistoryLookup(
   entries: readonly ReviewLogEntry[],
   validity: InstrumentValidityProjection = projectInstrumentValidity(entries),
+  hintUptakeRecorded: boolean = HINT_UPTAKE_RECORDED,
 ): SupportLevelHistoryLookup {
   const byKey = new Map<string, SessionSupportOutcome[]>();
 
@@ -405,8 +437,9 @@ export function buildSupportLevelHistoryLookup(
       const key = `${conceptId}:${tier}`;
       const existing = shapeByKey.get(key);
       shapeByKey.set(key, existing === undefined ? shape : worseFailureShape(existing, shape));
-      // `[D-350]`: the state of the answer as she gave it (`sessionReview`), not of its re-grade.
-      const uptake = hintUptakeOf(sessionReview);
+      // `[D-350]`: the state of the answer as she gave it (`sessionReview`), not of its re-grade;
+      // `false` outright while the switch is off (see `HINT_UPTAKE_RECORDED`).
+      const uptake = hintUptakeRecorded ? hintUptakeOf(sessionReview) : false;
       const priorUptake = hintByKey.get(key);
       hintByKey.set(key, priorUptake === undefined ? uptake : worseHintUptake(priorUptake, uptake));
     }

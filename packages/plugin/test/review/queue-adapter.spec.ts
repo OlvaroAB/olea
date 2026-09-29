@@ -32,6 +32,7 @@ import {
   adaptReviewQueue,
   buildSupportLevelHistoryLookup,
   createFrozenReviewQueue,
+  HINT_UPTAKE_RECORDED,
 } from '../../src/review/queue-adapter.js';
 import type { McqItem, ReviewQueueItem } from '../../src/review/types.js';
 
@@ -1796,7 +1797,13 @@ describe('buildSupportLevelHistoryLookup — only her own failures move the ladd
 // value as unknown." and "Absence of a record cannot establish unaided performance. ... record
 // explicit true or false for new reviews." This is the production fold (wired at
 // `review/open-session.ts` and `session-builder/provider.ts`); the core fold folds the same rule.
-describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350])', () => {
+//
+// The ruled reading is HELD in production until a review surface writes the field
+// (`HINT_UPTAKE_RECORDED`, `ol-egov.141.63`; the next describe pins the held path), so this block
+// forces the switch on: the ruled path stays tested, and stays correct, for the day it is flipped.
+describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350], switch forced on)', () => {
+  const ruledLookup = (entries: readonly LadderEntry[]) =>
+    buildSupportLevelHistoryLookup(entries, undefined, true);
   const day = (n: number) => `2026-08-${String(10 + n).padStart(2, '0')}T09:00:00+00:00`;
   const recallReview = (
     n: number,
@@ -1812,29 +1819,20 @@ describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350]
       ...extra,
     }) as unknown as LadderEntry;
   const levelOf = (entries: LadderEntry[], concept = 'concept-a') =>
-    chooseSupportLevel(buildSupportLevelHistoryLookup(entries).outcomesFor(concept, 'recall'))
-      .level;
+    chooseSupportLevel(ruledLookup(entries).outcomesFor(concept, 'recall')).level;
 
   it('an opened hint on a prompted recall success reads as taken; a recorded not-opened as not taken', () => {
     expect(
-      buildSupportLevelHistoryLookup([recallReview(0, { hintOpened: true })]).outcomesFor(
-        'concept-a',
-        'recall',
-      ),
+      ruledLookup([recallReview(0, { hintOpened: true })]).outcomesFor('concept-a', 'recall'),
     ).toEqual([{ failureShape: 'none', hintUptake: true }]);
     expect(
-      buildSupportLevelHistoryLookup([recallReview(0, { hintOpened: false })]).outcomesFor(
-        'concept-a',
-        'recall',
-      ),
+      ruledLookup([recallReview(0, { hintOpened: false })]).outcomesFor('concept-a', 'recall'),
     ).toEqual([{ failureShape: 'none', hintUptake: false }]);
   });
 
   it('an absent value on a prompted or guided answer is unknown, never not opened', () => {
     for (const supportLevelShown of ['prompted', 'guided'] as const) {
-      const lookup = buildSupportLevelHistoryLookup([
-        recallReview(0, { hintOpened: 'absent', supportLevelShown }),
-      ]);
+      const lookup = ruledLookup([recallReview(0, { hintOpened: 'absent', supportLevelShown })]);
       expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
         { failureShape: 'none', hintUptake: 'unknown' },
       ]);
@@ -1850,13 +1848,13 @@ describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350]
       conceptIds: ['concept-a'],
       hintOpened: 'absent',
     }) as unknown as LadderEntry;
-    expect(buildSupportLevelHistoryLookup([entry]).outcomesFor('concept-a', 'recall')).toEqual([
+    expect(ruledLookup([entry]).outcomesFor('concept-a', 'recall')).toEqual([
       { failureShape: 'none', hintUptake: 'unknown' },
     ]);
   });
 
   it('an answer shown at independent support has no hint to open: absent reads not opened (J5)', () => {
-    const lookup = buildSupportLevelHistoryLookup([
+    const lookup = ruledLookup([
       recallReview(0, { hintOpened: 'absent', supportLevelShown: 'independent' }),
     ]);
     expect(lookup.outcomesFor('concept-a', 'recall')).toEqual([
@@ -1876,7 +1874,7 @@ describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350]
         supportLevelShown: 'prompted',
         hintOpened,
       }) as unknown as LadderEntry;
-    const lookup = buildSupportLevelHistoryLookup([
+    const lookup = ruledLookup([
       explanation(0, true),
       explanation(2, 'absent'),
       explanation(4, false),
@@ -1902,8 +1900,7 @@ describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350]
         }),
       ) as unknown as LadderEntry[];
     const read = (states: readonly (boolean | 'absent')[]) =>
-      buildSupportLevelHistoryLookup(sitting(states)).outcomesFor('concept-a', 'recall')[0]
-        ?.hintUptake;
+      ruledLookup(sitting(states)).outcomesFor('concept-a', 'recall')[0]?.hintUptake;
     expect(read([false, false])).toBe(false);
     expect(read([false, 'absent'])).toBe('unknown');
     expect(read([false, true])).toBe(true);
@@ -1945,5 +1942,113 @@ describe('buildSupportLevelHistoryLookup — hint state is three-valued ([D-350]
         ),
       ]),
     ).toBe('prompted');
+  });
+});
+
+// The production path while the `[D-350]` reading is HELD (`ol-egov.141.89.9.83`,
+// `ol-egov.141.63`). No review surface writes `hintOpened` yet, so reading it as three-valued in
+// production makes the support level unable to recede: an unrecorded hint holds every prompted
+// cell for good (a replay of simulated terms found none ending independent, and readiness and
+// demand-met reading less). The ruling assumed the writer exists, so the
+// reader alone is held behind `HINT_UPTAKE_RECORDED` and production reads exactly what it read
+// before bd56859f: uptake `false` on every outcome, whatever the record says. Flip the switch to
+// `true` when the writer lands, and delete this block with that commit; the block above keeps the
+// ruled path tested meanwhile.
+describe('buildSupportLevelHistoryLookup — production default while the [D-350] reading is held', () => {
+  const day = (n: number) => `2026-08-${String(10 + n).padStart(2, '0')}T09:00:00+00:00`;
+  const recallReview = (
+    n: number,
+    extra: Partial<Parameters<typeof reviewLogEntry>[0]> = {},
+  ): LadderEntry =>
+    reviewLogEntry({
+      eventId: `p${n}`,
+      timestamp: day(n),
+      instrumentType: 'qa',
+      rating: 'good',
+      conceptIds: ['concept-a'],
+      supportLevelShown: 'prompted',
+      ...extra,
+    }) as unknown as LadderEntry;
+  const outcomes = (entries: LadderEntry[]) =>
+    buildSupportLevelHistoryLookup(entries).outcomesFor('concept-a', 'recall');
+  const levelOf = (entries: LadderEntry[]) => chooseSupportLevel(outcomes(entries)).level;
+
+  it('the switch is off until the writer of hintOpened lands', () => {
+    expect(HINT_UPTAKE_RECORDED).toBe(false);
+  });
+
+  it('reads uptake false on every outcome, whatever hintOpened says or omits', () => {
+    for (const hintOpened of [true, false, 'absent'] as const) {
+      for (const supportLevelShown of ['independent', 'prompted', 'guided'] as const) {
+        expect(outcomes([recallReview(0, { hintOpened, supportLevelShown })])).toEqual([
+          { failureShape: 'none', hintUptake: false },
+        ]);
+      }
+    }
+    const noLevel = reviewLogEntry({
+      eventId: 'p0',
+      timestamp: day(0),
+      instrumentType: 'qa',
+      rating: 'good',
+      conceptIds: ['concept-a'],
+      hintOpened: 'absent',
+    }) as unknown as LadderEntry;
+    expect(outcomes([noLevel])).toEqual([{ failureShape: 'none', hintUptake: false }]);
+  });
+
+  it('a session reads false however its answers differ', () => {
+    const sitting = ([true, 'absent', false] as const).map((hintOpened, i) =>
+      reviewLogEntry({
+        eventId: `s${i}`,
+        timestamp: `2026-08-10T09:0${i}:00+00:00`,
+        instrumentType: 'qa',
+        rating: 'good',
+        conceptIds: ['concept-a'],
+        supportLevelShown: 'prompted',
+        hintOpened,
+      }),
+    ) as unknown as LadderEntry[];
+    expect(outcomes(sitting)).toEqual([{ failureShape: 'none', hintUptake: false }]);
+  });
+
+  it('two clean sessions recede, with the hint field absent or opened, as before the ruling was built', () => {
+    expect(
+      levelOf([
+        recallReview(0, { hintOpened: 'absent' }),
+        recallReview(2, { hintOpened: 'absent' }),
+      ]),
+    ).toBe('independent');
+    expect(
+      levelOf([recallReview(0, { hintOpened: true }), recallReview(2, { hintOpened: true })]),
+    ).toBe('independent');
+    expect(levelOf([recallReview(0), recallReview(2)])).toBe('independent');
+  });
+
+  it('a failure still escalates, and a guided cell still recedes after clean sessions with no hint state', () => {
+    const failure = recallReview(0, { rating: 'again', hintOpened: 'absent' });
+    expect(levelOf([failure])).toBe('guided');
+    expect(
+      levelOf([
+        failure,
+        ...[2, 4, 6].map((n) =>
+          recallReview(n, { supportLevelShown: 'guided', hintOpened: 'absent' }),
+        ),
+      ]),
+    ).toBe('prompted');
+  });
+
+  it('the default is the switch: forcing it off gives the same lookup, forcing it on does not', () => {
+    const entries = [
+      recallReview(0, { hintOpened: 'absent' }),
+      recallReview(2, { hintOpened: 'absent' }),
+    ];
+    const read = (lookup: ReturnType<typeof buildSupportLevelHistoryLookup>) =>
+      lookup.outcomesFor('concept-a', 'recall');
+    expect(read(buildSupportLevelHistoryLookup(entries))).toEqual(
+      read(buildSupportLevelHistoryLookup(entries, undefined, false)),
+    );
+    expect(read(buildSupportLevelHistoryLookup(entries))).not.toEqual(
+      read(buildSupportLevelHistoryLookup(entries, undefined, true)),
+    );
   });
 });
