@@ -647,19 +647,8 @@ export class ReviewView extends ItemView {
         break;
     }
     this.render();
-    this.showWithheldNoticeIfAny(session);
-  }
-
-  /** `[D-343]`: a passive, truthful line when a question was set aside because its note changed. */
-  private showWithheldNoticeIfAny(session: ReviewSession): void {
-    const notice = session.takeWithheldNotice();
-    if (notice === null) return;
-    const banner = this.contentEl.createDiv({
-      cls: 'olea-review-withheld-notice',
-      text: notice,
-      attr: { role: 'status' },
-    });
-    this.contentEl.prepend(banner);
+    // The withheld-question notice (session.takeWithheldNotice()) is deliberately not rendered:
+    // no clause defines a surface or wording for it, so it awaits David's ruling (D-343).
   }
 
   private moveFocus(direction: 'up' | 'down'): void {
