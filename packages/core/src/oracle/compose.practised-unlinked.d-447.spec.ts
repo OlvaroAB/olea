@@ -444,6 +444,25 @@ describe('composeOracleRanking — practised concepts no assessment reaches ([D-
       }
     });
 
+    it('nor when relevance is what puts it ahead: the unknown-relevance placement is worded as a placement, never as assessment importance', async () => {
+      // An undated assessment leaves proximity equal, so relevance alone can decide the order.
+      await assessment('Quiz 1', COURSE, 'to be announced');
+      const result = await compose([review(GADGET.key)]);
+      const course = rankedCourse(result.ranking.courses, COURSE);
+      const gadget = course.ranked.find((c) => c.conceptKey === GADGET.key);
+      expect(gadget).toBeDefined();
+      const reasoning = gadget?.reasoning ?? '';
+      for (const claim of [
+        RANK_REASON_PHRASES.relevance,
+        RANK_REASON_PHRASES.evidencePastPapers,
+        RANK_REASON_PHRASES.evidenceObjectives,
+        RANK_REASON_PHRASES.evidenceBoth,
+        RANK_REASON_PHRASES.evidenceOther,
+      ]) {
+        expect(reasoning).not.toContain(claim);
+      }
+    });
+
     it('the entry carries no default weight presented as evidence: no contribution, no citation, proximity nil', async () => {
       await assessment('Quiz 1', COURSE, '2026-09-01');
       const result = await compose([review(GADGET.key)]);
