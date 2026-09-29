@@ -41,8 +41,7 @@
  * class used to index its own unfiltered `passages` with the model's number, so
  * a furniture-only chunk ahead of a citation attached the concept to a
  * different passage, and because the number was in range on both sides nothing
- * flagged it (104 of 125 proposals on the development set of the 2026-09-29
- * verification run). The Worker now returns `result.numbering`
+ * flagged it. The Worker now returns `result.numbering`
  * (`conceptsExtractNumbering`): for each shown number, the position of that
  * chunk in the `sourceChunks` sent, and its length. This class resolves every
  * cited number through it and holds NO copy of the Worker's filter, so the two
