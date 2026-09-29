@@ -91,7 +91,14 @@ export type RefusalOutcome =
   | 'retrieval-failure'
   | 'source-insufficient'
   | 'judgment-uncertain'
-  | 'service-failure';
+  | 'service-failure'
+  /**
+   * `below-relevance-threshold`, `below-composite-threshold`, `below-band`.
+   * Unclassified: whether these are retrieval failures or checked
+   * insufficiency is not ruled, so they keep their previous words and
+   * non-transient flag under their own value, pending a decision.
+   */
+  | 'below-threshold';
 
 export interface RefusalCopy {
   readonly headline: string;
@@ -120,6 +127,11 @@ const SOURCE_INSUFFICIENT: RefusalCopy = {
   outcome: 'source-insufficient',
   transient: false,
 };
+const BELOW_THRESHOLD: RefusalCopy = {
+  headline: NOT_ENOUGH_GROUNDING_HEADLINE,
+  outcome: 'below-threshold',
+  transient: false,
+};
 const RETRIEVAL_FAILURE: RefusalCopy = {
   headline: COULD_NOT_CHECK_HEADLINE,
   outcome: 'retrieval-failure',
@@ -136,9 +148,11 @@ const SERVICE_FAILURE: RefusalCopy = {
   transient: true,
 };
 
-/** Retrieval gave the judge nothing usable: empty package, or hits failing the relevance, composite or band bar. */
-const RETRIEVAL_FAILURE_REASONS: ReadonlySet<string> = new Set([
-  'no-hits',
+/** An empty package: retrieval gave the judge nothing (`[D-289]` point 2). */
+const RETRIEVAL_FAILURE_REASONS: ReadonlySet<string> = new Set(['no-hits']);
+
+/** Classification waits on a decision; see `BELOW_THRESHOLD`. */
+const BELOW_THRESHOLD_REASONS: ReadonlySet<string> = new Set([
   'below-relevance-threshold',
   'below-composite-threshold',
   'below-band',
@@ -160,6 +174,7 @@ const SERVICE_FAILURE_REASONS: ReadonlySet<string> = new Set([
  */
 export function describeRefusal(reason: string): RefusalCopy {
   if (RETRIEVAL_FAILURE_REASONS.has(reason)) return RETRIEVAL_FAILURE;
+  if (BELOW_THRESHOLD_REASONS.has(reason)) return BELOW_THRESHOLD;
   if (SERVICE_FAILURE_REASONS.has(reason)) return SERVICE_FAILURE;
   if (reason === 'could-not-decide') return JUDGMENT_UNCERTAIN;
   return SOURCE_INSUFFICIENT;

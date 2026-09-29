@@ -26,19 +26,24 @@ describe('classifyAuthoringOutcome — routing and budget deferral', () => {
 });
 
 describe('classifyAuthoringOutcome — the four refusal outcomes stay distinct (evd.md §3, D-289)', () => {
-  // retrieval failure: operational, never a verdict about her notes.
-  const RETRIEVAL_REASONS: readonly GroundingRefusalReason[] = [
-    'no-hits',
+  it('maps no-hits (an empty package) to unavailable with cause retrieval-failure (D-289)', () => {
+    expect(classifyAuthoringOutcome({ kind: 'refused', reason: 'no-hits' })).toEqual({
+      status: 'unavailable',
+      retryable: true,
+      cause: 'retrieval-failure',
+    });
+  });
+
+  // Classification of the below-* reasons is not ruled: previous status kept, own cause.
+  for (const reason of [
     'below-relevance-threshold',
     'below-composite-threshold',
     'below-band',
-  ];
-  for (const reason of RETRIEVAL_REASONS) {
-    it(`maps a retrieval-shaped refusal (${reason}) to unavailable with cause retrieval-failure`, () => {
+  ] as const) {
+    it(`keeps ${reason} as insufficient-evidence under its own below-threshold cause`, () => {
       expect(classifyAuthoringOutcome({ kind: 'refused', reason })).toEqual({
-        status: 'unavailable',
-        retryable: true,
-        cause: 'retrieval-failure',
+        status: 'insufficient-evidence',
+        cause: 'below-threshold',
       });
     });
   }

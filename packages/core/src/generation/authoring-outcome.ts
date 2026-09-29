@@ -91,34 +91,44 @@ export type AuthoringDeferralReason = 'unmet-format' | 'budget';
  *    the operation — the only cause that is a checked verdict;
  *  - `judgment-uncertain`: the judge ran and could not decide;
  *  - `service-failure`: a call could not be reached, timed out or came back
- *    malformed.
+ *    malformed;
+ *  - `below-threshold`: hits existed but failed the relevance, composite or
+ *    band bar. **Unclassified: whether these are retrieval failures or checked
+ *    insufficiency is not ruled** (`[D-289]` rules only the empty package), so
+ *    they keep their previous `insufficient-evidence` status and stay apart
+ *    from a genuine judge rejection until a decision classifies them.
  */
 export type AuthoringRefusalCause =
   | 'retrieval-failure'
   | 'source-insufficient'
   | 'judgment-uncertain'
-  | 'service-failure';
+  | 'service-failure'
+  | 'below-threshold';
 
 /** pra.md §3's five-way authoring outcome. */
 export type AuthoringOutcome =
   | { readonly status: 'eligible' }
-  | { readonly status: 'insufficient-evidence'; readonly cause: 'source-insufficient' }
+  | {
+      readonly status: 'insufficient-evidence';
+      readonly cause: 'source-insufficient' | 'below-threshold';
+    }
   | { readonly status: 'invalid-draft'; readonly defects: readonly McqDraftDefect[] }
   | { readonly status: 'deferred'; readonly reason: AuthoringDeferralReason }
   | {
       readonly status: 'unavailable';
       readonly retryable: true;
-      readonly cause: Exclude<AuthoringRefusalCause, 'source-insufficient'>;
+      readonly cause: Exclude<AuthoringRefusalCause, 'source-insufficient' | 'below-threshold'>;
     };
 
 /**
- * `GroundingRefusalReason`s where retrieval, not the judge, is why nothing
- * could be authored: no hits at all (`[D-289]` point 2), hits below the
- * relevance bar, and the composite and band bars that gate the judge.
- * Operational, never a verdict about her notes.
+ * The one `GroundingRefusalReason` ruled to be retrieval failure: no hits at
+ * all, an empty package (`[D-289]` point 2). Operational, never a verdict
+ * about her notes.
  */
-const RETRIEVAL_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
-  'no-hits',
+const RETRIEVAL_FAILURE_REASONS: ReadonlySet<GroundingRefusalReason> = new Set(['no-hits']);
+
+/** Classification of these waits on a decision (see `below-threshold` above); status is as before. */
+const BELOW_THRESHOLD_REASONS: ReadonlySet<GroundingRefusalReason> = new Set([
   'below-relevance-threshold',
   'below-composite-threshold',
   'below-band',
@@ -143,6 +153,9 @@ export function classifyAuthoringOutcome(attempt: AuthoringAttempt): AuthoringOu
     case 'refused':
       if (RETRIEVAL_FAILURE_REASONS.has(attempt.reason)) {
         return { status: 'unavailable', retryable: true, cause: 'retrieval-failure' };
+      }
+      if (BELOW_THRESHOLD_REASONS.has(attempt.reason)) {
+        return { status: 'insufficient-evidence', cause: 'below-threshold' };
       }
       if (SERVICE_FAILURE_REASONS.has(attempt.reason)) {
         return { status: 'unavailable', retryable: true, cause: 'service-failure' };

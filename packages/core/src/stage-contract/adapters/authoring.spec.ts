@@ -130,7 +130,7 @@ describe('writingFromAuthoringAttempt', () => {
 
   it('reads an evidence refusal as declined, upstream-refused, and a deferral as no writing outcome', () => {
     expect(
-      writingFromAuthoringAttempt({ kind: 'refused', reason: 'judge-rejected' }, context),
+      writingFromAuthoringAttempt({ kind: 'refused', reason: 'below-band' }, context),
     ).toMatchObject({ kind: 'declined', basis: 'upstream-refused' });
     expect(writingFromAuthoringAttempt({ kind: 'routed-away' }, context)).toBeNull();
     expect(writingFromAuthoringAttempt({ kind: 'budget-exhausted' }, context)).toBeNull();

@@ -18,19 +18,20 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
     expect(copy.headline.toLowerCase()).toContain('grounding');
   });
 
-  it('no-hits and relevance/composite/band failures are retrieval-failure: operational, never a verdict about her notes', () => {
-    const reasons = [
-      'no-hits',
-      'below-relevance-threshold',
-      'below-composite-threshold',
-      'below-band',
-    ];
-    for (const reason of reasons) {
+  it('no-hits is retrieval-failure: operational, never a verdict about her notes', () => {
+    const copy = describeRefusal('no-hits');
+    expect(copy.outcome).toBe('retrieval-failure');
+    expect(copy.transient).toBe(true);
+    expect(copy.headline.toLowerCase()).not.toContain('enough');
+    expect(copy.headline.toLowerCase()).not.toContain('grounding in your notes');
+  });
+
+  it('the below-* reasons keep their previous words and non-transient flag under their own value (classification pending a decision)', () => {
+    for (const reason of ['below-relevance-threshold', 'below-composite-threshold', 'below-band']) {
       const copy = describeRefusal(reason);
-      expect(copy.outcome).toBe('retrieval-failure');
-      expect(copy.transient).toBe(true);
-      expect(copy.headline.toLowerCase()).not.toContain('enough');
-      expect(copy.headline.toLowerCase()).not.toContain('grounding in your notes');
+      expect(copy.outcome).toBe('below-threshold');
+      expect(copy.transient).toBe(false);
+      expect(copy.headline).toBe(describeRefusal('judge-rejected').headline);
     }
   });
 
@@ -49,10 +50,14 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
   });
 
   it('the four outcome values are pairwise distinct even where the words are shared', () => {
-    const outcomes = ['judge-rejected', 'no-hits', 'could-not-decide', 'judge-unavailable'].map(
-      (r) => describeRefusal(r).outcome,
-    );
-    expect(new Set(outcomes).size).toBe(4);
+    const outcomes = [
+      'judge-rejected',
+      'no-hits',
+      'could-not-decide',
+      'judge-unavailable',
+      'below-band',
+    ].map((r) => describeRefusal(r).outcome);
+    expect(new Set(outcomes).size).toBe(5);
     // the operational three deliberately share one approved sentence
     expect(describeRefusal('no-hits').headline).toBe(describeRefusal('judge-unavailable').headline);
     expect(describeRefusal('judge-rejected').headline).not.toBe(
