@@ -1403,8 +1403,11 @@ describe('the standalone-image vision runner reaches production (ol-15f8 / ol-ua
     // `ol-egov.141.89.8.4` slice 4 added a `visionRoute` field after this one
     // (its own describe block below pins it), so the gap to the closing
     // `});` is no longer immediate.
+    // `[D-445]` (`ol-egov.141.89.8.43`) adds an `onManifestEntry` sink to the same `vision`
+    // literal (`grove/unit-manifest-wiring.spec.ts` pins it), so the literal may carry it after
+    // `createTransport`.
     expect(main).toMatch(
-      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?vision:\s*\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,\s*\},[\s\S]{0,300}?\}\);/,
+      /this\.ingestion\s*=\s*await buildIngestionRunner\(\{[\s\S]*?vision:\s*\{\s*dataHost:\s*this,\s*createTransport:\s*createRecordingTransport,\s*(?:onManifestEntry:[^}]*?,\s*)?\},[\s\S]{0,300}?\}\);/,
     );
   });
 

@@ -183,6 +183,7 @@ import {
   enumerateVaultInstruments,
   extractTier3Evidence,
   findUnreadableFiles,
+  formatFromExtension,
   type GroveCourseModel,
   HOLDING_CUT,
   hasPendingUnits,
@@ -254,11 +255,22 @@ export interface CreateLocalGroveProviderDeps {
    * perception pass has read (an image read by the vision runner) is not
    * re-classified from its empty text layer as "no text found", and a file
    * whose pass has not settled is recorded as not yet read rather than left
-   * out. **A thunk**, same reason as `relations`. No durable manifest store
-   * exists yet (`olea-core`'s export note), so `main.ts` supplies none and
-   * omitting it keeps today's re-extraction census unchanged.
+   * out. **A thunk**, same reason as `relations`.
+   *
+   * `ol-egov.141.89.8.43` (`[D-445]`): called with the paths of the linked
+   * sources this read will classify, and it may answer asynchronously. The
+   * durable store (`./unit-manifest-store.ts#UnitManifestStore.manifestsFor`)
+   * is the production supplier: it answers every path it is asked about, with
+   * the source's manifest or the unknown one, and enumerates a source it has
+   * no verified manifest for before answering, so a source is never handed to
+   * the census as absent and never falls back to the text-layer verdict that
+   * would call it read while its image pages were not. A supplier that
+   * ignores the paths (a fixed map) still works, and a path it omits keeps
+   * today's re-extraction. Omitting the dep keeps today's census unchanged.
    */
-  readonly unitManifests?: () => ReadonlyMap<VaultPath, UnitManifest>;
+  readonly unitManifests?: (
+    paths: readonly VaultPath[],
+  ) => ReadonlyMap<VaultPath, UnitManifest> | Promise<ReadonlyMap<VaultPath, UnitManifest>>;
 }
 
 /** The data half of `GroveViewDeps` — `main.ts` adds `openRetrospective` at the construction site. */
@@ -403,7 +415,7 @@ async function unreadableFilesByCourse(
   vault: VaultSource,
   sourcesReport: Awaited<ReturnType<typeof extractTier3Evidence>>['sourcesReport'],
   courseNames: ReadonlySet<string>,
-  manifests?: ReadonlyMap<VaultPath, UnitManifest>,
+  unitManifests?: CreateLocalGroveProviderDeps['unitManifests'],
 ): Promise<{
   readonly unreadable: ReadonlyMap<string, readonly UnreadableFile[]>;
   readonly notYetRead: ReadonlyMap<string, readonly VaultPath[]>;
@@ -434,12 +446,41 @@ async function unreadableFilesByCourse(
     }
   }
 
-  const entries = await Promise.all(
-    [...courseNames].map(async (course) => {
-      const files = [
+  const filesByCourse = new Map<string, readonly VaultPath[]>(
+    [...courseNames].map((course) => [
+      course,
+      [
         ...sourcesReport.sources.filter((s) => s.course === course).map((s) => s.path),
         ...(skippedByCourse.get(course) ?? []),
-      ];
+      ],
+    ]),
+  );
+
+  // `ol-egov.141.89.8.43`: the sources the census will actually classify by manifest — linked,
+  // non-markdown, and of a format an extractor reads — asked for once, for every course together.
+  // A file outside that set is decided before any manifest is consulted (`findUnreadableFiles`
+  // checks the format and the link first), so asking about it would only enumerate a file nobody
+  // is going to classify.
+  const manifestCandidates = [
+    ...new Set(
+      [...filesByCourse.values()]
+        .flat()
+        .filter(
+          (path) =>
+            !path.toLowerCase().endsWith('.md') &&
+            formatFromExtension(path) !== null &&
+            linkedPaths.has(path),
+        ),
+    ),
+  ].sort();
+  const manifests =
+    unitManifests === undefined || manifestCandidates.length === 0
+      ? undefined
+      : await unitManifests(manifestCandidates);
+
+  const entries = await Promise.all(
+    [...courseNames].map(async (course) => {
+      const files = filesByCourse.get(course) ?? [];
       const unreadable = await findUnreadableFiles(vault, {
         files,
         linkedPaths,
@@ -447,11 +488,15 @@ async function unreadableFilesByCourse(
       });
       // The census leaves a file whose pass has not settled out of its list
       // (it is not broken, only unfinished) — which would read as absent.
-      // Keep it as its own record: not read yet, never missing.
+      // Keep it as its own record: not read yet, never missing. Only a file
+      // the census actually classified by its manifest (linked, of a
+      // supported format) can be one: an unlinked file is already in the
+      // list under its own reason.
       const notYetRead =
         manifests === undefined
           ? []
           : files.filter((path) => {
+              if (!linkedPaths.has(path)) return false;
               const manifest = manifests.get(path);
               return manifest !== undefined && hasPendingUnits(manifest);
             });
@@ -722,7 +767,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             deps.vault,
             tier3.sourcesReport,
             courseNames,
-            deps.unitManifests?.(),
+            deps.unitManifests,
           );
         // `[D-226]` ruling 1, S1: computed once per course, same reasoning
         // as `unreadableByCourse` immediately above.

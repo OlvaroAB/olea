@@ -137,6 +137,10 @@ import {
 } from './grading/wiring.js';
 import { createLocalGroveProvider } from './grove/provider.js';
 import { ObsidianGroveReadCompletenessStore } from './grove/read-completeness-store.js';
+import {
+  createVaultUnitManifestStore,
+  type UnitManifestStore,
+} from './grove/unit-manifest-store.js';
 import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
@@ -445,6 +449,13 @@ export default class OleaPlugin extends Plugin {
     this.clock = clock;
   }
   private ingestion: IngestionWiring | null = null;
+  /**
+   * `[D-445]` (`ol-egov.141.89.8.43`): the durable unit manifest — what this install has read of her
+   * material, in `.olea/unit-manifests/`. Built once in `onload` before the grove view and the
+   * ingestion queue that write to and read from it; `null` before that. See
+   * `grove/unit-manifest-store.ts`'s module doc.
+   */
+  private unitManifests: UnitManifestStore | null = null;
   /**
    * `[D-360]` (`ol-egov.141.89.9.34`): the queued regrading workflow's own
    * `IngestionQueueEngine` instance — a separate one from `this.ingestion`
@@ -1790,12 +1801,44 @@ export default class OleaPlugin extends Plugin {
     // section carries its own filtered slice of the standing offer
     // (`retrospective/offer-card.ts`: "a future grove view would filter to
     // its own course").
+    // `[D-445]` (`ol-egov.141.89.8.43`, ruled 2026-09-29): the durable unit manifest the grove
+    // census below reads through `unitManifests`, and the vision runner and the concept read pass
+    // below write into. One store per plugin instance, in Olea's own layer of her vault (INV-6,
+    // never the Worker). `extractOptions` is a thunk because `this.ingestion` is built after this
+    // point: the store enumerates a source with the routing the queue used. `load()` is not
+    // awaited — until it finishes every source reads unknown, never read — and a failure to read
+    // the files leaves it that way.
+    const unitManifests = createVaultUnitManifestStore({
+      vault,
+      deviceId,
+      now: this.now,
+      extractOptions: () => this.ingestion?.extractOptions,
+    });
+    this.unitManifests = unitManifests;
+    // A modify withdraws trust in a source's manifest until it is re-hashed; a delete or rename
+    // retires it. A dot-prefixed folder raises no vault event, so nothing here is told about another
+    // device's records: they fold at the next `load()`.
+    this.register(vault.watch((event) => unitManifests.observe(event)));
+    this.register(
+      unitManifests.subscribe(() => {
+        void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_GROVE);
+      }),
+    );
+    void unitManifests.load().catch((error) => {
+      console.error('Olea: could not load the unit manifest', error);
+    });
+
     this.registerView(VIEW_TYPE_OLEA_GROVE, (leaf) => {
       const provider = createLocalGroveProvider({
         vault,
         deviceId,
         settingsHost: this,
         now: this.now,
+        // `[D-326]`/`[D-445]` (`ol-egov.141.89.8.42`/`.43`): the census reads each linked source's
+        // manifest, or the unknown one, instead of re-extracting its text layer — so an image page
+        // nobody has read never reads as absent or as read. Asked with the paths the census will
+        // classify; the store answers every one.
+        unitManifests: (paths) => unitManifests.manifestsFor(paths),
         // `ol-kghd` (C7.9): the same served relation fold `session-builder/
         // provider.ts` and `composeReviewSession` already read — a thunk so
         // a later ingestion tick's fresh batch reaches a grove built after
@@ -1968,6 +2011,9 @@ export default class OleaPlugin extends Plugin {
       vision: {
         dataHost: this,
         createTransport: createRecordingTransport,
+        // `[D-445]`: every reading the vision runner makes, partial or unreadable included, lands
+        // as one appended record on that page's stable unit id.
+        onManifestEntry: (entry) => unitManifests.recordReading(entry),
       },
       // `[D-324]`, resolving `ol-9cle`: composes the real `PageRenderPort`
       // into the `'vision-page'` runner's PDF branch
@@ -3023,6 +3069,22 @@ export default class OleaPlugin extends Plugin {
       } catch (error) {
         console.error('Olea: could not save read-coverage for the grove', error);
       }
+
+      // `[D-445]` (`ol-egov.141.89.8.43`): the sources this read pass consumed in full — every passage
+      // offered was read and the budget cut none — have had concept extraction run over their text
+      // layer, so the unit manifest marks those units. A source the budget cut short is left as it
+      // was: extraction did not finish there. The store records only units the text layer read (this
+      // pass reads no image) and swallows and logs its own write failures.
+      await this.unitManifests?.recordConceptExtraction(
+        pass.read.coverage
+          .filter(
+            (row) =>
+              row.passagesOffered > 0 &&
+              row.passagesRead >= row.passagesOffered &&
+              !row.truncatedByBudget,
+          )
+          .map((row) => row.sourcePath),
+      );
 
       // `ol-2zfj.32` (`[D-130]`): the confusion-pairing corroboration
       // reader's first production caller — makes `relation-reader-check.mjs`'s

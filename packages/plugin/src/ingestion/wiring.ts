@@ -103,6 +103,7 @@ import {
   deferredEnqueuer,
   type ExtractedUnit,
   type ExtractedUnitSink,
+  type ExtractOptions,
   type GenerationJobPayload,
   IngestionQueueEngine,
   type JobRunner,
@@ -120,6 +121,7 @@ import {
   reconcileOutcomeConcepts,
   resolveOutcome,
   type StudyPlanStore,
+  type UnitManifestEntry,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -207,6 +209,16 @@ export interface IngestionWiringDeps {
   readonly vision?: {
     readonly dataHost: ObsidianDataHost;
     readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+    /**
+     * `[D-445]` (`ol-egov.141.89.8.43`): forwarded unchanged into
+     * `WorkerVisionPageRunnerDeps.onManifestEntry`, the seam `vision-page-runner.ts`
+     * documents as "the seam a later wiring bead composes into" a durable manifest. Called at
+     * most once per reading actually reached; the durable unit manifest store
+     * (`../grove/unit-manifest-store.ts#UnitManifestStore.recordReading`) is the production
+     * sink. Omitted (every caller before this bead) leaves the runner persisting nothing, as
+     * before.
+     */
+    readonly onManifestEntry?: (entry: UnitManifestEntry) => void;
   };
   /**
    * `[D-324]`, resolving `ol-9cle`: the real `PageRenderPort` for a `'pdf'`
@@ -372,12 +384,21 @@ async function buildVisionRunner(
     extractor,
     sink,
     ...(pageRenderer ? { pageRenderer } : {}),
+    ...(vision.onManifestEntry ? { onManifestEntry: vision.onManifestEntry } : {}),
   });
 }
 
 export interface IngestionWiring {
   readonly engine: IngestionQueueEngine;
   readonly sink: PendingIndexingSink;
+  /**
+   * `[D-445]` (`ol-egov.141.89.8.43`): the routing options this runner's extraction ran with —
+   * the delivered vision-route threshold, resolved once at composition (`deps.visionRoute`), or
+   * absent when none was delivered and the extractors' declared default applies. Exposed so the
+   * durable unit manifest enumerates a source with the same routing the queue used: a page it
+   * calls text-layer here is a page the queue did not send to vision.
+   */
+  readonly extractOptions?: ExtractOptions;
 }
 
 /** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. */
@@ -801,7 +822,7 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     priority: (a, b) => compareGenerationPriority(a, b, deps.generation?.priority),
   });
   enqueuer.bind(engine);
-  return { engine, sink };
+  return { engine, sink, ...(extractOptions ? { extractOptions } : {}) };
 }
 
 /**

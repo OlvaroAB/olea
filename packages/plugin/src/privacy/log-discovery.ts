@@ -79,6 +79,12 @@ import {
   MERGE_AUDIT_PROPOSAL_FOLDER,
   MERGE_REPAIR_PROPOSAL_FOLDER,
 } from '../../../core/src/concept/merge-audit-store.js';
+// `[D-445]` (`ol-egov.141.89.8.43`): the unit manifest store's folder and path builder, imported by
+// module path for the same reason as the records above.
+import {
+  UNIT_MANIFEST_FOLDER,
+  unitManifestLogPath,
+} from '../../../core/src/ingestion/unit-manifest/log.js';
 // `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path, never the `olea-core`
 // barrel, which is another live lane's file this round (`session/holder.ts`'s stance).
 import {
@@ -153,6 +159,12 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // named by day and device like the composition records, so probed by exact path too. Carried as
   // the exact text on disk and removed by the full delete; never pruned.
   { folder: COURSE_CUTOFF_LOG_FOLDER, role: 'record' },
+  // `[D-445]` (`ol-egov.141.89.8.43`): the unit manifest, an append-only daily-per-device stream of
+  // what this install has read of her material (paths, pages, states, digests; a partial reading's
+  // own coverage words). Not an event log of C5.2's, so F7.4 carries it as the exact text on disk and
+  // the full delete removes it, like the composition records; never pruned. Probed by exact path for
+  // this device too (`OLEA_PROBED_DAILY_STREAMS`), since its files are named by day.
+  { folder: UNIT_MANIFEST_FOLDER, role: 'record' },
 ];
 
 /**
@@ -261,6 +273,7 @@ export const OLEA_PROBED_DAILY_STREAMS: ReadonlyArray<{
   ...OLEA_EVENT_LOGS,
   { folder: COMPOSITION_LOG_FOLDER, pathFor: compositionLogPath },
   { folder: COURSE_CUTOFF_LOG_FOLDER, pathFor: courseCutoffLogPath },
+  { folder: UNIT_MANIFEST_FOLDER, pathFor: unitManifestLogPath },
 ];
 
 export interface DiscoverOleaLayerOptions {
