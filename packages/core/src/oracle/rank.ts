@@ -1083,27 +1083,51 @@ function compareContributions(a: OracleEdgeContribution, b: OracleEdgeContributi
 }
 
 /**
- * `[D-417]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the phrases the ranking reason is built
- * from. **PROPOSED** — the recommended candidates in the copy pass
+ * `[D-417]` (ruled 2026-09-28) and rows 32 and 33 of
+ * `docs/direction/20260929_decision_sheet_responses.md` (ruled 2026-09-29),
+ * `ol-egov.141.89.10.92`: the phrases the ranking reason is built from. **PROPOSED** — the
+ * candidates and the checks against the facts and the vocabulary registry are in
  * `docs/design/copy-pass-2026-09/planning-sentences.md` (service repo), pending David's
  * sign-off; ratification may change the words, never which fact each one states.
  *
+ * Each phrase states only what the ranking actually holds (rows 32 and 33):
+ * - `need` is observed recall (a reading, from eligible recall evidence); `needUnknown` says there
+ *   is none, and an unknown need is worded as unknown, never as a deficit (registry section 22,
+ *   `[D-348]`). Wording follows the fact, not the planning benchmark: the benchmark reads the
+ *   phrases each factor is declared to use (`scripts/harness/ilb-pln`), never a fixed word.
+ * - `relevance` ("counts for more in your assessments") is used only when every assessment behind
+ *   the concept's relevance has a recorded weight. Otherwise the reason describes what drove the
+ *   ranking: `relevanceEvidence` when the assessment evidence alone is stronger, `relevanceAssumed`
+ *   when the relevance edge exists only because an unrecorded weight is counted in full (a
+ *   planning assumption, never evidence). `relevanceUnknown` is a concept with no assessment link:
+ *   the middle place is a default, said to be one (`[D-329]`).
+ * - `proximity` needs a date on both sides; `proximityDated` is the entry having one and the
+ *   next concept not.
+ * - Objectives: `evidenceObjectives` ("name it") only for an explicit name match;
+ *   `evidenceObjectivesCovered` where alignment is semantic (row 33).
+ *
  * No phrase carries a score, a decimal, a weight or a count (F8.3, F6.7; the registry's voice
- * rules keep engineering numbers out of a reason). Need is worded with the plain verb only; an
- * unknown need is worded as unknown, never as a deficit (registry §22, `[D-348]`).
+ * rules keep engineering numbers out of a reason). Past-paper evidence is stated as history
+ * ("appears in"), never as a prediction of current scope.
  */
 export const RANK_REASON_PHRASES = Object.freeze({
-  /** Need decided, from an estimated reading (current recall or demand-aware readiness). */
-  need: 'you need to practise it more',
-  /** Need decided because this concept's need is unknown, ordered at `[D-348]`'s provisional maximum. */
+  /** Need decided, from an observed reading (current recall, or the readiness fold, which today is that same recall). */
+  need: 'your recall of it is lower',
+  /** Need decided because this concept's need is unknown, ordered at `[D-348]`'s provisional maximum for ordering only. */
   needUnknown: 'there is no evidence yet of how well you recall it',
-  /** Relevance decided, from real assessment evidence. */
+  /** Relevance decided, and every assessment behind it has a recorded weight. */
   relevance: 'it counts for more in your assessments',
-  /** Relevance decided because this concept has no assessment evidence and sits at `[D-329]`'s declared middle, above the next concept's real relevance. */
-  relevanceUnknown:
-    "it has no assessment evidence yet and is placed in the middle, above the next concept's weaker evidence",
+  /** Relevance decided; some assessment weight is not recorded, but the assessment evidence alone is stronger. */
+  relevanceEvidence: 'the assessment evidence for it is stronger',
+  /** Relevance decided only through an unrecorded weight counted in full: a planning assumption. */
+  relevanceAssumed:
+    'the weight of an assessment it appears in is not recorded, so it is counted in full',
+  /** Relevance decided for a concept with no assessment link: it sits at `[D-329]`'s declared middle, a default. */
+  relevanceUnknown: 'with no assessment link it is placed in the middle by default',
   /** Proximity decided: its soonest dated assessment is sooner (`[D-410]`). */
   proximity: 'its assessment comes sooner',
+  /** Proximity decided because it has a dated assessment and the next concept has none. */
+  proximityDated: 'it has a dated assessment and the next concept does not',
   /** The concept ties the next one exactly; `rankOneCourse`'s tie-break ordered them. */
   tie: 'is level with the next concept, and a fixed tie-break puts it first',
   /** Last of several ranked concepts: nothing below it to have been placed above. */
@@ -1112,8 +1136,12 @@ export const RANK_REASON_PHRASES = Object.freeze({
   only: 'is the only concept ranked in this course',
   /** Evidence sentences — what the relevance reading rests on, never how much of it. */
   evidencePastPapers: 'It appears in past papers.',
+  /** An explicit name match in the objectives (row 33). */
   evidenceObjectives: 'Its course objectives name it.',
+  /** Semantic alignment with the objectives (row 33). */
+  evidenceObjectivesCovered: 'It is covered by the course objectives.',
   evidenceBoth: 'It appears in past papers, and its course objectives name it.',
+  evidenceBothCovered: 'It appears in past papers, and it is covered by the course objectives.',
   evidenceOther: 'Its assessments point to it.',
   evidenceNone: 'It has no assessment evidence recorded yet.',
   /** Stated when need is unknown and the position clause has not already said so. */
@@ -1168,9 +1196,34 @@ export function decidingFactors(
   return favouring;
 }
 
+/**
+ * The relevance phrase (rows 32 and 33): "counts for more in your assessments" only where the
+ * assessment weight behind it is recorded. An unrecorded weight is counted in full (declared
+ * neutral, never a silent 0), which is a planning assumption; a reason resting on it says what
+ * actually drove the ranking instead.
+ */
+function relevancePhrase(
+  entry: OracleConceptFactors & OracleProximityFactors,
+  next: OracleConceptFactors & OracleProximityFactors,
+): string {
+  if (entry.contributions.length === 0) return RANK_REASON_PHRASES.relevanceUnknown;
+  if (entry.contributions.every((c) => c.assessmentWeightKnown)) {
+    return RANK_REASON_PHRASES.relevance;
+  }
+  // Some weight is assumed, so compare on the weight-free evidence strength (yield rank and
+  // confidence): the assessment evidence is only called stronger when it is, with the assumption
+  // taken out. An unlinked next concept has none.
+  const strengthOf = (factors: OracleConceptFactors) =>
+    factors.contributions.reduce((sum, c) => sum + c.evidenceStrength, 0);
+  return strengthOf(entry) > strengthOf(next)
+    ? RANK_REASON_PHRASES.relevanceEvidence
+    : RANK_REASON_PHRASES.relevanceAssumed;
+}
+
 function factorPhrase(
   factor: BlendFactor,
   entry: OracleConceptFactors & OracleProximityFactors,
+  next: OracleConceptFactors & OracleProximityFactors,
 ): string {
   switch (factor) {
     case 'need':
@@ -1178,11 +1231,13 @@ function factorPhrase(
         ? RANK_REASON_PHRASES.needUnknown
         : RANK_REASON_PHRASES.need;
     case 'relevance':
-      return entry.contributions.length === 0
-        ? RANK_REASON_PHRASES.relevanceUnknown
-        : RANK_REASON_PHRASES.relevance;
+      return relevancePhrase(entry, next);
     case 'proximity':
-      return RANK_REASON_PHRASES.proximity;
+      // A proximity of exactly 0 is an undated assessment (`computeExamProximityScore`): "sooner"
+      // would compare a date with none.
+      return next.proximityScore === 0
+        ? RANK_REASON_PHRASES.proximityDated
+        : RANK_REASON_PHRASES.proximity;
   }
 }
 
@@ -1192,14 +1247,39 @@ function joinPhrases(phrases: readonly string[]): string {
   return `${phrases.slice(0, -1).join(', ')} and ${phrases[phrases.length - 1]}`;
 }
 
+/**
+ * How an objectives citation aligned the concept to the objectives: `'name'` for an explicit name
+ * match, `'semantic'` for a reading-based alignment (`[D-432]`). **The only producer today is the
+ * exact-name scan** (`tier3-evidence/build.ts`), so a citation that carries no marker is a name
+ * match; the semantic alignment lane must set `alignment: 'semantic'` on the citations it adds, or
+ * this reads them as names. Row 33: "objectives name it" is reserved for a name match.
+ */
+type ObjectivesAlignment = 'name' | 'semantic';
+
+function objectivesAlignmentOf(factors: OracleConceptFactors): ObjectivesAlignment {
+  const citations = (factors.objectivesCitations ?? []) as readonly {
+    readonly alignment?: ObjectivesAlignment;
+  }[];
+  // Named when at least one citation is an explicit name match; covered only when every one is a
+  // semantic alignment.
+  return citations.some((c) => c.alignment !== 'semantic') ? 'name' : 'semantic';
+}
+
 /** What the relevance reading rests on, by basis present, never how much of it. */
 function evidenceSentence(factors: OracleConceptFactors): string {
   if (factors.contributions.length === 0) return RANK_REASON_PHRASES.evidenceNone;
   const pastPapers = factors.citations.length > 0;
   const objectives = (factors.objectivesCitations ?? []).length > 0;
-  if (pastPapers && objectives) return RANK_REASON_PHRASES.evidenceBoth;
+  const named = objectives && objectivesAlignmentOf(factors) === 'name';
+  if (pastPapers && objectives) {
+    return named ? RANK_REASON_PHRASES.evidenceBoth : RANK_REASON_PHRASES.evidenceBothCovered;
+  }
   if (pastPapers) return RANK_REASON_PHRASES.evidencePastPapers;
-  if (objectives) return RANK_REASON_PHRASES.evidenceObjectives;
+  if (objectives) {
+    return named
+      ? RANK_REASON_PHRASES.evidenceObjectives
+      : RANK_REASON_PHRASES.evidenceObjectivesCovered;
+  }
   return RANK_REASON_PHRASES.evidenceOther;
 }
 
@@ -1212,6 +1292,14 @@ function evidenceSentence(factors: OracleConceptFactors): string {
  * (nothing below it) says so rather than inventing a reason. Then one sentence on the evidence's
  * basis (past papers, objectives, or none yet — F4.2's "each basis is stated for what it is"),
  * and, when her need on it is unknown and not already said, that it is unknown.
+ *
+ * **Each claim is checked against the evidence it would rest on (rows 32 and 33,
+ * `ol-egov.141.89.10.92`)**: relevance is said to "count for more in your assessments" only where
+ * the assessment weights are recorded, and otherwise says what drove the ranking
+ * ({@link relevancePhrase}); an unknown value given a default is worded as a default, never as
+ * importance; a concept with no assessment link is worded from what it has (its recall, and a
+ * middle place said to be a default), never from an assessment it does not have; and objectives
+ * are said to "name" a concept only for an explicit name match ({@link objectivesAlignmentOf}).
  *
  * **Derived, not decorated.** Every claim is read off `factors` of the two concepts; nothing is
  * recomputed from anything else. What it no longer carries, by the ruling: the per-factor
@@ -1241,7 +1329,7 @@ function buildReasoning(
     } else {
       namesUnknownNeed = deciding.includes('need') && factors.needBasis === 'unknown';
       position = `is ranked above the next concept because ${joinPhrases(
-        deciding.map((factor) => factorPhrase(factor, factors)),
+        deciding.map((factor) => factorPhrase(factor, factors, next)),
       )}`;
     }
   }

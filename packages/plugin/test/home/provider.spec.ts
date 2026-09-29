@@ -690,9 +690,10 @@ describe("createLocalHomeProvider — threads the composed session's focusReason
     // Guards the rest of this test against a silently-undefined reason —
     // `twoCourseVault()` unsteered always has a dominant course (the F4.6
     // steering suite above establishes TESTC101 wins the by-name tie-break).
-    // `[D-417]`/`[D-418]`: the fixture has no session or window history at
-    // all, so nobody is behind — the true branch is `'none-behind'`, not
-    // `'deficit'`.
+    // Rows 31 and 34: the fixture has no session or window history at all
+    // and nothing practised, so no share is measured and the courses tie on
+    // days since last practised; course id decides, and the chosen course
+    // has no recorded practice — never the "behind its share" sentence.
     expect(session.focusReason).toBeDefined();
     expect(state.focusReason).toBe(session.focusReason);
 
@@ -702,7 +703,9 @@ describe("createLocalHomeProvider — threads the composed session's focusReason
     // just that some string made it across.
     if (state.focusReason === undefined) throw new Error('expected a focusReason');
     expect(sessionCompositionSentence(state.focusReason)).toBe(
-      sessionCompositionSentence(focusReasonFor('none-behind', 'TESTC101')),
+      sessionCompositionSentence(
+        focusReasonFor('longest-without-tie-name+never-practised', 'TESTC101'),
+      ),
     );
   });
 

@@ -170,11 +170,15 @@ export interface CompositionRecord {
   /** The session's one course (C5.6, F2.18); `null` only under the harness's `'every-course'` baseline. */
   readonly course: string | null;
   /**
-   * Which of C5.6's tests chose `course`; `null` exactly when `course` is. The sentence is rendered
-   * from it and `course` ({@link recordedFocusReason}), never stored. `'none-behind'` (`[D-418]`) is
-   * a value added within schema version 1: a record written before it carries one of the first
-   * three and still reads; a reader that predates it rejects a record carrying it, as it would any
-   * unknown value.
+   * What decided `course` (C5.6's hierarchy) at the grain the sentence states, with the
+   * never-practised suffix when the course has no recorded practice (`./compose.ts`'s
+   * {@link FocusBranch}); `null` exactly when `course` is. The sentence is rendered from it and
+   * `course` ({@link recordedFocusReason}), never stored, so the record and the screens state one
+   * reason. Every value beyond the original `filter`, `urgency` and `deficit` (`'none-behind'`
+   * `[D-418]`, and the finer kinds and the suffix of rows 28 to 34 and 49, `ol-egov.141.89.10.92`)
+   * is added within schema version 1: a record written before them carries one of the original
+   * three and still reads; a reader that predates a value rejects a record carrying it, as it
+   * would any unknown value.
    */
   readonly branch: FocusBranch | null;
   /** Which F2.19 signal decided the within-course grouping (`./types.ts`). */
@@ -751,9 +755,12 @@ export function buildExtendedCompositionRecord(
  * composer used for the session's `focusReason`. The screens explain the active session from the
  * frozen composition itself (the plugin's `session/composition-recorder.ts#explainActiveSession`);
  * this is the durable copy's reading of the same two facts, so a record read back later (a
- * history view, a harness) states exactly the sentence she was shown. An extension carries its
- * parent's `branch` and `course` verbatim, so a keep going never changes it. `undefined` when the
- * record names no course (the harness's `'every-course'` baseline).
+ * history view, a harness) states exactly the sentence she was shown. It is also where the
+ * detail behind the card's one concise reason lives: the branch names the real decider (a tie
+ * broken by recency, a tie broken by name, the window reading, the days reading), so nothing that
+ * the sentence leaves out is lost (row 31). An extension carries its parent's `branch` and
+ * `course` verbatim, so a keep going never changes it. `undefined` when the record names no
+ * course (the harness's `'every-course'` baseline).
  */
 export function recordedFocusReason(record: CompositionRecord): string | undefined {
   return record.branch !== null && record.course !== null

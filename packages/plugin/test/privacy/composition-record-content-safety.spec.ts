@@ -58,10 +58,25 @@ const TODAY: CalendarDay = '2026-08-25';
 const DEVICE_ID = 'device-1';
 const COMPOSED_AT = '2026-08-25T09:00:00.000-04:00';
 
+const BRANCH_KINDS = [
+  'filter',
+  'urgency',
+  'urgency-unchecked',
+  'deficit',
+  'only-course',
+  'none-behind',
+  'none-behind-tie-recency',
+  'none-behind-tie-name',
+  'longest-without',
+  'longest-without-tie-name',
+];
+
 const ENUMS = {
   kind: ['compose', 'extend'],
   focusPolicy: ['single', 'every-course'],
-  branch: ['filter', 'urgency', 'deficit', 'none-behind'],
+  // Every value a record's `branch` may carry (`FOCUS_BRANCH_TEMPLATE`'s keys): a fixed enum of
+  // ids, never text. Each kind, without and with the never-practised suffix.
+  branch: [...BRANCH_KINDS, ...BRANCH_KINDS.map((kind) => `${kind}+never-practised`)],
   groupingSignal: ['assessment-scope', 'arrival-cohort', 'relatedness', 'none'],
   obligationClass: ['unmet', 'recall-due', 'baseline-due', 'elective'],
   formatMatch: ['preferred-format', 'other-format', 'no-preference'],

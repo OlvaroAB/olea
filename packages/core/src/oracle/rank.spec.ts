@@ -1931,7 +1931,7 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
     );
     // `[D-417]`: only need separates `faded` from `strong`, so need alone is named, in words.
     expect(fallback.reasoning).toContain(
-      'is ranked above the next concept because you need to practise it more.',
+      'is ranked above the next concept because your recall of it is lower.',
     );
     expect(fallback.reasoning).not.toMatch(/\d|relevance|proximity/);
 
@@ -2097,11 +2097,12 @@ describe('rankOracle — proximity is its own blend term; undated evidence is ne
     );
     expect(rows.map((r) => r.conceptKey)).toEqual(['hasedge', 'a-noedge']);
     // `[D-417]`: relevance alone separates them (need and proximity equal), so relevance alone
-    // is named; the no-edge concept, last, says it has no evidence yet.
+    // is named. Row 32: this assessment carries no recorded weight, so "counts for more in your
+    // assessments" is NOT claimed; the reason says the assessment evidence is what is stronger.
     expect(hasEdge?.reasoning).toContain(
-      'is ranked above the next concept because it counts for more in your assessments.',
+      'is ranked above the next concept because the assessment evidence for it is stronger.',
     );
-    expect(hasEdge?.reasoning).not.toMatch(/sooner|need to practise/);
+    expect(hasEdge?.reasoning).not.toMatch(/counts for more|sooner|recall of it is lower/);
     expect(noEdge?.reasoning).toContain('is ranked last in this course.');
     expect(noEdge?.reasoning).toContain('It has no assessment evidence recorded yet.');
   });
@@ -2213,20 +2214,26 @@ describe('rankOracle — purity / rebuild equivalence', () => {
   });
 });
 
-// `[D-417]` (ruled 2026-09-28, `ol-egov.141.89.10.92`): the reason names a single deciding factor
-// only when that factor alone put the concept above the next one, every favouring factor when
-// several did, and carries no score, decimal or count. Words of each factor's phrase are checked
-// the way the planning benchmark's sentence check reads them (a factor's own word, or the
-// phrase's plain words).
-describe('rankOracle — the reason names what decided, from the actual factor values ([D-417])', () => {
-  const FACTOR_WORDS = {
-    need: /\bneed\b|\brecall it\b/i,
-    relevance: /\brelevance\b|counts for more|assessment evidence yet and/i,
-    proximity: /\bproximity\b|\bsooner\b/i,
+// `[D-417]` (ruled 2026-09-28) and rows 32 and 33 of the 2026-09-29 sheet responses
+// (`ol-egov.141.89.10.92`): the reason names a single deciding factor only when that factor alone
+// put the concept above the next one, every favouring factor when several did, carries no score,
+// decimal or count, and claims only what the ranking's evidence supports. A factor is read as
+// named the way the planning benchmark's sentence check reads it: by the phrases the product
+// declares for that factor (`RANK_REASON_PHRASES`), never by a fixed word.
+describe('rankOracle — the reason names what decided, from the actual factor values ([D-417], rows 32 and 33)', () => {
+  const FACTOR_PHRASES = {
+    need: [RANK_REASON_PHRASES.need, RANK_REASON_PHRASES.needUnknown],
+    relevance: [
+      RANK_REASON_PHRASES.relevance,
+      RANK_REASON_PHRASES.relevanceEvidence,
+      RANK_REASON_PHRASES.relevanceAssumed,
+      RANK_REASON_PHRASES.relevanceUnknown,
+    ],
+    proximity: [RANK_REASON_PHRASES.proximity, RANK_REASON_PHRASES.proximityDated],
   } as const;
   const named = (text: string) =>
-    (Object.keys(FACTOR_WORDS) as (keyof typeof FACTOR_WORDS)[]).filter((f) =>
-      FACTOR_WORDS[f].test(text),
+    (Object.keys(FACTOR_PHRASES) as (keyof typeof FACTOR_PHRASES)[]).filter((f) =>
+      FACTOR_PHRASES[f].some((phrase) => text.includes(phrase)),
     );
   // The planning benchmark's committed ban on a count of unmet material, and the ruling's
   // "no raw scores or decimals".
@@ -2234,11 +2241,15 @@ describe('rankOracle — the reason names what decided, from the actual factor v
 
   function twoConcepts(opts: {
     readonly recall?: readonly [number, number];
-    readonly due?: readonly [string, string];
+    readonly due?: readonly [string | undefined, string | undefined];
     readonly yieldRank?: readonly [number, number];
+    /** Each assessment's recorded weight; `undefined` is an unrecorded one. Defaults to 20 each. */
+    readonly weight?: readonly [number | undefined, number | undefined];
+    readonly targetEdge?: Partial<ConceptAssessmentEdge>;
   }) {
     const due = opts.due ?? ['2026-09-01', '2026-09-01'];
     const yieldRank = opts.yieldRank ?? [1, 1];
+    const weight = opts.weight ?? [20, 20];
     const result = rankOracle({
       evidence: {
         edges: [
@@ -2246,6 +2257,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
             conceptName: 'target',
             assessmentPath: 'Assessments/T.md',
             yieldRank: yieldRank[0],
+            ...opts.targetEdge,
           }),
           edge({
             conceptName: 'reference',
@@ -2254,8 +2266,18 @@ describe('rankOracle — the reason names what decided, from the actual factor v
           }),
         ],
         assessmentsRead: readReport([
-          assessment({ path: 'Assessments/T.md', due: due[0] }),
-          assessment({ path: 'Assessments/R.md', due: due[1] }),
+          assessment({
+            path: 'Assessments/T.md',
+            weight: weight[0],
+            weightRaw: weight[0] === undefined ? undefined : String(weight[0]),
+            ...(due[0] !== undefined ? { due: due[0] } : { due: undefined }),
+          }),
+          assessment({
+            path: 'Assessments/R.md',
+            weight: weight[1],
+            weightRaw: weight[1] === undefined ? undefined : String(weight[1]),
+            ...(due[1] !== undefined ? { due: due[1] } : { due: undefined }),
+          }),
         ]),
         assessmentsWithNoEvidence: [],
       },
@@ -2274,17 +2296,27 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     return course.ranked;
   }
 
-  it('need alone moved it (the planning benchmark R10 construction): need alone is named', () => {
+  it('recall alone moved it (the planning benchmark R10 construction): recall alone is named, in words about recall', () => {
     const [first, second] = twoConcepts({ recall: [0.3, 0.9] });
     expect(first?.conceptKey).toBe('target');
     expect(first?.reasoning).toBe(
-      'target (COURSEA) is ranked above the next concept because you need to practise it more. ' +
+      'target (COURSEA) is ranked above the next concept because your recall of it is lower. ' +
         'It appears in past papers.',
     );
     expect(named(first?.reasoning ?? '')).toEqual(['need']);
     expect(second?.reasoning).toBe(
       'reference (COURSEA) is ranked last in this course. It appears in past papers.',
     );
+  });
+
+  it('no reason depends on the literal word "need": the wording follows the fact, not a benchmark check', () => {
+    for (const ranking of [
+      twoConcepts({ recall: [0.3, 0.9] }),
+      twoConcepts({}),
+      twoConcepts({ recall: [0.3, 0.9], due: ['2026-08-20', '2026-10-30'] }),
+    ]) {
+      for (const entry of ranking) expect(entry.reasoning).not.toMatch(/\bneeds?\b/i);
+    }
   });
 
   it('proximity alone moved it: only its sooner assessment is named', () => {
@@ -2294,11 +2326,60 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     expect(named(first?.reasoning ?? '')).toEqual(['proximity']);
   });
 
-  it('relevance alone moved it: only relevance is named', () => {
-    const [first] = twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4] });
+  it('proximity against an undated next concept says it has a date and the other has none, never "sooner"', () => {
+    const [first] = twoConcepts({ recall: [0.5, 0.5], due: ['2026-08-20', undefined] });
     expect(first?.conceptKey).toBe('target');
-    expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
-    expect(named(first?.reasoning ?? '')).toEqual(['relevance']);
+    expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.proximityDated}.`);
+    expect(first?.reasoning).not.toContain('sooner');
+    expect(named(first?.reasoning ?? '')).toEqual(['proximity']);
+  });
+
+  describe('row 32: "counts for more in your assessments" needs recorded assessment weight', () => {
+    it('relevance alone moved it, and every assessment behind it has a recorded weight: the phrase is used', () => {
+      const [first] = twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4], weight: [20, 20] });
+      expect(first?.conceptKey).toBe('target');
+      expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
+      expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+      expect(named(first?.reasoning ?? '')).toEqual(['relevance']);
+    });
+
+    it('the weight is not recorded, but the assessment evidence alone is stronger: the reason says the evidence is, not the weight', () => {
+      const [first] = twoConcepts({
+        recall: [0.5, 0.5],
+        yieldRank: [1, 4],
+        weight: [undefined, undefined],
+      });
+      expect(first?.conceptKey).toBe('target');
+      expect(first?.factors.contributions.every((c) => !c.assessmentWeightKnown)).toBe(true);
+      expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevanceEvidence}.`);
+      expect(first?.reasoning).not.toContain('counts for more');
+    });
+
+    it('it is ahead only because an unrecorded weight is counted in full: the reason says that is an assumption, never that it counts for more', () => {
+      // Same evidence strength on both; the target's assessment has no recorded weight (counted
+      // in full) while the reference's is recorded low, so relevance favours the target on the
+      // assumption alone.
+      const [first] = twoConcepts({
+        recall: [0.5, 0.5],
+        yieldRank: [1, 1],
+        weight: [undefined, 10],
+      });
+      expect(first?.conceptKey).toBe('target');
+      expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevanceAssumed}.`);
+      expect(first?.reasoning).not.toContain('counts for more');
+      expect(first?.reasoning).not.toContain('stronger');
+    });
+
+    it('a recorded weight on this concept but an unrecorded one on the next: it is ahead of the next even counted in FULL, so the claim stands', () => {
+      const [first] = twoConcepts({
+        recall: [0.5, 0.5],
+        yieldRank: [1, 4],
+        weight: [50, undefined],
+      });
+      expect(first?.conceptKey).toBe('target');
+      expect(first?.factors.contributions.every((c) => c.assessmentWeightKnown)).toBe(true);
+      expect(first?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+    });
   });
 
   it('need and proximity both favour it: they decide jointly, and both are named', () => {
@@ -2310,7 +2391,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     expect(named(first?.reasoning ?? '')).toEqual(['need', 'proximity']);
   });
 
-  it('a factor weighing against it is not named: need favours it, relevance does not, need alone decided', () => {
+  it('a factor weighing against it is not named: recall favours it, relevance does not, recall alone decided', () => {
     // target: lower relevance (yield rank 2) but much less recalled.
     const [first] = twoConcepts({ recall: [0.05, 0.95], yieldRank: [2, 1] });
     expect(first?.conceptKey).toBe('target');
@@ -2341,18 +2422,186 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     expect(decidingFactors(withProximity(first.factors), withProximity(first.factors))).toBe('tie');
   });
 
-  it('no reason carries a decimal, a percentage, a ratio, a weight or a count of unmet material', () => {
+  describe('a concept with no assessment link (the need-only treatment): worded from what it has, never from assessment evidence it does not', () => {
+    // `[D-329]`'s unknown-relevance entry: no contribution, no citation, proximity 0, relevance at
+    // the declared middle. `hasedge` is linked with a low yield so the middle sits above it.
+    /** A recall reading per concept; `undefined` supplies none (unknown need). */
+    function recallMap(recall: readonly [number | undefined, number | undefined]) {
+      const map = new Map<string, number>();
+      if (recall[0] !== undefined) map.set('noedge', recall[0]);
+      if (recall[1] !== undefined) map.set('hasedge', recall[1]);
+      return map;
+    }
+
+    function linkedAndUnlinked(opts: {
+      readonly recall: readonly [number | undefined, number | undefined];
+      readonly yieldRank?: number;
+    }) {
+      const result = rankOracle({
+        evidence: {
+          edges: [
+            edge({
+              conceptName: 'hasedge',
+              assessmentPath: 'Assessments/R.md',
+              yieldRank: opts.yieldRank ?? 6,
+            }),
+          ],
+          assessmentsRead: readReport([
+            assessment({ path: 'Assessments/R.md', due: undefined, weight: 20, weightRaw: '20' }),
+          ]),
+          assessmentsWithNoEvidence: [],
+        },
+        courseConcepts: new Map([
+          [
+            'COURSEA',
+            new Map([
+              ['hasedge', 'hasedge'],
+              ['noedge', 'noedge'],
+            ]),
+          ],
+        ]),
+        retrievability: recallMap(opts.recall),
+        asOf: ASOF,
+      });
+      const course = result.courses[0];
+      if (course?.status !== 'ranked') throw new Error('expected ranked');
+      const byKey = (key: string) => course.ranked.find((r) => r.conceptKey === key);
+      return { noedge: byKey('noedge'), hasedge: byKey('hasedge') };
+    }
+
+    it('ranked above a linked concept on recall alone: the reason is about recall, and says it has no assessment evidence', () => {
+      const { noedge } = linkedAndUnlinked({ recall: [0.05, 0.95], yieldRank: 1 });
+      expect(noedge?.factors.contributions).toEqual([]);
+      expect(noedge?.reasoning).toContain(`because ${RANK_REASON_PHRASES.need}.`);
+      expect(noedge?.reasoning).toContain(RANK_REASON_PHRASES.evidenceNone);
+      expect(named(noedge?.reasoning ?? '')).toEqual(['need']);
+      for (const claim of [
+        RANK_REASON_PHRASES.relevance,
+        RANK_REASON_PHRASES.relevanceEvidence,
+        RANK_REASON_PHRASES.evidencePastPapers,
+        RANK_REASON_PHRASES.evidenceObjectives,
+        RANK_REASON_PHRASES.evidenceOther,
+        RANK_REASON_PHRASES.proximity,
+      ]) {
+        expect(noedge?.reasoning).not.toContain(claim);
+      }
+    });
+
+    it('ranked above a linked concept partly on its default middle place: the reason says the place is a default, never that it counts for more', () => {
+      const { noedge } = linkedAndUnlinked({ recall: [0.05, 0.95], yieldRank: 6 });
+      expect(noedge?.reasoning).toContain(RANK_REASON_PHRASES.relevanceUnknown);
+      expect(noedge?.reasoning).toContain('by default');
+      expect(noedge?.reasoning).not.toContain('counts for more');
+      expect(noedge?.reasoning).not.toContain('stronger');
+    });
+
+    it('unknown recall on top of no assessment link: both are worded as unknown, never as weakness', () => {
+      const { noedge } = linkedAndUnlinked({ recall: [undefined, 0.5], yieldRank: 6 });
+      expect(noedge?.factors.needBasis).toBe('unknown');
+      expect(noedge?.reasoning).toContain(RANK_REASON_PHRASES.needUnknown);
+      expect(noedge?.reasoning).toContain(RANK_REASON_PHRASES.evidenceNone);
+      expect(noedge?.reasoning).not.toMatch(/\b(weak|weakness|struggling|behind)\b/i);
+    });
+
+    it('a linked concept ahead of an unlinked one is not said to be ahead on assessment evidence the other lacks unless its weights are recorded', () => {
+      const { hasedge } = linkedAndUnlinked({ recall: [0.5, 0.5], yieldRank: 1 });
+      expect(hasedge?.reasoning).toContain(`because ${RANK_REASON_PHRASES.relevance}.`);
+    });
+  });
+
+  describe('row 33: what the evidence rests on keeps its kinds apart', () => {
+    const objectivesOnly = (alignment?: 'name' | 'semantic') =>
+      twoConcepts({
+        recall: [0.5, 0.5],
+        targetEdge: {
+          basis: 'objectives',
+          citations: [],
+          objectivesCitations: [
+            { ...objectivesCitation(), ...(alignment !== undefined ? { alignment } : {}) },
+          ],
+        },
+      });
+
+    it('objectives evidence with no alignment marker is an explicit name match (the only producer today): "name it"', () => {
+      const [first, second] = objectivesOnly();
+      const target = [first, second].find((e) => e?.conceptKey === 'target');
+      expect(target?.reasoning).toContain(RANK_REASON_PHRASES.evidenceObjectives);
+      expect(target?.reasoning).not.toContain('covered by');
+    });
+
+    it('an explicit name match says the objectives name it', () => {
+      const target = objectivesOnly('name').find((e) => e.conceptKey === 'target');
+      expect(target?.reasoning).toContain('Its course objectives name it.');
+    });
+
+    it('semantic alignment says the objectives cover it, and never that they name it', () => {
+      const target = objectivesOnly('semantic').find((e) => e.conceptKey === 'target');
+      expect(target?.reasoning).toContain('It is covered by the course objectives.');
+      expect(target?.reasoning).not.toMatch(/name it|appears in past papers/i);
+    });
+
+    it('past papers and semantically aligned objectives are both stated, each for what it is', () => {
+      const ranking = twoConcepts({
+        recall: [0.5, 0.5],
+        targetEdge: {
+          objectivesCitations: [
+            {
+              ...objectivesCitation(),
+              alignment: 'semantic',
+            } as unknown as EvidenceObjectivesCitation,
+          ],
+        },
+      });
+      const target = ranking.find((e) => e.conceptKey === 'target');
+      expect(target?.reasoning).toContain(RANK_REASON_PHRASES.evidenceBothCovered);
+      expect(target?.reasoning).not.toContain('name it');
+    });
+
+    it('past papers and an explicit name match are both stated', () => {
+      const ranking = twoConcepts({
+        recall: [0.5, 0.5],
+        targetEdge: { objectivesCitations: [objectivesCitation()] },
+      });
+      const target = ranking.find((e) => e.conceptKey === 'target');
+      expect(target?.reasoning).toContain(RANK_REASON_PHRASES.evidenceBoth);
+    });
+
+    it('past-paper evidence is stated as history, never as a prediction of current scope', () => {
+      for (const entry of twoConcepts({ recall: [0.3, 0.9] })) {
+        expect(entry.reasoning).toContain('It appears in past papers.');
+        expect(entry.reasoning).not.toMatch(
+          /\b(will|likely|expected|examined this term|this term)\b/i,
+        );
+      }
+    });
+
+    it('unknown recall is worded as unknown, in its own sentence, when it did not decide the place', () => {
+      const ranking = twoConcepts({});
+      for (const entry of ranking) {
+        expect(entry.reasoning).toContain(RANK_REASON_PHRASES.recallUnknown);
+      }
+    });
+  });
+
+  it('no reason carries a decimal, a percentage, a ratio, a weight, a count of unmet material, or an engineering word', () => {
     const fixtures = [
       twoConcepts({ recall: [0.3, 0.9] }),
       twoConcepts({ recall: [0.5, 0.5], due: ['2026-08-20', '2026-10-30'] }),
       twoConcepts({}),
       twoConcepts({ recall: [0.3, 0.9], yieldRank: [3, 1], due: ['2026-08-18', '2026-09-30'] }),
+      twoConcepts({ recall: [0.5, 0.5], yieldRank: [1, 4], weight: [undefined, undefined] }),
+      twoConcepts({ recall: [0.5, 0.5], due: ['2026-08-20', undefined] }),
     ];
     for (const ranking of fixtures) {
       for (const entry of ranking) {
-        expect(entry.reasoning).not.toMatch(/\d+\.\d+|%|\bpercent|\bratio\b|\bweight\b|\bscore\b/i);
+        expect(entry.reasoning).not.toMatch(
+          /\d+\.\d+|%|\bpercent|\bratio\b|\bweights?\b.*\d|\bscore\b/i,
+        );
         expect(entry.reasoning).not.toMatch(COUNT_OF_UNMET);
         expect(entry.reasoning).not.toMatch(/\bweak|struggling|behind\b/i);
+        expect(entry.reasoning).not.toMatch(
+          /\brelevance\b|\bproximity\b|\breadiness\b|\bpriority\b/i,
+        );
       }
     }
   });

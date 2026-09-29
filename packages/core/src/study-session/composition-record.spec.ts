@@ -630,10 +630,11 @@ describe('[D-331] buildCompositionRecord', () => {
       reentry: false,
       focusPolicy: 'single',
       course: 'CRS101',
-      // `[D-418]`: `baseInput` supplies `emptyReplay()` — no session history at all, so no
-      // course reads behind its share. `'none-behind'` is the true branch; the course chosen is
-      // unchanged (`readsBehind` gates the branch, never the winner).
-      branch: 'none-behind',
+      // Rows 31 and 34: `baseInput` supplies `emptyReplay()` — no session history at all, so no
+      // window reading exists and no share is claimed. Both courses read the same days
+      // (never practised), course id decides, and the chosen course has no recorded practice.
+      // The course chosen is unchanged (the branch says what decided, never who wins).
+      branch: 'longest-without-tie-name+never-practised',
       groupingSignal: 'none',
       steering: { courses: null, conceptIds: null },
       budgetMinutes: 2,

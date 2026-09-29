@@ -237,18 +237,35 @@ export function sessionCompositionSentence(focusReason: string): string {
 }
 
 /**
- * The four course-why sentences as `sessionCompositionSentence` renders them for
- * a fixture course, for `allHomeStrings`' honesty checks. Mirrors
- * `olea-core`'s `FOCUS_BRANCH_TEMPLATE` word for word (PROPOSED); this module
- * imports nothing at runtime (a plain Node harness loads it from source), so
- * the mirror cannot be an import; `olea-core`'s `compose.spec.ts` reads this
- * file and pins the four strings to the template.
+ * Every course-why sentence as `sessionCompositionSentence` renders it for a fixture course, for
+ * `allHomeStrings`' honesty checks: each decider, without and then with the never-practised
+ * sentence (rows 28 to 34 and 49, `ol-egov.141.89.10.92`). Mirrors `olea-core`'s
+ * `FOCUS_BRANCH_TEMPLATE` word for word (PROPOSED where the ruling gave no exact words); this
+ * module imports nothing at runtime (a plain Node harness loads it from source), so the mirror
+ * cannot be an import; `olea-core`'s `compose.spec.ts` reads this file and pins every string to
+ * the template.
  */
 export const COURSE_WHY_SENTENCE_EXAMPLES: readonly string[] = [
   'TESTC101, because you asked for it',
   'TESTC101, because its assessment is close and the assessed material still needs work',
-  'TESTC101, because it is behind its share from your recent sessions',
-  'TESTC101, because no course with something to practise is behind its share, so the session goes to the one closest to falling behind, then to the one you have gone longest without, then by name',
+  "TESTC101, because its assessment is close and we haven't checked your recall of some assessed material yet",
+  'TESTC101, because it has had less than its planned share of recent practice',
+  'TESTC101, because it is the only course with something to practise right now',
+  'TESTC101, because no course has had less than its planned share of recent practice, and it is the closest to doing so',
+  'TESTC101, because no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it',
+  'TESTC101, because no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name',
+  'TESTC101, because you have gone longest without practising it',
+  'TESTC101, because you have gone equally long without practising another course, so it comes first by name',
+  "TESTC101 is selected next, because you asked for it. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because its assessment is close and the assessed material still needs work. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because its assessment is close and we haven't checked your recall of some assessed material yet. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because it has had less than its planned share of recent practice. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because it is the only course with something to practise right now. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because no course has had less than its planned share of recent practice, and it is the closest to doing so. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because no course has had less than its planned share of recent practice; it is level with another course, and you have gone longer without it. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because no course has had less than its planned share of recent practice; it is level with another course, so it comes first by name. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because you have gone longest without practising it. You haven't practised this course in Olea yet",
+  "TESTC101 is selected next, because you have gone equally long without practising another course, so it comes first by name. You haven't practised this course in Olea yet",
 ].map(sessionCompositionSentence);
 
 /** Every string this module can render, for `test/home/copy.spec.ts`'s honesty checks. */
