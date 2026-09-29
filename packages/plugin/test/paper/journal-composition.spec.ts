@@ -350,6 +350,61 @@ describe('an outage, a refusal and a partial paper stay three different things',
   });
 });
 
+describe('slots the blueprint left empty before any call qualify the paper too, by kind', () => {
+  const planTimeEmpty = (
+    reasonCode: 'demand-unsupported' | 'no-held-source' | 'rank-excluded',
+  ): PaperBlueprint['emptySlots'][number] => ({
+    slotId: `plan-${reasonCode}`,
+    conceptKey: 'concept-x',
+    conceptName: 'Topic X',
+    reasonCode,
+    reason: `decided before any call: ${reasonCode}`,
+  });
+
+  async function finishedWith(reasonCodes: readonly Parameters<typeof planTimeEmpty>[0][]) {
+    const { blueprint, scope } = await blueprintOf(2);
+    const withEmpties: PaperBlueprint = {
+      ...blueprint,
+      emptySlots: [...blueprint.emptySlots, ...reasonCodes.map(planTimeEmpty)],
+    };
+    const result = await compose(
+      memoryVault(),
+      withEmpties,
+      scope,
+      scriptedPort((request) => generated(request)).port,
+    );
+    if (result.kind !== 'finished') throw new Error('expected a finished paper');
+    return result.record;
+  }
+
+  it('a capability gap (no generator serves the demand) is a qualified partial by capability, apart from a source gap', async () => {
+    expect((await finishedWith(['demand-unsupported'])).completion).toEqual({
+      status: 'qualified-partial',
+      gaps: ['capability'],
+    });
+  });
+
+  it('a slot with no held source is a source gap', async () => {
+    expect((await finishedWith(['no-held-source'])).completion).toEqual({
+      status: 'qualified-partial',
+      gaps: ['source'],
+    });
+  });
+
+  it('both kinds name both, never blurred into one', async () => {
+    expect((await finishedWith(['no-held-source', 'demand-unsupported'])).completion).toEqual({
+      status: 'qualified-partial',
+      gaps: ['capability', 'source'],
+    });
+  });
+
+  it('a rank-excluded slot is the paper size, not a gap: the paper is complete, and the slot is still named', async () => {
+    const record = await finishedWith(['rank-excluded']);
+    expect(record.completion).toEqual({ status: 'complete' });
+    expect(record.emptySlots.map((slot) => slot.reasonCode)).toContain('rank-excluded');
+  });
+});
+
 describe('reuse checks all four inputs, and names the one that changed ([D-430])', () => {
   async function unfinishedThenChange(
     change: (base: { blueprint: PaperBlueprint; scope: PaperCompositionScope }) => Promise<{
