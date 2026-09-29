@@ -568,22 +568,35 @@ export const SUSPECT_DEFERRED_LINE =
   "Olea couldn't confirm the change to this source passage after two tries, and won't try again until you edit that passage.";
 
 /**
- * `[D-420]` (amends `[D-400]`; **PROPOSED, Class B, pending David's ratification**;
- * `ol-egov.141.89.5.28`) — the deferred row's sentence once the explicit check-again action is
- * wired (`./deferred-recheck-retry.ts`). Drafted, with its rejected alternatives, in olea-service
- * `docs/design/copy-pass-2026-09/deferred-recheck.md` (recommended candidate A), which also
- * re-drafts registry §24 in full. Differs from {@link SUSPECT_DEFERRED_LINE} in two ways, both on
- * purpose: it does not send her to edit the passage (`[D-420]`: editing correct material must not
- * be the only recovery), and it carries no attempt count, so it stays true after a pressed check
- * also goes unanswered. Never "deferred," "retry" or "exhausted."
+ * `[D-420]` (amends `[D-400]`; `ol-egov.141.89.5.28`; wording ruled by David 2026-09-29, row 13 of
+ * olea-service `docs/direction/20260929_decision_sheet_responses.md`, bead `ol-egov.141.89.5.36`)
+ * — the deferred row's sentence once the explicit check-again action is wired
+ * (`./deferred-recheck-retry.ts`). The ruled sentence, exactly, with the action's own label quoted
+ * inside it so the sentence and the button name the same thing. Drafted (candidate A) and now
+ * replaced in olea-service `docs/design/copy-pass-2026-09/deferred-recheck.md`.
+ *
+ * **For a failed check only, never a completed finding.** A deferred row is a pending-revalidation
+ * fact whose one automatic retry was spent and whose check still went unanswered
+ * (`retriedAt`, `../ingestion/materiality/citation-revision-wiring.ts`; read into the row by
+ * `./provider.ts#suspectSectionFrom`, set by `olea-core`'s `deriveRegistrySuspectSection` only when
+ * `retryExhausted` is true). Any answer that arrives resolves that fact, so a finding never reaches
+ * this sentence: a passage judged unchanged is refreshed, one judged changed suspends the item and
+ * ends tracking. A completed finding that the source is insufficient to settle the question is a
+ * different state and needs its own sentence; it must not be given this one, which says Olea could
+ * not check.
+ *
+ * Carries no attempt count, so it stays true after a pressed check also goes unanswered, and does
+ * not send her to edit the passage (`[D-420]`: editing correct material must not be the only
+ * recovery). The ruled sentence uses the word "retry" as the verb for the action, which the
+ * proposed registry §24 had listed as forbidden; the ruling governs, and §24 is to be aligned to it.
  */
 export const SUSPECT_DEFERRED_WITH_ACTION_LINE =
-  "Olea couldn't confirm the change to this source passage, and won't check it again on its own.";
+  "Olea couldn't check this changed passage. Select 'Check again' to retry.";
 
-/** `[D-420]` — the action's label (PROPOSED, candidate A; see {@link SUSPECT_DEFERRED_WITH_ACTION_LINE}). */
+/** `[D-420]` — the action's label, retained by the 2026-09-29 ruling (row 13); the ruled sentence quotes it. */
 export const SUSPECT_DEFERRED_RECHECK_ACTION = 'Check again';
 
-/** `[D-420]` — shown with the action, which is then unavailable, while the device is offline (PROPOSED, candidate A). */
+/** `[D-420]` — shown with the action, which is then unavailable, while the device is offline; retained by the 2026-09-29 ruling (row 13). */
 export const SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE = 'Checking again needs a connection.';
 
 /** What a deferred row shows: its sentence, and the action beside it when one is wired. */

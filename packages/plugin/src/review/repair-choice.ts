@@ -69,8 +69,52 @@
 import type { VaultInstrumentRecord, VaultPath } from 'olea-core';
 import { hashText } from 'olea-core';
 
-/** `[D-392]`'s own wording for the second choice, verbatim from the amended C5.3 clause. */
-export const REPAIR_CHOICE_NONE_OF_THESE_LABEL = 'None of these';
+/**
+ * What she reads on the grouped choice — the wording David ruled on 2026-09-29 (row 11 of
+ * olea-service `docs/direction/20260929_decision_sheet_responses.md`, bead `ol-v7r5.111`), given
+ * exactly and drafted with its reasoning in `docs/design/copy-pass-2026-09/grouped-repair-choice.md`.
+ * The screen that draws them is `ol-v7r5.105`'s; until it lands these constants have no production
+ * caller (`test/review/repair-choice.spec.ts` pins the strings, and
+ * `test/review/repair-choice-consequence.spec.ts` pins each claim they make against the real open
+ * path and store).
+ *
+ * The question deliberately does not presuppose that the card moved: "None of these." is a live
+ * answer, not a fallback.
+ */
+export const REPAIR_CHOICE_QUESTION = 'Which of these passages does this card refer to?';
+
+/** The second choice. The clause's own phrase (C5.3 as amended, `[D-392]`), with the ruled full stop. */
+export const REPAIR_CHOICE_NONE_OF_THESE_LABEL = 'None of these.';
+
+/**
+ * Shown under the question, whichever she picks. It says the practice history is kept with the
+ * card and nothing more: attaching the card to a passage does not compare that passage's text with
+ * the card's last text (`../instrument-stamping/repair-write-back.ts` refuses only on a different
+ * item type, an id already carried elsewhere and the other doubts its module doc lists), so the
+ * line must not say, or lead her to read, that the earlier practice vouches for the passage she
+ * picks. The ruling asks for exactly that restraint.
+ */
+export const REPAIR_CHOICE_HISTORY_LINE =
+  'Its practice history stays with the card, whichever you choose.';
+
+/**
+ * What "None of these." does, read off the implementation (each clause pinned in
+ * `test/review/repair-choice-consequence.spec.ts`):
+ *
+ * - the card ends up **without a passage**: nothing in her notes carries its id any more, so it is
+ *   not served (the review queue is built from the passages a walk finds), and the answer writes
+ *   nothing into her notes (`saveRepairChoiceAnswer`, `./duplication-confirmation-store.ts`);
+ * - **"you won't be asked again"**: the record is saved `declined` and a resolved record is never
+ *   proposed or rewritten by a later walk (`proposeRepairChoiceConfirmations` and
+ *   `saveRepairChoiceAnswer` both refuse it);
+ * - the practice history is untouched (the review log is append-only and this answer never
+ *   writes to it), which {@link REPAIR_CHOICE_HISTORY_LINE} already says.
+ *
+ * It does not use "withheld" (registry section 23's word for a defect) or "withdrawn" (F8.5's word
+ * for pruning a concept, `[D-171]`), and does not call the choice "unresolved": it is closed.
+ */
+export const REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE =
+  "None of these leaves the card without a passage: it won't be shown, and you won't be asked again.";
 
 /**
  * One candidate as she sees it in the grouped choice. `notePath` is the only stable,

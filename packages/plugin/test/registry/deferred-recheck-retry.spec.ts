@@ -11,6 +11,8 @@
  *
  * Every fixture string is INVENTED (INV-3).
  */
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { citationStorePath, type RevisionJudgePort, type VaultPath } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
@@ -385,5 +387,85 @@ describe('[D-420] end to end — the real [D-400] gate, the real store shape, th
     expect(world.judge.judge).toHaveBeenCalledTimes(3);
     const state = await suspectOf(await world.provider().load());
     expect(state.suspectInstruments.pendingRevalidation).toEqual([{ instrumentId: MCQ_ID }]);
+  });
+});
+
+/**
+ * Row 13 of the 2026-09-29 rulings (`ol-egov.141.89.5.36`): the ruled sentence says Olea could not
+ * check, so it is for a failed check only. A completed finding resolves the pending fact the row
+ * is read from, so it can never reach the sentence; and no code outside the copy module draws it.
+ */
+describe('row 13 — the "couldn\'t check" sentence is for a failed check, never a completed finding', () => {
+  it('a check that never answered reads the ruled sentence; an answer that arrives leaves no deferred row at all', async () => {
+    const world = await deferredWorld();
+    const provider = world.provider();
+    const failed = await suspectOf(await provider.load());
+    expect(failed.suspectInstruments.pendingRevalidation).toEqual([
+      { instrumentId: MCQ_ID, deferred: true },
+    ]);
+    expect(suspectDeferredRowCopy(failed.deferredRecheckAction).line).toBe(
+      SUSPECT_DEFERRED_WITH_ACTION_LINE,
+    );
+
+    // A completed finding that the passage's claim changed: the item is suspended and tracking
+    // ends, so there is no pending fact for the row to be read from.
+    expect(await provider.retryDeferredRecheck?.(MCQ_ID)).toBe('rearmed');
+    world.judge.judge.mockImplementationOnce(async () => ({ material: true, reason: 'changed' }));
+    const report = await world.pass();
+    expect(report.revised).toBe(1);
+    expect((await world.store.loadAll()).get(MCQ_ID)).toBeUndefined();
+    const finding = await suspectOf(await provider.load());
+    expect(finding.suspectInstruments.pendingRevalidation).toEqual([]);
+    expect(finding.suspectInstruments.flagged).toEqual([]);
+  });
+
+  it('a check still waiting for its first retry is the ordinary being-checked row, never the sentence', async () => {
+    const vault = memoryVault({
+      [NOTE_PATH]: note(PASSAGE_A),
+      [citationStorePath(MCQ_ID)]: citationSidecar(),
+    });
+    const store = new ObsidianCitationHashStore(new FakeDataHost());
+    const judge = throwingJudge();
+    let clock = 0;
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: { now: () => clock } });
+    await trigger.tick(vault, actions());
+    await vault.write(NOTE_PATH, note(PASSAGE_B));
+    clock += 1_000;
+    await trigger.tick(vault, actions()); // the original check, lost: one call so far
+    const state = await suspectOf(
+      await createLocalRegistryProvider({
+        vault,
+        deviceId: 'olea-testdevice1',
+        settingsHost: new FakeDataHost(),
+        now: () => NOW,
+        editPort: { edit: async () => undefined },
+        citationHashStore: store,
+        deferredRecheckRearm: store,
+        isOnline: () => true,
+      }).load(),
+    );
+    expect(state.suspectInstruments.pendingRevalidation).toEqual([{ instrumentId: MCQ_ID }]);
+  });
+
+  it('only the copy module draws the sentence, and only for a deferred row with the action wired', () => {
+    const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
+    const consumers: string[] = [];
+    const walk = (dir: string): void => {
+      for (const entry of readdirSync(srcDir + dir, { withFileTypes: true })) {
+        const path = dir + entry.name;
+        if (entry.isDirectory()) walk(`${path}/`);
+        else if (entry.name.endsWith('.ts')) {
+          const code = readFileSync(srcDir + path, 'utf8')
+            .replace(/\/\*[\s\S]*?\*\//g, '')
+            .replace(/\/\/.*$/gm, '');
+          if (code.includes('SUSPECT_DEFERRED_WITH_ACTION_LINE')) consumers.push(path);
+        }
+      }
+    };
+    walk('');
+    // The registry view reaches it only through suspectDeferredRowCopy (copy.ts), which returns it
+    // only when the check-again action is wired.
+    expect(consumers).toEqual(['registry/copy.ts']);
+    expect(suspectDeferredRowCopy(undefined).line).toBe(SUSPECT_DEFERRED_LINE);
   });
 });

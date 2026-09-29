@@ -39,6 +39,9 @@ import {
   SUSPECT_DEFERRED_RECHECK_ACTION,
   SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE,
   SUSPECT_DEFERRED_WITH_ACTION_LINE,
+  SUSPECT_FLAGGED_LINE,
+  SUSPECT_PENDING_REVALIDATION_LINE,
+  suspectDeferredRowCopy,
   THIN_NOTE_LABEL,
   thinNoteLine,
   vitalityLabel,
@@ -515,17 +518,22 @@ describe('[D-400] SUSPECT_DEFERRED_LINE (registry §24 — PROPOSED, Class B, pe
 
 // Scenarios: olea-service/features/F2-review.md — F2.23's `[D-420]` block, "the proposed action-era
 // sentence, action label and offline note are exact", tagged `@auto:plugin/registry/copy.spec`.
-// Drafted (candidate A, recommended) in olea-service docs/design/copy-pass-2026-09/deferred-recheck.md.
-describe('[D-420] the check-again strings (PROPOSED, Class B, pending ratification)', () => {
-  it('are exactly the draft’s recommended candidate A', () => {
+// The sentence is David's 2026-09-29 ruling (row 13, `ol-egov.141.89.5.36`); the label and the
+// offline note are unchanged from olea-service docs/design/copy-pass-2026-09/deferred-recheck.md.
+describe('[D-420] the check-again strings (sentence ruled 2026-09-29, row 13)', () => {
+  it('are exactly the ruled sentence, with the action label and the offline note unchanged', () => {
     expect(SUSPECT_DEFERRED_WITH_ACTION_LINE).toBe(
-      "Olea couldn't confirm the change to this source passage, and won't check it again on its own.",
+      "Olea couldn't check this changed passage. Select 'Check again' to retry.",
     );
     expect(SUSPECT_DEFERRED_RECHECK_ACTION).toBe('Check again');
     expect(SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE).toBe('Checking again needs a connection.');
   });
 
-  it('never say "deferred", "retry" or "exhausted", and the sentence neither sends her to edit nor counts tries', () => {
+  it("the sentence names the button by the button's own label, so the two cannot drift apart", () => {
+    expect(SUSPECT_DEFERRED_WITH_ACTION_LINE).toContain(`'${SUSPECT_DEFERRED_RECHECK_ACTION}'`);
+  });
+
+  it('never says "deferred" or "exhausted"; only the ruled sentence uses "retry", as the action verb', () => {
     for (const text of [
       SUSPECT_DEFERRED_WITH_ACTION_LINE,
       SUSPECT_DEFERRED_RECHECK_ACTION,
@@ -533,11 +541,37 @@ describe('[D-420] the check-again strings (PROPOSED, Class B, pending ratificati
     ]) {
       const lower = text.toLowerCase();
       expect(lower).not.toContain('deferred');
-      expect(lower).not.toContain('retry');
       expect(lower).not.toContain('exhausted');
     }
+    // The ruling overrides the proposed registry section's ban on "retry" for this one sentence.
+    expect(SUSPECT_DEFERRED_WITH_ACTION_LINE.toLowerCase()).toContain('retry');
+    expect(SUSPECT_DEFERRED_RECHECK_ACTION.toLowerCase()).not.toContain('retry');
+    expect(SUSPECT_DEFERRED_RECHECK_OFFLINE_NOTE.toLowerCase()).not.toContain('retry');
+  });
+
+  it('the sentence neither sends her to edit, counts tries, nor states a finding about the passage', () => {
     const line = SUSPECT_DEFERRED_WITH_ACTION_LINE.toLowerCase();
     expect(line).not.toContain('edit');
     expect(line).not.toMatch(/\btwo\b|\btries\b/);
+    // It says the check could not be made; it never says what the check would have found.
+    expect(line).not.toMatch(/insufficient|not enough|unclear|uncertain|changed the meaning/);
+    expect(line).toContain("couldn't check");
+  });
+
+  it('is the sentence only where the action is wired: unwired keeps the [D-400] sentence and no button', () => {
+    expect(suspectDeferredRowCopy(undefined).line).toBe(SUSPECT_DEFERRED_LINE);
+    expect(suspectDeferredRowCopy(undefined).line).not.toBe(SUSPECT_DEFERRED_WITH_ACTION_LINE);
+    expect(suspectDeferredRowCopy(undefined).action).toBeUndefined();
+    for (const availability of ['available', 'needs-connection'] as const) {
+      const copy = suspectDeferredRowCopy(availability);
+      expect(copy.line).toBe(SUSPECT_DEFERRED_WITH_ACTION_LINE);
+      expect(copy.action?.label).toBe(SUSPECT_DEFERRED_RECHECK_ACTION);
+    }
+  });
+
+  it('the two other suspect-section sentences never reuse it', () => {
+    expect(SUSPECT_PENDING_REVALIDATION_LINE).not.toBe(SUSPECT_DEFERRED_WITH_ACTION_LINE);
+    expect(SUSPECT_FLAGGED_LINE).not.toBe(SUSPECT_DEFERRED_WITH_ACTION_LINE);
+    expect(SUSPECT_DEFERRED_LINE).not.toBe(SUSPECT_DEFERRED_WITH_ACTION_LINE);
   });
 });

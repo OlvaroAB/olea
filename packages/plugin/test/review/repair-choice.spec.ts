@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildRepairChoice,
+  REPAIR_CHOICE_HISTORY_LINE,
+  REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE,
   REPAIR_CHOICE_NONE_OF_THESE_LABEL,
+  REPAIR_CHOICE_QUESTION,
   type RepairChoiceCandidate,
   resolveRepairChoice,
 } from '../../src/review/repair-choice.js';
@@ -144,8 +147,78 @@ describe('resolveRepairChoice', () => {
   });
 });
 
-describe('REPAIR_CHOICE_NONE_OF_THESE_LABEL', () => {
-  it("is the amended C5.3 clause's own wording, verbatim", () => {
-    expect(REPAIR_CHOICE_NONE_OF_THESE_LABEL).toBe('None of these');
+// Row 11 of the 2026-09-29 rulings (`ol-v7r5.111`): the wording of the grouped choice, given
+// exactly. `repair-choice-consequence.spec.ts` proves each claim these strings make.
+describe('the grouped choice wording (ruled 2026-09-29, row 11)', () => {
+  it('asks the ruled question and offers the ruled option, exactly', () => {
+    expect(REPAIR_CHOICE_QUESTION).toBe('Which of these passages does this card refer to?');
+    expect(REPAIR_CHOICE_NONE_OF_THESE_LABEL).toBe('None of these.');
+  });
+
+  it('the question does not presuppose that the card moved: it names no destination and no yes-or-no', () => {
+    const lower = REPAIR_CHOICE_QUESTION.toLowerCase();
+    expect(lower).not.toMatch(/moved|now|still|did it|has it|is it/);
+    expect(REPAIR_CHOICE_QUESTION.endsWith('?')).toBe(true);
+  });
+
+  it('states the consequence of "None of these." as the state the code produces, not the drafted "leaves it as it is"', () => {
+    expect(REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE).toBe(
+      "None of these leaves the card without a passage: it won't be shown, and you won't be asked again.",
+    );
+    expect(REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE.toLowerCase()).not.toContain('as it is');
+    // It opens with the option it explains, so the two cannot drift apart.
+    expect(
+      REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE.startsWith(
+        REPAIR_CHOICE_NONE_OF_THESE_LABEL.replace(/\.$/, ''),
+      ),
+    ).toBe(true);
+  });
+
+  it('says the practice history stays with the card, and never that it validates a passage', () => {
+    expect(REPAIR_CHOICE_HISTORY_LINE).toBe(
+      'Its practice history stays with the card, whichever you choose.',
+    );
+    const lower = REPAIR_CHOICE_HISTORY_LINE.toLowerCase();
+    for (const claim of [
+      'confirm',
+      'verif',
+      'valid',
+      'prove',
+      'proof',
+      'vouch',
+      'still know',
+      'carries over',
+      'counts',
+      'credit',
+    ]) {
+      expect(lower).not.toContain(claim);
+    }
+  });
+
+  it('none of the strings uses engineering vocabulary or a word the registry keeps for another meaning', () => {
+    for (const text of [
+      REPAIR_CHOICE_QUESTION,
+      REPAIR_CHOICE_NONE_OF_THESE_LABEL,
+      REPAIR_CHOICE_HISTORY_LINE,
+      REPAIR_CHOICE_NONE_OF_THESE_CONSEQUENCE_LINE,
+    ]) {
+      const lower = text.toLowerCase();
+      for (const word of [
+        'duplicate',
+        'repair',
+        'candidate',
+        'digest',
+        'instrument',
+        'anchor',
+        'block',
+        'identity',
+        'withheld',
+        'withdrawn',
+        'deferred',
+        'sorry',
+      ]) {
+        expect(lower).not.toContain(word);
+      }
+    }
   });
 });
