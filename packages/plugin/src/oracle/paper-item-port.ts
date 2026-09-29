@@ -34,37 +34,104 @@
  * file only assembles the envelope `WorkerTaskTransport.send` posts to `/v1/task`; the prompt text
  * lives entirely in the private repo's prompt files, never here.
  *
- * **Refusal handling.** `WorkerTaskTransport.send`'s own contract (`workerProvider.ts`) is "return
- * the parsed JSON body whatever the status code... throw only when there is genuinely no body."
- * This port reads a well-formed `ErrorResponse` shape (`{ success: false, error: { code, message }
- * }`, `olea-contracts`' `errorResponse`) as a `'refused'` result — carrying the Worker's own error
- * `code` as the reason — rather than a thrown exception, matching `PaperItemGenerationResult`'s
- * own "both a port that could not attempt the call and a generator's own refusal" contract
- * (`olea-core`'s doc). A transport that itself throws (network failure, unparsable body) is left
- * to propagate — this port does not swallow a genuine transport failure into a false "refused".
+ * **The envelope this port reads, and the three outcomes it reports apart (`ol-egov.141.89.7.29`,
+ * `[D-430]`, `[D-438]`).** `WorkerTaskTransport.send`'s own contract (`workerProvider.ts`) is "return
+ * the parsed JSON body whatever the status code... throw only when there is genuinely no body." The
+ * body is `olea-contracts`' `workerResponse`: `{ ok: true, stamp, result }` or
+ * `{ ok: false, code, message }`. An earlier version of this file read `{ success, error }` and a
+ * top-level `promptVersion`, a shape the Worker never sends (its specs agreed with it, so they stayed
+ * green): a real error body fell through to `generated`, and every prompt version read `unknown`.
+ * The envelope is now read by ONE classifier, `olea-core`'s `classifyPaperSlotWorkerResult`
+ * (`oracle/paper-journal.ts`, deep-imported like the other `olea-core/src/...` reads in this
+ * package because the barrel does not carry it yet); this file adds no second envelope reader.
+ *
+ * - `generated`: `ok: true` with a stamped prompt version (`stamp.promptVersion`, D7.3), carrying at
+ *   least one artefact. The whole body is kept as the item's `response`.
+ * - `refused` (source insufficiency: a fact about her material): the contract's `grounding-refused`
+ *   code, and the service's real refusal for these two tasks, a STAMPED SUCCESS OF ZERO ARTEFACTS
+ *   (`olea-service` `registry.ts`: "Zero is the refusal"; its `emptyContextGuard` answers an empty or
+ *   stub source with `{ questions: [] }` / `{ cards: [] }` before any model call, and nothing in the
+ *   service returns the `grounding-refused` code). Reason `'empty-result'`. Without this step the
+ *   real refusal would still be stored as a generated item, now with nothing in it to ask.
+ * - `unavailable` (service failure: work owed, never a verdict on her material): every other error
+ *   code, a success with no stamp, a success whose result has no artefact list, a body that is not an
+ *   envelope, and a transport that threw. The reason is structural (`'transport-failure'`, the error
+ *   code, `'no-stamp'`, `'malformed-response'`, `'malformed-result'`), never a message or content.
+ *
+ * The other two outcomes `[D-438]` names are not this port's to report: an empty retrieval is the
+ * blueprint's own `no-held-source` empty slot (before any call), and an uncertain support judgment is
+ * the support check's (`ol-egov.141.89.2.23`, after the source is chosen). Neither is folded into the
+ * words above.
+ *
+ * **Two ports, one reader.** `createWorkerPaperSlotOutcomePort` reports all three outcomes, for the
+ * journal driver (`olea-core`'s `runPaperJournal`; the wire stage `ol-egov.141.89.7.5` builds its
+ * generator from this port). `createWorkerPaperItemGenerationPort` is the flat path's adapter
+ * (`PaperItemGenerationPort`, whose result type has two outcomes): `generated` and `refused` pass
+ * through, and an outage is thrown as `PaperItemServiceUnavailableError`, so it fails the request
+ * as a transport failure always has and is never recorded as an item or as an empty slot.
  */
 
 import { CONTRACT_VERSION } from 'olea-contracts';
 import type {
+  PaperGeneratorTaskId,
   PaperItemGenerationPort,
   PaperItemGenerationRequest,
   PaperItemGenerationResult,
   WorkerTaskTransport,
 } from 'olea-core';
+import { classifyPaperSlotWorkerResult } from 'olea-core/src/oracle/paper-journal.js';
 
 export interface WorkerPaperItemGenerationPortDeps {
   readonly transport: WorkerTaskTransport;
 }
 
-function isWellFormedErrorResponse(body: unknown): body is {
-  readonly success: false;
-  readonly error: { readonly code: string; readonly message?: string };
-} {
-  if (typeof body !== 'object' || body === null) return false;
-  const v = body as Record<string, unknown>;
-  if (v.success !== false) return false;
-  if (typeof v.error !== 'object' || v.error === null) return false;
-  return typeof (v.error as Record<string, unknown>).code === 'string';
+/**
+ * What one slot's call ended as, apart: `generated` and `refused` are `olea-core`'s existing
+ * two-outcome result unchanged; `unavailable` is the third, the service could not answer usably.
+ * `reason` is a short structural string (D-005: never content).
+ */
+export type PaperItemPortOutcome =
+  | PaperItemGenerationResult
+  | { readonly status: 'unavailable'; readonly reason: string };
+
+/** The port `runPaperJournal`'s generator is built from: every outcome reported, none thrown. */
+export type PaperSlotOutcomePort = (
+  request: PaperItemGenerationRequest,
+) => Promise<PaperItemPortOutcome>;
+
+/**
+ * Thrown by the flat path's port (`createWorkerPaperItemGenerationPort`) when the service could not
+ * answer usably: the request fails, as a transport failure always has, and nothing is recorded as an
+ * item or as an empty slot. `reason` is the same structural string `PaperItemPortOutcome` carries.
+ */
+export class PaperItemServiceUnavailableError extends Error {
+  readonly reason: string;
+
+  constructor(reason: string) {
+    super(
+      `The practice-paper service could not answer (${reason}); nothing was recorded for this slot.`,
+    );
+    this.name = 'PaperItemServiceUnavailableError';
+    this.reason = reason;
+  }
+}
+
+/**
+ * The list a generator's `result` carries its artefacts in, by the slot's own task id
+ * (`olea-service`'s `quizGenerateResponse` / `cardsGenerateResponse`).
+ */
+const ARTEFACT_LIST_KEY: Record<PaperGeneratorTaskId, 'questions' | 'cards'> = {
+  'quiz.generate.v1': 'questions',
+  'cards.generate.v1': 'cards',
+};
+
+/** How many artefacts a success carries, or `null` when its result has no such list. */
+function artefactCount(body: unknown, taskId: PaperGeneratorTaskId): number | null {
+  if (typeof body !== 'object' || body === null) return null;
+  const result = (body as Record<string, unknown>).result;
+  if (typeof result !== 'object' || result === null) return null;
+  const list = (result as Record<string, unknown>)[ARTEFACT_LIST_KEY[taskId]];
+  return Array.isArray(list) ? list.length : null;
 }
 
 /**
@@ -83,37 +150,65 @@ function toWorkerPayload(request: PaperItemGenerationRequest): unknown {
   };
 }
 
-/** The real `PaperItemGenerationPort` — composed here, not exported through `main.ts` (see the module doc's reachability note). */
+function sendSlotRequest(
+  deps: WorkerPaperItemGenerationPortDeps,
+  request: PaperItemGenerationRequest,
+): Promise<unknown> {
+  return deps.transport.send({
+    contractVersion: CONTRACT_VERSION,
+    taskId: request.taskId,
+    payload: toWorkerPayload(request),
+  });
+}
+
+/** One Worker body into the three outcomes: the core classifier, then the artefact list the slot's task returns. */
+function readSlotOutcome(body: unknown, request: PaperItemGenerationRequest): PaperItemPortOutcome {
+  const classified = classifyPaperSlotWorkerResult(body);
+  if (classified.status !== 'generated') return classified;
+  const count = artefactCount(classified.response, request.taskId);
+  if (count === null) return { status: 'unavailable', reason: 'malformed-result' };
+  if (count === 0) return { status: 'refused', reason: 'empty-result' };
+  return {
+    status: 'generated',
+    taskId: request.taskId,
+    promptVersion: classified.promptVersion,
+    response: classified.response,
+  };
+}
+
+/** The three-outcome port: a slot's call ends `generated`, `refused` or `unavailable`, and never throws. */
+export function createWorkerPaperSlotOutcomePort(
+  deps: WorkerPaperItemGenerationPortDeps,
+): PaperSlotOutcomePort {
+  return async function workerPaperSlotOutcomePort(request) {
+    let body: unknown;
+    try {
+      body = await sendSlotRequest(deps, request);
+    } catch {
+      // A transport that throws had no body to read: an outage. The error's own text is dropped
+      // (D-005: a failure message can carry a URL or a body fragment).
+      return { status: 'unavailable', reason: 'transport-failure' };
+    }
+    return readSlotOutcome(body, request);
+  };
+}
+
+/**
+ * The real `PaperItemGenerationPort` for the flat path — composed here, not exported through
+ * `main.ts` (see the module doc's reachability note). `generated` and `refused` are returned as
+ * `fillPaperBlueprintSlots` consumes them; an outage is thrown (`PaperItemServiceUnavailableError`),
+ * and a transport that throws propagates as it always has: neither is swallowed into a false
+ * refusal.
+ */
 export function createWorkerPaperItemGenerationPort(
   deps: WorkerPaperItemGenerationPortDeps,
 ): PaperItemGenerationPort {
   return async function workerPaperItemGenerationPort(
     request: PaperItemGenerationRequest,
   ): Promise<PaperItemGenerationResult> {
-    const body = await deps.transport.send({
-      contractVersion: CONTRACT_VERSION,
-      taskId: request.taskId,
-      payload: toWorkerPayload(request),
-    });
-
-    if (isWellFormedErrorResponse(body)) {
-      return { status: 'refused', reason: body.error.code };
-    }
-
-    return {
-      status: 'generated',
-      taskId: request.taskId,
-      // The Worker's own response envelope carries `promptVersion` on success
-      // (`olea-contracts`' `successResponse`/`responseStamp`); read defensively rather than
-      // assuming a shape this package has no schema dependency on (same restraint
-      // `draft-quiz-cards.ts`'s own doc states for not validating the response here).
-      promptVersion:
-        typeof body === 'object' &&
-        body !== null &&
-        typeof (body as Record<string, unknown>).promptVersion === 'string'
-          ? ((body as Record<string, unknown>).promptVersion as string)
-          : 'unknown',
-      response: body,
-    };
+    const outcome = readSlotOutcome(await sendSlotRequest(deps, request), request);
+    if (outcome.status === 'unavailable')
+      throw new PaperItemServiceUnavailableError(outcome.reason);
+    return outcome;
   };
 }
