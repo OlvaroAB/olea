@@ -1314,9 +1314,9 @@ export const URGENCY_OVERRIDE_THRESHOLD = 1 / 14;
 /**
  * The clause each {@link FocusReasonKind} states after "because" (`[D-417]`, `[D-418]`, rows 28 to
  * 34 of `docs/direction/20260929_decision_sheet_responses.md`, `ol-egov.141.89.10.92`).
- * **PROPOSED where the ruling gave no exact words** — the candidates and the checks against the
- * facts and the vocabulary registry are in `docs/design/copy-pass-2026-09/planning-sentences.md`
- * (service repo); ratification may change the words, never the fact each states.
+ * **Signed** 2026-09-30 (decision sheet 19; registry section 29,
+ * `docs/design/copy-pass-2026-09/planning-sentences.md` in the service repo). A re-wording may
+ * change the words, never the fact each states.
  *
  * Rows 28 (`filter`), 29 (`urgency-unchecked`) and 30 (`deficit`) are David's own wording, kept
  * word for word. `urgency` keeps C5.6's ratified fragment, but is used only when recall was
@@ -1326,7 +1326,7 @@ export const URGENCY_OVERRIDE_THRESHOLD = 1 / 14;
  * sentence needs no such word).
  *
  * The `none-behind*`, `longest-without-tie-name` clauses were shortened 2026-09-30 to follow row 31
- * ("concisely"); they are lane-written drafts awaiting David's wording, the facts they state unchanged.
+ * ("concisely"); signed on sheet 19 (2026-09-30), the facts they state unchanged.
  */
 export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Object.freeze({
   filter: 'you asked for it',
@@ -1341,9 +1341,9 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
     'it is level with another course on planned share, and you have gone longer without it',
   'none-behind-tie-name':
     'it is level with another course on planned share, so it comes first by name',
-  // HELD DRAFT (row 31; wording drafted by the orchestrator, not ruled, `ol-egov.141.89.10.86`):
+  // Signed 2026-09-30 (row 31, sheet 19, `ol-egov.141.89.10.86`):
   // says a course was passed over because nothing was ready to practise in it. Never the word
-  // "behind" (the siblings above use the share wording). Ratification may change the words,
+  // "behind" (the siblings above use the share wording). A re-wording may change the words,
   // never the fact: some eligible course is below its planned share and had nothing ready.
   'passed-over-behind':
     'other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
@@ -1428,8 +1428,8 @@ export const FOCUS_BRANCH_SENTENCE: Readonly<Record<FocusBranch, string>> = Obje
 
 /**
  * `[D-417]`/`[D-418]` (ruled 2026-09-28, rows 28 to 34 and 49 of the 2026-09-29 sheet responses,
- * `ol-egov.141.89.10.92`): the course-why sentence per branch, naming the course. **PROPOSED where
- * the ruling gave no exact words**; see {@link FOCUS_REASON_CLAUSE}.
+ * `ol-egov.141.89.10.92`): the course-why sentence per branch, naming the course. **Signed** (sheet 19,
+ * 2026-09-30; the "is selected next, because ..." frame, David 2026-10-01); see {@link FOCUS_REASON_CLAUSE}.
  *
  * The sentence states the actual deciding reason and no more: the tie-break order stays in the
  * record and the planning-sentences document, not on the card (row 31). The course is the name

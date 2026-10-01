@@ -213,8 +213,8 @@ export function homeScopeGrewLine(addedDocumentPath: VaultPath, addedCount: numb
  * i.e. `olea-core`'s `study-session/compose.ts#focusReasonFor(branch, course)`,
  * the branch's sentence with the course's own name in it (the name Home's
  * course rows show). The record's `recordedFocusReason` reads the same two
- * facts to the same string. The wording is `FOCUS_BRANCH_TEMPLATE`'s, PROPOSED through the
- * copy pass (`docs/design/copy-pass-2026-09/planning-sentences.md`, service
+ * facts to the same string. The wording is `FOCUS_BRANCH_TEMPLATE`'s, signed through the
+ * copy pass (sheet 19, 2026-09-30; the frame 2026-10-01) (`docs/design/copy-pass-2026-09/planning-sentences.md`, service
  * repo) and never re-worded here. This function only punctuates: the course
  * name leads the sentence and is never re-cased, since a course id is shown
  * exactly as it is everywhere else. The earlier "this course" rendering is
@@ -240,7 +240,7 @@ export function sessionCompositionSentence(focusReason: string): string {
  * Every course-why sentence as `sessionCompositionSentence` renders it for a fixture course, for
  * `allHomeStrings`' honesty checks: each decider, without and then with the never-practised
  * sentence (rows 28 to 34 and 49, `ol-egov.141.89.10.92`). Mirrors `olea-core`'s
- * `FOCUS_BRANCH_TEMPLATE` word for word (PROPOSED where the ruling gave no exact words); this
+ * `FOCUS_BRANCH_TEMPLATE` word for word (all signed: sheet 19, and David 2026-10-01 for the frame); this
  * module imports nothing at runtime (a plain Node harness loads it from source), so the mirror
  * cannot be an import; `olea-core`'s `compose.spec.ts` reads this file and pins every string to
  * the template.

@@ -1086,10 +1086,9 @@ function compareContributions(a: OracleEdgeContribution, b: OracleEdgeContributi
 /**
  * `[D-417]` (ruled 2026-09-28) and rows 32 and 33 of
  * `docs/direction/20260929_decision_sheet_responses.md` (ruled 2026-09-29),
- * `ol-egov.141.89.10.92`: the phrases the ranking reason is built from. **PROPOSED** — the
- * candidates and the checks against the facts and the vocabulary registry are in
- * `docs/design/copy-pass-2026-09/planning-sentences.md` (service repo), pending David's
- * sign-off; ratification may change the words, never which fact each one states.
+ * `ol-egov.141.89.10.92`: the phrases the ranking reason is built from. **Signed** 2026-09-30 (decision
+ * sheet 19; registry section 29, `docs/design/copy-pass-2026-09/planning-sentences.md` in the
+ * service repo). A re-wording may change the words, never which fact each one states.
  *
  * Each phrase states only what the ranking actually holds (rows 32 and 33):
  * - `need` is observed recall (a reading, from eligible recall evidence); `needUnknown` says there
