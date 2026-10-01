@@ -45,8 +45,8 @@
  * nothing observable for the vault as it exists today; the seam exists so a
  * later per-course tempo value takes effect without a second wiring pass.
  * This build still implements only the flat-threshold form of the clause's
- * worked example — *"nothing from this course has arrived in three
- * weeks"* — never a term-relative or fitted tempo-relative one. Every real
+ * worked example — *"Olea has not processed a new source for this course in
+ * three weeks"* (`[D-456]`; first said "has arrived") — never a term-relative or fitted tempo-relative one. Every real
  * course in the reference vault has no term dates at all, so the degraded
  * form is not a fallback path here — it is the only path that will ever
  * fire against real material.

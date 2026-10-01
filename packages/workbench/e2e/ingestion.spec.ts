@@ -87,10 +87,10 @@ test('today-rhythm-quiet: a genuinely quiet course states its own honest arrival
 }) => {
   await gotoState(page, 'today', 'today-rhythm-quiet', 'obsidian-dark');
   const rhythm = todayBody(page).locator('.olea-today-insights');
-  await expect(rhythm.locator('.olea-today-insights-label')).toHaveText('What has arrived');
+  await expect(rhythm.locator('.olea-today-insights-label')).toHaveText('What Olea has processed');
   await expect(rhythm.locator('.olea-today-mastery-code')).toHaveText('syn:course:vantrel');
   await expect(rhythm.locator('.olea-today-insight-text')).toHaveText(
-    'nothing from this course has arrived in 31 days.',
+    'Olea has not processed a new source for this course in 31 days.',
   );
 });
 

@@ -468,8 +468,12 @@ export const INSIGHTS_LABEL = 'What the log shows';
  * material-arrival timestamp, not a window of review-log entries, so it
  * carries no `insightsScopeSentence` footer and must not be folded under a
  * label that promises one.
+ *
+ * **Processed, not arrived** (`[D-456]`, ruled 2026-09-30; registry section 29): the day a file
+ * was first processed does not establish when it arrived, and newer sources may be waiting
+ * unprocessed, so the heading and the sentence under it say what Olea has processed.
  */
-export const RHYTHM_LABEL = 'What has arrived';
+export const RHYTHM_LABEL = 'What Olea has processed';
 
 /**
  * Shown when every detector declined for want of history — the degenerate
@@ -647,17 +651,22 @@ export function insightsScopeSentence(): string {
 }
 
 /**
- * F6.9, the rhythm reading: is material arriving? **About her vault, never
+ * F6.9, the rhythm reading: what has Olea processed? **About her vault, never
  * about her** — the clause's own words, and the reason every sentence this
  * function can produce is a fact and a day count, nothing else.
  *
- * `rhythmQuietClause`'s text is F6.9's own worked example, almost verbatim:
- * *"nothing from this course has arrived in three weeks."* This states the
- * measured day count rather than converting it to a week count — the panel's
+ * `rhythmQuietClause`'s text is the sentence ruled in `[D-456]` (2026-09-30):
+ * *"Olea has not processed a new source for this course in N days."* It states
+ * the measured day count rather than converting it to a week count — the panel's
  * other numbers (`dueTodaySentence`) are all day-granular, and
  * `olea-core`'s `rhythm.ts` explicitly declines to invent a weeks-or-tempo
  * conversion it has no ruling behind (see that module's doc); copy is not the
- * place to invent one either.
+ * place to invent one either. **It claims no arrival date**: the count runs from
+ * the day a source was first processed, which is never earlier than the day it
+ * reached her vault and may be later (`[D-426]`), and a newer source may be
+ * waiting unprocessed. Pending work and ingestion failures keep their own
+ * treatment (a pending or unreadable latest source is never a quiet course;
+ * `today/arrivals.ts`), so neither becomes this sentence.
  *
  * **Forbidden outright, and F6.9 says this is most of the clause:** no
  * streak, no effort score, no hours total, no completion figure, nothing
@@ -669,7 +678,7 @@ export function insightsScopeSentence(): string {
  * `rhythmQuietLine` below for the bundled form the view actually reaches for.
  */
 export function rhythmQuietClause(quietDays: number): string {
-  return `nothing from this course has arrived in ${quietDays} days.`;
+  return `Olea has not processed a new source for this course in ${quietDays} days.`;
 }
 
 /** `rhythmQuietLine`'s return shape: the course a quiet finding is about, paired with the claim. */

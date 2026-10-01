@@ -28,6 +28,7 @@ import {
   newMaterialSourceLine,
   newMaterialSourceLines,
   pickRhythmYardstickReading,
+  RHYTHM_LABEL,
   rhythmQuietClause,
   rhythmQuietLine,
   rhythmYardstickClause,
@@ -512,7 +513,9 @@ describe('rhythmQuietClause / rhythmQuietLine — F6.9, the rhythm reading', () 
   // fact, never a verdict".
 
   it("states F6.9's own worked example, day-granular", () => {
-    expect(rhythmQuietClause(21)).toBe('nothing from this course has arrived in 21 days.');
+    expect(rhythmQuietClause(21)).toBe(
+      'Olea has not processed a new source for this course in 21 days.',
+    );
     expect(rhythmQuietClause(30)).toContain('30 days');
   });
 
@@ -541,14 +544,26 @@ describe('rhythmQuietClause / rhythmQuietLine — F6.9, the rhythm reading', () 
   it('the bundled text still names no course — only the .course field does (INV-3, ol-p2t08)', () => {
     const line = rhythmQuietLine('FIXTURE101', 21);
     expect(line.text).not.toContain('FIXTURE101');
-    expect(line.text).not.toMatch(/[A-Z]/);
+    // The only capital is the product's own name.
+    expect(line.text.replace('Olea', '')).not.toMatch(/[A-Z]/);
+  });
+
+  it('F6.9 / [D-456]: the heading and the sentence say what Olea has processed, and claim no arrival', () => {
+    expect(RHYTHM_LABEL).toBe('What Olea has processed');
+    for (const text of [RHYTHM_LABEL, rhythmQuietClause(21), rhythmQuietClause(40)]) {
+      expect(
+        text.toLowerCase(),
+        'a first-processing day is never worded as an arrival',
+      ).not.toMatch(/arriv/);
+    }
+    expect(allTodayStrings()).toContain(RHYTHM_LABEL);
   });
 
   it('is part of the corpus the panel-wide rules are checked against', () => {
     expect(allTodayStrings()).toContain(rhythmQuietClause(21));
   });
 
-  it("F6.9 scenario 'the reading states whether material has arrived, and nothing else' — given a course from which nothing has arrived in three weeks", () => {
+  it("F6.9 scenario 'the reading states what Olea has processed, and nothing else' — given a course for which Olea has not processed a new source in three weeks", () => {
     // features/F6-today.md's own wording: three weeks is QUIET_DAYS_THRESHOLD
     // (21 days, `olea-core`'s `rhythm.ts`).
     const clause = rhythmQuietClause(21);

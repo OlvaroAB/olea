@@ -97,7 +97,7 @@ test.describe('today-encouragement-off (F6.8)', () => {
 
     // The rhythm-quiet finding — same composition `today-rhythm-quiet` uses.
     await expect(frame(page).locator('.olea-today-insights-label')).toContainText(
-      'What has arrived',
+      'What Olea has processed',
     );
     await expect(frame(page).locator('.olea-today-insight-text')).toBeVisible();
 
@@ -130,7 +130,7 @@ test.describe('today-term-dates-pointer (F6.9/F7.2, [D-147])', () => {
   }) => {
     await gotoState(page, 'today', 'today-term-dates-pointer', 'obsidian-dark');
     await expect(frame(page).locator('.olea-today-insights-label')).toContainText(
-      'What has arrived',
+      'What Olea has processed',
     );
     const pointerText = frame(page).locator('.olea-today-term-dates-pointer-text');
     await expect(pointerText).toBeVisible();
