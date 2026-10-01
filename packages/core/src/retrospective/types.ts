@@ -148,6 +148,18 @@ export interface RetrospectiveDeclaredScope {
   readonly conceptIds: readonly string[];
 }
 
+/**
+ * One concept's assembly before the assessment's date (`./assembly.ts`; vew.md 2.7): whether she had
+ * attempted it (a scored review or an explain-back attempt) and the stage her evidence from before
+ * that date showed. Assembled apart for the reading's checks; never drawn, never a group.
+ */
+export interface RetrospectiveAssemblyEntry {
+  readonly conceptId: string;
+  readonly conceptName: string;
+  readonly attempted: boolean;
+  readonly demonstrated: MasteryState;
+}
+
 export interface RetrospectiveReading {
   readonly assessmentPath: VaultPath;
   readonly course: string;
@@ -180,6 +192,12 @@ export interface RetrospectiveReading {
    * concept can carry while staying counted once, in `tooEarlyCount`.
    */
   readonly carries: readonly RetrospectiveCarriesEntry[];
+  /**
+   * Attempted and demonstrated by the assessment's date, for every concept in scope, sorted by name.
+   * Present only when the caller supplied `RetrospectiveInput.assessmentDate`; not drawn, not a
+   * group, and the partition above is unchanged by it.
+   */
+  readonly assembly?: readonly RetrospectiveAssemblyEntry[];
 }
 
 /** Everything `buildRetrospective` needs, all caller-resolved (see this file's module doc). */
@@ -247,4 +265,11 @@ export interface RetrospectiveInput {
    * (`ol-egov.141.89.9.63`).
    */
   readonly disputes?: readonly DisputeLogRecord[];
+  /**
+   * The assessment's own calendar day. When supplied, the reading also assembles, per concept in
+   * scope, what she had attempted and demonstrated from evidence strictly before that day
+   * (`RetrospectiveReading.assembly`). Optional: omitted, no assembly is built and nothing else
+   * changes.
+   */
+  readonly assessmentDate?: import('../today/calendar-day.js').CalendarDay;
 }

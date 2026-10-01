@@ -45,6 +45,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
 import { computeConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
+import { assembleBeforeAssessment } from './assembly.js';
 import type {
   RetrospectiveCarriesEntry,
   RetrospectiveCarryBasis,
@@ -247,5 +248,17 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     faded,
     tooEarlyCount,
     carries,
+    ...(input.assessmentDate === undefined
+      ? {}
+      : {
+          assembly: assembleBeforeAssessment({
+            scope: input.scope,
+            entries,
+            assessmentDate: input.assessmentDate,
+            stageOptions,
+          })
+            .slice()
+            .sort(compareByConceptName),
+        }),
   };
 }
