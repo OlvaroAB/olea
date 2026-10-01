@@ -789,6 +789,78 @@ describe('readConcepts — split-document boundary reconciliation (`ol-2zfj.144`
     expect(result.concepts[0]?.alsoIn).toHaveLength(1);
   });
 
+  it('`ol-egov.141.89.3.39`: two batches of ONE document whose names differ but each lists the other as an alias fold to one identity, both wordings kept', async () => {
+    const reader = perCallReader([
+      (request) => ({
+        concepts: [
+          {
+            name: 'Quorbal',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: ['QB', 'quorbal'],
+            alsoIn: [],
+          },
+        ],
+      }),
+      (request) => ({
+        concepts: [
+          {
+            name: 'QB',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: ['quorbal'],
+            alsoIn: [],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name)).toEqual(['Quorbal']);
+    expect(result.concepts[0]?.aliases).toEqual(['QB', 'quorbal']);
+    expect(result.concepts[0]?.alsoIn).toHaveLength(1);
+  });
+
+  it('`ol-egov.141.89.3.39`: a ONE-SIDED alias claim is never folded (bias to splits), nor are unrelated names', async () => {
+    const reader = perCallReader([
+      (request) => ({
+        concepts: [
+          {
+            name: 'Quorbal',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: ['QB'],
+            alsoIn: [],
+          },
+        ],
+      }),
+      (request) => ({
+        concepts: [
+          {
+            name: 'QB',
+            // biome-ignore lint/style/noNonNullAssertion: fixture always sends one passage.
+            anchor: request.passages[0]!.anchor,
+            aliases: [],
+            alsoIn: [],
+          },
+        ],
+      }),
+    ]);
+
+    const result = await readConcepts(SPLIT_VAULT, reader, {
+      budget: { maxPassages: 100, passagesPerCall: 1 },
+    });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name).sort()).toEqual(['QB', 'Quorbal']);
+  });
+
   it('merging is scoped to one document — the same name proposed in two different documents is never folded', async () => {
     const reader = new ScriptedReader([
       proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),

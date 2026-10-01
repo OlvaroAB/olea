@@ -1395,6 +1395,49 @@ function anchorKey(anchor: Provenance): string {
  * position, and a later duplicate updates that position in place rather
  * than appending a second entry.
  */
+/**
+ * The second, narrower fold `mergeProposalsWithinDocument` applies (`ol-egov.141.89.3.39`, panel
+ * cpt/extras-audit/dev-verify-1): two same-document proposals whose NAMES differ (so the
+ * normalised-name key above misses them) are one concept when EACH one's name is, after the same
+ * identity normalisation, one of the OTHER's own wordings (its name or its aliases). That is two
+ * independent model reads of one document, split only by `[D-210]`, each saying "the other's name
+ * is another wording of mine" — the case the panel judged a duplicate (an abbreviation and its
+ * spelled-out name, each proposed in its own batch with the other as an alias).
+ *
+ * **Why it is mutual, never one-sided.** A one-sided alias claim is a single read's assertion and
+ * could swallow a distinct concept (a false merge is silent and has no repair path —
+ * `./same-as.ts`, "bias to splits"); two reads each claiming the other's name is evidence from both
+ * sides. It still never fuzzy-matches: only equality of the identity-normalised wording. It does
+ * NOT recover two batches that name the same idea with no wording in common (an abbreviation
+ * entry whose aliases are empty): that stays a split, which a same-as proposal may later link.
+ *
+ * Returns the position in `merged` of the proposal to fold into, or `undefined`.
+ */
+function mutualAliasMatch(
+  merged: readonly ProposedConcept[],
+  proposal: ProposedConcept,
+): number | undefined {
+  const incomingName = conceptIdentityNormalizationIndex(proposal.name);
+  const incomingWordings = new Set(
+    [proposal.name, ...proposal.aliases].map(conceptIdentityNormalizationIndex),
+  );
+  for (let i = 0; i < merged.length; i += 1) {
+    // biome-ignore lint/style/noNonNullAssertion: `i` is bounded by `merged.length`.
+    const existing = merged[i]!;
+    if (existing.anchor.sourcePath !== proposal.anchor.sourcePath) continue;
+    const existingWordings = new Set(
+      [existing.name, ...existing.aliases].map(conceptIdentityNormalizationIndex),
+    );
+    if (
+      existingWordings.has(incomingName) &&
+      incomingWordings.has(conceptIdentityNormalizationIndex(existing.name))
+    ) {
+      return i;
+    }
+  }
+  return undefined;
+}
+
 function mergeProposalsWithinDocument(
   proposals: readonly ProposedConcept[],
 ): readonly ProposedConcept[] {
@@ -1403,7 +1446,7 @@ function mergeProposalsWithinDocument(
 
   for (const proposal of proposals) {
     const key = `${proposal.anchor.sourcePath}\u0000${conceptIdentityNormalizationIndex(proposal.name)}`;
-    const existingIndex = indexByKey.get(key);
+    const existingIndex = indexByKey.get(key) ?? mutualAliasMatch(merged, proposal);
     if (existingIndex === undefined) {
       indexByKey.set(key, merged.length);
       merged.push(proposal);
