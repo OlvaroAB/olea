@@ -24,6 +24,7 @@ import {
   composeSessionRows,
   extendComposedStudySession,
   extendComposedStudySessionWithAccount,
+  focusReasonFor,
   MATERIAL_ARRIVAL_COHORT_HALF_LIFE_DAYS,
   URGENCY_OVERRIDE_THRESHOLD,
   WITHIN_BLOCK_PROXIMITY_HALF_LIFE_DAYS,
@@ -37,6 +38,7 @@ import {
   OPAQUE_COMPOSITION_ID_PREFIX,
   parseCompositionLog,
   parseCompositionRecord,
+  recordedFocusReason,
   serializeCompositionRecord,
 } from './composition-record.js';
 import type { DurationModel } from './duration.js';
@@ -832,6 +834,29 @@ describe('[D-331] serialize and parse — byte-identical round trips (INV-2)', (
     expect(serializeCompositionRecord(reversed)).toBe(serializeCompositionRecord(record));
     const line = serializeCompositionRecord(withTwo);
     expect(line.indexOf('"depth-gate"')).toBeLessThan(line.indexOf('"rank-weights"'));
+  });
+
+  it('a record carrying the passed-over value, and one carrying an original value, both read and round-trip byte for byte (compatibility of the added values within version 1)', () => {
+    const base = recordFixture();
+    for (const branch of [
+      'passed-over-behind',
+      'passed-over-behind+never-practised',
+      'deficit',
+    ] as const) {
+      const line = serializeCompositionRecord({ ...base, branch });
+      const parsed = parseCompositionRecord(JSON.parse(line));
+      expect(parsed?.branch).toBe(branch);
+      expect(parsed === null ? null : serializeCompositionRecord(parsed)).toBe(line);
+      expect(parsed === null ? undefined : recordedFocusReason(parsed)).toBe(
+        focusReasonFor(branch, base.course as string),
+      );
+    }
+    expect(
+      parseCompositionRecord({
+        ...JSON.parse(serializeCompositionRecord(base)),
+        branch: 'passed-over',
+      }),
+    ).toBeNull();
   });
 
   it('writes -0 as 0, so a record still equals its own round trip', () => {

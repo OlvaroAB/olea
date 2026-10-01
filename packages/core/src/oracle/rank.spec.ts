@@ -1952,7 +1952,7 @@ describe('rankOracle — the [D-332] blend: need from current recall, the stage 
     );
     // `[D-417]`: only need separates `faded` from `strong`, so need alone is named, in words.
     expect(fallback.reasoning).toContain(
-      'is ranked above the next concept because your recall of it is lower.',
+      'is ranked above the next concept because Olea estimates your recall of it is lower.',
     );
     expect(fallback.reasoning).not.toMatch(/\d|relevance|proximity/);
 
@@ -2321,7 +2321,7 @@ describe('rankOracle — the reason names what decided, from the actual factor v
     const [first, second] = twoConcepts({ recall: [0.3, 0.9] });
     expect(first?.conceptKey).toBe('target');
     expect(first?.reasoning).toBe(
-      'target (COURSEA) is ranked above the next concept because your recall of it is lower. ' +
+      'target (COURSEA) is ranked above the next concept because Olea estimates your recall of it is lower. ' +
         'It appears in past papers.',
     );
     expect(named(first?.reasoning ?? '')).toEqual(['need']);

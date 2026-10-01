@@ -48,61 +48,53 @@
  * asserts this holds by construction, per the component register's health
  * check (3.8).
  *
- * ## Two-level allocation, and what stood in for the missing first level
+ * ## Which course, then which concepts: a session is one course (production)
  *
- * Allocation is strictly two-level because `XCRS-1` (`ol-dq1c`, open) says
- * the pre-existing builder compared `gapScore` across courses, which the
- * contract forbids. Across courses, by **attention share**. Within a course,
- * by `overdue-first`, over that course's own concepts only — no `gapScore`
- * or `overdueDays` is ever compared across a course boundary.
+ * **In production a session is exactly one course** (F2.18; C5.5, composition is
+ * time-denominated and a session is one course; C5.6, allocation decides *which* course). The
+ * plan's shares are honoured across C5.6's rolling window of sessions, never divided inside one,
+ * and the floor is paid across that window, not inside a session. That is
+ * {@link composeFocusedSelection}, the default (`focusPolicy` `'single'`, `[D-244]`/`[FOCUS-5]`):
+ * {@link selectDominantCourse} picks the course (her filter, then urgency, then the window
+ * deficit, `[D-417]`/`[D-418]`), that one course fills from its own whole groups up to the whole
+ * session budget, and every other course is given nothing this session. `forced` is empty on this
+ * path, because the floor is not paid per session. Within the chosen course, concepts are ordered
+ * by `overdue-first` over that course's own concepts only; no `gapScore` or `overdueDays` is ever
+ * compared across a course boundary (`XCRS-1`, `ol-dq1c`).
  *
- * **`ol-v7r5.17` [ALLOC-2] wires the real share in**, via
- * {@link ComposeSessionRowsInput.allocation} and this module's own
- * `./allocation-seconds.js` (A2.5's contracted share-to-seconds conversion).
- * When it is supplied, it REPLACES both {@link proportionalCourseShares}'s
- * interim policy AND this module's local C5.6 floor-forcing
- * ({@link forcedCoursesFor}) wholesale, in one seam
- * ({@link composeSessionRows}'s own `allocation`-branch) — the two floor
- * mechanisms must never compound, because `computeAttentionShares`
- * (`olea-service`'s component 3.5) already resolves C5.6's windowed floor at
- * the point the share was computed, using her real sitting history rather
- * than this module's days-since-last-seen proxy.
+ * What the plan feeds this path: the cached study plan's `allocation`
+ * ({@link ComposeSessionRowsInput.allocation}, A2.5's contracted share-to-seconds text, whose
+ * multi-course split is harness-only) supplies each course's urgency and whether its recall has
+ * been checked; the window reading ({@link ComposeSessionRowsInput.windowDeficit}, her review log
+ * against the plan's shares, `./window.js`) supplies the deficit. The plan's shares are not
+ * converted to per-course seconds here.
  *
- * **Until a caller has a real allocation to pass, each course's share stays
- * proportional to how much of her ranked material lives in that course**
- * ({@link proportionalCourseShares}) — SESS-1's own headline configuration
- * (equal shares over the vault's uneven course sizes was measured to starve
- * the larger course; proportional avoids that confound), with this module's
- * own local floor-forcing still applying on that path exactly as before.
- * `allocation` is optional and an empty array reads the same as omitted —
- * both fall back to the interim path, so a caller with a stale or absent
- * plan degrades to today's behaviour rather than starving every course.
+ * **Plan-less degraded mode, as it behaves now** (`docs/dev/one-assembly-path.md` §6 row 1,
+ * olea-service; `[SESS-11]`, `ol-egov.132.12`): with no cached plan (`allocation` absent or
+ * empty) a first-run student still gets a composed one-course session. Urgency is then absent, and
+ * with no `windowDeficit` the deficit step falls back to days since the course was last
+ * retrieved ({@link deficitDaysByCourseFrom}; a never-practised course reads infinite), which
+ * measures no share, so the sentence says "gone longest without" and never claims one
+ * (`deficitMeasure` `'days'`). Nothing here builds a second plan-less path. Upstream, `rows`
+ * (`GapRow[]`) comes from the oracle chain (`gap/build.ts`'s `buildGapView`), which needs an
+ * assignments base path to rank anything, the same `isStudyPlanConfigured` gate Home and the
+ * session builder already apply; a vault with no plan configured produces no `rows` at all.
  *
- * **This interim path IS the composer's plan-less degraded mode**
- * (`docs/dev/one-assembly-path.md` §6 row 1, olea-service; `[SESS-11]`,
- * `ol-egov.132.12`) — a first-run student with no cached study plan at all
- * still gets a composed session, on these interim shares, exactly as she
- * always has. `[SESS-11]` considered and rejected building a SECOND
- * plan-less path here: this module has never required `allocation` to
- * produce a session, so there is nothing new to add. What that bead names
- * instead is a real but separate dependency, upstream of this module —
- * `rows` (`GapRow[]`) comes from the oracle chain (`gap/build.ts`'s
- * `buildGapView`), which needs an assignments base path to rank anything at
- * all, the same `isStudyPlanConfigured` gate Home and the session builder
- * already apply. A vault with no plan configured cannot produce `rows` in
- * the first place, regardless of `allocation` — no change this module could
- * make closes that gap, because it is a fact about what feeds this
- * function, not about what this function does with `allocation` once fed.
+ * ### Harness-only: the every-course path
  *
-
- * C5.6's rolling floor is enforced ({@link forcedCourseFloorDays}): a course
- * that has gone at least `runningCourses + slack` days without a concept from
- * it being retrieved is forced a guaranteed slice, where `slack` is C5.6's own
- * declared constant ("running courses + slack, slack initially 2" —
- * `docs/Olea_alpha_functional_scope.md`), reused directly rather than
- * `builder.mjs`'s own unfitted sweep default. **Days, not sessions** — C5.6's
- * window is denominated in her sessions and this substitutes days, the
- * available, honest proxy (the product assumes a daily cadence elsewhere,
+ * `focusPolicy: 'every-course'` is the harness's comparison baseline and is never the production
+ * path. Only it divides one session across courses: each course's share is proportional to how
+ * much ranked material it holds ({@link proportionalCourseShares}, SESS-1's headline
+ * configuration), or, when a real non-empty `allocation` is supplied, that allocation's shares
+ * converted to seconds by `./allocation-seconds.js`. In that branch the allocation REPLACES the
+ * local C5.6 floor-forcing wholesale, so the two floor mechanisms never compound
+ * (`computeAttentionShares`, `olea-service`'s component 3.5, already resolves the windowed floor
+ * where the share is computed). Only with the proportional shares does the local floor apply
+ * ({@link forcedCoursesFor}): a course gone at least `runningCourses + slack` days without a
+ * concept retrieved ({@link forcedCourseFloorDays}; `slack` is C5.6's declared constant,
+ * "running courses + slack, slack initially 2", `docs/Olea_alpha_functional_scope.md`) is forced
+ * a guaranteed slice. **Days, not sessions**: C5.6's window is denominated in her sessions and
+ * this substitutes days, the available proxy (the product assumes a daily cadence elsewhere,
  * `fsrs-scheduler.ts`'s module doc); nothing here claims to count sessions.
  *
  * ## F2.18 — course blocks, applied after selection
@@ -1340,10 +1332,11 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
   filter: 'you asked for it',
   urgency: 'its assessment is close and the assessed material still needs work',
   'urgency-unchecked':
-    "its assessment is close and we haven't checked your recall of some assessed material yet",
+    "its assessment is close and Olea hasn't checked your recall of some assessed material yet",
   deficit: 'it has had less than its planned share of recent practice',
   'only-course': 'it is the only course with something to practise right now',
-  'none-behind': 'no course is below its planned share, and it is the closest to it',
+  'none-behind':
+    'all courses with practice ready have reached their planned share, and this one is closest to its share',
   'none-behind-tie-recency':
     'it is level with another course on planned share, and you have gone longer without it',
   'none-behind-tie-name':
@@ -1488,7 +1481,7 @@ export function readsBehind(reading: number): boolean {
  * effectiveReadinessMultiplier(readiness, evidenceVolume)` — exactly C5.6's
  * ramped proximity-times-readiness term the pre-commitment names. Absent
  * `allocation` (the interim/no-allocation path, which has no risk computation
- * at all — see the module doc's "Two-level allocation" section), this reads
+ * at all — see the module doc's "Which course, then which concepts" section), this reads
  * empty and the urgency branch never fires; the composer still runs on filter
  * and deficit alone, an honest degrade rather than a fabricated number.
  */
@@ -1534,8 +1527,8 @@ function recallCheckedCoursesFrom(
  * since a course's material was last retrieved, `+Infinity` for a course
  * never seen — the SAME days-denominated proxy this module's own
  * {@link forcedCourseFloorDays}/{@link forcedCoursesFor} already substitute
- * for C5.6's session-denominated window (see the module doc's "C5.6's rolling
- * floor" note). **Corrected**: `sittingsSinceFloorMet` now HAS a pure
+ * for C5.6's session-denominated window (see the module doc's "Harness-only: the every-course
+ * path" note). **Corrected**: `sittingsSinceFloorMet` now HAS a pure
  * client-side producer, `packages/core/src/allocation/resolve-inputs.ts`
  * (`ol-v7r5.63` / `[DOS-C4]`), wired to a production caller in
  * `packages/plugin/src/plan/provider.ts` (`ol-feza` / `[DOS-C4-a]`) — but
@@ -2226,8 +2219,8 @@ export interface ComposeSessionRowsInput {
    * **Optional, and an empty array reads the same as omitted**: both mean
    * "no real allocation yet" and fall back to
    * {@link proportionalCourseShares}'s interim policy, this module's
-   * behaviour before this field existed. See the module doc's "Two-level
-   * allocation" section for why supplying it also disables this module's own
+   * behaviour before this field existed. See the module doc's "Harness-only: the
+   * every-course path" section for why supplying it also disables this module's own
    * local C5.6 floor-forcing rather than compounding with it.
    */
   readonly allocation?: readonly StudyPlanAllocationEntry[];
@@ -2249,7 +2242,7 @@ export interface ComposeSessionRowsInput {
    * already shipped**: `composeFocusedSelection` falls back to this module's
    * own days-since-last-seen substitute
    * ({@link forcedCourseFloorDays}/{@link deficitDaysByCourseFrom}) exactly
-   * as before this bead — see the module doc's "C5.6's rolling floor" note
+   * as before this bead — see the module doc's "Harness-only: the every-course path" note
    * for why that substitute exists and FOCUS-4c's finding for its known gap
    * (a course starving 13-14 sessions while the substitute never read past a
    * 2-day deficit). Read when `focusPolicy !== 'every-course'`, for the
@@ -2559,8 +2552,8 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   } else {
     // `ol-v7r5.17` [ALLOC-2]: a real allocation (non-empty) replaces both the
     // interim proportional share AND this module's own local C5.6
-    // floor-forcing, wholesale — see the module doc's "Two-level allocation"
-    // section for why the two floor mechanisms must never compound. Absent or
+    // floor-forcing, wholesale — see the module doc's "Harness-only: the every-course
+    // path" section for why the two floor mechanisms must never compound. Absent or
     // empty falls back to today's pre-ALLOC-2 behaviour unchanged.
     if (allocation !== undefined && allocation.length > 0) {
       shares = new Map(allocation.map((entry) => [entry.courseId, entry.share]));

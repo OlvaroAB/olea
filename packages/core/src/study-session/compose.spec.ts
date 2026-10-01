@@ -2769,7 +2769,7 @@ describe('[FOCUS-3]/[FOCUS-5] focusPolicy', () => {
       '{course}, because its assessment is close and the assessed material still needs work',
     );
     expect(FOCUS_BRANCH_TEMPLATE['urgency-unchecked']).toBe(
-      "{course}, because its assessment is close and we haven't checked your recall of some assessed material yet",
+      "{course}, because its assessment is close and Olea hasn't checked your recall of some assessed material yet",
     );
     // Row 30, verbatim.
     expect(FOCUS_BRANCH_TEMPLATE.deficit).toBe(
@@ -3644,7 +3644,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
         expect(result.dominantCourse).toBe('BETA');
         expect(result.focusBranch).toBe('urgency-unchecked');
         expect(result.focusReason).toBe(
-          "BETA, because its assessment is close and we haven't checked your recall of some assessed material yet",
+          "BETA, because its assessment is close and Olea hasn't checked your recall of some assessed material yet",
         );
       }
     });
@@ -3820,7 +3820,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       expect(result.dominantCourse).toBe('BETA');
       expect(result.focusBranch).toBe('none-behind');
       expect(result.focusReason).toBe(
-        'BETA, because no course is below its planned share, and it is the closest to it',
+        'BETA, because all courses with practice ready have reached their planned share, and this one is closest to its share',
       );
     });
   });
