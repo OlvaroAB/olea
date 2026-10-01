@@ -1567,6 +1567,12 @@ export default class OleaPlugin extends Plugin {
             ...(this.rankWeights?.readRankWeights
               ? { readRankWeights: this.rankWeights.readRankWeights }
               : {}),
+            // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): the durable unit manifest the grove
+            // census reads, so a source with a page still waiting reads "not fully read yet" here
+            // too. Read through `this` because the store is built further down in `onload`, after
+            // this factory is registered and before any view opens; the thunk runs at `load()`.
+            unitManifests: async (paths) =>
+              (await this.unitManifests?.manifestsFor(paths)) ?? new Map(),
             // `ol-p5t06b`: the `'build-session'` affordance has been a label
             // with nothing behind it since P5-T06a. This is what it does —
             // open Home seeded with the row's concept as F4.6's stated-

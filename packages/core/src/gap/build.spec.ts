@@ -5,6 +5,7 @@ import type { ConceptSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import { buildCoursePopulation } from '../coverage/population.js';
 import type { CoursePopulationInput } from '../coverage/types.js';
+import { newPendingEntry } from '../ingestion/unit-manifest/manifest.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { PaperDemand } from '../oracle/paper-types.js';
 import type { ConceptPriority, RankOracleResult } from '../oracle/types.js';
@@ -679,5 +680,47 @@ describe('unmetDemands: a non-empty list withholds credit, and absent is not emp
     const { alpha, beta } = rowsFor(new Map([['Alpha', []]]));
     expect(alpha.unmetDemands).toEqual([]);
     expect(beta.unmetDemands).toBeUndefined();
+  });
+});
+
+describe('the unit manifests reach the coverage fold (`ol-egov.141.89.8.44`, `[D-448]`)', () => {
+  const PATH = '03 Research/paper-2024.pdf' as VaultPath;
+  const waiting = new Map([
+    [
+      PATH,
+      {
+        sourcePath: PATH,
+        revisionDigest: 'rev-1',
+        entries: [newPendingEntry(PATH, 1)],
+      },
+    ],
+  ]);
+  const input = {
+    ranking: ranking([entry('Alpha', 1, 1)]),
+    assessments: ASSESSMENTS,
+    materialPresence: new Map<string, ConceptMaterialPresence>(),
+    sourceCoverage: COVERAGE,
+  };
+
+  it('without manifests the scope is today: read, and the claim stands', () => {
+    const { scope } = buildGapView(input);
+    expect(scope.sources[0]?.readState).toBe('read');
+    expect(scope.canStateExhaustiveness).toBe(true);
+  });
+
+  it('a source with a page waiting reads unsettled and not attempted, and withdraws the claim', () => {
+    const { scope } = buildGapView({ ...input, manifests: waiting });
+    expect(scope.sources[0]).toMatchObject({
+      readState: 'not-attempted',
+      readingCompleteness: 'unsettled',
+      absenceGrounding: 'unknown',
+    });
+    expect(scope.unsettledCount).toBe(1);
+    expect(scope.canStateExhaustiveness).toBe(false);
+  });
+
+  it('a path the manifests do not name keeps the extractor verdict', () => {
+    const { scope } = buildGapView({ ...input, manifests: new Map() });
+    expect(scope.sources[0]?.readState).toBe('read');
   });
 });

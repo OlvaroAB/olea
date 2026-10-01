@@ -664,9 +664,40 @@ export function readStateLabel(state: SourceReadState): string {
   return READ_STATE_LABELS[state];
 }
 
+/**
+ * The row label for a source with a page still waiting to be read (`[D-448]`, registry section 30):
+ * a Class B default derived from the ruled sentence, flagged for review (`ol-egov.141.89.8.44`).
+ */
+export const NOT_FULLY_READ_YET_LABEL = 'not fully read yet';
+
+/**
+ * A source Olea can open that still has a page waiting (`[D-326]`'s unsettled reading) and so is
+ * neither read in full nor a source "no reader" covers (`[D-448]`). A source whose pass already
+ * settled on a failed unit keeps its own state's word: that is a different fact.
+ */
+export function isNotFullyReadYet(source: CoverageScopeSource): boolean {
+  return (
+    source.readingCompleteness === 'unsettled' &&
+    (source.readState === 'read' || source.readState === 'not-attempted')
+  );
+}
+
 /** One source's row in the scope list — path and what happened to it, so the denominator is visible rather than asserted. */
 export function scopeSourceLine(source: CoverageScopeSource): string {
-  return `${source.sourcePath} — ${readStateLabel(source.readState)}`;
+  const label = isNotFullyReadYet(source)
+    ? NOT_FULLY_READ_YET_LABEL
+    : readStateLabel(source.readState);
+  return `${source.sourcePath} — ${label}`;
+}
+
+/**
+ * The sentence for the sources not fully read yet. The plural is `[D-448]`'s own, verbatim; the
+ * singular is a Class B default derived from it (`ol-egov.141.89.8.44`).
+ */
+export function notFullyReadSentence(n: number): string {
+  return n === 1
+    ? 'One of your sources is not fully read yet: some pages are still waiting to be read, so this list may grow.'
+    : `${n} of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.`;
 }
 
 function countedSources(n: number): string {
@@ -692,20 +723,30 @@ export function coverageScopeStatement(scope: CoverageScope): readonly string[] 
     ];
   }
 
-  if (scope.readCount === 0) {
+  // `[D-448]`: a source with a page still waiting is not read in full, so it is neither counted
+  // among the sources read nor said to have no reader; it has its own sentence below.
+  const notFullyRead = scope.sources.filter(isNotFullyReadYet).length;
+  const readInFull = scope.sources.filter(
+    (s) => s.readState === 'read' && !isNotFullyReadYet(s),
+  ).length;
+
+  if (readInFull === 0 && notFullyRead > 0) {
+    // Nothing read in full but pages are only waiting: "could not read any" would be untrue, so the
+    // sentence below stands alone.
+  } else if (readInFull === 0) {
     lines.push(
       total === 1
         ? 'Olea could not read your one source for this exam. Nothing below is a finding about your notes.'
         : `Olea could not read any of your ${countedSources(total)} for this exam. Nothing below is a finding about your notes.`,
     );
-  } else if (scope.readCount === total) {
+  } else if (readInFull === total) {
     lines.push(
       total === 1
         ? 'Read your one source for this exam.'
         : `Read all ${countedSources(total)} for this exam.`,
     );
   } else {
-    lines.push(`Read ${scope.readCount} of your ${countedSources(total)} for this exam.`);
+    lines.push(`Read ${readInFull} of your ${countedSources(total)} for this exam.`);
   }
 
   if (scope.yieldedNothingCount > 0) {
@@ -722,11 +763,17 @@ export function coverageScopeStatement(scope: CoverageScope): readonly string[] 
         : `${scope.unreadableCount} could not be read at all — scans, or files Olea cannot open yet.`,
     );
   }
-  if (scope.notAttemptedCount > 0) {
+  if (notFullyRead > 0) lines.push(notFullyReadSentence(notFullyRead));
+  // `[D-196]`'s structural reason stays, said only of a source no reader covers: a source with a
+  // page still waiting has its own sentence above.
+  const noReader = scope.sources.filter(
+    (s) => s.readState === 'not-attempted' && !isNotFullyReadYet(s),
+  ).length;
+  if (noReader > 0) {
     lines.push(
-      scope.notAttemptedCount === 1
+      noReader === 1
         ? 'One was not read on this pass: Olea has no reader for its kind yet.'
-        : `${scope.notAttemptedCount} were not read on this pass: Olea has no reader for their kind yet.`,
+        : `${noReader} were not read on this pass: Olea has no reader for their kind yet.`,
     );
   }
 

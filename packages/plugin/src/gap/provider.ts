@@ -88,6 +88,7 @@ import type {
   PaperDemand,
   RankOracleOptions,
   Scheduler,
+  UnitManifest,
   VaultInstrumentRecord,
   VaultPath,
   VaultSource,
@@ -99,6 +100,7 @@ import {
   composeOracleRanking,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  formatFromExtension,
   projectInstrumentDemands,
   projectInstrumentValidity,
   projectRegisteredFiles,
@@ -187,6 +189,18 @@ export interface CreateLocalGapProviderDeps {
   readonly readDeclaredDemands?: () => Promise<
     ReadonlyMap<string, readonly PaperDemand[]> | undefined
   >;
+  /**
+   * `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): the durable unit manifest, the same supplier the
+   * grove provider takes (`../grove/provider.ts`'s `unitManifests`;
+   * `../grove/unit-manifest-store.ts#UnitManifestStore.manifestsFor` is the production one). Called
+   * once per load, with the paths of the sources the scope lists that have an extractor format
+   * (markdown rows are not asked), and handed to the coverage fold, so a source with a page still
+   * waiting reads unsettled and never as read in full. Omitted, or a supplier that throws, keeps
+   * the extractor's verdict alone: today's scope, never an empty or complete record.
+   */
+  readonly unitManifests?: (
+    paths: readonly VaultPath[],
+  ) => ReadonlyMap<VaultPath, UnitManifest> | Promise<ReadonlyMap<VaultPath, UnitManifest>>;
 }
 
 /**
@@ -234,6 +248,37 @@ async function readDeclared(
     return await deps.readDeclaredDemands();
   } catch (error) {
     console.error('Olea: could not read the declared demands; the gap view shows none', error);
+    return undefined;
+  }
+}
+
+/**
+ * The manifests for the sources the coverage scope lists that an extractor reads (never a markdown
+ * row, as the grove census asks), or `undefined` when there is no supplier or it failed: the fold
+ * then keeps the extractor's verdict, which is today's behaviour, never an empty record.
+ */
+async function readManifests(
+  deps: CreateLocalGapProviderDeps,
+  sourceCoverage: readonly { readonly sourcePath: VaultPath }[],
+): Promise<ReadonlyMap<VaultPath, UnitManifest> | undefined> {
+  if (deps.unitManifests === undefined) return undefined;
+  const candidates = [
+    ...new Set(
+      sourceCoverage
+        .map((row) => row.sourcePath)
+        .filter(
+          (path) => !path.toLowerCase().endsWith('.md') && formatFromExtension(path) !== null,
+        ),
+    ),
+  ].sort();
+  if (candidates.length === 0) return undefined;
+  try {
+    return await deps.unitManifests(candidates);
+  } catch (error) {
+    console.error(
+      'Olea: could not read the unit manifest; the gap view keeps the extractor verdict',
+      error,
+    );
     return undefined;
   }
 }
@@ -401,8 +446,13 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           now,
         });
 
+        // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): what the durable manifest says of each source
+        // an extractor reads, so a page still waiting is never read as absent or as read in full.
+        const manifests = await readManifests(deps, edges.tier3.sourceCoverage);
+
         const model = buildGapView({
           ranking,
+          ...(manifests !== undefined ? { manifests } : {}),
           assessments: edges.assessmentsRead.records,
           mastery,
           materialPresence,

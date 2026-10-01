@@ -74,6 +74,7 @@ import type { ConceptRecord } from '../concept/types.js';
 import { coverageGateOptionsOf } from '../coverage/gate.js';
 import type { CoursePopulation } from '../coverage/types.js';
 import type { EvidenceQuestionCitation } from '../evidence-edge/types.js';
+import type { UnitManifest } from '../ingestion/unit-manifest/types.js';
 import { type NeedReading, readNeed } from '../mastery/attainment.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
 import type { PaperDemand } from '../oracle/paper-types.js';
@@ -318,6 +319,13 @@ export interface BuildGapViewInput {
    * wiring with its copy.
    */
   readonly coveragePopulation?: readonly CoursePopulation[];
+  /**
+   * The durable unit manifests (`[D-445]`, `ol-egov.141.89.8.44`), per source path, handed to the
+   * coverage fold (`summariseCoverageScope`'s `manifests`): a source with a page still waiting then
+   * reads unsettled, never read in full and never as having no reader (`[D-448]`). **Omitted means
+   * today's fold**, the extractor's verdict alone. A path with no manifest keeps that verdict.
+   */
+  readonly manifests?: ReadonlyMap<VaultPath, UnitManifest>;
   readonly readiness?: ReadinessOptions;
   /**
    * Per concept KEY: whether a correct, current, standing quiz answer exists
@@ -563,10 +571,12 @@ export function buildGapView(input: BuildGapViewInput): GapViewModel {
 
   return {
     courses,
-    scope: summariseCoverageScope(
-      input.sourceCoverage,
-      input.coveragePopulation === undefined ? {} : coverageGateOptionsOf(input.coveragePopulation),
-    ),
+    scope: summariseCoverageScope(input.sourceCoverage, {
+      ...(input.coveragePopulation === undefined
+        ? {}
+        : coverageGateOptionsOf(input.coveragePopulation)),
+      ...(input.manifests === undefined ? {} : { manifests: input.manifests }),
+    }),
     asOf: input.ranking.asOf,
   };
 }

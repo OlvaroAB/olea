@@ -1,5 +1,5 @@
 import type { GapCourseView, GapRow, SourceCoverage, VaultPath } from 'olea-core';
-import { readNeed, summariseCoverageScope } from 'olea-core';
+import { newPendingEntry, readNeed, summariseCoverageScope, withReadingState } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   abstainedCourseSentence,
@@ -16,6 +16,7 @@ import {
   masteryGapNarrative,
   materialGapMeta,
   materialGapNarrative,
+  notFullyReadSentence,
   OBJECTIVES_ATTRIBUTION_CLAUSE,
   OBJECTIVES_ATTRIBUTION_SENTENCE,
   pastPaperChipLabel,
@@ -668,5 +669,96 @@ describe('the readiness note (R7 framing)', () => {
     // "MCQs are enough" either.
     expect(applied?.toLowerCase()).not.toContain("don't count");
     expect(applied).toContain('Your mastery reading is unchanged.');
+  });
+});
+
+describe('[D-448] — sources not fully read yet (ol-egov.141.89.8.44)', () => {
+  const waiting = (path: string, readFirst: boolean) => {
+    const first = newPendingEntry(path as VaultPath, 1);
+    return {
+      sourcePath: path as VaultPath,
+      revisionDigest: 'rev-1',
+      entries: readFirst
+        ? [
+            withReadingState(first, { kind: 'read', method: 'text-layer' }),
+            newPendingEntry(path as VaultPath, 2),
+          ]
+        : [first],
+    };
+  };
+  const manifests = (...ms: ReturnType<typeof waiting>[]) =>
+    new Map(ms.map((m) => [m.sourcePath, m]));
+
+  it('the plural sentence is the ruling verbatim, the singular its derived default', () => {
+    expect(notFullyReadSentence(3)).toBe(
+      '3 of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.',
+    );
+    expect(notFullyReadSentence(1)).toBe(
+      'One of your sources is not fully read yet: some pages are still waiting to be read, so this list may grow.',
+    );
+  });
+
+  it('a source with no page read yet is never said to have no reader, and its row says not fully read yet', () => {
+    const scope = summariseCoverageScope([READ, READ_2], {
+      manifests: manifests(waiting(READ_2.sourcePath, false)),
+    });
+    const text = coverageScopeStatement(scope).join(' ');
+    expect(text).toContain('One of your sources is not fully read yet');
+    expect(text).not.toContain('no reader');
+    expect(text).not.toContain('not read on this pass');
+    expect(scope.sources.map(scopeSourceLine)).toContain(
+      `${READ_2.sourcePath} — not fully read yet`,
+    );
+  });
+
+  it('a source with some pages read and some waiting is not counted as read in full', () => {
+    const scope = summariseCoverageScope([READ, READ_2], {
+      manifests: manifests(waiting(READ_2.sourcePath, true)),
+    });
+    expect(scope.sources[1]?.readState).toBe('read');
+    const lines = coverageScopeStatement(scope);
+    expect(lines).toContain('Read 1 of your 2 sources for this exam.');
+    expect(lines.join(' ')).toContain('One of your sources is not fully read yet');
+    expect(scope.sources.map(scopeSourceLine)).toContain(
+      `${READ_2.sourcePath} — not fully read yet`,
+    );
+  });
+
+  it('counts the plural over every such source, and says nothing false when none was read in full', () => {
+    const scope = summariseCoverageScope([READ, READ_2], {
+      manifests: manifests(waiting(READ.sourcePath, false), waiting(READ_2.sourcePath, true)),
+    });
+    const lines = coverageScopeStatement(scope);
+    expect(lines).toContain(
+      '2 of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.',
+    );
+    expect(lines.join(' ')).not.toMatch(/could not read|Read all|Read \d/);
+  });
+
+  it('keeps the structural reason for a source with no reader, beside a not-fully-read one', () => {
+    const scope = summariseCoverageScope([READ, READ_2, NOT_ATTEMPTED], {
+      manifests: manifests(waiting(READ_2.sourcePath, false)),
+    });
+    const lines = coverageScopeStatement(scope);
+    expect(lines).toContain('One was not read on this pass: Olea has no reader for its kind yet.');
+    expect(lines.join(' ')).toContain('One of your sources is not fully read yet');
+  });
+
+  it('withholds the closing line while any page waits', () => {
+    const scope = summariseCoverageScope([READ, READ_2], {
+      manifests: manifests(waiting(READ_2.sourcePath, true)),
+    });
+    expect(coverageClosingLine(scope)).toBeNull();
+    expect(coverageScreenCopy({ scope, gapRowCount: 0 }).join(' ')).not.toContain(
+      'Nothing else in',
+    );
+  });
+
+  it('a source whose manifest is gone (deleted, then rebuilt as pending) never shows complete', () => {
+    const rebuilt = summariseCoverageScope([READ], {
+      manifests: manifests(waiting(READ.sourcePath, false)),
+    });
+    expect(coverageClosingLine(rebuilt)).toBeNull();
+    expect(rebuilt.sources[0]?.absenceGrounding).toBe('unknown');
   });
 });
