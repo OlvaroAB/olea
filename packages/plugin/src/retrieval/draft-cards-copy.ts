@@ -53,14 +53,12 @@
  *    claim her notes lack the material;
  *  - `judge-rejected` alone is a checked insufficiency.
  *
- * **The threshold-blocked wording is a stand-in, and a gap.** No approved
- * sentence exists for "blocked by a threshold, not assessed" (the
- * vocabulary registry and the copy pass carry none). The previous words,
- * "didn't find enough grounding in your notes", are themselves an
- * insufficiency claim, so they cannot stay. The one approved could-not-check
- * sentence is reused until a decision approves a sentence that says
- * "not assessed" outright. Every outcome keeps its own `outcome` value, so
- * the words can change without any consumer re-deriving the reason.
+ * **The threshold-blocked wording is the ruled not-assessed sentence
+ * (`[D-456]`, C4.7, registry section 29).** The previous words, "didn't find
+ * enough grounding in your notes", were an insufficiency claim, and the
+ * could-not-check stand-in told her to try again for a request a threshold
+ * refuses again. Every outcome keeps its own `outcome` value, so the words can
+ * change without any consumer re-deriving the reason.
  */
 
 export const DRAFT_CARDS_MODAL_TITLE = 'Draft quiz cards';
@@ -135,12 +133,19 @@ export interface RefusalCopy {
 const NOT_ENOUGH_GROUNDING_HEADLINE =
   "Olea didn't find enough grounding in your notes for this yet.";
 const COULD_NOT_CHECK_HEADLINE = 'Olea couldn’t check your notes just now — try again in a moment.';
+/**
+ * The ruled sentence for the numeric lower-bar outcome only (functional scope
+ * C4.7, `[D-456]`, vocabulary registry section 29). Exact; used for no other
+ * outcome; never implies insufficient notes; never invites a repeat request.
+ */
+const NOT_ASSESSED_HEADLINE =
+  "Olea didn't assess this: the passages it found matched too weakly to check.";
 
 /*
  * The vocabulary registry has no wording of its own for the operational
  * outcomes; `evd.md` §3 names "Olea could not check right now" as the
- * operational sentence, so all of them (and the threshold-blocked stand-in,
- * see the module doc) reuse today's approved could-not-check string. The
+ * operational sentence, so all of them reuse today's approved could-not-check
+ * string; threshold-blocked has its own ruled sentence (`NOT_ASSESSED_HEADLINE`). The
  * `outcome` value keeps them distinct underneath.
  */
 const SOURCE_INSUFFICIENT: RefusalCopy = {
@@ -149,7 +154,7 @@ const SOURCE_INSUFFICIENT: RefusalCopy = {
   transient: false,
 };
 const THRESHOLD_BLOCKED: RefusalCopy = {
-  headline: COULD_NOT_CHECK_HEADLINE,
+  headline: NOT_ASSESSED_HEADLINE,
   outcome: 'threshold-blocked',
   transient: true,
 };

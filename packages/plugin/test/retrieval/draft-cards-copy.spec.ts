@@ -34,7 +34,11 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
       const copy = describeRefusal(reason);
       expect(copy.outcome).toBe('threshold-blocked');
       expect(copy.transient).toBe(true);
-      expect(copy.headline).toBe(describeRefusal('no-hits').headline);
+      expect(copy.headline).toBe(
+        "Olea didn't assess this: the passages it found matched too weakly to check.",
+      );
+      expect(copy.headline).not.toBe(describeRefusal('no-hits').headline);
+      expect(copy.headline.toLowerCase()).not.toContain('try again');
       expect(copy.headline.toLowerCase()).not.toContain('enough');
       expect(copy.headline.toLowerCase()).not.toContain('grounding');
       expect(copy.headline).not.toBe(describeRefusal('judge-rejected').headline);
@@ -61,6 +65,20 @@ describe('describeRefusal — the four outcomes stay distinct (D-289, ol-riwn)',
       expect(headline).not.toContain('enough');
       expect(headline).not.toContain('grounding');
       expect(describeRefusal(reason).transient).toBe(true);
+    }
+  });
+
+  it('the not-assessed sentence belongs to threshold-blocked alone (D-456, C4.7)', () => {
+    const sentence = describeRefusal('below-band').headline;
+    for (const reason of [
+      'no-hits',
+      'below-relevance-threshold',
+      'could-not-decide',
+      'composite-check-unavailable',
+      'judge-unavailable',
+      'judge-rejected',
+    ]) {
+      expect(describeRefusal(reason).headline).not.toBe(sentence);
     }
   });
 
