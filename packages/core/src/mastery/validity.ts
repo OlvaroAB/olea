@@ -192,6 +192,16 @@ export interface InstrumentValidityProjection {
   readonly withheld: ReadonlyMap<string, WithheldFact>;
   /** Instruments with an open grade contest: thin evidence, never absent. */
   readonly contested: ReadonlySet<string>;
+  /**
+   * Per contested instrument, the reviews its open grade contests name
+   * (`reviewId`, rows 14 and 48), and whether any open contest names none and
+   * so keeps its historical ambiguity. Optional: a projection built without it
+   * reads every contested instrument as wholly thin.
+   */
+  readonly openGradeContests?: ReadonlyMap<
+    string,
+    { readonly unnamed: boolean; readonly reviewIds: ReadonlySet<string> }
+  >;
   /** Reviews whose grade a corrected contest proved wrong, keyed by the review's event id. */
   readonly correctedEvidence: ReadonlyMap<string, CorrectedEvidenceFact>;
   /** Standing 1 judged on events at or before `instant` (epoch ms) only. */
@@ -320,6 +330,28 @@ function contestedReview(
     }
   }
   return nearest;
+}
+
+/** Per instrument, the reviews its open grade contests name, and whether any open contest names none. */
+function openGradeContestsByInstrument(
+  disputes: readonly DisputeLogRecord[],
+): ReadonlyMap<string, { readonly unnamed: boolean; readonly reviewIds: ReadonlySet<string> }> {
+  const resolved = new Set(
+    disputes.map((record) => record.resolves).filter((id): id is string => id !== undefined),
+  );
+  const out = new Map<string, { unnamed: boolean; reviewIds: Set<string> }>();
+  for (const record of disputes) {
+    if (record.claimKind !== 'grade' || record.resolves !== undefined) continue;
+    if (resolved.has(record.eventId) || record.instrumentId === undefined) continue;
+    let entry = out.get(record.instrumentId);
+    if (entry === undefined) {
+      entry = { unnamed: false, reviewIds: new Set() };
+      out.set(record.instrumentId, entry);
+    }
+    if (record.reviewId === undefined) entry.unnamed = true;
+    else entry.reviewIds.add(record.reviewId);
+  }
+  return out;
 }
 
 /**
@@ -549,6 +581,7 @@ export function projectInstrumentValidity(
     provenInvalid,
     withheld,
     contested: new Set(quarantinedGradeInstrumentIds(disputeRecords)),
+    openGradeContests: openGradeContestsByInstrument(disputeRecords),
     correctedEvidence: correctedEvidenceAsOf(Number.POSITIVE_INFINITY),
     provenInvalidAsOf,
     correctedEvidenceAsOf,

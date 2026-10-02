@@ -550,6 +550,7 @@ describe('vitality: proven-invalid instruments never count; withheld ones per [D
       NOW,
       HOLDING_CUT,
       validity,
+      { replacedPredecessor: 'count' },
     );
     const drop = readAllEligibleConceptVitality(
       chain,
@@ -560,6 +561,7 @@ describe('vitality: proven-invalid instruments never count; withheld ones per [D
       validity,
       {
         withheldEvidence: 'drop-from-every-current-reading',
+        replacedPredecessor: 'count',
       },
     );
     expect(count.get('concept-a')?.instrumentsRead).toBe(2);
@@ -1024,14 +1026,16 @@ describe('a replaced card carries freshness only on equivalent qualifying eviden
       options,
     ).get('concept-a');
 
-  it("an active successor with an unaided recall success carries the predecessor; today's reading still counts both", () => {
+  it("an active successor with an unaided recall success carries the predecessor; 'count' still counts both", () => {
     const log = [...base, recall('s1', T3, { instrumentId: NEW })];
     expect(carriedOf(log).get(OLD)).toBe(NEW);
     const ruled = vitality(log);
     expect(ruled?.excludedInstrumentIds).toEqual([OLD]);
     expect(ruled?.weakest?.instrumentId).toBe(NEW);
-    expect(vitality(log, {})?.instrumentsRead).toBe(2);
-    expect(DEFAULT_REPLACED_PREDECESSOR_POLICY).toBe('count');
+    expect(vitality(log, { replacedPredecessor: 'count' })?.instrumentsRead).toBe(2);
+    // The ruled reading is the default (attainment targets version 4).
+    expect(DEFAULT_REPLACED_PREDECESSOR_POLICY).toBe('successor-with-equivalent-evidence');
+    expect(vitality(log, {})?.excludedInstrumentIds).toEqual([OLD]);
   });
 
   it('a recognition answer on the successor never refreshes recall of the broader target', () => {
@@ -1130,12 +1134,12 @@ describe('a replaced card carries freshness only on equivalent qualifying eviden
       recall('r1', T3, { instrumentId: 'eb:new' }),
     ];
     const v = projectInstrumentValidity(log);
-    const plain = readConceptAttainment(log, 'concept-a', v);
+    const plain = readConceptAttainment(log, 'concept-a', v, { replacedPredecessor: 'count' });
     const ruled = readConceptAttainment(log, 'concept-a', v, policy);
     expect(ruled.displayed.state).toBe(plain.displayed.state);
     expect(ruled.award).toEqual(plain.award);
-    expect(ruled.arithmeticVersion).toContain('replaced=successor-with-equivalent-evidence');
-    expect(plain.arithmeticVersion).not.toContain('replaced=');
+    expect(plain.arithmeticVersion).toContain('replaced=count');
+    expect(ruled.arithmeticVersion).not.toContain('replaced=');
   });
 
   it('readiness reads the successor once it carries the predecessor', () => {
@@ -1150,5 +1154,86 @@ describe('a replaced card carries freshness only on equivalent qualifying eviden
     ).get('concept-a');
     expect(readiness?.weakest?.instrumentId).toBe(NEW);
     expect(readiness?.instrumentsRead).toBe(1);
+  });
+});
+
+// `ol-egov.141.89.9.87`'s companion fixes (rows 14, 48 and 50; `[D-416]`, `[D-459]`, `[D-460]`): the
+// development set's four remaining failures were reader gaps, not target defects.
+describe('a revision after feedback is assisted whatever rung it records (row 50, D-459)', () => {
+  const linked = (eventId: string, timestamp: string) => ({
+    ...explainBack(eventId, timestamp, { instrumentId: 'eb:rev' }),
+    followsAttemptId: 'attempt-1',
+  });
+
+  it('an answer linked to the attempt it followed never earns the top stage, though it records independent', () => {
+    const state = attain([linked('rev-1', T1)]);
+    expect(state.displayed.state).toBe('sprout');
+    expect(state.award).toBeNull();
+  });
+
+  it('a revision lowers neither the stage nor the award an earlier independent attempt earned', () => {
+    const state = attain([
+      explainBack('first', T1, { instrumentId: 'eb:rev' }),
+      linked('rev-1', T2),
+    ]);
+    expect(state.displayed.state).toBe('tree');
+    expect(state.award?.attemptEventId).toBe('first');
+  });
+
+  it('an unlinked later attempt is a fresh attempt and earns what its own evidence supports', () => {
+    const state = attain([
+      linked('rev-1', T1),
+      explainBack('fresh', T2, { instrumentId: 'eb:rev' }),
+    ]);
+    expect(state.displayed.state).toBe('tree');
+    expect(state.award?.attemptEventId).toBe('fresh');
+  });
+});
+
+describe('uncertain feedback exposure withholds independent credit (row 50, D-460)', () => {
+  const log = [explainBack('exposed', T1, { instrumentId: 'eb:x' })];
+  const validity = projectInstrumentValidity(log);
+
+  it('the answer counts toward sprout and neither the stage nor an award rests on it', () => {
+    const state = readConceptAttainment(log, 'concept-a', validity, {
+      feedbackExposureUncertainEventIds: ['exposed'],
+    });
+    expect(state.displayed.state).toBe('sprout');
+    expect(state.award).toBeNull();
+  });
+
+  it('an exposure marker on another event, or none, changes nothing', () => {
+    for (const options of [{}, { feedbackExposureUncertainEventIds: ['elsewhere'] }]) {
+      const state = readConceptAttainment(log, 'concept-a', validity, options);
+      expect(state.displayed.state).toBe('tree');
+    }
+  });
+});
+
+describe('the thin mark reads the qualifying attempts own open contests (rows 14 and 48)', () => {
+  const named = (reviewId: string | undefined) =>
+    ({
+      ...gradeDispute('eb:t', 'd-1', T3),
+      ...(reviewId === undefined ? {} : { reviewId }),
+    }) as DisputeLogRecord;
+  const two = [
+    explainBack('first', T1, { instrumentId: 'eb:t' }),
+    explainBack('second', T2, { instrumentId: 'eb:t' }),
+  ];
+
+  it('is not thin when a qualifying attempt on the instrument is not the one contested', () => {
+    expect(attain(two, [named('first')]).thinEvidenceInstrumentIds).toEqual([]);
+  });
+
+  it('is thin when the only qualifying attempt is the contested one', () => {
+    const one = [
+      explainBack('first', T1, { instrumentId: 'eb:t' }),
+      explainBack('second', T2, { instrumentId: 'eb:t', correctness: 'partial' }),
+    ];
+    expect(attain(one, [named('first')]).thinEvidenceInstrumentIds).toEqual(['eb:t']);
+  });
+
+  it('keeps its historical ambiguity when the contest names no review', () => {
+    expect(attain(two, [named(undefined)]).thinEvidenceInstrumentIds).toEqual(['eb:t']);
   });
 });

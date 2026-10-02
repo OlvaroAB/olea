@@ -500,6 +500,16 @@ export interface MasteryRollupOptions {
    * hint-uptake writer (`[D-350]`) is the producer; nothing here invents one.
    */
   readonly hintReveals?: ReadonlyMap<string, HintReveal>;
+  /**
+   * `[D-460]` (row 50 of the sheet of 2026-09-29): the event ids of accepted
+   * explain-back answers whose exposure to earlier feedback cannot be
+   * confirmed (the exposure marker, which lives in Olea's own layer and not in
+   * the log, is the producer). Such an answer has its independent credit
+   * withheld: it counts as a graded explain-back toward sprout and never
+   * qualifies for the top stage. Never read as confirmed assistance, and it
+   * lowers nothing earned. Empty by default.
+   */
+  readonly feedbackExposureUncertainEventIds?: readonly string[];
 }
 
 interface ResolvedOptions {
@@ -511,6 +521,7 @@ interface ResolvedOptions {
   readonly explanationMissingEventIds: ReadonlySet<string>;
   readonly correctedEventIds: ReadonlySet<string>;
   readonly hintReveals: ReadonlyMap<string, HintReveal>;
+  readonly feedbackExposureUncertainEventIds: ReadonlySet<string>;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
@@ -539,6 +550,7 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
     explanationMissingEventIds: new Set(options?.explanationMissingEventIds ?? []),
     correctedEventIds: new Set(options?.correctedEventIds ?? []),
     hintReveals: options?.hintReveals ?? new Map(),
+    feedbackExposureUncertainEventIds: new Set(options?.feedbackExposureUncertainEventIds ?? []),
   };
 }
 
@@ -715,6 +727,16 @@ export interface ConceptMasteryEvidence {
     /** The attempt's timestamp, as written. */
     readonly at: string;
   } | null;
+  /**
+   * Every attempt that qualifies for the top stage, as event id and
+   * instrument id, sorted by event id (the thin mark reads each attempt's own
+   * open contest, rows 14 and 48). Optional for the same reason as the fields
+   * above.
+   */
+  readonly topStageQualifyingAttempts?: readonly {
+    readonly eventId: string;
+    readonly instrumentId: string;
+  }[];
   /** `[D-319]`: attempts that met every other top-stage condition but whose restates-the-source finding shows the requested explanation missing. */
   readonly withheldByRestatementFinding?: number;
 }
@@ -908,6 +930,7 @@ function conceptEvidence(
     instant: number;
   } | null = null;
   let withheldByRestatementFinding = 0;
+  const topStageQualifyingAttempts: { eventId: string; instrumentId: string }[] = [];
 
   const allRecords = indexEntries(entries).recordsByConcept.get(conceptId) ?? [];
   const { excludedInstrumentIds, asOf } = scope;
@@ -985,6 +1008,10 @@ function conceptEvidence(
           withheldByRestatementFinding += 1;
         } else {
           topStageQualified = true;
+          topStageQualifyingAttempts.push({
+            eventId: record.eventId,
+            instrumentId: record.instrumentId,
+          });
           const instant = Date.parse(record.timestamp);
           const candidate = {
             eventId: record.eventId,
@@ -1067,6 +1094,9 @@ function conceptEvidence(
             instrumentId: topStageAttempt.instrumentId,
             at: topStageAttempt.at,
           },
+    topStageQualifyingAttempts: topStageQualifyingAttempts.sort((a, b) =>
+      a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0,
+    ),
     withheldByRestatementFinding,
   };
 }
@@ -1171,6 +1201,14 @@ function qualifiesForTopStage(
   if (support === undefined || !resolved.admittedSupportLevels.has(support)) return false;
   if (resolved.invalidInstrumentIds.has(record.instrumentId)) return false;
   if (supersededEventIds.has(record.eventId)) return false;
+  // `[D-416]`, `[D-459]`, row 50: an answer linked to the attempt it followed
+  // (`followsAttemptId`, written when she chose Try again after feedback) is a
+  // revision after feedback, assisted whatever rung its record carries, and an
+  // answer whose exposure to feedback is uncertain has its independent credit
+  // withheld (`[D-460]`). Either still counts toward sprout, and neither lowers
+  // anything already earned (the as-of folds read the same predicate).
+  if (record.followsAttemptId !== undefined) return false;
+  if (resolved.feedbackExposureUncertainEventIds.has(record.eventId)) return false;
   return true;
 }
 

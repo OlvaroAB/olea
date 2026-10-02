@@ -164,6 +164,7 @@ export interface AttainmentOptions
     | 'saplingRule'
     | 'explanationMissingEventIds'
     | 'hintReveals'
+    | 'feedbackExposureUncertainEventIds'
   > {
   /** `[D-347]`, open. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
   readonly withheldEvidence?: WithheldEvidencePolicy;
@@ -182,7 +183,7 @@ export interface AttainmentOptions
    * **Replaced card (judgement J3; the ruling of 2026-09-30,
    * `ol-egov.141.89.9.87`).** What vitality and readiness do with a retired
    * predecessor whose successor is active. Defaults to
-   * {@link DEFAULT_REPLACED_PREDECESSOR_POLICY}, today's reading.
+   * {@link DEFAULT_REPLACED_PREDECESSOR_POLICY}, the ruled reading.
    */
   readonly replacedPredecessor?: ReplacedPredecessorPolicy;
   /**
@@ -208,7 +209,7 @@ export interface ArithmeticVersionInput {
   readonly schedulerVersion?: string | undefined;
   /** True when a passage-validity input was handed in (the D-347 split computed). Omitted otherwise. */
   readonly passageSplit?: boolean | undefined;
-  /** The replaced-predecessor policy, named only when it is not today's reading. Omitted otherwise. */
+  /** The replaced-predecessor policy, named only when it is not the default (the ruled reading). Omitted otherwise. */
   readonly replacedPredecessor?: ReplacedPredecessorPolicy | undefined;
 }
 
@@ -225,7 +226,8 @@ export function attainmentArithmeticVersion(input: ArithmeticVersionInput): stri
     `withheld=${input.withheldEvidence}`,
     `scheduler=${input.schedulerVersion ?? 'unknown'}`,
     ...(input.passageSplit === true ? ['passage=split'] : []),
-    ...(input.replacedPredecessor !== undefined && input.replacedPredecessor !== 'count'
+    ...(input.replacedPredecessor !== undefined &&
+    input.replacedPredecessor !== DEFAULT_REPLACED_PREDECESSOR_POLICY
       ? [`replaced=${input.replacedPredecessor}`]
       : []),
   ].join(';');
@@ -265,6 +267,9 @@ function rollupOptionsOf(options: AttainmentOptions): MasteryRollupOptions {
       ? { explanationMissingEventIds: options.explanationMissingEventIds }
       : {}),
     ...(options.hintReveals !== undefined ? { hintReveals: options.hintReveals } : {}),
+    ...(options.feedbackExposureUncertainEventIds !== undefined
+      ? { feedbackExposureUncertainEventIds: options.feedbackExposureUncertainEventIds }
+      : {}),
   };
 }
 
@@ -526,11 +531,24 @@ export function readConceptAttainment(
     }
   }
 
+  const openGradeContests = validity.openGradeContests ?? new Map();
+  const qualifying = displayed.evidence.topStageQualifyingAttempts ?? [];
   const thinEvidenceInstrumentIds = [
     ...new Set(
       records
         .map((record) => record.instrumentId)
-        .filter((instrumentId) => validity.contested.has(instrumentId)),
+        .filter((instrumentId) => validity.contested.has(instrumentId))
+        .filter((instrumentId) => {
+          // Rows 14 and 48: a contest is about the review it names, so an
+          // instrument whose qualifying attempts include one no open contest
+          // names does not rest on contested evidence alone. A contest naming
+          // no review keeps its historical ambiguity: the instrument stays thin.
+          const open = openGradeContests.get(instrumentId);
+          if (open === undefined || open.unnamed) return true;
+          const mine = qualifying.filter((attempt) => attempt.instrumentId === instrumentId);
+          if (mine.length === 0) return true;
+          return mine.every((attempt) => open.reviewIds.has(attempt.eventId));
+        }),
     ),
   ].sort();
 
@@ -715,12 +733,19 @@ export function unresolvedPassageInstrumentIds(
  *   never refreshes recall of the broader target. The displayed stage, the
  *   award and credit keep the predecessor's sound reviews under both.
  *
- * Opt-in until the targets cut the J3 amendment (`ol-egov.141.89.9.87`).
+ * The default since the targets cut the J3 amendment (version 4,
+ * `ol-egov.141.89.9.87`); `'count'` is the version 2 reading.
  */
 export type ReplacedPredecessorPolicy = 'count' | 'successor-with-equivalent-evidence';
 
-/** Today's reading, until the J3 amendment is cut as a target version. */
-export const DEFAULT_REPLACED_PREDECESSOR_POLICY: ReplacedPredecessorPolicy = 'count';
+/**
+ * The ruled reading (the ruling of 2026-09-30, attainment targets version 4):
+ * a retired predecessor stops counting once an active successor holds
+ * equivalent qualifying evidence. `'count'` stays selectable as the version 2
+ * reading.
+ */
+export const DEFAULT_REPLACED_PREDECESSOR_POLICY: ReplacedPredecessorPolicy =
+  'successor-with-equivalent-evidence';
 
 const TIER_RANK = { recognition: 0, recall: 1, explanation: 2 } as const;
 
