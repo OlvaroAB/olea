@@ -40,6 +40,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it, vi } from 'vitest';
+import { ObsidianMaterialityPendingStore } from '../../../src/ingestion/materiality/pending-store.js';
 import type {
   MaterialityHashStore,
   MaterialityJudge,
@@ -467,12 +468,24 @@ describe.skipIf(!CASES_PRESENT)(
       // stale against the code as it stands now (post defect-2, ol-egov.141.89.5.7).
     });
 
-    it('CHG-57f55b30941e3290 (restart-pending-escalation): an in-flight call lost to a restart is not recovered by the final tick — a real, reproduced gap', async () => {
+    it('CHG-57f55b30941e3290 (restart-pending-escalation): an in-flight call lost to a restart is recovered by the final tick and decided ([D-427])', async () => {
       const c = caseById('CHG-57f55b30941e3290');
       const key = keyById('CHG-57f55b30941e3290');
       const path = c.source.path;
       const store = new FakeStore();
       await seedInitial(store, c, path);
+      // `[D-427]` (`ol-egov.141.89.5.31`): the pending record lives in the plugin's local data file,
+      // as `buildMaterialityWiring` composes it — here one in-memory `data.json` both instances
+      // share — and the recovery reads the note's current text from the vault.
+      let dataJson: unknown;
+      const pendingStore = new ObsidianMaterialityPendingStore({
+        loadData: async () => (dataJson === undefined ? undefined : structuredClone(dataJson)),
+        saveData: async (data) => {
+          dataJson = structuredClone(data);
+        },
+      });
+      const vault = new Map<string, string>([[path, c.initial.files[path]!.text]]);
+      const readCurrentText = async (p: string) => vault.get(p) ?? null;
 
       // Instance A: dispatches a judge call and never gets an answer back — the process dies with
       // the call still in flight. `never()` deliberately never settles; the call is issued but not
@@ -481,36 +494,67 @@ describe.skipIf(!CASES_PRESENT)(
         judge: vi.fn((): Promise<MaterialityJudgeVerdict> => new Promise(() => {})),
       };
       const clock = steppedClock(c.initial.processedAtMs);
-      const triggerA = new MaterialityTrigger({ store, clock, judge: neverSettles });
+      const triggerA = new MaterialityTrigger({
+        store,
+        clock,
+        judge: neverSettles,
+        pendingStore,
+        readCurrentText,
+      });
       const save = c.events.find((e) => e.kind === 'save') as SaveEvent;
       clock.set(save.atMs);
+      vault.set(path, save.text);
       void triggerA.evaluate(path, save.text, c.initial.files[path]!.text);
       // Let the dispatch reach the (never-resolving) judge call -- the hash/store hops in between
       // are real microtasks (async SHA-256, an async FakeStore load), so this polls rather than
       // assuming a fixed number of ticks (a fixed `setTimeout(0)` flaked under full-suite load).
       await vi.waitFor(() => expect(neverSettles.judge).toHaveBeenCalledOnce());
 
-      // "restart": a brand-new instance, sharing only the persisted store — every in-memory map
+      // "restart": a brand-new instance, sharing only the persisted state — every in-memory map
       // (`pendingSmallEdit`, `pendingDebounced`, `lastProcessedText`, the in-flight `revisions` guard)
       // starts empty, exactly as after a real process restart.
       const restart = c.events.find((e) => e.kind === 'restart')!;
       clock.set(restart.atMs);
       const revisions = revisionMap(c);
-      const { judge: freshJudge } = truthByConstructionJudge(revisions, key.expected.answers);
-      const triggerB = new MaterialityTrigger({ store, clock, judge: freshJudge });
+      const { judge: freshJudge, calls } = truthByConstructionJudge(
+        revisions,
+        key.expected.answers,
+      );
+      const triggerB = new MaterialityTrigger({
+        store,
+        clock,
+        judge: freshJudge,
+        pendingStore,
+        readCurrentText,
+      });
 
+      // The tick, as `main.ts`'s `drainPendingMaterialityEdits` runs it: recovery, then the drain.
       const tick = c.events.find((e) => e.kind === 'tick')!;
+      const recovered = await triggerB.recoverUnfinishedChecks(tick.atMs);
       const drained = await triggerB.drainDuePendingEdits(tick.atMs);
 
-      // The reproduced gap (matches key.dev.json's own recorded `today.gap`): nothing about the
-      // lost-in-flight edit was ever persisted, and a fresh instance's drain has nothing of its own
-      // to act on — the file's next OBSERVATION (a future save) is what would pick this back up, not
-      // a periodic tick alone. This is a genuine, confirmed limitation, not a build defect this
-      // bead's own owns can fix without a persisted "dispatched, awaiting response" record (a new
-      // stored shape -- Class C, needs its own decision bead).
-      expect(drained).toHaveLength(0);
-      expect(store.peek(path)?.revision).toBe(0);
-      expect(key.expected.finalBaseline).toBe('r1'); // the TARGET baseline this gap keeps it from reaching
+      // Before `[D-427]` this reproduced the gap (drain 0, record left at revision 0). Now the lost
+      // call's one retry is sent from the pending record and the revision is decided: the key's
+      // known-good route, r0>r1, judged once after the restart.
+      expect(calls).toEqual([{ from: 'r0', to: 'r1' }]);
+      expect(recovered).toHaveLength(1);
+      const settled = recovered[0]!;
+      expect(settled.currentText).toBe(save.text);
+      expect(settled.result.kind).toBe('verdict');
+      expect(settled.result.kind === 'verdict' && settled.result.verdict.material).toBe(
+        key.expected.answers['r0>r1'] === 'material',
+      );
+      expect(drained).toHaveLength(0); // decided once, through recovery only
+      expect(store.peek(path)?.revision).toBe(1);
+      expect(revisions.get(save.text)).toBe(key.expected.finalBaseline);
+      const { computeMaterialityHashes } = await import(
+        '../../../src/ingestion/materiality/hashes.js'
+      );
+      expect(store.peek(path)?.hashes).toEqual(await computeMaterialityHashes(save.text));
+      expect(await pendingStore.load(path)).toBeNull();
+      // The lost original plus the one retry: inside the key's bound.
+      const attempts = vi.mocked(neverSettles.judge).mock.calls.length + calls.length;
+      expect(attempts).toBeLessThanOrEqual(key.expected.maxJudgeCalls as number);
     });
   },
 );

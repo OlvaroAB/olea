@@ -2290,6 +2290,18 @@ export default class OleaPlugin extends Plugin {
       dataHost: this,
       clock: { now: () => this.now().getTime() },
       judge: this.buildMaterialityJudge(),
+      // `[D-427]` (`ol-egov.141.89.5.31`): a check unfinished at restart is
+      // reconciled against the note as it stands now — see
+      // `drainPendingMaterialityEdits`, which runs the recovery. A note that is
+      // gone, or is one of Olea's own home notes (never evaluated: see
+      // `evaluateMaterialityChange`), has nothing of hers to reconcile.
+      readCurrentText: async (path) => {
+        if (!(await vault.exists(path))) return null;
+        const text = await vault.read(path);
+        return isOleaHomeNote(text) ? null : text;
+      },
+      // Same reachability source the citation grain's `[D-400]` budget uses below.
+      isOnline: () => navigator.onLine,
     });
     this.materialityPreviousText = createInMemoryPreviousTextTracker();
     // `ol-2zfj.35` [CORP-3b]: the citation-grain sibling's production caller
@@ -2553,10 +2565,30 @@ export default class OleaPlugin extends Plugin {
    * cannot abort the rest of it -- this method's own try/catch is the same
    * defensive backstop `evaluateMaterialityChange` keeps for its single
    * verdict, never the primary error path for either consumer.
+   *
+   * `[D-427]` (`ol-egov.141.89.5.31`): first, the checks a restart left
+   * unfinished (`MaterialityTrigger.recoverUnfinishedChecks`, which lists the
+   * pending records only while one may be unowned, so a quiet tick costs no
+   * read). Each check it settles reaches the SAME two consumers, the same
+   * way `evaluateMaterialityChange` routes a direct result — the raw result
+   * to the processed-revision record, `observedMaterialChange` to the
+   * generation sweep — so a recovered `'judge-unavailable'` (the one retry
+   * also unanswered) counts as changed exactly as a direct one does. A
+   * held-back edit it puts back is decided by the drain just below, on its
+   * own timing, and reaches the consumers from there: never both.
    */
   private async drainPendingMaterialityEdits(): Promise<void> {
     if (this.materiality === null) return;
     try {
+      const recovered = await this.materiality.recoverUnfinishedChecks(this.now().getTime());
+      for (const { path, currentText, result } of recovered) {
+        void this.processedRevisionFeed?.noteEvaluated(path, currentText, result);
+        await this.triggerAuthoredNoteGenerationIfObserved(
+          path,
+          currentText,
+          this.observedMaterialChange(result),
+        );
+      }
       const drained = await this.materiality.drainDuePendingEdits(this.now().getTime());
       for (const { verdict, currentText } of drained) {
         void this.processedRevisionFeed?.noteProcessed(verdict.path, currentText);
