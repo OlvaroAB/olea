@@ -38,16 +38,13 @@
  *    verdict proceeds to `quiz.generate.v1` (two transport calls, in
  *    order); an unsupported one refuses BEFORE the generative call ever
  *    happens (one transport call, never two).
- * 5. **The composite lower-bar veto composes with the band rather than being
- *    replaced by it (`[D-192]`, `ol-0r92.39`).** This call site now also
- *    passes `requireComposite: true` with `compositeThresholds:
- *    RECOMMENDED_COMPOSITE_THRESHOLDS`. A cosine below the composite's own
- *    top1 bar (0.545) refuses as `'below-composite-threshold'` — BEFORE
- *    `D112_GROUNDING_BAND`'s own classification or the judge ever run — even
- *    though, at that same cosine, the composite is the ONLY thing that would
- *    have refused (0.4 also sits below the band's lower bar, so both
- *    mechanisms agree here; the point being tested is which one answers
- *    first and that neither is silently skipped).
+ * 5. **There is no composite veto at this call site (`[D-449]`, ruled
+ *    2026-09-30; was `[D-192]`, `ol-0r92.39`).** The call site no longer
+ *    passes `requireComposite` or `compositeThresholds`. A request the
+ *    composite alone refused (top1 clears the band's lower bar, the lexical
+ *    clause fails) now reaches the sufficiency judge, while the band's lower
+ *    bar (0.555, kept provisionally) still refuses from numbers with nothing
+ *    sent.
  *
  * **Why the embedding space here is orthogonal, unlike `engine.spec.ts`'s.**
  * `engine.spec.ts`'s realistic overlapping-bands fixture exists to prove
@@ -280,15 +277,15 @@ async function makeRetrieveDeps(
 const REQUEST = { courseCode: 'COGS214', conceptName: QUERY_TEXT };
 
 // `D112_GROUNDING_BAND` is lower 0.555 / upper 0.800 (`[D-112]`).
-// `RECOMMENDED_COMPOSITE_THRESHOLDS.top1` is 0.545 (`[D-192]`) — since
-// `[D-192]`, this call site checks the composite FIRST, so a fixture cosine
-// needs to be chosen relative to BOTH bars to isolate which mechanism fired.
+// `RECOMMENDED_COMPOSITE_THRESHOLDS.top1` is 0.545 (`[D-192]`); this call site no longer passes the
+// composite (`[D-449]`), but the fixture cosines keep their position relative to it so the
+// band-only fixture (0.55) stays the one that isolates the band's own bar.
 // This fixture's `QUERY_TEXT`/`TARGET_TEXT` share the token "mitochondria"
 // and nothing else in the corpus does, so `lexBest` is always 1.0 here and
 // `marginP99` always equals `top1` itself (100 orthogonal zero-cosine filler
 // chunks) — every cosine below isolates purely on `top1`.
-const BELOW_COMPOSITE_COSINE = 0.4; // < composite top1 (0.545) AND < band lower (0.555) — the composite vetoes FIRST, before band classification ever runs
-const BELOW_BAND_ONLY_COSINE = 0.55; // >= composite top1 (0.545), so the composite does not veto — but < band lower (0.555), isolating the band's own bar
+const BELOW_BAND_COSINE = 0.4; // < band lower (0.555) (and < the dropped composite's top1 0.545): the band's own bar refuses
+const BELOW_BAND_ONLY_COSINE = 0.55; // >= the dropped composite's top1 (0.545) but < band lower (0.555), isolating the band's own bar
 const IN_BAND_COSINE = 0.65; // 0.555 <= x < 0.800, and clears the composite too
 const ABOVE_BAND_COSINE = 1.0; // >= 0.800, and clears the composite too
 
@@ -690,9 +687,86 @@ describe('draftQuizCardsForConcept — N-013: the band is load-bearing at this c
   });
 });
 
-describe('draftQuizCardsForConcept — the composite lower-bar veto composes with the band (`[D-192]`, ol-0r92.39)', () => {
-  it('a below-composite concept refuses as below-composite-threshold and NEVER calls transport.send — before the band or the judge ever run', async () => {
-    const { keywordIndex, provider } = buildFixture(BELOW_COMPOSITE_COSINE);
+// A concept name that shares no token with the corpus, so the composite's lexical clause (0.18)
+// fails while top1 (0.65) clears BOTH the composite's top1 clause and the band's lower bar: the
+// composite veto, were it still passed, is the ONLY thing that would refuse this request. The
+// query vector is the same as `QUERY_TEXT`'s, so the semantic signal is unchanged.
+const NO_LEXICAL_OVERLAP_TEXT = 'organelle energy';
+
+function buildVetoOnlyFixture(): {
+  readonly keywordIndex: PersistedKeywordIndex;
+  readonly provider: LookupEmbeddingProvider;
+} {
+  const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+  const residual = Math.sqrt(1 - IN_BAND_COSINE * IN_BAND_COSINE);
+  provider.register(
+    NO_LEXICAL_OVERLAP_TEXT,
+    unitVector(0).map((c, i) => c * IN_BAND_COSINE + (i === 1 ? residual : 0)),
+  );
+  return { keywordIndex, provider };
+}
+
+describe('draftQuizCardsForConcept — no composite veto for drafting (`[D-449]`, was `[D-192]`)', () => {
+  it('control: the composite veto, if passed, refuses the veto-only fixture — so the next test proves the call site no longer passes it', async () => {
+    const { keywordIndex, provider } = buildVetoOnlyFixture();
+    const retrieveDeps = await makeRetrieveDeps(keywordIndex, provider);
+
+    const withVeto = await retrieve(retrieveDeps, NO_LEXICAL_OVERLAP_TEXT, {
+      band: D112_GROUNDING_BAND,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+    });
+    expect(withVeto).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+
+    // Same request, no veto: the band alone does not refuse it (it escalates to a judge, which
+    // this control does not supply, so it fails closed rather than refusing from numbers).
+    const withoutVeto = await retrieve(retrieveDeps, NO_LEXICAL_OVERLAP_TEXT, {
+      band: D112_GROUNDING_BAND,
+    });
+    expect(withoutVeto.status === 'refused' ? withoutVeto.reason : 'ok').not.toBe(
+      'below-composite-threshold',
+    );
+  });
+
+  it('a request the composite veto alone would have refused now reaches the judge and, once supported, drafts — judge then quiz, two sends', async () => {
+    const { keywordIndex, provider } = buildVetoOnlyFixture();
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, {
+      courseCode: 'COGS214',
+      conceptName: NO_LEXICAL_OVERLAP_TEXT,
+    });
+
+    expect(result.status).toBe('drafted');
+    expect(transport.calls.map((call) => call.taskId)).toEqual([
+      'grounding.judge.v1',
+      'quiz.generate.v1',
+    ]);
+  });
+
+  it('the judge still decides: an unsupported verdict on the same veto-only request refuses as judge-rejected, one send, never the generative call', async () => {
+    const { keywordIndex, provider } = buildVetoOnlyFixture();
+    const transport = fakeTransport({ judge: judgeVerdict(false) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, {
+      courseCode: 'COGS214',
+      conceptName: NO_LEXICAL_OVERLAP_TEXT,
+    });
+
+    expect(result).toEqual({ status: 'refused', reason: 'judge-rejected' });
+    expect(transport.calls.map((call) => call.taskId)).toEqual(['grounding.judge.v1']);
+  });
+
+  it('the retained lower bar still refuses: top1 below 0.555 refuses as below-band, never below-composite-threshold, with nothing sent', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
     const transport = fakeTransport({});
     const deps: DraftQuizCardsDeps = {
       retrieve: await makeRetrieveDeps(keywordIndex, provider),
@@ -701,15 +775,11 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
 
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
-    // The reason reaches the caller as its own value; `describeRefusal`
-    // (`draft-cards-copy.ts`) reads it as threshold-blocked, not as a checked
-    // insufficiency (`[D-441]`, ruled 2026-09-29), and the asserted result
-    // below keeps the specific reason end to end.
-    expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
     expect(transport.calls).toHaveLength(0);
   });
 
-  it('the ABOVE-band path, when the composite also clears every clause, still goes judge then quiz — two sends (`[D-442]`)', async () => {
+  it('the ABOVE-band path still goes judge then quiz — two sends (`[D-442]`)', async () => {
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
     const transport = fakeTransport({});
     const deps: DraftQuizCardsDeps = {
@@ -720,12 +790,13 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
     expect(result.status).toBe('drafted');
-    expect(transport.calls).toHaveLength(2);
-    expect(transport.calls[0]?.taskId).toBe('grounding.judge.v1');
-    expect(transport.calls[1]?.taskId).toBe('quiz.generate.v1');
+    expect(transport.calls.map((call) => call.taskId)).toEqual([
+      'grounding.judge.v1',
+      'quiz.generate.v1',
+    ]);
   });
 
-  it('the IN-band, judge-supported path is unchanged when the composite also clears every clause — judge then quiz, two sends', async () => {
+  it('the IN-band, judge-supported path is unchanged — judge then quiz, two sends', async () => {
     const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
     const transport = fakeTransport({ judge: judgeVerdict(true) });
     const deps: DraftQuizCardsDeps = {
@@ -741,17 +812,16 @@ describe('draftQuizCardsForConcept — the composite lower-bar veto composes wit
     expect(transport.calls[1]?.taskId).toBe('quiz.generate.v1');
   });
 
-  it('sanity: RECOMMENDED_COMPOSITE_THRESHOLDS is the ratified point this call site is pinned to', () => {
+  it('sanity: the dropped D-192 point is still the value the control above pins', () => {
     expect(RECOMMENDED_COMPOSITE_THRESHOLDS).toEqual({ lex: 0.18, top1: 0.545, marginP99: 0.055 });
   });
 });
 
 /**
  * `[JEV-11]` (`ol-3ux7.96`) — proves the traced path from this real call
- * site down to an attributed `GateStage`, through the actual band and
- * composite options this function passes (`D112_GROUNDING_BAND`,
- * `RECOMMENDED_COMPOSITE_THRESHOLDS`), not a re-derived fixture. Each test
- * reuses a fixture already pinned above (BELOW_COMPOSITE/BELOW_BAND/IN_BAND/
+ * site down to an attributed `GateStage`, through the actual band option this
+ * function passes (`D112_GROUNDING_BAND`; no composite since `[D-449]`), not a re-derived fixture. Each test
+ * reuses a fixture already pinned above (BELOW_BAND/IN_BAND/
  * ABOVE_BAND) so the stage asserted here is the SAME decision the sibling
  * describe block already proved by transport-call count — this block adds
  * only the new assertion, `deps.onStage`'s recorded stage.
@@ -775,8 +845,8 @@ describe('draftQuizCardsForConcept — [JEV-11] onStage attributes the real call
     expect(result.status).toBe('drafted');
   });
 
-  it('attributes the composite-veto refusal to composite-veto, exactly once', async () => {
-    const { keywordIndex, provider } = buildFixture(BELOW_COMPOSITE_COSINE);
+  it('never records composite-veto at this call site: a below-lower-bar request is attributed to below-band', async () => {
+    const { keywordIndex, provider } = buildFixture(BELOW_BAND_COSINE);
     const transport = fakeTransport({});
     const rec = recorder();
     const deps: DraftQuizCardsDeps = {
@@ -787,8 +857,8 @@ describe('draftQuizCardsForConcept — [JEV-11] onStage attributes the real call
 
     const result = await draftQuizCardsForConcept(deps, REQUEST);
 
-    expect(result).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
-    expect(rec.stages).toEqual(['composite-veto']);
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(rec.stages).toEqual(['below-band']);
   });
 
   it('attributes the below-band refusal to below-band, exactly once', async () => {

@@ -2,7 +2,7 @@
  * `draftCardsForConcept` tests (`ol-0r92.116`).
  *
  * A lighter mirror of `../retrieval/draft-quiz-cards.spec.ts` — the shared
- * grounding mechanics (`retrieve()`, the band, the composite veto, the real
+ * grounding mechanics (`retrieve()`, the band, the real
  * `WorkerGroundingJudge`) are already proven exhaustively there and in
  * `groundedContext.spec.ts`/`compositeSignals.spec.ts` (`olea-core`); this
  * file only needs to prove the two properties specific to THIS call site:
@@ -28,6 +28,7 @@
  * measured to keep the percentile off the target.
  */
 import {
+  D112_GROUNDING_BAND,
   EmbeddingCacheEngine,
   type EmbeddingCacheStore,
   type EmbeddingProvider,
@@ -36,6 +37,8 @@ import {
   type JudgeRequestRecord,
   type PersistedEmbeddingCache,
   type PersistedKeywordIndex,
+  RECOMMENDED_COMPOSITE_THRESHOLDS,
+  retrieve,
   type WorkerTaskRequest,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -177,7 +180,7 @@ async function makeRetrieveDeps(
 }
 
 const REQUEST = { courseCode: 'COGS214', conceptName: QUERY_TEXT };
-const ABOVE_BAND_COSINE = 1.0; // clears the band's upper bar (0.8) and the composite — still reaches the judge since [D-442]
+const ABOVE_BAND_COSINE = 1.0; // clears the band's upper bar (0.8) — still reaches the judge since [D-442]
 
 describe('draftCardsForConcept (ol-0r92.116)', () => {
   it('a completely empty index refuses and NEVER calls transport.send — the load-bearing property, per draft-quiz-cards.spec.ts', async () => {
@@ -243,6 +246,65 @@ describe('draftCardsForConcept (ol-0r92.116)', () => {
       expect(result.request.purpose).toBe('readiness');
       expect(result.request.registerHint).toEqual({ terminology: ['mitosis'] });
     }
+  });
+});
+
+/**
+ * `[D-449]`: the composite veto is dropped at this call site too. A concept name sharing no token
+ * with the corpus fails the dropped composite's lexical clause (0.18) while its top1 (0.65) clears
+ * the band's lower bar (0.555), so the veto alone would have refused it. The control proves the
+ * veto would refuse it; the call site must now send it to the judge.
+ */
+describe('draftCardsForConcept — no composite veto for drafting (`[D-449]`)', () => {
+  const NO_LEXICAL_OVERLAP_TEXT = 'organelle energy';
+  const IN_BAND_COSINE = 0.65;
+
+  function vetoOnlyFixture() {
+    const { keywordIndex, provider } = buildFixture(IN_BAND_COSINE);
+    const residual = Math.sqrt(1 - IN_BAND_COSINE * IN_BAND_COSINE);
+    provider.register(
+      NO_LEXICAL_OVERLAP_TEXT,
+      unitVector(0).map((c, i) => c * IN_BAND_COSINE + (i === 1 ? residual : 0)),
+    );
+    return { keywordIndex, provider };
+  }
+
+  it('a request the composite veto alone would have refused reaches the judge and drafts — judge then cards', async () => {
+    const { keywordIndex, provider } = vetoOnlyFixture();
+    const retrieveDeps = await makeRetrieveDeps(keywordIndex, provider);
+
+    // Control: with the veto passed, the same request is refused from numbers.
+    const withVeto = await retrieve(retrieveDeps, NO_LEXICAL_OVERLAP_TEXT, {
+      band: D112_GROUNDING_BAND,
+      requireComposite: true,
+      compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
+    });
+    expect(withVeto).toEqual({ status: 'refused', reason: 'below-composite-threshold' });
+
+    const transport = fakeTransport();
+    const result = await draftCardsForConcept(
+      { retrieve: retrieveDeps, transport },
+      { courseCode: 'COGS214', conceptName: NO_LEXICAL_OVERLAP_TEXT },
+    );
+
+    expect(result.status).toBe('drafted');
+    expect(transport.calls.map((call) => call.taskId)).toEqual([
+      'grounding.judge.v1',
+      'cards.generate.v1',
+    ]);
+  });
+
+  it('the retained lower bar still refuses: top1 below 0.555 refuses as below-band with nothing sent', async () => {
+    const { keywordIndex, provider } = buildFixture(0.4);
+    const transport = fakeTransport();
+
+    const result = await draftCardsForConcept(
+      { retrieve: await makeRetrieveDeps(keywordIndex, provider), transport },
+      REQUEST,
+    );
+
+    expect(result).toEqual({ status: 'refused', reason: 'below-band' });
+    expect(transport.calls).toHaveLength(0);
   });
 });
 

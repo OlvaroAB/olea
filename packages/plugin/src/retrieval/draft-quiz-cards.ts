@@ -9,7 +9,8 @@
  * single-gate composite (`requireComposite: true` +
  * `RECOMMENDED_COMPOSITE_THRESHOLDS`, `ol-odb0.2`); `[WIRE-5]` (`ol-i0y6`)
  * switches it to `[D-089]`'s two-threshold band at the operating point
- * `[D-112]` (`ol-oqip`) ratified — see "THE BAND SWITCH" below — for the
+ * `[D-112]` (`ol-oqip`) ratified — see "THE BAND SWITCH" below; `[D-449]` later
+ * dropped the composite requirement altogether — for the
  * card-drafting flow through `quiz.generate.v1` the bead's own notes name as
  * the chosen destination.
  *
@@ -30,28 +31,27 @@
  * passages to the judge and this call site drafts only on a supported
  * verdict. The upper bar used to skip the judge ("generate from the cheap
  * signals"); a retrieval band never certifies support, so it does not any
- * more. The lower bar and the composite veto below are unchanged here; both
- * are re-derived once the retrieval targets lock.
+ * more. The lower bar is unchanged here; the composite veto was dropped for
+ * drafting by `[D-449]` (see the section below).
  *
  * ===========================================================================
- * THE COMPOSITE LOWER-BAR VETO (`[D-192]` / `ol-0r92.39`)
+ * NO COMPOSITE VETO FOR DRAFTING (`[D-449]`, ruled 2026-09-30)
  * ===========================================================================
- * This call site ALSO passes `requireComposite: true` with
- * `compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS`
- * (`packages/core/src/retrieval/compositeSignals.ts`), composed with the band
- * above rather than a replacement for it — `retrieve()`'s own doc on `band`
- * says the two now compose per `[D-192]`, superseding the earlier
- * mutually-exclusive posture this comment used to describe. The composite
- * runs as an ADDITIONAL veto ahead of `D112_GROUNDING_BAND`'s own
- * classification: a query whose composite signals miss the ratified lower
- * bar refuses (`below-composite-threshold`) before the band or the judge
- * ever sees it, at the measured point 14/20 refused, 0/40 false refusals
- * (`eval/THRESHOLDS.md`'s composite section, `olea-service`, private).
- * Veto-only, provisional: it can never grant a pass on its own, so a query
- * the composite does not refuse still goes through `D112_GROUNDING_BAND`'s
- * band/judge path (and, since `[D-442]`, reaches the judge above the upper
- * bar too). A veto is a threshold-blocked refusal, not a checked verdict
- * about her notes (`[D-441]`, ruled 2026-09-29).
+ * This call site USED to also pass `requireComposite: true` with
+ * `compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS` (`[D-192]`), an
+ * additional veto ahead of the band that refused `below-composite-threshold`.
+ * `[D-449]` drops that veto for drafting at both production call sites (this
+ * one and `../generation/draft-cards.ts`): `retrieve()` is now called with
+ * the band and the judge only, so the gate order is: no hits refuses; below
+ * the band's lower bar (0.555, `[D-112]`, kept as a PROVISIONAL baseline, not
+ * confirmed) refuses `below-band` from numbers with nothing sent; at or above
+ * it the sufficiency judge is always consulted (`[D-442]`) and drafting
+ * proceeds only on a supported verdict. A request the composite alone would
+ * have refused now reaches the judge. The lower bar's revisit condition is
+ * open (`eval/THRESHOLDS.md`'s D-449 amendment, `olea-service`, private, is
+ * the cited authority). `below-composite-threshold` is no longer produced by
+ * this call site; the refusal-reason union keeps it because other callers of
+ * `retrieve()` can still produce it.
  *
  * ===========================================================================
  * PERSONALIZATION CONTEXT (`[D-008]`, F3.8/F3.9, `ol-p3t07c`)
@@ -156,7 +156,6 @@ import {
   type GateStage,
   type GroundingRefusalReason,
   type JudgeRequestRecord,
-  RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
   type RetrieveOptions,
   retrieve,
@@ -384,10 +383,9 @@ export interface DraftQuizCardsDeps {
 
 /**
  * Drafts `quiz.generate.v1` questions for one concept, refusing before any
- * generative call unless `request.conceptName` clears BOTH: `[D-192]`'s
- * composite lower-bar veto (`RECOMMENDED_COMPOSITE_THRESHOLDS`) checked
- * first, and `[D-089]`'s two-threshold band against her indexed material, at
- * the operating point `[D-112]` ratified, checked after — and then the
+ * generative call unless `request.conceptName` clears `[D-089]`'s
+ * two-threshold band against her indexed material, at the operating point
+ * `[D-112]` ratified (no composite veto: `[D-449]`) — and then the
  * sufficiency judge says the passages support it (`[D-442]`: at or above the
  * lower bar the judge is always consulted, the upper bar no longer skips it).
  *
@@ -398,11 +396,8 @@ export interface DraftQuizCardsDeps {
  * `draft-quiz-cards.spec.ts`'s N-013 test pins: the same below-band fixture,
  * retrieved again with no `band` option, grounds — proving this call site's
  * explicit band is the only thing standing between "refuses" and "never
- * refuses" for that input. `requireComposite: true` with
- * `compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS` is passed
- * alongside it for the same reason, per `[D-192]` (see the module doc's "THE
- * COMPOSITE LOWER-BAR VETO" section) — composing rather than choosing one
- * mechanism over the other. `judge: new WorkerGroundingJudge({ transport:
+ * refuses" for that input. No composite option is passed (`[D-449]`; see the
+ * module doc's "NO COMPOSITE VETO FOR DRAFTING" section). `judge: new WorkerGroundingJudge({ transport:
  * deps.transport })` is constructed fresh per call — it is stateless and
  * holds only the transport reference `deps` already carries, so there is
  * nothing to gain from constructing it once and caching it here.
@@ -416,8 +411,6 @@ export async function draftQuizCardsForConcept(
   // was silently dropped for as long as `RetrieveOptions` lacked the field.
   const retrieveOptions: RetrieveOptions = {
     band: D112_GROUNDING_BAND,
-    requireComposite: true,
-    compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
     onStage: deps.onStage,
     onJudgeRequest: deps.onJudgeRequest,

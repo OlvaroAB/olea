@@ -4,8 +4,8 @@
  *
  * **Mirrors `../retrieval/draft-quiz-cards.ts`'s `draftQuizCardsForConcept`
  * line for line on purpose.** Same grounding gate (`[D-089]`'s two-threshold
- * band at the `[D-112]` operating point, composed with `[D-192]`'s composite
- * lower-bar veto), same `WorkerGroundingJudge`, same F3.8 personalization
+ * band at the `[D-112]` operating point, with no composite veto (`[D-449]`
+ * dropped `[D-192]`'s for drafting)), same `WorkerGroundingJudge`, same F3.8 personalization
  * context, same F3.8/`[D-188]` purpose/register-hint pass-through, same
  * "refused retrieval never reaches the generative transport" load-bearing
  * control flow, same "raw response, never validated against the private
@@ -60,7 +60,6 @@ import {
   type GateStage,
   type GroundingRefusalReason,
   type JudgeRequestRecord,
-  RECOMMENDED_COMPOSITE_THRESHOLDS,
   type RetrieveDeps,
   type RetrieveOptions,
   retrieve,
@@ -178,8 +177,8 @@ export interface DraftCardsDeps {
 /**
  * Drafts `cards.generate.v1` cards for one concept — the card-shaped sibling
  * of `draftQuizCardsForConcept` (`../retrieval/draft-quiz-cards.js`). See
- * that function's own doc for the grounding-gate argument (band + composite
- * veto, explicit on every call, never a default); it is reproduced here
+ * that function's own doc for the grounding-gate argument (band and judge, no composite veto
+ * since `[D-449]`, explicit on every call, never a default); it is reproduced here
  * verbatim rather than factored into a shared helper, matching this
  * package's existing convention of one small, independently-readable
  * function per generative task (`draft-quiz-cards.ts` does not import from
@@ -192,8 +191,6 @@ export async function draftCardsForConcept(
   // `ol-egov.141.89.1.47`: typed, every field written out — see `draftQuizCardsForConcept`.
   const retrieveOptions: RetrieveOptions = {
     band: D112_GROUNDING_BAND,
-    requireComposite: true,
-    compositeThresholds: RECOMMENDED_COMPOSITE_THRESHOLDS,
     judge: new WorkerGroundingJudge({ transport: deps.transport }),
     onStage: deps.onStage,
     onJudgeRequest: deps.onJudgeRequest,
