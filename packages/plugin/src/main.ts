@@ -152,6 +152,7 @@ import {
   type CitationRevisionTrigger,
 } from './ingestion/materiality/citation-revision-wiring.js';
 import { ObsidianMaterialityHashStore } from './ingestion/materiality/hash-store.js';
+import { createOwnWriteLedger } from './ingestion/materiality/own-write-ledger.js';
 import {
   createInMemoryPreviousTextTracker,
   type PreviousTextTracker,
@@ -698,6 +699,13 @@ export default class OleaPlugin extends Plugin {
   private materiality: MaterialityTrigger | null = null;
   /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
   private materialityPreviousText: PreviousTextTracker | null = null;
+  /**
+   * `ol-egov.141.89.5.41`: the exact text of Olea's own first-sight stamp writes, by path, until the
+   * matching modify event arrives. `evaluateMaterialityChange` treats a note whose text equals its
+   * entry as an Olea-only edit (no gate, no sweep); any other text, her edit made at the same time
+   * included, is evaluated as usual.
+   */
+  private readonly ownStampWrites = createOwnWriteLedger();
   /**
    * `[CORP-3b]` (`ol-2zfj.35`) — the citation-grain sibling of `materiality`
    * above: `[D-093]`'s "did THIS instrument's own cited passage change"
@@ -2486,6 +2494,13 @@ export default class OleaPlugin extends Plugin {
     // one and each set off another sweep. Skipped before evaluation; her source
     // and authored notes are what the gate exists for.
     if (isOleaHomeNote(currentText)) return;
+    // `ol-egov.141.89.5.41`: the first-sight stamp (`instrument-stamping/port.ts`) is Olea's own
+    // write into her authored note: not a change to her source. Matched on the exact written text,
+    // so a stamp plus a real edit (different text) still goes through the gate below.
+    if (this.ownStampWrites.consumeIfOleaOnly(path, currentText)) {
+      this.materialityPreviousText.record(path, currentText);
+      return;
+    }
     const previousText = this.materialityPreviousText.get(path);
     try {
       const result = await this.materiality.evaluate(path, currentText, previousText);
@@ -4049,6 +4064,9 @@ export default class OleaPlugin extends Plugin {
       // the one plugin-wide composed-session holder, and the port
       // `open-session.ts` calls through when it finds that holder idle —
       // never a private composition step of its own.
+      onStampWrite: (path, writtenText) => {
+        this.ownStampWrites.note(path, writtenText);
+      },
       studySessionHolder: this.studySessionHolder,
       composeDefaultStudySession: () => this.composeDefaultStudySession(),
       // `ol-egov.141.89.10.4.1` (bug fix): `open-session.ts`'s fresh-entry

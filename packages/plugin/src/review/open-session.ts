@@ -335,6 +335,8 @@ export interface ReviewSessionPorts {
 }
 
 export interface OpenReviewSessionInput {
+  /** `ol-egov.141.89.5.41`: told the exact text of each first-sight stamp write, so the materiality watch can tell Olea's own stamp from her edit. */
+  readonly onStampWrite?: (path: VaultPath, writtenText: string) => void;
   readonly vault: VaultSource;
   readonly scheduler: Scheduler;
   /** Names this device's own log files for the probe below (C5.2). */
@@ -1061,7 +1063,11 @@ export async function openReviewSession(
       // `evaluateSchedulingObservationRouting` just above: this is not an AI
       // feature with an "un-greyed" gate, only a durability upgrade to an id
       // a real vault write already exists for.
-      stampOnFirstSight: createStampOnFirstSightPort(input.vault, composed.recordsById),
+      stampOnFirstSight: createStampOnFirstSightPort(
+        input.vault,
+        composed.recordsById,
+        input.onStampWrite !== undefined ? { onOwnWrite: input.onStampWrite } : {},
+      ),
       // F2.21's third trigger (`ol-v7r5.40`): closes over the SAME
       // `composed.entries` `buildSupportLevelHistoryLookup` and
       // `liveSchedulingObservations` above already read — no third log read,

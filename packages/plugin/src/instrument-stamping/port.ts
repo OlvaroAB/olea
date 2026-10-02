@@ -148,6 +148,12 @@ export interface StampOnFirstSightDeps {
   readonly generateBlockId?: () => string;
   /** Injectable for deterministic tests; defaults to this module's own random generator. */
   readonly generateClozeId?: () => string;
+  /**
+   * `ol-egov.141.89.5.41`: called with the exact text just written, right after each stamp
+   * write. The plugin's materiality watch uses it to recognise the resulting modify event as
+   * Olea's own write (a stamp is not a change to her source); absent in a test that does not care.
+   */
+  readonly onOwnWrite?: (path: VaultPath, writtenText: string) => void;
 }
 
 const CLOZE_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
@@ -292,6 +298,7 @@ export async function stampOnFirstSight(
     const stamped = stampClozeId(source, anchor, mint);
     if (!stamped.changed) return { instrumentId: record.instrumentId };
     await vault.write(record.notePath, stamped.content);
+    deps.onOwnWrite?.(record.notePath, stamped.content);
     return {
       instrumentId: provisionalInstrumentId({
         noteUid: record.noteUid,
@@ -322,6 +329,7 @@ export async function stampOnFirstSight(
     );
     if (!stamped.changed) return { instrumentId: record.instrumentId };
     await vault.write(record.notePath, stamped.content);
+    deps.onOwnWrite?.(record.notePath, stamped.content);
     return { instrumentId: stamped.id };
   }
 
@@ -347,6 +355,7 @@ export async function stampOnFirstSight(
   );
   if (!stamped.changed) return { instrumentId: record.instrumentId };
   await vault.write(record.notePath, stamped.content);
+  deps.onOwnWrite?.(record.notePath, stamped.content);
   return {
     instrumentId: provisionalInstrumentId({
       noteUid: record.noteUid,
