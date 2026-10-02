@@ -99,6 +99,28 @@ export interface TranscriptRunnerDeps {
   readonly fallback: JobRunner;
 }
 
+/**
+ * The queue path's units: `transcriptPartsToUnits` plus the `transcriptPart` provenance marker
+ * (D-465, D-466), so a part read through the queue cites by part ("part 3"), never as a page.
+ * The part ordinal stays in `page` (the registry reads it as the part number); this reader
+ * knows no cue times, so the marker carries no `startSeconds`.
+ */
+export function transcriptUnitsForQueue(
+  sourcePath: VaultPath,
+  parts: Parameters<typeof transcriptPartsToUnits>[1],
+): ReturnType<typeof transcriptPartsToUnits> {
+  return transcriptPartsToUnits(sourcePath, parts).map((unit) => ({
+    ...unit,
+    provenance: {
+      ...unit.provenance,
+      location: {
+        ...unit.provenance.location,
+        transcriptPart: {},
+      },
+    },
+  }));
+}
+
 async function runTranscriptJob(
   deps: TranscriptRunnerDeps,
   job: JobRunnerView,
@@ -127,7 +149,7 @@ async function runTranscriptJob(
         reason: 'transcript has no readable text (empty-document)',
       };
     }
-    await deps.sink.receive(transcriptPartsToUnits(payload.sourcePath as VaultPath, result.parts));
+    await deps.sink.receive(transcriptUnitsForQueue(payload.sourcePath as VaultPath, result.parts));
     return { ok: true };
   } catch {
     // A file removed between enqueue and drain, or a transient read error.

@@ -131,6 +131,7 @@ import {
   type ParsedDocument,
   parseDocument,
   registerSources,
+  type TeachingEventResolver,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
@@ -485,6 +486,15 @@ export interface CorpusRelationVaultContextOptions {
   readonly embeddingProximity?: EmbeddingProximityOptions;
   /** Omitted (the default) skips the assessment-error-adjacency signal entirely — no caller wires a misconception store into this function yet; see `AssessmentErrorAdjacencyOptions`'s own doc. */
   readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
+  /**
+   * One teaching event counts once (`[D-465]`, knowledge model 5): the SAME resolver the concept
+   * reader takes (`olea-core`'s `TeachingEventResolver`, `ol-egov.141.89.3.43`), taken as an input,
+   * never rebuilt here. When two concepts' anchors resolve to one event and either anchor is a
+   * transcript passage, the transcript is restating that event's slides or note, so their
+   * `embedding-proximity` is the repetition itself and is not nominated as independent evidence.
+   * Omitted (the default): no bundles known, today's behaviour.
+   */
+  readonly teachingEventOf?: TeachingEventResolver;
 }
 
 export interface CorpusRelationVaultContext {
@@ -536,6 +546,26 @@ async function assessmentCooccurrenceSignals(
 }
 
 /**
+ * True when both concepts were introduced inside ONE teaching event and at least one introducing
+ * passage is a transcript part: the transcript restating its own lecture is not independent
+ * corroboration (`[D-465]`). Without a resolver, or with an anchor outside any bundle, false.
+ */
+function sameEventRestatement(
+  anchorByName: ReadonlyMap<string, CorpusConcept['anchor']>,
+  teachingEventOf: TeachingEventResolver | undefined,
+  aName: string,
+  bName: string,
+): boolean {
+  if (teachingEventOf === undefined) return false;
+  const a = anchorByName.get(aName);
+  const b = anchorByName.get(bName);
+  if (a === undefined || b === undefined) return false;
+  const eventA = teachingEventOf(a.sourcePath);
+  if (eventA === undefined || eventA !== teachingEventOf(b.sourcePath)) return false;
+  return a.location.transcriptPart !== undefined || b.location.transcriptPart !== undefined;
+}
+
+/**
  * The `embedding-proximity` pass: hash every concept's already-resolved
  * introducing-passage text, look up cached codes for that hash (never
  * computing new ones — see the module doc), and nominate every pair whose
@@ -544,6 +574,7 @@ async function assessmentCooccurrenceSignals(
 async function embeddingProximitySignals(
   passageTextByName: ReadonlyMap<string, string>,
   options: EmbeddingProximityOptions,
+  sameEventRestatement: (aName: string, bName: string) => boolean = () => false,
 ): Promise<readonly NominationSignal[]> {
   const codesByName = new Map<string, NonNullable<ReturnType<EmbeddingCacheEngine['codesFor']>>>();
   for (const [name, text] of passageTextByName) {
@@ -563,6 +594,7 @@ async function embeddingProximitySignals(
       const aCodes = codesByName.get(aName);
       const bCodes = codesByName.get(bName);
       if (aCodes === undefined || bCodes === undefined) continue;
+      if (sameEventRestatement(aName, bName)) continue;
       if (cosineSimilarity(aCodes, bCodes) >= options.threshold) {
         signals.push({ kind: 'embedding-proximity', a: aName, b: bName });
       }
@@ -691,6 +723,7 @@ export async function gatherCorpusRelationVaultContext(
   }
 
   const passageTextByName = new Map<string, string>();
+  const anchorByName = new Map(concepts.map((c) => [c.name, c.anchor] as const));
   const seenPairs = new Set<string>();
   const signals: NominationSignal[] = [];
 
@@ -727,7 +760,11 @@ export async function gatherCorpusRelationVaultContext(
 
   if (options.embeddingProximity !== undefined) {
     signals.push(
-      ...(await embeddingProximitySignals(passageTextByName, options.embeddingProximity)),
+      ...(await embeddingProximitySignals(
+        passageTextByName,
+        options.embeddingProximity,
+        (aName, bName) => sameEventRestatement(anchorByName, options.teachingEventOf, aName, bName),
+      )),
     );
   }
 
