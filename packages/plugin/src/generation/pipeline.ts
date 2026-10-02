@@ -229,9 +229,13 @@ import {
   draftedDemandFactsOf,
   extractDraftedDemand,
 } from './draft-demand.js';
-import { withGroundingPassage } from './grounding-passage.js';
+import { CITED_CHUNK_DIGEST_ENABLED, withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
-import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
+import {
+  extractDraftedGroundedIn,
+  extractDraftedProvenance,
+  extractDraftedQuestions,
+} from './response.js';
 import type { GenerationRoutingDeps } from './routing.js';
 import {
   buildConceptInstrumentInventory,
@@ -313,6 +317,13 @@ export interface GenerationPipelineDeps {
    * (an instrumentation surface is a later bead); the counter is what one would read.
    */
   readonly demandCounter?: DemandRoutingCounter;
+  /**
+   * `[D-446]` (`ol-egov.141.89.2.29`): whether a question's `groundedIn` citation may name the
+   * passage its draft rests on (see `grounding-passage.ts`). Absent, `CITED_CHUNK_DIGEST_ENABLED`
+   * decides, which is `false` until the wrong-citation rate is measured; the composition root
+   * (`wiring.ts`) does not set it. A test sets it to exercise the cited path.
+   */
+  readonly citedChunkDigest?: boolean;
 }
 
 /**
@@ -830,6 +841,7 @@ export async function runGenerationSweep(
   const routing = deps.routing;
   const formatMatch = deps.formatMatch;
   const memory = deps.refusalMemory ?? refusalMemoryFor(deps.cache);
+  const citedChunkDigest = deps.citedChunkDigest ?? CITED_CHUNK_DIGEST_ENABLED;
   const sweepOrdinal = memory.beginSweep();
   // `[D-437]` row 38: the sweep's explicit recall intent, routed like any other ask. Routed once:
   // the constant and the generator are both fixed for the whole sweep.
@@ -1122,9 +1134,11 @@ export async function runGenerationSweep(
       }
       // `[D-446]` option (a) (`ol-egov.141.89.2.5`): the passage digest, recorded only where the
       // passage this draft rests on can be named without guessing — see `grounding-passage.ts`.
-      // Today that is the request supplying exactly one chunk; a response that cites its chunk is
-      // a wire change, not built. Several chunks, no digest: the accept-time seal then mints one
-      // only for a source with a single body passage, and everything else keeps whole-note grain.
+      // Here, for every question: the request supplying exactly one chunk. Per question below
+      // (`ol-egov.141.89.2.29`): the response citing exactly one chunk for that question, while
+      // `citedChunkDigest` holds (off until measured). Otherwise no digest: the accept-time seal
+      // then mints one only for a source with a single body passage, and everything else keeps
+      // whole-note grain.
       const sourceCitation =
         sourceUnit === undefined
           ? undefined
@@ -1134,6 +1148,11 @@ export async function runGenerationSweep(
               notePath,
               result.request.sourceChunks,
             );
+      // Read parallel to `questions` (each question is its own record, so each is resolved on its
+      // own citation); `undefined` when citations are not trusted, so nothing below reads them.
+      const groundedIn = citedChunkDigest
+        ? extractDraftedGroundedIn(result.response, 'questions', result.request.sourceChunks.length)
+        : undefined;
 
       // `ol-0r92.87`: the snapshot the drafted questions were actually
       // grounded against — see the module doc's own section. Read once per
@@ -1169,6 +1188,20 @@ export async function runGenerationSweep(
         const draftId = staleRecordExists
           ? await deriveDraftId(courseCode, candidate.name, sequence, courseSourceContentHash)
           : await generateDraftId(courseCode, candidate.name, sequence);
+        // `[D-446]` (`ol-egov.141.89.2.29`): this question's own citation, when trusted. Returns
+        // `sourceCitation` unchanged when it already names a passage (the sole-chunk case), when
+        // the question cites no single chunk, or when that chunk is not exactly one passage of the
+        // cited note.
+        const questionCitation =
+          sourceCitation === undefined || groundedIn?.[questionIndex] === undefined
+            ? sourceCitation
+            : await withGroundingPassage(
+                deps.vault,
+                sourceCitation,
+                notePath,
+                result.request.sourceChunks,
+                groundedIn[questionIndex],
+              );
         const record: DraftRecord = {
           draftId,
           status: 'pending',
@@ -1178,7 +1211,7 @@ export async function runGenerationSweep(
           // — see `types.ts`'s doc on `DraftRecord.conceptIds`.
           conceptIds: [candidate.key],
           sourcePath: notePath,
-          ...(sourceCitation !== undefined ? { sourceCitation } : {}),
+          ...(questionCitation !== undefined ? { sourceCitation: questionCitation } : {}),
           ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
           createdAt,
           question,

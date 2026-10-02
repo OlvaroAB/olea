@@ -111,6 +111,14 @@ export interface CardsGenerateResponsePayload {
     readonly front: string;
     readonly back: string;
     readonly subject: string;
+    /**
+     * `[D-446]` (`ol-egov.141.89.2.29`, `cards.generate.v1` 1.9.0): the 0-based positions in the
+     * request's `sourceChunks` this card rests on — see `QuizGenerateResponsePayload`'s identical
+     * field. Read through `response.ts`'s `extractDraftedGroundedIn(response, 'cards', n)`. Nothing
+     * reads it yet: the one card-caching caller, `revision-job-runner.ts` (`ol-0r92.116`), records
+     * no source citation on its successor drafts, so there is no citation for a digest to join.
+     */
+    readonly groundedIn?: readonly number[];
   }[];
 }
 

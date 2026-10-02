@@ -23,7 +23,7 @@
  * shared copy module to grow a case it has no other caller for.
  */
 
-import { TASK_IDS } from 'olea-contracts';
+import { readAuthoringGroundedIn, TASK_IDS } from 'olea-contracts';
 import type {
   DraftCardContent,
   DraftDistractorGrounding,
@@ -130,6 +130,39 @@ export function extractDraftedQuestions(response: unknown): readonly DraftQuesti
     questions.push(question);
   }
   return questions;
+}
+
+/**
+ * `[D-446]` option (a) (`ol-egov.141.89.2.29`): each item's `groundedIn` — the 0-based positions in
+ * the request's `sourceChunks` the drafting response says the item rests on — read PARALLEL to the
+ * item list (`itemsKey` `'questions'` or `'cards'`, the same order `extractDraftedQuestions` /
+ * `extractDraftedCards` walk). Kept out of `DraftQuestion` on purpose: that type is persisted inside
+ * `DraftRecord`, and only the digest a citation resolves to (`sourceCitation.passageDigest`, an
+ * existing field) is ever persisted.
+ *
+ * Total, and never a reason to drop an item: an entry is `undefined` when the item has no
+ * citation, a malformed one, or one naming a position the request did not carry (`olea-contracts`'
+ * `readAuthoringGroundedIn` voids the whole citation on any defect). A response that is not an ok
+ * envelope, or has no item list, gives `[]`. An older Worker's response carries no `groundedIn`, so
+ * every entry is `undefined`: no citation, exactly as before.
+ */
+export function extractDraftedGroundedIn(
+  response: unknown,
+  itemsKey: 'questions' | 'cards',
+  sentChunkCount: number,
+): readonly (readonly number[] | undefined)[] {
+  if (typeof response !== 'object' || response === null) return [];
+  const envelope = response as Record<string, unknown>;
+  if (envelope.ok !== true) return [];
+  const result = envelope.result;
+  if (typeof result !== 'object' || result === null) return [];
+  const items = (result as Record<string, unknown>)[itemsKey];
+  if (!Array.isArray(items)) return [];
+  return items.map((item) =>
+    typeof item === 'object' && item !== null
+      ? readAuthoringGroundedIn((item as Record<string, unknown>).groundedIn, sentChunkCount)
+      : undefined,
+  );
 }
 
 /**

@@ -8,18 +8,23 @@
  * ===========================================================================
  * The drafting request carries the grounded chunks as plain strings
  * (`DraftQuizCardsResult.request.sourceChunks`; the chunk's path and block index are dropped when
- * the request is built). The response — `quiz.generate.v1`'s `questions[]`, `cards.generate.v1`'s
- * `cards[]` — carries no field that refers back into those chunks: no chunk index, no quotation.
- * So of the two ways a passage could be named from data the client already holds, one does not
- * exist (a response that cites a chunk) and one does: the request supplied exactly ONE chunk, which
- * is then the only thing the item could have rested on.
+ * the request is built). Two ways name the chunk an item rests on without guessing:
  *
- * Every other draft has several chunks (retrieval hands up to eight to the model) and nothing
- * says which of them an item used. Picking one — the top-ranked, the one from the cited note, the
- * best word overlap — would be a guess, and a wrong digest is worse than none: it would settle a
- * changed passage as unchanged, where no digest leaves the instrument at whole-note grain, which
- * withholds it (`[D-446]`: "ambiguity remains unresolved"). Naming the passage for those drafts
- * needs the response to cite its chunk, a wire change that is filed as a bead and not made here.
+ *  1. **The request supplied exactly ONE chunk**, which is then the only thing the item could have
+ *     rested on (`soleGroundingChunk`). Always on.
+ *  2. **The response cites it** (`ol-egov.141.89.2.29`): `quiz.generate.v1` (2.5.0) and
+ *     `cards.generate.v1` (1.9.0) return, per item, `groundedIn` — positions in the request's
+ *     `sourceChunks` (`olea-contracts`' `authoring-citation.ts`). A citation names a chunk only when
+ *     its positions name exactly ONE distinct chunk (`citedGroundingChunk`); two or more is
+ *     ambiguous and names nothing (`[D-446]`: "ambiguity remains unresolved"). **Held off**
+ *     (`CITED_CHUNK_DIGEST_ENABLED`): the citation is the model's own claim, checked by the Worker
+ *     only against a weak word-overlap floor, so it names a passage only once its wrong-citation
+ *     rate is measured.
+ *
+ * Anything else — several chunks and no usable citation — names nothing. Picking one (the
+ * top-ranked, the one from the cited note, the best word overlap) would be a guess, and a wrong
+ * digest is worse than none: it would settle a changed passage as unchanged, where no digest leaves
+ * the instrument at whole-note grain, which withholds it.
  *
  * ===========================================================================
  * WHAT IS RECORDED, AND WHY IT CAN BE TRUSTED
@@ -38,8 +43,22 @@
  * for that citation would be kept unchecked by the seal, so none is supplied.
  */
 
+import { readAuthoringGroundedIn } from 'olea-contracts';
 import type { InstrumentCitation, VaultSource } from 'olea-core';
 import { citePassage } from 'olea-core';
+
+/**
+ * Whether a drafting response's citation (`groundedIn`) may name the passage a draft rests on.
+ * **`false` until the wrong-citation rate is measured** (`ol-egov.141.89.2.29`, acceptance
+ * criterion 4: per item, chunks carried, chunks cited, and whether the cited chunk is the one a
+ * stated label source says grounds it, reported with an interval on the development and held-out
+ * sets). The harmful error is a wrong digest, which settles a changed passage as unchanged; a
+ * missing one only leaves the instrument at whole-note grain. Flipping this is a measured-baseline
+ * decision, not a code change made in passing. The sole-chunk rule does not depend on it.
+ *
+ * @provenance declared
+ */
+export const CITED_CHUNK_DIGEST_ENABLED = false;
 
 /**
  * The one chunk a draft rests on: the chunk when the request supplied exactly one, otherwise
@@ -49,27 +68,51 @@ export function soleGroundingChunk(sourceChunks: readonly string[]): string | un
   return sourceChunks.length === 1 ? sourceChunks[0] : undefined;
 }
 
+/**
+ * The one chunk an item's citation names: the chunk text at `groundedIn`'s positions when they
+ * name exactly one distinct chunk (two positions holding the same text are one chunk, since a
+ * digest is taken of the text). `undefined` when there is no citation, when it names two or more
+ * distinct chunks, or when any position is not one the request carried (re-checked here, so a
+ * caller can never index past what it sent). Never the first of several.
+ */
+export function citedGroundingChunk(
+  sourceChunks: readonly string[],
+  groundedIn: readonly number[] | undefined,
+): string | undefined {
+  const positions = readAuthoringGroundedIn(groundedIn, sourceChunks.length);
+  if (positions === undefined) return undefined;
+  const texts = new Set(positions.map((position) => sourceChunks[position]));
+  if (texts.size !== 1) return undefined;
+  const [text] = texts;
+  return text;
+}
+
 function isMarkdownPath(path: string): boolean {
   return path.toLowerCase().endsWith('.md');
 }
 
 /**
  * `citation` with `passageDigest` set to the digest of the passage `sourceChunks` grounded the
- * draft in, when that can be named: exactly one chunk was supplied, the citation names a markdown
- * note other than `destinationPath`, and the chunk stands as exactly one passage of that note.
- * Otherwise `citation` itself, unchanged. A citation that already carries a digest is returned as
- * it is. Never throws: a note it cannot read leaves the citation as it was.
+ * draft in, when that can be named: exactly one chunk was supplied, or (when the caller passes
+ * one) the item's `groundedIn` names exactly one chunk; the citation names a markdown note other
+ * than `destinationPath`; and the chunk stands as exactly one passage of that note. Otherwise
+ * `citation` itself, unchanged. A citation that already carries a digest is returned as it is.
+ * Never throws: a note it cannot read leaves the citation as it was.
  *
- * `destinationPath` is the note the drafted instrument will be written into.
+ * `destinationPath` is the note the drafted instrument will be written into. `groundedIn` is the
+ * item's citation as `extractDraftedGroundedIn` read it; a caller passes it only while
+ * `CITED_CHUNK_DIGEST_ENABLED` (or its own explicit opt-in) holds. With one chunk supplied, that
+ * chunk is used whatever the citation says.
  */
 export async function withGroundingPassage(
   vault: VaultSource,
   citation: InstrumentCitation,
   destinationPath: string,
   sourceChunks: readonly string[],
+  groundedIn?: readonly number[],
 ): Promise<InstrumentCitation> {
   if (citation.passageDigest !== undefined) return citation;
-  const chunk = soleGroundingChunk(sourceChunks);
+  const chunk = soleGroundingChunk(sourceChunks) ?? citedGroundingChunk(sourceChunks, groundedIn);
   if (chunk === undefined) return citation;
   const source = citation.sourcePath;
   if (!isMarkdownPath(source) || source === destinationPath) return citation;

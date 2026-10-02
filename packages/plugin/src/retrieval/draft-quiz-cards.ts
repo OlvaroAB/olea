@@ -244,6 +244,14 @@ export interface QuizGenerateResponsePayload {
     readonly correctAnswer: string;
     readonly distractors: readonly string[];
     readonly feedback: string;
+    /**
+     * `[D-446]` (`ol-egov.141.89.2.29`, `quiz.generate.v1` 2.5.0): the 0-based positions in the
+     * request's `sourceChunks` this question rests on, the Worker's mapping of the model's own
+     * citation (`olea-contracts`' `authoring-citation.ts`). Optional: absent from an older Worker's
+     * response and whenever nothing was cited. Read only through `generation/response.ts`'s
+     * `extractDraftedGroundedIn`, never indexed directly.
+     */
+    readonly groundedIn?: readonly number[];
   }[];
 }
 
