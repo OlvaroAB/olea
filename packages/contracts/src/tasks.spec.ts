@@ -8,11 +8,15 @@
 // So the literal strings are asserted here, not just their types: this suite
 // exists to make a rename a deliberate, visible act.
 import { describe, expect, it } from 'vitest';
+import { z } from 'zod';
 import {
   ALL_TASK_IDS,
   isKnownTaskId,
   isValidRemainingAllowanceUsd,
   knownTaskId,
+  refineSourceChunkOriginAlignment,
+  SOURCE_CHUNK_ORIGIN_TASK_IDS,
+  sourceChunkOriginsField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
 } from './tasks.js';
@@ -190,5 +194,61 @@ describe('isValidRemainingAllowanceUsd', () => {
     expect(isValidRemainingAllowanceUsd('1.5')).toBe(false);
     expect(isValidRemainingAllowanceUsd(undefined)).toBe(false);
     expect(isValidRemainingAllowanceUsd(null)).toBe(false);
+  });
+});
+
+// `ol-egov.141.89.1.67` / [D-465]: the optional per-passage transcript origin fragment.
+describe('sourceChunkOrigins (per-passage transcript origin)', () => {
+  const request = z
+    .object({ sourceChunks: z.array(z.string()), sourceChunkOrigins: sourceChunkOriginsField })
+    .superRefine(refineSourceChunkOriginAlignment);
+  const origin = { kind: 'transcript', speakerRole: 'lecturer' } as const;
+
+  it("an absent field is valid (today's request)", () => {
+    expect(request.safeParse({ sourceChunks: ['a', 'b'] }).success).toBe(true);
+  });
+
+  it('a null entry is valid, beside a transcript entry with and without flags', () => {
+    const parsed = request.safeParse({
+      sourceChunks: ['a', 'b', 'c'],
+      sourceChunkOrigins: [
+        null,
+        origin,
+        { ...origin, speakerRole: 'unknown', flags: ['inaudible'] },
+      ],
+    });
+    expect(parsed.success).toBe(true);
+  });
+
+  it('a misaligned length is rejected, shorter and longer', () => {
+    expect(
+      request.safeParse({ sourceChunks: ['a', 'b'], sourceChunkOrigins: [origin] }).success,
+    ).toBe(false);
+    expect(
+      request.safeParse({ sourceChunks: ['a'], sourceChunkOrigins: [origin, null] }).success,
+    ).toBe(false);
+  });
+
+  it('an unknown role, flag or kind is rejected', () => {
+    const bad = (entry: unknown) =>
+      request.safeParse({ sourceChunks: ['a'], sourceChunkOrigins: [entry] }).success;
+    expect(bad({ ...origin, speakerRole: 'student' })).toBe(false);
+    expect(bad({ ...origin, flags: ['mumbled'] })).toBe(false);
+    expect(bad({ ...origin, kind: 'note' })).toBe(false);
+  });
+
+  it('no speaker name can travel: an extra key is rejected', () => {
+    expect(
+      request.safeParse({
+        sourceChunks: ['a'],
+        sourceChunkOrigins: [{ ...origin, speakerName: 'x' }],
+      }).success,
+    ).toBe(false);
+  });
+
+  it('names the seven source-reading tasks, none of which is a task without sourceChunks', () => {
+    expect([...SOURCE_CHUNK_ORIGIN_TASK_IDS]).not.toContain('grounding.judge.v1');
+    expect([...SOURCE_CHUNK_ORIGIN_TASK_IDS]).not.toContain('explain-back.judge.v1');
+    expect(SOURCE_CHUNK_ORIGIN_TASK_IDS).toHaveLength(7);
   });
 });

@@ -306,8 +306,18 @@ export {
   type KnownTaskId,
   knownTaskId,
   type RemainingAllowanceField,
+  refineSourceChunkOriginAlignment,
+  SOURCE_CHUNK_ORIGIN_TASK_IDS,
+  type SourceChunkOriginTaskId,
+  sourceChunkOriginsField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
+  TRANSCRIPT_SEGMENT_FLAGS,
+  TRANSCRIPT_SPEAKER_ROLES,
+  type TranscriptSegmentFlag,
+  type TranscriptSourceChunkOrigin,
+  type TranscriptSpeakerRole,
+  transcriptSourceChunkOrigin,
 } from './tasks.js';
 export {
   CONTRACT_VERSION,

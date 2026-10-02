@@ -503,3 +503,90 @@ export interface RemainingAllowanceField {
 export function isValidRemainingAllowanceUsd(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
+
+/**
+ * `ol-egov.141.89.1.67` / `[D-465]` (Class B default, for David's retroactive review): the
+ * OPTIONAL per-passage origin fragment on the source-reading task requests. It marks which entries
+ * of a request's `sourceChunks` are transcript-derived, who was speaking, and what the reader
+ * could not hear or see, so a prompt can scope its transcript guidance to those passages only.
+ *
+ * Why a request field and not an in-text marker: her own note text could spoof a marker and
+ * nothing could validate it. A field is validated at the boundary.
+ *
+ * - `sourceChunkOrigins`, aligned by index with `sourceChunks`: entry `i` describes chunk `i`.
+ *   Absent for a request with no transcript passage (today's request, unchanged). When present it
+ *   has exactly as many entries as `sourceChunks`; a different length is rejected, never padded.
+ * - An entry is `null` (not a transcript passage) or `{ kind: 'transcript', speakerRole,
+ *   flags? }`.
+ * - Only ROLES travel, never a speaker name (the `[D-465]` privacy line): a speaker label in the
+ *   file is mapped to a role by the reader before the request is built.
+ * - Endorsement (whether a passage's speaker endorses a claim) is NOT a field; the model judges
+ *   it per claim under the prompt guidance.
+ * - Not persisted: transient request context, like `sourceChunks` itself (D-005).
+ *
+ * The tasks that carry it, each of which reads a `sourceChunks` array: see
+ * `SOURCE_CHUNK_ORIGIN_TASK_IDS`. `grounding.judge.v1` (a single assembled `context` string) and
+ * `explain-back.judge.v1` (`sourceBlocks` with block ids) read no `sourceChunks`, so they do not
+ * carry it; a transcript-aware shape for them is a separate decision.
+ *
+ * Skew: a Worker from before this field strips it as an unknown key, which reads as no
+ * transcript passages, exactly as before.
+ */
+export const SOURCE_CHUNK_ORIGIN_TASK_IDS = Object.freeze([
+  'concepts.extract.v1',
+  'concepts.relations.v1',
+  'concepts.classify.v1',
+  'sections.summarize.v1',
+  'quiz.generate.v1',
+  'cards.generate.v1',
+  'probe-application.generate.v1',
+] as const);
+export type SourceChunkOriginTaskId = (typeof SOURCE_CHUNK_ORIGIN_TASK_IDS)[number];
+
+/** Who is speaking in a transcript passage. A role, never a name. */
+export const TRANSCRIPT_SPEAKER_ROLES = Object.freeze([
+  'lecturer',
+  'other-speaker',
+  'unknown',
+] as const);
+export type TranscriptSpeakerRole = (typeof TRANSCRIPT_SPEAKER_ROLES)[number];
+
+/** What the reader could not take from the audio alone. */
+export const TRANSCRIPT_SEGMENT_FLAGS = Object.freeze([
+  'inaudible',
+  'visual-reference',
+  'term-discrepancy',
+] as const);
+export type TranscriptSegmentFlag = (typeof TRANSCRIPT_SEGMENT_FLAGS)[number];
+
+export const transcriptSourceChunkOrigin = z
+  .object({
+    kind: z.literal('transcript'),
+    speakerRole: z.enum(TRANSCRIPT_SPEAKER_ROLES),
+    flags: z.array(z.enum(TRANSCRIPT_SEGMENT_FLAGS)).optional(),
+  })
+  .strict();
+export type TranscriptSourceChunkOrigin = z.infer<typeof transcriptSourceChunkOrigin>;
+
+/** The request field: one entry per `sourceChunks` entry, `null` where it is not a transcript passage. */
+export const sourceChunkOriginsField = z.array(transcriptSourceChunkOrigin.nullable()).optional();
+
+/**
+ * The alignment rule, for a request's refinement: when `sourceChunkOrigins` is present its length
+ * must equal `sourceChunks`'. Adds one issue at `sourceChunkOrigins` otherwise.
+ */
+export function refineSourceChunkOriginAlignment(
+  value: { sourceChunks: readonly unknown[]; sourceChunkOrigins?: readonly unknown[] | undefined },
+  ctx: z.RefinementCtx,
+): void {
+  if (
+    value.sourceChunkOrigins !== undefined &&
+    value.sourceChunkOrigins.length !== value.sourceChunks.length
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'sourceChunkOrigins must have exactly one entry per sourceChunks entry',
+      path: ['sourceChunkOrigins'],
+    });
+  }
+}
