@@ -77,6 +77,7 @@ import type {
   PassageCurationAuthority as MaterialityCurationAuthority,
 } from '../generate/voice-sources.js';
 import type { VaultPath } from '../vault/types.js';
+import type { TranscriptSpeaker } from './transcript-attribution.js';
 import type { SourceRole } from './types.js';
 
 export type { MaterialityAuthorship, MaterialityCurationAuthority };
@@ -284,6 +285,23 @@ export interface MaterialityCues {
    * never promotes and never demotes anything on an absent value.
    */
   readonly text?: string;
+  /**
+   * D-465: this document or passage comes from a supplied lecture transcript, with the speaker of
+   * the passage (`unknown-speaker` at document grain or when the file has no labels). Overrides a
+   * declared course-material role and the two-wikilink hers signature: nothing in a transcript is
+   * hers, a voice exemplar or evidence of belief. Only her own correction outranks it.
+   */
+  readonly transcriptSpeaker?: TranscriptSpeaker;
+}
+
+/** Declared constant: a rule on explicit transcript labels, not fitted (D-465; lecturer rule provisional, runsheet 93). */
+const TRANSCRIPT_CONFIDENCE = 0.9;
+
+/** Knowledge model 3.2 for a transcript passage: lecturer and unlabelled are instructor-curated and not hers; a student or question is unknown authorship. Never `hers`. */
+export function transcriptMateriality(speaker: TranscriptSpeaker): MaterialityFact {
+  return speaker === 'student-or-question'
+    ? { authorship: 'unknown', curationAuthority: 'unknown' }
+    : { authorship: 'not-hers', curationAuthority: 'instructor' };
 }
 
 /**
@@ -298,6 +316,14 @@ export interface MaterialityCues {
  *  - passage grain exists only where the mixture is (`structuralNotHersFragment`, checked against whatever grain `cues.text` is).
  */
 export function classifyMateriality(cues: MaterialityCues): ClassifiedMateriality {
+  // TIER 0 - the transcript cue (D-465). Overrides the declared role and the hers link signature.
+  if (cues.transcriptSpeaker !== undefined) {
+    return {
+      fact: transcriptMateriality(cues.transcriptSpeaker),
+      provenance: { source: 'inferred', confidence: TRANSCRIPT_CONFIDENCE },
+    };
+  }
+
   // TIER 1 — inferred, format/container. Near-certain; no text is read.
   if (cues.format !== null && SLIDE_EXPORT_FORMATS.has(cues.format)) {
     return {

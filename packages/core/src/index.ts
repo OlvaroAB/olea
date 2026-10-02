@@ -2705,6 +2705,8 @@ export type {
   MaterialityProvenance,
   MaterialityProvenanceSource,
 } from './source/materiality.js';
+// D-465 (`ol-egov.141.89.3.42`): lecture-transcript authority, speaker and endorsement facts,
+// explicit lecture association, and the mention-is-not-scope guard.
 export {
   carriesNotHersMarkers,
   classifyMateriality,
@@ -2713,6 +2715,7 @@ export {
   hasHersLinkStructure,
   resolveMateriality,
   structuralNotHersFragment,
+  transcriptMateriality,
   UNKNOWN_MATERIALITY,
 } from './source/materiality.js';
 // `[D-446]` option (a) (`ol-egov.141.89.5.32`): the ONE versioned passage segmentation and
@@ -2757,6 +2760,35 @@ export type {
   QuestionBlock,
 } from './source/segment-past-paper.js';
 export { segmentPastPaper } from './source/segment-past-paper.js';
+export type {
+  LectureBundle,
+  LectureFileKind,
+  LinkedFile,
+} from './source/transcript-association.js';
+export { associateLectures } from './source/transcript-association.js';
+export type {
+  AttributedPassage,
+  ClaimUse,
+  EndorsedClaim,
+  EndorsementType,
+  SpeakerLabelRule,
+  SpeakerProvenance,
+  TranscriptAttribution,
+  TranscriptPassageInput,
+  TranscriptSourceAuthority,
+  TranscriptSpeaker,
+} from './source/transcript-attribution.js';
+export {
+  attributeTranscript,
+  claimsUsableFor,
+  endorsementAllowsUse,
+  isAdmissibleExplanation,
+  PROVISIONAL_SPEAKER_LABEL_RULE,
+  speakerForLabel,
+  TRANSCRIPT_SOURCE_AUTHORITY,
+} from './source/transcript-attribution.js';
+export type { ConceptAttestation, ConceptAttestationOrigin } from './source/transcript-scope.js';
+export { declaredScopeNamesFrom } from './source/transcript-scope.js';
 export type {
   RegisteredFileSpec,
   RegisterSourcesOptions,

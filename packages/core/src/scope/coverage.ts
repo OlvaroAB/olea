@@ -283,6 +283,8 @@ export type TeachingArrivalProvenance = 'yes' | 'probable' | 'possible';
 export interface TaughtSignalEvidence {
   /** Step two: the week's slide deck names or covers this concept. Direct evidence — opens automatically, exactly like `hasMaterial`. */
   readonly inWeekSlideDeck: boolean;
+  /** Step two, same step as the deck (D-465, F8.1): the week's lecture transcript opens this concept. Direct evidence, opens automatically, and NEVER a scope basis - a concept only a transcript mentions stays `volunteer`. Absent reads `false`. */
+  readonly inWeekTranscript?: boolean;
   /**
    * Step three: a calendar session PLUS a slide sequence place this concept
    * in a taught week — F8.2's own joint signal. There is deliberately no
@@ -324,7 +326,8 @@ export function resolveTeachingArrival(
   signal?: TaughtSignalEvidence,
 ): TeachingArrival {
   if (hasOwnNote) return { provenance: 'yes', opensAutomatically: true };
-  if (signal?.inWeekSlideDeck) return { provenance: 'yes', opensAutomatically: true };
+  if (signal?.inWeekSlideDeck || signal?.inWeekTranscript === true)
+    return { provenance: 'yes', opensAutomatically: true };
   if (signal?.calendarSessionWithSlideSequence) {
     return { provenance: 'probable', opensAutomatically: false };
   }
