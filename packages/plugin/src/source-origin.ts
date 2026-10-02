@@ -13,8 +13,12 @@
  *    transcript is byte-identical to what it was before this field existed;
  *  - only a role ever travels: never a speaker name, a label or a path.
  *
- * Flags (`inaudible` and the rest) come from the reader and are not set here (T10,
- * `ol-egov.141.89.1.64`).
+ * Flags (`ol-egov.141.89.1.64`, D-465): a transcript origin carries `flags` (`inaudible`,
+ * `visual-reference`, `term-discrepancy`) from core's `flagTranscriptPart`, in the contract's
+ * order, and the key is omitted when the part has none, so an unflagged request is unchanged.
+ * The term check needs the teaching event's concept names: the host may supply them through the
+ * optional `lectureTermsFor` (taken from the lecture bundle); without it no term check runs.
+ * Only the kinds travel, never the matched text or the candidate word.
  *
  * "Is a transcript" is decided the way the reader decides it (`resolveTranscriptFormat`): a
  * `.txt` file (the formats this build can read) is one; a `.md` is one only when its cached frontmatter `role`
@@ -25,6 +29,7 @@
 import type { TranscriptSourceChunkOrigin, TranscriptSpeakerRole } from 'olea-contracts';
 import {
   attributeTranscript,
+  flagTranscriptPart,
   isTranscriptRole,
   resolveTranscriptFormat,
   type TranscriptSpeaker,
@@ -34,6 +39,8 @@ import {
 /** The one method this file needs from the host's metadata cache (INV-1: no `obsidian` import). */
 export interface SourceOriginFrontmatterHost {
   frontmatterFor(path: VaultPath): Record<string, unknown> | undefined;
+  /** Concept names of the transcript's teaching event (its lecture bundle's slides or notes), when known. */
+  lectureTermsFor?(path: VaultPath): readonly string[] | undefined;
 }
 
 export type SourceChunkOrigins = readonly (TranscriptSourceChunkOrigin | null)[];
@@ -65,7 +72,14 @@ export function sourceChunkOriginOf(
 ): TranscriptSourceChunkOrigin | null {
   if (!isSuppliedTranscriptPath(path, host)) return null;
   const speaker = attributeTranscript([{ text }]).passages[0]?.speaker ?? 'unknown-speaker';
-  return { kind: 'transcript', speakerRole: ROLE_BY_SPEAKER[speaker] };
+  const { flags } = flagTranscriptPart(text, {
+    bundleTerms: host?.lectureTermsFor?.(path as VaultPath),
+  });
+  return {
+    kind: 'transcript',
+    speakerRole: ROLE_BY_SPEAKER[speaker],
+    ...(flags.length > 0 ? { flags: [...flags] } : {}),
+  };
 }
 
 /**

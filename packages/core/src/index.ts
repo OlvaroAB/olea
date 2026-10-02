@@ -644,6 +644,22 @@ export {
   TRANSCRIPT_READER_VERSION,
   transcriptPartsToUnits,
 } from './extract/transcript.js';
+// `ol-egov.141.89.1.64` (D-465): uncertain-evidence flags and the per-claim eligibility rule.
+export type {
+  ClaimEligibility,
+  SlideSpeechOutcome,
+  TranscriptFlagKind,
+  TranscriptFlagOptions,
+  TranscriptFlagSpan,
+  TranscriptPartFlags,
+} from './extract/transcript-flags.js';
+export {
+  claimEligibility,
+  flagTranscriptPart,
+  reconcileSlideAndSpeech,
+  slideCorrectionCues,
+  TRANSCRIPT_FLAG_KINDS,
+} from './extract/transcript-flags.js';
 export type {
   CharRange,
   EmbeddedInNote,
