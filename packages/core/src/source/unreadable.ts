@@ -96,6 +96,7 @@
  */
 
 import { extractFromVault, formatFromExtension } from '../extract/registry.js';
+import { declaresTranscript } from '../extract/transcript.js';
 import type { ExtractionOutcome } from '../extract/types.js';
 import { hasPendingUnits } from '../ingestion/unit-manifest/manifest.js';
 import type { UnitManifest } from '../ingestion/unit-manifest/types.js';
@@ -140,6 +141,19 @@ export interface FindUnreadableFilesOptions {
 
 function isMarkdown(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+async function isDeclaredTranscriptWithManifest(
+  vault: VaultSource,
+  path: VaultPath,
+  manifests: ReadonlyMap<VaultPath, UnitManifest> | undefined,
+): Promise<boolean> {
+  if (manifests?.get(path) === undefined) return false;
+  try {
+    return declaresTranscript(await vault.read(path));
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -222,15 +236,20 @@ export async function findUnreadableFiles(
   const results: UnreadableFile[] = [];
 
   for (const path of options.files) {
-    if (isMarkdown(path)) continue;
+    // A Markdown note is read by the block parser, never by an extractor, so it is skipped, except
+    // one that declares role transcript and has a manifest: its parts are read states too (D-448,
+    // `ol-egov.141.89.8.59`). An undeclared note is skipped exactly as before.
+    const markdown = isMarkdown(path);
+    if (markdown && !(await isDeclaredTranscriptWithManifest(vault, path, options.manifests))) {
+      continue;
+    }
 
     const format = formatFromExtension(path);
     if (format === null) {
       // A plain-text file the unit manifest holds is a lecture transcript: its manifest decides, and
       // its waiting parts are "not fully read yet", never "no reader" (`ol-egov.141.89.8.51`, [D-448]).
-      const transcriptManifest = path.toLowerCase().endsWith('.txt')
-        ? options.manifests?.get(path)
-        : undefined;
+      const transcriptManifest =
+        markdown || path.toLowerCase().endsWith('.txt') ? options.manifests?.get(path) : undefined;
       if (transcriptManifest === undefined) {
         results.push({ path, reason: 'no-reader-for-format' });
         continue;

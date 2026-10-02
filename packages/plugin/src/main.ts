@@ -135,6 +135,7 @@ import {
   type GradingWiring,
   gradeExplainBackAttempt,
 } from './grading/wiring.js';
+import { recordCappedTranscriptReads } from './grove/capped-transcript-reads.js';
 import { createLocalGroveProvider } from './grove/provider.js';
 import { ObsidianGroveReadCompletenessStore } from './grove/read-completeness-store.js';
 import {
@@ -147,6 +148,7 @@ import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
 import { buildIngestionArrivalWatch } from './ingestion/arrival-watch.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import { readLectureBundles, teachingEventResolverFrom } from './ingestion/lecture-links.js';
+import { lectureTermsLookup } from './ingestion/lecture-terms.js';
 import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash-store.js';
 import {
   adaptMaterialityJudgeAsRevisionJudge,
@@ -300,7 +302,7 @@ import {
   ObsidianHeadingOfferSettingStore,
 } from './settings/heading-offer-setting.js';
 import { OleaSettingTab } from './settings/settings-tab.js';
-import type { SourceOriginFrontmatterHost } from './source-origin.js';
+import { isSuppliedTranscriptPath, type SourceOriginFrontmatterHost } from './source-origin.js';
 import { createTodayContestSupport } from './today/contest.js';
 import {
   createRhythmSource,
@@ -912,6 +914,12 @@ export default class OleaPlugin extends Plugin {
    * step).
    */
   private conceptRecords: readonly ConceptRecord[] | null = null;
+  /**
+   * Concept names per source from the latest read pass, in memory only (`ol-egov.141.89.8.59`): the
+   * term check's lecture terms (`sourceOriginFrontmatterHost().lectureTermsFor`) are the names the
+   * OTHER members of a transcript's lecture bundle taught.
+   */
+  private conceptNamesBySource: ReadonlyMap<VaultPath, readonly string[]> = new Map();
   /** The ingestion queue's snapshot as of the PREVIOUS tick — `ingestionSessionJustClosed`'s other half. */
   private lastIngestionSnapshot: QueueSnapshot | null = null;
 
@@ -3126,6 +3134,17 @@ export default class OleaPlugin extends Plugin {
       // this makes no new network call, and `this.conceptRecords`'s own doc
       // for what still has no consumer.
       this.conceptRecords = await extractConceptsWithAnchors(vault, pass.read.concepts);
+      {
+        const namesBySource = new Map<VaultPath, string[]>();
+        for (const concept of pass.read.concepts) {
+          for (const sourcePath of concept.sourcePaths) {
+            const list = namesBySource.get(sourcePath) ?? [];
+            list.push(concept.name);
+            namesBySource.set(sourcePath, list);
+          }
+        }
+        this.conceptNamesBySource = namesBySource;
+      }
 
       // `ol-2zfj.157` [DOS-I15]: `pass.read.coverage` (`ol-2zfj.144`
       // [IL-D5]'s `truncatedByBudget`/`sections`, per document) is the row
@@ -3147,7 +3166,9 @@ export default class OleaPlugin extends Plugin {
           const course = courseFromPath(row.sourcePath, DEFAULT_COURSES_FOLDER);
           if (course === undefined) continue;
           const rows = readCompletenessByCourse.get(course) ?? [];
-          rows.push(row);
+          // `partsRead` is in memory only (`ol-egov.141.89.8.59`): never written to the store.
+          const { partsRead: _partsRead, ...stored } = row;
+          rows.push(stored);
           readCompletenessByCourse.set(course, rows);
         }
         await new ObsidianGroveReadCompletenessStore(this).save(readCompletenessByCourse);
@@ -3170,6 +3191,9 @@ export default class OleaPlugin extends Plugin {
           )
           .map((row) => row.sourcePath),
       );
+      // `ol-egov.141.89.8.59` (D-448): a transcript the budget cut short marks exactly the parts it
+      // reached; the rest stay waiting and a later read resumes.
+      await recordCappedTranscriptReads(this.unitManifests, pass.read.coverage);
 
       // `ol-2zfj.32` (`[D-130]`): the confusion-pairing corroboration
       // reader's first production caller — makes `relation-reader-check.mjs`'s
@@ -3299,8 +3323,17 @@ export default class OleaPlugin extends Plugin {
    * (`ol-egov.141.89.8.56`, D-465).
    */
   private sourceOriginFrontmatterHost(): SourceOriginFrontmatterHost {
+    const frontmatterFor: SourceOriginFrontmatterHost['frontmatterFor'] = (path) =>
+      this.app.metadataCache.getCache(path)?.frontmatter;
     return {
-      frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
+      frontmatterFor,
+      // `ol-egov.141.89.8.59` (D-465): the term check runs in production, its terms the concept
+      // names of the transcript's own lecture bundle, rebuilt from her links on every call.
+      lectureTermsFor: lectureTermsLookup({
+        bundles: () => readLectureBundles(createObsidianResolvedLinksPort(this.app.metadataCache)),
+        conceptNamesBySource: () => this.conceptNamesBySource,
+        isTranscript: (path) => isSuppliedTranscriptPath(path, { frontmatterFor }),
+      }),
     };
   }
 

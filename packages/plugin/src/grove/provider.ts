@@ -179,6 +179,7 @@ import {
   createFsrsScheduler,
   DEFAULT_COURSES_FOLDER,
   type DisputeLogRecord,
+  declaresTranscript,
   discoverEmbeddedSources,
   enumerateVaultInstruments,
   extractTier3Evidence,
@@ -430,13 +431,25 @@ async function unreadableFilesByCourse(
     for (const r of resolved) embeddedPaths.add(r.path);
   }
 
+  // `ol-egov.141.89.8.59`: a Markdown note that declares role transcript is a lecture transcript, so
+  // it reaches the census with its part states like a plain-text one; an undeclared note does not.
+  const declaredTranscripts = new Set<VaultPath>();
+  for (const path of sourcesReport.unclassified) {
+    try {
+      if (declaresTranscript(await vault.read(path))) declaredTranscripts.add(path);
+    } catch {
+      // unreadable now: left out, as an undeclared note is
+    }
+  }
+
   const linkedPaths = new Set<VaultPath>([
     ...sourcesReport.sources.map((s) => s.path),
     ...embeddedPaths,
+    ...declaredTranscripts,
   ]);
 
   const skippedByCourse = new Map<string, VaultPath[]>();
-  for (const path of sourcesReport.skippedNonMarkdown) {
+  for (const path of [...sourcesReport.skippedNonMarkdown, ...declaredTranscripts]) {
     const base = path.slice(path.lastIndexOf('/') + 1);
     const course = [...courseNames].find((name) => base.startsWith(name));
     if (course !== undefined) {
@@ -465,9 +478,10 @@ async function unreadableFilesByCourse(
     ...new Set(
       [...filesByCourse.values()].flat().filter(
         (path) =>
-          !path.toLowerCase().endsWith('.md') &&
-          // A plain-text file is a candidate lecture transcript: its parts are read states too (`ol-egov.141.89.8.51`).
-          (formatFromExtension(path) !== null || path.toLowerCase().endsWith('.txt')) &&
+          (declaredTranscripts.has(path) ||
+            (!path.toLowerCase().endsWith('.md') &&
+              // A plain-text file is a candidate lecture transcript: its parts are read states too (`ol-egov.141.89.8.51`).
+              (formatFromExtension(path) !== null || path.toLowerCase().endsWith('.txt')))) &&
           linkedPaths.has(path),
       ),
     ),

@@ -437,6 +437,13 @@ export interface ConceptReadCoverage {
    * read as zero to a caller that only wants the count.
    */
   readonly anchorsRejected?: number;
+  /**
+   * For a transcript, the ordinals of the parts this pass let through to the reader, ascending
+   * (`ol-egov.141.89.8.59`, D-448). Absent for every other source. **In memory only: a caller
+   * hands it to the unit manifest and never stores it** (the grove's read-completeness store
+   * drops it), because a part ordinal means something only within one revision of one file.
+   */
+  readonly partsRead?: readonly number[];
 }
 
 /** Why a read produced no concepts, when the cause was the run rather than the vault. */
@@ -1198,11 +1205,14 @@ function buildCoverage(
   calls: ReadonlyMap<VaultPath, number> = NO_CALLS,
   anchorsRejected: ReadonlyMap<VaultPath, number> = NO_ANCHORS_REJECTED,
 ): readonly ConceptReadCoverage[] {
-  const rows = new Map<VaultPath, { offered: number; read: number; sections: Set<string> }>();
+  const rows = new Map<
+    VaultPath,
+    { offered: number; read: number; sections: Set<string>; parts: number[] }
+  >();
   function rowFor(sourcePath: VaultPath) {
     const existing = rows.get(sourcePath);
     if (existing !== undefined) return existing;
-    const row = { offered: 0, read: 0, sections: new Set<string>() };
+    const row = { offered: 0, read: 0, sections: new Set<string>(), parts: [] as number[] };
     rows.set(sourcePath, row);
     return row;
   }
@@ -1218,7 +1228,15 @@ function buildCoverage(
     if (section !== undefined) row.sections.add(section);
   }
   for (const passage of read) {
-    rowFor(passage.anchor.sourcePath).read += 1;
+    const row = rowFor(passage.anchor.sourcePath);
+    row.read += 1;
+    // A transcript passage's `page` is its part ordinal (`transcriptPassages`).
+    if (
+      passage.anchor.location.transcriptPart !== undefined &&
+      passage.anchor.location.page !== undefined
+    ) {
+      row.parts.push(passage.anchor.location.page);
+    }
   }
   return [...rows.entries()]
     .map(([sourcePath, row]) => ({
@@ -1230,6 +1248,7 @@ function buildCoverage(
       truncatedByBudget: row.read < row.offered,
       sections: [...row.sections],
       anchorsRejected: anchorsRejected.get(sourcePath) ?? 0,
+      ...(row.parts.length > 0 ? { partsRead: [...new Set(row.parts)].sort((a, b) => a - b) } : {}),
     }))
     .sort((a, b) => byCodeUnit(a.sourcePath, b.sourcePath));
 }
