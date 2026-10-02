@@ -75,6 +75,7 @@ import { HOME_AVOIDANCE_STORAGE_KEY } from '../home/avoidance.js';
 import { HOME_SCOPE_GROWTH_STORAGE_KEY } from '../home/scope-growth-store.js';
 import { CITATION_ANCHOR_STORAGE_KEY } from '../ingestion/materiality/citation-hash-store.js';
 import { MATERIALITY_HASH_STORAGE_KEY } from '../ingestion/materiality/hash-store.js';
+import { MATERIALITY_PENDING_STORAGE_KEY } from '../ingestion/materiality/pending-store.js';
 import { PROCESSED_REVISION_STORAGE_KEY } from '../ingestion/processed-revisions/store.js';
 import { INGESTION_QUEUE_STORAGE_KEY } from '../ingestion/queue-store.js';
 import { KEYWORD_INDEX_STORAGE_KEY } from '../keyword-index/store.js';
@@ -134,6 +135,11 @@ export const SETTINGS_KEY_MANIFEST: readonly SettingsKeyEntry[] = [
     key: CONTEST_REGRADE_QUEUE_STORAGE_KEY,
     classification: 'content-derived',
     holds: 'pending regrading jobs for answers she contested',
+  },
+  {
+    key: MATERIALITY_PENDING_STORAGE_KEY,
+    classification: 'content-derived',
+    holds: 'the last settled text of a note while its change check is unfinished ([D-427])',
   },
   // Caches rebuildable from her vault (D-006).
   {
