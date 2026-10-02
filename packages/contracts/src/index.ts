@@ -68,6 +68,18 @@ export {
   visionRouteBody,
   visionRouteEnvelope,
 } from './artifact-envelope.js';
+// The per-item citation fragment on `quiz.generate.v1` / `cards.generate.v1` — `[D-446]` option
+// (a), the draft-time half (`ol-egov.141.89.2.29`): `groundedIn`, the 0-based positions in the
+// request's `sourceChunks` an item rests on, optional and never a reason to fail an item. See the
+// module's own header.
+export {
+  AUTHORING_CITATION_TASK_IDS,
+  type AuthoringCitationTaskId,
+  type AuthoringGroundedIn,
+  authoringGroundedIn,
+  authoringGroundedInField,
+  readAuthoringGroundedIn,
+} from './authoring-citation.js';
 // The demand-carriage wire fragment on `quiz.generate.v1` / `cards.generate.v1` — `[D-437]`
 // (`ol-egov.141.89.57`), design section 4.3 of `docs/dev/intelligence-build/demand-carriage.md`
 // (service repo, cited by path), amended by the 2026-09-29 rulings on rows 35 to 38. The
