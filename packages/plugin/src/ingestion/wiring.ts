@@ -98,6 +98,7 @@ import {
   type ConceptKeyRecord,
   conceptRegistryEntryFromRecord,
   createExtractionJobRunner,
+  createTranscriptAwareJobRunner,
   DEFAULT_ENQUEUE_DEBOUNCE_POLICY,
   type DeviceCapability,
   deferredEnqueuer,
@@ -106,6 +107,7 @@ import {
   type ExtractOptions,
   type GenerationJobPayload,
   IngestionQueueEngine,
+  isTranscriptKind,
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
@@ -940,10 +942,18 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
   const generationAwareRunner = deps.generation
     ? createGenerationAwareJobRunner({ draft: deps.generation.draft, fallback: composedRunner })
     : composedRunner;
+  // D-465 (`ol-egov.141.89.8.55`): the outermost link. A drained `'transcript'` job is read by the
+  // transcript reader and its parts go to the SAME sink the extraction runner lands units in (so
+  // `onUnitsLanded`, indexing and generation hooks see them); every other kind falls through.
+  const transcriptAwareRunner = createTranscriptAwareJobRunner({
+    vault: deps.vault,
+    sink: runnerSink,
+    fallback: generationAwareRunner,
+  });
   const engine = await IngestionQueueEngine.create({
     store: deps.queueStore,
     capability: deps.capability,
-    runner: generationAwareRunner,
+    runner: transcriptAwareRunner,
     // `ol-2zfj.38`: the ENQUEUE debounce is always in force from this
     // construction onward — see `enqueue-debounce.ts`'s own doc for why it
     // is declared, not derived, and `EngineDeps.enqueueDebounce`'s doc for
@@ -1003,15 +1013,22 @@ export type FirstReadFolderCounts = QueueStatusCounts;
  * path prefix — `sourcePath === folder` or `sourcePath.startsWith(folder +
  * '/')`, so a course organised into sub-folders (PSYCH326's `WEEK 2/WEEK
  * 3/...`, F1.3) still counts toward that course's one line. `null` when the
- * job's payload isn't a recognised `'source'` job (no `sourcePath` at all —
- * e.g. a future `'instrument-revision'` job) or matches none of `folders`;
+ * job's payload isn't a recognised `'source'` or `'transcript'` job (no `sourcePath` at all —
+ * e.g. an `'instrument-revision'` job) or matches none of `folders`;
  * such jobs are silently excluded from every folder's count, the same way
  * `commands/diagnostics.ts` reads `job.status` alone and nothing else.
  */
 function firstReadFolderOf(payload: unknown, folders: readonly VaultPath[]): VaultPath | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const record = payload as Record<string, unknown>;
-  if (record.kind !== 'source' || typeof record.sourcePath !== 'string') return null;
+  // D-465: a transcript job counts in its folder exactly as a source does; every other kind is
+  // excluded here by name, never by accident.
+  if (
+    (record.kind !== 'source' && !isTranscriptKind(record)) ||
+    typeof record.sourcePath !== 'string'
+  ) {
+    return null;
+  }
   const sourcePath = record.sourcePath as VaultPath;
   for (const folder of folders) {
     if (sourcePath === folder || sourcePath.startsWith(`${folder}/`)) return folder;

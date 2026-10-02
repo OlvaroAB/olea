@@ -75,11 +75,13 @@
  */
 
 import {
+  buildTranscriptEnqueueInput,
   type EnqueueInput,
   type ExtractedUnit,
   formatFromExtension,
   hashContent,
   type JobEnqueuer,
+  resolveTranscriptFormat,
   type TickResult,
   type VaultPath,
   type VaultSource,
@@ -207,6 +209,38 @@ async function runSource(
     sourceUnitId: path,
     workflowVersion: EXTRACTION_WORKFLOW_VERSION,
   };
+  return enqueueAndDrain(input, contentHash, enqueuer, tick, isOnline);
+}
+
+/**
+ * D-465 (`ol-egov.141.89.8.55`): the same timing override for a lecture transcript. The job is the
+ * `'transcript'` kind (`buildTranscriptEnqueueInput`), so the same idempotency, offline and
+ * single-tick behaviour as a source applies, with no `lastChangedAt` for the same reason.
+ */
+async function runTranscript(
+  path: VaultPath,
+  format: Parameters<typeof buildTranscriptEnqueueInput>[0]['transcriptFormat'],
+  vault: VaultSource,
+  enqueuer: JobEnqueuer,
+  tick: ProcessNowDeps['tick'],
+  isOnline: () => boolean,
+): Promise<ProcessNowOutcome> {
+  const contentHash = await hashContent(await vault.readBinary(path));
+  const input = buildTranscriptEnqueueInput({
+    sourcePath: path,
+    transcriptFormat: format,
+    contentHash,
+  });
+  return enqueueAndDrain(input, contentHash, enqueuer, tick, isOnline);
+}
+
+async function enqueueAndDrain(
+  input: EnqueueInput & { readonly workflowVersion?: string },
+  contentHash: string,
+  enqueuer: JobEnqueuer,
+  tick: ProcessNowDeps['tick'],
+  isOnline: () => boolean,
+): Promise<ProcessNowOutcome> {
   const enqueueResult = await enqueuer.enqueue(input);
   if (enqueueResult.status === 'duplicate' && enqueueResult.existingStatus === 'done') {
     return { kind: 'already-processed' };
@@ -246,6 +280,22 @@ export function createProcessNowAction(deps: ProcessNowDeps): ProcessNowAction {
       if (inFlight.has(path)) return { kind: 'coalesced' };
       inFlight.add(path);
       try {
+        // D-465: a plain-text file, or a Markdown file that declares role transcript, is a lecture
+        // transcript and goes to the `'transcript'` job kind; any other `.md` is an authored note.
+        const lower = path.toLowerCase();
+        if (lower.endsWith('.txt') || lower.endsWith('.md')) {
+          const resolution = resolveTranscriptFormat(path, await deps.vault.read(path));
+          if (resolution.kind === 'transcript') {
+            return await runTranscript(
+              path,
+              resolution.format,
+              deps.vault,
+              deps.enqueuer,
+              deps.tick,
+              isOnline,
+            );
+          }
+        }
         if (isMarkdownPath(path)) {
           return await runAuthoredNote(path, deps.vault, deps.onAuthoredNoteUnits);
         }

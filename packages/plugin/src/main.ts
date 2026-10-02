@@ -30,6 +30,7 @@ import {
   DEFAULT_COURSES_FOLDER,
   type DeviceCapability,
   type DisputeLogRecord,
+  declaresTranscript,
   detectCourseProposals,
   EMPTY_REGISTRY_OVERRIDES,
   type ExplainBackPromptContext,
@@ -2506,6 +2507,11 @@ export default class OleaPlugin extends Plugin {
     // one and each set off another sweep. Skipped before evaluation; her source
     // and authored notes are what the gate exists for.
     if (isOleaHomeNote(currentText)) return;
+    // D-465 (`ol-egov.141.89.8.55`): a Markdown file that declares role transcript is a supplied
+    // lecture transcript, not her authored note. It is read through the `'transcript'` job kind
+    // (the arrival watch and process-now enqueue it), so it stays off the materiality gate, the
+    // processed-revision note feed and the authored-note generation sweep.
+    if (declaresTranscript(currentText)) return;
     // `ol-egov.141.89.5.41`: the first-sight stamp (`instrument-stamping/port.ts`) is Olea's own
     // write into her authored note: not a change to her source. Matched on the exact written text,
     // so a stamp plus a real edit (different text) still goes through the gate below.

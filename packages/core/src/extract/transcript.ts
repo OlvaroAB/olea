@@ -100,12 +100,17 @@ function normalizeRole(raw: string): string {
     .replace(/[\s_]+/g, '-');
 }
 
+/** Whether a raw `role` value (a frontmatter scalar, however it was cached) declares a lecture transcript. Pure. */
+export function isTranscriptRole(role: string): boolean {
+  return TRANSCRIPT_ROLE_VALUES.has(normalizeRole(role));
+}
+
 /** Whether a Markdown file declares itself a lecture transcript (frontmatter `role`). Pure over the text. */
 export function declaresTranscript(markdown: string): boolean {
   const first = parseDocument(markdown).blocks[0];
   if (first?.kind !== 'frontmatter') return false;
   const role = readScalar(parseFrontmatter(first.inner), 'role').scalar;
-  return TRANSCRIPT_ROLE_VALUES.has(normalizeRole(role));
+  return isTranscriptRole(role);
 }
 
 /** How a path (plus, for Markdown, its text) resolves, once, at enqueue time. */

@@ -618,6 +618,30 @@ export {
   DEFAULT_TEXT_LAYER_CHAR_THRESHOLD,
   routePage,
 } from './extract/threshold.js';
+// D-465 (`ol-egov.141.89.8.49`, wired by `ol-egov.141.89.8.55`): the lecture-transcript reader and
+// the `'transcript'` ingestion job kind.
+export type {
+  TranscriptFormat,
+  TranscriptFormatResolution,
+  TranscriptPart,
+  TranscriptReadFailure,
+  TranscriptReadResult,
+} from './extract/transcript.js';
+export {
+  declaresTranscript,
+  describeTranscriptFailure,
+  isTranscriptFormat,
+  isTranscriptRole,
+  READABLE_TRANSCRIPT_FORMATS,
+  readTranscriptFromVault,
+  readTranscriptText,
+  resolveTranscriptFormat,
+  TRANSCRIPT_FORMATS,
+  TRANSCRIPT_PART_MAX_CHARS,
+  TRANSCRIPT_PART_RULE_VERSION,
+  TRANSCRIPT_READER_VERSION,
+  transcriptPartsToUnits,
+} from './extract/transcript.js';
 export type {
   CharRange,
   EmbeddedInNote,
@@ -956,6 +980,17 @@ export {
   isExtractionJobPayload,
 } from './ingestion/extraction-runner.js';
 export { hashContent, hashText } from './ingestion/hash.js';
+export type {
+  TranscriptJobPayload,
+  TranscriptRunnerDeps,
+} from './ingestion/transcript-job.js';
+export {
+  buildTranscriptEnqueueInput,
+  createTranscriptAwareJobRunner,
+  isTranscriptJobPayload,
+  isTranscriptKind,
+  TRANSCRIPT_WORKFLOW_VERSION,
+} from './ingestion/transcript-job.js';
 export type {
   Clock,
   DeferReason,

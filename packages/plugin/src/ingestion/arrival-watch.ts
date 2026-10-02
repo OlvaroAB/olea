@@ -71,11 +71,13 @@
  */
 
 import {
+  buildTranscriptEnqueueInput,
   type Clock,
   type EnqueueInput,
   formatFromExtension,
   hashContent,
   type JobEnqueuer,
+  resolveTranscriptFormat,
   type Unsubscribe,
   type VaultEvent,
   type VaultPath,
@@ -166,6 +168,48 @@ async function enqueueArrival(
 }
 
 /**
+ * D-465 (`ol-egov.141.89.8.55`): an arriving `.txt`, or a `.md` that declares itself a lecture
+ * transcript, is enqueued under the `'transcript'` job kind. `resolveTranscriptFormat` decides, once,
+ * here; an undeclared `.md` is `not-a-transcript` and stays on the note path, and a format with no
+ * reader in this build (`.vtt`, `.srt`) enqueues nothing. A path inside a dot-prefixed folder (Olea's
+ * own layer, Obsidian's config) is never her material and is skipped.
+ */
+async function enqueueTranscriptArrival(
+  path: VaultPath,
+  vault: VaultSource,
+  enqueuer: JobEnqueuer,
+  clock: Clock,
+  tracker: LastChangedTracker,
+): Promise<void> {
+  const lastChangedAt = tracker.get(path);
+  try {
+    const text = await vault.read(path);
+    const resolution = resolveTranscriptFormat(path, text);
+    if (resolution.kind !== 'transcript') return;
+    const contentHash = await hashContent(await vault.readBinary(path));
+    const input: EnqueueInput & { readonly workflowVersion?: string } = {
+      ...buildTranscriptEnqueueInput({
+        sourcePath: path,
+        transcriptFormat: resolution.format,
+        contentHash,
+      }),
+      lastChangedAt,
+    };
+    await enqueuer.enqueue(input);
+  } catch (error) {
+    console.error('Olea: could not enqueue an arriving transcript file', error);
+  } finally {
+    tracker.record(path, clock.now());
+  }
+}
+
+function isTranscriptCandidatePath(path: VaultPath): boolean {
+  if (path.split('/').some((segment) => segment.startsWith('.'))) return false;
+  const lower = path.toLowerCase();
+  return lower.endsWith('.txt') || lower.endsWith('.md');
+}
+
+/**
  * Wires `deps.vault`'s (or `deps.watch`'s) change events to
  * `deps.enqueuer.enqueue` for every arriving file `formatFromExtension`
  * recognises (pdf/pptx/docx/image). Returns the unsubscribe handle so a host
@@ -180,7 +224,12 @@ export function buildIngestionArrivalWatch(deps: IngestionArrivalWatchDeps): Uns
   return watch((event) => {
     if (event.kind !== 'create' && event.kind !== 'modify') return;
     const format = formatFromExtension(event.path);
-    if (format === null) return;
+    if (format === null) {
+      if (isTranscriptCandidatePath(event.path)) {
+        void enqueueTranscriptArrival(event.path, deps.vault, deps.enqueuer, clock, tracker);
+      }
+      return;
+    }
     void enqueueArrival(event.path, format, deps.vault, deps.enqueuer, clock, tracker);
   });
 }

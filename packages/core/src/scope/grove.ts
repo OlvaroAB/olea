@@ -100,6 +100,8 @@ import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import type { ConceptAttestation } from '../source/transcript-scope.js';
+import { declaredScopeNamesFrom } from '../source/transcript-scope.js';
 import type { Source, SourceRole } from '../source/types.js';
 import type { ConceptCitation, ConceptCitationKind } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
@@ -355,11 +357,17 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     return { model: { status: 'inferred', course, concepts }, nextGroundStreaks: emptyStreaks };
   }
 
-  const declaredNames = new Set(
-    input.citations
-      .filter((c) => c.course === course && DECLARED_CITATION_KINDS.has(c.kind))
-      .map((c) => c.conceptName),
-  );
+  // D-465 (`ol-egov.141.89.8.55`), the mention-is-not-scope guard: every citation for this course is
+  // given an origin, and only an examiner attestation (an objectives or past-paper citation) reaches
+  // the declared-scope names. A transcript mention can never enter by construction, whatever kind
+  // of citation a later reading gives it.
+  const attestations: ConceptAttestation[] = input.citations
+    .filter((c) => c.course === course)
+    .map((c) => ({
+      conceptName: c.conceptName,
+      origin: DECLARED_CITATION_KINDS.has(c.kind) ? 'examiner' : 'other',
+    }));
+  const declaredNames = declaredScopeNamesFrom(attestations);
 
   const pastPaperSourcePaths = sortedUnique(
     input.sources

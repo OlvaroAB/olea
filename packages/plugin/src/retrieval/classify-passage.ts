@@ -34,18 +34,23 @@
  *    argument is never supplied here. Building either is a different bead's
  *    job, not an invented surface of this one (see the project's "no
  *    user-visible affordance without a clause" rule).
- *  - **Reachability**: nothing in this package calls `buildClassifyPassageHook`
- *    yet. `main.ts`'s `draftQuizCardsDeps()` (private method, ~line 1283) is
- *    the one production call site that assembles `DraftQuizCardsDeps` for
- *    the live F3.3 generation sweep, and `main.ts` is owned by a different
- *    lane this round — the exact diff that call site needs is recorded on
- *    `ol-2zfj.36`'s close notes rather than applied here.
+ *  - **Reachability**: `main.ts`'s `draftQuizCardsDeps()` is the production caller; it supplies the
+ *    real metadata-cache closure for `FrontmatterRoleHost`.
+ *
+ * **Lecture transcripts (D-465, `ol-egov.141.89.8.55`).** A chunk of a supplied transcript (a `.txt`,
+ * or a `.md` whose cached `role` declares one) is classified with `transcriptSpeaker`, which
+ * `classifyMateriality` tests first: never hers, so never a voice exemplar. Parts carry no speaker
+ * label, so the speaker is `unknown-speaker` (`attributeTranscript`).
  */
 
 import {
+  attributeTranscript,
   classifyMateriality,
   formatFromExtension,
+  isTranscriptRole,
+  resolveTranscriptFormat,
   type SourceRole,
+  type TranscriptSpeaker,
   type VaultPath,
 } from 'olea-core';
 import type { DraftQuizCardsDeps } from './draft-quiz-cards.js';
@@ -98,6 +103,33 @@ function roleFromFrontmatter(
   return ROLE_BY_NORMALIZED_VALUE.get(normalize(raw));
 }
 
+/**
+ * D-465 (`ol-egov.141.89.8.55`): whether a chunk's file is a supplied lecture transcript, decided
+ * the way the reader decides it: a `.txt` is plain text, a `.md` is a transcript only when its
+ * cached frontmatter `role` declares one. Synchronous, from the path and the cached frontmatter
+ * alone, like every other cue this hook reads.
+ */
+function isSuppliedTranscript(
+  path: VaultPath,
+  frontmatter: Record<string, unknown> | undefined,
+): boolean {
+  if (path.toLowerCase().endsWith('.md')) {
+    const raw = frontmatter?.role;
+    return typeof raw === 'string' && isTranscriptRole(raw);
+  }
+  return resolveTranscriptFormat(path).kind === 'transcript';
+}
+
+/**
+ * The speaker of one transcript chunk. A part carries no speaker label (parts are document-grain),
+ * so attribution gives `unknown-speaker`, which `classifyMateriality` reads as instructor-curated and
+ * not hers; a student or question label would give `student-or-question`, unknown authorship. In no
+ * case is a transcript passage hers, so it can never become a voice exemplar.
+ */
+function speakerOfTranscriptChunk(text: string): TranscriptSpeaker {
+  return attributeTranscript([{ text }]).passages[0]?.speaker ?? 'unknown-speaker';
+}
+
 export interface BuildClassifyPassageHookDeps {
   readonly frontmatterHost: FrontmatterRoleHost;
 }
@@ -116,10 +148,15 @@ export function buildClassifyPassageHook(
 ): NonNullable<DraftQuizCardsDeps['classifyPassage']> {
   return (chunk) => {
     const format = formatFromExtension(chunk.path);
-    const declaredRole = roleFromFrontmatter(deps.frontmatterHost.frontmatterFor(chunk.path));
+    const frontmatter = deps.frontmatterHost.frontmatterFor(chunk.path);
+    const declaredRole = roleFromFrontmatter(frontmatter);
+    const transcriptSpeaker = isSuppliedTranscript(chunk.path, frontmatter)
+      ? speakerOfTranscriptChunk(chunk.text)
+      : undefined;
     const classified = classifyMateriality({
       path: chunk.path,
       format,
+      ...(transcriptSpeaker === undefined ? {} : { transcriptSpeaker }),
       // `exactOptionalPropertyTypes`: omit the key entirely rather than
       // assign `undefined` to it, same discipline `main.ts`'s own
       // `draftQuizCardsDeps()` already uses for its optional `keywordIndex`.

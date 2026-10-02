@@ -22,6 +22,10 @@
  *  - **An embedded source is queued** ({@link ProcessedRevisionFeed.observeEnqueues}): a pdf,
  *    slide deck, document or image the queue admitted (`queued`, never `duplicate` or `debounced`)
  *    is recorded `pending`, keyed by the hash the job is keyed by. The day is the day it was queued.
+ *  - **A lecture transcript** (D-465, `ol-egov.141.89.8.55`) is queued under its own `'transcript'`
+ *    job kind and is recorded like an embedded source: `pending` when queued, then `read` when its
+ *    job is done or `unreadable` when it failed, keyed by the job's content hash. It has no unit
+ *    manifest, so the job's own outcome is the state.
  *  - **An embedded source's job settles** ({@link ProcessedRevisionFeed.jobRan}): the source
  *    reading's fold of that source's manifest becomes the state (`read`, or `unreadable` when a page
  *    failed, was not legible, or **the source yielded nothing**, `[D-426]`; still `pending` while
@@ -151,15 +155,20 @@ const IS_PROCESSING_MOMENT: Readonly<Record<MaterialityEvaluationResult['kind'],
   verdict: true,
 };
 
-/** The two job payload kinds that name a source file: the whole source, and one page of it read by vision. */
-type SourceJobKind = 'source' | 'vision-page';
+/** The three job payload kinds that name a source file: the whole source, one page of it read by vision, and a lecture transcript. */
+type SourceJobKind = 'source' | 'vision-page' | 'transcript';
 
 function sourceTargetOf(
   payload: unknown,
 ): { readonly kind: SourceJobKind; readonly sourcePath: VaultPath } | null {
   if (typeof payload !== 'object' || payload === null) return null;
   const { kind, sourcePath } = payload as { kind?: unknown; sourcePath?: unknown };
-  if ((kind !== 'source' && kind !== 'vision-page') || typeof sourcePath !== 'string') return null;
+  if (
+    (kind !== 'source' && kind !== 'vision-page' && kind !== 'transcript') ||
+    typeof sourcePath !== 'string'
+  ) {
+    return null;
+  }
   return { kind, sourcePath: sourcePath as VaultPath };
 }
 
@@ -292,7 +301,11 @@ export function createProcessedRevisionFeed(
           if (result.status === 'queued') {
             const target = sourceTargetOf(input.payload);
             const course = target === null ? undefined : courseOfSource(target.sourcePath);
-            if (target !== null && target.kind === 'source' && course !== undefined) {
+            if (
+              target !== null &&
+              (target.kind === 'source' || target.kind === 'transcript') &&
+              course !== undefined
+            ) {
               void serial(() =>
                 record({
                   path: target.sourcePath,
@@ -324,6 +337,20 @@ export function createProcessedRevisionFeed(
       const course = target === null ? undefined : courseOfSource(target.sourcePath);
       if (job === undefined || target === null || course === undefined) return Promise.resolve();
       const jobHash = job.contentHash;
+
+      // D-465 (`ol-egov.141.89.8.55`): a transcript has no unit manifest (the manifest enumerates
+      // paged documents), so its state is the job's own outcome, keyed by the hash the job is keyed
+      // by: `done` is `read`, `failed` is `unreadable`. A deferred tick never reaches here.
+      if (target.kind === 'transcript') {
+        return serial(() =>
+          record({
+            path: target.sourcePath,
+            courses: [course],
+            fingerprint: jobHash,
+            state: tick.outcome === 'done' ? 'read' : 'unreadable',
+          }),
+        );
+      }
 
       return serial(async () => {
         const manifest = (await deps.manifestsFor([target.sourcePath])).get(target.sourcePath);
