@@ -183,6 +183,37 @@ describe('under every rule, proven-invalid evidence never meets a demand ([D-338
   });
 });
 
+// `ol-egov.141.89.9.84` (`[D-347]`'s split): an unresolved changed passage meets no demand until
+// revalidated, under every rule; a revalidation that reads immaterial counts it again.
+describe('an unresolved changed passage meets no demand until revalidated ([D-347])', () => {
+  const run = (
+    rule: DemandRule,
+    revalidation: { at: string; state: 'material' | 'immaterial' }[],
+  ) =>
+    demandsMetNow(
+      {
+        conceptId: 'concept-a',
+        declaredDemands: ['recall-a-fact'],
+        instrumentDemands: RECALL_FACT,
+        entries: [review()],
+        validity: projectInstrumentValidity([review()]),
+        scheduler,
+        now: SOON,
+        passageChanges: [{ instrumentIds: ['qa:a:1'], changedAt: T1, revalidation }],
+      },
+      rule,
+    );
+  it('is not met while pending or material, under either rule', () => {
+    for (const rule of ['qualifying-review', 'any-past-success'] as const) {
+      expect(run(rule, []).unmet).toEqual(['recall-a-fact']);
+      expect(run(rule, [{ at: T1, state: 'material' }]).unmet).toEqual(['recall-a-fact']);
+    }
+  });
+  it('is met again once revalidated immaterial', () => {
+    expect(run('qualifying-review', [{ at: T1, state: 'immaterial' }]).unmet).toEqual([]);
+  });
+});
+
 describe('the declared demands are the question; nothing is inferred (R7, N5)', () => {
   it('no declared demands means nothing unmet and nothing met — never a demand inferred from tier', () => {
     const result = met('qualifying-review', [review()], [], RECALL_FACT);

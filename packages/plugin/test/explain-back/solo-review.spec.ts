@@ -434,10 +434,37 @@ describe('recordSoloGradeAndReview — [D-281] the independent correctness verdi
     expectNoNestedVerdict(record);
   });
 
-  it('records NO verdict when the accept came back stale (the cited source has since changed)', async () => {
-    const record = await writeWith(Promise.resolve({ status: 'stale' as const }));
-    expect(record).not.toHaveProperty('explainBackCorrectness');
-    expectNoNestedVerdict(record);
+  // R10 / [D-343] (ol-egov.141.89.9.85): an accept after its cited passage changed records nothing,
+  // at the writer, whatever depth pass was asked for.
+  it('writes NO record at all when the accept came back stale (the cited source has since changed)', async () => {
+    for (const depthPass of [undefined, 'skipped' as const]) {
+      const vault = memoryVault();
+      const wiring = wiringWithSoloReply();
+      // biome-ignore lint/suspicious/noExplicitAny: the memo's value type is the accept result this test scripts.
+      wiring.acceptedObservationsByAttempt.set(
+        'attempt-1',
+        Promise.resolve({ status: 'stale' }) as any,
+      );
+      const outcome = await recordSoloGradeAndReview(
+        {
+          grading: wiring,
+          vault,
+          deviceId: 'device-a',
+          now: () => new Date('2026-08-31T09:00:00Z'),
+        },
+        {
+          instrumentId: 'explain-back:concept-a:1',
+          attemptId: 'attempt-1',
+          subjectConceptId: 'concept-a',
+          context: CONTEXT,
+          answer: 'her explanation',
+          supportLevelShown: 'independent',
+          ...(depthPass !== undefined ? { depthPass } : {}),
+        },
+      );
+      expect(outcome).toBeUndefined();
+      expect(vault.writes ?? []).toEqual([]);
+    }
   });
 
   it('records NO verdict when the accept rejected, and still writes the depth evidence', async () => {

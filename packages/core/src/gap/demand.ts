@@ -76,6 +76,8 @@ import {
 import {
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
   excludedFromCurrent,
+  type PassageChangeFact,
+  unresolvedPassageInstrumentIds,
   type WithheldEvidencePolicy,
 } from '../mastery/attainment.js';
 import { HOLDING_CUT } from '../mastery/rollup.js';
@@ -108,6 +110,8 @@ export interface DemandsMetInput {
   readonly holdingCut?: number;
   /** `[D-347]`'s option. Defaults to today's behaviour ("count"). */
   readonly withheldEvidence?: WithheldEvidencePolicy;
+  /** `[D-347]`'s split: changed cited passages and where each stands in revalidation. Absent reads as none changed. */
+  readonly passageChanges?: readonly PassageChangeFact[];
 }
 
 export interface DemandsMetReading {
@@ -147,6 +151,7 @@ function readOneConcept(
 ): DemandsMetReading {
   const policy = input.withheldEvidence ?? DEFAULT_WITHHELD_EVIDENCE_POLICY;
   const cut = input.holdingCut ?? HOLDING_CUT;
+  const unresolvedPassage = unresolvedPassageInstrumentIds(input.passageChanges, input.now);
   const met = new Set<PaperDemand>();
 
   const currentByInstrument = new Map<string, boolean>();
@@ -168,7 +173,8 @@ function readOneConcept(
     if (!creditsConcept(entry, input.conceptId)) continue;
     const declaresHere = input.instrumentDemands.get(entry.instrumentId) ?? [];
     if (declaresHere.length === 0) continue;
-    if (excludedFromCurrent(entry.instrumentId, 'need', input.validity, policy)) continue;
+    if (excludedFromCurrent(entry.instrumentId, 'need', input.validity, policy, unresolvedPassage))
+      continue;
     if (!succeeded(entry)) continue;
 
     for (const demand of declaresHere) {

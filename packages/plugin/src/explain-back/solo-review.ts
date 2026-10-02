@@ -526,6 +526,10 @@ export async function recordSoloGradeAndReview(
   if (subjectConceptId === null) return undefined;
 
   const attemptId = params.attemptId ?? params.instrumentId;
+  // R10 / `[D-343]` (`ol-egov.141.89.9.85`): an accept after its cited passage changed is refused at
+  // the writer and never recorded, correctness or depth. A fold over the log cannot know it, so it
+  // is decided here, before any depth call is spent.
+  if (await acceptWasStale(deps.grading, attemptId)) return undefined;
   const subject = (timestamp: string): GradedExplainBackReviewSubject => ({
     instrumentId: params.instrumentId,
     conceptIds: [subjectConceptId],
@@ -709,6 +713,19 @@ async function recordCorrectnessOnly(
  *   survives a refused accept, and this function never fails the depth write
  *   that rode on it.
  */
+async function acceptWasStale(
+  wiring: RecordSoloGradeAndReviewDeps['grading'],
+  attemptId: string,
+): Promise<boolean> {
+  const pendingAccept = wiring.acceptedObservationsByAttempt.get(attemptId);
+  if (pendingAccept === undefined) return false;
+  try {
+    return (await pendingAccept).status === 'stale';
+  } catch {
+    return false;
+  }
+}
+
 async function resolveIndependentCorrectness(
   wiring: RecordSoloGradeAndReviewDeps['grading'],
   attemptId: string,

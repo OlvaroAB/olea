@@ -25,6 +25,7 @@ import {
   ATTAINMENT_FOLD_VERSION,
   attainmentArithmeticVersion,
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
+  type PassageChangeFact,
   readAllConceptAttainment,
   readAllConceptReadiness,
   readAllCurrentRecognition,
@@ -32,6 +33,8 @@ import {
   readConceptAttainment,
   readNeed,
   UNKNOWN_NEED_VALUE,
+  unresolvedPassageInstrumentIds,
+  withKnownFalseJudgements,
 } from './attainment.js';
 import { HOLDING_CUT } from './rollup.js';
 import { projectInstrumentValidity } from './validity.js';
@@ -809,5 +812,190 @@ describe('rule 2: a corrected grade uses the corrected verdict; unrelated review
         'concept-a',
       ),
     ).toBe(false);
+  });
+});
+
+// `ol-egov.141.89.9.84` (`[D-347]`'s split): a changed cited passage not yet revalidated is excluded
+// from every current reading under every policy; a sound withdrawal keeps counting under the ruled
+// option; the displayed stage and the award keep both.
+describe('the passage-validity input, split from a sound withdrawal ([D-347]; A6, A9, E4)', () => {
+  const change = (
+    states: readonly { at: string; state: PassageChangeFact['revalidation'][number]['state'] }[],
+    instrumentIds: readonly string[] = ['qa:a:1'],
+  ): PassageChangeFact => ({ instrumentIds, changedAt: T2, revalidation: states });
+  const entries: ReviewLogEntry[] = [
+    recall('r1', T1, { instrumentId: 'qa:a:1' }),
+    recall('r2', T1, { instrumentId: 'qa:a:2', rating: 'again' }),
+  ];
+  const validity = projectInstrumentValidity(entries);
+  const vitalityWeakest = (passageChanges?: readonly PassageChangeFact[]) =>
+    readAllEligibleConceptVitality(
+      entries,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      HOLDING_CUT,
+      validity,
+      passageChanges === undefined ? {} : { passageChanges },
+    ).get('concept-a');
+  const readinessOf = (passageChanges?: readonly PassageChangeFact[]) =>
+    readAllConceptReadiness(
+      entries,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      validity,
+      passageChanges === undefined ? {} : { passageChanges },
+    ).get('concept-a');
+
+  it('a change with no outcome yet is pending: excluded from vitality, readiness, need and recognition', () => {
+    const pending = [change([])];
+    expect(vitalityWeakest(pending)?.excludedInstrumentIds).toEqual(['qa:a:1']);
+    expect(readinessOf(pending)?.weakest).toBeNull();
+    expect(readNeed(readinessOf(pending) as never).basis).toBe('unknown');
+    const quiz = [
+      review({ eventId: 'q1', timestamp: T1, instrumentId: 'mcq:a:1', instrumentType: 'mcq' }),
+    ];
+    const quizValidity = projectInstrumentValidity(quiz);
+    const credit = (passageChanges?: readonly PassageChangeFact[]) =>
+      readAllCurrentRecognition(quiz, ['concept-a'], scheduler, new Date(T1), quizValidity, {
+        ...(passageChanges === undefined ? {} : { passageChanges }),
+      }).get('concept-a');
+    expect(credit()).toBe(true);
+    expect(credit([{ ...change([], ['mcq:a:1']), changedAt: T1 }])).toBe(false);
+  });
+
+  it('material, uncertain and unavailable stay excluded until revalidated; immaterial counts again', () => {
+    for (const state of ['material', 'uncertain', 'unavailable'] as const) {
+      const unresolved = [change([{ at: T3, state }])];
+      expect(vitalityWeakest(unresolved)?.excludedInstrumentIds).toEqual(['qa:a:1']);
+      expect(readinessOf(unresolved)?.weakest).toBeNull();
+    }
+    const resolved = [
+      change([
+        { at: T2, state: 'pending-revalidation' },
+        { at: T3, state: 'immaterial' },
+      ]),
+    ];
+    expect(vitalityWeakest(resolved)?.excludedInstrumentIds).toEqual([]);
+    expect(readinessOf(resolved)?.weakest?.instrumentId).toBe('qa:a:1');
+  });
+
+  it('is exclusion under every policy, where a sound withdrawal counts under the ruled one', () => {
+    const withdrawn = [...entries, suspend('qa:a:1', T2, 's1')];
+    const withdrawnValidity = projectInstrumentValidity(withdrawn);
+    const readiness = (extra: object) =>
+      readAllConceptReadiness(withdrawn, ['concept-a'], scheduler, NOW, withdrawnValidity, {
+        withheldEvidence: 'count',
+        ...extra,
+      }).get('concept-a')?.weakest?.instrumentId ?? null;
+    expect(readiness({})).toBe('qa:a:1');
+    expect(readiness({ passageChanges: [change([], ['qa:a:2'])] })).toBe('qa:a:1');
+    expect(readiness({ passageChanges: [change([], ['qa:a:1'])] })).toBeNull();
+  });
+
+  it('a change after the reading instant is not yet a fact; an unreadable instant reads as unresolved', () => {
+    const later: PassageChangeFact = {
+      instrumentIds: ['qa:a:1'],
+      changedAt: '2999-01-01T00:00:00Z',
+      revalidation: [],
+    };
+    expect(unresolvedPassageInstrumentIds([later], NOW).size).toBe(0);
+    const unreadable: PassageChangeFact = {
+      instrumentIds: ['qa:a:1'],
+      changedAt: 'not a date',
+      revalidation: [],
+    };
+    expect([...unresolvedPassageInstrumentIds([unreadable], NOW)]).toEqual(['qa:a:1']);
+    expect(unresolvedPassageInstrumentIds(undefined, NOW).size).toBe(0);
+  });
+
+  it('the displayed stage and the award keep the changed card; the version says the split was computed', () => {
+    const log = [explainBack('eb-1', T1)];
+    const v = projectInstrumentValidity(log);
+    const plain = readConceptAttainment(log, 'concept-a', v);
+    const split = readConceptAttainment(log, 'concept-a', v, {
+      passageChanges: [change([], ['eb:a'])],
+    });
+    expect(split.displayed.state).toBe(plain.displayed.state);
+    expect(split.award).toEqual(plain.award);
+    expect(split.correction).toBeNull();
+    expect(plain.arithmeticVersion).not.toContain('passage=split');
+    expect(split.arithmeticVersion).toContain('passage=split');
+  });
+});
+
+// `ol-egov.141.89.9.85` (R10; the E6 case): a judgement known false from an instant is excluded
+// from current readings and from the displayed stage, with a note; the award keeps what stood.
+describe('a judgement known false (R10; E6)', () => {
+  const log = [explainBack('eb-1', T1)];
+  const known = (at: string) => [{ eventId: 'eb-1', knownAt: at }];
+
+  it('the displayed stage falls with a known-false note; the historical award keeps what stood', () => {
+    const v = withKnownFalseJudgements(projectInstrumentValidity(log), log, known(T3));
+    const reading = readConceptAttainment(log, 'concept-a', v);
+    expect(reading.displayed.state).toBe('sprout');
+    expect(reading.award?.attemptEventId).toBe('eb-1');
+    expect(reading.correction).toEqual({
+      from: 'tree',
+      to: 'sprout',
+      facts: [{ kind: 'known-false', instrumentId: 'eb:a', reviewEventId: 'eb-1', at: T3 }],
+    });
+  });
+
+  it("only the named review is excluded; the instrument's other reviews stand", () => {
+    const two = [recall('r1', T1), recall('r2', T2)];
+    const v = withKnownFalseJudgements(projectInstrumentValidity(two), two, [
+      { eventId: 'r2', knownAt: T3 },
+    ]);
+    const reading = readAllEligibleConceptVitality(
+      two,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      HOLDING_CUT,
+      v,
+    );
+    expect(reading.get('concept-a')?.instrumentsRead).toBe(1);
+    const base = readAllEligibleConceptVitality(
+      two,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      HOLDING_CUT,
+      projectInstrumentValidity(two),
+    );
+    expect(v.correctedEvidence.has('r2')).toBe(true);
+    expect(v.correctedEvidence.has('r1')).toBe(false);
+    expect(base.get('concept-a')?.instrumentsRead).toBe(1);
+  });
+
+  it('readiness no longer counts a known-false success, from the instant it became known', () => {
+    const ready = (v: ReturnType<typeof projectInstrumentValidity>) =>
+      readAllConceptReadiness([recall('r1', T1)], ['concept-a'], scheduler, NOW, v).get('concept-a')
+        ?.weakest?.instrumentId ?? null;
+    const base = projectInstrumentValidity([recall('r1', T1)]);
+    expect(ready(base)).toBe('qa:a:1');
+    expect(
+      ready(withKnownFalseJudgements(base, [recall('r1', T1)], [{ eventId: 'r1', knownAt: T3 }])),
+    ).toBeNull();
+  });
+
+  it('is not the award as of an instant before it was known; a corrective re-grade replaces it', () => {
+    const regraded = [
+      explainBack('eb-1', T1),
+      explainBack('eb-2', T4, { revisionOf: 'eb-1', correctness: 'correct' }),
+    ];
+    const v = withKnownFalseJudgements(projectInstrumentValidity(regraded), regraded, known(T3));
+    const reading = readConceptAttainment(regraded, 'concept-a', v);
+    expect(reading.award?.attemptEventId).toBe('eb-1');
+    expect(reading.displayed.state).toBe('tree');
+  });
+
+  it('names no review in the log, or an unreadable instant: excludes nothing', () => {
+    const base = projectInstrumentValidity(log);
+    expect(withKnownFalseJudgements(base, log, [{ eventId: 'absent', knownAt: T3 }])).toBe(base);
+    expect(withKnownFalseJudgements(base, log, [{ eventId: 'eb-1', knownAt: 'nope' }])).toBe(base);
+    expect(withKnownFalseJudgements(base, log, undefined)).toBe(base);
   });
 });

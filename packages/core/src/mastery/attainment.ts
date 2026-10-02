@@ -82,6 +82,7 @@ import {
   type SaplingRule,
 } from './rollup.js';
 import {
+  type CorrectedEvidenceFact,
   type InstrumentValidityProjection,
   type ProvenInvalidReason,
   withoutCorrectedEvidence,
@@ -163,6 +164,17 @@ export interface AttainmentOptions
   /** `[D-347]`, open. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
   readonly withheldEvidence?: WithheldEvidencePolicy;
   /**
+   * **The passage-validity input (`[D-347]`'s split; `ol-egov.141.89.9.84`).**
+   * Changed cited passages and where each stands in revalidation. When given,
+   * an instrument whose cited passage is changed and not yet revalidated
+   * (pending, `material`, `uncertain` or `unavailable`) is excluded from
+   * vitality, readiness, need and the recognition credit, whatever
+   * {@link WithheldEvidencePolicy} says about a sound withdrawal, until a
+   * revalidation reads `immaterial`. The displayed stage and the award never
+   * read it. Absent reads as no passage changed: today's behaviour.
+   */
+  readonly passageChanges?: readonly PassageChangeFact[];
+  /**
    * The scheduler configuration version to stamp on stage readings, which do
    * not themselves read the scheduler. Current readings take it from the
    * scheduler they are handed. Absent reads as `unknown`, never guessed.
@@ -175,6 +187,8 @@ export interface ArithmeticVersionInput {
   readonly saplingRule: SaplingRule;
   readonly withheldEvidence: WithheldEvidencePolicy;
   readonly schedulerVersion?: string | undefined;
+  /** True when a passage-validity input was handed in (the D-347 split computed). Omitted otherwise. */
+  readonly passageSplit?: boolean | undefined;
 }
 
 /**
@@ -189,6 +203,7 @@ export function attainmentArithmeticVersion(input: ArithmeticVersionInput): stri
     `sapling=${input.saplingRule}`,
     `withheld=${input.withheldEvidence}`,
     `scheduler=${input.schedulerVersion ?? 'unknown'}`,
+    ...(input.passageSplit === true ? ['passage=split'] : []),
   ].join(';');
 }
 
@@ -207,6 +222,7 @@ function versionOf(options: AttainmentOptions, schedulerVersion: string | undefi
     saplingRule: options.saplingRule ?? DEFAULT_SAPLING_RULE,
     withheldEvidence: withheldPolicyOf(options),
     schedulerVersion,
+    passageSplit: options.passageChanges !== undefined,
   });
 }
 
@@ -267,6 +283,18 @@ export type CorrectionFact =
       readonly at: string;
     }
   | {
+      /**
+       * One review whose judgement rested on a grading basis later known false (R10): it stays
+       * practice and earns nothing until a corrective re-grade replaces it. The reason word of
+       * the note is an open question (OQ-E6-note-reason): this fact carries none.
+       */
+      readonly kind: 'known-false';
+      readonly instrumentId: string;
+      readonly reviewEventId: string;
+      /** The instant it became known. */
+      readonly at: string;
+    }
+  | {
       readonly kind: 'regraded';
       /** The instrument the superseded attempt was on. */
       readonly instrumentId: string;
@@ -319,6 +347,8 @@ function correctionFactEventId(fact: CorrectionFact): string {
       return fact.eventId;
     case 'grade-corrected':
       return fact.resolutionEventId;
+    case 'known-false':
+      return fact.reviewEventId;
     case 'regraded':
       return fact.byEventId;
   }
@@ -344,6 +374,15 @@ function correctionFacts(
   for (const record of records) {
     const fact = validity.correctedEvidence.get(record.eventId);
     if (fact === undefined) continue;
+    if (isKnownFalseFact(fact)) {
+      facts.push({
+        kind: 'known-false',
+        instrumentId: fact.instrumentId,
+        reviewEventId: fact.reviewEventId,
+        at: fact.at,
+      });
+      continue;
+    }
     facts.push({
       kind: 'grade-corrected',
       instrumentId: fact.instrumentId,
@@ -487,8 +526,147 @@ export function readAllConceptAttainment(
 }
 
 // ---------------------------------------------------------------------------
+// A judgement known false (R10; `ol-egov.141.89.9.85`)
+// ---------------------------------------------------------------------------
+
+/**
+ * A review whose judgement rested on a grading basis later known false: the
+ * review's event and the instant it became known (R10; the E6 case). Only
+ * that review is affected; the instrument's other reviews stand.
+ */
+export interface KnownFalseJudgement {
+  readonly eventId: string;
+  /** The instant it became known (ISO). */
+  readonly knownAt: string;
+}
+
+/** A corrected-evidence fact that came from a known-false judgement rather than a contest. */
+interface KnownFalseEvidenceFact extends CorrectedEvidenceFact {
+  readonly basis: 'known-false';
+}
+
+function isKnownFalseFact(fact: CorrectedEvidenceFact): fact is KnownFalseEvidenceFact {
+  return (fact as Partial<KnownFalseEvidenceFact>).basis === 'known-false';
+}
+
+/**
+ * The validity projection with judgements known false added as proven-wrong
+ * reviews from the instant each became known — the reader input R10 asks for.
+ * Every reader that takes a projection then honours it with no further change:
+ * the displayed stage drops the review from that instant and names it in the
+ * note; vitality, readiness, need and the recognition credit replay without it;
+ * the historical award, judged as of each earlier instant, keeps what stood
+ * before (it never reads a fact from after its instant). A corrective re-grade
+ * still replaces it, exactly as for a corrected contest. A judgement naming no
+ * review in `entries`, or with an unreadable instant, excludes nothing: an
+ * operational gap is never a fact about her. Pure; the same projection when
+ * nothing applies.
+ */
+export function withKnownFalseJudgements(
+  validity: InstrumentValidityProjection,
+  entries: readonly ReviewLogEntry[],
+  judgements: readonly KnownFalseJudgement[] | undefined,
+): InstrumentValidityProjection {
+  if (judgements === undefined || judgements.length === 0) return validity;
+  const reviews = new Map<string, ReviewLogRecord>();
+  for (const entry of entries) {
+    if (entry.kind === 'review') reviews.set(entry.eventId, entry);
+  }
+  const added = new Map<
+    string,
+    { readonly instant: number; readonly fact: KnownFalseEvidenceFact }
+  >();
+  for (const judgement of judgements) {
+    const review = reviews.get(judgement.eventId);
+    const instant = Date.parse(judgement.knownAt);
+    if (review === undefined || !Number.isFinite(instant)) continue;
+    const prior = added.get(review.eventId);
+    if (prior !== undefined && prior.instant <= instant) continue;
+    added.set(review.eventId, {
+      instant,
+      fact: {
+        basis: 'known-false',
+        reviewEventId: review.eventId,
+        instrumentId: review.instrumentId,
+        resolutionEventId: review.eventId,
+        at: judgement.knownAt,
+      },
+    });
+  }
+  if (added.size === 0) return validity;
+  const correctedAsOf = (instant: number): ReadonlyMap<string, CorrectedEvidenceFact> => {
+    const merged = new Map(validity.correctedEvidenceAsOf(instant));
+    for (const [eventId, { instant: knownMs, fact }] of added) {
+      if (knownMs <= instant && !merged.has(eventId)) merged.set(eventId, fact);
+    }
+    return merged;
+  };
+  return {
+    ...validity,
+    correctedEvidence: correctedAsOf(Number.POSITIVE_INFINITY),
+    correctedEvidenceAsOf: correctedAsOf,
+    changeInstants: [
+      ...new Set([...validity.changeInstants, ...[...added.values()].map((a) => a.instant)]),
+    ].sort((a, b) => a - b),
+  };
+}
+
+// ---------------------------------------------------------------------------
 // Current readings: vitality, readiness, need, the recognition credit
 // ---------------------------------------------------------------------------
+
+/** Where a changed passage stands in revalidation (`[D-293]`, `[D-351]`; the ruled states). */
+export type PassageRevalidationState =
+  | 'pending-revalidation'
+  | 'material'
+  | 'uncertain'
+  | 'unavailable'
+  | 'immaterial';
+
+/**
+ * One changed cited passage and the instruments that cite it, with each
+ * revalidation outcome in the order it arrived. The pending-revalidation fact
+ * (`[D-351]`) is the change itself: a change with no outcome yet is pending.
+ * `uncertain` and `unavailable` are a precaution, never a finding: the
+ * recorded state stays the actual outcome (`[D-293]` item 2, `[D-443]`).
+ */
+export interface PassageChangeFact {
+  readonly instrumentIds: readonly string[];
+  /** When the passage was seen to have changed (ISO). */
+  readonly changedAt: string;
+  readonly revalidation: readonly {
+    readonly at: string;
+    readonly state: PassageRevalidationState;
+  }[];
+}
+
+/**
+ * The instruments whose cited passage is changed and not revalidated
+ * `immaterial` as of `now` — the set current readings exclude (`[D-347]`'s
+ * unresolved row). A change after `now` is not yet a fact; an unreadable
+ * timestamp reads as unresolved (a precaution, never a finding about her).
+ */
+export function unresolvedPassageInstrumentIds(
+  changes: readonly PassageChangeFact[] | undefined,
+  now: Date,
+): ReadonlySet<string> {
+  const unresolved = new Set<string>();
+  if (changes === undefined) return unresolved;
+  const nowMs = now.getTime();
+  for (const change of changes) {
+    const changedMs = Date.parse(change.changedAt);
+    if (Number.isFinite(changedMs) && changedMs > nowMs) continue;
+    let latest: { readonly ms: number; readonly state: PassageRevalidationState } | undefined;
+    for (const outcome of change.revalidation) {
+      const ms = Date.parse(outcome.at);
+      if (!Number.isFinite(ms) || ms > nowMs) continue;
+      if (latest === undefined || ms >= latest.ms) latest = { ms, state: outcome.state };
+    }
+    if (latest?.state === 'immaterial') continue;
+    for (const id of change.instrumentIds) unresolved.add(id);
+  }
+  return unresolved;
+}
 
 /** The current readings the eligibility rule distinguishes. */
 export type CurrentReading = 'vitality' | 'readiness' | 'need';
@@ -504,8 +682,12 @@ export function excludedFromCurrent(
   reading: CurrentReading,
   validity: InstrumentValidityProjection,
   policy: WithheldEvidencePolicy,
+  unresolvedPassage?: ReadonlySet<string>,
 ): boolean {
   if (validity.provenInvalid.has(instrumentId)) return true;
+  // `[D-347]`'s split: an unresolved changed passage is excluded from every current reading
+  // under every policy; a sound withdrawal is the policy's.
+  if (unresolvedPassage?.has(instrumentId) === true) return true;
   if (!validity.withheld.has(instrumentId)) return false;
   switch (policy) {
     case 'count':
@@ -548,6 +730,7 @@ export function readAllEligibleConceptVitality(
 ): ReadonlyMap<string, EligibleVitalityReading> {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
+  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
   const replayed = replaySchedulerStates(
     withoutCorrectedEvidence(entries, validity.correctedEvidence),
     scheduler,
@@ -558,7 +741,15 @@ export function readAllEligibleConceptVitality(
     const eligible: VitalityInstrument[] = [];
     const excluded: string[] = [];
     for (const instrument of instruments) {
-      if (excludedFromCurrent(instrument.instrumentId, 'vitality', validity, policy)) {
+      if (
+        excludedFromCurrent(
+          instrument.instrumentId,
+          'vitality',
+          validity,
+          policy,
+          unresolvedPassage,
+        )
+      ) {
         excluded.push(instrument.instrumentId);
       } else {
         eligible.push(instrument);
@@ -610,6 +801,7 @@ export function readAllConceptReadiness(
 ): ReadonlyMap<string, ConceptReadinessReading> {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
+  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed = replaySchedulerStates(standing, scheduler);
   const independent = instrumentsWithIndependentSuccess(standing);
@@ -618,7 +810,13 @@ export function readAllConceptReadiness(
     const instruments = conceptVitalityInstruments(entries, id, replayed)
       .filter(
         (instrument) =>
-          !excludedFromCurrent(instrument.instrumentId, 'readiness', validity, policy),
+          !excludedFromCurrent(
+            instrument.instrumentId,
+            'readiness',
+            validity,
+            policy,
+            unresolvedPassage,
+          ),
       )
       .map((instrument) => ({
         ...instrument,
@@ -724,6 +922,7 @@ export function readAllCurrentRecognition(
 ): ReadonlyMap<string, boolean> {
   const policy = withheldPolicyOf(options);
   const cut = options.holdingCut ?? HOLDING_CUT;
+  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed: ReplayResult = replaySchedulerStates(standing, scheduler);
   const latest = latestRatedReviewByInstrument(standing);
@@ -732,7 +931,8 @@ export function readAllCurrentRecognition(
     let current = false;
     for (const instrument of conceptVitalityInstruments(entries, id, replayed)) {
       if (instrument.instrumentType !== 'mcq' || instrument.state === null) continue;
-      if (excludedFromCurrent(instrument.instrumentId, 'need', validity, policy)) continue;
+      if (excludedFromCurrent(instrument.instrumentId, 'need', validity, policy, unresolvedPassage))
+        continue;
       const last = latest.get(instrument.instrumentId);
       if (last === undefined || last.rating === null || last.rating === 'again') continue;
       const { recallProbability } = scheduler.retrievability({

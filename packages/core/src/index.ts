@@ -1330,8 +1330,11 @@ export type {
   CorrectionFact,
   CurrentReading,
   EligibleVitalityReading,
+  KnownFalseJudgement,
   NeedBasis,
   NeedReading,
+  PassageChangeFact,
+  PassageRevalidationState,
   StageCorrection,
   TopStageAward,
   WithheldEvidencePolicy,
@@ -1348,6 +1351,8 @@ export {
   readConceptAttainment,
   readNeed,
   UNKNOWN_NEED_VALUE,
+  unresolvedPassageInstrumentIds,
+  withKnownFalseJudgements,
 } from './mastery/attainment.js';
 // F2.11's single vocabulary site (D-017). Anything rendering mastery imports
 // from here; there is deliberately no second copy of these five words.
