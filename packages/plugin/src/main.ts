@@ -3093,6 +3093,9 @@ export default class OleaPlugin extends Plugin {
       });
       const records = await misconceptionStore.load();
       const embeddingCache = this.retrieval?.embeddingCache;
+      const teachingEventOf = teachingEventResolverFrom(
+        readLectureBundles(createObsidianResolvedLinksPort(this.app.metadataCache)),
+      );
       const pass = await readConceptsAndRelations(
         this.concept,
         this.corpusRelation,
@@ -3103,11 +3106,9 @@ export default class OleaPlugin extends Plugin {
           now: this.now,
           // `ol-egov.141.89.3.43` (D-465): her explicit links make a lecture's slides, transcript and
           // note one teaching event, so a transcript that restates its slides adds no concept size.
-          read: {
-            teachingEventOf: teachingEventResolverFrom(
-              readLectureBundles(createObsidianResolvedLinksPort(this.app.metadataCache)),
-            ),
-          },
+          read: { teachingEventOf },
+          // `ol-egov.141.89.8.60`: the same resolver reaches relation nomination.
+          teachingEventOf,
           // `ol-egov.141.89.4.15`: a fresh, stateless `data.json` projection (same idiom as
           // `this.citationHashStore` above) — threads a REAL materiality hash store to both
           // sides of Default 4's freshness gate (rel.md §3), so a cached relation whose endpoint

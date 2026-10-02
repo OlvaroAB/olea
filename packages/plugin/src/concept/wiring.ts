@@ -671,6 +671,12 @@ export interface RunCorpusRelationBatchIfDueOptions {
    */
   readonly embeddingProximity?: EmbeddingProximityOptions;
   /**
+   * `ol-egov.141.89.8.60` (D-465): forwarded verbatim to `gatherCorpusRelationVaultContext`'s
+   * `teachingEventOf`, so a transcript passage restating its own lecture's slides raises no
+   * `embedding-proximity` signal. Omitted, nomination is unchanged.
+   */
+  readonly teachingEventOf?: TeachingEventResolver;
+  /**
    * Opt-in assessment-error-adjacency signal (`ol-2zfj.19`) — same shape as
    * `embeddingProximity`: absent means the signal contributes nothing.
    */
@@ -803,6 +809,9 @@ export async function runCorpusRelationBatchIfDue(
       ...(options.assessmentErrorAdjacency !== undefined
         ? { assessmentErrorAdjacency: options.assessmentErrorAdjacency }
         : {}),
+      ...(options.teachingEventOf !== undefined
+        ? { teachingEventOf: options.teachingEventOf }
+        : {}),
     },
   );
 
@@ -880,6 +889,8 @@ export interface ReadConceptsAndRelationsOptions {
   readonly sourcesFolder?: VaultPath;
   /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `embeddingProximity` (`ol-2zfj.13`). */
   readonly embeddingProximity?: EmbeddingProximityOptions;
+  /** `ol-egov.141.89.8.60` (D-465): forwarded verbatim to `runCorpusRelationBatchIfDue`'s `teachingEventOf`; falls back to `read.teachingEventOf`, so one resolver serves the reader and the relation batch. */
+  readonly teachingEventOf?: TeachingEventResolver;
   /** Forwarded verbatim to `runCorpusRelationBatchIfDue`'s `assessmentErrorAdjacency` (`ol-2zfj.19`). */
   readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
   /**
@@ -1023,6 +1034,7 @@ export async function readConceptsAndRelations(
   // no new affordance — via `packages/plugin/src/registry/merge-audit-identity.ts`.
   await proposeAndPersistMergeAudits(options.vault, keyRecords);
 
+  const teachingEventOf = options.teachingEventOf ?? options.read?.teachingEventOf;
   const corpus = await runCorpusRelationBatchIfDue(corpusWiring, stateStore, {
     vault: options.vault,
     ingestionSessionClosed: options.ingestionSessionClosed,
@@ -1035,6 +1047,7 @@ export async function readConceptsAndRelations(
     ...(options.assessmentErrorAdjacency !== undefined
       ? { assessmentErrorAdjacency: options.assessmentErrorAdjacency }
       : {}),
+    ...(teachingEventOf !== undefined ? { teachingEventOf } : {}),
     ...(options.hashStore !== undefined
       ? { endpointRevisionStamping: { keyRecords, hashStore: options.hashStore } }
       : {}),
