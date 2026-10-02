@@ -572,14 +572,19 @@ type InternalPhase =
  * `docs/direction/20260929_decision_sheet_responses.md`). Her own sentence, exactly, for a change
  * that was established; the answer clause is dropped when she submitted none.
  *
- * Held for David, deliberately not built (each has no ruled words): the failed-check sentence, the
- * brief line for a later set-aside in the same session, and any sentence for the case where only
- * the note is known to have changed (today's guard is note-grain). Each returns `null` here.
+ * Ruled words (`[D-456]`, vocabulary registry): Olea is named, never "we". A changed-source check
+ * that could not be completed has its own sentence and is never worded as an established change.
+ * Still unruled, so each returns `null`: the brief line for a later check-failed set-aside, and any
+ * sentence for the case where only the note is known to have changed (today's guard is note-grain).
  */
 export const WITHHELD_PASSAGE_CHANGED_NOTICE =
-  "The passage this question relies on has changed, so we set the question aside and didn't record your answer.";
+  "The passage this question relies on has changed, so Olea set the question aside and didn't record your answer.";
 export const WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE =
-  'The passage this question relies on has changed, so we set the question aside.';
+  'The passage this question relies on has changed, so Olea set the question aside.';
+export const WITHHELD_CHECK_FAILED_NOTICE =
+  "Olea couldn't check the changed source, so this question is set aside for now.";
+export const WITHHELD_LATER_PASSAGE_CHANGED_NOTICE =
+  'Another question has been set aside because its source changed.';
 
 /** What a set-aside established: the passage changed, only the note is known to have, or the check failed. */
 export type WithheldEstablished = 'passage-changed' | 'note-changed' | 'check-failed';
@@ -589,10 +594,16 @@ export function withheldNoticeText(
   established: WithheldEstablished,
   answerSubmitted: boolean,
 ): string | null {
+  if (established === 'check-failed') return WITHHELD_CHECK_FAILED_NOTICE;
   if (established !== 'passage-changed') return null;
   return answerSubmitted
     ? WITHHELD_PASSAGE_CHANGED_NOTICE
     : WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE;
+}
+
+/** The ruled brief line for a later set-aside in the same session, `null` where none is ruled. */
+export function withheldLaterNoticeText(established: WithheldEstablished): string | null {
+  return established === 'passage-changed' ? WITHHELD_LATER_PASSAGE_CHANGED_NOTICE : null;
 }
 
 export class ReviewSession {
@@ -601,8 +612,8 @@ export class ReviewSession {
   private index = 0;
   private phase: InternalPhase = 'loading';
   private withheldNotice: string | null = null;
-  /** `[D-455]`: the full explanation is shown once per session. */
-  private withheldExplained = false;
+  /** `[D-455]`: the full explanation is shown once per session, per kind of outcome. */
+  private readonly withheldExplained = new Set<WithheldEstablished>();
   private mcqSelectedIndex: number | null = null;
   private wasUnsure = false;
   private presentedAtMs: number | null = null;
@@ -1459,15 +1470,15 @@ export class ReviewSession {
       // the rest of the session keeps its order and no replacement is
       // inserted. Whether her answer was submitted (`answerSubmitted`) decides whether the line says so.
       this.items.splice(index, 1);
-      // `[D-455]`: the full explanation once per session; the brief line for a later set-aside is
-      // held wording, so a later one carries none rather than a repeat or an invented sentence.
-      const text = this.withheldExplained
-        ? null
-        : withheldNoticeText(
-            err.grain === 'passage' ? 'passage-changed' : 'note-changed',
-            answerSubmitted,
-          );
-      if (text !== null) this.withheldExplained = true;
+      // `[D-455]` `[D-456]`: the full explanation once per session; each later set-aside for an
+      // established change carries the brief line. `check-failed` is thrown by no guard yet
+      // (ol-egov.141.89.5.5), but its sentence is ruled and never worded as a change.
+      const established: WithheldEstablished =
+        err.grain === 'passage' ? 'passage-changed' : 'note-changed';
+      const text = this.withheldExplained.has(established)
+        ? withheldLaterNoticeText(established)
+        : withheldNoticeText(established, answerSubmitted);
+      if (text !== null) this.withheldExplained.add(established);
       this.withheldNotice = text;
       await this.presentCurrent();
       return null;

@@ -648,8 +648,8 @@ export class ReviewView extends ItemView {
     }
     this.render();
     // `[D-455]` (C5.3): the withheld-question notice, a passive line on the screen that follows,
-    // never a control. `takeWithheldNotice()` returns text only for the ruled wording; the held
-    // variants (failed check, brief later line, note-only) return null and render nothing.
+    // never a control. `takeWithheldNotice()` returns text only for ruled wording ([D-456]:
+    // full explanation, check-failed sentence, brief later line); the unruled note-only case renders nothing.
     const withheldNotice = session.takeWithheldNotice();
     if (withheldNotice !== null) {
       const line = this.contentEl.createDiv({

@@ -15,6 +15,7 @@ import {
   type ReviewSessionDeps,
   WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE,
   WITHHELD_PASSAGE_CHANGED_NOTICE,
+  withheldLaterNoticeText,
   withheldNoticeText,
 } from '../../src/review/session.js';
 import {
@@ -2294,20 +2295,27 @@ describe('a draft refused for a changed source is withheld, never a crash (ol-eg
   // `[D-455]` (row 41): the ruled sentence, exactly, and the answer clause only when submitted.
   it('the ruled sentence, exactly, for an established passage change; the answer clause only when an answer was submitted', () => {
     expect(withheldNoticeText('passage-changed', true)).toBe(
-      "The passage this question relies on has changed, so we set the question aside and didn't record your answer.",
+      "The passage this question relies on has changed, so Olea set the question aside and didn't record your answer.",
     );
     expect(withheldNoticeText('passage-changed', false)).toBe(
-      'The passage this question relies on has changed, so we set the question aside.',
+      'The passage this question relies on has changed, so Olea set the question aside.',
     );
     expect(WITHHELD_PASSAGE_CHANGED_NOTICE).toContain("didn't record your answer");
     expect(WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE).not.toMatch(/answer/);
   });
 
-  it('the held variants (failed check, note only) carry no words yet', () => {
+  it('a check that could not be completed has its own ruled sentence, never worded as a change; note-only has none', () => {
     for (const submitted of [true, false]) {
-      expect(withheldNoticeText('check-failed', submitted)).toBeNull();
+      const text = withheldNoticeText('check-failed', submitted);
+      expect(text).toBe(
+        "Olea couldn't check the changed source, so this question is set aside for now.",
+      );
+      expect(text).not.toMatch(/has changed|answer/);
       expect(withheldNoticeText('note-changed', submitted)).toBeNull();
     }
+    expect(withheldLaterNoticeText('check-failed')).toBeNull();
+    expect(withheldLaterNoticeText('note-changed')).toBeNull();
+    expect(WITHHELD_PASSAGE_CHANGED_NOTICE).not.toMatch(/\bwe\b/);
   });
 
   it('mcqNext with an established passage change: the ruled sentence with the answer clause, taken once', async () => {
@@ -2339,7 +2347,7 @@ describe('a draft refused for a changed source is withheld, never a crash (ol-eg
     expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE);
   });
 
-  it('once per session: a later set-aside repeats no full explanation and invents no brief line (held wording)', async () => {
+  it('once per session: a later set-aside repeats no full explanation and carries the ruled brief line', async () => {
     const a = queueItem(mcqFixture({ draftId: 'draft-a', instrumentId: 'inst-a' }));
     const b = queueItem(mcqFixture({ draftId: 'draft-b', instrumentId: 'inst-b' }));
     const c = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-c' }));
@@ -2354,6 +2362,9 @@ describe('a draft refused for a changed source is withheld, never a crash (ol-eg
     expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NOTICE);
     await session.mcqAnswer(0);
     await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBe(
+      'Another question has been set aside because its source changed.',
+    );
     expect(session.takeWithheldNotice()).toBeNull();
   });
 
