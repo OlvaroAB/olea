@@ -368,15 +368,12 @@ export type ReviewLogRecordV2 = z.infer<typeof reviewLogRecordV2>;
  *
  * **Why the field had to be persisted, rather than widened in memory only.** A
  * note may carry several `topic:` values; tier-2 extraction mints a concept per
- * value; and evidence is many-to-many everywhere else in the model. So a note
- * genuinely about two concepts is evidence for both. D-031 wanted exactly that
- * and could not have it, because this record held one id — and the interim it
- * settled for, binding each instrument to her *first* listed topic, was a
- * placeholder from the day it was written. Widening only the in-memory queue
- * was considered and declined on its merits: it would change which cards she is
- * offered while still logging one concept, which is faithful nowhere and
- * different everywhere. Ruled 2026-08-14; the ruling's own words are that one
- * instrument may be evidence for every concept its note names.
+ * value. D-031 bound each instrument to her *first* listed topic, a placeholder;
+ * the 2026-08-14 ruling widened the record to a list so the queue and the log
+ * agree on which concepts a card is reachable from. **Credit was then narrowed
+ * (D-419, D-423):** the list is for navigation and the per-concept belief stamp;
+ * evidence is credited to one scored concept only (the first listed). Do not
+ * read an instrument as evidence for every concept its note names.
  *
  * **Key order.** `conceptIds` lands last rather than in `conceptId`'s old slot,
  * because the fields before it are spread wholesale from v2 rather than
@@ -393,9 +390,14 @@ export const reviewLogRecordV3 = z.object({
   // Every v2 field except `conceptId`, verbatim and by derivation.
   ...reviewLogRecordV2.omit({ schemaVersion: true, kind: true, conceptId: true }).shape,
   /**
-   * Every concept this instrument practises, in the order her note names them
-   * — the spine (knowledge model §1), now many-to-many as it is everywhere
-   * else in the model.
+   * Every concept the instrument's note names, in her order — the spine
+   * (knowledge model §1). **Index 0 is the scored concept** (D-419, D-423): the
+   * record's recorded subject, read from the record as written. Later ids are
+   * context: they keep navigation and the per-concept belief stamp and earn no
+   * credit. A record written under the earlier every-concept reading credits
+   * only its first id, and reordering a note's topics never reassigns written
+   * records. Credit readers go through the shared scored-concept rule
+   * (`creditsConcept`, `scoredConceptOf` in core's `session/scored-concept.ts`).
    *
    * **Non-empty by schema.** An instrument with no concept is invisible to the
    * queue, to the mastery rollup and to every later question; a record that
