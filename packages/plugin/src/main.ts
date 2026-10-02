@@ -298,6 +298,7 @@ import {
   ObsidianHeadingOfferSettingStore,
 } from './settings/heading-offer-setting.js';
 import { OleaSettingTab } from './settings/settings-tab.js';
+import type { SourceOriginFrontmatterHost } from './source-origin.js';
 import { createTodayContestSupport } from './today/contest.js';
 import {
   createRhythmSource,
@@ -2224,6 +2225,7 @@ export default class OleaPlugin extends Plugin {
     this.concept = await buildConceptWiring({
       dataHost: this,
       createTransport: createRecordingTransport,
+      frontmatterHost: this.sourceOriginFrontmatterHost(),
     });
 
     // KCT-2 (`ol-fx1k`, `[D-114]`): the knowledge-kind classifier's production
@@ -2232,6 +2234,7 @@ export default class OleaPlugin extends Plugin {
     this.knowledgeKind = await buildKnowledgeKindWiring({
       dataHost: this,
       createTransport: createRecordingTransport,
+      frontmatterHost: this.sourceOriginFrontmatterHost(),
     });
 
     // `[EXT-11]` (`ol-kw4a`, `[D-118]`): the corpus-level relation stage's
@@ -2241,6 +2244,7 @@ export default class OleaPlugin extends Plugin {
     this.corpusRelation = await buildCorpusRelationWiring({
       dataHost: this,
       createTransport: createRecordingTransport,
+      frontmatterHost: this.sourceOriginFrontmatterHost(),
     });
     this.corpusRelationStateStore = new ObsidianCorpusRelationStateStore(this);
 
@@ -3281,6 +3285,17 @@ export default class OleaPlugin extends Plugin {
   }
 
   /**
+   * The one cached-frontmatter closure (`this.app.metadataCache`, synchronous, no vault read) shared
+   * by the classify hook and every request builder that sends `sourceChunkOrigins`
+   * (`ol-egov.141.89.8.56`, D-465).
+   */
+  private sourceOriginFrontmatterHost(): SourceOriginFrontmatterHost {
+    return {
+      frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
+    };
+  }
+
+  /**
    * Assembles `DraftQuizCardsDeps` for a grounded generative call
    * (`ol-p3t07a`), or `null` when any half is unavailable — no Worker token
    * pasted yet (F7.8), or the keyword index has not built its first
@@ -3316,14 +3331,15 @@ export default class OleaPlugin extends Plugin {
         registryOverrides: this.registryOverridesCache,
       },
       transport,
+      // `ol-egov.141.89.8.56` (D-465): the same cached-frontmatter source the classify hook reads,
+      // so a Markdown file declaring a transcript role reaches `sourceChunkOrigins`.
+      frontmatterHost: this.sourceOriginFrontmatterHost(),
       // `ol-2zfj.36` ([D-101], F3.8/F3.9): the source-materiality hook —
       // categorical facts for presentation (hers→phrasing,
       // instructor→terminology), never an evidence weight. Absent frontmatter
       // degrades to 'unknown', same as before this hook existed.
       classifyPassage: buildClassifyPassageHook({
-        frontmatterHost: {
-          frontmatterFor: (path) => this.app.metadataCache.getCache(path)?.frontmatter,
-        },
+        frontmatterHost: this.sourceOriginFrontmatterHost(),
       }),
       // `[JEV-11]` (`ol-3ux7.96`): `this.gateStageRecorder.record` runs
       // synchronously and in-memory — the gate's decision never waits on

@@ -111,6 +111,7 @@ import {
 // contention for a single function this file alone calls in production.
 import { proposeAndPersistMergeAudits } from 'olea-core/src/concept/merge-audit-store.js';
 import type { MaterialityHashStore } from '../ingestion/materiality/types.js';
+import type { SourceOriginFrontmatterHost } from '../source-origin.js';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import {
@@ -183,6 +184,8 @@ export interface ObsidianDataHost {
 export interface ConceptWiringDeps {
   readonly dataHost: ObsidianDataHost;
   readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
+  /** `ol-egov.141.89.8.56` (D-465): the cached-frontmatter source, so a Markdown file declaring a transcript role reaches the request origins. Optional: without it only `.txt` transcripts are recognised. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 export interface ConceptWiring {
@@ -200,7 +203,12 @@ export async function buildConceptWiring(deps: ConceptWiringDeps): Promise<Conce
   if (!isWorkerConfigured(config)) return { conceptReader: null };
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
-  return { conceptReader: new WorkerConceptReader({ transport }) };
+  return {
+    conceptReader: new WorkerConceptReader({
+      transport,
+      ...(deps.frontmatterHost === undefined ? {} : { frontmatterHost: deps.frontmatterHost }),
+    }),
+  };
 }
 
 export interface ReadConceptsFromVaultOptions {
@@ -484,7 +492,12 @@ export async function buildKnowledgeKindWiring(
   if (!isWorkerConfigured(config)) return { classifier: null };
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
-  return { classifier: new WorkerKnowledgeKindClassifier({ transport }) };
+  return {
+    classifier: new WorkerKnowledgeKindClassifier({
+      transport,
+      ...(deps.frontmatterHost === undefined ? {} : { frontmatterHost: deps.frontmatterHost }),
+    }),
+  };
 }
 
 /**
@@ -537,7 +550,12 @@ export async function buildCorpusRelationWiring(
   if (!isWorkerConfigured(config)) return { verdictPort: null };
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
-  return { verdictPort: new WorkerCorpusRelationVerdict({ transport }) };
+  return {
+    verdictPort: new WorkerCorpusRelationVerdict({
+      transport,
+      ...(deps.frontmatterHost === undefined ? {} : { frontmatterHost: deps.frontmatterHost }),
+    }),
+  };
 }
 
 /**

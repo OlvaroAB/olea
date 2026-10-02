@@ -47,12 +47,11 @@ import {
   attributeTranscript,
   classifyMateriality,
   formatFromExtension,
-  isTranscriptRole,
-  resolveTranscriptFormat,
   type SourceRole,
   type TranscriptSpeaker,
   type VaultPath,
 } from 'olea-core';
+import { isSuppliedTranscriptPath } from '../source-origin.js';
 import type { DraftQuizCardsDeps } from './draft-quiz-cards.js';
 
 /**
@@ -104,23 +103,6 @@ function roleFromFrontmatter(
 }
 
 /**
- * D-465 (`ol-egov.141.89.8.55`): whether a chunk's file is a supplied lecture transcript, decided
- * the way the reader decides it: a `.txt` is plain text, a `.md` is a transcript only when its
- * cached frontmatter `role` declares one. Synchronous, from the path and the cached frontmatter
- * alone, like every other cue this hook reads.
- */
-function isSuppliedTranscript(
-  path: VaultPath,
-  frontmatter: Record<string, unknown> | undefined,
-): boolean {
-  if (path.toLowerCase().endsWith('.md')) {
-    const raw = frontmatter?.role;
-    return typeof raw === 'string' && isTranscriptRole(raw);
-  }
-  return resolveTranscriptFormat(path).kind === 'transcript';
-}
-
-/**
  * The speaker of one transcript chunk. A part carries no speaker label (parts are document-grain),
  * so attribution gives `unknown-speaker`, which `classifyMateriality` reads as instructor-curated and
  * not hers; a student or question label would give `student-or-question`, unknown authorship. In no
@@ -150,7 +132,7 @@ export function buildClassifyPassageHook(
     const format = formatFromExtension(chunk.path);
     const frontmatter = deps.frontmatterHost.frontmatterFor(chunk.path);
     const declaredRole = roleFromFrontmatter(frontmatter);
-    const transcriptSpeaker = isSuppliedTranscript(chunk.path, frontmatter)
+    const transcriptSpeaker = isSuppliedTranscriptPath(chunk.path, deps.frontmatterHost)
       ? speakerOfTranscriptChunk(chunk.text)
       : undefined;
     const classified = classifyMateriality({
