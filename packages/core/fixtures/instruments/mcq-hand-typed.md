@@ -10,14 +10,14 @@ on read. Being read is not a reason to be reformatted, and a formatter that ran 
 a byte-churning diff in every commit she makes.
 
 ~~~~olea-mcq
-Stem :   Which igneous grain size says the magma cooled slowly?
+Stem :   Which igneous crystal size says the magma cooled slowly?
 distractor:   Aphanitic
 answer:Phaneritic
 
 distractor: Porphyritic
 distractor:  Banded
 DISTRACTOR: Foliated
-   id: mcq-grain-size-1
+   id: mcq-crystal-size-1
 ~~~~
 
 The canonical form of that same item is what `serializeMcq` emits, and it is deliberately not what

@@ -13,14 +13,15 @@ INV-2 golden suite walks **both** trees, so nothing is lost by the separation.
 
 ## INV-3
 
-Entirely invented, and invented **fresh for these files** rather than borrowed. Every distinctive
-term below was checked whole-word and case-insensitively against the read-only real-vault snapshot
-before it was written down, with zero hits required for each: `olivine`, `feldspar`, `quartz`,
+Invented **fresh for these files** rather than borrowed. `check-fixture-vocabulary` in the service repo
+now reads this tree with the vault's checks, whole-word and case-insensitively against the read-only
+real-vault snapshot, and passes with no recorded exceptions. Each distinctive term below had zero
+hits when it was written down: `olivine`, `feldspar`, `quartz`,
 `calcite`, `garnet`, `amphibole`, `basalt`, `granite`, `gneiss`, `schist`, `marble`, `pumice`,
 `breccia`, `magma`, `silicate`, `groundmass`, `phenocryst`, `foliation`, `cleavage`, `banding`,
 `banded`, `aphanitic`, `phaneritic`, `porphyritic`, `igneous`, `metamorphic`, `sedimentary`,
-`volcanic`, `crystallises`, `specimen`, `outcrop`, `coarse`, `grain`, `LITHO204`, and the invented
-ids `mcq-crystallisation-1`, `mcq-grain-size-1`, `basaltline`. The remaining words in these files
+`volcanic`, `crystallises`, `specimen`, `outcrop`, `coarse`, `crystal`, `texture`, `tier`, `LITHO204`, and the invented
+ids `mcq-crystallisation-1`, `mcq-crystal-size-1`, `basaltline`. The remaining words in these files
 are ordinary English.
 
 The invented course code is `LITHO204` and the subject matter is deliberately outside every
@@ -33,7 +34,7 @@ The target format is the default syntax of the Obsidian spaced-repetition plugin
 established from is documented at the top of `packages/core/src/instrument/card-format.ts`, which
 is the file to read before changing anything here.
 
-- **Single-line card** (`::`) — "Grain size and cooling", first card.
+- **Single-line card** (`::`) — "Crystal size and cooling", first card.
 - **Single-line reversed card** (`:::`) — second card. Exercises the separator-ordering rule:
   `:::` contains `::`, so a parser that checks the short one first silently produces the wrong
   back text rather than no card at all.
