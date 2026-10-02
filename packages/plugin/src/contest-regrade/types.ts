@@ -21,7 +21,8 @@ export const CONTEST_REGRADE_JOB_KIND = 'contest-regrade' as const;
  *
  * This is `[D-360]` criterion 2's mechanism: `originalGradeEventId` is
  * resolved from the log as it stood at dispute time (`enqueue.ts` calls
- * `originalGradeEventIdFor` before this payload is built), so a drain that
+ * `contestedGradeEventIdFor(dispute, records)` before this payload is built,
+ * so a dispute that names its review aims the job at that review), so a drain that
  * runs later — possibly after her vault has moved on — still names the
  * exact event the corrective re-grade must carry as `revisionOf`, rather
  * than re-resolving "the standing grade" against whatever is current then.
@@ -37,7 +38,7 @@ export interface ContestRegradeJobPayload {
   readonly disputeEventId: string;
   /** The instrument the grade was on. Present because `DisputeLogRecord.instrumentId` is present for exactly the grade case this job exists for. */
   readonly instrumentId: string;
-  /** The `eventId` of the grade event standing at dispute time — the `revisionOf` a correction must name (`[D-281]`'s correction rule; see `contest.ts`'s `originalGradeEventIdFor`). */
+  /** The `eventId` of the grade event standing at dispute time — the `revisionOf` a correction must name (`[D-281]`'s correction rule; see `review/contest.ts`'s `contestedGradeEventIdFor`, which `enqueue.ts` calls). */
   readonly originalGradeEventId: string;
   /** Every concept the dispute named, carried through for UI/telemetry only — never read to decide anything the engine does. */
   readonly conceptIds: readonly string[];

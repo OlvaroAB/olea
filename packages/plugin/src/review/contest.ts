@@ -62,11 +62,12 @@ export interface GradeContestPort {
    * whose grade is contested, for a caller that knows it at the moment of the
    * contest; the record then names it directly and readers stop inferring the
    * review. A caller that cannot name it (the review is not written yet)
-   * omits it, and the record carries none. **No production caller supplies
-   * it today:** `ReviewSession.contestGrade` (`./session.ts`) contests an
-   * answered quiz item before that item's review event exists, so there is
-   * no id to name until the session pre-mints the review's event id; that is
-   * the follow-up named on `ol-egov.141.89.9.72`.
+   * omits it, and the record carries none. **The one production caller
+   * supplies it:** `ReviewSession.contestGrade` (`./session.ts`) contests an
+   * answered quiz item before that item's review event exists, so it
+   * pre-mints the review's event id (`reserveReviewEventId`), passes it here
+   * as `reviewId`, and hands the same id to the later review write, which
+   * lands under exactly that id (row 48, `ol-egov.141.89.9.74`).
    */
   contestGrade(input: {
     readonly instrumentId: string;
