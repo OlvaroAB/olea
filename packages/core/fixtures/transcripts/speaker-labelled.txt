@@ -1,0 +1,4 @@
+Dr Quillfeather: Let us begin with the lattice model of course A.
+Dr Quillfeather: Each cell in the lattice holds exactly one marker.
+Student: Does that hold for the border cells as well?
+Dr Quillfeather: Good question. Border cells follow the same rule, but they have fewer neighbours.

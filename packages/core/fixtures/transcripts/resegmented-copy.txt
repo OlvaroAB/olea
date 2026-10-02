@@ -1,0 +1,7 @@
+Today we cover the stacking rule.
+
+A marker is added to a cell only if the cell has fewer than three markers.
+
+Otherwise the marker is passed to a neighbouring cell.
+
+This keeps the pile level across the lattice.

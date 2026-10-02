@@ -1,0 +1,799 @@
+Point 0 of the invented lecture states a small claim about topic 0. Point 1 of the invented lecture states a small claim about topic 1. Point 2 of the invented lecture states a small claim about topic 2.
+
+Point 3 of the invented lecture states a small claim about topic 3. Point 4 of the invented lecture states a small claim about topic 4. Point 5 of the invented lecture states a small claim about topic 5.
+
+Point 6 of the invented lecture states a small claim about topic 6. Point 7 of the invented lecture states a small claim about topic 0. Point 8 of the invented lecture states a small claim about topic 1.
+
+Point 9 of the invented lecture states a small claim about topic 2. Point 10 of the invented lecture states a small claim about topic 3. Point 11 of the invented lecture states a small claim about topic 4.
+
+Point 12 of the invented lecture states a small claim about topic 5. Point 13 of the invented lecture states a small claim about topic 6. Point 14 of the invented lecture states a small claim about topic 0.
+
+Point 15 of the invented lecture states a small claim about topic 1. Point 16 of the invented lecture states a small claim about topic 2. Point 17 of the invented lecture states a small claim about topic 3.
+
+Point 18 of the invented lecture states a small claim about topic 4. Point 19 of the invented lecture states a small claim about topic 5. Point 20 of the invented lecture states a small claim about topic 6.
+
+Point 21 of the invented lecture states a small claim about topic 0. Point 22 of the invented lecture states a small claim about topic 1. Point 23 of the invented lecture states a small claim about topic 2.
+
+Point 24 of the invented lecture states a small claim about topic 3. Point 25 of the invented lecture states a small claim about topic 4. Point 26 of the invented lecture states a small claim about topic 5.
+
+Point 27 of the invented lecture states a small claim about topic 6. Point 28 of the invented lecture states a small claim about topic 0. Point 29 of the invented lecture states a small claim about topic 1.
+
+Point 30 of the invented lecture states a small claim about topic 2. Point 31 of the invented lecture states a small claim about topic 3. Point 32 of the invented lecture states a small claim about topic 4.
+
+Point 33 of the invented lecture states a small claim about topic 5. Point 34 of the invented lecture states a small claim about topic 6. Point 35 of the invented lecture states a small claim about topic 0.
+
+Point 36 of the invented lecture states a small claim about topic 1. Point 37 of the invented lecture states a small claim about topic 2. Point 38 of the invented lecture states a small claim about topic 3.
+
+Point 39 of the invented lecture states a small claim about topic 4. Point 40 of the invented lecture states a small claim about topic 5. Point 41 of the invented lecture states a small claim about topic 6.
+
+Point 42 of the invented lecture states a small claim about topic 0. Point 43 of the invented lecture states a small claim about topic 1. Point 44 of the invented lecture states a small claim about topic 2.
+
+Point 45 of the invented lecture states a small claim about topic 3. Point 46 of the invented lecture states a small claim about topic 4. Point 47 of the invented lecture states a small claim about topic 5.
+
+Point 48 of the invented lecture states a small claim about topic 6. Point 49 of the invented lecture states a small claim about topic 0. Point 50 of the invented lecture states a small claim about topic 1.
+
+Point 51 of the invented lecture states a small claim about topic 2. Point 52 of the invented lecture states a small claim about topic 3. Point 53 of the invented lecture states a small claim about topic 4.
+
+Point 54 of the invented lecture states a small claim about topic 5. Point 55 of the invented lecture states a small claim about topic 6. Point 56 of the invented lecture states a small claim about topic 0.
+
+Point 57 of the invented lecture states a small claim about topic 1. Point 58 of the invented lecture states a small claim about topic 2. Point 59 of the invented lecture states a small claim about topic 3.
+
+Point 60 of the invented lecture states a small claim about topic 4. Point 61 of the invented lecture states a small claim about topic 5. Point 62 of the invented lecture states a small claim about topic 6.
+
+Point 63 of the invented lecture states a small claim about topic 0. Point 64 of the invented lecture states a small claim about topic 1. Point 65 of the invented lecture states a small claim about topic 2.
+
+Point 66 of the invented lecture states a small claim about topic 3. Point 67 of the invented lecture states a small claim about topic 4. Point 68 of the invented lecture states a small claim about topic 5.
+
+Point 69 of the invented lecture states a small claim about topic 6. Point 70 of the invented lecture states a small claim about topic 0. Point 71 of the invented lecture states a small claim about topic 1.
+
+Point 72 of the invented lecture states a small claim about topic 2. Point 73 of the invented lecture states a small claim about topic 3. Point 74 of the invented lecture states a small claim about topic 4.
+
+Point 75 of the invented lecture states a small claim about topic 5. Point 76 of the invented lecture states a small claim about topic 6. Point 77 of the invented lecture states a small claim about topic 0.
+
+Point 78 of the invented lecture states a small claim about topic 1. Point 79 of the invented lecture states a small claim about topic 2. Point 80 of the invented lecture states a small claim about topic 3.
+
+Point 81 of the invented lecture states a small claim about topic 4. Point 82 of the invented lecture states a small claim about topic 5. Point 83 of the invented lecture states a small claim about topic 6.
+
+Point 84 of the invented lecture states a small claim about topic 0. Point 85 of the invented lecture states a small claim about topic 1. Point 86 of the invented lecture states a small claim about topic 2.
+
+Point 87 of the invented lecture states a small claim about topic 3. Point 88 of the invented lecture states a small claim about topic 4. Point 89 of the invented lecture states a small claim about topic 5.
+
+Point 90 of the invented lecture states a small claim about topic 6. Point 91 of the invented lecture states a small claim about topic 0. Point 92 of the invented lecture states a small claim about topic 1.
+
+Point 93 of the invented lecture states a small claim about topic 2. Point 94 of the invented lecture states a small claim about topic 3. Point 95 of the invented lecture states a small claim about topic 4.
+
+Point 96 of the invented lecture states a small claim about topic 5. Point 97 of the invented lecture states a small claim about topic 6. Point 98 of the invented lecture states a small claim about topic 0.
+
+Point 99 of the invented lecture states a small claim about topic 1. Point 100 of the invented lecture states a small claim about topic 2. Point 101 of the invented lecture states a small claim about topic 3.
+
+Point 102 of the invented lecture states a small claim about topic 4. Point 103 of the invented lecture states a small claim about topic 5. Point 104 of the invented lecture states a small claim about topic 6.
+
+Point 105 of the invented lecture states a small claim about topic 0. Point 106 of the invented lecture states a small claim about topic 1. Point 107 of the invented lecture states a small claim about topic 2.
+
+Point 108 of the invented lecture states a small claim about topic 3. Point 109 of the invented lecture states a small claim about topic 4. Point 110 of the invented lecture states a small claim about topic 5.
+
+Point 111 of the invented lecture states a small claim about topic 6. Point 112 of the invented lecture states a small claim about topic 0. Point 113 of the invented lecture states a small claim about topic 1.
+
+Point 114 of the invented lecture states a small claim about topic 2. Point 115 of the invented lecture states a small claim about topic 3. Point 116 of the invented lecture states a small claim about topic 4.
+
+Point 117 of the invented lecture states a small claim about topic 5. Point 118 of the invented lecture states a small claim about topic 6. Point 119 of the invented lecture states a small claim about topic 0.
+
+Point 120 of the invented lecture states a small claim about topic 1. Point 121 of the invented lecture states a small claim about topic 2. Point 122 of the invented lecture states a small claim about topic 3.
+
+Point 123 of the invented lecture states a small claim about topic 4. Point 124 of the invented lecture states a small claim about topic 5. Point 125 of the invented lecture states a small claim about topic 6.
+
+Point 126 of the invented lecture states a small claim about topic 0. Point 127 of the invented lecture states a small claim about topic 1. Point 128 of the invented lecture states a small claim about topic 2.
+
+Point 129 of the invented lecture states a small claim about topic 3. Point 130 of the invented lecture states a small claim about topic 4. Point 131 of the invented lecture states a small claim about topic 5.
+
+Point 132 of the invented lecture states a small claim about topic 6. Point 133 of the invented lecture states a small claim about topic 0. Point 134 of the invented lecture states a small claim about topic 1.
+
+Point 135 of the invented lecture states a small claim about topic 2. Point 136 of the invented lecture states a small claim about topic 3. Point 137 of the invented lecture states a small claim about topic 4.
+
+Point 138 of the invented lecture states a small claim about topic 5. Point 139 of the invented lecture states a small claim about topic 6. Point 140 of the invented lecture states a small claim about topic 0.
+
+Point 141 of the invented lecture states a small claim about topic 1. Point 142 of the invented lecture states a small claim about topic 2. Point 143 of the invented lecture states a small claim about topic 3.
+
+Point 144 of the invented lecture states a small claim about topic 4. Point 145 of the invented lecture states a small claim about topic 5. Point 146 of the invented lecture states a small claim about topic 6.
+
+Point 147 of the invented lecture states a small claim about topic 0. Point 148 of the invented lecture states a small claim about topic 1. Point 149 of the invented lecture states a small claim about topic 2.
+
+Point 150 of the invented lecture states a small claim about topic 3. Point 151 of the invented lecture states a small claim about topic 4. Point 152 of the invented lecture states a small claim about topic 5.
+
+Point 153 of the invented lecture states a small claim about topic 6. Point 154 of the invented lecture states a small claim about topic 0. Point 155 of the invented lecture states a small claim about topic 1.
+
+Point 156 of the invented lecture states a small claim about topic 2. Point 157 of the invented lecture states a small claim about topic 3. Point 158 of the invented lecture states a small claim about topic 4.
+
+Point 159 of the invented lecture states a small claim about topic 5. Point 160 of the invented lecture states a small claim about topic 6. Point 161 of the invented lecture states a small claim about topic 0.
+
+Point 162 of the invented lecture states a small claim about topic 1. Point 163 of the invented lecture states a small claim about topic 2. Point 164 of the invented lecture states a small claim about topic 3.
+
+Point 165 of the invented lecture states a small claim about topic 4. Point 166 of the invented lecture states a small claim about topic 5. Point 167 of the invented lecture states a small claim about topic 6.
+
+Point 168 of the invented lecture states a small claim about topic 0. Point 169 of the invented lecture states a small claim about topic 1. Point 170 of the invented lecture states a small claim about topic 2.
+
+Point 171 of the invented lecture states a small claim about topic 3. Point 172 of the invented lecture states a small claim about topic 4. Point 173 of the invented lecture states a small claim about topic 5.
+
+Point 174 of the invented lecture states a small claim about topic 6. Point 175 of the invented lecture states a small claim about topic 0. Point 176 of the invented lecture states a small claim about topic 1.
+
+Point 177 of the invented lecture states a small claim about topic 2. Point 178 of the invented lecture states a small claim about topic 3. Point 179 of the invented lecture states a small claim about topic 4.
+
+Point 180 of the invented lecture states a small claim about topic 5. Point 181 of the invented lecture states a small claim about topic 6. Point 182 of the invented lecture states a small claim about topic 0.
+
+Point 183 of the invented lecture states a small claim about topic 1. Point 184 of the invented lecture states a small claim about topic 2. Point 185 of the invented lecture states a small claim about topic 3.
+
+Point 186 of the invented lecture states a small claim about topic 4. Point 187 of the invented lecture states a small claim about topic 5. Point 188 of the invented lecture states a small claim about topic 6.
+
+Point 189 of the invented lecture states a small claim about topic 0. Point 190 of the invented lecture states a small claim about topic 1. Point 191 of the invented lecture states a small claim about topic 2.
+
+Point 192 of the invented lecture states a small claim about topic 3. Point 193 of the invented lecture states a small claim about topic 4. Point 194 of the invented lecture states a small claim about topic 5.
+
+Point 195 of the invented lecture states a small claim about topic 6. Point 196 of the invented lecture states a small claim about topic 0. Point 197 of the invented lecture states a small claim about topic 1.
+
+Point 198 of the invented lecture states a small claim about topic 2. Point 199 of the invented lecture states a small claim about topic 3. Point 200 of the invented lecture states a small claim about topic 4.
+
+Point 201 of the invented lecture states a small claim about topic 5. Point 202 of the invented lecture states a small claim about topic 6. Point 203 of the invented lecture states a small claim about topic 0.
+
+Point 204 of the invented lecture states a small claim about topic 1. Point 205 of the invented lecture states a small claim about topic 2. Point 206 of the invented lecture states a small claim about topic 3.
+
+Point 207 of the invented lecture states a small claim about topic 4. Point 208 of the invented lecture states a small claim about topic 5. Point 209 of the invented lecture states a small claim about topic 6.
+
+Point 210 of the invented lecture states a small claim about topic 0. Point 211 of the invented lecture states a small claim about topic 1. Point 212 of the invented lecture states a small claim about topic 2.
+
+Point 213 of the invented lecture states a small claim about topic 3. Point 214 of the invented lecture states a small claim about topic 4. Point 215 of the invented lecture states a small claim about topic 5.
+
+Point 216 of the invented lecture states a small claim about topic 6. Point 217 of the invented lecture states a small claim about topic 0. Point 218 of the invented lecture states a small claim about topic 1.
+
+Point 219 of the invented lecture states a small claim about topic 2. Point 220 of the invented lecture states a small claim about topic 3. Point 221 of the invented lecture states a small claim about topic 4.
+
+Point 222 of the invented lecture states a small claim about topic 5. Point 223 of the invented lecture states a small claim about topic 6. Point 224 of the invented lecture states a small claim about topic 0.
+
+Point 225 of the invented lecture states a small claim about topic 1. Point 226 of the invented lecture states a small claim about topic 2. Point 227 of the invented lecture states a small claim about topic 3.
+
+Point 228 of the invented lecture states a small claim about topic 4. Point 229 of the invented lecture states a small claim about topic 5. Point 230 of the invented lecture states a small claim about topic 6.
+
+Point 231 of the invented lecture states a small claim about topic 0. Point 232 of the invented lecture states a small claim about topic 1. Point 233 of the invented lecture states a small claim about topic 2.
+
+Point 234 of the invented lecture states a small claim about topic 3. Point 235 of the invented lecture states a small claim about topic 4. Point 236 of the invented lecture states a small claim about topic 5.
+
+Point 237 of the invented lecture states a small claim about topic 6. Point 238 of the invented lecture states a small claim about topic 0. Point 239 of the invented lecture states a small claim about topic 1.
+
+Point 240 of the invented lecture states a small claim about topic 2. Point 241 of the invented lecture states a small claim about topic 3. Point 242 of the invented lecture states a small claim about topic 4.
+
+Point 243 of the invented lecture states a small claim about topic 5. Point 244 of the invented lecture states a small claim about topic 6. Point 245 of the invented lecture states a small claim about topic 0.
+
+Point 246 of the invented lecture states a small claim about topic 1. Point 247 of the invented lecture states a small claim about topic 2. Point 248 of the invented lecture states a small claim about topic 3.
+
+Point 249 of the invented lecture states a small claim about topic 4. Point 250 of the invented lecture states a small claim about topic 5. Point 251 of the invented lecture states a small claim about topic 6.
+
+Point 252 of the invented lecture states a small claim about topic 0. Point 253 of the invented lecture states a small claim about topic 1. Point 254 of the invented lecture states a small claim about topic 2.
+
+Point 255 of the invented lecture states a small claim about topic 3. Point 256 of the invented lecture states a small claim about topic 4. Point 257 of the invented lecture states a small claim about topic 5.
+
+Point 258 of the invented lecture states a small claim about topic 6. Point 259 of the invented lecture states a small claim about topic 0. Point 260 of the invented lecture states a small claim about topic 1.
+
+Point 261 of the invented lecture states a small claim about topic 2. Point 262 of the invented lecture states a small claim about topic 3. Point 263 of the invented lecture states a small claim about topic 4.
+
+Point 264 of the invented lecture states a small claim about topic 5. Point 265 of the invented lecture states a small claim about topic 6. Point 266 of the invented lecture states a small claim about topic 0.
+
+Point 267 of the invented lecture states a small claim about topic 1. Point 268 of the invented lecture states a small claim about topic 2. Point 269 of the invented lecture states a small claim about topic 3.
+
+Point 270 of the invented lecture states a small claim about topic 4. Point 271 of the invented lecture states a small claim about topic 5. Point 272 of the invented lecture states a small claim about topic 6.
+
+Point 273 of the invented lecture states a small claim about topic 0. Point 274 of the invented lecture states a small claim about topic 1. Point 275 of the invented lecture states a small claim about topic 2.
+
+Point 276 of the invented lecture states a small claim about topic 3. Point 277 of the invented lecture states a small claim about topic 4. Point 278 of the invented lecture states a small claim about topic 5.
+
+Point 279 of the invented lecture states a small claim about topic 6. Point 280 of the invented lecture states a small claim about topic 0. Point 281 of the invented lecture states a small claim about topic 1.
+
+Point 282 of the invented lecture states a small claim about topic 2. Point 283 of the invented lecture states a small claim about topic 3. Point 284 of the invented lecture states a small claim about topic 4.
+
+Point 285 of the invented lecture states a small claim about topic 5. Point 286 of the invented lecture states a small claim about topic 6. Point 287 of the invented lecture states a small claim about topic 0.
+
+Point 288 of the invented lecture states a small claim about topic 1. Point 289 of the invented lecture states a small claim about topic 2. Point 290 of the invented lecture states a small claim about topic 3.
+
+Point 291 of the invented lecture states a small claim about topic 4. Point 292 of the invented lecture states a small claim about topic 5. Point 293 of the invented lecture states a small claim about topic 6.
+
+Point 294 of the invented lecture states a small claim about topic 0. Point 295 of the invented lecture states a small claim about topic 1. Point 296 of the invented lecture states a small claim about topic 2.
+
+Point 297 of the invented lecture states a small claim about topic 3. Point 298 of the invented lecture states a small claim about topic 4. Point 299 of the invented lecture states a small claim about topic 5.
+
+Point 300 of the invented lecture states a small claim about topic 6. Point 301 of the invented lecture states a small claim about topic 0. Point 302 of the invented lecture states a small claim about topic 1.
+
+Point 303 of the invented lecture states a small claim about topic 2. Point 304 of the invented lecture states a small claim about topic 3. Point 305 of the invented lecture states a small claim about topic 4.
+
+Point 306 of the invented lecture states a small claim about topic 5. Point 307 of the invented lecture states a small claim about topic 6. Point 308 of the invented lecture states a small claim about topic 0.
+
+Point 309 of the invented lecture states a small claim about topic 1. Point 310 of the invented lecture states a small claim about topic 2. Point 311 of the invented lecture states a small claim about topic 3.
+
+Point 312 of the invented lecture states a small claim about topic 4. Point 313 of the invented lecture states a small claim about topic 5. Point 314 of the invented lecture states a small claim about topic 6.
+
+Point 315 of the invented lecture states a small claim about topic 0. Point 316 of the invented lecture states a small claim about topic 1. Point 317 of the invented lecture states a small claim about topic 2.
+
+Point 318 of the invented lecture states a small claim about topic 3. Point 319 of the invented lecture states a small claim about topic 4. Point 320 of the invented lecture states a small claim about topic 5.
+
+Point 321 of the invented lecture states a small claim about topic 6. Point 322 of the invented lecture states a small claim about topic 0. Point 323 of the invented lecture states a small claim about topic 1.
+
+Point 324 of the invented lecture states a small claim about topic 2. Point 325 of the invented lecture states a small claim about topic 3. Point 326 of the invented lecture states a small claim about topic 4.
+
+Point 327 of the invented lecture states a small claim about topic 5. Point 328 of the invented lecture states a small claim about topic 6. Point 329 of the invented lecture states a small claim about topic 0.
+
+Point 330 of the invented lecture states a small claim about topic 1. Point 331 of the invented lecture states a small claim about topic 2. Point 332 of the invented lecture states a small claim about topic 3.
+
+Point 333 of the invented lecture states a small claim about topic 4. Point 334 of the invented lecture states a small claim about topic 5. Point 335 of the invented lecture states a small claim about topic 6.
+
+Point 336 of the invented lecture states a small claim about topic 0. Point 337 of the invented lecture states a small claim about topic 1. Point 338 of the invented lecture states a small claim about topic 2.
+
+Point 339 of the invented lecture states a small claim about topic 3. Point 340 of the invented lecture states a small claim about topic 4. Point 341 of the invented lecture states a small claim about topic 5.
+
+Point 342 of the invented lecture states a small claim about topic 6. Point 343 of the invented lecture states a small claim about topic 0. Point 344 of the invented lecture states a small claim about topic 1.
+
+Point 345 of the invented lecture states a small claim about topic 2. Point 346 of the invented lecture states a small claim about topic 3. Point 347 of the invented lecture states a small claim about topic 4.
+
+Point 348 of the invented lecture states a small claim about topic 5. Point 349 of the invented lecture states a small claim about topic 6. Point 350 of the invented lecture states a small claim about topic 0.
+
+Point 351 of the invented lecture states a small claim about topic 1. Point 352 of the invented lecture states a small claim about topic 2. Point 353 of the invented lecture states a small claim about topic 3.
+
+Point 354 of the invented lecture states a small claim about topic 4. Point 355 of the invented lecture states a small claim about topic 5. Point 356 of the invented lecture states a small claim about topic 6.
+
+Point 357 of the invented lecture states a small claim about topic 0. Point 358 of the invented lecture states a small claim about topic 1. Point 359 of the invented lecture states a small claim about topic 2.
+
+Point 360 of the invented lecture states a small claim about topic 3. Point 361 of the invented lecture states a small claim about topic 4. Point 362 of the invented lecture states a small claim about topic 5.
+
+Point 363 of the invented lecture states a small claim about topic 6. Point 364 of the invented lecture states a small claim about topic 0. Point 365 of the invented lecture states a small claim about topic 1.
+
+Point 366 of the invented lecture states a small claim about topic 2. Point 367 of the invented lecture states a small claim about topic 3. Point 368 of the invented lecture states a small claim about topic 4.
+
+Point 369 of the invented lecture states a small claim about topic 5. Point 370 of the invented lecture states a small claim about topic 6. Point 371 of the invented lecture states a small claim about topic 0.
+
+Point 372 of the invented lecture states a small claim about topic 1. Point 373 of the invented lecture states a small claim about topic 2. Point 374 of the invented lecture states a small claim about topic 3.
+
+Point 375 of the invented lecture states a small claim about topic 4. Point 376 of the invented lecture states a small claim about topic 5. Point 377 of the invented lecture states a small claim about topic 6.
+
+Point 378 of the invented lecture states a small claim about topic 0. Point 379 of the invented lecture states a small claim about topic 1. Point 380 of the invented lecture states a small claim about topic 2.
+
+Point 381 of the invented lecture states a small claim about topic 3. Point 382 of the invented lecture states a small claim about topic 4. Point 383 of the invented lecture states a small claim about topic 5.
+
+Point 384 of the invented lecture states a small claim about topic 6. Point 385 of the invented lecture states a small claim about topic 0. Point 386 of the invented lecture states a small claim about topic 1.
+
+Point 387 of the invented lecture states a small claim about topic 2. Point 388 of the invented lecture states a small claim about topic 3. Point 389 of the invented lecture states a small claim about topic 4.
+
+Point 390 of the invented lecture states a small claim about topic 5. Point 391 of the invented lecture states a small claim about topic 6. Point 392 of the invented lecture states a small claim about topic 0.
+
+Point 393 of the invented lecture states a small claim about topic 1. Point 394 of the invented lecture states a small claim about topic 2. Point 395 of the invented lecture states a small claim about topic 3.
+
+Point 396 of the invented lecture states a small claim about topic 4. Point 397 of the invented lecture states a small claim about topic 5. Point 398 of the invented lecture states a small claim about topic 6.
+
+Point 399 of the invented lecture states a small claim about topic 0. Point 400 of the invented lecture states a small claim about topic 1. Point 401 of the invented lecture states a small claim about topic 2.
+
+Point 402 of the invented lecture states a small claim about topic 3. Point 403 of the invented lecture states a small claim about topic 4. Point 404 of the invented lecture states a small claim about topic 5.
+
+Point 405 of the invented lecture states a small claim about topic 6. Point 406 of the invented lecture states a small claim about topic 0. Point 407 of the invented lecture states a small claim about topic 1.
+
+Point 408 of the invented lecture states a small claim about topic 2. Point 409 of the invented lecture states a small claim about topic 3. Point 410 of the invented lecture states a small claim about topic 4.
+
+Point 411 of the invented lecture states a small claim about topic 5. Point 412 of the invented lecture states a small claim about topic 6. Point 413 of the invented lecture states a small claim about topic 0.
+
+Point 414 of the invented lecture states a small claim about topic 1. Point 415 of the invented lecture states a small claim about topic 2. Point 416 of the invented lecture states a small claim about topic 3.
+
+Point 417 of the invented lecture states a small claim about topic 4. Point 418 of the invented lecture states a small claim about topic 5. Point 419 of the invented lecture states a small claim about topic 6.
+
+Point 420 of the invented lecture states a small claim about topic 0. Point 421 of the invented lecture states a small claim about topic 1. Point 422 of the invented lecture states a small claim about topic 2.
+
+Point 423 of the invented lecture states a small claim about topic 3. Point 424 of the invented lecture states a small claim about topic 4. Point 425 of the invented lecture states a small claim about topic 5.
+
+Point 426 of the invented lecture states a small claim about topic 6. Point 427 of the invented lecture states a small claim about topic 0. Point 428 of the invented lecture states a small claim about topic 1.
+
+Point 429 of the invented lecture states a small claim about topic 2. Point 430 of the invented lecture states a small claim about topic 3. Point 431 of the invented lecture states a small claim about topic 4.
+
+Point 432 of the invented lecture states a small claim about topic 5. Point 433 of the invented lecture states a small claim about topic 6. Point 434 of the invented lecture states a small claim about topic 0.
+
+Point 435 of the invented lecture states a small claim about topic 1. Point 436 of the invented lecture states a small claim about topic 2. Point 437 of the invented lecture states a small claim about topic 3.
+
+Point 438 of the invented lecture states a small claim about topic 4. Point 439 of the invented lecture states a small claim about topic 5. Point 440 of the invented lecture states a small claim about topic 6.
+
+Point 441 of the invented lecture states a small claim about topic 0. Point 442 of the invented lecture states a small claim about topic 1. Point 443 of the invented lecture states a small claim about topic 2.
+
+Point 444 of the invented lecture states a small claim about topic 3. Point 445 of the invented lecture states a small claim about topic 4. Point 446 of the invented lecture states a small claim about topic 5.
+
+Point 447 of the invented lecture states a small claim about topic 6. Point 448 of the invented lecture states a small claim about topic 0. Point 449 of the invented lecture states a small claim about topic 1.
+
+Point 450 of the invented lecture states a small claim about topic 2. Point 451 of the invented lecture states a small claim about topic 3. Point 452 of the invented lecture states a small claim about topic 4.
+
+Point 453 of the invented lecture states a small claim about topic 5. Point 454 of the invented lecture states a small claim about topic 6. Point 455 of the invented lecture states a small claim about topic 0.
+
+Point 456 of the invented lecture states a small claim about topic 1. Point 457 of the invented lecture states a small claim about topic 2. Point 458 of the invented lecture states a small claim about topic 3.
+
+Point 459 of the invented lecture states a small claim about topic 4. Point 460 of the invented lecture states a small claim about topic 5. Point 461 of the invented lecture states a small claim about topic 6.
+
+Point 462 of the invented lecture states a small claim about topic 0. Point 463 of the invented lecture states a small claim about topic 1. Point 464 of the invented lecture states a small claim about topic 2.
+
+Point 465 of the invented lecture states a small claim about topic 3. Point 466 of the invented lecture states a small claim about topic 4. Point 467 of the invented lecture states a small claim about topic 5.
+
+Point 468 of the invented lecture states a small claim about topic 6. Point 469 of the invented lecture states a small claim about topic 0. Point 470 of the invented lecture states a small claim about topic 1.
+
+Point 471 of the invented lecture states a small claim about topic 2. Point 472 of the invented lecture states a small claim about topic 3. Point 473 of the invented lecture states a small claim about topic 4.
+
+Point 474 of the invented lecture states a small claim about topic 5. Point 475 of the invented lecture states a small claim about topic 6. Point 476 of the invented lecture states a small claim about topic 0.
+
+Point 477 of the invented lecture states a small claim about topic 1. Point 478 of the invented lecture states a small claim about topic 2. Point 479 of the invented lecture states a small claim about topic 3.
+
+Point 480 of the invented lecture states a small claim about topic 4. Point 481 of the invented lecture states a small claim about topic 5. Point 482 of the invented lecture states a small claim about topic 6.
+
+Point 483 of the invented lecture states a small claim about topic 0. Point 484 of the invented lecture states a small claim about topic 1. Point 485 of the invented lecture states a small claim about topic 2.
+
+Point 486 of the invented lecture states a small claim about topic 3. Point 487 of the invented lecture states a small claim about topic 4. Point 488 of the invented lecture states a small claim about topic 5.
+
+Point 489 of the invented lecture states a small claim about topic 6. Point 490 of the invented lecture states a small claim about topic 0. Point 491 of the invented lecture states a small claim about topic 1.
+
+Point 492 of the invented lecture states a small claim about topic 2. Point 493 of the invented lecture states a small claim about topic 3. Point 494 of the invented lecture states a small claim about topic 4.
+
+Point 495 of the invented lecture states a small claim about topic 5. Point 496 of the invented lecture states a small claim about topic 6. Point 497 of the invented lecture states a small claim about topic 0.
+
+Point 498 of the invented lecture states a small claim about topic 1. Point 499 of the invented lecture states a small claim about topic 2. Point 500 of the invented lecture states a small claim about topic 3.
+
+Point 501 of the invented lecture states a small claim about topic 4. Point 502 of the invented lecture states a small claim about topic 5. Point 503 of the invented lecture states a small claim about topic 6.
+
+Point 504 of the invented lecture states a small claim about topic 0. Point 505 of the invented lecture states a small claim about topic 1. Point 506 of the invented lecture states a small claim about topic 2.
+
+Point 507 of the invented lecture states a small claim about topic 3. Point 508 of the invented lecture states a small claim about topic 4. Point 509 of the invented lecture states a small claim about topic 5.
+
+Point 510 of the invented lecture states a small claim about topic 6. Point 511 of the invented lecture states a small claim about topic 0. Point 512 of the invented lecture states a small claim about topic 1.
+
+Point 513 of the invented lecture states a small claim about topic 2. Point 514 of the invented lecture states a small claim about topic 3. Point 515 of the invented lecture states a small claim about topic 4.
+
+Point 516 of the invented lecture states a small claim about topic 5. Point 517 of the invented lecture states a small claim about topic 6. Point 518 of the invented lecture states a small claim about topic 0.
+
+Point 519 of the invented lecture states a small claim about topic 1. Point 520 of the invented lecture states a small claim about topic 2. Point 521 of the invented lecture states a small claim about topic 3.
+
+Point 522 of the invented lecture states a small claim about topic 4. Point 523 of the invented lecture states a small claim about topic 5. Point 524 of the invented lecture states a small claim about topic 6.
+
+Point 525 of the invented lecture states a small claim about topic 0. Point 526 of the invented lecture states a small claim about topic 1. Point 527 of the invented lecture states a small claim about topic 2.
+
+Point 528 of the invented lecture states a small claim about topic 3. Point 529 of the invented lecture states a small claim about topic 4. Point 530 of the invented lecture states a small claim about topic 5.
+
+Point 531 of the invented lecture states a small claim about topic 6. Point 532 of the invented lecture states a small claim about topic 0. Point 533 of the invented lecture states a small claim about topic 1.
+
+Point 534 of the invented lecture states a small claim about topic 2. Point 535 of the invented lecture states a small claim about topic 3. Point 536 of the invented lecture states a small claim about topic 4.
+
+Point 537 of the invented lecture states a small claim about topic 5. Point 538 of the invented lecture states a small claim about topic 6. Point 539 of the invented lecture states a small claim about topic 0.
+
+Point 540 of the invented lecture states a small claim about topic 1. Point 541 of the invented lecture states a small claim about topic 2. Point 542 of the invented lecture states a small claim about topic 3.
+
+Point 543 of the invented lecture states a small claim about topic 4. Point 544 of the invented lecture states a small claim about topic 5. Point 545 of the invented lecture states a small claim about topic 6.
+
+Point 546 of the invented lecture states a small claim about topic 0. Point 547 of the invented lecture states a small claim about topic 1. Point 548 of the invented lecture states a small claim about topic 2.
+
+Point 549 of the invented lecture states a small claim about topic 3. Point 550 of the invented lecture states a small claim about topic 4. Point 551 of the invented lecture states a small claim about topic 5.
+
+Point 552 of the invented lecture states a small claim about topic 6. Point 553 of the invented lecture states a small claim about topic 0. Point 554 of the invented lecture states a small claim about topic 1.
+
+Point 555 of the invented lecture states a small claim about topic 2. Point 556 of the invented lecture states a small claim about topic 3. Point 557 of the invented lecture states a small claim about topic 4.
+
+Point 558 of the invented lecture states a small claim about topic 5. Point 559 of the invented lecture states a small claim about topic 6. Point 560 of the invented lecture states a small claim about topic 0.
+
+Point 561 of the invented lecture states a small claim about topic 1. Point 562 of the invented lecture states a small claim about topic 2. Point 563 of the invented lecture states a small claim about topic 3.
+
+Point 564 of the invented lecture states a small claim about topic 4. Point 565 of the invented lecture states a small claim about topic 5. Point 566 of the invented lecture states a small claim about topic 6.
+
+Point 567 of the invented lecture states a small claim about topic 0. Point 568 of the invented lecture states a small claim about topic 1. Point 569 of the invented lecture states a small claim about topic 2.
+
+Point 570 of the invented lecture states a small claim about topic 3. Point 571 of the invented lecture states a small claim about topic 4. Point 572 of the invented lecture states a small claim about topic 5.
+
+Point 573 of the invented lecture states a small claim about topic 6. Point 574 of the invented lecture states a small claim about topic 0. Point 575 of the invented lecture states a small claim about topic 1.
+
+Point 576 of the invented lecture states a small claim about topic 2. Point 577 of the invented lecture states a small claim about topic 3. Point 578 of the invented lecture states a small claim about topic 4.
+
+Point 579 of the invented lecture states a small claim about topic 5. Point 580 of the invented lecture states a small claim about topic 6. Point 581 of the invented lecture states a small claim about topic 0.
+
+Point 582 of the invented lecture states a small claim about topic 1. Point 583 of the invented lecture states a small claim about topic 2. Point 584 of the invented lecture states a small claim about topic 3.
+
+Point 585 of the invented lecture states a small claim about topic 4. Point 586 of the invented lecture states a small claim about topic 5. Point 587 of the invented lecture states a small claim about topic 6.
+
+Point 588 of the invented lecture states a small claim about topic 0. Point 589 of the invented lecture states a small claim about topic 1. Point 590 of the invented lecture states a small claim about topic 2.
+
+Point 591 of the invented lecture states a small claim about topic 3. Point 592 of the invented lecture states a small claim about topic 4. Point 593 of the invented lecture states a small claim about topic 5.
+
+Point 594 of the invented lecture states a small claim about topic 6. Point 595 of the invented lecture states a small claim about topic 0. Point 596 of the invented lecture states a small claim about topic 1.
+
+Point 597 of the invented lecture states a small claim about topic 2. Point 598 of the invented lecture states a small claim about topic 3. Point 599 of the invented lecture states a small claim about topic 4.
+
+Point 600 of the invented lecture states a small claim about topic 5. Point 601 of the invented lecture states a small claim about topic 6. Point 602 of the invented lecture states a small claim about topic 0.
+
+Point 603 of the invented lecture states a small claim about topic 1. Point 604 of the invented lecture states a small claim about topic 2. Point 605 of the invented lecture states a small claim about topic 3.
+
+Point 606 of the invented lecture states a small claim about topic 4. Point 607 of the invented lecture states a small claim about topic 5. Point 608 of the invented lecture states a small claim about topic 6.
+
+Point 609 of the invented lecture states a small claim about topic 0. Point 610 of the invented lecture states a small claim about topic 1. Point 611 of the invented lecture states a small claim about topic 2.
+
+Point 612 of the invented lecture states a small claim about topic 3. Point 613 of the invented lecture states a small claim about topic 4. Point 614 of the invented lecture states a small claim about topic 5.
+
+Point 615 of the invented lecture states a small claim about topic 6. Point 616 of the invented lecture states a small claim about topic 0. Point 617 of the invented lecture states a small claim about topic 1.
+
+Point 618 of the invented lecture states a small claim about topic 2. Point 619 of the invented lecture states a small claim about topic 3. Point 620 of the invented lecture states a small claim about topic 4.
+
+Point 621 of the invented lecture states a small claim about topic 5. Point 622 of the invented lecture states a small claim about topic 6. Point 623 of the invented lecture states a small claim about topic 0.
+
+Point 624 of the invented lecture states a small claim about topic 1. Point 625 of the invented lecture states a small claim about topic 2. Point 626 of the invented lecture states a small claim about topic 3.
+
+Point 627 of the invented lecture states a small claim about topic 4. Point 628 of the invented lecture states a small claim about topic 5. Point 629 of the invented lecture states a small claim about topic 6.
+
+Point 630 of the invented lecture states a small claim about topic 0. Point 631 of the invented lecture states a small claim about topic 1. Point 632 of the invented lecture states a small claim about topic 2.
+
+Point 633 of the invented lecture states a small claim about topic 3. Point 634 of the invented lecture states a small claim about topic 4. Point 635 of the invented lecture states a small claim about topic 5.
+
+Point 636 of the invented lecture states a small claim about topic 6. Point 637 of the invented lecture states a small claim about topic 0. Point 638 of the invented lecture states a small claim about topic 1.
+
+Point 639 of the invented lecture states a small claim about topic 2. Point 640 of the invented lecture states a small claim about topic 3. Point 641 of the invented lecture states a small claim about topic 4.
+
+Point 642 of the invented lecture states a small claim about topic 5. Point 643 of the invented lecture states a small claim about topic 6. Point 644 of the invented lecture states a small claim about topic 0.
+
+Point 645 of the invented lecture states a small claim about topic 1. Point 646 of the invented lecture states a small claim about topic 2. Point 647 of the invented lecture states a small claim about topic 3.
+
+Point 648 of the invented lecture states a small claim about topic 4. Point 649 of the invented lecture states a small claim about topic 5. Point 650 of the invented lecture states a small claim about topic 6.
+
+Point 651 of the invented lecture states a small claim about topic 0. Point 652 of the invented lecture states a small claim about topic 1. Point 653 of the invented lecture states a small claim about topic 2.
+
+Point 654 of the invented lecture states a small claim about topic 3. Point 655 of the invented lecture states a small claim about topic 4. Point 656 of the invented lecture states a small claim about topic 5.
+
+Point 657 of the invented lecture states a small claim about topic 6. Point 658 of the invented lecture states a small claim about topic 0. Point 659 of the invented lecture states a small claim about topic 1.
+
+Point 660 of the invented lecture states a small claim about topic 2. Point 661 of the invented lecture states a small claim about topic 3. Point 662 of the invented lecture states a small claim about topic 4.
+
+Point 663 of the invented lecture states a small claim about topic 5. Point 664 of the invented lecture states a small claim about topic 6. Point 665 of the invented lecture states a small claim about topic 0.
+
+Point 666 of the invented lecture states a small claim about topic 1. Point 667 of the invented lecture states a small claim about topic 2. Point 668 of the invented lecture states a small claim about topic 3.
+
+Point 669 of the invented lecture states a small claim about topic 4. Point 670 of the invented lecture states a small claim about topic 5. Point 671 of the invented lecture states a small claim about topic 6.
+
+Point 672 of the invented lecture states a small claim about topic 0. Point 673 of the invented lecture states a small claim about topic 1. Point 674 of the invented lecture states a small claim about topic 2.
+
+Point 675 of the invented lecture states a small claim about topic 3. Point 676 of the invented lecture states a small claim about topic 4. Point 677 of the invented lecture states a small claim about topic 5.
+
+Point 678 of the invented lecture states a small claim about topic 6. Point 679 of the invented lecture states a small claim about topic 0. Point 680 of the invented lecture states a small claim about topic 1.
+
+Point 681 of the invented lecture states a small claim about topic 2. Point 682 of the invented lecture states a small claim about topic 3. Point 683 of the invented lecture states a small claim about topic 4.
+
+Point 684 of the invented lecture states a small claim about topic 5. Point 685 of the invented lecture states a small claim about topic 6. Point 686 of the invented lecture states a small claim about topic 0.
+
+Point 687 of the invented lecture states a small claim about topic 1. Point 688 of the invented lecture states a small claim about topic 2. Point 689 of the invented lecture states a small claim about topic 3.
+
+Point 690 of the invented lecture states a small claim about topic 4. Point 691 of the invented lecture states a small claim about topic 5. Point 692 of the invented lecture states a small claim about topic 6.
+
+Point 693 of the invented lecture states a small claim about topic 0. Point 694 of the invented lecture states a small claim about topic 1. Point 695 of the invented lecture states a small claim about topic 2.
+
+Point 696 of the invented lecture states a small claim about topic 3. Point 697 of the invented lecture states a small claim about topic 4. Point 698 of the invented lecture states a small claim about topic 5.
+
+Point 699 of the invented lecture states a small claim about topic 6. Point 700 of the invented lecture states a small claim about topic 0. Point 701 of the invented lecture states a small claim about topic 1.
+
+Point 702 of the invented lecture states a small claim about topic 2. Point 703 of the invented lecture states a small claim about topic 3. Point 704 of the invented lecture states a small claim about topic 4.
+
+Point 705 of the invented lecture states a small claim about topic 5. Point 706 of the invented lecture states a small claim about topic 6. Point 707 of the invented lecture states a small claim about topic 0.
+
+Point 708 of the invented lecture states a small claim about topic 1. Point 709 of the invented lecture states a small claim about topic 2. Point 710 of the invented lecture states a small claim about topic 3.
+
+Point 711 of the invented lecture states a small claim about topic 4. Point 712 of the invented lecture states a small claim about topic 5. Point 713 of the invented lecture states a small claim about topic 6.
+
+Point 714 of the invented lecture states a small claim about topic 0. Point 715 of the invented lecture states a small claim about topic 1. Point 716 of the invented lecture states a small claim about topic 2.
+
+Point 717 of the invented lecture states a small claim about topic 3. Point 718 of the invented lecture states a small claim about topic 4. Point 719 of the invented lecture states a small claim about topic 5.
+
+Point 720 of the invented lecture states a small claim about topic 6. Point 721 of the invented lecture states a small claim about topic 0. Point 722 of the invented lecture states a small claim about topic 1.
+
+Point 723 of the invented lecture states a small claim about topic 2. Point 724 of the invented lecture states a small claim about topic 3. Point 725 of the invented lecture states a small claim about topic 4.
+
+Point 726 of the invented lecture states a small claim about topic 5. Point 727 of the invented lecture states a small claim about topic 6. Point 728 of the invented lecture states a small claim about topic 0.
+
+Point 729 of the invented lecture states a small claim about topic 1. Point 730 of the invented lecture states a small claim about topic 2. Point 731 of the invented lecture states a small claim about topic 3.
+
+Point 732 of the invented lecture states a small claim about topic 4. Point 733 of the invented lecture states a small claim about topic 5. Point 734 of the invented lecture states a small claim about topic 6.
+
+Point 735 of the invented lecture states a small claim about topic 0. Point 736 of the invented lecture states a small claim about topic 1. Point 737 of the invented lecture states a small claim about topic 2.
+
+Point 738 of the invented lecture states a small claim about topic 3. Point 739 of the invented lecture states a small claim about topic 4. Point 740 of the invented lecture states a small claim about topic 5.
+
+Point 741 of the invented lecture states a small claim about topic 6. Point 742 of the invented lecture states a small claim about topic 0. Point 743 of the invented lecture states a small claim about topic 1.
+
+Point 744 of the invented lecture states a small claim about topic 2. Point 745 of the invented lecture states a small claim about topic 3. Point 746 of the invented lecture states a small claim about topic 4.
+
+Point 747 of the invented lecture states a small claim about topic 5. Point 748 of the invented lecture states a small claim about topic 6. Point 749 of the invented lecture states a small claim about topic 0.
+
+Point 750 of the invented lecture states a small claim about topic 1. Point 751 of the invented lecture states a small claim about topic 2. Point 752 of the invented lecture states a small claim about topic 3.
+
+Point 753 of the invented lecture states a small claim about topic 4. Point 754 of the invented lecture states a small claim about topic 5. Point 755 of the invented lecture states a small claim about topic 6.
+
+Point 756 of the invented lecture states a small claim about topic 0. Point 757 of the invented lecture states a small claim about topic 1. Point 758 of the invented lecture states a small claim about topic 2.
+
+Point 759 of the invented lecture states a small claim about topic 3. Point 760 of the invented lecture states a small claim about topic 4. Point 761 of the invented lecture states a small claim about topic 5.
+
+Point 762 of the invented lecture states a small claim about topic 6. Point 763 of the invented lecture states a small claim about topic 0. Point 764 of the invented lecture states a small claim about topic 1.
+
+Point 765 of the invented lecture states a small claim about topic 2. Point 766 of the invented lecture states a small claim about topic 3. Point 767 of the invented lecture states a small claim about topic 4.
+
+Point 768 of the invented lecture states a small claim about topic 5. Point 769 of the invented lecture states a small claim about topic 6. Point 770 of the invented lecture states a small claim about topic 0.
+
+Point 771 of the invented lecture states a small claim about topic 1. Point 772 of the invented lecture states a small claim about topic 2. Point 773 of the invented lecture states a small claim about topic 3.
+
+Point 774 of the invented lecture states a small claim about topic 4. Point 775 of the invented lecture states a small claim about topic 5. Point 776 of the invented lecture states a small claim about topic 6.
+
+Point 777 of the invented lecture states a small claim about topic 0. Point 778 of the invented lecture states a small claim about topic 1. Point 779 of the invented lecture states a small claim about topic 2.
+
+Point 780 of the invented lecture states a small claim about topic 3. Point 781 of the invented lecture states a small claim about topic 4. Point 782 of the invented lecture states a small claim about topic 5.
+
+Point 783 of the invented lecture states a small claim about topic 6. Point 784 of the invented lecture states a small claim about topic 0. Point 785 of the invented lecture states a small claim about topic 1.
+
+Point 786 of the invented lecture states a small claim about topic 2. Point 787 of the invented lecture states a small claim about topic 3. Point 788 of the invented lecture states a small claim about topic 4.
+
+Point 789 of the invented lecture states a small claim about topic 5. Point 790 of the invented lecture states a small claim about topic 6. Point 791 of the invented lecture states a small claim about topic 0.
+
+Point 792 of the invented lecture states a small claim about topic 1. Point 793 of the invented lecture states a small claim about topic 2. Point 794 of the invented lecture states a small claim about topic 3.
+
+Point 795 of the invented lecture states a small claim about topic 4. Point 796 of the invented lecture states a small claim about topic 5. Point 797 of the invented lecture states a small claim about topic 6.
+
+Point 798 of the invented lecture states a small claim about topic 0. Point 799 of the invented lecture states a small claim about topic 1. Point 800 of the invented lecture states a small claim about topic 2.
+
+Point 801 of the invented lecture states a small claim about topic 3. Point 802 of the invented lecture states a small claim about topic 4. Point 803 of the invented lecture states a small claim about topic 5.
+
+Point 804 of the invented lecture states a small claim about topic 6. Point 805 of the invented lecture states a small claim about topic 0. Point 806 of the invented lecture states a small claim about topic 1.
+
+Point 807 of the invented lecture states a small claim about topic 2. Point 808 of the invented lecture states a small claim about topic 3. Point 809 of the invented lecture states a small claim about topic 4.
+
+Point 810 of the invented lecture states a small claim about topic 5. Point 811 of the invented lecture states a small claim about topic 6. Point 812 of the invented lecture states a small claim about topic 0.
+
+Point 813 of the invented lecture states a small claim about topic 1. Point 814 of the invented lecture states a small claim about topic 2. Point 815 of the invented lecture states a small claim about topic 3.
+
+Point 816 of the invented lecture states a small claim about topic 4. Point 817 of the invented lecture states a small claim about topic 5. Point 818 of the invented lecture states a small claim about topic 6.
+
+Point 819 of the invented lecture states a small claim about topic 0. Point 820 of the invented lecture states a small claim about topic 1. Point 821 of the invented lecture states a small claim about topic 2.
+
+Point 822 of the invented lecture states a small claim about topic 3. Point 823 of the invented lecture states a small claim about topic 4. Point 824 of the invented lecture states a small claim about topic 5.
+
+Point 825 of the invented lecture states a small claim about topic 6. Point 826 of the invented lecture states a small claim about topic 0. Point 827 of the invented lecture states a small claim about topic 1.
+
+Point 828 of the invented lecture states a small claim about topic 2. Point 829 of the invented lecture states a small claim about topic 3. Point 830 of the invented lecture states a small claim about topic 4.
+
+Point 831 of the invented lecture states a small claim about topic 5. Point 832 of the invented lecture states a small claim about topic 6. Point 833 of the invented lecture states a small claim about topic 0.
+
+Point 834 of the invented lecture states a small claim about topic 1. Point 835 of the invented lecture states a small claim about topic 2. Point 836 of the invented lecture states a small claim about topic 3.
+
+Point 837 of the invented lecture states a small claim about topic 4. Point 838 of the invented lecture states a small claim about topic 5. Point 839 of the invented lecture states a small claim about topic 6.
+
+Point 840 of the invented lecture states a small claim about topic 0. Point 841 of the invented lecture states a small claim about topic 1. Point 842 of the invented lecture states a small claim about topic 2.
+
+Point 843 of the invented lecture states a small claim about topic 3. Point 844 of the invented lecture states a small claim about topic 4. Point 845 of the invented lecture states a small claim about topic 5.
+
+Point 846 of the invented lecture states a small claim about topic 6. Point 847 of the invented lecture states a small claim about topic 0. Point 848 of the invented lecture states a small claim about topic 1.
+
+Point 849 of the invented lecture states a small claim about topic 2. Point 850 of the invented lecture states a small claim about topic 3. Point 851 of the invented lecture states a small claim about topic 4.
+
+Point 852 of the invented lecture states a small claim about topic 5. Point 853 of the invented lecture states a small claim about topic 6. Point 854 of the invented lecture states a small claim about topic 0.
+
+Point 855 of the invented lecture states a small claim about topic 1. Point 856 of the invented lecture states a small claim about topic 2. Point 857 of the invented lecture states a small claim about topic 3.
+
+Point 858 of the invented lecture states a small claim about topic 4. Point 859 of the invented lecture states a small claim about topic 5. Point 860 of the invented lecture states a small claim about topic 6.
+
+Point 861 of the invented lecture states a small claim about topic 0. Point 862 of the invented lecture states a small claim about topic 1. Point 863 of the invented lecture states a small claim about topic 2.
+
+Point 864 of the invented lecture states a small claim about topic 3. Point 865 of the invented lecture states a small claim about topic 4. Point 866 of the invented lecture states a small claim about topic 5.
+
+Point 867 of the invented lecture states a small claim about topic 6. Point 868 of the invented lecture states a small claim about topic 0. Point 869 of the invented lecture states a small claim about topic 1.
+
+Point 870 of the invented lecture states a small claim about topic 2. Point 871 of the invented lecture states a small claim about topic 3. Point 872 of the invented lecture states a small claim about topic 4.
+
+Point 873 of the invented lecture states a small claim about topic 5. Point 874 of the invented lecture states a small claim about topic 6. Point 875 of the invented lecture states a small claim about topic 0.
+
+Point 876 of the invented lecture states a small claim about topic 1. Point 877 of the invented lecture states a small claim about topic 2. Point 878 of the invented lecture states a small claim about topic 3.
+
+Point 879 of the invented lecture states a small claim about topic 4. Point 880 of the invented lecture states a small claim about topic 5. Point 881 of the invented lecture states a small claim about topic 6.
+
+Point 882 of the invented lecture states a small claim about topic 0. Point 883 of the invented lecture states a small claim about topic 1. Point 884 of the invented lecture states a small claim about topic 2.
+
+Point 885 of the invented lecture states a small claim about topic 3. Point 886 of the invented lecture states a small claim about topic 4. Point 887 of the invented lecture states a small claim about topic 5.
+
+Point 888 of the invented lecture states a small claim about topic 6. Point 889 of the invented lecture states a small claim about topic 0. Point 890 of the invented lecture states a small claim about topic 1.
+
+Point 891 of the invented lecture states a small claim about topic 2. Point 892 of the invented lecture states a small claim about topic 3. Point 893 of the invented lecture states a small claim about topic 4.
+
+Point 894 of the invented lecture states a small claim about topic 5. Point 895 of the invented lecture states a small claim about topic 6. Point 896 of the invented lecture states a small claim about topic 0.
+
+Point 897 of the invented lecture states a small claim about topic 1. Point 898 of the invented lecture states a small claim about topic 2. Point 899 of the invented lecture states a small claim about topic 3.
+
+Point 900 of the invented lecture states a small claim about topic 4. Point 901 of the invented lecture states a small claim about topic 5. Point 902 of the invented lecture states a small claim about topic 6.
+
+Point 903 of the invented lecture states a small claim about topic 0. Point 904 of the invented lecture states a small claim about topic 1. Point 905 of the invented lecture states a small claim about topic 2.
+
+Point 906 of the invented lecture states a small claim about topic 3. Point 907 of the invented lecture states a small claim about topic 4. Point 908 of the invented lecture states a small claim about topic 5.
+
+Point 909 of the invented lecture states a small claim about topic 6. Point 910 of the invented lecture states a small claim about topic 0. Point 911 of the invented lecture states a small claim about topic 1.
+
+Point 912 of the invented lecture states a small claim about topic 2. Point 913 of the invented lecture states a small claim about topic 3. Point 914 of the invented lecture states a small claim about topic 4.
+
+Point 915 of the invented lecture states a small claim about topic 5. Point 916 of the invented lecture states a small claim about topic 6. Point 917 of the invented lecture states a small claim about topic 0.
+
+Point 918 of the invented lecture states a small claim about topic 1. Point 919 of the invented lecture states a small claim about topic 2. Point 920 of the invented lecture states a small claim about topic 3.
+
+Point 921 of the invented lecture states a small claim about topic 4. Point 922 of the invented lecture states a small claim about topic 5. Point 923 of the invented lecture states a small claim about topic 6.
+
+Point 924 of the invented lecture states a small claim about topic 0. Point 925 of the invented lecture states a small claim about topic 1. Point 926 of the invented lecture states a small claim about topic 2.
+
+Point 927 of the invented lecture states a small claim about topic 3. Point 928 of the invented lecture states a small claim about topic 4. Point 929 of the invented lecture states a small claim about topic 5.
+
+Point 930 of the invented lecture states a small claim about topic 6. Point 931 of the invented lecture states a small claim about topic 0. Point 932 of the invented lecture states a small claim about topic 1.
+
+Point 933 of the invented lecture states a small claim about topic 2. Point 934 of the invented lecture states a small claim about topic 3. Point 935 of the invented lecture states a small claim about topic 4.
+
+Point 936 of the invented lecture states a small claim about topic 5. Point 937 of the invented lecture states a small claim about topic 6. Point 938 of the invented lecture states a small claim about topic 0.
+
+Point 939 of the invented lecture states a small claim about topic 1. Point 940 of the invented lecture states a small claim about topic 2. Point 941 of the invented lecture states a small claim about topic 3.
+
+Point 942 of the invented lecture states a small claim about topic 4. Point 943 of the invented lecture states a small claim about topic 5. Point 944 of the invented lecture states a small claim about topic 6.
+
+Point 945 of the invented lecture states a small claim about topic 0. Point 946 of the invented lecture states a small claim about topic 1. Point 947 of the invented lecture states a small claim about topic 2.
+
+Point 948 of the invented lecture states a small claim about topic 3. Point 949 of the invented lecture states a small claim about topic 4. Point 950 of the invented lecture states a small claim about topic 5.
+
+Point 951 of the invented lecture states a small claim about topic 6. Point 952 of the invented lecture states a small claim about topic 0. Point 953 of the invented lecture states a small claim about topic 1.
+
+Point 954 of the invented lecture states a small claim about topic 2. Point 955 of the invented lecture states a small claim about topic 3. Point 956 of the invented lecture states a small claim about topic 4.
+
+Point 957 of the invented lecture states a small claim about topic 5. Point 958 of the invented lecture states a small claim about topic 6. Point 959 of the invented lecture states a small claim about topic 0.
+
+Point 960 of the invented lecture states a small claim about topic 1. Point 961 of the invented lecture states a small claim about topic 2. Point 962 of the invented lecture states a small claim about topic 3.
+
+Point 963 of the invented lecture states a small claim about topic 4. Point 964 of the invented lecture states a small claim about topic 5. Point 965 of the invented lecture states a small claim about topic 6.
+
+Point 966 of the invented lecture states a small claim about topic 0. Point 967 of the invented lecture states a small claim about topic 1. Point 968 of the invented lecture states a small claim about topic 2.
+
+Point 969 of the invented lecture states a small claim about topic 3. Point 970 of the invented lecture states a small claim about topic 4. Point 971 of the invented lecture states a small claim about topic 5.
+
+Point 972 of the invented lecture states a small claim about topic 6. Point 973 of the invented lecture states a small claim about topic 0. Point 974 of the invented lecture states a small claim about topic 1.
+
+Point 975 of the invented lecture states a small claim about topic 2. Point 976 of the invented lecture states a small claim about topic 3. Point 977 of the invented lecture states a small claim about topic 4.
+
+Point 978 of the invented lecture states a small claim about topic 5. Point 979 of the invented lecture states a small claim about topic 6. Point 980 of the invented lecture states a small claim about topic 0.
+
+Point 981 of the invented lecture states a small claim about topic 1. Point 982 of the invented lecture states a small claim about topic 2. Point 983 of the invented lecture states a small claim about topic 3.
+
+Point 984 of the invented lecture states a small claim about topic 4. Point 985 of the invented lecture states a small claim about topic 5. Point 986 of the invented lecture states a small claim about topic 6.
+
+Point 987 of the invented lecture states a small claim about topic 0. Point 988 of the invented lecture states a small claim about topic 1. Point 989 of the invented lecture states a small claim about topic 2.
+
+Point 990 of the invented lecture states a small claim about topic 3. Point 991 of the invented lecture states a small claim about topic 4. Point 992 of the invented lecture states a small claim about topic 5.
+
+Point 993 of the invented lecture states a small claim about topic 6. Point 994 of the invented lecture states a small claim about topic 0. Point 995 of the invented lecture states a small claim about topic 1.
+
+Point 996 of the invented lecture states a small claim about topic 2. Point 997 of the invented lecture states a small claim about topic 3. Point 998 of the invented lecture states a small claim about topic 4.
+
+Point 999 of the invented lecture states a small claim about topic 5. Point 1000 of the invented lecture states a small claim about topic 6. Point 1001 of the invented lecture states a small claim about topic 0.
+
+Point 1002 of the invented lecture states a small claim about topic 1. Point 1003 of the invented lecture states a small claim about topic 2. Point 1004 of the invented lecture states a small claim about topic 3.
+
+Point 1005 of the invented lecture states a small claim about topic 4. Point 1006 of the invented lecture states a small claim about topic 5. Point 1007 of the invented lecture states a small claim about topic 6.
+
+Point 1008 of the invented lecture states a small claim about topic 0. Point 1009 of the invented lecture states a small claim about topic 1. Point 1010 of the invented lecture states a small claim about topic 2.
+
+Point 1011 of the invented lecture states a small claim about topic 3. Point 1012 of the invented lecture states a small claim about topic 4. Point 1013 of the invented lecture states a small claim about topic 5.
+
+Point 1014 of the invented lecture states a small claim about topic 6. Point 1015 of the invented lecture states a small claim about topic 0. Point 1016 of the invented lecture states a small claim about topic 1.
+
+Point 1017 of the invented lecture states a small claim about topic 2. Point 1018 of the invented lecture states a small claim about topic 3. Point 1019 of the invented lecture states a small claim about topic 4.
+
+Point 1020 of the invented lecture states a small claim about topic 5. Point 1021 of the invented lecture states a small claim about topic 6. Point 1022 of the invented lecture states a small claim about topic 0.
+
+Point 1023 of the invented lecture states a small claim about topic 1. Point 1024 of the invented lecture states a small claim about topic 2. Point 1025 of the invented lecture states a small claim about topic 3.
+
+Point 1026 of the invented lecture states a small claim about topic 4. Point 1027 of the invented lecture states a small claim about topic 5. Point 1028 of the invented lecture states a small claim about topic 6.
+
+Point 1029 of the invented lecture states a small claim about topic 0. Point 1030 of the invented lecture states a small claim about topic 1. Point 1031 of the invented lecture states a small claim about topic 2.
+
+Point 1032 of the invented lecture states a small claim about topic 3. Point 1033 of the invented lecture states a small claim about topic 4. Point 1034 of the invented lecture states a small claim about topic 5.
+
+Point 1035 of the invented lecture states a small claim about topic 6. Point 1036 of the invented lecture states a small claim about topic 0. Point 1037 of the invented lecture states a small claim about topic 1.
+
+Point 1038 of the invented lecture states a small claim about topic 2. Point 1039 of the invented lecture states a small claim about topic 3. Point 1040 of the invented lecture states a small claim about topic 4.
+
+Point 1041 of the invented lecture states a small claim about topic 5. Point 1042 of the invented lecture states a small claim about topic 6. Point 1043 of the invented lecture states a small claim about topic 0.
+
+Point 1044 of the invented lecture states a small claim about topic 1. Point 1045 of the invented lecture states a small claim about topic 2. Point 1046 of the invented lecture states a small claim about topic 3.
+
+Point 1047 of the invented lecture states a small claim about topic 4. Point 1048 of the invented lecture states a small claim about topic 5. Point 1049 of the invented lecture states a small claim about topic 6.
+
+Point 1050 of the invented lecture states a small claim about topic 0. Point 1051 of the invented lecture states a small claim about topic 1. Point 1052 of the invented lecture states a small claim about topic 2.
+
+Point 1053 of the invented lecture states a small claim about topic 3. Point 1054 of the invented lecture states a small claim about topic 4. Point 1055 of the invented lecture states a small claim about topic 5.
+
+Point 1056 of the invented lecture states a small claim about topic 6. Point 1057 of the invented lecture states a small claim about topic 0. Point 1058 of the invented lecture states a small claim about topic 1.
+
+Point 1059 of the invented lecture states a small claim about topic 2. Point 1060 of the invented lecture states a small claim about topic 3. Point 1061 of the invented lecture states a small claim about topic 4.
+
+Point 1062 of the invented lecture states a small claim about topic 5. Point 1063 of the invented lecture states a small claim about topic 6. Point 1064 of the invented lecture states a small claim about topic 0.
+
+Point 1065 of the invented lecture states a small claim about topic 1. Point 1066 of the invented lecture states a small claim about topic 2. Point 1067 of the invented lecture states a small claim about topic 3.
+
+Point 1068 of the invented lecture states a small claim about topic 4. Point 1069 of the invented lecture states a small claim about topic 5. Point 1070 of the invented lecture states a small claim about topic 6.
+
+Point 1071 of the invented lecture states a small claim about topic 0. Point 1072 of the invented lecture states a small claim about topic 1. Point 1073 of the invented lecture states a small claim about topic 2.
+
+Point 1074 of the invented lecture states a small claim about topic 3. Point 1075 of the invented lecture states a small claim about topic 4. Point 1076 of the invented lecture states a small claim about topic 5.
+
+Point 1077 of the invented lecture states a small claim about topic 6. Point 1078 of the invented lecture states a small claim about topic 0. Point 1079 of the invented lecture states a small claim about topic 1.
+
+Point 1080 of the invented lecture states a small claim about topic 2. Point 1081 of the invented lecture states a small claim about topic 3. Point 1082 of the invented lecture states a small claim about topic 4.
+
+Point 1083 of the invented lecture states a small claim about topic 5. Point 1084 of the invented lecture states a small claim about topic 6. Point 1085 of the invented lecture states a small claim about topic 0.
+
+Point 1086 of the invented lecture states a small claim about topic 1. Point 1087 of the invented lecture states a small claim about topic 2. Point 1088 of the invented lecture states a small claim about topic 3.
+
+Point 1089 of the invented lecture states a small claim about topic 4. Point 1090 of the invented lecture states a small claim about topic 5. Point 1091 of the invented lecture states a small claim about topic 6.
+
+Point 1092 of the invented lecture states a small claim about topic 0. Point 1093 of the invented lecture states a small claim about topic 1. Point 1094 of the invented lecture states a small claim about topic 2.
+
+Point 1095 of the invented lecture states a small claim about topic 3. Point 1096 of the invented lecture states a small claim about topic 4. Point 1097 of the invented lecture states a small claim about topic 5.
+
+Point 1098 of the invented lecture states a small claim about topic 6. Point 1099 of the invented lecture states a small claim about topic 0. Point 1100 of the invented lecture states a small claim about topic 1.
+
+Point 1101 of the invented lecture states a small claim about topic 2. Point 1102 of the invented lecture states a small claim about topic 3. Point 1103 of the invented lecture states a small claim about topic 4.
+
+Point 1104 of the invented lecture states a small claim about topic 5. Point 1105 of the invented lecture states a small claim about topic 6. Point 1106 of the invented lecture states a small claim about topic 0.
+
+Point 1107 of the invented lecture states a small claim about topic 1. Point 1108 of the invented lecture states a small claim about topic 2. Point 1109 of the invented lecture states a small claim about topic 3.
+
+Point 1110 of the invented lecture states a small claim about topic 4. Point 1111 of the invented lecture states a small claim about topic 5. Point 1112 of the invented lecture states a small claim about topic 6.
+
+Point 1113 of the invented lecture states a small claim about topic 0. Point 1114 of the invented lecture states a small claim about topic 1. Point 1115 of the invented lecture states a small claim about topic 2.
+
+Point 1116 of the invented lecture states a small claim about topic 3. Point 1117 of the invented lecture states a small claim about topic 4. Point 1118 of the invented lecture states a small claim about topic 5.
+
+Point 1119 of the invented lecture states a small claim about topic 6. Point 1120 of the invented lecture states a small claim about topic 0. Point 1121 of the invented lecture states a small claim about topic 1.
+
+Point 1122 of the invented lecture states a small claim about topic 2. Point 1123 of the invented lecture states a small claim about topic 3. Point 1124 of the invented lecture states a small claim about topic 4.
+
+Point 1125 of the invented lecture states a small claim about topic 5. Point 1126 of the invented lecture states a small claim about topic 6. Point 1127 of the invented lecture states a small claim about topic 0.
+
+Point 1128 of the invented lecture states a small claim about topic 1. Point 1129 of the invented lecture states a small claim about topic 2. Point 1130 of the invented lecture states a small claim about topic 3.
+
+Point 1131 of the invented lecture states a small claim about topic 4. Point 1132 of the invented lecture states a small claim about topic 5. Point 1133 of the invented lecture states a small claim about topic 6.
+
+Point 1134 of the invented lecture states a small claim about topic 0. Point 1135 of the invented lecture states a small claim about topic 1. Point 1136 of the invented lecture states a small claim about topic 2.
+
+Point 1137 of the invented lecture states a small claim about topic 3. Point 1138 of the invented lecture states a small claim about topic 4. Point 1139 of the invented lecture states a small claim about topic 5.
+
+Point 1140 of the invented lecture states a small claim about topic 6. Point 1141 of the invented lecture states a small claim about topic 0. Point 1142 of the invented lecture states a small claim about topic 1.
+
+Point 1143 of the invented lecture states a small claim about topic 2. Point 1144 of the invented lecture states a small claim about topic 3. Point 1145 of the invented lecture states a small claim about topic 4.
+
+Point 1146 of the invented lecture states a small claim about topic 5. Point 1147 of the invented lecture states a small claim about topic 6. Point 1148 of the invented lecture states a small claim about topic 0.
+
+Point 1149 of the invented lecture states a small claim about topic 1. Point 1150 of the invented lecture states a small claim about topic 2. Point 1151 of the invented lecture states a small claim about topic 3.
+
+Point 1152 of the invented lecture states a small claim about topic 4. Point 1153 of the invented lecture states a small claim about topic 5. Point 1154 of the invented lecture states a small claim about topic 6.
+
+Point 1155 of the invented lecture states a small claim about topic 0. Point 1156 of the invented lecture states a small claim about topic 1. Point 1157 of the invented lecture states a small claim about topic 2.
+
+Point 1158 of the invented lecture states a small claim about topic 3. Point 1159 of the invented lecture states a small claim about topic 4. Point 1160 of the invented lecture states a small claim about topic 5.
+
+Point 1161 of the invented lecture states a small claim about topic 6. Point 1162 of the invented lecture states a small claim about topic 0. Point 1163 of the invented lecture states a small claim about topic 1.
+
+Point 1164 of the invented lecture states a small claim about topic 2. Point 1165 of the invented lecture states a small claim about topic 3. Point 1166 of the invented lecture states a small claim about topic 4.
+
+Point 1167 of the invented lecture states a small claim about topic 5. Point 1168 of the invented lecture states a small claim about topic 6. Point 1169 of the invented lecture states a small claim about topic 0.
+
+Point 1170 of the invented lecture states a small claim about topic 1. Point 1171 of the invented lecture states a small claim about topic 2. Point 1172 of the invented lecture states a small claim about topic 3.
+
+Point 1173 of the invented lecture states a small claim about topic 4. Point 1174 of the invented lecture states a small claim about topic 5. Point 1175 of the invented lecture states a small claim about topic 6.
+
+Point 1176 of the invented lecture states a small claim about topic 0. Point 1177 of the invented lecture states a small claim about topic 1. Point 1178 of the invented lecture states a small claim about topic 2.
+
+Point 1179 of the invented lecture states a small claim about topic 3. Point 1180 of the invented lecture states a small claim about topic 4. Point 1181 of the invented lecture states a small claim about topic 5.
+
+Point 1182 of the invented lecture states a small claim about topic 6. Point 1183 of the invented lecture states a small claim about topic 0. Point 1184 of the invented lecture states a small claim about topic 1.
+
+Point 1185 of the invented lecture states a small claim about topic 2. Point 1186 of the invented lecture states a small claim about topic 3. Point 1187 of the invented lecture states a small claim about topic 4.
+
+Point 1188 of the invented lecture states a small claim about topic 5. Point 1189 of the invented lecture states a small claim about topic 6. Point 1190 of the invented lecture states a small claim about topic 0.
+
+Point 1191 of the invented lecture states a small claim about topic 1. Point 1192 of the invented lecture states a small claim about topic 2. Point 1193 of the invented lecture states a small claim about topic 3.
+
+Point 1194 of the invented lecture states a small claim about topic 4. Point 1195 of the invented lecture states a small claim about topic 5. Point 1196 of the invented lecture states a small claim about topic 6.
+
+Point 1197 of the invented lecture states a small claim about topic 0. Point 1198 of the invented lecture states a small claim about topic 1. Point 1199 of the invented lecture states a small claim about topic 2.

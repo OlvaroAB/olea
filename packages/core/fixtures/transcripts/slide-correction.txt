@@ -1,0 +1,2 @@
+Dr Marrowby: One correction to the slide you were given. It says the lattice has four neighbours per cell. That is a mistake on the slide: the lattice has six neighbours per cell, except at the border.
+Dr Marrowby: Please change the slide in your own notes to say six.

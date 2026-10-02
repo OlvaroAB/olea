@@ -1,0 +1,2 @@
+Dr Quillfeather: The slide calls it the neighbour threshold, and in speech I will say the neighbor cutoff, meaning the same quantity.
+Dr Quillfeather: The stacking rule fires when the neighbor cutoff is reached.

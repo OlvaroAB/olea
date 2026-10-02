@@ -1,0 +1,5 @@
+Welcome to week one of course A. Today we look at two ideas.
+
+First, the idea of a worked example. A worked example shows each step and the reason for it.
+
+Second, the idea of a counter-example, which is just as useful. A counter-example shows where a claim stops holding.
