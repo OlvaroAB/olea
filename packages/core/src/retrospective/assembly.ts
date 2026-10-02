@@ -23,8 +23,10 @@
  * `summariseBeforeAssessment` turns the per-concept assembly into the one line's counts: {n}
  * practised, {m} in scope, {k} explained. Both counts read the same filtered log, one boundary.
  * Where the scope is empty or the history is unavailable it returns the limitation, never a zero.
- * A scope drawn from review history is read as of the same boundary: a concept first practised on or
- * after the day was not in the evidenced set by the date.
+ * **The line is drawn only on a stated scope.** An evidenced scope (no stated scope) is built from
+ * what she practised, so {n} would equal {m} by construction and the line would read as full
+ * coverage, which implies preparedness and which `[D-469]` forbids. It returns the scope limitation
+ * instead (Class B display default, `ol-egov.141.89.11.31`, for David's review).
  *
  * Pure: no clock, no vault, nothing stored.
  */
@@ -67,6 +69,7 @@ export function assembleBeforeAssessment(input: {
  *
  * - {k} counts explained (`tree`) among the practised concepts only, so it never exceeds {n}.
  * - `historyAvailable: false` is the limitation, whatever the counts would be.
+ * - An evidenced scope never yields counts: `'scope'` unavailable, whatever she practised.
  * - An empty scope is `'scope'` unavailable. No practice before the date among the scope is
  *   `'history'` unavailable: Olea cannot tell "she practised none" from "no earlier history is
  *   available to it", so it never draws a zero for it (Class B default under `[D-469]`).
@@ -76,12 +79,10 @@ export function summariseBeforeAssessment(input: {
   readonly scopeOrigin: RetrospectiveScopeOrigin;
   readonly historyAvailable: boolean;
 }): RetrospectiveBeforeAssessment {
+  if (input.scopeOrigin === 'evidenced') return { kind: 'unavailable', reason: 'scope' };
   if (input.assembly.length === 0) return { kind: 'unavailable', reason: 'scope' };
   if (!input.historyAvailable) return { kind: 'unavailable', reason: 'history' };
-  const members =
-    input.scopeOrigin === 'evidenced'
-      ? input.assembly.filter((entry) => entry.attempted)
-      : input.assembly;
+  const members = input.assembly;
   const practised = members.filter((entry) => entry.attempted);
   if (practised.length === 0) return { kind: 'unavailable', reason: 'history' };
   return {

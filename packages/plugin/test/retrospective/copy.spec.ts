@@ -304,7 +304,7 @@ describe('practiceByDateLine (D-469, F8.8 "What she had practised by the date")'
   it('each unavailable case states its limitation and holds no number', () => {
     const scope = practiceByDateLine({ kind: 'unavailable', reason: 'scope' });
     const history = practiceByDateLine({ kind: 'unavailable', reason: 'history' });
-    expect(scope).toMatch(/not available/);
+    expect(scope).toMatch(/no stated scope is recorded for this assessment/);
     expect(history).toMatch(/not available/);
     expect(scope).not.toBe(history);
     expect(scope).not.toMatch(/\d/);

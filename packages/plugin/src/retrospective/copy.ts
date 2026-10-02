@@ -96,7 +96,7 @@ export function practiceByDateLine(line: BeforeAssessment): string {
     );
   }
   return line.reason === 'scope'
-    ? 'Olea cannot say what you had practised by the assessment date: the concepts linked to this assessment in Olea are not available.'
+    ? 'Olea cannot say what you had practised by the assessment date: no stated scope is recorded for this assessment.'
     : 'Olea cannot say what you had practised by the assessment date: your recorded practice from before that date is not available.';
 }
 

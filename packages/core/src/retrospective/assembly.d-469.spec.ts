@@ -173,24 +173,18 @@ describe('the scope basis', () => {
     expect(edited).toMatchObject({ scopeSize: 1, basis: 'assessment-stated' });
   });
 
-  it('an evidenced scope never includes a concept first practised on or after the date', () => {
+  it('an evidenced scope never yields counts: it is the scope limitation, whatever she practised', () => {
     const line = buildRetrospective(
       input(
         [
           review('k-a', '2026-07-01T10:00:00+00:00', 'e1'),
-          review('k-b', '2026-07-14T10:00:00+00:00', 'e2'),
+          explainBack('k-b', '2026-07-02T10:00:00+00:00', 'e2'),
           review('k-c', '2026-08-01T10:00:00+00:00', 'e3'),
         ],
         { scopeOrigin: 'evidenced' },
       ),
     ).beforeAssessment;
-    expect(line).toEqual({
-      kind: 'counts',
-      practised: 1,
-      scopeSize: 1,
-      explained: 0,
-      basis: 'evidenced',
-    });
+    expect(line).toEqual({ kind: 'unavailable', reason: 'scope' });
   });
 });
 

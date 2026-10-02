@@ -747,6 +747,13 @@ describe('createLocalRetrospectiveProvider — what she had practised by the dat
     });
   });
 
+  it('no stated scope (evidenced) shows the scope limitation, never counts', async () => {
+    const vault = await vaultWithReviewsOn({ Photosynthesis: '2026-08-19' }, undefined);
+    const reading = await load(vault);
+    expect(reading.scopeOrigin).toBe('evidenced');
+    expect(reading.beforeAssessment).toEqual({ kind: 'unavailable', reason: 'scope' });
+  });
+
   it('only practice after the date reads as the history limitation, never a zero', async () => {
     const vault = await vaultWithReviewsOn({ Photosynthesis: '2026-08-25' }, 'Photosynthesis');
     expect((await load(vault)).beforeAssessment).toEqual({
