@@ -102,6 +102,14 @@ export interface SourceLocation {
    *    internal structure to name.
    */
   readonly section?: string;
+  /**
+   * Present only when this location is a part of a supplied lecture transcript
+   * (`ol-egov.141.89.3.43`, D-465, D-466). `page` is then the part's 1-based ordinal, never a
+   * page number, and a citation shows "part N" (or "at mm:ss" when `startSeconds` is
+   * supplied). `startSeconds` is parsed from a timed file, never estimated; absent for an
+   * untimed transcript. In memory only: never written to her vault or to a store.
+   */
+  readonly transcriptPart?: { readonly startSeconds?: number };
 }
 
 /**

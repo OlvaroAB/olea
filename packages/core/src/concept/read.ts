@@ -130,6 +130,11 @@ import { parseDocument } from '../block/parse.js';
 import type { OutlineNode, ParsedDocument } from '../block/types.js';
 import { discoverEmbeddedSources } from '../extract/embeds.js';
 import { extractFromVault, formatFromExtension } from '../extract/registry.js';
+import {
+  declaresTranscript,
+  readTranscriptText,
+  type TranscriptFormat,
+} from '../extract/transcript.js';
 import type { EmbeddedInNote, Provenance, SourceFormat } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
@@ -143,7 +148,7 @@ import { reconcileRelations, type ScopedProposedRelation, totalDropped } from '.
 import type { RelationWithEndpointKeys } from './related-concept-keys.js';
 import type { ProposedRelation } from './relation.js';
 import type { ConceptSize } from './size.js';
-import { readConceptSize } from './size.js';
+import { readConceptSize, type TeachingEventResolver } from './size.js';
 import type { ConceptRecord, ConceptTier } from './types.js';
 import { DEFAULT_ZETTELKASTEN_FOLDER } from './zettelkasten.js';
 
@@ -557,6 +562,13 @@ export interface ReadConceptsOptions {
    * passes `true`.
    */
   readonly stampConceptKeys?: boolean;
+  /**
+   * The repetition guard's bundle lookup (`ol-egov.141.89.3.43`, D-465): a path's lecture
+   * bundle, so a lecture's slides, transcript and her note are one teaching event in concept
+   * size. Built by the caller from her explicit links (`associateLectures`); absent means no
+   * bundles, and a transcript is then its own event.
+   */
+  readonly teachingEventOf?: TeachingEventResolver;
 }
 
 function byCodeUnit(a: string, b: string): number {
@@ -799,6 +811,31 @@ function sectionsByBlockIndex(doc: ParsedDocument): ReadonlyMap<number, string> 
 }
 
 /**
+ * A supplied lecture transcript's parts as passages (`ol-egov.141.89.3.43`, D-465), read like
+ * note passages: each part is one passage, anchored at its own file range, with `page` carrying
+ * the part ordinal and `transcriptPart` marking it so a citation says "part N" (or a time),
+ * never a page number. An untimed transcript carries no time; none is estimated. A file the
+ * reader cannot read, or an empty one, contributes no passage.
+ */
+function transcriptPassages(
+  path: VaultPath,
+  content: string,
+  format: TranscriptFormat,
+  course: string | undefined,
+): readonly ConceptPassage[] {
+  const result = readTranscriptText(content, format);
+  if (!result.ok) return [];
+  return result.parts.map((part) => ({
+    text: part.text,
+    anchor: {
+      sourcePath: path,
+      location: { page: part.ordinal, charRange: part.range, transcriptPart: {} },
+    },
+    course,
+  }));
+}
+
+/**
  * Passages from her material, markdown blocks and extracted non-markdown
  * units alike, each carrying the anchor that produced it so a citation can
  * quote the exact span.
@@ -860,6 +897,21 @@ export async function gatherPassages(
     const content = await vault.read(path);
     const doc = parseDocument(content);
 
+    // A Markdown file that declares a transcript role is a lecture transcript, never her note
+    // (D-465): its parts are read as transcript passages, not as blocks of her writing.
+    if (declaresTranscript(content)) {
+      const courses = notePathCourses(path, [], coursesFolder);
+      passages.push(
+        ...transcriptPassages(
+          path,
+          content,
+          'markdown',
+          courses.length === 1 ? courses[0] : undefined,
+        ),
+      );
+      continue;
+    }
+
     // Her `course` property when the note carries one, otherwise the course
     // folder it lives under (F1.3) — the same rule `./extract.js` uses, so a
     // passage and a corroborating record never disagree about the course.
@@ -892,6 +944,23 @@ export async function gatherPassages(
         course,
       });
     });
+  }
+
+  // Plain-text lecture transcripts (D-465): a `.txt` is read by the transcript reader.
+  const textPaths = await vault.list({
+    ...(options.under !== undefined ? { under: options.under } : {}),
+    extensions: ['txt'],
+  });
+  for (const path of [...textPaths].sort(byCodeUnit)) {
+    const courses = notePathCourses(path, [], coursesFolder);
+    passages.push(
+      ...transcriptPassages(
+        path,
+        await vault.read(path),
+        'plain-text',
+        courses.length === 1 ? courses[0] : undefined,
+      ),
+    );
   }
 
   const derived = await gatherDerivedPassages(vault, paths, coursesFolder, options.under);
@@ -1275,6 +1344,32 @@ function applyContainmentEvidence(
       }),
     };
   });
+}
+
+/**
+ * The repetition guard's bundle step (`ol-egov.141.89.3.43`, D-465): size is recomputed with the
+ * caller's lecture bundles, so a transcript that restates its own lecture's slides is one
+ * teaching event with them and adds no passage. Containment evidence already folded into the
+ * extent is carried over. With no resolver, the concepts are returned unchanged.
+ */
+function applyTeachingEvents(
+  concepts: readonly ReadConcept[],
+  teachingEventOf: TeachingEventResolver | undefined,
+): readonly ReadConcept[] {
+  if (teachingEventOf === undefined) return concepts;
+  return concepts.map((concept) => ({
+    ...concept,
+    size: readConceptSize({
+      anchor: concept.anchor,
+      alsoIn: concept.alsoIn,
+      sourcePaths: concept.sourcePaths,
+      ...(concept.boundNotePath !== undefined ? { boundNotePath: concept.boundNotePath } : {}),
+      ...(concept.size.extent.containmentEvidence !== undefined
+        ? { containmentEvidence: concept.size.extent.containmentEvidence }
+        : {}),
+      teachingEventOf,
+    }),
+  }));
 }
 
 /**
@@ -1705,7 +1800,10 @@ export async function readConcepts(
   // authoritative — a relation naming one it did not return is dropped and
   // counted, never used to mint one.
   const reconciled = reconcileRelations(proposedRelations, concepts);
-  const withContainment = applyContainmentEvidence(concepts, reconciled.relations);
+  const withContainment = applyTeachingEvents(
+    applyContainmentEvidence(concepts, reconciled.relations),
+    options.teachingEventOf,
+  );
 
   // A wording split by course (`[D-402]`) orders its identities by their
   // courses, as `./extract.js` does, so the order never depends on read order.

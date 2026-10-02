@@ -485,9 +485,11 @@ export {
   COARSE_EXTENT_FLOOR,
   conceptRecordExtent,
   conceptRecordSize,
+  countPassagesByTeachingEvent,
   deriveConceptSize,
   readConceptExtent,
   readConceptSize,
+  type TeachingEventResolver,
 } from './concept/size.js';
 export type { ConceptRecord, ConceptTier, ExtractConceptsOptions } from './concept/types.js';
 // C7.8's course lifecycle (`[D-098]`, `ol-0r92.7`): the BEGINNING slice —
@@ -2168,7 +2170,11 @@ export type {
   QueueSelectionContext,
 } from './queue/types.js';
 export { buildRegistryModel } from './registry/build.js';
-export { formatSourceCitation, passageGrainLabel } from './registry/citation.js';
+export {
+  formatSourceCitation,
+  formatTranscriptTime,
+  passageGrainLabel,
+} from './registry/citation.js';
 // The concept and instrument registry (F8.4/F8.4a/F8.5, `[REG-1]`,
 // `ol-4v2l`, amended acceptance `[D-135]`) — the browsable inventory over
 // concepts, their course associations, their instrument mix, and their

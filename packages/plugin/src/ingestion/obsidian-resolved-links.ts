@@ -9,7 +9,8 @@ import type { ResolvedLinksPort } from './lecture-links.js';
 
 /** The slice of Obsidian's `MetadataCache` this reads (structural, so tests need no `obsidian`). */
 export interface MetadataCacheLike {
-  readonly resolvedLinks: Record<string, Record<string, number>>;
+  /** Optional only because the workbench's reduced shim has no link graph; absent reads as no links. Obsidian always supplies it. */
+  readonly resolvedLinks?: Record<string, Record<string, number>>;
   getCache(path: string): { frontmatter?: Record<string, unknown> } | null;
 }
 
@@ -17,7 +18,7 @@ export function createObsidianResolvedLinksPort(cache: MetadataCacheLike): Resol
   return {
     resolvedLinks: () =>
       new Map(
-        Object.entries(cache.resolvedLinks).map(([source, targets]) => [
+        Object.entries(cache.resolvedLinks ?? {}).map(([source, targets]) => [
           source as VaultPath,
           Object.keys(targets) as VaultPath[],
         ]),

@@ -146,6 +146,7 @@ import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
 import { buildIngestionArrivalWatch } from './ingestion/arrival-watch.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
+import { readLectureBundles, teachingEventResolverFrom } from './ingestion/lecture-links.js';
 import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash-store.js';
 import {
   adaptMaterialityJudgeAsRevisionJudge,
@@ -164,6 +165,7 @@ import {
   type MaterialityTrigger,
 } from './ingestion/materiality/wiring.js';
 import { WorkerMaterialityJudge } from './ingestion/materiality/workerJudge.js';
+import { createObsidianResolvedLinksPort } from './ingestion/obsidian-resolved-links.js';
 // `[ILB-PER-4]` §8 item 2 (`ol-egov.141.89.8.4` slice 4): the GET-shaped
 // `VisionRouteHttpGet` adapter over Obsidian's real `requestUrl` — see
 // `IngestionWiringDeps.visionRoute`'s own doc (`ingestion/wiring.ts`) for why
@@ -3091,6 +3093,13 @@ export default class OleaPlugin extends Plugin {
           vault,
           ingestionSessionClosed: true,
           now: this.now,
+          // `ol-egov.141.89.3.43` (D-465): her explicit links make a lecture's slides, transcript and
+          // note one teaching event, so a transcript that restates its slides adds no concept size.
+          read: {
+            teachingEventOf: teachingEventResolverFrom(
+              readLectureBundles(createObsidianResolvedLinksPort(this.app.metadataCache)),
+            ),
+          },
           // `ol-egov.141.89.4.15`: a fresh, stateless `data.json` projection (same idiom as
           // `this.citationHashStore` above) — threads a REAL materiality hash store to both
           // sides of Default 4's freshness gate (rel.md §3), so a cached relation whose endpoint

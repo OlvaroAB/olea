@@ -175,6 +175,53 @@ export interface ReadConceptExtentInput {
   readonly boundNotePath?: VaultPath;
   /** See `ConceptMaterialExtent.containmentEvidence`. Absent when the caller carries no relation data. */
   readonly containmentEvidence?: boolean;
+  /**
+   * The repetition guard's bundle lookup (`TeachingEventResolver`). Absent when the caller has
+   * no bundles; a transcript is then its own event.
+   */
+  readonly teachingEventOf?: TeachingEventResolver;
+}
+
+/**
+ * The repetition guard's one input (`ol-egov.141.89.3.43`, D-465, D-466; knowledge model 5, "one
+ * teaching event"). A lecture's slides, transcript and her note are ONE teaching event, never
+ * independent corroboration; the same event restated is not more material. Pure: no I/O.
+ */
+export type TeachingEventResolver = (path: VaultPath) => string | undefined;
+
+/**
+ * How many distinct passages ground a concept, with the repetition guard applied.
+ *
+ * **What counts.** Every passage that is not a transcript part counts once, exactly as before.
+ * A transcript's parts are cue-boundary and wording artefacts of one spoken event, so ALL the
+ * parts of one transcript event count as at most ONE, however many parts, however long, however
+ * often the same explanation recurs, and wherever the cues were cut. Even that one is dropped
+ * when the same event already has a counted passage (its slides, or her linking note): a
+ * transcript that restates the slides adds nothing. A transcript in a different event, or in
+ * none, is a genuinely separate teaching event and counts once.
+ *
+ * Length and duration enter nowhere. `1500`-character parts, cue times and part ordinals are
+ * never read here.
+ */
+export function countPassagesByTeachingEvent(
+  passages: readonly Provenance[],
+  teachingEventOf?: TeachingEventResolver,
+): number {
+  let ordinary = 0;
+  const ordinaryEvents = new Set<string>();
+  const transcriptEvents = new Set<string>();
+  for (const passage of passages) {
+    const event = teachingEventOf?.(passage.sourcePath);
+    if (passage.location.transcriptPart !== undefined) {
+      transcriptEvents.add(event ?? `path:${passage.sourcePath}`);
+    } else {
+      ordinary += 1;
+      if (event !== undefined) ordinaryEvents.add(event);
+    }
+  }
+  let extra = 0;
+  for (const event of transcriptEvents) if (!ordinaryEvents.has(event)) extra += 1;
+  return ordinary + extra;
 }
 
 /**
@@ -184,10 +231,13 @@ export interface ReadConceptExtentInput {
  * under-counted just because the reader anchored it once.
  */
 export function readConceptExtent(concept: ReadConceptExtentInput): ConceptMaterialExtent {
-  const passageCount = (concept.anchor !== undefined ? 1 : 0) + concept.alsoIn.length;
+  const passages = [...(concept.anchor !== undefined ? [concept.anchor] : []), ...concept.alsoIn];
+  const passageCount = countPassagesByTeachingEvent(passages, concept.teachingEventOf);
+  // A transcript is course material, not a note of hers (D-465): it never adds to `noteCount`.
   const notePaths = new Set<VaultPath>(concept.sourcePaths);
-  if (concept.anchor !== undefined) notePaths.add(concept.anchor.sourcePath);
-  for (const passage of concept.alsoIn) notePaths.add(passage.sourcePath);
+  for (const passage of passages) {
+    if (passage.location.transcriptPart === undefined) notePaths.add(passage.sourcePath);
+  }
   return {
     noteCount: notePaths.size,
     passageCount,

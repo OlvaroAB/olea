@@ -51,4 +51,38 @@ describe('formatSourceCitation', () => {
     ).toBe('p. 3');
     expect(formatSourceCitation(loc({}), { grainOnly: true })).toBe('');
   });
+
+  describe('lecture transcripts (D-466)', () => {
+    const talk = 'Courses/COURSE-A/Lectures/talk.txt';
+
+    it('renders "at mm:ss" for a timed part', () => {
+      expect(
+        formatSourceCitation(
+          loc({ sourcePath: talk, transcriptPart: { part: 3, startSeconds: 724 } }),
+        ),
+      ).toBe('talk (at 12:04)');
+    });
+
+    it('renders hours for a long recording', () => {
+      expect(
+        formatSourceCitation(
+          loc({ sourcePath: talk, transcriptPart: { part: 3, startSeconds: 3725 } }),
+        ),
+      ).toBe('talk (at 1:02:05)');
+    });
+
+    it('renders "part N" for an untimed part', () => {
+      expect(formatSourceCitation(loc({ sourcePath: talk, transcriptPart: { part: 3 } }))).toBe(
+        'talk (part 3)',
+      );
+    });
+
+    it('never shows a page number for a transcript, even when one is present', () => {
+      const out = formatSourceCitation(
+        loc({ sourcePath: talk, page: 3, transcriptPart: { part: 3 } }),
+      );
+      expect(out).not.toMatch(/p\. /);
+      expect(out).toBe('talk (part 3)');
+    });
+  });
 });

@@ -23,6 +23,7 @@ import {
   type LectureBundle,
   type LectureFileKind,
   type LinkedFile,
+  type TeachingEventResolver,
   type VaultPath,
 } from 'olea-core';
 
@@ -67,4 +68,23 @@ export function buildLinkedFiles(port: ResolvedLinksPort): LinkedFile[] {
 /** Lecture bundles right now, rebuilt from her links on every call. Stores nothing. */
 export function readLectureBundles(port: ResolvedLinksPort): LectureBundle[] {
   return associateLectures(buildLinkedFiles(port));
+}
+
+/**
+ * The repetition guard's lookup (`ol-egov.141.89.3.43`, D-465): a path's teaching event is its
+ * lecture bundle, so the slides, the transcript and the note that linked them are ONE event in
+ * concept size. A bundle is named by its first member; a path in no bundle has no event. Pure.
+ */
+export function teachingEventResolverFrom(
+  bundles: readonly LectureBundle[],
+): TeachingEventResolver {
+  const eventOf = new Map<VaultPath, string>();
+  for (const bundle of bundles) {
+    const id = bundle.members[0];
+    if (id === undefined) continue;
+    for (const path of [...bundle.members, ...bundle.via]) {
+      if (!eventOf.has(path)) eventOf.set(path, id);
+    }
+  }
+  return (path) => eventOf.get(path);
 }

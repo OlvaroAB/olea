@@ -125,7 +125,16 @@ import type {
  */
 function passageGrain(
   location: Provenance['location'],
-): Pick<RegistrySourceLocation, 'page' | 'section'> {
+): Pick<RegistrySourceLocation, 'page' | 'section' | 'transcriptPart'> {
+  // A transcript part carries its ordinal as `transcriptPart.part`, never as a page (D-466).
+  if (location.transcriptPart !== undefined) {
+    return {
+      transcriptPart:
+        location.transcriptPart.startSeconds === undefined
+          ? { part: location.page }
+          : { part: location.page, startSeconds: location.transcriptPart.startSeconds },
+    };
+  }
   return location.section === undefined
     ? { page: location.page }
     : { page: location.page, section: location.section };

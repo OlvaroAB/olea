@@ -37,8 +37,24 @@ function isPptxPath(sourcePath: string): boolean {
   return sourcePath.toLowerCase().endsWith('.pptx');
 }
 
+/** "12:04", or "1:02:05" from an hour up. Whole seconds, floored; never negative. */
+export function formatTranscriptTime(startSeconds: number): string {
+  const total = Math.max(0, Math.floor(startSeconds));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return h > 0 ? `${h}:${pad(m)}:${pad(sec)}` : `${pad(m)}:${pad(sec)}`;
+}
+
 /** The passage-grain fragment alone (`p. 3`, `slide 5`, a section title, a heading) — `undefined` when nothing is known, never a fabricated default. Exported for callers that want the grain separately from the note name. */
 export function passageGrainLabel(location: RegistrySourceLocation): string | undefined {
+  // A transcript is located by time when the file supplied one, otherwise by part, and is never
+  // shown a page number (D-466; vocabulary registry 10.1).
+  if (location.transcriptPart !== undefined) {
+    const { part, startSeconds } = location.transcriptPart;
+    return startSeconds !== undefined ? `at ${formatTranscriptTime(startSeconds)}` : `part ${part}`;
+  }
   if (location.section) return location.section;
   if (location.page !== undefined) {
     return isPptxPath(location.sourcePath) ? `slide ${location.page}` : `p. ${location.page}`;

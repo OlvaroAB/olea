@@ -101,6 +101,7 @@ import {
   runCorpusRelationBatch,
   type SameAsLinkRecord,
   shouldRunCorpusRelationBatch,
+  type TeachingEventResolver,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -225,6 +226,8 @@ export interface ReadConceptsFromVaultOptions {
    * fixture that must not be written into.
    */
   readonly stampConceptKeys?: boolean;
+  /** `ol-egov.141.89.3.43` (D-465): the lecture-bundle lookup behind the one-teaching-event guard (`olea-core`'s `ReadConceptsOptions.teachingEventOf`). */
+  readonly teachingEventOf?: TeachingEventResolver;
 }
 
 /**
@@ -266,6 +269,7 @@ export async function readConceptsFromVault(
       : {}),
     ...(options.coursesFolder !== undefined ? { coursesFolder: options.coursesFolder } : {}),
     stampConceptKeys: options.stampConceptKeys ?? true,
+    ...(options.teachingEventOf !== undefined ? { teachingEventOf: options.teachingEventOf } : {}),
   });
 }
 

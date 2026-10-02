@@ -204,6 +204,12 @@ export interface RegistrySourceLocation {
    */
   readonly page?: number;
   readonly section?: string;
+  /**
+   * Set instead of `page` when the passage is a part of a supplied lecture transcript
+   * (`ol-egov.141.89.3.43`, D-466). `part` is the 1-based ordinal; `startSeconds` is present only
+   * for a timed transcript. A transcript is never shown a page number.
+   */
+  readonly transcriptPart?: { readonly part: number; readonly startSeconds?: number };
 }
 
 /**
