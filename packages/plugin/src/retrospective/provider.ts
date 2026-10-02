@@ -336,6 +336,12 @@ export function createLocalRetrospectiveProvider(
         // wrong, never the instrument: that review stays practice and the
         // instrument's other reviews keep counting.
         disputes: history.disputes,
+        // `[D-469]` (F8.8 "What she had practised by the date"): the assessment's own local day,
+        // exactly as recorded (`hasAssessmentPassed` already required it to be a plain
+        // YYYY-MM-DD day), and whether the history read is complete enough to count from.
+        // A listing blind to other devices may hide earlier practice, so it reads as unavailable.
+        ...(chosen.due === undefined ? {} : { assessmentDate: chosen.due }),
+        historyAvailable: !history.discoveryDegraded,
         scheduler,
         now,
         holdingCut,

@@ -19,13 +19,25 @@
  * exclusions `buildRetrospective` uses for its own displayed stage; nothing here restates the stage
  * rule, so a ruled change to it moves this too.
  *
+ * **Drawn once, by clause (`[D-469]`, F8.8 "What she had practised by the date").**
+ * `summariseBeforeAssessment` turns the per-concept assembly into the one line's counts: {n}
+ * practised, {m} in scope, {k} explained. Both counts read the same filtered log, one boundary.
+ * Where the scope is empty or the history is unavailable it returns the limitation, never a zero.
+ * A scope drawn from review history is read as of the same boundary: a concept first practised on or
+ * after the day was not in the evidenced set by the date.
+ *
  * Pure: no clock, no vault, nothing stored.
  */
 
 import type { MasteryState, ReviewLogEntry } from 'olea-contracts';
 import { foldConceptStage, type MasteryRollupOptions } from '../mastery/rollup.js';
 import { type CalendarDay, calendarDayOfTimestamp } from '../today/calendar-day.js';
-import type { RetrospectiveAssemblyEntry, RetrospectiveConceptCoverage } from './types.js';
+import type {
+  RetrospectiveAssemblyEntry,
+  RetrospectiveBeforeAssessment,
+  RetrospectiveConceptCoverage,
+  RetrospectiveScopeOrigin,
+} from './types.js';
 
 export function assembleBeforeAssessment(input: {
   readonly scope: readonly RetrospectiveConceptCoverage[];
@@ -48,4 +60,35 @@ export function assembleBeforeAssessment(input: {
       demonstrated,
     };
   });
+}
+
+/**
+ * F8.8's counts, from `assembleBeforeAssessment`'s output (`[D-469]`).
+ *
+ * - {k} counts explained (`tree`) among the practised concepts only, so it never exceeds {n}.
+ * - `historyAvailable: false` is the limitation, whatever the counts would be.
+ * - An empty scope is `'scope'` unavailable. No practice before the date among the scope is
+ *   `'history'` unavailable: Olea cannot tell "she practised none" from "no earlier history is
+ *   available to it", so it never draws a zero for it (Class B default under `[D-469]`).
+ */
+export function summariseBeforeAssessment(input: {
+  readonly assembly: readonly RetrospectiveAssemblyEntry[];
+  readonly scopeOrigin: RetrospectiveScopeOrigin;
+  readonly historyAvailable: boolean;
+}): RetrospectiveBeforeAssessment {
+  if (input.assembly.length === 0) return { kind: 'unavailable', reason: 'scope' };
+  if (!input.historyAvailable) return { kind: 'unavailable', reason: 'history' };
+  const members =
+    input.scopeOrigin === 'evidenced'
+      ? input.assembly.filter((entry) => entry.attempted)
+      : input.assembly;
+  const practised = members.filter((entry) => entry.attempted);
+  if (practised.length === 0) return { kind: 'unavailable', reason: 'history' };
+  return {
+    kind: 'counts',
+    practised: practised.length,
+    scopeSize: members.length,
+    explained: practised.filter((entry) => entry.demonstrated === 'tree').length,
+    basis: input.scopeOrigin,
+  };
 }

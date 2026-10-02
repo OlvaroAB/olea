@@ -1,4 +1,4 @@
-export { assembleBeforeAssessment } from './assembly.js';
+export { assembleBeforeAssessment, summariseBeforeAssessment } from './assembly.js';
 export { buildRetrospective } from './build.js';
 export {
   hasAssessmentPassed,
@@ -8,6 +8,7 @@ export {
 } from './offer.js';
 export type {
   RetrospectiveAssemblyEntry,
+  RetrospectiveBeforeAssessment,
   RetrospectiveCarriesEntry,
   RetrospectiveCarriesLine,
   RetrospectiveCarryBasis,

@@ -45,7 +45,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import { buildSameAsKeyRedirect } from '../concept/same-as-consumer.js';
 import { computeConceptMastery, readAllConceptVitality } from '../mastery/rollup.js';
 import { projectInstrumentValidity } from '../mastery/validity.js';
-import { assembleBeforeAssessment } from './assembly.js';
+import { assembleBeforeAssessment, summariseBeforeAssessment } from './assembly.js';
 import type {
   RetrospectiveCarriesEntry,
   RetrospectiveCarryBasis,
@@ -239,6 +239,18 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
   faded.sort(compareByConceptName);
   carries.sort(compareByConceptName);
 
+  const assembly =
+    input.assessmentDate === undefined
+      ? undefined
+      : assembleBeforeAssessment({
+          scope: input.scope,
+          entries,
+          assessmentDate: input.assessmentDate,
+          stageOptions,
+        })
+          .slice()
+          .sort(compareByConceptName);
+
   return {
     assessmentPath: input.assessmentPath,
     course: input.course,
@@ -248,17 +260,15 @@ export function buildRetrospective(input: RetrospectiveInput): RetrospectiveRead
     faded,
     tooEarlyCount,
     carries,
-    ...(input.assessmentDate === undefined
+    ...(assembly === undefined
       ? {}
       : {
-          assembly: assembleBeforeAssessment({
-            scope: input.scope,
-            entries,
-            assessmentDate: input.assessmentDate,
-            stageOptions,
-          })
-            .slice()
-            .sort(compareByConceptName),
+          assembly,
+          beforeAssessment: summariseBeforeAssessment({
+            assembly,
+            scopeOrigin: input.scopeOrigin,
+            historyAvailable: input.historyAvailable !== false,
+          }),
         }),
   };
 }

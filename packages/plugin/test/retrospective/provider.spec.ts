@@ -677,3 +677,89 @@ describe('createLocalRetrospectiveProvider — the evidenced scope counts a revi
     expect(await evidencedNames(['Respiration', 'Photosynthesis'])).toEqual(['Respiration']);
   });
 });
+
+describe('createLocalRetrospectiveProvider — what she had practised by the date (ol-egov.141.89.11.31, D-469)', () => {
+  const DUE = '2026-08-20';
+
+  async function vaultWithReviewsOn(
+    daysByName: Readonly<Record<string, string>>,
+    scope: string | undefined,
+  ) {
+    const vault = memoryVault({
+      ...CONCEPT_FILES,
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': assessmentNote({
+        due: DUE,
+        ...(scope === undefined ? {} : { scope }),
+      }),
+    });
+    const concepts = await extractConceptsFromVault(vault, {});
+    const keyByName = new Map(concepts.map((c) => [c.name, c.key] as const));
+    for (const [name, day] of Object.entries(daysByName)) {
+      const key = keyByName.get(name);
+      if (key === undefined) throw new Error(`no concept minted for "${name}"`);
+      await vault.write(
+        reviewLogPath(day, DEVICE),
+        JSON.stringify({ ...reviewRecord(key), timestamp: `${day}T10:00:00-04:00` }),
+      );
+    }
+    return vault;
+  }
+
+  async function load(vault: Awaited<ReturnType<typeof vaultWithReviewsOn>>) {
+    const provider = createLocalRetrospectiveProvider({
+      vault,
+      deviceId: DEVICE,
+      offerStore: emptyOfferStore,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: () => NOW,
+    });
+    const result = await provider.load();
+    if (result === null) throw new Error('expected a retrospective to load');
+    return result.reading;
+  }
+
+  it('passes the assessment date: the day before counts, the assessment day and later do not', async () => {
+    const vault = await vaultWithReviewsOn(
+      { Photosynthesis: '2026-08-19', Respiration: '2026-08-20', Osmosis: '2026-08-25' },
+      'Photosynthesis, Respiration, Osmosis',
+    );
+    const reading = await load(vault);
+    expect(reading.beforeAssessment).toEqual({
+      kind: 'counts',
+      practised: 1,
+      scopeSize: 3,
+      explained: 0,
+      basis: 'assessment-stated',
+    });
+  });
+
+  it('a scope edit after the date moves {m} and the line still names the stated basis', async () => {
+    const vault = await vaultWithReviewsOn({ Photosynthesis: '2026-08-19' }, 'Photosynthesis');
+    expect((await load(vault)).beforeAssessment).toMatchObject({ scopeSize: 1 });
+    await vault.write(
+      '02 Assignments/Quiz 1.md',
+      assessmentNote({ due: DUE, scope: 'Photosynthesis, Respiration' }),
+    );
+    expect((await load(vault)).beforeAssessment).toMatchObject({
+      scopeSize: 2,
+      basis: 'assessment-stated',
+    });
+  });
+
+  it('only practice after the date reads as the history limitation, never a zero', async () => {
+    const vault = await vaultWithReviewsOn({ Photosynthesis: '2026-08-25' }, 'Photosynthesis');
+    expect((await load(vault)).beforeAssessment).toEqual({
+      kind: 'unavailable',
+      reason: 'history',
+    });
+  });
+
+  it('a stated scope that resolves to no concept reads as the scope limitation', async () => {
+    const vault = await vaultWithReviewsOn({ Photosynthesis: '2026-08-19' }, 'Nothing Matches');
+    expect((await load(vault)).beforeAssessment).toEqual({
+      kind: 'unavailable',
+      reason: 'scope',
+    });
+  });
+});

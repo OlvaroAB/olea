@@ -13,6 +13,8 @@ import {
   OWN_WORDS_PROMPT,
   OWN_WORDS_SECTION_HEADING,
   offerCardLine,
+  practiceByDateBasisLine,
+  practiceByDateLine,
   scopeFactLine,
   scopeOriginLine,
   sectionCountLine,
@@ -272,5 +274,54 @@ describe('the own-words prompt and heading (`[D-190]`)', () => {
 
   it('the section heading is a plain heading, not a registry-controlled term', () => {
     expect(OWN_WORDS_SECTION_HEADING).toBe('In your own words');
+  });
+});
+
+describe('practiceByDateLine (D-469, F8.8 "What she had practised by the date")', () => {
+  it('uses the ruled words verbatim, with the three counts filled', () => {
+    expect(
+      practiceByDateLine({
+        kind: 'counts',
+        practised: 4,
+        scopeSize: 9,
+        explained: 2,
+        basis: 'assessment-stated',
+      }),
+    ).toBe(
+      'Before the assessment date, you had practised 4 of the 9 concepts linked to this assessment in Olea. By then, your recorded practice showed explanation-level evidence for 2 of those concepts.',
+    );
+  });
+
+  it('names the scope basis for each origin, and none for a limitation', () => {
+    const counts = { kind: 'counts', practised: 1, scopeSize: 2, explained: 0 } as const;
+    expect(practiceByDateBasisLine({ ...counts, basis: 'assessment-stated' })).toMatch(
+      /recorded scope.*later edit/i,
+    );
+    expect(practiceByDateBasisLine({ ...counts, basis: 'evidenced' })).toMatch(/review history/i);
+    expect(practiceByDateBasisLine({ kind: 'unavailable', reason: 'scope' })).toBeNull();
+  });
+
+  it('each unavailable case states its limitation and holds no number', () => {
+    const scope = practiceByDateLine({ kind: 'unavailable', reason: 'scope' });
+    const history = practiceByDateLine({ kind: 'unavailable', reason: 'history' });
+    expect(scope).toMatch(/not available/);
+    expect(history).toMatch(/not available/);
+    expect(scope).not.toBe(history);
+    expect(scope).not.toMatch(/\d/);
+    expect(history).not.toMatch(/\d/);
+  });
+
+  it('never implies readiness or an outcome', () => {
+    const lines = [
+      practiceByDateLine({
+        kind: 'counts',
+        practised: 1,
+        scopeSize: 1,
+        explained: 1,
+        basis: 'evidenced',
+      }),
+      practiceByDateLine({ kind: 'unavailable', reason: 'history' }),
+    ].join(' ');
+    expect(lines).not.toMatch(/ready|prepared|passed|score|grade|result/i);
   });
 });

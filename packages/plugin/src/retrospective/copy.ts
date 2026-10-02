@@ -79,6 +79,39 @@ export function scopeOriginLine(origin: RetrospectiveScopeOrigin): string {
     : 'source · drawn from your review history, not the assessment’s own words';
 }
 
+type BeforeAssessment = NonNullable<RetrospectiveReading['beforeAssessment']>;
+
+/**
+ * F8.8 "What she had practised by the date" (`[D-469]`): the ruled words, verbatim, with {n}, {m}
+ * and {k} filled. Where the reading carries a limitation instead of counts, the line says so plainly
+ * and holds no number at all, so no zero can stand in for "not available". A record of practice and
+ * of demonstrated explanation, never readiness or how the assessment went.
+ */
+export function practiceByDateLine(line: BeforeAssessment): string {
+  if (line.kind === 'counts') {
+    return (
+      `Before the assessment date, you had practised ${line.practised} of the ${line.scopeSize} ` +
+      'concepts linked to this assessment in Olea. By then, your recorded practice showed ' +
+      `explanation-level evidence for ${line.explained} of those concepts.`
+    );
+  }
+  return line.reason === 'scope'
+    ? 'Olea cannot say what you had practised by the assessment date: the concepts linked to this assessment in Olea are not available.'
+    : 'Olea cannot say what you had practised by the assessment date: your recorded practice from before that date is not available.';
+}
+
+/**
+ * The scope basis behind {m}, named whenever a later scope edit could change it (`[D-469]`): the
+ * assessment's recorded scope is read as it stands now, and the evidenced set is read from review
+ * history. `null` for a limitation, which has no {m}.
+ */
+export function practiceByDateBasisLine(line: BeforeAssessment): string | null {
+  if (line.kind !== 'counts') return null;
+  return line.basis === 'assessment-stated'
+    ? 'scope · the assessment’s own recorded scope as it stands now; a later edit to it would change the concepts counted'
+    : 'scope · the concepts your review history shows you practised before that date, not the assessment’s own words';
+}
+
 export const HELD_SECTION_HEADING = 'What held';
 export const FADED_SECTION_HEADING = 'What faded';
 export const CARRIES_SECTION_HEADING = 'What carries forward';

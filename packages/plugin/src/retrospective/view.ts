@@ -31,6 +31,8 @@ import {
   HONESTY_DISCLAIMER,
   OWN_WORDS_PLACEHOLDER,
   OWN_WORDS_PROMPT,
+  practiceByDateBasisLine,
+  practiceByDateLine,
   RETROSPECTIVE_VIEW_TITLE,
   scopeFactLine,
   scopeOriginLine,
@@ -145,6 +147,20 @@ export class RetrospectiveView extends ItemView {
       cls: 'olea-retrospective-scope-origin',
       text: scopeOriginLine(reading.scopeOrigin),
     });
+
+    // F8.8 "What she had practised by the date" (`[D-469]`): beside the groupings, adding no group.
+    // Present only when the provider passed the assessment's date.
+    if (reading.beforeAssessment !== undefined) {
+      const practice = root.createDiv({ cls: 'olea-retrospective-practice-by-date' });
+      practice.createDiv({
+        cls: 'olea-retrospective-practice-by-date-line',
+        text: practiceByDateLine(reading.beforeAssessment),
+      });
+      const basis = practiceByDateBasisLine(reading.beforeAssessment);
+      if (basis !== null) {
+        practice.createDiv({ cls: 'olea-retrospective-practice-by-date-basis', text: basis });
+      }
+    }
 
     if (reading.scopeCount === 0) {
       root.createDiv({ cls: 'olea-retrospective-empty', text: emptyScopeLine() });

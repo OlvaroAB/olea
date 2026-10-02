@@ -160,6 +160,28 @@ export interface RetrospectiveAssemblyEntry {
   readonly demonstrated: MasteryState;
 }
 
+/**
+ * F8.8's "what she had practised by the date" line (`[D-469]`), as data: the three counts and the
+ * scope basis, or the limitation that stops Olea saying any count. Never a zero standing in for
+ * "not available": an unavailable case carries no number at all.
+ *
+ * `basis` is always named, because the scope Olea reads now is the one place a later edit could move
+ * {m}: the assessment's stated scope can be edited after the date (no edit history is held), and the
+ * evidenced set is drawn from review history.
+ */
+export type RetrospectiveBeforeAssessment =
+  | {
+      readonly kind: 'counts';
+      /** {n}: concepts in scope she had practised on a day before the assessment's day. */
+      readonly practised: number;
+      /** {m}: concepts in scope (for the evidenced basis, those evidenced before the day). */
+      readonly scopeSize: number;
+      /** {k}: of the practised ones, those whose stage from that evidence alone was explained (`tree`). */
+      readonly explained: number;
+      readonly basis: RetrospectiveScopeOrigin;
+    }
+  | { readonly kind: 'unavailable'; readonly reason: 'scope' | 'history' };
+
 export interface RetrospectiveReading {
   readonly assessmentPath: VaultPath;
   readonly course: string;
@@ -198,6 +220,8 @@ export interface RetrospectiveReading {
    * group, and the partition above is unchanged by it.
    */
   readonly assembly?: readonly RetrospectiveAssemblyEntry[];
+  /** `[D-469]`'s line as data. Present exactly when `assembly` is. */
+  readonly beforeAssessment?: RetrospectiveBeforeAssessment;
 }
 
 /** Everything `buildRetrospective` needs, all caller-resolved (see this file's module doc). */
@@ -272,4 +296,10 @@ export interface RetrospectiveInput {
    * changes.
    */
   readonly assessmentDate?: import('../today/calendar-day.js').CalendarDay;
+  /**
+   * `false` when the caller knows the practice history it read may be incomplete (for example the
+   * review-log listing was blind to other devices). `[D-469]`: the line then states that limitation
+   * instead of counts. Omitted means available.
+   */
+  readonly historyAvailable?: boolean;
 }
