@@ -122,6 +122,13 @@ export const TASK_IDS = {
    */
   GROUNDING_JUDGE: 'grounding.judge.v1',
   /**
+   * W6 · Slot J — the structured grounding judge (`[D-476]`, `ol-egov.141.89.1.85`):
+   * reserved id only. The model lists the dependencies a request needs and how
+   * each is supported; the Worker's code combines them into the accept or refuse
+   * decision. Development evidence only; no client caller exists or is implied.
+   */
+  GROUNDING_JUDGE_V2: 'grounding.judge.v2',
+  /**
    * W4 · Slot G — the corpus-level relation verdict: given a candidate pair
    * of concepts and BOTH endpoints' introducing-passage text, does the
    * material support `prerequisite` or `contrasts-with` between them
