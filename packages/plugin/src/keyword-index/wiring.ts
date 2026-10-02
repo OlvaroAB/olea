@@ -26,6 +26,14 @@
  * `reload.spec.ts`. Staying current *within* a session from that point on is
  * `watch()`'s job below, not a second rebuild.
  *
+ * **Lecture transcripts (D-465, `ol-egov.141.89.1.62`).** Nothing is passed here for them: the
+ * engine's own scan and its incremental `applyEvent` both index a plain-text file, and a Markdown
+ * file declaring role transcript, as the transcript reader's parts (each carrying its part
+ * ordinal), through the one `indexDocument`. So the rebuild-once step above, the persisted reload
+ * and the watch below all cover transcripts with no second path. A persisted index written before
+ * this change keeps a declared transcript's old note-shaped blocks until that file is next
+ * modified or a rebuild runs (the cache is deletable, D-006).
+ *
  * **What this does not attempt.** Catching up on vault edits made while
  * Obsidian was closed, on a different device, requires either a full rebuild
  * every launch (real CPU cost on every start, including mobile) or some

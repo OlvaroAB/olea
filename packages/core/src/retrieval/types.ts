@@ -66,6 +66,8 @@ export interface RetrievalChunk {
   readonly text: string;
   /** SHA-256 of `text`, hex-encoded (`../ingestion/hash.ts`'s `hashText`) — the embedding cache key (C2.3, D-004). */
   readonly contentHash: string;
+  /** D-465: the 1-based transcript part ordinal, present only for a transcript part (carried from `IndexedBlock.part`). */
+  readonly part?: number;
 }
 
 /**

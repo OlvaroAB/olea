@@ -181,8 +181,8 @@ describe('KeywordIndexEngine — incremental updates from vault events (C1.5)', 
     );
     await engine.applyEvent({ kind: 'create', path: '.olea/reviews/2026-08-28.dev.jsonl' });
     await engine.applyEvent({ kind: 'modify', path: '.olea/reviews/2026-08-28.dev.jsonl' });
-    vault.set('notes.txt', 'plain text');
-    await engine.applyEvent({ kind: 'create', path: 'notes.txt' });
+    vault.set('notes.csv', 'plain,text');
+    await engine.applyEvent({ kind: 'create', path: 'notes.csv' });
     expect(engine.toPersisted().documents.map((doc) => doc.path)).toEqual(['a.md']);
   });
 

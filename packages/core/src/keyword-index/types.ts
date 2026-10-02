@@ -37,6 +37,12 @@ export interface IndexedBlock {
   readonly kind: BlockKind;
   /** The block's searchable text — trimmed, otherwise verbatim; see `document.ts` for exactly what's captured per `kind`. */
   readonly text: string;
+  /**
+   * D-465: set only on a lecture-transcript part. The 1-based part ordinal within this revision
+   * (the part locator a citation shows as "part n"); never identity. Absent on every ordinary block,
+   * so a non-transcript document persists byte-for-byte as before.
+   */
+  readonly part?: number;
 }
 
 /**

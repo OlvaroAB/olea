@@ -216,6 +216,36 @@ describe('drainIntoEmbeddingCache', () => {
     expect(payload.chunks.map((c) => c.text)).toEqual(['markdown block text']);
   });
 
+  it('lists a transcript once: a sink unit whose source the keyword index already holds is left out (ol-egov.141.89.1.62)', async () => {
+    const sink = new PendingIndexingSink();
+    await sink.receive([
+      unit('Lectures/lecture.md', 'sink copy of the part'),
+      unit('Lectures/a.pdf', 'deck text'),
+    ]);
+    const keywordIndex = await KeywordIndexEngine.create({
+      vault: unusedVault,
+      store: new MemoryKeywordIndexStore({
+        version: 1,
+        documents: [
+          {
+            path: 'Lectures/lecture.md',
+            courses: [],
+            contentHash: 'doc-hash',
+            blocks: [{ blockIndex: 0, kind: 'paragraph', text: 'index copy of the part', part: 1 }],
+          },
+        ],
+      }),
+    });
+
+    await drainIntoEmbeddingCache({ embeddingCache, sink, keywordIndex });
+
+    const payload = transport.calls[0]?.payload as { chunks: readonly { text: string }[] };
+    expect(payload.chunks.map((c) => c.text).sort()).toEqual([
+      'deck text',
+      'index copy of the part',
+    ]);
+  });
+
   it('sends each distinct text exactly once even when it appears in both sources (C2.3 dedup)', async () => {
     const sink = new PendingIndexingSink();
     await sink.receive([unit('Lectures/a.pdf', 'shared text')]);

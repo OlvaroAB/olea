@@ -50,14 +50,13 @@ import type { IndexedBlock, IndexedDocument, PersistedKeywordIndex } from './typ
 export const DEFAULT_INDEX_CHUNK_SIZE = 25;
 
 /**
- * The extensions this index scans — markdown only: the block model, and
- * therefore this index, is markdown-only; C3's binary formats are a separate
- * pipeline. Exported so `KeywordIndexEngine.applyEvent` applies the IDENTICAL
+ * The extensions this index scans: markdown, plus `txt` (D-465: a plain-text file is a lecture
+ * transcript, read into parts by `document.ts`); C3's binary formats are a separate pipeline. Exported so `KeywordIndexEngine.applyEvent` applies the IDENTICAL
  * filter to an incremental event that `buildFullIndex` applies to a full scan
  * (`ol-3ux7.64.18` found the two disagreeing: a `.olea/reviews/*.jsonl` append
  * surfaced as a `modify` event was indexed as a document, then embedded).
  */
-export const DEFAULT_INDEX_EXTENSIONS: readonly string[] = ['md'];
+export const DEFAULT_INDEX_EXTENSIONS: readonly string[] = ['md', 'txt'];
 
 export interface BuildProgress {
   readonly documentsProcessed: number;

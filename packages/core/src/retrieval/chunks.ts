@@ -32,6 +32,7 @@ export async function chunksFromIndex(
         kind: block.kind,
         text: block.text,
         contentHash,
+        ...(block.part !== undefined ? { part: block.part } : {}),
       });
     }
   }

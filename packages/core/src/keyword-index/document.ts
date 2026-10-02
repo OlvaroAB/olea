@@ -10,6 +10,7 @@
 
 import { parseDocument } from '../block/parse.js';
 import type { Block } from '../block/types.js';
+import { readTranscriptText, resolveTranscriptFormat } from '../extract/transcript.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
 import { hashText } from '../ingestion/hash.js';
@@ -60,6 +61,33 @@ function indexBlocks(blocks: readonly Block[]): readonly IndexedBlock[] {
 export async function indexDocument(vault: VaultSource, path: VaultPath): Promise<IndexedDocument> {
   const content = await vault.read(path);
   const doc = parseDocument(content);
+  const contentHashPromise = hashText(content);
+
+  // D-465: a plain-text file, or Markdown declaring role transcript, is a lecture transcript. It is
+  // indexed once, as its reader's parts (each carrying its part ordinal), never as authored-note blocks.
+  const resolution = resolveTranscriptFormat(path, content);
+  if (resolution.kind === 'transcript') {
+    const read = readTranscriptText(content, resolution.format);
+    if (read.ok) {
+      const parts: IndexedBlock[] = [];
+      for (const part of read.parts) {
+        const text = part.text.trim();
+        if (text === '') continue;
+        parts.push({ blockIndex: part.ordinal - 1, kind: 'paragraph', text, part: part.ordinal });
+      }
+      const head = doc.blocks[0];
+      const transcriptCourses =
+        head?.kind === 'frontmatter'
+          ? [...readList(parseFrontmatter(head.inner), 'course').items].sort()
+          : [];
+      return {
+        path,
+        courses: transcriptCourses,
+        contentHash: await contentHashPromise,
+        blocks: parts,
+      };
+    }
+  }
 
   const first = doc.blocks[0];
   let courses: readonly string[] = [];
@@ -68,7 +96,7 @@ export async function indexDocument(vault: VaultSource, path: VaultPath): Promis
     courses = [...readList(fm, 'course').items].sort();
   }
 
-  const contentHash = await hashText(content);
+  const contentHash = await contentHashPromise;
   const blocks = indexBlocks(doc.blocks);
 
   return { path, courses, contentHash, blocks };

@@ -189,3 +189,56 @@ describe('buildKeywordIndexWiring — stays live for the rest of the session', (
     void fire;
   });
 });
+
+describe('buildKeywordIndexWiring — lecture transcripts (ol-egov.141.89.1.62)', () => {
+  it('indexes a declared Markdown transcript and a plain-text one as parts, once, and keeps them across a reload and a live event', async () => {
+    writeFileSync(
+      join(root, 'lecture-1.md'),
+      '---\nrole: transcript\ncourse: GEOL204\n---\n\nThe lecturer explains bedforms.\n\nA second paragraph of speech.\n',
+    );
+    writeFileSync(join(root, 'lecture-2.txt'), 'Plain lecture speech about regeneration.\n');
+    const host = new FakeDataHost();
+    const vault = new FolderSource(root);
+
+    const first = await buildKeywordIndexWiring({
+      vault,
+      store: new ObsidianKeywordIndexStore(host),
+      capability: CAN_DRAIN,
+      watch: fakeWatch().watch,
+    });
+    const docs = first.engine.toPersisted().documents;
+    const md = docs.find((d) => d.path === 'lecture-1.md');
+    const txt = docs.find((d) => d.path === 'lecture-2.txt');
+    expect(docs.filter((d) => d.path === 'lecture-1.md')).toHaveLength(1);
+    expect(md?.blocks.map((b) => b.part)).toEqual([1]);
+    expect(txt?.blocks.map((b) => b.part)).toEqual([1]);
+    // The authored notes beside them are unchanged: no part marker.
+    expect(docs.find((d) => d.path === 'week2.md')?.blocks.some((b) => 'part' in b)).toBe(false);
+
+    // Restart: trusted outright, transcript parts still there.
+    const second = await buildKeywordIndexWiring({
+      vault,
+      store: new ObsidianKeywordIndexStore(host),
+      capability: CAN_DRAIN,
+      watch: fakeWatch().watch,
+    });
+    expect(second.engine.toPersisted()).toEqual(first.engine.toPersisted());
+
+    // A transcript arriving live goes through the same path.
+    const fake = fakeWatch();
+    const live = await buildKeywordIndexWiring({
+      vault,
+      store: new ObsidianKeywordIndexStore(new FakeDataHost()),
+      capability: CAN_DRAIN,
+      watch: fake.watch,
+    });
+    writeFileSync(join(root, 'lecture-3.txt'), 'Late arriving lecture speech.\n');
+    fake.fire({ kind: 'create', path: 'lecture-3.txt' });
+    await waitFor(() =>
+      live.engine.toPersisted().documents.some((d) => d.path === 'lecture-3.txt'),
+    );
+    expect(
+      live.engine.toPersisted().documents.find((d) => d.path === 'lecture-3.txt')?.blocks[0]?.part,
+    ).toBe(1);
+  });
+});
