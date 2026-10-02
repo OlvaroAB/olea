@@ -691,10 +691,10 @@ describe('[D-448] — sources not fully read yet (ol-egov.141.89.8.44)', () => {
 
   it('the plural sentence is the ruling verbatim, the singular its derived default', () => {
     expect(notFullyReadSentence(3)).toBe(
-      '3 of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.',
+      '3 of your sources are not fully read yet: some pages or transcript parts are still waiting to be read, so this list may grow.',
     );
     expect(notFullyReadSentence(1)).toBe(
-      'One of your sources is not fully read yet: some pages are still waiting to be read, so this list may grow.',
+      'One of your sources is not fully read yet: some pages or transcript parts are still waiting to be read, so this list may grow.',
     );
   });
 
@@ -730,7 +730,7 @@ describe('[D-448] — sources not fully read yet (ol-egov.141.89.8.44)', () => {
     });
     const lines = coverageScopeStatement(scope);
     expect(lines).toContain(
-      '2 of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.',
+      '2 of your sources are not fully read yet: some pages or transcript parts are still waiting to be read, so this list may grow.',
     );
     expect(lines.join(' ')).not.toMatch(/could not read|Read all|Read \d/);
   });

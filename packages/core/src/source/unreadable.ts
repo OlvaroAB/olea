@@ -226,7 +226,23 @@ export async function findUnreadableFiles(
 
     const format = formatFromExtension(path);
     if (format === null) {
-      results.push({ path, reason: 'no-reader-for-format' });
+      // A plain-text file the unit manifest holds is a lecture transcript: its manifest decides, and
+      // its waiting parts are "not fully read yet", never "no reader" (`ol-egov.141.89.8.51`, [D-448]).
+      const transcriptManifest = path.toLowerCase().endsWith('.txt')
+        ? options.manifests?.get(path)
+        : undefined;
+      if (transcriptManifest === undefined) {
+        results.push({ path, reason: 'no-reader-for-format' });
+        continue;
+      }
+      if (!options.linkedPaths.has(path)) {
+        results.push({ path, reason: 'not-linked' });
+        continue;
+      }
+      const manifestReason = reasonForUnitManifest(transcriptManifest);
+      if (manifestReason !== null && manifestReason !== 'not-settled') {
+        results.push({ path, reason: manifestReason });
+      }
       continue;
     }
 

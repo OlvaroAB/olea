@@ -696,8 +696,8 @@ export function scopeSourceLine(source: CoverageScopeSource): string {
  */
 export function notFullyReadSentence(n: number): string {
   return n === 1
-    ? 'One of your sources is not fully read yet: some pages are still waiting to be read, so this list may grow.'
-    : `${n} of your sources are not fully read yet: some pages are still waiting to be read, so this list may grow.`;
+    ? 'One of your sources is not fully read yet: some pages or transcript parts are still waiting to be read, so this list may grow.'
+    : `${n} of your sources are not fully read yet: some pages or transcript parts are still waiting to be read, so this list may grow.`;
 }
 
 function countedSources(n: number): string {

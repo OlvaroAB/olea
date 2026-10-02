@@ -463,14 +463,13 @@ async function unreadableFilesByCourse(
   // is going to classify.
   const manifestCandidates = [
     ...new Set(
-      [...filesByCourse.values()]
-        .flat()
-        .filter(
-          (path) =>
-            !path.toLowerCase().endsWith('.md') &&
-            formatFromExtension(path) !== null &&
-            linkedPaths.has(path),
-        ),
+      [...filesByCourse.values()].flat().filter(
+        (path) =>
+          !path.toLowerCase().endsWith('.md') &&
+          // A plain-text file is a candidate lecture transcript: its parts are read states too (`ol-egov.141.89.8.51`).
+          (formatFromExtension(path) !== null || path.toLowerCase().endsWith('.txt')) &&
+          linkedPaths.has(path),
+      ),
     ),
   ].sort();
   const manifests =

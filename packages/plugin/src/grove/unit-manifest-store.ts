@@ -84,7 +84,14 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
-import { enumerationOfExtraction } from '../../../core/src/ingestion/unit-manifest/enumerate.js';
+import {
+  readTranscriptText,
+  resolveTranscriptFormat,
+} from '../../../core/src/extract/transcript.js';
+import {
+  enumerationOfExtraction,
+  type SourceEnumeration,
+} from '../../../core/src/ingestion/unit-manifest/enumerate.js';
 import {
   appendUnitManifestRecords,
   readUnitManifestLog,
@@ -103,6 +110,10 @@ import {
   UNIT_MANIFEST_RECORD_VERSION,
   type UnitManifestRecord,
 } from '../../../core/src/ingestion/unit-manifest/records.js';
+import {
+  transcriptEnumeration,
+  transcriptPartsRead,
+} from '../../../core/src/ingestion/unit-manifest/transcript-reading.js';
 import { DEFAULT_LOG_PROBE_DAYS, discoverLogPaths } from '../privacy/log-discovery.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 
@@ -160,7 +171,14 @@ export interface UnitManifestStore {
   manifestsFor(paths: readonly VaultPath[]): Promise<ReadonlyMap<VaultPath, UnitManifest>>;
   /** The sink for `vision-page-runner.ts`'s `onManifestEntry`: fire and forget, serialised, best effort. */
   recordReading(entry: UnitManifestEntry): void;
-  /** Marks the text-layer units of these sources extracted, for sources a concept read pass consumed in full. */
+  /**
+   * Marks the parts of a transcript a read pass consumed as read (`[D-448]`, `ol-egov.141.89.8.51`).
+   * A pass cut short by the per-read limit names only the parts it reached; every other part stays
+   * waiting and a later pass resumes from it. A part not named is never marked read, and never absent.
+   * Serialised and best effort, like `recordReading`; resolves when the write has finished.
+   */
+  recordTranscriptReading(path: VaultPath, partOrdinals: readonly number[]): Promise<void>;
+  /** Marks the text-layer units of these sources extracted, for sources a concept read pass consumed in full. A transcript consumed in full has every part read first. */
   recordConceptExtraction(paths: readonly VaultPath[]): Promise<void>;
   /** Feeds one vault event: a modify withdraws trust in the path until it is re-hashed; a delete or rename retires it. */
   observe(event: VaultEvent): void;
@@ -168,6 +186,21 @@ export interface UnitManifestStore {
   subscribe(listener: () => void): () => void;
   /** Resolves when every queued write has finished and any pending notification has been sent. For tests and shutdown. */
   idle(): Promise<void>;
+}
+
+/**
+ * A file that may be a lecture transcript: plain text, or Markdown that declares itself one (decided
+ * on reading the text, `ensureEnumerated`). The only formats with a transcript reader in this build;
+ * a timed format with no reader stays out until it has one.
+ */
+function isTranscriptCandidate(path: VaultPath): boolean {
+  const lower = path.toLowerCase();
+  return lower.endsWith('.txt') || lower.endsWith('.md');
+}
+
+/** Whether the manifest holds this path at all: a paged format an extractor reads, or a transcript candidate. */
+function isManifestable(path: VaultPath): boolean {
+  return formatFromExtension(path) !== null || isTranscriptCandidate(path);
 }
 
 function sameReading(a: UnitReadingState | undefined, b: UnitReadingState): boolean {
@@ -253,12 +286,27 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
   });
 
   /**
+   * The enumeration of a transcript candidate: every part waiting (PERSISTENCE 2.3). Null for a file
+   * that is not a transcript (an undeclared Markdown note stays her note) or that cannot be read as
+   * one, so it is left to the census's own verdict. The text is read as the transcript queue job
+   * reads it, so the same bytes cut into the same parts.
+   */
+  const transcriptEnumerationOf = async (path: VaultPath): Promise<SourceEnumeration | null> => {
+    const text = await deps.vault.read(path);
+    const resolved = resolveTranscriptFormat(path, text);
+    if (resolved.kind !== 'transcript') return null;
+    const result = readTranscriptText(text, resolved.format);
+    if (!result.ok) return null;
+    return transcriptEnumeration(result.parts.length);
+  };
+
+  /**
    * Makes `path` have a live manifest for its current bytes. Returns whether records were written.
    * Re-hashing is what "verify" means here: bytes equal to the live revision's write nothing.
    */
   const ensureEnumerated = async (path: VaultPath): Promise<boolean> => {
     const format = formatFromExtension(path);
-    if (format === null) return false;
+    if (format === null && !isTranscriptCandidate(path)) return false;
 
     let bytes: Uint8Array;
     try {
@@ -276,11 +324,15 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
       return false;
     }
 
-    let enumeration: ReturnType<typeof enumerationOfExtraction> = null;
+    let enumeration: SourceEnumeration | null = null;
     try {
-      enumeration = enumerationOfExtraction(
-        await extract({ path, bytes, format, options: deps.extractOptions?.() }),
-      );
+      if (format === null) {
+        enumeration = await transcriptEnumerationOf(path);
+      } else {
+        enumeration = enumerationOfExtraction(
+          await extract({ path, bytes, format, options: deps.extractOptions?.() }),
+        );
+      }
     } catch {
       enumeration = null;
     }
@@ -357,6 +409,40 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
     notifyLater();
   };
 
+  const transcriptRecords = (
+    path: VaultPath,
+    live: UnitManifest,
+    ordinals: readonly number[],
+    extracted: boolean,
+  ): UnitManifestRecord[] =>
+    transcriptPartsRead(live, ordinals).map((change) => ({
+      v: UNIT_MANIFEST_RECORD_VERSION,
+      kind: 'unit',
+      deviceId: deps.deviceId,
+      ...stamp(),
+      sourcePath: path,
+      revisionDigest: live.revisionDigest,
+      unitId: stableUnitId(path, change.page),
+      page: change.page,
+      readingState: change.readingState,
+      conceptExtractionState: extracted ? 'complete' : 'not-started',
+    }));
+
+  /** Appends read states for the transcript parts a pass consumed. Returns whether anything was written. */
+  const applyTranscriptReading = async (
+    path: VaultPath,
+    ordinals: readonly number[],
+  ): Promise<boolean> => {
+    if (formatFromExtension(path) !== null || !isTranscriptCandidate(path)) return false;
+    if (unenumerable.has(path)) return false;
+    if (!verified.has(path)) await ensureEnumerated(path);
+    const live = fold.manifestOf(path);
+    if (live === undefined || !verified.has(path)) return false;
+    const records = transcriptRecords(path, live, ordinals, false);
+    await append(records);
+    return records.length > 0;
+  };
+
   const applyConceptExtraction = async (paths: readonly VaultPath[]): Promise<void> => {
     const records: UnitManifestRecord[] = [];
     for (const path of paths) {
@@ -364,6 +450,17 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
       if (!verified.has(path)) await ensureEnumerated(path);
       const live = fold.manifestOf(path);
       if (live === undefined || !verified.has(path)) continue;
+      // A transcript the pass consumed in full: every part was read by it (`[D-448]`), and extracted.
+      if (formatFromExtension(path) === null) {
+        records.push(
+          ...transcriptRecords(
+            path,
+            live,
+            live.entries.map((entry) => entry.page),
+            true,
+          ),
+        );
+      }
       for (const entry of live.entries) {
         const state = entry.readingState;
         // The concept read pass reads the text layer. It says nothing about a page read from an image.
@@ -441,7 +538,7 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
       }
       const out = new Map<VaultPath, UnitManifest>();
       for (const path of paths) {
-        if (formatFromExtension(path) === null) continue;
+        if (!isManifestable(path)) continue;
         if (!loaded) {
           out.set(path, unknownUnitManifest(path));
           continue;
@@ -467,6 +564,16 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
           await applyReading(entry);
         } catch (error) {
           console.error('Olea: could not record a reading in the unit manifest', error);
+        }
+      });
+    },
+
+    recordTranscriptReading(path, partOrdinals) {
+      return run(async () => {
+        try {
+          if (await applyTranscriptReading(path, partOrdinals)) notifyLater();
+        } catch (error) {
+          console.error('Olea: could not record a transcript reading in the unit manifest', error);
         }
       });
     },
