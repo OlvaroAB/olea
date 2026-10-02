@@ -11,7 +11,6 @@ import type {
   VerdictLogRecord,
 } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
-import { correctedGradeInstrumentIds } from '../review-log/contest.js';
 import { latestVerdictByInstrument } from '../review-log/verdicts.js';
 import {
   projectInstrumentValidity,
@@ -396,9 +395,8 @@ describe('parity with the proven-invalid set the readers build today (8a017c4, f
     }
     const v = projectInstrumentValidity(entries, disputes);
     expect([...v.provenInvalid.keys()].sort()).toEqual([...today].sort());
-    // The instrument a contest was resolved `corrected` on is named by the
-    // contest, but its evidence as a whole is not proven invalid.
-    expect(correctedGradeInstrumentIds(disputes)).toEqual(['eb:1']);
+    // An instrument a contest was resolved `corrected` on is not proven
+    // invalid by that alone: the cause decides, and a contest records none.
     expect(v.provenInvalid.has('eb:1')).toBe(false);
   });
 });

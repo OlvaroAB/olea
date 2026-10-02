@@ -2328,7 +2328,6 @@ export {
   contestOutcomeShapes,
   contestRateHealthCheck,
   contestStateForClaim,
-  correctedGradeInstrumentIds,
   FORBIDDEN_CONTEST_STRINGS,
   isDisputeCurrent,
   isRoutedRendering,
