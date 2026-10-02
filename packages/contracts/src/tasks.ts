@@ -525,9 +525,9 @@ export function isValidRemainingAllowanceUsd(value: unknown): value is number {
  * - Not persisted: transient request context, like `sourceChunks` itself (D-005).
  *
  * The tasks that carry it, each of which reads a `sourceChunks` array: see
- * `SOURCE_CHUNK_ORIGIN_TASK_IDS`. `grounding.judge.v1` (a single assembled `context` string) and
- * `explain-back.judge.v1` (`sourceBlocks` with block ids) read no `sourceChunks`, so they do not
- * carry it; a transcript-aware shape for them is a separate decision.
+ * `SOURCE_CHUNK_ORIGIN_TASK_IDS`. `grounding.judge.v1` (a single assembled `context` string) reads
+ * no `sourceChunks` and does not carry it. `explain-back.judge.v1` carries a per-block `origin`
+ * instead (`sourceBlockOriginField`, `ol-egov.141.89.1.69`).
  *
  * Skew: a Worker from before this field strips it as an unknown key, which reads as no
  * transcript passages, exactly as before.
@@ -590,3 +590,14 @@ export function refineSourceChunkOriginAlignment(
     });
   }
 }
+
+/**
+ * `ol-egov.141.89.1.69` / `[D-465]` (Class B default): `explain-back.judge.v1`'s per-block
+ * origin. Each entry of the request's `sourceBlocks` (`{ blockId, text }`) may carry an optional
+ * `origin`: the same entry type as `sourceChunkOrigins` (never redefined), or `null` for a block
+ * that is not a transcript passage. Absent is today's request. The origin rides on the block
+ * itself, so there is no alignment to get wrong. Roles only, never a speaker name; endorsement is
+ * not a field. Not persisted. The prompt does not read it yet; `ol-egov.141.89.1.64` sends and
+ * renders it.
+ */
+export const sourceBlockOriginField = transcriptSourceChunkOrigin.nullable().optional();

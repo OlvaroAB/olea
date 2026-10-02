@@ -16,6 +16,7 @@ import {
   knownTaskId,
   refineSourceChunkOriginAlignment,
   SOURCE_CHUNK_ORIGIN_TASK_IDS,
+  sourceBlockOriginField,
   sourceChunkOriginsField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
@@ -250,5 +251,38 @@ describe('sourceChunkOrigins (per-passage transcript origin)', () => {
     expect([...SOURCE_CHUNK_ORIGIN_TASK_IDS]).not.toContain('grounding.judge.v1');
     expect([...SOURCE_CHUNK_ORIGIN_TASK_IDS]).not.toContain('explain-back.judge.v1');
     expect(SOURCE_CHUNK_ORIGIN_TASK_IDS).toHaveLength(7);
+  });
+});
+
+// `ol-egov.141.89.1.69` / [D-465]: explain-back.judge's per-block origin.
+describe('sourceBlockOrigin (explain-back.judge per-block transcript origin)', () => {
+  const block = z.object({
+    blockId: z.string().min(1),
+    text: z.string().min(1),
+    origin: sourceBlockOriginField,
+  });
+  const request = z.object({ sourceBlocks: z.array(block) });
+  const origin = { kind: 'transcript', speakerRole: 'lecturer' } as const;
+  const one = (extra: Record<string, unknown>) =>
+    request.safeParse({ sourceBlocks: [{ blockId: 'b1', text: 't', ...extra }] }).success;
+
+  it('absent is valid', () => {
+    expect(one({})).toBe(true);
+  });
+  it('null is valid, and a transcript origin with or without flags', () => {
+    expect(one({ origin: null })).toBe(true);
+    expect(one({ origin })).toBe(true);
+    expect(one({ origin: { ...origin, speakerRole: 'unknown', flags: ['inaudible'] } })).toBe(true);
+  });
+  it('an unknown role, flag or kind is rejected', () => {
+    expect(one({ origin: { ...origin, speakerRole: 'student' } })).toBe(false);
+    expect(one({ origin: { ...origin, flags: ['mumbled'] } })).toBe(false);
+    expect(one({ origin: { ...origin, kind: 'note' } })).toBe(false);
+  });
+  it('an extra key is rejected, so no speaker name can travel', () => {
+    expect(one({ origin: { ...origin, speakerName: 'x' } })).toBe(false);
+  });
+  it('misalignment cannot occur: the origin rides on its block', () => {
+    expect(one({ origin: [origin] })).toBe(false);
   });
 });

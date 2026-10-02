@@ -309,6 +309,7 @@ export {
   refineSourceChunkOriginAlignment,
   SOURCE_CHUNK_ORIGIN_TASK_IDS,
   type SourceChunkOriginTaskId,
+  sourceBlockOriginField,
   sourceChunkOriginsField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
