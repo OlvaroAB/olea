@@ -75,9 +75,12 @@ import {
   type ConceptMasteryResult,
   conceptVitalityInstruments,
   DEFAULT_SAPLING_RULE,
+  evidenceTierOf,
   foldConceptStage,
+  type HintReveal,
   HOLDING_CUT,
   type MasteryRollupOptions,
+  recallDayQualification,
   reviewRecordsForConcept,
   type SaplingRule,
 } from './rollup.js';
@@ -176,6 +179,21 @@ export interface AttainmentOptions
    */
   readonly passageChanges?: readonly PassageChangeFact[];
   /**
+   * **Replaced card (judgement J3; the ruling of 2026-09-30,
+   * `ol-egov.141.89.9.87`).** What vitality and readiness do with a retired
+   * predecessor whose successor is active. Defaults to
+   * {@link DEFAULT_REPLACED_PREDECESSOR_POLICY}, today's reading.
+   */
+  readonly replacedPredecessor?: ReplacedPredecessorPolicy;
+  /**
+   * Per instrument, the demands it declares (`projectInstrumentDemands`), so a
+   * success on a successor that declares a narrower set of demands than its
+   * predecessor is never equivalent evidence. An instrument absent from the map
+   * declares none, and constrains nothing. Read only under
+   * `replacedPredecessor: 'successor-with-equivalent-evidence'`.
+   */
+  readonly instrumentDemands?: ReadonlyMap<string, readonly string[]>;
+  /**
    * The scheduler configuration version to stamp on stage readings, which do
    * not themselves read the scheduler. Current readings take it from the
    * scheduler they are handed. Absent reads as `unknown`, never guessed.
@@ -190,6 +208,8 @@ export interface ArithmeticVersionInput {
   readonly schedulerVersion?: string | undefined;
   /** True when a passage-validity input was handed in (the D-347 split computed). Omitted otherwise. */
   readonly passageSplit?: boolean | undefined;
+  /** The replaced-predecessor policy, named only when it is not today's reading. Omitted otherwise. */
+  readonly replacedPredecessor?: ReplacedPredecessorPolicy | undefined;
 }
 
 /**
@@ -205,6 +225,9 @@ export function attainmentArithmeticVersion(input: ArithmeticVersionInput): stri
     `withheld=${input.withheldEvidence}`,
     `scheduler=${input.schedulerVersion ?? 'unknown'}`,
     ...(input.passageSplit === true ? ['passage=split'] : []),
+    ...(input.replacedPredecessor !== undefined && input.replacedPredecessor !== 'count'
+      ? [`replaced=${input.replacedPredecessor}`]
+      : []),
   ].join(';');
 }
 
@@ -224,6 +247,7 @@ function versionOf(options: AttainmentOptions, schedulerVersion: string | undefi
     withheldEvidence: withheldPolicyOf(options),
     schedulerVersion,
     passageSplit: options.passageChanges !== undefined,
+    replacedPredecessor: replacedPredecessorPolicyOf(options),
   });
 }
 
@@ -670,6 +694,154 @@ export function unresolvedPassageInstrumentIds(
   return unresolved;
 }
 
+// ---------------------------------------------------------------------------
+// A replaced card (J3)
+// ---------------------------------------------------------------------------
+
+/**
+ * What the current freshness readings (vitality and readiness) do with a
+ * retired predecessor whose successor is active:
+ *
+ * - `'count'` — today's reading, locked in attainment targets version 2
+ *   (J3 as first taken): the predecessor's sound review counts beside its
+ *   successor, so it can hold the concept at *needs tending* as a separate
+ *   overdue obligation nobody can serve.
+ * - `'successor-with-equivalent-evidence'` — the ruling of 2026-09-30: a
+ *   retired predecessor is no separate obligation once an ACTIVE successor
+ *   tests the same learning target and carries **equivalent qualifying
+ *   evidence** (see {@link predecessorsCarriedBySuccessor}). Until it does,
+ *   the predecessor's sound review keeps counting: a recognition answer, a
+ *   failed attempt, an assisted success or a success on a narrower demand
+ *   never refreshes recall of the broader target. The displayed stage, the
+ *   award and credit keep the predecessor's sound reviews under both.
+ *
+ * Opt-in until the targets cut the J3 amendment (`ol-egov.141.89.9.87`).
+ */
+export type ReplacedPredecessorPolicy = 'count' | 'successor-with-equivalent-evidence';
+
+/** Today's reading, until the J3 amendment is cut as a target version. */
+export const DEFAULT_REPLACED_PREDECESSOR_POLICY: ReplacedPredecessorPolicy = 'count';
+
+const TIER_RANK = { recognition: 0, recall: 1, explanation: 2 } as const;
+
+function isSuccessfulReview(record: ReviewLogRecord): boolean {
+  if (record.instrumentType === 'explain-back') {
+    return readExplainBackCorrectness(record)?.verdict === 'correct';
+  }
+  return record.rating !== null && record.rating !== 'again';
+}
+
+/**
+ * Whether one standing review of the successor is **equivalent qualifying
+ * evidence** for a predecessor of tier `predecessorTier` (judgement J3): a
+ * success, at the predecessor's tier or above, that qualifies as evidence of
+ * that tier — recall only by the strict definition of light assistance
+ * (`recallDayQualification`, `[D-458]`) — and, where the predecessor declares
+ * demands, on an instrument that declares all of them.
+ */
+function isEquivalentEvidence(
+  record: ReviewLogRecord,
+  predecessorTier: number,
+  hintReveals: ReadonlyMap<string, HintReveal>,
+): boolean {
+  if (!isSuccessfulReview(record)) return false;
+  const tier = TIER_RANK[evidenceTierOf(record.instrumentType)];
+  if (tier < predecessorTier) return false;
+  if (tier === TIER_RANK.recall && recallDayQualification(record, hintReveals) !== 'qualifies') {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * The retired predecessors whose freshness an active successor now carries,
+ * each with the successor that carries it (judgement J3). A predecessor is
+ * carried when some ACTIVE instrument down its succession chain (not proven
+ * invalid, not withheld for any reason but having been replaced itself, not
+ * behind an unresolved changed passage) holds a standing review that is
+ * equivalent qualifying evidence ({@link isEquivalentEvidence}) and declares
+ * every demand the predecessor declares. Pure over the log and the validity
+ * projection; invents no demand and no hint history.
+ */
+export function predecessorsCarriedBySuccessor(
+  entries: readonly ReviewLogEntry[],
+  validity: InstrumentValidityProjection,
+  options: Pick<AttainmentOptions, 'hintReveals' | 'instrumentDemands'> = {},
+  unresolvedPassage: ReadonlySet<string> = new Set(),
+): ReadonlyMap<string, string> {
+  const successorOf = new Map<string, string>();
+  const standingByInstrument = new Map<string, ReviewLogRecord[]>();
+  for (const entry of entries) {
+    if (entry.kind === 'succession') {
+      if (!successorOf.has(entry.predecessorInstrumentId)) {
+        successorOf.set(entry.predecessorInstrumentId, entry.successorInstrumentId);
+      }
+    } else if (entry.kind === 'review' && !validity.correctedEvidence.has(entry.eventId)) {
+      const list = standingByInstrument.get(entry.instrumentId) ?? [];
+      list.push(entry);
+      standingByInstrument.set(entry.instrumentId, list);
+    }
+  }
+  const hintReveals = options.hintReveals ?? new Map<string, HintReveal>();
+  const isActive = (id: string): boolean => {
+    if (validity.provenInvalid.has(id) || unresolvedPassage.has(id)) return false;
+    const withheld = validity.withheld.get(id);
+    return withheld === undefined || withheld.reasons.every((reason) => reason === 'succeeded');
+  };
+  const covers = (successor: string, predecessor: string): boolean => {
+    const needed = options.instrumentDemands?.get(predecessor) ?? [];
+    if (needed.length === 0) return true;
+    const declared = options.instrumentDemands?.get(successor) ?? [];
+    return needed.every((demand) => declared.includes(demand));
+  };
+  const carried = new Map<string, string>();
+  for (const predecessor of [...successorOf.keys()].sort()) {
+    const predecessorReviews = standingByInstrument.get(predecessor) ?? [];
+    const first = predecessorReviews[0];
+    if (first === undefined) continue;
+    const tier = TIER_RANK[evidenceTierOf(first.instrumentType)];
+    const seen = new Set<string>([predecessor]);
+    let next = successorOf.get(predecessor);
+    while (next !== undefined && !seen.has(next)) {
+      seen.add(next);
+      if (
+        isActive(next) &&
+        covers(next, predecessor) &&
+        (standingByInstrument.get(next) ?? []).some((review) =>
+          isEquivalentEvidence(review, tier, hintReveals),
+        )
+      ) {
+        carried.set(predecessor, next);
+        break;
+      }
+      next = successorOf.get(next);
+    }
+  }
+  return carried;
+}
+
+function replacedPredecessorPolicyOf(options: AttainmentOptions): ReplacedPredecessorPolicy {
+  const policy = options.replacedPredecessor ?? DEFAULT_REPLACED_PREDECESSOR_POLICY;
+  if (policy !== 'count' && policy !== 'successor-with-equivalent-evidence') {
+    throw new Error(
+      `attainment: replacedPredecessor must be 'count' or 'successor-with-equivalent-evidence', got ${policy}`,
+    );
+  }
+  return policy;
+}
+
+/** The predecessors an active successor carries, or none under today's reading. */
+function carriedFor(
+  entries: readonly ReviewLogEntry[],
+  validity: InstrumentValidityProjection,
+  options: AttainmentOptions,
+  unresolvedPassage: ReadonlySet<string>,
+): ReadonlyMap<string, string> | undefined {
+  return replacedPredecessorPolicyOf(options) === 'successor-with-equivalent-evidence'
+    ? predecessorsCarriedBySuccessor(entries, validity, options, unresolvedPassage)
+    : undefined;
+}
+
 /** The current readings the eligibility rule distinguishes. */
 export type CurrentReading = 'vitality' | 'readiness' | 'need';
 
@@ -685,8 +857,12 @@ export function excludedFromCurrent(
   validity: InstrumentValidityProjection,
   policy: WithheldEvidencePolicy,
   unresolvedPassage?: ReadonlySet<string>,
+  carriedBySuccessor?: ReadonlyMap<string, string>,
 ): boolean {
   if (validity.provenInvalid.has(instrumentId)) return true;
+  // Judgement J3: a predecessor an active successor carries with equivalent evidence is no
+  // separate obligation for freshness (vitality, readiness).
+  if (reading !== 'need' && carriedBySuccessor?.has(instrumentId) === true) return true;
   // `[D-347]`'s split: an unresolved changed passage is excluded from every current reading
   // under every policy; a sound withdrawal is the policy's.
   if (unresolvedPassage?.has(instrumentId) === true) return true;
@@ -733,6 +909,7 @@ export function readAllEligibleConceptVitality(
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
   const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
+  const carried = carriedFor(entries, validity, options, unresolvedPassage);
   const replayed = replaySchedulerStates(
     withoutCorrectedEvidence(entries, validity.correctedEvidence),
     scheduler,
@@ -750,6 +927,7 @@ export function readAllEligibleConceptVitality(
           validity,
           policy,
           unresolvedPassage,
+          carried,
         )
       ) {
         excluded.push(instrument.instrumentId);
@@ -804,6 +982,7 @@ export function readAllConceptReadiness(
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
   const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
+  const carried = carriedFor(entries, validity, options, unresolvedPassage);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed = replaySchedulerStates(standing, scheduler);
   const independent = instrumentsWithIndependentSuccess(standing);
@@ -818,6 +997,7 @@ export function readAllConceptReadiness(
             validity,
             policy,
             unresolvedPassage,
+            carried,
           ),
       )
       .map((instrument) => ({

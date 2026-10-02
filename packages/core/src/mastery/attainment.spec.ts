@@ -24,8 +24,10 @@ import type { Scheduler } from '../scheduler/types.js';
 import {
   ATTAINMENT_FOLD_VERSION,
   attainmentArithmeticVersion,
+  DEFAULT_REPLACED_PREDECESSOR_POLICY,
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
   type PassageChangeFact,
+  predecessorsCarriedBySuccessor,
   readAllConceptAttainment,
   readAllConceptReadiness,
   readAllCurrentRecognition,
@@ -997,5 +999,156 @@ describe('a judgement known false (R10; E6)', () => {
     expect(withKnownFalseJudgements(base, log, [{ eventId: 'absent', knownAt: T3 }])).toBe(base);
     expect(withKnownFalseJudgements(base, log, [{ eventId: 'eb-1', knownAt: 'nope' }])).toBe(base);
     expect(withKnownFalseJudgements(base, log, undefined)).toBe(base);
+  });
+});
+
+// `ol-egov.141.89.9.87` (judgement J3; the ruling of 2026-09-30): a retired predecessor is no separate
+// overdue obligation once an ACTIVE successor carries EQUIVALENT qualifying evidence. A recognition
+// answer, a failed attempt, an assisted success or a success on a narrower demand does not refresh
+// recall of the broader target. Sound historical reviews keep their stage and credit throughout.
+describe('a replaced card carries freshness only on equivalent qualifying evidence (J3)', () => {
+  const OLD = 'qa:a:old';
+  const NEW = 'qa:a:new';
+  const policy = { replacedPredecessor: 'successor-with-equivalent-evidence' as const };
+  const base = [recall('p1', T1, { instrumentId: OLD }), succession(OLD, NEW, T2)];
+  const carriedOf = (log: readonly ReviewLogEntry[], extra: object = {}) =>
+    predecessorsCarriedBySuccessor(log, projectInstrumentValidity(log), extra);
+  const vitality = (log: readonly ReviewLogEntry[], options: object = policy) =>
+    readAllEligibleConceptVitality(
+      log,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      HOLDING_CUT,
+      projectInstrumentValidity(log),
+      options,
+    ).get('concept-a');
+
+  it("an active successor with an unaided recall success carries the predecessor; today's reading still counts both", () => {
+    const log = [...base, recall('s1', T3, { instrumentId: NEW })];
+    expect(carriedOf(log).get(OLD)).toBe(NEW);
+    const ruled = vitality(log);
+    expect(ruled?.excludedInstrumentIds).toEqual([OLD]);
+    expect(ruled?.weakest?.instrumentId).toBe(NEW);
+    expect(vitality(log, {})?.instrumentsRead).toBe(2);
+    expect(DEFAULT_REPLACED_PREDECESSOR_POLICY).toBe('count');
+  });
+
+  it('a recognition answer on the successor never refreshes recall of the broader target', () => {
+    const log = [
+      ...base,
+      review({
+        eventId: 's1',
+        timestamp: T3,
+        instrumentId: NEW,
+        instrumentType: 'mcq',
+        supportLevelShown: undefined,
+      }),
+    ];
+    expect(carriedOf(log).size).toBe(0);
+    expect(vitality(log)?.excludedInstrumentIds).toEqual([]);
+  });
+
+  it('a failed attempt on the successor never refreshes it either', () => {
+    const log = [...base, recall('s1', T3, { instrumentId: NEW, rating: 'again' })];
+    expect(carriedOf(log).size).toBe(0);
+    expect(vitality(log)?.instrumentsRead).toBe(2);
+  });
+
+  it('an assisted success, or one whose assistance the record cannot establish, never qualifies', () => {
+    const guided = [...base, recall('s1', T3, { instrumentId: NEW, supportLevelShown: 'guided' })];
+    expect(carriedOf(guided).size).toBe(0);
+    const unknownHint = [
+      ...base,
+      recall('s1', T3, { instrumentId: NEW, supportLevelShown: 'prompted' }),
+    ];
+    expect(carriedOf(unknownHint).size).toBe(0);
+    const notOpened = [
+      ...base,
+      recall('s1', T3, { instrumentId: NEW, supportLevelShown: 'prompted', hintOpened: false }),
+    ];
+    expect(carriedOf(notOpened).get(OLD)).toBe(NEW);
+  });
+
+  it('a success on a narrower demand never refreshes the broader one; one covering every demand does', () => {
+    const log = [...base, recall('s1', T3, { instrumentId: NEW })];
+    const demands = (successor: readonly string[]) =>
+      new Map<string, readonly string[]>([
+        [OLD, ['recall-a-fact', 'calculate']],
+        [NEW, successor],
+      ]);
+    expect(carriedOf(log, { instrumentDemands: demands(['recall-a-fact']) }).size).toBe(0);
+    expect(
+      carriedOf(log, { instrumentDemands: demands(['calculate', 'recall-a-fact']) }).get(OLD),
+    ).toBe(NEW);
+    // Nothing declared on the predecessor constrains nothing (no demand is inferred).
+    expect(
+      carriedOf(log, { instrumentDemands: new Map([[NEW, ['recall-a-fact']]]) }).get(OLD),
+    ).toBe(NEW);
+  });
+
+  it('a successor with no review, a withdrawn one, or one behind an unresolved passage carries nothing', () => {
+    expect(carriedOf(base).size).toBe(0);
+    const withdrawn = [
+      ...base,
+      recall('s1', T3, { instrumentId: NEW }),
+      suspend(NEW, T4, 's-susp'),
+    ];
+    expect(carriedOf(withdrawn).size).toBe(0);
+    const log = [...base, recall('s1', T3, { instrumentId: NEW })];
+    const readiness = readAllConceptReadiness(
+      log,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      projectInstrumentValidity(log),
+      {
+        ...policy,
+        passageChanges: [{ instrumentIds: [NEW], changedAt: T3, revalidation: [] }],
+      },
+    ).get('concept-a');
+    // The successor is behind an unresolved change, so it is excluded and carries nothing: the predecessor stands.
+    expect(readiness?.weakest?.instrumentId).toBe(OLD);
+  });
+
+  it('a chain of replacements is carried by the first active link with equivalent evidence', () => {
+    const log = [
+      recall('p1', T1, { instrumentId: OLD }),
+      succession(OLD, NEW, T2),
+      succession(NEW, 'qa:a:newer', T3),
+      recall('s1', T4, { instrumentId: 'qa:a:newer' }),
+    ];
+    const carried = carriedOf(log);
+    expect(carried.get(OLD)).toBe('qa:a:newer');
+    expect(carried.has('qa:a:newer')).toBe(false);
+  });
+
+  it("keeps the predecessor's sound reviews for the displayed stage and credit", () => {
+    const log = [
+      explainBack('eb-1', T1, { instrumentId: 'eb:old' }),
+      succession('eb:old', 'eb:new', T2),
+      recall('r1', T3, { instrumentId: 'eb:new' }),
+    ];
+    const v = projectInstrumentValidity(log);
+    const plain = readConceptAttainment(log, 'concept-a', v);
+    const ruled = readConceptAttainment(log, 'concept-a', v, policy);
+    expect(ruled.displayed.state).toBe(plain.displayed.state);
+    expect(ruled.award).toEqual(plain.award);
+    expect(ruled.arithmeticVersion).toContain('replaced=successor-with-equivalent-evidence');
+    expect(plain.arithmeticVersion).not.toContain('replaced=');
+  });
+
+  it('readiness reads the successor once it carries the predecessor', () => {
+    const log = [...base, recall('s1', T3, { instrumentId: NEW })];
+    const readiness = readAllConceptReadiness(
+      log,
+      ['concept-a'],
+      scheduler,
+      NOW,
+      projectInstrumentValidity(log),
+      policy,
+    ).get('concept-a');
+    expect(readiness?.weakest?.instrumentId).toBe(NEW);
+    expect(readiness?.instrumentsRead).toBe(1);
   });
 });

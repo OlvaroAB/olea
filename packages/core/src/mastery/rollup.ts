@@ -392,7 +392,7 @@ export type HintReveal = 'light' | 'answer-bearing';
  * `hintOpened` is unknown (`[D-350]`), and opening a hint is not proof it
  * supplied the answer.
  */
-function recallDayQualification(
+export function recallDayQualification(
   record: ReviewLogRecord,
   hintReveals: ReadonlyMap<string, HintReveal>,
 ): 'qualifies' | 'uncertain' | 'no' {

@@ -1335,6 +1335,7 @@ export type {
   NeedReading,
   PassageChangeFact,
   PassageRevalidationState,
+  ReplacedPredecessorPolicy,
   StageCorrection,
   TopStageAward,
   WithheldEvidencePolicy,
@@ -1342,8 +1343,10 @@ export type {
 export {
   ATTAINMENT_FOLD_VERSION,
   attainmentArithmeticVersion,
+  DEFAULT_REPLACED_PREDECESSOR_POLICY,
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
   excludedFromCurrent,
+  predecessorsCarriedBySuccessor,
   readAllConceptAttainment,
   readAllConceptReadiness,
   readAllCurrentRecognition,
