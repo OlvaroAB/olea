@@ -346,6 +346,7 @@ export interface RecordedStageArithmetic {
 const SAPLING_RULES: readonly SaplingRule[] = [
   'any-scored-success',
   'unaided-recall',
+  'strict-unaided-recall',
   'mix-with-unaided-recall',
 ];
 

@@ -330,10 +330,25 @@ export const ADMITTED_SUPPORT_LEVELS: readonly SupportLevel[] = ['independent', 
  *   distinguishes "unaided or prompted", so unaided is read here as
  *   `independent` — flagged for the ruling to confirm.
  *
+ * - `'strict-unaided-recall'` — (b) as ruled 2026-09-30 (`[D-458]`,
+ *   `ol-egov.141.89.9.86`): recall-tier successes that are **qualifying recall
+ *   successes under the strict definition of light assistance** on that many
+ *   distinct days. Unaided counts; a prompted success counts only with its hint
+ *   recorded not opened (or opened and known to have been a light cue);
+ *   answer-bearing guidance never counts; where the record cannot establish
+ *   whether assistance was used or what it revealed, the event is recorded as
+ *   uncertain, is not a new qualifying day, and is never a failed answer.
+ *   `'unaided-recall'` keeps the reading before the ruling, so a record
+ *   stamped with it replays as it was written and no award is silently rewritten.
+ *
  * Adopting (b) or (c) lowers some concepts from sapling to sprout once, which
  * F2.11 forbids unless ruled: that is why the default stays (a).
  */
-export type SaplingRule = 'any-scored-success' | 'unaided-recall' | 'mix-with-unaided-recall';
+export type SaplingRule =
+  | 'any-scored-success'
+  | 'unaided-recall'
+  | 'strict-unaided-recall'
+  | 'mix-with-unaided-recall';
 
 /** `[D-346]` is open: today's rule. See {@link SaplingRule}. */
 export const DEFAULT_SAPLING_RULE: SaplingRule = 'any-scored-success';
@@ -341,6 +356,7 @@ export const DEFAULT_SAPLING_RULE: SaplingRule = 'any-scored-success';
 const SAPLING_RULES: readonly SaplingRule[] = [
   'any-scored-success',
   'unaided-recall',
+  'strict-unaided-recall',
   'mix-with-unaided-recall',
 ];
 
@@ -349,6 +365,48 @@ const UNAIDED_RECALL_SUPPORT_LEVELS: ReadonlySet<SupportLevel> = new Set([
   'independent',
   'prompted',
 ]);
+
+/**
+ * What a hint that was opened is known to have revealed (`[D-458]`, R7). A
+ * light cue directs attention or asks for a structure; answer-bearing
+ * guidance supplies the tested fact, relationship, necessary answer step or
+ * answer choices. Nothing in the review record states which: it is a fact a
+ * writer that observed the hint's content would hand in
+ * ({@link MasteryRollupOptions.hintReveals}), never one this fold infers.
+ */
+export type HintReveal = 'light' | 'answer-bearing';
+
+/**
+ * How one recall-tier success reads as evidence of a **qualifying recall day**
+ * under the strict definition of light assistance (`[D-458]`; the ruling of
+ * 2026-09-30, `ol-egov.141.89.9.86`):
+ *
+ * - `qualifies` — unaided, or a known light cue;
+ * - `uncertain` — the record cannot establish whether assistance was used or
+ *   what it revealed: not a new qualifying day, never a failed answer, and
+ *   recorded (`ConceptMasteryEvidence.uncertainAssistanceRecallEventIds`);
+ * - `no` — known answer-bearing guidance (the guided rung, or an opened hint
+ *   known to have supplied the answer).
+ *
+ * Reads only what the record holds, and never invents hint history: an absent
+ * `hintOpened` is unknown (`[D-350]`), and opening a hint is not proof it
+ * supplied the answer.
+ */
+function recallDayQualification(
+  record: ReviewLogRecord,
+  hintReveals: ReadonlyMap<string, HintReveal>,
+): 'qualifies' | 'uncertain' | 'no' {
+  const support = record.supportLevelShown;
+  if (support === undefined) return 'uncertain';
+  if (support !== 'independent' && support !== 'prompted') return 'no';
+  if (record.hintOpened === false) return 'qualifies';
+  if (record.hintOpened === undefined) return support === 'independent' ? 'qualifies' : 'uncertain';
+  // The hint was opened, on a review that was offered no hint or only a prompt: what it revealed decides.
+  const revealed = hintReveals.get(record.eventId);
+  if (revealed === 'light') return 'qualifies';
+  if (revealed === 'answer-bearing') return 'no';
+  return 'uncertain';
+}
 
 /**
  * Tunable parameters for `computeConceptMastery`. Both defaults are
@@ -435,6 +493,13 @@ export interface MasteryRollupOptions {
    * by saying nothing. Pass `[...validity.correctedEvidence.keys()]`.
    */
   readonly correctedEventIds?: readonly string[];
+  /**
+   * `[D-458]` (`ol-egov.141.89.9.86`): per review event id, what an OPENED hint
+   * is known to have revealed. Absent for an event reads as not known, so an
+   * opened hint on it is uncertain and never a new qualifying recall day. The
+   * hint-uptake writer (`[D-350]`) is the producer; nothing here invents one.
+   */
+  readonly hintReveals?: ReadonlyMap<string, HintReveal>;
 }
 
 interface ResolvedOptions {
@@ -445,6 +510,7 @@ interface ResolvedOptions {
   readonly saplingRule: SaplingRule;
   readonly explanationMissingEventIds: ReadonlySet<string>;
   readonly correctedEventIds: ReadonlySet<string>;
+  readonly hintReveals: ReadonlyMap<string, HintReveal>;
 }
 
 function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOptions {
@@ -472,6 +538,7 @@ function resolveOptions(options: MasteryRollupOptions | undefined): ResolvedOpti
     saplingRule,
     explanationMissingEventIds: new Set(options?.explanationMissingEventIds ?? []),
     correctedEventIds: new Set(options?.correctedEventIds ?? []),
+    hintReveals: options?.hintReveals ?? new Map(),
   };
 }
 
@@ -622,6 +689,21 @@ export interface ConceptMasteryEvidence {
   readonly unaidedRecallSuccessDays?: number;
   /** `[D-346]` option (c)'s extra condition: at least one recall-tier review succeeded at `independent` support. */
   readonly independentRecallSuccess?: boolean;
+  /**
+   * `[D-458]` (`ol-egov.141.89.9.86`): distinct calendar days on which a
+   * recall-tier review succeeded as a **qualifying recall success** under the
+   * strict definition of light assistance (unaided, or a known light cue); the
+   * input of `'strict-unaided-recall'`. See {@link recallDayQualification}.
+   */
+  readonly qualifyingRecallSuccessDays?: number;
+  /**
+   * `[D-458]`: the recall-tier successes whose assistance the record cannot
+   * establish (no support level recorded, a prompted success with no hint value,
+   * or a hint opened whose content is not known). Each is **recorded, never
+   * counted as a new qualifying recall day, and never a failed answer**. Sorted
+   * by event id. Optional like its neighbours.
+   */
+  readonly uncertainAssistanceRecallEventIds?: readonly string[];
   /**
    * The earliest attempt, by `(instant, eventId)`, that qualifies for the top
    * stage — what the historical award names (`[D-338]` item 1). `null` when
@@ -808,6 +890,8 @@ function conceptEvidence(
   const successDays = new Set<string>();
   const unaidedRecallDays = new Set<string>();
   let independentRecallSuccess = false;
+  const qualifyingRecallDays = new Set<string>();
+  const uncertainAssistanceRecallEventIds: string[] = [];
   let scoredEventCount = 0;
   let scoredSuccessCount = 0;
   let recognitionScoredCount = 0;
@@ -940,10 +1024,18 @@ function conceptEvidence(
       if (day !== null) successDays.add(day);
       if (tier === 'recall') {
         const support = record.supportLevelShown;
+        // The reading before `[D-458]`, kept so `unaided-recall` still replays a record written under it.
         if (support !== undefined && UNAIDED_RECALL_SUPPORT_LEVELS.has(support) && day !== null) {
           unaidedRecallDays.add(day);
         }
         if (support === 'independent') independentRecallSuccess = true;
+        // `[D-458]`: the strict reading, with uncertainty recorded.
+        const qualification = recallDayQualification(record, resolved.hintReveals);
+        if (qualification === 'qualifies') {
+          if (day !== null) qualifyingRecallDays.add(day);
+        } else if (qualification === 'uncertain') {
+          uncertainAssistanceRecallEventIds.push(record.eventId);
+        }
       }
     }
   }
@@ -965,6 +1057,8 @@ function conceptEvidence(
     topStageQualified,
     unaidedRecallSuccessDays: unaidedRecallDays.size,
     independentRecallSuccess,
+    qualifyingRecallSuccessDays: qualifyingRecallDays.size,
+    uncertainAssistanceRecallEventIds: uncertainAssistanceRecallEventIds.sort(),
     topStageAttempt:
       topStageAttempt === null
         ? null
@@ -985,6 +1079,8 @@ function saplingReached(evidence: ConceptMasteryEvidence, resolved: ResolvedOpti
       return evidence.successfulScoredDays >= days;
     case 'unaided-recall':
       return (evidence.unaidedRecallSuccessDays ?? 0) >= days;
+    case 'strict-unaided-recall':
+      return (evidence.qualifyingRecallSuccessDays ?? 0) >= days;
     case 'mix-with-unaided-recall':
       return evidence.successfulScoredDays >= days && evidence.independentRecallSuccess === true;
   }

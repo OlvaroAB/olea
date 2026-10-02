@@ -1388,7 +1388,7 @@ export {
 // needs without re-deriving mastery a second way — `packages/plugin`'s
 // F6.2 cross-course scope source (`today/data-source.ts`) is the first
 // consumer.
-export type { ConceptMasteryResult } from './mastery/rollup.js';
+export type { ConceptMasteryResult, HintReveal } from './mastery/rollup.js';
 // The value a review-log writer stamps onto a new v4 record (`ol-7328`'s
 // per-concept ruling, `ol-g6zg`'s v4 shape, wired by `ol-rpr4`). Exported here
 // rather than left to a deep source import: the plugin's review port is

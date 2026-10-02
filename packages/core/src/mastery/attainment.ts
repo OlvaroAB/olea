@@ -160,6 +160,7 @@ export interface AttainmentOptions
     | 'admittedSupportLevels'
     | 'saplingRule'
     | 'explanationMissingEventIds'
+    | 'hintReveals'
   > {
   /** `[D-347]`, open. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
   readonly withheldEvidence?: WithheldEvidencePolicy;
@@ -239,6 +240,7 @@ function rollupOptionsOf(options: AttainmentOptions): MasteryRollupOptions {
     ...(options.explanationMissingEventIds !== undefined
       ? { explanationMissingEventIds: options.explanationMissingEventIds }
       : {}),
+    ...(options.hintReveals !== undefined ? { hintReveals: options.hintReveals } : {}),
   };
 }
 

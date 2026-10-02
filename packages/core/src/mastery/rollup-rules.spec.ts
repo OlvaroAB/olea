@@ -410,3 +410,94 @@ describe('Knowledge model §8 test 6 / `[D-097]` — a rejected item’s reviews
     }
   });
 });
+
+// `ol-egov.141.89.9.86` (`[D-458]`; the ruling of 2026-09-30): strict evidence for a qualifying
+// recall day. A light cue may count; answer-bearing guidance may not; where the record cannot
+// establish whether assistance was used or what it revealed, the event is recorded uncertain,
+// is not a new qualifying day, and is never a failed answer.
+describe('[D-458] strict qualifying recall days (strict-unaided-recall)', () => {
+  const strict = (
+    entries: readonly ReviewLogEntry[],
+    hintReveals?: Map<string, 'light' | 'answer-bearing'>,
+  ) =>
+    computeConceptMastery(entries, 'concept-a', {
+      saplingRule: 'strict-unaided-recall',
+      ...(hintReveals !== undefined ? { hintReveals } : {}),
+    });
+
+  it('unaided recall on three days reads sapling', () => {
+    const entries = onDays(THREE_DAYS, () => ({ supportLevelShown: 'independent' }));
+    expect(strict(entries).state).toBe('sapling');
+    expect(strict(entries).evidence.uncertainAssistanceRecallEventIds).toEqual([]);
+  });
+
+  it('a prompted success with its hint recorded not opened qualifies', () => {
+    const entries = onDays(THREE_DAYS, () => ({
+      supportLevelShown: 'prompted',
+      hintOpened: false,
+    }));
+    expect(strict(entries).state).toBe('sapling');
+  });
+
+  it('a prompted success with no hint value is uncertain: no new qualifying day, recorded, never a failure', () => {
+    const entries = onDays(THREE_DAYS, () => ({ supportLevelShown: 'prompted' }));
+    const reading = strict(entries);
+    expect(reading.state).toBe('sprout');
+    expect(reading.evidence.qualifyingRecallSuccessDays).toBe(0);
+    expect(reading.evidence.uncertainAssistanceRecallEventIds).toHaveLength(3);
+    // Not a failed answer: the successes still count as scored successes and practice.
+    expect(reading.evidence.scoredSuccessCount).toBe(3);
+    expect(reading.evidence.correctedAttemptCount ?? 0).toBe(0);
+    // The reading before the ruling is kept for a record written under it.
+    expect(
+      computeConceptMastery(entries, 'concept-a', { saplingRule: 'unaided-recall' }).state,
+    ).toBe('sapling');
+  });
+
+  it('opening a hint is not proof it supplied the answer: opened and unknown is uncertain, not excluded as a failure', () => {
+    const entries = onDays(THREE_DAYS, () => ({ supportLevelShown: 'prompted', hintOpened: true }));
+    const reading = strict(entries);
+    expect(reading.state).toBe('sprout');
+    expect(reading.evidence.uncertainAssistanceRecallEventIds).toHaveLength(3);
+  });
+
+  it('a known light cue counts; known answer-bearing guidance does not, however correct the answer', () => {
+    const entries = onDays(THREE_DAYS, () => ({ supportLevelShown: 'prompted', hintOpened: true }));
+    const light = new Map(entries.map((e) => [e.eventId, 'light' as const]));
+    const bearing = new Map(entries.map((e) => [e.eventId, 'answer-bearing' as const]));
+    expect(strict(entries, light).state).toBe('sapling');
+    const refused = strict(entries, bearing);
+    expect(refused.state).toBe('sprout');
+    expect(refused.evidence.uncertainAssistanceRecallEventIds).toEqual([]);
+  });
+
+  it('guided recall and a success with no support level recorded never qualify (the latter is uncertain)', () => {
+    expect(strict(onDays(THREE_DAYS, () => ({ supportLevelShown: 'guided' }))).state).toBe(
+      'sprout',
+    );
+    const unknown = strict(onDays(THREE_DAYS, () => ({})));
+    expect(unknown.state).toBe('sprout');
+    expect(unknown.evidence.uncertainAssistanceRecallEventIds).toHaveLength(3);
+  });
+
+  it('one uncertain day among two qualifying ones does not complete the spread; the third qualifying day does', () => {
+    const entries = [
+      ...onDays(['2026-01-10', '2026-01-12'], () => ({ supportLevelShown: 'independent' })),
+      ...onDays(['2026-01-15'], () => ({ supportLevelShown: 'prompted' })),
+    ];
+    expect(strict(entries).state).toBe('sprout');
+    const withThird = [
+      ...entries,
+      ...onDays(['2026-01-20'], () => ({ supportLevelShown: 'independent' })),
+    ];
+    expect(strict(withThird).state).toBe('sapling');
+  });
+
+  it('a top-stage award earned before is never lowered by the stricter reading (the award is the explain-back, not recall days)', () => {
+    const log = [
+      explainBack('eb-1', '2026-01-10T09:00:00-04:00'),
+      ...onDays(THREE_DAYS, () => ({ supportLevelShown: 'prompted' })),
+    ];
+    expect(strict(log).state).toBe('tree');
+  });
+});
