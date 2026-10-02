@@ -44,7 +44,10 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type { ObsidianDataHost } from '../../src/ingestion/materiality/citation-hash-store.js';
-import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
+import {
+  type CitationHashStore,
+  ObsidianCitationHashStore,
+} from '../../src/ingestion/materiality/citation-hash-store.js';
 import {
   type OpenReviewSessionInput,
   openReviewSession,
@@ -399,10 +402,25 @@ describe('openReviewSession — [D-323] instrument standing over the real review
     });
     await store.setPendingRevalidation(qa.instrumentId, 'content-hash-1', NOW.getTime());
 
+    // The fact is pending when the session opens (the standing read is taken there) and has
+    // been answered by the time the item is shown: a still-pending fact at presentation sets
+    // the question aside as could-not-check (ol-egov.141.89.5.45), so this fixture lets the
+    // fact lapse between open and presentation to keep exercising the standing read itself.
+    let shown = false;
+    const lapsing: CitationHashStore = {
+      loadAll: () => store.loadAll(),
+      save: (id, record) => store.save(id, record),
+      remove: (id) => store.remove(id),
+      setPendingRevalidation: (id, hash, at) => store.setPendingRevalidation(id, hash, at),
+      recordDispatch: (id, hash, at, retry) => store.recordDispatch(id, hash, at, retry),
+      isPendingRevalidationCurrent: (id, hash) =>
+        shown ? Promise.resolve(false) : store.isPendingRevalidationCurrent(id, hash),
+    };
     const outcome = await openReviewSession(
-      await sessionInputFor(vault, { citationHashStore: store }),
+      await sessionInputFor(vault, { citationHashStore: lapsing }),
     );
     if (!outcome.ok) throw new Error('expected a composed session');
+    shown = true;
     await outcome.session.start();
     await rateCurrentItem(outcome.session);
 

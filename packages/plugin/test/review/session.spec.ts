@@ -13,6 +13,7 @@ import type { GradeContestPort } from '../../src/review/contest.js';
 import {
   ReviewSession,
   type ReviewSessionDeps,
+  WITHHELD_CHECK_FAILED_NOTICE,
   WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE,
   WITHHELD_PASSAGE_CHANGED_NOTICE,
   withheldLaterNoticeText,
@@ -2376,5 +2377,82 @@ describe('a draft refused for a changed source is withheld, never a crash (ol-eg
     await session.start();
     await session.mcqAnswer(0);
     await expect(session.mcqNext()).rejects.toThrow('disk full');
+  });
+});
+
+describe('[D-455]/[D-456] presentation-time check: could-not-check (ol-egov.141.89.5.45)', () => {
+  it('an unanswered check sets the next question aside with the ruled could-not-check sentence, nothing recorded for it', async () => {
+    const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
+    const b = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-b' }));
+    const c = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-c' }));
+    const check = vi.fn(
+      async (id: string) =>
+        (id === 'inst-b' ? 'check-failed' : 'clear') as 'clear' | 'check-failed',
+    );
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({ queue: [a, b, c], reviewLog, checkSourceAtPresentation: check }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+    expect(session.takeWithheldNotice()).toBeNull();
+    const vm = session.getViewModel();
+    expect(vm.phase).toBe('mcq-open');
+    expect(JSON.stringify(vm)).toContain('inst-c');
+    expect(check).toHaveBeenCalledWith('inst-b');
+    expect(WITHHELD_CHECK_FAILED_NOTICE).not.toMatch(/has changed|answer/);
+  });
+
+  it('a check that throws reads as could-not-check, never a crash and never a change', async () => {
+    const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
+    const b = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-b' }));
+    const check = vi.fn(async (id: string) => {
+      if (id === 'inst-b') throw new Error('store unreadable');
+      return 'clear' as const;
+    });
+    const session = new ReviewSession(
+      baseDeps({ queue: [a, b], checkSourceAtPresentation: check }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+  });
+
+  it('an established change keeps its own sentence beside a could-not-check one in the same session', async () => {
+    const stale = queueItem(mcqFixture({ draftId: 'draft-stale', instrumentId: 'inst-stale' }));
+    const unanswered = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-u' }));
+    const next = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-next' }));
+    const draftAcceptPort = fakeDraftAcceptPort();
+    vi.mocked(draftAcceptPort.accept).mockRejectedValueOnce(
+      new StaleSourceRevisionError('passage changed', 'passage'),
+    );
+    const check = vi.fn(
+      async (id: string) =>
+        (id === 'inst-u' ? 'check-failed' : 'clear') as 'clear' | 'check-failed',
+    );
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [stale, unanswered, next],
+        draftAcceptPort,
+        checkSourceAtPresentation: check,
+      }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    // The established change is explained; the unanswered one does not replace it.
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_PASSAGE_CHANGED_NOTICE);
+    expect(session.getViewModel().phase).toBe('mcq-open');
+  });
+
+  it('absent check: every item shows, as before', async () => {
+    const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
+    const session = new ReviewSession(baseDeps({ queue: [a] }));
+    await session.start();
+    expect(session.getViewModel().phase).toBe('mcq-open');
+    expect(session.takeWithheldNotice()).toBeNull();
   });
 });

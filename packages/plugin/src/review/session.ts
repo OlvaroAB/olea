@@ -178,6 +178,17 @@ export interface ReviewSessionDeps {
   readonly noteExists: NoteExistsPort;
   readonly clock: Clock;
   /**
+   * `[D-455]`/`[D-456]` (C5.3; `ol-egov.141.89.5.45`): the presentation-time changed-source check,
+   * asked for each already-scheduled item (`draftId === null`) just before it is shown. `'clear'`
+   * shows it; `'check-failed'` means a check of its source was started and has not been answered
+   * (failed, lost, or its one `[D-400]` retry spent), so the question is set aside for this
+   * session as could-not-check, never as an established change. Nothing is written or retried
+   * here: the persisted pending fact is the `[D-293]`/`[D-400]` record and stays as it is, so the
+   * item remains deferred and recoverable. A throw reads as `'check-failed'`. Optional: absent
+   * shows every item, as before.
+   */
+  readonly checkSourceAtPresentation?: (instrumentId: string) => Promise<'clear' | 'check-failed'>;
+  /**
    * Resolves a cached, unreviewed draft (`instrument.draftId !== null`, F3.3,
    * `ol-p3t07a`) into a real instrument the moment she answers, edits, or
    * rejects it. Required even for a session with no draft items today —
@@ -1471,15 +1482,13 @@ export class ReviewSession {
       // inserted. Whether her answer was submitted (`answerSubmitted`) decides whether the line says so.
       this.items.splice(index, 1);
       // `[D-455]` `[D-456]`: the full explanation once per session; each later set-aside for an
-      // established change carries the brief line. `check-failed` is thrown by no guard yet
-      // (ol-egov.141.89.5.5), but its sentence is ruled and never worded as a change.
-      const established: WithheldEstablished =
-        err.grain === 'passage' ? 'passage-changed' : 'note-changed';
-      const text = this.withheldExplained.has(established)
-        ? withheldLaterNoticeText(established)
-        : withheldNoticeText(established, answerSubmitted);
-      if (text !== null) this.withheldExplained.add(established);
-      this.withheldNotice = text;
+      // established change carries the brief line. `check-failed` is raised at presentation
+      // (`presentCurrent`, `checkSourceAtPresentation`), never here; its sentence is never worded
+      // as a change.
+      this.noteWithheld(
+        err.grain === 'passage' ? 'passage-changed' : 'note-changed',
+        answerSubmitted,
+      );
       await this.presentCurrent();
       return null;
     }
@@ -1489,6 +1498,15 @@ export class ReviewSession {
     };
     this.items[index] = resolved;
     return resolved;
+  }
+
+  /** Sets `withheldNotice` for a set-aside: the full ruled sentence once per outcome kind, the brief line after. */
+  private noteWithheld(established: WithheldEstablished, answerSubmitted: boolean): void {
+    const text = this.withheldExplained.has(established)
+      ? withheldLaterNoticeText(established)
+      : withheldNoticeText(established, answerSubmitted);
+    if (text !== null) this.withheldExplained.add(established);
+    this.withheldNotice = text;
   }
 
   private requireCurrent(): ReviewQueueItem {
@@ -1523,6 +1541,25 @@ export class ReviewSession {
     if (item === undefined) {
       this.phase = 'complete';
       return;
+    }
+
+    // `[D-455]`/`[D-456]`: a changed-source check that was not answered sets this question aside
+    // as could-not-check, never as an established change. Only a settled instrument has a
+    // persisted fact to read (a pending draft has no instrument id yet).
+    if (this.deps.checkSourceAtPresentation !== undefined && item.instrument.draftId === null) {
+      let outcome: 'clear' | 'check-failed';
+      try {
+        outcome = await this.deps.checkSourceAtPresentation(item.instrument.instrumentId);
+      } catch {
+        outcome = 'check-failed';
+      }
+      if (outcome === 'check-failed') {
+        this.items.splice(this.index, 1);
+        // A notice already pending from this same action (an established change) is not replaced.
+        if (this.withheldNotice === null) this.noteWithheld('check-failed', false);
+        await this.presentCurrent();
+        return;
+      }
     }
 
     const exists = await this.deps.noteExists.exists(item.instrument.sourcePath);

@@ -1046,6 +1046,12 @@ export async function openReviewSession(
       // byte-for-byte); it is wired anyway so the real reader just above has
       // a real decision to feed, not only a type-reachable one.
       evaluateInstrumentStanding,
+      // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`): the presentation-time changed-source check,
+      // read fresh from the same store, so a check that went unanswered mid-sitting sets the
+      // question aside as could-not-check. Absent store: every item shows, as before.
+      ...(input.citationHashStore
+        ? { checkSourceAtPresentation: sourceCheckAtPresentation(input.citationHashStore) }
+        : {}),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -1611,6 +1617,26 @@ async function pendingRevalidationInstrumentIdsFrom(
     }),
   );
   return result;
+}
+
+/**
+ * `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`): the presentation-time changed-source check. An
+ * instrument whose persisted `pendingRevalidation` fact is still current right now has a check
+ * of its source that has not been answered (in flight, lost, failed, its one `[D-400]` retry
+ * spent, or withheld for a passage that cannot be found), so it is `'check-failed'`: set aside
+ * for this sitting, nothing written, the fact left for the `[D-400]` recovery. An established
+ * change retires the pending fact and suspends the instrument, so it never reads here.
+ */
+export function sourceCheckAtPresentation(
+  store: CitationHashStore,
+): (instrumentId: string) => Promise<'clear' | 'check-failed'> {
+  return async (instrumentId) => {
+    const pending = (await store.loadAll()).get(instrumentId)?.pendingRevalidation;
+    if (pending === undefined) return 'clear';
+    return (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
+      ? 'check-failed'
+      : 'clear';
+  };
 }
 
 /** Shared, never mutated — the "no store/ids supplied" reading both new `[D-323]` concerns fall back to. */
