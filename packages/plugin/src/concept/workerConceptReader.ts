@@ -70,6 +70,7 @@ import {
   type RelationType,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { type SourceOriginFrontmatterHost, sourceChunkOriginsFragment } from '../source-origin.js';
 
 /** `TASK_IDS.CONCEPTS_EXTRACT`, mirrored — see the module doc. Pinned by `workerConceptReader.spec.ts`. */
 export const CONCEPTS_EXTRACT_TASK_ID = 'concepts.extract.v1';
@@ -95,13 +96,17 @@ export class WorkerConceptReaderError extends Error {
 
 export interface WorkerConceptReaderDeps {
   readonly transport: WorkerTaskTransport;
+  /** `ol-egov.141.89.8.56`: lets a `.md` that declares a transcript role be recognised. Optional. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 export class WorkerConceptReader implements ConceptReaderPort {
   private readonly transport: WorkerTaskTransport;
+  private readonly frontmatterHost: SourceOriginFrontmatterHost | undefined;
 
   constructor(deps: WorkerConceptReaderDeps) {
     this.transport = deps.transport;
+    this.frontmatterHost = deps.frontmatterHost;
   }
 
   async read(request: ConceptReadRequest): Promise<ConceptReadResponse> {
@@ -119,7 +124,14 @@ export class WorkerConceptReader implements ConceptReaderPort {
       body = await this.transport.send({
         contractVersion: CONCEPTS_EXTRACT_CONTRACT_VERSION,
         taskId: CONCEPTS_EXTRACT_TASK_ID,
-        payload: { sourceChunks: passages.map((passage) => passage.text) },
+        payload: {
+          sourceChunks: passages.map((passage) => passage.text),
+          // `ol-egov.141.89.8.56` (D-465): aligned origins when a passage is a supplied transcript.
+          ...sourceChunkOriginsFragment(
+            passages.map((passage) => ({ path: passage.anchor.sourcePath, text: passage.text })),
+            this.frontmatterHost,
+          ),
+        },
       });
     } catch (error) {
       // A transport failure below the HTTP layer (no network, DNS, a

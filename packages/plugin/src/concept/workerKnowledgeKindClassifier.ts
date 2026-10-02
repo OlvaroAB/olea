@@ -50,6 +50,7 @@ import {
   KnowledgeKindClassifierUnavailableError,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { type SourceOriginFrontmatterHost, sourceChunkOriginsFragment } from '../source-origin.js';
 
 /** `TASK_IDS.CONCEPTS_CLASSIFY`, mirrored — see the module doc. Pinned by `workerKnowledgeKindClassifier.spec.ts`. */
 export const CONCEPTS_CLASSIFY_TASK_ID = 'concepts.classify.v1';
@@ -74,13 +75,17 @@ export class WorkerKnowledgeKindClassifierError extends Error {
 
 export interface WorkerKnowledgeKindClassifierDeps {
   readonly transport: WorkerTaskTransport;
+  /** `ol-egov.141.89.8.56`: lets a `.md` that declares a transcript role be recognised. Optional. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 export class WorkerKnowledgeKindClassifier implements KnowledgeKindClassifierPort {
   private readonly transport: WorkerTaskTransport;
+  private readonly frontmatterHost: SourceOriginFrontmatterHost | undefined;
 
   constructor(deps: WorkerKnowledgeKindClassifierDeps) {
     this.transport = deps.transport;
+    this.frontmatterHost = deps.frontmatterHost;
   }
 
   async classify(request: ClassifyKnowledgeKindRequest): Promise<ClassifyKnowledgeKindResponse> {
@@ -92,6 +97,14 @@ export class WorkerKnowledgeKindClassifier implements KnowledgeKindClassifierPor
         payload: {
           conceptName: request.conceptName,
           sourceChunks: request.sourceMaterial.map((passage) => passage.text),
+          // `ol-egov.141.89.8.56` (D-465): aligned origins when a passage is a supplied transcript.
+          ...sourceChunkOriginsFragment(
+            request.sourceMaterial.map((passage) => ({
+              path: passage.anchor.sourcePath,
+              text: passage.text,
+            })),
+            this.frontmatterHost,
+          ),
         },
       });
     } catch (error) {

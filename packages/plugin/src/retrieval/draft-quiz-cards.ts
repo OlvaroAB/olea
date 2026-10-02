@@ -161,6 +161,11 @@ import {
   type RetrieveOptions,
   retrieve,
 } from 'olea-core';
+import {
+  type SourceChunkOrigins,
+  type SourceOriginFrontmatterHost,
+  sourceChunkOriginsFragment,
+} from '../source-origin.js';
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**
@@ -209,6 +214,8 @@ export interface QuizGenerateRequestPayload {
   readonly courseCode: string;
   readonly conceptName: string;
   readonly sourceChunks: readonly string[];
+  /** `ol-egov.141.89.8.56`: aligned with `sourceChunks`; present only when a chunk is a supplied transcript. */
+  readonly sourceChunkOrigins?: SourceChunkOrigins;
   readonly questionCount?: number;
   readonly personalization?: {
     readonly voiceExemplars: VoiceExemplars;
@@ -328,6 +335,8 @@ export interface DraftQuizCardsDeps {
    * currently supplies nothing. Returning `undefined` for a chunk is
    * equivalent to `{authorship: 'unknown', curationAuthority: 'unknown'}`.
    */
+  /** `ol-egov.141.89.8.56`: cached frontmatter, so a `.md` that declares a transcript role is recognised as one. Absent: only `.txt`, `.vtt` and `.srt` are. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
   readonly classifyPassage?: (chunk: { readonly path: string; readonly text: string }) =>
     | {
         readonly authorship: PassageAuthorship;
@@ -451,6 +460,8 @@ export async function draftQuizCardsForConcept(
     courseCode: request.courseCode,
     conceptName: request.conceptName,
     sourceChunks: grounding.chunks.map((chunk) => chunk.text),
+    // `ol-egov.141.89.8.56` (D-465): aligned origins when a chunk is a supplied transcript; omitted otherwise.
+    ...sourceChunkOriginsFragment(grounding.chunks, deps.frontmatterHost),
     ...(request.questionCount === undefined ? {} : { questionCount: request.questionCount }),
     personalization: { voiceExemplars },
     // `[D-188]` / `ol-0r92.35`: passed through verbatim, never decided here —

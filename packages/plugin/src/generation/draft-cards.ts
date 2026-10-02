@@ -67,6 +67,11 @@ import {
 } from 'olea-core';
 import type { GenerationPurpose, RegisterHint } from '../retrieval/draft-quiz-cards.js';
 import { WorkerGroundingJudge } from '../retrieval/workerGroundingJudge.js';
+import {
+  type SourceChunkOrigins,
+  type SourceOriginFrontmatterHost,
+  sourceChunkOriginsFragment,
+} from '../source-origin.js';
 
 /**
  * `cards.generate.v1`'s request shape, restated locally rather than imported
@@ -87,6 +92,8 @@ export interface CardsGenerateRequestPayload {
   readonly courseCode: string;
   readonly conceptName: string;
   readonly sourceChunks: readonly string[];
+  /** `ol-egov.141.89.8.56` — see `QuizGenerateRequestPayload.sourceChunkOrigins`. */
+  readonly sourceChunkOrigins?: SourceChunkOrigins;
   readonly personalization?: {
     readonly voiceExemplars: VoiceExemplars;
   };
@@ -153,6 +160,8 @@ export interface DraftCardsDeps {
   readonly retrieve: RetrieveDeps;
   /** Sends the `cards.generate.v1` envelope. See `DraftQuizCardsDeps.transport`'s own doc. */
   readonly transport: WorkerTaskTransport;
+  /** `ol-egov.141.89.8.56` — see `DraftQuizCardsDeps.frontmatterHost`. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
   /** `[D-101]`'s passage classification — see `DraftQuizCardsDeps.classifyPassage`'s own doc. */
   readonly classifyPassage?: (chunk: { readonly path: string; readonly text: string }) =>
     | {
@@ -215,6 +224,8 @@ export async function draftCardsForConcept(
     courseCode: request.courseCode,
     conceptName: request.conceptName,
     sourceChunks: grounding.chunks.map((chunk) => chunk.text),
+    // `ol-egov.141.89.8.56` (D-465): see `draftQuizCardsForConcept`.
+    ...sourceChunkOriginsFragment(grounding.chunks, deps.frontmatterHost),
     personalization: { voiceExemplars },
     ...(request.purpose === undefined ? {} : { purpose: request.purpose }),
     ...(request.registerHint === undefined ? {} : { registerHint: request.registerHint }),

@@ -81,6 +81,11 @@ import type {
   RelationType,
   WorkerTaskTransport,
 } from 'olea-core';
+import {
+  type SourceChunkOrigins,
+  type SourceOriginFrontmatterHost,
+  sourceChunkOriginsFragment,
+} from '../source-origin.js';
 
 /** `TASK_IDS.CONCEPTS_RELATIONS`, mirrored — see the module doc. Pinned by `workerCorpusRelationVerdict.spec.ts`. */
 export const CONCEPTS_RELATIONS_TASK_ID = 'concepts.relations.v1';
@@ -122,12 +127,16 @@ export class WorkerCorpusRelationVerdictError extends Error {
 
 export interface WorkerCorpusRelationVerdictDeps {
   readonly transport: WorkerTaskTransport;
+  /** `ol-egov.141.89.8.56`: lets a `.md` that declares a transcript role be recognised. Optional. */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 interface WireEndpoint {
   readonly name: string;
   readonly aliases: readonly string[];
   readonly sourceChunks: readonly string[];
+  /** `ol-egov.141.89.8.56` (D-465): aligned with `sourceChunks`; present only when the endpoint's passage is a supplied transcript. */
+  readonly sourceChunkOrigins?: SourceChunkOrigins;
   /**
    * The candidate's own `CorpusConcept.key`, when the caller that built the
    * `CorpusVerdictRequest` supplied one -- `ol-l40p` [REL-9]. Mirrors the
@@ -151,7 +160,10 @@ interface WireCandidatePair {
 /** Keyed by each endpoint's own `name` -- see the module doc's "Sends the endpoint-dictionary shape" note. */
 type WireEndpointDictionary = Readonly<Record<string, WireEndpoint>>;
 
-function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a']): WireEndpoint {
+function toWireEndpoint(
+  endpoint: CorpusVerdictRequest['candidates'][number]['a'],
+  frontmatterHost: SourceOriginFrontmatterHost | undefined,
+): WireEndpoint {
   return {
     name: endpoint.name,
     aliases: [...endpoint.aliases],
@@ -161,6 +173,11 @@ function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a'
     // applies unchanged; there is exactly one passage per endpoint on this
     // side of the port.
     sourceChunks: [endpoint.passageText],
+    // `ol-egov.141.89.8.56`: the origin of that one passage, from the endpoint's own anchor path.
+    ...sourceChunkOriginsFragment(
+      [{ path: endpoint.anchor.sourcePath, text: endpoint.passageText }],
+      frontmatterHost,
+    ),
     // `ol-l40p` [REL-9]: `key` only -- never `endpoint.anchor` and never a
     // vault path, per this file's module doc and `WireEndpoint.key`'s own
     // doc. Omitted entirely (never `key: undefined`) when the candidate has
@@ -177,14 +194,19 @@ function toWireEndpoint(endpoint: CorpusVerdictRequest['candidates'][number]['a'
  * written into `endpoints` on its first sighting only; later sightings only
  * add another `WireCandidatePair` entry, which is the whole saving.
  */
-function buildDictionaryPayload(candidates: CorpusVerdictRequest['candidates']): {
+function buildDictionaryPayload(
+  candidates: CorpusVerdictRequest['candidates'],
+  frontmatterHost: SourceOriginFrontmatterHost | undefined,
+): {
   endpoints: WireEndpointDictionary;
   candidates: readonly WireCandidatePair[];
 } {
   const endpoints: Record<string, WireEndpoint> = {};
   for (const candidate of candidates) {
-    if (!(candidate.a.name in endpoints)) endpoints[candidate.a.name] = toWireEndpoint(candidate.a);
-    if (!(candidate.b.name in endpoints)) endpoints[candidate.b.name] = toWireEndpoint(candidate.b);
+    if (!(candidate.a.name in endpoints))
+      endpoints[candidate.a.name] = toWireEndpoint(candidate.a, frontmatterHost);
+    if (!(candidate.b.name in endpoints))
+      endpoints[candidate.b.name] = toWireEndpoint(candidate.b, frontmatterHost);
   }
   return {
     endpoints,
@@ -194,9 +216,11 @@ function buildDictionaryPayload(candidates: CorpusVerdictRequest['candidates']):
 
 export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
   private readonly transport: WorkerTaskTransport;
+  private readonly frontmatterHost: SourceOriginFrontmatterHost | undefined;
 
   constructor(deps: WorkerCorpusRelationVerdictDeps) {
     this.transport = deps.transport;
+    this.frontmatterHost = deps.frontmatterHost;
   }
 
   async verdict(request: CorpusVerdictRequest): Promise<CorpusVerdictResponse> {
@@ -207,7 +231,10 @@ export class WorkerCorpusRelationVerdict implements CorpusRelationVerdictPort {
       return { verdicts: [] };
     }
 
-    const { endpoints, candidates: wireCandidates } = buildDictionaryPayload(request.candidates);
+    const { endpoints, candidates: wireCandidates } = buildDictionaryPayload(
+      request.candidates,
+      this.frontmatterHost,
+    );
 
     let body: unknown;
     try {
