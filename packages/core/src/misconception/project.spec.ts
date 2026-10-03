@@ -197,14 +197,49 @@ describe('projectMisconceptions — resolution folding (M2)', () => {
     expect(record?.status).toBe('fading');
   });
 
-  it('a second resolution-evidence event downgrades fading -> resolved', () => {
+  it('a second piece of explanation evidence downgrades fading -> resolved', () => {
     const events = [
       observed({ eventId: 'e1' }),
-      resolutionEvidence({ eventId: 'e2', timestamp: '2026-08-16T10:00:00-04:00' }),
-      resolutionEvidence({ eventId: 'e3', timestamp: '2026-08-16T11:00:00-04:00' }),
+      resolutionEvidence({
+        eventId: 'e2',
+        timestamp: '2026-08-16T10:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
+      resolutionEvidence({
+        eventId: 'e3',
+        timestamp: '2026-08-16T11:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
     ];
     const [record] = projectMisconceptions(events);
     expect(record?.status).toBe('resolved');
+  });
+
+  it('recall evidence fades a misconception but never resolves it ([D-485]); explanation then resolves it', () => {
+    const recall = (eventId: string, timestamp: string) =>
+      resolutionEvidence({ eventId, timestamp, evidenceKind: 'recall' });
+    const first = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+    ]);
+    expect(first[0]?.status).toBe('fading');
+    const second = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+      recall('e3', '2026-08-16T11:00:00-04:00'),
+    ]);
+    expect(second[0]?.status).toBe('fading');
+    const then = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+      recall('e3', '2026-08-16T11:00:00-04:00'),
+      resolutionEvidence({
+        eventId: 'e4',
+        timestamp: '2026-08-16T12:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
+    ]);
+    expect(then[0]?.status).toBe('resolved');
   });
 
   it('resolution-evidence on a resolved record is a no-op, not an error', () => {

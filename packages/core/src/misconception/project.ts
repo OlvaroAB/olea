@@ -56,9 +56,14 @@
  * MCQ pick asserts nothing about either field, so it must not be read as
  * asserting their absence. `project.spec.ts`'s "sticky merge" cases pin this.
  *
- * **Resolution folding (M2).** A `resolution-evidence` event downgrades
- * *every* `active`/`fading` record on its `conceptId` one step
- * (`active` → `fading` → `resolved`); `resolved` records are a no-op.
+ * **Resolution folding (M2, amended by `[D-485]`).** A `resolution-evidence`
+ * event of kind `explanation` downgrades *every* `active`/`fading` record on
+ * its `conceptId` one step (`active` → `fading` → `resolved`); `resolved`
+ * records are a no-op. An event of kind `recall` fades an `active` record to
+ * `fading` but leaves a `fading` record `fading`: recall evidence never
+ * resolves a misconception. This holds on re-projection for every recall
+ * event in the log (the log is never rewritten). Explanation stays
+ * concept-wide until bead `ol-egov.141.89.6.88` makes it belief-specific.
  * **Known imprecision, stated rather than hidden:** when a concept carries
  * more than one open misconception simultaneously, one piece of evidence
  * downgrades all of them, because the event only names a concept, not a
@@ -90,6 +95,7 @@ import type {
   MisconceptionEvent,
   MisconceptionRecord,
   MisconceptionStatus,
+  ResolutionEvidenceKind,
   SourceCitation,
 } from './types.js';
 
@@ -107,6 +113,13 @@ function sortKey(entry: {
 const DOWNGRADE: Readonly<Record<MisconceptionStatus, MisconceptionStatus>> = {
   active: 'fading',
   fading: 'resolved',
+  resolved: 'resolved',
+};
+
+/** `[D-485]`: recall evidence fades `active` and never resolves `fading`. */
+const RECALL_DOWNGRADE: Readonly<Record<MisconceptionStatus, MisconceptionStatus>> = {
+  active: 'fading',
+  fading: 'fading',
   resolved: 'resolved',
 };
 
@@ -140,6 +153,8 @@ export interface NormalizedMisconceptionResolution {
   readonly eventId: string;
   readonly timestamp: string;
   readonly conceptId: string;
+  /** `[D-485]`: `recall` never resolves; `explanation` keeps the one-step downgrade. */
+  readonly evidenceKind: ResolutionEvidenceKind;
 }
 
 export type NormalizedMisconceptionFoldEntry =
@@ -176,6 +191,7 @@ export function normalizeMisconceptionEvent(
     eventId: event.eventId,
     timestamp: event.timestamp,
     conceptId: event.conceptId,
+    evidenceKind: event.evidenceKind,
   };
 }
 
@@ -244,11 +260,13 @@ export function foldMisconceptionObservations(
       continue;
     }
 
-    // resolution-evidence: downgrade every active/fading record on this concept.
+    // resolution-evidence: downgrade every active/fading record on this concept;
+    // recall evidence stops at `fading` ([D-485]).
+    const table = entry.evidenceKind === 'recall' ? RECALL_DOWNGRADE : DOWNGRADE;
     for (const [id, record] of records) {
       if (record.conceptId !== entry.conceptId) continue;
       if (record.status === 'resolved') continue;
-      records.set(id, { ...record, status: DOWNGRADE[record.status] });
+      records.set(id, { ...record, status: table[record.status] });
     }
   }
 
