@@ -1,4 +1,4 @@
-import type { MisconceptionRecord } from 'olea-core';
+import { buildObservationEventsFromAcceptedGrading, type MisconceptionRecord } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildExplainBackObservationContext,
@@ -198,5 +198,113 @@ describe('hasExplainBackSourceRevisionChanged — ol-0r92.89', () => {
       { block: { blockId: 'a.md#0#1', text: 'passage a' }, path: 'a.md', blockIndex: 0 },
     ];
     expect(hasExplainBackSourceRevisionChanged(graded, fresh)).toBe(false);
+  });
+});
+
+describe('buildExplainBackObservationContext: the permitted list is the only binding ([D-482])', () => {
+  const baseParams = {
+    originInstrumentId: 'inst-1',
+    originReviewEventId: null,
+    sourceBlocks: [
+      { block: { blockId: 'blk-1', text: 'x' }, path: 'note.md', blockIndex: 0 },
+    ] as readonly ExplainBackSourceBlock[],
+    now: fixedNow,
+  };
+  const candidate = (concept: string, confusedWith?: string) => ({
+    concept,
+    statement: 'an invented wrong belief',
+    correction: 'the invented fact',
+    correctionSourceBlockIds: ['blk-1'],
+    ...(confusedWith !== undefined ? { confusedWith } : {}),
+  });
+
+  // @auto:plugin/explain-back/observation.spec
+  it('refuses a candidate whose concept label is not among the permitted ids', async () => {
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: 'concept-a',
+      permittedConceptIds: ['concept-a'],
+      records: [],
+    });
+    expect(context.resolveConceptId('a free label the model invented')).toBeNull();
+    const [outcome] = await buildObservationEventsFromAcceptedGrading(
+      [candidate('a free label the model invented')],
+      context,
+      { embedder: null },
+    );
+    if (!outcome?.skipped) throw new Error('expected a skip');
+    expect(outcome.reason).toBe('unresolved-concept');
+  });
+
+  // @auto:plugin/explain-back/observation.spec
+  it('binds a first-ever misconception on the known subject to the subject id', async () => {
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: 'concept-a',
+      permittedConceptIds: ['concept-a'],
+      records: [],
+    });
+    const [outcome] = await buildObservationEventsFromAcceptedGrading(
+      [candidate('concept-a')],
+      context,
+      { embedder: null },
+    );
+    if (!outcome || outcome.skipped) throw new Error('expected a recorded outcome');
+    expect(outcome.result.event.conceptId).toBe('concept-a');
+  });
+
+  it('binds both ids for a confusion with the resolved neighbour', async () => {
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: 'concept-a',
+      permittedConceptIds: ['concept-a', 'concept-b'],
+      records: [],
+    });
+    const [outcome] = await buildObservationEventsFromAcceptedGrading(
+      [candidate('concept-a', 'concept-b')],
+      context,
+      { embedder: null },
+    );
+    if (!outcome || outcome.skipped) throw new Error('expected a recorded outcome');
+    expect(outcome.result.event.conceptId).toBe('concept-a');
+    expect(outcome.result.event.confusedWithConceptId).toBe('concept-b');
+  });
+
+  it('does not record a subject confused with itself', async () => {
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: 'concept-a',
+      permittedConceptIds: ['concept-a'],
+      records: [],
+    });
+    const [outcome] = await buildObservationEventsFromAcceptedGrading(
+      [candidate('concept-a', 'concept-a')],
+      context,
+      { embedder: null },
+    );
+    expect(outcome?.skipped).toBe(true);
+  });
+
+  it('a free topic permits nothing: no candidate binds', async () => {
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: null,
+      permittedConceptIds: [],
+      records: [],
+    });
+    expect(context.resolveConceptId('concept-a')).toBeNull();
+  });
+
+  // @auto:plugin/explain-back/observation.spec
+  it('a stale Worker that ignored the list still cannot bind a free label: the client refuses it', async () => {
+    // No permittedConceptIds given: falls back to the subject alone, so a label the stale Worker
+    // produced for lack of the rule is refused exactly the same way.
+    const context = buildExplainBackObservationContext({
+      ...baseParams,
+      subjectConceptId: 'concept-a',
+      records: [],
+    });
+    expect(context.resolveConceptId('Concept A, in the model’s own words')).toBeNull();
+    expect(context.resolveConceptId('concept-a')).toBe('concept-a');
   });
 });

@@ -219,6 +219,18 @@ export interface MisconceptionCandidate {
 }
 
 /**
+ * `[D-319]` / `[D-482]`: the judge's restatement finding, reported BESIDE the verdict and
+ * never folded into it: her answer reproduces the source and the requested explanation is
+ * missing. `answerSpans` are quoted from her answer, `sourceBlockIds` name the supplied
+ * source blocks they reproduce. Wire field name per the conformance plan (item 1); the
+ * service lane owns the schema, this is its mirror. Transient: nothing persists it here.
+ */
+export interface RestatementFinding {
+  readonly answerSpans: readonly string[];
+  readonly sourceBlockIds: readonly string[];
+}
+
+/**
  * The graded branch of the response, exactly as `explain-back.judge.v1`
  * returns it, before grounding — byte-identical in its fields to the
  * pre-`[D-321]` flat response, plus the `outcome` discriminant. Mirrors
@@ -231,6 +243,8 @@ export interface ExplainBackGradingWireGraded {
   readonly missedPoints: readonly string[];
   readonly citedIssues: readonly CitedIssue[];
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
+  /** `[D-319]` / `[D-482]`: optional; an older Worker never sends it. */
+  readonly restatement?: RestatementFinding;
 }
 
 /**
@@ -273,6 +287,13 @@ export interface ExplainBackJudgeWireRequest {
   readonly sourceBlocks: readonly SourceBlockRef[];
   readonly misconceptionDigest: readonly { concept: string; statement: string }[];
   readonly restatementOverlap?: RestatementOverlapEvidence;
+  /**
+   * `[D-482]` item 4: the concept ids the judge may name as a misconception's `concept` (or
+   * `confusedWith`): the subject, plus the resolved neighbour when one resolved. A free topic
+   * (no known subject) sends an empty list. Optional and additive; a stale Worker strips it,
+   * which fails safe because the client resolver checks the same list.
+   */
+  readonly permittedConceptIds?: readonly string[];
 }
 
 export interface GradeExplainBackInput {
@@ -288,6 +309,8 @@ export interface GradeExplainBackInput {
    * for how it is cut down to what actually crosses the wire.
    */
   readonly misconceptionDigest: readonly MisconceptionDigestEntry[];
+  /** `[D-482]` item 4: sent as `permittedConceptIds`; omitted reads as an empty list (free topic). */
+  readonly permittedConceptIds?: readonly string[];
 }
 
 /**
@@ -348,6 +371,10 @@ export interface GroundedGradingGraded {
   /** Count only — never the dropped content itself. See "never log content" above. */
   readonly droppedCitationCount: number;
   readonly droppedMisconceptionCount: number;
+  /** `[D-319]` / `[D-482]`: present only when a finding survived the same grounding the other citations get. */
+  readonly restatement?: RestatementFinding;
+  /** 1 when a finding arrived and was dropped (spans not in her answer, or no supplied source id); else 0. Count only. */
+  readonly droppedRestatementCount?: number;
 }
 
 /**
@@ -457,6 +484,25 @@ export function groundCitations(
     misconceptionCandidates.push({ ...rest, correctionSourceBlockIds: validIds, ...spans });
   }
 
+  // `[D-319]` / `[D-482]`: the same rule the citations above follow, applied to the finding
+  // the Worker returns. It is kept only with at least one span that occurs in her answer AND at
+  // least one source id the caller supplied; otherwise it is dropped and counted, and the
+  // verdict is untouched (INV-5). No answer to check against means no finding is carried.
+  let restatement: RestatementFinding | undefined;
+  let droppedRestatementCount = 0;
+  if (response.restatement !== undefined) {
+    const spans =
+      studentAnswer === undefined
+        ? []
+        : response.restatement.answerSpans.filter((span) => answerSpanOccurs(span, studentAnswer));
+    const ids = response.restatement.sourceBlockIds.filter((id) => knownIds.has(id));
+    if (spans.length === 0 || ids.length === 0) {
+      droppedRestatementCount = 1;
+    } else {
+      restatement = { answerSpans: spans, sourceBlockIds: ids };
+    }
+  }
+
   return {
     outcome: 'graded',
     verdict: response.verdict,
@@ -467,6 +513,8 @@ export function groundCitations(
     citationsAvailable: sourceBlocks.length > 0,
     droppedCitationCount,
     droppedMisconceptionCount,
+    droppedRestatementCount,
+    ...(restatement !== undefined ? { restatement } : {}),
   };
 }
 
@@ -576,6 +624,9 @@ export async function gradeExplainBack(
     // version was bumped alongside this change (D7.3) — see
     // prompts/explain-back.judge/VERSION in olea-service.
     restatementOverlap: toRestatementOverlapEvidence(overlap),
+    // `[D-482]` item 4: always sent (empty for a free topic) so the judge never names a concept
+    // she was not asked about.
+    permittedConceptIds: input.permittedConceptIds ?? [],
   });
   return {
     status: 'pending-review',
@@ -597,6 +648,8 @@ export interface AcceptedExplainBackGrading {
   readonly missedPoints: readonly string[];
   readonly citedIssues: readonly CitedIssue[];
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
+  /** `[D-319]` / `[D-482]`: the grounded restatement finding, carried beside the verdict; absent when none survived. */
+  readonly restatement?: RestatementFinding;
   /** The correctness call's stamp, carried from `PendingExplainBackGrading.stamp`; absent when none arrived. */
   readonly stamp?: ModelStamp;
 }
@@ -658,6 +711,9 @@ export function acceptExplainBackGrading(
     missedPoints: pending.grading.missedPoints,
     citedIssues: pending.grading.citedIssues,
     misconceptionCandidates: pending.grading.misconceptionCandidates,
+    ...(pending.grading.restatement !== undefined
+      ? { restatement: pending.grading.restatement }
+      : {}),
     ...(pending.stamp !== undefined ? { stamp: pending.stamp } : {}),
   };
 }

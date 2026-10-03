@@ -188,6 +188,9 @@ import {
   type AcceptedGradingMisconceptionCandidate,
   type AcceptedGradingObservationOutcome,
   acceptExplainBackGrading,
+  BoundedCallError,
+  boundedCall,
+  boundedCallWithRetries,
   buildObservationEventsFromAcceptedGrading,
   buildResolutionEvidenceEvent,
   type ConfusionRoutingDecision,
@@ -205,6 +208,7 @@ import {
   evaluateRepeatedFailureStandingCheck as evaluateRepeatedFailureStandingCheckCore,
   evaluateSchedulingObservationRouting as evaluateSchedulingObservationRoutingCore,
   failedCallProvenance,
+  GRADING_CALL_BOUNDS,
   type GradeExplainBackInput,
   type GradeSoloInput,
   gradeExplainBack,
@@ -304,6 +308,65 @@ export interface GradingWiring {
   >;
 }
 
+/**
+ * `[D-482]` item 2: every Worker call on the explain-back path runs through a declared bound
+ * (`GRADING_CALL_BOUNDS`, `olea-core`) with bounded retries: at most `transportRetries` after a
+ * transport failure and `invalidResponseRetries` after an unusable response, none after a
+ * timeout (the timed-out call may still be running, and `requestUrl` cannot be aborted, so the
+ * bound is a race and a late result is dropped). A timeout surfaces as a typed `BoundedCallError`;
+ * any other failure is rethrown as the ORIGINAL error so `olea-core`'s stage-contract adapters
+ * still read its Worker code, and `classifyGradingCallFailure` recovers the typed reason from it.
+ */
+function boundedWorkerCall<I, R>(
+  call: (input: I) => Promise<R>,
+  boundMs: number,
+): (input: I) => Promise<R> {
+  return async (input) => {
+    try {
+      return await boundedCallWithRetries(() => call(input), {
+        boundMs,
+        transportRetries: GRADING_CALL_BOUNDS.transportRetries,
+        invalidResponseRetries: GRADING_CALL_BOUNDS.invalidResponseRetries,
+      });
+    } catch (error) {
+      if (
+        error instanceof BoundedCallError &&
+        error.reason !== 'timeout' &&
+        error.cause !== undefined
+      ) {
+        throw error.cause;
+      }
+      throw error;
+    }
+  };
+}
+
+/**
+ * `[D-482]` item 2: the misconception embedder, bounded. One timeout ends every later embed call
+ * of the same accept at once (the match's own bounded retry would otherwise multiply the wait), and
+ * `buildObservationEventWithEmbedding` degrades to its existing no-embedder path, so the attempt
+ * is never held up by the embedder.
+ */
+function boundMisconceptionEmbedder(
+  embedder: MisconceptionEmbedder | null,
+): MisconceptionEmbedder | null {
+  if (embedder === null) return null;
+  let timedOut = false;
+  return {
+    embed: async (texts) => {
+      if (timedOut) throw new BoundedCallError('timeout');
+      try {
+        return await boundedCall(() => embedder.embed(texts), {
+          boundMs: GRADING_CALL_BOUNDS.embedderMs,
+        });
+      } catch (error) {
+        if (error instanceof BoundedCallError && error.reason === 'timeout') timedOut = true;
+        throw error;
+      }
+    },
+  };
+}
+
 export async function buildGradingWiring(deps: GradingWiringDeps): Promise<GradingWiring> {
   const configStore = new ObsidianWorkerConfigStore(deps.dataHost);
   const config = await configStore.load();
@@ -332,7 +395,10 @@ export async function buildGradingWiring(deps: GradingWiringDeps): Promise<Gradi
 
   const transport = deps.createTransport({ baseUrl: config.baseUrl, token: config.token });
   return {
-    judgeCaller: createWorkerJudgeCaller({ transport }),
+    judgeCaller: boundedWorkerCall(
+      createWorkerJudgeCaller({ transport }),
+      GRADING_CALL_BOUNDS.correctnessMs,
+    ),
     killedBySustainedAuditFailure,
     misconceptionEmbedder: misconception.embedder,
     misconceptionEmbeddingCache: misconception.cache,
@@ -785,7 +851,7 @@ async function computeAcceptExplainBackGradingWithObservation(
       attachStatementAuthorship(accepted.misconceptionCandidates),
       context,
       {
-        embedder: wiring.misconceptionEmbedder,
+        embedder: boundMisconceptionEmbedder(wiring.misconceptionEmbedder),
         ...(wiring.misconceptionEmbeddingCache
           ? { cache: wiring.misconceptionEmbeddingCache }
           : {}),
@@ -858,7 +924,10 @@ export async function gradeSoloAttempt(
 
   const pending = await gradeSolo(
     input,
-    createWorkerSoloJudgeCaller({ transport: capturingTransport }),
+    boundedWorkerCall(
+      createWorkerSoloJudgeCaller({ transport: capturingTransport }),
+      GRADING_CALL_BOUNDS.depthMs,
+    ),
   );
   if (stamp === null) {
     console.error(
@@ -940,7 +1009,13 @@ export async function gradeSoloAttemptDecision(
   };
 
   const [settled] = await Promise.allSettled([
-    gradeSolo(input, createWorkerSoloJudgeCaller({ transport: capturingTransport })),
+    gradeSolo(
+      input,
+      boundedWorkerCall(
+        createWorkerSoloJudgeCaller({ transport: capturingTransport }),
+        GRADING_CALL_BOUNDS.depthMs,
+      ),
+    ),
   ]);
   const context: StageSeamContext = {
     seat: 'candidate',

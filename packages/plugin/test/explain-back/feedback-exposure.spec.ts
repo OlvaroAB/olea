@@ -651,7 +651,7 @@ describe('the view reads the exposure once, when the question is resolved, and s
       modal.indexOf('private acceptGrading('),
     );
     expect(submit).toMatch(
-      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?this\.deps\.grade\(input\)/,
+      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?runGradingAttempt\(/,
     );
   });
 

@@ -103,6 +103,7 @@ import type {
   ExplainBackGradingWireResponse,
   ExplainBackJudgeWireRequest,
   MisconceptionCandidate,
+  RestatementFinding,
 } from './gradingPipeline.js';
 
 /**
@@ -269,6 +270,7 @@ function readGrading(body: unknown): StampedExplainBackGradingWireResponse {
     missedPoints: readStringArray(r.missedPoints, 'missedPoints'),
     citedIssues: readCitedIssues(r.citedIssues),
     misconceptionCandidates: readMisconceptionCandidates(r.misconceptionCandidates),
+    ...readRestatement(r.restatement),
     stamp: requireStamp(response),
   };
 }
@@ -324,6 +326,22 @@ function readCitedIssues(value: unknown): readonly CitedIssue[] {
       ...(answerSpans.length > 0 ? { answerSpans } : {}),
     };
   });
+}
+
+/**
+ * `[D-319]` / `[D-482]`: the optional restatement finding. Absent reads as no finding (an
+ * older Worker). A present-but-malformed value is dropped, never an error: the finding is
+ * additive evidence and must never fail a verdict that is otherwise good (INV-5 posture).
+ */
+function readRestatement(value: unknown): { readonly restatement?: RestatementFinding } {
+  if (typeof value !== 'object' || value === null) return {};
+  const entry = value as Record<string, unknown>;
+  const spans = entry.answerSpans;
+  const ids = entry.sourceBlockIds;
+  const isStrings = (v: unknown): v is readonly string[] =>
+    Array.isArray(v) && v.every((x) => typeof x === 'string');
+  if (!isStrings(spans) || !isStrings(ids)) return {};
+  return { restatement: { answerSpans: spans, sourceBlockIds: ids } };
 }
 
 function readMisconceptionCandidates(value: unknown): readonly MisconceptionCandidate[] {

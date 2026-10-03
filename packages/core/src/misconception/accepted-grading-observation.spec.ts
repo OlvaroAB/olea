@@ -208,3 +208,36 @@ describe('buildObservationEventsFromAcceptedGrading — never invents a citation
     });
   });
 });
+
+describe('buildObservationEventsFromAcceptedGrading: a concept confused with itself ([D-482])', () => {
+  // @auto:core/misconception/accepted-grading-observation.spec
+  it('records nothing when the confused-with id equals the concept id', async () => {
+    const outcomes = await buildObservationEventsFromAcceptedGrading(
+      [candidate({ confusedWith: 'newtons-second-law' })],
+      baseContext(),
+      { embedder: null, generateMisconceptionId: () => 'fresh-id' },
+    );
+    expect(outcomes).toHaveLength(1);
+    const outcome = outcomes[0];
+    if (!outcome?.skipped) throw new Error('expected a skip');
+    expect(outcome.reason).toBe('self-confusion');
+  });
+
+  it('still records a confusion with a different, resolvable concept', async () => {
+    const outcomes = await buildObservationEventsFromAcceptedGrading(
+      [candidate({ confusedWith: 'momentum' })],
+      baseContext({
+        resolveConceptId: (concept) =>
+          concept === 'newtons-second-law'
+            ? 'concept-nsl'
+            : concept === 'momentum'
+              ? 'concept-momentum'
+              : null,
+      }),
+      { embedder: null, generateMisconceptionId: () => 'fresh-id' },
+    );
+    const outcome = outcomes[0];
+    if (!outcome || outcome.skipped) throw new Error('expected a recorded outcome');
+    expect(outcome.result.event.confusedWithConceptId).toBe('concept-momentum');
+  });
+});

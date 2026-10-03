@@ -266,6 +266,7 @@ export function buildExplainBackPromptContextFromInstrument(
   instrument: ReviewInstrument,
   sourceBlocks: readonly ExplainBackSourceBlock[],
   misconceptionDigest: GradeExplainBackInput['misconceptionDigest'] = [],
+  permittedConceptIds: readonly string[] = [],
 ): ExplainBackPromptContext {
   const { question, referenceAnswer } = questionAndReferenceAnswer(instrument);
   return {
@@ -273,7 +274,24 @@ export function buildExplainBackPromptContextFromInstrument(
     referenceAnswer,
     sourceBlocks: sourceBlocks.map((entry) => entry.block),
     misconceptionDigest,
+    permittedConceptIds,
   };
+}
+
+/**
+ * `[D-482]` item 4: the concept ids a misconception candidate may name: the subject, plus the
+ * resolved neighbour when one resolved (never the same id twice). A prompt with no known subject
+ * (a free topic) permits nothing, whatever a neighbour says. The judge is told to name only
+ * these, and the client resolver (`./observation.ts`) refuses anything else.
+ */
+export function permittedConceptIdsFor(
+  subjectConceptId: string | null,
+  neighbourConceptId?: string,
+): readonly string[] {
+  if (subjectConceptId === null) return [];
+  return neighbourConceptId !== undefined && neighbourConceptId !== subjectConceptId
+    ? [subjectConceptId, neighbourConceptId]
+    : [subjectConceptId];
 }
 
 /**
@@ -287,12 +305,14 @@ export function buildExplainBackPromptContextFromTopic(
   topic: string,
   sourceBlocks: readonly ExplainBackSourceBlock[],
   misconceptionDigest: GradeExplainBackInput['misconceptionDigest'] = [],
+  permittedConceptIds: readonly string[] = [],
 ): ExplainBackPromptContext {
   return {
     question: `In your own words: explain ${topic}.`,
     referenceAnswer: joinSourceText(sourceBlocks),
     sourceBlocks: sourceBlocks.map((entry) => entry.block),
     misconceptionDigest,
+    permittedConceptIds,
   };
 }
 
@@ -382,6 +402,7 @@ export function buildGradeExplainBackInputFromTypedAnswer(
     referenceAnswer: context.referenceAnswer,
     sourceBlocks: context.sourceBlocks,
     misconceptionDigest: context.misconceptionDigest,
+    permittedConceptIds: context.permittedConceptIds ?? [],
   };
 }
 

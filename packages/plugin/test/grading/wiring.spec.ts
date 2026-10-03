@@ -12,11 +12,13 @@
  * uses for `buildRetrievalWiring`.
  */
 import {
+  BoundedCallError,
   buildObservationEventsFromAcceptedGrading,
+  GRADING_CALL_BOUNDS,
   type MisconceptionRecord,
   type WorkerTaskRequest,
 } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   type AcceptExplainBackGradingWithObservationContext,
   acceptExplainBackGradingWithObservation,
@@ -1440,5 +1442,133 @@ describe('acceptExplainBackGradingWithObservation — ol-egov.141.89.6.31: M2 re
     );
 
     expect(second).toBe(first);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-482]` (F5.5 / F5.3): every call is bounded, retries are bounded, the embedder falls back
+// ---------------------------------------------------------------------------
+
+describe('buildGradingWiring: bounded calls and bounded retries ([D-482])', () => {
+  const host = () =>
+    configuredHost({ version: 1, baseUrl: 'https://worker.example', token: 'secret-token' });
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // @auto:plugin/grading/wiring.spec
+  it('retries a failing transport at most the declared number of times, then surfaces the failure', async () => {
+    const transport = fakeTransport(() => {
+      throw new Error('socket closed');
+    });
+    const wiring = await buildGradingWiring({ dataHost: host(), createTransport: () => transport });
+    await expect(gradeExplainBackAttempt(wiring, baseInput)).rejects.toThrow('socket closed');
+    expect(transport.calls).toHaveLength(1 + GRADING_CALL_BOUNDS.transportRetries);
+  });
+
+  // @auto:plugin/grading/wiring.spec
+  it('retries an unusable response at most the declared number of times, then surfaces the failure', async () => {
+    const transport = fakeTransport(() => ({ ok: true, result: 'not an object' }));
+    const wiring = await buildGradingWiring({ dataHost: host(), createTransport: () => transport });
+    await expect(gradeExplainBackAttempt(wiring, baseInput)).rejects.toMatchObject({
+      name: 'WorkerJudgeError',
+    });
+    expect(transport.calls).toHaveLength(1 + GRADING_CALL_BOUNDS.invalidResponseRetries);
+  });
+
+  // @auto:plugin/grading/wiring.spec
+  it('ends a hung correctness call at its bound with a typed timeout, and does not retry it', async () => {
+    const calls: unknown[] = [];
+    const transport = {
+      send: (request: unknown) => {
+        calls.push(request);
+        return new Promise<unknown>(() => {});
+      },
+    };
+    const wiring = await buildGradingWiring({ dataHost: host(), createTransport: () => transport });
+    const outcome = gradeExplainBackAttempt(wiring, baseInput).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GRADING_CALL_BOUNDS.correctnessMs + 1);
+    const error = await outcome;
+    expect(error).toBeInstanceOf(BoundedCallError);
+    expect((error as BoundedCallError).reason).toBe('timeout');
+    expect(calls).toHaveLength(1);
+  });
+
+  it('ends a hung depth call at its bound with a typed timeout', async () => {
+    const transport = { send: () => new Promise<unknown>(() => {}) };
+    const wiring = await buildGradingWiring({ dataHost: host(), createTransport: () => transport });
+    const outcome = gradeSoloAttempt(wiring, baseSoloInput).catch((error: unknown) => error);
+    await vi.advanceTimersByTimeAsync(GRADING_CALL_BOUNDS.depthMs + 1);
+    expect(((await outcome) as BoundedCallError).reason).toBe('timeout');
+  });
+
+  // @auto:plugin/grading/wiring.spec
+  it('bounds the misconception embedder: a hung embedder falls back to the no-embedder path and the accept is not held up', async () => {
+    const base = await buildGradingWiring({
+      dataHost: new FakeDataHost(),
+      createTransport: () => fakeTransport(),
+    });
+    let embedCalls = 0;
+    const wiring = {
+      ...base,
+      misconceptionEmbedder: {
+        embed: () => {
+          embedCalls += 1;
+          return new Promise<never>(() => {});
+        },
+      },
+    };
+    const pending = {
+      status: 'pending-review' as const,
+      overlap: {
+        containment: 0,
+        ngramSize: 3,
+        matchedNgramCount: 0,
+        totalNgramCount: 0,
+        lcsRatio: 0,
+        jaccard: 0,
+        answerTokenCount: 0,
+        sourceTokenCount: 0,
+      },
+      grading: {
+        outcome: 'graded' as const,
+        verdict: 'partial' as const,
+        feedback: 'Close.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [
+          {
+            concept: 'heap-property',
+            statement: 'Thinks a heap is always fully sorted.',
+            correction: 'A heap only guarantees parent-child ordering.',
+            correctionSourceBlockIds: ['block-1'],
+          },
+        ],
+        citationsAvailable: true,
+        droppedCitationCount: 0,
+        droppedMisconceptionCount: 0,
+      },
+    };
+    const outcome = acceptExplainBackGradingWithObservation(wiring, pending, {
+      originInstrumentId: 'explain-back:concept-heap:1',
+      originReviewEventId: null,
+      timestamp: '2026-08-29T09:00:00-04:00',
+      resolveCitation: () => ({ path: 'Courses/CS/notes.md', blockIndex: 2 }),
+      resolveConceptId: (concept) => (concept === 'heap-property' ? 'concept-heap' : null),
+      candidateRecordsForConcept: () => [],
+    });
+    await vi.advanceTimersByTimeAsync(GRADING_CALL_BOUNDS.embedderMs + 1_000);
+    const result = await outcome;
+    if (result.status !== 'accepted') throw new Error('expected an accepted outcome');
+    const observation = result.observations[0];
+    if (!observation || observation.skipped) throw new Error('expected a recorded observation');
+    expect(observation.result.matchedExisting).toBe(false);
+    expect(observation.result.event.conceptId).toBe('concept-heap');
+    // One timeout ends every later embed of the same accept at once.
+    expect(embedCalls).toBe(1);
   });
 });

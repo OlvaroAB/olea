@@ -26,6 +26,7 @@ describe('buildGradeExplainBackInputFromTranscript — voice is an input method,
       referenceAnswer: context.referenceAnswer,
       sourceBlocks: context.sourceBlocks,
       misconceptionDigest: context.misconceptionDigest,
+      permittedConceptIds: [],
     };
     expect(input).toEqual(expected);
   });
@@ -55,6 +56,7 @@ describe('buildGradeExplainBackInputFromTranscript — voice is an input method,
         'referenceAnswer',
         'sourceBlocks',
         'misconceptionDigest',
+        'permittedConceptIds',
       ].sort(),
     );
   });

@@ -128,6 +128,7 @@ export interface AcceptedGradingObservationDeps {
 export type SkippedAcceptedGradingCandidateReason =
   | 'uncitable'
   | 'unresolved-concept'
+  | 'self-confusion'
   | ExcludedBeliefSourceReason;
 
 export type AcceptedGradingObservationOutcome =
@@ -186,6 +187,11 @@ export async function buildObservationEventsFromAcceptedGrading(
     const confusedWithConceptId = candidate.confusedWith
       ? context.resolveConceptId(candidate.confusedWith)
       : null;
+    // `[D-482]`: a concept confused with itself is not a misconception; nothing is recorded.
+    if (confusedWithConceptId !== null && confusedWithConceptId === conceptId) {
+      outcomes.push({ candidate, skipped: true, reason: 'self-confusion' });
+      continue;
+    }
 
     const input: ObservationInput = {
       conceptId,
