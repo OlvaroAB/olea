@@ -63,9 +63,12 @@
  *   never a second, invented text.
  */
 
+import type { ExplainBackGradingProvenance } from 'olea-contracts';
 import {
   type ConceptRecord,
   type ConceptRelation,
+  digestPassage,
+  EXPLAIN_BACK_JUDGE_CONTRACT_VERSION,
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
   type GradeSoloInput,
@@ -275,6 +278,28 @@ export function buildExplainBackPromptContextFromInstrument(
     sourceBlocks: sourceBlocks.map((entry) => entry.block),
     misconceptionDigest,
     permittedConceptIds,
+  };
+}
+
+/**
+ * `[D-483]`: the minimal grading provenance of the request this prompt context became, each
+ * field taken from the request itself and never invented (digests and version labels only, D-005).
+ * - `requestVersion`: the grading request contract version the judge call is made under
+ *   (`EXPLAIN_BACK_JUDGE_CONTRACT_VERSION`, the very constant the Worker caller sends).
+ * - `passageFingerprints`: `digestPassage` of each source passage sent, in order, the same digest
+ *   space `presentedPassageDigest` uses; omitted when no passage was sent.
+ * `instrumentVersion` and `targetVersion` are omitted: nothing on this request path carries
+ * either (an instrument has no version field, and no target bundle is part of the request).
+ */
+export async function buildExplainBackGradingProvenance(
+  context: Pick<ExplainBackPromptContext, 'sourceBlocks'>,
+): Promise<ExplainBackGradingProvenance> {
+  const passageFingerprints = await Promise.all(
+    context.sourceBlocks.map((block) => digestPassage(block.text)),
+  );
+  return {
+    requestVersion: String(EXPLAIN_BACK_JUDGE_CONTRACT_VERSION),
+    ...(passageFingerprints.length > 0 ? { passageFingerprints } : {}),
   };
 }
 

@@ -79,7 +79,12 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
-import type { MasteryState, SoloLevel, SupportLevel } from 'olea-contracts';
+import type {
+  ExplainBackGradingProvenance,
+  MasteryState,
+  SoloLevel,
+  SupportLevel,
+} from 'olea-contracts';
 import {
   buildGradingSourceMaterial,
   type CitedIssue,
@@ -150,6 +155,7 @@ import {
 import { isConfirmedFirstFullDepth } from './first-full-depth.js';
 import { runGradingAttempt } from './grading-attempt.js';
 import {
+  buildExplainBackGradingProvenance,
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
@@ -410,6 +416,12 @@ export interface ExplainBackModalDeps {
      * wrapper, so no composition-root change is needed for it to land.
      */
     readonly followsAttemptId?: string;
+    /**
+     * `[D-483]`: the versions and passage fingerprints of the grading request this view built
+     * (`./request.ts`'s `buildExplainBackGradingProvenance`), forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.gradingProvenance`. Digests and version labels only.
+     */
+    readonly gradingProvenance?: ExplainBackGradingProvenance;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -1456,6 +1468,9 @@ export class ExplainBackModal extends Modal {
       // attempt's graded result. Sealed at `submitAnswer`, never re-read here.
       const supportLevelShown = support.supportLevelShown;
       try {
+        // `[D-483]`: taken from the request this prompt context became, inside the isolation
+        // below so a digest failure can never block the accept she is looking at.
+        const gradingProvenance = await buildExplainBackGradingProvenance(prompt.context);
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
           attemptId,
@@ -1503,6 +1518,7 @@ export class ExplainBackModal extends Modal {
           ...(support.followsAttemptId !== null
             ? { followsAttemptId: support.followsAttemptId }
             : {}),
+          gradingProvenance,
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {
