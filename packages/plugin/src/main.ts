@@ -95,6 +95,7 @@ import {
 import { enqueueContestRegradeJobOnDispute } from './contest-regrade/enqueue.js';
 import { createContestRegradeEngine, drainContestRegradeQueue } from './contest-regrade/wiring.js';
 import { buildRecognitionClaimCopy } from './course-setup/copy.js';
+import { courseMaterialPaths } from './course-setup/detection-sources.js';
 import { readCourseSetupRecognitions } from './course-setup/recognition-source.js';
 import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
@@ -2771,7 +2772,7 @@ export default class OleaPlugin extends Plugin {
   private async openNextCourseSetupProposal(vault: VaultSource): Promise<void> {
     let paths: readonly VaultPath[];
     try {
-      paths = await vault.list({ extensions: ['md'] });
+      paths = courseMaterialPaths(await vault.list());
     } catch (error) {
       console.error('Olea: course detection could not list the vault', error);
       return;
