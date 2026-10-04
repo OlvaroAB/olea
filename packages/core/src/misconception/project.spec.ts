@@ -295,6 +295,37 @@ describe('projectMisconceptions — resolution folding (M2)', () => {
   });
 });
 
+describe('projectMisconceptions — same-attempt order ([D-485] part 1, ol-egov.141.89.6.90)', () => {
+  const T = '2026-08-16T12:00:00-04:00';
+  // Event ids crafted so observation-first and resolution-first id orders both occur.
+  const idOrders = [
+    { name: 'observation id sorts first', obsId: 'a-obs', evId: 'b-ev' },
+    { name: 'resolution id sorts first', obsId: 'b-obs', evId: 'a-ev' },
+  ];
+
+  for (const { name, obsId, evId } of idOrders) {
+    it(`a correct explanation that surfaces a new misconception leaves it active (${name})`, () => {
+      const records = projectMisconceptions([
+        observed({ eventId: 'e-old', misconceptionId: 'm-old' }),
+        observed({ eventId: obsId, misconceptionId: 'm-new', timestamp: T }),
+        resolutionEvidence({ eventId: evId, timestamp: T }),
+      ]);
+      expect(records.find((r) => r.id === 'm-new')?.status).toBe('active');
+      expect(records.find((r) => r.id === 'm-old')?.status).toBe('fading');
+    });
+
+    it(`a correct explanation that re-observes a fading record leaves it active (${name})`, () => {
+      const records = projectMisconceptions([
+        observed({ eventId: 'e-old', misconceptionId: 'm-1' }),
+        resolutionEvidence({ eventId: 'e-prior', timestamp: '2026-08-16T10:00:00-04:00' }),
+        observed({ eventId: obsId, misconceptionId: 'm-1', timestamp: T }),
+        resolutionEvidence({ eventId: evId, timestamp: T }),
+      ]);
+      expect(records.find((r) => r.id === 'm-1')?.status).toBe('active');
+    });
+  }
+});
+
 describe('projectMisconceptions — idempotency on replay', () => {
   it('a duplicated event (same eventId twice) is folded once, not twice', () => {
     const event = observed({ eventId: 'e1' });
