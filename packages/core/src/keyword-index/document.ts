@@ -15,6 +15,7 @@ import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
 import { hashText } from '../ingestion/hash.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { evidenceRawOfBlock, type GeneratedSpan, generatedSpans } from './evidence-scope.js';
 import type { IndexedBlock, IndexedDocument } from './types.js';
 
 /**
@@ -40,11 +41,21 @@ function extractBlockText(block: Block): string | null {
   }
 }
 
-function indexBlocks(blocks: readonly Block[]): readonly IndexedBlock[] {
+function indexBlocks(
+  blocks: readonly Block[],
+  source: string,
+  generated: readonly GeneratedSpan[],
+): readonly IndexedBlock[] {
   const indexed: IndexedBlock[] = [];
   blocks.forEach((block, blockIndex) => {
-    const raw = extractBlockText(block);
+    let raw = extractBlockText(block);
     if (raw === null) return;
+    // [D-491]: the index is course evidence only. A block Olea's own instruments or home-note
+    // scaffolding reach is cut down to her text, or dropped when none of it is hers; every other
+    // block is indexed exactly as before. `blockIndex` stays positional in the FULL parse.
+    const kept = evidenceRawOfBlock(block, source, generated);
+    if (kept === null) return;
+    if (kept !== block.raw) raw = kept;
     const text = raw.trim();
     if (text === '') return;
     indexed.push({ blockIndex, kind: block.kind, text });
@@ -84,6 +95,7 @@ export async function indexDocument(vault: VaultSource, path: VaultPath): Promis
         path,
         courses: transcriptCourses,
         contentHash: await contentHashPromise,
+        evidenceScope: 1,
         blocks: parts,
       };
     }
@@ -97,7 +109,7 @@ export async function indexDocument(vault: VaultSource, path: VaultPath): Promis
   }
 
   const contentHash = await contentHashPromise;
-  const blocks = indexBlocks(doc.blocks);
+  const blocks = indexBlocks(doc.blocks, content, generatedSpans(content, doc));
 
-  return { path, courses, contentHash, blocks };
+  return { path, courses, contentHash, evidenceScope: 1, blocks };
 }

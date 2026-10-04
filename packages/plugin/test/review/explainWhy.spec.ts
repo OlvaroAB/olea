@@ -10,6 +10,7 @@
 
 import { TASK_IDS } from 'olea-contracts';
 import {
+  buildFullIndex,
   EmbeddingCacheEngine,
   type EmbeddingCacheStore,
   type EmbeddingProvider,
@@ -452,6 +453,49 @@ describe('retrieveExplainWhySourceChunks — F2.7 grounding half (ol-sn1q)', () 
     );
 
     expect(chunks).toEqual([]);
+  });
+});
+
+describe("retrieveExplainWhySourceChunks — Olea's own items never ground an explanation ([D-491])", () => {
+  /** A real index built through `buildFullIndex`: her note holds a parsed `::` card AND her own line on the same topic. */
+  async function plantedIndex(): Promise<PersistedKeywordIndex> {
+    const instrument = qaFixture();
+    const note = [
+      '# Rehearsal',
+      '',
+      'My own note: the capacity of articulatory rehearsal is limited by chunking.',
+      '',
+      `${instrument.question} :: ${instrument.answer}`,
+      '',
+    ].join('\n');
+    const files = new Map([['Courses/PSYC210/note.md', note]]);
+    const vault = {
+      list: async () => [...files.keys()].sort(),
+      read: async (path: string) => files.get(path) ?? '',
+      readBinary: async () => new Uint8Array(),
+      write: async () => {},
+      exists: async (path: string) => files.has(path),
+      watch: () => () => {},
+    };
+    const built = await buildFullIndex({ vault });
+    if (built.status !== 'complete') throw new Error('index build did not complete');
+    return built.index;
+  }
+
+  it('grounds on her own line and never on the accepted card sitting beside it', async () => {
+    const instrument = qaFixture();
+    const chunks = await retrieveExplainWhySourceChunks(
+      { retrieve: await fakeRetrieveDeps(await plantedIndex()) },
+      instrument,
+    );
+
+    expect(chunks.join('\n')).toContain(
+      'capacity of articulatory rehearsal is limited by chunking',
+    );
+    for (const chunk of chunks) {
+      expect(chunk).not.toContain(instrument.answer);
+      expect(chunk).not.toContain(instrument.question);
+    }
   });
 });
 
