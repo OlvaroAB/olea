@@ -233,7 +233,11 @@ function attestationsEqual(a: RelationCacheAttestation, b: RelationCacheAttestat
   );
 }
 
-/** Provenance outranks confidence, never the reverse (`[D-070]`) — restated rather than imported: `./relation-cache.ts`'s own `rankAttestations` is private to that module, the same "restated rather than imported" trade that module's own doc makes for `corpus-relations/verdict.ts`'s pair-key helper. */
+/**
+ * Provenance outranks confidence, never the reverse (`[D-070]`) — restated rather than imported: `./relation-cache.ts`'s own `rankAttestations` is private to that module, the same "restated rather than imported" trade that module's own doc makes for `corpus-relations/verdict.ts`'s pair-key helper.
+ *
+ * **What the `'hers'` rank claims (`[D-490]`).** The persisted literal keeps its name, but it means *linked in a note she keeps*: curation, never her vouching unless that note is declared `made-by: me`. An undeclared note's link keeps the rank it always had. A pairing only links in notes declared `made-by: assistant` nominated was stamped `'model-proposed'` before it was cached (`corpus-relations/verdict.ts`'s `provenanceFor`), so it competes here on confidence alone.
+ */
 function rankAttestations(a: RelationCacheAttestation, b: RelationCacheAttestation): number {
   const aHers = a.provenance === 'hers' ? 0 : 1;
   const bHers = b.provenance === 'hers' ? 0 : 1;

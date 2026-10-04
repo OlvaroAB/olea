@@ -12,6 +12,9 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../extract/types.js';
+import type { DeclaredMadeBy } from '../source/materiality.js';
+import type { CorpusConcept, CorpusRelationCandidate } from './corpus-relations/types.js';
+import { reconcileCorpusVerdicts } from './corpus-relations/verdict.js';
 import {
   assertionsForTriage,
   type ConceptRelation,
@@ -391,5 +394,68 @@ describe('assertionsForTriage — the rule written before the surface exists', (
       edge('part-of', 'Scale', 'Bud'),
     ]);
     expect(assertionsForTriage(set).map((e) => e.edge.type)).toEqual(['contrasts-with']);
+  });
+});
+
+// `[D-490]` (`ol-egov.141.89.4.31`, IMPACT.md row 4): ordering by her `made-by` declaration, end to
+// end from the corpus stage's own stamping (`./corpus-relations/verdict.ts`) into this fold. The
+// same prerequisite edge is attested twice: once by a pair a link in a note nominated, at low
+// confidence, and once by an embedding-proximity pair, at high confidence.
+describe('deriveRelationSet — ordering follows her made-by declaration on the linking note ([D-490])', () => {
+  function corpusConcept(name: string): CorpusConcept {
+    return { name, aliases: [], anchor: passage(`${name}.md`) };
+  }
+
+  function corpusEdges(
+    signals: CorpusRelationCandidate['signals'],
+    confidence: number,
+    linkingNoteDeclarations?: readonly (DeclaredMadeBy | undefined)[],
+  ): readonly ConceptRelation[] {
+    return reconcileCorpusVerdicts(
+      [{ a: 'Bud', b: 'Shoot', type: 'prerequisite', direction: 'a-to-b', confidence }],
+      [{ a: corpusConcept('Bud'), b: corpusConcept('Shoot'), signals }],
+      undefined,
+      linkingNoteDeclarations === undefined ? undefined : () => linkingNoteDeclarations,
+    ).relations;
+  }
+
+  const proposed = corpusEdges(['embedding-proximity'], 0.9);
+
+  it('declared `made-by: me`: the linked attestation outranks the more confident proposal and stands as an assertion', () => {
+    const set = deriveRelationSet(proposed, corpusEdges(['her-link'], 0.3, ['me']));
+    expect(set.entries).toHaveLength(1);
+    expect(set.entries[0]?.edge.provenance).toBe('hers');
+    expect(set.entries[0]?.edge.confidence).toBe(0.3);
+    expect(set.entries[0]?.triageStanding).toBe('assertion');
+  });
+
+  it('declared `made-by: assistant`: no rank lift, the more confident proposal wins and the edge is a candidate', () => {
+    const set = deriveRelationSet(proposed, corpusEdges(['her-link'], 0.3, ['assistant']));
+    expect(set.entries).toHaveLength(1);
+    expect(set.entries[0]?.edge.provenance).toBe('model-proposed');
+    expect(set.entries[0]?.edge.confidence).toBe(0.9);
+    expect(set.entries[0]?.attestations.map((a) => a.confidence)).toEqual([0.9, 0.3]);
+    expect(set.entries[0]?.triageStanding).toBe('candidate');
+    expect(assertionsForTriage(set)).toEqual([]);
+  });
+
+  it('undeclared: ordering unchanged — identical to the fold with no declaration lookup at all', () => {
+    const undeclared = deriveRelationSet(proposed, corpusEdges(['her-link'], 0.3, [undefined]));
+    const beforeD490 = deriveRelationSet(proposed, corpusEdges(['her-link'], 0.3));
+    expect(undeclared).toEqual(beforeD490);
+    expect(undeclared.entries[0]?.edge.provenance).toBe('hers');
+    expect(undeclared.entries[0]?.edge.confidence).toBe(0.3);
+    expect(undeclared.entries[0]?.triageStanding).toBe('assertion');
+  });
+
+  it('[D-082] intact: the winning edge keeps the verdict’s type and direction in all three cases', () => {
+    for (const madeBy of ['me', 'assistant', undefined] as const) {
+      const set = deriveRelationSet(proposed, corpusEdges(['her-link'], 0.3, [madeBy]));
+      expect(set.entries[0]?.edge).toMatchObject({
+        type: 'prerequisite',
+        from: 'Bud',
+        to: 'Shoot',
+      });
+    }
   });
 });
