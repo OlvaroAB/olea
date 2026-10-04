@@ -44,6 +44,7 @@ import {
   type MisconceptionResolutionEvidenceEvent,
   type NonAttemptLogRecordInput,
   type PendingExplainBackGrading,
+  parseMadeBy,
   pastSessionsFromReviewLog,
   pickNextExplainBackInvitation,
   projectRegisteredFiles,
@@ -1702,6 +1703,9 @@ export default class OleaPlugin extends Plugin {
           leaf,
           () =>
             createBulkReviewController({
+              // `[D-489]`: her cached `made-by` declaration decides "a note you wrote" vs "your notes".
+              madeByFor: (notePath) =>
+                parseMadeBy(this.app.metadataCache.getCache(notePath)?.frontmatter?.['made-by']),
               cache: generationWiring.cache,
               acceptPort: generationWiring.acceptPort,
               editPort: createObsidianEditPort(this.app),

@@ -5,6 +5,7 @@
  * punctuation, and the origin is named — never claimed as support for the
  * draft — in whichever of the two registers actually applies.
  */
+import { parseMadeBy } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   bulkReviewCompletionTally,
@@ -25,6 +26,14 @@ describe('sourceMarkerText', () => {
     expect(sourceMarkerText('My Own Thoughts', 'authored-note')).toBe(
       'From a note you wrote, My Own Thoughts.',
     );
+  });
+
+  it('says "From your notes" for a kept note, never that she wrote it ([D-489])', () => {
+    expect(sourceMarkerText('My Own Thoughts', 'kept-note')).toBe(
+      'From your notes, My Own Thoughts.',
+    );
+    expect(sourceMarkerText('X', 'kept-note').toLowerCase()).not.toContain('wrote');
+    expect(sourceMarkerText('X', 'kept-note').toLowerCase()).not.toContain('reading');
   });
 
   it('never says "reading" for an authored-note origin', () => {
@@ -50,6 +59,29 @@ describe('sourceMarkerText', () => {
   });
 });
 
+describe('sourceMarkerOrigin ([D-489])', () => {
+  const md = '01 Courses/X/Note.md';
+  it('declared me reads as authored-note', () => {
+    expect(sourceMarkerOrigin(md, parseMadeBy('me'))).toBe('authored-note');
+    expect(sourceMarkerOrigin('a/Note.MD', 'me')).toBe('authored-note');
+  });
+  it('declared assistant, declared mixed, an invalid value and no declaration read as kept-note', () => {
+    expect(sourceMarkerOrigin(md, parseMadeBy('assistant'))).toBe('kept-note');
+    expect(sourceMarkerOrigin(md, parseMadeBy('mixed'))).toBe('kept-note');
+    expect(sourceMarkerOrigin(md, parseMadeBy('robot'))).toBe('kept-note');
+    expect(sourceMarkerOrigin(md, parseMadeBy(42))).toBe('kept-note');
+    expect(sourceMarkerOrigin(md)).toBe('kept-note');
+  });
+  it('a non-Markdown or absent citation reads as a reading whatever the declaration', () => {
+    expect(sourceMarkerOrigin('a/Lecture.pdf', 'me')).toBe('reading');
+    expect(sourceMarkerOrigin('a/Slides.pptx')).toBe('reading');
+    expect(sourceMarkerOrigin(undefined, 'me')).toBe('reading');
+    expect(sourceMarkerText('Lecture', sourceMarkerOrigin('a/Lecture.pdf', 'me'))).toBe(
+      'From your reading on Lecture.',
+    );
+  });
+});
+
 describe('bulkReviewCompletionTally ([STY-0e], ol-l5og.18.5; ol-2x4)', () => {
   it('names only the outcomes that happened, in accepted/edited/rejected order', () => {
     expect(bulkReviewCompletionTally({ accepted: 12, edited: 3, rejected: 5 })).toBe(
@@ -70,12 +102,12 @@ describe('bulkReviewCompletionTally ([STY-0e], ol-l5og.18.5; ol-2x4)', () => {
 });
 
 describe('sourceMarkerOrigin', () => {
-  it('reads a markdown citation path as an authored-note origin', () => {
-    expect(sourceMarkerOrigin('01 Courses/COGS214/My Own Thoughts.md')).toBe('authored-note');
+  it('reads a declared-me markdown citation path as an authored-note origin', () => {
+    expect(sourceMarkerOrigin('01 Courses/COGS214/My Own Thoughts.md', 'me')).toBe('authored-note');
   });
 
   it('is case-insensitive on the extension', () => {
-    expect(sourceMarkerOrigin('01 Courses/COGS214/My Own Thoughts.MD')).toBe('authored-note');
+    expect(sourceMarkerOrigin('01 Courses/COGS214/My Own Thoughts.MD', 'me')).toBe('authored-note');
   });
 
   it('reads a non-markdown citation path (a PDF/PPTX/DOCX/image reading) as "reading"', () => {
