@@ -16,6 +16,8 @@ function candidate(
     statement: 'Thinks force and acceleration are the same quantity.',
     correction: 'Force equals mass times acceleration — they are related, not identical.',
     correctionSourceBlockIds: ['block-1'],
+    // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused, so the base candidate is hers.
+    statementAuthorship: 'hers',
     ...overrides,
   };
 }

@@ -43,8 +43,11 @@ describe('admitBeliefBearingStatement — the belief-bearing-statement gatherer'
     });
   });
 
-  it('admits when no authorship fact was supplied at all (the field is optional; see its own doc for why absence is not the same question as "unknown")', () => {
-    expect(admitBeliefBearingStatement(undefined)).toEqual({ admitted: true });
+  it('refuses when no authorship fact was supplied at all — fail closed, absent reads as unknown ([D-490])', () => {
+    expect(admitBeliefBearingStatement(undefined)).toEqual({
+      admitted: false,
+      reason: 'unknown-authorship',
+    });
   });
 });
 
@@ -64,9 +67,9 @@ describe('assertBeliefBearingStatement — defense-in-depth throw', () => {
     expect(() => assertBeliefBearingStatement('unknown')).toThrow(BeliefSourceExcludedError);
   });
 
-  it('does not throw for hers or for an absent fact', () => {
+  it('does not throw for hers, and throws for an absent fact ([D-490])', () => {
     expect(() => assertBeliefBearingStatement('hers')).not.toThrow();
-    expect(() => assertBeliefBearingStatement(undefined)).not.toThrow();
+    expect(() => assertBeliefBearingStatement(undefined)).toThrow(BeliefSourceExcludedError);
   });
 });
 
@@ -80,12 +83,23 @@ function baseObservationInput(overrides: Partial<ObservationInput> = {}): Observ
     originInstrumentId: 'explain-back:concept-alpha:1',
     originReviewEventId: 'review-event-1',
     timestamp: '2026-08-16T09:00:00-04:00',
+    statementAuthorship: 'hers',
     ...overrides,
   };
 }
 
 describe('buildObservationEvent — wired in front of the statement field (events.ts)', () => {
-  it('still builds the event exactly as before when no authorship fact is supplied', () => {
+  it('throws when no authorship fact is supplied ([D-490], fail closed)', () => {
+    const { statementAuthorship: _omitted, ...withoutAuthorship } = baseObservationInput();
+    expect(() =>
+      buildObservationEvent(withoutAuthorship, {
+        statementEmbedding: [1, 0, 0, 0],
+        candidates: [],
+      }),
+    ).toThrow(BeliefSourceExcludedError);
+  });
+
+  it('builds the event exactly as before for her typed explain-back answer (hers)', () => {
     const result = buildObservationEvent(baseObservationInput(), {
       statementEmbedding: [1, 0, 0, 0],
       candidates: [],
@@ -131,10 +145,11 @@ const embeddingInput: ObservationInput = {
   originInstrumentId: 'explain-back:concept-alpha:2',
   originReviewEventId: 'review-event-2',
   timestamp: '2026-08-20T09:00:00-04:00',
+  statementAuthorship: 'hers',
 };
 
 describe('buildObservationEventWithEmbedding — wired in front of the statement field (observe.ts)', () => {
-  it('still builds the event exactly as before when no authorship fact is supplied (no embedder configured)', async () => {
+  it('builds the event for her typed explain-back answer (hers; no embedder configured)', async () => {
     const result = await buildObservationEventWithEmbedding(embeddingInput, {
       embedder: null,
       candidateRecords: [],
@@ -180,6 +195,7 @@ function acceptedCandidate(
     statement: 'Believes X always implies Y.',
     correction: 'The source states X implies Y only under condition Z.',
     correctionSourceBlockIds: ['block-1'],
+    statementAuthorship: 'hers',
     ...overrides,
   };
 }
@@ -195,7 +211,7 @@ describe('buildObservationEventsFromAcceptedGrading — the real, non-throwing o
   };
   const deps = { embedder: null };
 
-  it('records an event for a candidate with no authorship fact (unchanged behaviour)', async () => {
+  it('records an event for her typed explain-back answer (hers), support rules unchanged', async () => {
     const outcomes = await buildObservationEventsFromAcceptedGrading(
       [acceptedCandidate()],
       context,
@@ -203,6 +219,16 @@ describe('buildObservationEventsFromAcceptedGrading — the real, non-throwing o
     );
     expect(outcomes).toHaveLength(1);
     expect(outcomes[0]?.skipped).toBe(false);
+  });
+
+  it('skips, with reason "unknown-authorship", a candidate carrying no authorship fact ([D-490], fail closed)', async () => {
+    const { statementAuthorship: _omitted, ...bare } = acceptedCandidate();
+    const outcomes = await buildObservationEventsFromAcceptedGrading([bare], context, deps);
+    const outcome = outcomes[0];
+    if (outcome === undefined || outcome.skipped === false) {
+      throw new Error('expected a skipped outcome');
+    }
+    expect(outcome.reason).toBe('unknown-authorship');
   });
 
   it('records an event for a candidate confidently hers', async () => {

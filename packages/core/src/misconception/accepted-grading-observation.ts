@@ -80,12 +80,10 @@ export interface AcceptedGradingMisconceptionCandidate {
   readonly correctionSourceBlockIds: readonly string[];
   /**
    * `[D-101]`'s authorship fact for `statement`'s source prose — see
-   * `events.ts`'s `ObservationInput.statementAuthorship` doc for the exact
-   * rule and for the plugin caller that must start supplying a real value.
-   * **Optional and not supplied by any caller today**: `../grading/
-   * gradingPipeline.js`'s `MisconceptionCandidate` (this type's mirror, per
-   * the module doc) carries no such fact, so this field is dormant until a
-   * plugin caller starts populating it when it builds each candidate.
+   * `events.ts`'s `ObservationInput.statementAuthorship` doc for the rule.
+   * The plugin's explain-back path attaches `'hers'` to every candidate
+   * (`attachStatementAuthorship` in `packages/plugin/src/grading/wiring.ts`);
+   * an absent fact is refused (`[D-490]`, `ol-egov.141.89.6.91`).
    */
   readonly statementAuthorship?: MaterialityAuthorship;
 }
@@ -176,8 +174,8 @@ export async function buildObservationEventsFromAcceptedGrading(
     // `[D-101]`: the real, non-throwing gate — checked before building
     // `ObservationInput` or spending an embed call, the same shape as the
     // `'uncitable'`/`'unresolved-concept'` skips above. See
-    // `belief-source.ts`'s `admitBeliefBearingStatement` doc for why an
-    // absent `statementAuthorship` admits rather than excludes.
+    // `belief-source.ts`'s `admitBeliefBearingStatement` doc: an absent
+    // `statementAuthorship` is refused (`[D-490]`, `ol-egov.141.89.6.91`).
     const admission = admitBeliefBearingStatement(candidate.statementAuthorship);
     if (!admission.admitted) {
       outcomes.push({ candidate, skipped: true, reason: admission.reason ?? 'not-hers' });

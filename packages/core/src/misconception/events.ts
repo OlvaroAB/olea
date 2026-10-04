@@ -35,23 +35,14 @@ export interface ObservationInput {
   /**
    * `[D-101]`'s authorship fact for this statement's source prose (knowledge
    * model §4.1's statement field, amended `[D-101]`): `'hers'` admits;
-   * `'not-hers'`/`'unknown'` both exclude, per `belief-source.ts`'s
-   * `admitBeliefBearingStatement`. **Optional** — no production caller
-   * supplies a real value yet. The observation path today
+   * `'not-hers'`/`'unknown'` exclude, and so does an absent fact (`[D-490]`,
+   * `ol-egov.141.89.6.91`: authorship needs her word, so no fact means no
+   * admission), per `belief-source.ts`'s `admitBeliefBearingStatement`.
+   * Optional in the type only. The one production path
    * (`accepted-grading-observation.ts`'s `buildObservationEventsFromAcceptedGrading`,
-   * called from `packages/plugin/src/grading/wiring.ts`'s
-   * `computeAcceptExplainBackGradingWithObservation`) builds its candidates
-   * from `AcceptedExplainBackGrading.misconceptionCandidates`
-   * (`../grading/gradingPipeline.js`, not this directory's `owns`) with no
-   * authorship fact attached anywhere upstream. The plugin caller that must
-   * start supplying one is `packages/plugin/src/grading/wiring.ts` (or the
-   * materiality wiring it already has under
-   * `packages/plugin/src/ingestion/materiality/`), classifying the graded
-   * answer's source prose via `classifyMateriality`/`resolveMateriality`
-   * before building each `AcceptedGradingMisconceptionCandidate`. Omitting
-   * this field leaves existing behaviour unchanged — see
-   * `admitBeliefBearingStatement`'s own doc for why an absent fact admits
-   * rather than guesses at an exclusion.
+   * called from `packages/plugin/src/grading/wiring.ts`) attaches `'hers'` to
+   * every candidate, because each statement comes from her own typed
+   * explain-back answer (`attachStatementAuthorship` there).
    */
   readonly statementAuthorship?: MaterialityAuthorship;
 }

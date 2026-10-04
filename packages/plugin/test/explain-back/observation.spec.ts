@@ -215,6 +215,8 @@ describe('buildExplainBackObservationContext: the permitted list is the only bin
     statement: 'an invented wrong belief',
     correction: 'the invented fact',
     correctionSourceBlockIds: ['blk-1'],
+    // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused; the wiring marks her typed answer hers.
+    statementAuthorship: 'hers' as const,
     ...(confusedWith !== undefined ? { confusedWith } : {}),
   });
 

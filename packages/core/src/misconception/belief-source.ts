@@ -57,30 +57,22 @@ export interface BeliefBearingStatementResult {
  * caller's `ObservationInput.statementAuthorship` carries for this
  * statement's source prose.
  *
- * **`authorship === undefined` admits.** This is deliberately NOT the same
- * question as "the classifier ran and returned `'unknown'`" — `undefined`
- * means no caller in the chain has supplied a `[D-101]` fact for this
- * observation AT ALL yet (the field is optional; see `events.ts`'s doc for
- * why). Treating an absent fact as an exclusion would silently drop every
- * observation built by every caller that has not yet been migrated to
- * supply one — including the one production caller that exists today,
- * which does not yet have a wired classifier upstream of it — which is
- * exactly the kind of "hole that defaults to hers" failure `[D-101]`
- * itself warns against, just inverted: a hole must default to "not this
- * filter's business yet," never to a value this function did not actually
- * conclude. A caller that HAS a real classifier wired always supplies a
- * genuine `MaterialityAuthorship`, at which point `'unknown'` is read and
- * excluded exactly as `'not-hers'` is, per `isConfidentlyHersProse`.
+ * **`authorship === undefined` is refused (fail closed, `[D-490]`)** with
+ * the `'unknown-authorship'` reason: an absent fact is treated as unknown,
+ * so a caller that supplies no authorship can never admit a statement. The
+ * production caller (`plugin/src/grading/wiring.ts`) supplies `'hers'` for
+ * her typed explain-back answer, so its admission is unchanged.
  */
 export function admitBeliefBearingStatement(
   authorship: MaterialityAuthorship | undefined,
 ): BeliefBearingStatementResult {
-  if (authorship === undefined || isConfidentlyHersProse(authorship)) {
+  if (authorship !== undefined && isConfidentlyHersProse(authorship)) {
     return { admitted: true };
   }
   return {
     admitted: false,
-    reason: authorship === 'unknown' ? 'unknown-authorship' : 'not-hers',
+    reason:
+      authorship === undefined || authorship === 'unknown' ? 'unknown-authorship' : 'not-hers',
   };
 }
 
