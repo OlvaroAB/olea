@@ -80,4 +80,16 @@ describe('assembleVoiceExemplars — F3.8 / [D-101] voice fidelity (features/F3-
   it('returns empty exemplar sets for an empty passage list, without throwing', () => {
     expect(assembleVoiceExemplars([])).toEqual({ phrasing: [], terminology: [] });
   });
+
+  it('only declared-hers passages reach phrasing: unknown, assistant (not-hers) and folder-curated hers never do (D-490)', () => {
+    const exemplars = assembleVoiceExemplars([
+      { text: 'declared me', authorship: 'hers', curationAuthority: 'unknown' },
+      { text: 'undeclared note', authorship: 'unknown', curationAuthority: 'unknown' },
+      { text: 'filed in her folder', authorship: 'unknown', curationAuthority: 'hers' },
+      { text: 'assistant note, edited', authorship: 'not-hers', curationAuthority: 'unknown' },
+      { text: 'declared mixed', authorship: 'unknown', curationAuthority: 'unknown' },
+    ]);
+    expect(exemplars.phrasing).toEqual(['declared me']);
+    expect(exemplars.terminology).toEqual([]);
+  });
 });
