@@ -138,6 +138,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { stripOleaFrontmatter } from '../generation/strip-olea-frontmatter.js';
 
 /** Matches `[[target]]`, `[[target#heading]]`, `[[target|alias]]` (and the combination) — same shape `olea-core`'s frontmatter reader uses for the identical syntax, restated here rather than imported across a package this module has no other reason to depend on for one regex. */
 const WIKILINK_RE = /\[\[([^[\]]+)\]\]/g;
@@ -753,10 +754,23 @@ export async function gatherCorpusRelationVaultContext(
     // budget-bounded rule — see the module doc's `ol-2zfj.64` paragraph for why this superseded
     // `sectionPassageText`.
     const charRange = concept.anchor.location.charRange;
+    // `ol-egov.141.89.2.32`: Olea's own `olea-*` frontmatter keys never travel inside a passage.
+    // The strip only removes text inside the leading frontmatter block, so an anchor's offsets
+    // shift left by exactly the removed length (clamped at the note's start).
+    const sendable = stripOleaFrontmatter(content);
+    const removed = content.length - sendable.length;
     const passageText =
       charRange !== undefined
-        ? notePassageText(content, charRange)
-        : content.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
+        ? notePassageText(
+            sendable,
+            removed === 0
+              ? charRange
+              : {
+                  start: Math.max(0, charRange.start - removed),
+                  end: Math.max(0, charRange.end - removed),
+                },
+          )
+        : sendable.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
     passageTextByName.set(concept.name, passageText);
 
     for (const target of wikilinkTargets(content)) {

@@ -910,3 +910,32 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
     },
   );
 });
+
+describe('gatherCorpusRelationVaultContext: the stamp block never travels (`ol-egov.141.89.2.32`)', () => {
+  const stamp = ['olea-cloze-ids:', '  block-a1: cloze-1', 'olea-uid: uid-77'].join('\n');
+  const body = 'Spring tides follow the new and full moon.';
+  const stamped = ['---', 'topic: [Tides]', stamp, '---', '', body].join('\n');
+  const clean = ['---', 'topic: [Tides]', '---', '', body].join('\n');
+
+  it('the passage text is the note without its olea-* keys, anchor kept inside the body', async () => {
+    const start = stamped.indexOf(body);
+    const vault = new MemoryVault({ 'Tides.md': stamped });
+    const c = concept('Spring tides', 'Tides.md', [start, start + body.length]);
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+    const text = passageTextByName.get('Spring tides') ?? '';
+    expect(text).not.toMatch(/olea-cloze-ids|olea-uid|cloze-1|uid-77/);
+    expect(text).toBe(clean);
+  });
+
+  it('over budget, the window stays centred on the anchor after the strip shifts offsets', async () => {
+    const pad = 'filler words go here. '.repeat(400);
+    const note = (head: string) => ['---', head, '---', '', pad, body, pad].join('\n');
+    const start = note(stamp).indexOf(body);
+    const vault = new MemoryVault({ 'Tides.md': note(stamp) });
+    const c = concept('Spring tides', 'Tides.md', [start, start + body.length]);
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+    const text = passageTextByName.get('Spring tides') ?? '';
+    expect(text).toContain(body);
+    expect(text).not.toMatch(/olea-cloze-ids|olea-uid/);
+  });
+});
