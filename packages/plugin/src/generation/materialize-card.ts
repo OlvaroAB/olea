@@ -248,7 +248,7 @@ import {
   planInstrumentDemand,
 } from './demand-target.js';
 import { sourceRevisionMatches } from './home-note.js';
-import { StaleSourceRevisionError } from './materialize-mcq.js';
+import { assertCitedSourceUnchanged, StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
 
 export { StaleSourceRevisionError };
@@ -373,6 +373,13 @@ export async function materializeAcceptedCardDraft(
       );
     }
   }
+
+  await assertCitedSourceUnchanged(
+    vault,
+    input.sourceCitation,
+    input.sourcePath,
+    'materializeAcceptedCardDraft',
+  );
 
   if (input.card.front.trim() === '' || input.card.back.trim() === '') {
     throw new Error('materializeAcceptedCardDraft: a card needs both a front and a back');

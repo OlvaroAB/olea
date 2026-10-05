@@ -1221,7 +1221,7 @@ describe("a generation sweep's classified refusals are captured for the bulk-rev
 
   it('captures report?.refusals onto this.lastGenerationRefusals inside onUnitsLanded', () => {
     expect(main).toMatch(
-      /const report = await this\.generation\.sweep\(\s*units,\s*this\.draftQuizCardsDeps\(\),\s*\{ classifier: this\.knowledgeKind\?\.classifier \?\? null \},\s*formatMatch,\s*\);\s*this\.lastGenerationRefusals = report\?\.refusals \?\? \[\];/,
+      /const report = await this\.generation\.sweep\(\s*units,\s*this\.draftQuizCardsDeps\(\),\s*\{ classifier: this\.knowledgeKind\?\.classifier \?\? null \},\s*formatMatch,\s*sourceRevisions,\s*\);\s*this\.lastGenerationRefusals = report\?\.refusals \?\? \[\];/,
     );
   });
 

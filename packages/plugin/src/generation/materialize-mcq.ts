@@ -248,6 +248,7 @@ import {
   citationStorePath,
   type DistractorProvenanceEntry,
   distractorProvenanceStorePath,
+  hashContent,
   hashText,
   type InstrumentCitation,
   insertMcqBlock,
@@ -325,6 +326,38 @@ export interface MaterializeAcceptedDraftInput {
  * Thrown before anything is written, so a caller catching this knows the vault is untouched.
  * `accept.ts` is the one caller that catches it today, to do the reject bookkeeping.
  */
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): the accept-time guard for a non-markdown source's fingerprint.
+ * When the draft's citation recorded `sourceRevision` (the SHA-256 hex of the file's raw bytes at
+ * drafting), refuses with `StaleSourceRevisionError` unless the file's bytes hash to it now; a file
+ * that cannot be read counts as changed. A citation with no `sourceRevision` is NOT refused here
+ * (it is withheld later, at presentation), nor is a markdown source or the question's own note
+ * (the note guard covers those). Called before anything is written.
+ */
+export async function assertCitedSourceUnchanged(
+  vault: VaultSource,
+  citation: InstrumentCitation | undefined,
+  ownNotePath: string,
+  caller: string,
+): Promise<void> {
+  const expected = citation?.sourceRevision;
+  if (citation === undefined || expected === undefined) return;
+  if (citation.sourcePath.toLowerCase().endsWith('.md') || citation.sourcePath === ownNotePath) {
+    return;
+  }
+  let current: string | undefined;
+  try {
+    current = await hashContent(await vault.readBinary(citation.sourcePath));
+  } catch {
+    current = undefined;
+  }
+  if (current !== expected) {
+    throw new StaleSourceRevisionError(
+      `${caller}: ${citation.sourcePath} changed since this draft was cached (or cannot be read) — refusing to accept against a source that was never reviewed ([D-515])`,
+    );
+  }
+}
+
 export class StaleSourceRevisionError extends Error {
   /**
    * What the guard established (`[D-455]`). `'note'` is today's only grain: the guard hashes the
@@ -429,6 +462,13 @@ export async function materializeAcceptedDraft(
       );
     }
   }
+
+  await assertCitedSourceUnchanged(
+    vault,
+    input.sourceCitation,
+    input.sourcePath,
+    'materializeAcceptedDraft',
+  );
 
   const fields = acceptGeneratedMcq(
     {
