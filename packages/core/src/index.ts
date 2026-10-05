@@ -2442,6 +2442,11 @@ export {
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
 } from './review-log/explain-back-history.js';
+// `[D-460]`: the explain-back feedback exposure marker, read back — a
+// projection folded from the review log, never stored; see
+// review-log/feedback-shown.ts.
+export type { ExplainBackFeedbackShownAttempt } from './review-log/feedback-shown.js';
+export { explainBackFeedbackShownAttempts } from './review-log/feedback-shown.js';
 // D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
 // (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
 // see review-log/generation-signals.ts's module doc for the named
@@ -2468,6 +2473,7 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendDisputeLogResult,
+  AppendExplainBackFeedbackShownLogResult,
   AppendExplainBackOfferLogResult,
   AppendExplainBackSetAsideLogResult,
   AppendMisconceptionObservedLogResult,
@@ -2480,6 +2486,7 @@ export type {
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
+  ExplainBackFeedbackShownLogRecordInput,
   ExplainBackOfferLogRecordInput,
   ExplainBackSetAsideLogRecordInput,
   MisconceptionObservedLogRecordInput,
@@ -2493,6 +2500,7 @@ export type {
 } from './review-log/write.js';
 export {
   appendDisputeRecord,
+  appendExplainBackFeedbackShownRecord,
   appendExplainBackOfferRecord,
   appendExplainBackSetAsideRecord,
   appendMisconceptionObservedRecord,

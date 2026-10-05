@@ -91,6 +91,7 @@ import {
   type ConceptDefiningPassages,
   type ConceptRelation,
   discardExplainBackGrading,
+  type ExplainBackFeedbackShownLogRecordInput,
   type ExplainBackPromptContext,
   type ExplainBackSetAsideLogRecordInput,
   formatSourceCitation,
@@ -146,11 +147,14 @@ import {
 } from './copy.js';
 import {
   type FeedbackExposureLedger,
+  feedbackShownRecordInput,
   NO_PRIOR_ATTEMPT,
   type PriorAttemptState,
   type ReadLoggedAttemptState,
+  type RecordFeedbackShown,
   resolvePriorAttemptState,
   sessionFeedbackExposureLedger,
+  writeFeedbackShown,
 } from './feedback-exposure.js';
 import { isConfirmedFirstFullDepth } from './first-full-depth.js';
 import { runGradingAttempt } from './grading-attempt.js';
@@ -485,6 +489,19 @@ export interface ExplainBackModalDeps {
    * (no rung recorded), never not shown and never guided.
    */
   readonly readLoggedAttemptState?: ReadLoggedAttemptState;
+  /**
+   * `[D-460]` (`ol-egov.141.89.6.86`): writes the feedback exposure marker —
+   * the question, the attempt and the time — to her log BEFORE a graded
+   * result renders, so a reload after she read it cannot make a later
+   * attempt look like a first one. `./feedback-exposure.ts`'s
+   * `createRecordFeedbackShown` (core's `appendExplainBackFeedbackShownRecord`).
+   * Awaited in `submitAnswer`; see `recordFeedbackShownBeforeDisplay` for
+   * what a failed write does.
+   *
+   * Optional, same posture as `recordSetAsideAttempt`: unwired, nothing is
+   * written and the result renders exactly as before this field existed.
+   */
+  readonly recordFeedbackShown?: RecordFeedbackShown;
   /**
    * Row 50: the session note of graded results already shown (see
    * `./feedback-exposure.ts`'s `FeedbackExposureLedger`), injectable for a
@@ -1040,6 +1057,20 @@ export class ExplainBackModal extends Modal {
   /** Row 50: `deps.feedbackExposureLedger`, or the session-wide one. */
   private readonly feedbackExposureLedger: FeedbackExposureLedger;
 
+  /**
+   * `[D-460]`: set once Obsidian closes this view. A graded result that
+   * arrives after that is never displayed, so nothing records it as shown:
+   * no marker, no session note.
+   */
+  private closed = false;
+
+  /**
+   * `[D-460]`: the marker for the graded result on screen, held only while its
+   * write before display has failed, so `onClose` can try it once more if she
+   * leaves the result without Try again or accepting. `null` otherwise.
+   */
+  private unwrittenFeedbackShown: ExplainBackFeedbackShownLogRecordInput | null = null;
+
   constructor(app: App, deps: ExplainBackModalDeps, seed: ExplainBackSeed) {
     super(app);
     this.deps = deps;
@@ -1073,6 +1104,22 @@ export class ExplainBackModal extends Modal {
     // so this cannot be awaited, and `recordNonAttemptIfPossible` never
     // throws (see its own doc).
     if (this.state.phase === 'answering') void this.recordNonAttemptIfPossible(this.state.prompt);
+    // `[D-460]`: she leaves a graded result whose marker never reached her log,
+    // with neither Try again (whose set-aside record says she saw it) nor
+    // accept (which ends the exchange). One more write, fire-and-forget, so a
+    // later session does not read her next attempt as a first one. Writing
+    // twice is harmless if the first had in fact landed.
+    const unwritten = this.unwrittenFeedbackShown;
+    this.unwrittenFeedbackShown = null;
+    if (
+      unwritten !== null &&
+      this.state.phase === 'graded' &&
+      this.state.attemptId === unwritten.attemptId &&
+      this.deps.recordFeedbackShown
+    ) {
+      void writeFeedbackShown(this.deps.recordFeedbackShown, unwritten);
+    }
+    this.closed = true;
     this.contentEl.empty();
     this.deps.onClosed?.();
   }
@@ -1310,11 +1357,19 @@ export class ExplainBackModal extends Modal {
       return;
     }
     const pending = outcome.pending;
-    // Row 50: a graded result is about to be shown to her, so the session now
-    // knows she was exposed, whatever she does next (accept, Try again, or
-    // close). An attempt the check could not assess shows her no feedback.
     if (pending.grading.outcome === 'graded') {
+      // `[D-460]`: a closed view displays nothing, so nothing is recorded as shown.
+      if (this.closed) return;
+      // Row 50: a graded result is about to be shown to her, so the session now
+      // knows she was exposed, whatever she does next (accept, Try again, or
+      // close). An attempt the check could not assess shows her no feedback.
       this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
+      // `[D-460]`: the marker reaches her log BEFORE the result renders, so a
+      // reload after she has read it cannot hide that she did.
+      await this.recordFeedbackShownBeforeDisplay(prompt.originInstrumentId, attemptId);
+      if (this.closed || this.state.phase !== 'grading' || this.state.attemptId !== attemptId) {
+        return;
+      }
     }
     this.state = {
       phase: 'graded',
@@ -1327,6 +1382,30 @@ export class ExplainBackModal extends Modal {
       support,
     };
     this.render();
+  }
+
+  /**
+   * `[D-460]` (`ol-egov.141.89.6.86`): writes the feedback exposure marker for
+   * the graded result `submitAnswer` is about to show, and returns only once
+   * the write has settled, so the result never renders before its marker.
+   *
+   * **A failed write** is absorbed (`writeFeedbackShown`): the result still
+   * renders and she is never told. The session note `submitAnswer` wrote just
+   * before this, and this view's own sequence once she chooses Try again,
+   * hold the exposure as shown, so a revision in this session is sealed
+   * guided, never independent, and never read as not shown. The marker is
+   * kept in `unwrittenFeedbackShown` for `onClose` to try once more. Unwired
+   * (`deps.recordFeedbackShown` absent), nothing is written.
+   */
+  private async recordFeedbackShownBeforeDisplay(
+    instrumentId: string,
+    attemptId: string,
+  ): Promise<void> {
+    this.unwrittenFeedbackShown = null;
+    const record = this.deps.recordFeedbackShown;
+    if (!record) return;
+    const input = feedbackShownRecordInput({ instrumentId, attemptId, at: this.now() });
+    if (!(await writeFeedbackShown(record, input))) this.unwrittenFeedbackShown = input;
   }
 
   /**
