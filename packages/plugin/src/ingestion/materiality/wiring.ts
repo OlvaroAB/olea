@@ -389,6 +389,11 @@ export class MaterialityTrigger {
    */
   private readonly lastProcessedText = new Map<string, string>();
   /**
+   * `ol-egov.141.89.5.85` ([D-311]): paths whose text changed while Obsidian was closed (marked
+   * by priming). Session-only; a mark is spent on the path's first evaluation.
+   */
+  private readonly previousUnknown = new Set<string>();
+  /**
    * `[D-427]`: judge calls this instance has dispatched and not yet settled,
    * per path. Raised under the path lock, in the same step that writes the
    * call's pending record, so a recovery pass (which takes the same lock)
@@ -518,6 +523,11 @@ export class MaterialityTrigger {
     return thisTurn;
   }
 
+  /** Marks `path` as having no trustworthy previous text for its first evaluation this session. */
+  markPreviousUnknown(path: string): void {
+    this.previousUnknown.add(path);
+  }
+
   /**
    * The locked portion of `evaluate` — see that method's doc for the race it
    * closes. Returns either a terminal result (every outcome the free gates
@@ -594,6 +604,10 @@ export class MaterialityTrigger {
       currentCanonicalLength: canonicalLength,
     });
 
+    // `ol-egov.141.89.5.85`: the mark is spent here, on the path's first evaluation, whatever
+    // the outcome (routing below).
+    const wasMarkedUnknown = this.previousUnknown.delete(path);
+
     if (outcome.kind === 'unchanged') {
       // The note is back at exactly the bytes its baseline was taken from. An
       // edit this instance still holds for the path (below the floor, or
@@ -617,6 +631,24 @@ export class MaterialityTrigger {
         );
       }
       return { kind: 'resolved', result: outcome };
+    }
+
+    // `ol-egov.141.89.5.85` ([D-311]): a note marked previous-unknown (changed while Obsidian was
+    // closed) has no baseline to judge this first save against, and the record's hashes say only
+    // that it differs. With no known previous, a below-floor, debounced or call-judge outcome
+    // resolves as unavailable, exactly as the call-judge branch below does, instead of deferring
+    // against a wrong baseline. The mark itself was spent above.
+    if (
+      wasMarkedUnknown &&
+      knownPrevious === undefined &&
+      (outcome.kind === 'below-floor' ||
+        outcome.kind === 'debounced' ||
+        outcome.kind === 'call-judge')
+    ) {
+      this.pendingSmallEdit.delete(path);
+      this.pendingDebounced.delete(path);
+      await this.clearPending(path);
+      return { kind: 'resolved', result: { kind: 'judge-unavailable' } };
     }
 
     // `[D-311]`, literally: "records without one [a revision] are treated as

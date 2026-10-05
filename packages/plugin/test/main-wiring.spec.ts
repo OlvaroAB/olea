@@ -1412,7 +1412,7 @@ describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is
 
   it('imports the tested composer, not an inline vault.watch handler', () => {
     expect(main).toMatch(
-      /import\s*\{\s*buildIngestionArrivalWatch\s*\}\s*from\s*'\.\/ingestion\/arrival-watch\.js'/,
+      /import\s*\{[^}]*\bbuildIngestionArrivalWatch\b[^}]*\}\s*from\s*'\.\/ingestion\/arrival-watch\.js'/,
     );
   });
 

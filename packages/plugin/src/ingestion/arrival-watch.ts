@@ -168,6 +168,53 @@ async function enqueueArrival(
 }
 
 /**
+ * `ol-egov.141.89.5.84` ([D-518]): the citation-revision trigger's catch-up request for one cited
+ * source file. The job is exactly an arrival's (kind `'source'`, content hash of the current bytes,
+ * label and `sourceUnitId` the path), with two differences. Its `workflowVersion` is the extraction
+ * version plus a suffix carrying the session's load time, so it is unique per session and a `done`
+ * job for the same bytes (whose landed text a restart forgot) cannot swallow it; only the engine's
+ * dedup reads that field. And it carries no `lastChangedAt`: the bytes are settled, so the enqueue
+ * debounce does not apply. Skipped when a queued or in-flight job already holds those bytes under
+ * any version, so a landing already on its way is not duplicated. Never throws.
+ */
+export async function requestSourceCatchUpExtraction(deps: {
+  readonly vault: VaultSource;
+  readonly engine: {
+    list(): readonly { readonly contentHash: string; readonly status: string }[];
+    enqueue(input: EnqueueInput & { readonly workflowVersion?: string }): Promise<unknown>;
+  };
+  readonly sourcePath: VaultPath;
+  /** The session's load time, epoch ms. */
+  readonly sessionStamp: number;
+}): Promise<void> {
+  try {
+    const format = formatFromExtension(deps.sourcePath);
+    if (format === null) return;
+    const contentHash = await hashContent(await deps.vault.readBinary(deps.sourcePath));
+    const pending = deps.engine
+      .list()
+      .some(
+        (job) =>
+          job.contentHash === contentHash &&
+          (job.status === 'queued' || job.status === 'in-flight'),
+      );
+    if (pending) return;
+    await deps.engine.enqueue({
+      contentHash,
+      label: deps.sourcePath,
+      payload: { kind: 'source', sourcePath: deps.sourcePath, format },
+      sourceUnitId: deps.sourcePath,
+      workflowVersion: `${EXTRACTION_WORKFLOW_VERSION}:catch-up:${deps.sessionStamp}`,
+    });
+  } catch (error) {
+    console.error(
+      'Olea: could not enqueue a catch-up source extraction',
+      error instanceof Error ? error.name : 'unknown',
+    );
+  }
+}
+
+/**
  * D-465 (`ol-egov.141.89.8.55`): an arriving `.txt`, or a `.md` that declares itself a lecture
  * transcript, is enqueued under the `'transcript'` job kind. `resolveTranscriptFormat` decides, once,
  * here; an undeclared `.md` is `not-a-transcript` and stays on the note path, and a format with no
