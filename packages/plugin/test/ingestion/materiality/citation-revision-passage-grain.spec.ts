@@ -300,6 +300,43 @@ describe('the bug: an edit elsewhere in the note, or a move, no longer reaches t
     expect((await anchorOf(store)).text).toBe(reflowed);
   });
 
+  it('a passage re-wrapped onto two lines settles free with no judge call and stays showable (ol-egov.141.89.5.76, D-446)', async () => {
+    const oneLine = `${GRANITE} ${QUARTZ}`;
+    const { vault, store } = await fixture({
+      sourceText: sourceNote(BASALT, oneLine, LIMESTONE),
+      passage: oneLine,
+    });
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    await t.tick(vault, actions());
+
+    await vault.write(SOURCE_PATH, sourceNote(BASALT, `${GRANITE}\n${QUARTZ}`, LIMESTONE));
+    const a = actions();
+    const report = await t.tick(vault, a);
+
+    expect(judge.judge).not.toHaveBeenCalled();
+    expect(report.formattingOnly).toBe(1);
+    expect(a.suspend).not.toHaveBeenCalled();
+    expect(a.enqueue).not.toHaveBeenCalled();
+    const anchor = await anchorOf(store);
+    expect(anchor.text).toBe(`${GRANITE}\n${QUARTZ}`);
+    expect(anchor.pendingRevalidation).toBeUndefined();
+  });
+
+  it('the same re-wrap plus one changed word still reaches the judge (ol-egov.141.89.5.76)', async () => {
+    const { vault, store } = await fixture();
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    await t.tick(vault, actions());
+
+    const edited = `${GRANITE} ${QUARTZ.replace('quartz', 'olivine')}`;
+    await vault.write(SOURCE_PATH, sourceNote(BASALT, edited, LIMESTONE));
+    const report = await t.tick(vault, actions());
+
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(report.formattingOnly).toBe(0);
+  });
+
   it('an emphasis-only change to the passage exits free as formatting-only (a list marker is content, ol-egov.141.89.5.60)', async () => {
     const bullets = `${GRANITE}\n**${QUARTZ}**`;
     const { vault, store } = await fixture();

@@ -711,6 +711,9 @@ export class CitationRevisionTrigger {
       let current: CurrentPassageState;
       // `[D-446]`: set only for a passage-grain anchor whose passage was found in a note this pass.
       let passage: PassageContext | undefined;
+      // `ol-egov.141.89.5.76`: the ladder's own verdict that the passage stands unchanged in
+      // everything but whitespace and line breaks (`via: 'exact'`, a [D-446] normalised match).
+      let reformattedByLadder = false;
       try {
         if (currentRecord !== undefined && previous.passageDigest !== undefined) {
           // Passage grain: ask WHERE the anchored passage stands now, by the shared rule. Only a
@@ -741,6 +744,7 @@ export class CitationRevisionTrigger {
           }
           current = { kind: 'found-at-anchor', text: resolution.text };
           passage = { sourcePath: resolution.sourcePath, rule: resolution.rule };
+          reformattedByLadder = resolution.via === 'exact';
         } else if (currentRecord !== undefined) {
           current = {
             kind: 'found-at-anchor',
@@ -776,7 +780,8 @@ export class CitationRevisionTrigger {
         currentRecord !== undefined &&
         current.kind === 'found-at-anchor' &&
         current.text !== previous.text &&
-        canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text)
+        (reformattedByLadder ||
+          canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text))
       ) {
         report.formattingOnly += 1;
         try {
