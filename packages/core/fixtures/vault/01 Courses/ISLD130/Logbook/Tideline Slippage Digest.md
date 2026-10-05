@@ -1,16 +1,16 @@
 ---
 made-by: assistant
 made-from:
-  - "[[Lecture - Skerry Formation]]"
+  - "[[Lecture - Skerry Accretion]]"
   - "[[Isld130-Week1-Slides]]"
 ---
 
-# Tideline Drift Digest
+# Tideline Slippage Digest
 
 The tideline moves a little each day as the tide table shifts. Moorings set against a fixed
-mark drift out of position unless the line is re-seated every few days.
+mark slip out of position unless the line is re-seated every few days.
 
-## What changes the tideline most?
+## What alters the tideline most?
 
 Wind direction and the spring-and-neap cycle both shift the line.
 

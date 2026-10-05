@@ -391,15 +391,15 @@ describe('made-by declaration — against the ISLD130 fixtures ([D-490])', () =>
     };
   }
 
-  it('Mooring Basics (made-by me) reads hers, declared', async () => {
-    const { declaredMadeBy, result } = await factFor(`${base}/Notes/Mooring Basics.md`);
+  it('Mooring Rudiments (made-by me) reads hers, declared', async () => {
+    const { declaredMadeBy, result } = await factFor(`${base}/Logbook/Mooring Rudiments.md`);
     expect(declaredMadeBy).toBe('me');
     expect(result.fact.authorship).toBe('hers');
     expect(result.provenance.source).toBe('declared');
   });
 
-  it('Tideline Drift Digest (assistant, later edited) keeps assistant origin and is never hers', async () => {
-    const { declaredMadeBy, result } = await factFor(`${base}/Notes/Tideline Drift Digest.md`);
+  it('Tideline Slippage Digest (assistant, later edited) keeps assistant origin and is never hers', async () => {
+    const { declaredMadeBy, result } = await factFor(`${base}/Logbook/Tideline Slippage Digest.md`);
     expect(declaredMadeBy).toBe('assistant');
     expect(result.fact).toEqual({ authorship: 'not-hers', curationAuthority: 'unknown' });
   });

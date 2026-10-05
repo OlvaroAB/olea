@@ -74,16 +74,16 @@ describe('buildClassifyPassageHook', () => {
   });
 
   it('reads her made-by declaration from cached frontmatter (D-490)', () => {
-    const me = '01 Courses/ISLD130/Notes/Mooring Basics.md';
-    const assistant = '01 Courses/ISLD130/Notes/Tideline Drift Digest.md';
-    const mixed = '01 Courses/ISLD130/Notes/Mixed.md';
+    const me = '01 Courses/ISLD130/Logbook/Mooring Rudiments.md';
+    const assistant = '01 Courses/ISLD130/Logbook/Tideline Slippage Digest.md';
+    const mixed = '01 Courses/ISLD130/Logbook/Mixed.md';
     const bad = '01 Courses/ISLD130/Zettelkasten/Bad value.md';
     const undeclared = '01 Courses/ISLD130/Zettelkasten/Undeclared.md';
     const hook = buildClassifyPassageHook({
       frontmatterHost: new FakeFrontmatterHost({
         [me]: { 'made-by': 'me' },
         // An assistant note she later edited still says assistant.
-        [assistant]: { 'made-by': 'assistant', 'made-from': ['[[Lecture - Skerry Formation]]'] },
+        [assistant]: { 'made-by': 'assistant', 'made-from': ['[[Lecture - Skerry Accretion]]'] },
         [mixed]: { 'made-by': 'mixed' },
         [bad]: { 'made-by': 'robot' },
       }),

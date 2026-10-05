@@ -1,9 +1,9 @@
-# Skerry Formation
+# Skerry Accretion
 
 A skerry is a low rocky islet that the tide covers and uncovers. This summary follows the
 week 1 slides in the same folder.
 
-## How does a skerry differ from a full island?
+## How does a skerry diverge from a full island?
 
 A skerry has no soil layer and no permanent shelter, so a [[Gannet colony]] may nest on it
 only between storms. A full island holds a [[Tideline]] well above the waterline.

@@ -89,7 +89,7 @@ describe('classifyMateriality — [D-101] (features/F1-sources.md)', () => {
     it('me reads hers, declared, at full confidence, outranking the folder prior', () => {
       const result = classifyMateriality({
         ...base,
-        path: '01 Courses/ISLD130/Notes/Mooring Basics.md',
+        path: '01 Courses/ISLD130/Logbook/Mooring Rudiments.md',
         declaredMadeBy: 'me',
       });
       expect(result.fact).toEqual({ authorship: 'hers', curationAuthority: 'unknown' });
@@ -105,7 +105,7 @@ describe('classifyMateriality — [D-101] (features/F1-sources.md)', () => {
     it('assistant reads not-hers with curation unknown, declared; an edit never makes it hers', () => {
       const result = classifyMateriality({
         ...base,
-        path: '01 Courses/ISLD130/Notes/Tideline Drift Digest.md',
+        path: '01 Courses/ISLD130/Logbook/Tideline Slippage Digest.md',
         declaredMadeBy: 'assistant',
         text: 'Last Tuesday I watched the line move. I am going to ask in the next session.',
       });
