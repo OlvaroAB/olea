@@ -138,6 +138,17 @@
  * one install cannot write the old `'proposed'` record back over it; and a new record claims its
  * name only if the name is still free inside the task, so two overlapping proposals never write
  * one file twice.
+ *
+ * **One proposal walk at a time (`ol-egov.141.89.104.53`).** A walk lists the folder, matches, and
+ * writes a new record for an entry nothing matches — a check that spans every record file, which
+ * no one file's queue covers. Two overlapping walks would both match nothing and both write, the
+ * second under the next free name: two `'proposed'` records for one collision set. So each of the
+ * three proposers ({@link proposeDuplicationConfirmations}, {@link proposeRepairChoiceConfirmations},
+ * {@link proposeItemValidationConfirmations}) runs its whole walk as one task on the folder's own
+ * queue key, {@link DUPLICATION_CONFIRMATION_FOLDER}, and takes each record file's queue inside it.
+ * **Acquisition order:** the folder key first, then a record file's key, never the reverse — an
+ * answer or an apply takes only its record file's key and never waits for the folder's
+ * (`olea-core`'s `vault/path-queue.ts`, "Two keys at once").
  */
 
 import type {
@@ -494,6 +505,23 @@ export async function proposeDuplicationConfirmations(
   options: ProposeDuplicationConfirmationsOptions = {},
 ): Promise<ProposeDuplicationConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkDuplicationConfirmations(vault, entries, options));
+}
+
+/**
+ * Runs one proposal walk as one task on the folder's own queue key — see the module doc's "One
+ * proposal walk at a time". The walk takes record files' queues inside; never the folder's again.
+ */
+function onProposalWalkQueue<T>(walk: () => Promise<T>): Promise<T> {
+  return withPathQueue(DUPLICATION_CONFIRMATION_FOLDER, walk);
+}
+
+/** {@link proposeDuplicationConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkDuplicationConfirmations(
+  vault: VaultSource,
+  entries: readonly DuplicationConfirmationEntryInput[],
+  options: ProposeDuplicationConfirmationsOptions,
+): Promise<ProposeDuplicationConfirmationsResult> {
   const noteUidOf = options.noteUidOf ?? (() => null);
 
   const stored = await listDuplicationConfirmationRecords(vault);
@@ -733,7 +761,14 @@ export async function proposeItemValidationConfirmations(
   entries: readonly ItemValidationConfirmationEntryInput[],
 ): Promise<ProposeItemValidationConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkItemValidationConfirmations(vault, entries));
+}
 
+/** {@link proposeItemValidationConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkItemValidationConfirmations(
+  vault: VaultSource,
+  entries: readonly ItemValidationConfirmationEntryInput[],
+): Promise<ProposeItemValidationConfirmationsResult> {
   const existing = await listItemValidationConfirmationRecords(vault);
   const existingByInstrumentId = new Map(
     existing.map((stored) => [stored.record.instrumentId, stored]),
@@ -819,7 +854,14 @@ export async function proposeRepairChoiceConfirmations(
   entries: readonly RepairChoiceConfirmationEntryInput[],
 ): Promise<ProposeRepairChoiceConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkRepairChoiceConfirmations(vault, entries));
+}
 
+/** {@link proposeRepairChoiceConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkRepairChoiceConfirmations(
+  vault: VaultSource,
+  entries: readonly RepairChoiceConfirmationEntryInput[],
+): Promise<ProposeRepairChoiceConfirmationsResult> {
   const existing = await listRepairChoiceConfirmationRecords(vault);
   const existingByInstrumentId = new Map(
     existing.map((stored) => [stored.record.instrumentId, stored]),

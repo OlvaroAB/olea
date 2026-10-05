@@ -31,6 +31,17 @@
  * never resume either. So a store takes the queue at its public entry point, does that path's read
  * and write inside, and finishes before it touches the next path; a store that must move from one
  * path to another (`../concept/same-as.ts`'s look-up by identity) releases the first first.
+ *
+ * **Two keys at once, in one order only (`ol-egov.141.89.104.53`).** Some check-then-write spans
+ * several files: a look-up that lists a store's folder and then mints a new record file (the
+ * plugin's duplication-confirmation proposals), or a purge that lists an index and then deletes
+ * the files it names along with the index (the plugin's draft cache). No one file's queue covers those, so the whole operation runs on one
+ * fixed **set key** — the store's folder path, or its index file's path — and takes each record
+ * file's own queue inside it. The order is always the set key first, then a record key under it:
+ * no task holds a record key while it waits for a set key, and no task holds two set keys, so no
+ * two tasks can each wait on the other. A task holding a set key never queues on that same key
+ * again (the index file is written or deleted directly inside its own task, never through a
+ * helper that queues on it).
  */
 
 import type { VaultPath } from './types.js';
