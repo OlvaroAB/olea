@@ -816,6 +816,22 @@ export class CitationRevisionTrigger {
           // passage found in place (unchanged, reformatted, or edited-and-unmistakable) continues
           // into the ordinary compare-and-judge below; a moved, missing or ambiguous passage is
           // settled here, with no judge call.
+          // `ol-egov.141.89.5.78`: an anchor withheld at first sighting (no text, only the
+          // citation's digest) is re-tried by that digest before the text-based read, which has
+          // nothing to compare.
+          if (
+            await this.retryWithheldFirstSighting(
+              instrumentId,
+              previous,
+              currentRecord,
+              passageNotes,
+              rules,
+              actions,
+              report,
+            )
+          ) {
+            continue;
+          }
           const resolution = await resolveAnchoredPassage(
             {
               text: previous.text,
@@ -1207,6 +1223,111 @@ export class CitationRevisionTrigger {
     } catch (error) {
       console.error('Olea: citation-revision passage withhold write failed', error);
     }
+  }
+
+  /**
+   * `ol-egov.141.89.5.78` ([D-514] item a, [D-508]): an anchor saved withheld at first sighting
+   * (empty text, the citation's digest, a pending fact with a passage reason) is re-tried by its
+   * stored digest, with the SAME locator first sighting uses. A digest match is identical text, so
+   * a unique match in the cited note, or (when the note holds none) exactly one in another note,
+   * seeds the anchor and clears the fact with no judge call. Ambiguous and unsupported-rule
+   * outcomes keep their reason and the hold. Returns true when the pass settled the instrument
+   * here; false leaves it to the ordinary read (a passage that is still absent stays withheld as
+   * a tracked missing passage does). A non-markdown source never takes this path.
+   */
+  private async retryWithheldFirstSighting(
+    instrumentId: string,
+    previous: CitationAnchorRecord,
+    currentRecord: VaultInstrumentRecord,
+    notes: PassageNotes,
+    rules: readonly PassageRule[],
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<boolean> {
+    const digest = previous.passageDigest;
+    if (
+      digest === undefined ||
+      previous.text !== '' ||
+      !isKnownPassageReason(previous.pendingRevalidation?.reason)
+    ) {
+      return false;
+    }
+    const ownPath = citedPassagePath(currentRecord);
+    if (!isMarkdownVaultPath(ownPath)) return false;
+    try {
+      const own = await locatePassageByDigest(await notes.material(ownPath), digest, rules);
+      if (own.status === 'unique') {
+        await this.deps.store.save(instrumentId, {
+          sourcePath: ownPath,
+          text: own.segment.text,
+          passageDigest: digest,
+          conceptIds: currentRecord.conceptIds,
+        });
+        report.newlyBaselined += 1;
+        return true;
+      }
+      if (own.status !== 'absent') {
+        await this.applyPassageResolution(
+          instrumentId,
+          previous,
+          currentRecord,
+          {
+            kind: 'unresolved',
+            reason: own.status === 'ambiguous' ? 'ambiguous' : 'rule-unsupported',
+          },
+          notes,
+          actions,
+          report,
+        );
+        return true;
+      }
+      // Absent from its own note: the relocation heal, by digest, over every other note.
+      const found: { path: VaultPath; text: string }[] = [];
+      let ambiguous = false;
+      for (const path of await notes.markdownPaths()) {
+        if (path === ownPath) continue;
+        let located: Awaited<ReturnType<typeof locatePassageByDigest>>;
+        try {
+          located = await locatePassageByDigest(await notes.material(path), digest, rules);
+        } catch {
+          continue;
+        }
+        if (located.status === 'unique') found.push({ path, text: located.segment.text });
+        else if (located.status === 'ambiguous') ambiguous = true;
+      }
+      const only = found[0];
+      if (found.length === 1 && only !== undefined && !ambiguous) {
+        const version = parsePassageDigest(digest)?.version;
+        const rule = rules.find((candidate) => candidate.version === version);
+        if (rule !== undefined) {
+          await this.applyPassageResolution(
+            instrumentId,
+            previous,
+            currentRecord,
+            { kind: 'relocated', sourcePath: only.path, text: only.text, rule },
+            notes,
+            actions,
+            report,
+          );
+          return true;
+        }
+      }
+      if (found.length > 1 || ambiguous) {
+        await this.applyPassageResolution(
+          instrumentId,
+          previous,
+          currentRecord,
+          { kind: 'unresolved', reason: 'ambiguous' },
+          notes,
+          actions,
+          report,
+        );
+        return true;
+      }
+    } catch (error) {
+      console.error('Olea: citation-revision withheld-anchor digest retry failed', error);
+    }
+    return false;
   }
 
   private async storeHas(instrumentId: string): Promise<boolean> {
