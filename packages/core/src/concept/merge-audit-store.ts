@@ -46,6 +46,7 @@
 
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecordForWrite, skipUnreadableStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { courseFromPath, DEFAULT_COURSES_FOLDER } from './course.js';
 import { type ConceptKeyRecord, listConceptKeyRecords } from './key-store.js';
@@ -230,14 +231,10 @@ async function findMergeAuditProposalRecordEntry(
   key: string,
 ): Promise<{ readonly path: VaultPath; readonly record: MergeAuditProposalRecord } | undefined> {
   const path = mergeAuditProposalRecordPath(key);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isMergeAuditProposalRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent.
-  }
-  return undefined;
+  // Unreadable is not absent: it throws `UnreadableStoreRecordError`, so nothing is written over a
+  // decision this build cannot read (T12, `ol-egov.141.89.104.2`).
+  const record = await readStoreRecordForWrite(vault, path, isMergeAuditProposalRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 async function findMergeRepairProposalRecordEntry(
@@ -245,14 +242,9 @@ async function findMergeRepairProposalRecordEntry(
   key: string,
 ): Promise<{ readonly path: VaultPath; readonly record: MergeRepairProposalRecord } | undefined> {
   const path = mergeRepairProposalRecordPath(key);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isMergeRepairProposalRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent.
-  }
-  return undefined;
+  // Unreadable is not absent (T12, as above).
+  const record = await readStoreRecordForWrite(vault, path, isMergeRepairProposalRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 export interface ProposeAndPersistMergeAuditsOptions {
@@ -288,31 +280,41 @@ export async function proposeAndPersistMergeAudits(
   const written: MergeAuditProposalRecord[] = [];
   for (const proposal of proposals) {
     const path = mergeAuditProposalRecordPath(proposal.key);
-    const record = await withPathQueue(path, async () => {
-      const existing = await findMergeAuditProposalRecordEntry(vault, proposal.key);
-      if (existing !== undefined) return existing.record;
-      const finding = findings.find((f) => f.key === proposal.key);
-      const sourceRecord = byKey.get(proposal.key);
-      const anchorPaths =
-        finding === undefined || sourceRecord === undefined || sourceRecord.anchor.kind !== 'topic'
-          ? []
-          : [...new Set(sourceRecord.anchor.introducingPaths ?? [])]
-              .filter((p) => courseFromPath(p, coursesFolder) === proposal.anchorCourse)
-              .sort();
+    let record: MergeAuditProposalRecord;
+    try {
+      record = await withPathQueue(path, async () => {
+        const existing = await findMergeAuditProposalRecordEntry(vault, proposal.key);
+        if (existing !== undefined) return existing.record;
+        const finding = findings.find((f) => f.key === proposal.key);
+        const sourceRecord = byKey.get(proposal.key);
+        const anchorPaths =
+          finding === undefined ||
+          sourceRecord === undefined ||
+          sourceRecord.anchor.kind !== 'topic'
+            ? []
+            : [...new Set(sourceRecord.anchor.introducingPaths ?? [])]
+                .filter((p) => courseFromPath(p, coursesFolder) === proposal.anchorCourse)
+                .sort();
 
-      const proposed: MergeAuditProposalRecord = {
-        key: proposal.key,
-        wording: proposal.wording,
-        anchorCourse: proposal.anchorCourse,
-        anchorPaths,
-        misattributedCourses: finding?.misattributedCourses ?? [],
-        status: 'proposed',
-        proposedAt: now(),
-        schemaVersion: MERGE_AUDIT_PROPOSAL_RECORD_SCHEMA_VERSION,
-      };
-      await vault.write(path, serialize(proposed));
-      return proposed;
-    });
+        const proposed: MergeAuditProposalRecord = {
+          key: proposal.key,
+          wording: proposal.wording,
+          anchorCourse: proposal.anchorCourse,
+          anchorPaths,
+          misattributedCourses: finding?.misattributedCourses ?? [],
+          status: 'proposed',
+          proposedAt: now(),
+          schemaVersion: MERGE_AUDIT_PROPOSAL_RECORD_SCHEMA_VERSION,
+        };
+        await vault.write(path, serialize(proposed));
+        return proposed;
+      });
+    } catch (error) {
+      // A key whose record cannot be read is left exactly as it is and skipped (T12); the rest
+      // of the batch is still proposed.
+      skipUnreadableStoreRecord(error);
+      continue;
+    }
     written.push(record);
   }
   return written;

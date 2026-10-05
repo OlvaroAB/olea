@@ -62,7 +62,11 @@
 
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
-import { readStoreRecord } from '../vault/store-record.js';
+import {
+  readStoreRecord,
+  readStoreRecordForWrite,
+  skipUnreadableStoreRecord,
+} from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import {
   type ConceptKeyCanonicalIndex,
@@ -202,14 +206,11 @@ async function findLink(
   keyB: string,
 ): Promise<{ readonly path: VaultPath; readonly record: SameAsLinkRecord } | undefined> {
   const path = sameAsLinkRecordPath(keyA, keyB);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isSameAsLinkRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent, matching `listSameAsLinkRecords`'s posture.
-  }
-  return undefined;
+  // A file that does not read as a link (torn, or a newer build's status) throws
+  // `UnreadableStoreRecordError` rather than reading as absent, so no transition and no proposal
+  // is ever written over it (T12, `ol-egov.141.89.104.2`): it may hold her decision.
+  const record = await readStoreRecordForWrite(vault, path, isSameAsLinkRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 /**
@@ -440,12 +441,18 @@ export async function proposeSameAsFromMintCollisions(
       const pair = JSON.stringify(canonicalPair(ownKey, otherKey));
       if (proposedPairs.has(pair)) continue;
       proposedPairs.add(pair);
-      proposed.push(
-        await proposeSameAsLink(vault, ownKey, otherKey, {
-          canonicalKeys,
-          ...(options.now !== undefined ? { now: options.now } : {}),
-        }),
-      );
+      try {
+        proposed.push(
+          await proposeSameAsLink(vault, ownKey, otherKey, {
+            canonicalKeys,
+            ...(options.now !== undefined ? { now: options.now } : {}),
+          }),
+        );
+      } catch (error) {
+        // A pair whose record cannot be read is left exactly as it is and skipped (T12); the
+        // rest of the batch is still proposed.
+        skipUnreadableStoreRecord(error);
+      }
     }
   }
   return proposed;

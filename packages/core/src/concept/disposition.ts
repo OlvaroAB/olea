@@ -62,6 +62,7 @@
 
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecordForWrite } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { ConceptKeyCanonicalIndex } from './key-store.js';
 import type { RelationType } from './relation.js';
@@ -135,19 +136,21 @@ export async function listEdgeDispositionLogs(
   return out;
 }
 
+/**
+ * The log an append extends. A file that does not read as a log (torn, or a newer build's event
+ * kind) throws `UnreadableStoreRecordError` instead of reading as absent: a decline in it is a
+ * hard labelled negative, and a fresh one-event log written over it would erase it (T12,
+ * `ol-egov.141.89.104.2`). Its bytes are left as they are.
+ */
 async function readLog(
   vault: VaultSource,
   propositionKeyValue: string,
 ): Promise<EdgeDispositionLog | undefined> {
-  const path = edgeDispositionLogPath(propositionKeyValue);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isEdgeDispositionLog(parsed)) return parsed;
-  } catch {
-    // Corrupt: treated as absent.
-  }
-  return undefined;
+  return readStoreRecordForWrite(
+    vault,
+    edgeDispositionLogPath(propositionKeyValue),
+    isEdgeDispositionLog,
+  );
 }
 
 function defaultNow(): string {

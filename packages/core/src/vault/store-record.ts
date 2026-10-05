@@ -33,3 +33,52 @@ export async function readStoreRecord<T>(
   }
   return isRecord(parsed) ? { kind: 'record', record: parsed } : { kind: 'unreadable' };
 }
+
+/**
+ * A store refused to write over a record file that does not read as a record (T12,
+ * `ol-egov.141.89.104.2`). The file is left byte-identical; nothing is set aside, because a copy
+ * would be a new file family under `.olea/`. `path` says which file; the message names only its
+ * folder, so a caller may log it without logging a key.
+ */
+export class UnreadableStoreRecordError extends Error {
+  readonly path: VaultPath;
+  readonly folder: VaultPath;
+
+  constructor(path: VaultPath, cause?: unknown) {
+    const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+    super(
+      `A record in ${folder} could not be read, so it was left exactly as it is and nothing was written over it.`,
+      cause === undefined ? undefined : { cause },
+    );
+    this.name = 'UnreadableStoreRecordError';
+    this.path = path;
+    this.folder = folder;
+  }
+}
+
+/**
+ * For a write that may replace an authoritative record: the record at `path`, `undefined` when
+ * there is no file, and an `UnreadableStoreRecordError` — never `undefined` — when a file is there
+ * that does not read as a record, so the caller cannot mistake it for absent and write over it.
+ */
+export async function readStoreRecordForWrite<T>(
+  vault: VaultSource,
+  path: VaultPath,
+  isRecord: (value: unknown) => value is T,
+): Promise<T | undefined> {
+  const read = await readStoreRecord(vault, path, isRecord);
+  if (read.kind === 'unreadable') throw new UnreadableStoreRecordError(path, read.cause);
+  return read.kind === 'record' ? read.record : undefined;
+}
+
+/**
+ * How a batch reports a record it skipped because it could not read it: a warning naming the
+ * folder only (D-005: never a key, a path segment or any content). Rethrows anything else.
+ */
+export function skipUnreadableStoreRecord(error: unknown): void {
+  if (!(error instanceof UnreadableStoreRecordError)) throw error;
+  console.warn(
+    'Olea: a stored record could not be read; it was left exactly as it is and skipped.',
+    { folder: error.folder },
+  );
+}

@@ -59,6 +59,7 @@ import {
 } from '../concept/key-store.js';
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecordForWrite } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/same-as/` and `.olea/outcomes/` — its own folder, never a subfolder of either. */
@@ -158,14 +159,11 @@ async function findNearMatch(
   { readonly path: VaultPath; readonly record: OutcomeConceptNearMatchRecord } | undefined
 > {
   const path = outcomeConceptNearMatchRecordPath(outcomeId, conceptKey);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isOutcomeConceptNearMatchRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent, matching `listOutcomeConceptNearMatchRecords`'s posture.
-  }
-  return undefined;
+  // A file that does not read as a record throws `UnreadableStoreRecordError` rather than reading
+  // as absent, so nothing is written over a decision this build cannot read (T12,
+  // `ol-egov.141.89.104.2`).
+  const record = await readStoreRecordForWrite(vault, path, isOutcomeConceptNearMatchRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 function defaultNow(): string {
