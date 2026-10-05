@@ -95,6 +95,8 @@ async function seedOpenMisconception(
       originInstrumentId: 'inst-origin',
       originReviewEventId: null,
       timestamp: NOW.toISOString(),
+      // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused.
+      statementAuthorship: 'hers',
     },
     { candidates: [] },
   );

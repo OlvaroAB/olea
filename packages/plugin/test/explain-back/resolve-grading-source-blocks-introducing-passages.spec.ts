@@ -246,7 +246,7 @@ describe("the SOLO denominator effect (this bead's acceptance criteria): decided
     const end = modal.indexOf('private async resolveTopicPrompt(');
     const b = modal.slice(start, end);
     expect(b).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
     );
   });
 });

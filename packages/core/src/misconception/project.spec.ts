@@ -197,14 +197,49 @@ describe('projectMisconceptions — resolution folding (M2)', () => {
     expect(record?.status).toBe('fading');
   });
 
-  it('a second resolution-evidence event downgrades fading -> resolved', () => {
+  it('a second piece of explanation evidence downgrades fading -> resolved', () => {
     const events = [
       observed({ eventId: 'e1' }),
-      resolutionEvidence({ eventId: 'e2', timestamp: '2026-08-16T10:00:00-04:00' }),
-      resolutionEvidence({ eventId: 'e3', timestamp: '2026-08-16T11:00:00-04:00' }),
+      resolutionEvidence({
+        eventId: 'e2',
+        timestamp: '2026-08-16T10:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
+      resolutionEvidence({
+        eventId: 'e3',
+        timestamp: '2026-08-16T11:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
     ];
     const [record] = projectMisconceptions(events);
     expect(record?.status).toBe('resolved');
+  });
+
+  it('recall evidence fades a misconception but never resolves it ([D-485]); explanation then resolves it', () => {
+    const recall = (eventId: string, timestamp: string) =>
+      resolutionEvidence({ eventId, timestamp, evidenceKind: 'recall' });
+    const first = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+    ]);
+    expect(first[0]?.status).toBe('fading');
+    const second = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+      recall('e3', '2026-08-16T11:00:00-04:00'),
+    ]);
+    expect(second[0]?.status).toBe('fading');
+    const then = projectMisconceptions([
+      observed({ eventId: 'e1' }),
+      recall('e2', '2026-08-16T10:00:00-04:00'),
+      recall('e3', '2026-08-16T11:00:00-04:00'),
+      resolutionEvidence({
+        eventId: 'e4',
+        timestamp: '2026-08-16T12:00:00-04:00',
+        evidenceKind: 'explanation',
+      }),
+    ]);
+    expect(then[0]?.status).toBe('resolved');
   });
 
   it('resolution-evidence on a resolved record is a no-op, not an error', () => {
@@ -258,6 +293,37 @@ describe('projectMisconceptions — resolution folding (M2)', () => {
     ]);
     expect(recall[0]?.status).toBe('fading');
   });
+});
+
+describe('projectMisconceptions — same-attempt order ([D-485] part 1, ol-egov.141.89.6.90)', () => {
+  const T = '2026-08-16T12:00:00-04:00';
+  // Event ids crafted so observation-first and resolution-first id orders both occur.
+  const idOrders = [
+    { name: 'observation id sorts first', obsId: 'a-obs', evId: 'b-ev' },
+    { name: 'resolution id sorts first', obsId: 'b-obs', evId: 'a-ev' },
+  ];
+
+  for (const { name, obsId, evId } of idOrders) {
+    it(`a correct explanation that surfaces a new misconception leaves it active (${name})`, () => {
+      const records = projectMisconceptions([
+        observed({ eventId: 'e-old', misconceptionId: 'm-old' }),
+        observed({ eventId: obsId, misconceptionId: 'm-new', timestamp: T }),
+        resolutionEvidence({ eventId: evId, timestamp: T }),
+      ]);
+      expect(records.find((r) => r.id === 'm-new')?.status).toBe('active');
+      expect(records.find((r) => r.id === 'm-old')?.status).toBe('fading');
+    });
+
+    it(`a correct explanation that re-observes a fading record leaves it active (${name})`, () => {
+      const records = projectMisconceptions([
+        observed({ eventId: 'e-old', misconceptionId: 'm-1' }),
+        resolutionEvidence({ eventId: 'e-prior', timestamp: '2026-08-16T10:00:00-04:00' }),
+        observed({ eventId: obsId, misconceptionId: 'm-1', timestamp: T }),
+        resolutionEvidence({ eventId: evId, timestamp: T }),
+      ]);
+      expect(records.find((r) => r.id === 'm-1')?.status).toBe('active');
+    });
+  }
 });
 
 describe('projectMisconceptions — idempotency on replay', () => {

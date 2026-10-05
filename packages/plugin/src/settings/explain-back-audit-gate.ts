@@ -60,6 +60,7 @@
  * student-visible string.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import type { ObsidianDataHost } from '../worker/config-store.js';
 
 export const EXPLAIN_BACK_AUDIT_GATE_HEADING = 'Explaining back is paused';
@@ -116,13 +117,20 @@ export class ObsidianExplainBackAuditGateStore {
    * under sibling keys in one `data.json` blob and none may clobber another.
    */
   async setSustainedFailure(value: boolean): Promise<void> {
-    const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const gate: PersistedExplainBackAuditGate = { version: 1, sustainedFailure: value };
-    blob[EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY] = gate;
-    await this.host.saveData(blob);
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const gate: PersistedExplainBackAuditGate = { version: 1, sustainedFailure: value };
+      blob[EXPLAIN_BACK_AUDIT_GATE_STORAGE_KEY] = gate;
+      return blob;
+    };
+    // One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`).
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    await this.host.saveData(merge(await this.host.loadData()));
   }
 }

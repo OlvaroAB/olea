@@ -109,6 +109,8 @@ export interface ExplainBackPromptContext {
   readonly referenceAnswer: GradeExplainBackInput['referenceAnswer'];
   readonly sourceBlocks: GradeExplainBackInput['sourceBlocks'];
   readonly misconceptionDigest: GradeExplainBackInput['misconceptionDigest'];
+  /** `[D-482]` item 4: the concept ids the judge may bind a misconception to; absent reads as empty (free topic). */
+  readonly permittedConceptIds?: GradeExplainBackInput['permittedConceptIds'];
 }
 
 /**
@@ -136,5 +138,6 @@ export function buildGradeExplainBackInputFromTranscript(
     referenceAnswer: context.referenceAnswer,
     sourceBlocks: context.sourceBlocks,
     misconceptionDigest: context.misconceptionDigest,
+    permittedConceptIds: context.permittedConceptIds ?? [],
   };
 }

@@ -53,9 +53,20 @@
  * (`confirmSameAsLink`, `declineSameAsLink`, `severSameAsLink`) still address one record by the
  * keys it was written with, and nothing here rewrites a record's keys. A shared introducing passage
  * alone never makes two concepts one identity, so it never joins two links either.
+ *
+ * **One writer per record file at a time (`ol-egov.141.89.104.2`).** Every transition reads and
+ * writes its record as one task on that file's queue (`../vault/path-queue.ts`), so a confirm and
+ * a decline that overlap on one install are applied in the order they were made, each to the
+ * record the other left — never to a stale copy.
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import {
+  readStoreRecord,
+  readStoreRecordForWrite,
+  skipUnreadableStoreRecord,
+} from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import {
   type ConceptKeyCanonicalIndex,
@@ -195,14 +206,11 @@ async function findLink(
   keyB: string,
 ): Promise<{ readonly path: VaultPath; readonly record: SameAsLinkRecord } | undefined> {
   const path = sameAsLinkRecordPath(keyA, keyB);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isSameAsLinkRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent, matching `listSameAsLinkRecords`'s posture.
-  }
-  return undefined;
+  // A file that does not read as a link (torn, or a newer build's status) throws
+  // `UnreadableStoreRecordError` rather than reading as absent, so no transition and no proposal
+  // is ever written over it (T12, `ol-egov.141.89.104.2`): it may hold her decision.
+  const record = await readStoreRecordForWrite(vault, path, isSameAsLinkRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 /**
@@ -280,6 +288,12 @@ export interface ProposeSameAsLinkOptions {
  * not re-proposed under another. A brand-new record carries the keys as given; a caller proposing
  * from the concept store resolves them first (`packages/plugin/src/concept/wiring.ts`'s
  * `proposeSameAsForMovedNoteAnchors`).
+ *
+ * **One queue per record file (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`).** The look-up
+ * and the write run as one task on this pair's record file. When the decision sits in another
+ * file (a duplicate key's record, above), this pair's queue is released first and the decision is
+ * re-read and settled on that file's own queue — never both at once, so no two proposals can wait
+ * on each other.
  */
 export async function proposeSameAsLink(
   vault: VaultSource,
@@ -288,46 +302,83 @@ export async function proposeSameAsLink(
   options: ProposeSameAsLinkOptions = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
-  const existing =
-    (await findLink(vault, keyA, keyB)) ??
-    (await findLinkForIdentityPair(
-      vault,
-      keyA,
-      keyB,
-      options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
-    ));
-  if (existing !== undefined) {
-    if (
-      existing.record.status === 'declined' &&
-      options.evidenceFingerprint !== undefined &&
-      options.evidenceFingerprint !== existing.record.evidenceFingerprint
-    ) {
-      const reproposed: SameAsLinkRecord = {
-        ...existing.record,
-        status: 'proposed',
-        proposedAt: now(),
-        evidenceFingerprint: options.evidenceFingerprint,
-      };
-      await vault.write(existing.path, serialize(reproposed));
-      return reproposed;
-    }
-    return existing.record;
-  }
+  const path = sameAsLinkRecordPath(keyA, keyB);
+  const outcome = await withPathQueue(
+    path,
+    async (): Promise<
+      | { readonly settled: SameAsLinkRecord }
+      | { readonly elsewhere: { readonly path: VaultPath; readonly record: SameAsLinkRecord } }
+    > => {
+      const exact = await findLink(vault, keyA, keyB);
+      if (exact !== undefined) {
+        return { settled: await settleExistingDecision(vault, exact, options, now) };
+      }
+      const byIdentity = await findLinkForIdentityPair(
+        vault,
+        keyA,
+        keyB,
+        options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
+      );
+      if (byIdentity !== undefined) return { elsewhere: byIdentity };
 
-  const [a, b] = canonicalPair(keyA, keyB);
-  const record: SameAsLinkRecord = {
-    keyA: a,
-    keyB: b,
-    status: 'proposed',
-    reason: options.reason ?? 'normalisation-collision',
-    proposedAt: now(),
-    schemaVersion: SAME_AS_LINK_RECORD_SCHEMA_VERSION,
-    ...(options.evidenceFingerprint !== undefined
-      ? { evidenceFingerprint: options.evidenceFingerprint }
-      : {}),
-  };
-  await vault.write(sameAsLinkRecordPath(keyA, keyB), serialize(record));
-  return record;
+      const [a, b] = canonicalPair(keyA, keyB);
+      const record: SameAsLinkRecord = {
+        keyA: a,
+        keyB: b,
+        status: 'proposed',
+        reason: options.reason ?? 'normalisation-collision',
+        proposedAt: now(),
+        schemaVersion: SAME_AS_LINK_RECORD_SCHEMA_VERSION,
+        ...(options.evidenceFingerprint !== undefined
+          ? { evidenceFingerprint: options.evidenceFingerprint }
+          : {}),
+      };
+      await vault.write(path, serialize(record));
+      return { settled: record };
+    },
+  );
+  if ('settled' in outcome) return outcome.settled;
+
+  const { elsewhere } = outcome;
+  return withPathQueue(elsewhere.path, async () => {
+    const fresh = await readStoreRecord(vault, elsewhere.path, isSameAsLinkRecord);
+    // Gone or no longer readable since the listing: nothing is written over it.
+    if (fresh.kind !== 'record') return elsewhere.record;
+    return settleExistingDecision(
+      vault,
+      { path: elsewhere.path, record: fresh.record },
+      options,
+      now,
+    );
+  });
+}
+
+/**
+ * `proposeSameAsLink`'s rule for a pair that already has a record: a `'declined'` record whose
+ * evidence changed goes back to `'proposed'`; every other record is returned unchanged. Runs on the
+ * record file's queue.
+ */
+async function settleExistingDecision(
+  vault: VaultSource,
+  existing: { readonly path: VaultPath; readonly record: SameAsLinkRecord },
+  options: ProposeSameAsLinkOptions,
+  now: () => string,
+): Promise<SameAsLinkRecord> {
+  if (
+    existing.record.status === 'declined' &&
+    options.evidenceFingerprint !== undefined &&
+    options.evidenceFingerprint !== existing.record.evidenceFingerprint
+  ) {
+    const reproposed: SameAsLinkRecord = {
+      ...existing.record,
+      status: 'proposed',
+      proposedAt: now(),
+      evidenceFingerprint: options.evidenceFingerprint,
+    };
+    await vault.write(existing.path, serialize(reproposed));
+    return reproposed;
+  }
+  return existing.record;
 }
 
 /**
@@ -390,12 +441,18 @@ export async function proposeSameAsFromMintCollisions(
       const pair = JSON.stringify(canonicalPair(ownKey, otherKey));
       if (proposedPairs.has(pair)) continue;
       proposedPairs.add(pair);
-      proposed.push(
-        await proposeSameAsLink(vault, ownKey, otherKey, {
-          canonicalKeys,
-          ...(options.now !== undefined ? { now: options.now } : {}),
-        }),
-      );
+      try {
+        proposed.push(
+          await proposeSameAsLink(vault, ownKey, otherKey, {
+            canonicalKeys,
+            ...(options.now !== undefined ? { now: options.now } : {}),
+          }),
+        );
+      } catch (error) {
+        // A pair whose record cannot be read is left exactly as it is and skipped (T12); the
+        // rest of the batch is still proposed.
+        skipUnreadableStoreRecord(error);
+      }
     }
   }
   return proposed;
@@ -552,6 +609,18 @@ export async function confirmSameAsLink(
   options: { readonly now?: () => string; readonly canonicalKeys?: ConceptKeyCanonicalIndex } = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
+  return withPathQueue(sameAsLinkRecordPath(keyA, keyB), () =>
+    confirmUnderQueue(vault, keyA, keyB, options, now),
+  );
+}
+
+async function confirmUnderQueue(
+  vault: VaultSource,
+  keyA: string,
+  keyB: string,
+  options: { readonly canonicalKeys?: ConceptKeyCanonicalIndex },
+  now: () => string,
+): Promise<SameAsLinkRecord> {
   const existing = await findLink(vault, keyA, keyB);
   if (existing === undefined) {
     throw new Error(
@@ -604,6 +673,17 @@ export async function declineSameAsLink(
   options: { readonly now?: () => string } = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
+  return withPathQueue(sameAsLinkRecordPath(keyA, keyB), () =>
+    declineUnderQueue(vault, keyA, keyB, now),
+  );
+}
+
+async function declineUnderQueue(
+  vault: VaultSource,
+  keyA: string,
+  keyB: string,
+  now: () => string,
+): Promise<SameAsLinkRecord> {
   const existing = await findLink(vault, keyA, keyB);
   if (existing === undefined) {
     throw new Error(
@@ -648,13 +728,15 @@ export async function severSameAsLink(
   options: { readonly now?: () => string } = {},
 ): Promise<SameAsLinkRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findLink(vault, keyA, keyB);
-  if (existing === undefined || existing.record.status !== 'confirmed') {
-    throw new Error('severSameAsLink: no confirmed same-as link for this pair to sever.');
-  }
-  const severed: SameAsLinkRecord = { ...existing.record, status: 'severed', severedAt: now() };
-  await vault.write(existing.path, serialize(severed));
-  return severed;
+  return withPathQueue(sameAsLinkRecordPath(keyA, keyB), async () => {
+    const existing = await findLink(vault, keyA, keyB);
+    if (existing === undefined || existing.record.status !== 'confirmed') {
+      throw new Error('severSameAsLink: no confirmed same-as link for this pair to sever.');
+    }
+    const severed: SameAsLinkRecord = { ...existing.record, status: 'severed', severedAt: now() };
+    await vault.write(existing.path, serialize(severed));
+    return severed;
+  });
 }
 
 /** Re-exported for callers composing a same-as-aware relation cache write without a second import — see `./relation-wiring.ts` (plugin). */

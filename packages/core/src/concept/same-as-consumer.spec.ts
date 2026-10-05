@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import type { DeclaredMadeBy } from '../source/materiality.js';
+import { reconcileCorpusVerdicts } from './corpus-relations/verdict.js';
 import type { RelationCacheAttestation, RelationCacheRecord } from './relation-cache.js';
 import { propositionKey } from './relation-cache.js';
 import type { SameAsLinkRecord } from './same-as.js';
@@ -260,5 +262,72 @@ describe('resolveRelationCacheRecordsWithSameAsLinks — read-time endpoint reso
     const [resolved] = resolveRelationCacheRecordsWithSameAsLinks([record], [declinedLink()]);
     expect(resolved).toBe(record);
     expect(resolved?.fromKey).toBe('key-b');
+  });
+});
+
+// `[D-490]` (`ol-egov.141.89.4.31`, IMPACT.md row 4): the same-as fold's ordering follows the
+// provenance the corpus stage stamped before the edge was cached, and that stamp follows her
+// `made-by` declaration on the linking note. The stamp is taken from the real stage
+// (`./corpus-relations/verdict.ts`), never restated here.
+describe('resolveRelationCacheRecordsWithSameAsLinks — ordering follows her made-by declaration ([D-490])', () => {
+  function stampedForLink(
+    madeBy: DeclaredMadeBy | undefined,
+  ): RelationCacheAttestation['provenance'] {
+    const anchorOf = (sourcePath: string) => ({ sourcePath, location: { page: 1 } });
+    const [edge] = reconcileCorpusVerdicts(
+      [{ a: 'Cell', b: 'Mitosis', type: 'prerequisite', direction: 'a-to-b', confidence: 0.3 }],
+      [
+        {
+          a: { name: 'Cell', aliases: [], anchor: anchorOf('A.md') },
+          b: { name: 'Mitosis', aliases: [], anchor: anchorOf('B.md') },
+          signals: ['her-link'],
+        },
+      ],
+      undefined,
+      () => [madeBy],
+    ).relations;
+    if (edge === undefined) throw new Error('the corpus stage emitted no edge for the fixture');
+    return edge.provenance;
+  }
+
+  function foldWithLinkedRecord(madeBy: DeclaredMadeBy | undefined) {
+    const proposedRecord = cacheRecord({
+      fromKey: 'key-a',
+      toKey: 'key-z',
+      attestations: [attestation({ provenance: 'model-proposed', confidence: 0.9 })],
+    });
+    const linkedRecord = cacheRecord({
+      fromKey: 'key-b', // resolves to key-a through link(): the same proposition once folded.
+      toKey: 'key-z',
+      attestations: [
+        attestation({ provenance: stampedForLink(madeBy), confidence: 0.3, fromName: 'cells' }),
+      ],
+    });
+    const resolved = resolveRelationCacheRecordsWithSameAsLinks(
+      [proposedRecord, linkedRecord],
+      [link()],
+    );
+    expect(resolved).toHaveLength(1);
+    return resolved[0]?.attestations ?? [];
+  }
+
+  it('declared `made-by: me`: the linked attestation takes the top slot over a more confident proposal', () => {
+    const [top] = foldWithLinkedRecord('me');
+    expect(top?.provenance).toBe('hers');
+    expect(top?.confidence).toBe(0.3);
+  });
+
+  it('declared `made-by: assistant`: no rank lift, the more confident proposal takes the top slot', () => {
+    const attestations = foldWithLinkedRecord('assistant');
+    expect(attestations.map((a) => [a.provenance, a.confidence])).toEqual([
+      ['model-proposed', 0.9],
+      ['model-proposed', 0.3],
+    ]);
+  });
+
+  it('undeclared: unchanged, the linked attestation still takes the top slot', () => {
+    const [top] = foldWithLinkedRecord(undefined);
+    expect(top?.provenance).toBe('hers');
+    expect(top?.confidence).toBe(0.3);
   });
 });

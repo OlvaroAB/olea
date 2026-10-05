@@ -101,6 +101,7 @@ import {
   runCorpusRelationBatch,
   type SameAsLinkRecord,
   shouldRunCorpusRelationBatch,
+  skipUnreadableStoreRecord,
   type TeachingEventResolver,
   type VaultPath,
   type VaultSource,
@@ -450,7 +451,13 @@ export async function proposeSameAsForMovedNoteAnchors(
       const pair = JSON.stringify([orphanKey, candidateKey].sort());
       if (proposedPairs.has(pair)) continue;
       proposedPairs.add(pair);
-      proposed.push(await proposeSameAsLink(vault, orphanKey, candidateKey, { canonicalKeys }));
+      try {
+        proposed.push(await proposeSameAsLink(vault, orphanKey, candidateKey, { canonicalKeys }));
+      } catch (error) {
+        // `ol-egov.141.89.104.2` (T12): a pair whose record cannot be read is left as it is and
+        // skipped, so the rest of the tick still runs.
+        skipUnreadableStoreRecord(error);
+      }
     }
   }
   return proposed;

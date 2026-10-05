@@ -178,7 +178,7 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
       /const resolvedGrading = await resolveGradingSourceBlocks\(\s*this\.deps,\s*subjectConceptId,\s*sourceBlocks,\s*\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
     );
     expect(body).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
     );
     // `ol-0r92.104` [DOS-I9] added `conceptIds` to this construction (a
     // non-attempt record's own field, D7.1); `ol-egov.141.89.6.50` added
@@ -204,6 +204,8 @@ describe('explain-back/modal.ts: resolveGradingSourceBlocks threads the resolved
     expect(body).toMatch(
       /const resolvedGrading = await resolveGradingSourceBlocks\(this\.deps, null, sourceBlocks\);\s*const gradingSourceBlocks = resolvedGrading\.sourceBlocks;/,
     );
-    expect(body).toMatch(/buildExplainBackPromptContextFromTopic\(topic, gradingSourceBlocks\);/);
+    expect(body).toMatch(
+      /buildExplainBackPromptContextFromTopic\(\s*topic,\s*gradingSourceBlocks,\s*\[\],\s*permittedConceptIdsFor\(subjectConceptId\),?\s*\);/,
+    );
   });
 });

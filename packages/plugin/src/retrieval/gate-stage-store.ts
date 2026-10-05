@@ -174,11 +174,20 @@ export class ObsidianGateStageStore {
 
   /** Deliberate developer action only (see module doc) — never called from production wiring. */
   async clear(): Promise<void> {
+    const remove = (existing: unknown): unknown => {
+      if (typeof existing !== 'object' || existing === null) return existing;
+      const blob = { ...(existing as Record<string, unknown>) };
+      delete blob[GATE_STAGE_STORAGE_KEY];
+      return blob;
+    };
+    // One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`).
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(remove);
+      return;
+    }
     const existing = await this.host.loadData().catch(() => null);
     if (typeof existing !== 'object' || existing === null) return;
-    const blob = { ...(existing as Record<string, unknown>) };
-    delete blob[GATE_STAGE_STORAGE_KEY];
-    await this.host.saveData(blob);
+    await this.host.saveData(remove(existing));
   }
 }
 

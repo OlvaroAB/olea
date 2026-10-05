@@ -139,6 +139,7 @@ import type { EmbeddedInNote, Provenance, SourceFormat } from '../extract/types.
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readList } from '../frontmatter/read.js';
 import { hashContent } from '../ingestion/hash.js';
+import { evidenceRawOfBlock, generatedSpans } from '../keyword-index/evidence-scope.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { conceptIdentityNormalizationIndex, provisionalConceptKey } from './concept-key.js';
 import { DEFAULT_COURSES_FOLDER, notePathCourses } from './course.js';
@@ -932,12 +933,18 @@ export async function gatherPassages(
     const course = courses.length === 1 ? courses[0] : undefined;
     const sections = sectionsByBlockIndex(doc);
 
+    // [D-491]: Olea's own instruments and home-note scaffolding are never course evidence. A block
+    // they reach is read as her remaining text (its charRange still the whole block's, so the
+    // anchor stays a real location in the note), or skipped when none of it is hers.
+    const generated = generatedSpans(content, doc);
     doc.blocks.forEach((block, index) => {
       if (block.kind === 'frontmatter' || block.kind === 'blank') return;
       if (block.raw.trim() === '') return;
+      const kept = evidenceRawOfBlock(block, content, generated);
+      if (kept === null || kept.trim() === '') return;
       const section = sections.get(index);
       passages.push({
-        text: block.raw,
+        text: kept,
         anchor: {
           sourcePath: path,
           // Markdown has no pages; page 1 is the whole-document convention

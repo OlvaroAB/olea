@@ -689,7 +689,7 @@ describe('accept-time staleness is a direct per-block fingerprint check, not a f
 
   it('no longer re-retrieves the source blocks against the frozen query', () => {
     expect(main).toMatch(
-      /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
+      /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly permittedConceptIds\?:\s*readonly string\[\];\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
     );
     expect(main).not.toMatch(/composeExplainBackSourceBlocks\(params\.query\)/);
     expect(main).not.toMatch(/hasExplainBackSourceRevisionChanged/);

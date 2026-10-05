@@ -53,6 +53,7 @@ import { INGESTION_QUEUE_STORAGE_KEY } from '../ingestion/queue-store.js';
 import { KEYWORD_INDEX_STORAGE_KEY } from '../keyword-index/store.js';
 import { STUDY_PLAN_STORAGE_KEY } from '../plan/store.js';
 import { EMBEDDING_CACHE_STORAGE_KEY } from '../retrieval/embedding-cache-store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import { deleteVaultPath, type ObsidianDataHost } from './types.js';
 
 /**
@@ -80,20 +81,25 @@ export interface CachePurgeDeps {
 }
 
 export async function purgeCache(deps: CachePurgeDeps): Promise<CachePurgeResult> {
-  const existing = await deps.dataHost.loadData();
-  const blob: Record<string, unknown> =
-    typeof existing === 'object' && existing !== null
-      ? { ...(existing as Record<string, unknown>) }
-      : {};
-
-  const clearedDataJsonKeys: string[] = [];
-  for (const key of CACHE_DATA_JSON_KEYS) {
-    if (key in blob) {
-      delete blob[key];
-      clearedDataJsonKeys.push(key);
+  let clearedDataJsonKeys: string[] = [];
+  const clear = (existing: unknown): Record<string, unknown> => {
+    const blob: Record<string, unknown> =
+      typeof existing === 'object' && existing !== null
+        ? { ...(existing as Record<string, unknown>) }
+        : {};
+    clearedDataJsonKeys = [];
+    for (const key of CACHE_DATA_JSON_KEYS) {
+      if (key in blob) {
+        delete blob[key];
+        clearedDataJsonKeys.push(key);
+      }
     }
-  }
-  await deps.dataHost.saveData(blob);
+    return blob;
+  };
+  // One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`), so a
+  // store writing its own key meanwhile is not discarded by this save.
+  if (hasReadModifyWrite(deps.dataHost)) await deps.dataHost.readModifyWrite(clear);
+  else await deps.dataHost.saveData(clear(await deps.dataHost.loadData()));
 
   const draftStore = createVaultDraftCacheStore(deps.vault);
   const drafts = await draftStore.list();

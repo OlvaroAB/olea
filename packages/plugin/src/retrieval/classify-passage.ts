@@ -47,6 +47,7 @@ import {
   attributeTranscript,
   classifyMateriality,
   formatFromExtension,
+  parseMadeBy,
   type SourceRole,
   type TranscriptSpeaker,
   type VaultPath,
@@ -60,7 +61,7 @@ import type { DraftQuizCardsDeps } from './draft-quiz-cards.js';
  * `main.ts` supplies `(path) => this.app.metadataCache.getCache(path)?.frontmatter`.
  */
 export interface FrontmatterRoleHost {
-  /** Raw frontmatter for `path`, or `undefined` when nothing is cached for it (never yet indexed, or genuinely no frontmatter). Reads exactly one key (`role`) out of whatever is returned. */
+  /** Raw frontmatter for `path`, or `undefined` when nothing is cached for it (never yet indexed, or genuinely no frontmatter). Reads two keys (`role`, `made-by`) out of whatever is returned. */
   frontmatterFor(path: VaultPath): Record<string, unknown> | undefined;
 }
 
@@ -103,6 +104,14 @@ function roleFromFrontmatter(
 }
 
 /**
+ * Her `made-by` declaration ([D-490]), read from the same cached frontmatter as `role`. An invalid
+ * value is ignored, so the note reads as undeclared. Olea never writes this key.
+ */
+function madeByFromFrontmatter(frontmatter: Record<string, unknown> | undefined) {
+  return parseMadeBy(frontmatter?.['made-by']);
+}
+
+/**
  * The speaker of one transcript chunk. A part carries no speaker label (parts are document-grain),
  * so attribution gives `unknown-speaker`, which `classifyMateriality` reads as instructor-curated and
  * not hers; a student or question label would give `student-or-question`, unknown authorship. In no
@@ -132,6 +141,7 @@ export function buildClassifyPassageHook(
     const format = formatFromExtension(chunk.path);
     const frontmatter = deps.frontmatterHost.frontmatterFor(chunk.path);
     const declaredRole = roleFromFrontmatter(frontmatter);
+    const declaredMadeBy = madeByFromFrontmatter(frontmatter);
     const transcriptSpeaker = isSuppliedTranscriptPath(chunk.path, deps.frontmatterHost)
       ? speakerOfTranscriptChunk(chunk.text)
       : undefined;
@@ -143,6 +153,7 @@ export function buildClassifyPassageHook(
       // assign `undefined` to it, same discipline `main.ts`'s own
       // `draftQuizCardsDeps()` already uses for its optional `keywordIndex`.
       ...(declaredRole === undefined ? {} : { declaredRole }),
+      ...(declaredMadeBy === undefined ? {} : { declaredMadeBy }),
       text: chunk.text,
     });
     return classified.fact;

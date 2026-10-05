@@ -63,6 +63,12 @@ export interface IndexedDocument {
    * (e.g. C2.3 embeddings, keyed by content hash) doesn't have to re-hash.
    */
   readonly contentHash: string;
+  /**
+   * [D-491]: `1` on every document indexed with Olea's own instruments and home-note scaffolding
+   * excluded (`evidence-scope.ts`). A document persisted before the exclusion lacks it, and
+   * `KeywordIndexEngine.create` discards such a cache so it is rebuilt (D-006: the index is a cache).
+   */
+  readonly evidenceScope?: 1;
   readonly blocks: readonly IndexedBlock[];
 }
 

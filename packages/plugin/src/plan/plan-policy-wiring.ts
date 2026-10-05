@@ -51,6 +51,7 @@
  * propagates as `undefined`, unchanged from before.
  */
 
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from '../worker/config-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { planPolicyFingerprint, planPolicyFingerprintChanged } from './plan-policy-fingerprint.js';
@@ -104,10 +105,18 @@ export class ObsidianPlanPolicyCacheStore {
     return isPersistedPlanPolicyCache(candidate) ? candidate : null;
   }
 
+  /** One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`). */
   async save(entry: PersistedPlanPolicyCache): Promise<void> {
-    const data = await this.host.loadData();
-    const base = typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
-    await this.host.saveData({ ...base, [PLAN_POLICY_CACHE_STORAGE_KEY]: entry });
+    const merge = (data: unknown): Record<string, unknown> => {
+      const base =
+        typeof data === 'object' && data !== null ? (data as Record<string, unknown>) : {};
+      return { ...base, [PLAN_POLICY_CACHE_STORAGE_KEY]: entry };
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    await this.host.saveData(merge(await this.host.loadData()));
   }
 }
 

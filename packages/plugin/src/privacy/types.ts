@@ -26,6 +26,7 @@
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
+import { withPathQueue } from 'olea-core';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this feature needs. */
 export interface ObsidianDataHost {
@@ -43,12 +44,19 @@ export interface ObsidianDataHost {
  * already checks `exists()` or works from a listing it trusts, but a
  * defensive no-op here means a double-delete (e.g. a retried purge) is
  * still safe.
+ *
+ * `ol-egov.141.89.104.2`: the delete joins the file's queue (`olea-core`'s
+ * `withPathQueue`), the same one every store's read-modify-write of that file
+ * runs on, so a write queued before the delete lands first and the delete then
+ * removes it — a cache purge or full delete never leaves a record that a
+ * write already on its way puts back.
  */
 export async function deleteVaultPath(vault: VaultSource, path: VaultPath): Promise<void> {
-  if (vault.delete === undefined) {
+  const remove = vault.delete?.bind(vault);
+  if (remove === undefined) {
     throw new Error(`VaultSource.delete is required for privacy deletion flows (path: ${path})`);
   }
-  await vault.delete(path);
+  await withPathQueue(path, () => remove(path));
 }
 
 /**

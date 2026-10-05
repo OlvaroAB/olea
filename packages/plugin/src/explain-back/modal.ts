@@ -79,7 +79,12 @@
 
 import type { App } from 'obsidian';
 import { Modal } from 'obsidian';
-import type { MasteryState, SoloLevel, SupportLevel } from 'olea-contracts';
+import type {
+  ExplainBackGradingProvenance,
+  MasteryState,
+  SoloLevel,
+  SupportLevel,
+} from 'olea-contracts';
 import {
   buildGradingSourceMaterial,
   type CitedIssue,
@@ -148,13 +153,16 @@ import {
   sessionFeedbackExposureLedger,
 } from './feedback-exposure.js';
 import { isConfirmedFirstFullDepth } from './first-full-depth.js';
+import { runGradingAttempt } from './grading-attempt.js';
 import {
+  buildExplainBackGradingProvenance,
   buildExplainBackPromptContextFromInstrument,
   buildExplainBackPromptContextFromTopic,
   buildGradeExplainBackInputFromTypedAnswer,
   type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
   type FreeformTopicConceptMatch,
+  permittedConceptIdsFor,
   shouldRunExplainBackDepthPass,
 } from './request.js';
 import { setAsideRecordInput } from './set-aside-record.js';
@@ -274,6 +282,8 @@ export interface ExplainBackModalDeps {
   ) => Promise<ExplainBackSourceBlock | null>;
   readonly buildObservationContext: (params: {
     readonly subjectConceptId: string | null;
+    /** `[D-482]` item 4: the permitted concept ids the grading request carried; the resolver matches against exactly these. */
+    readonly permittedConceptIds?: readonly string[];
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
     /**
@@ -406,6 +416,12 @@ export interface ExplainBackModalDeps {
      * wrapper, so no composition-root change is needed for it to land.
      */
     readonly followsAttemptId?: string;
+    /**
+     * `[D-483]`: the versions and passage fingerprints of the grading request this view built
+     * (`./request.ts`'s `buildExplainBackGradingProvenance`), forwarded to `solo-review.ts`'s
+     * `RecordSoloGradeAndReviewParams.gradingProvenance`. Digests and version labels only.
+     */
+    readonly gradingProvenance?: ExplainBackGradingProvenance;
   }) => Promise<SoloLevel | undefined>;
   /** A stable id for this attempt (`../grading/wiring.ts`'s "distinct from any card/MCQ id space"). Injected so this view never mints its own id-generation policy. */
   readonly generateInstrumentId: () => string;
@@ -1094,6 +1110,9 @@ export class ExplainBackModal extends Modal {
       instrument,
       gradingSourceBlocks,
       misconceptionDigest,
+      // `[D-482]` item 4: the subject, plus the resolved neighbour, are the only ids a
+      // misconception candidate may bind to.
+      permittedConceptIdsFor(subjectConceptId, resolvedGrading.neighbourConceptId),
     );
     const prompt: ResolvedPrompt = {
       context,
@@ -1142,7 +1161,6 @@ export class ExplainBackModal extends Modal {
     // `resolveGradingRelationContext`, never a second, divergent one.
     const resolvedGrading = await resolveGradingSourceBlocks(this.deps, null, sourceBlocks);
     const gradingSourceBlocks = resolvedGrading.sourceBlocks;
-    const context = buildExplainBackPromptContextFromTopic(topic, gradingSourceBlocks);
     // `[D-322]` (`ol-egov.141.89.6.4`): resolve the freeform topic to one subject concept HERE, at
     // composition time, before she ever sees an answer box — never left for later, and never
     // silently unset. `matchFreeformTopicConcept` absent (no production composer wires it yet —
@@ -1155,6 +1173,13 @@ export class ExplainBackModal extends Modal {
     const subjectConceptId = topicMatch.kind === 'unique' ? topicMatch.conceptId : null;
     const practiceOnly = topicMatch.kind !== 'unique';
     const conceptIds = topicMatch.kind === 'unique' ? [topicMatch.conceptId] : [];
+    // `[D-482]` item 4: a free topic (no unique match) permits no concept id at all.
+    const context = buildExplainBackPromptContextFromTopic(
+      topic,
+      gradingSourceBlocks,
+      [],
+      permittedConceptIdsFor(subjectConceptId),
+    );
     if (context.referenceAnswer.trim() === '') {
       const prompt: ResolvedPrompt = {
         context,
@@ -1263,53 +1288,45 @@ export class ExplainBackModal extends Modal {
     this.render();
 
     const input = buildGradeExplainBackInputFromTypedAnswer(answer, prompt.context);
-    try {
-      const pending = await this.deps.grade(input);
-      if (pending === null) {
-        this.state = {
-          phase: 'refused',
-          prompt,
-          answer,
-          reason: 'unavailable',
-          durationMs,
-          attemptId,
-        };
-        this.render();
-        return;
-      }
-      // Row 50: a graded result is about to be shown to her, so the session now
-      // knows she was exposed, whatever she does next (accept, Try again, or
-      // close). An attempt the check could not assess shows her no feedback.
-      if (pending.grading.outcome === 'graded') {
-        this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
-      }
-      this.state = {
-        phase: 'graded',
-        prompt,
-        answer,
-        pending,
-        durationMs,
-        attemptId,
-        answerEdits,
-        support,
-      };
-      this.render();
-    } catch (error) {
-      // `UnusableGradingInputError` (empty referenceAnswer) reads as
-      // insufficient-notes; anything else reads as the transient
-      // check-failed refusal — the same two-reason posture C4.7/`[D-089]`
-      // rules for the folded path (see this file's module doc).
-      const isUnusableInput = error instanceof Error && error.name === 'UnusableGradingInputError';
+    // `[D-482]`: bounded, typed, and attempt-guarded — see `./grading-attempt.ts`. A hung, failed
+    // or unusable call is the existing could-not-check refusal and writes nothing; a result that
+    // settles after Try again started a newer attempt is `superseded` and ignored here.
+    const outcome = await runGradingAttempt({
+      grade: (gradeInput) => this.deps.grade(gradeInput),
+      input,
+      isCurrent: () => this.state.phase === 'grading' && this.state.attemptId === attemptId,
+    });
+    if (outcome.kind === 'superseded') return;
+    if (outcome.kind === 'unavailable' || outcome.kind === 'refused') {
       this.state = {
         phase: 'refused',
         prompt,
         answer,
-        reason: isUnusableInput ? 'insufficient-notes' : 'check-failed',
+        reason: outcome.kind === 'unavailable' ? 'unavailable' : outcome.reason,
         durationMs,
         attemptId,
       };
       this.render();
+      return;
     }
+    const pending = outcome.pending;
+    // Row 50: a graded result is about to be shown to her, so the session now
+    // knows she was exposed, whatever she does next (accept, Try again, or
+    // close). An attempt the check could not assess shows her no feedback.
+    if (pending.grading.outcome === 'graded') {
+      this.feedbackExposureLedger.noteShown(prompt.originInstrumentId, attemptId);
+    }
+    this.state = {
+      phase: 'graded',
+      prompt,
+      answer,
+      pending,
+      durationMs,
+      attemptId,
+      answerEdits,
+      support,
+    };
+    this.render();
   }
 
   /**
@@ -1375,6 +1392,7 @@ export class ExplainBackModal extends Modal {
     const context = {
       ...(await this.deps.buildObservationContext({
         subjectConceptId: prompt.subjectConceptId,
+        permittedConceptIds: prompt.context.permittedConceptIds ?? [],
         originInstrumentId: prompt.originInstrumentId,
         sourceBlocks: prompt.sourceBlocks,
         // `ol-egov.141.89.6.16`: the frozen retrieval query, never
@@ -1391,6 +1409,10 @@ export class ExplainBackModal extends Modal {
       // already carries; see `wiring.ts`'s `AcceptExplainBackGradingWithObser
       // vationContext.attemptId` doc for what it keys.
       attemptId,
+      // `[D-512]` (`ol-egov.141.89.6.93`): the sealed feedback exposure, not
+      // the guided rung (which the source open beside her also sets): only
+      // `'shown'` means she read feedback on this question first.
+      afterFeedback: support.feedbackExposure === 'shown',
     };
     const result = await this.deps.acceptWithObservation(pending, context);
     // Row 50: an accepted attempt ends the exchange, so a later offer of this
@@ -1450,6 +1472,9 @@ export class ExplainBackModal extends Modal {
       // attempt's graded result. Sealed at `submitAnswer`, never re-read here.
       const supportLevelShown = support.supportLevelShown;
       try {
+        // `[D-483]`: taken from the request this prompt context became, inside the isolation
+        // below so a digest failure can never block the accept she is looking at.
+        const gradingProvenance = await buildExplainBackGradingProvenance(prompt.context);
         const depthOutcome = await this.deps.recordSoloGradeAndReview({
           instrumentId: prompt.originInstrumentId,
           attemptId,
@@ -1497,6 +1522,7 @@ export class ExplainBackModal extends Modal {
           ...(support.followsAttemptId !== null
             ? { followsAttemptId: support.followsAttemptId }
             : {}),
+          gradingProvenance,
         });
         if (depthOutcome) soloLevel = depthOutcome;
       } catch (error) {

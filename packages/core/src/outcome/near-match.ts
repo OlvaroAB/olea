@@ -45,6 +45,12 @@
  * concept's identity as this pair's record, so a near match declined under a superseded
  * duplicate's key is not proposed again under the canonical key. Records keep the keys they were
  * written with; confirm and decline still address one record by its own pair.
+ *
+ * **One writer per record file at a time (`ol-egov.141.89.104.2`).** Each of the three writers
+ * reads and writes its pair's record as one task on that file's queue (`../vault/path-queue.ts`),
+ * so a confirm and a decline that overlap on one install are applied in the order they were made:
+ * the later one meets the record the earlier one left, and is refused as it would be one after
+ * the other.
  */
 
 import {
@@ -52,6 +58,8 @@ import {
   readConceptKeyCanonicalIndex,
 } from '../concept/key-store.js';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecordForWrite } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 
 /** The vault folder this module owns. Dot-prefixed, sibling to `.olea/same-as/` and `.olea/outcomes/` — its own folder, never a subfolder of either. */
@@ -151,14 +159,11 @@ async function findNearMatch(
   { readonly path: VaultPath; readonly record: OutcomeConceptNearMatchRecord } | undefined
 > {
   const path = outcomeConceptNearMatchRecordPath(outcomeId, conceptKey);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isOutcomeConceptNearMatchRecord(parsed)) return { path, record: parsed };
-  } catch {
-    // Corrupt: treated as absent, matching `listOutcomeConceptNearMatchRecords`'s posture.
-  }
-  return undefined;
+  // A file that does not read as a record throws `UnreadableStoreRecordError` rather than reading
+  // as absent, so nothing is written over a decision this build cannot read (T12,
+  // `ol-egov.141.89.104.2`).
+  const record = await readStoreRecordForWrite(vault, path, isOutcomeConceptNearMatchRecord);
+  return record === undefined ? undefined : { path, record };
 }
 
 function defaultNow(): string {
@@ -218,26 +223,29 @@ export async function proposeOutcomeConceptNearMatch(
   options: ProposeOutcomeConceptNearMatchOptions = {},
 ): Promise<OutcomeConceptNearMatchRecord> {
   const now = options.now ?? defaultNow;
-  const existing =
-    (await findNearMatch(vault, outcomeId, conceptKey)) ??
-    (await findNearMatchForIdentity(
-      vault,
+  const path = outcomeConceptNearMatchRecordPath(outcomeId, conceptKey);
+  return withPathQueue(path, async () => {
+    const existing =
+      (await findNearMatch(vault, outcomeId, conceptKey)) ??
+      (await findNearMatchForIdentity(
+        vault,
+        outcomeId,
+        conceptKey,
+        options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
+      ));
+    if (existing !== undefined) return existing.record;
+
+    const record: OutcomeConceptNearMatchRecord = {
       outcomeId,
       conceptKey,
-      options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault)),
-    ));
-  if (existing !== undefined) return existing.record;
-
-  const record: OutcomeConceptNearMatchRecord = {
-    outcomeId,
-    conceptKey,
-    status: 'proposed',
-    reason: 'token-set-containment',
-    proposedAt: now(),
-    schemaVersion: OUTCOME_CONCEPT_NEAR_MATCH_RECORD_SCHEMA_VERSION,
-  };
-  await vault.write(outcomeConceptNearMatchRecordPath(outcomeId, conceptKey), serialize(record));
-  return record;
+      status: 'proposed',
+      reason: 'token-set-containment',
+      proposedAt: now(),
+      schemaVersion: OUTCOME_CONCEPT_NEAR_MATCH_RECORD_SCHEMA_VERSION,
+    };
+    await vault.write(path, serialize(record));
+    return record;
+  });
 }
 
 /**
@@ -255,29 +263,31 @@ export async function confirmOutcomeConceptNearMatch(
   options: { readonly now?: () => string } = {},
 ): Promise<OutcomeConceptNearMatchRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findNearMatch(vault, outcomeId, conceptKey);
-  if (existing === undefined) {
-    throw new Error(
-      'confirmOutcomeConceptNearMatch: no proposed near-match record for this pair — a near ' +
-        'match proposes, it never attaches on its own, so a confirm must follow an existing ' +
-        'proposal.',
-    );
-  }
-  if (existing.record.status === 'confirmed') return existing.record;
-  if (existing.record.status === 'declined') {
-    throw new Error(
-      'confirmOutcomeConceptNearMatch: this pair was already declined — declined is a terminal ' +
-        'resolution, not reopened by a later confirm.',
-    );
-  }
+  return withPathQueue(outcomeConceptNearMatchRecordPath(outcomeId, conceptKey), async () => {
+    const existing = await findNearMatch(vault, outcomeId, conceptKey);
+    if (existing === undefined) {
+      throw new Error(
+        'confirmOutcomeConceptNearMatch: no proposed near-match record for this pair — a near ' +
+          'match proposes, it never attaches on its own, so a confirm must follow an existing ' +
+          'proposal.',
+      );
+    }
+    if (existing.record.status === 'confirmed') return existing.record;
+    if (existing.record.status === 'declined') {
+      throw new Error(
+        'confirmOutcomeConceptNearMatch: this pair was already declined — declined is a terminal ' +
+          'resolution, not reopened by a later confirm.',
+      );
+    }
 
-  const confirmed: OutcomeConceptNearMatchRecord = {
-    ...existing.record,
-    status: 'confirmed',
-    confirmedAt: now(),
-  };
-  await vault.write(existing.path, serialize(confirmed));
-  return confirmed;
+    const confirmed: OutcomeConceptNearMatchRecord = {
+      ...existing.record,
+      status: 'confirmed',
+      confirmedAt: now(),
+    };
+    await vault.write(existing.path, serialize(confirmed));
+    return confirmed;
+  });
 }
 
 /**
@@ -292,26 +302,28 @@ export async function declineOutcomeConceptNearMatch(
   options: { readonly now?: () => string } = {},
 ): Promise<OutcomeConceptNearMatchRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findNearMatch(vault, outcomeId, conceptKey);
-  if (existing === undefined) {
-    throw new Error(
-      'declineOutcomeConceptNearMatch: no proposed near-match record for this pair — a decline ' +
-        'must follow an existing proposal.',
-    );
-  }
-  if (existing.record.status === 'declined') return existing.record;
-  if (existing.record.status === 'confirmed') {
-    throw new Error(
-      'declineOutcomeConceptNearMatch: this pair was already confirmed — confirmed is a terminal ' +
-        'resolution, not reopened by a later decline.',
-    );
-  }
+  return withPathQueue(outcomeConceptNearMatchRecordPath(outcomeId, conceptKey), async () => {
+    const existing = await findNearMatch(vault, outcomeId, conceptKey);
+    if (existing === undefined) {
+      throw new Error(
+        'declineOutcomeConceptNearMatch: no proposed near-match record for this pair — a decline ' +
+          'must follow an existing proposal.',
+      );
+    }
+    if (existing.record.status === 'declined') return existing.record;
+    if (existing.record.status === 'confirmed') {
+      throw new Error(
+        'declineOutcomeConceptNearMatch: this pair was already confirmed — confirmed is a terminal ' +
+          'resolution, not reopened by a later decline.',
+      );
+    }
 
-  const declined: OutcomeConceptNearMatchRecord = {
-    ...existing.record,
-    status: 'declined',
-    declinedAt: now(),
-  };
-  await vault.write(existing.path, serialize(declined));
-  return declined;
+    const declined: OutcomeConceptNearMatchRecord = {
+      ...existing.record,
+      status: 'declined',
+      declinedAt: now(),
+    };
+    await vault.write(existing.path, serialize(declined));
+    return declined;
+  });
 }

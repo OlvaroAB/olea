@@ -89,7 +89,7 @@
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
-import { hashText } from 'olea-core';
+import { hashText, withPathQueue } from 'olea-core';
 import { type DraftRecord, isDraftRecord } from './types.js';
 
 export const DRAFT_CACHE_FOLDER: VaultPath = '.olea/drafts';
@@ -316,15 +316,22 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
     },
 
     async put(record) {
-      await vault.write(draftPath(record.draftId), `${JSON.stringify(record, null, 2)}\n`);
-      const index = await readIndex(vault);
-      const next = upsertEntry(index, {
-        draftId: record.draftId,
-        courseCode: record.courseCode,
-        conceptName: record.conceptName,
-        status: record.status,
+      // `ol-egov.141.89.104.2`: the record file and the index each take their own path's queue
+      // (`olea-core`'s `withPathQueue`), one after the other, so two overlapping puts on one
+      // install both reach the index instead of the second writing back an index that lacks the
+      // first. The cross-device index race in this module's doc is a different problem, unchanged.
+      const path = draftPath(record.draftId);
+      await withPathQueue(path, () => vault.write(path, `${JSON.stringify(record, null, 2)}\n`));
+      await withPathQueue(INDEX_PATH, async () => {
+        const index = await readIndex(vault);
+        const next = upsertEntry(index, {
+          draftId: record.draftId,
+          courseCode: record.courseCode,
+          conceptName: record.conceptName,
+          status: record.status,
+        });
+        await writeIndex(vault, next);
       });
-      await writeIndex(vault, next);
     },
 
     async findByKey(courseCode, conceptName, expected) {

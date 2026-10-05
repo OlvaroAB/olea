@@ -19,6 +19,8 @@ function baseObservationInput(overrides: Partial<ObservationInput> = {}): Observ
     originInstrumentId: 'explain-back:concept-alpha:1',
     originReviewEventId: 'review-event-1',
     timestamp: '2026-08-16T09:00:00-04:00',
+    // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused, so the base input is hers.
+    statementAuthorship: 'hers',
     ...overrides,
   };
 }

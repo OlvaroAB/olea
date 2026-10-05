@@ -23,7 +23,9 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { CORRECTNESS_OVERALL_BOUND_MS } from 'olea-core';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { runGradingAttempt } from '../../src/explain-back/grading-attempt.js';
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -73,7 +75,7 @@ describe('ExplainBackModal — a refused or unavailable judgment records no lear
       modal.indexOf('private acceptGrading('),
     );
     expect(submitAnswerBody).toMatch(
-      /phase: 'refused',\s*prompt,\s*answer,\s*reason: 'unavailable'/,
+      /phase: 'refused',\s*prompt,\s*answer,\s*reason: outcome\.kind === 'unavailable' \? 'unavailable' : outcome\.reason/,
     );
     expect(submitAnswerBody).not.toMatch(/acceptWithObservation/);
     expect(submitAnswerBody).not.toMatch(/recordSoloGradeAndReview/);
@@ -97,8 +99,92 @@ describe('ExplainBackModal — acceptGrading threads the graded query through fo
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(
-      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*\};/,
+      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*permittedConceptIds:\s*prompt\.context\.permittedConceptIds \?\? \[\],\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*afterFeedback:\s*support\.feedbackExposure === 'shown',\s*\};/,
     );
     expect(acceptGradingBody).not.toMatch(/query:\s*prompt\.context\.question/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-482]` (F5.5 / F5.3): a call has a bound, and a failed call is never a verdict
+// ---------------------------------------------------------------------------
+
+const GRADE_INPUT = {
+  question: 'Why does X happen?',
+  studentAnswer: 'Because Y causes Z.',
+  referenceAnswer: 'Because Y drives Z.',
+  sourceBlocks: [],
+  misconceptionDigest: [],
+};
+
+describe('runGradingAttempt: a correctness call that cannot answer is could-not-check, never a verdict', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // @auto:plugin/explain-back/modal-refusal.spec
+  it('a call that does not return within its bound is refused as check-failed, with nothing to record', async () => {
+    const outcome = runGradingAttempt({
+      grade: () => new Promise(() => {}),
+      input: GRADE_INPUT,
+      isCurrent: () => true,
+    });
+    await vi.advanceTimersByTimeAsync(CORRECTNESS_OVERALL_BOUND_MS + 1);
+    expect(await outcome).toEqual({ kind: 'refused', reason: 'check-failed' });
+  });
+
+  // @auto:plugin/explain-back/modal-refusal.spec
+  it('a transport error, an unusable response and a timeout each read as check-failed: never incorrect, never notes-insufficient', async () => {
+    const unusable = new Error('the Worker response was not an object');
+    unusable.name = 'WorkerJudgeError';
+    const results = await Promise.all([
+      runGradingAttempt({
+        grade: () => Promise.reject(new Error('socket closed')),
+        input: GRADE_INPUT,
+        isCurrent: () => true,
+      }),
+      runGradingAttempt({
+        grade: () => Promise.reject(unusable),
+        input: GRADE_INPUT,
+        isCurrent: () => true,
+      }),
+    ]);
+    for (const result of results) {
+      expect(result).toEqual({ kind: 'refused', reason: 'check-failed' });
+      expect(JSON.stringify(result)).not.toMatch(/incorrect|insufficient/);
+    }
+  });
+
+  // @auto:plugin/explain-back/modal-refusal.spec
+  it('notes-insufficient stays reserved for an empty reference (UnusableGradingInputError)', async () => {
+    const empty = new Error('referenceAnswer is empty');
+    empty.name = 'UnusableGradingInputError';
+    const result = await runGradingAttempt({
+      grade: () => Promise.reject(empty),
+      input: GRADE_INPUT,
+      isCurrent: () => true,
+    });
+    expect(result).toEqual({ kind: 'refused', reason: 'insufficient-notes' });
+  });
+
+  it('an unconfigured grader (null) is the existing unavailable refusal', async () => {
+    const result = await runGradingAttempt({
+      grade: () => Promise.resolve(null),
+      input: GRADE_INPUT,
+      isCurrent: () => true,
+    });
+    expect(result).toEqual({ kind: 'unavailable' });
+  });
+
+  it('submitAnswer routes every failure through runGradingAttempt and never calls a write dep', () => {
+    const submitAnswerBody = modal.slice(
+      modal.indexOf('private async submitAnswer('),
+      modal.indexOf('private acceptGrading('),
+    );
+    expect(submitAnswerBody).toMatch(/await runGradingAttempt\(/);
+    expect(submitAnswerBody).not.toMatch(/reason: 'insufficient-notes'/);
   });
 });

@@ -24,6 +24,7 @@ import {
   buildGradeSoloInputFromTypedAnswer,
   type FreeformTopicConceptCandidate,
   matchFreeformTopicToConcept,
+  permittedConceptIdsFor,
   resolveExplainBackCausesPartner,
   resolveExplainBackRelationEdge,
   retrieveExplainBackSourceBlocks,
@@ -185,6 +186,7 @@ describe('buildGradeExplainBackInputFromTypedAnswer', () => {
       referenceAnswer: context.referenceAnswer,
       sourceBlocks: context.sourceBlocks,
       misconceptionDigest: context.misconceptionDigest,
+      permittedConceptIds: [],
     });
   });
 });
@@ -694,5 +696,36 @@ describe('shouldRunExplainBackDepthPass ([D-286])', () => {
 
   it('skips the depth pass for a clearly incorrect verdict', () => {
     expect(shouldRunExplainBackDepthPass('incorrect')).toBe(false);
+  });
+});
+
+describe('permitted concept ids on the grading request ([D-482])', () => {
+  const context = (permitted?: readonly string[]) =>
+    buildExplainBackPromptContextFromTopic('an invented topic', [], [], permitted);
+
+  // @auto:plugin/explain-back/request.spec
+  it('carries the subject, plus the neighbour when one resolved', () => {
+    expect(permittedConceptIdsFor('concept-a')).toEqual(['concept-a']);
+    expect(permittedConceptIdsFor('concept-a', 'concept-b')).toEqual(['concept-a', 'concept-b']);
+    expect(permittedConceptIdsFor('concept-a', 'concept-a')).toEqual(['concept-a']);
+    const input = buildGradeExplainBackInputFromTypedAnswer(
+      'an answer',
+      context(permittedConceptIdsFor('concept-a', 'concept-b')),
+    );
+    expect(input.permittedConceptIds).toEqual(['concept-a', 'concept-b']);
+  });
+
+  // @auto:plugin/explain-back/request.spec
+  it('sends an empty list for a free topic with no subject, whatever a neighbour says', () => {
+    expect(permittedConceptIdsFor(null)).toEqual([]);
+    expect(permittedConceptIdsFor(null, 'concept-b')).toEqual([]);
+    const input = buildGradeExplainBackInputFromTypedAnswer(
+      'an answer',
+      context(permittedConceptIdsFor(null)),
+    );
+    expect(input.permittedConceptIds).toEqual([]);
+    expect(
+      buildGradeExplainBackInputFromTypedAnswer('an answer', context()).permittedConceptIds,
+    ).toEqual([]);
   });
 });
