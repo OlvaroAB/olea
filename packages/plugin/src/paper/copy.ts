@@ -91,3 +91,48 @@ export function buildNoAssessmentAheadCopy(course: string): string {
 /** F7.8's grey-out copy — shown instead of a broken attempt when no Worker is configured. */
 export const PRACTICE_PAPER_AI_UNAVAILABLE_COPY =
   'Practice papers need Olea AI features, which are not configured yet.';
+
+/**
+ * `[D-457]` (F4.11, vocabulary registry section 31): the two states a paper that is not whole can
+ * be in, each with its own ruled sentence, VERBATIM. Never edit these without the clause.
+ * Neither is ever worded as covering less of the course: a missing question may reduce depth or
+ * demand coverage without removing a topic.
+ */
+export const UNFINISHED_PAPER_SENTENCE =
+  "Olea couldn't finish this paper. Ask again to continue from where it stopped.";
+export const INCOMPLETE_PAPER_SENTENCE =
+  'This paper is incomplete. Some planned questions could not be written.';
+
+/** One omitted part of a partial paper, with the reason recorded for it when it ended empty. */
+export interface OmittedPaperPart {
+  readonly conceptName: string;
+  readonly reason: string;
+}
+
+/** The partial state's face: the ruled sentence, then the omitted parts, each with its reason. */
+export interface IncompletePaperStatement {
+  readonly sentence: string;
+  readonly omittedParts: readonly OmittedPaperPart[];
+}
+
+/**
+ * Builds the partial state's statement from a finished record's own fields. Null unless the record's
+ * completion is a qualified partial (a flat record has no completion and reads as before). A part
+ * set aside by rank is extent, not a gap, so it is never listed as omitted.
+ */
+export function buildIncompletePaperStatement(
+  completion: { readonly status: string } | undefined,
+  emptySlots: readonly {
+    readonly conceptName: string;
+    readonly reasonCode: string;
+    readonly reason: string;
+  }[],
+): IncompletePaperStatement | null {
+  if (completion?.status !== 'qualified-partial') return null;
+  return {
+    sentence: INCOMPLETE_PAPER_SENTENCE,
+    omittedParts: emptySlots
+      .filter((slot) => slot.reasonCode !== 'rank-excluded')
+      .map((slot) => ({ conceptName: slot.conceptName, reason: slot.reason })),
+  };
+}

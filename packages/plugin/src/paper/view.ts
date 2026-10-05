@@ -47,6 +47,7 @@ import type {
   PracticePaperFaceItem,
   PracticePaperViewDeps,
 } from './provider.js';
+import { unfinishedPaperNotice } from './provider.js';
 
 export { VIEW_TYPE_OLEA_PAPER };
 
@@ -158,21 +159,38 @@ export class PaperView extends ItemView {
       return;
     }
     if (state.kind === 'unlocked-not-pulled') {
-      const button = root.createEl('button', { text: 'Give me a practice paper for this course' });
-      button.addEventListener('click', () => {
-        void this.pullPaper(state.course);
-      });
+      this.renderRequestButton(root, state.course);
       return;
     }
     // `state.kind === 'ready'`
     this.renderReady(root, state);
   }
 
+  private renderRequestButton(root: HTMLElement, course: string): void {
+    const button = root.createEl('button', { text: 'Give me a practice paper for this course' });
+    button.addEventListener('click', () => {
+      void this.pullPaper(course);
+    });
+  }
+
   private async pullPaper(course: string): Promise<void> {
     const root = this.contentEl;
     root.empty();
     root.createEl('p', { text: 'Composing your practice paper…' });
-    const result = await this.deps.requestPaper(course);
+    let result: Awaited<ReturnType<PracticePaperViewDeps['requestPaper']>>;
+    try {
+      result = await this.deps.requestPaper(course);
+    } catch (error) {
+      // `[D-457]`: an outage kept the unfinished paper; she reads the ruled sentence and the same
+      // request she already used is offered again ("Ask again"). Any other failure is unchanged.
+      const notice = unfinishedPaperNotice(error);
+      if (notice === null) throw error;
+      root.empty();
+      root.createEl('h2', { text: this.getDisplayText() });
+      root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
+      this.renderRequestButton(root, course);
+      return;
+    }
     this.justHandedOff.clear();
     if (result.kind === 'ai-unavailable') {
       this.render(result);
@@ -193,6 +211,18 @@ export class PaperView extends ItemView {
         const list = banner.createEl('ul');
         for (const path of state.partialStatement.pointerPaths) {
           list.createEl('li', { text: path });
+        }
+      }
+    }
+
+    // `[D-457]`: the partial paper's sentence and its omitted parts, also before any item.
+    if (state.incompleteStatement !== null) {
+      const incomplete = root.createDiv({ cls: 'olea-paper-incomplete' });
+      incomplete.createEl('p', { text: state.incompleteStatement.sentence });
+      if (state.incompleteStatement.omittedParts.length > 0) {
+        const omitted = incomplete.createEl('ul');
+        for (const part of state.incompleteStatement.omittedParts) {
+          omitted.createEl('li', { text: `${part.conceptName}: ${part.reason}` });
         }
       }
     }
