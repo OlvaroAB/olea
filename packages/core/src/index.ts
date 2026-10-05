@@ -2667,6 +2667,7 @@ export type {
   ClassifyDeclaredConceptInput,
   DeclaredConceptClassification,
   GroveDeclaredState,
+  TaughtSignalEvidence,
 } from './scope/coverage.js';
 export {
   classifyDeclaredConcept,
@@ -2683,6 +2684,17 @@ export type {
   GroveVolunteerCell,
 } from './scope/grove.js';
 export { buildGroveModel } from './scope/grove.js';
+// F8.2's step-two producer (`ol-egov.141.89.7.51`, `[D-465]`): the course's decks and supplied
+// transcripts, read for each concept's name by the examiner side's whole-word rule, become
+// `TaughtSignalEvidence` for `buildGroveModel`'s `taughtSignals`. Pure; the grove provider
+// gathers the text (`packages/plugin/src/grove/taught-signal-material.ts`).
+export type {
+  ProduceTaughtSignalsInput,
+  StepTwoMaterial,
+  StepTwoMaterialKind,
+  StepTwoTextUnit,
+} from './scope/taught-signal-producer.js';
+export { produceTaughtSignals } from './scope/taught-signal-producer.js';
 // The session pipeline (P2-T07's missing half): walk her vault for instruments,
 // bind each to its concept and courses, replay the review log into per-instrument
 // scheduling state, and hand the result to `composeQueue`. `buildReviewSession`
@@ -3141,6 +3153,9 @@ export { extractTier3Evidence } from './tier3-evidence/build.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,
+  // `ol-egov.141.89.7.51`: the derived text tier 3 already extracted, handed back on request
+  // (`ExtractTier3EvidenceOptions.includeDerivedUnits`) for the grove's step-two producer.
+  DerivedTextUnit,
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
   PastPaperCluster,
