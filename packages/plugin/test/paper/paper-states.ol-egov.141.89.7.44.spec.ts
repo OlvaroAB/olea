@@ -110,7 +110,7 @@ describe('the partial state', () => {
     expect(INCOMPLETE_PAPER_SENTENCE).toBe(INCOMPLETE);
   });
 
-  it('lists each omitted part with its recorded reason, source and capability gaps apart', () => {
+  it('lists each omitted part by name, keeping only its reason code, never the recorded prose', () => {
     const state = buildReadyStateFromRecord(
       'COURSEA',
       record(
@@ -124,10 +124,22 @@ describe('the partial state', () => {
     expect(state.incompleteStatement).toEqual({
       sentence: INCOMPLETE,
       omittedParts: [
-        { conceptName: 'Concept a', reason: 'no held source for this concept' },
-        { conceptName: 'Concept b', reason: 'intended demand is not declared served' },
+        { conceptName: 'Concept a', reasonCode: 'no-held-source' },
+        { conceptName: 'Concept b', reasonCode: 'demand-unsupported' },
       ],
     });
+    expect(JSON.stringify(state.incompleteStatement)).not.toMatch(/held source|declared served/);
+  });
+
+  it('the view renders an omitted part by its name alone', () => {
+    const view = readFileSync(
+      fileURLToPath(new URL('../../src/paper/view.ts', import.meta.url)),
+      'utf8',
+    );
+    expect(view).toMatch(/omitted\.createEl\('li', \{ text: part\.conceptName \}\)/);
+    expect(view).not.toMatch(/part\.reason|slot\.reason/);
+    // The older empty-slot list is not drawn beside the statement, so no part is listed twice.
+    expect(view).toMatch(/state\.incompleteStatement === null && state\.emptySlots\.length > 0/);
   });
 
   it('a part set aside for extent (rank) is not an omitted part', () => {

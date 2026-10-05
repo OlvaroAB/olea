@@ -103,10 +103,15 @@ export const UNFINISHED_PAPER_SENTENCE =
 export const INCOMPLETE_PAPER_SENTENCE =
   'This paper is incomplete. Some planned questions could not be written.';
 
-/** One omitted part of a partial paper, with the reason recorded for it when it ended empty. */
+/**
+ * One omitted part of a partial paper. It carries the machine reason code only: the slot's free-text
+ * `reason` is developer prose (tiers, file paths, a generator's error) and never reaches her. The
+ * clause lists each part "with its ruled reason", and no wording per code is ruled yet, so the view
+ * shows the part's name alone until a ruling words each code (ol-egov.141.89.7.44).
+ */
 export interface OmittedPaperPart {
   readonly conceptName: string;
-  readonly reason: string;
+  readonly reasonCode: string;
 }
 
 /** The partial state's face: the ruled sentence, then the omitted parts, each with its reason. */
@@ -125,7 +130,6 @@ export function buildIncompletePaperStatement(
   emptySlots: readonly {
     readonly conceptName: string;
     readonly reasonCode: string;
-    readonly reason: string;
   }[],
 ): IncompletePaperStatement | null {
   if (completion?.status !== 'qualified-partial') return null;
@@ -133,6 +137,6 @@ export function buildIncompletePaperStatement(
     sentence: INCOMPLETE_PAPER_SENTENCE,
     omittedParts: emptySlots
       .filter((slot) => slot.reasonCode !== 'rank-excluded')
-      .map((slot) => ({ conceptName: slot.conceptName, reason: slot.reason })),
+      .map((slot) => ({ conceptName: slot.conceptName, reasonCode: slot.reasonCode })),
   };
 }

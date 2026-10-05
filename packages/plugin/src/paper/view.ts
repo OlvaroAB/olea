@@ -222,7 +222,8 @@ export class PaperView extends ItemView {
       if (state.incompleteStatement.omittedParts.length > 0) {
         const omitted = incomplete.createEl('ul');
         for (const part of state.incompleteStatement.omittedParts) {
-          omitted.createEl('li', { text: `${part.conceptName}: ${part.reason}` });
+          // The name only: no reason wording is ruled yet, and the recorded reason is developer prose.
+          omitted.createEl('li', { text: part.conceptName });
         }
       }
     }
@@ -235,10 +236,13 @@ export class PaperView extends ItemView {
       this.renderHandoffControl(row, state, item);
     }
 
-    if (state.emptySlots.length > 0) {
+    // A partial paper's omitted parts are its statement above (`[D-457]`), so they are not listed
+    // twice. Names only: a slot's recorded reason is developer prose, never her wording, and no
+    // wording per reason is ruled yet (ol-egov.141.89.7.44).
+    if (state.incompleteStatement === null && state.emptySlots.length > 0) {
       const emptyList = root.createEl('ul', { cls: 'olea-paper-empty-slots' });
       for (const slot of state.emptySlots) {
-        emptyList.createEl('li', { text: `${slot.conceptName}: ${slot.reason}` });
+        emptyList.createEl('li', { text: slot.conceptName });
       }
     }
   }
