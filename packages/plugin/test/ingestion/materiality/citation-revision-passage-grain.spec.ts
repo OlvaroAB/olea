@@ -501,21 +501,22 @@ describe('an edited passage: the judge sees the passage, and only when it is unm
     await t.tick(vault, actions());
 
     await vault.write(SOURCE_PATH, sourceNote('Basalt is a fine-grained rock.', EDITED, LIMESTONE));
-    const report = await t.tick(vault, actions());
+    const a = actions();
+    const report = await t.tick(vault, a);
 
     expect(judge.judge).toHaveBeenCalledTimes(1);
     expect(judge.judge).toHaveBeenCalledWith({ previousText: PASSAGE, currentText: EDITED });
     expect(report.refreshed).toBe(1);
-    // A same-claim verdict advances the anchor to the new passage, and its digest with it.
-    const anchor = await anchorOf(store);
-    expect(anchor.text).toBe(EDITED);
-    expect(anchor.passageDigest).toBe(await digestPassage(EDITED));
-    expect(anchor.pendingRevalidation).toBeUndefined();
-
-    // The new passage is then the identity: an unrelated edit afterwards still makes no call.
-    await vault.write(SOURCE_PATH, sourceNote('Basalt is dark.', EDITED, LIMESTONE));
-    await t.tick(vault, actions());
-    expect(judge.judge).toHaveBeenCalledTimes(1);
+    // [D-508] an immaterial verdict never restores the question: the instrument is suspended, a
+    // successor is drafted from the current passage, and the anchor is removed (no certifying
+    // baseline is saved for the edited passage).
+    expect(a.suspend).toHaveBeenCalledWith(MCQ_ID, expect.anything());
+    expect(a.enqueue).toHaveBeenCalledTimes(1);
+    const enqueued = a.enqueue.mock.calls[0]?.[0] as unknown as {
+      payload: { newPassageText: string };
+    };
+    expect(enqueued.payload.newPassageText).toBe(EDITED);
+    expect((await store.loadAll()).has(MCQ_ID)).toBe(false);
   });
 
   it('a changed-claim verdict suspends the instrument and drafts the successor from the passage', async () => {

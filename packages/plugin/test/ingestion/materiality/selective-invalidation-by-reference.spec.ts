@@ -249,7 +249,7 @@ describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective
     expect(after.get(MCQ_B)).toEqual(baselined.get(MCQ_B));
   });
 
-  it('a same-claim (refreshed) revision on ONE instrument advances only its own baseline, never touching an unrelated instrument’s recorded reference', async () => {
+  it('an immaterial ([D-508]) revision on ONE instrument rewrites only that instrument, never touching an unrelated instrument’s recorded reference', async () => {
     const vault = new MemoryVaultSource({
       [PATH_A]: note('Weathering rates', 'GEO101', PARAGRAPH_A_BEFORE, MCQ_A),
       [PATH_B]: note('Erosion patterns', 'GEO101', PARAGRAPH_B_TEXT, MCQ_B),
@@ -268,11 +268,13 @@ describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective
     const report = await trigger.tick(vault, act);
 
     expect(report.refreshed).toBe(1);
-    expect(act.suspend).not.toHaveBeenCalled();
-    expect(act.enqueue).not.toHaveBeenCalled();
+    // [D-508] an immaterial verdict on a changed cited passage takes the rewrite path for A only.
+    expect(act.suspend).toHaveBeenCalledTimes(1);
+    expect(act.suspend).toHaveBeenCalledWith(MCQ_A, expect.anything());
+    expect(act.enqueue).toHaveBeenCalledTimes(1);
 
     const after = await store.loadAll();
-    expect(after.get(MCQ_A)?.text).toContain(reworded); // A's own baseline advanced
+    expect(after.has(MCQ_A)).toBe(false); // A is retired, no certifying baseline
     expect(after.get(MCQ_B)?.text).toContain(PARAGRAPH_B_TEXT); // B's reference is exactly as it was
     expect(after.has(MCQ_B)).toBe(true); // still tracked, never retired
   });

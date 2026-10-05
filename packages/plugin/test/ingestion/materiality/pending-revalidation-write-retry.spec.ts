@@ -21,9 +21,9 @@
  *   `evaluateCitedPassageRevision`'s `pendingRecorder.recordPending`, `material-change.ts`'s own doc:
  *   "A failure here propagates rather than being swallowed") -- moves *current* -> *pending
  *   revalidation*;
- * - the RESOLVING half (`applyOutcome`'s `'refreshed'` arm's `store.save`, which both clears the
- *   pending fact AND advances the anchor's `text` in one write) -- moves *pending revalidation* ->
- *   *current*.
+ * - the RESOLVING half ([D-508]: `applyOutcome`'s `'refreshed'` arm suspends, enqueues a successor
+ *   and removes the anchor via `store.remove`; it no longer saves the judged text as a baseline) --
+ *   moves *pending revalidation* -> *rewritten* (the entry retired).
  *
  * Both are read-modify-write calls against the SAME underlying `data.json`-shaped blob
  * (`ObsidianCitationHashStore`'s own doc), so a failed `saveData` call is atomic at the point that
@@ -237,6 +237,7 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     const store = new ObsidianCitationHashStore(host);
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) }; // same claim -> 'refreshed'
     const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(2_000) });
+    const act = actions();
 
     await trigger.tick(vault, actions()); // tick 1: baseline (call #1)
     await vault.write(NOTE_PATH, note(PARAGRAPH_B));
@@ -245,7 +246,7 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     // succeed, followed, in the same pass, by the judge's answer and `applyOutcome`'s resolving
     // `store.save` (call #4) -- the one set up to fail.
     const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const secondTick = await trigger.tick(vault, actions());
+    const secondTick = await trigger.tick(vault, act);
     consoleError.mockRestore();
     expect(judge.judge).toHaveBeenCalledOnce();
     expect(secondTick.refreshed).toBe(1); // the outcome was decided...
@@ -268,10 +269,10 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     const thirdTick = await trigger.tick(vault, actions());
     expect(host.saveDataCallCount).toBe(7);
     const afterRetry = await store.loadAll();
-    const record = afterRetry.get(MCQ_ID);
-    expect(record?.pendingRevalidation).toBeUndefined(); // resolved -- cleared exactly once
-    expect(record?.text).toContain('cold, dry climates'); // and the text landed in the SAME write
-    expect(afterRetry.size).toBe(1); // never duplicated
+    // [D-508] the resolving write is now the anchor's removal (the rewrite path), so a
+    // successful retry leaves no entry at all, and never a baseline for the changed text.
+    expect(afterRetry.has(MCQ_ID)).toBe(false);
+    expect(afterRetry.size).toBe(0);
     expect(thirdTick.staleResultDiscarded).toBe(0); // a genuine retry, never mistaken for a stale one
     expect(thirdTick.retryExhausted).toBe(0); // resolved before the retry itself could go unanswered
   });

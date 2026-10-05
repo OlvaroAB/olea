@@ -225,6 +225,7 @@
  */
 
 import {
+  buildSuccessorRevisionEnqueueInput,
   type CitedPassageRevisionOutcome,
   type Clock,
   type CurrentPassageState,
@@ -1074,76 +1075,82 @@ export class CitationRevisionTrigger {
           console.error('Olea: citation-revision relocation-heal write failed', error);
         }
         return;
-      case 'refreshed':
-        // Same claim — advance the stored baseline so this delta is not
-        // re-flagged next pass. Nothing is written to the vault: under this
-        // caller's scoping (see this module's own doc) the changed material
-        // is already on disk; there is no separate instrument wording left
-        // stale by it.
+      case 'refreshed': {
+        // [D-508] (ol-egov.141.89.5.61): an immaterial verdict on an item's OWN
+        // cited passage never restores the question. This arm is reached only
+        // after the code's free exits (identical text, formatting-only under the
+        // canonical normaliser, the [D-446] move/reformat rules) have already
+        // settled without a judge call, so a real difference remains: the
+        // question stays withheld until a re-check against the current passage
+        // passes or it is rewritten. No re-check exists yet, so it takes the
+        // rewrite path, exactly like a material verdict. The judge's answer is
+        // still counted and routes the work; it just cannot certify the old text.
         report.refreshed += 1;
-        if (currentRecord !== undefined && current.kind === 'found-at-anchor') {
-          try {
-            // [D-351]: this verdict was computed against
-            // `outcome.event.newContentHash`. Only restore to current
-            // (clearing the pending fact — the write below omits it) when
-            // the PERSISTED pending hash still matches: a mismatch means a
-            // newer edit has already raised its own pending state, and this
-            // is a late result for an earlier edit that must not clear it.
-            const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
-              instrumentId,
-              outcome.event.newContentHash,
-            );
-            if (!pendingStillCurrent) {
-              report.staleResultDiscarded += 1;
-              return;
-            }
-            await this.deps.store.save(instrumentId, {
-              sourcePath: passage?.sourcePath ?? citedPassagePath(currentRecord),
-              text: current.text,
-              conceptIds: currentRecord.conceptIds,
-              ...(await passageFields(passage, current.text)),
-              // pendingRevalidation omitted -- restored to current [D-351].
-            });
-          } catch (error) {
-            console.error('Olea: citation-revision refresh write failed', error);
-          }
+        if (currentRecord === undefined || current.kind !== 'found-at-anchor') {
+          return;
         }
-        return;
-      case 'revised': {
-        report.revised += 1;
-        const conceptIds = currentRecord?.conceptIds ?? previous.conceptIds;
-        try {
-          // [D-351]: same guard as `refreshed` above, before acting on the
-          // verdict at all — a stale 'revised' verdict must not suspend the
-          // predecessor or enqueue a successor against content a newer edit
-          // has already superseded.
-          const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
-            instrumentId,
-            outcome.event.newContentHash,
-          );
-          if (!pendingStillCurrent) {
-            report.staleResultDiscarded += 1;
-            return;
-          }
-          await actions.suspend(outcome.predecessorInstrumentId, conceptIds);
-          await actions.enqueue(outcome.successorEnqueueInput);
-          // Retire tracking: the predecessor is suspended, so further
-          // changes to this material no longer need watching under this id.
-          // A failure above leaves this line unreached, so the entry stays
-          // tracked and the SAME 'revised' outcome is retried next pass —
-          // an acceptable, rare, at-least-once cost rather than a silent
-          // drop (a duplicate suspend/enqueue attempt is at worst a second,
-          // idempotent-by-content-hash `enqueue` and one extra append-only
-          // suspend event, never a second successor drafted twice).
-          await this.deps.store.remove(instrumentId);
-        } catch (error) {
-          console.error(
-            'Olea: citation-revision suspend/enqueue failed; predecessor stays tracked for retry',
-            error,
-          );
-        }
+        await this.suspendAndEnqueueSuccessor(
+          instrumentId,
+          currentRecord?.conceptIds ?? previous.conceptIds,
+          outcome.event.newContentHash,
+          outcome.event.instrumentId,
+          buildSuccessorRevisionEnqueueInput(outcome.event, current.text),
+          actions,
+          report,
+        );
         return;
       }
+      case 'revised': {
+        report.revised += 1;
+        await this.suspendAndEnqueueSuccessor(
+          instrumentId,
+          currentRecord?.conceptIds ?? previous.conceptIds,
+          outcome.event.newContentHash,
+          outcome.predecessorInstrumentId,
+          outcome.successorEnqueueInput,
+          actions,
+          report,
+        );
+        return;
+      }
+    }
+  }
+
+  /**
+   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage:
+   * suspend the predecessor, enqueue a successor drafted from the current passage, retire
+   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`); a failed
+   * suspend or enqueue leaves the anchor and its pending fact in place, so the question stays
+   * withheld and the same outcome is retried next pass.
+   */
+  private async suspendAndEnqueueSuccessor(
+    instrumentId: string,
+    conceptIds: readonly string[],
+    judgedContentHash: string,
+    predecessorInstrumentId: string,
+    successorEnqueueInput: EnqueueInput,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<void> {
+    try {
+      const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
+        instrumentId,
+        judgedContentHash,
+      );
+      if (!pendingStillCurrent) {
+        report.staleResultDiscarded += 1;
+        return;
+      }
+      await actions.suspend(predecessorInstrumentId, conceptIds);
+      await actions.enqueue(successorEnqueueInput);
+      // Retire tracking only after both succeeded; a failure leaves the entry tracked
+      // (pending fact intact) and the SAME outcome is retried next pass, at-least-once.
+      await this.deps.store.remove(instrumentId);
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision suspend/enqueue failed; predecessor stays tracked for retry',
+        error,
+      );
     }
   }
 }
