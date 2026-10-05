@@ -12,6 +12,10 @@
  *
  * Pure of `obsidian`: the caller supplies the recorded paths and a text reader. Hashes use
  * `computeMaterialityHashes`, the helper the trigger itself uses for a note's current hashes.
+ * A mismatched note is also reported through the optional `markPreviousUnknown` dep
+ * (`ol-egov.141.89.5.85`, [D-311]): its first save after the load has no trustworthy previous text,
+ * so the trigger resolves it as unavailable rather than judging it against a wrong baseline.
+ *
  * Never throws, never overwrites a path the tracker already holds (an edit observed first wins),
  * and reports counts only (INV-3: never a path or text).
  */
@@ -36,6 +40,8 @@ export interface PrimePreviousTextDeps {
   readonly recordedPaths: readonly string[];
   /** The note's current text, or `null` when it is gone or not hers to evaluate. */
   readonly readText: (path: string) => Promise<string | null>;
+  /** Called for every mismatched note (text differs from its record). Counts are unchanged. */
+  readonly markPreviousUnknown?: (path: string) => void;
 }
 
 /**
@@ -74,6 +80,7 @@ export async function primePreviousTextFromVault(
       const current = await computeMaterialityHashes(text);
       if (current.rawHash !== record.hashes.rawHash) {
         mismatched += 1;
+        deps.markPreviousUnknown?.(path);
         continue;
       }
       // Re-checked after the awaits: an edit observed meanwhile wins.

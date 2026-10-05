@@ -168,6 +168,7 @@ import {
   listMaterialityRecordPaths,
   primePreviousTextFromVault,
 } from './ingestion/materiality/prime-previous-text.js';
+import { createPrimingGate } from './ingestion/materiality/priming-gate.js';
 import {
   buildMaterialityWiring,
   type MaterialityEvaluationResult,
@@ -716,6 +717,8 @@ export default class OleaPlugin extends Plugin {
   private materiality: MaterialityTrigger | null = null;
   /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
   private materialityPreviousText: PreviousTextTracker | null = null;
+  /** `ol-egov.141.89.5.85`: opens once the previous-text priming pass settles (any outcome). */
+  private readonly primingGate = createPrimingGate();
   /**
    * `ol-egov.141.89.5.41`: the exact text of Olea's own first-sight stamp writes, by path, until the
    * matching modify event arrives. `evaluateMaterialityChange` treats a note whose text equals its
@@ -2423,6 +2426,15 @@ export default class OleaPlugin extends Plugin {
       );
     }
 
+    // `ol-egov.141.89.5.66` (c): seed the previous-text tracker from the vault for every note
+    // whose text still matches its materiality record, so a first small or debounced save after
+    // this load is judged against the settled text; `ol-egov.141.89.5.85`: and mark every note
+    // changed while Obsidian was closed. Never awaited, never failing; counts only are logged
+    // (INV-3). Started before the watch below is registered, so nothing in between can leave
+    // `primingGate` shut: `evaluateMaterialityChange` awaits it, and `run` opens it however
+    // priming ends, skipped included.
+    void this.primingGate.run(() => this.primeMaterialityPreviousText(vault));
+
     this.register(
       vault.watch((event) => {
         // `ol-egov.141.89.11.13`: `'create'` is accepted alongside
@@ -2464,12 +2476,6 @@ export default class OleaPlugin extends Plugin {
     // `refreshCachedStudyPlan` above documents.
     this.checkForCourseSetupProposals(vault);
 
-    // `ol-egov.141.89.5.66` (c): seed the previous-text tracker from the vault for every note
-    // whose text still matches its materiality record, so a first small or debounced save after
-    // this load is judged against the settled text. Same never-awaited, never-failing posture as
-    // the scan above; counts only are logged (INV-3).
-    void this.primeMaterialityPreviousText(vault);
-
     this.registerInterval(
       window.setInterval(() => {
         void this.tickIngestionAndMaybeRunCorpusRelations();
@@ -2507,6 +2513,7 @@ export default class OleaPlugin extends Plugin {
         tracker,
         store: new ObsidianMaterialityHashStore(this),
         recordedPaths: await listMaterialityRecordPaths(() => this.loadData()),
+        markPreviousUnknown: (p) => this.materiality?.markPreviousUnknown(p),
         readText: async (path) => {
           if (!(await vault.exists(path))) return null;
           const text = await vault.read(path);
@@ -2555,6 +2562,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async evaluateMaterialityChange(vault: VaultSource, path: VaultPath): Promise<void> {
     if (this.materiality === null || this.materialityPreviousText === null) return;
+    await this.primingGate.whenSettled;
     let currentText: string;
     try {
       currentText = await vault.read(path);
