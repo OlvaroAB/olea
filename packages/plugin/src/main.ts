@@ -165,6 +165,10 @@ import {
   type PreviousTextTracker,
 } from './ingestion/materiality/previous-text.js';
 import {
+  listMaterialityRecordPaths,
+  primePreviousTextFromVault,
+} from './ingestion/materiality/prime-previous-text.js';
+import {
   buildMaterialityWiring,
   type MaterialityEvaluationResult,
   type MaterialityTrigger,
@@ -2460,6 +2464,12 @@ export default class OleaPlugin extends Plugin {
     // `refreshCachedStudyPlan` above documents.
     this.checkForCourseSetupProposals(vault);
 
+    // `ol-egov.141.89.5.66` (c): seed the previous-text tracker from the vault for every note
+    // whose text still matches its materiality record, so a first small or debounced save after
+    // this load is judged against the settled text. Same never-awaited, never-failing posture as
+    // the scan above; counts only are logged (INV-3).
+    void this.primeMaterialityPreviousText(vault);
+
     this.registerInterval(
       window.setInterval(() => {
         void this.tickIngestionAndMaybeRunCorpusRelations();
@@ -2486,6 +2496,32 @@ export default class OleaPlugin extends Plugin {
         }
       }, INGESTION_TICK_INTERVAL_MS),
     );
+  }
+
+  /** Runs `primePreviousTextFromVault` once after load; never throws (see its module doc). */
+  private async primeMaterialityPreviousText(vault: VaultSource): Promise<void> {
+    const tracker = this.materialityPreviousText;
+    if (this.materiality === null || tracker === null) return;
+    try {
+      const counts = await primePreviousTextFromVault({
+        tracker,
+        store: new ObsidianMaterialityHashStore(this),
+        recordedPaths: await listMaterialityRecordPaths(() => this.loadData()),
+        readText: async (path) => {
+          if (!(await vault.exists(path))) return null;
+          const text = await vault.read(path);
+          return isOleaHomeNote(text) ? null : text;
+        },
+      });
+      console.debug(
+        `Olea: materiality previous text primed (${counts.primed} primed, ${counts.mismatched} changed since last record, ${counts.unreadable} unreadable, ${counts.alreadyKnown} already seen)`,
+      );
+    } catch (error) {
+      console.error(
+        'Olea: materiality previous-text priming failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
   }
 
   /**
