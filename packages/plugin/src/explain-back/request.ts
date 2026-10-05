@@ -74,6 +74,7 @@ import {
   type GradeSoloInput,
   type GradingSourceMaterial,
   type RelationSet,
+  type RelationType,
   type RetrieveDeps,
   resolveRelatedConceptKeys,
   retrieve,
@@ -210,7 +211,9 @@ function otherEndKey(
   subjectConceptId: string,
   records: readonly ConceptRecord[],
 ): string | undefined {
-  const adjacency = resolveRelatedConceptKeys([edge], records).relatedConceptKeys;
+  const adjacency = resolveRelatedConceptKeys([edge], records, {
+    allowedTypes: new Set<RelationType>([edge.type]), // the partner lookup reads the edge it was handed, causes included; only grouping is filtered ([D-461])
+  }).relatedConceptKeys;
   const others = adjacency.get(subjectConceptId);
   return others === undefined ? undefined : [...others][0];
 }

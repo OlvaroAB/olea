@@ -369,7 +369,10 @@ export { reconcileRelations, totalDropped } from './concept/reconcile.js';
 // for the reused name→key derivation (`ol-63e1`) and the reversible
 // "every relation type counts, adjacency is symmetric" default.
 export type { RelatedConceptKeysResolution } from './concept/related-concept-keys.js';
-export { resolveRelatedConceptKeys } from './concept/related-concept-keys.js';
+export {
+  resolveRelatedConceptKeys,
+  SESSION_GROUPING_RELATION_TYPES,
+} from './concept/related-concept-keys.js';
 // The six ruled concept-to-concept relation types (`[REL-1]`, C7.10,
 // `[D-070]`) — vocabulary, directedness, and which types v0.9 actually
 // emits. See `./concept/relation.js`'s module doc for the per-type argument.
