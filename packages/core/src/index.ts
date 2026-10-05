@@ -3119,6 +3119,7 @@ export {
   RECESSION_CLEAN_STREAK_THRESHOLD,
   SNAPBACK_RECESSION_MULTIPLIER,
   type SupportLevelState,
+  supportLevelActuallyShown,
 } from './support-level/ladder.js';
 export { type SupportLevelReviewFields, supportLevelReviewFields } from './support-level/record.js';
 export {

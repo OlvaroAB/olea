@@ -570,7 +570,7 @@ describe('review-log write shape (D7.1, F2.14)', () => {
   // at adaptation time; this is the write-seam half — `logAndAdvance` must
   // carry it straight into `RecordReviewInput.supportLevel` unchanged, the
   // same seam `ports.ts` already merges into `supportLevelShown` ([SUPP-2]).
-  it('carries the instrument’s chooser decision into RecordReviewInput.supportLevel', async () => {
+  it('records the support shown, not the chooser’s offer, into RecordReviewInput.supportLevel ([D-517])', async () => {
     const item = queueItem(
       qaFixture({ supportLevel: { level: 'guided', provenance: 'evidence-thin' } }),
     );
@@ -580,9 +580,10 @@ describe('review-log write shape (D7.1, F2.14)', () => {
     session.reveal();
     await session.rate('good');
 
+    // No recall screen shows a prompt, so the offered 'guided' is not recorded as shown.
     expect(reviewLog.calls[0]?.supportLevel).toEqual({
-      level: 'guided',
-      provenance: 'evidence-thin',
+      level: 'independent',
+      provenance: 'not-offered',
     });
   });
 
@@ -2509,5 +2510,45 @@ describe('[D-515] a pending draft on a changed non-markdown source is not shown 
     );
     await session.start();
     expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+  });
+});
+
+describe('[D-517] — a recall review records the support actually shown (F2.20, [D-362])', () => {
+  it.each([
+    ['qa', queueItem(qaFixture({ instrumentId: 'q1' }))],
+    ['cloze', queueItem(clozeFixture({ instrumentId: 'c1' }))],
+  ] as const)(
+    'a %s item offered "prompted" at composition, with no prompt on screen, records independent',
+    async (_kind, item) => {
+      const offered = {
+        ...item,
+        instrument: {
+          ...item.instrument,
+          supportLevel: { level: 'prompted', provenance: 'evidence-thin' },
+        },
+      } as typeof item;
+      const reviewLog = fakeReviewLog();
+      const session = new ReviewSession(baseDeps({ queue: [offered], reviewLog }));
+      await session.start();
+      session.reveal();
+      await session.rate('good');
+
+      expect(reviewLog.calls).toHaveLength(1);
+      expect(reviewLog.calls[0]?.supportLevel).toEqual({
+        level: 'independent',
+        provenance: 'not-offered',
+      });
+    },
+  );
+
+  it('an item with no chooser decision still records no support level', async () => {
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({ queue: [queueItem(qaFixture({ instrumentId: 'q2' }))], reviewLog }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
   });
 });

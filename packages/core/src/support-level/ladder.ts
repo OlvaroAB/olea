@@ -114,6 +114,22 @@ export function initialSupportLevelState(): SupportLevelState {
 }
 
 /**
+ * The level a review record carries as "shown" (`[D-517]` (a), scope
+ * principle 16, F2.20, `[D-362]`): what was actually presented, never what the
+ * ladder offered. The ladder's level (`initialSupportLevelState` starts at
+ * `'prompted'`) is an offer; offering support is not recording that she used
+ * it. A review where no prompt was displayed is unaided, so it records
+ * `'independent'` and readiness credits it. Only a displayed prompt records
+ * the offered level.
+ */
+export function supportLevelActuallyShown(
+  offered: SupportLevel,
+  promptShown: boolean,
+): SupportLevel {
+  return promptShown ? offered : 'independent';
+}
+
+/**
  * One session boundary's worth of evolution (`[D-094]`: "transitions only
  * at session boundaries" — a caller must not call this mid-session, and
  * this module has no way to enforce that itself since it holds no clock and
