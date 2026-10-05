@@ -94,6 +94,46 @@ describe('buildKnowledgeKindSourceMaterial', () => {
   });
 });
 
+describe("buildKnowledgeKindSourceMaterial: Olea's own stamp never reaches the model", () => {
+  const STAMP = ['olea-cloze-ids:', '  block-a1: cloze-1', '  block-b2: cloze-2', ''].join('\n');
+
+  it('drops the olea-cloze-ids block from the passage text, keeping her own keys and body byte-for-byte', async () => {
+    const note = [
+      '---',
+      'topic: [Memory]',
+      STAMP + 'course: COGS214',
+      '---',
+      '',
+      'Body {{c1::text}}.',
+    ].join('\n');
+    const vault = new MemoryVaultSource({ 'a.md': note });
+    const passages = await buildKnowledgeKindSourceMaterial(vault, { sourcePaths: ['a.md'] });
+    const expected = [
+      '---',
+      'topic: [Memory]',
+      'course: COGS214',
+      '---',
+      '',
+      'Body {{c1::text}}.',
+    ].join('\n');
+    expect(passages).toHaveLength(1);
+    expect(passages[0]?.text).toBe(expected);
+    expect(passages[0]?.text).not.toContain('olea-cloze-ids');
+    expect(passages[0]?.text).not.toContain('cloze-1');
+    expect(passages[0]?.anchor.location.charRange).toEqual({ start: 0, end: expected.length });
+  });
+
+  it('leaves a note with no stamp unchanged, and skips a note that is only a stamp', async () => {
+    const plain = '---\ntopic: [Memory]\n---\n\nBody.\n';
+    const onlyStamp = `---\n${STAMP}---\n`;
+    const vault = new MemoryVaultSource({ 'plain.md': plain, 'stamp.md': onlyStamp });
+    const passages = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['plain.md', 'stamp.md'],
+    });
+    expect(passages.map((p) => p.text)).toEqual([plain]);
+  });
+});
+
 describe('classifyForRouting', () => {
   const concept = { name: 'Working memory', sourcePaths: [NOTE] };
 
