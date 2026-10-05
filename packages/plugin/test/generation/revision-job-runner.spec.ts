@@ -142,7 +142,7 @@ describe('runInstrumentRevisionJob', () => {
     });
   });
 
-  it('does not thread newPassageText into the drafting request (draftQuizCardsForConcept has no such input)', async () => {
+  it('leaves the drafting request itself unchanged (the passage travels on the generation call, see revision-job-runner-passage-and-retry.spec.ts)', async () => {
     const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
     const cache = createVaultDraftCacheStore(vault);
     const draftForConcept = vi.fn(async () => groundedResponse('Sediment layering'));
