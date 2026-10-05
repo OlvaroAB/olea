@@ -30,12 +30,14 @@
  * A structure written under a `partly-read` state is a partial reading: the state says so, so a
  * consumer of the structure reads the state beside it.
  *
- * **Reachability.** Nothing calls this in production yet. Its production caller is the ingestion
- * trigger's discard point, `../ingestion/wiring.ts` `triggerOutcomesExtractForLandedUnit`, after
- * `reconcileResolvedOutcomes` (where the structure reading is dropped today): one
- * `recordExtraction` call there, and one `recordPending` in the branch that skips on an unavailable
- * Worker. That file is claimed by another lane (`ol-egov.141.89.11.24`), so adding the call is wire
- * work under `ol-egov.141.89.7.5`, not this module's. Nothing here reaches a model or a network:
+ * **Reachability.** The writes are wired (`ol-egov.141.89.7.5`, client `b077cb4e`). The ingestion
+ * trigger's `openScopeReadingWriter` (`../ingestion/wiring.ts:423`) opens this module at :443, and
+ * `triggerOutcomesExtractForLandedUnit` (:641) writes through it: `recordPending` on an unavailable
+ * Worker, a reader error or a failed call (:664, :697, :706), and `recordExtraction` after
+ * `reconcileResolvedOutcomes` (:720). `main.ts:2064` supplies its `scopeReading` deps. Two members
+ * still have no production caller, and both are `ol-egov.141.89.7.5`'s (the wiring register's
+ * `ScopeReadingStore` row): `recordRegistered`, which waits on registration wiring, and
+ * `readDocument`, since nothing reads the store yet. Nothing here reaches a model or a network:
  * INV-1 (no `obsidian` import) and C6 (no server-side state) hold by construction.
  */
 

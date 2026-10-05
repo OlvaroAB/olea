@@ -65,6 +65,17 @@
  * (F8.2's "self-sown", never hidden or auto-pruned). No concept is ever
  * silently dropped from all three.
  *
+ * ## A declared concept with no note of hers can open on a deck or a transcript (F8.2 step two)
+ *
+ * `BuildGroveModelInput.taughtSignals` (`ol-egov.141.89.7.51`) carries
+ * `./taught-signal-producer.js#produceTaughtSignals`'s reading of the course's
+ * decks and supplied transcripts into `classifyDeclaredConcept`, so a concept
+ * the examiner declares and a deck or transcript of the course names is a live
+ * `ground` cell rather than a material gap. It is consulted only for a concept
+ * already in `declaredNames`, so it never moves the denominator, and only for
+ * a concept with a key (a declared name with no concept of this course stays a
+ * material gap by name, as before).
+ *
  * ## F8.3's ban, enforced at the type level too
  *
  * `GroveCourseSummary` carries a `builtCount` and a `denominatorCount`
@@ -110,6 +121,7 @@ import {
   containerNamesToFold,
   type GroveDeclaredState,
   isVolunteer,
+  type TaughtSignalEvidence,
 } from './coverage.js';
 
 export type { GroveDeclaredState } from './coverage.js';
@@ -319,6 +331,17 @@ export interface BuildGroveModelInput {
    * absent-value, never a guessed `'complete'`.
    */
   readonly readCoverage?: readonly ConceptReadCoverage[];
+  /**
+   * Per concept KEY, F8.2's taught-signal evidence for steps two to five (`[D-247]`, `[D-465]`,
+   * `ol-egov.141.89.7.51`) — `./taught-signal-producer.js#produceTaughtSignals`'s output for
+   * this course, unmodified — handed to `classifyDeclaredConcept` for a concept already inside
+   * the declared scope. **Optional, and absence is today's behaviour exactly**: a missing map, or
+   * a key it does not carry, hands that concept no evidence, so only step one (her own note,
+   * `hasMaterial`) can open it. Read after `declaredNames` is fixed and never consulted for
+   * membership, so a deck or transcript can open a declared concept but can never put one in
+   * scope or move the denominator (`[D-465]`: a transcript opens, never scopes).
+   */
+  readonly taughtSignals?: ReadonlyMap<string, TaughtSignalEvidence>;
 }
 
 export interface BuildGroveModelResult {
@@ -434,11 +457,15 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     const presence = input.materialPresence.get(concept.key);
     const hasMaterial = presence !== undefined && presence.notePaths.length > 0;
     const masteryState = input.mastery.get(concept.key)?.state;
+    // F8.2 step two (`ol-egov.141.89.7.51`): spread in only when supplied, so a caller that
+    // wires no producer hands `classifyDeclaredConcept` exactly the input it always did.
+    const taughtSignal = input.taughtSignals?.get(concept.key);
     const classification = classifyDeclaredConcept({
       hasMaterial,
       instrumentCount: presence?.instrumentCount ?? 0,
       ...(masteryState !== undefined ? { masteryState } : {}),
       priorGroundStreak: emptyStreaks.get(concept.key) ?? 0,
+      ...(taughtSignal !== undefined ? { taughtSignal } : {}),
     });
 
     if (classification.kind === 'material-gap') {
