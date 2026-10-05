@@ -149,7 +149,9 @@ export interface PendingRevalidation {
    *  - `passage-ambiguous`: the same text stands in two or more places, or more than one segment
    *    resembles an edited passage, so which one was cited cannot be told;
    *  - `passage-rule-unsupported`: the anchor's segmentation rule is no longer registered and the
-   *    passage could not be re-found cleanly under the current one.
+   *    passage could not be re-found cleanly under the current one;
+   *  - `source-revision-changed` ([D-518]): a non-markdown cited source's bytes no longer match the
+   *    recorded `sourceRevision`.
    * A withheld-for-a-reason fact is cleared by the reader the pass the passage is found again; it
    * never enters the judge's dispatch budget, and it is never read as a confirmed change.
    */
@@ -157,7 +159,18 @@ export interface PendingRevalidation {
 }
 
 /** See {@link PendingRevalidation.reason}. */
-export type PendingReason = 'passage-missing' | 'passage-ambiguous' | 'passage-rule-unsupported';
+export type PendingReason =
+  | 'passage-missing'
+  | 'passage-ambiguous'
+  | 'passage-rule-unsupported'
+  /**
+   * `ol-egov.141.89.5.81` ([D-518]): the instrument cites a non-markdown file whose current bytes
+   * differ from the citation sidecar's `sourceRevision` (or cannot be checked). Lifts only when the
+   * bytes equal that revision again; otherwise it ends when the re-extracted cited page is used to
+   * rewrite the question ([D-508]). A build that predates this value keeps it as the raw string
+   * ([D-473]).
+   */
+  | 'source-revision-changed';
 
 /**
  * `[D-473]` (`ol-egov.141.89.5.52`), the tolerant reader: a reason string this build does not know

@@ -246,7 +246,8 @@ export function isInstrumentRevisionJobPayload(
     v.kind === 'instrument-revision' &&
     typeof v.predecessorInstrumentId === 'string' &&
     v.predecessorInstrumentId.length > 0 &&
-    typeof v.newPassageText === 'string'
+    typeof v.newPassageText === 'string' &&
+    (v.sourceRevision === undefined || typeof v.sourceRevision === 'string')
   );
 }
 
@@ -624,6 +625,7 @@ async function successorCitationOf(
   predecessorInstrumentId: string,
   ownNotePath: VaultPath,
   passage: string,
+  payloadSourceRevision?: string,
 ): Promise<InstrumentCitation | undefined> {
   try {
     const predecessor = await readInstrumentCitation(vault, predecessorInstrumentId);
@@ -637,6 +639,12 @@ async function successorCitationOf(
       return passage.trim().length === 0
         ? base
         : await withGroundingPassage(vault, base, ownNotePath, [passage]);
+    }
+    // `ol-egov.141.89.5.81` ([D-518]): units re-extracted from changed bytes carry the hash they were
+    // read from, recorded as a fresh question's citation would. The accept guard and the
+    // presentation check verify it against the file's bytes later.
+    if (payloadSourceRevision !== undefined) {
+      return { ...base, sourceRevision: payloadSourceRevision };
     }
     if (
       predecessor.sourceRevision !== undefined &&
@@ -758,6 +766,7 @@ export async function runInstrumentRevisionJob(
       payload.predecessorInstrumentId,
       target.sourcePath,
       payload.newPassageText,
+      payload.sourceRevision,
     );
     let cachedCount = 0;
     for (const [index, card] of drafted.contents.entries()) {
@@ -827,6 +836,7 @@ export async function runInstrumentRevisionJob(
       payload.predecessorInstrumentId,
       target.sourcePath,
       payload.newPassageText,
+      payload.sourceRevision,
     );
     let cachedCount = 0;
     for (const [index, question] of drafted.contents.entries()) {

@@ -155,6 +155,7 @@ import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash
 import {
   adaptMaterialityJudgeAsRevisionJudge,
   buildCitationRevisionWiring,
+  type CitationRevisionActions,
   type CitationRevisionTrigger,
 } from './ingestion/materiality/citation-revision-wiring.js';
 import { ObsidianMaterialityHashStore } from './ingestion/materiality/hash-store.js';
@@ -3264,10 +3265,28 @@ export default class OleaPlugin extends Plugin {
   private async tickCitationRevisions(): Promise<void> {
     if (this.citationRevision === null) return;
     try {
-      const vault = this.vaultSource;
-      const deviceId = await ensureDeviceId(this);
-      const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
-      await this.citationRevision.tick(vault, {
+      const { vault, actions } = await this.citationRevisionActions();
+      await this.citationRevision.tick(vault, actions);
+    } catch (error) {
+      console.error('Olea: citation-revision batch pass failed', error);
+    }
+  }
+
+  /**
+   * The vault and the suspend/enqueue actions the citation trigger needs, built fresh per call
+   * (see `tickCitationRevisions`). Shared with the units-landed hook (`ol-egov.141.89.5.81`,
+   * `[D-518]`).
+   */
+  private async citationRevisionActions(): Promise<{
+    vault: VaultSource;
+    actions: CitationRevisionActions;
+  }> {
+    const vault = this.vaultSource;
+    const deviceId = await ensureDeviceId(this);
+    const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
+    return {
+      vault,
+      actions: {
         enqueue: (input) =>
           this.ingestion === null
             ? Promise.resolve(undefined)
@@ -3285,10 +3304,8 @@ export default class OleaPlugin extends Plugin {
             'Olea: a citation relocation proposal is pending confirmation-registry admission (ol-2zfj.35 hand-back)',
           );
         },
-      });
-    } catch (error) {
-      console.error('Olea: citation-revision batch pass failed', error);
-    }
+      },
+    };
   }
 
   /**
@@ -3518,6 +3535,20 @@ export default class OleaPlugin extends Plugin {
     units: readonly ExtractedUnit[],
     sourceRevisions?: ReadonlyMap<string, string>,
   ): Promise<void> {
+    // `ol-egov.141.89.5.81` ([D-518]): a changed non-markdown source's re-extracted units rewrite the
+    // questions held for it. Independent of generation, and never fails the hook.
+    if (
+      sourceRevisions !== undefined &&
+      sourceRevisions.size > 0 &&
+      this.citationRevision !== null
+    ) {
+      try {
+        const { vault, actions } = await this.citationRevisionActions();
+        await this.citationRevision.onSourceUnitsLanded(vault, actions, units, sourceRevisions);
+      } catch (error) {
+        console.error('Olea: citation-revision source rewrite on landed units failed', error);
+      }
+    }
     if (this.generation === null) return;
     try {
       const formatMatch = await this.buildFormatMatchProducer();

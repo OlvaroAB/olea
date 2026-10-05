@@ -232,6 +232,7 @@ import {
   type CurrentPassageState,
   digestPassage,
   type EnqueueInput,
+  type ExtractedUnit,
   enumerateVaultInstruments,
   evaluateCitedPassageRevision,
   hashContent,
@@ -243,6 +244,7 @@ import {
   parsePassageDigest,
   projectInstrumentValidity,
   type RelocationCandidate,
+  type RevisionEvent,
   type RevisionJudgeInput,
   type RevisionJudgePort,
   type RevisionJudgeVerdict,
@@ -386,11 +388,11 @@ export interface CitationRevisionTickReport {
 
 /**
  * `ol-egov.141.89.5.73` ([D-515]): the pending-fact reason written for a non-markdown source whose
- * bytes differ from the recorded `sourceRevision`, or that cannot be checked. A string outside
- * `PendingReason`: `[D-473]`'s tolerant reader keeps it and the hold stands. A new reason value is
- * a contract-level choice, flagged for review.
+ * bytes differ from the recorded `sourceRevision`, or that cannot be checked. A typed
+ * `PendingReason` since `[D-518]` (`ol-egov.141.89.5.81`); `[D-473]`'s tolerant reader keeps it on
+ * older builds.
  */
-export const SOURCE_REVISION_REASON = 'source-revision-changed';
+export const SOURCE_REVISION_REASON: PendingReason = 'source-revision-changed';
 
 /**
  * `ol-egov.141.89.5.77`: how many times in all (the first attempt included) a confirmed rewrite's
@@ -545,6 +547,36 @@ interface MutableTickReport {
   sourceBytesChanged: number;
 }
 
+/** A zeroed report. */
+function blankTickReport(): MutableTickReport {
+  return {
+    tracked: 0,
+    revised: 0,
+    refreshed: 0,
+    relocated: 0,
+    relocationProposed: 0,
+    stranded: 0,
+    judgeUnavailable: 0,
+    newlyBaselined: 0,
+    formattingOnly: 0,
+    staleResultDiscarded: 0,
+    exemptSelfContained: 0,
+    authorshipUnverified: 0,
+    retryExhausted: 0,
+    passageAmbiguous: 0,
+    passageRuleUnsupported: 0,
+    passageSeedUnresolved: 0,
+    successorEnqueueFailed: 0,
+    sourceBytesChanged: 0,
+  };
+}
+
+/** What {@link CitationRevisionTrigger.onSourceUnitsLanded} did: questions rewritten, and questions left held because the cited page has no text. Counts only. */
+export interface SourceLandingResult {
+  readonly rewritten: number;
+  readonly heldNoText: number;
+}
+
 /** Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read to every write that advances the anchor. */
 interface PassageContext {
   readonly sourcePath: VaultPath;
@@ -596,6 +628,17 @@ export class CitationRevisionTrigger {
    */
   private readonly confirmedRewrites = new Map<string, ConfirmedRewrite>();
 
+  /**
+   * `ol-egov.141.89.5.81` ([D-518]): the latest re-extracted page texts of each source some tracked
+   * question cites, by source path, with the byte hash they were extracted from. Memory only, like
+   * {@link confirmedRewrites}: a restart forgets it, the hold stands, and the next extraction of the
+   * file lands again.
+   */
+  private readonly landedSources = new Map<
+    string,
+    { readonly hash: string; readonly pages: ReadonlyMap<number, string> }
+  >();
+
   constructor(private readonly deps: CitationRevisionTriggerDeps) {}
 
   /**
@@ -606,26 +649,7 @@ export class CitationRevisionTrigger {
     vault: VaultSource,
     actions: CitationRevisionActions,
   ): Promise<CitationRevisionTickReport> {
-    const report: MutableTickReport = {
-      tracked: 0,
-      revised: 0,
-      refreshed: 0,
-      relocated: 0,
-      relocationProposed: 0,
-      stranded: 0,
-      judgeUnavailable: 0,
-      newlyBaselined: 0,
-      formattingOnly: 0,
-      staleResultDiscarded: 0,
-      exemptSelfContained: 0,
-      authorshipUnverified: 0,
-      retryExhausted: 0,
-      passageAmbiguous: 0,
-      passageRuleUnsupported: 0,
-      passageSeedUnresolved: 0,
-      successorEnqueueFailed: 0,
-      sourceBytesChanged: 0,
-    };
+    const report = blankTickReport();
     const rules = this.deps.passageRules ?? PASSAGE_RULES;
 
     // See this module's own "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET"
@@ -1025,6 +1049,10 @@ export class CitationRevisionTrigger {
 
     for (const call of judgeCalls) await call();
 
+    // `[D-518]`: units that landed before this pass saw the new bytes (or a rewrite whose enqueue
+    // failed) are acted on here, with no judge call.
+    await this.rewriteHeldFromLandedSources(vault, actions, report);
+
     // Baseline every TRACKED instrument this pass found that the store has
     // never recorded — every MCQ, plus a Q&A/cloze that names a genuine
     // separate citation (`[D-366]`; a self-contained one was already
@@ -1200,7 +1228,12 @@ export class CitationRevisionTrigger {
       const citation = await readInstrumentCitation(vault, record.instrumentId);
       const bytes = await vault.readBinary(citation?.sourcePath ?? sourcePath);
       const now = await hashContent(bytes);
-      if (citation?.sourceRevision !== undefined && citation.sourceRevision === now) return false;
+      if (citation?.sourceRevision !== undefined && citation.sourceRevision === now) {
+        // `[D-518]`: the bytes equal the recorded revision again, so a hold this check raised
+        // lifts, by identical bytes alone (a code exit, no judge call).
+        await this.liftSourceHold(record);
+        return false;
+      }
       observed = now;
     } catch {
       observed = 'unreadable';
@@ -1211,12 +1244,156 @@ export class CitationRevisionTrigger {
         record.instrumentId,
         await hashText(`${SOURCE_REVISION_REASON}\n${observed}`),
         this.deps.clock.now(),
-        SOURCE_REVISION_REASON as PendingReason,
+        SOURCE_REVISION_REASON,
       );
     } catch (error) {
       console.error('Olea: citation-revision source-bytes withhold write failed', error);
     }
     return true;
+  }
+
+  /** `[D-518]`: clears a pending fact whose reason is {@link SOURCE_REVISION_REASON}; any other fact (or none) is left alone. */
+  private async liftSourceHold(record: VaultInstrumentRecord): Promise<void> {
+    try {
+      const anchor = (await this.deps.store.loadAll()).get(record.instrumentId);
+      if (anchor?.pendingRevalidation?.reason !== SOURCE_REVISION_REASON) return;
+      const { pendingRevalidation: _lifted, ...rest } = anchor;
+      await this.deps.store.save(record.instrumentId, rest);
+    } catch (error) {
+      console.error('Olea: citation-revision source-hold lift write failed', error);
+    }
+  }
+
+  /**
+   * `ol-egov.141.89.5.81` ([D-518], [D-508]): a changed non-markdown source's re-extracted units
+   * have landed (`sourceRevisions` is core's `sourcePath -> byte hash` map from that extraction).
+   * Remembers, in memory only, the text of each page of every source some tracked question cites,
+   * then rewrites every question held for that source ({@link rewriteHeldFromLandedSources}). No
+   * judge call; nothing is persisted beyond the existing store.
+   */
+  async onSourceUnitsLanded(
+    vault: VaultSource,
+    actions: CitationRevisionActions,
+    units: readonly ExtractedUnit[],
+    sourceRevisions: ReadonlyMap<string, string>,
+  ): Promise<SourceLandingResult> {
+    const report = blankTickReport();
+    try {
+      // The anchor's own path is the home note for a binary citation; the cited file is named by the sidecar.
+      const cited = new Set<string>();
+      if (sourceRevisions.size > 0) {
+        for (const instrumentId of (await this.deps.store.loadAll()).keys()) {
+          const citation = await readInstrumentCitation(vault, instrumentId);
+          if (citation !== undefined) cited.add(citation.sourcePath);
+        }
+      }
+      for (const [path, hash] of sourceRevisions) {
+        if (!cited.has(path)) continue;
+        const pages = new Map<number, string[]>();
+        for (const unit of units) {
+          if (unit.provenance.sourcePath !== path) continue;
+          const bucket = pages.get(unit.provenance.location.page);
+          if (bucket === undefined) pages.set(unit.provenance.location.page, [unit.text]);
+          else bucket.push(unit.text);
+        }
+        this.landedSources.set(path, {
+          hash,
+          pages: new Map([...pages].map(([page, texts]) => [page, texts.join('\n\n')] as const)),
+        });
+      }
+    } catch (error) {
+      console.error('Olea: citation-revision could not record landed source units', error);
+    }
+    return this.rewriteHeldFromLandedSources(vault, actions, report);
+  }
+
+  /**
+   * For each question held with {@link SOURCE_REVISION_REASON} whose cited source's landed bytes are
+   * the ones the hold was raised for: suspend the predecessor and enqueue a successor drafted from
+   * the cited page's new text (the same shared step the passage path uses, so the late-reply guard
+   * and the bounded retry apply unchanged). A cited page with no text leaves the question held; the
+   * outcome is counted and logged once per pass (a count only, never content).
+   */
+  private async rewriteHeldFromLandedSources(
+    vault: VaultSource,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<SourceLandingResult> {
+    const result = { rewritten: 0, heldNoText: 0 };
+    if (this.landedSources.size === 0) return result;
+    let stored: ReadonlyMap<string, CitationAnchorRecord>;
+    try {
+      stored = await this.deps.store.loadAll();
+    } catch (error) {
+      console.error('Olea: citation-revision could not read the store for source rewrites', error);
+      return result;
+    }
+    for (const [instrumentId, anchor] of stored) {
+      const pending = anchor.pendingRevalidation;
+      if (pending?.reason !== SOURCE_REVISION_REASON) continue;
+      try {
+        const citation = await readInstrumentCitation(vault, instrumentId);
+        const landed =
+          citation === undefined ? undefined : this.landedSources.get(citation.sourcePath);
+        if (citation === undefined || landed === undefined) continue;
+        // The hold must be the one raised for these very bytes.
+        if (
+          pending.sinceContentHash !== (await hashText(`${SOURCE_REVISION_REASON}\n${landed.hash}`))
+        ) {
+          continue;
+        }
+        const text = (
+          citation.page === undefined
+            ? [...landed.pages.entries()]
+                .sort(([a], [b]) => a - b)
+                .map(([, t]) => t)
+                .join('\n\n')
+            : (landed.pages.get(citation.page) ?? '')
+        ).trim();
+        if (text.length === 0) {
+          result.heldNoText += 1;
+          continue;
+        }
+        const confirmed = this.confirmedRewrites.get(instrumentId);
+        if (confirmed !== undefined && confirmed.judgedContentHash !== pending.sinceContentHash) {
+          this.confirmedRewrites.delete(instrumentId);
+        } else if (confirmed?.gaveUp === true) {
+          continue;
+        }
+        const event: RevisionEvent = {
+          instrumentId,
+          at: this.deps.clock.now(),
+          oldContentHash: citation.sourceRevision ?? '',
+          // Per question, so two questions on one file are never collapsed by the queue's own idempotency.
+          newContentHash: await hashText(`${landed.hash}\n${instrumentId}\n${citation.page ?? ''}`),
+          change: SOURCE_REVISION_REASON,
+        };
+        const before = report.successorEnqueueFailed + report.staleResultDiscarded;
+        await this.suspendAndEnqueueSuccessor(
+          instrumentId,
+          anchor.conceptIds,
+          pending.sinceContentHash,
+          instrumentId,
+          buildSuccessorRevisionEnqueueInput(event, text, landed.hash),
+          actions,
+          report,
+        );
+        if (
+          report.successorEnqueueFailed + report.staleResultDiscarded === before &&
+          !this.confirmedRewrites.has(instrumentId)
+        ) {
+          result.rewritten += 1;
+        }
+      } catch (error) {
+        console.error('Olea: citation-revision source rewrite failed', error);
+      }
+    }
+    if (result.heldNoText > 0) {
+      console.info(
+        `Olea: citation-revision left ${result.heldNoText} question(s) held: the cited page of a changed source has no text`,
+      );
+    }
+    return result;
   }
 
   private async applyOutcome(

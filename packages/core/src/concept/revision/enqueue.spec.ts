@@ -34,4 +34,16 @@ describe('buildSuccessorRevisionEnqueueInput', () => {
       newPassageText: 'the updated passage text',
     });
   });
+
+  it('carries a sourceRevision only when given (ol-egov.141.89.5.81)', () => {
+    const withRevision = buildSuccessorRevisionEnqueueInput(event, 'text', 'abc123');
+    expect(withRevision.payload).toEqual({
+      kind: 'instrument-revision',
+      predecessorInstrumentId: 'inst-001',
+      newPassageText: 'text',
+      sourceRevision: 'abc123',
+    });
+    const without = buildSuccessorRevisionEnqueueInput(event, 'text');
+    expect(Object.keys(without.payload as object)).not.toContain('sourceRevision');
+  });
 });

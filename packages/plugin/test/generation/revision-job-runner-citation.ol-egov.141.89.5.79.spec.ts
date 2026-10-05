@@ -74,7 +74,7 @@ class ByteVault extends MemoryVaultSource {
   }
 }
 
-async function run(vault: MemoryVaultSource, passage = PASSAGE) {
+async function run(vault: MemoryVaultSource, passage = PASSAGE, sourceRevision?: string) {
   const cache = createVaultDraftCacheStore(vault);
   await runInstrumentRevisionJob(
     {
@@ -88,6 +88,7 @@ async function run(vault: MemoryVaultSource, passage = PASSAGE) {
       kind: 'instrument-revision',
       predecessorInstrumentId: PREDECESSOR_ID,
       newPassageText: passage,
+      ...(sourceRevision === undefined ? {} : { sourceRevision }),
     },
   );
   return cache.listPending();
@@ -146,6 +147,18 @@ describe('a rewritten question carries a citation with a passage digest (ol-egov
       expect(record?.sourceCitation?.passageDigest).toBeUndefined();
       expect(record?.sourceCitation?.sourceRevision).toBe(expected);
     }
+  });
+
+  it('a payload sourceRevision is the successor citation revision even when the file bytes now differ (ol-egov.141.89.5.81)', async () => {
+    const vault = new ByteVault({ [NOTE_PATH]: NOTE, [PDF]: 'synthetic pdf bytes, edited' });
+    await writeInstrumentCitation(vault, PREDECESSOR_ID, {
+      sourcePath: PDF,
+      page: 3,
+      sourceRevision: 'older-revision',
+    });
+    const [record] = await run(vault, 'Synthetic changed slide text.', 'landed-hash-from-units');
+    expect(record?.sourceCitation?.sourceRevision).toBe('landed-hash-from-units');
+    expect(record?.sourceCitation?.page).toBe(3);
   });
 
   it('a self-referential or absent predecessor citation yields no citation', async () => {
