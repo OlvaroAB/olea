@@ -244,6 +244,10 @@ import {
 import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import {
+  citedPassagePath,
+  HIDDEN_PATH_SEGMENT,
+} from '../ingestion/materiality/citation-revision-wiring.js';
 import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.js';
@@ -1700,22 +1704,6 @@ export interface CurrentPassageReader {
   readonly recordOf: (instrumentId: string) => VaultInstrumentRecord | undefined;
 }
 
-/** Mirrors `citation-revision-wiring.ts` `citedPassagePath` (`:422`, not exported; that file is another lane's). */
-function citedPathOf(record: VaultInstrumentRecord): VaultPath {
-  const sourcePath = record.sourceProvenance?.sourcePath;
-  if (
-    sourcePath !== undefined &&
-    sourcePath !== record.notePath &&
-    sourcePath.toLowerCase().endsWith('.md')
-  ) {
-    return sourcePath;
-  }
-  return record.notePath;
-}
-
-/** Mirrors `citation-revision-wiring.ts` `HIDDEN_PATH_SEGMENT` (`:477`). */
-const HIDDEN_PATH = /(^|\/)\./;
-
 /**
  * Whether an anchored citation's own cited passage still reads as the baseline, by the batch
  * pass's own free code exits and nothing else: passage grain asks `resolveAnchoredPassage`
@@ -1739,7 +1727,7 @@ async function citedPassageUnchanged(
   try {
     const record = reader.recordOf(instrumentId);
     if (record === undefined) return false;
-    const citedPath = citedPathOf(record);
+    const citedPath = citedPassagePath(record);
     const { vault } = reader;
     const material = async (path: VaultPath): Promise<string> => {
       const source = await vault.read(path);
@@ -1767,7 +1755,9 @@ async function citedPassageUnchanged(
         exists: (path) => vault.exists(path),
         material,
         markdownPaths: async () =>
-          (await vault.list({ extensions: ['md'] })).filter((path) => !HIDDEN_PATH.test(path)),
+          (await vault.list({ extensions: ['md'] })).filter(
+            (path) => !HIDDEN_PATH_SEGMENT.test(path),
+          ),
       },
     );
     if (resolution.kind === 'relocated') return true;

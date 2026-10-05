@@ -420,7 +420,7 @@ function isMarkdownVaultPath(path: VaultPath): boolean {
  * `[D-366]` (`sourceProvenance` lives on `VaultInstrumentCommon`, shared by
  * every instrument type — `session/types.ts`).
  */
-function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
+export function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
   const sourcePath = record.sourceProvenance?.sourcePath;
   if (
     sourcePath !== undefined &&
@@ -475,7 +475,7 @@ function isTrackedForRevision(record: VaultInstrumentRecord): boolean {
 }
 
 /** A path with a hidden (dot-prefixed) segment — Obsidian's own folders, the trash, Olea's own layer: never a note her passage moved into. */
-const HIDDEN_PATH_SEGMENT = /(^|\/)\./;
+export const HIDDEN_PATH_SEGMENT = /(^|\/)\./;
 
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
 interface MutableTickReport {
