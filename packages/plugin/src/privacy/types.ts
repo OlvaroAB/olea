@@ -52,11 +52,29 @@ export interface ObsidianDataHost {
  * write already on its way puts back.
  */
 export async function deleteVaultPath(vault: VaultSource, path: VaultPath): Promise<void> {
+  const remove = requireVaultDelete(vault, path);
+  await withPathQueue(path, () => remove(path));
+}
+
+/**
+ * {@link deleteVaultPath} without joining `path`'s queue, for a caller that orders the delete on
+ * the queue itself (`../generation/cache-store.ts`'s `purgeDraftCache`, `ol-egov.141.89.104.53`):
+ * a task already holding a path's queue must never queue on it again (`olea-core`'s
+ * `vault/path-queue.ts`). The same loud failure when `vault.delete` is missing.
+ */
+export async function deleteVaultPathUnqueued(vault: VaultSource, path: VaultPath): Promise<void> {
+  await requireVaultDelete(vault, path)(path);
+}
+
+function requireVaultDelete(
+  vault: VaultSource,
+  path: VaultPath,
+): (path: VaultPath) => Promise<void> {
   const remove = vault.delete?.bind(vault);
   if (remove === undefined) {
     throw new Error(`VaultSource.delete is required for privacy deletion flows (path: ${path})`);
   }
-  await withPathQueue(path, () => remove(path));
+  return remove;
 }
 
 /**

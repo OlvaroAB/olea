@@ -48,13 +48,13 @@
 
 import type { VaultSource } from 'olea-core';
 import { CORPUS_RELATION_STATE_STORAGE_KEY } from '../concept/corpusRelationStateStore.js';
-import { createVaultDraftCacheStore, DRAFT_CACHE_FOLDER } from '../generation/cache-store.js';
+import { purgeDraftCache } from '../generation/cache-store.js';
 import { INGESTION_QUEUE_STORAGE_KEY } from '../ingestion/queue-store.js';
 import { KEYWORD_INDEX_STORAGE_KEY } from '../keyword-index/store.js';
 import { STUDY_PLAN_STORAGE_KEY } from '../plan/store.js';
 import { EMBEDDING_CACHE_STORAGE_KEY } from '../retrieval/embedding-cache-store.js';
 import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
-import { deleteVaultPath, type ObsidianDataHost } from './types.js';
+import { deleteVaultPathUnqueued, type ObsidianDataHost } from './types.js';
 
 /**
  * The five `data.json` keys D-006 calls a pure derivation. Order is
@@ -101,19 +101,12 @@ export async function purgeCache(deps: CachePurgeDeps): Promise<CachePurgeResult
   if (hasReadModifyWrite(deps.dataHost)) await deps.dataHost.readModifyWrite(clear);
   else await deps.dataHost.saveData(clear(await deps.dataHost.loadData()));
 
-  const draftStore = createVaultDraftCacheStore(deps.vault);
-  const drafts = await draftStore.list();
-  const deletedDraftPaths: string[] = [];
-  for (const draft of drafts) {
-    const path = `${DRAFT_CACHE_FOLDER}/${draft.draftId}.json`;
-    await deleteVaultPath(deps.vault, path);
-    deletedDraftPaths.push(path);
-  }
-  const indexPath = `${DRAFT_CACHE_FOLDER}/index.json`;
-  if (await deps.vault.exists(indexPath)) {
-    await deleteVaultPath(deps.vault, indexPath);
-    deletedDraftPaths.push(indexPath);
-  }
+  // Every draft the index names, then the index, as one task on the index's queue
+  // (`ol-egov.141.89.104.53`): a draft written meanwhile is purged with its entry or kept with it,
+  // never left on disk with no entry. Each delete still waits for writes queued before it.
+  const deletedDraftPaths = [
+    ...(await purgeDraftCache(deps.vault, (path) => deleteVaultPathUnqueued(deps.vault, path))),
+  ];
 
   return { clearedDataJsonKeys, deletedDraftPaths };
 }
