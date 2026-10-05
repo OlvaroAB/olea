@@ -71,6 +71,7 @@ import {
   type ConceptKeyRecord,
   readConceptKeyCanonicalIndex,
 } from '../concept/key-store.js';
+import { skipUnreadableStoreRecord } from '../vault/store-record.js';
 import type { VaultSource } from '../vault/types.js';
 import {
   type OutcomeConceptNearMatchStatus,
@@ -304,18 +305,26 @@ export async function reconcileOutcomeConcepts(
         attached.push({ outcomeId: outcome.id, conceptKey: concept.key, kind });
         matchedAny = true;
       } else if (kind === 'near-token-containment') {
-        const nearMatch = await proposeOutcomeConceptNearMatch(
-          vault,
-          outcome.id,
-          concept.key,
-          writerOptions,
-        );
+        matchedAny = true;
+        let nearMatch: Awaited<ReturnType<typeof proposeOutcomeConceptNearMatch>>;
+        try {
+          nearMatch = await proposeOutcomeConceptNearMatch(
+            vault,
+            outcome.id,
+            concept.key,
+            writerOptions,
+          );
+        } catch (error) {
+          // A near-match record this build cannot read is left exactly as it is and skipped
+          // (T12, `ol-egov.141.89.104.2`); the rest of the reconciliation carries on.
+          skipUnreadableStoreRecord(error);
+          continue;
+        }
         proposed.push({
           outcomeId: outcome.id,
           conceptKey: concept.key,
           status: nearMatch.status,
         });
-        matchedAny = true;
       }
     }
 

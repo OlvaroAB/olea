@@ -51,7 +51,7 @@
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
-import { isValidDeviceId } from 'olea-core';
+import { isValidDeviceId, withPathQueue } from 'olea-core';
 import {
   appendCompositionRecord,
   COMPOSITION_LOG_FOLDER,
@@ -221,9 +221,12 @@ async function appendJournalLine(
 ): Promise<boolean> {
   try {
     const path = unresolvedCompositionWritesPath(deviceId);
-    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-    const prefix = existing.length > 0 && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await vault.write(path, prefix + line);
+    // One task on the journal file's queue (`ol-egov.141.89.104.2`): two overlapping lines both land.
+    await withPathQueue(path, async () => {
+      const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+      const prefix = existing.length > 0 && !existing.endsWith('\n') ? `${existing}\n` : existing;
+      await vault.write(path, prefix + line);
+    });
     return true;
   } catch {
     return false;

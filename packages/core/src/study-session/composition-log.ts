@@ -28,6 +28,7 @@
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import {
   type CompositionRecord,
@@ -72,7 +73,8 @@ export interface AppendCompositionRecordResult {
  * reasoning). Extends, never rewrites: a partial trailing line from an interrupted earlier append
  * survives as a literal prefix, closed off by its own `\n` before this line (INV-2, the review
  * and misconception writers' own technique, kept as a near-duplicate for the reason
- * `../misconception/write.ts` gives).
+ * `../misconception/write.ts` gives). The read and the write run as one task on the day file's
+ * queue (`../vault/path-queue.ts`), so two overlapping appends both land.
  */
 export async function appendCompositionRecord(
   vault: VaultSource,
@@ -81,10 +83,12 @@ export async function appendCompositionRecord(
 ): Promise<AppendCompositionRecordResult> {
   const path = compositionLogPath(record.composedAt.slice(0, 10), deviceId);
   const line = serializeCompositionRecord(record);
-  const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-  const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-  const prefix = needsSeparator ? `${existing}\n` : existing;
-  await vault.write(path, prefix + line);
+  await withPathQueue(path, async () => {
+    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+    const prefix = needsSeparator ? `${existing}\n` : existing;
+    await vault.write(path, prefix + line);
+  });
   return { record, path };
 }
 

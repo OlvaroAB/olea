@@ -22,6 +22,7 @@
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { CalendarDay } from './calendar-day.js';
 import {
@@ -58,7 +59,8 @@ export function courseCutoffLogPath(date: CalendarDay, deviceId: string): VaultP
 /**
  * Appends one record to this device's file for `takenOn`. Extends, never rewrites: a partial
  * trailing line from an interrupted earlier append survives as a literal prefix, closed off by its
- * own `\n` before this line (INV-2, the composition log's technique).
+ * own `\n` before this line (INV-2, the composition log's technique). The read and the write run as
+ * one task on the day file's queue (`../vault/path-queue.ts`), so two overlapping appends both land.
  */
 export async function appendCourseCutoffRecord(
   vault: VaultSource,
@@ -68,10 +70,12 @@ export async function appendCourseCutoffRecord(
 ): Promise<VaultPath> {
   const path = courseCutoffLogPath(takenOn, deviceId);
   const line = serializeCourseCutoffRecord(record);
-  const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-  const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-  const prefix = needsSeparator ? `${existing}\n` : existing;
-  await vault.write(path, prefix + line);
+  await withPathQueue(path, async () => {
+    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+    const prefix = needsSeparator ? `${existing}\n` : existing;
+    await vault.write(path, prefix + line);
+  });
   return path;
 }
 

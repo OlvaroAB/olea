@@ -10,7 +10,8 @@
  * being rolled up are the review events her instruments produced, not a
  * concept-to-concept hierarchy: `concept ↔ concept` edges exist in the
  * knowledge model's table (§5, "prerequisite, part-of, contrasts-with") but
- * nothing in this codebase extracts, stores or consumes them, and no
+ * the relation pipeline does extract and cache them (`../concept/relation.ts`,
+ * `../concept/relation-cache.ts`), but nothing in mastery reads them and no
  * functional-scope item asks mastery to climb one. Building a parent-concept
  * rollup over child *concepts* would be inventing a second, un-contracted
  * kind of aggregation on top of the one the knowledge model actually names.

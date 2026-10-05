@@ -63,6 +63,7 @@
 
 import { isValidDeviceId } from 'olea-core';
 import type { ObsidianDataHost } from '../keyword-index/store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The top-level key this module owns inside the plugin's single `data.json` blob. */
 export const DEVICE_ID_STORAGE_KEY = 'deviceId';
@@ -95,28 +96,56 @@ export function generateDeviceId(random: RandomSource = defaultRandom): string {
  * Idempotent: every later call returns the same id without writing. The write
  * happens only when there was nothing usable stored, which keeps the common
  * path free of a `saveData` on every plugin load.
+ *
+ * The mint is one `readModifyWrite` on the settings file's queue when the host
+ * has one (`ol-egov.141.89.104.2`), so a store writing its own key at the same
+ * moment is never discarded by this save, and two overlapping first calls
+ * agree on one id. A sealed host (a full delete under way) runs no
+ * read-modify-write at all; the id minted then is this call's only, exactly as
+ * the dropped save left it before.
  */
 export async function ensureDeviceId(
   host: ObsidianDataHost,
   random: RandomSource = defaultRandom,
 ): Promise<string> {
-  const existing = await host.loadData();
-  const blob: Record<string, unknown> =
-    typeof existing === 'object' && existing !== null
-      ? { ...(existing as Record<string, unknown>) }
-      : {};
-
-  const stored = blob[DEVICE_ID_STORAGE_KEY];
   // Validated on read, not merely type-checked: an id that fails
   // `isValidDeviceId` would make every `reviewLogPath` call throw, and the
   // throw would surface at the moment she finishes a review — the worst
   // possible time to discover a bad filename.
-  if (typeof stored === 'string' && isValidDeviceId(stored)) return stored;
+  const existing = await host.loadData();
+  const stored = storedDeviceId(existing);
+  if (stored !== undefined) return stored;
 
-  const minted = generateDeviceId(random);
-  blob[DEVICE_ID_STORAGE_KEY] = minted;
-  await host.saveData(blob);
-  return minted;
+  if (!hasReadModifyWrite(host)) {
+    const minted = generateDeviceId(random);
+    await host.saveData({ ...blobOf(existing), [DEVICE_ID_STORAGE_KEY]: minted });
+    return minted;
+  }
+  let settled: string | undefined;
+  await host.readModifyWrite((current) => {
+    const already = storedDeviceId(current);
+    if (already !== undefined) {
+      settled = already;
+      return current;
+    }
+    settled = generateDeviceId(random);
+    return { ...blobOf(current), [DEVICE_ID_STORAGE_KEY]: settled };
+  });
+  return settled ?? generateDeviceId(random);
+}
+
+/** The valid id stored in a settings blob, or `undefined`. */
+function storedDeviceId(blob: unknown): string | undefined {
+  if (typeof blob !== 'object' || blob === null) return undefined;
+  const stored = (blob as Record<string, unknown>)[DEVICE_ID_STORAGE_KEY];
+  return typeof stored === 'string' && isValidDeviceId(stored) ? stored : undefined;
+}
+
+/** A copy of the settings blob's keys, or none when there is no object to copy. */
+function blobOf(existing: unknown): Record<string, unknown> {
+  return typeof existing === 'object' && existing !== null
+    ? { ...(existing as Record<string, unknown>) }
+    : {};
 }
 
 /**
@@ -131,14 +160,13 @@ export async function resetDeviceId(
   host: ObsidianDataHost,
   random: RandomSource = defaultRandom,
 ): Promise<string> {
-  const existing = await host.loadData();
-  const blob: Record<string, unknown> =
-    typeof existing === 'object' && existing !== null
-      ? { ...(existing as Record<string, unknown>) }
-      : {};
-
   const fresh = generateDeviceId(random);
-  blob[DEVICE_ID_STORAGE_KEY] = fresh;
-  await host.saveData(blob);
+  const merge = (existing: unknown): Record<string, unknown> => ({
+    ...blobOf(existing),
+    [DEVICE_ID_STORAGE_KEY]: fresh,
+  });
+  // One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`).
+  if (hasReadModifyWrite(host)) await host.readModifyWrite(merge);
+  else await host.saveData(merge(await host.loadData()));
   return fresh;
 }

@@ -65,6 +65,7 @@ import {
   WorkerMisconceptionEmbedder,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { hasReadModifyWrite } from './retrieval/serializing-data-host.js';
 import { SLOT_E_MODEL_ID } from './retrieval/wiring.js';
 import { isWorkerConfigured, ObsidianWorkerConfigStore } from './worker/config-store.js';
 import type { WorkerConfig } from './worker/transport.js';
@@ -107,14 +108,21 @@ export class ObsidianMisconceptionEmbeddingCacheStore implements MisconceptionEm
     return isPersistedMisconceptionEmbeddingCache(candidate) ? candidate : null;
   }
 
+  /** One link of the settings file's queue when the host has one (`ol-egov.141.89.104.2`). */
   async save(cache: PersistedMisconceptionEmbeddingCache): Promise<void> {
-    const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[MISCONCEPTION_EMBEDDING_CACHE_STORAGE_KEY] = cache;
-    await this.host.saveData(blob);
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[MISCONCEPTION_EMBEDDING_CACHE_STORAGE_KEY] = cache;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    await this.host.saveData(merge(await this.host.loadData()));
   }
 }
 

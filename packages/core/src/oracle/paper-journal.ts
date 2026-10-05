@@ -54,6 +54,8 @@
 
 import { canonicalJson } from '../outcome/canonical-json.js';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { PaperGeneratedItem } from './paper-items.js';
 import {
@@ -332,16 +334,32 @@ async function loadJournal(
   throw new Error(`${fnName}: no journal "${journalId}" — never mints one.`);
 }
 
-/** Folds one event into the stored journal and writes it back only if something changed. */
+/**
+ * Folds one event into the stored journal and writes it back only if something changed.
+ *
+ * The fold reads the journal file again, as one task on its queue (`../vault/path-queue.ts`,
+ * `ol-egov.141.89.104.2`), rather than folding onto the caller's copy: a run holds its copy across
+ * slow drafting work, and folding onto it would write back a journal that lacks whatever another
+ * task recorded meanwhile (a discard, say). `journal` names the file; a journal that is gone or no
+ * longer reads as one is refused, never recreated from the caller's copy.
+ */
 async function appendJournalEvent(
   vault: VaultSource,
   journal: PaperJournalRecord,
   event: PaperJournalEvent,
 ): Promise<PaperJournalRecord> {
-  const updated = applyPaperJournalEvent(journal, event);
-  if (updated === undefined || updated === journal) return journal;
-  await vault.write(paperJournalPath(journal.id), serialize(updated));
-  return updated;
+  const path = paperJournalPath(journal.id);
+  return withPathQueue(path, async () => {
+    const fresh = await readStoreRecord(vault, path, isPaperJournalRecord);
+    if (fresh.kind !== 'record' || fresh.record.id !== journal.id) {
+      throw new Error(`appendJournalEvent: journal "${journal.id}" is no longer readable on disk.`);
+    }
+    const current = fresh.record;
+    const updated = applyPaperJournalEvent(current, event);
+    if (updated === undefined || updated === current) return current;
+    await vault.write(path, serialize(updated));
+    return updated;
+  });
 }
 
 function assertDependencyOrder(plan: readonly PaperJournalPlanSlot[]): void {
@@ -454,7 +472,8 @@ export async function openPaperJournal(
   });
   if (opened === undefined)
     throw new Error('openPaperJournal: an opened event produced no journal');
-  await vault.write(paperJournalPath(opened.id), serialize(opened));
+  const openedPath = paperJournalPath(opened.id);
+  await withPathQueue(openedPath, () => vault.write(openedPath, serialize(opened)));
   const incompatibleDiscards = discarded.filter((d) => d.changed.length > 0);
   return {
     decision: incompatibleDiscards.length > 0 ? 'discarded-and-fresh' : 'fresh',

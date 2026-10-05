@@ -61,6 +61,8 @@
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecordForWrite } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { ConceptKeyCanonicalIndex } from './key-store.js';
 import type { RelationType } from './relation.js';
@@ -134,19 +136,21 @@ export async function listEdgeDispositionLogs(
   return out;
 }
 
+/**
+ * The log an append extends. A file that does not read as a log (torn, or a newer build's event
+ * kind) throws `UnreadableStoreRecordError` instead of reading as absent: a decline in it is a
+ * hard labelled negative, and a fresh one-event log written over it would erase it (T12,
+ * `ol-egov.141.89.104.2`). Its bytes are left as they are.
+ */
 async function readLog(
   vault: VaultSource,
   propositionKeyValue: string,
 ): Promise<EdgeDispositionLog | undefined> {
-  const path = edgeDispositionLogPath(propositionKeyValue);
-  if (!(await vault.exists(path))) return undefined;
-  try {
-    const parsed: unknown = JSON.parse(await vault.read(path));
-    if (isEdgeDispositionLog(parsed)) return parsed;
-  } catch {
-    // Corrupt: treated as absent.
-  }
-  return undefined;
+  return readStoreRecordForWrite(
+    vault,
+    edgeDispositionLogPath(propositionKeyValue),
+    isEdgeDispositionLog,
+  );
 }
 
 function defaultNow(): string {
@@ -162,6 +166,10 @@ function defaultNow(): string {
  * idempotent caller idempotent; two GENUINELY different moments recording the same kind (e.g.
  * declined, later re-accepted, later declined again) are three distinct, non-adjacent events and
  * all three are kept.
+ *
+ * The read and the write run as one task on the log file's queue (`../vault/path-queue.ts`,
+ * `ol-egov.141.89.104.2`), so two overlapping dispositions on one install both land, in the order
+ * they were made, and the second is compared against the first, never against a stale copy.
  */
 export async function appendEdgeDisposition(
   vault: VaultSource,
@@ -170,20 +178,23 @@ export async function appendEdgeDisposition(
   options: { readonly now?: () => string } = {},
 ): Promise<EdgeDispositionLog> {
   const now = options.now ?? defaultNow;
-  const existing = await readLog(vault, propositionKeyValue);
-  const priorEvents = existing?.events ?? [];
-  const latest = priorEvents[priorEvents.length - 1];
-  if (latest !== undefined && latest.kind === kind) {
-    return existing as EdgeDispositionLog;
-  }
+  const path = edgeDispositionLogPath(propositionKeyValue);
+  return withPathQueue(path, async () => {
+    const existing = await readLog(vault, propositionKeyValue);
+    const priorEvents = existing?.events ?? [];
+    const latest = priorEvents[priorEvents.length - 1];
+    if (latest !== undefined && latest.kind === kind) {
+      return existing as EdgeDispositionLog;
+    }
 
-  const log: EdgeDispositionLog = {
-    propositionKey: propositionKeyValue,
-    events: [...priorEvents, { kind, at: now() }],
-    schemaVersion: EDGE_DISPOSITION_LOG_SCHEMA_VERSION,
-  };
-  await vault.write(edgeDispositionLogPath(propositionKeyValue), serialize(log));
-  return log;
+    const log: EdgeDispositionLog = {
+      propositionKey: propositionKeyValue,
+      events: [...priorEvents, { kind, at: now() }],
+      schemaVersion: EDGE_DISPOSITION_LOG_SCHEMA_VERSION,
+    };
+    await vault.write(path, serialize(log));
+    return log;
+  });
 }
 
 /** The most recent disposition, or `undefined` for a proposition with no recorded disposition at all — the ordinary case for the vast majority of edges, which nobody has yet triaged. */

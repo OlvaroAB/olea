@@ -119,6 +119,28 @@ function hasFullDeleteWriterSeal(
  * that one in the same step, so one call closes every writer of the instance, in the settings file
  * and under `.olea/` alike.
  */
+/**
+ * The settings queue the delete itself writes through. `ol-egov.141.89.104.2` (T12): the queue
+ * refuses to replace a settings file that does not hold an object, but a full delete is her
+ * request to remove it, so the delete's own writes go through the queue's
+ * `readModifyWriteReplacingUnreadable` when it has one — unchanged from before the refusal.
+ */
+function deleteQueue(queue: AtomicDataHost): AtomicDataHost {
+  const replacing = (queue as Partial<ReplacingDataHost>).readModifyWriteReplacingUnreadable;
+  if (typeof replacing !== 'function') return queue;
+  return {
+    loadData: () => queue.loadData(),
+    saveData: (data) => queue.saveData(data),
+    readModifyWrite: (mutate) => replacing.call(queue, mutate),
+  };
+}
+
+interface ReplacingDataHost {
+  readModifyWriteReplacingUnreadable(
+    mutate: (current: unknown) => unknown | Promise<unknown>,
+  ): Promise<void>;
+}
+
 export class FullDeleteWriteSeal implements AtomicDataHost {
   private sealDepth = 0;
   private retired = false;
@@ -156,7 +178,7 @@ export class FullDeleteWriteSeal implements AtomicDataHost {
     }
     const sealedLayer = await layer;
     return {
-      dataHost: this.queue,
+      dataHost: deleteQueue(this.queue),
       vault: sealedLayer?.vault ?? null,
       release: () => {
         if (released || this.retired) return;

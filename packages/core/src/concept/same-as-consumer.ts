@@ -15,7 +15,14 @@
  * a VIEW, never a write: nothing here calls `VaultSource.write`, mutates a `ConceptRecord`, a
  * `RelationCacheRecord` or a `SameAsLinkRecord` on disk.
  *
- * **Canonical key, stated plainly: the pair's `keyA`.** `./same-as.ts`'s own `canonicalPair` /
+ * **Classes, not pairs (`[D-295]`, KG-W1a).** Confirmed links read over canonical keys form
+ * connected classes (a chain `a=b, b=c` and a star `a=c, b=c` are each one class), and every member
+ * redirects straight to the class's one representative: its code-unit-first canonical key. The
+ * result depends on the set of confirmed links, never on the order the link files arrive in.
+ * A severed or declined link contributes no edge; what a sever does inside a class that stays
+ * connected through other links is not ruled here and reads as the remaining edges connect.
+ *
+ * **Canonical key for a single pair: the pair's `keyA`.** `./same-as.ts`'s own `canonicalPair` /
  * `byCodeUnit` already sorts and persists `keyA <= keyB` for every link that exists — this module
  * reuses that already-persisted, deterministic order rather than inventing a second one (e.g.
  * "earliest mint"). Two reasons, not one: first, "earliest mint" would need a `ConceptKeyRecord`
@@ -108,8 +115,9 @@ export function canonicalKeyForLink(link: SameAsLinkRecord): string | undefined 
 }
 
 /**
- * Every confirmed link's losing key (`keyB`) → canonical key (`keyA`), as a lookup a caller
- * applies to its own keyed records. `'proposed'`, `'declined'` and `'severed'` links contribute
+ * Every non-representative member of each confirmed class → the class's representative (its
+ * code-unit-first canonical key), as a lookup a caller applies to its own keyed records. One step
+ * reaches the final key. `'proposed'`, `'declined'` and `'severed'` links contribute
  * nothing (requirements 2 and 3) — this is the one seam through which every function below
  * inherits that discipline, rather than each re-checking `status` itself.
  *
@@ -122,27 +130,45 @@ export function buildSameAsKeyRedirect(
   links: readonly SameAsLinkRecord[],
   canonicalKeys?: ConceptKeyCanonicalIndex,
 ): ReadonlyMap<string, string> {
-  if (canonicalKeys === undefined) {
-    const redirect = new Map<string, string>();
-    for (const link of links) {
-      const canonicalKey = canonicalKeyForLink(link);
-      if (canonicalKey === undefined) continue;
-      if (link.keyB !== canonicalKey) redirect.set(link.keyB, canonicalKey);
+  // Union-find over canonical keys, built from confirmed links only. The representative of a
+  // class is its code-unit-first member, chosen by value, never by link order, so the result
+  // is the same for every arrival order of the link files.
+  const parent = new Map<string, string>();
+  const find = (key: string): string => {
+    let root = key;
+    for (let next = parent.get(root); next !== undefined; next = parent.get(root)) root = next;
+    for (let cur = key; cur !== root; ) {
+      const next = parent.get(cur) ?? root;
+      parent.set(cur, root);
+      cur = next;
     }
-    return redirect;
+    return root;
+  };
+  const union = (x: string, y: string): void => {
+    const rx = find(x);
+    const ry = find(y);
+    if (rx === ry) return;
+    // keep the code-unit-first key as the root, so the root is the representative
+    if (rx < ry) parent.set(ry, rx);
+    else parent.set(rx, ry);
+  };
+
+  for (const link of links) {
+    if (link.status !== 'confirmed') continue;
+    const a = canonicalKeys === undefined ? link.keyA : canonicalKeys.canonicalOf(link.keyA);
+    const b = canonicalKeys === undefined ? link.keyB : canonicalKeys.canonicalOf(link.keyB);
+    union(a, b);
   }
 
   const redirect = new Map<string, string>();
-  for (const link of links) {
-    if (canonicalKeyForLink(link) === undefined) continue;
-    const a = canonicalKeys.canonicalOf(link.keyA);
-    const b = canonicalKeys.canonicalOf(link.keyB);
-    if (a === b) continue;
-    const [surviving, losing] = a < b ? [a, b] : [b, a];
-    redirect.set(losing, surviving);
+  for (const key of [...parent.keys()]) {
+    const root = find(key);
+    if (root !== key) redirect.set(key, root);
   }
-  for (const [superseded, canonical] of canonicalKeys.superseded) {
-    redirect.set(superseded, redirect.get(canonical) ?? canonical);
+  if (canonicalKeys !== undefined) {
+    for (const [superseded, canonical] of canonicalKeys.superseded) {
+      redirect.set(superseded, find(canonical));
+    }
   }
   return redirect;
 }

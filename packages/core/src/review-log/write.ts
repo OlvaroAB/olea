@@ -54,6 +54,7 @@ import {
   verdictLogRecord,
 } from 'olea-contracts';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { DisputeLogRecordInput } from './contest-record.js';
 import { REVIEW_LOG_FOLDER, reviewLogPath } from './path.js';
@@ -366,6 +367,11 @@ function localDateOf(timestamp: string): string {
  * Takes `ReviewLogEntry` alone (not `ReviewLogEntry | DisputeLogRecord` as
  * before `ol-qs72`) — `disputeLogRecordV5` is now a member of the contracts
  * union, so every kind this file writes already fits the one type.
+ *
+ * The read and the write run as one task on the day file's queue
+ * (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`): two appends that overlap
+ * on one install both land, in the order they were made, instead of the
+ * second discarding the first one's line.
  */
 async function appendEntryLine(
   vault: VaultSource,
@@ -375,10 +381,12 @@ async function appendEntryLine(
   const path = reviewLogPath(localDateOf(entry.timestamp), deviceId);
   const line = `${JSON.stringify(entry)}\n`;
 
-  const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-  const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-  const prefix = needsSeparator ? `${existing}\n` : existing;
-  await vault.write(path, prefix + line);
+  await withPathQueue(path, async () => {
+    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+    const prefix = needsSeparator ? `${existing}\n` : existing;
+    await vault.write(path, prefix + line);
+  });
 
   return path;
 }

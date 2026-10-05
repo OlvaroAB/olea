@@ -3272,6 +3272,16 @@ export {
   type ListUnderCapableVault,
   listFolder,
 } from './vault/list-folder.js';
+// `ol-egov.141.89.104.2`: one queue per vault path for whole-file read-modify-writes and deletes,
+// and the in-queue re-read of one record file. Exported for the plugin's own `.olea/` stores.
+export { pathQueueKey, withPathQueue } from './vault/path-queue.js';
+export {
+  readStoreRecord,
+  readStoreRecordForWrite,
+  type StoreRecordRead,
+  skipUnreadableStoreRecord,
+  UnreadableStoreRecordError,
+} from './vault/store-record.js';
 export {
   isVaultPath,
   type ListOptions,
