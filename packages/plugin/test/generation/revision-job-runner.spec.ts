@@ -192,7 +192,7 @@ describe('runInstrumentRevisionJob', () => {
     expect(outcome).toEqual({ ok: false, retryable: true });
   });
 
-  it('a grounded refusal caches nothing and is not a job failure', async () => {
+  it('a grounded refusal caches nothing and is a recorded non-retryable failure', async () => {
     const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
     const cache = createVaultDraftCacheStore(vault);
 
@@ -206,7 +206,7 @@ describe('runInstrumentRevisionJob', () => {
       payload(),
     );
 
-    expect(outcome).toEqual({ ok: true });
+    expect(outcome).toMatchObject({ ok: false, retryable: false }); // ol-egov.141.89.5.79: recorded, not silent
     expect(await cache.listPending()).toEqual([]);
   });
 
@@ -371,7 +371,7 @@ describe('runInstrumentRevisionJob: same-kind successor', () => {
     expect(pending[0]?.question).toBeUndefined();
   });
 
-  it("a 'qa' predecessor: a grounded refusal caches nothing and is not a job failure", async () => {
+  it("a 'qa' predecessor: a grounded refusal caches nothing and is a recorded non-retryable failure", async () => {
     const vault = new MemoryVaultSource({ [QA_NOTE_PATH]: QA_NOTE });
     const predecessorId = await predecessorIdIn(vault, QA_NOTE_PATH);
     const cache = createVaultDraftCacheStore(vault);
@@ -390,7 +390,7 @@ describe('runInstrumentRevisionJob: same-kind successor', () => {
       },
     );
 
-    expect(outcome).toEqual({ ok: true });
+    expect(outcome).toMatchObject({ ok: false, retryable: false }); // ol-egov.141.89.5.79: recorded, not silent
     expect(await cache.listPending()).toEqual([]);
   });
 
@@ -861,12 +861,23 @@ describe('runInstrumentRevisionJob: the successor carries its demand on the cach
     ]);
   });
 
-  it('when every quiz successor question is refused nothing is cached and the job still succeeds, like a refused or empty draft', async () => {
+  it('when every quiz successor question is refused nothing is cached and the job is a recorded non-retryable failure (ol-egov.141.89.5.79)', async () => {
     const { cache, outcome } = await reviseMcq(['calculate']);
 
-    expect(outcome).toEqual({ ok: true });
+    expect(outcome).toMatchObject({ ok: false, retryable: false });
+    expect((outcome as { reason?: string }).reason).toContain(PREDECESSOR_ID);
+    expect((outcome as { reason?: string }).reason).toContain('stays suspended');
     expect(await cache.listPending()).toEqual([]);
     expect(draftDemandRefusalCounterFor(cache).total()).toBe(1);
+  });
+
+  it('when every cards successor card is refused the job is a recorded non-retryable failure naming the predecessor (ol-egov.141.89.5.79)', async () => {
+    const { cache, outcome, predecessorId } = await reviseCard(['calculate']);
+
+    expect(await cache.listPending()).toEqual([]);
+    expect(outcome).toMatchObject({ ok: false, retryable: false });
+    expect((outcome as { reason?: string }).reason).toContain(predecessorId);
+    expect((outcome as { reason?: string }).reason).toContain('stays suspended');
   });
 
   it('an unspecified predecessor sends no demand, so its successor is cached with no demand key', async () => {

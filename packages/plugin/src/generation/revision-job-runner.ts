@@ -275,6 +275,23 @@ function withPassageTransport<T extends { readonly transport: WorkerTaskTranspor
     transport: {
       send: (request) => {
         const payload = request.payload;
+        // `ol-egov.141.89.5.79`: the grounding gate checks the successor against the passage it
+        // was drafted from. The judge's evidence is `context` (a string: the chunk texts joined by
+        // a blank line; `WorkerGroundingJudge.judge`, retrieval/workerGroundingJudge.ts:103-115).
+        if (
+          request.taskId === 'grounding.judge.v1' &&
+          typeof payload === 'object' &&
+          payload !== null
+        ) {
+          const judged = payload as { context?: unknown };
+          if (typeof judged.context !== 'string' || judged.context.includes(passage)) {
+            return inner.send(request);
+          }
+          return inner.send({
+            ...request,
+            payload: { ...judged, context: `${passage}\n\n${judged.context}` },
+          });
+        }
         if (
           !GENERATION_TASK_IDS.has(request.taskId) ||
           typeof payload !== 'object' ||
@@ -646,6 +663,19 @@ function emptyDraftOutcome(payload: InstrumentRevisionJobPayload, attempts: numb
 }
 
 /**
+ * `ol-egov.141.89.5.79`: a job that ends with no successor cached is recorded, never a silent
+ * success (a grounded refusal, or every drafted item refused for its demand). Not retryable: the
+ * same retrieval or draft would end the same way until the material or the ask changes.
+ */
+function noSuccessorOutcome(payload: InstrumentRevisionJobPayload, why: string): JobRunOutcome {
+  return {
+    ok: false,
+    retryable: false,
+    reason: `instrument-revision job: no successor cached for predecessor ${payload.predecessorInstrumentId} (${why}); the predecessor stays suspended`,
+  };
+}
+
+/**
  * Drafts a successor for one drained `'instrument-revision'` job and caches
  * it as a `DraftRecord` carrying `predecessorInstrumentId` — the piece
  * `accept.ts` forwards to `materializeAcceptedDraft`/
@@ -717,7 +747,9 @@ export async function runInstrumentRevisionJob(
     );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') return { ok: true };
+    if (drafted.kind === 'nothing-to-cache') {
+      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    }
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
@@ -727,6 +759,7 @@ export async function runInstrumentRevisionJob(
       target.sourcePath,
       payload.newPassageText,
     );
+    let cachedCount = 0;
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
       // counted, not cached. The declaration is read by the item's position in the response.
@@ -758,6 +791,10 @@ export async function runInstrumentRevisionJob(
         ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
+      cachedCount += 1;
+    }
+    if (cachedCount === 0) {
+      return noSuccessorOutcome(payload, 'every drafted item was refused for its demand');
     }
     return { ok: true };
   }
@@ -779,7 +816,9 @@ export async function runInstrumentRevisionJob(
     );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') return { ok: true };
+    if (drafted.kind === 'nothing-to-cache') {
+      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    }
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
@@ -789,6 +828,7 @@ export async function runInstrumentRevisionJob(
       target.sourcePath,
       payload.newPassageText,
     );
+    let cachedCount = 0;
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.
       const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
@@ -814,6 +854,10 @@ export async function runInstrumentRevisionJob(
         ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
+      cachedCount += 1;
+    }
+    if (cachedCount === 0) {
+      return noSuccessorOutcome(payload, 'every drafted item was refused for its demand');
     }
     return { ok: true };
   }
