@@ -1835,7 +1835,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
         // `ol-egov.141.89.5.19` added a `citationHashStore` spread after this
         // one (its own describe block below pins it), so the gap to the
         // closing `},` is no longer immediate.
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
+        `private async composeDefaultStudySession\\(\\s*request\\?: SessionBuilderRequest,?\\s*\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*request \\?\\? \\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
       ),
     );
   });
@@ -1902,7 +1902,7 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   it('composeDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,1100}?${citationSpread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);`,
+        `private async composeDefaultStudySession\\(\\s*request\\?: SessionBuilderRequest,?\\s*\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,1100}?${citationSpread},\\s*\\},\\s*request \\?\\? \\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);`,
       ),
     );
   });
@@ -2531,5 +2531,26 @@ describe('row 50 (ol-egov.141.89.6.72): a later session reads the explain-back f
 
   it('adds no write: the only append in the explain-back deps literal is the set-aside writer', () => {
     expect(main.match(/createRecordSetAsideAttempt\(/g)).toHaveLength(1);
+  });
+});
+
+describe('Start composes from the steering she chose on Home (F4.6, D-243, ol-egov.141.89.10.111)', () => {
+  const main = codeOf('main.ts');
+
+  it('enterStudySessionHolderForStart takes the request and hands it to the fresh compose', () => {
+    expect(main).toMatch(
+      /private async enterStudySessionHolderForStart\(\s*request\?: SessionBuilderRequest,?\s*\): Promise<void>/,
+    );
+    expect(main).toMatch(/await this\.composeDefaultStudySession\(request\);/);
+  });
+
+  it('with no request, composeDefaultStudySession still falls back to the declared default budget with no steering', () => {
+    expect(main).toMatch(/request \?\? \{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \}/);
+  });
+
+  it('the other doors (open-session, extend) are given no request', () => {
+    expect(main).toMatch(
+      /composeDefaultStudySession: \(\) => this\.composeDefaultStudySession\(\)/,
+    );
   });
 });

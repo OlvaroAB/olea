@@ -76,18 +76,13 @@
  * for the `decideRebuild`/staleness handling the design note
  * (`docs/dev/one-assembly-path.md` §3a/§3b, private repo) called for.
  *
- * What stays genuinely true: the composition Start freezes carries **no**
- * course/topic/concept steering — `composeDefaultStudySession`'s own doc in
- * `main.ts` states it calls the session-builder assembly "with no
- * course/topic/concept steering" and C5.5's declared default budget. Home's
- * own inline steering inputs (`renderSteeringControls`, held as this view's
- * sticky local state, § above) are never threaded into that call, so
- * whatever course or topic she just picked on Home is not what Start
- * freezes; pressing Start still sits the plain default-budget composition.
- * `[D-382]` (open, `ol-egov.141.89.10.62`) frames the open question this
- * leaves — whether Home's live preview sentence and the frozen session's may
- * honestly diverge, or whether Home's steering should thread into Start's
- * composition instead — and is not decided here.
+ * `ol-egov.141.89.10.111` (F4.6, `[D-243]`): Start now hands the steering she set on Home
+ * ({@link HomeViewDeps.startSession}'s `request`, built by the same `currentRequest` helper
+ * `refresh()` previews with) to `main.ts`'s `enterStudySessionHolderForStart`, so the frozen
+ * session is composed from the time, course or topic and stated interest she chose, together.
+ * With nothing chosen the request is the default budget and the composition is unchanged. When
+ * a session is already held and not stale, Start holds it and the steering does not recompose it
+ * (C5.8: a frozen session is never rebuilt mid-sitting).
  *
  * **The per-course coverage strip is a REDUCED-size read of the same grove
  * `GroveView` already renders**, not a second computation: `./provider.ts`
@@ -381,7 +376,7 @@ export interface HomeViewDeps {
    * own module doc, points 1 and "What Start does NOT yet do", for exactly
    * what this does and does not do today.
    */
-  readonly startSession: () => void | Promise<void>;
+  readonly startSession: (request?: SessionBuilderRequest) => void | Promise<void>;
   /** F8.1: opens the course grove — F6.10's "Open the term" link. */
   readonly openGrove: () => void;
   /** `[D-134]` Q1's other ending — the offer's own dismiss, without opening. */
@@ -457,12 +452,20 @@ export class HomeView extends ItemView {
 
   /** Re-reads and redraws, over the current steering inputs. Public so a host can refresh after a dismiss, or after her material changes — same convention every other view in this plugin sets. */
   async refresh(): Promise<void> {
-    const request: SessionBuilderRequest = {
+    this.render(await this.deps.load(this.currentRequest()));
+  }
+
+  /**
+   * F4.6's three steering inputs as they stand now — the one request `refresh()` previews and
+   * Start sits (`[D-243]`: "Start on Home sits that session"; the inputs "are honoured
+   * together"), built in one place so the preview and the session agree.
+   */
+  private currentRequest(): SessionBuilderRequest {
+    return {
       budgetMinutes: this.budgetMinutes,
       ...(this.focusConceptName !== undefined ? { focusConceptName: this.focusConceptName } : {}),
       ...(this.courseOrTopic !== undefined ? { courseOrTopic: this.courseOrTopic } : {}),
     };
-    this.render(await this.deps.load(request));
   }
 
   /**
@@ -742,7 +745,7 @@ export class HomeView extends ItemView {
       text: HOME_START_ACTION,
     });
     start.addEventListener('click', () => {
-      void this.deps.startSession();
+      void this.deps.startSession(this.currentRequest());
     });
     const openExplainBack = this.deps.openExplainBack;
     if (openExplainBack) {
