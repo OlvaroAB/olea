@@ -250,6 +250,7 @@ import {
   type RevisionJudgeVerdict,
   readInstrumentCitation,
   readReviewLogHistory,
+  suspendedInstrumentIds,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
@@ -749,8 +750,13 @@ export class CitationRevisionTrigger {
     // whole batch pass, the same permissive posture every other read in this file already takes
     // on failure.
     let rejectedInstrumentIds: ReadonlySet<string>;
+    let suspendedIds: ReadonlySet<string> = new Set();
     try {
       const { entries } = await readReviewLogHistory(vault);
+      // `ol-egov.141.89.5.81` ([D-518]): a SUSPENDED instrument (her own, or this trigger's rewrite of
+      // it) is left alone by the pass, read from the same log by the shared fold the presentation
+      // path uses, so an `unsuspend` lifts it here too.
+      suspendedIds = suspendedInstrumentIds(entries);
       const provenInvalid = projectInstrumentValidity(entries).provenInvalid;
       rejectedInstrumentIds = new Set(
         [...provenInvalid]
@@ -1065,6 +1071,9 @@ export class CitationRevisionTrigger {
       // `ol-egov.141.89.2.14`: a rejected instrument never gets a first baseline either — no
       // write at all while it stands rejected (see the `rejectedInstrumentIds` doc above).
       if (rejectedInstrumentIds.has(instrumentId)) continue;
+      // `ol-egov.141.89.5.81`: nor is a suspended one (a rewritten predecessor lost its record on
+      // purpose; re-seeding it would re-raise a hold and suspend it again every pass).
+      if (suspendedIds.has(instrumentId)) continue;
       try {
         const path = citedPassagePath(record);
         // `[D-446]`: an instrument whose citation carries a passage digest that resolves to exactly
@@ -1328,9 +1337,17 @@ export class CitationRevisionTrigger {
       console.error('Olea: citation-revision could not read the store for source rewrites', error);
       return result;
     }
+    let suspendedIds: ReadonlySet<string> = new Set();
+    try {
+      suspendedIds = suspendedInstrumentIds((await readReviewLogHistory(vault)).entries);
+    } catch (error) {
+      console.error('Olea: citation-revision could not read the review log for suspension', error);
+    }
     for (const [instrumentId, anchor] of stored) {
       const pending = anchor.pendingRevalidation;
       if (pending?.reason !== SOURCE_REVISION_REASON) continue;
+      // `ol-egov.141.89.5.81`: a suspended instrument is never rewritten again.
+      if (suspendedIds.has(instrumentId) && !this.confirmedRewrites.has(instrumentId)) continue;
       try {
         const citation = await readInstrumentCitation(vault, instrumentId);
         const landed =
