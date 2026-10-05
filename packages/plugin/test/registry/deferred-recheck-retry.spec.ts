@@ -469,3 +469,19 @@ describe('row 13 — the "couldn\'t check" sentence is for a failed check, never
     expect(suspectDeferredRowCopy(undefined).line).toBe(SUSPECT_DEFERRED_LINE);
   });
 });
+
+describe('re-arming carries the withholding reason ([D-473], ol-egov.141.89.5.52)', () => {
+  const spent = { sinceContentHash: 'h-sample', since: 100, dispatchedAt: 200, retriedAt: 300 };
+  it('keeps a known reason', () => {
+    expect(rearmSpentRetry({ ...spent, reason: 'passage-missing' }, 'h-sample')?.reason).toBe(
+      'passage-missing',
+    );
+  });
+  it('keeps an unrecognised reason', () => {
+    const reason = 'passage-future-reason';
+    expect(rearmSpentRetry({ ...spent, reason }, 'h-sample')?.reason).toBe(reason);
+  });
+  it('adds no reason when there was none', () => {
+    expect(rearmSpentRetry(spent, 'h-sample')).not.toHaveProperty('reason');
+  });
+});

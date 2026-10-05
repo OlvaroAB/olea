@@ -503,13 +503,27 @@ interface PassageContext {
   readonly rule: PassageRule;
 }
 
-/** The pending fact an anchor may keep across a write: one awaiting the judge stays; one raised for a passage reason is cleared by the pass that finds the passage again. */
+/** The three withholding reasons this build knows, and so may clear on finding the passage again. */
+function isKnownPassageReason(reason: string | undefined): reason is PendingReason {
+  return (
+    reason === 'passage-missing' ||
+    reason === 'passage-ambiguous' ||
+    reason === 'passage-rule-unsupported'
+  );
+}
+
+/**
+ * The pending fact an anchor may keep across a write: one awaiting the judge stays; one raised for
+ * a passage reason this build knows is cleared by the pass that finds the passage again. A reason
+ * this build does not recognise is kept (`[D-473]`, `ol-egov.141.89.5.52`): only a build that
+ * knows the reason may decide it is resolved.
+ */
 function carriedPending(
   previous: CitationAnchorRecord,
 ): Pick<CitationAnchorRecord, 'pendingRevalidation'> {
-  return previous.pendingRevalidation !== undefined &&
-    previous.pendingRevalidation.reason === undefined
-    ? { pendingRevalidation: previous.pendingRevalidation }
+  const pending = previous.pendingRevalidation;
+  return pending !== undefined && !isKnownPassageReason(pending.reason)
+    ? { pendingRevalidation: pending }
     : {};
 }
 
@@ -1075,7 +1089,7 @@ export class CitationRevisionTrigger {
         // rule, re-found cleanly under the current one, is re-seated on it.
         if (
           passage !== undefined &&
-          (previous.pendingRevalidation?.reason !== undefined ||
+          (isKnownPassageReason(previous.pendingRevalidation?.reason) ||
             digestVersionOf(previous) !== passage.rule.version) &&
           currentRecord !== undefined &&
           current.kind === 'found-at-anchor'
@@ -1085,6 +1099,8 @@ export class CitationRevisionTrigger {
               sourcePath: passage.sourcePath,
               text: current.text,
               conceptIds: currentRecord.conceptIds,
+              // `[D-473]`: an unrecognised reason's hold survives the re-seat.
+              ...carriedPending(previous),
               ...(await passageFields(passage, current.text)),
             });
           } catch (error) {
