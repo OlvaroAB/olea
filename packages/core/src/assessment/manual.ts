@@ -221,15 +221,20 @@ export async function listManualAssessmentRecords(
  * privacy code makes), because a caller asking to remove one row must be able to tell "removed"
  * from "this host cannot remove anything" — reachable in the settings pane only where
  * `ObsidianSource`/`FolderSource` are the host, both of which implement `delete`.
+ *
+ * The delete joins the file's queue (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`), so a write
+ * to the same file queued before it lands first and is then removed: nothing is recreated after
+ * the delete.
  */
 export async function removeManualAssessmentEntry(
   vault: VaultSource,
   path: VaultPath,
 ): Promise<void> {
-  if (vault.delete === undefined) {
+  const remove = vault.delete?.bind(vault);
+  if (remove === undefined) {
     throw new Error('removeManualAssessmentEntry: this VaultSource cannot delete files');
   }
-  await vault.delete(path);
+  await withPathQueue(path, () => remove(path));
 }
 
 /**
