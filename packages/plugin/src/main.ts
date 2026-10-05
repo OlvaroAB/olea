@@ -147,7 +147,10 @@ import {
 import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
-import { buildIngestionArrivalWatch } from './ingestion/arrival-watch.js';
+import {
+  buildIngestionArrivalWatch,
+  requestSourceCatchUpExtraction,
+} from './ingestion/arrival-watch.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import { readLectureBundles, teachingEventResolverFrom } from './ingestion/lecture-links.js';
 import { lectureTermsLookup } from './ingestion/lecture-terms.js';
@@ -2346,6 +2349,7 @@ export default class OleaPlugin extends Plugin {
     // `ol-egov.141.89.5.19`: held on `this.citationHashStore` too, so the session-builder deps
     // below (and `composeDefaultStudySession`/`extendDefaultStudySession`) read the SAME store
     // this trigger writes pending-revalidation facts to — see that field's own doc.
+    const sessionLoadedAt = this.now().getTime();
     this.citationHashStore = new ObsidianCitationHashStore(this);
     this.citationRevision = buildCitationRevisionWiring({
       store: this.citationHashStore,
@@ -2357,6 +2361,24 @@ export default class OleaPlugin extends Plugin {
       // `navigator.onLine` source `processNowAction`/the [D-420] registry
       // action already use for the identical reachability question.
       isOnline: () => navigator.onLine,
+      // `ol-egov.141.89.5.84` ([D-518]): a withheld question whose cited file has no extracted text
+      // in memory (a restart, or a change made while Obsidian was closed) asks for one catch-up
+      // extraction of that file, once per (file, bytes) per session — `requestSourceCatchUpExtraction`'s
+      // doc. Its landing reaches `onSourceUnitsLanded` through the same route an arrival's does.
+      requestSourceReextraction: async (sourcePath) => {
+        const ingestion = this.ingestion;
+        if (ingestion === null) return;
+        await requestSourceCatchUpExtraction({
+          vault,
+          engine: {
+            list: () => ingestion.engine.list(),
+            enqueue: (input) =>
+              processedRevisionFeed.observeEnqueues(ingestion.engine).enqueue(input),
+          },
+          sourcePath,
+          sessionStamp: sessionLoadedAt,
+        });
+      },
     });
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`
