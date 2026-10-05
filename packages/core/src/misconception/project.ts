@@ -70,17 +70,24 @@
  * re-observed by the same attempt is never faded by that attempt's evidence:
  * the equal-instant ordering above folds the evidence first, so the later
  * observation leaves it `active` (`[D-485]` part 1, `ol-egov.141.89.6.90`).
- * Explanation stays concept-wide until bead `ol-egov.141.89.6.88` makes it
- * belief-specific.
- * **Known imprecision, stated rather than hidden:** when a concept carries
- * more than one open misconception simultaneously, one piece of evidence
- * downgrades all of them, because the event only names a concept, not a
- * specific misconception id (`./events.js`'s doc explains why the grader
- * cannot reliably supply one). This is the conservative-toward-availability
- * side of the M1/M2 trade: M1 already biases toward *not* merging distinct
- * misconceptions into one record, so a shared concept-level resolution
- * signal is the accepted cost of that same conservatism rather than a
- * separate design flaw. Flagged as a Class B call in the bead report.
+ *
+ * **Belief-specific evidence (`[D-485]` part 1, `ol-egov.141.89.6.88`).** An
+ * event that carries `beliefResolution` moves only the records it names in
+ * `targetMisconceptionIds`, one step each by the same table its
+ * `evidenceKind` selects, and only those still on the event's `conceptId` and
+ * not yet resolved — so it can only ever move a subset of what the
+ * concept-wide rule would have moved for the same event. An empty target list
+ * moves nothing; it never falls back to the concept-wide rule. A name repeated
+ * in the list moves its record once.
+ *
+ * **The concept-wide rule, kept for every event without that field** (every
+ * event written before `[D-485]`, and every event a caller builds with no
+ * per-belief decision, which is still every production caller until the
+ * wiring bead lands): one piece of evidence downgrades every open
+ * misconception on the concept, because such an event names a concept only.
+ * Replaying an old log therefore gives exactly the statuses it always gave
+ * (INV-2). `[D-485]` names this rule's flaw — a correct answer fades beliefs
+ * it never touched — which is why new evidence names its records.
  *
  * **Generalised for cross-stream reconciliation (`ol-2zfj.70`).** The actual
  * fold logic lives in `foldMisconceptionObservations`, over a normalized
@@ -155,7 +162,7 @@ export interface NormalizedMisconceptionObservation {
   readonly originInstrumentId: string;
 }
 
-/** M2's per-concept resolution signal, normalized the same way. */
+/** M2's resolution signal, normalized the same way. */
 export interface NormalizedMisconceptionResolution {
   readonly kind: 'resolution-evidence';
   readonly eventId: string;
@@ -163,6 +170,12 @@ export interface NormalizedMisconceptionResolution {
   readonly conceptId: string;
   /** `[D-485]`: `recall` never resolves; `explanation` keeps the one-step downgrade. */
   readonly evidenceKind: ResolutionEvidenceKind;
+  /**
+   * `[D-485]` part 1: present only when the event carried `beliefResolution`
+   * (its `targetMisconceptionIds`). Present moves only these records; absent
+   * keeps the concept-wide rule. See this module's doc.
+   */
+  readonly targetMisconceptionIds?: readonly string[];
 }
 
 export type NormalizedMisconceptionFoldEntry =
@@ -200,6 +213,9 @@ export function normalizeMisconceptionEvent(
     timestamp: event.timestamp,
     conceptId: event.conceptId,
     evidenceKind: event.evidenceKind,
+    ...(event.beliefResolution !== undefined
+      ? { targetMisconceptionIds: event.beliefResolution.targetMisconceptionIds }
+      : {}),
   };
 }
 
@@ -270,9 +286,19 @@ export function foldMisconceptionObservations(
       continue;
     }
 
-    // resolution-evidence: downgrade every active/fading record on this concept;
-    // recall evidence stops at `fading` ([D-485]).
+    // resolution-evidence; recall evidence stops at `fading` ([D-485] part 3).
     const table = entry.evidenceKind === 'recall' ? RECALL_DOWNGRADE : DOWNGRADE;
+    if (entry.targetMisconceptionIds !== undefined) {
+      // [D-485] part 1: only the named records on this concept, one step each.
+      for (const id of new Set(entry.targetMisconceptionIds)) {
+        const record = records.get(id);
+        if (record === undefined || record.conceptId !== entry.conceptId) continue;
+        if (record.status === 'resolved') continue;
+        records.set(id, { ...record, status: table[record.status] });
+      }
+      continue;
+    }
+    // No belief-specific field: every active/fading record on this concept (INV-2).
     for (const [id, record] of records) {
       if (record.conceptId !== entry.conceptId) continue;
       if (record.status === 'resolved') continue;

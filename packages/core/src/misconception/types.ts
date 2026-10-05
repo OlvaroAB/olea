@@ -133,17 +133,79 @@ export interface MisconceptionObservedEvent extends MisconceptionEventCommon {
 }
 
 /**
- * Evidence that she demonstrated correct understanding of a concept (M2).
- * Applies to every currently active/fading misconception on `conceptId` —
- * see `./project.js`'s doc for why resolution is per-concept rather than
- * per-misconception-id: the grader identifies errors on a concept, not
- * against a specific prior misconception id, so asking it to pick one would
- * invent a distinction the Worker has no way to make reliably.
+ * `[D-485]` part 1: the four options of the bounded per-belief resolution
+ * decision — does her answer demonstrate the correct understanding this one
+ * recorded belief gets wrong, stay silent on it, reassert it, or is it
+ * unclear? Only `demonstrates` ever moves a record (`./project.js`); `silent`,
+ * `unclear` and `reasserts` move nothing (part 2). A reassertion is a
+ * recurrence, which the observation path handles by identity, never a fade.
+ */
+export const BELIEF_RESOLUTION_OPTIONS = [
+  'demonstrates',
+  'silent',
+  'reasserts',
+  'unclear',
+] as const;
+export type BeliefResolutionOption = (typeof BELIEF_RESOLUTION_OPTIONS)[number];
+
+/** D7.3's stamp for the call that made one per-belief decision: ids only, never content. */
+export interface BeliefResolutionProvenance {
+  /** The Worker task (prompt directory) that decided, e.g. `misconception.resolve`. */
+  readonly taskId: string;
+  /** The `VERSION` the response was stamped with. */
+  readonly promptVersion: string;
+  readonly modelId: string;
+}
+
+/** One candidate record's per-belief decision, as persisted on the event. */
+export interface BeliefResolutionDecision {
+  readonly misconceptionId: string;
+  /**
+   * The option the call chose. `null` when no call chose one: the call
+   * failed, timed out, or returned nothing for this record. `[D-485]` part 2
+   * counts that as unclear (it moves nothing); it is recorded as `null`, not
+   * as `'unclear'`, because a failed reply is never read as an option.
+   */
+  readonly option: BeliefResolutionOption | null;
+  /** `null` exactly when `option` is `null`: no call, no stamp. */
+  readonly provenance: BeliefResolutionProvenance | null;
+}
+
+/**
+ * `[D-485]` part 1's belief-specific field on a resolution-evidence event:
+ * which records this evidence moves, and the decision behind each candidate.
+ * Record ids, option literals and D7.3 stamps only — no belief statement,
+ * correction or answer text (D-005).
+ */
+export interface BeliefResolutionEvidence {
+  /**
+   * The records this evidence moves, one step each (`./project.js`). Every id
+   * here has a decision below whose option is `demonstrates`. Empty means the
+   * evidence moves nothing — never "fall back to the whole concept".
+   * Persisted explicitly rather than re-derived from `decisions` on replay, so
+   * a later change to which decisions count never changes what an old event did.
+   */
+  readonly targetMisconceptionIds: readonly string[];
+  /** One entry per candidate record the decision was asked about, in the order asked. */
+  readonly decisions: readonly BeliefResolutionDecision[];
+}
+
+/**
+ * Evidence that she demonstrated correct understanding (M2).
+ *
+ * **Two shapes, told apart by `beliefResolution`'s presence (`[D-485]`).**
+ * Without it (every event written before `ol-egov.141.89.6.88`, and every
+ * event a caller with no per-belief decision builds), the evidence applies to
+ * every currently active/fading misconception on `conceptId`, exactly as the
+ * fold has always applied it. With it, the evidence moves only the records it
+ * names — see `./project.js`'s doc for both rules.
  */
 export interface MisconceptionResolutionEvidenceEvent extends MisconceptionEventCommon {
   readonly kind: 'resolution-evidence';
   readonly conceptId: string;
   readonly evidenceKind: ResolutionEvidenceKind;
+  /** `[D-485]` part 1. Optional and additive: absent means the concept-wide rule (INV-2). */
+  readonly beliefResolution?: BeliefResolutionEvidence;
 }
 
 export type MisconceptionEvent = MisconceptionObservedEvent | MisconceptionResolutionEvidenceEvent;
