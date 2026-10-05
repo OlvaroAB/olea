@@ -16,6 +16,8 @@ function candidate(
     statement: 'Thinks force and acceleration are the same quantity.',
     correction: 'Force equals mass times acceleration — they are related, not identical.',
     correctionSourceBlockIds: ['block-1'],
+    // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused, so the base candidate is hers.
+    statementAuthorship: 'hers',
     ...overrides,
   };
 }
@@ -206,5 +208,38 @@ describe('buildObservationEventsFromAcceptedGrading — never invents a citation
       skipped: true,
       reason: 'unresolved-concept',
     });
+  });
+});
+
+describe('buildObservationEventsFromAcceptedGrading: a concept confused with itself ([D-482])', () => {
+  // @auto:core/misconception/accepted-grading-observation.spec
+  it('records nothing when the confused-with id equals the concept id', async () => {
+    const outcomes = await buildObservationEventsFromAcceptedGrading(
+      [candidate({ confusedWith: 'newtons-second-law' })],
+      baseContext(),
+      { embedder: null, generateMisconceptionId: () => 'fresh-id' },
+    );
+    expect(outcomes).toHaveLength(1);
+    const outcome = outcomes[0];
+    if (!outcome?.skipped) throw new Error('expected a skip');
+    expect(outcome.reason).toBe('self-confusion');
+  });
+
+  it('still records a confusion with a different, resolvable concept', async () => {
+    const outcomes = await buildObservationEventsFromAcceptedGrading(
+      [candidate({ confusedWith: 'momentum' })],
+      baseContext({
+        resolveConceptId: (concept) =>
+          concept === 'newtons-second-law'
+            ? 'concept-nsl'
+            : concept === 'momentum'
+              ? 'concept-momentum'
+              : null,
+      }),
+      { embedder: null, generateMisconceptionId: () => 'fresh-id' },
+    );
+    const outcome = outcomes[0];
+    if (!outcome || outcome.skipped) throw new Error('expected a recorded outcome');
+    expect(outcome.result.event.confusedWithConceptId).toBe('concept-momentum');
   });
 });

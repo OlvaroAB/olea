@@ -211,6 +211,68 @@ describe('[D-319] the restatement finding withholds the top stage only when the 
   });
 });
 
+describe('[D-483] the fold reads the restatement finding off the persisted record', () => {
+  /** A v6 attempt: top-level verdict (own stamp), depth grade without the nested verdict. */
+  function v6Attempt(eventId: string, timestamp: string, finding: boolean): ReviewLogRecord {
+    const base = explainBack(eventId, timestamp);
+    const { correctness: _legacy, ...grade } = base.explainBackGrade as NonNullable<
+      ReviewLogRecord['explainBackGrade']
+    >;
+    return {
+      ...base,
+      explainBackGrade: grade,
+      explainBackCorrectness: {
+        verdict: 'correct',
+        artifactProvenance: {
+          taskId: 'explain-back.judge.v1',
+          promptVersion: '1.5.0',
+          modelId: 'm',
+        },
+        ...(finding ? { restatement: { sourceBlockIds: ['b1'], spanCount: 1 } } : {}),
+      },
+    } as ReviewLogRecord;
+  }
+
+  it('a flagged attempt never reaches the top stage and no option list is needed', () => {
+    const result = computeConceptMastery(
+      [v6Attempt('eb-1', '2026-01-10T09:00:00-04:00', true)],
+      'concept-a',
+    );
+    expect(result.state).toBe('sprout');
+    expect(result.evidence.topStageQualified).toBe(false);
+    expect(result.evidence.withheldByRestatementFinding).toBe(1);
+  });
+
+  it('it keeps its verdict: still a graded attempt, and correct (explanation tier succeeded)', () => {
+    const result = computeConceptMastery(
+      [v6Attempt('eb-1', '2026-01-10T09:00:00-04:00', true)],
+      'concept-a',
+    );
+    expect(result.evidence.gradedExplainBackCount).toBe(1);
+  });
+
+  it('an otherwise identical unflagged attempt still reaches the top stage', () => {
+    const result = computeConceptMastery(
+      [v6Attempt('eb-1', '2026-01-10T09:00:00-04:00', false)],
+      'concept-a',
+    );
+    expect(result.state).toBe('tree');
+    expect(result.evidence.withheldByRestatementFinding).toBe(0);
+  });
+
+  it('the finding is per attempt: a second, unflagged attempt still reaches the top stage', () => {
+    const result = computeConceptMastery(
+      [
+        v6Attempt('eb-1', '2026-01-10T09:00:00-04:00', true),
+        v6Attempt('eb-2', '2026-01-12T09:00:00-04:00', false),
+      ],
+      'concept-a',
+    );
+    expect(result.state).toBe('tree');
+    expect(result.evidence.topStageAttempt?.eventId).toBe('eb-2');
+  });
+});
+
 describe('the qualifying attempt is named (A6, A8 need it for the award)', () => {
   it('names the earliest qualifying attempt by instant, then event id, whatever the input order', () => {
     const late = explainBack('eb-late', '2026-01-20T09:00:00-04:00');

@@ -4509,6 +4509,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async buildExplainBackObservationContextFor(params: {
     readonly subjectConceptId: string | null;
+    readonly permittedConceptIds?: readonly string[];
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
     readonly query: string;
@@ -4524,6 +4525,9 @@ export default class OleaPlugin extends Plugin {
     return {
       ...buildExplainBackObservationContext({
         subjectConceptId: params.subjectConceptId,
+        ...(params.permittedConceptIds !== undefined
+          ? { permittedConceptIds: params.permittedConceptIds }
+          : {}),
         originInstrumentId: params.originInstrumentId,
         // Recording the graded verdict into a review-log event is `ol-95vv`'s
         // mastery-fold job, not this view's (see `explain-back/modal.ts`'s

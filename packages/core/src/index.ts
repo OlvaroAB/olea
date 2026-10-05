@@ -844,6 +844,20 @@ export type {
   GenerationTriggerKind,
 } from './generation/types.js';
 export { isGenerationJobPayload } from './generation/types.js';
+// `[D-482]`: the declared bound and typed failure reasons for every grading call.
+export type {
+  BoundedCallOptions,
+  BoundedCallReason,
+  BoundedRetryOptions,
+} from './grading/boundedCall.js';
+export {
+  BoundedCallError,
+  boundedCall,
+  boundedCallWithRetries,
+  CORRECTNESS_OVERALL_BOUND_MS,
+  classifyGradingCallFailure,
+  GRADING_CALL_BOUNDS,
+} from './grading/boundedCall.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
 // this is the one impure export in that file. `ol-cqz8` widens this block to
@@ -888,6 +902,7 @@ export type {
   JudgeCaller,
   MisconceptionCandidate,
   PendingExplainBackGrading,
+  RestatementFinding,
   SourceBlockRef,
 } from './grading/gradingPipeline.js';
 export {
@@ -3024,6 +3039,7 @@ export type {
 } from './study-session/explain-back-grade-write.js';
 export {
   composeGradedExplainBackReviewRecord,
+  findRecordedAttempt,
   recordGradedExplainBackReview,
 } from './study-session/explain-back-grade-write.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';

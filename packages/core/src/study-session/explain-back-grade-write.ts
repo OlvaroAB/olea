@@ -97,7 +97,9 @@
 import type {
   AnswerEdits,
   ExplainBackCorrectness,
+  ExplainBackGradingProvenance,
   MasteryAtTime,
+  ReviewLogRecord,
   SelectionContextV4,
 } from 'olea-contracts';
 import type { AcceptedSoloGrading, SoloArtifactProvenance } from '../grading/explainBackSolo.js';
@@ -158,6 +160,14 @@ export interface GradedExplainBackReviewSubject {
    * `followsAttemptId`. Absent for a first attempt, never fabricated.
    */
   readonly followsAttemptId?: string;
+  /**
+   * `[D-483]`: this attempt's own id, persisted so the record is findable by attempt independently
+   * of `contentRef` (a correctness-only record has none). Absent when the caller has no real
+   * per-attempt id; never fabricated, never backfilled.
+   */
+  readonly attemptId?: string;
+  /** `[D-483]`: digests-only grading provenance (versions and fingerprints, never text). */
+  readonly gradingProvenance?: ExplainBackGradingProvenance;
 }
 
 export interface ComposeGradedExplainBackReviewRecordInput {
@@ -248,7 +258,34 @@ export function composeGradedExplainBackReviewRecord(
     ...(subject.followsAttemptId !== undefined
       ? { followsAttemptId: subject.followsAttemptId }
       : {}),
+    // `[D-483]`: the attempt's own id and digests-only provenance; absent means not recorded.
+    ...(subject.attemptId !== undefined ? { attemptId: subject.attemptId } : {}),
+    ...(subject.gradingProvenance !== undefined
+      ? { gradingProvenance: subject.gradingProvenance }
+      : {}),
   };
+}
+
+/**
+ * `[D-483]`: the accepted explain-back review already on this device's log for the day of
+ * `timestamp` that carries `attemptId`, whether or not it has a depth grade. The durable half of
+ * idempotency for a correctness-only record, which has no `contentRef` to key on. A record
+ * written before the field existed carries no id and is never matched (never backfilled).
+ */
+export async function findRecordedAttempt(
+  vault: VaultSource,
+  attemptId: string,
+  timestamp: string,
+  deviceId: string,
+): Promise<ReviewLogRecord | undefined> {
+  const dateOf = timestamp.slice(0, timestamp.indexOf('T'));
+  const existing = await readReviewLogFile(vault, reviewLogPath(dateOf, deviceId));
+  return existing.records.find(
+    (entry): entry is ReviewLogRecord =>
+      entry.kind === 'review' &&
+      entry.instrumentType === 'explain-back' &&
+      entry.attemptId === attemptId,
+  );
 }
 
 export interface RecordGradedExplainBackReviewInput
@@ -425,8 +462,12 @@ export async function recordGradedExplainBackReview(
   const path = reviewLogPath(dateOf, options.deviceId);
 
   const existing = await readReviewLogFile(vault, path);
+  // `[D-483]`: found by the persisted attempt id first, with `contentRef` kept as the second guard
+  // (records written before the id existed carry only that).
   const alreadyRecorded = explainBackGradeEvents(existing.records).find(
-    (record) => record.explainBackGrade.contentRef === contentId,
+    (record) =>
+      record.explainBackGrade.contentRef === contentId ||
+      (input.subject.attemptId !== undefined && record.attemptId === input.subject.attemptId),
   );
   if (alreadyRecorded !== undefined) {
     // Guarantee 1: this exact attempt is already durably recorded — return

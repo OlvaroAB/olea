@@ -59,6 +59,8 @@ const baseInput: ObservationInput = {
   originInstrumentId: 'explain-back:concept-alpha:2',
   originReviewEventId: 'review-event-2',
   timestamp: '2026-08-20T09:00:00-04:00',
+  // `[D-490]`, ol-egov.141.89.6.91: absent authorship is refused, so the base input is hers.
+  statementAuthorship: 'hers',
 };
 
 describe('buildObservationEventWithEmbedding — no-embedder fallback', () => {

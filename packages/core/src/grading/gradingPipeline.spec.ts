@@ -703,3 +703,109 @@ describe('groundCitations — quoted words of her answer ([D-318])', () => {
     expect(JSON.stringify(summarizeGradingForTelemetry(pending))).not.toContain(sentinel);
   });
 });
+
+// ---------------------------------------------------------------------------
+// `[D-319]` / `[D-482]`: the client grounds the restatement finding the same way
+// ---------------------------------------------------------------------------
+
+describe('groundCitations: the restatement finding ([D-319], [D-482])', () => {
+  // @auto:core/grading/gradingPipeline.spec
+  it('drops a finding whose spans are not in her answer, and counts it; the verdict is untouched', () => {
+    const grounded = groundCitations(
+      wireResponse({
+        verdict: 'correct',
+        restatement: { answerSpans: ['words she never wrote'], sourceBlockIds: ['blk-1'] },
+      }),
+      SOURCE_BLOCKS,
+      'Because Y causes Z.',
+    );
+    expect(grounded.restatement).toBeUndefined();
+    expect(grounded.droppedRestatementCount).toBe(1);
+    expect(grounded.verdict).toBe('correct');
+  });
+
+  // @auto:core/grading/gradingPipeline.spec
+  it('drops a finding that names no source id the caller supplied', () => {
+    const grounded = groundCitations(
+      wireResponse({
+        restatement: { answerSpans: ['Y causes Z'], sourceBlockIds: ['blk-invented'] },
+      }),
+      SOURCE_BLOCKS,
+      'Because Y causes Z.',
+    );
+    expect(grounded.restatement).toBeUndefined();
+    expect(grounded.droppedRestatementCount).toBe(1);
+  });
+
+  // @auto:core/grading/gradingPipeline.spec
+  it('carries a finding whose spans are present, keeping only the spans and ids that check out', () => {
+    const grounded = groundCitations(
+      wireResponse({
+        verdict: 'correct',
+        restatement: {
+          answerSpans: ['Y causes Z', 'not in the answer'],
+          sourceBlockIds: ['blk-1', 'blk-invented'],
+        },
+      }),
+      SOURCE_BLOCKS,
+      'Because Y causes Z.',
+    );
+    expect(grounded.restatement).toEqual({
+      answerSpans: ['Y causes Z'],
+      sourceBlockIds: ['blk-1'],
+    });
+    expect(grounded.droppedRestatementCount).toBe(0);
+    expect(grounded.verdict).toBe('correct');
+  });
+
+  it('carries no finding when there is no answer to check the spans against (an unchecked quotation is never passed on)', () => {
+    const grounded = groundCitations(
+      wireResponse({
+        restatement: { answerSpans: ['Y causes Z'], sourceBlockIds: ['blk-1'] },
+      }),
+      SOURCE_BLOCKS,
+    );
+    expect(grounded.restatement).toBeUndefined();
+  });
+
+  it('a response with no finding yields none: nothing derives one from the overlap number', async () => {
+    const pending = await gradeExplainBack(
+      baseInput({ studentAnswer: 'The mechanism is Z, driven by Y.' }),
+      async () => wireResponse({ verdict: 'correct' }),
+    );
+    if (pending.grading.outcome !== 'graded') throw new Error('expected graded');
+    expect(pending.grading.restatement).toBeUndefined();
+    expect(pending.overlap.containment).toBeGreaterThan(0.5);
+  });
+
+  it('the accepted grading carries the grounded finding beside the verdict', async () => {
+    const pending = await gradeExplainBack(
+      baseInput({ studentAnswer: 'Because Y causes Z.' }),
+      async () =>
+        wireResponse({
+          verdict: 'correct',
+          restatement: { answerSpans: ['Y causes Z'], sourceBlockIds: ['blk-1'] },
+        }),
+    );
+    const accepted = acceptExplainBackGrading(pending);
+    expect(accepted.verdict).toBe('correct');
+    expect(accepted.restatement).toEqual({
+      answerSpans: ['Y causes Z'],
+      sourceBlockIds: ['blk-1'],
+    });
+  });
+});
+
+describe('gradeExplainBack: the request carries the permitted concept ids ([D-482])', () => {
+  it('sends the list it was given, and an empty list when none was', async () => {
+    const seen: ExplainBackJudgeWireRequest[] = [];
+    const caller = async (request: ExplainBackJudgeWireRequest) => {
+      seen.push(request);
+      return wireResponse();
+    };
+    await gradeExplainBack(baseInput({ permittedConceptIds: ['concept-a', 'concept-b'] }), caller);
+    await gradeExplainBack(baseInput(), caller);
+    expect(seen[0]?.permittedConceptIds).toEqual(['concept-a', 'concept-b']);
+    expect(seen[1]?.permittedConceptIds).toEqual([]);
+  });
+});

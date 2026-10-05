@@ -616,6 +616,116 @@ describe('a revision recorded guided or with no rung never lowers a growth label
 });
 
 // ---------------------------------------------------------------------------
+// Uncertain exposure never reaches the top stage (no producer needed)
+// ---------------------------------------------------------------------------
+
+describe('an attempt whose feedback exposure is uncertain never reaches the top stage, whatever its verdict and depth', () => {
+  // `ol-egov.141.89.6.87.15`: production never supplies
+  // `feedbackExposureUncertainEventIds` to the fold. It does not need to: the
+  // rung is sealed at submit (`sealAttemptSupport`), and unknown exposure seals
+  // no rung, which the fold reads as unknown support and never admits.
+  const VERDICTS = ['correct', 'partial', 'incorrect'] as const;
+  const DEPTHS = [
+    'prestructural',
+    'unistructural',
+    'multistructural',
+    'relational',
+    'extended-abstract',
+  ] as const;
+  const UNKNOWN: PriorAttemptState = { exposure: 'unknown', lastAttemptId: null };
+
+  /** The record the view writes: the rung and link exactly as sealed, the fold option left unset. */
+  function acceptedAttempt(
+    sealed: ReturnType<typeof sealAttemptSupport>,
+    verdict: (typeof VERDICTS)[number],
+    depth: (typeof DEPTHS)[number],
+  ): ReviewLogEntry {
+    return reviewEntry('at-sealed', {
+      eventId: 'evt-sealed',
+      instrumentId: 'explain-back:concept-a',
+      ...(sealed.supportLevelShown !== undefined
+        ? { supportLevelShown: sealed.supportLevelShown }
+        : {}),
+      ...(sealed.followsAttemptId !== null ? { followsAttemptId: sealed.followsAttemptId } : {}),
+      explainBackGrade: {
+        soloLevel: depth,
+        correctness: verdict,
+        contentRef: 'content-ref-placeholder',
+        revisionOf: null,
+        artifactProvenance: { taskId: 'explain-back-grade', promptVersion: 'v0', modelId: 'm' },
+      },
+    } as Partial<ReviewLogRecord>);
+  }
+  const stageOf = (entry: ReviewLogEntry) => computeConceptMastery([entry], 'concept-a').state;
+
+  const unassessed = setAside(EMPTY_ATTEMPT_SEQUENCE, 'at-first', 'unable-to-assess', UNKNOWN);
+  const paths: Record<string, ReturnType<typeof sealAttemptSupport>> = {
+    'a first attempt, exposure unknown': sealAttemptSupport(
+      EMPTY_ATTEMPT_SEQUENCE,
+      UNAIDED,
+      UNKNOWN,
+    ),
+    'a retry after an attempt the check could not assess': sealAttemptSupport(
+      unassessed,
+      UNAIDED,
+      UNKNOWN,
+    ),
+  };
+
+  for (const [name, sealed] of Object.entries(paths)) {
+    it(`${name}: no verdict and no depth reaches the top stage`, () => {
+      expect(sealed.feedbackExposure).toBe('unknown');
+      expect(sealed.supportLevelShown).toBeUndefined();
+      for (const verdict of VERDICTS) {
+        for (const depth of DEPTHS) {
+          expect(stageOf(acceptedAttempt(sealed, verdict, depth)), `${verdict}/${depth}`).not.toBe(
+            'tree',
+          );
+        }
+      }
+    });
+  }
+
+  it('a re-opened view whose log cannot be read seals unknown and reaches no top stage', async () => {
+    const prior = await resolvePriorAttemptState({
+      instrumentId: INSTRUMENT,
+      ledger: createFeedbackExposureLedger(),
+      readLogged: async () => {
+        throw new Error('read failed');
+      },
+    });
+    expect(prior.exposure).toBe('unknown');
+    const sealed = sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, UNAIDED, prior);
+    for (const verdict of VERDICTS) {
+      for (const depth of DEPTHS) {
+        expect(stageOf(acceptedAttempt(sealed, verdict, depth))).not.toBe('tree');
+      }
+    }
+  });
+
+  it('a re-opened view whose log holds an unreadable line naming the question seals unknown and reaches no top stage', () => {
+    const prior = classifyLoggedFeedbackExposure(
+      history(
+        [],
+        [`{"instrumentId":"${INSTRUMENT}","timestamp":"2026-09-28T10:00:00-04:00" truncated`],
+      ),
+      INSTRUMENT,
+    );
+    expect(prior.exposure).toBe('unknown');
+    const sealed = sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, UNAIDED, prior);
+    expect(stageOf(acceptedAttempt(sealed, 'correct', 'extended-abstract'))).not.toBe('tree');
+  });
+
+  it('positive control: the same attempt with exposure known not shown reaches the top stage when it qualifies', () => {
+    const sealed = sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, UNAIDED, NO_PRIOR_ATTEMPT);
+    expect(sealed.supportLevelShown).toBe('independent');
+    expect(stageOf(acceptedAttempt(sealed, 'correct', 'relational'))).toBe('tree');
+    expect(stageOf(acceptedAttempt(sealed, 'partial', 'relational'))).not.toBe('tree');
+    expect(stageOf(acceptedAttempt(sealed, 'correct', 'prestructural'))).not.toBe('tree');
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The view's wiring (source-level: modal.ts cannot load under Vitest)
 // ---------------------------------------------------------------------------
 
@@ -651,7 +761,7 @@ describe('the view reads the exposure once, when the question is resolved, and s
       modal.indexOf('private acceptGrading('),
     );
     expect(submit).toMatch(
-      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?this\.deps\.grade\(input\)/,
+      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?runGradingAttempt\(/,
     );
   });
 

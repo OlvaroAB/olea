@@ -23,6 +23,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
+import { runGradingAttempt } from '../../src/explain-back/grading-attempt.js';
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -52,7 +53,7 @@ describe('ExplainBackModal — ol-0r92.94 [DOS-C1]: attemptId minted at submit, 
       /phase: 'grading',\s*prompt,\s*answer,\s*durationMs,\s*attemptId/,
     );
     expect(submitAnswerBody).toMatch(
-      /phase: 'refused',\s*prompt,\s*answer,\s*reason: 'unavailable',\s*durationMs,\s*attemptId/,
+      /phase: 'refused',\s*prompt,\s*answer,\s*reason: outcome\.kind === 'unavailable' \? 'unavailable' : outcome\.reason,\s*durationMs,\s*attemptId/,
     );
     expect(submitAnswerBody).toMatch(
       /phase: 'graded',\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId/,
@@ -100,5 +101,68 @@ describe('ExplainBackModal — ol-0r92.94 [DOS-C1]: in-flight memo keyed on atte
     );
     expect(computeBody).toMatch(/this\.deps\.acceptWithObservation\(/);
     expect(computeBody).toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// `[D-482]` (F5.5): a late answer never overwrites a newer attempt
+// ---------------------------------------------------------------------------
+
+const GRADE_INPUT = {
+  question: 'Why does X happen?',
+  studentAnswer: 'Because Y causes Z.',
+  referenceAnswer: 'Because Y drives Z.',
+  sourceBlocks: [],
+  misconceptionDigest: [],
+};
+
+describe('runGradingAttempt: the attempt guard', () => {
+  const pending = { status: 'pending-review' } as never;
+
+  // @auto:plugin/explain-back/modal-idempotency.spec
+  it('a first call that returns after Try again started a second attempt is ignored', async () => {
+    // The modal's own notion of "current", reduced to what the guard reads.
+    let currentAttempt = 'attempt-1';
+    let releaseFirst: (value: never) => void = () => {};
+    const first = runGradingAttempt({
+      grade: () =>
+        new Promise((resolve) => {
+          releaseFirst = resolve;
+        }),
+      input: GRADE_INPUT,
+      isCurrent: () => currentAttempt === 'attempt-1',
+    });
+    currentAttempt = 'attempt-2'; // Try again: a newer attempt began
+    releaseFirst(pending);
+    expect(await first).toEqual({ kind: 'superseded' });
+
+    const second = await runGradingAttempt({
+      grade: () => Promise.resolve(pending),
+      input: GRADE_INPUT,
+      isCurrent: () => currentAttempt === 'attempt-2',
+    });
+    expect(second).toEqual({ kind: 'graded', pending });
+  });
+
+  it('a late refusal from the superseded attempt is ignored too', async () => {
+    let current = false;
+    const result = await runGradingAttempt({
+      grade: () => Promise.reject(new Error('socket closed')),
+      input: GRADE_INPUT,
+      isCurrent: () => current,
+    });
+    expect(result).toEqual({ kind: 'superseded' });
+    current = true;
+  });
+
+  // @auto:plugin/explain-back/modal-idempotency.spec
+  it('removing the guard turns the late-response check red: submitAnswer returns on superseded and reads the live attempt id', () => {
+    // The behavioural test above fails for any runGradingAttempt that ignores isCurrent();
+    // this half pins that the modal supplies the guard and honours its answer.
+    const submitAnswerBody = bodyBetween('private async submitAnswer(', 'private acceptGrading(');
+    expect(submitAnswerBody).toMatch(
+      /isCurrent:\s*\(\)\s*=>\s*this\.state\.phase === 'grading' && this\.state\.attemptId === attemptId/,
+    );
+    expect(submitAnswerBody).toMatch(/if \(outcome\.kind === 'superseded'\) return;/);
   });
 });

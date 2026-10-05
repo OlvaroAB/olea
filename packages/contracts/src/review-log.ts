@@ -2123,6 +2123,31 @@ function refineBeliefStampComplete(
   });
 }
 
+/** `[D-483]`: the persisted form of a restatement finding: opaque source-block ids and a span count, never wording. */
+export const explainBackRestatementFinding = z.object({
+  sourceBlockIds: z.array(z.string().min(1)).min(1),
+  spanCount: z.number().int().min(1),
+});
+export type ExplainBackRestatementFinding = z.infer<typeof explainBackRestatementFinding>;
+
+/**
+ * `[D-483]` minimal grading provenance on an explain-back review: fingerprints and versions only,
+ * never text (D-005). Every field optional and **absent means not recorded**. The correctness
+ * call's prompt and model versions already ride `explainBackCorrectness.artifactProvenance`; this
+ * adds what that stamp does not name. Opaque strings: a version label or a digest.
+ */
+export const explainBackGradingProvenance = z.object({
+  /** Version of the grading request contract the Worker was called under. */
+  requestVersion: z.string().min(1).optional(),
+  /** Version of the instrument the prompt was drawn from. */
+  instrumentVersion: z.string().min(1).optional(),
+  /** Version of the target (reference) the answer was graded against. */
+  targetVersion: z.string().min(1).optional(),
+  /** Digests of the source passages sent, in the same digest space as `presentedPassageDigest`. */
+  passageFingerprints: z.array(z.string().min(1)).optional(),
+});
+export type ExplainBackGradingProvenance = z.infer<typeof explainBackGradingProvenance>;
+
 /**
  * The explain-back correctness verdict in its own place (`[D-303]`, ruled
  * 2026-09-24, option b): the correctness judge's verdict for this attempt,
@@ -2150,6 +2175,18 @@ function refineBeliefStampComplete(
 export const explainBackCorrectness = z.object({
   verdict: explainBackCorrectnessVerdict,
   artifactProvenance,
+  /**
+   * `[D-483]` (`[D-319]`): the correctness call's restatement finding, sharing this verdict's
+   * stamp (it came from the same call). Present only when a grounded finding survived: her answer
+   * reproduces the source and the requested explanation is missing. **Absent means no finding**,
+   * never "checked and clear". Additive on v6, no version bump.
+   *
+   * **Ids and a count only, no text** (D-005): `sourceBlockIds` are opaque ids of the supplied
+   * source blocks the answer reproduces; `spanCount` is how many quoted spans grounded it. The
+   * quoted words are never persisted. The mastery fold reads this off the record, so no call site
+   * can forget it ({@link restatementFindingOf}).
+   */
+  restatement: explainBackRestatementFinding.optional(),
 });
 export type ExplainBackCorrectness = z.infer<typeof explainBackCorrectness>;
 
@@ -2183,6 +2220,16 @@ function refineExplainBackCorrectness(
         'one attempt, one correctness verdict ([D-303])',
     });
   }
+}
+
+/**
+ * `[D-483]`: the restatement finding persisted on a review record, or undefined. The one reader
+ * every fold uses, so a call site cannot forget the finding.
+ */
+export function restatementFindingOf(record: {
+  readonly explainBackCorrectness?: ExplainBackCorrectness | undefined;
+}): ExplainBackRestatementFinding | undefined {
+  return record.explainBackCorrectness?.restatement;
 }
 
 /**
@@ -2260,6 +2307,28 @@ function refineFollowsAttemptIdInstrumentType(
     path: ['followsAttemptId'],
     message: 'followsAttemptId may only appear on an explain-back review ([D-416])',
   });
+}
+
+/**
+ * `attemptId` and `gradingProvenance` (`[D-483]`) appear only on an explain-back review.
+ */
+function refineAttemptAndProvenanceInstrumentType(
+  value: {
+    readonly instrumentType: InstrumentType;
+    readonly attemptId?: string | undefined;
+    readonly gradingProvenance?: ExplainBackGradingProvenance | undefined;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  if (value.instrumentType === 'explain-back') return;
+  for (const key of ['attemptId', 'gradingProvenance'] as const) {
+    if (value[key] === undefined) continue;
+    ctx.addIssue({
+      code: 'custom',
+      path: [key],
+      message: `${key} may only appear on an explain-back review ([D-483])`,
+    });
+  }
 }
 
 /**
@@ -2346,6 +2415,16 @@ export const reviewLogRecordV6 = z
      * after it and means the same thing.
      */
     followsAttemptId: z.string().min(1).optional(),
+    /**
+     * This attempt's own id (`[D-483]`), mirroring `followsAttemptId`: the id the explain-back
+     * view minted at submit, persisted on every accepted explain-back review, correctness-only
+     * included, so idempotency never depends on `contentRef`. **Absent means written before the
+     * field existed**, never backfilled. Explain-back reviews only. Opaque: a minted id (D-005).
+     * Additive, no version bump.
+     */
+    attemptId: z.string().min(1).optional(),
+    /** `[D-483]`: digests-only grading provenance; see {@link explainBackGradingProvenance}. */
+    gradingProvenance: explainBackGradingProvenance.optional(),
   })
   .superRefine(refineMasteryAgreesWithConcepts)
   .superRefine(refineVitalityAgreesWithConcepts)
@@ -2355,7 +2434,8 @@ export const reviewLogRecordV6 = z
   .superRefine(refineCorrectnessInstrumentType)
   .superRefine(refineAnswerEditsInstrumentType)
   .superRefine(refineExplainBackCorrectness)
-  .superRefine(refineFollowsAttemptIdInstrumentType);
+  .superRefine(refineFollowsAttemptIdInstrumentType)
+  .superRefine(refineAttemptAndProvenanceInstrumentType);
 export type ReviewLogRecordV6 = z.infer<typeof reviewLogRecordV6>;
 
 /**
