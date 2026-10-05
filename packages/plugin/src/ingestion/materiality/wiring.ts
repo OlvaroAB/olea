@@ -145,6 +145,7 @@ import type {
   MaterialityHashStore,
   MaterialityJudge,
   MaterialityJudgeVerdict,
+  MaterialityRecord,
   MaterialityVerdictEvent,
 } from './types.js';
 import { MATERIALITY_JUDGE_TASK_ID } from './workerJudge.js';
@@ -593,7 +594,30 @@ export class MaterialityTrigger {
       currentCanonicalLength: canonicalLength,
     });
 
-    if (outcome.kind === 'unchanged') return { kind: 'resolved', result: outcome };
+    if (outcome.kind === 'unchanged') {
+      // The note is back at exactly the bytes its baseline was taken from. An
+      // edit this instance still holds for the path (below the floor, or
+      // debounced), or a judge call still in flight for it, is about text the
+      // note no longer holds: it is cleared exactly as the formatting-only
+      // exit clears it (same settle below), and an in-flight answer is made
+      // stale by bumping the in-memory revision, so it is dropped and never
+      // committed as baseline. With nothing held, nothing is written.
+      if (this.ownsPath(path)) {
+        if (this.inFlight.has(path)) {
+          this.revisions.set(path, (this.revisions.get(path) ?? 0) + 1);
+        }
+        await this.settleFreeExit(
+          path,
+          current,
+          canonicalLength,
+          currentText,
+          now,
+          record,
+          persistedRevision,
+        );
+      }
+      return { kind: 'resolved', result: outcome };
+    }
 
     // `[D-311]`, literally: "records without one [a revision] are treated as
     // unknown and re-judged at their next change." A record persisted before
@@ -721,20 +745,15 @@ export class MaterialityTrigger {
       // so nothing is left pending on this path, and THIS raw text becomes
       // the fresher comparison point (defect 2, ol-egov.141.89.5.7) for
       // whatever real change comes next.
-      await this.deps.store.save({
+      await this.settleFreeExit(
         path,
-        hashes: current,
+        current,
         canonicalLength,
-        lastChangedAt: now,
-        lastVerdictAt: record?.lastVerdictAt ?? null,
-        // [D-311]: no judge call dispatched, so the revision is unchanged.
-        revision: persistedRevision,
-      });
-      this.pendingSmallEdit.delete(path);
-      this.pendingDebounced.delete(path);
-      this.lastProcessedText.set(path, currentText);
-      // `[D-427]`: nothing is left unfinished on this path, so no pending record either.
-      await this.clearPending(path);
+        currentText,
+        now,
+        record,
+        persistedRevision,
+      );
       return { kind: 'resolved', result: outcome };
     }
 
@@ -1307,6 +1326,37 @@ export class MaterialityTrigger {
       }
     }
     return settled({ kind: 'verdict', verdict, decision });
+  }
+
+  /**
+   * A genuine free exit: this raw text becomes the fresher comparison point
+   * (defect 2, ol-egov.141.89.5.7), nothing is left held or recorded on the
+   * path. Shared by the formatting-only exit and the identical-bytes exit
+   * when an edit is still held (ol-egov.141.89.5.82).
+   */
+  private async settleFreeExit(
+    path: string,
+    current: MaterialityHashes,
+    canonicalLength: number,
+    currentText: string,
+    now: number,
+    record: MaterialityRecord | null,
+    persistedRevision: number,
+  ): Promise<void> {
+    await this.deps.store.save({
+      path,
+      hashes: current,
+      canonicalLength,
+      lastChangedAt: now,
+      lastVerdictAt: record?.lastVerdictAt ?? null,
+      // [D-311]: no judge call dispatched, so the revision is unchanged.
+      revision: persistedRevision,
+    });
+    this.pendingSmallEdit.delete(path);
+    this.pendingDebounced.delete(path);
+    this.lastProcessedText.set(path, currentText);
+    // `[D-427]`: nothing is left unfinished on this path, so no pending record either.
+    await this.clearPending(path);
   }
 
   /** `[D-427]`: true while this instance holds an edit back for `path` or has a call in flight for it. */
