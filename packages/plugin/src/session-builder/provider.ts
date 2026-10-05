@@ -291,7 +291,7 @@ import type { CompositionProvenance } from '../../../core/src/study-session/comp
 // resolver from `resolveCitationFreshness` above, never a shared one.
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
-  isStudyPlanConfigured,
+  hasAssessmentSource,
   type ObsidianDataHost,
   ObsidianStudyPlanSettingsStore,
 } from '../plan/settings-store.js';
@@ -998,8 +998,9 @@ async function disputesFromFiles(
  * ~150 lines of it. `main.ts` calls this directly, with `{ budgetMinutes:
  * DEFAULT_SESSION_BUDGET_MINUTES }` and no steering, for that door.
  *
- * Returns `null` when the study plan is not configured yet — the same
- * `isStudyPlanConfigured` gate `buildFresh` already applied privately, now
+ * Returns `null` when there is no assessment source yet (no readable Base and no
+ * hand-entered assessment, F1.2) — the same
+ * `hasAssessmentSource` gate `buildFresh` already applied privately, now
  * visible to every caller rather than only to `SessionBuilderState`'s
  * `'unavailable'` kind. Throws whatever the vault walk, the log read or the
  * oracle chain throws — `buildFresh` below is what turns that into
@@ -1014,7 +1015,8 @@ export async function composeStudySessionForRequest(
   now: Date,
 ): Promise<ComposeStudySessionForRequestResult | null> {
   const config = await new ObsidianStudyPlanSettingsStore(deps.settingsHost).load();
-  if (!isStudyPlanConfigured(config)) return null;
+  // F1.2 (`ol-egov.141.89.10.112`): her hand-entered assessments are a source where no Base exists.
+  if (!(await hasAssessmentSource(deps.vault, config))) return null;
 
   const today = localToday(now);
   const probeDays = deps.probeDays ?? SCHEDULING_HISTORY_PROBE_DAYS;
