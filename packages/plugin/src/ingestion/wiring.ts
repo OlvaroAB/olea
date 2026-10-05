@@ -201,7 +201,16 @@ export interface IngestionWiringDeps {
    * propagated. Omitted means no notification, unchanged from this module's
    * pre-`ol-p3t07a` behaviour.
    */
-  readonly onUnitsLanded?: (units: readonly ExtractedUnit[]) => Promise<void> | void;
+  readonly onUnitsLanded?: (
+    units: readonly ExtractedUnit[],
+    /**
+     * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> the drained job's contentHash` (the SHA-256
+     * of the file's raw bytes the queue keyed the job by), present only when the landing job was a
+     * `'source'` job, so the hash is that file's own. Absent for note-embed, vision-page and
+     * transcript landings, whose job hash is not the cited file's. Never read from the file again.
+     */
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ) => Promise<void> | void;
   /**
    * `ol-15f8`: composes the real `visionRunner` for standalone image sources
    * (C3.1/C3.3) exactly the way `concept/wiring.ts`'s `buildConceptWiring`
@@ -515,13 +524,19 @@ export interface IngestionWiring {
 /** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. */
 function withUnitsLandedHook(
   pendingSink: PendingIndexingSink,
-  onUnitsLanded: (units: readonly ExtractedUnit[]) => Promise<void> | void,
+  onUnitsLanded: NonNullable<IngestionWiringDeps['onUnitsLanded']>,
+  currentSourceJob: {
+    current: { readonly sourcePath: string; readonly contentHash: string } | null;
+  },
 ): ExtractedUnitSink {
   return {
     async receive(units) {
       await pendingSink.receive(units);
       try {
-        await onUnitsLanded(units);
+        const job = currentSourceJob.current;
+        await (job === null
+          ? onUnitsLanded(units)
+          : onUnitsLanded(units, new Map([[job.sourcePath, job.contentHash]])));
       } catch (error) {
         console.error('Olea: generation-trigger hook failed (ingestion unaffected)', error);
       }
@@ -839,8 +854,14 @@ function compareGenerationPriority(
 export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<IngestionWiring> {
   const sink = new PendingIndexingSink();
   const enqueuer = deferredEnqueuer();
+  // `ol-egov.141.89.5.73` ([D-515]): the `'source'` job being drained right now, so the landed-units
+  // hook can pass that job's contentHash (the file's byte digest) with its units. Set only around
+  // the extraction runner below, cleared after, so no other job kind ever inherits it.
+  const currentSourceJob: {
+    current: { readonly sourcePath: string; readonly contentHash: string } | null;
+  } = { current: null };
   let runnerSink: ExtractedUnitSink = deps.onUnitsLanded
-    ? withUnitsLandedHook(sink, deps.onUnitsLanded)
+    ? withUnitsLandedHook(sink, deps.onUnitsLanded, currentSourceJob)
     : sink;
   // `deps.outcomes` (`[D-344]`): composed right after `onUnitsLanded`'s hook, before
   // `deps.generation`'s — independent of both, in the same "add-ons over the same base sink"
@@ -926,15 +947,25 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     ...(visionRunner ? { visionRunner } : {}),
     ...(extractOptions ? { options: extractOptions } : {}),
   });
+  const hashAwareRunner: typeof runner = async (job) => {
+    const payload = job.payload as { kind?: unknown; sourcePath?: unknown } | null;
+    if (payload?.kind !== 'source' || typeof payload.sourcePath !== 'string') return runner(job);
+    currentSourceJob.current = { sourcePath: payload.sourcePath, contentHash: job.contentHash };
+    try {
+      return await runner(job);
+    } finally {
+      currentSourceJob.current = null;
+    }
+  };
   const composedRunner = deps.revision
     ? createRevisionAwareJobRunner({
         vault: deps.vault,
         cache: deps.revision.cache,
         draftDeps: deps.revision.draftDeps,
-        fallback: runner,
+        fallback: hashAwareRunner,
         ...(deps.revision.now !== undefined ? { now: deps.revision.now } : {}),
       })
-    : runner;
+    : hashAwareRunner;
   // `deps.generation`'s execution half: recognises a drained `'generation'`
   // job and routes it to `deps.generation.draft`, falling through to
   // `composedRunner` (extraction, optionally revision-aware) for anything

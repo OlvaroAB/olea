@@ -153,17 +153,21 @@ export interface PendingRevalidation {
    * A withheld-for-a-reason fact is cleared by the reader the pass the passage is found again; it
    * never enters the judge's dispatch budget, and it is never read as a confirmed change.
    */
-  readonly reason?: PendingReason;
+  readonly reason?: PendingReason | UnrecognisedPendingReason;
 }
 
 /** See {@link PendingRevalidation.reason}. */
 export type PendingReason = 'passage-missing' | 'passage-ambiguous' | 'passage-rule-unsupported';
 
-const PENDING_REASONS: ReadonlySet<string> = new Set<PendingReason>([
-  'passage-missing',
-  'passage-ambiguous',
-  'passage-rule-unsupported',
-]);
+/**
+ * `[D-473]` (`ol-egov.141.89.5.52`), the tolerant reader: a reason string this build does not know
+ * (written by a newer build) is kept as the raw string, never dropped. The record stays, the hold
+ * stays (the pending fact still reads as current, so the question stays withheld), and a write
+ * that does not resolve the fact carries the value through unchanged. Only a legitimate
+ * resolution clears it. A non-string reason is still malformed. Branded so a literal is never
+ * mistaken for a known reason in a switch.
+ */
+export type UnrecognisedPendingReason = string & { readonly __unrecognisedPendingReason?: never };
 
 /** One instrument's last-observed citation anchor. */
 export interface CitationAnchorRecord {
@@ -298,11 +302,9 @@ function isPendingRevalidation(value: unknown): value is PendingRevalidation {
   if (candidate.retriedAt !== undefined && typeof candidate.retriedAt !== 'number') {
     return false;
   }
-  // `[D-446]`: optional, and if present one of the known reasons.
-  if (
-    candidate.reason !== undefined &&
-    !(typeof candidate.reason === 'string' && PENDING_REASONS.has(candidate.reason))
-  ) {
+  // `[D-446]`: optional, and if present a string. `[D-473]`: a string this build does not know is
+  // KEPT (the hold is preserved), never rejected; only a non-string is malformed.
+  if (candidate.reason !== undefined && typeof candidate.reason !== 'string') {
     return false;
   }
   return true;
@@ -518,6 +520,11 @@ export class ObsidianCitationHashStore implements CitationHashStore {
           sinceContentHash: sourceContentHash,
           since,
           dispatchedAt,
+          // `[D-473]`: a reason this build may not know belongs to the same difference; a dispatch
+          // write must not erase it.
+          ...(forSameDifference && existingPending.reason !== undefined
+            ? { reason: existingPending.reason }
+            : {}),
           ...(retry
             ? { retriedAt: dispatchedAt }
             : carriedRetriedAt !== undefined

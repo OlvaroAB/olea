@@ -2448,6 +2448,23 @@ describe('[D-455]/[D-456] presentation-time check: could-not-check (ol-egov.141.
     expect(session.getViewModel().phase).toBe('mcq-open');
   });
 
+  it('a suspended outcome drops the item silently and shows the next', async () => {
+    const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
+    const b = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-b' }));
+    const c = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-c' }));
+    const check = vi.fn(
+      async (id: string) => (id === 'inst-b' ? 'suspended' : 'clear') as 'clear' | 'suspended',
+    );
+    const session = new ReviewSession(
+      baseDeps({ queue: [a, b, c], checkSourceAtPresentation: check }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBeNull();
+    expect(session.currentItem?.instrument.instrumentId).toBe('inst-c');
+  });
+
   it('absent check: every item shows, as before', async () => {
     const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
     const session = new ReviewSession(baseDeps({ queue: [a] }));

@@ -127,8 +127,9 @@
  * change confirmed by the judge (suspension) and from a check still awaiting or failing to reach
  * the judge (a pending fact with no reason); none of the three reads as another. The withholding
  * never enters the `[D-400]` dispatch budget, and lifts the pass the passage is found again.
- * Where no digest resolves to exactly one passage at first sighting, the whole-note baseline is
- * taken as before (`report.passageSeedUnresolved`), never a guessed passage.
+ * Where no digest resolves to exactly one passage at first sighting (`report.passageSeedUnresolved`),
+ * the question is WITHHELD (`[D-514]`, `ol-egov.141.89.5.71`): an anchor with no passage text and the
+ * pending fact for the reason; the edited note is never baselined in the passage's place.
  *
  * ===========================================================================
  * `[D-400]` — ONE AUTOMATIC RETRY PER ORIGINAL CHECK, NEVER A FRESH
@@ -225,6 +226,7 @@
  */
 
 import {
+  buildSuccessorRevisionEnqueueInput,
   type CitedPassageRevisionOutcome,
   type Clock,
   type CurrentPassageState,
@@ -418,7 +420,7 @@ function isMarkdownVaultPath(path: VaultPath): boolean {
  * `[D-366]` (`sourceProvenance` lives on `VaultInstrumentCommon`, shared by
  * every instrument type — `session/types.ts`).
  */
-function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
+export function citedPassagePath(record: VaultInstrumentRecord): VaultPath {
   const sourcePath = record.sourceProvenance?.sourcePath;
   if (
     sourcePath !== undefined &&
@@ -473,7 +475,7 @@ function isTrackedForRevision(record: VaultInstrumentRecord): boolean {
 }
 
 /** A path with a hidden (dot-prefixed) segment — Obsidian's own folders, the trash, Olea's own layer: never a note her passage moved into. */
-const HIDDEN_PATH_SEGMENT = /(^|\/)\./;
+export const HIDDEN_PATH_SEGMENT = /(^|\/)\./;
 
 /** Mutable per-tick counters, threaded through `applyOutcome` rather than returned and merged — one pass, one report. */
 interface MutableTickReport {
@@ -501,13 +503,27 @@ interface PassageContext {
   readonly rule: PassageRule;
 }
 
-/** The pending fact an anchor may keep across a write: one awaiting the judge stays; one raised for a passage reason is cleared by the pass that finds the passage again. */
+/** The three withholding reasons this build knows, and so may clear on finding the passage again. */
+function isKnownPassageReason(reason: string | undefined): reason is PendingReason {
+  return (
+    reason === 'passage-missing' ||
+    reason === 'passage-ambiguous' ||
+    reason === 'passage-rule-unsupported'
+  );
+}
+
+/**
+ * The pending fact an anchor may keep across a write: one awaiting the judge stays; one raised for
+ * a passage reason this build knows is cleared by the pass that finds the passage again. A reason
+ * this build does not recognise is kept (`[D-473]`, `ol-egov.141.89.5.52`): only a build that
+ * knows the reason may decide it is resolved.
+ */
 function carriedPending(
   previous: CitationAnchorRecord,
 ): Pick<CitationAnchorRecord, 'pendingRevalidation'> {
-  return previous.pendingRevalidation !== undefined &&
-    previous.pendingRevalidation.reason === undefined
-    ? { pendingRevalidation: previous.pendingRevalidation }
+  const pending = previous.pendingRevalidation;
+  return pending !== undefined && !isKnownPassageReason(pending.reason)
+    ? { pendingRevalidation: pending }
     : {};
 }
 
@@ -668,6 +684,7 @@ export class CitationRevisionTrigger {
       rejectedInstrumentIds = new Set();
     }
 
+    const judgeCalls: Array<() => Promise<void>> = [];
     for (const [instrumentId, previous] of stored) {
       // `ol-egov.141.89.2.14`: a standing rejection wins over every other check this loop makes
       // — no current-passage read, no judge dispatch, no store write, no suspend, no enqueue.
@@ -694,6 +711,9 @@ export class CitationRevisionTrigger {
       let current: CurrentPassageState;
       // `[D-446]`: set only for a passage-grain anchor whose passage was found in a note this pass.
       let passage: PassageContext | undefined;
+      // `ol-egov.141.89.5.76`: the ladder's own verdict that the passage stands unchanged in
+      // everything but whitespace and line breaks (`via: 'exact'`, a [D-446] normalised match).
+      let reformattedByLadder = false;
       try {
         if (currentRecord !== undefined && previous.passageDigest !== undefined) {
           // Passage grain: ask WHERE the anchored passage stands now, by the shared rule. Only a
@@ -724,6 +744,7 @@ export class CitationRevisionTrigger {
           }
           current = { kind: 'found-at-anchor', text: resolution.text };
           passage = { sourcePath: resolution.sourcePath, rule: resolution.rule };
+          reformattedByLadder = resolution.via === 'exact';
         } else if (currentRecord !== undefined) {
           current = {
             kind: 'found-at-anchor',
@@ -759,7 +780,8 @@ export class CitationRevisionTrigger {
         currentRecord !== undefined &&
         current.kind === 'found-at-anchor' &&
         current.text !== previous.text &&
-        canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text)
+        (reformattedByLadder ||
+          canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text))
       ) {
         report.formattingOnly += 1;
         try {
@@ -782,7 +804,11 @@ export class CitationRevisionTrigger {
         continue;
       }
 
-      let outcome: CitedPassageRevisionOutcome;
+      // `ol-egov.141.89.5.71` ([D-514] item b): a judge call is never awaited inside this walk. The
+      // walk records every affected instrument's pending fact (and dispatch) first; the calls
+      // follow in `judgeCalls`, so a slow or silent judge cannot delay a later instrument's fact.
+      let judgeWillBeCalled = false;
+      let outcome: CitedPassageRevisionOutcome | undefined;
       try {
         // `[D-400]`: past the formatting-only exit above, reaching here with
         // `current.text !== previous.text` means a REAL, unresolved
@@ -838,26 +864,61 @@ export class CitationRevisionTrigger {
           }
         }
 
-        outcome = await evaluateCitedPassageRevision(
-          {
+        const previousContentHash = await hashText(previous.text);
+        const evaluate = (
+          recorder: PendingRevalidationRecorder,
+        ): Promise<CitedPassageRevisionOutcome> =>
+          evaluateCitedPassageRevision(
+            { instrumentId, previousText: previous.text, previousContentHash, current },
+            // While unreachable, take the SAME `'judge-unavailable'` path a
+            // `judge === null` caller already gets — no call, no spend, the
+            // pending fact still recorded per `[D-351]`. See this module's own
+            // "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc section.
+            online ? this.deps.judge : null,
+            this.deps.clock,
+            recorder,
+          );
+        judgeWillBeCalled =
+          online &&
+          this.deps.judge !== null &&
+          current.kind === 'found-at-anchor' &&
+          (await hashText(current.text)) !== previousContentHash;
+        if (judgeWillBeCalled && current.kind === 'found-at-anchor') {
+          // The fact first (`[D-351]`), for every affected instrument, before any call is awaited.
+          await pendingRecorder.recordPending({
             instrumentId,
-            previousText: previous.text,
-            previousContentHash: await hashText(previous.text),
-            current,
-          },
-          // While unreachable, take the SAME `'judge-unavailable'` path a
-          // `judge === null` caller already gets — no call, no spend, the
-          // pending fact still recorded per `[D-351]`. See this module's own
-          // "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc section.
-          online ? this.deps.judge : null,
-          this.deps.clock,
-          pendingRecorder,
-        );
+            sourceContentHash: await hashText(current.text),
+          });
+          const settled = current;
+          judgeCalls.push(async () => {
+            let judged: CitedPassageRevisionOutcome;
+            try {
+              // The fact was written in the first phase; the call does not write it a second time.
+              judged = await evaluate({ recordPending: async () => undefined });
+            } catch (error) {
+              console.error('Olea: citation-revision evaluation failed', error);
+              return;
+            }
+            await this.applyOutcome(
+              instrumentId,
+              previous,
+              currentRecord,
+              settled,
+              judged,
+              actions,
+              report,
+              passage,
+            );
+          });
+        } else {
+          outcome = await evaluate(pendingRecorder);
+        }
       } catch (error) {
         console.error('Olea: citation-revision evaluation failed', error);
         continue;
       }
 
+      if (judgeWillBeCalled || outcome === undefined) continue;
       await this.applyOutcome(
         instrumentId,
         previous,
@@ -869,6 +930,8 @@ export class CitationRevisionTrigger {
         passage,
       );
     }
+
+    for (const call of judgeCalls) await call();
 
     // Baseline every TRACKED instrument this pass found that the store has
     // never recorded — every MCQ, plus a Q&A/cloze that names a genuine
@@ -889,8 +952,27 @@ export class CitationRevisionTrigger {
         // one, a rule this build does not carry) keeps today's whole-note baseline — never a guessed
         // passage.
         const seeded = await seedPassageAnchor(vault, instrumentId, path, materialFor, rules);
-        if (seeded === 'unresolved') report.passageSeedUnresolved += 1;
-        if (seeded !== undefined && seeded !== 'unresolved') {
+        if (seeded !== undefined && 'withheld' in seeded) {
+          // `ol-egov.141.89.5.71` ([D-514] item a): the cited passage cannot be found at first
+          // sighting, so there is no passage to baseline and the edited note is never adopted in
+          // its place. The anchor holds no passage text (empty), only the citation's digest, and
+          // carries the pending fact that sets the question aside as could-not-check.
+          report.passageSeedUnresolved += 1;
+          await this.deps.store.save(instrumentId, {
+            sourcePath: path,
+            text: '',
+            passageDigest: seeded.digest,
+            conceptIds: record.conceptIds,
+          });
+          await this.deps.store.setPendingRevalidation(
+            instrumentId,
+            await hashText(`${seeded.withheld}\n${await materialFor(path)}`),
+            this.deps.clock.now(),
+            seeded.withheld,
+          );
+          continue;
+        }
+        if (seeded !== undefined) {
           await this.deps.store.save(instrumentId, {
             sourcePath: path,
             text: seeded.text,
@@ -1012,7 +1094,7 @@ export class CitationRevisionTrigger {
         // rule, re-found cleanly under the current one, is re-seated on it.
         if (
           passage !== undefined &&
-          (previous.pendingRevalidation?.reason !== undefined ||
+          (isKnownPassageReason(previous.pendingRevalidation?.reason) ||
             digestVersionOf(previous) !== passage.rule.version) &&
           currentRecord !== undefined &&
           current.kind === 'found-at-anchor'
@@ -1022,6 +1104,8 @@ export class CitationRevisionTrigger {
               sourcePath: passage.sourcePath,
               text: current.text,
               conceptIds: currentRecord.conceptIds,
+              // `[D-473]`: an unrecognised reason's hold survives the re-seat.
+              ...carriedPending(previous),
               ...(await passageFields(passage, current.text)),
             });
           } catch (error) {
@@ -1074,76 +1158,82 @@ export class CitationRevisionTrigger {
           console.error('Olea: citation-revision relocation-heal write failed', error);
         }
         return;
-      case 'refreshed':
-        // Same claim — advance the stored baseline so this delta is not
-        // re-flagged next pass. Nothing is written to the vault: under this
-        // caller's scoping (see this module's own doc) the changed material
-        // is already on disk; there is no separate instrument wording left
-        // stale by it.
+      case 'refreshed': {
+        // [D-508] (ol-egov.141.89.5.61): an immaterial verdict on an item's OWN
+        // cited passage never restores the question. This arm is reached only
+        // after the code's free exits (identical text, formatting-only under the
+        // canonical normaliser, the [D-446] move/reformat rules) have already
+        // settled without a judge call, so a real difference remains: the
+        // question stays withheld until a re-check against the current passage
+        // passes or it is rewritten. No re-check exists yet, so it takes the
+        // rewrite path, exactly like a material verdict. The judge's answer is
+        // still counted and routes the work; it just cannot certify the old text.
         report.refreshed += 1;
-        if (currentRecord !== undefined && current.kind === 'found-at-anchor') {
-          try {
-            // [D-351]: this verdict was computed against
-            // `outcome.event.newContentHash`. Only restore to current
-            // (clearing the pending fact — the write below omits it) when
-            // the PERSISTED pending hash still matches: a mismatch means a
-            // newer edit has already raised its own pending state, and this
-            // is a late result for an earlier edit that must not clear it.
-            const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
-              instrumentId,
-              outcome.event.newContentHash,
-            );
-            if (!pendingStillCurrent) {
-              report.staleResultDiscarded += 1;
-              return;
-            }
-            await this.deps.store.save(instrumentId, {
-              sourcePath: passage?.sourcePath ?? citedPassagePath(currentRecord),
-              text: current.text,
-              conceptIds: currentRecord.conceptIds,
-              ...(await passageFields(passage, current.text)),
-              // pendingRevalidation omitted -- restored to current [D-351].
-            });
-          } catch (error) {
-            console.error('Olea: citation-revision refresh write failed', error);
-          }
+        if (currentRecord === undefined || current.kind !== 'found-at-anchor') {
+          return;
         }
-        return;
-      case 'revised': {
-        report.revised += 1;
-        const conceptIds = currentRecord?.conceptIds ?? previous.conceptIds;
-        try {
-          // [D-351]: same guard as `refreshed` above, before acting on the
-          // verdict at all — a stale 'revised' verdict must not suspend the
-          // predecessor or enqueue a successor against content a newer edit
-          // has already superseded.
-          const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
-            instrumentId,
-            outcome.event.newContentHash,
-          );
-          if (!pendingStillCurrent) {
-            report.staleResultDiscarded += 1;
-            return;
-          }
-          await actions.suspend(outcome.predecessorInstrumentId, conceptIds);
-          await actions.enqueue(outcome.successorEnqueueInput);
-          // Retire tracking: the predecessor is suspended, so further
-          // changes to this material no longer need watching under this id.
-          // A failure above leaves this line unreached, so the entry stays
-          // tracked and the SAME 'revised' outcome is retried next pass —
-          // an acceptable, rare, at-least-once cost rather than a silent
-          // drop (a duplicate suspend/enqueue attempt is at worst a second,
-          // idempotent-by-content-hash `enqueue` and one extra append-only
-          // suspend event, never a second successor drafted twice).
-          await this.deps.store.remove(instrumentId);
-        } catch (error) {
-          console.error(
-            'Olea: citation-revision suspend/enqueue failed; predecessor stays tracked for retry',
-            error,
-          );
-        }
+        await this.suspendAndEnqueueSuccessor(
+          instrumentId,
+          currentRecord?.conceptIds ?? previous.conceptIds,
+          outcome.event.newContentHash,
+          outcome.event.instrumentId,
+          buildSuccessorRevisionEnqueueInput(outcome.event, current.text),
+          actions,
+          report,
+        );
         return;
       }
+      case 'revised': {
+        report.revised += 1;
+        await this.suspendAndEnqueueSuccessor(
+          instrumentId,
+          currentRecord?.conceptIds ?? previous.conceptIds,
+          outcome.event.newContentHash,
+          outcome.predecessorInstrumentId,
+          outcome.successorEnqueueInput,
+          actions,
+          report,
+        );
+        return;
+      }
+    }
+  }
+
+  /**
+   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage:
+   * suspend the predecessor, enqueue a successor drafted from the current passage, retire
+   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`); a failed
+   * suspend or enqueue leaves the anchor and its pending fact in place, so the question stays
+   * withheld and the same outcome is retried next pass.
+   */
+  private async suspendAndEnqueueSuccessor(
+    instrumentId: string,
+    conceptIds: readonly string[],
+    judgedContentHash: string,
+    predecessorInstrumentId: string,
+    successorEnqueueInput: EnqueueInput,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<void> {
+    try {
+      const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
+        instrumentId,
+        judgedContentHash,
+      );
+      if (!pendingStillCurrent) {
+        report.staleResultDiscarded += 1;
+        return;
+      }
+      await actions.suspend(predecessorInstrumentId, conceptIds);
+      await actions.enqueue(successorEnqueueInput);
+      // Retire tracking only after both succeeded; a failure leaves the entry tracked
+      // (pending fact intact) and the SAME outcome is retried next pass, at-least-once.
+      await this.deps.store.remove(instrumentId);
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision suspend/enqueue failed; predecessor stays tracked for retry',
+        error,
+      );
     }
   }
 }
@@ -1151,9 +1241,10 @@ export class CitationRevisionTrigger {
 /**
  * `[D-446]`: the passage a citation's digest names, when it resolves to exactly one segment of
  * `path`'s material — the text and digest a passage-grain anchor is first saved with. `undefined`
- * when the citation carries no digest (the legacy grain: nothing to say); `'unresolved'` when it
+ * when the citation carries no digest (the legacy grain: nothing to say); a withheld reason when it
  * carries one that does not resolve to exactly one passage (ambiguous, absent, unsupported rule,
- * malformed) — counted by the caller, which then keeps the whole-note baseline.
+ * malformed) — counted by the caller, which then WITHHOLDS the question (`[D-514]`): no passage is
+ * baselined.
  */
 async function seedPassageAnchor(
   vault: VaultSource,
@@ -1161,13 +1252,24 @@ async function seedPassageAnchor(
   path: VaultPath,
   materialFor: (path: VaultPath) => Promise<string>,
   rules: readonly PassageRule[],
-): Promise<{ readonly text: string; readonly digest: string } | 'unresolved' | undefined> {
+): Promise<
+  | { readonly text: string; readonly digest: string }
+  | { readonly withheld: PendingReason; readonly digest: string }
+  | undefined
+> {
   const citation = await readInstrumentCitation(vault, instrumentId);
   const digest = citation?.passageDigest;
   if (digest === undefined) return undefined;
-  if (!isMarkdownVaultPath(path)) return 'unresolved';
+  if (!isMarkdownVaultPath(path)) return { withheld: 'passage-missing', digest };
   const located = await locatePassageByDigest(await materialFor(path), digest, rules);
-  return located.status === 'unique' ? { text: located.segment.text, digest } : 'unresolved';
+  if (located.status === 'unique') return { text: located.segment.text, digest };
+  const withheld: PendingReason =
+    located.status === 'ambiguous'
+      ? 'passage-ambiguous'
+      : located.status === 'absent'
+        ? 'passage-missing'
+        : 'passage-rule-unsupported';
+  return { withheld, digest };
 }
 
 /**

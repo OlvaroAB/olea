@@ -200,16 +200,36 @@ describe('baselining at the cited passage', () => {
     expect(anchor.passageDigest).toBeUndefined();
   });
 
-  it('a digest that resolves to no single passage falls back to the whole note and is counted, never guessed', async () => {
+  it('a digest that resolves to no single passage withholds its question and is counted, never baselined as the edited note ([D-514] item a)', async () => {
     const ambiguousNote = sourceNote(PASSAGE, LIMESTONE, PASSAGE);
     const { vault, store } = await fixture({ sourceText: ambiguousNote });
     const report = await trigger(store, null).tick(vault, actions());
 
     expect(report.passageSeedUnresolved).toBe(1);
-    expect(report.newlyBaselined).toBe(1);
+    expect(report.newlyBaselined).toBe(0);
     const anchor = await anchorOf(store);
-    expect(anchor.passageDigest).toBeUndefined();
-    expect(anchor.text).toBe(ambiguousNote);
+    expect(anchor.text).toBe('');
+    expect(anchor.text).not.toContain(LIMESTONE);
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-ambiguous');
+  });
+
+  it('a passage that cannot be found at first sighting leaves its question withheld, and stays withheld on the next pass ([D-514] item a)', async () => {
+    const { vault, store } = await fixture({ sourceText: sourceNote(BASALT, LIMESTONE) });
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    const report = await t.tick(vault, actions());
+
+    expect(report.passageSeedUnresolved).toBe(1);
+    const anchor = await anchorOf(store);
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-missing');
+    expect(anchor.text).not.toBe(sourceNote(BASALT, LIMESTONE));
+    expect(anchor.text).toBe('');
+
+    await t.tick(vault, actions());
+    const again = await anchorOf(store);
+    expect(again.pendingRevalidation?.reason).toBe('passage-missing');
+    expect(again.text).toBe('');
+    expect(judge.judge).not.toHaveBeenCalled();
   });
 });
 
@@ -280,8 +300,45 @@ describe('the bug: an edit elsewhere in the note, or a move, no longer reaches t
     expect((await anchorOf(store)).text).toBe(reflowed);
   });
 
-  it('a markup-only change to the passage (bullets, emphasis) exits free as formatting-only', async () => {
-    const bullets = `- ${GRANITE}\n- **${QUARTZ}**`;
+  it('a passage re-wrapped onto two lines settles free with no judge call and stays showable (ol-egov.141.89.5.76, D-446)', async () => {
+    const oneLine = `${GRANITE} ${QUARTZ}`;
+    const { vault, store } = await fixture({
+      sourceText: sourceNote(BASALT, oneLine, LIMESTONE),
+      passage: oneLine,
+    });
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    await t.tick(vault, actions());
+
+    await vault.write(SOURCE_PATH, sourceNote(BASALT, `${GRANITE}\n${QUARTZ}`, LIMESTONE));
+    const a = actions();
+    const report = await t.tick(vault, a);
+
+    expect(judge.judge).not.toHaveBeenCalled();
+    expect(report.formattingOnly).toBe(1);
+    expect(a.suspend).not.toHaveBeenCalled();
+    expect(a.enqueue).not.toHaveBeenCalled();
+    const anchor = await anchorOf(store);
+    expect(anchor.text).toBe(`${GRANITE}\n${QUARTZ}`);
+    expect(anchor.pendingRevalidation).toBeUndefined();
+  });
+
+  it('the same re-wrap plus one changed word still reaches the judge (ol-egov.141.89.5.76)', async () => {
+    const { vault, store } = await fixture();
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    await t.tick(vault, actions());
+
+    const edited = `${GRANITE} ${QUARTZ.replace('quartz', 'olivine')}`;
+    await vault.write(SOURCE_PATH, sourceNote(BASALT, edited, LIMESTONE));
+    const report = await t.tick(vault, actions());
+
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(report.formattingOnly).toBe(0);
+  });
+
+  it('an emphasis-only change to the passage exits free as formatting-only (a list marker is content, ol-egov.141.89.5.60)', async () => {
+    const bullets = `${GRANITE}\n**${QUARTZ}**`;
     const { vault, store } = await fixture();
     const judge = judgeSaying(true);
     const t = trigger(store, judge);
@@ -501,21 +558,22 @@ describe('an edited passage: the judge sees the passage, and only when it is unm
     await t.tick(vault, actions());
 
     await vault.write(SOURCE_PATH, sourceNote('Basalt is a fine-grained rock.', EDITED, LIMESTONE));
-    const report = await t.tick(vault, actions());
+    const a = actions();
+    const report = await t.tick(vault, a);
 
     expect(judge.judge).toHaveBeenCalledTimes(1);
     expect(judge.judge).toHaveBeenCalledWith({ previousText: PASSAGE, currentText: EDITED });
     expect(report.refreshed).toBe(1);
-    // A same-claim verdict advances the anchor to the new passage, and its digest with it.
-    const anchor = await anchorOf(store);
-    expect(anchor.text).toBe(EDITED);
-    expect(anchor.passageDigest).toBe(await digestPassage(EDITED));
-    expect(anchor.pendingRevalidation).toBeUndefined();
-
-    // The new passage is then the identity: an unrelated edit afterwards still makes no call.
-    await vault.write(SOURCE_PATH, sourceNote('Basalt is dark.', EDITED, LIMESTONE));
-    await t.tick(vault, actions());
-    expect(judge.judge).toHaveBeenCalledTimes(1);
+    // [D-508] an immaterial verdict never restores the question: the instrument is suspended, a
+    // successor is drafted from the current passage, and the anchor is removed (no certifying
+    // baseline is saved for the edited passage).
+    expect(a.suspend).toHaveBeenCalledWith(MCQ_ID, expect.anything());
+    expect(a.enqueue).toHaveBeenCalledTimes(1);
+    const enqueued = a.enqueue.mock.calls[0]?.[0] as unknown as {
+      payload: { newPassageText: string };
+    };
+    expect(enqueued.payload.newPassageText).toBe(EDITED);
+    expect((await store.loadAll()).has(MCQ_ID)).toBe(false);
   });
 
   it('a changed-claim verdict suspends the instrument and drafts the successor from the passage', async () => {
@@ -647,13 +705,13 @@ describe('segmentation-rule versions (D-446, row 42)', () => {
     },
   };
 
-  it('a citation digest from a rule this build does not carry is unresolved at first sighting: whole-note baseline, counted, never matched by chance', async () => {
+  it('a citation digest from a rule this build does not carry is unresolved at first sighting: withheld, counted, never matched by chance', async () => {
     const { vault, store } = await fixture({ digest: `p9:${'a'.repeat(64)}` });
     const report = await trigger(store, null).tick(vault, actions());
     expect(report.passageSeedUnresolved).toBe(1);
     const anchor = await anchorOf(store);
-    expect(anchor.passageDigest).toBeUndefined();
-    expect(anchor.text).toBe(SOURCE_TEXT);
+    expect(anchor.text).toBe('');
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-rule-unsupported');
   });
 
   it('the same passage digests differently under each rule, so a version 1 digest never resolves under version 2 by coincidence', async () => {

@@ -52,8 +52,8 @@ describe('resolveAnchoredPassage ladder', () => {
     expect(resolved).toMatchObject({ kind: 'relocated', sourcePath: ELSEWHERE, text: PASSAGE });
   });
 
-  it('a markup-only variant in place is present via the canonical rung, before any search elsewhere', async () => {
-    const notes = notesOf({ [HERE]: `- **${PASSAGE}**\n`, [ELSEWHERE]: `${PASSAGE}\n` });
+  it('an emphasis-only variant in place is present (a list marker is content, ol-egov.141.89.5.60) via the canonical rung, before any search elsewhere', async () => {
+    const notes = notesOf({ [HERE]: `**${PASSAGE}**\n`, [ELSEWHERE]: `${PASSAGE}\n` });
     const resolved = await resolveAnchoredPassage(await anchored(), notes);
     expect(resolved).toMatchObject({ kind: 'present', via: 'canonical', sourcePath: HERE });
   });

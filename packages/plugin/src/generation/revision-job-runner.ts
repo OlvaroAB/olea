@@ -37,14 +37,28 @@
  * precedent for building a fresh reader on that same walk rather than a
  * second one).
  *
- * `payload.newPassageText` is read only to prove it survived the trip; it is
- * NOT threaded into the drafting call. `draftQuizCardsForConcept` re-retrieves
- * grounded chunks for `conceptName` via `retrieve()` — it has no "draft from
- * this exact text" mode — so the new passage reaches the successor only
- * insofar as it is already indexed and the retrieval band grounds on it. A
- * later bead that wants a "draft strictly from this passage" mode can use
- * the field this runner leaves untouched; documented here so its apparent
- * disuse reads as a decision, not an oversight.
+ * ## The successor is drafted from the changed passage (`ol-egov.141.89.5.75`, `[D-508]`)
+ *
+ * Under `[D-508]` every changed cited passage is rewritten from its current text, so
+ * `payload.newPassageText` must reach drafting. `draftQuizCardsForConcept` and
+ * `draftCardsForConcept` re-retrieve grounded chunks for `conceptName` and have no "draft from this
+ * text" input, so a successor reflected the change only if retrieval had already indexed it. This
+ * runner supplies the passage through the seam it owns: it hands the drafting function a copy of
+ * `draftDeps` whose transport puts the passage FIRST in `sourceChunks` on the generation call
+ * (`quiz.generate.v1` / `cards.generate.v1`), keeping `sourceChunkOrigins` aligned (the passage's
+ * entry is `null`, a note passage). Other calls (the grounding judge) are untouched, and a passage
+ * already in `sourceChunks` is not added twice. Retrieval's own grounding gate still decides whether
+ * a draft is made at all; the passage is added to what the model reads, not to what the gate judged.
+ *
+ * ## An empty or unparseable draft is retried, then fails loudly (`ol-egov.141.89.5.75`)
+ *
+ * A reply that parses to nothing (no questions or cards, or a body that is not the expected shape)
+ * used to end the job `ok` with nothing cached, leaving the predecessor suspended with no successor.
+ * It now returns `retryable: true` until `REVISION_EMPTY_DRAFT_MAX_ATTEMPTS` attempts (the queue's
+ * own `JobRunnerView.attempts`) have been made; the queue's existing backoff and its own cap
+ * (`ingestion/engine.ts`, `MAX_ATTEMPTS`) apply to the retries. At the bound the job returns
+ * `retryable: false` with a reason, which the queue records as a `failed` job with that
+ * `failedReason`. A grounded refusal is not an empty draft and is unchanged.
  *
  * ## Why this bypasses `runGenerationSweep`'s cache dedupe
  *
@@ -190,6 +204,7 @@ import {
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
+  type WorkerTaskTransport,
 } from 'olea-core';
 import type {
   DraftQuizCardsDeps,
@@ -201,6 +216,7 @@ import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
 import type { DraftedDemandCarry } from './draft-demand.js';
+import { hashSourceRevision } from './home-note.js';
 import {
   demandRoutingCounterFor,
   draftDemandForQuestion,
@@ -228,6 +244,57 @@ export function isInstrumentRevisionJobPayload(
     v.predecessorInstrumentId.length > 0 &&
     typeof v.newPassageText === 'string'
   );
+}
+
+/**
+ * How many attempts an empty or unparseable successor draft gets before the job is recorded as
+ * failed. A declared constant, not fitted: each attempt is a generation call, so the bound is small;
+ * a malformed reply is usually a one-off the next attempt clears. It sits below the queue's own
+ * attempt cap, which still governs retries of transport failures.
+ */
+export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
+
+const GENERATION_TASK_IDS: ReadonlySet<string> = new Set(['quiz.generate.v1', 'cards.generate.v1']);
+
+/**
+ * `draftDeps` with its transport wrapped so a generation request carries `passage` first in
+ * `sourceChunks` (see the module doc). Everything else passes through unchanged.
+ */
+function withPassageTransport<T extends { readonly transport: WorkerTaskTransport }>(
+  draftDeps: T,
+  passage: string,
+): T {
+  if (passage.trim().length === 0) return draftDeps;
+  const inner = draftDeps.transport;
+  return {
+    ...draftDeps,
+    transport: {
+      send: (request) => {
+        const payload = request.payload;
+        if (
+          !GENERATION_TASK_IDS.has(request.taskId) ||
+          typeof payload !== 'object' ||
+          payload === null
+        ) {
+          return inner.send(request);
+        }
+        const body = payload as { sourceChunks?: unknown; sourceChunkOrigins?: unknown };
+        if (!Array.isArray(body.sourceChunks) || body.sourceChunks.includes(passage)) {
+          return inner.send(request);
+        }
+        return inner.send({
+          ...request,
+          payload: {
+            ...body,
+            sourceChunks: [passage, ...body.sourceChunks],
+            ...(Array.isArray(body.sourceChunkOrigins)
+              ? { sourceChunkOrigins: [null, ...body.sourceChunkOrigins] }
+              : {}),
+          },
+        });
+      },
+    },
+  };
 }
 
 function defaultGenerateDraftId(): string {
@@ -363,6 +430,8 @@ async function standsRejected(vault: VaultSource, instrumentId: string): Promise
 type SuccessorDraftOutcome<TContent> =
   | { readonly kind: 'thrown' }
   | { readonly kind: 'nothing-to-cache' }
+  /** Unparseable or empty reply: retried under `REVISION_EMPTY_DRAFT_MAX_ATTEMPTS`, then a recorded failure. */
+  | { readonly kind: 'empty-draft' }
   | {
       readonly kind: 'drafted';
       readonly contents: readonly TContent[];
@@ -446,11 +515,8 @@ async function draftMcqSuccessor(
   const questions = extractDraftedQuestions(result.response);
   const provenance = extractDraftedProvenance(result.response);
   if (questions === null || provenance === null || questions.length === 0) {
-    // Unparseable or empty — nothing content-bearing to cache. Not an error:
-    // the ingestion queue marks this job `done`, and a future edit to the
-    // same instrument would enqueue its own fresh `instrument-revision` job
-    // (a new content hash) rather than this one being retried.
-    return { kind: 'nothing-to-cache' };
+    // Unparseable or empty: see the module doc's retry section.
+    return { kind: 'empty-draft' };
   }
 
   return {
@@ -494,7 +560,7 @@ async function draftQaSuccessor(
   const cards = extractDraftedCards(result.response);
   const provenance = extractDraftedCardsProvenance(result.response);
   if (cards === null || provenance === null || cards.length === 0) {
-    return { kind: 'nothing-to-cache' };
+    return { kind: 'empty-draft' };
   }
 
   return {
@@ -502,6 +568,30 @@ async function draftQaSuccessor(
     contents: cards,
     provenance,
     demand: extractDraftedCardDemand(result.request, result.response),
+  };
+}
+
+/**
+ * The note's revision hash at draft time, as the sweep records it (`pipeline.ts`, `hashSourceRevision`):
+ * `accept.ts` forwards it so accepting refuses a successor drafted against a note that has since
+ * changed. Absent when the note is gone.
+ */
+async function sourceContentHashOf(
+  vault: VaultSource,
+  notePath: VaultPath,
+): Promise<string | undefined> {
+  return (await vault.exists(notePath))
+    ? await hashSourceRevision(await vault.read(notePath))
+    : undefined;
+}
+
+/** Retry an empty or unparseable draft until the bound, then fail with a reason the queue records. */
+function emptyDraftOutcome(payload: InstrumentRevisionJobPayload, attempts: number): JobRunOutcome {
+  if (attempts < REVISION_EMPTY_DRAFT_MAX_ATTEMPTS) return { ok: false, retryable: true };
+  return {
+    ok: false,
+    retryable: false,
+    reason: `instrument-revision job: no usable successor draft for predecessor ${payload.predecessorInstrumentId} after ${REVISION_EMPTY_DRAFT_MAX_ATTEMPTS} attempts (empty or unparseable reply); the predecessor stays suspended`,
   };
 }
 
@@ -521,6 +611,8 @@ async function draftQaSuccessor(
 export async function runInstrumentRevisionJob(
   deps: RevisionJobRunnerDeps,
   payload: InstrumentRevisionJobPayload,
+  /** This attempt's number (`JobRunnerView.attempts`); absent reads as the first. */
+  attempts = 1,
 ): Promise<JobRunOutcome> {
   // `ol-egov.141.89.2.14`: see the module doc's section. Read before the
   // Worker check, so a rejected predecessor's job ends rather than waiting
@@ -567,11 +659,18 @@ export async function runInstrumentRevisionJob(
       payload.predecessorInstrumentId,
       'cards.generate.v1',
     );
-    const drafted = await draftQaSuccessor(draftDeps, draftCardForConcept, target, demandFields);
+    const drafted = await draftQaSuccessor(
+      withPassageTransport(draftDeps, payload.newPassageText),
+      draftCardForConcept,
+      target,
+      demandFields,
+    );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
+    if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
     const createdAt = now().toISOString();
+    const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
       // counted, not cached. The declaration is read by the item's position in the response.
@@ -588,6 +687,7 @@ export async function runInstrumentRevisionJob(
         conceptIds: [target.conceptKey],
         sourcePath: target.sourcePath,
         createdAt,
+        ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
         card,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -614,11 +714,18 @@ export async function runInstrumentRevisionJob(
       payload.predecessorInstrumentId,
       'quiz.generate.v1',
     );
-    const drafted = await draftMcqSuccessor(draftDeps, draftForConcept, target, demandFields);
+    const drafted = await draftMcqSuccessor(
+      withPassageTransport(draftDeps, payload.newPassageText),
+      draftForConcept,
+      target,
+      demandFields,
+    );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
+    if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
     if (drafted.kind === 'nothing-to-cache') return { ok: true };
 
     const createdAt = now().toISOString();
+    const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.
       const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
@@ -634,6 +741,7 @@ export async function runInstrumentRevisionJob(
         conceptIds: [target.conceptKey],
         sourcePath: target.sourcePath,
         createdAt,
+        ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
         question,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -667,6 +775,6 @@ export function createRevisionAwareJobRunner(
     if (!isInstrumentRevisionJobPayload(job.payload)) {
       return deps.fallback(job);
     }
-    return runInstrumentRevisionJob(deps, job.payload);
+    return runInstrumentRevisionJob(deps, job.payload, job.attempts);
   };
 }

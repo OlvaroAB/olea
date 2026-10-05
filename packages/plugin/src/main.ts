@@ -1994,7 +1994,7 @@ export default class OleaPlugin extends Plugin {
       // trigger. Fires once per drained job, best-effort (see `wiring.ts`'s
       // own doc for why a generation failure can never fail the ingestion
       // job it rode in on).
-      onUnitsLanded: (units) => this.onUnitsLanded(units),
+      onUnitsLanded: (units, sourceRevisions) => this.onUnitsLanded(units, sourceRevisions),
       // `ol-2zfj.39` (`[D-133]` end-to-end): a drained `'instrument-revision'`
       // job drafts its successor into the same cache the F3.3 sweep fills,
       // carrying the predecessor id that `accept.ts` stamps on materialize.
@@ -3514,7 +3514,10 @@ export default class OleaPlugin extends Plugin {
    * the F7.8 degrade (`report === null`, no Worker configured or `units`
    * empty), never a stale prior sweep's refusals surviving a no-op one.
    */
-  private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
+  private async onUnitsLanded(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
     if (this.generation === null) return;
     try {
       const formatMatch = await this.buildFormatMatchProducer();
@@ -3523,6 +3526,7 @@ export default class OleaPlugin extends Plugin {
         this.draftQuizCardsDeps(),
         { classifier: this.knowledgeKind?.classifier ?? null },
         formatMatch,
+        sourceRevisions,
       );
       this.lastGenerationRefusals = report?.refusals ?? [];
     } catch (error) {
