@@ -2754,6 +2754,7 @@ export type {
 // deliberately not wired yet (the arrival declaration, the repair badge).
 export type {
   ClassifiedMateriality,
+  DeclaredMadeBy,
   MaterialityAuthorship,
   MaterialityCorrection,
   MaterialityCues,
@@ -2768,8 +2769,9 @@ export {
   carriesNotHersMarkers,
   classifyMateriality,
   expireCorrectionIfMaterial,
+  factForMadeBy,
   folderPriorFor,
-  hasHersLinkStructure,
+  parseMadeBy,
   resolveMateriality,
   structuralNotHersFragment,
   transcriptMateriality,
@@ -2807,6 +2809,7 @@ export {
 } from './source/passage-identity.js';
 export {
   DEFAULT_SOURCES_FOLDER,
+  declaredMadeByFromFrontmatter,
   isRegisterableDocument,
   projectRegisteredFiles,
   registerSources,

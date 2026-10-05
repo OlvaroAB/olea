@@ -147,16 +147,19 @@ describe('buildBulkReviewGroups', () => {
     });
 
     it('reads "authored-note" for a markdown citation, naming HER note, never the destination note', () => {
-      const groups = buildBulkReviewGroups([
-        record({
-          // The destination note is Olea's own home note beside hers
-          // (`[D-214]`'s sibling) — deliberately a different path from the
-          // cited authored note below, mirroring `homeNotePathForSource`'s
-          // real "(Olea)"-suffixed naming.
-          sourcePath: '01 Courses/COGS214/My Own Thoughts (Olea).md',
-          sourceCitation: { sourcePath: '01 Courses/COGS214/My Own Thoughts.md' },
-        }),
-      ]);
+      const groups = buildBulkReviewGroups(
+        [
+          record({
+            // The destination note is Olea's own home note beside hers
+            // (`[D-214]`'s sibling) — deliberately a different path from the
+            // cited authored note below, mirroring `homeNotePathForSource`'s
+            // real "(Olea)"-suffixed naming.
+            sourcePath: '01 Courses/COGS214/My Own Thoughts (Olea).md',
+            sourceCitation: { sourcePath: '01 Courses/COGS214/My Own Thoughts.md' },
+          }),
+        ],
+        () => 'me',
+      );
       expect(groups[0]?.sourceMarkerOrigin).toBe('authored-note');
       expect(groups[0]?.sourceMarkerNoteTitle).toBe('My Own Thoughts');
       // The destination note's own title is still carried, unchanged, for
@@ -179,7 +182,18 @@ describe('buildBulkReviewGroups', () => {
           sourceCitation: { sourcePath: '01 Courses/COGS214/Lecture 4.pdf' },
         }),
       ]);
-      expect(groups[0]?.sourceMarkerOrigin).toBe('authored-note');
+      expect(groups[0]?.sourceMarkerOrigin).toBe('kept-note');
+    });
+
+    it('reads "kept-note" for an undeclared markdown citation, still naming HER note', () => {
+      const groups = buildBulkReviewGroups([
+        record({
+          sourcePath: '01 Courses/COGS214/My Own Thoughts (Olea).md',
+          sourceCitation: { sourcePath: '01 Courses/COGS214/My Own Thoughts.md' },
+        }),
+      ]);
+      expect(groups[0]?.sourceMarkerOrigin).toBe('kept-note');
+      expect(groups[0]?.sourceMarkerNoteTitle).toBe('My Own Thoughts');
     });
   });
 });

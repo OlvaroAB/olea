@@ -304,10 +304,23 @@ describe('against the real [D-101] classifier (../source/materiality.ts), read-o
     });
   });
 
-  it('the zettelkasten folder prior resolves hers, and hers is admitted through the observe path', async () => {
+  it('the zettelkasten folder prior never resolves hers (D-490): unknown excludes, as not-hers does', () => {
     const classified = classifyMateriality({
       path: 'Courses/Sample/05 Zettelkasten/my-own-thoughts.md',
       format: null,
+    });
+    expect(classified.fact.authorship).toBe('unknown');
+    expect(admitBeliefBearingStatement(classified.fact.authorship)).toEqual({
+      admitted: false,
+      reason: 'unknown-authorship',
+    });
+  });
+
+  it('a note she declared made-by me resolves hers, and hers is admitted through the observe path', async () => {
+    const classified = classifyMateriality({
+      path: 'Courses/Sample/05 Zettelkasten/my-own-thoughts.md',
+      format: null,
+      declaredMadeBy: 'me',
     });
     expect(classified.fact.authorship).toBe('hers');
 

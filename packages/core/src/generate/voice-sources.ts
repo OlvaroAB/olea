@@ -28,7 +28,8 @@
  */
 
 export type PassageAuthorship = 'hers' | 'not-hers' | 'unknown';
-export type PassageCurationAuthority = 'instructor' | 'published' | 'peer' | 'unknown';
+/** `hers` is student curation ([D-490]): she filed it. It never stands for authorship. */
+export type PassageCurationAuthority = 'instructor' | 'published' | 'peer' | 'hers' | 'unknown';
 
 export interface ClassifiedPassage {
   readonly text: string;

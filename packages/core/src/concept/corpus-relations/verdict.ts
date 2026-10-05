@@ -10,25 +10,33 @@
  * clause-compliant by construction rather than by discipline (the bead's
  * own phrase for this, and the reason this module's request shape below
  * has no "name-only" path at all). This holds for a `her-link`-nominated
- * pair exactly as much as any other: her link says the two ideas belong
- * together, never what the relationship IS, so the port still reads both
+ * pair exactly as much as any other: a link in a note she keeps says the two
+ * ideas belong together, never what the relationship IS, so the port still reads both
  * passages to decide `type`/`direction`/`confidence` — see the provenance
  * note below for the one thing that DOES change for such a pair.
  *
  * **Provenance is stamped from the nomination signal, not from the model
- * (`[D-070]`, `ol-9qwy`).** A candidate nominated (at least in part) by her
- * own wikilink between the two concept notes reconciles to
- * `RelationProvenanceKind: 'hers'` — the strongest provenance tier the
- * system has, because the expensive judgement ("these two ideas belong
- * together") is a link she authored, not an inference from adjacency. Every
- * other candidate still reconciles to `'model-proposed'`. The TYPE
+ * (`[D-070]`, `ol-9qwy`; meaning amended by `[D-490]`).** A candidate
+ * nominated (at least in part) by a wiki-link between the two concept notes
+ * reconciles to `RelationProvenanceKind: 'hers'`. That stored value keeps
+ * its persisted name (it is written to `.olea/relations/`, `../relation-cache.ts`),
+ * but it MEANS *linked in a note she keeps*: curation, a fact about how her
+ * notes are organised, never that she wrote the note or vouches for the
+ * pair (knowledge model §5, C7.10). The vouching reading is reserved for a
+ * link in a note she has declared `made-by: me`. A link found only in notes
+ * she has declared `made-by: assistant` is the assistant's link, so the
+ * pair reconciles to `'model-proposed'` instead and gets no rank lift
+ * (`provenanceFor` below). A link in an undeclared (or `mixed`) note keeps
+ * `'hers'` and today's ordering: authorship there is unknown, and only the
+ * wording of the claim changes. Every other candidate reconciles to
+ * `'model-proposed'`. The TYPE
  * (`prerequisite` / `contrasts-with` / `causes`) is model-inferred from the sentence
- * either way — provenance answers "who vouches this pair is related", type
+ * either way (`[D-082]`) — provenance answers "where the pairing came from", type
  * answers "what the relation is", and this module keeps the two answers
  * separate rather than letting one imply the other. This is `reconcileCorpusVerdicts`
  * reading `CorpusRelationCandidate.signals`, computed after the port
- * returns — the port itself never sees a signal kind and cannot be asked to
- * self-report authorship it has no way to know.
+ * returns — the port itself never sees a signal kind or a declaration, and
+ * cannot be asked to self-report authorship it has no way to know.
  *
  * **The boundary compliance argument lives in this shape, not only in a
  * document.** `CorpusRelationVerdictPort.verdict` takes a transient batch
@@ -108,6 +116,7 @@
  */
 
 import type { Provenance } from '../../extract/types.js';
+import type { DeclaredMadeBy } from '../../source/materiality.js';
 import type { VaultPath } from '../../vault/types.js';
 import type { RelationProvenanceKind, RelationType } from '../relation.js';
 import { RELATION_DIRECTEDNESS } from '../relation.js';
@@ -145,6 +154,24 @@ export interface EndpointRevisionStampingOptions {
   readonly introducingPaths: IntroducingPathsLookup;
   readonly pathRevision: PathRevisionLookup;
 }
+
+/**
+ * Her `made-by` declaration (`[D-490]`, knowledge model §3.2) on each note
+ * whose wiki-link nominated `candidate`: one entry per linking note,
+ * `undefined` for a note that declares nothing (or declares an invalid
+ * value, which `parseMadeBy` already reads as undeclared). Called only for a
+ * candidate carrying a `'her-link'` signal.
+ *
+ * An injected function for the same reason `IntroducingPathsLookup` is: the
+ * caller holds the vault (it scanned the notes for the links, and reads
+ * their frontmatter), and this module gains no vault or frontmatter
+ * dependency of its own. Absent, or returning an empty list, the linking
+ * notes are unknown and every `'her-link'` pair keeps today's `'hers'`
+ * (`provenanceFor`), the same as an undeclared note.
+ */
+export type LinkingNoteDeclarationsLookup = (
+  candidate: CorpusRelationCandidate,
+) => readonly (DeclaredMadeBy | undefined)[];
 
 /**
  * A reconciled corpus relation additionally carrying `endpointRevisions` --
@@ -349,28 +376,48 @@ function pairKey(a: string, b: string): string {
 }
 
 /**
- * Which nomination signal kinds backed each candidate pair — the input
- * `reconcileCorpusVerdicts` needs to decide provenance, since a verdict
+ * The candidate behind each pair — the input `reconcileCorpusVerdicts` needs
+ * to decide provenance (its nomination signal kinds, and for a `'her-link'`
+ * pair the declarations of the notes that carry the link), since a verdict
  * itself carries only two concept names and never a signal kind.
  */
-function signalsByPair(
+function candidatesByPair(
   candidates: readonly CorpusRelationCandidate[],
-): ReadonlyMap<string, CorpusRelationCandidate['signals']> {
-  const index = new Map<string, CorpusRelationCandidate['signals']>();
+): ReadonlyMap<string, CorpusRelationCandidate> {
+  const index = new Map<string, CorpusRelationCandidate>();
   for (const candidate of candidates) {
-    index.set(pairKey(candidate.a.name, candidate.b.name), candidate.signals);
+    index.set(pairKey(candidate.a.name, candidate.b.name), candidate);
   }
   return index;
 }
 
 /**
- * `[D-070]`: a pair nominated (in part or wholly) by her own wikilink
- * reconciles at the strongest provenance tier, regardless of what else also
- * nominated it — the type may still be model-inferred; provenance answers a
- * different question (`./types.js`'s `NominationSignalKind` doc).
+ * `[D-070]`, its meaning amended by `[D-490]` (module doc): what a link in a
+ * note she keeps earns the pair. Provenance answers where the pairing came
+ * from; the type stays model-inferred either way (`[D-082]`).
+ *
+ * - **No `'her-link'` signal:** `'model-proposed'`.
+ * - **Every note whose link nominated the pair is declared
+ *   `made-by: assistant`:** `'model-proposed'`. The link is the
+ *   assistant's: she keeps the note, so it is curation, but it is never her
+ *   vouching for the pair, and it gets no rank lift over a model's proposal.
+ *   The persisted enum has no third value to name this, and adding one is a
+ *   persisted-schema change (`../relation-cache.ts`).
+ * - **Otherwise `'hers'`**, read as *linked in a note she keeps*. A linking
+ *   note declared `made-by: me` is the one case where the vouching reading
+ *   holds. An undeclared or `mixed` note keeps today's tier and ordering:
+ *   authorship there is unknown, so the claim is curation only. So does a
+ *   pair whose linking notes are unknown (no lookup, or an empty list).
  */
-function provenanceFor(signals: CorpusRelationCandidate['signals']): RelationProvenanceKind {
-  return signals.includes('her-link') ? 'hers' : 'model-proposed';
+function provenanceFor(
+  signals: CorpusRelationCandidate['signals'],
+  linkingNoteDeclarations: () => readonly (DeclaredMadeBy | undefined)[],
+): RelationProvenanceKind {
+  if (!signals.includes('her-link')) return 'model-proposed';
+  const declarations = linkingNoteDeclarations();
+  const onlyAssistantLinks =
+    declarations.length > 0 && declarations.every((madeBy) => madeBy === 'assistant');
+  return onlyAssistantLinks ? 'model-proposed' : 'hers';
 }
 
 /**
@@ -394,15 +441,21 @@ function provenanceFor(signals: CorpusRelationCandidate['signals']): RelationPro
  * through) falls back to exactly the pre-`ol-l40p` exact-name join, so this
  * change is additive: a candidate set and verdict batch with no keys at all
  * behaves identically to before.
+ *
+ * **`linkingNoteDeclarations` (`[D-490]`) is optional and additive the same
+ * way.** Omitted, every `'her-link'` pair reconciles to `'hers'` exactly as
+ * before; supplied, a pair whose every linking note is declared
+ * `made-by: assistant` reconciles to `'model-proposed'` (`provenanceFor`).
  */
 export function reconcileCorpusVerdicts(
   verdicts: readonly CorpusVerdict[],
   candidates: readonly CorpusRelationCandidate[],
   stamping?: EndpointRevisionStampingOptions,
+  linkingNoteDeclarations?: LinkingNoteDeclarationsLookup,
 ): ReconcileCorpusVerdictsResult {
   const known = byName(candidates);
   const knownByKey = byKey(candidates);
-  const signalsIndex = signalsByPair(candidates);
+  const candidateIndex = candidatesByPair(candidates);
   const dropped: Partial<Record<CorpusRelationDropReason, number>> = {};
   const bump = (reason: CorpusRelationDropReason) => {
     dropped[reason] = (dropped[reason] ?? 0) + 1;
@@ -451,14 +504,21 @@ export function reconcileCorpusVerdicts(
     const [from, to] = !directed || verdict.direction === 'a-to-b' ? [a, b] : [b, a];
 
     // `[D-082]`'s own text scopes "the verdict must come from reading the
-    // combined passages" to EVERY candidate, hers included — the port was
-    // called and both passages were read regardless of provenance. What
-    // `[D-070]` (`ol-9qwy`) changes is what happens AFTER: a pair her own
-    // wikilink nominated stamps as `'hers'`, the strongest provenance tier,
-    // rather than being flattened to `'model-proposed'` like every other
-    // candidate. Signals are looked up by pair, not by endpoint, since a
-    // signal kind belongs to the CANDIDATE, not to either concept alone.
-    const signals = signalsIndex.get(pairKey(a.name, b.name)) ?? [];
+    // combined passages" to EVERY candidate, link-nominated ones included —
+    // the port was called and both passages were read regardless of
+    // provenance. What `[D-070]` (`ol-9qwy`) changes is what happens AFTER: a
+    // pair a link in a note she keeps nominated stamps as `'hers'` (curation;
+    // `[D-490]`: never her vouching unless that note is declared hers, and
+    // not at all when every linking note is declared an assistant's —
+    // `provenanceFor`). Signals are looked up by pair, not by endpoint, since
+    // a signal kind belongs to the CANDIDATE, not to either concept alone.
+    const candidate = candidateIndex.get(pairKey(a.name, b.name));
+    const signals = candidate?.signals ?? [];
+    const provenance = provenanceFor(signals, () =>
+      candidate === undefined || linkingNoteDeclarations === undefined
+        ? []
+        : linkingNoteDeclarations(candidate),
+    );
 
     // `ol-egov.141.89.4.14` (module doc): computed over the WIDER
     // introducing-path set `stamping.introducingPaths` resolves for `from`/`to`
@@ -473,7 +533,7 @@ export function reconcileCorpusVerdicts(
       type: verdict.type,
       from: from.name,
       to: to.name,
-      provenance: provenanceFor(signals),
+      provenance,
       confidence: verdict.confidence,
       introducingPassages: { from: anchorOf(from), to: anchorOf(to) },
       // `ol-l40p` [REL-9]: carried post-swap, so `fromKey`/`toKey` name the

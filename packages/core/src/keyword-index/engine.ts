@@ -67,7 +67,12 @@ export class KeywordIndexEngine {
    */
   static async create(deps: KeywordIndexEngineDeps): Promise<KeywordIndexEngine> {
     const persisted = await deps.store.load();
-    const documents = new Map((persisted?.documents ?? []).map((doc) => [doc.path, doc] as const));
+    // [D-491]: a cache indexed before Olea's instruments were excluded still holds them. It is a
+    // cache (D-006), so it is dropped whole, and the wiring's existing empty-index rebuild refills it.
+    const current = (persisted?.documents ?? []).every((doc) => doc.evidenceScope === 1);
+    const documents = new Map(
+      (current ? (persisted?.documents ?? []) : []).map((doc) => [doc.path, doc] as const),
+    );
     return new KeywordIndexEngine(deps, documents);
   }
 

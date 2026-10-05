@@ -57,8 +57,9 @@
  *    (`../concept/relation.js:567-568`). Freshness itself is computed upstream, not here.
  * 3. **The three provenance cases, including both "written nowhere" sub-cases** — `RelationProvenance`'s
  *    three-armed union: `edge-provenance` (stated in one document, or implied across two — the same
- *    shape either way, per F5.2a), `asserted-no-provenance` (her own link, no textual provenance),
- *    and `no-edge` (she asserted a relation the graph does not have).
+ *    shape either way, per F5.2a), `asserted-no-provenance` (a link in a note she keeps, no textual
+ *    provenance; never a link in a note she declared `made-by: assistant`, `[D-490]`), and
+ *    `no-edge` (she asserted a relation the graph does not have).
  * 4. **The omission denominator — subject material plus edge provenance, nothing wider** (F5.3):
  *    `GradingSourceMaterial.omissionDenominator`, built to exclude the neighbour's own defining
  *    passages even though they are sent as retrieval context.
@@ -93,6 +94,7 @@
 
 import type { RelationEvidenceState, RelationProvenanceKind } from '../concept/relation.js';
 import type { SourceBlockRef } from '../grading/gradingPipeline.js';
+import type { DeclaredMadeBy } from '../source/materiality.js';
 
 // ---------------------------------------------------------------------------
 // 1. The subject — fixed at prompt time, C5.11 / R9
@@ -138,9 +140,14 @@ export type RelationProvenance =
       readonly passages: readonly SourceBlockRef[];
     }
   | {
-      /** She linked the two concepts herself; the edge is real but carries no textual provenance. */
+      /**
+       * The two concepts are linked in a note she keeps; the edge is real but carries no textual
+       * provenance. `[D-490]`: the link is curation, and her own assertion only when the note is
+       * declared `made-by: me`; a note declared `made-by: assistant` never produces this case
+       * (`resolveRelationProvenance`).
+       */
       readonly kind: 'asserted-no-provenance';
-      /** Her own linking note, retrieved in place of provenance passages (F5.2a). */
+      /** The linking note she keeps, retrieved in place of provenance passages (F5.2a). */
       readonly linkingNote: SourceBlockRef;
     }
   | {
@@ -206,8 +213,19 @@ export interface ResolvedRelationEdge {
   readonly provenance: RelationProvenanceKind;
   /** The edge's own introducing passages, already resolved to source blocks — empty when none exist. */
   readonly introducingPassages: readonly SourceBlockRef[];
-  /** Her own linking note, present when `provenance` is `'hers'` and no textual provenance was found. */
+  /**
+   * The note she keeps that carries the link, present when `provenance` is `'hers'` (linked in a
+   * note she keeps, `[D-490]`) and no textual provenance was found.
+   */
   readonly linkingNote?: SourceBlockRef;
+  /**
+   * Her `made-by` declaration on `linkingNote` (`[D-490]`, knowledge model §3.2), as `parseMadeBy`
+   * reads it; absent when the note declares nothing. Read by `resolveRelationProvenance` with the
+   * same rule the corpus stage stamps provenance by: `'assistant'` means the link is an
+   * assistant's, so the note is never used as her assertion; `'me'` is the vouching reading;
+   * absent or `'mixed'` keeps today's selection, with authorship unknown.
+   */
+  readonly linkingNoteMadeBy?: DeclaredMadeBy;
 }
 
 /**
@@ -224,6 +242,15 @@ export interface ResolvedRelationEdge {
  * two concepts at all — the ordinary `no-edge` case, unaffected by
  * freshness.
  *
+ * **The linking note is used only where the corpus stage would stamp the
+ * link `'hers'` (`[D-490]`).** A note declared `made-by: me` is her own
+ * assertion; an undeclared or `mixed` note keeps today's selection, read as a
+ * note she keeps (curation, authorship unknown). A note declared
+ * `made-by: assistant` carries the assistant's link, not hers, so it is
+ * never retrieved as her assertion: the edge reads exactly as a
+ * model-proposed edge with no textual provenance does, which is `no-edge`.
+ * `[D-082]` is untouched: nothing here reads or changes the edge's type.
+ *
  * Pure and synchronous, like every other export in this module: freshness
  * itself is computed upstream, not here (see `ResolvedRelationEdge.evidence`'s
  * own doc); this function only decides what to do with it once resolved.
@@ -237,13 +264,16 @@ export function resolveRelationProvenance(
   if (edge.introducingPassages.length > 0) {
     return { kind: 'edge-provenance', passages: edge.introducingPassages };
   }
-  if (edge.provenance === 'hers' && edge.linkingNote) {
+  const linkedInANoteSheKeeps =
+    edge.provenance === 'hers' && edge.linkingNoteMadeBy !== 'assistant';
+  if (linkedInANoteSheKeeps && edge.linkingNote) {
     return { kind: 'asserted-no-provenance', linkingNote: edge.linkingNote };
   }
   // A model-proposed edge with no textual provenance and no linking note is
   // not a case C7.10 defines (a candidate always carries the passages that
   // produced it) — treated as no usable edge rather than inventing a fourth
-  // provenance case this module has no evidence for.
+  // provenance case this module has no evidence for. A link only in a note
+  // declared `made-by: assistant` lands here too (this function's doc).
   return { kind: 'no-edge' };
 }
 
@@ -398,9 +428,10 @@ export function buildGradingSourceMaterial(input: GradingRetrievalInput): Gradin
       };
     }
     case 'asserted-no-provenance': {
-      // An edge she asserted herself, with no textual provenance — F5.2a's second "written
-      // nowhere" sub-case. Retrieval still gets both concepts' defining passages plus her own
-      // linking note; omission-scoring degrades because there is no provenance to bound it.
+      // An edge linked in a note she keeps, with no textual provenance — F5.2a's second "written
+      // nowhere" sub-case (her own assertion only when that note is declared `made-by: me`,
+      // `[D-490]`). Retrieval still gets both concepts' defining passages plus the linking note;
+      // omission-scoring degrades because there is no provenance to bound it.
       return {
         sourceBlocks: [...subjectPassages, ...neighbourPassages, provenance.linkingNote],
         omissionDenominator: null,
