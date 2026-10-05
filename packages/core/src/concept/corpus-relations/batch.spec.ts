@@ -282,4 +282,97 @@ describe('runCorpusRelationBatch — causes (ol-egov.141.89.4.23)', () => {
     expect(result.relations).toEqual([]);
     expect(result.dropped['no-relation']).toBe(1);
   });
+
+  describe('[ol-egov.141.89.4.32] her-link signals carry the linking notes made-by into stamping', () => {
+    async function stampFor(
+      signals: readonly import('./types.js').NominationSignal[],
+    ): Promise<string | undefined> {
+      const port: CorpusRelationVerdictPort = {
+        verdict: vi.fn().mockResolvedValue({
+          verdicts: [
+            {
+              a: 'Osmosis',
+              b: 'Membrane transport',
+              type: 'prerequisite',
+              direction: 'b-to-a',
+              confidence: 0.9,
+            },
+          ],
+        }),
+      };
+      const result = await runCorpusRelationBatch(port, {
+        newConcepts: [concept('Osmosis')],
+        allConcepts: [concept('Osmosis'), concept('Membrane transport', 'Lecture 2.md')],
+        signals,
+        passageText: () => 'some passage text',
+      });
+      return result.relations[0]?.provenance;
+    }
+
+    it('a link in a note declared assistant stamps model-proposed', async () => {
+      expect(
+        await stampFor([
+          {
+            kind: 'her-link',
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            linkingNoteMadeBy: 'assistant',
+          },
+        ]),
+      ).toBe('model-proposed');
+    });
+
+    it('a pair linked from two notes, one assistant and one me, stays hers', async () => {
+      expect(
+        await stampFor([
+          {
+            kind: 'her-link',
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            linkingNoteMadeBy: 'assistant',
+          },
+          { kind: 'her-link', a: 'Membrane transport', b: 'Osmosis', linkingNoteMadeBy: 'me' },
+        ]),
+      ).toBe('hers');
+    });
+
+    it('a pair linked from two assistant notes stamps model-proposed', async () => {
+      expect(
+        await stampFor([
+          {
+            kind: 'her-link',
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            linkingNoteMadeBy: 'assistant',
+          },
+          {
+            kind: 'her-link',
+            a: 'Membrane transport',
+            b: 'Osmosis',
+            linkingNoteMadeBy: 'assistant',
+          },
+        ]),
+      ).toBe('model-proposed');
+    });
+
+    it('an assistant note plus an undeclared note stays hers (mixed, today)', async () => {
+      expect(
+        await stampFor([
+          {
+            kind: 'her-link',
+            a: 'Osmosis',
+            b: 'Membrane transport',
+            linkingNoteMadeBy: 'assistant',
+          },
+          { kind: 'her-link', a: 'Membrane transport', b: 'Osmosis' },
+        ]),
+      ).toBe('hers');
+    });
+
+    it('an undeclared link stays hers', async () => {
+      expect(await stampFor([{ kind: 'her-link', a: 'Osmosis', b: 'Membrane transport' }])).toBe(
+        'hers',
+      );
+    });
+  });
 });

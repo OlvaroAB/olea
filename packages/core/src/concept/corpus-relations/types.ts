@@ -35,6 +35,7 @@
  */
 
 import type { Provenance } from '../../extract/types.js';
+import type { DeclaredMadeBy } from '../../source/materiality.js';
 import {
   type ConceptRelation,
   RELATION_EMISSION_STATUS,
@@ -141,16 +142,19 @@ export interface CorpusConcept {
  *   1.2a's "co-occurrence in assessment documents."
  * - `'embedding-proximity'` — the local vector cache places the two
  *   concepts close together.
- * - `'her-link'` — she linked the two concept notes herself. Component
- *   register row 1.2a calls this "usefully, human-asserted" — strong
- *   nomination evidence. It is still only nomination for the purpose of
+ * - `'her-link'` — a wiki-link between the two concept notes, in a note she
+ *   keeps (`[D-490]`: linked in a note she keeps, not necessarily her own
+ *   hand; her `made-by` declaration on that note says more, see
+ *   `NominationSignal.linkingNoteMadeBy`). Component register row 1.2a calls
+ *   this "usefully, human-asserted" — strong nomination evidence. It is still only nomination for the purpose of
  *   `[D-082]`'s combined-passage rule: "the verdict on each candidate must
  *   come from reading the combined passages" applies to every candidate,
  *   hers included, so this signal never skips the port call or invents a
  *   type/direction from the two names alone. What it DOES change,
  *   post-verdict (`[D-070]`, `ol-9qwy`): a candidate this signal nominated
- *   reconciles to `RelationProvenanceKind: 'hers'` rather than
- *   `'model-proposed'` — see `./verdict.js`'s doc for the reconciliation
+ *   reconciles to `RelationProvenanceKind: 'hers'` (read as
+ *   *linked in a note she keeps*; a note declared `made-by: assistant` stamps
+ *   `'model-proposed'`) rather than `'model-proposed'` — see `./verdict.js`'s doc for the reconciliation
  *   rule and why that is a separate question from what the verdict types
  *   the relation as.
  * - `'assessment-error-adjacency'` — the grading judge attributed a wrong
@@ -196,6 +200,13 @@ export interface NominationSignal {
   readonly kind: NominationSignalKind;
   readonly a: string;
   readonly b: string;
+  /**
+   * `'her-link'` only (`ol-egov.141.89.4.32`, `[D-490]`): her `made-by` declaration on the note
+   * that carries this link, as `parseMadeBy` reads it. Absent when that note declares nothing.
+   * A pair linked from two notes arrives as two signals, one per distinct declaration, so
+   * `./batch.ts` can hand `./verdict.ts` every linking note's declaration.
+   */
+  readonly linkingNoteMadeBy?: DeclaredMadeBy;
 }
 
 /**

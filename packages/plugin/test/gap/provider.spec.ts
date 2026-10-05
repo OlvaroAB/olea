@@ -13,6 +13,7 @@
 import { studyPlanEnvelope } from 'olea-contracts';
 import type { PaperDemand, Scheduler } from 'olea-core';
 import {
+  addManualAssessmentEntry,
   createFsrsScheduler,
   daysBetween,
   enumerateVaultInstruments,
@@ -1346,5 +1347,61 @@ describe('createLocalGapProvider — the demand rule, live ([D-437] B5, [D-349])
       expect(live.rank).toBe(baseline.rank);
       expect(live.gapScore).toBe(baseline.gapScore);
     });
+  });
+});
+
+describe('createLocalGapProvider — manual entries as the F1.2 fallback (ol-egov.141.89.10.112)', () => {
+  function filesWithoutTable() {
+    return {
+      '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2023.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+      ].join('\n'),
+    };
+  }
+
+  it('with a blank Base path and one manual entry, load renders a model for that course', async () => {
+    const vault = memoryVault(filesWithoutTable());
+    await addManualAssessmentEntry(vault, { course: 'TESTC101', type: 'Quiz', due: '2026-09-01' });
+    const provider = createLocalGapProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+    const state = await provider.load();
+    expect(state.kind).toBe('model');
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    expect(course?.status).toBe('ranked');
+  });
+
+  it('with a blank Base path and no manual entry, load stays unavailable', async () => {
+    const provider = createLocalGapProvider({
+      vault: memoryVault(filesWithoutTable()),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => new Date('2026-08-10T09:00:00-04:00'),
+    });
+    expect((await provider.load()).kind).toBe('unavailable');
   });
 });

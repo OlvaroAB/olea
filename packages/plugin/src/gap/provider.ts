@@ -112,7 +112,7 @@ import {
   unmetDemandsByConcept,
 } from 'olea-core';
 import {
-  isStudyPlanConfigured,
+  hasAssessmentSource,
   type ObsidianDataHost,
   ObsidianStudyPlanSettingsStore,
 } from '../plan/settings-store.js';
@@ -370,7 +370,8 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
     async load(): Promise<GapViewState> {
       try {
         const config = await settingsStore.load();
-        if (!isStudyPlanConfigured(config)) return { kind: 'unavailable' };
+        // F1.2 (`ol-egov.141.89.10.112`): hand-entered assessments are a source where no Base exists.
+        if (!(await hasAssessmentSource(deps.vault, config))) return { kind: 'unavailable' };
 
         const now = deps.now();
         const today = localToday(now);

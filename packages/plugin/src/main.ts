@@ -303,7 +303,11 @@ import {
   instrumentIdsInScope,
   resolveCitationPendingRevalidation,
 } from './session-builder/provider.js';
-import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
+import {
+  type SessionBuilderRequest,
+  SessionBuilderView,
+  VIEW_TYPE_OLEA_SESSION,
+} from './session-builder/view.js';
 import {
   type HeadingOfferSettingSnapshot,
   ObsidianHeadingOfferSettingStore,
@@ -1828,9 +1832,9 @@ export default class OleaPlugin extends Plugin {
         openRetrospective: () => {
           void this.revealRetrospectiveView();
         },
-        startSession: () => {
+        startSession: (request) => {
           void (async () => {
-            await this.enterStudySessionHolderForStart();
+            await this.enterStudySessionHolderForStart(request);
             void this.revealReviewView();
           })();
         },
@@ -3831,7 +3835,9 @@ export default class OleaPlugin extends Plugin {
    * `createLocalSessionBuilderProvider` uses for Home and the session
    * builder (`session-builder/provider.ts`'s `composeStudySessionForRequest`,
    * extracted there for exactly this reuse), with no course/topic/concept
-   * steering and C5.5's declared default budget
+   * steering and C5.5's declared default budget — unless `request` is given
+   * (`ol-egov.141.89.10.111`, F4.6/`[D-243]`: Start passes the steering she
+   * chose on Home, and only Start does)
    * (`DEFAULT_SESSION_BUDGET_MINUTES`) — the identical one-liner
    * `home/provider.ts` already calls for Home's own preview
    * (`sessionProvider.load({ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES })`).
@@ -3858,7 +3864,9 @@ export default class OleaPlugin extends Plugin {
    * the same "nothing frozen" reading `provider.ts` gives its own fields on
    * an unavailable build.
    */
-  private async composeDefaultStudySession(): Promise<ComposedStudySession | null> {
+  private async composeDefaultStudySession(
+    request?: SessionBuilderRequest,
+  ): Promise<ComposedStudySession | null> {
     const wiring = this.review;
     if (wiring === null) return null;
     const now = this.now();
@@ -3898,7 +3906,9 @@ export default class OleaPlugin extends Plugin {
         // instrument too, not only the session-builder leaf.
         ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
       },
-      { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+      // `ol-egov.141.89.10.111` (F4.6, `[D-243]`): Start passes the steering she chose on Home;
+      // every other door passes none and gets C5.5's declared default budget, as before.
+      request ?? { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
     );
     this.sharedSittingFrozenScope = result?.frozenScope;
@@ -4080,7 +4090,7 @@ export default class OleaPlugin extends Plugin {
    * honest zeros when nothing has been frozen yet or the idle threshold has
    * not passed — see its own doc.
    */
-  private async enterStudySessionHolderForStart(): Promise<void> {
+  private async enterStudySessionHolderForStart(request?: SessionBuilderRequest): Promise<void> {
     const now = this.now();
     const sitting = this.studySessionHolder.getSitting();
     if (sitting.status === 'active') {
@@ -4136,7 +4146,7 @@ export default class OleaPlugin extends Plugin {
       // the idle case.
       this.studySessionHolder.exit();
     }
-    const composed = await this.composeDefaultStudySession();
+    const composed = await this.composeDefaultStudySession(request);
     // `ol-egov.141.89.10.47` (C5.8, `[D-193]`): pass the composition's own
     // plan as `enter`'s third argument, so the composition PLAN is captured
     // at the exact instant this fresh sitting begins, not lazily at the
