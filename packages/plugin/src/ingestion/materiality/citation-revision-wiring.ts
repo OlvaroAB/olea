@@ -234,6 +234,7 @@ import {
   type EnqueueInput,
   enumerateVaultInstruments,
   evaluateCitedPassageRevision,
+  hashContent,
   hashText,
   locatePassageByDigest,
   PASSAGE_RULES,
@@ -375,7 +376,21 @@ export interface CitationRevisionTickReport {
    * surface.
    */
   readonly successorEnqueueFailed: number;
+  /**
+   * `ol-egov.141.89.5.73` ([D-515]): a question whose cited source is a non-markdown file whose
+   * current bytes no longer match the sidecar's `sourceRevision` (or that could not be checked),
+   * withheld with {@link SOURCE_REVISION_REASON}.
+   */
+  readonly sourceBytesChanged: number;
 }
+
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): the pending-fact reason written for a non-markdown source whose
+ * bytes differ from the recorded `sourceRevision`, or that cannot be checked. A string outside
+ * `PendingReason`: `[D-473]`'s tolerant reader keeps it and the hold stands. A new reason value is
+ * a contract-level choice, flagged for review.
+ */
+export const SOURCE_REVISION_REASON = 'source-revision-changed';
 
 /**
  * `ol-egov.141.89.5.77`: how many times in all (the first attempt included) a confirmed rewrite's
@@ -431,6 +446,14 @@ export interface CitationRevisionTriggerDeps {
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
 function isMarkdownVaultPath(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+/** `[D-515]`: true when the instrument's citation names a non-markdown file other than its own note. */
+function citesBinarySource(record: VaultInstrumentRecord): boolean {
+  const sourcePath = record.sourceProvenance?.sourcePath;
+  return (
+    sourcePath !== undefined && sourcePath !== record.notePath && !isMarkdownVaultPath(sourcePath)
+  );
 }
 
 /**
@@ -519,6 +542,7 @@ interface MutableTickReport {
   passageRuleUnsupported: number;
   passageSeedUnresolved: number;
   successorEnqueueFailed: number;
+  sourceBytesChanged: number;
 }
 
 /** Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read to every write that advances the anchor. */
@@ -600,6 +624,7 @@ export class CitationRevisionTrigger {
       passageRuleUnsupported: 0,
       passageSeedUnresolved: 0,
       successorEnqueueFailed: 0,
+      sourceBytesChanged: 0,
     };
     const rules = this.deps.passageRules ?? PASSAGE_RULES;
 
@@ -740,6 +765,15 @@ export class CitationRevisionTrigger {
       }
 
       const currentRecord = currentByInstrumentId.get(instrumentId);
+      // `ol-egov.141.89.5.73` ([D-515]): a non-markdown source is never diffed as text, so its
+      // bytes are compared with the sidecar's `sourceRevision` instead, and the question is
+      // withheld here, before any judge call is awaited ([D-514] b).
+      if (
+        currentRecord !== undefined &&
+        (await this.withholdIfSourceBytesChanged(vault, currentRecord, report))
+      ) {
+        continue;
+      }
       let current: CurrentPassageState;
       // `[D-446]`: set only for a passage-grain anchor whose passage was found in a note this pass.
       let passage: PassageContext | undefined;
@@ -1050,6 +1084,10 @@ export class CitationRevisionTrigger {
       } catch (error) {
         console.error('Olea: citation-revision baseline write failed', error);
       }
+      // `ol-egov.141.89.5.73`: a fresh anchor on a changed non-markdown source is withheld too.
+      if (citesBinarySource(record) && (await this.storeHas(instrumentId))) {
+        await this.withholdIfSourceBytesChanged(vault, record, report);
+      }
     }
 
     return report;
@@ -1132,6 +1170,53 @@ export class CitationRevisionTrigger {
     } catch (error) {
       console.error('Olea: citation-revision passage withhold write failed', error);
     }
+  }
+
+  private async storeHas(instrumentId: string): Promise<boolean> {
+    return (await this.deps.store.loadAll()).has(instrumentId);
+  }
+
+  /**
+   * `ol-egov.141.89.5.73` ([D-515], part 4): for a question citing a non-markdown source, hash the
+   * file's current bytes and compare with the sidecar's `sourceRevision`. Equal: nothing changes
+   * (returns false). A mismatch, a missing `sourceRevision`, an unreadable sidecar or file: record
+   * the pending-revalidation fact with {@link SOURCE_REVISION_REASON} (keyed to the observed bytes)
+   * and return true, so the caller skips the judge path.
+   *
+   * [D-508] routes a changed cited source to a rewrite, but a binary source has no passage text to
+   * judge or to draft from, and the revision job's drafting reads retrieval that may still hold the
+   * old file's chunks; nothing is suspended or enqueued here. The question stays withheld until a
+   * successor can honestly be drafted from the new bytes (reported, not built).
+   */
+  private async withholdIfSourceBytesChanged(
+    vault: VaultSource,
+    record: VaultInstrumentRecord,
+    report: MutableTickReport,
+  ): Promise<boolean> {
+    const sourcePath = record.sourceProvenance?.sourcePath;
+    if (sourcePath === undefined || !citesBinarySource(record)) return false;
+    let observed: string;
+    try {
+      const citation = await readInstrumentCitation(vault, record.instrumentId);
+      const bytes = await vault.readBinary(citation?.sourcePath ?? sourcePath);
+      const now = await hashContent(bytes);
+      if (citation?.sourceRevision !== undefined && citation.sourceRevision === now) return false;
+      observed = now;
+    } catch {
+      observed = 'unreadable';
+    }
+    report.sourceBytesChanged += 1;
+    try {
+      await this.deps.store.setPendingRevalidation(
+        record.instrumentId,
+        await hashText(`${SOURCE_REVISION_REASON}\n${observed}`),
+        this.deps.clock.now(),
+        SOURCE_REVISION_REASON as PendingReason,
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision source-bytes withhold write failed', error);
+    }
+    return true;
   }
 
   private async applyOutcome(
