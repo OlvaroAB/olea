@@ -32,6 +32,7 @@ import type {
   Scheduler,
   SchedulingObservationDecision,
   StrongRecallProposalDecision,
+  SupportLevelPresentation,
 } from 'olea-core';
 import {
   buildResolutionEvidenceEvent,
@@ -40,6 +41,7 @@ import {
   mapMcqRating,
   STRONG_RECALL_PROPOSAL_TRIGGER,
   scoredConceptId,
+  supportLevelActuallyShown,
 } from 'olea-core';
 // `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
 // from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
@@ -621,6 +623,22 @@ export function withheldNoticeText(
   return answerSubmitted
     ? WITHHELD_PASSAGE_CHANGED_NOTICE
     : WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE;
+}
+
+/**
+ * Whether a recall review screen (Q&A or cloze) displays a support prompt.
+ * No view does today, so no recall review may record support as shown
+ * (`[D-517]` (a), `ol-egov.141.89.9.91`). The one switch to flip, with the
+ * view that adds the prompt, if a prompt is ever shown (and that needs its
+ * own clause).
+ */
+export const RECALL_PROMPT_SHOWN = false;
+
+/** The decision a recall review records: the offered level only when a prompt was shown. */
+function supportLevelShownOnRecall(offered: SupportLevelPresentation): SupportLevelPresentation {
+  const level = supportLevelActuallyShown(offered.level, RECALL_PROMPT_SHOWN);
+  if (level === offered.level) return offered;
+  return { level, provenance: 'not-offered' };
 }
 
 /** The ruled brief line for a later set-aside in the same session, `null` where none is ruled. */
@@ -1730,8 +1748,14 @@ export class ReviewSession {
       // because `RecordReviewInput.supportLevel` is optional under
       // `exactOptionalPropertyTypes` and an explicit `undefined` value is not
       // the same as an absent key there.
+      // `[D-517]` (a): the chooser's level is what was OFFERED; the record carries what was
+      // SHOWN (principle 16, F2.20, `[D-362]`). No recall screen displays a prompt
+      // (`RECALL_PROMPT_SHOWN`), so an unaided answer records `independent` and readiness
+      // credits it. Provenance follows: nothing was shown above the floor.
       ...(stamped.instrument.supportLevel !== undefined
-        ? { supportLevel: stamped.instrument.supportLevel }
+        ? {
+            supportLevel: supportLevelShownOnRecall(stamped.instrument.supportLevel),
+          }
         : {}),
       // Same conditional-spread discipline as `supportLevel` just above, and
       // for the same `exactOptionalPropertyTypes` reason.

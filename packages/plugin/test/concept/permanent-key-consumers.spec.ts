@@ -287,9 +287,9 @@ describe('one real review under the permanent key reaches every consumer, in one
     // Three REAL sessions of the same instrument, each over 45 minutes apart (C5.5's
     // `SESSION_CLUSTERING_GAP_SECONDS`), each rated 'good'. `openReviewSession` recomputes the
     // support level shown from the vault's real history every time (see this file's module
-    // doc): session 1 is the honest cold start (`'prompted'`, `[D-094]`); by session 3 the real
-    // ladder (`support-level/ladder.ts`) has folded two clean, unhinted prior sessions and
-    // recedes to `'independent'` — never a hand-asserted string.
+    // doc): the ladder offers `'prompted'` at the cold start (`[D-094]`) and recedes by session 3,
+    // but no recall screen shows a prompt, so every record carries `'independent'`, what was
+    // shown (`[D-517]` (a)) — never a hand-asserted string.
     const T0 = new Date('2026-09-26T09:00:00-04:00');
     const GAP_MS = 46 * 60 * 1000;
     await openAndRateOneItem(vault, T0);
@@ -299,7 +299,7 @@ describe('one real review under the permanent key reaches every consumer, in one
     const { entries } = await readReviewLogHistory(vault, {});
     const reviewEntries = entries.filter((entry) => entry.kind === 'review');
     expect(reviewEntries).toHaveLength(3);
-    expect(reviewEntries[0]?.supportLevelShown).toBe('prompted');
+    expect(reviewEntries[0]?.supportLevelShown).toBe('independent');
     expect(reviewEntries[2]?.supportLevelShown).toBe('independent');
     const conceptId = reviewEntries[2]?.conceptIds[0];
     expect(conceptId).toBeDefined();
@@ -351,18 +351,19 @@ describe('one real review under the permanent key reaches every consumer, in one
     expect(plannedCourse.concepts.some((concept) => concept.conceptId === key)).toBe(true);
   });
 
-  it('a prompted cold-start review reaches Today and attainment, and correctly not readiness (D-264)', async () => {
+  it('an unaided cold-start review records independent and reaches Today, attainment and readiness ([D-517], D-264)', async () => {
     const vault = fixtureVault();
 
     // ONE real session, on a fresh vault with no prior history — the honest cold start.
     // `openReviewSession` reads that empty history itself (see this file's module doc) and
-    // shows `'prompted'` ([D-094]); never a hand-asserted string.
+    // offers `'prompted'` ([D-094]), but no recall screen shows a prompt, so the record carries
+    // what was shown, `'independent'` ([D-517] (a)); never a hand-asserted string.
     await openAndRateOneItem(vault, NOW);
 
     const { entries } = await readReviewLogHistory(vault, {});
     const reviewEntries = entries.filter((entry) => entry.kind === 'review');
     expect(reviewEntries).toHaveLength(1);
-    expect(reviewEntries[0]?.supportLevelShown).toBe('prompted');
+    expect(reviewEntries[0]?.supportLevelShown).toBe('independent');
     const conceptId = reviewEntries[0]?.conceptIds[0];
     expect(conceptId).toBeDefined();
     expect(conceptId?.startsWith(`${OPAQUE_CONCEPT_KEY_PREFIX}:`)).toBe(true);
@@ -378,8 +379,8 @@ describe('one real review under the permanent key reaches every consumer, in one
     const mastery = computeAllConceptMastery(entries, [key]);
     expect(mastery.get(key)?.evidence.scoredEventCount).toBe(1);
 
-    // Readiness correctly reads no weakest recall estimate: a prompted review is not an unaided
-    // success (D-264), so it is honestly absent, never folded in as a measured zero.
+    // Readiness credits the unaided success (D-264): the first review is real evidence now that
+    // the record says what was shown, never "prompted" for a prompt nobody saw.
     const dayAfter = new Date(Date.parse(reviewEntries[0]?.timestamp as string) + 86_400_000);
     const readiness = readAllConceptReadiness(
       entries,
@@ -388,6 +389,6 @@ describe('one real review under the permanent key reaches every consumer, in one
       dayAfter,
       projectInstrumentValidity(entries),
     );
-    expect(readiness.get(key)?.weakest).toBeNull();
+    expect(readiness.get(key)?.weakest).not.toBeNull();
   });
 });
