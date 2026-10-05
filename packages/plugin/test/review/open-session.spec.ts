@@ -76,6 +76,10 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  type CitationHashStore,
+  ObsidianCitationHashStore,
+} from '../../src/ingestion/materiality/citation-hash-store.js';
+import {
   type ObsidianDataHost,
   STUDY_PLAN_SETTINGS_STORAGE_KEY,
 } from '../../src/plan/settings-store.js';
@@ -2040,5 +2044,98 @@ describe('F2.21 — the strong-recall proposal is composed into every opened ses
     expect(withHistory.scheduledQueue.map((item) => item.instrument.instrumentId).sort()).toEqual(
       plain.scheduledQueue.map((item) => item.instrument.instrumentId).sort(),
     );
+  });
+});
+
+describe('a material verdict on a cited passage withholds the question inside an open session (ol-egov.141.89.5.59, D-343, D-511)', () => {
+  // The revised path (`citation-revision-wiring.ts`) suspends the predecessor through the review
+  // log and removes the passage record. Neither leaves a pending fact, so the presentation-time
+  // changed-source check alone reads clear: the suspension itself has to be read at presentation.
+  function memoryHost(): ObsidianDataHost {
+    let blob: unknown = {};
+    return {
+      loadData: async () => blob,
+      saveData: async (next: unknown) => {
+        blob = next;
+      },
+    };
+  }
+
+  async function openWithStore(vault: ReturnType<typeof memoryVault>, store: CitationHashStore) {
+    const input = await sessionInput(vault);
+    return openReviewSession({ ...input, citationHashStore: store });
+  }
+
+  async function applyRevisedPathEffect(
+    vault: ReturnType<typeof memoryVault>,
+    store: CitationHashStore,
+    item: { instrumentId: string; conceptIds: readonly string[] },
+  ) {
+    await createVaultSuspendPort(vault, DEVICE).suspend(item.instrumentId, item.conceptIds);
+    await store.remove(item.instrumentId);
+  }
+
+  it('an item suspended after the session opened is not shown when its turn comes', async () => {
+    const vault = studyVault();
+    const store = new ObsidianCitationHashStore(memoryHost());
+    const outcome = await openWithStore(vault, store);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+    const [first, second] = outcome.session.queueSnapshot;
+    if (first === undefined || second === undefined) throw new Error('expected two items');
+
+    await applyRevisedPathEffect(vault, store, second.instrument);
+
+    await advancePastCurrentItem(outcome.session);
+    expect(outcome.session.getViewModel().phase).toBe('complete');
+    expect(outcome.session.currentItem?.instrument.instrumentId).not.toBe(
+      second.instrument.instrumentId,
+    );
+    expect(outcome.session.takeWithheldNotice()).toBeNull();
+  });
+
+  it('an unreadable suspension state fails closed: the item is withheld', async () => {
+    const vault = studyVault();
+    const store = new ObsidianCitationHashStore(memoryHost());
+    const outcome = await openWithStore(vault, store);
+    if (!outcome.ok) throw new Error('expected a composed session');
+    await outcome.session.start();
+    const second = outcome.session.queueSnapshot[1];
+    if (second === undefined) throw new Error('expected two items');
+
+    const realRead = vault.read.bind(vault);
+    vault.read = async (path: string) => {
+      if (path.includes('.olea/reviews')) throw new Error('log unreadable');
+      return realRead(path);
+    };
+    await advancePastCurrentItem(outcome.session);
+    expect(outcome.session.getViewModel().phase).not.toBe('mcq-open');
+    expect(outcome.session.getViewModel().phase).not.toBe('front');
+  });
+
+  it('a session opened after the suspension never contains the item', async () => {
+    const vault = studyVault();
+    const store = new ObsidianCitationHashStore(memoryHost());
+    const first = await openWithStore(vault, store);
+    if (!first.ok) throw new Error('expected a composed session');
+    await first.session.start();
+    const second = first.session.queueSnapshot[1];
+    if (second === undefined) throw new Error('expected two items');
+    await applyRevisedPathEffect(vault, store, second.instrument);
+
+    const fresh = await openWithStore(vault, store);
+    if (!fresh.ok) return; // nothing left to compose is also a withheld item
+    await fresh.session.start();
+    const shown: string[] = [];
+    for (
+      let guard = 0;
+      guard < 5 && fresh.session.getViewModel().phase !== 'complete';
+      guard += 1
+    ) {
+      const id = fresh.session.currentItem?.instrument.instrumentId;
+      if (id !== undefined) shown.push(id);
+      await advancePastCurrentItem(fresh.session);
+    }
+    expect(shown).not.toContain(second.instrument.instrumentId);
   });
 });

@@ -184,10 +184,15 @@ export interface ReviewSessionDeps {
    * (failed, lost, or its one `[D-400]` retry spent), so the question is set aside for this
    * session as could-not-check, never as an established change. Nothing is written or retried
    * here: the persisted pending fact is the `[D-293]`/`[D-400]` record and stays as it is, so the
-   * item remains deferred and recoverable. A throw reads as `'check-failed'`. Optional: absent
-   * shows every item, as before.
+   * item remains deferred and recoverable. A throw reads as `'check-failed'`. `'suspended'`
+   * (`ol-egov.141.89.5.59`, `[D-343]`, `[D-511]`): the instrument was suspended after the session
+   * was composed (a material verdict on its cited passage takes the revised path), so it is
+   * dropped from this session silently, exactly as a new composition excludes it. Optional:
+   * absent shows every item, as before.
    */
-  readonly checkSourceAtPresentation?: (instrumentId: string) => Promise<'clear' | 'check-failed'>;
+  readonly checkSourceAtPresentation?: (
+    instrumentId: string,
+  ) => Promise<'clear' | 'check-failed' | 'suspended'>;
   /**
    * Resolves a cached, unreviewed draft (`instrument.draftId !== null`, F3.3,
    * `ol-p3t07a`) into a real instrument the moment she answers, edits, or
@@ -1547,11 +1552,18 @@ export class ReviewSession {
     // as could-not-check, never as an established change. Only a settled instrument has a
     // persisted fact to read (a pending draft has no instrument id yet).
     if (this.deps.checkSourceAtPresentation !== undefined && item.instrument.draftId === null) {
-      let outcome: 'clear' | 'check-failed';
+      let outcome: 'clear' | 'check-failed' | 'suspended';
       try {
         outcome = await this.deps.checkSourceAtPresentation(item.instrument.instrumentId);
       } catch {
         outcome = 'check-failed';
+      }
+      if (outcome === 'suspended') {
+        // `[D-343]`: withheld before it is next shown; the same set-aside as a fresh composition
+        // gives a suspended instrument, so no sentence of its own.
+        this.items.splice(this.index, 1);
+        await this.presentCurrent();
+        return;
       }
       if (outcome === 'check-failed') {
         this.items.splice(this.index, 1);

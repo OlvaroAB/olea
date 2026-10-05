@@ -224,11 +224,13 @@ import {
   REVIEW_LOG_FOLDER,
   readDistractorProvenance,
   readReviewLogFile,
+  readReviewLogHistory,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
   resolveInstrumentDuplications,
   resolveInstrumentRepair,
   reviewLogPath,
+  suspendedInstrumentIds,
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
@@ -657,6 +659,12 @@ export async function openReviewSession(
     // `composed.queue` (`composeQueue`'s selection) is deliberately never
     // read below; row 6 (`ol-egov.132.6`) retires the call once nothing
     // production reads it anywhere. See the module doc.
+    // `ol-egov.141.89.5.59`: re-read at each presentation, never the frozen `composed.entries`,
+    // because a suspension appended after this open is exactly what it must see.
+    const suspendedAtPresentation = async (): Promise<ReadonlySet<string>> =>
+      suspendedInstrumentIds(
+        (await readReviewLogHistory(input.vault, { additionalPaths })).entries,
+      );
     const reviewSessionBuild: Parameters<typeof buildReviewSession>[0] = {
       vault: input.vault,
       scheduler: input.scheduler,
@@ -1046,12 +1054,22 @@ export async function openReviewSession(
       // byte-for-byte); it is wired anyway so the real reader just above has
       // a real decision to feed, not only a type-reachable one.
       evaluateInstrumentStanding,
-      // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`): the presentation-time changed-source check,
+      // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`; suspension read added by `ol-egov.141.89.5.59`): the presentation-time changed-source check,
       // read fresh from the same store, so a check that went unanswered mid-sitting sets the
       // question aside as could-not-check. Absent store: every item shows, as before.
       ...(input.citationHashStore
-        ? { checkSourceAtPresentation: sourceCheckAtPresentation(input.citationHashStore) }
-        : {}),
+        ? {
+            checkSourceAtPresentation: sourceCheckAtPresentation(
+              input.citationHashStore,
+              suspendedAtPresentation,
+            ),
+          }
+        : {
+            checkSourceAtPresentation: sourceCheckAtPresentation(
+              undefined,
+              suspendedAtPresentation,
+            ),
+          }),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -1624,13 +1642,25 @@ async function pendingRevalidationInstrumentIdsFrom(
  * instrument whose persisted `pendingRevalidation` fact is still current right now has a check
  * of its source that has not been answered (in flight, lost, failed, its one `[D-400]` retry
  * spent, or withheld for a passage that cannot be found), so it is `'check-failed'`: set aside
- * for this sitting, nothing written, the fact left for the `[D-400]` recovery. An established
- * change retires the pending fact and suspends the instrument, so it never reads here.
+ * for this sitting, nothing written, the fact left for the `[D-400]` recovery.
+ *
+ * An established change does NOT remove the item from an open session: the revised path
+ * (`citation-revision-wiring.ts`) retires the pending fact, removes the passage record and
+ * appends a suspend record to the review log, so the pending-fact read above finds nothing and
+ * reads clear. `ol-egov.141.89.5.59` (`[D-343]`, `[D-511]`): the suspension is therefore read
+ * here too, from the log, and a suspended instrument is `'suspended'` (dropped silently, as a
+ * fresh composition excludes it). The suspension read throwing propagates, which the session
+ * reads as `'check-failed'` (fail closed).
  */
 export function sourceCheckAtPresentation(
-  store: CitationHashStore,
-): (instrumentId: string) => Promise<'clear' | 'check-failed'> {
+  store: CitationHashStore | undefined,
+  readSuspended?: () => Promise<ReadonlySet<string>>,
+): (instrumentId: string) => Promise<'clear' | 'check-failed' | 'suspended'> {
   return async (instrumentId) => {
+    if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
+      return 'suspended';
+    }
+    if (store === undefined) return 'clear';
     const pending = (await store.loadAll()).get(instrumentId)?.pendingRevalidation;
     if (pending === undefined) return 'clear';
     return (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
