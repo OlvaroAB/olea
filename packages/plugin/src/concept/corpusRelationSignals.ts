@@ -31,7 +31,7 @@
  * **All three register-row-1.2a-named signals are wired, plus a fourth from
  * outside that row.** Component register row 1.2a names three
  * nomination-signal sources: assessment-document co-occurrence,
- * embedding-proximity over the local vector cache, and her own wikilinks
+ * embedding-proximity over the local vector cache, and wikilinks in notes she keeps
  * between concept notes (`'her-link'`,
  * `packages/core/src/concept/corpus-relations/types.ts`'s
  * `NominationSignalKind`). `ol-kw4a` wired `her-link` alone and named the
@@ -114,7 +114,7 @@
  * `anchor` may be a lecture note, a paper, or a dedicated zettelkasten note,
  * and nothing at this layer distinguishes which. Scanning every anchor
  * source for `[[...]]` targets that resolve to another concept in the SAME
- * course's set is the honest reading of "her own wikilinks between concept
+ * course's set is the honest reading of "wikilinks between concept
  * notes" available without inventing a folder convention this bead was not
  * asked to design.
  */
@@ -123,6 +123,8 @@ import {
   buildOutline,
   type CorpusConcept,
   cosineSimilarity,
+  type DeclaredMadeBy,
+  declaredMadeByFromFrontmatter,
   type EmbeddingCacheEngine,
   hashText,
   type MisconceptionRecord,
@@ -130,6 +132,7 @@ import {
   type OutlineNode,
   type ParsedDocument,
   parseDocument,
+  parseFrontmatter,
   registerSources,
   type TeachingEventResolver,
   type VaultPath,
@@ -727,6 +730,18 @@ export async function gatherCorpusRelationVaultContext(
   const seenPairs = new Set<string>();
   const signals: NominationSignal[] = [];
 
+  const madeByCache = new Map<VaultPath, DeclaredMadeBy | undefined>();
+  const madeByOf = (path: VaultPath, content: string): DeclaredMadeBy | undefined => {
+    if (madeByCache.has(path)) return madeByCache.get(path);
+    const first = parseDocument(content).blocks[0];
+    const madeBy =
+      first?.kind === 'frontmatter'
+        ? declaredMadeByFromFrontmatter(parseFrontmatter(first.inner))
+        : undefined;
+    madeByCache.set(path, madeBy);
+    return madeBy;
+  };
+
   for (const concept of concepts) {
     const content = await readCached(concept.anchor.sourcePath);
     // `charRange` is optional (`../../core/src/extract/types.js`, `ol-2zfj.54`); every anchor a
@@ -747,10 +762,21 @@ export async function gatherCorpusRelationVaultContext(
     for (const target of wikilinkTargets(content)) {
       const linked = byName.get(target);
       if (linked === undefined || linked.name === concept.name) continue;
-      const key = unorderedPairKey(concept.name, linked.name);
+      // `ol-egov.141.89.4.32` (`[D-490]`): the note carrying this link is `concept`'s anchor
+      // note; its `made-by` rides on the signal. A pair linked from two notes keeps one signal
+      // per DISTINCT declaration (undeclared included), because `reconcileCorpusVerdicts` reads
+      // the whole list of linking-note declarations ("every note assistant" differs from "one
+      // assistant, one not"); a repeat of a declaration already recorded adds nothing.
+      const madeBy = madeByOf(concept.anchor.sourcePath, content);
+      const key = `${unorderedPairKey(concept.name, linked.name)}\u0000${madeBy ?? ''}`;
       if (seenPairs.has(key)) continue;
       seenPairs.add(key);
-      signals.push({ kind: 'her-link', a: concept.name, b: linked.name });
+      signals.push({
+        kind: 'her-link',
+        a: concept.name,
+        b: linked.name,
+        ...(madeBy !== undefined ? { linkingNoteMadeBy: madeBy } : {}),
+      });
     }
   }
 

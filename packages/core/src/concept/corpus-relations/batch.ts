@@ -37,6 +37,7 @@ import {
   type CorpusRelationVerdictPort,
   type CorpusVerdictRequestCandidate,
   type EndpointRevisionStampingOptions,
+  type LinkingNoteDeclarationsLookup,
   reconcileCorpusVerdicts,
 } from './verdict.js';
 
@@ -67,6 +68,28 @@ export interface RunCorpusRelationBatchInput {
    * today's behaviour, read as `'unverified'` downstream.
    */
   readonly endpointRevisionStamping?: EndpointRevisionStampingOptions;
+}
+
+/**
+ * `ol-egov.141.89.4.32` (`[D-490]`): the declaration lookup `./verdict.js`'s
+ * `reconcileCorpusVerdicts` reads, built from the `'her-link'` signals the caller passed in. One
+ * entry per `'her-link'` signal naming the candidate's pair (either direction), so a pair linked
+ * from two notes yields both notes' declarations; a signal without `linkingNoteMadeBy` is an
+ * undeclared note (`undefined`). With no `'her-link'` signal for a pair the list is empty, which
+ * `provenanceFor` reads as unknown linking notes, today's `'hers'`.
+ */
+function linkingNoteDeclarationsFrom(
+  signals: readonly NominationSignal[],
+): LinkingNoteDeclarationsLookup {
+  return (candidate) =>
+    signals
+      .filter(
+        (signal) =>
+          signal.kind === 'her-link' &&
+          ((signal.a === candidate.a.name && signal.b === candidate.b.name) ||
+            (signal.a === candidate.b.name && signal.b === candidate.a.name)),
+      )
+      .map((signal) => signal.linkingNoteMadeBy);
 }
 
 /**
@@ -122,6 +145,7 @@ export async function runCorpusRelationBatch(
     response.verdicts,
     candidates,
     input.endpointRevisionStamping,
+    linkingNoteDeclarationsFrom(input.signals),
   );
 
   const fullDropped = emptyCorpusDropCounts();
