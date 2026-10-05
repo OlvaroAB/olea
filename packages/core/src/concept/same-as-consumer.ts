@@ -20,7 +20,7 @@
  * redirects straight to the class's one representative: its code-unit-first canonical key. The
  * result depends on the set of confirmed links, never on the order the link files arrive in.
  * A severed or declined link contributes no edge; what a sever does inside a class that stays
- * connected through other links is not ruled here and reads as the remaining edges connect.
+ 
  *
  * **Canonical key for a single pair: the pair's `keyA`.** `./same-as.ts`'s own `canonicalPair` /
  * `byCodeUnit` already sorts and persists `keyA <= keyB` for every link that exists — this module
@@ -130,9 +130,31 @@ export function buildSameAsKeyRedirect(
   links: readonly SameAsLinkRecord[],
   canonicalKeys?: ConceptKeyCanonicalIndex,
 ): ReadonlyMap<string, string> {
-  // Union-find over canonical keys, built from confirmed links only. The representative of a
-  // class is its code-unit-first member, chosen by value, never by link order, so the result
-  // is the same for every arrival order of the link files.
+  const { find, redirect } = foldClasses(links, canonicalKeys);
+  if (canonicalKeys !== undefined) {
+    for (const [superseded, canonical] of canonicalKeys.superseded) {
+      redirect.set(superseded, find(canonical));
+    }
+  }
+  return redirect;
+}
+
+/** One link's two keys, read over canonical keys when an index is given. */
+function endpoints(
+  link: SameAsLinkRecord,
+  canonicalKeys: ConceptKeyCanonicalIndex | undefined,
+): readonly [string, string] {
+  return canonicalKeys === undefined
+    ? [link.keyA, link.keyB]
+    : [canonicalKeys.canonicalOf(link.keyA), canonicalKeys.canonicalOf(link.keyB)];
+}
+
+/**
+ * Union-find over canonical keys. The representative of a class is its code-unit-first member,
+ * chosen by value, never by link order, so the result is the same for every arrival order of the
+ * link files.
+ */
+function closure(edges: readonly (readonly [string, string])[]): (key: string) => string {
   const parent = new Map<string, string>();
   const find = (key: string): string => {
     let root = key;
@@ -144,33 +166,92 @@ export function buildSameAsKeyRedirect(
     }
     return root;
   };
-  const union = (x: string, y: string): void => {
+  for (const [x, y] of edges) {
     const rx = find(x);
     const ry = find(y);
-    if (rx === ry) return;
+    if (rx === ry) continue;
     // keep the code-unit-first key as the root, so the root is the representative
     if (rx < ry) parent.set(ry, rx);
     else parent.set(rx, ry);
-  };
+  }
+  return find;
+}
 
+/**
+ * Sever rule (`[D-498]`, KG-W1b). A confirmed class in which she severed a link, while other
+ * confirmed links still connect the severed pair, is CONFLICTED: it stays unfolded — none of its
+ * confirmed links contributes an edge — so each identity reads alone until she resolves it (by
+ * severing or re-deciding a link so the severed pair is no longer connected). No other path
+ * through the class may override her rejection. The confirmed and severed records are untouched.
+ */
+function foldClasses(
+  links: readonly SameAsLinkRecord[],
+  canonicalKeys: ConceptKeyCanonicalIndex | undefined,
+): { find: (key: string) => string; redirect: Map<string, string> } {
+  const confirmed: (readonly [string, string])[] = [];
+  const severed: (readonly [string, string])[] = [];
   for (const link of links) {
-    if (link.status !== 'confirmed') continue;
-    const a = canonicalKeys === undefined ? link.keyA : canonicalKeys.canonicalOf(link.keyA);
-    const b = canonicalKeys === undefined ? link.keyB : canonicalKeys.canonicalOf(link.keyB);
-    union(a, b);
+    if (link.status === 'confirmed') confirmed.push(endpoints(link, canonicalKeys));
+    else if (link.status === 'severed') severed.push(endpoints(link, canonicalKeys));
   }
-
+  const first = closure(confirmed);
+  const conflicted = new Set<string>();
+  for (const [x, y] of severed) {
+    if (x !== y && first(x) === first(y)) conflicted.add(first(x));
+  }
+  const held =
+    conflicted.size === 0 ? confirmed : confirmed.filter(([x]) => !conflicted.has(first(x)));
+  const find = closure(held);
   const redirect = new Map<string, string>();
-  for (const key of [...parent.keys()]) {
-    const root = find(key);
-    if (root !== key) redirect.set(key, root);
-  }
-  if (canonicalKeys !== undefined) {
-    for (const [superseded, canonical] of canonicalKeys.superseded) {
-      redirect.set(superseded, find(canonical));
+  for (const [x, y] of held) {
+    for (const key of [x, y]) {
+      const root = find(key);
+      if (root !== key) redirect.set(key, root);
     }
   }
-  return redirect;
+  return { find, redirect };
+}
+
+/** One conflicted class: what she severed, the confirmed links that still connect it, and its held members. */
+export interface SameAsSeverConflict {
+  readonly severed: readonly { readonly keyA: string; readonly keyB: string }[];
+  readonly confirmed: readonly { readonly keyA: string; readonly keyB: string }[];
+  readonly members: readonly string[];
+}
+
+/**
+ * The conflicts `buildSameAsKeyRedirect` holds unfolded, as an in-memory projection for whatever
+ * later surface asks her to resolve them (none exists yet; a surface needs a clause). Persists
+ * nothing. Ordered by code-unit-first member; pairs are as stored (keyA, keyB).
+ */
+export function findSameAsSeverConflicts(
+  links: readonly SameAsLinkRecord[],
+  canonicalKeys?: ConceptKeyCanonicalIndex,
+): readonly SameAsSeverConflict[] {
+  const confirmedLinks = links.filter((l) => l.status === 'confirmed');
+  const find = closure(confirmedLinks.map((l) => endpoints(l, canonicalKeys)));
+  const byRoot = new Map<string, { severed: SameAsLinkRecord[] }>();
+  for (const link of links) {
+    if (link.status !== 'severed') continue;
+    const [x, y] = endpoints(link, canonicalKeys);
+    if (x === y || find(x) !== find(y)) continue;
+    const entry = byRoot.get(find(x)) ?? { severed: [] };
+    entry.severed.push(link);
+    byRoot.set(find(x), entry);
+  }
+  const out: SameAsSeverConflict[] = [];
+  for (const [root, { severed }] of [...byRoot.entries()].sort(([a], [b]) => (a < b ? -1 : 1))) {
+    const inClass = confirmedLinks.filter((l) => find(endpoints(l, canonicalKeys)[0]) === root);
+    const members = new Set<string>();
+    for (const l of inClass) for (const k of endpoints(l, canonicalKeys)) members.add(k);
+    const pair = (l: SameAsLinkRecord) => ({ keyA: l.keyA, keyB: l.keyB });
+    out.push({
+      severed: severed.map(pair),
+      confirmed: inClass.map(pair),
+      members: [...members].sort(),
+    });
+  }
+  return out;
 }
 
 function resolveKey(key: string, redirect: ReadonlyMap<string, string>): string {
