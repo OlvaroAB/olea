@@ -218,6 +218,8 @@ import {
   executeStudyPlanOverComposedRows,
   listFolder,
   matchDeletedInstrumentIds,
+  parseCardsWithInvalid,
+  parseMcqBlocks,
   projectInstrumentValidity,
   queueItemsFromComposedSession,
   REVIEW_LOG_EXTENSION,
@@ -239,7 +241,10 @@ import {
   evaluateInstrumentStanding,
   evaluateSchedulingObservationRouting,
 } from '../grading/wiring.js';
+import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
@@ -1062,6 +1067,13 @@ export async function openReviewSession(
             checkSourceAtPresentation: sourceCheckAtPresentation(
               input.citationHashStore,
               suspendedAtPresentation,
+              {
+                vault: input.vault,
+                recordOf: (instrumentId) =>
+                  composed.instruments.records.find(
+                    (record) => record.instrumentId === instrumentId,
+                  ),
+              },
             ),
           }
         : {
@@ -1655,18 +1667,118 @@ async function pendingRevalidationInstrumentIdsFrom(
 export function sourceCheckAtPresentation(
   store: CitationHashStore | undefined,
   readSuspended?: () => Promise<ReadonlySet<string>>,
+  currentPassage?: CurrentPassageReader,
 ): (instrumentId: string) => Promise<'clear' | 'check-failed' | 'suspended'> {
   return async (instrumentId) => {
     if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
       return 'suspended';
     }
     if (store === undefined) return 'clear';
-    const pending = (await store.loadAll()).get(instrumentId)?.pendingRevalidation;
-    if (pending === undefined) return 'clear';
-    return (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
-      ? 'check-failed'
-      : 'clear';
+    const anchor = (await store.loadAll()).get(instrumentId);
+    if (anchor === undefined) return 'clear';
+    const pending = anchor.pendingRevalidation;
+    if (
+      pending !== undefined &&
+      (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
+    ) {
+      return 'check-failed';
+    }
+    if (currentPassage === undefined) return 'clear';
+    return (await citedPassageUnchanged(instrumentId, anchor, currentPassage))
+      ? 'clear'
+      : 'check-failed';
   };
+}
+
+/**
+ * `ol-egov.141.89.5.72` (`[D-514]` item c): what the presentation-time passage check reads. The
+ * vault (read fresh at every presentation, never cached) and the instrument's record, for the
+ * note it lives in and the source its citation names.
+ */
+export interface CurrentPassageReader {
+  readonly vault: VaultSource;
+  readonly recordOf: (instrumentId: string) => VaultInstrumentRecord | undefined;
+}
+
+/** Mirrors `citation-revision-wiring.ts` `citedPassagePath` (`:422`, not exported; that file is another lane's). */
+function citedPathOf(record: VaultInstrumentRecord): VaultPath {
+  const sourcePath = record.sourceProvenance?.sourcePath;
+  if (
+    sourcePath !== undefined &&
+    sourcePath !== record.notePath &&
+    sourcePath.toLowerCase().endsWith('.md')
+  ) {
+    return sourcePath;
+  }
+  return record.notePath;
+}
+
+/** Mirrors `citation-revision-wiring.ts` `HIDDEN_PATH_SEGMENT` (`:477`). */
+const HIDDEN_PATH = /(^|\/)\./;
+
+/**
+ * Whether an anchored citation's own cited passage still reads as the baseline, by the batch
+ * pass's own free code exits and nothing else: passage grain asks `resolveAnchoredPassage`
+ * (`passage-grain.ts:136`, the call at `citation-revision-wiring.ts:690`) and whole-note grain
+ * reads the note minus instrument spans (`citation-revision-wiring.ts:617`). Identical text, or
+ * equal under `canonicalizeForMateriality` (`canonical.ts:99`, the pass's comparison at
+ * `citation-revision-wiring.ts:759-763`), is unchanged; a passage found elsewhere exactly
+ * (`relocated`) is the pass's silent heal, unchanged. Everything else, and every failure to
+ * read or resolve, is `false`: the caller withholds, and the next pass records and routes the
+ * change. Reads only, never writes.
+ */
+async function citedPassageUnchanged(
+  instrumentId: string,
+  anchor: {
+    readonly text: string;
+    readonly sourcePath: VaultPath;
+    readonly passageDigest?: string | undefined;
+  },
+  reader: CurrentPassageReader,
+): Promise<boolean> {
+  try {
+    const record = reader.recordOf(instrumentId);
+    if (record === undefined) return false;
+    const citedPath = citedPathOf(record);
+    const { vault } = reader;
+    const material = async (path: VaultPath): Promise<string> => {
+      const source = await vault.read(path);
+      const spans = [
+        ...parseCardsWithInvalid(source).cards.map((card) => card.span),
+        ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
+      ];
+      return stripInstrumentSpans(source, spans);
+    };
+    if (anchor.passageDigest === undefined) {
+      const current = await material(citedPath);
+      return (
+        current === anchor.text ||
+        canonicalizeForMateriality(current) === canonicalizeForMateriality(anchor.text)
+      );
+    }
+    const resolution = await resolveAnchoredPassage(
+      {
+        text: anchor.text,
+        passageDigest: anchor.passageDigest,
+        anchorPath: anchor.sourcePath,
+        citedPath,
+      },
+      {
+        exists: (path) => vault.exists(path),
+        material,
+        markdownPaths: async () =>
+          (await vault.list({ extensions: ['md'] })).filter((path) => !HIDDEN_PATH.test(path)),
+      },
+    );
+    if (resolution.kind === 'relocated') return true;
+    if (resolution.kind !== 'present') return false;
+    return (
+      resolution.text === anchor.text ||
+      canonicalizeForMateriality(resolution.text) === canonicalizeForMateriality(anchor.text)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Shared, never mutated — the "no store/ids supplied" reading both new `[D-323]` concerns fall back to. */
