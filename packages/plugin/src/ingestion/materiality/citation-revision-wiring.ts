@@ -127,8 +127,9 @@
  * change confirmed by the judge (suspension) and from a check still awaiting or failing to reach
  * the judge (a pending fact with no reason); none of the three reads as another. The withholding
  * never enters the `[D-400]` dispatch budget, and lifts the pass the passage is found again.
- * Where no digest resolves to exactly one passage at first sighting, the whole-note baseline is
- * taken as before (`report.passageSeedUnresolved`), never a guessed passage.
+ * Where no digest resolves to exactly one passage at first sighting (`report.passageSeedUnresolved`),
+ * the question is WITHHELD (`[D-514]`, `ol-egov.141.89.5.71`): an anchor with no passage text and the
+ * pending fact for the reason; the edited note is never baselined in the passage's place.
  *
  * ===========================================================================
  * `[D-400]` — ONE AUTOMATIC RETRY PER ORIGINAL CHECK, NEVER A FRESH
@@ -669,6 +670,7 @@ export class CitationRevisionTrigger {
       rejectedInstrumentIds = new Set();
     }
 
+    const judgeCalls: Array<() => Promise<void>> = [];
     for (const [instrumentId, previous] of stored) {
       // `ol-egov.141.89.2.14`: a standing rejection wins over every other check this loop makes
       // — no current-passage read, no judge dispatch, no store write, no suspend, no enqueue.
@@ -783,7 +785,11 @@ export class CitationRevisionTrigger {
         continue;
       }
 
-      let outcome: CitedPassageRevisionOutcome;
+      // `ol-egov.141.89.5.71` ([D-514] item b): a judge call is never awaited inside this walk. The
+      // walk records every affected instrument's pending fact (and dispatch) first; the calls
+      // follow in `judgeCalls`, so a slow or silent judge cannot delay a later instrument's fact.
+      let judgeWillBeCalled = false;
+      let outcome: CitedPassageRevisionOutcome | undefined;
       try {
         // `[D-400]`: past the formatting-only exit above, reaching here with
         // `current.text !== previous.text` means a REAL, unresolved
@@ -839,26 +845,61 @@ export class CitationRevisionTrigger {
           }
         }
 
-        outcome = await evaluateCitedPassageRevision(
-          {
+        const previousContentHash = await hashText(previous.text);
+        const evaluate = (
+          recorder: PendingRevalidationRecorder,
+        ): Promise<CitedPassageRevisionOutcome> =>
+          evaluateCitedPassageRevision(
+            { instrumentId, previousText: previous.text, previousContentHash, current },
+            // While unreachable, take the SAME `'judge-unavailable'` path a
+            // `judge === null` caller already gets — no call, no spend, the
+            // pending fact still recorded per `[D-351]`. See this module's own
+            // "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc section.
+            online ? this.deps.judge : null,
+            this.deps.clock,
+            recorder,
+          );
+        judgeWillBeCalled =
+          online &&
+          this.deps.judge !== null &&
+          current.kind === 'found-at-anchor' &&
+          (await hashText(current.text)) !== previousContentHash;
+        if (judgeWillBeCalled && current.kind === 'found-at-anchor') {
+          // The fact first (`[D-351]`), for every affected instrument, before any call is awaited.
+          await pendingRecorder.recordPending({
             instrumentId,
-            previousText: previous.text,
-            previousContentHash: await hashText(previous.text),
-            current,
-          },
-          // While unreachable, take the SAME `'judge-unavailable'` path a
-          // `judge === null` caller already gets — no call, no spend, the
-          // pending fact still recorded per `[D-351]`. See this module's own
-          // "AN OUTAGE NEVER SPENDS THE `[D-400]` BUDGET" doc section.
-          online ? this.deps.judge : null,
-          this.deps.clock,
-          pendingRecorder,
-        );
+            sourceContentHash: await hashText(current.text),
+          });
+          const settled = current;
+          judgeCalls.push(async () => {
+            let judged: CitedPassageRevisionOutcome;
+            try {
+              // The fact was written in the first phase; the call does not write it a second time.
+              judged = await evaluate({ recordPending: async () => undefined });
+            } catch (error) {
+              console.error('Olea: citation-revision evaluation failed', error);
+              return;
+            }
+            await this.applyOutcome(
+              instrumentId,
+              previous,
+              currentRecord,
+              settled,
+              judged,
+              actions,
+              report,
+              passage,
+            );
+          });
+        } else {
+          outcome = await evaluate(pendingRecorder);
+        }
       } catch (error) {
         console.error('Olea: citation-revision evaluation failed', error);
         continue;
       }
 
+      if (judgeWillBeCalled || outcome === undefined) continue;
       await this.applyOutcome(
         instrumentId,
         previous,
@@ -870,6 +911,8 @@ export class CitationRevisionTrigger {
         passage,
       );
     }
+
+    for (const call of judgeCalls) await call();
 
     // Baseline every TRACKED instrument this pass found that the store has
     // never recorded — every MCQ, plus a Q&A/cloze that names a genuine
@@ -890,8 +933,27 @@ export class CitationRevisionTrigger {
         // one, a rule this build does not carry) keeps today's whole-note baseline — never a guessed
         // passage.
         const seeded = await seedPassageAnchor(vault, instrumentId, path, materialFor, rules);
-        if (seeded === 'unresolved') report.passageSeedUnresolved += 1;
-        if (seeded !== undefined && seeded !== 'unresolved') {
+        if (seeded !== undefined && 'withheld' in seeded) {
+          // `ol-egov.141.89.5.71` ([D-514] item a): the cited passage cannot be found at first
+          // sighting, so there is no passage to baseline and the edited note is never adopted in
+          // its place. The anchor holds no passage text (empty), only the citation's digest, and
+          // carries the pending fact that sets the question aside as could-not-check.
+          report.passageSeedUnresolved += 1;
+          await this.deps.store.save(instrumentId, {
+            sourcePath: path,
+            text: '',
+            passageDigest: seeded.digest,
+            conceptIds: record.conceptIds,
+          });
+          await this.deps.store.setPendingRevalidation(
+            instrumentId,
+            await hashText(`${seeded.withheld}\n${await materialFor(path)}`),
+            this.deps.clock.now(),
+            seeded.withheld,
+          );
+          continue;
+        }
+        if (seeded !== undefined) {
           await this.deps.store.save(instrumentId, {
             sourcePath: path,
             text: seeded.text,
@@ -1158,9 +1220,10 @@ export class CitationRevisionTrigger {
 /**
  * `[D-446]`: the passage a citation's digest names, when it resolves to exactly one segment of
  * `path`'s material — the text and digest a passage-grain anchor is first saved with. `undefined`
- * when the citation carries no digest (the legacy grain: nothing to say); `'unresolved'` when it
+ * when the citation carries no digest (the legacy grain: nothing to say); a withheld reason when it
  * carries one that does not resolve to exactly one passage (ambiguous, absent, unsupported rule,
- * malformed) — counted by the caller, which then keeps the whole-note baseline.
+ * malformed) — counted by the caller, which then WITHHOLDS the question (`[D-514]`): no passage is
+ * baselined.
  */
 async function seedPassageAnchor(
   vault: VaultSource,
@@ -1168,13 +1231,24 @@ async function seedPassageAnchor(
   path: VaultPath,
   materialFor: (path: VaultPath) => Promise<string>,
   rules: readonly PassageRule[],
-): Promise<{ readonly text: string; readonly digest: string } | 'unresolved' | undefined> {
+): Promise<
+  | { readonly text: string; readonly digest: string }
+  | { readonly withheld: PendingReason; readonly digest: string }
+  | undefined
+> {
   const citation = await readInstrumentCitation(vault, instrumentId);
   const digest = citation?.passageDigest;
   if (digest === undefined) return undefined;
-  if (!isMarkdownVaultPath(path)) return 'unresolved';
+  if (!isMarkdownVaultPath(path)) return { withheld: 'passage-missing', digest };
   const located = await locatePassageByDigest(await materialFor(path), digest, rules);
-  return located.status === 'unique' ? { text: located.segment.text, digest } : 'unresolved';
+  if (located.status === 'unique') return { text: located.segment.text, digest };
+  const withheld: PendingReason =
+    located.status === 'ambiguous'
+      ? 'passage-ambiguous'
+      : located.status === 'absent'
+        ? 'passage-missing'
+        : 'passage-rule-unsupported';
+  return { withheld, digest };
 }
 
 /**

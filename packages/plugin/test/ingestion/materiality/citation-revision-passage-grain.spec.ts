@@ -200,16 +200,36 @@ describe('baselining at the cited passage', () => {
     expect(anchor.passageDigest).toBeUndefined();
   });
 
-  it('a digest that resolves to no single passage falls back to the whole note and is counted, never guessed', async () => {
+  it('a digest that resolves to no single passage withholds its question and is counted, never baselined as the edited note ([D-514] item a)', async () => {
     const ambiguousNote = sourceNote(PASSAGE, LIMESTONE, PASSAGE);
     const { vault, store } = await fixture({ sourceText: ambiguousNote });
     const report = await trigger(store, null).tick(vault, actions());
 
     expect(report.passageSeedUnresolved).toBe(1);
-    expect(report.newlyBaselined).toBe(1);
+    expect(report.newlyBaselined).toBe(0);
     const anchor = await anchorOf(store);
-    expect(anchor.passageDigest).toBeUndefined();
-    expect(anchor.text).toBe(ambiguousNote);
+    expect(anchor.text).toBe('');
+    expect(anchor.text).not.toContain(LIMESTONE);
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-ambiguous');
+  });
+
+  it('a passage that cannot be found at first sighting leaves its question withheld, and stays withheld on the next pass ([D-514] item a)', async () => {
+    const { vault, store } = await fixture({ sourceText: sourceNote(BASALT, LIMESTONE) });
+    const judge = judgeSaying(true);
+    const t = trigger(store, judge);
+    const report = await t.tick(vault, actions());
+
+    expect(report.passageSeedUnresolved).toBe(1);
+    const anchor = await anchorOf(store);
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-missing');
+    expect(anchor.text).not.toBe(sourceNote(BASALT, LIMESTONE));
+    expect(anchor.text).toBe('');
+
+    await t.tick(vault, actions());
+    const again = await anchorOf(store);
+    expect(again.pendingRevalidation?.reason).toBe('passage-missing');
+    expect(again.text).toBe('');
+    expect(judge.judge).not.toHaveBeenCalled();
   });
 });
 
@@ -648,13 +668,13 @@ describe('segmentation-rule versions (D-446, row 42)', () => {
     },
   };
 
-  it('a citation digest from a rule this build does not carry is unresolved at first sighting: whole-note baseline, counted, never matched by chance', async () => {
+  it('a citation digest from a rule this build does not carry is unresolved at first sighting: withheld, counted, never matched by chance', async () => {
     const { vault, store } = await fixture({ digest: `p9:${'a'.repeat(64)}` });
     const report = await trigger(store, null).tick(vault, actions());
     expect(report.passageSeedUnresolved).toBe(1);
     const anchor = await anchorOf(store);
-    expect(anchor.passageDigest).toBeUndefined();
-    expect(anchor.text).toBe(SOURCE_TEXT);
+    expect(anchor.text).toBe('');
+    expect(anchor.pendingRevalidation?.reason).toBe('passage-rule-unsupported');
   });
 
   it('the same passage digests differently under each rule, so a version 1 digest never resolves under version 2 by coincidence', async () => {
