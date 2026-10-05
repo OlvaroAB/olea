@@ -169,3 +169,26 @@ describe('HomeView.renderActiveSession — the frozen explanation, never a live 
     }
   });
 });
+
+describe('HomeView Start — hands the steering she chose on Home to the start path (F4.6, D-243, ol-egov.141.89.10.111)', () => {
+  it('startSession is typed to take the SessionBuilderRequest', () => {
+    expect(VIEW).toMatch(
+      /readonly startSession:\s*\(request\?: SessionBuilderRequest\)\s*=>\s*void \| Promise<void>;/,
+    );
+  });
+
+  it('the Start click passes the same request refresh() sends load(), built by one helper', () => {
+    expect(VIEW).toMatch(/private currentRequest\(\): SessionBuilderRequest/);
+    expect(VIEW).toMatch(/this\.deps\.startSession\(this\.currentRequest\(\)\)/);
+    expect(VIEW).toMatch(/this\.deps\.load\(this\.currentRequest\(\)\)/);
+  });
+
+  it('currentRequest carries budget, stated interest and course-or-topic together', () => {
+    const start = VIEW.indexOf('private currentRequest(): SessionBuilderRequest');
+    expect(start).toBeGreaterThan(-1);
+    const body = VIEW.slice(start, start + 600);
+    expect(body).toMatch(/budgetMinutes: this\.budgetMinutes/);
+    expect(body).toMatch(/focusConceptName: this\.focusConceptName/);
+    expect(body).toMatch(/courseOrTopic: this\.courseOrTopic/);
+  });
+});

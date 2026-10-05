@@ -42,6 +42,7 @@ import type {
   StudySessionModel,
 } from 'olea-core';
 import {
+  addManualAssessmentEntry,
   computeWindowDeficit,
   createFsrsScheduler,
   enumerateVaultInstruments,
@@ -1757,5 +1758,41 @@ describe('createLocalSessionBuilderProvider — [D-404] instrument-inventory eli
     const names = conceptNamesOf(result.composed.full.model);
     expect(names).not.toContain('Gadget theory');
     expect(names).toContain('Widget theory');
+  });
+});
+
+describe('createLocalSessionBuilderProvider — manual entries as the F1.2 fallback (ol-egov.141.89.10.112)', () => {
+  /** The base fixture with its assignments table and quiz file removed — only her hand-entered assessment says when the course is assessed. */
+  function filesWithoutTable(): Record<string, string> {
+    const files: Record<string, string> = { ...KEYED_BASE_FILES };
+    delete files[BASE_PATH];
+    delete files['02 Assignments/Quiz 1.md'];
+    return files;
+  }
+
+  it('with a blank Base path and one manual entry, load composes a model rather than reporting unavailable', async () => {
+    const vault = memoryVault(filesWithoutTable());
+    await addManualAssessmentEntry(vault, { course: 'TESTC101', type: 'Quiz', due: '2026-09-01' });
+    const provider = createLocalSessionBuilderProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+    });
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('model');
+  });
+
+  it('with a blank Base path and no manual entry, load stays unavailable', async () => {
+    const provider = createLocalSessionBuilderProvider({
+      vault: memoryVault(filesWithoutTable()),
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      scheduler: createFsrsScheduler(),
+    });
+    const state = await provider.load({ budgetMinutes: 60 });
+    expect(state.kind).toBe('unavailable');
   });
 });

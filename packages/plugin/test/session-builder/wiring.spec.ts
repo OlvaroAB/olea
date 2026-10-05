@@ -128,7 +128,7 @@ describe('the session-builder view is no longer a navigation target ([D-243])', 
   // builder.
   it("Home's own Start action enters the shared holder, then opens the review surface directly, never the session builder", () => {
     expect(main).toMatch(
-      /startSession:\s*\(\)\s*=>\s*\{\s*void \(async \(\) => \{\s*await this\.enterStudySessionHolderForStart\(\);\s*void this\.revealReviewView\(\);/,
+      /startSession:\s*\(request\)\s*=>\s*\{\s*void \(async \(\) => \{\s*await this\.enterStudySessionHolderForStart\(request\);\s*void this\.revealReviewView\(\);/,
     );
     expect(main).not.toMatch(/startSession:[^}]*revealSessionBuilderView/);
   });
