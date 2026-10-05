@@ -1,7 +1,8 @@
 /**
- * `ol-egov.141.89.5.73` part 1 ([D-515]): the landed-units hook hands the drained job's content
- * hash along with the units, and never reads the file's bytes again to get it. Synthetic only.
+ * `ol-egov.141.89.5.73` parts 1-2 ([D-515]): the landed-units hook hands core's byte hash of each extracted
+ * source (standalone or embedded in a note) along with the units, and never reads the file's bytes again to get it. Synthetic only.
  */
+
 import type {
   ListOptions,
   PersistedQueue,
@@ -11,10 +12,12 @@ import type {
   VaultPath,
   VaultSource,
 } from 'olea-core';
+import { hashContent } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { buildIngestionRunner } from '../../src/ingestion/wiring.js';
 
 const PDF = 'Lectures/week2.pdf';
+const NOTE = 'Lectures/Week 2.md';
 
 function pdf(text: string): Uint8Array {
   const raw = `BT /F1 12 Tf 20 150 Td (${text}) Tj ET`;
@@ -32,9 +35,10 @@ function pdf(text: string): Uint8Array {
 class CountingVault implements VaultSource {
   reads = 0;
   async list(_o: ListOptions = {}): Promise<readonly VaultPath[]> {
-    return [PDF];
+    return [PDF, NOTE];
   }
   async read(path: VaultPath): Promise<string> {
+    if (path === NOTE) return 'Slides: ![[week2.pdf]]\n';
     throw new Error(`no text: ${path}`);
   }
   async readBinary(path: VaultPath): Promise<Uint8Array> {
@@ -46,7 +50,7 @@ class CountingVault implements VaultSource {
     throw new Error('unused');
   }
   async exists(path: VaultPath): Promise<boolean> {
-    return path === PDF;
+    return path === PDF || path === NOTE;
   }
   watch(_h: (e: VaultEvent) => void): Unsubscribe {
     return () => {};
@@ -64,6 +68,7 @@ class MemoryQueueStore implements QueueStore {
 }
 
 async function drain(
+  payload: Record<string, unknown>,
   onUnitsLanded?: (units: readonly unknown[], revisions?: ReadonlyMap<string, string>) => void,
 ) {
   const vault = new CountingVault();
@@ -73,23 +78,31 @@ async function drain(
     capability: { canDrain: true },
     ...(onUnitsLanded ? { onUnitsLanded } : {}),
   });
-  await engine.enqueue({
-    contentHash: 'job-hash-1',
-    label: 'week 2',
-    payload: { kind: 'source', sourcePath: PDF, format: 'pdf' },
-  });
+  await engine.enqueue({ contentHash: 'job-hash-1', label: 'week 2', payload });
   await engine.tick();
   return vault.reads;
 }
 
-describe('[D-515] withUnitsLandedHook passes the drained job hash', () => {
-  it('a source job hands { sourcePath -> job contentHash } to the hook, with no extra file read', async () => {
-    const baseline = await drain();
+const SOURCE_JOB = { kind: 'source', sourcePath: PDF, format: 'pdf' };
+const NOTE_JOB = { kind: 'note', notePath: NOTE };
+
+describe("[D-515] the landed-units hook passes core's byte hash of each source", () => {
+  it('a standalone source hands { sourcePath -> its byte hash } (not the job key), read once', async () => {
     let seen: ReadonlyMap<string, string> | undefined;
-    const reads = await drain((_units, revisions) => {
+    const reads = await drain(SOURCE_JOB, (_units, revisions) => {
       seen = revisions;
     });
-    expect(seen?.get(PDF)).toBe('job-hash-1');
-    expect(reads).toBe(baseline);
+    expect(seen?.get(PDF)).toBe(await hashContent(pdf('Stratigraphic succession')));
+    expect(seen?.get(PDF)).not.toBe('job-hash-1');
+    expect(reads).toBe(1);
+  });
+
+  it("a PDF embedded in a note hands that PDF's byte hash, not the note job's, read once", async () => {
+    let seen: ReadonlyMap<string, string> | undefined;
+    const reads = await drain(NOTE_JOB, (_units, revisions) => {
+      seen = revisions;
+    });
+    expect(seen?.get(PDF)).toBe(await hashContent(pdf('Stratigraphic succession')));
+    expect(reads).toBe(1);
   });
 });

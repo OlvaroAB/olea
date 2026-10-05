@@ -216,6 +216,7 @@ import {
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlanOverComposedRows,
+  hashContent,
   listFolder,
   matchDeletedInstrumentIds,
   parseCardsWithInvalid,
@@ -225,6 +226,7 @@ import {
   REVIEW_LOG_EXTENSION,
   REVIEW_LOG_FOLDER,
   readDistractorProvenance,
+  readInstrumentCitation,
   readReviewLogFile,
   readReviewLogHistory,
   replayedStateOf,
@@ -237,6 +239,7 @@ import {
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
+import type { DraftRecord } from '../generation/types.js';
 import {
   evaluateInstrumentStanding,
   evaluateSchedulingObservationRouting,
@@ -1084,8 +1087,17 @@ export async function openReviewSession(
             checkSourceAtPresentation: sourceCheckAtPresentation(
               undefined,
               suspendedAtPresentation,
+              {
+                vault: input.vault,
+                recordOf: (instrumentId) =>
+                  composed.instruments.records.find(
+                    (record) => record.instrumentId === instrumentId,
+                  ),
+              },
             ),
           }),
+      // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
+      checkDraftSourceAtPresentation: draftSourceCheckAtPresentation(input.vault, pendingDrafts),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -1677,18 +1689,94 @@ export function sourceCheckAtPresentation(
     if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
       return 'suspended';
     }
-    if (store === undefined) return 'clear';
-    const anchor = (await store.loadAll()).get(instrumentId);
-    if (anchor === undefined) return 'clear';
-    const pending = anchor.pendingRevalidation;
-    if (
-      pending !== undefined &&
-      (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
-    ) {
-      return 'check-failed';
+    if (store !== undefined) {
+      const anchor = (await store.loadAll()).get(instrumentId);
+      if (anchor !== undefined) {
+        const pending = anchor.pendingRevalidation;
+        if (
+          pending !== undefined &&
+          (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
+        ) {
+          return 'check-failed';
+        }
+        if (
+          currentPassage !== undefined &&
+          !(await citedPassageUnchanged(instrumentId, anchor, currentPassage))
+        ) {
+          return 'check-failed';
+        }
+      }
     }
+    // `ol-egov.141.89.5.73` ([D-515]): last, after every check above, and whether or not a store
+    // is supplied. Nothing is cached: one sidecar read and one file read per presentation.
     if (currentPassage === undefined) return 'clear';
-    return (await citedPassageUnchanged(instrumentId, anchor, currentPassage))
+    return (await nonMarkdownSourceUnchanged(instrumentId, currentPassage))
+      ? 'clear'
+      : 'check-failed';
+  };
+}
+
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): whether a question built on a non-markdown source (anything
+ * but a `.md` file that is not the question's own note) still has that file's bytes. Reads the
+ * citation sidecar's `sourceRevision` and hashes the current bytes the way the writer did
+ * (`hashContent` over `readBinary`). A missing revision, an unreadable sidecar, a missing or
+ * unreadable file, or a different hash is `false`: the caller withholds with the existing
+ * could-not-check outcome. A markdown source, or a record with no source, is `true` (not this
+ * check's). Reads only, never writes.
+ */
+async function nonMarkdownSourceUnchanged(
+  instrumentId: string,
+  reader: CurrentPassageReader,
+): Promise<boolean> {
+  try {
+    const record = reader.recordOf(instrumentId);
+    const sourcePath = record?.sourceProvenance?.sourcePath;
+    if (record === undefined || sourcePath === undefined) return true;
+    if (sourcePath === record.notePath || sourcePath.toLowerCase().endsWith('.md')) return true;
+    const citation = await readInstrumentCitation(reader.vault, instrumentId);
+    return await bytesMatchRevision(reader.vault, sourcePath, citation?.sourceRevision);
+  } catch {
+    return false;
+  }
+}
+
+async function bytesMatchRevision(
+  vault: VaultSource,
+  sourcePath: string,
+  expected: string | undefined,
+): Promise<boolean> {
+  if (expected === undefined) return false;
+  try {
+    return (await hashContent(await vault.readBinary(sourcePath))) === expected;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): the same comparison for a pending draft, against the draft's
+ * own `DraftRecord.sourceCitation` (a draft has no sidecar yet). Drafts are indexed once per
+ * session open (the records are already in hand); each presentation still reads the file afresh.
+ * A draft with no citation, a markdown source, or the draft's own note reads `'clear'`; an
+ * unknown draft id reads `'clear'` (it is not a draft this session holds).
+ */
+export function draftSourceCheckAtPresentation(
+  vault: VaultSource,
+  drafts: readonly DraftRecord[],
+): (draftId: string) => Promise<'clear' | 'check-failed'> {
+  const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
+  return async (draftId) => {
+    const draft = byId.get(draftId);
+    const citation = draft?.sourceCitation;
+    if (draft === undefined || citation === undefined) return 'clear';
+    if (
+      citation.sourcePath === draft.sourcePath ||
+      citation.sourcePath.toLowerCase().endsWith('.md')
+    ) {
+      return 'clear';
+    }
+    return (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision))
       ? 'clear'
       : 'check-failed';
   };

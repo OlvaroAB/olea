@@ -190,6 +190,8 @@ import {
   authoringDemandFields,
   type DemandRoutingCounter,
   enumerateVaultInstruments,
+  hashContent,
+  type InstrumentCitation,
   type InstrumentRevisionJobPayload,
   type JobRunner,
   type JobRunnerView,
@@ -198,6 +200,7 @@ import {
   type PaperDemand,
   projectInstrumentValidity,
   type QuestionBindingBlock,
+  readInstrumentCitation,
   readInstrumentDemand,
   readReviewLogHistory,
   routeDemandAsk,
@@ -216,6 +219,7 @@ import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
 import type { DraftedDemandCarry } from './draft-demand.js';
+import { withGroundingPassage } from './grounding-passage.js';
 import { hashSourceRevision } from './home-note.js';
 import {
   demandRoutingCounterFor,
@@ -242,7 +246,8 @@ export function isInstrumentRevisionJobPayload(
     v.kind === 'instrument-revision' &&
     typeof v.predecessorInstrumentId === 'string' &&
     v.predecessorInstrumentId.length > 0 &&
-    typeof v.newPassageText === 'string'
+    typeof v.newPassageText === 'string' &&
+    (v.sourceRevision === undefined || typeof v.sourceRevision === 'string')
   );
 }
 
@@ -271,6 +276,23 @@ function withPassageTransport<T extends { readonly transport: WorkerTaskTranspor
     transport: {
       send: (request) => {
         const payload = request.payload;
+        // `ol-egov.141.89.5.79`: the grounding gate checks the successor against the passage it
+        // was drafted from. The judge's evidence is `context` (a string: the chunk texts joined by
+        // a blank line; `WorkerGroundingJudge.judge`, retrieval/workerGroundingJudge.ts:103-115).
+        if (
+          request.taskId === 'grounding.judge.v1' &&
+          typeof payload === 'object' &&
+          payload !== null
+        ) {
+          const judged = payload as { context?: unknown };
+          if (typeof judged.context !== 'string' || judged.context.includes(passage)) {
+            return inner.send(request);
+          }
+          return inner.send({
+            ...request,
+            payload: { ...judged, context: `${passage}\n\n${judged.context}` },
+          });
+        }
         if (
           !GENERATION_TASK_IDS.has(request.taskId) ||
           typeof payload !== 'object' ||
@@ -585,6 +607,59 @@ async function sourceContentHashOf(
     : undefined;
 }
 
+/**
+ * `ol-egov.141.89.5.79` ([D-508]): the successor's source citation. The sweep builds one from a
+ * sweep unit; this job has none, so it is rebuilt from the predecessor's own citation (which note,
+ * page and section the question cited) and the current passage text the job carries. The passage
+ * digest is minted by `withGroundingPassage` with the passage as the one chunk, the same sealing
+ * the sweep applies, so it equals what a new question on this passage would get; it is omitted
+ * (whole-note grain) when the passage is not exactly one passage of the cited note.
+ *
+ * A non-markdown source keeps its path, page and section; its `sourceRevision` is carried only
+ * while it is still the file's byte hash now (never a stale one). No citation at all when the
+ * predecessor had none or cited its own note (the self-referential fallback): accept then mints
+ * its own, as before.
+ */
+async function successorCitationOf(
+  vault: VaultSource,
+  predecessorInstrumentId: string,
+  ownNotePath: VaultPath,
+  passage: string,
+  payloadSourceRevision?: string,
+): Promise<InstrumentCitation | undefined> {
+  try {
+    const predecessor = await readInstrumentCitation(vault, predecessorInstrumentId);
+    if (predecessor === undefined || predecessor.sourcePath === ownNotePath) return undefined;
+    const base: InstrumentCitation = {
+      sourcePath: predecessor.sourcePath,
+      ...(predecessor.page !== undefined ? { page: predecessor.page } : {}),
+      ...(predecessor.section !== undefined ? { section: predecessor.section } : {}),
+    };
+    if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
+      return passage.trim().length === 0
+        ? base
+        : await withGroundingPassage(vault, base, ownNotePath, [passage]);
+    }
+    // `ol-egov.141.89.5.81` ([D-518]): units re-extracted from changed bytes carry the hash they were
+    // read from, recorded as a fresh question's citation would. The accept guard and the
+    // presentation check verify it against the file's bytes later.
+    if (payloadSourceRevision !== undefined) {
+      return { ...base, sourceRevision: payloadSourceRevision };
+    }
+    if (
+      predecessor.sourceRevision !== undefined &&
+      (await vault.exists(predecessor.sourcePath)) &&
+      (await hashContent(await vault.readBinary(predecessor.sourcePath))) ===
+        predecessor.sourceRevision
+    ) {
+      return { ...base, sourceRevision: predecessor.sourceRevision };
+    }
+    return base;
+  } catch {
+    return undefined; // never throws: no citation is today's behaviour
+  }
+}
+
 /** Retry an empty or unparseable draft until the bound, then fail with a reason the queue records. */
 function emptyDraftOutcome(payload: InstrumentRevisionJobPayload, attempts: number): JobRunOutcome {
   if (attempts < REVISION_EMPTY_DRAFT_MAX_ATTEMPTS) return { ok: false, retryable: true };
@@ -592,6 +667,19 @@ function emptyDraftOutcome(payload: InstrumentRevisionJobPayload, attempts: numb
     ok: false,
     retryable: false,
     reason: `instrument-revision job: no usable successor draft for predecessor ${payload.predecessorInstrumentId} after ${REVISION_EMPTY_DRAFT_MAX_ATTEMPTS} attempts (empty or unparseable reply); the predecessor stays suspended`,
+  };
+}
+
+/**
+ * `ol-egov.141.89.5.79`: a job that ends with no successor cached is recorded, never a silent
+ * success (a grounded refusal, or every drafted item refused for its demand). Not retryable: the
+ * same retrieval or draft would end the same way until the material or the ask changes.
+ */
+function noSuccessorOutcome(payload: InstrumentRevisionJobPayload, why: string): JobRunOutcome {
+  return {
+    ok: false,
+    retryable: false,
+    reason: `instrument-revision job: no successor cached for predecessor ${payload.predecessorInstrumentId} (${why}); the predecessor stays suspended`,
   };
 }
 
@@ -667,10 +755,20 @@ export async function runInstrumentRevisionJob(
     );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') return { ok: true };
+    if (drafted.kind === 'nothing-to-cache') {
+      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    }
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
+    const sourceCitation = await successorCitationOf(
+      deps.vault,
+      payload.predecessorInstrumentId,
+      target.sourcePath,
+      payload.newPassageText,
+      payload.sourceRevision,
+    );
+    let cachedCount = 0;
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
       // counted, not cached. The declaration is read by the item's position in the response.
@@ -688,6 +786,7 @@ export async function runInstrumentRevisionJob(
         sourcePath: target.sourcePath,
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
+        ...(sourceCitation === undefined ? {} : { sourceCitation }),
         card,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -701,6 +800,10 @@ export async function runInstrumentRevisionJob(
         ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
+      cachedCount += 1;
+    }
+    if (cachedCount === 0) {
+      return noSuccessorOutcome(payload, 'every drafted item was refused for its demand');
     }
     return { ok: true };
   }
@@ -722,10 +825,20 @@ export async function runInstrumentRevisionJob(
     );
     if (drafted.kind === 'thrown') return { ok: false, retryable: true };
     if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') return { ok: true };
+    if (drafted.kind === 'nothing-to-cache') {
+      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    }
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
+    const sourceCitation = await successorCitationOf(
+      deps.vault,
+      payload.predecessorInstrumentId,
+      target.sourcePath,
+      payload.newPassageText,
+      payload.sourceRevision,
+    );
+    let cachedCount = 0;
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.
       const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
@@ -742,6 +855,7 @@ export async function runInstrumentRevisionJob(
         sourcePath: target.sourcePath,
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
+        ...(sourceCitation === undefined ? {} : { sourceCitation }),
         question,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -750,6 +864,10 @@ export async function runInstrumentRevisionJob(
         ...(stamped.demand === undefined ? {} : { demand: stamped.demand }),
       };
       await deps.cache.put(record);
+      cachedCount += 1;
+    }
+    if (cachedCount === 0) {
+      return noSuccessorOutcome(payload, 'every drafted item was refused for its demand');
     }
     return { ok: true };
   }

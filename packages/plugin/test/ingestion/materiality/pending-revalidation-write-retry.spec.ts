@@ -260,14 +260,12 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     expect(pendingHash).toBeDefined();
     expect(afterFailedResolve.get(MCQ_ID)?.text).toContain('humid climates'); // still the OLD text
 
-    // Tick 3 (the retry -- the SAME periodic tick main.ts already drives this from): the same real
-    // difference is still there (the failed write never advanced `text`), so it is recognised again
-    // -- `[D-400]`'s own dispatch record fires this instrument's one permitted retry (call #5,
-    // recording `retriedAt`), `setPendingRevalidation` re-sets the SAME hash (call #6, a no-op in
-    // effect: `[D-351]`'s "the SETTING half always wins with the newest known real difference") --
-    // the judge answers the same way, and this time the resolving write (call #7) succeeds.
+    // Tick 3 (the retry -- the SAME periodic tick main.ts already drives this from): the judge's
+    // answer was already acted on (`ol-egov.141.89.5.77`), so the retry repeats only the resolving
+    // step with NO new judge call and no `[D-400]` budget: the one write (call #5) succeeds.
     const thirdTick = await trigger.tick(vault, actions());
-    expect(host.saveDataCallCount).toBe(7);
+    expect(host.saveDataCallCount).toBe(5);
+    expect(judge.judge).toHaveBeenCalledOnce();
     const afterRetry = await store.loadAll();
     // [D-508] the resolving write is now the anchor's removal (the rewrite path), so a
     // successful retry leaves no entry at all, and never a baseline for the changed text.

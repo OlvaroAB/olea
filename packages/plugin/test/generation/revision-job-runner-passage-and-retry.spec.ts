@@ -272,3 +272,60 @@ describe('an empty or unparseable draft is retried under a bound, then fails lou
     expect(await cache.listPending()).toHaveLength(1);
   });
 });
+
+describe('the grounding gate sees the passage; a grounded refusal is recorded (ol-egov.141.89.5.79, D-508)', () => {
+  it('the grounding judge request carries the job passage in its context, once', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    const sent: { taskId: string; payload: Record<string, unknown> }[] = [];
+    const base = {
+      send: async (req: { taskId: string; payload: unknown }) => {
+        sent.push({ taskId: req.taskId, payload: req.payload as Record<string, unknown> });
+        return goodResponse;
+      },
+    };
+    await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({ transport: base }) as unknown as DraftQuizCardsDeps,
+        draftForConcept: async (deps) => {
+          await deps.transport.send({
+            contractVersion: 1,
+            taskId: 'grounding.judge.v1',
+            payload: { query: 'q', context: 'stale retrieved chunk' },
+          });
+          await deps.transport.send({
+            contractVersion: 1,
+            taskId: 'grounding.judge.v1',
+            payload: { query: 'q', context: `${PASSAGE}\n\nother` },
+          });
+          return drafted(goodResponse);
+        },
+      },
+      job().payload,
+    );
+    expect(sent[0]?.payload.context).toBe(`${PASSAGE}\n\nstale retrieved chunk`);
+    expect(sent[0]?.payload.query).toBe('q');
+    expect(sent[1]?.payload.context).toBe(`${PASSAGE}\n\nother`);
+  });
+
+  it('a grounded refusal is a recorded non-retryable failure naming the predecessor', async () => {
+    const vault = new MemoryVaultSource({ [NOTE_PATH]: NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    const outcome = await runInstrumentRevisionJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({ transport: { send: vi.fn() } }) as unknown as DraftQuizCardsDeps,
+        draftForConcept: async () =>
+          ({ status: 'refused', reason: 'below-band' }) as unknown as DraftQuizCardsResult,
+      },
+      job().payload,
+    );
+    expect(outcome).toMatchObject({ ok: false, retryable: false });
+    const reason = (outcome as { reason?: string }).reason ?? '';
+    expect(reason).toContain(PREDECESSOR_ID);
+    expect(reason).toContain('stays suspended');
+  });
+});
