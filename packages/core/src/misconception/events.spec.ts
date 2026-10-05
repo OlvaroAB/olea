@@ -135,4 +135,53 @@ describe('buildResolutionEvidenceEvent', () => {
     const recall = buildResolutionEvidenceEvent(baseResolutionInput({ evidenceKind: 'recall' }));
     expect(recall.evidenceKind).toBe('recall');
   });
+
+  describe('belief-specific field ([D-485] part 1, ol-egov.141.89.6.88)', () => {
+    const STAMP = { taskId: 'task-resolve', promptVersion: '0.0.1', modelId: 'model-x' };
+
+    it('with no per-belief decision the event is exactly the concept-wide shape, with no beliefResolution key', () => {
+      const event = buildResolutionEvidenceEvent(baseResolutionInput(), {
+        generateEventId: () => 'event-4',
+      });
+      expect('beliefResolution' in event).toBe(false);
+      expect(JSON.stringify(event)).toBe(
+        '{"schemaVersion":1,"kind":"resolution-evidence","eventId":"event-4","timestamp":"2026-08-16T09:05:00-04:00","originInstrumentId":"explain-back:concept-alpha:2","originReviewEventId":"review-event-2","conceptId":"concept-alpha","evidenceKind":"explanation"}',
+      );
+    });
+
+    it('carries the field last, in canonical key order, whatever order the caller built it in', () => {
+      const event = buildResolutionEvidenceEvent(
+        baseResolutionInput({
+          beliefResolution: {
+            decisions: [
+              {
+                provenance: { modelId: 'model-x', promptVersion: '0.0.1', taskId: 'task-resolve' },
+                option: 'demonstrates',
+                misconceptionId: 'm-1',
+              },
+            ],
+            targetMisconceptionIds: ['m-1'],
+          },
+        }),
+        { generateEventId: () => 'event-5' },
+      );
+      expect(Object.keys(event).at(-1)).toBe('beliefResolution');
+      expect(JSON.stringify(event.beliefResolution)).toBe(
+        '{"targetMisconceptionIds":["m-1"],"decisions":[{"misconceptionId":"m-1","option":"demonstrates","provenance":{"taskId":"task-resolve","promptVersion":"0.0.1","modelId":"model-x"}}]}',
+      );
+    });
+
+    it('refuses a malformed field (a caller bug) rather than writing an event the reader would skip', () => {
+      expect(() =>
+        buildResolutionEvidenceEvent(
+          baseResolutionInput({
+            beliefResolution: {
+              targetMisconceptionIds: ['m-1'],
+              decisions: [{ misconceptionId: 'm-1', option: 'silent', provenance: STAMP }],
+            },
+          }),
+        ),
+      ).toThrow(/beliefResolution/);
+    });
+  });
 });

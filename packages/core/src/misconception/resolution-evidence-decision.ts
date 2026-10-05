@@ -93,7 +93,16 @@
  * .rating` already satisfies these shapes with zero adapter code.
  */
 
-import type { ResolutionEvidenceKind } from './types.js';
+import { isDerivedMcqMisconceptionKey } from './store.js';
+import {
+  BELIEF_RESOLUTION_OPTIONS,
+  type BeliefResolutionDecision,
+  type BeliefResolutionEvidence,
+  type BeliefResolutionOption,
+  type BeliefResolutionProvenance,
+  type MisconceptionRecord,
+  type ResolutionEvidenceKind,
+} from './types.js';
 
 /** A just-accepted explain-back grading's outcome, reduced to what this decision needs. */
 export interface ExplainBackResolutionCandidate {
@@ -146,4 +155,162 @@ export function decideResolutionEvidence(
   }
 
   return PASSING_RECALL_RATINGS.has(candidate.rating) ? 'recall' : null;
+}
+
+/*
+ * ===========================================================================
+ * BELIEF-SPECIFIC RESOLUTION (`[D-485]` parts 1 and 2, `ol-egov.141.89.6.88`)
+ * ===========================================================================
+ * `decideResolutionEvidence` above stays the gate: no correct verdict, no
+ * evidence. When the gate passes, the functions below decide WHICH records the
+ * evidence moves:
+ *
+ * 1. `selectBeliefResolutionCandidates` — the open records on the concept,
+ *    minus any record the same attempt created or re-observed (part 1 names
+ *    created records; re-observed ones are excluded by the same reasoning, the
+ *    recorded default for the bead's open question), minus any record known
+ *    only by a multiple-choice pick's derived key (it embeds option wording and
+ *    is never persisted, `./store.js`).
+ * 2. One bounded decision per candidate, through an injected
+ *    `BeliefResolutionDecisionPort`: demonstrates / silent / reasserts /
+ *    unclear. The caller binds her answer and the requirement into the port,
+ *    so nothing here ever holds answer text.
+ * 3. `decideBeliefResolution` — pure: only `demonstrates` names a record;
+ *    silent, unclear, reasserts and a failed or missing decision name nothing
+ *    (part 2). The result is the event's `beliefResolution` field.
+ *
+ * With no port, no caller runs any of this and the event keeps today's
+ * concept-wide shape (`./events.js`); nothing she experiences changes until
+ * the wiring bead supplies one.
+ */
+
+/** What the injected decision port reports for one candidate record. */
+export type BeliefResolutionDecisionResult =
+  | {
+      readonly status: 'decided';
+      readonly option: BeliefResolutionOption;
+      /** D7.3's stamp from the response that carried the option. */
+      readonly provenance: BeliefResolutionProvenance;
+    }
+  | {
+      /** The call failed, timed out, or its reply could not be read as one of the four options. */
+      readonly status: 'failed';
+    };
+
+/**
+ * The seam onto the bounded per-belief decision call (a Worker task the wiring
+ * bead adds). One call per candidate record, never batched, so no call sees
+ * another belief. An implementation enforces its own timeout and resolves
+ * `{ status: 'failed' }` (or rejects) when it trips; both count as unclear.
+ */
+export interface BeliefResolutionDecisionPort {
+  decide(candidate: MisconceptionRecord): Promise<BeliefResolutionDecisionResult>;
+}
+
+export interface SelectBeliefResolutionCandidatesInput {
+  /** The concept the explanation was about (the prompt's subject concept). */
+  readonly conceptId: string;
+  /** The caller's local projection as it stood before this attempt (any concepts; filtered here). */
+  readonly records: readonly MisconceptionRecord[];
+  /** Every `misconceptionId` this same attempt observed, whether it created the record or re-observed it. */
+  readonly observedByAttempt: readonly string[];
+}
+
+/**
+ * Step 1: the records the per-belief decision is asked about, sorted by id so
+ * the order asked (and recorded) does not depend on the caller's read order.
+ * Pure.
+ */
+export function selectBeliefResolutionCandidates(
+  input: SelectBeliefResolutionCandidatesInput,
+): readonly MisconceptionRecord[] {
+  const observed = new Set(input.observedByAttempt);
+  return input.records
+    .filter(
+      (record) =>
+        record.conceptId === input.conceptId &&
+        (record.status === 'active' || record.status === 'fading') &&
+        !observed.has(record.id) &&
+        !isDerivedMcqMisconceptionKey(record.id),
+    )
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+function isReadableDecided(
+  result: BeliefResolutionDecisionResult | undefined,
+): result is Extract<BeliefResolutionDecisionResult, { status: 'decided' }> {
+  if (result === undefined || result.status !== 'decided') return false;
+  if (!BELIEF_RESOLUTION_OPTIONS.includes(result.option)) return false;
+  const p = result.provenance;
+  return (
+    typeof p === 'object' &&
+    p !== null &&
+    typeof p.taskId === 'string' &&
+    p.taskId.length > 0 &&
+    typeof p.promptVersion === 'string' &&
+    p.promptVersion.length > 0 &&
+    typeof p.modelId === 'string' &&
+    p.modelId.length > 0
+  );
+}
+
+/**
+ * Step 3, pure: one decision result per candidate gives the event's
+ * `beliefResolution` field. A candidate whose result is missing, failed or
+ * unreadable is recorded with no option and moves nothing (`[D-485]` part 2).
+ * A result for an id that is not a candidate is ignored, so a record the same
+ * attempt created or re-observed can never be named, whatever the port said.
+ */
+export function decideBeliefResolution(
+  candidateIds: readonly string[],
+  results: ReadonlyMap<string, BeliefResolutionDecisionResult>,
+): BeliefResolutionEvidence {
+  const decisions: BeliefResolutionDecision[] = [];
+  for (const misconceptionId of new Set(candidateIds)) {
+    const result = results.get(misconceptionId);
+    decisions.push(
+      isReadableDecided(result)
+        ? {
+            misconceptionId,
+            option: result.option,
+            provenance: {
+              taskId: result.provenance.taskId,
+              promptVersion: result.provenance.promptVersion,
+              modelId: result.provenance.modelId,
+            },
+          }
+        : { misconceptionId, option: null, provenance: null },
+    );
+  }
+  return {
+    targetMisconceptionIds: decisions
+      .filter((d) => d.option === 'demonstrates')
+      .map((d) => d.misconceptionId),
+    decisions,
+  };
+}
+
+/**
+ * Steps 2 and 3: asks `port` about each candidate (one call each, run
+ * together) and decides. A call that rejects counts as failed; one candidate's
+ * failure never affects another's decision. Performs no I/O of its own — only
+ * what the injected port does.
+ */
+export async function runBeliefResolutionDecision(
+  port: BeliefResolutionDecisionPort,
+  candidates: readonly MisconceptionRecord[],
+): Promise<BeliefResolutionEvidence> {
+  const settled = await Promise.all(
+    candidates.map(async (candidate): Promise<[string, BeliefResolutionDecisionResult]> => {
+      try {
+        return [candidate.id, await port.decide(candidate)];
+      } catch {
+        return [candidate.id, { status: 'failed' }];
+      }
+    }),
+  );
+  return decideBeliefResolution(
+    candidates.map((candidate) => candidate.id),
+    new Map(settled),
+  );
 }

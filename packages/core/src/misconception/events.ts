@@ -13,7 +13,9 @@ import type { MaterialityAuthorship } from '../source/materiality.js';
 import { assertBeliefBearingStatement } from './belief-source.js';
 import type { MisconceptionMatchCandidate } from './matcher.js';
 import { DEFAULT_M1_THRESHOLD, matchExistingMisconception } from './matcher.js';
+import { parseBeliefResolution } from './parse.js';
 import {
+  type BeliefResolutionEvidence,
   type EmbeddingVector,
   MISCONCEPTION_EVENT_SCHEMA_VERSION,
   type MisconceptionObservedEvent,
@@ -145,6 +147,14 @@ export interface ResolutionEvidenceInput {
   readonly originInstrumentId: string;
   readonly originReviewEventId: string | null;
   readonly timestamp: string;
+  /**
+   * `[D-485]` part 1: the per-belief decision's outcome
+   * (`./resolution-evidence-decision.js`'s `decideBeliefResolution` or
+   * `runBeliefResolutionDecision`). Omit it when no per-belief decision ran:
+   * the event is then exactly today's concept-wide shape, with no
+   * `beliefResolution` key at all.
+   */
+  readonly beliefResolution?: BeliefResolutionEvidence;
 }
 
 export interface BuildResolutionEvidenceEventOptions {
@@ -153,14 +163,26 @@ export interface BuildResolutionEvidenceEventOptions {
 
 /**
  * Builds a resolution-evidence event (M2). Unlike an observation, there is
- * no matching decision to make: the event names a concept, not a
- * misconception id, and `./project.js`'s fold applies it to every
- * `active`/`fading` record on that concept — see that module's doc for why.
+ * no matching decision to make here. Without `input.beliefResolution` the
+ * event names a concept only, and `./project.js`'s fold applies it to every
+ * `active`/`fading` record on that concept; with it, the fold moves only the
+ * records it names (`[D-485]`) — see that module's doc.
+ *
+ * Throws on a malformed `beliefResolution` (a caller bug: the decision
+ * functions never produce one), using the same validation the log reader
+ * applies, so every built event parses back to itself byte for byte.
  */
 export function buildResolutionEvidenceEvent(
   input: ResolutionEvidenceInput,
   options: BuildResolutionEvidenceEventOptions = {},
 ): MisconceptionResolutionEvidenceEvent {
+  let beliefResolution: BeliefResolutionEvidence | null = null;
+  if (input.beliefResolution !== undefined) {
+    beliefResolution = parseBeliefResolution(input.beliefResolution);
+    if (beliefResolution === null) {
+      throw new Error('buildResolutionEvidenceEvent: malformed beliefResolution ([D-485])');
+    }
+  }
   const generateEventId = options.generateEventId ?? defaultGenerateId;
   return {
     schemaVersion: MISCONCEPTION_EVENT_SCHEMA_VERSION,
@@ -171,5 +193,6 @@ export function buildResolutionEvidenceEvent(
     originReviewEventId: input.originReviewEventId,
     conceptId: input.conceptId,
     evidenceKind: input.evidenceKind,
+    ...(beliefResolution !== null ? { beliefResolution } : {}),
   };
 }

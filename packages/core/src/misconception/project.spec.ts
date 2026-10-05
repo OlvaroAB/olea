@@ -326,6 +326,189 @@ describe('projectMisconceptions — same-attempt order ([D-485] part 1, ol-egov.
   }
 });
 
+describe('projectMisconceptions — belief-specific evidence ([D-485] part 1, ol-egov.141.89.6.88)', () => {
+  const STAMP = { taskId: 'task-resolve', promptVersion: '0.0.1', modelId: 'model-x' };
+
+  /** Evidence naming `targets` (each decided demonstrates); `others` are recorded but not named. */
+  function beliefEvidence(
+    targets: readonly string[],
+    overrides: Partial<Extract<MisconceptionEvent, { kind: 'resolution-evidence' }>> = {},
+    others: Readonly<Record<string, 'silent' | 'reasserts' | 'unclear' | null>> = {},
+  ) {
+    return resolutionEvidence({
+      beliefResolution: {
+        targetMisconceptionIds: targets,
+        decisions: [
+          ...targets.map((id) => ({
+            misconceptionId: id,
+            option: 'demonstrates' as const,
+            provenance: STAMP,
+          })),
+          ...Object.entries(others).map(([id, option]) => ({
+            misconceptionId: id,
+            option,
+            provenance: option === null ? null : STAMP,
+          })),
+        ],
+      },
+      ...overrides,
+    });
+  }
+
+  const twoOpen = [
+    observed({ eventId: 'e-a', misconceptionId: 'm-a' }),
+    observed({ eventId: 'e-b', misconceptionId: 'm-b' }),
+  ];
+  const statusOf = (records: readonly { id: string; status: string }[], id: string) =>
+    records.find((r) => r.id === id)?.status;
+
+  it('collateral fade: evidence naming A fades A and leaves B active, where the concept-wide event fades both', () => {
+    const specific = projectMisconceptions([
+      ...twoOpen,
+      beliefEvidence(['m-a'], { eventId: 'e-ev' }, { 'm-b': 'silent' }),
+    ]);
+    expect(statusOf(specific, 'm-a')).toBe('fading');
+    expect(statusOf(specific, 'm-b')).toBe('active');
+
+    const conceptWide = projectMisconceptions([
+      ...twoOpen,
+      resolutionEvidence({ eventId: 'e-ev' }),
+    ]);
+    expect(statusOf(conceptWide, 'm-a')).toBe('fading');
+    expect(statusOf(conceptWide, 'm-b')).toBe('fading');
+  });
+
+  it('premature resolution: two pieces of evidence each naming A resolve A only', () => {
+    const records = projectMisconceptions([
+      ...twoOpen,
+      beliefEvidence(['m-a'], { eventId: 'e-ev1', timestamp: '2026-08-16T10:00:00-04:00' }),
+      beliefEvidence(['m-a'], { eventId: 'e-ev2', timestamp: '2026-08-16T11:00:00-04:00' }),
+    ]);
+    expect(statusOf(records, 'm-a')).toBe('resolved');
+    expect(statusOf(records, 'm-b')).toBe('active');
+  });
+
+  it('missed resolution: evidence naming A and B moves both, one step each', () => {
+    const records = projectMisconceptions([...twoOpen, beliefEvidence(['m-a', 'm-b'])]);
+    expect(statusOf(records, 'm-a')).toBe('fading');
+    expect(statusOf(records, 'm-b')).toBe('fading');
+  });
+
+  it('evidence naming no record moves nothing — it never falls back to the whole concept', () => {
+    const records = projectMisconceptions([
+      ...twoOpen,
+      beliefEvidence([], {}, { 'm-a': 'silent', 'm-b': 'unclear' }),
+    ]);
+    expect(statusOf(records, 'm-a')).toBe('active');
+    expect(statusOf(records, 'm-b')).toBe('active');
+  });
+
+  it('moves only records on its own concept: a named record on another concept stays put', () => {
+    const records = projectMisconceptions([
+      observed({ eventId: 'e-a', misconceptionId: 'm-a', conceptId: 'concept-alpha' }),
+      observed({ eventId: 'e-z', misconceptionId: 'm-z', conceptId: 'concept-beta' }),
+      beliefEvidence(['m-a', 'm-z'], { conceptId: 'concept-alpha' }),
+    ]);
+    expect(statusOf(records, 'm-a')).toBe('fading');
+    expect(statusOf(records, 'm-z')).toBe('active');
+  });
+
+  it('a name with no record, and a resolved record, are no-ops', () => {
+    const records = projectMisconceptions([
+      observed({ eventId: 'e-a', misconceptionId: 'm-a' }),
+      resolutionEvidence({ eventId: 'e-1', timestamp: '2026-08-16T10:00:00-04:00' }),
+      resolutionEvidence({ eventId: 'e-2', timestamp: '2026-08-16T11:00:00-04:00' }),
+      beliefEvidence(['m-a', 'm-unknown'], {
+        eventId: 'e-3',
+        timestamp: '2026-08-16T12:00:00-04:00',
+      }),
+    ]);
+    expect(records.map((r) => [r.id, r.status])).toEqual([['m-a', 'resolved']]);
+  });
+
+  it('a name repeated in the fold entry moves its record once', () => {
+    const entries: NormalizedMisconceptionFoldEntry[] = [
+      {
+        kind: 'observed',
+        eventId: 'e-a',
+        timestamp: '2026-08-16T09:00:00-04:00',
+        misconceptionId: 'm-a',
+        conceptId: 'concept-alpha',
+        confusedWithConceptId: null,
+        statement: 'Believes X always implies Y.',
+        correction: 'X implies Y only under condition Z.',
+        citation: CITATION,
+        originInstrumentId: 'explain-back:concept-alpha:1',
+      },
+      {
+        kind: 'resolution-evidence',
+        eventId: 'e-ev',
+        timestamp: '2026-08-16T10:00:00-04:00',
+        conceptId: 'concept-alpha',
+        evidenceKind: 'explanation',
+        targetMisconceptionIds: ['m-a', 'm-a'],
+      },
+    ];
+    expect(foldMisconceptionObservations(entries)[0]?.status).toBe('fading');
+  });
+
+  it('recall evidence that names a record still stops at fading ([D-485] part 3)', () => {
+    const records = projectMisconceptions([
+      observed({ eventId: 'e-a', misconceptionId: 'm-a' }),
+      beliefEvidence(['m-a'], {
+        eventId: 'e-1',
+        timestamp: '2026-08-16T10:00:00-04:00',
+        evidenceKind: 'recall',
+      }),
+      beliefEvidence(['m-a'], {
+        eventId: 'e-2',
+        timestamp: '2026-08-16T11:00:00-04:00',
+        evidenceKind: 'recall',
+      }),
+    ]);
+    expect(statusOf(records, 'm-a')).toBe('fading');
+  });
+
+  it('a record the same attempt re-observes ends active even if the evidence names it', () => {
+    const T = '2026-08-16T12:00:00-04:00';
+    for (const [obsId, evId] of [
+      ['a-obs', 'b-ev'],
+      ['b-obs', 'a-ev'],
+    ] as const) {
+      const records = projectMisconceptions([
+        observed({ eventId: 'e-a', misconceptionId: 'm-a' }),
+        observed({ eventId: obsId, misconceptionId: 'm-a', timestamp: T }),
+        beliefEvidence(['m-a'], { eventId: evId, timestamp: T }),
+      ]);
+      expect(statusOf(records, 'm-a')).toBe('active');
+    }
+  });
+
+  it('an old log replays as today: events without the field fold concept-wide, beside events with it', () => {
+    const records = projectMisconceptions([
+      ...twoOpen,
+      observed({ eventId: 'e-c', misconceptionId: 'm-c' }),
+      // Written before [D-485]: no field, fades all three.
+      resolutionEvidence({ eventId: 'e-old', timestamp: '2026-08-16T10:00:00-04:00' }),
+      // Written after: resolves A only.
+      beliefEvidence(['m-a'], { eventId: 'e-new', timestamp: '2026-08-16T11:00:00-04:00' }),
+    ]);
+    expect(statusOf(records, 'm-a')).toBe('resolved');
+    expect(statusOf(records, 'm-b')).toBe('fading');
+    expect(statusOf(records, 'm-c')).toBe('fading');
+  });
+
+  it('is order-independent with belief-specific events in the log', () => {
+    const events = [
+      ...twoOpen,
+      beliefEvidence(['m-a'], { eventId: 'e-1', timestamp: '2026-08-16T10:00:00-04:00' }),
+      resolutionEvidence({ eventId: 'e-2', timestamp: '2026-08-16T11:00:00-04:00' }),
+      beliefEvidence(['m-b'], { eventId: 'e-3', timestamp: '2026-08-16T12:00:00-04:00' }),
+    ];
+    expect(projectMisconceptions([...events].reverse())).toEqual(projectMisconceptions(events));
+  });
+});
+
 describe('projectMisconceptions — idempotency on replay', () => {
   it('a duplicated event (same eventId twice) is folded once, not twice', () => {
     const event = observed({ eventId: 'e1' });

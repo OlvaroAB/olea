@@ -1652,6 +1652,7 @@ export type {
   ParseMisconceptionLogResult,
 } from './misconception/parse.js';
 export {
+  parseBeliefResolution,
   parseMisconceptionEvent,
   parseMisconceptionLog,
 } from './misconception/parse.js';
@@ -1666,12 +1667,23 @@ export { projectMisconceptions } from './misconception/project.js';
 // for a concept's open misconception, and which `ResolutionEvidenceKind` it
 // demonstrates — see the module doc for why `hasOpenMisconceptionOnConcept`
 // stays the caller's job.
+// `[D-485]` parts 1 and 2 (`ol-egov.141.89.6.88`): the belief-specific step —
+// candidate selection, the injected per-belief decision port, and the pure
+// decision that names the records an explanation moves.
 export type {
+  BeliefResolutionDecisionPort,
+  BeliefResolutionDecisionResult,
   ExplainBackResolutionCandidate,
   RecallResolutionCandidate,
   ResolutionEvidenceCandidate,
+  SelectBeliefResolutionCandidatesInput,
 } from './misconception/resolution-evidence-decision.js';
-export { decideResolutionEvidence } from './misconception/resolution-evidence-decision.js';
+export {
+  decideBeliefResolution,
+  decideResolutionEvidence,
+  runBeliefResolutionDecision,
+  selectBeliefResolutionCandidates,
+} from './misconception/resolution-evidence-decision.js';
 // F5.3a / R7's third trigger for the SAME F2.21 on-demand offer (`[D-083]`/
 // `[D-087]`, `ol-0r92.11`): an unconsumed scheduling observation naming the
 // just-graded instrument's concept as a neighbour. Lives beside
@@ -1697,8 +1709,16 @@ export type {
   McqMisconceptionPick,
   ReconcileMisconceptionStreamsOptions,
 } from './misconception/store.js';
-export { mcqObservationKey, projectMisconceptionsFromAllSources } from './misconception/store.js';
+export {
+  isDerivedMcqMisconceptionKey,
+  mcqObservationKey,
+  projectMisconceptionsFromAllSources,
+} from './misconception/store.js';
 export type {
+  BeliefResolutionDecision,
+  BeliefResolutionEvidence,
+  BeliefResolutionOption,
+  BeliefResolutionProvenance,
   EmbeddingVector as MisconceptionEmbeddingVector,
   MisconceptionEmbedder,
   MisconceptionEvent,
@@ -1710,6 +1730,7 @@ export type {
   SourceCitation as MisconceptionSourceCitation,
 } from './misconception/types.js';
 export {
+  BELIEF_RESOLUTION_OPTIONS,
   MISCONCEPTION_EVENT_SCHEMA_VERSION,
   MISCONCEPTION_STATUSES,
 } from './misconception/types.js';
