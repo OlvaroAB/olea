@@ -1405,3 +1405,231 @@ describe('createLocalGapProvider — manual entries as the F1.2 fallback (ol-ego
     expect((await provider.load()).kind).toBe('unavailable');
   });
 });
+
+/**
+ * `ol-egov.141.89.9.93` (F4.3, `[D-348]`, registry §22): the production gap view supplies need
+ * with its basis. Before this bead `gap/provider.ts` handed `buildGapView` no `need`, so every
+ * mastery-gap row with built practice read "recall here hasn't caught up" — a concept she has
+ * never attempted included — and `copy.ts`'s unknown branch was never reached in production.
+ *
+ * Need is read from the same readiness fold, with the same validity projection, that the
+ * ranking's own need term reads (`oracle/compose.ts`), so the two never disagree about one
+ * concept (`[D-371]`). Supplying it also scores each row relevance × need × credit (the
+ * attainment chain spec, section 2.5); the REPORT test records what that does to row order.
+ *
+ * Every string here is invented (INV-3).
+ */
+describe('createLocalGapProvider — need with its basis ([D-348], F4.3, ol-egov.141.89.9.93)', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+  const LOG = '.olea/reviews/2026-08-09.olea-testdevice1.jsonl';
+
+  function recallReview(conceptKey: string, instrumentId: string, eventId: string): string {
+    return `${JSON.stringify({
+      schemaVersion: 5,
+      kind: 'review',
+      eventId,
+      timestamp: '2026-08-09T09:00:00-04:00',
+      instrumentId,
+      instrumentType: 'qa',
+      conceptIds: [conceptKey],
+      rating: 'good',
+      supportLevelShown: 'independent',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['qa'],
+        planVersion: null,
+      },
+    })}\n`;
+  }
+
+  async function keyOf(vault: ReturnType<typeof memoryVault>, name: string): Promise<string> {
+    const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+      (concept) => concept.name === name,
+    )?.key;
+    if (key === undefined) throw new Error(`fixture vault has no ${name} concept`);
+    return key;
+  }
+
+  async function rowsOf(vault: ReturnType<typeof memoryVault>, scheduler: Scheduler) {
+    const state = await createLocalGapProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler,
+    }).load();
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    return course.rows;
+  }
+
+  const DEFICIT_WORDING = /hasn't caught up|\bweak|struggl|\bbehind\b/i;
+
+  it('REGRESSION (fails pre-fix): built practice with no eligible evidence reads need unknown at the declared value, and its line says unknown, never a shortfall', async () => {
+    // The base fixture: her note and one built card on Widget theory, and no review at all.
+    const rows = await rowsOf(gapVault(), fixedRetrievabilityScheduler(1));
+    const row = rows.find((r) => r.conceptName === 'Widget theory');
+    if (row === undefined) throw new Error('expected Widget theory to be ranked');
+    expect(row.gapClass).toBe('mastery-gap');
+    expect(row.instrumentCount).toBe(1);
+
+    // Pre-fix: `row.need` was undefined, and the line below read "hasn't caught up".
+    expect(row.need?.basis).toBe('unknown');
+    expect(row.need?.value).toBe(1);
+    expect(row.need?.readiness.weakest).toBeNull();
+
+    const line = gapRowLine(row);
+    expect(line).toBe(masteryGapLine(row));
+    expect(line).toContain('recall here is unknown');
+    expect(line).toContain('this says nothing about what you know');
+    expect(line).not.toMatch(DEFICIT_WORDING);
+  });
+
+  it('REGRESSION (fails pre-fix): an unaided recall success reads need estimated at one minus readiness, the same need the ranking read, and keeps the estimated wording', async () => {
+    const vault = gapVault();
+    const widgetKey = await keyOf(vault, 'Widget theory');
+    await vault.write(LOG, recallReview(widgetKey, 'qa:widget-theory:1', 'r1'));
+
+    const rows = await rowsOf(vault, fixedRetrievabilityScheduler(0.4));
+    const row = rows.find((r) => r.conceptName === 'Widget theory');
+    if (row === undefined) throw new Error('expected Widget theory to be ranked');
+
+    expect(row.need?.basis).toBe('estimated');
+    expect(row.need?.value).toBeCloseTo(0.6, 12);
+    expect(row.need?.readiness.weakest?.instrumentId).toBe('qa:widget-theory:1');
+
+    // One evidence rule for one concept ([D-371]): the ranking's need term is the same number.
+    // At the declared fallback weights (1, 1, 1) the blend is relevance + need + proximity.
+    const rankingNeed =
+      row.priorityScore - (row.assessmentRelevance ?? Number.NaN) - quizProximityScore(NOW());
+    expect(rankingNeed).toBeCloseTo(row.need?.value ?? Number.NaN, 10);
+
+    expect(gapRowLine(row)).toContain("recall here hasn't caught up");
+  });
+
+  it('REGRESSION (fails pre-fix): with need supplied, each row scores relevance × need × credit and reads no priority (att.md 2.5)', async () => {
+    const vault = gapVault();
+    const widgetKey = await keyOf(vault, 'Widget theory');
+    await vault.write(LOG, recallReview(widgetKey, 'qa:widget-theory:1', 'r1'));
+
+    for (const scheduler of [fixedRetrievabilityScheduler(0.4), fixedRetrievabilityScheduler(1)]) {
+      const row = (await rowsOf(vault, scheduler)).find((r) => r.conceptName === 'Widget theory');
+      if (row?.need === undefined) throw new Error('expected need on the row');
+      expect(row.gapScore).toBeCloseTo(
+        (row.assessmentRelevance ?? Number.NaN) * row.need.value * row.readiness.weight,
+        12,
+      );
+    }
+    // Unknown need scores at the declared value 1: relevance × credit.
+    const unknown = (await rowsOf(gapVault(), fixedRetrievabilityScheduler(1))).find(
+      (r) => r.conceptName === 'Widget theory',
+    );
+    expect(unknown?.gapScore).toBeCloseTo(
+      (unknown?.assessmentRelevance ?? Number.NaN) * (unknown?.readiness.weight ?? Number.NaN),
+      12,
+    );
+  });
+
+  it('REPORT: supplying need changes the gap view order where relevance and need trade off (one change on this fixture)', async () => {
+    // Widget theory is asked in two past papers and Gadget theory in one, so their relevance
+    // differs; both carry one edge to the same quiz, so proximity is equal.
+    const vault = memoryVault({
+      '05 Zettelkasten/Widget theory.md': '# Widget theory\n',
+      '05 Zettelkasten/Gadget theory.md': '# Gadget theory\n',
+      'Notes/one.md': [
+        '---',
+        'topic: [Widget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      'Notes/two.md': [
+        '---',
+        'topic: [Gadget theory]',
+        'course: TESTC101',
+        '---',
+        '',
+        'Front::Back',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2023.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2023',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Explain the core mechanism behind Widget theory and why it matters.',
+        '',
+        '## Question 2 (10 marks)',
+        '',
+        'Explain the core mechanism behind Gadget theory and why it matters.',
+        '',
+      ].join('\n'),
+      '03 Research/TESTC101 Past Paper 2024.md': [
+        '---',
+        'role: past-paper',
+        'course: TESTC101',
+        '---',
+        '',
+        '# TESTC101 Past Paper — 2024',
+        '',
+        '## Question 1 (10 marks)',
+        '',
+        'Compare Widget theory with an older account.',
+        '',
+      ].join('\n'),
+      [BASE_PATH]: BASE_FILE,
+      '02 Assignments/Quiz 1.md': QUIZ,
+    });
+    const widgetKey = await keyOf(vault, 'Widget theory');
+    const gadgetKey = await keyOf(vault, 'Gadget theory');
+    await vault.write(
+      LOG,
+      recallReview(widgetKey, 'qa:widget-theory:1', 'r-w') +
+        recallReview(gadgetKey, 'qa:gadget-theory:1', 'r-g'),
+    );
+    // Widget theory recalled at 0.7 (need 0.3), Gadget theory at 0.5 (need 0.5).
+    const scheduler: Scheduler = {
+      schedule: (input) => createFsrsScheduler().schedule(input),
+      retrievability: (input: RetrievabilityInput): RetrievabilityOutput => ({
+        instrumentId: input.instrumentId,
+        recallProbability: input.instrumentId === 'qa:widget-theory:1' ? 0.7 : 0.5,
+      }),
+    };
+    const rows = await rowsOf(vault, scheduler);
+    const widget = rows.find((r) => r.conceptName === 'Widget theory');
+    const gadget = rows.find((r) => r.conceptName === 'Gadget theory');
+    if (widget === undefined || gadget === undefined) throw new Error('expected both ranked');
+    const rW = widget.assessmentRelevance ?? Number.NaN;
+    const rG = gadget.assessmentRelevance ?? Number.NaN;
+    // The precondition for a flip, stated rather than assumed: the relevance gap is smaller than
+    // the need gap (so the additive blend orders by need) while the relevance ratio is larger than
+    // the need ratio (so the product orders by relevance).
+    expect(rW - rG).toBeLessThan(0.5 - 0.3);
+    expect(rW / rG).toBeGreaterThan(0.5 / 0.3);
+
+    // Before: the gap score was the ranking's priority × the credit.
+    const before = [...rows]
+      .sort(
+        (a, b) =>
+          b.priorityScore * b.readiness.weight - a.priorityScore * a.readiness.weight ||
+          a.oracleRank - b.oracleRank,
+      )
+      .map((r) => r.conceptName);
+    // After: relevance × need × credit, the view's own order.
+    const after = [...rows].sort((a, b) => a.rank - b.rank).map((r) => r.conceptName);
+    expect(before).toEqual(['Gadget theory', 'Widget theory']);
+    expect(after).toEqual(['Widget theory', 'Gadget theory']);
+  });
+});
