@@ -43,6 +43,7 @@
 import type { SearchHit } from '../keyword-index/query.js';
 import type { VaultPath } from '../vault/types.js';
 import { topKByCosine } from './cosine.js';
+import { buildLexicon, idfFor, tokenize } from './lexicon.js';
 import type { EmbeddingVector, RerankProvider, RetrievalChunk, VectorLike } from './types.js';
 
 /**
@@ -111,6 +112,12 @@ export interface HybridRetrievalOptions {
 export interface HybridRetrieveParams {
   /** The original query text — only used to call `options.rerank`, if supplied; fusion itself needs no query text, only the two already-ranked lists below. */
   readonly query: string;
+  /**
+   * The text the keyword leg was searched with, when it differs from `query` (alias expansion,
+   * `engine.ts`). The idf weighting below sums over THIS text's distinct tokens so the weighted leg
+   * sees exactly the tokens `searchKeywordIndex` matched on. Defaults to `query`.
+   */
+  readonly keywordQuery?: string;
   /** Every indexed chunk (`chunks.ts`), the join between a keyword hit's (path, blockIndex) and a cosine hit's contentHash. */
   readonly chunks: readonly RetrievalChunk[];
   readonly keywordHits: readonly SearchHit[];
@@ -138,15 +145,20 @@ export async function hybridRetrieve(params: HybridRetrieveParams): Promise<read
     if (!byContentHash.has(chunk.contentHash)) byContentHash.set(chunk.contentHash, chunk);
   }
 
-  // Keyword ranks: 1-based position within `keywordHits`, which is already
-  // sorted highest-score-first (`searchKeywordIndex`).
+  // Keyword ranks: 1-based position within the keyword leg's order. The leg scores a block as the
+  // sum of the shipped idf (`lexicon.ts` `idfFor`, over `params.chunks`) across the distinct query
+  // tokens it matches (D-452: the provisional baseline adopted after its held-out read held; the
+  // fusion constants, weights and pool are unchanged). The candidate set is `keywordHits`'; only
+  // its order changes. Ties keep the shipped rule: path, then block index. `keywordScore` on a hit
+  // stays the raw distinct-token count from `searchKeywordIndex`.
   const keywordRank = new Map<string, number>();
   const keywordScoreByKey = new Map<string, number>();
-  params.keywordHits.forEach((hit, index) => {
-    const key = chunkKey(hit.path, hit.blockIndex);
-    keywordRank.set(key, index + 1);
-    keywordScoreByKey.set(key, hit.score);
-  });
+  for (const hit of params.keywordHits) {
+    keywordScoreByKey.set(chunkKey(hit.path, hit.blockIndex), hit.score);
+  }
+  for (const [index, hit] of orderKeywordHitsByIdf(params).entries()) {
+    keywordRank.set(chunkKey(hit.path, hit.blockIndex), index + 1);
+  }
 
   // Semantic ranks: cosine over every cached embedding, capped to a
   // generous candidate pool before fusion.
@@ -248,6 +260,31 @@ export async function hybridRetrieve(params: HybridRetrieveParams): Promise<read
   });
 
   return applyLimit(withRerank, params.options?.limit);
+}
+
+function orderKeywordHitsByIdf(params: HybridRetrieveParams): readonly SearchHit[] {
+  if (params.keywordHits.length === 0) return params.keywordHits;
+  const lexicon = buildLexicon(params.chunks);
+  const indexByKey = new Map<string, number>();
+  params.chunks.forEach((c, i) => {
+    indexByKey.set(chunkKey(c.path, c.blockIndex), i);
+  });
+  const queryTokens = [...new Set(tokenize(params.keywordQuery ?? params.query))];
+  const idf = new Map(queryTokens.map((t) => [t, idfFor(lexicon.df.get(t) ?? 0, lexicon.n)]));
+  const scored = params.keywordHits.map((hit) => {
+    const i = indexByKey.get(chunkKey(hit.path, hit.blockIndex));
+    const tokens =
+      (i === undefined ? undefined : lexicon.tokensByChunk[i]) ?? new Set(tokenize(hit.text));
+    let s = 0;
+    for (const t of queryTokens) if (tokens.has(t)) s += idf.get(t) ?? 0;
+    return { hit, s };
+  });
+  scored.sort((a, b) => {
+    if (a.s !== b.s) return b.s - a.s;
+    if (a.hit.path !== b.hit.path) return a.hit.path < b.hit.path ? -1 : 1;
+    return a.hit.blockIndex - b.hit.blockIndex;
+  });
+  return scored.map((x) => x.hit);
 }
 
 function applyLimit<T>(items: readonly T[], limit: number | undefined): readonly T[] {
