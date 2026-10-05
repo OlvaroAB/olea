@@ -117,6 +117,7 @@ import {
   projectInstrumentValidity,
   projectRegisteredFiles,
   readAllConceptReadiness,
+  readAllCurrentRecognition,
   readInstrumentDemand,
   readNeed,
   readReviewLogFile,
@@ -334,6 +335,23 @@ async function readInstrumentDemands(
 }
 
 /**
+ * **The evidence rule every current reading this view supplies applies** (`ol-egov.141.89.9.94`):
+ * need, the recognition credit and the demand rule. Proven-invalid evidence never counts: that is
+ * the `validity` projection each reading is handed (`[D-338]` item 3). A sound review she withheld
+ * (her suspension or withdrawal with no defect recorded, or with no reason at all) **keeps
+ * counting**: `[D-347]` as ruled, whose clarification reads "a personal withdrawal or replacement
+ * does not automatically invalidate a sound review" (the attainment matching rule, section 7, row
+ * "withheld, sound", judgement J1). That is the `'count'` option, named here so the ruled reading
+ * is visible at the call site; option (c), dropping every withheld instrument, was the proposal
+ * the ruling did not adopt. The same policy `oracle/compose.ts` passes to the ranking's readiness.
+ *
+ * Not yet applied anywhere in production: the ruling's other exclusion, a cited passage changed
+ * and not yet revalidated (`AttainmentOptions.passageChanges`). No production reader has that
+ * input; see `ol-egov.141.89.9.94`'s notes.
+ */
+const RULED_CURRENT_READING = { withheldEvidence: 'count' } as const;
+
+/**
  * The gap view's `unmetDemands`: per concept whose declared demands were read, the demands no
  * qualifying review shows now (`[D-349]`). A concept not read has no entry. With nothing declared
  * the map is empty and no instrument is read.
@@ -364,6 +382,7 @@ async function unmetDemandsFor(input: {
     validity: input.validity,
     scheduler: input.scheduler,
     now: input.now,
+    ...RULED_CURRENT_READING,
   });
 }
 
@@ -397,10 +416,41 @@ function needByConcept(
   now: Date,
   validity: InstrumentValidityProjection,
 ): ReadonlyMap<string, NeedReading> {
-  const readiness = readAllConceptReadiness(entries, conceptKeys, scheduler, now, validity);
+  const readiness = readAllConceptReadiness(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    RULED_CURRENT_READING,
+  );
   const need = new Map<string, NeedReading>();
   for (const [conceptKey, reading] of readiness) need.set(conceptKey, readNeed(reading));
   return need;
+}
+
+/**
+ * `[D-338]` item 3 (`ol-egov.141.89.9.94`): per ranked concept key, whether a correct, current quiz
+ * answer stands (`readAllCurrentRecognition`), so the recognition credit never reads an answer on
+ * an item proven defective, or one no longer current (the attainment chain spec, section 2.5).
+ * Without it, `buildGapView` falls back to the mastery join's `tiersSucceeded.recognition`, which
+ * reads any past success and removes proven-invalid evidence at the top stage only.
+ */
+function currentRecognitionByConcept(
+  entries: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+): ReadonlyMap<string, boolean> {
+  return readAllCurrentRecognition(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    RULED_CURRENT_READING,
+  );
 }
 
 /**
@@ -502,7 +552,17 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
 
         // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
         // unknown basis is worded as unknown, never as weakness. See `needByConcept`.
-        const need = needByConcept(entries, rankedConceptKeys(ranking), scheduler, now, validity);
+        const conceptKeys = rankedConceptKeys(ranking);
+        const need = needByConcept(entries, conceptKeys, scheduler, now, validity);
+        // `[D-338]` item 3 (`ol-egov.141.89.9.94`): the recognition credit reads only a correct,
+        // current answer on a standing item. See `currentRecognitionByConcept`.
+        const currentRecognition = currentRecognitionByConcept(
+          entries,
+          conceptKeys,
+          scheduler,
+          now,
+          validity,
+        );
 
         // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): what the durable manifest says of each source
         // an extractor reads, so a page still waiting is never read as absent or as read in full.
@@ -516,6 +576,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           materialPresence,
           unmetDemands,
           need,
+          currentRecognition,
           // `tier3.sourceCoverage`, unmodified — `ol-cvsc`'s scope statement
           // (`GapViewModel.scope`) is only as honest as this pass-through.
           // N-013 mutation test: deleting this line and passing `[]` instead

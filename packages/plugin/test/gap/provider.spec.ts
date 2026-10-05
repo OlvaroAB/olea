@@ -1633,3 +1633,149 @@ describe('createLocalGapProvider — need with its basis ([D-348], F4.3, ol-egov
     expect(after).toEqual(['Widget theory', 'Gadget theory']);
   });
 });
+
+/**
+ * `ol-egov.141.89.9.94` (F4.3; `[D-338]` item 3, `[D-347]` as ruled, `[D-371]`): every current
+ * reading the production gap view supplies applies one evidence rule. Proven-invalid evidence
+ * never counts. A sound review she withheld keeps counting, because availability is not validity
+ * (`[D-347]`'s clarification; the attainment matching rule, section 7, judgement J1).
+ *
+ * Before this bead the provider supplied no current-recognition map, so the recognition credit
+ * read `mastery.evidence.tiersSucceeded.recognition`: any past success, an answer on an item later
+ * proven defective included, since the mastery join removes proven-invalid evidence at the top
+ * stage only. The credit now reads `readAllCurrentRecognition`: a correct answer, current, on an
+ * instrument still standing (the attainment chain spec, section 2.5).
+ *
+ * Every string here is invented (INV-3).
+ */
+describe('createLocalGapProvider — current readings apply one evidence rule ([D-338] item 3, [D-347], ol-egov.141.89.9.94)', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+  const LOG = '.olea/reviews/2026-08-09.olea-testdevice1.jsonl';
+  const QUIZ_ITEM = 'mcq:widget-theory:1';
+  const CARD = 'qa:widget-theory:1';
+
+  function review(
+    conceptKey: string,
+    instrumentId: string,
+    instrumentType: 'mcq' | 'qa',
+    eventId: string,
+  ): string {
+    return `${JSON.stringify({
+      schemaVersion: 5,
+      kind: 'review',
+      eventId,
+      timestamp: '2026-08-09T09:00:00-04:00',
+      instrumentId,
+      instrumentType,
+      conceptIds: [conceptKey],
+      rating: 'good',
+      supportLevelShown: 'independent',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: [instrumentType],
+        planVersion: null,
+      },
+    })}\n`;
+  }
+
+  /** A suspension written after the review; `reason` omitted reads unknown (`[D-345]`). */
+  function suspend(
+    conceptKey: string,
+    instrumentId: string,
+    reason: 'defect' | 'own-choice' | undefined,
+  ): string {
+    return `${JSON.stringify({
+      schemaVersion: 6,
+      kind: 'suspend',
+      eventId: `s-${instrumentId}`,
+      timestamp: '2026-08-09T10:00:00-04:00',
+      instrumentId,
+      conceptIds: [conceptKey],
+      ...(reason !== undefined ? { reason } : {}),
+    })}\n`;
+  }
+
+  async function widgetRow(lines: (key: string) => string, scheduler: Scheduler) {
+    const vault = gapVault();
+    const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+      (concept) => concept.name === 'Widget theory',
+    )?.key;
+    if (key === undefined) throw new Error('fixture vault has no Widget theory concept');
+    await vault.write(LOG, lines(key));
+    const state = await createLocalGapProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler,
+    }).load();
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    if (row === undefined) throw new Error('expected Widget theory to be ranked');
+    return row;
+  }
+
+  it('control: a correct, current quiz answer on a standing item earns the credit on a recall-style assessment', async () => {
+    const row = await widgetRow(
+      (key) => review(key, QUIZ_ITEM, 'mcq', 'r1'),
+      fixedRetrievabilityScheduler(1),
+    );
+    expect(row.assessmentFormat).toBe('recall-style');
+    expect(row.readiness.applied).toBe(true);
+    expect(row.readiness.weight).toBe(0.6);
+  });
+
+  it('REGRESSION (fails pre-fix): a correct quiz answer on an item later suspended as defective earns no recognition credit ([D-338] item 3)', async () => {
+    const row = await widgetRow(
+      (key) => review(key, QUIZ_ITEM, 'mcq', 'r1') + suspend(key, QUIZ_ITEM, 'defect'),
+      fixedRetrievabilityScheduler(1),
+    );
+    // Pre-fix: applied, weight 0.6 — the mastery join's `tiersSucceeded.recognition` still read
+    // the defective item's answer.
+    expect(row.readiness.applied).toBe(false);
+    expect(row.readiness.weight).toBe(1);
+  });
+
+  it('REGRESSION (fails pre-fix): a correct quiz answer whose recall estimate is now below the retention target earns no credit (att.md 2.5)', async () => {
+    const row = await widgetRow(
+      (key) => review(key, QUIZ_ITEM, 'mcq', 'r1'),
+      fixedRetrievabilityScheduler(0.5),
+    );
+    // Pre-fix: applied — any past success earned the credit.
+    expect(row.readiness.applied).toBe(false);
+    expect(row.readiness.weight).toBe(1);
+  });
+
+  it('PIN ([D-347] as ruled): her suspension with no defect recorded keeps the sound quiz answer counting for the credit', async () => {
+    for (const reason of ['own-choice', undefined] as const) {
+      const row = await widgetRow(
+        (key) => review(key, QUIZ_ITEM, 'mcq', 'r1') + suspend(key, QUIZ_ITEM, reason),
+        fixedRetrievabilityScheduler(1),
+      );
+      expect(row.readiness.applied).toBe(true);
+    }
+  });
+
+  it('PIN ([D-347] as ruled, [D-338] item 3): need keeps a sound review she suspended, and drops one suspended as defective', async () => {
+    for (const reason of ['own-choice', undefined] as const) {
+      const row = await widgetRow(
+        (key) => review(key, CARD, 'qa', 'r1') + suspend(key, CARD, reason),
+        fixedRetrievabilityScheduler(0.4),
+      );
+      expect(row.need?.basis).toBe('estimated');
+      expect(row.need?.value).toBeCloseTo(0.6, 12);
+    }
+    const defective = await widgetRow(
+      (key) => review(key, CARD, 'qa', 'r1') + suspend(key, CARD, 'defect'),
+      fixedRetrievabilityScheduler(0.4),
+    );
+    expect(defective.need?.basis).toBe('unknown');
+    expect(gapRowLine(defective)).toContain('recall here is unknown');
+  });
+});

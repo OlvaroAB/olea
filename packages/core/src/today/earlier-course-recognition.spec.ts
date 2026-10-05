@@ -596,6 +596,29 @@ describe('buildEarlierCourseRecognitions — the ruled validity scope (ol-egov.1
     });
     expect(lifted?.state).toBe('tree');
   });
+
+  // `ol-egov.141.89.9.94` (`[D-338]` item 2, R3, F8.5; `[D-347]`: the stage keeps withheld
+  // evidence). The stage is not a current reading: her suspension with no defect recorded never
+  // lowers it, whatever the current readings do. A pin: it held before the bead too.
+  it('her suspension with no defect recorded (her choice, or no reason) leaves the stage where it was', () => {
+    for (const reason of ['own-choice', undefined] as const) {
+      const entries = [
+        heldReview,
+        attempt('eb-1', '2026-08-29T09:00:00+00:00'),
+        {
+          schemaVersion: 6,
+          kind: 'suspend',
+          eventId: 'suspend-1',
+          timestamp: '2026-08-29T12:00:00+00:00',
+          instrumentId: 'eb:c1:1',
+          conceptIds: ['c1'],
+          ...(reason !== undefined ? { reason } : {}),
+        } as ReviewLogEntry,
+      ];
+      const [result] = buildEarlierCourseRecognitions({ newCourse: 'NEW1', entries, concepts });
+      expect(result?.state).toBe('tree');
+    }
+  });
 });
 
 // `ol-egov.141.89.9.73` (`[D-419]`, `[D-423]`): the evidence a recognition carries is the reviews
