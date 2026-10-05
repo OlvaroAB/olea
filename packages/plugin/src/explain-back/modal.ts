@@ -1409,6 +1409,10 @@ export class ExplainBackModal extends Modal {
       // already carries; see `wiring.ts`'s `AcceptExplainBackGradingWithObser
       // vationContext.attemptId` doc for what it keys.
       attemptId,
+      // `[D-512]` (`ol-egov.141.89.6.93`): the sealed feedback exposure, not
+      // the guided rung (which the source open beside her also sets): only
+      // `'shown'` means she read feedback on this question first.
+      afterFeedback: support.feedbackExposure === 'shown',
     };
     const result = await this.deps.acceptWithObservation(pending, context);
     // Row 50: an accepted attempt ends the exchange, so a later offer of this

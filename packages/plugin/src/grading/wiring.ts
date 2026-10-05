@@ -565,6 +565,14 @@ export interface AcceptExplainBackGradingWithObservationContext {
    * `attemptId`. `modal.ts`'s own production call always supplies one.
    */
   readonly attemptId?: string;
+  /**
+   * `[D-512]` (`ol-egov.141.89.6.93`): true when this answer was written after
+   * she read feedback on this question (the attempt's sealed feedback exposure
+   * is `'shown'`). Such an answer is not resolution evidence — the accept step
+   * records none — but its misconception observations are unchanged. Absent
+   * means false: a first attempt keeps the plain M2 rule.
+   */
+  readonly afterFeedback?: boolean;
   readonly originReviewEventId: string | null;
   readonly timestamp: string;
   readonly resolveCitation: (blockId: string) => MisconceptionSourceCitation | null;
@@ -662,6 +670,9 @@ function buildResolutionEvidenceForAcceptedGrading(
   context: AcceptExplainBackGradingWithObservationContext,
   accepted: AcceptedExplainBackGrading,
 ): MisconceptionResolutionEvidenceEvent | null {
+  // `[D-512]` (`ol-egov.141.89.6.93`): an answer written after reading feedback
+  // on this question moves no misconception record; observations are untouched.
+  if (context.afterFeedback === true) return null;
   const conceptId = context.subjectConceptId;
   if (conceptId === undefined || conceptId === null) return null;
 

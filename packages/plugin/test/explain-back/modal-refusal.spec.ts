@@ -99,7 +99,7 @@ describe('ExplainBackModal — acceptGrading threads the graded query through fo
       modal.indexOf('private discardGrading('),
     );
     expect(acceptGradingBody).toMatch(
-      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*permittedConceptIds:\s*prompt\.context\.permittedConceptIds \?\? \[\],\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*\};/,
+      /this\.deps\.buildObservationContext\(\{\s*subjectConceptId:\s*prompt\.subjectConceptId,\s*permittedConceptIds:\s*prompt\.context\.permittedConceptIds \?\? \[\],\s*originInstrumentId:\s*prompt\.originInstrumentId,\s*sourceBlocks:\s*prompt\.sourceBlocks,\s*query:\s*prompt\.query,\s*\}\)\),\s*attemptId,\s*afterFeedback:\s*support\.feedbackExposure === 'shown',\s*\};/,
     );
     expect(acceptGradingBody).not.toMatch(/query:\s*prompt\.context\.question/);
   });

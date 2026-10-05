@@ -1306,6 +1306,54 @@ describe('acceptExplainBackGradingWithObservation — ol-egov.141.89.6.31: M2 re
     expect(result.observations).toEqual([]);
   });
 
+  it('[D-512] a correct verdict after feedback appends no resolution evidence; a first attempt still does; observations are unchanged', async () => {
+    const wiring = await unconfiguredWiring();
+    const after = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({ afterFeedback: true, attemptId: 'attempt-after' }),
+    );
+    if (after.status !== 'accepted') throw new Error('expected an accepted outcome');
+    expect(after.resolutionEvidence).toBeNull();
+
+    const first = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct'),
+      resolutionContext({ afterFeedback: false, attemptId: 'attempt-first' }),
+    );
+    if (first.status !== 'accepted') throw new Error('expected an accepted outcome');
+    expect(first.resolutionEvidence).not.toBeNull();
+
+    const candidate = {
+      concept: 'heap',
+      statement: 'a heap is sorted',
+      correction: 'a heap only orders parent over child',
+      correctionSourceBlockIds: ['block-1'],
+    };
+    const ctx = (afterFeedback: boolean, attemptId: string) =>
+      resolutionContext({
+        afterFeedback,
+        attemptId,
+        resolveCitation: (blockId: string) =>
+          blockId === 'block-1' ? { path: 'Courses/CS/notes.md', blockIndex: 2 } : null,
+        resolveConceptId: () => 'concept-heap',
+        candidateRecordsForConcept: () => [],
+      });
+    const obsAfter = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct', [candidate]),
+      ctx(true, 'obs-after'),
+    );
+    const obsFirst = await acceptExplainBackGradingWithObservation(
+      wiring,
+      pendingForVerdict('correct', [candidate]),
+      ctx(false, 'obs-first'),
+    );
+    if (obsAfter.status !== 'accepted' || obsFirst.status !== 'accepted') throw new Error('x');
+    expect(obsAfter.observations.length).toBe(obsFirst.observations.length);
+    expect(obsAfter.observations.length).toBeGreaterThan(0);
+  });
+
   it('a partial verdict appends no resolution-evidence event, even with an open misconception', async () => {
     const wiring = await unconfiguredWiring();
 
