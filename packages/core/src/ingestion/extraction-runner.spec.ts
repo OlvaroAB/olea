@@ -19,7 +19,7 @@ import {
   type ExtractedUnitSink,
   isExtractionJobPayload,
 } from './extraction-runner.js';
-import { hashText } from './hash.js';
+import { hashContent, hashText } from './hash.js';
 import type {
   EnqueueInput,
   JobRunner,
@@ -134,8 +134,13 @@ class MemoryVaultSource implements VaultSource {
 
 class CollectingSink implements ExtractedUnitSink {
   readonly batches: (readonly ExtractedUnit[])[] = [];
-  async receive(units: readonly ExtractedUnit[]): Promise<void> {
+  readonly revisions: (ReadonlyMap<string, string> | undefined)[] = [];
+  async receive(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
     this.batches.push(units);
+    this.revisions.push(sourceRevisions);
   }
   get all(): readonly ExtractedUnit[] {
     return this.batches.flat();
@@ -580,5 +585,69 @@ describe('isExtractionJobPayload', () => {
     [42, false],
   ] as const)('%j -> %s', (value, expected) => {
     expect(isExtractionJobPayload(value)).toBe(expected);
+  });
+});
+
+describe('createExtractionJobRunner — sourceRevisions ([D-515], ol-egov.141.89.5.73)', () => {
+  it("an embedded PDF in a note hands the sink units and that PDF's own byte hash, read once", async () => {
+    const vault = new MemoryVaultSource();
+    const bytes = buildPdfBytes([ABOVE_THRESHOLD]);
+    vault.setText('Lectures/Week 1.md', 'Slides: ![[deck.pdf]]\n');
+    vault.setBinary('Lectures/deck.pdf', bytes);
+    const sink = new CollectingSink();
+    const runner = createExtractionJobRunner({
+      vault,
+      enqueuer: { enqueue: vi.fn(async () => ({ status: 'queued' as const })) },
+      sink,
+    });
+    await runner({
+      contentHash: 'the-notes-hash',
+      label: 'n',
+      payload: { kind: 'note', notePath: 'Lectures/Week 1.md' },
+      attempts: 0,
+    });
+    expect(sink.all.length).toBeGreaterThan(0);
+    const expected = await hashContent(bytes);
+    expect(sink.revisions[0]?.get('Lectures/deck.pdf')).toBe(expected);
+    expect(sink.revisions[0]?.get('Lectures/deck.pdf')).not.toBe('the-notes-hash');
+    expect(vault.readBinaryCalls.filter((p) => p === 'Lectures/deck.pdf')).toHaveLength(1);
+  });
+
+  it('a standalone source job still carries its own byte hash, read once', async () => {
+    const vault = new MemoryVaultSource();
+    const bytes = buildPdfBytes([ABOVE_THRESHOLD]);
+    vault.setBinary('Lectures/deck.pdf', bytes);
+    const sink = new CollectingSink();
+    const runner = createExtractionJobRunner({
+      vault,
+      enqueuer: { enqueue: vi.fn(async () => ({ status: 'queued' as const })) },
+      sink,
+    });
+    await runner({
+      contentHash: 'queue-key',
+      label: 's',
+      payload: { kind: 'source', sourcePath: 'Lectures/deck.pdf', format: 'pdf' },
+      attempts: 0,
+    });
+    expect(sink.revisions[0]?.get('Lectures/deck.pdf')).toBe(await hashContent(bytes));
+    expect(vault.readBinaryCalls).toEqual(['Lectures/deck.pdf']);
+  });
+
+  it('a markdown-only note hands the sink nothing, so no revision exists for it', async () => {
+    const vault = new MemoryVaultSource();
+    vault.setText('a.md', 'plain note, no embeds');
+    const sink = new CollectingSink();
+    const runner = createExtractionJobRunner({
+      vault,
+      enqueuer: { enqueue: vi.fn(async () => ({ status: 'queued' as const })) },
+      sink,
+    });
+    await runner({
+      contentHash: 'h',
+      label: 'm',
+      payload: { kind: 'note', notePath: 'a.md' },
+      attempts: 0,
+    });
+    expect(sink.batches).toEqual([]);
   });
 });

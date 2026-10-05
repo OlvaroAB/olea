@@ -204,10 +204,10 @@ export interface IngestionWiringDeps {
   readonly onUnitsLanded?: (
     units: readonly ExtractedUnit[],
     /**
-     * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> the drained job's contentHash` (the SHA-256
-     * of the file's raw bytes the queue keyed the job by), present only when the landing job was a
-     * `'source'` job, so the hash is that file's own. Absent for note-embed, vision-page and
-     * transcript landings, whose job hash is not the cited file's. Never read from the file again.
+     * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> SHA-256 of that file's own bytes`, computed
+     * by core's extraction from the one read it makes, for every extracted non-markdown source
+     * (standalone or embedded in a note). Absent for vision-page and transcript landings. Never
+     * read from the file again.
      */
     sourceRevisions?: ReadonlyMap<string, string>,
   ) => Promise<void> | void;
@@ -521,22 +521,18 @@ export interface IngestionWiring {
   readonly extractOptions?: ExtractOptions;
 }
 
-/** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. */
+/** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. Passes core's `sourcePath -> byte hash` map through ([D-515]). */
 function withUnitsLandedHook(
   pendingSink: PendingIndexingSink,
   onUnitsLanded: NonNullable<IngestionWiringDeps['onUnitsLanded']>,
-  currentSourceJob: {
-    current: { readonly sourcePath: string; readonly contentHash: string } | null;
-  },
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
+    async receive(units, sourceRevisions) {
       await pendingSink.receive(units);
       try {
-        const job = currentSourceJob.current;
-        await (job === null
+        await (sourceRevisions === undefined
           ? onUnitsLanded(units)
-          : onUnitsLanded(units, new Map([[job.sourcePath, job.contentHash]])));
+          : onUnitsLanded(units, sourceRevisions));
       } catch (error) {
         console.error('Olea: generation-trigger hook failed (ingestion unaffected)', error);
       }
@@ -562,8 +558,8 @@ function withGenerationEnqueueHook(
   furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined,
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
-      await inner.receive(units);
+    async receive(units, sourceRevisions) {
+      await inner.receive(units, sourceRevisions);
       try {
         await enqueuePrimaryGenerationCallsForLandedUnits(units, generationArrivalDeps);
       } catch (error) {
@@ -743,8 +739,8 @@ function withOutcomesExtractHook(
   outcomesDeps: OutcomesExtractTriggerDeps,
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
-      await inner.receive(units);
+    async receive(units, sourceRevisions) {
+      await inner.receive(units, sourceRevisions);
       const unitsBySourcePath = new Map<VaultPath, ExtractedUnit[]>();
       for (const unit of units) {
         const path = unit.provenance.sourcePath;
@@ -854,14 +850,8 @@ function compareGenerationPriority(
 export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<IngestionWiring> {
   const sink = new PendingIndexingSink();
   const enqueuer = deferredEnqueuer();
-  // `ol-egov.141.89.5.73` ([D-515]): the `'source'` job being drained right now, so the landed-units
-  // hook can pass that job's contentHash (the file's byte digest) with its units. Set only around
-  // the extraction runner below, cleared after, so no other job kind ever inherits it.
-  const currentSourceJob: {
-    current: { readonly sourcePath: string; readonly contentHash: string } | null;
-  } = { current: null };
   let runnerSink: ExtractedUnitSink = deps.onUnitsLanded
-    ? withUnitsLandedHook(sink, deps.onUnitsLanded, currentSourceJob)
+    ? withUnitsLandedHook(sink, deps.onUnitsLanded)
     : sink;
   // `deps.outcomes` (`[D-344]`): composed right after `onUnitsLanded`'s hook, before
   // `deps.generation`'s — independent of both, in the same "add-ons over the same base sink"
@@ -947,25 +937,15 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     ...(visionRunner ? { visionRunner } : {}),
     ...(extractOptions ? { options: extractOptions } : {}),
   });
-  const hashAwareRunner: typeof runner = async (job) => {
-    const payload = job.payload as { kind?: unknown; sourcePath?: unknown } | null;
-    if (payload?.kind !== 'source' || typeof payload.sourcePath !== 'string') return runner(job);
-    currentSourceJob.current = { sourcePath: payload.sourcePath, contentHash: job.contentHash };
-    try {
-      return await runner(job);
-    } finally {
-      currentSourceJob.current = null;
-    }
-  };
   const composedRunner = deps.revision
     ? createRevisionAwareJobRunner({
         vault: deps.vault,
         cache: deps.revision.cache,
         draftDeps: deps.revision.draftDeps,
-        fallback: hashAwareRunner,
+        fallback: runner,
         ...(deps.revision.now !== undefined ? { now: deps.revision.now } : {}),
       })
-    : hashAwareRunner;
+    : runner;
   // `deps.generation`'s execution half: recognises a drained `'generation'`
   // job and routes it to `deps.generation.draft`, falling through to
   // `composedRunner` (extraction, optionally revision-aware) for anything
