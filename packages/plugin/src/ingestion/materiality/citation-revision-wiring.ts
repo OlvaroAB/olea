@@ -368,6 +368,29 @@ export interface CitationRevisionTickReport {
    * whole-note baseline rather than guessing a passage.
    */
   readonly passageSeedUnresolved: number;
+  /**
+   * `ol-egov.141.89.5.77`: a confirmed rewrite (the judge's answer already acted on) whose suspend
+   * or enqueue kept failing and was given up on after `SUCCESSOR_RETRY_BOUND` attempts. Counted
+   * here and logged once; the question stays withheld ([D-508]), never restored. No user-visible
+   * surface.
+   */
+  readonly successorEnqueueFailed: number;
+}
+
+/**
+ * `ol-egov.141.89.5.77`: how many times in all (the first attempt included) a confirmed rewrite's
+ * suspend-then-enqueue step is tried across passes before the failure is recorded and given up.
+ */
+const SUCCESSOR_RETRY_BOUND = 5;
+
+/** A confirmed rewrite whose suspend or enqueue failed, remembered (in memory) so later passes retry it with no judge call. */
+interface ConfirmedRewrite {
+  readonly judgedContentHash: string;
+  readonly conceptIds: readonly string[];
+  readonly predecessorInstrumentId: string;
+  readonly successorEnqueueInput: EnqueueInput;
+  attempts: number;
+  gaveUp: boolean;
 }
 
 /** What the tick needs to act on outcomes — supplied per call, since both need a real, freshly-built `vault`/`deviceId` the same way `main.ts`'s other periodic ticks build their own rather than closing over `onload`'s. */
@@ -495,6 +518,7 @@ interface MutableTickReport {
   passageAmbiguous: number;
   passageRuleUnsupported: number;
   passageSeedUnresolved: number;
+  successorEnqueueFailed: number;
 }
 
 /** Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read to every write that advances the anchor. */
@@ -541,6 +565,13 @@ async function passageFields(
 }
 
 export class CitationRevisionTrigger {
+  /**
+   * `ol-egov.141.89.5.77`: confirmed rewrites whose suspend or enqueue failed, by instrument id. Held
+   * in memory only (a persisted field would be a schema change); a restart forgets it and the
+   * ordinary `[D-400]` budget then governs, which keeps the question withheld, never restored.
+   */
+  private readonly confirmedRewrites = new Map<string, ConfirmedRewrite>();
+
   constructor(private readonly deps: CitationRevisionTriggerDeps) {}
 
   /**
@@ -568,6 +599,7 @@ export class CitationRevisionTrigger {
       passageAmbiguous: 0,
       passageRuleUnsupported: 0,
       passageSeedUnresolved: 0,
+      successorEnqueueFailed: 0,
     };
     const rules = this.deps.passageRules ?? PASSAGE_RULES;
 
@@ -802,6 +834,32 @@ export class CitationRevisionTrigger {
           console.error('Olea: citation-revision formatting-only refresh write failed', error);
         }
         continue;
+      }
+
+      // `ol-egov.141.89.5.77`: an answer already acted on, whose suspend or enqueue failed, is
+      // retried here with NO judge call and no `[D-400]` budget, for the same difference only.
+      const confirmed = this.confirmedRewrites.get(instrumentId);
+      if (confirmed !== undefined) {
+        if (
+          currentRecord !== undefined &&
+          current.kind === 'found-at-anchor' &&
+          (await hashText(current.text)) === confirmed.judgedContentHash
+        ) {
+          if (!confirmed.gaveUp) {
+            await this.suspendAndEnqueueSuccessor(
+              instrumentId,
+              currentRecord.conceptIds,
+              confirmed.judgedContentHash,
+              confirmed.predecessorInstrumentId,
+              confirmed.successorEnqueueInput,
+              actions,
+              report,
+            );
+          }
+          continue;
+        }
+        // The passage moved on since the answer: it no longer applies.
+        this.confirmedRewrites.delete(instrumentId);
       }
 
       // `ol-egov.141.89.5.71` ([D-514] item b): a judge call is never awaited inside this walk. The
@@ -1222,6 +1280,7 @@ export class CitationRevisionTrigger {
       );
       if (!pendingStillCurrent) {
         report.staleResultDiscarded += 1;
+        this.confirmedRewrites.delete(instrumentId);
         return;
       }
       await actions.suspend(predecessorInstrumentId, conceptIds);
@@ -1229,7 +1288,29 @@ export class CitationRevisionTrigger {
       // Retire tracking only after both succeeded; a failure leaves the entry tracked
       // (pending fact intact) and the SAME outcome is retried next pass, at-least-once.
       await this.deps.store.remove(instrumentId);
+      this.confirmedRewrites.delete(instrumentId);
     } catch (error) {
+      // `ol-egov.141.89.5.77`: remember the confirmed outcome so later passes retry this step
+      // without asking the judge again; bounded, then recorded.
+      const entry: ConfirmedRewrite = this.confirmedRewrites.get(instrumentId) ?? {
+        judgedContentHash,
+        conceptIds,
+        predecessorInstrumentId,
+        successorEnqueueInput,
+        attempts: 0,
+        gaveUp: false,
+      };
+      entry.attempts += 1;
+      this.confirmedRewrites.set(instrumentId, entry);
+      if (entry.attempts >= SUCCESSOR_RETRY_BOUND) {
+        entry.gaveUp = true;
+        report.successorEnqueueFailed += 1;
+        console.error(
+          'Olea: citation-revision successor enqueue gave up after repeated failures; the question stays withheld',
+          error,
+        );
+        return;
+      }
       console.error(
         'Olea: citation-revision suspend/enqueue failed; predecessor stays tracked for retry',
         error,
