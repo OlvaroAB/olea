@@ -234,6 +234,7 @@ import {
   extractDraftedProvenance,
   extractDraftedQuestions,
 } from './response.js';
+import { stripOleaFrontmatter } from './strip-olea-frontmatter.js';
 import type { DraftCardContent, DraftProvenance, DraftQuestion, DraftRecord } from './types.js';
 
 /** Narrows `PersistedJob.payload` (`unknown` by contract) to the one shape this runner understands. Mirrors `createExtractionJobRunner`'s own `isExtractionJobPayload` guard, one payload family over. */
@@ -267,8 +268,11 @@ const GENERATION_TASK_IDS: ReadonlySet<string> = new Set(['quiz.generate.v1', 'c
  */
 function withPassageTransport<T extends { readonly transport: WorkerTaskTransport }>(
   draftDeps: T,
-  passage: string,
+  rawPassage: string,
 ): T {
+  // `ol-egov.141.89.2.32`: a whole-note passage carries the note's frontmatter, so Olea's own
+  // `olea-*` stamp keys come out before the text reaches any model request.
+  const passage = stripOleaFrontmatter(rawPassage);
   if (passage.trim().length === 0) return draftDeps;
   const inner = draftDeps.transport;
   return {
