@@ -108,6 +108,7 @@ import type { Source, SourceKind, SourceRole } from '../source/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type {
   ConceptCitation,
+  DerivedTextUnit,
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
   PastPaperCluster,
@@ -405,8 +406,13 @@ function detectBoilerplateHeads(pages: readonly DerivedPage[]): ReadonlyMap<Deri
  * `headEnd` characters. `headEnd` of 0 makes this exactly
  * `findMentionedTerms`; a non-zero one drops a term whose every occurrence on
  * the page is inside the template heading (`detectBoilerplateHeads`).
+ *
+ * Exported for `../scope/taught-signal-producer.ts` (`ol-egov.141.89.7.51`):
+ * F8.2's step two reads a deck or a transcript for a concept's name by this
+ * same rule, so the taught side and the examiner side never disagree about
+ * what "names it" means.
  */
-function findMentionedTermsAfter(
+export function findMentionedTermsAfter(
   text: string,
   vocabulary: readonly string[],
   headEnd: number,
@@ -684,6 +690,7 @@ function derivedTextCitations(
   derived: readonly DerivedSource[],
   vocabulary: readonly string[],
   objectivesAsObjectives: boolean,
+  heads: ReadonlyMap<DerivedPage, number>,
 ): readonly ConceptCitation[] {
   const pages = derived.flatMap((s) => s.pages);
   const objectivesSourcePaths = new Set(
@@ -691,15 +698,6 @@ function derivedTextCitations(
       ? derived.filter((s) => s.role === 'objectives').map((s) => s.sourcePath)
       : [],
   );
-  // Boilerplate detection runs across ALL derived pages at once, embedded and
-  // registered together. It has to: the rule is "a leading phrase shared by
-  // four or more distinct documents is template furniture", and running it
-  // separately per route would let a registered deck escape a template its
-  // embedded siblings established. This corpus is untouched by the
-  // past-paper exemption below — a segmented past paper's pages still count
-  // toward what OTHER documents' headings look like template furniture
-  // against; only its own citations are routed elsewhere.
-  const heads = detectBoilerplateHeads(pages);
 
   // `ol-3ux7.10`: a past paper whose questions segmented is cited exclusively
   // through `binaryPastPaperCitations`'s `kind: 'past-paper'` route below —
@@ -877,8 +875,19 @@ export async function extractTier3Evidence(
   }
 
   const derived = await collectDerivedSources(vault, coursesFolder, sourcesReport.sources);
+  // Boilerplate detection runs across ALL derived pages at once, embedded and
+  // registered together. It has to: the rule is "a leading phrase shared by
+  // four or more distinct documents is template furniture", and running it
+  // separately per route would let a registered deck escape a template its
+  // embedded siblings established. This corpus is untouched by the
+  // past-paper exemption in `derivedTextCitations` — a segmented past paper's
+  // pages still count toward what OTHER documents' headings look like template
+  // furniture against; only its own citations are routed elsewhere. Computed
+  // here rather than inside `derivedTextCitations` so `derivedUnits` below
+  // carries the same heading offsets the citations were read against.
+  const heads = detectBoilerplateHeads(derived.flatMap((s) => s.pages));
   citationLists.push(
-    derivedTextCitations(derived, vocabulary, options.binaryObjectivesAsObjectives === true),
+    derivedTextCitations(derived, vocabulary, options.binaryObjectivesAsObjectives === true, heads),
   );
   for (const source of derived) {
     if (source.role === 'past-paper') {
@@ -934,5 +943,29 @@ export async function extractTier3Evidence(
     })),
   ].sort((a, b) => (a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0));
 
-  return { vocabulary, citations, pastPaperClusters, sourcesReport, sourceCoverage };
+  // `ol-egov.141.89.7.51`: the text this pass already extracted, handed back
+  // only when asked for (`includeDerivedUnits`) — never a second extraction.
+  const derivedUnits: DerivedTextUnit[] | undefined =
+    options.includeDerivedUnits === true
+      ? derived.flatMap((s) =>
+          s.pages.map((page) => ({
+            sourcePath: s.sourcePath,
+            duplicateSourcePaths: s.duplicateSourcePaths,
+            courses: s.courses,
+            role: s.role,
+            format: s.format,
+            text: page.text,
+            templateHeadEnd: heads.get(page) ?? 0,
+          })),
+        )
+      : undefined;
+
+  return {
+    vocabulary,
+    citations,
+    pastPaperClusters,
+    sourcesReport,
+    sourceCoverage,
+    ...(derivedUnits !== undefined ? { derivedUnits } : {}),
+  };
 }

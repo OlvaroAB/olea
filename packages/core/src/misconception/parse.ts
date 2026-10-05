@@ -13,13 +13,17 @@
  */
 
 import type {
+  BeliefResolutionDecision,
+  BeliefResolutionEvidence,
+  BeliefResolutionOption,
+  BeliefResolutionProvenance,
   MisconceptionEvent,
   MisconceptionObservedEvent,
   MisconceptionResolutionEvidenceEvent,
   ResolutionEvidenceKind,
   SourceCitation,
 } from './types.js';
-import { MISCONCEPTION_EVENT_SCHEMA_VERSION } from './types.js';
+import { BELIEF_RESOLUTION_OPTIONS, MISCONCEPTION_EVENT_SCHEMA_VERSION } from './types.js';
 
 export interface InvalidMisconceptionLogLine {
   /** 1-based line number, matching what an editor would show. */
@@ -92,6 +96,73 @@ function parseObserved(v: Record<string, unknown>): MisconceptionObservedEvent |
   };
 }
 
+function isNonEmptyString(value: unknown): value is string {
+  return isString(value) && value.length > 0;
+}
+
+function parseProvenance(value: unknown): BeliefResolutionProvenance | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (!isNonEmptyString(v.taskId) || !isNonEmptyString(v.promptVersion)) return null;
+  if (!isNonEmptyString(v.modelId)) return null;
+  return { taskId: v.taskId, promptVersion: v.promptVersion, modelId: v.modelId };
+}
+
+function parseDecision(value: unknown): BeliefResolutionDecision | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (!isNonEmptyString(v.misconceptionId)) return null;
+  if (v.option === null && v.provenance === null) {
+    return { misconceptionId: v.misconceptionId, option: null, provenance: null };
+  }
+  if (!BELIEF_RESOLUTION_OPTIONS.includes(v.option as BeliefResolutionOption)) return null;
+  const provenance = parseProvenance(v.provenance);
+  if (provenance === null) return null;
+  return {
+    misconceptionId: v.misconceptionId,
+    option: v.option as BeliefResolutionOption,
+    provenance,
+  };
+}
+
+/**
+ * `[D-485]` part 1: validates a resolution-evidence event's `beliefResolution`
+ * field and returns a copy in canonical key order, or `null` when it is
+ * malformed. A malformed field makes the whole line invalid — the event is
+ * skipped, never folded as if the field were absent, because the concept-wide
+ * fade is exactly the over-reaching move this field exists to prevent.
+ *
+ * Rules: every id is a non-empty string and appears at most once per list; a
+ * decision's `option` and `provenance` are both `null` or both present; every
+ * target has a decision whose option is `demonstrates`. A `demonstrates`
+ * decision need not be a target (a writer may hold one back, e.g. a later
+ * confidence cut). Also used by `./events.js`'s builder, so a built event
+ * always parses back to itself.
+ */
+export function parseBeliefResolution(value: unknown): BeliefResolutionEvidence | null {
+  if (typeof value !== 'object' || value === null) return null;
+  const v = value as Record<string, unknown>;
+  if (!Array.isArray(v.targetMisconceptionIds) || !Array.isArray(v.decisions)) return null;
+
+  const decisions: BeliefResolutionDecision[] = [];
+  const optionById = new Map<string, BeliefResolutionOption | null>();
+  for (const raw of v.decisions) {
+    const decision = parseDecision(raw);
+    if (decision === null || optionById.has(decision.misconceptionId)) return null;
+    optionById.set(decision.misconceptionId, decision.option);
+    decisions.push(decision);
+  }
+
+  const targets: string[] = [];
+  for (const id of v.targetMisconceptionIds) {
+    if (!isNonEmptyString(id) || targets.includes(id)) return null;
+    if (optionById.get(id) !== 'demonstrates') return null;
+    targets.push(id);
+  }
+
+  return { targetMisconceptionIds: targets, decisions };
+}
+
 function parseResolutionEvidence(
   v: Record<string, unknown>,
 ): MisconceptionResolutionEvidenceEvent | null {
@@ -105,6 +176,13 @@ function parseResolutionEvidence(
     return null;
   }
 
+  // `[D-485]`: absent keeps today's shape exactly (INV-2); present must be well formed.
+  let beliefResolution: BeliefResolutionEvidence | null = null;
+  if (v.beliefResolution !== undefined) {
+    beliefResolution = parseBeliefResolution(v.beliefResolution);
+    if (beliefResolution === null) return null;
+  }
+
   return {
     schemaVersion: 1,
     kind: 'resolution-evidence',
@@ -114,6 +192,7 @@ function parseResolutionEvidence(
     originReviewEventId: v.originReviewEventId as string | null,
     conceptId: v.conceptId as string,
     evidenceKind: v.evidenceKind as ResolutionEvidenceKind,
+    ...(beliefResolution !== null ? { beliefResolution } : {}),
   };
 }
 

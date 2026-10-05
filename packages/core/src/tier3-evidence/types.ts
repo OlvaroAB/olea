@@ -146,6 +146,42 @@ export interface ExtractTier3EvidenceOptions extends RegisterSourcesOptions {
    * `derivedTextCitations`.
    */
   readonly binaryObjectivesAsObjectives?: boolean;
+  /**
+   * `ol-egov.141.89.7.51` (F8.2 step two, `[D-465]`): also hand back, on
+   * `ExtractTier3EvidenceResult.derivedUnits`, the text this pass already
+   * extracted from every derived (non-markdown) source, one entry per unit, so
+   * a caller that must read the same decks again (the grove's taught-signal
+   * producer) reuses this extraction rather than paying a second one. **Off by
+   * default**: the text is held only when asked for, and nothing else in the
+   * result changes either way.
+   */
+  readonly includeDerivedUnits?: boolean;
+}
+
+/**
+ * One unit of derived (non-markdown) text exactly as this pass extracted and
+ * read it — see `ExtractTier3EvidenceOptions.includeDerivedUnits`. Keyed by
+ * content like `SourceCoverage` (`ol-n0yc`): one file filed at two paths is
+ * read once, at `sourcePath`, with the others on `duplicateSourcePaths`.
+ */
+export interface DerivedTextUnit {
+  /** The path that cites — the first of a duplicate set in code-unit order (`SourceCoverage.sourcePath`). */
+  readonly sourcePath: VaultPath;
+  readonly duplicateSourcePaths: readonly VaultPath[];
+  /** The courses attributed to the source, as on its `SourceCoverage` row; a single `undefined` entry means "no course, not guessed". */
+  readonly courses: readonly (string | undefined)[];
+  /** The registered role, or `undefined` for a source reached only as an embed. */
+  readonly role: SourceRole | undefined;
+  readonly format: SourceFormat;
+  /** The unit's extracted text, verbatim. */
+  readonly text: string;
+  /**
+   * Where the page's shared template heading ends, or 0 when it has none: a
+   * name whose every occurrence lies before this offset is template furniture,
+   * not evidence, and this pass cites nothing for it (`./build.js`'s
+   * `detectBoilerplateHeads`).
+   */
+  readonly templateHeadEnd: number;
 }
 
 /**
@@ -225,4 +261,6 @@ export interface ExtractTier3EvidenceResult {
   readonly sourcesReport: SourceRegistrationReport;
   /** What was actually read, one row per distinct source, zero-yield rows included. See `SourceCoverage`. */
   readonly sourceCoverage: readonly SourceCoverage[];
+  /** Present only when `ExtractTier3EvidenceOptions.includeDerivedUnits` is set — see `DerivedTextUnit`. */
+  readonly derivedUnits?: readonly DerivedTextUnit[];
 }

@@ -444,6 +444,13 @@ export interface CitationRevisionTriggerDeps {
    * production registry, when omitted). Injectable so a test can prove what a rule change does.
    */
   readonly passageRules?: readonly PassageRule[];
+  /**
+   * `ol-egov.141.89.5.84` ([D-518]): asks the host to (re-)extract a cited non-markdown source whose
+   * bytes this pass has just withheld a question for, when no extracted text for those exact bytes is
+   * held (a restart forgot it, or the file changed while Obsidian was closed). Called at most once
+   * per (source, bytes) per session; a failure is logged and the hold stands. Omitted: never asks.
+   */
+  readonly requestSourceReextraction?: (sourcePath: string) => Promise<void>;
 }
 
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
@@ -639,6 +646,9 @@ export class CitationRevisionTrigger {
     string,
     { readonly hash: string; readonly pages: ReadonlyMap<number, string> }
   >();
+
+  /** `ol-egov.141.89.5.84`: `sourcePath\n bytes hash` pairs this session already asked a re-extraction for. Memory only. */
+  private readonly reextractionAsked = new Set<string>();
 
   constructor(private readonly deps: CitationRevisionTriggerDeps) {}
 
@@ -1354,9 +1364,11 @@ export class CitationRevisionTrigger {
     const sourcePath = record.sourceProvenance?.sourcePath;
     if (sourcePath === undefined || !citesBinarySource(record)) return false;
     let observed: string;
+    let citedPath = sourcePath;
     try {
       const citation = await readInstrumentCitation(vault, record.instrumentId);
-      const bytes = await vault.readBinary(citation?.sourcePath ?? sourcePath);
+      citedPath = citation?.sourcePath ?? sourcePath;
+      const bytes = await vault.readBinary(citedPath);
       const now = await hashContent(bytes);
       if (citation?.sourceRevision !== undefined && citation.sourceRevision === now) {
         // `[D-518]`: the bytes equal the recorded revision again, so a hold this check raised
@@ -1379,7 +1391,29 @@ export class CitationRevisionTrigger {
     } catch (error) {
       console.error('Olea: citation-revision source-bytes withhold write failed', error);
     }
+    if (observed !== 'unreadable') await this.requestReextractionOnce(citedPath, observed);
     return true;
+  }
+
+  /**
+   * `ol-egov.141.89.5.84`: once per session per (source, bytes), when no landed text is held for
+   * those bytes, asks the host to extract the file. The hold stands whatever happens.
+   */
+  private async requestReextractionOnce(citedPath: string, observed: string): Promise<void> {
+    const request = this.deps.requestSourceReextraction;
+    if (request === undefined) return;
+    if (this.landedSources.get(citedPath)?.hash === observed) return;
+    const key = `${citedPath}\n${observed}`;
+    if (this.reextractionAsked.has(key)) return;
+    this.reextractionAsked.add(key);
+    try {
+      await request(citedPath);
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision source re-extraction request failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
   }
 
   /** `[D-518]`: clears a pending fact whose reason is {@link SOURCE_REVISION_REASON}; any other fact (or none) is left alone. */
@@ -1658,11 +1692,21 @@ export class CitationRevisionTrigger {
   }
 
   /**
-   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage:
-   * suspend the predecessor, enqueue a successor drafted from the current passage, retire
-   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`); a failed
-   * suspend or enqueue leaves the anchor and its pending fact in place, so the question stays
-   * withheld and the same outcome is retried next pass.
+   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage, and by
+   * the binary-source rewrite: enqueue the successor, THEN suspend the predecessor, then retire
+   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`).
+   *
+   * `ol-egov.141.89.5.88` ([D-508]): the order is enqueue-first so an orphan (a suspended
+   * predecessor with no successor) cannot arise. The suspend record carries no author, so a
+   * restart cannot tell this step's suspension from one the student made herself, and the
+   * suspended skip must stay absolute. Enqueue fails: nothing is suspended, the anchor and its
+   * pending fact stay, the question stays withheld, the step is retried in the session, and after a
+   * restart the hold still stands so the next landing (or the [D-518] catch-up extraction) rewrites
+   * it. Enqueue succeeds and suspend fails: the retry re-enqueues the same input, which the work
+   * queue reports as status 'duplicate' without throwing (`IngestionEngine.enqueue` dedupes on
+   * `contentHash`), then suspends; throughout, the predecessor stays withheld by its pending
+   * fact, so predecessor and successor are never shown together. The anchor is removed only after
+   * both succeed; a bounded number of failed attempts is then recorded and given up on.
    */
   private async suspendAndEnqueueSuccessor(
     instrumentId: string,
@@ -1683,8 +1727,8 @@ export class CitationRevisionTrigger {
         this.confirmedRewrites.delete(instrumentId);
         return;
       }
-      await actions.suspend(predecessorInstrumentId, conceptIds);
       await actions.enqueue(successorEnqueueInput);
+      await actions.suspend(predecessorInstrumentId, conceptIds);
       // Retire tracking only after both succeeded; a failure leaves the entry tracked
       // (pending fact intact) and the SAME outcome is retried next pass, at-least-once.
       await this.deps.store.remove(instrumentId);
@@ -1796,6 +1840,8 @@ export interface CitationRevisionWiringDeps {
   readonly clock: Clock;
   /** See `CitationRevisionTriggerDeps.isOnline`'s own doc. */
   readonly isOnline?: () => boolean;
+  /** See `CitationRevisionTriggerDeps.requestSourceReextraction`'s own doc. */
+  readonly requestSourceReextraction?: (sourcePath: string) => Promise<void>;
   /** See `CitationRevisionTriggerDeps.passageRules`'s own doc. */
   readonly passageRules?: readonly PassageRule[];
 }

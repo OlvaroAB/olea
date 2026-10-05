@@ -1652,6 +1652,7 @@ export type {
   ParseMisconceptionLogResult,
 } from './misconception/parse.js';
 export {
+  parseBeliefResolution,
   parseMisconceptionEvent,
   parseMisconceptionLog,
 } from './misconception/parse.js';
@@ -1666,12 +1667,23 @@ export { projectMisconceptions } from './misconception/project.js';
 // for a concept's open misconception, and which `ResolutionEvidenceKind` it
 // demonstrates — see the module doc for why `hasOpenMisconceptionOnConcept`
 // stays the caller's job.
+// `[D-485]` parts 1 and 2 (`ol-egov.141.89.6.88`): the belief-specific step —
+// candidate selection, the injected per-belief decision port, and the pure
+// decision that names the records an explanation moves.
 export type {
+  BeliefResolutionDecisionPort,
+  BeliefResolutionDecisionResult,
   ExplainBackResolutionCandidate,
   RecallResolutionCandidate,
   ResolutionEvidenceCandidate,
+  SelectBeliefResolutionCandidatesInput,
 } from './misconception/resolution-evidence-decision.js';
-export { decideResolutionEvidence } from './misconception/resolution-evidence-decision.js';
+export {
+  decideBeliefResolution,
+  decideResolutionEvidence,
+  runBeliefResolutionDecision,
+  selectBeliefResolutionCandidates,
+} from './misconception/resolution-evidence-decision.js';
 // F5.3a / R7's third trigger for the SAME F2.21 on-demand offer (`[D-083]`/
 // `[D-087]`, `ol-0r92.11`): an unconsumed scheduling observation naming the
 // just-graded instrument's concept as a neighbour. Lives beside
@@ -1697,8 +1709,16 @@ export type {
   McqMisconceptionPick,
   ReconcileMisconceptionStreamsOptions,
 } from './misconception/store.js';
-export { mcqObservationKey, projectMisconceptionsFromAllSources } from './misconception/store.js';
+export {
+  isDerivedMcqMisconceptionKey,
+  mcqObservationKey,
+  projectMisconceptionsFromAllSources,
+} from './misconception/store.js';
 export type {
+  BeliefResolutionDecision,
+  BeliefResolutionEvidence,
+  BeliefResolutionOption,
+  BeliefResolutionProvenance,
   EmbeddingVector as MisconceptionEmbeddingVector,
   MisconceptionEmbedder,
   MisconceptionEvent,
@@ -1710,6 +1730,7 @@ export type {
   SourceCitation as MisconceptionSourceCitation,
 } from './misconception/types.js';
 export {
+  BELIEF_RESOLUTION_OPTIONS,
   MISCONCEPTION_EVENT_SCHEMA_VERSION,
   MISCONCEPTION_STATUSES,
 } from './misconception/types.js';
@@ -2675,6 +2696,7 @@ export type {
   ClassifyDeclaredConceptInput,
   DeclaredConceptClassification,
   GroveDeclaredState,
+  TaughtSignalEvidence,
 } from './scope/coverage.js';
 export {
   classifyDeclaredConcept,
@@ -2691,6 +2713,17 @@ export type {
   GroveVolunteerCell,
 } from './scope/grove.js';
 export { buildGroveModel } from './scope/grove.js';
+// F8.2's step-two producer (`ol-egov.141.89.7.51`, `[D-465]`): the course's decks and supplied
+// transcripts, read for each concept's name by the examiner side's whole-word rule, become
+// `TaughtSignalEvidence` for `buildGroveModel`'s `taughtSignals`. Pure; the grove provider
+// gathers the text (`packages/plugin/src/grove/taught-signal-material.ts`).
+export type {
+  ProduceTaughtSignalsInput,
+  StepTwoMaterial,
+  StepTwoMaterialKind,
+  StepTwoTextUnit,
+} from './scope/taught-signal-producer.js';
+export { produceTaughtSignals } from './scope/taught-signal-producer.js';
 // The session pipeline (P2-T07's missing half): walk her vault for instruments,
 // bind each to its concept and courses, replay the review log into per-instrument
 // scheduling state, and hand the result to `composeQueue`. `buildReviewSession`
@@ -3149,6 +3182,9 @@ export { extractTier3Evidence } from './tier3-evidence/build.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,
+  // `ol-egov.141.89.7.51`: the derived text tier 3 already extracted, handed back on request
+  // (`ExtractTier3EvidenceOptions.includeDerivedUnits`) for the grove's step-two producer.
+  DerivedTextUnit,
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
   PastPaperCluster,

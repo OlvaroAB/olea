@@ -390,8 +390,8 @@ export interface RecordSoloGradeAndReviewParams {
    * Optional, same structural-typing accommodation `durationMs` above
    * documents (`main.ts`'s inline params type does not name it; the object
    * reaches this function unreconstructed). Absent — every call whose prompt
-   * has no causes partner, and, until `modal.ts` hands it over, every call —
-   * means no observation can be recorded: if the judge nonetheless reports
+   * has no causes partner, and any caller that omits it — means no
+   * observation can be recorded: if the judge nonetheless reports
    * neighbour use, the depth record is still written whole and the outcome's
    * `schedulingObservation` says `not-recorded` (see
    * {@link SoloSchedulingObservationOutcome}).
