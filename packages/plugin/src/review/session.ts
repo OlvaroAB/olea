@@ -194,6 +194,12 @@ export interface ReviewSessionDeps {
     instrumentId: string,
   ) => Promise<'clear' | 'check-failed' | 'suspended'>;
   /**
+   * `ol-egov.141.89.5.73` ([D-515]): the presentation-time source-bytes check for a pending draft
+   * (`draftId !== null`), asked with the draft id just before it is shown. `'check-failed'` sets it
+   * aside as could-not-check, as for a settled item; a throw reads the same. Absent: drafts show.
+   */
+  readonly checkDraftSourceAtPresentation?: (draftId: string) => Promise<'clear' | 'check-failed'>;
+  /**
    * Resolves a cached, unreviewed draft (`instrument.draftId !== null`, F3.3,
    * `ol-p3t07a`) into a real instrument the moment she answers, edits, or
    * rejects it. Required even for a session with no draft items today —
@@ -1568,6 +1574,24 @@ export class ReviewSession {
       if (outcome === 'check-failed') {
         this.items.splice(this.index, 1);
         // A notice already pending from this same action (an established change) is not replaced.
+        if (this.withheldNotice === null) this.noteWithheld('check-failed', false);
+        await this.presentCurrent();
+        return;
+      }
+    }
+
+    if (
+      this.deps.checkDraftSourceAtPresentation !== undefined &&
+      item.instrument.draftId !== null
+    ) {
+      let outcome: 'clear' | 'check-failed';
+      try {
+        outcome = await this.deps.checkDraftSourceAtPresentation(item.instrument.draftId);
+      } catch {
+        outcome = 'check-failed';
+      }
+      if (outcome === 'check-failed') {
+        this.items.splice(this.index, 1);
         if (this.withheldNotice === null) this.noteWithheld('check-failed', false);
         await this.presentCurrent();
         return;

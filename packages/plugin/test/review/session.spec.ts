@@ -2473,3 +2473,41 @@ describe('[D-455]/[D-456] presentation-time check: could-not-check (ol-egov.141.
     expect(session.takeWithheldNotice()).toBeNull();
   });
 });
+
+describe('[D-515] a pending draft on a changed non-markdown source is not shown (ol-egov.141.89.5.73)', () => {
+  it('a draft the draft check fails is set aside with the could-not-check sentence; a clear one shows', async () => {
+    const bad = queueItem(mcqFixture({ draftId: 'draft-bad', instrumentId: 'draft-bad' }));
+    const good = queueItem(mcqFixture({ draftId: 'draft-good', instrumentId: 'draft-good' }));
+    const checkDraft = vi.fn(
+      async (id: string) =>
+        (id === 'draft-bad' ? 'check-failed' : 'clear') as 'clear' | 'check-failed',
+    );
+    const settled = vi.fn(async () => 'clear' as const);
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [bad, good],
+        checkSourceAtPresentation: settled,
+        checkDraftSourceAtPresentation: checkDraft,
+      }),
+    );
+    await session.start();
+    expect(checkDraft).toHaveBeenCalledWith('draft-bad');
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+    expect(JSON.stringify(session.getViewModel())).toContain('draft-good');
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it('a draft check that throws reads as could-not-check', async () => {
+    const bad = queueItem(mcqFixture({ draftId: 'draft-bad', instrumentId: 'draft-bad' }));
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [bad],
+        checkDraftSourceAtPresentation: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    await session.start();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+  });
+});
