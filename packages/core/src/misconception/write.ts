@@ -10,6 +10,7 @@
  * would cost an abstraction for a coincidence, not a real one.
  */
 
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { misconceptionLogPath } from './path.js';
 import type { MisconceptionEvent } from './types.js';
@@ -39,7 +40,9 @@ function localDateOf(timestamp: string): string {
  * Appends one already-constructed event (`./events.js` builds it) to its
  * device's daily file. Extends, never rewrites: a corrupt trailing line from
  * an interrupted previous append survives as a literal prefix, closed off by
- * its own `\n` before this event's line is added.
+ * its own `\n` before this event's line is added. The read and the write run as
+ * one task on the day file's queue (`../vault/path-queue.ts`), so two
+ * overlapping appends both land.
  */
 export async function appendMisconceptionEvent(
   vault: VaultSource,
@@ -49,10 +52,12 @@ export async function appendMisconceptionEvent(
   const path = misconceptionLogPath(localDateOf(event.timestamp), deviceId);
   const line = `${JSON.stringify(event)}\n`;
 
-  const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-  const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-  const prefix = needsSeparator ? `${existing}\n` : existing;
-  await vault.write(path, prefix + line);
+  await withPathQueue(path, async () => {
+    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+    const prefix = needsSeparator ? `${existing}\n` : existing;
+    await vault.write(path, prefix + line);
+  });
 
   return { event, path };
 }

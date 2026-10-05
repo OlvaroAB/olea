@@ -58,6 +58,8 @@ import {
   writeInstrumentTarget,
 } from '../instrument/target-store.js';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
 import {
@@ -462,21 +464,35 @@ export async function createPaper(
   if (record === undefined) {
     throw new Error('createPaper: applyPaperEvent returned undefined for a generated event');
   }
-  await vault.write(paperRecordPath(record.id), serialize(record));
+  const path = paperRecordPath(record.id);
+  await withPathQueue(path, () => vault.write(path, serialize(record)));
   return record;
 }
 
-async function loadExisting(
+/**
+ * Runs `update` on the current copy of paper `paperId`'s record, as one task on its file's queue
+ * (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`): the listing finds the file, and the record is
+ * read again inside the queue before anything is decided, so two overlapping responses (or a
+ * response and a retirement) both land instead of the later one writing back a copy that lacks the
+ * earlier one. Throws, as before, when there is no record for the id, or the one found no longer
+ * reads as a record.
+ */
+async function updateExistingPaper<T>(
   vault: VaultSource,
   paperId: string,
   fnName: string,
-): Promise<{ readonly path: VaultPath; readonly record: PaperRecord }> {
+  update: (hit: { readonly path: VaultPath; readonly record: PaperRecord }) => Promise<T>,
+): Promise<T> {
+  const missing = () =>
+    new Error(`${fnName}: no existing PaperRecord for id "${paperId}" — never mints one.`);
   const existing = await listPaperRecords(vault);
   const hit = existing.find(({ record }) => record.id === paperId);
-  if (hit === undefined) {
-    throw new Error(`${fnName}: no existing PaperRecord for id "${paperId}" — never mints one.`);
-  }
-  return hit;
+  if (hit === undefined) throw missing();
+  return withPathQueue(hit.path, async () => {
+    const fresh = await readStoreRecord(vault, hit.path, isPaperRecord);
+    if (fresh.kind !== 'record' || fresh.record.id !== paperId) throw missing();
+    return update({ path: hit.path, record: fresh.record });
+  });
 }
 
 /** Validates that `slotId` names an item this paper actually has — the module's guard against handing off, responding to, or explaining an item the paper never generated. */
@@ -495,21 +511,22 @@ export async function recordPaperResponse(
   options: PaperStoreOptions = {},
 ): Promise<PaperRecord> {
   const now = options.now ?? defaultNow;
-  const { path, record } = await loadExisting(vault, paperId, 'recordPaperResponse');
-  assertKnownSlot(record, slotId, 'recordPaperResponse');
-  const event: PaperResponseRecordedEvent = {
-    kind: 'response-recorded',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
-    paperId,
-    slotId,
-    responseText,
-  };
-  const updated = applyPaperEvent(record, event);
-  if (updated === undefined || updated === record) return record;
-  await vault.write(path, serialize(updated));
-  return updated;
+  return updateExistingPaper(vault, paperId, 'recordPaperResponse', async ({ path, record }) => {
+    assertKnownSlot(record, slotId, 'recordPaperResponse');
+    const event: PaperResponseRecordedEvent = {
+      kind: 'response-recorded',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      paperId,
+      slotId,
+      responseText,
+    };
+    const updated = applyPaperEvent(record, event);
+    if (updated === undefined || updated === record) return record;
+    await vault.write(path, serialize(updated));
+    return updated;
+  });
 }
 
 /**
@@ -626,63 +643,64 @@ export async function handOffPaperItem(
   options: PaperStoreOptions = {},
 ): Promise<PaperHandoffResult> {
   const now = options.now ?? defaultNow;
-  const { path, record } = await loadExisting(vault, paperId, 'handOffPaperItem');
-  assertKnownSlot(record, slotId, 'handOffPaperItem');
-  const item = record.items.find((i) => i.slotId === slotId);
-  if (item === undefined) throw new Error('handOffPaperItem: internal error, slot vanished');
-  const candidate = paperItemMcqCandidate(item, target.questionIndex);
-  const origin = { paperId, slotId };
-  const instrumentId = await paperItemInstrumentId(paperId, slotId);
+  return updateExistingPaper(vault, paperId, 'handOffPaperItem', async ({ path, record }) => {
+    assertKnownSlot(record, slotId, 'handOffPaperItem');
+    const item = record.items.find((i) => i.slotId === slotId);
+    if (item === undefined) throw new Error('handOffPaperItem: internal error, slot vanished');
+    const candidate = paperItemMcqCandidate(item, target.questionIndex);
+    const origin = { paperId, slotId };
+    const instrumentId = await paperItemInstrumentId(paperId, slotId);
 
-  const source = await vault.read(target.notePath);
-  const already = parseMcqBlocks(source).instruments.find((i) => i.id === instrumentId);
-  let instrumentWritten = false;
-  if (already !== undefined) {
-    const stamped = stampMcqPaperOrigin(source, already.span, origin);
-    if (stamped.changed) {
-      await vault.write(target.notePath, stamped.content);
+    const source = await vault.read(target.notePath);
+    const already = parseMcqBlocks(source).instruments.find((i) => i.id === instrumentId);
+    let instrumentWritten = false;
+    if (already !== undefined) {
+      const stamped = stampMcqPaperOrigin(source, already.span, origin);
+      if (stamped.changed) {
+        await vault.write(target.notePath, stamped.content);
+        instrumentWritten = true;
+      }
+    } else if (!record.handoffs.some((h) => h.slotId === slotId)) {
+      const firstBlock = parseDocument(source).blocks[0];
+      const { content } = insertMcqBlock({
+        source,
+        afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
+        fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
+      });
+      const declaredDemand = handedOffItemDemand(record, item);
+      if (declaredDemand !== undefined) {
+        const entered = parseMcqBlocks(content).instruments.find((i) => i.id === instrumentId);
+        const targetPath = instrumentTargetStorePath(instrumentId);
+        if (entered !== undefined && !(await vault.exists(targetPath))) {
+          await writeInstrumentTarget(vault, {
+            instrumentId,
+            declaredDemand,
+            origin: 'paper-handoff',
+            questionBinding: await questionBindingOf(entered),
+            authoredAt: now(),
+            generator: { taskId: item.taskId, promptVersion: item.promptVersion },
+          });
+        }
+      }
+      await vault.write(target.notePath, content);
       instrumentWritten = true;
     }
-  } else if (!record.handoffs.some((h) => h.slotId === slotId)) {
-    const firstBlock = parseDocument(source).blocks[0];
-    const { content } = insertMcqBlock({
-      source,
-      afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
-      fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
-    });
-    const declaredDemand = handedOffItemDemand(record, item);
-    if (declaredDemand !== undefined) {
-      const entered = parseMcqBlocks(content).instruments.find((i) => i.id === instrumentId);
-      const targetPath = instrumentTargetStorePath(instrumentId);
-      if (entered !== undefined && !(await vault.exists(targetPath))) {
-        await writeInstrumentTarget(vault, {
-          instrumentId,
-          declaredDemand,
-          origin: 'paper-handoff',
-          questionBinding: await questionBindingOf(entered),
-          authoredAt: now(),
-          generator: { taskId: item.taskId, promptVersion: item.promptVersion },
-        });
-      }
-    }
-    await vault.write(target.notePath, content);
-    instrumentWritten = true;
-  }
 
-  const event: PaperItemHandedOffEvent = {
-    kind: 'item-handed-off',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
-    paperId,
-    slotId,
-  };
-  const updated = applyPaperEvent(record, event);
-  if (updated === undefined || updated === record) {
-    return { record, instrumentId, instrumentWritten };
-  }
-  await vault.write(path, serialize(updated));
-  return { record: updated, instrumentId, instrumentWritten };
+    const event: PaperItemHandedOffEvent = {
+      kind: 'item-handed-off',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      paperId,
+      slotId,
+    };
+    const updated = applyPaperEvent(record, event);
+    if (updated === undefined || updated === record) {
+      return { record, instrumentId, instrumentWritten };
+    }
+    await vault.write(path, serialize(updated));
+    return { record: updated, instrumentId, instrumentWritten };
+  });
 }
 
 /** Records a free-response item's explain-yourself depth reading — ruling 2, never a mark. */
@@ -694,21 +712,27 @@ export async function recordPaperExplanationResult(
   options: PaperStoreOptions = {},
 ): Promise<PaperRecord> {
   const now = options.now ?? defaultNow;
-  const { path, record } = await loadExisting(vault, paperId, 'recordPaperExplanationResult');
-  assertKnownSlot(record, slotId, 'recordPaperExplanationResult');
-  const event: PaperExplanationRecordedEvent = {
-    kind: 'explanation-recorded',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
+  return updateExistingPaper(
+    vault,
     paperId,
-    slotId,
-    depthReading,
-  };
-  const updated = applyPaperEvent(record, event);
-  if (updated === undefined || updated === record) return record;
-  await vault.write(path, serialize(updated));
-  return updated;
+    'recordPaperExplanationResult',
+    async ({ path, record }) => {
+      assertKnownSlot(record, slotId, 'recordPaperExplanationResult');
+      const event: PaperExplanationRecordedEvent = {
+        kind: 'explanation-recorded',
+        schemaVersion: 1,
+        eventId: globalThis.crypto.randomUUID(),
+        timestamp: now(),
+        paperId,
+        slotId,
+        depthReading,
+      };
+      const updated = applyPaperEvent(record, event);
+      if (updated === undefined || updated === record) return record;
+      await vault.write(path, serialize(updated));
+      return updated;
+    },
+  );
 }
 
 /** F8.5's withdrawal, applied to a paper (ruling 6). No production caller yet — see the module doc. */
@@ -718,16 +742,17 @@ export async function retirePaper(
   options: PaperStoreOptions = {},
 ): Promise<PaperRecord> {
   const now = options.now ?? defaultNow;
-  const { path, record } = await loadExisting(vault, paperId, 'retirePaper');
-  const event: PaperRetiredEvent = {
-    kind: 'retired',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
-    paperId,
-  };
-  const updated = applyPaperEvent(record, event);
-  if (updated === undefined || updated === record) return record;
-  await vault.write(path, serialize(updated));
-  return updated;
+  return updateExistingPaper(vault, paperId, 'retirePaper', async ({ path, record }) => {
+    const event: PaperRetiredEvent = {
+      kind: 'retired',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      paperId,
+    };
+    const updated = applyPaperEvent(record, event);
+    if (updated === undefined || updated === record) return record;
+    await vault.write(path, serialize(updated));
+    return updated;
+  });
 }

@@ -37,9 +37,15 @@
  * proposal records intent; execution is a later bead's job."** Nothing in this file, or reachable
  * from it, moves a path, mints a key, or rewrites the audited record — `confirmMergeRepairProposalRecord`
  * only ever flips a status and stamps a timestamp.
+ *
+ * **One writer per record file at a time (`ol-egov.141.89.104.2`).** Every writer below reads and
+ * writes one record as one task on that file's queue (`../vault/path-queue.ts`), so a confirm and a
+ * decline that overlap on one install are applied in the order they were made, the later one to
+ * the record the earlier one left.
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { courseFromPath, DEFAULT_COURSES_FOLDER } from './course.js';
 import { type ConceptKeyRecord, listConceptKeyRecords } from './key-store.js';
@@ -281,31 +287,32 @@ export async function proposeAndPersistMergeAudits(
 
   const written: MergeAuditProposalRecord[] = [];
   for (const proposal of proposals) {
-    const existing = await findMergeAuditProposalRecordEntry(vault, proposal.key);
-    if (existing !== undefined) {
-      written.push(existing.record);
-      continue;
-    }
-    const finding = findings.find((f) => f.key === proposal.key);
-    const sourceRecord = byKey.get(proposal.key);
-    const anchorPaths =
-      finding === undefined || sourceRecord === undefined || sourceRecord.anchor.kind !== 'topic'
-        ? []
-        : [...new Set(sourceRecord.anchor.introducingPaths ?? [])]
-            .filter((path) => courseFromPath(path, coursesFolder) === proposal.anchorCourse)
-            .sort();
+    const path = mergeAuditProposalRecordPath(proposal.key);
+    const record = await withPathQueue(path, async () => {
+      const existing = await findMergeAuditProposalRecordEntry(vault, proposal.key);
+      if (existing !== undefined) return existing.record;
+      const finding = findings.find((f) => f.key === proposal.key);
+      const sourceRecord = byKey.get(proposal.key);
+      const anchorPaths =
+        finding === undefined || sourceRecord === undefined || sourceRecord.anchor.kind !== 'topic'
+          ? []
+          : [...new Set(sourceRecord.anchor.introducingPaths ?? [])]
+              .filter((p) => courseFromPath(p, coursesFolder) === proposal.anchorCourse)
+              .sort();
 
-    const record: MergeAuditProposalRecord = {
-      key: proposal.key,
-      wording: proposal.wording,
-      anchorCourse: proposal.anchorCourse,
-      anchorPaths,
-      misattributedCourses: finding?.misattributedCourses ?? [],
-      status: 'proposed',
-      proposedAt: now(),
-      schemaVersion: MERGE_AUDIT_PROPOSAL_RECORD_SCHEMA_VERSION,
-    };
-    await vault.write(mergeAuditProposalRecordPath(record.key), serialize(record));
+      const proposed: MergeAuditProposalRecord = {
+        key: proposal.key,
+        wording: proposal.wording,
+        anchorCourse: proposal.anchorCourse,
+        anchorPaths,
+        misattributedCourses: finding?.misattributedCourses ?? [],
+        status: 'proposed',
+        proposedAt: now(),
+        schemaVersion: MERGE_AUDIT_PROPOSAL_RECORD_SCHEMA_VERSION,
+      };
+      await vault.write(path, serialize(proposed));
+      return proposed;
+    });
     written.push(record);
   }
   return written;
@@ -324,21 +331,23 @@ export async function confirmMergeAuditProposalRecord(
   options: { readonly now?: () => string } = {},
 ): Promise<MergeAuditProposalRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findMergeAuditProposalRecordEntry(vault, key);
-  if (existing === undefined) {
-    throw new Error(
-      `confirmMergeAuditProposalRecord: no persisted merge-audit proposal for key ${JSON.stringify(key)} — a caller must propose before confirming ([D-402]).`,
-    );
-  }
-  const transitioned = confirmMergeAuditProposal(asMergeAuditProposal(existing.record));
-  if (transitioned.status === existing.record.status) return existing.record;
-  const written: MergeAuditProposalRecord = {
-    ...existing.record,
-    status: 'confirmed',
-    confirmedAt: now(),
-  };
-  await vault.write(existing.path, serialize(written));
-  return written;
+  return withPathQueue(mergeAuditProposalRecordPath(key), async () => {
+    const existing = await findMergeAuditProposalRecordEntry(vault, key);
+    if (existing === undefined) {
+      throw new Error(
+        `confirmMergeAuditProposalRecord: no persisted merge-audit proposal for key ${JSON.stringify(key)} — a caller must propose before confirming ([D-402]).`,
+      );
+    }
+    const transitioned = confirmMergeAuditProposal(asMergeAuditProposal(existing.record));
+    if (transitioned.status === existing.record.status) return existing.record;
+    const written: MergeAuditProposalRecord = {
+      ...existing.record,
+      status: 'confirmed',
+      confirmedAt: now(),
+    };
+    await vault.write(existing.path, serialize(written));
+    return written;
+  });
 }
 
 /**
@@ -354,21 +363,23 @@ export async function declineMergeAuditProposalRecord(
   options: { readonly now?: () => string } = {},
 ): Promise<MergeAuditProposalRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findMergeAuditProposalRecordEntry(vault, key);
-  if (existing === undefined) {
-    throw new Error(
-      `declineMergeAuditProposalRecord: no persisted merge-audit proposal for key ${JSON.stringify(key)} — a caller must propose before declining ([D-402]).`,
-    );
-  }
-  const transitioned = declineMergeAuditProposal(asMergeAuditProposal(existing.record));
-  if (transitioned.status === existing.record.status) return existing.record;
-  const written: MergeAuditProposalRecord = {
-    ...existing.record,
-    status: 'declined',
-    declinedAt: now(),
-  };
-  await vault.write(existing.path, serialize(written));
-  return written;
+  return withPathQueue(mergeAuditProposalRecordPath(key), async () => {
+    const existing = await findMergeAuditProposalRecordEntry(vault, key);
+    if (existing === undefined) {
+      throw new Error(
+        `declineMergeAuditProposalRecord: no persisted merge-audit proposal for key ${JSON.stringify(key)} — a caller must propose before declining ([D-402]).`,
+      );
+    }
+    const transitioned = declineMergeAuditProposal(asMergeAuditProposal(existing.record));
+    if (transitioned.status === existing.record.status) return existing.record;
+    const written: MergeAuditProposalRecord = {
+      ...existing.record,
+      status: 'declined',
+      declinedAt: now(),
+    };
+    await vault.write(existing.path, serialize(written));
+    return written;
+  });
 }
 
 export type MergeAuditRepairAttemptOutcome =
@@ -409,58 +420,59 @@ export async function proposeAndPersistMergeRepair(
   options: ProposeAndPersistMergeRepairOptions = {},
 ): Promise<MergeAuditRepairAttemptOutcome> {
   const now = options.now ?? defaultNow;
+  return withPathQueue(mergeRepairProposalRecordPath(key), async () => {
+    const existingRepair = await findMergeRepairProposalRecordEntry(vault, key);
+    if (existingRepair !== undefined) {
+      return { kind: 'repair-proposal', proposal: existingRepair.record };
+    }
 
-  const existingRepair = await findMergeRepairProposalRecordEntry(vault, key);
-  if (existingRepair !== undefined) {
-    return { kind: 'repair-proposal', proposal: existingRepair.record };
-  }
+    const auditRecord = await findMergeAuditProposalRecordEntry(vault, key);
+    if (auditRecord === undefined || auditRecord.record.status !== 'declined') {
+      return { kind: 'not-declined' };
+    }
 
-  const auditRecord = await findMergeAuditProposalRecordEntry(vault, key);
-  if (auditRecord === undefined || auditRecord.record.status !== 'declined') {
-    return { kind: 'not-declined' };
-  }
+    const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
+    const records = options.records ?? (await listConceptKeyRecords(vault));
+    const sameAsLinks =
+      options.sameAsLinks ?? (await listSameAsLinkRecords(vault)).map((entry) => entry.record);
+    const findings = findMergeAuditFindings(
+      records.map(({ record }) => record),
+      sameAsLinks,
+      { coursesFolder },
+    );
+    const finding = findings.find((f) => f.key === key);
+    if (finding === undefined) {
+      // The old-merge shape this key's finding depended on no longer exists on disk (its
+      // introducing paths were edited away since the audit ran) — nothing left to repair.
+      return { kind: 'not-declined' };
+    }
 
-  const coursesFolder = options.coursesFolder ?? DEFAULT_COURSES_FOLDER;
-  const records = options.records ?? (await listConceptKeyRecords(vault));
-  const sameAsLinks =
-    options.sameAsLinks ?? (await listSameAsLinkRecords(vault)).map((entry) => entry.record);
-  const findings = findMergeAuditFindings(
-    records.map(({ record }) => record),
-    sameAsLinks,
-    { coursesFolder },
-  );
-  const finding = findings.find((f) => f.key === key);
-  if (finding === undefined) {
-    // The old-merge shape this key's finding depended on no longer exists on disk (its
-    // introducing paths were edited away since the audit ran) — nothing left to repair.
-    return { kind: 'not-declined' };
-  }
+    const proposal: MergeAuditProposal = {
+      key: auditRecord.record.key,
+      wording: auditRecord.record.wording,
+      anchorCourse: auditRecord.record.anchorCourse,
+      misattributedCourseCodes: auditRecord.record.misattributedCourses.map((e) => e.course),
+      status: 'declined',
+    };
+    const outcome = proposeMergeRepair(finding, proposal);
+    if (outcome.kind === 'needs-decision') {
+      return { kind: 'needs-decision', escalation: outcome.escalation };
+    }
 
-  const proposal: MergeAuditProposal = {
-    key: auditRecord.record.key,
-    wording: auditRecord.record.wording,
-    anchorCourse: auditRecord.record.anchorCourse,
-    misattributedCourseCodes: auditRecord.record.misattributedCourses.map((e) => e.course),
-    status: 'declined',
-  };
-  const outcome = proposeMergeRepair(finding, proposal);
-  if (outcome.kind === 'needs-decision') {
-    return { kind: 'needs-decision', escalation: outcome.escalation };
-  }
-
-  const record: MergeRepairProposalRecord = {
-    key: outcome.proposal.key,
-    wording: auditRecord.record.wording,
-    anchorCourse: auditRecord.record.anchorCourse,
-    anchorPaths: auditRecord.record.anchorPaths,
-    course: outcome.proposal.course,
-    paths: outcome.proposal.paths,
-    status: 'proposed',
-    proposedAt: now(),
-    schemaVersion: MERGE_REPAIR_PROPOSAL_RECORD_SCHEMA_VERSION,
-  };
-  await vault.write(mergeRepairProposalRecordPath(record.key), serialize(record));
-  return { kind: 'repair-proposal', proposal: record };
+    const record: MergeRepairProposalRecord = {
+      key: outcome.proposal.key,
+      wording: auditRecord.record.wording,
+      anchorCourse: auditRecord.record.anchorCourse,
+      anchorPaths: auditRecord.record.anchorPaths,
+      course: outcome.proposal.course,
+      paths: outcome.proposal.paths,
+      status: 'proposed',
+      proposedAt: now(),
+      schemaVersion: MERGE_REPAIR_PROPOSAL_RECORD_SCHEMA_VERSION,
+    };
+    await vault.write(mergeRepairProposalRecordPath(record.key), serialize(record));
+    return { kind: 'repair-proposal', proposal: record };
+  });
 }
 
 /** Persisted confirm for a repair proposal — records intent only; nothing here moves a path or
@@ -472,21 +484,23 @@ export async function confirmMergeRepairProposalRecord(
   options: { readonly now?: () => string } = {},
 ): Promise<MergeRepairProposalRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findMergeRepairProposalRecordEntry(vault, key);
-  if (existing === undefined) {
-    throw new Error(
-      `confirmMergeRepairProposalRecord: no persisted repair proposal for key ${JSON.stringify(key)}.`,
-    );
-  }
-  const transitioned = confirmMergeRepairProposal(existing.record);
-  if (transitioned.status === existing.record.status) return existing.record;
-  const written: MergeRepairProposalRecord = {
-    ...existing.record,
-    status: 'confirmed',
-    confirmedAt: now(),
-  };
-  await vault.write(existing.path, serialize(written));
-  return written;
+  return withPathQueue(mergeRepairProposalRecordPath(key), async () => {
+    const existing = await findMergeRepairProposalRecordEntry(vault, key);
+    if (existing === undefined) {
+      throw new Error(
+        `confirmMergeRepairProposalRecord: no persisted repair proposal for key ${JSON.stringify(key)}.`,
+      );
+    }
+    const transitioned = confirmMergeRepairProposal(existing.record);
+    if (transitioned.status === existing.record.status) return existing.record;
+    const written: MergeRepairProposalRecord = {
+      ...existing.record,
+      status: 'confirmed',
+      confirmedAt: now(),
+    };
+    await vault.write(existing.path, serialize(written));
+    return written;
+  });
 }
 
 /** Persisted decline for a repair proposal — a hard labelled negative on the repair itself, never
@@ -497,19 +511,21 @@ export async function declineMergeRepairProposalRecord(
   options: { readonly now?: () => string } = {},
 ): Promise<MergeRepairProposalRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await findMergeRepairProposalRecordEntry(vault, key);
-  if (existing === undefined) {
-    throw new Error(
-      `declineMergeRepairProposalRecord: no persisted repair proposal for key ${JSON.stringify(key)}.`,
-    );
-  }
-  const transitioned = declineMergeRepairProposal(existing.record);
-  if (transitioned.status === existing.record.status) return existing.record;
-  const written: MergeRepairProposalRecord = {
-    ...existing.record,
-    status: 'declined',
-    declinedAt: now(),
-  };
-  await vault.write(existing.path, serialize(written));
-  return written;
+  return withPathQueue(mergeRepairProposalRecordPath(key), async () => {
+    const existing = await findMergeRepairProposalRecordEntry(vault, key);
+    if (existing === undefined) {
+      throw new Error(
+        `declineMergeRepairProposalRecord: no persisted repair proposal for key ${JSON.stringify(key)}.`,
+      );
+    }
+    const transitioned = declineMergeRepairProposal(existing.record);
+    if (transitioned.status === existing.record.status) return existing.record;
+    const written: MergeRepairProposalRecord = {
+      ...existing.record,
+      status: 'declined',
+      declinedAt: now(),
+    };
+    await vault.write(existing.path, serialize(written));
+    return written;
+  });
 }

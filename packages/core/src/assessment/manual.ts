@@ -38,6 +38,7 @@
  */
 
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { AssessmentRecord } from './types.js';
 import { normalizeAssessmentWeight } from './weight.js';
@@ -180,7 +181,7 @@ export async function addManualAssessmentEntry(
   };
 
   const path = manualAssessmentRecordPath(id);
-  await vault.write(path, serialize(record));
+  await withPathQueue(path, () => vault.write(path, serialize(record)));
   return { record, path };
 }
 

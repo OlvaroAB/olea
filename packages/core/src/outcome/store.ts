@@ -42,6 +42,8 @@ import {
   readConceptKeyCanonicalIndex,
 } from '../concept/key-store.js';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
+import { readStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { OutcomeEvent } from './events.js';
 import { applyOutcomeEvent } from './project.js';
@@ -179,6 +181,31 @@ async function listStoredOutcomeRecords(
   return out;
 }
 
+/**
+ * Runs `update` on the current copy of outcome `outcomeId`'s record, as one task on its file's
+ * queue (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`): the listing finds the file, and the
+ * record is read again inside the queue before anything is decided, so two overlapping
+ * attachments, or an attachment and a retirement, both land rather than the later one writing back
+ * a copy that lacks the earlier one. `missing` is thrown when no record for the id is there, or the
+ * one found no longer reads as a record.
+ */
+async function updateStoredOutcome<T>(
+  vault: VaultSource,
+  outcomeId: string,
+  missing: () => Error,
+  update: (hit: { readonly path: VaultPath; readonly record: OutcomeRecord }) => Promise<T>,
+): Promise<T> {
+  const located = (await listStoredOutcomeRecords(vault)).find(
+    ({ record }) => record.id === outcomeId,
+  );
+  if (located === undefined) throw missing();
+  return withPathQueue(located.path, async () => {
+    const fresh = await readStoreRecord(vault, located.path, isOutcomeRecord);
+    if (fresh.kind !== 'record' || fresh.record.id !== outcomeId) throw missing();
+    return update({ path: located.path, record: fresh.record });
+  });
+}
+
 /** A source of randomness for `mintOpaqueOutcomeId`. Injectable for deterministic tests, the same shape `../concept/concept-key.ts`'s `OpaqueKeyNonceSource` already uses. */
 export type OpaqueIdNonceSource = () => string;
 
@@ -272,7 +299,8 @@ export async function resolveOutcome(
   if (record === undefined) {
     throw new Error('resolveOutcome: applyOutcomeEvent returned undefined for a created event');
   }
-  await vault.write(outcomeRecordPath(record.id), serialize(record));
+  const path = outcomeRecordPath(record.id);
+  await withPathQueue(path, () => vault.write(path, serialize(record)));
   return record;
 }
 
@@ -298,35 +326,33 @@ export async function attachConceptToOutcome(
 ): Promise<OutcomeRecord> {
   const now = options.now ?? defaultNow;
   const canonicalKeys = options.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
-  const existing = await listStoredOutcomeRecords(vault);
-  const hit = existing.find(({ record }) => record.id === outcomeId);
-  if (hit === undefined) {
-    throw new Error(
+  const missing = () =>
+    new Error(
       `attachConceptToOutcome: no existing OutcomeRecord for id "${outcomeId}" — this function ` +
         'attaches to an existing record and never mints one (see the module doc).',
     );
-  }
+  return updateStoredOutcome(vault, outcomeId, missing, async (hit) => {
+    const canonicalKey = canonicalKeys.canonicalOf(conceptKey);
+    const alreadyAttached = hit.record.conceptKeys.some(
+      (key) => canonicalKeys.canonicalOf(key) === canonicalKey,
+    );
+    if (alreadyAttached) return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
 
-  const canonicalKey = canonicalKeys.canonicalOf(conceptKey);
-  const alreadyAttached = hit.record.conceptKeys.some(
-    (key) => canonicalKeys.canonicalOf(key) === canonicalKey,
-  );
-  if (alreadyAttached) return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
-
-  const event: OutcomeEvent = {
-    kind: 'concept-attached',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
-    outcomeId,
-    conceptKey: canonicalKey,
-  };
-  const updated = applyOutcomeEvent(hit.record, event);
-  if (updated === undefined || updated === hit.record) {
-    return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
-  }
-  await vault.write(hit.path, serialize(updated));
-  return outcomeRecordThroughCanonicalKeys(updated, canonicalKeys);
+    const event: OutcomeEvent = {
+      kind: 'concept-attached',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      outcomeId,
+      conceptKey: canonicalKey,
+    };
+    const updated = applyOutcomeEvent(hit.record, event);
+    if (updated === undefined || updated === hit.record) {
+      return outcomeRecordThroughCanonicalKeys(hit.record, canonicalKeys);
+    }
+    await vault.write(hit.path, serialize(updated));
+    return outcomeRecordThroughCanonicalKeys(updated, canonicalKeys);
+  });
 }
 
 /**
@@ -340,24 +366,22 @@ export async function retireOutcome(
   options: Pick<ResolveOutcomeOptions, 'now'> = {},
 ): Promise<OutcomeRecord> {
   const now = options.now ?? defaultNow;
-  const existing = await listStoredOutcomeRecords(vault);
-  const hit = existing.find(({ record }) => record.id === outcomeId);
-  if (hit === undefined) {
-    throw new Error(
+  const missing = () =>
+    new Error(
       `retireOutcome: no existing OutcomeRecord for id "${outcomeId}" — this function retires ` +
         'an existing record and never mints one (see the module doc).',
     );
-  }
-
-  const event: OutcomeEvent = {
-    kind: 'retired',
-    schemaVersion: 1,
-    eventId: globalThis.crypto.randomUUID(),
-    timestamp: now(),
-    outcomeId,
-  };
-  const updated = applyOutcomeEvent(hit.record, event);
-  if (updated === undefined || updated === hit.record) return hit.record;
-  await vault.write(hit.path, serialize(updated));
-  return updated;
+  return updateStoredOutcome(vault, outcomeId, missing, async (hit) => {
+    const event: OutcomeEvent = {
+      kind: 'retired',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      outcomeId,
+    };
+    const updated = applyOutcomeEvent(hit.record, event);
+    if (updated === undefined || updated === hit.record) return hit.record;
+    await vault.write(hit.path, serialize(updated));
+    return updated;
+  });
 }

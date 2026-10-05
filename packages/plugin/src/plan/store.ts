@@ -22,6 +22,7 @@
 
 import type { StudyPlanEnvelope } from 'olea-contracts';
 import type { StudyPlanStore } from 'olea-core';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
 export interface ObsidianDataHost {
@@ -44,13 +45,22 @@ export class ObsidianStudyPlanStore implements StudyPlanStore {
 
   async save(plan: StudyPlanEnvelope): Promise<void> {
     // Read-modify-write: every other store sharing this blob (queue,
-    // keyword index, worker config, device id) must survive this write.
-    const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    blob[STUDY_PLAN_STORAGE_KEY] = plan;
-    await this.host.saveData(blob);
+    // keyword index, worker config, device id) must survive this write — as
+    // one link of the settings file's queue when the host has one
+    // (`ol-egov.141.89.104.2`), so nothing written between the load and the
+    // save is discarded.
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      blob[STUDY_PLAN_STORAGE_KEY] = plan;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    await this.host.saveData(merge(await this.host.loadData()));
   }
 }
