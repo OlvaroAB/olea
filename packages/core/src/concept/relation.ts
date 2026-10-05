@@ -680,22 +680,20 @@ export function servedRelations(set: RelationSet): readonly ConceptRelation[] {
  * `made-by: me`; `features/F1-sources.md`'s relations-triage scenario,
  * tagged `@auto:core/registry/relations-triage.spec`).
  *
- * **Nothing composes this to a surface, and nothing may.** No contract clause
- * names a concept-relation triage surface — C7.10 rules what triage *shows*,
- * never that a screen exists — and the standing rule *"no user-visible
- * affordance without a clause"* forbids a lane inventing one. This function
- * exists for the same reason `routing/instrument-mix.js`'s `routingReason`
- * does: so that the rule is a checkable value with its own test coverage
- * before a surface reaches for it, rather than being invented at the UI layer
- * against no source of truth on the day one is clauses.
+ * **Nothing composes this to a surface yet; the clause that defines one is
+ * F8.4a** (the concept-relation triage surface, functional scope).
+ * A lane builds that surface only from F8.4a, never from this comment. This
+ * function exists for the same reason `routing/instrument-mix.js`'s
+ * `routingReason` does: so that the rule is a checkable value with its own
+ * test coverage before a surface reaches for it, rather than being invented at
+ * the UI layer against no source of truth.
  *
  * **It is not empty in production, which is what makes the missing clause a
  * live gap rather than a hypothetical one.** Since `ol-9qwy` the corpus stage
  * stamps `'hers'` on any edge a wiki-link in a note she keeps helped
  * nominate, unless every such note is declared `made-by: assistant`
  * (`./corpus-relations/verdict.js`), so a real vault with a linked card index
- * yields real assertions here — with nowhere ruled for them to go. The one
- * thing that follows from that is a decision bead, not a screen.
+ * yields real assertions here — with no surface built for them yet.
  */
 export function assertionsForTriage(set: RelationSet): readonly RelationSetEntry[] {
   return set.entries.filter((entry) => entry.triageStanding === 'assertion');
