@@ -202,6 +202,7 @@ export async function retrieve(
 
   const hits = await hybridRetrieve({
     query,
+    keywordQuery,
     chunks,
     keywordHits,
     queryVector,
