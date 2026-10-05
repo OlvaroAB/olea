@@ -12,12 +12,11 @@
  * it describes how a *concept* relates to a source it appears in, not what
  * *kind* of document the source is. `SourceRole` below is the latter.)
  *
- * `SourceRole` is deliberately narrow — `'past-paper' | 'objectives'` —
- * because F1.5's acceptance criteria is exactly these two ("Register past
- * papers and learning objectives as first-class course sources"). General
- * course material (lecture notes, embedded slide decks) already flows
- * through `../extract/` and `../concept/extract.js` without needing a role
- * tag; this bead does not invent one for them.
+ * `SourceRole` is deliberately narrow — `'past-paper' | 'objectives'` are the two F1.5 names
+ * ("Register past papers and learning objectives as first-class course sources"), and
+ * `'course-material'` was added later (F3.1, `ol-ep3.2`) for manual registration, as the type's
+ * own note below says. Material that is merely read (lecture notes, embedded slide decks) flows
+ * through `../extract/` and `../concept/extract.js` without needing a role tag.
  */
 
 import type { SourceFormat } from '../extract/types.js';
