@@ -280,8 +280,8 @@ describe('the bug: an edit elsewhere in the note, or a move, no longer reaches t
     expect((await anchorOf(store)).text).toBe(reflowed);
   });
 
-  it('a markup-only change to the passage (bullets, emphasis) exits free as formatting-only', async () => {
-    const bullets = `- ${GRANITE}\n- **${QUARTZ}**`;
+  it('an emphasis-only change to the passage exits free as formatting-only (a list marker is content, ol-egov.141.89.5.60)', async () => {
+    const bullets = `${GRANITE}\n**${QUARTZ}**`;
     const { vault, store } = await fixture();
     const judge = judgeSaying(true);
     const t = trigger(store, judge);
