@@ -190,6 +190,8 @@ import {
   authoringDemandFields,
   type DemandRoutingCounter,
   enumerateVaultInstruments,
+  hashContent,
+  type InstrumentCitation,
   type InstrumentRevisionJobPayload,
   type JobRunner,
   type JobRunnerView,
@@ -198,6 +200,7 @@ import {
   type PaperDemand,
   projectInstrumentValidity,
   type QuestionBindingBlock,
+  readInstrumentCitation,
   readInstrumentDemand,
   readReviewLogHistory,
   routeDemandAsk,
@@ -216,6 +219,7 @@ import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
 import type { DraftedDemandCarry } from './draft-demand.js';
+import { withGroundingPassage } from './grounding-passage.js';
 import { hashSourceRevision } from './home-note.js';
 import {
   demandRoutingCounterFor,
@@ -585,6 +589,52 @@ async function sourceContentHashOf(
     : undefined;
 }
 
+/**
+ * `ol-egov.141.89.5.79` ([D-508]): the successor's source citation. The sweep builds one from a
+ * sweep unit; this job has none, so it is rebuilt from the predecessor's own citation (which note,
+ * page and section the question cited) and the current passage text the job carries. The passage
+ * digest is minted by `withGroundingPassage` with the passage as the one chunk, the same sealing
+ * the sweep applies, so it equals what a new question on this passage would get; it is omitted
+ * (whole-note grain) when the passage is not exactly one passage of the cited note.
+ *
+ * A non-markdown source keeps its path, page and section; its `sourceRevision` is carried only
+ * while it is still the file's byte hash now (never a stale one). No citation at all when the
+ * predecessor had none or cited its own note (the self-referential fallback): accept then mints
+ * its own, as before.
+ */
+async function successorCitationOf(
+  vault: VaultSource,
+  predecessorInstrumentId: string,
+  ownNotePath: VaultPath,
+  passage: string,
+): Promise<InstrumentCitation | undefined> {
+  try {
+    const predecessor = await readInstrumentCitation(vault, predecessorInstrumentId);
+    if (predecessor === undefined || predecessor.sourcePath === ownNotePath) return undefined;
+    const base: InstrumentCitation = {
+      sourcePath: predecessor.sourcePath,
+      ...(predecessor.page !== undefined ? { page: predecessor.page } : {}),
+      ...(predecessor.section !== undefined ? { section: predecessor.section } : {}),
+    };
+    if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
+      return passage.trim().length === 0
+        ? base
+        : await withGroundingPassage(vault, base, ownNotePath, [passage]);
+    }
+    if (
+      predecessor.sourceRevision !== undefined &&
+      (await vault.exists(predecessor.sourcePath)) &&
+      (await hashContent(await vault.readBinary(predecessor.sourcePath))) ===
+        predecessor.sourceRevision
+    ) {
+      return { ...base, sourceRevision: predecessor.sourceRevision };
+    }
+    return base;
+  } catch {
+    return undefined; // never throws: no citation is today's behaviour
+  }
+}
+
 /** Retry an empty or unparseable draft until the bound, then fail with a reason the queue records. */
 function emptyDraftOutcome(payload: InstrumentRevisionJobPayload, attempts: number): JobRunOutcome {
   if (attempts < REVISION_EMPTY_DRAFT_MAX_ATTEMPTS) return { ok: false, retryable: true };
@@ -671,6 +721,12 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
+    const sourceCitation = await successorCitationOf(
+      deps.vault,
+      payload.predecessorInstrumentId,
+      target.sourcePath,
+      payload.newPassageText,
+    );
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
       // counted, not cached. The declaration is read by the item's position in the response.
@@ -688,6 +744,7 @@ export async function runInstrumentRevisionJob(
         sourcePath: target.sourcePath,
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
+        ...(sourceCitation === undefined ? {} : { sourceCitation }),
         card,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -726,6 +783,12 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
+    const sourceCitation = await successorCitationOf(
+      deps.vault,
+      payload.predecessorInstrumentId,
+      target.sourcePath,
+      payload.newPassageText,
+    );
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.
       const stamped = draftDemandForQuestion(drafted.demand, index, 'revision');
@@ -742,6 +805,7 @@ export async function runInstrumentRevisionJob(
         sourcePath: target.sourcePath,
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
+        ...(sourceCitation === undefined ? {} : { sourceCitation }),
         question,
         provenance: drafted.provenance,
         firstServedAt: null,
