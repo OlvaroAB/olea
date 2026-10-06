@@ -436,7 +436,7 @@ function needByConcept(
  * Without it, `buildGapView` falls back to the mastery join's `tiersSucceeded.recognition`, which
  * reads any past success and removes proven-invalid evidence at the top stage only.
  */
-export function currentRecognitionByConcept(
+function currentRecognitionByConcept(
   entries: readonly ReviewLogEntry[],
   conceptKeys: readonly string[],
   scheduler: Scheduler,

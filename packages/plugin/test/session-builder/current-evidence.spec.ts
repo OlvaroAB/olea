@@ -175,8 +175,8 @@ describe('the session reads current evidence its own way, and the same evidence 
   });
 
   /**
-   * `[D-371]`/`[D-338]` item 3 (`ol-egov.141.89.9.97`, F4.3): the session's gap view reads the same
-   * current-recognition rule as the production gap view. A correct quiz answer on an item later
+   * `[D-371]`/`[D-338]` item 3 (`ol-egov.141.89.9.97`, F4.3): the session removes recognition credit
+   * from defective instruments only, never importing the gap view's recall threshold. A correct quiz answer on an item later
    * suspended as defective earns no recognition credit; a suspension with no defect recorded
    * (`[D-347]` as ruled) keeps it. Only which recognition counts changes, never the formula.
    */
@@ -214,12 +214,15 @@ describe('the session reads current evidence its own way, and the same evidence 
         reason,
       });
 
-    async function rowAfter(extra: (conceptKey: string) => string) {
+    async function rowAfter(
+      extra: (conceptKey: string) => string,
+      scheduler: Scheduler = fixedRetrievabilityScheduler(1),
+    ) {
       const { vault, conceptKey } = await reviewedCardWorld();
       const path = '.olea/reviews/2026-08-09.olea-testdevice1.jsonl';
       const base = await vault.read(path);
       await vault.write(path, base + extra(conceptKey));
-      const [row] = await sessionRows(vault, fixedRetrievabilityScheduler(1));
+      const [row] = await sessionRows(vault, scheduler);
       if (row === undefined) throw new Error('expected a session row');
       return row;
     }
@@ -233,6 +236,14 @@ describe('the session reads current evidence its own way, and the same evidence 
       const row = await rowAfter((key) => quizAnswer(key) + suspension(key, 'defect'));
       expect(row.readiness.applied).toBe(false);
       expect(row.readiness.weight).toBe(1);
+    });
+
+    it('PIN ([D-371], ruled 2026-10-06): a correct answer below the retention target still earns the credit; only defective instruments lose it', async () => {
+      // Recall estimate 0.4, under the retention target: the gap view would not count this answer
+      // as current, but importing that threshold is a separate scheduling-policy change.
+      const row = await rowAfter(quizAnswer, fixedRetrievabilityScheduler(0.4));
+      expect(row.readiness.applied).toBe(true);
+      expect(row.readiness.weight).toBeLessThan(1);
     });
 
     it('PIN ([D-347] as ruled): her own-choice suspension keeps the sound answer counting', async () => {
