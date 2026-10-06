@@ -291,6 +291,31 @@ describe('the alignment result store', () => {
     await expect(s.recordAlignmentResults([withoutProvenance])).rejects.toThrow(/provenance/);
   });
 
+  it('refuses a past-paper result with no structure id, and needs none on an objectives result ([D-534])', async () => {
+    const s = store();
+    const result = { kind: 'not-aligned', reason: 'searched' } as const;
+    await expect(
+      s.recordAlignmentResults([
+        alignmentPayload(OBJECTIVES('r1'), 'k0', result),
+        alignmentPayload(PAPER('r1'), 'k1', result),
+      ]),
+    ).rejects.toThrow(/structure/);
+    const view = alignmentResultView(
+      await s.load(),
+      { courseId: 'course-1', source: OBJECTIVES('r1'), conceptKey: 'k0' },
+      DIGESTS,
+    );
+    expect(view.status).toBe('none');
+    expect(
+      await s.recordAlignmentResults([
+        { ...alignmentPayload(PAPER('r1'), 'k1', result), structureId: 'e9' },
+      ]),
+    ).toEqual({ appended: 1, unchanged: 0 });
+    expect(
+      await s.recordAlignmentResults([alignmentPayload(OBJECTIVES('r1'), 'k0', result)]),
+    ).toEqual({ appended: 1, unchanged: 0 });
+  });
+
   it('writes nothing at all when one payload in the batch is invalid', async () => {
     const s = store();
     await expect(

@@ -169,7 +169,8 @@ export function isAlignmentResultPayload(value: unknown): value is AlignmentResu
     isString(value.digests.closedList) &&
     isString(value.digests.coverage) &&
     isString(value.digests.frozenConfiguration) &&
-    isObject(value.coverage)
+    isObject(value.coverage) &&
+    (value.structureId === undefined || isString(value.structureId))
   );
 }
 
@@ -403,18 +404,32 @@ export function partDemandView(
 /** The digests the caller says are current. Only those supplied are compared; an omitted one is not checked. */
 export type AlignmentCurrentDigests = Partial<AlignmentDigests>;
 
+type AlignmentStaleName =
+  | 'revision'
+  | 'closedList'
+  | 'coverage'
+  | 'batchPlan'
+  | 'frozenConfiguration'
+  | 'structure';
+
 /** Compares one stored result with the digests that are current now. `revisionDigest` is optional here: a keyed lookup already implies the revision. */
 export function alignmentFreshness(
   payload: AlignmentResultPayload,
-  current: AlignmentCurrentDigests & { readonly revisionDigest?: string },
+  current: AlignmentCurrentDigests & {
+    readonly revisionDigest?: string;
+    /** `[D-534]`: the structure id current now. When supplied, a result naming any other (or none) is stale. */
+    readonly structureId?: string;
+  },
 ): AlignmentFreshness {
-  const stale: ('revision' | 'closedList' | 'coverage' | 'batchPlan' | 'frozenConfiguration')[] =
-    [];
+  const stale: AlignmentStaleName[] = [];
   if (
     current.revisionDigest !== undefined &&
     current.revisionDigest !== payload.source.revisionDigest
   ) {
     stale.push('revision');
+  }
+  if (current.structureId !== undefined && current.structureId !== payload.structureId) {
+    stale.push('structure');
   }
   for (const name of ['closedList', 'coverage', 'batchPlan', 'frozenConfiguration'] as const) {
     const now = current[name];
@@ -440,22 +455,49 @@ export type AlignmentResultView =
       readonly coverage: AlignmentCoverageNote;
       readonly digests: AlignmentDigests;
       readonly provenance?: ScopeReaderProvenance;
+      /** `[D-534]`: the structure a past-paper result's part ids name. */
+      readonly structureId?: string;
       readonly stale: readonly string[];
     };
 
 function viewOfAlignment(
+  projection: ScopeReadingProjection,
   payload: AlignmentResultPayload,
   currentDigests: AlignmentCurrentDigests,
 ): Extract<AlignmentResultView, { status: 'current' | 'unverified' }> {
   const freshness = alignmentFreshness(payload, currentDigests);
+  // `[D-534]` 2-ii: a past paper's part ids mean something only against the structure they came from.
+  if (payload.source.documentKind === 'past-paper') {
+    const structure = structureView(projection, payload.source);
+    const matches =
+      (structure.status === 'current' || structure.status === 'stale-reader') &&
+      structure.structureId === payload.structureId;
+    if (!matches) {
+      const stale = freshness.status === 'unverified' ? freshness.stale : [];
+      return viewOf(payload, 'unverified', [...stale, 'structure']);
+    }
+  }
+  return viewOf(
+    payload,
+    freshness.status,
+    freshness.status === 'unverified' ? freshness.stale : [],
+  );
+}
+
+function viewOf(
+  payload: AlignmentResultPayload,
+  status: 'current' | 'unverified',
+  stale: readonly string[],
+): Extract<AlignmentResultView, { status: 'current' | 'unverified' }> {
   return {
-    status: freshness.status,
+    status,
     conceptKey: payload.conceptKey,
     result: payload.result,
     coverage: payload.coverage,
     digests: payload.digests,
     ...(payload.provenance !== undefined ? { provenance: payload.provenance } : {}),
-    stale: freshness.status === 'unverified' ? freshness.stale : [],
+    ...(payload.structureId !== undefined ? { structureId: payload.structureId } : {}),
+    stale,
   };
 }
 
@@ -479,7 +521,7 @@ export function alignmentResultView(
       ),
     };
   }
-  return viewOfAlignment(held.payload, currentDigests);
+  return viewOfAlignment(projection, held.payload, currentDigests);
 }
 
 /** Every alignment result for one course's document at its current revision, in concept-key order. */
@@ -497,7 +539,7 @@ export function alignmentResultsForDocument(
       payload.source.sourcePath === source.sourcePath &&
       payload.source.revisionDigest === source.revisionDigest
     ) {
-      out.push(viewOfAlignment(payload, currentDigests));
+      out.push(viewOfAlignment(projection, payload, currentDigests));
     }
   }
   return out.sort((a, b) =>

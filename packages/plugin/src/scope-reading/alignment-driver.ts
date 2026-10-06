@@ -315,6 +315,11 @@ async function alignCourse(
   });
   const structureId =
     ref.documentKind === 'past-paper' ? recorded.structure?.structureId : undefined;
+  // `[D-534]` 2-ii: a past-paper result names the structure its part ids came from. With none
+  // recorded there is nothing to name, so nothing is called or written: absence, never a verdict.
+  if (ref.documentKind === 'past-paper' && structureId === undefined) {
+    return { calls: 0, written: 0 };
+  }
   const closedList = await alignClosedListDigest(closedListEntries);
   const batchPlan = await alignBatchPlanDigest(plan, structureId);
 
@@ -364,7 +369,13 @@ async function alignCourse(
         : {}),
     }));
     if (results.length === 0) return { calls: 0, written: 0 };
-    await persistence.recordAlignmentResults({ ref, courseId: course, digests, results });
+    await persistence.recordAlignmentResults({
+      ref,
+      courseId: course,
+      digests,
+      ...(structureId !== undefined ? { structureId } : {}),
+      results,
+    });
     return { calls: 0, written: results.length };
   }
 
@@ -497,7 +508,13 @@ async function alignCourse(
     };
   });
   if (results.length === 0) return { calls: made, written: 0 };
-  await persistence.recordAlignmentResults({ ref, courseId: course, digests, results });
+  await persistence.recordAlignmentResults({
+    ref,
+    courseId: course,
+    digests,
+    ...(structureId !== undefined ? { structureId } : {}),
+    results,
+  });
   return { calls: made, written: results.length };
 }
 

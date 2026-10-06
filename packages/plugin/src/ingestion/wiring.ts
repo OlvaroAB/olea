@@ -133,8 +133,11 @@ import type { DraftCacheStore } from '../generation/cache-store.js';
 import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DocumentReadingBasis } from '../scope-reading/basis.js';
+import { runScopeReadingDrivers, SCOPE_READING_DRIVERS_ENABLED } from '../scope-reading/drivers.js';
 import {
   createScopeReadingPersistence,
+  type DocumentRef,
+  type RecordedExtraction,
   type ScopeReadingPersistence,
 } from '../scope-reading/persistence.js';
 import {
@@ -392,6 +395,19 @@ export interface ScopeReadingTriggerDeps {
   readonly readingBasisFor: (sourcePath: VaultPath) => Promise<DocumentReadingBasis | null>;
   /** Injectable for deterministic tests. */
   readonly now?: () => string;
+  /**
+   * `[D-534]` 1b: the scope-reading drivers (`../scope-reading/drivers.ts`) behind an off switch.
+   * Absent, or `enabled: false`, the trigger enters them never: no demand or alignment call, no
+   * further write. Absent, the default is `SCOPE_READING_DRIVERS_ENABLED` (`../scope-reading/
+   * drivers.ts`, `false`); `main.ts` passes nothing, so production stays off. Never a setting.
+   */
+  readonly drivers?: ScopeReadingDriversDeps;
+}
+
+export interface ScopeReadingDriversDeps {
+  readonly enabled: boolean;
+  /** Vault paths of registered assessment documents: a definition bound to one is not a description source. Read fresh per run. */
+  readonly assessmentPaths?: () => Promise<ReadonlySet<string>>;
 }
 
 /** Why an extraction is owed, as `../scope-reading/persistence.ts` names it. */
@@ -416,7 +432,15 @@ interface ScopeReadingWriter {
     readonly declarationCount: number;
     readonly paperStructure: OutcomesExtractReadResult<OutcomeSourceReference>['paperStructure'];
     readonly stamp: { readonly promptVersion: string; readonly modelId: string };
-  }): Promise<void>;
+  }): Promise<RecordedExtraction | null>;
+  /** The opened persistence and the document it writes for, for the drivers (`[D-534]`). */
+  target(): Promise<{
+    readonly persistence: ScopeReadingPersistence;
+    readonly ref: DocumentRef;
+    readonly basis: DocumentReadingBasis;
+  }>;
+  /** `[D-534]` 1b: whether the drivers may run at all, and where the assessment paths come from. */
+  readonly drivers: ScopeReadingDriversDeps | undefined;
 }
 
 async function openScopeReadingWriter(
@@ -456,9 +480,11 @@ async function openScopeReadingWriter(
         console.error('Olea: scope reading was not recorded (ingestion unaffected)', { error });
       }
     },
+    drivers: deps.drivers,
+    target: async () => ({ persistence: await open(), ref, basis: known }),
     async extraction(result) {
       try {
-        await (await open()).recordExtraction({
+        return await (await open()).recordExtraction({
           sourcePath,
           documentKind,
           revisionDigest: known.revisionDigest,
@@ -469,6 +495,7 @@ async function openScopeReadingWriter(
         });
       } catch (error) {
         console.error('Olea: scope reading was not recorded (ingestion unaffected)', { error });
+        return null;
       }
     },
   };
@@ -643,6 +670,7 @@ async function triggerOutcomesExtractForLandedUnit(
   deps: OutcomesExtractTriggerDeps,
   sourcePath: VaultPath,
   units: readonly ExtractedUnit[],
+  sourceRevisions?: ReadonlyMap<string, string>,
 ): Promise<void> {
   const registered = await deps.registeredDocumentFor(sourcePath);
   if (registered === null) return;
@@ -718,11 +746,32 @@ async function triggerOutcomesExtractForLandedUnit(
   await reconcileResolvedOutcomes(vault, resolved, options);
   // `[D-429]`: after the Outcome records, so a `recorded` state never outruns the declarations it
   // stands for. The structure half of the answer, dropped here before this bead, is kept.
-  await scope?.extraction({
+  const recorded = await scope?.extraction({
     declarationCount: result.outcomes.length,
     paperStructure: result.paperStructure,
     stamp: { promptVersion: provenance.promptVersion, modelId: provenance.modelVersion },
   });
+  // `[D-534]` 1b: the drivers run only when the composition root's switch is on (it ships off:
+  // `[D-344]` is not extended to these calls). Never fails the job it rode in on.
+  if ((scope?.drivers?.enabled ?? SCOPE_READING_DRIVERS_ENABLED) && scope && recorded) {
+    try {
+      const deliveryRevisionDigest = sourceRevisions?.get(sourcePath);
+      const assessmentPaths = await scope.drivers?.assessmentPaths?.();
+      await runScopeReadingDrivers({
+        ...(await scope.target()),
+        recorded,
+        units,
+        courses: registered.courses,
+        declarations: resolved.outcomes,
+        transport: innerTransport,
+        vault,
+        ...(deliveryRevisionDigest !== undefined ? { deliveryRevisionDigest } : {}),
+        ...(assessmentPaths !== undefined ? { assessmentPaths } : {}),
+      });
+    } catch (error) {
+      console.error('Olea: scope reading drivers failed (ingestion unaffected)', { error });
+    }
+  }
 }
 
 /**
@@ -751,7 +800,13 @@ function withOutcomesExtractHook(
       }
       for (const [sourcePath, sourceUnits] of unitsBySourcePath) {
         try {
-          await triggerOutcomesExtractForLandedUnit(vault, outcomesDeps, sourcePath, sourceUnits);
+          await triggerOutcomesExtractForLandedUnit(
+            vault,
+            outcomesDeps,
+            sourcePath,
+            sourceUnits,
+            sourceRevisions,
+          );
         } catch (error) {
           console.error('Olea: outcomes-extract hook failed (ingestion unaffected)', error);
         }
