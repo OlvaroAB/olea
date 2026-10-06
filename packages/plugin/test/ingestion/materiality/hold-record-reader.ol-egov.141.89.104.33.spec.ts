@@ -2,8 +2,9 @@
  * [D-500] / [D-502] (ol-egov.141.89.104.33): the hold-record reader and the consumer hold check,
  * the reader floor's second piece. Every hold this build can read holds; an unknown reason or an
  * unknown version keeps the hold; bytes that name no readable passage are not a hold, are left
- * untouched and are reported; an unreadable store is never read as no holds. Reading writes
- * nothing. Synthetic text only (invented terms from the validation fixture world).
+ * untouched and are reported; a store that cannot be read is unavailable, never no holds and
+ * never a hold, and is read again until it reads ([D-539]). Reading writes nothing. Synthetic
+ * text only (invented terms from the validation fixture world).
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -16,12 +17,15 @@ import {
   citedPassagesOf,
   classifyHoldRecord,
   type HoldStoreRead,
-  heldEffect,
+  HoldStoreReader,
+  type HoldStoreSource,
   holdCoversPassage,
+  holdEffect,
   mergeHoldReads,
   NEWER_FACT_HOLD_REASON,
+  readHoldStore,
   readHoldText,
-  resolveHoldWithheldInstruments,
+  resolveHoldWithholding,
   summariseHoldRead,
 } from '../../../src/ingestion/materiality/hold-record-reader.js';
 
@@ -72,8 +76,7 @@ describe('classifyHoldRecord: what counts as a hold', () => {
     expect(
       checkHolds(readHoldText(text(line(record({ reason: 'zz-future' })))), [citing()]),
     ).toEqual({
-      held: true,
-      cause: 'hold',
+      status: 'held',
       reasons: [{ reason: 'zz-future', recognised: false, factId: 'cor:9' }],
     });
   });
@@ -159,8 +162,8 @@ describe('readHoldText: torn, corrupt and repeated lines', () => {
     );
     expect(read.holds.map((hold) => hold.id)).toEqual(['hold-1', 'hold-3']);
     expect(read.unreadable).toEqual([{ line: 2, kind: 'not-json', length: 15 }]);
-    expect(checkHolds(read, [citing()]).held).toBe(true);
-    expect(checkHolds(read, [citing(OTHER_SOURCE, D2)]).held).toBe(true);
+    expect(checkHolds(read, [citing()]).status).toBe('held');
+    expect(checkHolds(read, [citing(OTHER_SOURCE, D2)]).status).toBe('held');
   });
 
   it('a hold appended straight after a torn fragment, on the same line, is read and holds', () => {
@@ -216,7 +219,7 @@ describe('readHoldText: torn, corrupt and repeated lines', () => {
     );
     expect(read.holds).toHaveLength(2);
     const check = checkHolds(read, [citing()]);
-    expect(check.held && check.cause === 'hold' ? check.reasons.map((r) => r.factId) : []).toEqual([
+    expect(check.status === 'held' ? check.reasons.map((r) => r.factId) : []).toEqual([
       'cor:9',
       'cor:12',
     ]);
@@ -295,13 +298,14 @@ describe('holdCoversPassage', () => {
   });
 });
 
-describe('checkHolds and heldEffect: the consumer hold check', () => {
+describe('checkHolds and holdEffect: the consumer hold check', () => {
   const holding = readHoldText(text(line(record())));
 
   it('an instrument citing a held passage is not shown, not support and not reviewable', () => {
     const check = checkHolds(holding, [citing()]);
-    expect(check.held).toBe(true);
-    expect(heldEffect('instrument', check)).toEqual({
+    expect(check.status).toBe('held');
+    expect(holdEffect('instrument', check)).toEqual({
+      status: 'held',
       display: 'not-shown',
       supportUse: false,
       reviewEligible: false,
@@ -309,7 +313,8 @@ describe('checkHolds and heldEffect: the consumer hold check', () => {
   });
 
   it('an explanation claim citing a held passage is shown withdrawn', () => {
-    expect(heldEffect('explanation-claim', checkHolds(holding, [citing()]))).toEqual({
+    expect(holdEffect('explanation-claim', checkHolds(holding, [citing()]))).toEqual({
+      status: 'held',
       display: 'shown-withdrawn',
       supportUse: false,
       reviewEligible: false,
@@ -317,42 +322,245 @@ describe('checkHolds and heldEffect: the consumer hold check', () => {
   });
 
   it('one held passage among several cited holds the artifact', () => {
-    expect(checkHolds(holding, [citing(OTHER_SOURCE, D2), citing()]).held).toBe(true);
+    expect(checkHolds(holding, [citing(OTHER_SOURCE, D2), citing()]).status).toBe('held');
   });
 
   it('a different passage of the same source is untouched', () => {
     const check = checkHolds(holding, [citing(SOURCE, D2)]);
-    expect(check).toEqual({ held: false });
-    expect(heldEffect('instrument', check)).toBeNull();
+    expect(check).toEqual({ status: 'clear' });
+    expect(holdEffect('instrument', check)).toBeNull();
   });
 
   it('no hold store at all holds nothing', () => {
-    expect(checkHolds({ status: 'absent' }, [citing()])).toEqual({ held: false });
+    expect(checkHolds({ status: 'absent' }, [citing()])).toEqual({ status: 'clear' });
   });
 
-  it('a store that cannot be read is never read as no holds', () => {
+  it('a store that cannot be read is unavailable: never no holds, and never a hold ([D-539])', () => {
     const unavailable: HoldStoreRead = { status: 'unavailable' };
-    expect(checkHolds(unavailable, [citing(OTHER_SOURCE, D2)])).toEqual({
-      held: true,
-      cause: 'hold-store-unavailable',
+    expect(checkHolds(unavailable, [citing(OTHER_SOURCE, D2)])).toEqual({ status: 'unavailable' });
+    expect(holdEffect('instrument', checkHolds(unavailable, [citing()]))).toEqual({
+      status: 'unavailable',
+      display: 'unavailable',
+      supportUse: 'unknown',
+      reviewEligible: false,
     });
-    expect(heldEffect('instrument', checkHolds(unavailable, [citing()]))?.display).toBe(
-      'not-shown',
-    );
+    // an explanation claim is never shown withdrawn for a check that could not be made
+    const claim = holdEffect('explanation-claim', checkHolds(unavailable, [citing()]));
+    expect(claim?.status).toBe('unavailable');
+    expect(claim?.display).not.toBe('shown-withdrawn');
   });
 
   it('an artifact that cites no passage is untouched, even when the store cannot be read', () => {
-    expect(checkHolds({ status: 'unavailable' }, [])).toEqual({ held: false });
-    expect(checkHolds(holding, [])).toEqual({ held: false });
+    expect(checkHolds({ status: 'unavailable' }, [])).toEqual({ status: 'clear' });
+    expect(checkHolds(holding, [])).toEqual({ status: 'clear' });
   });
 
-  it('resolves the withheld set to union with the anchor pending set', () => {
-    const held = resolveHoldWithheldInstruments(holding, [
+  it('resolves the set to union with the anchor pending set, and the evidence withdrawn', () => {
+    const withholding = resolveHoldWithholding(holding, [
       { instrumentId: 'i:7', cited: [citing()] },
       { instrumentId: 'i:12', cited: [citing(OTHER_SOURCE, D2)] },
       { instrumentId: 'i:13', cited: [] },
     ]);
-    expect([...held]).toEqual(['i:7']);
+    expect(withholding.store).toBe('read');
+    expect([...withholding.notPresented]).toEqual(['i:7']);
+    expect([...withholding.evidenceWithdrawn]).toEqual(['i:7']);
+    expect([...withholding.evidenceUnknown]).toEqual([]);
+  });
+});
+
+describe('an unreadable store is shown as unavailable and never reads as weak knowledge ([D-539])', () => {
+  const instruments = [
+    { instrumentId: 'i:7', cited: [citing()] },
+    { instrumentId: 'i:12', cited: [citing(OTHER_SOURCE, D2)] },
+    { instrumentId: 'i:13', cited: [] },
+  ];
+
+  it('keeps passage-citing instruments from presentation, their evidence unknown, not withdrawn', () => {
+    const withholding = resolveHoldWithholding({ status: 'unavailable' }, instruments);
+    expect(withholding.store).toBe('unavailable');
+    expect([...withholding.notPresented]).toEqual(['i:7', 'i:12']);
+    // nothing is removed from a reading: removing it would read as weak knowledge
+    expect([...withholding.evidenceWithdrawn]).toEqual([]);
+    expect([...withholding.evidenceUnknown]).toEqual(['i:7', 'i:12']);
+  });
+
+  it('a readable hold still withdraws its own evidence, and leaves nothing unknown', () => {
+    const withholding = resolveHoldWithholding(readHoldText(text(line(record()))), instruments);
+    expect([...withholding.evidenceWithdrawn]).toEqual(['i:7']);
+    expect([...withholding.evidenceUnknown]).toEqual([]);
+  });
+});
+
+describe('a single unreadable record never makes the store unavailable (M2)', () => {
+  it('a corrupt record beside a readable hold: read, reported, and the readable hold decides', async () => {
+    const read = await readHoldStore({
+      listParts: async () => [async () => text('{"id":"hold-', line(record()))],
+    });
+    expect(read.status).toBe('read');
+    expect(read.status === 'read' ? read.unreadable.map((entry) => entry.kind) : []).toEqual([
+      'not-json',
+    ]);
+    expect(checkHolds(read, [citing()]).status).toBe('held');
+  });
+
+  it('a corrupt record alone: read with no holds, never unavailable', async () => {
+    const read = await readHoldStore({ listParts: async () => [async () => text('{"id":"hold-')] });
+    expect(read.status).toBe('read');
+    expect(checkHolds(read, [citing()])).toEqual({ status: 'clear' });
+  });
+});
+
+describe('readHoldStore: a whole-store read', () => {
+  const ok = (body: string) => async () => body;
+  const fails = async (): Promise<string> => {
+    throw new Error('EIO');
+  };
+
+  it('a store with no parts is absent', async () => {
+    expect(await readHoldStore({ listParts: async () => [] })).toEqual({ status: 'absent' });
+  });
+
+  it('a store that cannot be listed is unavailable', async () => {
+    const source: HoldStoreSource = {
+      listParts: async () => {
+        throw new Error('EACCES');
+      },
+    };
+    expect(await readHoldStore(source)).toEqual({ status: 'unavailable' });
+  });
+
+  it('one part that cannot be read makes the whole unavailable, never fewer holds', async () => {
+    const read = await readHoldStore({ listParts: async () => [ok(text(line(record()))), fails] });
+    expect(read).toEqual({ status: 'unavailable' });
+  });
+
+  it('a part that does not hand back text is unavailable, never no holds', async () => {
+    const odd = (async () => undefined) as unknown as () => Promise<string>;
+    expect(await readHoldStore({ listParts: async () => [odd] })).toEqual({
+      status: 'unavailable',
+    });
+  });
+
+  it('combines the readable parts', async () => {
+    const read = await readHoldStore({
+      listParts: async () => [
+        ok(text(line(record()))),
+        ok(text(line(record({ id: 'hold-6', passage: passage(OTHER_SOURCE, D2) })))),
+      ],
+    });
+    expect(read.status === 'read' ? read.holds.map((hold) => hold.id) : []).toEqual([
+      'hold-1',
+      'hold-6',
+    ]);
+  });
+});
+
+describe('HoldStoreReader: the recovery path, without restarting Olea ([D-539])', () => {
+  /** A store whose reads fail until `healthy` is set; counts how often it is listed. */
+  function flakyStore(body: string) {
+    const state = { healthy: false, listings: 0 };
+    const source: HoldStoreSource = {
+      listParts: async () => {
+        state.listings += 1;
+        if (!state.healthy) throw new Error('EIO');
+        return [async () => body];
+      },
+    };
+    return { state, source };
+  }
+
+  it('a failed read is never kept: the next read goes to the store again and recovers', async () => {
+    const { state, source } = flakyStore(text(line(record())));
+    let clock = 1_000;
+    const reader = new HoldStoreReader(source, () => clock);
+    expect(reader.current).toBeUndefined();
+
+    const first = await reader.read();
+    expect(first.read.status).toBe('unavailable');
+    expect(first.unavailableSince).toBe(1_000);
+    expect(first.failedReads).toBe(1);
+    expect(first.recovered).toBeUndefined();
+
+    clock = 31_000;
+    const second = await reader.read();
+    expect(second.read.status).toBe('unavailable');
+    expect(second.unavailableSince).toBe(1_000);
+    expect(second.failedReads).toBe(2);
+
+    state.healthy = true;
+    clock = 61_000;
+    const third = await reader.read();
+    expect(third.read.status).toBe('read');
+    expect(third.unavailableSince).toBeUndefined();
+    expect(third.failedReads).toBe(0);
+    expect(third.recovered).toEqual({ unavailableSince: 1_000, failedReads: 2 });
+    expect(checkHolds(third.read, [citing()]).status).toBe('held');
+    expect(reader.current).toBe(third);
+    expect(state.listings).toBe(3);
+
+    // recovery is reported once, on the read that ends the run
+    clock = 91_000;
+    expect((await reader.read()).recovered).toBeUndefined();
+  });
+
+  it('the tick re-reads only while unavailable, and clears the state once the store reads', async () => {
+    const { state, source } = flakyStore(text(line(record())));
+    const reader = new HoldStoreReader(source, () => 5);
+    // no read yet: the tick reads
+    expect((await reader.readIfUnavailable()).read.status).toBe('unavailable');
+    expect((await reader.readIfUnavailable()).failedReads).toBe(2);
+    state.healthy = true;
+    const recovered = await reader.readIfUnavailable();
+    expect(recovered.read.status).toBe('read');
+    expect(recovered.recovered?.failedReads).toBe(2);
+    // healthy: the tick does not go to the store again
+    const listings = state.listings;
+    expect(await reader.readIfUnavailable()).toBe(recovered);
+    expect(state.listings).toBe(listings);
+  });
+
+  it('a load always reads afresh, so a hold that has arrived since is seen', async () => {
+    const parts: string[] = [];
+    const reader = new HoldStoreReader({
+      listParts: async () => parts.map((body) => async () => body),
+    });
+    expect((await reader.read()).read.status).toBe('absent');
+    parts.push(text(line(record())));
+    expect(checkHolds((await reader.read()).read, [citing()]).status).toBe('held');
+  });
+
+  it('reads started together share one', async () => {
+    const { state, source } = flakyStore(text(line(record())));
+    state.healthy = true;
+    const reader = new HoldStoreReader(source);
+    const [a, b] = await Promise.all([reader.read(), reader.read()]);
+    expect(a).toBe(b);
+    expect(state.listings).toBe(1);
+  });
+
+  it('a failed read is reported by counts and times only', async () => {
+    const reader = new HoldStoreReader(
+      {
+        listParts: async () => {
+          throw new Error('Orm course/Lecture 4 transcript.md: EIO');
+        },
+      },
+      () => 7,
+    );
+    const serialised = JSON.stringify(await reader.read());
+    expect(serialised.includes('Orm')).toBe(false);
+    expect(serialised.includes('EIO')).toBe(false);
+  });
+});
+
+describe('a legacy citation with no passage digest (C5.3 as amended by [D-539])', () => {
+  it('is held by a hold on any passage of its source, and untouched by a hold on another', () => {
+    const legacy = citing(SOURCE, null);
+    expect(checkHolds(readHoldText(text(line(record()))), [legacy]).status).toBe('held');
+    const otherPassage = readHoldText(text(line(record({ passage: passage(SOURCE, D2) }))));
+    expect(checkHolds(otherPassage, [legacy]).status).toBe('held');
+    const otherSource = readHoldText(text(line(record({ passage: passage(OTHER_SOURCE, D1) }))));
+    expect(checkHolds(otherSource, [legacy])).toEqual({ status: 'clear' });
   });
 });
 
@@ -389,8 +597,8 @@ describe('the hold check beside the citation anchor table', () => {
     const sidecar = { sourcePath: SOURCE, passageDigest: D1 };
     const holds = readHoldText(text(line(record({ passage: passage(OTHER_SOURCE, D2) }))));
     const check = checkHolds(holds, citedPassagesOf(sidecar, anchor));
-    expect(check.held).toBe(true);
-    expect(checkHolds(holds, citedPassagesOf(sidecar, undefined)).held).toBe(false);
+    expect(check.status).toBe('held');
+    expect(checkHolds(holds, citedPassagesOf(sidecar, undefined)).status).toBe('clear');
     expect(host.writes).toBe(0);
     expect(JSON.stringify(host.blob)).toBe(before);
   });
