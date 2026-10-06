@@ -1086,6 +1086,9 @@ export async function composeStudySessionForRequest(
     instrumentCountsByNotePath(enumeration.records),
   );
 
+  // `[D-521]` (ruled 2026-10-06): no `need` here, deliberately. Without it each row scores the
+  // ranking's priority × credit, so the session is ordered by the ranking's additive blend (C5.10);
+  // the product, relevance × need × credit, is the gap view's formula (`../gap/provider.ts`).
   const gap = buildGapView({
     ranking,
     assessments: edges.assessmentsRead.records,

@@ -978,7 +978,17 @@ function resolveRetrievabilityScores(
 ): ReadonlyMap<string, number> | undefined {
   if (retrievabilityInput === undefined) return undefined;
   const { scheduler, now } = retrievabilityInput;
-  const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity);
+  // `[D-347]` as ruled (`ol-egov.141.89.9.94`): a sound review she withheld keeps counting in
+  // readiness, because "a personal withdrawal or replacement does not automatically invalidate a
+  // sound review" (the attainment matching rule, section 7, judgement J1); `validity` removes the
+  // proven-invalid ones (`[D-338]` item 3). Named so the ruled reading is visible here: option
+  // (c), dropping every withheld instrument, was the proposal the ruling did not adopt. The gap
+  // view's need, recognition credit and demand rule pass the same policy
+  // (`plugin/src/gap/provider.ts`'s `RULED_CURRENT_READING`). A changed, unrevalidated passage
+  // (`AttainmentOptions.passageChanges`) has no production input yet.
+  const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity, {
+    withheldEvidence: 'count',
+  });
   const scores = new Map<string, number>();
   for (const [conceptKey, reading] of readings) {
     if (reading.weakest !== null) {

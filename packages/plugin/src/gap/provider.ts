@@ -64,6 +64,15 @@ and the provider never names the target record's writer. Nothing here is worded:
 reads no `unmetDemands`, and this bead adds no surface. A reader that throws is the same as one
 that read nothing, so a failing optional reader never takes the whole view down.
 
+## Need with its basis (`ol-egov.141.89.9.93`, `[D-348]`, F4.3)
+
+`buildGapView`'s `need` input is supplied here: per ranked concept, need read from the readiness
+fold, estimated where the concept has eligible evidence and unknown where it has none. The copy
+words an unknown basis as unknown, never as a shortfall (registry §22), and each row scores
+relevance × need × credit (the attainment chain spec, section 2.5). Need reads the same entries,
+scheduler, instant and validity projection as the ranking's own need term, so the two agree for
+every concept (`[D-371]`).
+
 ## Unavailable, for two different reasons, one state
  *
  * `GapViewState` (`./view.ts`) is `{kind:'model', model} | {kind:'unavailable'}`
@@ -85,8 +94,11 @@ import type {
   DisputeLogRecord,
   GapRow,
   InstrumentDemandReading,
+  InstrumentValidityProjection,
+  NeedReading,
   PaperDemand,
   RankOracleOptions,
+  RankOracleResult,
   Scheduler,
   UnitManifest,
   VaultInstrumentRecord,
@@ -104,7 +116,10 @@ import {
   projectInstrumentDemands,
   projectInstrumentValidity,
   projectRegisteredFiles,
+  readAllConceptReadiness,
+  readAllCurrentRecognition,
   readInstrumentDemand,
+  readNeed,
   readReviewLogFile,
   readReviewLogHistory,
   reviewLogPath,
@@ -320,6 +335,23 @@ async function readInstrumentDemands(
 }
 
 /**
+ * **The evidence rule every current reading this view supplies applies** (`ol-egov.141.89.9.94`):
+ * need, the recognition credit and the demand rule. Proven-invalid evidence never counts: that is
+ * the `validity` projection each reading is handed (`[D-338]` item 3). A sound review she withheld
+ * (her suspension or withdrawal with no defect recorded, or with no reason at all) **keeps
+ * counting**: `[D-347]` as ruled, whose clarification reads "a personal withdrawal or replacement
+ * does not automatically invalidate a sound review" (the attainment matching rule, section 7, row
+ * "withheld, sound", judgement J1). That is the `'count'` option, named here so the ruled reading
+ * is visible at the call site; option (c), dropping every withheld instrument, was the proposal
+ * the ruling did not adopt. The same policy `oracle/compose.ts` passes to the ranking's readiness.
+ *
+ * Not yet applied anywhere in production: the ruling's other exclusion, a cited passage changed
+ * and not yet revalidated (`AttainmentOptions.passageChanges`). No production reader has that
+ * input; see `ol-egov.141.89.9.94`'s notes.
+ */
+const RULED_CURRENT_READING = { withheldEvidence: 'count' } as const;
+
+/**
  * The gap view's `unmetDemands`: per concept whose declared demands were read, the demands no
  * qualifying review shows now (`[D-349]`). A concept not read has no entry. With nothing declared
  * the map is empty and no instrument is read.
@@ -329,7 +361,7 @@ async function unmetDemandsFor(input: {
   readonly declaredDemands: ReadonlyMap<string, readonly PaperDemand[]> | undefined;
   readonly records: readonly VaultInstrumentRecord[];
   readonly entries: readonly ReviewLogEntry[];
-  readonly disputes: readonly DisputeLogRecord[];
+  readonly validity: InstrumentValidityProjection;
   readonly scheduler: Scheduler;
   readonly now: Date;
 }): Promise<ReadonlyMap<string, readonly PaperDemand[]>> {
@@ -347,11 +379,78 @@ async function unmetDemandsFor(input: {
     declaredDemands,
     instrumentDemands,
     entries: input.entries,
-    // The same dispute-aware projection `composeOracleRanking` folds (it does not return it).
-    validity: projectInstrumentValidity(input.entries, input.disputes),
+    validity: input.validity,
     scheduler: input.scheduler,
     now: input.now,
+    ...RULED_CURRENT_READING,
   });
+}
+
+/** The concept keys the gap view has rows for: every ranked entry, abstained courses having none. */
+function rankedConceptKeys(ranking: RankOracleResult): readonly string[] {
+  const keys = new Set<string>();
+  for (const course of ranking.courses) {
+    if (course.status !== 'ranked') continue;
+    for (const entry of course.ranked) keys.add(entry.conceptKey);
+  }
+  return [...keys].sort();
+}
+
+/**
+ * `[D-348]` (`ol-egov.141.89.9.93`, F4.3): need with its basis, per ranked concept key. Estimated
+ * at one minus the readiness reading when the concept has eligible evidence; unknown, at the
+ * declared value, when it has none (`readNeed`). Folded by `readAllConceptReadiness` over the same
+ * entries, scheduler, instant and validity projection the ranking's own need term reads
+ * (`oracle/compose.ts`'s `resolveRetrievabilityScores`), so the gap view and the ranking never
+ * apply two evidence rules to one concept (`[D-371]`).
+ *
+ * Supplied to `buildGapView`, it does two things: the copy words an unknown basis as unknown and
+ * never as a shortfall (`./copy.ts`'s `masteryGapLine`, registry §22), and each row scores
+ * relevance × need × credit instead of the ranking's priority × credit (the attainment chain spec,
+ * section 2.5; `GapRow.gapScore`).
+ */
+function needByConcept(
+  entries: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+): ReadonlyMap<string, NeedReading> {
+  const readiness = readAllConceptReadiness(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    RULED_CURRENT_READING,
+  );
+  const need = new Map<string, NeedReading>();
+  for (const [conceptKey, reading] of readiness) need.set(conceptKey, readNeed(reading));
+  return need;
+}
+
+/**
+ * `[D-338]` item 3 (`ol-egov.141.89.9.94`): per ranked concept key, whether a correct, current quiz
+ * answer stands (`readAllCurrentRecognition`), so the recognition credit never reads an answer on
+ * an item proven defective, or one no longer current (the attainment chain spec, section 2.5).
+ * Without it, `buildGapView` falls back to the mastery join's `tiersSucceeded.recognition`, which
+ * reads any past success and removes proven-invalid evidence at the top stage only.
+ */
+function currentRecognitionByConcept(
+  entries: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+): ReadonlyMap<string, boolean> {
+  return readAllCurrentRecognition(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    RULED_CURRENT_READING,
+  );
 }
 
 /**
@@ -397,6 +496,10 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
         const disputes = await disputesFromFiles(deps.vault, files);
+        // The same dispute-aware projection `composeOracleRanking` folds internally (it does not
+        // return it), folded once here for every current reading this view supplies: need and the
+        // demand rule. Proven-invalid evidence never counts in either (`[D-338]` item 3).
+        const validity = projectInstrumentValidity(entries, disputes);
 
         const { ranking, edges, mastery } = await composeOracleRanking({
           vault: deps.vault,
@@ -442,10 +545,27 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           declaredDemands,
           records: enumeration.records,
           entries,
-          disputes,
+          validity,
           scheduler,
           now,
         });
+
+        // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
+        // unknown basis is worded as unknown, never as weakness. See `needByConcept`.
+        // `[D-521]` (ruled 2026-10-06): supplying need makes this view's row score the product,
+        // relevance × need × credit, the gap view's own formula (the attainment chain spec, section
+        // 2.5). The session builder supplies none and keeps the ranking's blend (C5.10).
+        const conceptKeys = rankedConceptKeys(ranking);
+        const need = needByConcept(entries, conceptKeys, scheduler, now, validity);
+        // `[D-338]` item 3 (`ol-egov.141.89.9.94`): the recognition credit reads only a correct,
+        // current answer on a standing item. See `currentRecognitionByConcept`.
+        const currentRecognition = currentRecognitionByConcept(
+          entries,
+          conceptKeys,
+          scheduler,
+          now,
+          validity,
+        );
 
         // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): what the durable manifest says of each source
         // an extractor reads, so a page still waiting is never read as absent or as read in full.
@@ -458,6 +578,8 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           mastery,
           materialPresence,
           unmetDemands,
+          need,
+          currentRecognition,
           // `tier3.sourceCoverage`, unmodified — `ol-cvsc`'s scope statement
           // (`GapViewModel.scope`) is only as honest as this pass-through.
           // N-013 mutation test: deleting this line and passing `[]` instead

@@ -446,7 +446,7 @@ describe('the view remembers a shown graded result for the session, whether or n
     expect(ledger.shown(INSTRUMENT)).toEqual({ attemptId: 'at-2' });
   });
 
-  it('accepting an attempt ends the exchange, so the note is cleared and a later offer is not a revision', async () => {
+  it('accepting an attempt clears the shown note, and a reopen in the same session continues the exchange ([D-459])', async () => {
     const ledger = createFeedbackExposureLedger();
     ledger.noteShown(INSTRUMENT, 'at-1');
     ledger.settle(INSTRUMENT);
@@ -457,7 +457,7 @@ describe('the view remembers a shown graded result for the session, whether or n
         ledger,
         readLogged: async () => NO_PRIOR_ATTEMPT,
       }),
-    ).toEqual(NO_PRIOR_ATTEMPT);
+    ).toEqual({ exposure: 'shown', lastAttemptId: null });
   });
 
   it('the note is bounded: past its capacity the oldest question is dropped and the newest kept', () => {

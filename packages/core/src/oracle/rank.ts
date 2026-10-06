@@ -972,7 +972,15 @@ function resolveNeed(
   return { needBasis: 'unknown', needOrderingInput: UNKNOWN_NEED_VALUE };
 }
 
-/** `[D-332]`'s blend with `[D-410]`'s proximity term: the three terms add, weighted; see the module doc. */
+/**
+ * `[D-332]`'s blend with `[D-410]`'s proximity term: the three terms add, weighted; see the module doc.
+ *
+ * **Purpose (`[D-521]`, ruled 2026-10-06): this is the RANKING's formula** — the order the study
+ * plan and the session serve concepts in, under C5.10, which rules out a product so that no single
+ * low factor silences a concept. The gap view's row score is a different formula for a different
+ * purpose (relevance × need × credit, `../gap/build.ts`'s `gapScore`; the attainment chain spec,
+ * section 2.5) and is not this.
+ */
 function blendPriority(
   relevance: number,
   needOrderingInput: number,

@@ -53,8 +53,8 @@
  * defective or unresolved; a sound withdrawal or replacement is not
  * invalidity) — the passage-validity half is built (`passageChanges`,
  * `ol-egov.141.89.9.84`), and the rest sits behind
- * {@link WithheldEvidencePolicy}, whose default is still "count them" until
- * `ol-egov.141.89.9.5` passes a policy from the production caller. Readiness additionally
+ * {@link WithheldEvidencePolicy}, whose ruled reading is `'count'`: every production caller
+ * passes it explicitly (`ol-egov.141.89.9.94`). Readiness additionally
  * needs an unaided (independent) success (`[D-264]`); need carries a basis
  * (`[D-348]`, ruled: unknown enters at a declared value, never worded as a
  * deficit); the recognition credit reads only a correct answer that is
@@ -121,13 +121,14 @@ export const ATTAINMENT_FOLD_VERSION = 'att-fold-1';
  * predecessor replaced by a successor. The displayed stage and the award keep
  * this evidence under every option.
  *
- * - `'count'` — (a), **today's behaviour and the default until a production
- *   caller passes a policy** (`oracle/compose.ts` passes none): every current
- *   reading counts it.
+ * - `'count'` — (a), **the ruled reading for a sound withdrawal** and the
+ *   default; `oracle/compose.ts` and the plugin's gap view pass it explicitly
+ *   (`ol-egov.141.89.9.94`): every current reading counts it.
  * - `'drop-from-readiness-and-need'` — (b): readiness and need drop it while
  *   withheld; vitality keeps it.
- * - `'drop-from-every-current-reading'` — (c), the spec's recommendation:
- *   vitality, readiness and need all drop it, and take it back when restored.
+ * - `'drop-from-every-current-reading'` — (c), the spec's proposal, which the
+ *   ruling did not adopt: vitality, readiness and need all drop it, and take it
+ *   back when restored.
  *
  * Under every option a withdrawal is withheld, never proven invalid: it never
  * invalidates sound earlier evidence (the ruling of 2026-09-28 on
@@ -141,7 +142,7 @@ export type WithheldEvidencePolicy =
   | 'drop-from-readiness-and-need'
   | 'drop-from-every-current-reading';
 
-/** `[D-347]` is ruled; this default is today's behaviour until a caller passes a policy. See {@link WithheldEvidencePolicy}. */
+/** `[D-347]` as ruled: a sound withdrawal keeps counting. See {@link WithheldEvidencePolicy}. */
 export const DEFAULT_WITHHELD_EVIDENCE_POLICY: WithheldEvidencePolicy = 'count';
 
 const WITHHELD_POLICIES: readonly WithheldEvidencePolicy[] = [
@@ -174,7 +175,7 @@ export interface AttainmentOptions
     | 'hintReveals'
     | 'feedbackExposureUncertainEventIds'
   > {
-  /** `[D-347]`, ruled; no production caller passes it yet. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
+  /** `[D-347]`, ruled; production callers pass `'count'` explicitly. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
   readonly withheldEvidence?: WithheldEvidencePolicy;
   /**
    * **The passage-validity input (`[D-347]`'s split; `ol-egov.141.89.9.84`).**

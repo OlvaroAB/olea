@@ -8,8 +8,8 @@
  * `./relation.js`'s `ConceptRelation.from`/`.to` are concept **names**
  * (matched against `ReadConcept.name`); the grouping seam partitions and
  * joins on `conceptKey`. This module performs exactly that join, and only
- * that join — no relation-type filtering beyond what already reached the
- * fold, no clustering structure, no I/O.
+ * that join plus the F2.19 allowed-type filter below — no clustering
+ * structure, no I/O.
  *
  * **The name→key derivation is REUSED, not reinvented.** It is the same
  * `new Map(concepts.map((concept) => [concept.name, concept.key]))`
@@ -24,22 +24,11 @@
  * to defend. A relation endpoint whose name does not exact-match any known
  * concept is dropped rather than guessed at.
  *
- * **Which of C7.10's six relation types count as "connected", and
- * directionality — a reversible default, not a ruling.** `compose.ts`'s own
- * module doc leaves this "deliberately type-agnostic... the caller's call".
- * The default taken here (Class B, flagged for retroactive review): every
- * relation type present in the input counts as evidence of a connection, and
- * the resulting adjacency is symmetric — an edge's `from` and `to` are each
- * added to the other's set regardless of the relation's own directedness
- * (`RELATION_DIRECTEDNESS`). F2.19 asks whether two concepts "connect to each
- * other" for PLACEMENT purposes, a weaker question than the six types' own
- * directed semantics, and grouping two concepts next to each other reads the
- * same regardless of which one is nominally the prerequisite. In production
- * this only ever sees whatever `servedRelations` currently yields —
- * `is-a`/`part-of`/`contrasts-with`/`prerequisite` today
- * (`RELATION_EMISSION_STATUS`); `causes`/`related` carry no production edges
- * yet, so this default has not been exercised against those two and should be
- * revisited if it ever is.
+ * **Which relation types count as "connected" — F2.19 / `[D-461]`.** Only the
+ * four the clause names (`SESSION_GROUPING_RELATION_TYPES`); `causes` and the
+ * bare `related` are skipped. Directionality is not read: the adjacency is
+ * symmetric, since F2.19 asks whether two concepts connect for PLACEMENT, a
+ * weaker question than the directed semantics (`RELATION_DIRECTEDNESS`).
  *
  * **The exact-name join is no longer the only join — `ol-l40p` [REL-9],
  * 2026-09-11.** `resolveRelatedConceptKeys` now keys an endpoint by its own
@@ -69,21 +58,19 @@ export interface RelationWithEndpointKeys extends ConceptRelation {
 }
 
 /**
- * The relation types F2.19 session grouping reads — `[D-461]` (`ol-egov.141.89.4.30`,
- * ruled 2026-09-30): causes stays out of session grouping for v0.9, so the new
- * relation introduces no accidental behaviour change. Every ruled type EXCEPT
- * `causes`: the four types served today (`RELATION_EMISSION_STATUS`) plus
- * `related`, which carries no production edges and was counted before this
- * filter existed, so keeping it leaves behaviour exactly as it was. Explicit,
- * not "everything but causes" computed at the call: a relation type added
- * later is out of grouping until a decision puts it here.
+ * The relation types F2.19 session grouping reads: exactly the four the clause
+ * names (is-a, part-of, prerequisite, contrasts-with), `[D-461]`
+ * (`ol-egov.141.89.4.30`, ruled 2026-09-30, `ol-egov.141.89.4.23`). Explicit,
+ * never "everything but X" computed at the call: `causes` (served for
+ * explain-back) and the bare `related` type (C7.10, defined and unwritten) stay
+ * out, and a relation type added later is out of grouping until a decision puts
+ * it here.
  */
 export const SESSION_GROUPING_RELATION_TYPES: ReadonlySet<RelationType> = new Set<RelationType>([
   'is-a',
   'part-of',
   'contrasts-with',
   'prerequisite',
-  'related',
 ]);
 
 /** {@link resolveRelatedConceptKeys}'s result: the adjacency map plus the honest miss count. */
