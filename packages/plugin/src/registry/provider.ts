@@ -224,7 +224,7 @@ import {
   listMergeRepairProposalRecords,
 } from 'olea-core/src/concept/merge-audit-store.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
-import { isStudyPlanConfigured, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
+import { hasAssessmentSource, ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import {
@@ -674,7 +674,7 @@ async function courseRankingsForNoteOffer(
 ): Promise<readonly CourseOracleRanking[]> {
   try {
     const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
-    if (!isStudyPlanConfigured(config)) return [];
+    if (!(await hasAssessmentSource(vault, config))) return [];
     // `[D-110]` (`ol-v7r5.55` [IL-D7]): same-tick `undefined` when
     // `readRankWeights` is absent, or a network call to the Worker when
     // present — mirrors `plan/provider.ts`/`gap/provider.ts`'s own read.

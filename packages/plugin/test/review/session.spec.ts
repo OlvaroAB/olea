@@ -570,7 +570,7 @@ describe('review-log write shape (D7.1, F2.14)', () => {
   // at adaptation time; this is the write-seam half — `logAndAdvance` must
   // carry it straight into `RecordReviewInput.supportLevel` unchanged, the
   // same seam `ports.ts` already merges into `supportLevelShown` ([SUPP-2]).
-  it('carries the instrument’s chooser decision into RecordReviewInput.supportLevel', async () => {
+  it('records the support shown, not the chooser’s offer, into RecordReviewInput.supportLevel ([D-517])', async () => {
     const item = queueItem(
       qaFixture({ supportLevel: { level: 'guided', provenance: 'evidence-thin' } }),
     );
@@ -580,9 +580,10 @@ describe('review-log write shape (D7.1, F2.14)', () => {
     session.reveal();
     await session.rate('good');
 
+    // No recall screen shows a prompt, so the offered 'guided' is not recorded as shown.
     expect(reviewLog.calls[0]?.supportLevel).toEqual({
-      level: 'guided',
-      provenance: 'evidence-thin',
+      level: 'independent',
+      provenance: 'not-offered',
     });
   });
 
@@ -2448,11 +2449,106 @@ describe('[D-455]/[D-456] presentation-time check: could-not-check (ol-egov.141.
     expect(session.getViewModel().phase).toBe('mcq-open');
   });
 
+  it('a suspended outcome drops the item silently and shows the next', async () => {
+    const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
+    const b = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-b' }));
+    const c = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-c' }));
+    const check = vi.fn(
+      async (id: string) => (id === 'inst-b' ? 'suspended' : 'clear') as 'clear' | 'suspended',
+    );
+    const session = new ReviewSession(
+      baseDeps({ queue: [a, b, c], checkSourceAtPresentation: check }),
+    );
+    await session.start();
+    await session.mcqAnswer(0);
+    await session.mcqNext();
+    expect(session.takeWithheldNotice()).toBeNull();
+    expect(session.currentItem?.instrument.instrumentId).toBe('inst-c');
+  });
+
   it('absent check: every item shows, as before', async () => {
     const a = queueItem(mcqFixture({ draftId: null, instrumentId: 'inst-a' }));
     const session = new ReviewSession(baseDeps({ queue: [a] }));
     await session.start();
     expect(session.getViewModel().phase).toBe('mcq-open');
     expect(session.takeWithheldNotice()).toBeNull();
+  });
+});
+
+describe('[D-515] a pending draft on a changed non-markdown source is not shown (ol-egov.141.89.5.73)', () => {
+  it('a draft the draft check fails is set aside with the could-not-check sentence; a clear one shows', async () => {
+    const bad = queueItem(mcqFixture({ draftId: 'draft-bad', instrumentId: 'draft-bad' }));
+    const good = queueItem(mcqFixture({ draftId: 'draft-good', instrumentId: 'draft-good' }));
+    const checkDraft = vi.fn(
+      async (id: string) =>
+        (id === 'draft-bad' ? 'check-failed' : 'clear') as 'clear' | 'check-failed',
+    );
+    const settled = vi.fn(async () => 'clear' as const);
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [bad, good],
+        checkSourceAtPresentation: settled,
+        checkDraftSourceAtPresentation: checkDraft,
+      }),
+    );
+    await session.start();
+    expect(checkDraft).toHaveBeenCalledWith('draft-bad');
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+    expect(JSON.stringify(session.getViewModel())).toContain('draft-good');
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it('a draft check that throws reads as could-not-check', async () => {
+    const bad = queueItem(mcqFixture({ draftId: 'draft-bad', instrumentId: 'draft-bad' }));
+    const session = new ReviewSession(
+      baseDeps({
+        queue: [bad],
+        checkDraftSourceAtPresentation: async () => {
+          throw new Error('boom');
+        },
+      }),
+    );
+    await session.start();
+    expect(session.takeWithheldNotice()).toBe(WITHHELD_CHECK_FAILED_NOTICE);
+  });
+});
+
+describe('[D-517] — a recall review records the support actually shown (F2.20, [D-362])', () => {
+  it.each([
+    ['qa', queueItem(qaFixture({ instrumentId: 'q1' }))],
+    ['cloze', queueItem(clozeFixture({ instrumentId: 'c1' }))],
+  ] as const)(
+    'a %s item offered "prompted" at composition, with no prompt on screen, records independent',
+    async (_kind, item) => {
+      const offered = {
+        ...item,
+        instrument: {
+          ...item.instrument,
+          supportLevel: { level: 'prompted', provenance: 'evidence-thin' },
+        },
+      } as typeof item;
+      const reviewLog = fakeReviewLog();
+      const session = new ReviewSession(baseDeps({ queue: [offered], reviewLog }));
+      await session.start();
+      session.reveal();
+      await session.rate('good');
+
+      expect(reviewLog.calls).toHaveLength(1);
+      expect(reviewLog.calls[0]?.supportLevel).toEqual({
+        level: 'independent',
+        provenance: 'not-offered',
+      });
+    },
+  );
+
+  it('an item with no chooser decision still records no support level', async () => {
+    const reviewLog = fakeReviewLog();
+    const session = new ReviewSession(
+      baseDeps({ queue: [queueItem(qaFixture({ instrumentId: 'q2' }))], reviewLog }),
+    );
+    await session.start();
+    session.reveal();
+    await session.rate('good');
+    expect(Object.hasOwn(reviewLog.calls[0] ?? {}, 'supportLevel')).toBe(false);
   });
 });

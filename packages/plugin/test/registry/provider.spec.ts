@@ -10,6 +10,7 @@
  * the review log.
  */
 import {
+  addManualAssessmentEntry,
   appendDisputeRecord,
   appendReviewLogRecord,
   type ConceptRecord,
@@ -1187,6 +1188,30 @@ describe('createLocalRegistryProvider — threads the delivered rank weights ([D
 
     await modelFrom(await provider.load());
     expect(calls).toBe(0);
+  });
+
+  // F1.2 (`ol-egov.141.89.10.114`): manual entry is the fallback where no Base exists, so a blank
+  // Base path with her hand-entered assessments is a configured setup for the note-offer ranking.
+  it('with a blank Base path and one manual entry, the note-offer ranking runs (F1.2 fallback)', async () => {
+    let calls = 0;
+    const readRankWeights = async () => {
+      calls += 1;
+      return { proximityHalfLifeDays: 21 };
+    };
+    const vault = fixtureVault();
+    await addManualAssessmentEntry(vault, { course: 'TESTC101', type: 'Quiz', due: '2026-09-01' });
+
+    const provider = createLocalRegistryProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: new FakeDataHost(),
+      now: () => NOW,
+      editPort: new FakeEditPort(),
+      readRankWeights,
+    });
+
+    await modelFrom(await provider.load());
+    expect(calls).toBe(1);
   });
 });
 

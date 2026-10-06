@@ -11,7 +11,10 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../extract/types.js';
-import { resolveRelatedConceptKeys } from './related-concept-keys.js';
+import {
+  resolveRelatedConceptKeys,
+  SESSION_GROUPING_RELATION_TYPES,
+} from './related-concept-keys.js';
 import type { ConceptRelation, RelationProvenanceKind, RelationType } from './relation.js';
 import type { ConceptRecord } from './types.js';
 
@@ -197,5 +200,58 @@ describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [
 
     expect(result.unresolvedEndpointCount).toBe(0);
     expect(result.relatedConceptKeys.get('key-photo')).toEqual(new Set(['key-resp']));
+  });
+
+  // F2.19 / [D-461] (ol-egov.141.89.4.33): a cause link never groups a session.
+  describe('the allowed-type filter ([D-461])', () => {
+    it('a causes edge between two concepts does not make them related for session grouping', () => {
+      const concepts = [concept('A', 'k-a'), concept('B', 'k-b')];
+
+      const result = resolveRelatedConceptKeys([edge('causes', 'A', 'B')], concepts);
+
+      expect(result.relatedConceptKeys.size).toBe(0);
+      expect(result.unresolvedEndpointCount).toBe(0);
+    });
+
+    it.each(['is-a', 'part-of', 'contrasts-with', 'prerequisite'] as const)(
+      'a %s edge still makes its two concepts related, in both directions',
+      (type) => {
+        const concepts = [concept('A', 'k-a'), concept('B', 'k-b')];
+
+        const result = resolveRelatedConceptKeys([edge(type, 'A', 'B')], concepts);
+
+        expect(result.relatedConceptKeys.get('k-a')).toEqual(new Set(['k-b']));
+        expect(result.relatedConceptKeys.get('k-b')).toEqual(new Set(['k-a']));
+      },
+    );
+
+    it('a causes edge among allowed ones adds nothing, and the allowed ones are untouched', () => {
+      const concepts = [concept('A', 'k-a'), concept('B', 'k-b'), concept('C', 'k-c')];
+
+      const result = resolveRelatedConceptKeys(
+        [edge('prerequisite', 'A', 'B'), edge('causes', 'B', 'C')],
+        concepts,
+      );
+
+      expect(result.relatedConceptKeys.get('k-b')).toEqual(new Set(['k-a']));
+      expect(result.relatedConceptKeys.has('k-c')).toBe(false);
+    });
+
+    it('names causes as the one excluded type; every other ruled type is allowed', () => {
+      expect(SESSION_GROUPING_RELATION_TYPES.has('causes')).toBe(false);
+      expect([...SESSION_GROUPING_RELATION_TYPES].sort()).toEqual(
+        ['contrasts-with', 'is-a', 'part-of', 'prerequisite', 'related'].sort(),
+      );
+    });
+
+    it('an explicit allowedTypes override reads causes (the explain-back partner lookup)', () => {
+      const concepts = [concept('A', 'k-a'), concept('B', 'k-b')];
+
+      const result = resolveRelatedConceptKeys([edge('causes', 'A', 'B')], concepts, {
+        allowedTypes: new Set<RelationType>(['causes']),
+      });
+
+      expect(result.relatedConceptKeys.get('k-a')).toEqual(new Set(['k-b']));
+    });
   });
 });

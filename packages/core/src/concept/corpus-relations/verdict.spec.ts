@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { Provenance } from '../../extract/types.js';
+import type { DeclaredMadeBy } from '../../source/materiality.js';
 import type { VaultPath } from '../../vault/types.js';
 import type { CorpusConcept, CorpusRelationCandidate } from './types.js';
 import type { CorpusVerdict, EndpointRevisionStampingOptions } from './verdict.js';
@@ -534,5 +535,108 @@ describe('reconcileCorpusVerdicts — causes (ol-egov.141.89.4.23)', () => {
     expect(result.relations[0]?.fromKey).toBe('ck-expansion');
     expect(result.relations[0]?.toKey).toBe('ck-heat');
     expect(result.relations[0]?.provenance).toBe('hers');
+  });
+});
+
+// `[D-490]` (`ol-egov.141.89.4.31`, IMPACT.md row 4): a wiki-link between two concept notes means
+// "linked in a note she keeps", which is curation. The stored value `'hers'` keeps its persisted
+// name; only a link in a note she declared `made-by: me` reads as her vouching, and a link found only
+// in notes declared `made-by: assistant` gets no tier at all. Undeclared notes keep today's result.
+describe('reconcileCorpusVerdicts — a link earns the pair what her made-by declaration allows ([D-490])', () => {
+  const osmosis = concept('Osmosis', { anchor: anchor('Lecture 1.md') });
+  const diffusion = concept('Diffusion basics', { anchor: anchor('Lecture 2.md') });
+
+  function reconcileWithDeclarations(
+    declarations: readonly (DeclaredMadeBy | undefined)[],
+    signals: CorpusRelationCandidate['signals'] = ['her-link'],
+  ) {
+    return reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion, signals)],
+      undefined,
+      () => declarations,
+    );
+  }
+
+  it('a link in a note she declared `made-by: me` stamps `hers`: the vouching reading', () => {
+    expect(reconcileWithDeclarations(['me']).relations[0]?.provenance).toBe('hers');
+  });
+
+  it('a link in a note declared `made-by: assistant` stamps `model-proposed`: curation she keeps, never her vouching', () => {
+    expect(reconcileWithDeclarations(['assistant']).relations[0]?.provenance).toBe(
+      'model-proposed',
+    );
+  });
+
+  it('a link in an undeclared note keeps `hers`, identical to a call with no lookup at all', () => {
+    const undeclared = reconcileWithDeclarations([undefined]);
+    const noLookup = reconcileCorpusVerdicts(
+      [verdict()],
+      [candidate(osmosis, diffusion, ['her-link'])],
+    );
+    expect(undeclared.relations[0]?.provenance).toBe('hers');
+    expect(undeclared).toEqual(noLookup);
+  });
+
+  it('a `mixed` note reads as authorship unknown and keeps `hers`, like an undeclared one', () => {
+    expect(reconcileWithDeclarations(['mixed']).relations[0]?.provenance).toBe('hers');
+  });
+
+  it('an empty declaration list (the linking notes are unknown) keeps `hers`', () => {
+    expect(reconcileWithDeclarations([]).relations[0]?.provenance).toBe('hers');
+  });
+
+  it('links in two notes, one declared `assistant` and one not: the other note keeps `hers`', () => {
+    expect(reconcileWithDeclarations(['assistant', undefined]).relations[0]?.provenance).toBe(
+      'hers',
+    );
+    expect(reconcileWithDeclarations(['assistant', 'me']).relations[0]?.provenance).toBe('hers');
+  });
+
+  it('links only in notes declared `assistant`, however many, stamp `model-proposed`', () => {
+    expect(reconcileWithDeclarations(['assistant', 'assistant']).relations[0]?.provenance).toBe(
+      'model-proposed',
+    );
+  });
+
+  it('an assistant link beside another cheap signal still stamps `model-proposed`', () => {
+    const result = reconcileWithDeclarations(['assistant'], ['embedding-proximity', 'her-link']);
+    expect(result.relations[0]?.provenance).toBe('model-proposed');
+  });
+
+  it('[D-082] intact: type, direction, confidence and passages are the verdict’s in every case; only provenance moves', () => {
+    const shapes = (['me', 'assistant', undefined] as const).map((madeBy) => {
+      const { provenance: _provenance, ...rest } =
+        reconcileWithDeclarations([madeBy]).relations[0] ?? {};
+      return rest;
+    });
+    expect(shapes[1]).toEqual(shapes[0]);
+    expect(shapes[2]).toEqual(shapes[0]);
+    expect(shapes[0]).toMatchObject({
+      type: 'prerequisite',
+      from: 'Diffusion basics',
+      to: 'Osmosis',
+      confidence: 0.75,
+    });
+  });
+
+  it('the lookup is asked only about a `her-link` candidate, and is handed that candidate', () => {
+    const asked: CorpusRelationCandidate[] = [];
+    const typeI = concept('Type I error');
+    const typeII = concept('Type II error');
+    const linked = candidate(osmosis, diffusion, ['her-link']);
+    reconcileCorpusVerdicts(
+      [
+        verdict(),
+        { a: 'Type I error', b: 'Type II error', type: 'contrasts-with', confidence: 0.5 },
+      ],
+      [linked, candidate(typeI, typeII, ['embedding-proximity'])],
+      undefined,
+      (candidateAsked) => {
+        asked.push(candidateAsked);
+        return ['assistant'];
+      },
+    );
+    expect(asked).toEqual([linked]);
   });
 });

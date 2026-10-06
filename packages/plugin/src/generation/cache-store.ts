@@ -86,10 +86,24 @@
  *
  * See the `ol-p3t07a` close evidence for the original flag, `ol-y6ty` for
  * this look, and `ol-zbnn` for the fix.
+ *
+ * **One install: a draft and its index entry move together
+ * (`ol-egov.141.89.104.53`).** `put()` writes a draft's own file and then its
+ * index entry; the purge (`purgeDraftCache`, below) reads the index, deletes
+ * every draft it names, and then deletes the index. Each spans two files, so
+ * no one file's queue covers it: a `put()` landing between the purge's
+ * listing and its index delete left the draft's file with no index entry,
+ * where nothing that reads the index finds it again. So each runs as one task
+ * on the index's queue (`olea-core`'s `withPathQueue`), and takes a draft
+ * file's own queue inside it. **Acquisition order:** the index key first,
+ * then a draft file's key, never the reverse; a task holding the index's
+ * queue writes or deletes the index directly, never through a helper that
+ * queues on it (`olea-core`'s `vault/path-queue.ts`, "Two keys at once"). The
+ * cross-device index race above is a different problem, unchanged.
  */
 
 import type { VaultPath, VaultSource } from 'olea-core';
-import { hashText } from 'olea-core';
+import { hashText, pathQueueKey, withPathQueue } from 'olea-core';
 import { type DraftRecord, isDraftRecord } from './types.js';
 
 export const DRAFT_CACHE_FOLDER: VaultPath = '.olea/drafts';
@@ -123,6 +137,16 @@ function isIndexEntry(value: unknown): value is IndexEntry {
 
 function draftPath(draftId: string): VaultPath {
   return `${DRAFT_CACHE_FOLDER}/${draftId}.json`;
+}
+
+/**
+ * Runs `task` on draft file `path`'s own queue, from inside a task that already holds the index's
+ * (the module doc's acquisition order). A path that shares the index's queue key — a draft id of
+ * `index`, in any letter case — is not queued again on that key, which the holding task could
+ * never get past.
+ */
+function onDraftFileQueue<T>(path: VaultPath, task: () => Promise<T>): Promise<T> {
+  return pathQueueKey(path) === pathQueueKey(INDEX_PATH) ? task() : withPathQueue(path, task);
 }
 
 /**
@@ -286,6 +310,52 @@ function upsertEntry(index: DraftIndex, entry: IndexEntry): DraftIndex {
   return { version: 1, entries: [...withoutExisting, entry] };
 }
 
+/** Every draft the index names whose own file is there and reads as a draft — `DraftCacheStore.list()`. */
+async function listIndexedDrafts(vault: VaultSource): Promise<readonly DraftRecord[]> {
+  const index = await readIndex(vault);
+  const records: DraftRecord[] = [];
+  for (const entry of index.entries) {
+    const path = draftPath(entry.draftId);
+    if (!(await vault.exists(path))) continue; // index stale — the record was never written or the index entry is orphaned; skip rather than fabricate
+    try {
+      const parsed: unknown = JSON.parse(await vault.read(path));
+      if (isDraftRecord(parsed)) records.push(parsed);
+    } catch {
+      // corrupt per-record file — skip, matching review-log's per-line tolerance
+    }
+  }
+  return records;
+}
+
+/**
+ * The draft half of the cache purge (`../privacy/cache-purge.ts`): deletes every draft `list()`
+ * returns, then the index, as one task on the index's queue (module doc, `ol-egov.141.89.104.53`),
+ * so no `put()` lands between the listing and the index delete — a `put()` issued meanwhile runs
+ * after it and is kept, file and entry. Returns every path removed, in the order removed (the
+ * index last, and only when it was there).
+ *
+ * `remove` deletes one path and must not take that path's queue itself: each draft's file is
+ * removed here on its own queue, and the index under the index's queue this task already holds.
+ */
+export async function purgeDraftCache(
+  vault: VaultSource,
+  remove: (path: VaultPath) => Promise<void>,
+): Promise<readonly VaultPath[]> {
+  return withPathQueue(INDEX_PATH, async () => {
+    const removed: VaultPath[] = [];
+    for (const draft of await listIndexedDrafts(vault)) {
+      const path = draftPath(draft.draftId);
+      await onDraftFileQueue(path, () => remove(path));
+      removed.push(path);
+    }
+    if (await vault.exists(INDEX_PATH)) {
+      await remove(INDEX_PATH);
+      removed.push(INDEX_PATH);
+    }
+    return removed;
+  });
+}
+
 export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore {
   return {
     async get(draftId) {
@@ -300,31 +370,29 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
     },
 
     async list() {
-      const index = await readIndex(vault);
-      const records: DraftRecord[] = [];
-      for (const entry of index.entries) {
-        const path = draftPath(entry.draftId);
-        if (!(await vault.exists(path))) continue; // index stale — the record was never written or the index entry is orphaned; skip rather than fabricate
-        try {
-          const parsed: unknown = JSON.parse(await vault.read(path));
-          if (isDraftRecord(parsed)) records.push(parsed);
-        } catch {
-          // corrupt per-record file — skip, matching review-log's per-line tolerance
-        }
-      }
-      return records;
+      return listIndexedDrafts(vault);
     },
 
     async put(record) {
-      await vault.write(draftPath(record.draftId), `${JSON.stringify(record, null, 2)}\n`);
-      const index = await readIndex(vault);
-      const next = upsertEntry(index, {
-        draftId: record.draftId,
-        courseCode: record.courseCode,
-        conceptName: record.conceptName,
-        status: record.status,
+      // The draft's own file and its index entry, as one task on the index's queue (module doc,
+      // `ol-egov.141.89.104.53`), with the file's own queue taken inside it: two overlapping puts on
+      // one install both reach the index (`ol-egov.141.89.104.2`), and a purge never runs between a
+      // draft's file and its entry. The cross-device index race in this module's doc is a different
+      // problem, unchanged.
+      const path = draftPath(record.draftId);
+      await withPathQueue(INDEX_PATH, async () => {
+        await onDraftFileQueue(path, () =>
+          vault.write(path, `${JSON.stringify(record, null, 2)}\n`),
+        );
+        const index = await readIndex(vault);
+        const next = upsertEntry(index, {
+          draftId: record.draftId,
+          courseCode: record.courseCode,
+          conceptName: record.conceptName,
+          status: record.status,
+        });
+        await writeIndex(vault, next);
       });
-      await writeIndex(vault, next);
     },
 
     async findByKey(courseCode, conceptName, expected) {

@@ -421,5 +421,12 @@ function isInstrumentCitationShape(value: unknown): boolean {
   if (c.section !== undefined && (typeof c.section !== 'string' || c.section.length === 0)) {
     return false;
   }
+  // `ol-egov.141.89.5.73` ([D-515]): the source file's byte digest, when the draft recorded one.
+  if (
+    c.sourceRevision !== undefined &&
+    (typeof c.sourceRevision !== 'string' || c.sourceRevision.length === 0)
+  ) {
+    return false;
+  }
   return true;
 }

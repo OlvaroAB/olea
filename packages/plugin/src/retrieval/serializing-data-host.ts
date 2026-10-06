@@ -54,7 +54,36 @@
  * without `readModifyWrite` — which is exactly the fake host every existing
  * store test in this plugin still constructs, so none of those tests needed
  * to change.
+ *
+ * **A settings file that is not an object is never replaced (T12, `ol-egov.141.89.104.2`).**
+ * Every store keeps its state under its own key of one object. When the file holds something
+ * else — an array, a string, a number, a boolean — no store's save can be merged into it, and
+ * replacing it would discard whatever it holds. So `readModifyWrite` refuses with an
+ * `UnreadableSettingsFileError` and saves nothing; the file stays exactly as it was until it is
+ * repaired by hand. An empty file (`null`/`undefined`: nothing stored yet) is not unreadable.
+ * The one exception is a full delete, which she asked for: it writes through
+ * `readModifyWriteReplacingUnreadable` (`../privacy/settings-section.ts`'s `FullDeleteWriteSeal`),
+ * exactly as every writer could before.
+ * Setting the bytes aside instead would mean a second settings file, a new file family. What
+ * `loadData` returns for a file that is not JSON at all is the host's to say (Obsidian's
+ * `Plugin.loadData`; its typings do not), and is not decided here.
  */
+
+/** `readModifyWrite` refused to replace a settings file that does not hold an object (module doc). */
+export class UnreadableSettingsFileError extends Error {
+  constructor() {
+    super(
+      'The settings file does not hold an object, so it was left exactly as it is and nothing was saved over it.',
+    );
+    this.name = 'UnreadableSettingsFileError';
+  }
+}
+
+/** True for a settings value no store can merge into: anything but an object, or nothing stored. */
+function isUnreadableSettings(current: unknown): boolean {
+  if (current === null || current === undefined) return false;
+  return typeof current !== 'object' || Array.isArray(current);
+}
 
 export interface RawDataHost {
   loadData(): Promise<unknown>;
@@ -99,6 +128,21 @@ export class SerializingDataHost implements RawDataHost {
    * empty store) and returns what gets saved.
    */
   readModifyWrite(mutate: (current: unknown) => unknown | Promise<unknown>): Promise<void> {
+    return this.enqueue(async () => {
+      const current = await this.raw.loadData();
+      if (isUnreadableSettings(current)) throw new UnreadableSettingsFileError();
+      const next = await mutate(current);
+      await this.raw.saveData(next);
+    });
+  }
+
+  /**
+   * `readModifyWrite` without the refusal: a settings file that does not hold an object is handed
+   * to `mutate` like any other. For the full delete only (module doc), never a store.
+   */
+  readModifyWriteReplacingUnreadable(
+    mutate: (current: unknown) => unknown | Promise<unknown>,
+  ): Promise<void> {
     return this.enqueue(async () => {
       const current = await this.raw.loadData();
       const next = await mutate(current);

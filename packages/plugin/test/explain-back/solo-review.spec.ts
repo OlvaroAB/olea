@@ -7,8 +7,14 @@
  */
 
 import type { ExplainBackPromptContext, WorkerTaskRequest } from 'olea-core';
-import { readContentRecord, readReviewLogFile, reviewLogPath } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import {
+  computeAllConceptMastery,
+  GRADING_CALL_BOUNDS,
+  readContentRecord,
+  readReviewLogFile,
+  reviewLogPath,
+} from 'olea-core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   type RecordSoloGradeAndReviewOutcome,
   recordSoloGradeAndReview,
@@ -735,5 +741,235 @@ describe('recordSoloGradeAndReview — ol-ryrh: the accepted correctness verdict
     );
     expect(outcome).toBeUndefined();
     expect(vault.writes).toEqual([]);
+  });
+});
+
+// `[D-483]` / `[D-482]`: the attempt id, the restatement finding and digests-only provenance on the
+// persisted record; durable idempotency independent of `contentRef`; a depth timeout.
+describe('recordSoloGradeAndReview — [D-483]: attempt id, restatement finding, provenance, durable idempotency', () => {
+  const JUDGE_STAMP = { promptVersion: 'judge-7', modelId: 'judge-model' };
+  const NOW = () => new Date('2026-08-31T09:00:00Z');
+
+  function acceptedWith(
+    verdict: 'correct' | 'partial' | 'incorrect',
+    restatement?: { answerSpans: string[]; sourceBlockIds: string[] },
+  ) {
+    return Promise.resolve({
+      status: 'accepted' as const,
+      accepted: {
+        status: 'accepted' as const,
+        verdict,
+        feedback: 'Clear on both halves.',
+        missedPoints: [],
+        citedIssues: [],
+        misconceptionCandidates: [],
+        ...(restatement !== undefined ? { restatement } : {}),
+        stamp: JUDGE_STAMP,
+      },
+      observations: [],
+    });
+  }
+
+  /** The correctness field off a record read back from the log, whose type is the union of every record kind. */
+  function correctnessOf(record: unknown) {
+    return (record as { explainBackCorrectness?: { verdict?: string } } | undefined)
+      ?.explainBackCorrectness;
+  }
+
+  /** A fresh wiring each call: a reload loses the in-memory memo, the accept is made again. */
+  async function acceptAttempt(
+    vault: ReturnType<typeof memoryVault>,
+    attemptId: string | undefined,
+    over: {
+      depthPass?: 'run' | 'skipped';
+      restatement?: { answerSpans: string[]; sourceBlockIds: string[] };
+      gradingProvenance?: { requestVersion?: string; passageFingerprints?: string[] };
+      wiring?: GradingWiring;
+    } = {},
+  ) {
+    const wiring = over.wiring ?? wiringWithSoloReply();
+    const key = attemptId ?? 'explain-back:concept-a:1';
+    // biome-ignore lint/suspicious/noExplicitAny: the memo's value type is the accept result this test scripts.
+    wiring.acceptedObservationsByAttempt.set(key, acceptedWith('correct', over.restatement) as any);
+    const outcome = await recordSoloGradeAndReview(
+      { grading: wiring, vault, deviceId: 'device-a', now: NOW },
+      {
+        instrumentId: 'explain-back:concept-a:1',
+        ...(attemptId !== undefined ? { attemptId } : {}),
+        subjectConceptId: 'concept-a',
+        context: CONTEXT,
+        answer: 'her explanation',
+        supportLevelShown: 'independent',
+        depthPass: over.depthPass ?? 'skipped',
+        ...(over.gradingProvenance !== undefined
+          ? { gradingProvenance: over.gradingProvenance }
+          : {}),
+      },
+    );
+    const file = await readReviewLogFile(vault, reviewLogPath('2026-08-31', 'device-a'));
+    return { outcome, records: file.records };
+  }
+
+  it('persists the attempt id on a correctness-only record, independent of any contentRef', async () => {
+    const { records } = await acceptAttempt(memoryVault(), 'attempt-1');
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ attemptId: 'attempt-1' });
+    expect(records[0]).not.toHaveProperty('explainBackGrade');
+  });
+
+  it('accepting the same attempt again after a reload writes one correctness-only record', async () => {
+    const vault = memoryVault();
+    await acceptAttempt(vault, 'attempt-1');
+    const second = await acceptAttempt(vault, 'attempt-1');
+    expect(second.records).toHaveLength(1);
+    expect(second.outcome?.result.record).toEqual(second.records[0]);
+  });
+
+  it('two genuine attempts at one instrument write two records', async () => {
+    const vault = memoryVault();
+    await acceptAttempt(vault, 'attempt-1');
+    const { records } = await acceptAttempt(vault, 'attempt-2');
+    expect(records).toHaveLength(2);
+  });
+
+  it('a missing raw-answer attachment does not remove dedup (the record alone carries the id)', async () => {
+    const vault = memoryVault();
+    await acceptAttempt(vault, 'attempt-1', { depthPass: 'skipped' });
+    // No content record exists for a correctness-only attempt; the retry still finds it.
+    expect((await acceptAttempt(vault, 'attempt-1')).records).toHaveLength(1);
+  });
+
+  it('a record written before the id existed is never matched or backfilled', async () => {
+    const vault = memoryVault();
+    // The first write carries no real attempt id (the instrument-id fallback), so no id is persisted.
+    const first = await acceptAttempt(vault, undefined);
+    expect(first.records[0]).not.toHaveProperty('attemptId');
+    const { records } = await acceptAttempt(vault, 'attempt-1');
+    expect(records).toHaveLength(2);
+    expect(records[0]).not.toHaveProperty('attemptId');
+  });
+
+  it('a depth-graded attempt carries the id too, and a retry finds it by id', async () => {
+    const vault = memoryVault();
+    await acceptAttempt(vault, 'attempt-1', { depthPass: 'run' });
+    const { records } = await acceptAttempt(vault, 'attempt-1', { depthPass: 'run' });
+    expect(records).toHaveLength(1);
+    expect(records[0]).toMatchObject({ attemptId: 'attempt-1' });
+    expect(records[0]).toHaveProperty('explainBackGrade');
+  });
+
+  it('persists the restatement finding inside explainBackCorrectness as ids and a count, no wording', async () => {
+    const { records } = await acceptAttempt(memoryVault(), 'attempt-1', {
+      restatement: {
+        answerSpans: ['invented span one', 'invented span two'],
+        sourceBlockIds: ['blk-1'],
+      },
+    });
+    expect(records[0]).toMatchObject({
+      explainBackCorrectness: {
+        verdict: 'correct',
+        artifactProvenance: { promptVersion: 'judge-7', modelId: 'judge-model' },
+        restatement: { sourceBlockIds: ['blk-1'], spanCount: 2 },
+      },
+    });
+    expect(JSON.stringify(records[0])).not.toContain('invented span');
+  });
+
+  it('writes no finding field when none survived grounding', async () => {
+    const { records } = await acceptAttempt(memoryVault(), 'attempt-1');
+    expect(correctnessOf(records[0])).not.toHaveProperty('restatement');
+  });
+
+  it('the growth fold reads the finding off the record: flagged is withheld from the top stage and keeps its verdict; unflagged is not', async () => {
+    const flagged = await acceptAttempt(memoryVault(), 'attempt-1', {
+      depthPass: 'run',
+      restatement: { answerSpans: ['invented span'], sourceBlockIds: ['blk-1'] },
+    });
+    const clear = await acceptAttempt(memoryVault(), 'attempt-1', { depthPass: 'run' });
+    // No option list is passed anywhere: the record alone carries the exclusion.
+    const flaggedResult = computeAllConceptMastery(flagged.records).get('concept-a');
+    const clearResult = computeAllConceptMastery(clear.records).get('concept-a');
+    expect(clearResult?.evidence.topStageQualified).toBe(true);
+    expect(flaggedResult?.evidence.topStageQualified).toBe(false);
+    expect(flaggedResult?.evidence.withheldByRestatementFinding).toBe(1);
+    expect(flaggedResult?.evidence.gradedExplainBackCount).toBe(1);
+    expect(correctnessOf(flagged.records[0])?.verdict).toBe('correct');
+  });
+
+  it('records digests-only provenance (versions and fingerprints) when supplied, and none otherwise', async () => {
+    const withProv = await acceptAttempt(memoryVault(), 'attempt-1', {
+      gradingProvenance: { requestVersion: 'req-1', passageFingerprints: ['fp-1'] },
+    });
+    expect(withProv.records[0]).toMatchObject({
+      attemptId: 'attempt-1',
+      gradingProvenance: { requestVersion: 'req-1', passageFingerprints: ['fp-1'] },
+    });
+    const without = await acceptAttempt(memoryVault(), 'attempt-1');
+    expect(without.records[0]).not.toHaveProperty('gradingProvenance');
+  });
+});
+
+describe('recordSoloGradeAndReview — [D-482]: a depth timeout keeps the correctness verdict and writes once; a late depth result is discarded', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('the depth call outlives its bound: one correctness-only record, and the late result adds no second event', async () => {
+    vi.useFakeTimers();
+    const vault = memoryVault();
+    let releaseDepth: (body: unknown) => void = () => {};
+    const wiring = wiringWithSoloReply();
+    const hungDepth = new Promise<unknown>((resolve) => {
+      releaseDepth = resolve;
+    });
+    const hung: GradingWiring = {
+      ...wiring,
+      soloTransport: { send: () => hungDepth as never },
+    };
+    // biome-ignore lint/suspicious/noExplicitAny: the memo's value type is the accept result this test scripts.
+    hung.acceptedObservationsByAttempt.set(
+      'attempt-1',
+      Promise.resolve({
+        status: 'accepted',
+        accepted: {
+          status: 'accepted',
+          verdict: 'partial',
+          feedback: 'ok',
+          missedPoints: [],
+          citedIssues: [],
+          misconceptionCandidates: [],
+          stamp: { promptVersion: 'judge-7', modelId: 'judge-model' },
+        },
+        observations: [],
+      }) as any,
+    );
+
+    const pending = recordSoloGradeAndReview(
+      { grading: hung, vault, deviceId: 'device-a', now: () => new Date('2026-08-31T09:00:00Z') },
+      {
+        instrumentId: 'explain-back:concept-a:1',
+        attemptId: 'attempt-1',
+        subjectConceptId: 'concept-a',
+        context: CONTEXT,
+        answer: 'her explanation',
+        depthPass: 'run',
+      },
+    );
+    await vi.advanceTimersByTimeAsync(GRADING_CALL_BOUNDS.depthMs + 1);
+    const outcome = await pending;
+
+    expect(outcome?.depth).toBe('unavailable');
+    expect(outcome).not.toHaveProperty('soloLevel');
+    // The late depth result arrives after the bound ended the call: discarded, no second event.
+    releaseDepth({
+      ok: true,
+      stamp: { contractVersion: 2, promptVersion: '1.0.0', modelId: 'solo-test-model' },
+      result: { soloLevel: 'relational', rationale: 'late' },
+    });
+    await vi.advanceTimersByTimeAsync(1000);
+    const file = await readReviewLogFile(vault, reviewLogPath('2026-08-31', 'device-a'));
+    expect(file.records).toHaveLength(1);
+    expect(file.records[0]).toMatchObject({ explainBackCorrectness: { verdict: 'partial' } });
+    expect(file.records[0]).not.toHaveProperty('explainBackGrade');
   });
 });

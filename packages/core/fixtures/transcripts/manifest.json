@@ -1,21 +1,61 @@
 {
   "note": "Every fixture is synthetic: invented courses and invented lecturers. No real course or vault content.",
   "fixtures": [
-    {"file": "plain-untimed-unlabelled.txt", "purpose": "plain text, untimed, no speaker labels"},
-    {"file": "declared-markdown.md", "purpose": "Markdown that declares the transcript role in frontmatter"},
-    {"file": "undeclared-markdown.md", "purpose": "Markdown without the declaration; must not be read as a transcript"},
-    {"file": "sample.vtt", "purpose": "timed VTT with speaker voice tags; file only, the VTT reader is built later"},
-    {"file": "sample.srt", "purpose": "timed SRT with inline speaker labels; file only, the SRT reader is built later"},
-    {"file": "speaker-labelled.txt", "purpose": "untimed, speaker-labelled, including a student turn"},
-    {"file": "misconception-quoted-rejected.txt", "purpose": "a lecturer quotes a misconception and rejects it"},
-    {"file": "student-question.txt", "purpose": "a question from a student inside the lecture"},
-    {"file": "deictic-and-inaudible.txt", "purpose": "this-graph deictic references and an inaudible marker"},
-    {"file": "near-match-slide-term.txt", "purpose": "speech term that near-matches a slide term"},
-    {"file": "slide-correction.txt", "purpose": "a lecturer corrects a slide"},
-    {"file": "resegmented-original.txt", "purpose": "one lecture, original segmentation", "group": "recut"},
-    {"file": "resegmented-copy.txt", "purpose": "same words as the original, cut into different paragraphs", "group": "recut"},
-    {"file": "corrected-export-v1.txt", "purpose": "export with a transcription error", "group": "corrected"},
-    {"file": "corrected-export-v2.txt", "purpose": "corrected re-export of v1", "group": "corrected"},
-    {"file": "long-over-cap.txt", "purpose": "long untimed transcript far over the per-read cap"}
+    { "file": "plain-untimed-unlabelled.txt", "purpose": "plain text, untimed, no speaker labels" },
+    {
+      "file": "declared-markdown.md",
+      "purpose": "Markdown that declares the transcript role in frontmatter"
+    },
+    {
+      "file": "undeclared-markdown.md",
+      "purpose": "Markdown without the declaration; must not be read as a transcript"
+    },
+    {
+      "file": "sample.vtt",
+      "purpose": "timed VTT with speaker voice tags; file only, the VTT reader is built later"
+    },
+    {
+      "file": "sample.srt",
+      "purpose": "timed SRT with inline speaker labels; file only, the SRT reader is built later"
+    },
+    {
+      "file": "speaker-labelled.txt",
+      "purpose": "untimed, speaker-labelled, including a student turn"
+    },
+    {
+      "file": "misconception-quoted-rejected.txt",
+      "purpose": "a lecturer quotes a misconception and rejects it"
+    },
+    { "file": "student-question.txt", "purpose": "a question from a student inside the lecture" },
+    {
+      "file": "deictic-and-inaudible.txt",
+      "purpose": "this-graph deictic references and an inaudible marker"
+    },
+    {
+      "file": "near-match-slide-term.txt",
+      "purpose": "speech term that near-matches a slide term"
+    },
+    { "file": "slide-correction.txt", "purpose": "a lecturer corrects a slide" },
+    {
+      "file": "resegmented-original.txt",
+      "purpose": "one lecture, original segmentation",
+      "group": "recut"
+    },
+    {
+      "file": "resegmented-copy.txt",
+      "purpose": "same words as the original, cut into different paragraphs",
+      "group": "recut"
+    },
+    {
+      "file": "corrected-export-v1.txt",
+      "purpose": "export with a transcription error",
+      "group": "corrected"
+    },
+    {
+      "file": "corrected-export-v2.txt",
+      "purpose": "corrected re-export of v1",
+      "group": "corrected"
+    },
+    { "file": "long-over-cap.txt", "purpose": "long untimed transcript far over the per-read cap" }
   ]
 }

@@ -82,6 +82,7 @@ import {
   routeKnowledgeKindClassification,
 } from 'olea-core';
 import { PROVISIONAL_CONFIDENCE_FLOOR } from './constants.js';
+import { stripOleaFrontmatter } from './strip-olea-frontmatter.js';
 
 /**
  * Component 2.2's routing consultation, as opted into by a caller of
@@ -139,7 +140,7 @@ export async function buildKnowledgeKindSourceMaterial(
       : concept.sourcePaths;
   for (const sourcePath of orderedPaths) {
     if (!(await vault.exists(sourcePath))) continue;
-    const text = await vault.read(sourcePath);
+    const text = stripOleaFrontmatter(await vault.read(sourcePath));
     if (text.trim().length === 0) continue;
     passages.push({
       text,

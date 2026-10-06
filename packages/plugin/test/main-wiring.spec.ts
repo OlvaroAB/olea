@@ -173,12 +173,15 @@ describe('every port the session needs is the real one', () => {
     // `openExplainBackModal` deps (`recordSetAsideAttempt`) awaits it a
     // tenth time to thread the same id into
     // `createRecordSetAsideAttempt`'s own vault write (the Try again
-    // set-aside-attempt event) —
+    // set-aside-attempt event), and `[D-460]`'s `openExplainBackModal` deps
+    // (`recordFeedbackShown`) awaits it an eleventh time to thread the same
+    // id into `createRecordFeedbackShown`'s own vault write (the feedback
+    // exposure marker, written before a graded result renders) —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // ten. The count below tracks known call sites rather than asserting
+    // eleven. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(10);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(11);
   });
 });
 
@@ -689,7 +692,7 @@ describe('accept-time staleness is a direct per-block fingerprint check, not a f
 
   it('no longer re-retrieves the source blocks against the frozen query', () => {
     expect(main).toMatch(
-      /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
+      /private async buildExplainBackObservationContextFor\(params:\s*\{\s*readonly subjectConceptId:\s*string \| null;\s*readonly permittedConceptIds\?:\s*readonly string\[\];\s*readonly originInstrumentId:\s*string;\s*readonly sourceBlocks:\s*readonly ExplainBackSourceBlock\[\];\s*readonly query:\s*string;\s*\}\):\s*Promise<AcceptExplainBackGradingWithObservationContext> \{/,
     );
     expect(main).not.toMatch(/composeExplainBackSourceBlocks\(params\.query\)/);
     expect(main).not.toMatch(/hasExplainBackSourceRevisionChanged/);
@@ -1221,7 +1224,7 @@ describe("a generation sweep's classified refusals are captured for the bulk-rev
 
   it('captures report?.refusals onto this.lastGenerationRefusals inside onUnitsLanded', () => {
     expect(main).toMatch(
-      /const report = await this\.generation\.sweep\(\s*units,\s*this\.draftQuizCardsDeps\(\),\s*\{ classifier: this\.knowledgeKind\?\.classifier \?\? null \},\s*formatMatch,\s*\);\s*this\.lastGenerationRefusals = report\?\.refusals \?\? \[\];/,
+      /const report = await this\.generation\.sweep\(\s*units,\s*this\.draftQuizCardsDeps\(\),\s*\{ classifier: this\.knowledgeKind\?\.classifier \?\? null \},\s*formatMatch,\s*sourceRevisions,\s*\);\s*this\.lastGenerationRefusals = report\?\.refusals \?\? \[\];/,
     );
   });
 
@@ -1412,7 +1415,7 @@ describe('the vault-watch-to-enqueue glue for the multi-format ingestion path is
 
   it('imports the tested composer, not an inline vault.watch handler', () => {
     expect(main).toMatch(
-      /import\s*\{\s*buildIngestionArrivalWatch\s*\}\s*from\s*'\.\/ingestion\/arrival-watch\.js'/,
+      /import\s*\{[^}]*\bbuildIngestionArrivalWatch\b[^}]*\}\s*from\s*'\.\/ingestion\/arrival-watch\.js'/,
     );
   });
 
@@ -1835,7 +1838,7 @@ describe('every oracle-ranking caller receives the delivered weights, not just p
         // `ol-egov.141.89.5.19` added a `citationHashStore` spread after this
         // one (its own describe block below pins it), so the gap to the
         // closing `},` is no longer immediate.
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
+        `private async composeDefaultStudySession\\(\\s*request\\?: SessionBuilderRequest,?\\s*\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,600}?windowDeficit: \\(deficitInput\\) => this\\.windowDeficitFromReviewLog\\(deficitInput\\),\\s*${spread},[\\s\\S]{0,300}?\\},\\s*request \\?\\? \\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);[\\s\\S]{0,400}?return result\\?\\.composed\\.full`,
       ),
     );
   });
@@ -1902,7 +1905,7 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   it('composeDefaultStudySession’s composeStudySessionForRequest call receives it', () => {
     expect(main).toMatch(
       new RegExp(
-        `private async composeDefaultStudySession\\(\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,1100}?${citationSpread},\\s*\\},\\s*\\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);`,
+        `private async composeDefaultStudySession\\(\\s*request\\?: SessionBuilderRequest,?\\s*\\): Promise<ComposedStudySession \\| null> \\{[\\s\\S]{0,1100}?${citationSpread},\\s*\\},\\s*request \\?\\? \\{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \\},\\s*now,\\s*\\);`,
       ),
     );
   });
@@ -2529,7 +2532,59 @@ describe('row 50 (ol-egov.141.89.6.72): a later session reads the explain-back f
     expect(main.match(/createReadLoggedAttemptState\(/g)).toHaveLength(1);
   });
 
-  it('adds no write: the only append in the explain-back deps literal is the set-aside writer', () => {
+  it('builds exactly one set-aside writer', () => {
     expect(main.match(/createRecordSetAsideAttempt\(/g)).toHaveLength(1);
+  });
+});
+
+describe('[D-460] (ol-egov.141.89.6.86): the explain-back view writes the feedback exposure marker before a graded result renders', () => {
+  // The ordering and the failure handling are proved behaviourally in
+  // `test/explain-back/modal-feedback-shown-marker.spec.ts` and the read-back in
+  // `test/explain-back/feedback-shown-marker.spec.ts`; these pins hold that
+  // `main.ts` supplies the writer, into the SAME log the reader reads.
+
+  it('imports createRecordFeedbackShown from the tested module', () => {
+    expect(main).toMatch(
+      /import \{ createRecordFeedbackShown \} from '\.\/explain-back\/feedback-exposure\.js';/,
+    );
+  });
+
+  it("supplies recordFeedbackShown as ExplainBackModal's dep, over the plugin's vault source and device id", () => {
+    expect(main).toMatch(
+      /recordFeedbackShown:\s*createRecordFeedbackShown\(\{\s*vault:\s*this\.vaultSource,\s*deviceId:\s*\(\)\s*=>\s*ensureDeviceId\(this\),?\s*\}\),/,
+    );
+  });
+
+  it('builds the marker writer in the same deps literal as the log reader, so both see one log', () => {
+    const start = main.indexOf('readLoggedAttemptState: createReadLoggedAttemptState(');
+    expect(start).toBeGreaterThan(-1);
+    const end = main.indexOf('loadMisconceptionDigest:', start);
+    expect(end).toBeGreaterThan(start);
+    expect(main.slice(start, end)).toMatch(/recordFeedbackShown:\s*createRecordFeedbackShown\(/);
+  });
+
+  it('builds exactly one marker writer', () => {
+    expect(main.match(/createRecordFeedbackShown\(/g)).toHaveLength(1);
+  });
+});
+
+describe('Start composes from the steering she chose on Home (F4.6, D-243, ol-egov.141.89.10.111)', () => {
+  const main = codeOf('main.ts');
+
+  it('enterStudySessionHolderForStart takes the request and hands it to the fresh compose', () => {
+    expect(main).toMatch(
+      /private async enterStudySessionHolderForStart\(\s*request\?: SessionBuilderRequest,?\s*\): Promise<void>/,
+    );
+    expect(main).toMatch(/await this\.composeDefaultStudySession\(request\);/);
+  });
+
+  it('with no request, composeDefaultStudySession still falls back to the declared default budget with no steering', () => {
+    expect(main).toMatch(/request \?\? \{ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES \}/);
+  });
+
+  it('the other doors (open-session, extend) are given no request', () => {
+    expect(main).toMatch(
+      /composeDefaultStudySession: \(\) => this\.composeDefaultStudySession\(\)/,
+    );
   });
 });

@@ -319,6 +319,39 @@ describe('notePassageText — the whole-note bounder (`ol-2zfj.64` [REL-5])', ()
 });
 
 describe('gatherCorpusRelationVaultContext — her-link nomination signal', () => {
+  it('[ol-egov.141.89.4.32] records the made-by declaration of each note carrying the link; a pair linked from two notes keeps both', async () => {
+    const vault = new MemoryVault({
+      'A.md': '---\nmade-by: assistant\n---\nSee [[Type II error]].',
+      'B.md': '---\nmade-by: me\n---\nSee [[Type I error]].',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 50]),
+      concept('Type II error', 'B.md', [0, 50]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals).toEqual([
+      { kind: 'her-link', a: 'Type I error', b: 'Type II error', linkingNoteMadeBy: 'assistant' },
+      { kind: 'her-link', a: 'Type II error', b: 'Type I error', linkingNoteMadeBy: 'me' },
+    ]);
+  });
+
+  it('[ol-egov.141.89.4.32] an undeclared linking note carries no linkingNoteMadeBy key', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'See [[Type II error]].',
+      'B.md': 'Nothing here.',
+    });
+    const concepts = [
+      concept('Type I error', 'A.md', [0, 22]),
+      concept('Type II error', 'B.md', [0, 13]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
+
+    expect(signals).toEqual([{ kind: 'her-link', a: 'Type I error', b: 'Type II error' }]);
+  });
+
   it("nominates a pair when one concept's introducing passage wikilinks the other", async () => {
     const vault = new MemoryVault({
       'A.md': 'A Type I error occurs when... see also [[Type II error]] for the converse.',
@@ -876,4 +909,33 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
       expect(signals.filter((s) => s.kind === 'assessment-error-adjacency')).toEqual([]);
     },
   );
+});
+
+describe('gatherCorpusRelationVaultContext: the stamp block never travels (`ol-egov.141.89.2.32`)', () => {
+  const stamp = ['olea-cloze-ids:', '  block-a1: cloze-1', 'olea-uid: uid-77'].join('\n');
+  const body = 'Spring tides follow the new and full moon.';
+  const stamped = ['---', 'topic: [Tides]', stamp, '---', '', body].join('\n');
+  const clean = ['---', 'topic: [Tides]', '---', '', body].join('\n');
+
+  it('the passage text is the note without its olea-* keys, anchor kept inside the body', async () => {
+    const start = stamped.indexOf(body);
+    const vault = new MemoryVault({ 'Tides.md': stamped });
+    const c = concept('Spring tides', 'Tides.md', [start, start + body.length]);
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+    const text = passageTextByName.get('Spring tides') ?? '';
+    expect(text).not.toMatch(/olea-cloze-ids|olea-uid|cloze-1|uid-77/);
+    expect(text).toBe(clean);
+  });
+
+  it('over budget, the window stays centred on the anchor after the strip shifts offsets', async () => {
+    const pad = 'filler words go here. '.repeat(400);
+    const note = (head: string) => ['---', head, '---', '', pad, body, pad].join('\n');
+    const start = note(stamp).indexOf(body);
+    const vault = new MemoryVault({ 'Tides.md': note(stamp) });
+    const c = concept('Spring tides', 'Tides.md', [start, start + body.length]);
+    const { passageTextByName } = await gatherCorpusRelationVaultContext(vault, [c]);
+    const text = passageTextByName.get('Spring tides') ?? '';
+    expect(text).toContain(body);
+    expect(text).not.toMatch(/olea-cloze-ids|olea-uid/);
+  });
 });

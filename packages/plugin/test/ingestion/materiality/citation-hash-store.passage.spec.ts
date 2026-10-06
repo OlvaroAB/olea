@@ -67,7 +67,7 @@ describe('ObsidianCitationHashStore, passage grain', () => {
     });
   });
 
-  it('reads a record written before either field, and drops a malformed one', async () => {
+  it('reads a record written before either field, and drops a malformed one (a non-string reason; an unknown string is kept, D-473)', async () => {
     const host = new FakeDataHost();
     host.blob = {
       [CITATION_ANCHOR_STORAGE_KEY]: {
@@ -77,7 +77,7 @@ describe('ObsidianCitationHashStore, passage grain', () => {
           sourcePath: 'A.md',
           text: 't',
           conceptIds: [],
-          pendingRevalidation: { sinceContentHash: 'h', since: 1, reason: 'invented' },
+          pendingRevalidation: { sinceContentHash: 'h', since: 1, reason: 7 },
         },
       },
     };

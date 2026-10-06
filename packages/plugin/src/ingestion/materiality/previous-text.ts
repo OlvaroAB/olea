@@ -15,15 +15,19 @@
  * one's own contract requires. This cache holds nothing else and answers
  * exactly one question, so it can change independently.
  *
- * **Session-scoped only, by construction — never persisted.** A plugin
- * reload starts with an empty cache, and the next modify event for any path
- * evaluates as a first sighting (`previousText: undefined`), which
- * `MaterialityTrigger.evaluate` already treats safely (`'judge-unavailable'`
- * for anything that would otherwise reach the judge, rather than a guess at
- * what the text used to be). This is the same "current as of this session's
- * own edits" posture `keyword-index/wiring.ts`'s module doc argues for its
- * own, unrelated limitation — deliberate, not an oversight, and cheap to
- * revisit later if a persisted or richer source is wired in.
+ * **In-memory, primed once per load, never persisted.** The map itself is session state, but
+ * it no longer starts empty in effect: after a load, `prime-previous-text.ts`
+ * (`primePreviousTextFromVault`, called once from `main.ts`, off the critical path) reads each
+ * note that has a materiality record from the vault and records its text here ONLY when that
+ * text hashes to the record's stored raw hash (it IS the settled baseline). Without that, a
+ * note's first small or debounced save after a load had no previous text, so it got no pending
+ * record and a later escalating edit was judged against the intermediate save, not the
+ * baseline (`ol-egov.141.89.5.66`). An edit observed before priming reaches a path always wins.
+ *
+ * **The unprimed case.** A note whose text changed while Obsidian was closed (no match), an
+ * unreadable note, and a note with no record at all stay empty here, and the next modify event
+ * evaluates as a first sighting (`previousText: undefined`), which `MaterialityTrigger.evaluate`
+ * treats safely (`'judge-unavailable'` for anything that would otherwise reach the judge).
  */
 
 export interface PreviousTextTracker {

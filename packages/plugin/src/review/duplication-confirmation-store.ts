@@ -131,6 +131,24 @@
  * it yet** — the same honest-gap posture `[D-392]`'s own module doc already states for its
  * candidates ("no clause defines an affordance for her to confirm or decline a duplication"),
  * carried through to this third reason value.
+ *
+ * **One writer per record file at a time (`ol-egov.141.89.104.2`).** Every write here is one task
+ * on its file's queue (`olea-core`'s `withPathQueue`). A refresh or an answer decides from the file
+ * as it is inside that task, never from the listing's copy, so a refresh overlapping her answer on
+ * one install cannot write the old `'proposed'` record back over it; and a new record claims its
+ * name only if the name is still free inside the task, so two overlapping proposals never write
+ * one file twice.
+ *
+ * **One proposal walk at a time (`ol-egov.141.89.104.53`).** A walk lists the folder, matches, and
+ * writes a new record for an entry nothing matches — a check that spans every record file, which
+ * no one file's queue covers. Two overlapping walks would both match nothing and both write, the
+ * second under the next free name: two `'proposed'` records for one collision set. So each of the
+ * three proposers ({@link proposeDuplicationConfirmations}, {@link proposeRepairChoiceConfirmations},
+ * {@link proposeItemValidationConfirmations}) runs its whole walk as one task on the folder's own
+ * queue key, {@link DUPLICATION_CONFIRMATION_FOLDER}, and takes each record file's queue inside it.
+ * **Acquisition order:** the folder key first, then a record file's key, never the reverse — an
+ * answer or an apply takes only its record file's key and never waits for the folder's
+ * (`olea-core`'s `vault/path-queue.ts`, "Two keys at once").
  */
 
 import type {
@@ -139,7 +157,7 @@ import type {
   VaultPath,
   VaultSource,
 } from 'olea-core';
-import { hashText, listFolder } from 'olea-core';
+import { hashText, listFolder, readStoreRecord, withPathQueue } from 'olea-core';
 import {
   compareRepairChoiceCandidates,
   digestOfInstrumentRecord,
@@ -452,6 +470,29 @@ async function newRecordPath(
 }
 
 /**
+ * Writes a new record under the first free name for `idSet`, claiming the name inside its file's
+ * queue: a name another task took meanwhile is skipped for the next, never written over. Adds every
+ * name it looks at to `taken`.
+ */
+async function writeNewRecord(
+  vault: VaultSource,
+  idSet: readonly string[],
+  taken: Set<VaultPath>,
+  content: string,
+): Promise<VaultPath> {
+  for (;;) {
+    const path = await newRecordPath(vault, idSet, taken);
+    taken.add(path);
+    const claimed = await withPathQueue(path, async () => {
+      if (await vault.exists(path)) return false;
+      await vault.write(path, content);
+      return true;
+    });
+    if (claimed) return path;
+  }
+}
+
+/**
  * Persists `entries` — one per losing note, as `olea-core`'s `resolveInstrumentDuplications`
  * produces them — against the records already in the folder, rename-safely. Idempotent: an entry
  * already on record writes nothing unless where a copy was observed changed. See the module doc
@@ -464,6 +505,23 @@ export async function proposeDuplicationConfirmations(
   options: ProposeDuplicationConfirmationsOptions = {},
 ): Promise<ProposeDuplicationConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkDuplicationConfirmations(vault, entries, options));
+}
+
+/**
+ * Runs one proposal walk as one task on the folder's own queue key — see the module doc's "One
+ * proposal walk at a time". The walk takes record files' queues inside; never the folder's again.
+ */
+function onProposalWalkQueue<T>(walk: () => Promise<T>): Promise<T> {
+  return withPathQueue(DUPLICATION_CONFIRMATION_FOLDER, walk);
+}
+
+/** {@link proposeDuplicationConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkDuplicationConfirmations(
+  vault: VaultSource,
+  entries: readonly DuplicationConfirmationEntryInput[],
+  options: ProposeDuplicationConfirmationsOptions,
+): Promise<ProposeDuplicationConfirmationsResult> {
   const noteUidOf = options.noteUidOf ?? (() => null);
 
   const stored = await listDuplicationConfirmationRecords(vault);
@@ -542,19 +600,27 @@ export async function proposeDuplicationConfirmations(
     const s = matchOf.get(e);
     const existing = s === undefined ? undefined : stored[s];
     if (existing !== undefined) {
-      if (existing.record.schemaVersion !== DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION) {
-        // Not a shape this module writes: matched, so nothing shadows it, and never rewritten.
-        records.push(existing);
-        continue;
-      }
-      const refreshed: DuplicationConfirmationRecord = { ...existing.record, losing, collisions };
-      if (canonical(refreshed) !== canonical(existing.record)) {
+      const outcome = await withPathQueue(existing.path, async () => {
+        const fresh = await readStoreRecord(vault, existing.path, isDuplicationConfirmationRecord);
+        // Gone or unreadable since the listing: matched, and never written over.
+        if (fresh.kind !== 'record') return { stored: existing, wrote: false };
+        const current: StoredDuplicationConfirmationRecord = {
+          path: existing.path,
+          record: fresh.record,
+        };
+        if (current.record.schemaVersion !== DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION) {
+          // Not a shape this module writes: matched, so nothing shadows it, and never rewritten.
+          return { stored: current, wrote: false };
+        }
+        const refreshed: DuplicationConfirmationRecord = { ...current.record, losing, collisions };
+        if (canonical(refreshed) === canonical(current.record)) {
+          return { stored: current, wrote: false };
+        }
         await vault.write(existing.path, serialize(refreshed));
-        written.push(existing.path);
-        records.push({ path: existing.path, record: refreshed });
-      } else {
-        records.push(existing);
-      }
+        return { stored: { path: existing.path, record: refreshed }, wrote: true };
+      });
+      if (outcome.wrote) written.push(existing.path);
+      records.push(outcome.stored);
       continue;
     }
 
@@ -566,9 +632,7 @@ export async function proposeDuplicationConfirmations(
       proposedAt: new Date(entry.proposedAt).toISOString(),
       schemaVersion: DUPLICATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
     };
-    const path = await newRecordPath(vault, entryIdSets[e] ?? [], taken);
-    taken.add(path);
-    await vault.write(path, serialize(record));
+    const path = await writeNewRecord(vault, entryIdSets[e] ?? [], taken, serialize(record));
     written.push(path);
     records.push({ path, record });
   }
@@ -697,7 +761,14 @@ export async function proposeItemValidationConfirmations(
   entries: readonly ItemValidationConfirmationEntryInput[],
 ): Promise<ProposeItemValidationConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkItemValidationConfirmations(vault, entries));
+}
 
+/** {@link proposeItemValidationConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkItemValidationConfirmations(
+  vault: VaultSource,
+  entries: readonly ItemValidationConfirmationEntryInput[],
+): Promise<ProposeItemValidationConfirmationsResult> {
   const existing = await listItemValidationConfirmationRecords(vault);
   const existingByInstrumentId = new Map(
     existing.map((stored) => [stored.record.instrumentId, stored]),
@@ -716,25 +787,32 @@ export async function proposeItemValidationConfirmations(
     const stored = existingByInstrumentId.get(entry.instrumentId);
 
     if (stored !== undefined) {
-      if (
-        stored.record.schemaVersion !== ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION ||
-        stored.record.status !== 'proposed'
-      ) {
-        records.push(stored);
-        continue;
-      }
-      const refreshed: ItemValidationConfirmationRecord = {
-        ...stored.record,
-        kind: entry.kind,
-        ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
-      };
-      if (canonical(refreshed) !== canonical(stored.record)) {
+      const outcome = await withPathQueue(stored.path, async () => {
+        const fresh = await readStoreRecord(vault, stored.path, isItemValidationConfirmationRecord);
+        if (fresh.kind !== 'record') return { stored, wrote: false };
+        const current: StoredItemValidationConfirmationRecord = {
+          path: stored.path,
+          record: fresh.record,
+        };
+        if (
+          current.record.schemaVersion !== ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION ||
+          current.record.status !== 'proposed'
+        ) {
+          return { stored: current, wrote: false };
+        }
+        const refreshed: ItemValidationConfirmationRecord = {
+          ...current.record,
+          kind: entry.kind,
+          ...(entry.reason !== undefined ? { reason: entry.reason } : {}),
+        };
+        if (canonical(refreshed) === canonical(current.record)) {
+          return { stored: current, wrote: false };
+        }
         await vault.write(stored.path, serialize(refreshed));
-        written.push(stored.path);
-        records.push({ path: stored.path, record: refreshed });
-      } else {
-        records.push(stored);
-      }
+        return { stored: { path: stored.path, record: refreshed }, wrote: true };
+      });
+      if (outcome.wrote) written.push(stored.path);
+      records.push(outcome.stored);
       continue;
     }
 
@@ -747,9 +825,7 @@ export async function proposeItemValidationConfirmations(
       proposedAt: new Date(entry.proposedAt).toISOString(),
       schemaVersion: ITEM_VALIDATION_CONFIRMATION_RECORD_SCHEMA_VERSION,
     };
-    const path = await newRecordPath(vault, [entry.instrumentId], taken);
-    taken.add(path);
-    await vault.write(path, serialize(record));
+    const path = await writeNewRecord(vault, [entry.instrumentId], taken, serialize(record));
     written.push(path);
     records.push({ path, record });
   }
@@ -778,7 +854,14 @@ export async function proposeRepairChoiceConfirmations(
   entries: readonly RepairChoiceConfirmationEntryInput[],
 ): Promise<ProposeRepairChoiceConfirmationsResult> {
   if (entries.length === 0) return { records: [], written: [] };
+  return onProposalWalkQueue(() => walkRepairChoiceConfirmations(vault, entries));
+}
 
+/** {@link proposeRepairChoiceConfirmations}'s walk, run while the caller holds the folder's queue. */
+async function walkRepairChoiceConfirmations(
+  vault: VaultSource,
+  entries: readonly RepairChoiceConfirmationEntryInput[],
+): Promise<ProposeRepairChoiceConfirmationsResult> {
   const existing = await listRepairChoiceConfirmationRecords(vault);
   const existingByInstrumentId = new Map(
     existing.map((stored) => [stored.record.instrumentId, stored]),
@@ -801,29 +884,36 @@ export async function proposeRepairChoiceConfirmations(
     const stored = existingByInstrumentId.get(entry.instrumentId);
 
     if (stored !== undefined) {
-      if (
-        !isWritableRepairChoiceVersion(stored.record.schemaVersion) ||
-        stored.record.status !== 'proposed' ||
-        // Never downgrade: an undigested entry leaves a version 2 record's digests as they are.
-        stored.record.schemaVersion > schemaVersion
-      ) {
-        // Not this module's shape to rewrite, or already resolved: matched, so no second
-        // proposal shadows it, and never rewritten (binding condition 1).
-        records.push(stored);
-        continue;
-      }
-      const refreshed: RepairChoiceConfirmationRecord = {
-        ...stored.record,
-        candidates,
-        schemaVersion,
-      };
-      if (canonical(refreshed) !== canonical(stored.record)) {
+      const outcome = await withPathQueue(stored.path, async () => {
+        const fresh = await readStoreRecord(vault, stored.path, isRepairChoiceConfirmationRecord);
+        if (fresh.kind !== 'record') return { stored, wrote: false };
+        const current: StoredRepairChoiceConfirmationRecord = {
+          path: stored.path,
+          record: fresh.record,
+        };
+        if (
+          !isWritableRepairChoiceVersion(current.record.schemaVersion) ||
+          current.record.status !== 'proposed' ||
+          // Never downgrade: an undigested entry leaves a version 2 record's digests as they are.
+          current.record.schemaVersion > schemaVersion
+        ) {
+          // Not this module's shape to rewrite, or already resolved: matched, so no second
+          // proposal shadows it, and never rewritten (binding condition 1).
+          return { stored: current, wrote: false };
+        }
+        const refreshed: RepairChoiceConfirmationRecord = {
+          ...current.record,
+          candidates,
+          schemaVersion,
+        };
+        if (canonical(refreshed) === canonical(current.record)) {
+          return { stored: current, wrote: false };
+        }
         await vault.write(stored.path, serialize(refreshed));
-        written.push(stored.path);
-        records.push({ path: stored.path, record: refreshed });
-      } else {
-        records.push(stored);
-      }
+        return { stored: { path: stored.path, record: refreshed }, wrote: true };
+      });
+      if (outcome.wrote) written.push(stored.path);
+      records.push(outcome.stored);
       continue;
     }
 
@@ -835,9 +925,7 @@ export async function proposeRepairChoiceConfirmations(
       proposedAt: new Date(entry.proposedAt).toISOString(),
       schemaVersion,
     };
-    const path = await newRecordPath(vault, [entry.instrumentId], taken);
-    taken.add(path);
-    await vault.write(path, serialize(record));
+    const path = await writeNewRecord(vault, [entry.instrumentId], taken, serialize(record));
     written.push(path);
     records.push({ path, record });
   }
@@ -876,6 +964,17 @@ async function findRepairChoiceRecord(
     (stored) => stored.record.instrumentId === instrumentId,
   );
   return matches[matches.length - 1];
+}
+
+/** The repair-choice record at `path` as it is now, or `undefined` when it is gone, unreadable or no longer `instrumentId`'s. */
+async function rereadRepairChoiceRecord(
+  vault: VaultSource,
+  path: VaultPath,
+  instrumentId: string,
+): Promise<StoredRepairChoiceConfirmationRecord | undefined> {
+  const fresh = await readStoreRecord(vault, path, isRepairChoiceConfirmationRecord);
+  if (fresh.kind !== 'record' || fresh.record.instrumentId !== instrumentId) return undefined;
+  return { path, record: fresh.record };
 }
 
 /**
@@ -943,9 +1042,22 @@ export async function saveRepairChoiceAnswer(
   vault: VaultSource,
   input: SaveRepairChoiceAnswerInput,
 ): Promise<SaveRepairChoiceAnswerResult> {
+  const located = await findRepairChoiceRecord(vault, input.instrumentId);
+  if (located === undefined) return { kind: 'not-found' };
+  return withPathQueue(located.path, async () => {
+    const stored = await rereadRepairChoiceRecord(vault, located.path, input.instrumentId);
+    if (stored === undefined) return { kind: 'not-found' };
+    return saveRepairChoiceAnswerUnderQueue(vault, input, stored);
+  });
+}
+
+/** `saveRepairChoiceAnswer`'s decision and write, on the record file's queue, from its current copy. */
+async function saveRepairChoiceAnswerUnderQueue(
+  vault: VaultSource,
+  input: SaveRepairChoiceAnswerInput,
+  stored: StoredRepairChoiceConfirmationRecord,
+): Promise<SaveRepairChoiceAnswerResult> {
   const { instrumentId, answer, currentRecords, now } = input;
-  const stored = await findRepairChoiceRecord(vault, instrumentId);
-  if (stored === undefined) return { kind: 'not-found' };
   const { record } = stored;
   if (!isWritableRepairChoiceVersion(record.schemaVersion)) {
     return { kind: 'unsupported-version', stored };
@@ -1030,9 +1142,22 @@ export async function applyConfirmedRepairChoice(
   vault: VaultSource,
   input: ApplyConfirmedRepairChoiceInput,
 ): Promise<ApplyConfirmedRepairChoiceResult> {
+  const located = await findRepairChoiceRecord(vault, input.instrumentId);
+  if (located === undefined) return { kind: 'not-found' };
+  return withPathQueue(located.path, async () => {
+    const stored = await rereadRepairChoiceRecord(vault, located.path, input.instrumentId);
+    if (stored === undefined) return { kind: 'not-found' };
+    return applyConfirmedRepairChoiceUnderQueue(vault, input, stored);
+  });
+}
+
+/** `applyConfirmedRepairChoice`'s re-check and any re-proposal, on the record file's queue. */
+async function applyConfirmedRepairChoiceUnderQueue(
+  vault: VaultSource,
+  input: ApplyConfirmedRepairChoiceInput,
+  stored: StoredRepairChoiceConfirmationRecord,
+): Promise<ApplyConfirmedRepairChoiceResult> {
   const { instrumentId, currentRecords } = input;
-  const stored = await findRepairChoiceRecord(vault, instrumentId);
-  if (stored === undefined) return { kind: 'not-found' };
   const { record } = stored;
   if (!isWritableRepairChoiceVersion(record.schemaVersion)) {
     return { kind: 'unsupported-version', stored };

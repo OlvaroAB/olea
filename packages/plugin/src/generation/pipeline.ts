@@ -300,6 +300,14 @@ export interface GenerationPipelineDeps {
    */
   readonly formatMatch?: (courseCode: string) => FormatMatchDecision | undefined;
   /**
+   * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> SHA-256 hex of that file's raw bytes`, as the
+   * drained extraction job recorded it (`ingestion/wiring.ts`'s landed-units hook). Becomes
+   * `InstrumentCitation.sourceRevision` on a citation to a non-markdown file other than the
+   * question's own note. Never recomputed in the sweep: re-reading the file here could pair a newer
+   * fingerprint with older extracted text.
+   */
+  readonly sourceRevisions?: ReadonlyMap<string, string>;
+  /**
    * What earlier sweeps learned about refusals that reached the judge
    * (`ol-egov.141.89.2.17`) — see `GenerationRefusalMemory`. Absent, the sweep uses
    * `refusalMemoryFor(deps.cache)`: one memory per draft cache instance, which is
@@ -769,12 +777,22 @@ function standaloneSourcePaths(units: readonly ExtractedUnit[]): readonly string
  * never the unit's `embeddedIn` note (that is the *destination* `DraftRecord.sourcePath` already
  * names, not the cited passage).
  */
-function citationFromUnit(unit: ExtractedUnit): InstrumentCitation {
-  const { location } = unit.provenance;
+function citationFromUnit(
+  unit: ExtractedUnit,
+  sourceRevisions?: ReadonlyMap<string, string>,
+  ownNotePath?: string,
+): InstrumentCitation {
+  const { location, sourcePath } = unit.provenance;
+  // `ol-egov.141.89.5.73` ([D-515]): only a non-markdown source that is not the question's own note.
+  const revision =
+    sourcePath.toLowerCase().endsWith('.md') || sourcePath === ownNotePath
+      ? undefined
+      : sourceRevisions?.get(sourcePath);
   return {
-    sourcePath: unit.provenance.sourcePath,
+    sourcePath,
     page: location.page,
     ...(location.section !== undefined ? { section: location.section } : {}),
+    ...(revision !== undefined ? { sourceRevision: revision } : {}),
   };
 }
 
@@ -1144,7 +1162,7 @@ export async function runGenerationSweep(
           ? undefined
           : await withGroundingPassage(
               deps.vault,
-              citationFromUnit(sourceUnit),
+              citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
               notePath,
               result.request.sourceChunks,
             );

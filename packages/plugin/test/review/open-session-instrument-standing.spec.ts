@@ -48,6 +48,7 @@ import {
   type CitationHashStore,
   ObsidianCitationHashStore,
 } from '../../src/ingestion/materiality/citation-hash-store.js';
+import { stripInstrumentSpans } from '../../src/ingestion/materiality/citation-material.js';
 import {
   type OpenReviewSessionInput,
   openReviewSession,
@@ -397,7 +398,10 @@ describe('openReviewSession — [D-323] instrument standing over the real review
     // observation, then a later mismatch), not a hand-built pending fact.
     await store.save(qa.instrumentId, {
       sourcePath: qa.notePath,
-      text: 'the note text as last observed',
+      // The note's real material (its text minus instrument blocks): since ol-egov.141.89.5.72
+      // presentation also compares the cited passage with this baseline, so an invented baseline
+      // would read as a changed passage and set the question aside before the standing read.
+      text: stripInstrumentSpans(await vault.read(qa.notePath), [qa.card.span]),
       conceptIds: [conceptId],
     });
     await store.setPendingRevalidation(qa.instrumentId, 'content-hash-1', NOW.getTime());

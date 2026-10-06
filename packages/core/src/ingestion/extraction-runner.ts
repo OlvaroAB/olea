@@ -51,7 +51,7 @@
  */
 
 import { discoverEmbeddedSources, type UnresolvedEmbed } from '../extract/embeds.js';
-import { extractFromVault } from '../extract/registry.js';
+import { EXTRACTORS } from '../extract/registry.js';
 import type {
   EmbeddedInNote,
   ExtractedUnit,
@@ -60,7 +60,7 @@ import type {
   SourceFormat,
 } from '../extract/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { hashText } from './hash.js';
+import { hashContent, hashText } from './hash.js';
 import type {
   EnqueueInput,
   EnqueueResult,
@@ -78,8 +78,18 @@ export interface JobEnqueuer {
 
 /** Where every successfully-extracted, text-layer-routed unit goes. The plugin's real implementation forwards to indexing (C2/C3, out of this bead's scope); a test implementation just collects them. */
 export interface ExtractedUnitSink {
-  /** Called at most once per job, with every unit that job produced. Never called with an empty array — a job that produced nothing simply doesn't call this. */
-  receive(units: readonly ExtractedUnit[]): Promise<void>;
+  /**
+   * Called at most once per job, with every unit that job produced. Never called with an empty array — a job that produced nothing simply doesn't call this.
+   *
+   * `sourceRevisions` (`ol-egov.141.89.5.73`, [D-515]): `sourcePath -> SHA-256 hex of the exact
+   * bytes that source's units were extracted from`, one entry per extracted non-markdown source
+   * (standalone, or embedded in a note), computed from the single read extraction already makes.
+   * Absent from callers that do not extract a file (transcripts); never persisted.
+   */
+  receive(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void>;
 }
 
 /** A source already resolved to a path and format — the common shape both `'source'` jobs and each resolved embed inside a `'note'` job extract through. */
@@ -205,18 +215,28 @@ function basename(path: VaultPath): string {
   return slash === -1 ? path : path.slice(slash + 1);
 }
 
+/** What `extractResolvedSource` returns: the text-layer units and the byte hash of the source they came from. */
+interface ExtractedSource {
+  readonly units: readonly ExtractedUnit[];
+  readonly sourceRevision: string;
+}
+
 /** Extracts one already-resolved source, enqueues a follow-on job for every vision-routed page, and returns the units its text-layer-routed pages produced. Shared by `'source'` jobs and each resolved embed of a `'note'` job — the one place either kind of job actually calls `extractFromVault`. */
 async function extractResolvedSource(
   deps: ExtractionRunnerDeps,
   parentContentHash: string,
   source: ResolvedSource,
-): Promise<readonly ExtractedUnit[]> {
-  const result = await extractFromVault(
-    deps.vault,
-    source.sourcePath,
-    source.format,
+): Promise<ExtractedSource> {
+  // One read: the same bytes feed the extractor and the revision hash ([D-515], never re-read).
+  const bytes = await deps.vault.readBinary(source.sourcePath);
+  const sourceRevision = await hashContent(bytes);
+  const result = await EXTRACTORS[source.format].extract(
+    {
+      path: source.sourcePath,
+      bytes,
+      ...(source.embeddedIn ? { embeddedIn: source.embeddedIn } : {}),
+    },
     deps.options,
-    source.embeddedIn,
   );
 
   if (result.pages.length === 0) {
@@ -261,7 +281,7 @@ async function extractResolvedSource(
       });
     }
   }
-  return units;
+  return { units, sourceRevision };
 }
 
 async function runNoteJob(
@@ -280,16 +300,18 @@ async function runNoteJob(
   }
 
   const units: ExtractedUnit[] = [];
+  const sourceRevisions = new Map<string, string>();
   for (const embed of resolved) {
-    const embedUnits = await extractResolvedSource(deps, job.contentHash, {
+    const extracted = await extractResolvedSource(deps, job.contentHash, {
       sourcePath: embed.path,
       format: embed.format,
       embeddedIn: embed.embeddedIn,
     });
-    units.push(...embedUnits);
+    units.push(...extracted.units);
+    if (extracted.units.length > 0) sourceRevisions.set(embed.path, extracted.sourceRevision);
   }
 
-  if (units.length > 0) await deps.sink.receive(units);
+  if (units.length > 0) await deps.sink.receive(units, sourceRevisions);
   return { ok: true };
 }
 
@@ -298,8 +320,10 @@ async function runSourceJob(
   job: JobRunnerView,
   source: ResolvedSource,
 ): Promise<JobRunOutcome> {
-  const units = await extractResolvedSource(deps, job.contentHash, source);
-  if (units.length > 0) await deps.sink.receive(units);
+  const { units, sourceRevision } = await extractResolvedSource(deps, job.contentHash, source);
+  if (units.length > 0) {
+    await deps.sink.receive(units, new Map([[source.sourcePath, sourceRevision]]));
+  }
   return { ok: true };
 }
 

@@ -31,7 +31,7 @@
  * **All three register-row-1.2a-named signals are wired, plus a fourth from
  * outside that row.** Component register row 1.2a names three
  * nomination-signal sources: assessment-document co-occurrence,
- * embedding-proximity over the local vector cache, and her own wikilinks
+ * embedding-proximity over the local vector cache, and wikilinks in notes she keeps
  * between concept notes (`'her-link'`,
  * `packages/core/src/concept/corpus-relations/types.ts`'s
  * `NominationSignalKind`). `ol-kw4a` wired `her-link` alone and named the
@@ -114,7 +114,7 @@
  * `anchor` may be a lecture note, a paper, or a dedicated zettelkasten note,
  * and nothing at this layer distinguishes which. Scanning every anchor
  * source for `[[...]]` targets that resolve to another concept in the SAME
- * course's set is the honest reading of "her own wikilinks between concept
+ * course's set is the honest reading of "wikilinks between concept
  * notes" available without inventing a folder convention this bead was not
  * asked to design.
  */
@@ -123,6 +123,8 @@ import {
   buildOutline,
   type CorpusConcept,
   cosineSimilarity,
+  type DeclaredMadeBy,
+  declaredMadeByFromFrontmatter,
   type EmbeddingCacheEngine,
   hashText,
   type MisconceptionRecord,
@@ -130,11 +132,13 @@ import {
   type OutlineNode,
   type ParsedDocument,
   parseDocument,
+  parseFrontmatter,
   registerSources,
   type TeachingEventResolver,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { stripOleaFrontmatter } from '../generation/strip-olea-frontmatter.js';
 
 /** Matches `[[target]]`, `[[target#heading]]`, `[[target|alias]]` (and the combination) — same shape `olea-core`'s frontmatter reader uses for the identical syntax, restated here rather than imported across a package this module has no other reason to depend on for one regex. */
 const WIKILINK_RE = /\[\[([^[\]]+)\]\]/g;
@@ -727,6 +731,18 @@ export async function gatherCorpusRelationVaultContext(
   const seenPairs = new Set<string>();
   const signals: NominationSignal[] = [];
 
+  const madeByCache = new Map<VaultPath, DeclaredMadeBy | undefined>();
+  const madeByOf = (path: VaultPath, content: string): DeclaredMadeBy | undefined => {
+    if (madeByCache.has(path)) return madeByCache.get(path);
+    const first = parseDocument(content).blocks[0];
+    const madeBy =
+      first?.kind === 'frontmatter'
+        ? declaredMadeByFromFrontmatter(parseFrontmatter(first.inner))
+        : undefined;
+    madeByCache.set(path, madeBy);
+    return madeBy;
+  };
+
   for (const concept of concepts) {
     const content = await readCached(concept.anchor.sourcePath);
     // `charRange` is optional (`../../core/src/extract/types.js`, `ol-2zfj.54`); every anchor a
@@ -738,19 +754,43 @@ export async function gatherCorpusRelationVaultContext(
     // budget-bounded rule — see the module doc's `ol-2zfj.64` paragraph for why this superseded
     // `sectionPassageText`.
     const charRange = concept.anchor.location.charRange;
+    // `ol-egov.141.89.2.32`: Olea's own `olea-*` frontmatter keys never travel inside a passage.
+    // The strip only removes text inside the leading frontmatter block, so an anchor's offsets
+    // shift left by exactly the removed length (clamped at the note's start).
+    const sendable = stripOleaFrontmatter(content);
+    const removed = content.length - sendable.length;
     const passageText =
       charRange !== undefined
-        ? notePassageText(content, charRange)
-        : content.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
+        ? notePassageText(
+            sendable,
+            removed === 0
+              ? charRange
+              : {
+                  start: Math.max(0, charRange.start - removed),
+                  end: Math.max(0, charRange.end - removed),
+                },
+          )
+        : sendable.slice(0, RELATIONS_ENDPOINT_CHAR_BUDGET);
     passageTextByName.set(concept.name, passageText);
 
     for (const target of wikilinkTargets(content)) {
       const linked = byName.get(target);
       if (linked === undefined || linked.name === concept.name) continue;
-      const key = unorderedPairKey(concept.name, linked.name);
+      // `ol-egov.141.89.4.32` (`[D-490]`): the note carrying this link is `concept`'s anchor
+      // note; its `made-by` rides on the signal. A pair linked from two notes keeps one signal
+      // per DISTINCT declaration (undeclared included), because `reconcileCorpusVerdicts` reads
+      // the whole list of linking-note declarations ("every note assistant" differs from "one
+      // assistant, one not"); a repeat of a declaration already recorded adds nothing.
+      const madeBy = madeByOf(concept.anchor.sourcePath, content);
+      const key = `${unorderedPairKey(concept.name, linked.name)}\u0000${madeBy ?? ''}`;
       if (seenPairs.has(key)) continue;
       seenPairs.add(key);
-      signals.push({ kind: 'her-link', a: concept.name, b: linked.name });
+      signals.push({
+        kind: 'her-link',
+        a: concept.name,
+        b: linked.name,
+        ...(madeBy !== undefined ? { linkingNoteMadeBy: madeBy } : {}),
+      });
     }
   }
 

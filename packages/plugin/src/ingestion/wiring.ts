@@ -201,7 +201,16 @@ export interface IngestionWiringDeps {
    * propagated. Omitted means no notification, unchanged from this module's
    * pre-`ol-p3t07a` behaviour.
    */
-  readonly onUnitsLanded?: (units: readonly ExtractedUnit[]) => Promise<void> | void;
+  readonly onUnitsLanded?: (
+    units: readonly ExtractedUnit[],
+    /**
+     * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> SHA-256 of that file's own bytes`, computed
+     * by core's extraction from the one read it makes, for every extracted non-markdown source
+     * (standalone or embedded in a note). Absent for vision-page and transcript landings. Never
+     * read from the file again.
+     */
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ) => Promise<void> | void;
   /**
    * `ol-15f8`: composes the real `visionRunner` for standalone image sources
    * (C3.1/C3.3) exactly the way `concept/wiring.ts`'s `buildConceptWiring`
@@ -512,16 +521,18 @@ export interface IngestionWiring {
   readonly extractOptions?: ExtractOptions;
 }
 
-/** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. */
+/** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. Passes core's `sourcePath -> byte hash` map through ([D-515]). */
 function withUnitsLandedHook(
   pendingSink: PendingIndexingSink,
-  onUnitsLanded: (units: readonly ExtractedUnit[]) => Promise<void> | void,
+  onUnitsLanded: NonNullable<IngestionWiringDeps['onUnitsLanded']>,
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
+    async receive(units, sourceRevisions) {
       await pendingSink.receive(units);
       try {
-        await onUnitsLanded(units);
+        await (sourceRevisions === undefined
+          ? onUnitsLanded(units)
+          : onUnitsLanded(units, sourceRevisions));
       } catch (error) {
         console.error('Olea: generation-trigger hook failed (ingestion unaffected)', error);
       }
@@ -547,8 +558,8 @@ function withGenerationEnqueueHook(
   furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined,
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
-      await inner.receive(units);
+    async receive(units, sourceRevisions) {
+      await inner.receive(units, sourceRevisions);
       try {
         await enqueuePrimaryGenerationCallsForLandedUnits(units, generationArrivalDeps);
       } catch (error) {
@@ -728,8 +739,8 @@ function withOutcomesExtractHook(
   outcomesDeps: OutcomesExtractTriggerDeps,
 ): ExtractedUnitSink {
   return {
-    async receive(units) {
-      await inner.receive(units);
+    async receive(units, sourceRevisions) {
+      await inner.receive(units, sourceRevisions);
       const unitsBySourcePath = new Map<VaultPath, ExtractedUnit[]>();
       for (const unit of units) {
         const path = unit.provenance.sourcePath;

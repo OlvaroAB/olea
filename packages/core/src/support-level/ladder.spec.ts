@@ -6,6 +6,7 @@ import {
   RECESSION_CLEAN_STREAK_THRESHOLD,
   SNAPBACK_RECESSION_MULTIPLIER,
   type SupportLevelState,
+  supportLevelActuallyShown,
 } from './ladder.js';
 import type { SessionSupportOutcome } from './types.js';
 
@@ -243,5 +244,19 @@ describe('advanceSupportLevel — snap-back doubling', () => {
     // A failure the session AFTER that is an ordinary escalation, not a snap-back.
     const laterFailure = advanceSupportLevel(oneCleanSession, outcome({ failureShape: 'blank' }));
     expect(laterFailure.requiredCleanStreak).toBe(RECESSION_CLEAN_STREAK_THRESHOLD);
+  });
+});
+
+describe('supportLevelActuallyShown ([D-517], F2.20, [D-362])', () => {
+  it('records independent when no prompt was shown, whatever level was offered', () => {
+    for (const offered of ['independent', 'prompted', 'guided'] as const) {
+      expect(supportLevelActuallyShown(offered, false)).toBe('independent');
+    }
+  });
+
+  it('records the offered level when the prompt was actually shown', () => {
+    for (const offered of ['independent', 'prompted', 'guided'] as const) {
+      expect(supportLevelActuallyShown(offered, true)).toBe(offered);
+    }
   });
 });

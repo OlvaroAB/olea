@@ -49,7 +49,9 @@ import { parseDocument } from '../block/parse.js';
 import { formatFromExtension } from '../extract/registry.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { readScalar } from '../frontmatter/read.js';
+import type { Frontmatter } from '../frontmatter/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { type DeclaredMadeBy, parseMadeBy } from './materiality.js';
 import type {
   RegisteredFileSpec,
   RegisterSourcesOptions,
@@ -106,6 +108,15 @@ function matchRole(value: string): SourceRole | undefined {
     if (ROLE_ALIASES[role].includes(normalized)) return role;
   }
   return undefined;
+}
+
+/**
+ * Her `made-by` declaration in a parsed frontmatter block ([D-490]), read exactly like `role`
+ * above: a scalar key, tolerant of case and quoting. An invalid value is `undefined` (the note
+ * reads as undeclared). Olea never writes this key.
+ */
+export function declaredMadeByFromFrontmatter(fm: Frontmatter): DeclaredMadeBy | undefined {
+  return parseMadeBy(readScalar(fm, 'made-by').scalar);
 }
 
 function isMarkdown(path: VaultPath): boolean {

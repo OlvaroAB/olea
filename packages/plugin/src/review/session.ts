@@ -32,6 +32,7 @@ import type {
   Scheduler,
   SchedulingObservationDecision,
   StrongRecallProposalDecision,
+  SupportLevelPresentation,
 } from 'olea-core';
 import {
   buildResolutionEvidenceEvent,
@@ -40,6 +41,7 @@ import {
   mapMcqRating,
   STRONG_RECALL_PROPOSAL_TRIGGER,
   scoredConceptId,
+  supportLevelActuallyShown,
 } from 'olea-core';
 // `decideResolutionEvidence` (`ol-egov.141.89.6.19`) is not yet re-exported
 // from `olea-core`'s barrel (`packages/core/src/index.ts` is another lane's
@@ -184,10 +186,21 @@ export interface ReviewSessionDeps {
    * (failed, lost, or its one `[D-400]` retry spent), so the question is set aside for this
    * session as could-not-check, never as an established change. Nothing is written or retried
    * here: the persisted pending fact is the `[D-293]`/`[D-400]` record and stays as it is, so the
-   * item remains deferred and recoverable. A throw reads as `'check-failed'`. Optional: absent
-   * shows every item, as before.
+   * item remains deferred and recoverable. A throw reads as `'check-failed'`. `'suspended'`
+   * (`ol-egov.141.89.5.59`, `[D-343]`, `[D-511]`): the instrument was suspended after the session
+   * was composed (a material verdict on its cited passage takes the revised path), so it is
+   * dropped from this session silently, exactly as a new composition excludes it. Optional:
+   * absent shows every item, as before.
    */
-  readonly checkSourceAtPresentation?: (instrumentId: string) => Promise<'clear' | 'check-failed'>;
+  readonly checkSourceAtPresentation?: (
+    instrumentId: string,
+  ) => Promise<'clear' | 'check-failed' | 'suspended'>;
+  /**
+   * `ol-egov.141.89.5.73` ([D-515]): the presentation-time source-bytes check for a pending draft
+   * (`draftId !== null`), asked with the draft id just before it is shown. `'check-failed'` sets it
+   * aside as could-not-check, as for a settled item; a throw reads the same. Absent: drafts show.
+   */
+  readonly checkDraftSourceAtPresentation?: (draftId: string) => Promise<'clear' | 'check-failed'>;
   /**
    * Resolves a cached, unreviewed draft (`instrument.draftId !== null`, F3.3,
    * `ol-p3t07a`) into a real instrument the moment she answers, edits, or
@@ -610,6 +623,22 @@ export function withheldNoticeText(
   return answerSubmitted
     ? WITHHELD_PASSAGE_CHANGED_NOTICE
     : WITHHELD_PASSAGE_CHANGED_NO_ANSWER_NOTICE;
+}
+
+/**
+ * Whether a recall review screen (Q&A or cloze) displays a support prompt.
+ * No view does today, so no recall review may record support as shown
+ * (`[D-517]` (a), `ol-egov.141.89.9.91`). The one switch to flip, with the
+ * view that adds the prompt, if a prompt is ever shown (and that needs its
+ * own clause).
+ */
+export const RECALL_PROMPT_SHOWN = false;
+
+/** The decision a recall review records: the offered level only when a prompt was shown. */
+function supportLevelShownOnRecall(offered: SupportLevelPresentation): SupportLevelPresentation {
+  const level = supportLevelActuallyShown(offered.level, RECALL_PROMPT_SHOWN);
+  if (level === offered.level) return offered;
+  return { level, provenance: 'not-offered' };
 }
 
 /** The ruled brief line for a later set-aside in the same session, `null` where none is ruled. */
@@ -1547,15 +1576,40 @@ export class ReviewSession {
     // as could-not-check, never as an established change. Only a settled instrument has a
     // persisted fact to read (a pending draft has no instrument id yet).
     if (this.deps.checkSourceAtPresentation !== undefined && item.instrument.draftId === null) {
-      let outcome: 'clear' | 'check-failed';
+      let outcome: 'clear' | 'check-failed' | 'suspended';
       try {
         outcome = await this.deps.checkSourceAtPresentation(item.instrument.instrumentId);
       } catch {
         outcome = 'check-failed';
       }
+      if (outcome === 'suspended') {
+        // `[D-343]`: withheld before it is next shown; the same set-aside as a fresh composition
+        // gives a suspended instrument, so no sentence of its own.
+        this.items.splice(this.index, 1);
+        await this.presentCurrent();
+        return;
+      }
       if (outcome === 'check-failed') {
         this.items.splice(this.index, 1);
         // A notice already pending from this same action (an established change) is not replaced.
+        if (this.withheldNotice === null) this.noteWithheld('check-failed', false);
+        await this.presentCurrent();
+        return;
+      }
+    }
+
+    if (
+      this.deps.checkDraftSourceAtPresentation !== undefined &&
+      item.instrument.draftId !== null
+    ) {
+      let outcome: 'clear' | 'check-failed';
+      try {
+        outcome = await this.deps.checkDraftSourceAtPresentation(item.instrument.draftId);
+      } catch {
+        outcome = 'check-failed';
+      }
+      if (outcome === 'check-failed') {
+        this.items.splice(this.index, 1);
         if (this.withheldNotice === null) this.noteWithheld('check-failed', false);
         await this.presentCurrent();
         return;
@@ -1694,8 +1748,14 @@ export class ReviewSession {
       // because `RecordReviewInput.supportLevel` is optional under
       // `exactOptionalPropertyTypes` and an explicit `undefined` value is not
       // the same as an absent key there.
+      // `[D-517]` (a): the chooser's level is what was OFFERED; the record carries what was
+      // SHOWN (principle 16, F2.20, `[D-362]`). No recall screen displays a prompt
+      // (`RECALL_PROMPT_SHOWN`), so an unaided answer records `independent` and readiness
+      // credits it. Provenance follows: nothing was shown above the floor.
       ...(stamped.instrument.supportLevel !== undefined
-        ? { supportLevel: stamped.instrument.supportLevel }
+        ? {
+            supportLevel: supportLevelShownOnRecall(stamped.instrument.supportLevel),
+          }
         : {}),
       // Same conditional-spread discipline as `supportLevel` just above, and
       // for the same `exactOptionalPropertyTypes` reason.

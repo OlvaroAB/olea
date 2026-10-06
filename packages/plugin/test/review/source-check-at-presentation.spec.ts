@@ -49,4 +49,15 @@ describe('sourceCheckAtPresentation', () => {
     const store = storeWith({ 'inst-a': { sinceContentHash: 'old', since: 1 } }, () => false);
     expect(await sourceCheckAtPresentation(store)('inst-a')).toBe('clear');
   });
+
+  it('a suspended instrument (the revised path leaves no pending fact) reads suspended; an unreadable suspension state throws', async () => {
+    const store = storeWith({}, () => false);
+    const suspended = sourceCheckAtPresentation(store, async () => new Set(['inst-a']));
+    expect(await suspended('inst-a')).toBe('suspended');
+    expect(await suspended('inst-b')).toBe('clear');
+    const unreadable = sourceCheckAtPresentation(store, async () => {
+      throw new Error('log unreadable');
+    });
+    await expect(unreadable('inst-a')).rejects.toThrow();
+  });
 });

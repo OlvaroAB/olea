@@ -1,0 +1,501 @@
+{
+  "threeBases": {
+    "gap": {
+      "kind": "model",
+      "model": {
+        "courses": [
+          {
+            "course": "TESTC101",
+            "status": "ranked",
+            "rows": [
+              {
+                "conceptName": "Widget theory",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000001",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 1,
+                "assessmentRelevance": 0.5,
+                "priorityScore": 1.9516129032258065,
+                "gapScore": 1.9516129032258065,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Test 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "questionLabel": "1",
+                    "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 73,
+                          "end": 168
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                    "questionLabel": "1",
+                    "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 73,
+                          "end": 165
+                        }
+                      }
+                    }
+                  }
+                ],
+                "distinctSourceCount": 2,
+                "reasoning": "Widget theory (TESTC101) is ranked above the next concept because it counts for more in your assessments. It appears in past papers, and its course objectives name it. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 1
+              },
+              {
+                "conceptName": "Sprocket method",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000003",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 2,
+                "assessmentRelevance": 0.13333333333333333,
+                "priorityScore": 1.5849462365591398,
+                "gapScore": 1.5849462365591398,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Test 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [],
+                "distinctSourceCount": 0,
+                "reasoning": "Sprocket method (TESTC101) is ranked above the next concept because it counts for more in your assessments. Its course objectives name it. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 2
+              },
+              {
+                "conceptName": "Gizmo law",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000002",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 3,
+                "assessmentRelevance": 0.1,
+                "priorityScore": 1.5516129032258066,
+                "gapScore": 1.5516129032258066,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Test 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "questionLabel": "2",
+                    "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 168,
+                          "end": 242
+                        }
+                      }
+                    }
+                  }
+                ],
+                "distinctSourceCount": 1,
+                "reasoning": "Gizmo law (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 3
+              },
+              {
+                "conceptName": "Flange rule",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000004",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 4,
+                "assessmentRelevance": 0.007142857142857143,
+                "priorityScore": 1.4587557603686636,
+                "gapScore": 1.4587557603686636,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Quiz 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [],
+                "distinctSourceCount": 0,
+                "reasoning": "Flange rule (TESTC101) is ranked last in this course. Its assessments point to it. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 4
+              }
+            ]
+          }
+        ],
+        "scope": {
+          "sources": [
+            {
+              "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+              "readState": "read",
+              "role": "objectives",
+              "kinds": ["registered-file"],
+              "format": null,
+              "outcome": null,
+              "citations": 2,
+              "units": 1,
+              "readingCompleteness": "not-recorded",
+              "conceptExtraction": "not-recorded",
+              "absenceGrounding": "groundable"
+            },
+            {
+              "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+              "readState": "read",
+              "role": "past-paper",
+              "kinds": ["registered-file"],
+              "format": null,
+              "outcome": null,
+              "citations": 2,
+              "units": 1,
+              "readingCompleteness": "not-recorded",
+              "conceptExtraction": "not-recorded",
+              "absenceGrounding": "groundable"
+            },
+            {
+              "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+              "readState": "read",
+              "role": "past-paper",
+              "kinds": ["registered-file"],
+              "format": null,
+              "outcome": null,
+              "citations": 1,
+              "units": 1,
+              "readingCompleteness": "not-recorded",
+              "conceptExtraction": "not-recorded",
+              "absenceGrounding": "groundable"
+            }
+          ],
+          "readCount": 3,
+          "yieldedNothingCount": 0,
+          "unreadableCount": 0,
+          "notAttemptedCount": 0,
+          "partlyReadCount": 0,
+          "unsettledCount": 0,
+          "extractionUnfinishedCount": 0,
+          "declaredUnitCount": null,
+          "unalignedDeclaredUnitCount": null,
+          "canStateExhaustiveness": true
+        },
+        "asOf": "2026-08-15"
+      },
+      "bases": [
+        [
+          "TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000001",
+          ["objectives", "past-paper"]
+        ],
+        ["TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000002", ["past-paper"]],
+        ["TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000003", ["objectives"]],
+        ["TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000004", ["assessment-brief"]]
+      ]
+    },
+    "framing": [
+      "Ranked by what 2 past papers of yours have asked. Some of this ranking also draws on your registered course objectives, for what they declare in scope. Some of this ranking also draws on your assessment briefs, for what they say each assessment covers.",
+      "This is where the evidence points, not where the exam will go. Cover the whole syllabus; let this decide what you do first."
+    ],
+    "plan": {
+      "threw": "ZodError: [\n  {\n    \"origin\": \"array\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"body\",\n      \"courses\",\n      0,\n      \"concepts\",\n      1,\n      \"citations\"\n    ],\n    \"message\": \"Too small: expected array to have >=1 items\"\n  },\n  {\n    \"origin\": \"array\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"body\",\n      \"courses\",\n      0,\n      \"concepts\",\n      3,\n      \"citations\"\n    ],\n    \"message\": \"Too small: expected array to have >=1 items\"\n  }\n]"
+    }
+  },
+  "pastPapersOnly": {
+    "gap": {
+      "kind": "model",
+      "model": {
+        "courses": [
+          {
+            "course": "TESTC101",
+            "status": "ranked",
+            "rows": [
+              {
+                "conceptName": "Widget theory",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000001",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 1,
+                "assessmentRelevance": 0.4,
+                "priorityScore": 1.8516129032258064,
+                "gapScore": 1.8516129032258064,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Test 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "questionLabel": "1",
+                    "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 73,
+                          "end": 168
+                        }
+                      }
+                    }
+                  },
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                    "questionLabel": "1",
+                    "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 73,
+                          "end": 165
+                        }
+                      }
+                    }
+                  }
+                ],
+                "distinctSourceCount": 2,
+                "reasoning": "Widget theory (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 1
+              },
+              {
+                "conceptName": "Gizmo law",
+                "conceptKey": "concept-key1:00000000-0000-4000-8000-000000000002",
+                "course": "TESTC101",
+                "gapClass": "mastery-gap",
+                "oracleRank": 2,
+                "assessmentRelevance": 0.1,
+                "priorityScore": 1.5516129032258066,
+                "gapScore": 1.5516129032258066,
+                "readiness": {
+                  "assessmentFormat": "recall-style",
+                  "recognitionEvidence": false,
+                  "recognitionOnly": false,
+                  "applied": false,
+                  "weight": 1
+                },
+                "masteryState": "seed",
+                "targetAssessmentPath": "02 Assignments/Test 1.md",
+                "assessmentFormat": "recall-style",
+                "citations": [
+                  {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "questionLabel": "2",
+                    "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+                    "provenance": {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "location": {
+                        "page": 1,
+                        "charRange": {
+                          "start": 168,
+                          "end": 242
+                        }
+                      }
+                    }
+                  }
+                ],
+                "distinctSourceCount": 1,
+                "reasoning": "Gizmo law (TESTC101) is ranked last in this course. It appears in past papers. How well you recall it is not known yet.",
+                "notePaths": ["Notes/one.md"],
+                "instrumentCount": 1,
+                "affordances": ["open-concept", "build-session"],
+                "conceptSize": {
+                  "band": "fine",
+                  "extent": {
+                    "noteCount": 1,
+                    "structureCorroborated": false
+                  }
+                },
+                "rank": 2
+              }
+            ]
+          }
+        ],
+        "scope": {
+          "sources": [
+            {
+              "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+              "readState": "read",
+              "role": "past-paper",
+              "kinds": ["registered-file"],
+              "format": null,
+              "outcome": null,
+              "citations": 2,
+              "units": 1,
+              "readingCompleteness": "not-recorded",
+              "conceptExtraction": "not-recorded",
+              "absenceGrounding": "groundable"
+            },
+            {
+              "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+              "readState": "read",
+              "role": "past-paper",
+              "kinds": ["registered-file"],
+              "format": null,
+              "outcome": null,
+              "citations": 1,
+              "units": 1,
+              "readingCompleteness": "not-recorded",
+              "conceptExtraction": "not-recorded",
+              "absenceGrounding": "groundable"
+            }
+          ],
+          "readCount": 2,
+          "yieldedNothingCount": 0,
+          "unreadableCount": 0,
+          "notAttemptedCount": 0,
+          "partlyReadCount": 0,
+          "unsettledCount": 0,
+          "extractionUnfinishedCount": 0,
+          "declaredUnitCount": null,
+          "unalignedDeclaredUnitCount": null,
+          "canStateExhaustiveness": true
+        },
+        "asOf": "2026-08-15"
+      },
+      "bases": [
+        ["TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000001", ["past-paper"]],
+        ["TESTC101\u0000concept-key1:00000000-0000-4000-8000-000000000002", ["past-paper"]]
+      ]
+    },
+    "framing": [
+      "Ranked by what 2 past papers of yours have asked.",
+      "This is where the evidence points, not where the exam will go. Cover the whole syllabus; let this decide what you do first."
+    ],
+    "plan": {
+      "envelope": {
+        "envelopeVersion": 1,
+        "kind": "study-plan",
+        "bodyVersion": 1,
+        "policyVersion": "sp1-20abcfd6f907a24d",
+        "computedAt": "2026-08-15T13:00:00.000Z",
+        "freshForSeconds": 86400,
+        "governsForSeconds": 604800,
+        "body": {
+          "asOf": "2026-08-15",
+          "courses": [
+            {
+              "course": "TESTC101",
+              "status": "ranked",
+              "concepts": [
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000001",
+                  "rank": 1,
+                  "weight": 1.8516129032258064,
+                  "examProximityDays": 17,
+                  "reasoning": "Widget theory (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "questionLabel": "1"
+                    },
+                    {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                      "questionLabel": "1"
+                    }
+                  ]
+                },
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000002",
+                  "rank": 2,
+                  "weight": 1.5516129032258066,
+                  "examProximityDays": 17,
+                  "reasoning": "Gizmo law (TESTC101) is ranked last in this course. It appears in past papers. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "questionLabel": "2"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
+    }
+  }
+}

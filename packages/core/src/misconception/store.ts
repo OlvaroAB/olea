@@ -138,9 +138,22 @@ export function mcqObservationKey(pick: McqMisconceptionPick, conceptId: string)
   return `${pick.eventId}::${conceptId}`;
 }
 
+const MCQ_DISTRACTOR_KEY_PREFIX = 'mcq-distractor:';
+
 /** Tier 2's deterministic fallback key — see this module's doc. Never persisted. */
 function mcqDistractorFallbackKey(pick: McqMisconceptionPick, conceptId: string): string {
-  return `mcq-distractor:${JSON.stringify([pick.instrumentId, conceptId, pick.distractor.text])}`;
+  return `${MCQ_DISTRACTOR_KEY_PREFIX}${JSON.stringify([pick.instrumentId, conceptId, pick.distractor.text])}`;
+}
+
+/**
+ * Whether a `MisconceptionRecord.id` is tier 2's derived fallback key rather
+ * than a persisted misconception id. Such a key embeds the distractor's
+ * wording and is never persisted, so nothing may write it into an event —
+ * `./resolution-evidence-decision.js`'s candidate selection (`[D-485]`)
+ * excludes these records for that reason.
+ */
+export function isDerivedMcqMisconceptionKey(id: string): boolean {
+  return id.startsWith(MCQ_DISTRACTOR_KEY_PREFIX);
 }
 
 function resolveMcqMisconceptionId(

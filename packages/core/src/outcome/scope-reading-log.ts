@@ -42,6 +42,7 @@
 import { hashText } from '../ingestion/hash.js';
 import { isValidDeviceId } from '../review-log/path.js';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { canonicalJson } from './canonical-json.js';
 import { OUTCOME_STORE_FOLDER } from './store.js';
@@ -232,7 +233,9 @@ function defaultNow(): string {
  * per-key current entries, then writing once. A draft whose content is already the current entry
  * for its key (in the store or earlier in the same batch) is skipped and reported `appended: false`
  * with the entry it matched. Extends the file, never rewrites it: a torn trailing line survives as
- * a literal prefix closed off by its own newline.
+ * a literal prefix closed off by its own newline. The read and the write run as one task on the
+ * file's queue (`../vault/path-queue.ts`), so two overlapping batches on one install both land,
+ * each with its own clock.
  */
 export async function appendScopeReadingEvents(
   vault: VaultSource,
@@ -243,6 +246,19 @@ export async function appendScopeReadingEvents(
 ): Promise<readonly AppendScopeReadingResult[]> {
   const path = scopeReadingLogPath(store, deviceId);
   const now = options.now ?? defaultNow;
+  return withPathQueue(path, () =>
+    appendScopeReadingEventsUnderQueue(vault, store, deviceId, drafts, path, now),
+  );
+}
+
+async function appendScopeReadingEventsUnderQueue(
+  vault: VaultSource,
+  store: ScopeReadingStoreName,
+  deviceId: string,
+  drafts: readonly ScopeReadingDraft[],
+  path: VaultPath,
+  now: () => string,
+): Promise<readonly AppendScopeReadingResult[]> {
   const existing = await readScopeReadingLog(vault, store, { deviceId });
   const current = new Map(latestEntryPerKey(existing));
   let clock = existing.reduce((max, entry) => Math.max(max, entry.clock), 0);

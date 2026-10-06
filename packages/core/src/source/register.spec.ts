@@ -3,9 +3,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ReviewLogEntry } from 'olea-contracts';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { parseDocument } from '../block/parse.js';
+import { parseFrontmatter } from '../frontmatter/parse.js';
 import { FolderSource } from '../vault/folder-source.js';
+import { classifyMateriality } from './materiality.js';
 import {
   DEFAULT_SOURCES_FOLDER,
+  declaredMadeByFromFrontmatter,
   isRegisterableDocument,
   projectRegisteredFiles,
   registerSources,
@@ -363,5 +367,53 @@ describe('projectRegisteredFiles — [D-226] ruling 1, the review-log projection
 
   it('an empty log projects an empty list', () => {
     expect(projectRegisteredFiles([])).toEqual([]);
+  });
+});
+
+describe('made-by declaration — against the ISLD130 fixtures ([D-490])', () => {
+  const source = new FolderSource(FIXTURE_ROOT);
+  const base = '01 Courses/ISLD130';
+
+  async function factFor(path: string) {
+    const doc = parseDocument(await source.read(path));
+    const first = doc.blocks[0];
+    const declaredMadeBy =
+      first?.kind === 'frontmatter'
+        ? declaredMadeByFromFrontmatter(parseFrontmatter(first.inner))
+        : undefined;
+    return {
+      declaredMadeBy,
+      result: classifyMateriality({
+        path,
+        format: null,
+        ...(declaredMadeBy === undefined ? {} : { declaredMadeBy }),
+      }),
+    };
+  }
+
+  it('Mooring Rudiments (made-by me) reads hers, declared', async () => {
+    const { declaredMadeBy, result } = await factFor(`${base}/Logbook/Mooring Rudiments.md`);
+    expect(declaredMadeBy).toBe('me');
+    expect(result.fact.authorship).toBe('hers');
+    expect(result.provenance.source).toBe('declared');
+  });
+
+  it('Tideline Slippage Digest (assistant, later edited) keeps assistant origin and is never hers', async () => {
+    const { declaredMadeBy, result } = await factFor(`${base}/Logbook/Tideline Slippage Digest.md`);
+    expect(declaredMadeBy).toBe('assistant');
+    expect(result.fact).toEqual({ authorship: 'not-hers', curationAuthority: 'unknown' });
+  });
+
+  it('undeclared lecture and Zettelkasten notes read unknown authorship, never hers', async () => {
+    const paths = (await source.list({ under: base })).filter(
+      (p) =>
+        p.endsWith('.md') && (p.includes('/Lecture 1 - Skerries/') || p.includes('/Zettelkasten/')),
+    );
+    expect(paths.length).toBeGreaterThan(0);
+    for (const path of paths) {
+      const { declaredMadeBy, result } = await factFor(path);
+      expect(declaredMadeBy).toBeUndefined();
+      expect(result.fact.authorship).not.toBe('hers');
+    }
   });
 });

@@ -31,6 +31,8 @@
  * same `ObsidianDataHost` port, own top-level key, read-modify-write on save.
  */
 
+import type { VaultSource } from 'olea-core';
+import { resolveAssessments } from 'olea-core';
 import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The `{ loadData, saveData }` slice of Obsidian's `Plugin` this store needs — see the module doc for why it's spelled out rather than imported. */
@@ -60,7 +62,22 @@ function isPersistedStudyPlanConfig(value: unknown): value is PersistedStudyPlan
   return candidate.version === 1 && typeof candidate.assignmentsBasePath === 'string';
 }
 
-/** True once a non-blank path has been entered — the only state in which a plan refresh can attempt a real composition. */
+/**
+ * F1.2 (`ol-egov.141.89.10.112`): true when there is any assessment source to work from — a readable
+ * Base, or her hand-entered assessments where none exists (`resolveAssessments`'s own fallback). The
+ * gate for every surface that composes from assessments (the plan, the session builder, the gap
+ * view); `isStudyPlanConfigured` below answers only the narrower "is a Base path typed", and as a
+ * gate it shut out a setup that had manual entries and no Base.
+ */
+export async function hasAssessmentSource(
+  vault: VaultSource,
+  config: PersistedStudyPlanConfig,
+): Promise<boolean> {
+  const report = await resolveAssessments(vault, config.assignmentsBasePath);
+  return !(report.source === 'manual' && report.records.length === 0);
+}
+
+/** True once a non-blank path has been entered — whether a Base path is typed; no longer a composition gate (see {@link hasAssessmentSource}). */
 export function isStudyPlanConfigured(config: PersistedStudyPlanConfig): boolean {
   return config.assignmentsBasePath.trim().length > 0;
 }

@@ -206,7 +206,13 @@
  * from `Promise<void>` to `Promise<SoloLevel | void>` to match).
  */
 
-import type { AnswerEdits, ExplainBackCorrectness, SoloLevel, SupportLevel } from 'olea-contracts';
+import type {
+  AnswerEdits,
+  ExplainBackCorrectness,
+  ExplainBackGradingProvenance,
+  SoloLevel,
+  SupportLevel,
+} from 'olea-contracts';
 import {
   type AppendReviewLogOptions,
   type AppendReviewLogResult,
@@ -214,10 +220,12 @@ import {
   appendReviewLogRecord,
   EXPLAIN_BACK_JUDGE_TASK_ID,
   type ExplainBackPromptContext,
+  findRecordedAttempt,
   type GradedExplainBackReviewSubject,
   type GradingSourceMaterial,
   type ReviewLogRecordInput,
   recordGradedExplainBackReview,
+  reviewLogPath,
   type VaultSource,
   type WriteContentOptions,
 } from 'olea-core';
@@ -256,6 +264,12 @@ export interface RecordSoloGradeAndReviewParams {
    * correctness here.
    */
   readonly attemptId?: string;
+  /**
+   * `[D-483]`: digests-only grading provenance (versions and fingerprints, never text), supplied
+   * by the caller that built the request and written onto the record as `gradingProvenance`.
+   * Absent means not recorded. (The prompt and model versions are already the correctness stamp.)
+   */
+  readonly gradingProvenance?: ExplainBackGradingProvenance;
   /** `null` for a free-form entry point with no resolved concept — see this module's own "disclosed gap" doc. */
   readonly subjectConceptId: string | null;
   readonly context: ExplainBackPromptContext;
@@ -376,8 +390,8 @@ export interface RecordSoloGradeAndReviewParams {
    * Optional, same structural-typing accommodation `durationMs` above
    * documents (`main.ts`'s inline params type does not name it; the object
    * reaches this function unreconstructed). Absent — every call whose prompt
-   * has no causes partner, and, until `modal.ts` hands it over, every call —
-   * means no observation can be recorded: if the judge nonetheless reports
+   * has no causes partner, and any caller that omits it — means no
+   * observation can be recorded: if the judge nonetheless reports
    * neighbour use, the depth record is still written whole and the outcome's
    * `schedulingObservation` says `not-recorded` (see
    * {@link SoloSchedulingObservationOutcome}).
@@ -541,6 +555,12 @@ export async function recordSoloGradeAndReview(
       : {}),
     ...(params.answerEdits !== undefined ? { answerEdits: params.answerEdits } : {}),
     ...(params.followsAttemptId !== undefined ? { followsAttemptId: params.followsAttemptId } : {}),
+    // `[D-483]`: persisted only when the caller supplied a REAL per-attempt id; the instrument-id
+    // fallback is shared by every attempt at an instrument and would collapse genuine attempts.
+    ...(params.attemptId !== undefined ? { attemptId: params.attemptId } : {}),
+    ...(params.gradingProvenance !== undefined
+      ? { gradingProvenance: params.gradingProvenance }
+      : {}),
     selectionContext: {
       dueState: 'new',
       examProximity: null,
@@ -552,7 +572,7 @@ export async function recordSoloGradeAndReview(
   const options: AppendReviewLogOptions & WriteContentOptions = { deviceId: deps.deviceId };
 
   if (params.depthPass === 'skipped') {
-    return recordCorrectnessOnly(deps, attemptId, subject, options, 'skipped');
+    return recordCorrectnessOnly(deps, attemptId, subject, options, 'skipped', params.attemptId);
   }
 
   // `ol-egov.141.89.6.50`: `resolved` is genuinely absent-field-vs-undefined
@@ -579,7 +599,14 @@ export async function recordSoloGradeAndReview(
     outcome = null;
   }
   if (outcome === null) {
-    return recordCorrectnessOnly(deps, attemptId, subject, options, 'unavailable');
+    return recordCorrectnessOnly(
+      deps,
+      attemptId,
+      subject,
+      options,
+      'unavailable',
+      params.attemptId,
+    );
   }
 
   const accepted = acceptSoloGrading(outcome.pending);
@@ -632,12 +659,12 @@ export async function recordSoloGradeAndReview(
  * explain-back review with neither a depth grade nor a verdict would say
  * nothing about the attempt, and the verdict is never guessed.
  *
- * **Idempotency.** `recordGradedExplainBackReview`'s durable check keys on
- * the depth grade's `contentRef`, which this record has none of. A double
- * accept is already shared in memory by `modal.ts`'s per-attempt in-flight
- * memo, and a restart leaves no pending grading to accept again — the
- * correctness verdict lives only in `wiring.acceptedObservationsByAttempt`'s
- * in-memory memo — so no second write for the same attempt is reachable.
+ * **Idempotency (`[D-483]`).** The attempt id is persisted on the record itself, independently of
+ * `contentRef` (which this record has none of), and the log is read for it before appending: a
+ * reload or retry of the same attempt finds the record already there and returns it, writing
+ * nothing. `realAttemptId` is the caller's own id, absent when only the instrument-id fallback
+ * exists (nothing durable is keyed on a fallback shared by every attempt). A record written
+ * before the field existed carries no id and is never matched or backfilled.
  */
 async function recordCorrectnessOnly(
   deps: RecordSoloGradeAndReviewDeps,
@@ -645,10 +672,30 @@ async function recordCorrectnessOnly(
   subject: (timestamp: string) => GradedExplainBackReviewSubject,
   options: AppendReviewLogOptions,
   depth: 'unavailable' | 'skipped',
+  realAttemptId: string | undefined,
 ): Promise<RecordSoloGradeAndReviewOutcome | undefined> {
   const explainBackCorrectness = await resolveIndependentCorrectness(deps.grading, attemptId);
   if (explainBackCorrectness === undefined) return undefined;
   const fields = subject(isoWithLocalOffset(deps.now()));
+  if (realAttemptId !== undefined) {
+    const already = await findRecordedAttempt(
+      deps.vault,
+      realAttemptId,
+      fields.timestamp,
+      options.deviceId,
+    );
+    if (already !== undefined) {
+      const path = reviewLogPath(
+        fields.timestamp.slice(0, fields.timestamp.indexOf('T')),
+        options.deviceId,
+      );
+      return {
+        result: { record: already, path },
+        depth,
+        schedulingObservation: { status: 'not-run' },
+      };
+    }
+  }
   const record: ReviewLogRecordInput = {
     timestamp: fields.timestamp,
     instrumentId: fields.instrumentId,
@@ -665,6 +712,10 @@ async function recordCorrectnessOnly(
     ...(fields.answerEdits !== undefined ? { answerEdits: fields.answerEdits } : {}),
     explainBackCorrectness,
     ...(fields.followsAttemptId !== undefined ? { followsAttemptId: fields.followsAttemptId } : {}),
+    ...(fields.attemptId !== undefined ? { attemptId: fields.attemptId } : {}),
+    ...(fields.gradingProvenance !== undefined
+      ? { gradingProvenance: fields.gradingProvenance }
+      : {}),
   };
   const result = await appendReviewLogRecord(deps.vault, record, options);
   // No depth grade was made, so there was no neighbour-use judgement to record.
@@ -740,6 +791,10 @@ async function resolveIndependentCorrectness(
     // never with an invented one.
     const stamp = accepted.accepted.stamp;
     if (stamp === undefined) return undefined;
+    // `[D-483]`: the grounded restatement finding rides the verdict and its stamp, as ids and a
+    // count only (the quoted spans are her words and are never persisted). Written HERE, at the
+    // one place the verdict is, so the fold (`restatementFindingOf`) can never miss it.
+    const finding = accepted.accepted.restatement;
     return {
       verdict: accepted.accepted.verdict,
       artifactProvenance: {
@@ -747,6 +802,14 @@ async function resolveIndependentCorrectness(
         promptVersion: stamp.promptVersion,
         modelId: stamp.modelId,
       },
+      ...(finding !== undefined && finding.sourceBlockIds.length > 0
+        ? {
+            restatement: {
+              sourceBlockIds: [...finding.sourceBlockIds],
+              spanCount: Math.max(1, finding.answerSpans.length),
+            },
+          }
+        : {}),
     };
   } catch {
     return undefined;

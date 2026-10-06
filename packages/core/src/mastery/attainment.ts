@@ -49,8 +49,12 @@
  * Vitality, readiness, need and the recognition credit exclude proven-invalid
  * instruments always (`[D-338]` item 3), and never replay a review whose
  * grade a corrected contest proved wrong. What they do with withheld-but-valid
- * ones is `[D-347]`, open — built as {@link WithheldEvidencePolicy} with
- * today's behaviour ("count them") as the default. Readiness additionally
+ * ones is `[D-347]`, ruled 2026-09-25 (exclude evidence whose support is
+ * defective or unresolved; a sound withdrawal or replacement is not
+ * invalidity) — the passage-validity half is built (`passageChanges`,
+ * `ol-egov.141.89.9.84`), and the rest sits behind
+ * {@link WithheldEvidencePolicy}, whose default is still "count them" until
+ * `ol-egov.141.89.9.5` passes a policy from the production caller. Readiness additionally
  * needs an unaided (independent) success (`[D-264]`); need carries a basis
  * (`[D-348]`, ruled: unknown enters at a declared value, never worded as a
  * deficit); the recognition credit reads only a correct answer that is
@@ -109,13 +113,17 @@ export const ATTAINMENT_FOLD_VERSION = 'att-fold-1';
 
 /**
  * **What current readings do with an instrument withheld but not proven
- * invalid — `[D-347]`, OPEN** (the chain spec's proposal 3). Her suspension
+ * invalid — `[D-347]`, RULED 2026-09-25** (the chain spec's proposal 3;
+ * the ruling excludes evidence whose support is defective or unresolved and
+ * keeps a sound withdrawal's evidence, which the options below do not yet
+ * all express). Her suspension
  * (F2.6) or withdrawal (F8.5), a passage change pending revalidation, a
  * predecessor replaced by a successor. The displayed stage and the award keep
  * this evidence under every option.
  *
- * - `'count'` — (a), **today's behaviour and the default until ruled**: every
- *   current reading counts it.
+ * - `'count'` — (a), **today's behaviour and the default until a production
+ *   caller passes a policy** (`oracle/compose.ts` passes none): every current
+ *   reading counts it.
  * - `'drop-from-readiness-and-need'` — (b): readiness and need drop it while
  *   withheld; vitality keeps it.
  * - `'drop-from-every-current-reading'` — (c), the spec's recommendation:
@@ -133,7 +141,7 @@ export type WithheldEvidencePolicy =
   | 'drop-from-readiness-and-need'
   | 'drop-from-every-current-reading';
 
-/** `[D-347]` is open: today's behaviour. See {@link WithheldEvidencePolicy}. */
+/** `[D-347]` is ruled; this default is today's behaviour until a caller passes a policy. See {@link WithheldEvidencePolicy}. */
 export const DEFAULT_WITHHELD_EVIDENCE_POLICY: WithheldEvidencePolicy = 'count';
 
 const WITHHELD_POLICIES: readonly WithheldEvidencePolicy[] = [
@@ -166,7 +174,7 @@ export interface AttainmentOptions
     | 'hintReveals'
     | 'feedbackExposureUncertainEventIds'
   > {
-  /** `[D-347]`, open. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
+  /** `[D-347]`, ruled; no production caller passes it yet. Defaults to {@link DEFAULT_WITHHELD_EVIDENCE_POLICY}. */
   readonly withheldEvidence?: WithheldEvidencePolicy;
   /**
    * **The passage-validity input (`[D-347]`'s split; `ol-egov.141.89.9.84`).**

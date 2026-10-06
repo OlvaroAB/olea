@@ -66,13 +66,14 @@
  * curationAuthority: 'unknown'` — `assembleVoiceExemplars` already handles
  * that correctly (empty exemplar sets, never a wrong one), which is the
  * honest state of the world until `[D-101]` lands.
- * `payload.personalization.styleProfile` is `olea-core`'s
- * `DEFAULT_STYLE_PROFILE` — F3.9's own declared numbers from the functional
- * scope clause — until a real per-student card-corpus feed exists
- * (`computeStyleProfile` is built and tested for that day; nothing here
- * calls it yet because nothing here reads her card corpus). Neither ever
- * affects the grounding decision above: an empty-context refusal happens
- * before this section runs.
+ * **No `styleProfile` is sent.** `payload.personalization` carries
+ * `voiceExemplars` only: F3.9's card-style profile is card-scoped, the
+ * service's `quiz.generate.v1` ignores it, and nothing here reads her card
+ * corpus. `olea-core`'s `DEFAULT_STYLE_PROFILE` (F3.9's declared numbers) and
+ * `computeStyleProfile` exist for the day a per-student card-corpus feed
+ * exists, and no production path calls either. Neither voice exemplars nor
+ * any profile ever affects the grounding decision above: an empty-context
+ * refusal happens before this section runs.
  *
  * ===========================================================================
  * PURPOSE / REGISTER (`[D-188]`, F3.8's purpose clause, `ol-0r92.35`)

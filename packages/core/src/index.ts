@@ -369,7 +369,10 @@ export { reconcileRelations, totalDropped } from './concept/reconcile.js';
 // for the reused name→key derivation (`ol-63e1`) and the reversible
 // "every relation type counts, adjacency is symmetric" default.
 export type { RelatedConceptKeysResolution } from './concept/related-concept-keys.js';
-export { resolveRelatedConceptKeys } from './concept/related-concept-keys.js';
+export {
+  resolveRelatedConceptKeys,
+  SESSION_GROUPING_RELATION_TYPES,
+} from './concept/related-concept-keys.js';
 // The six ruled concept-to-concept relation types (`[REL-1]`, C7.10,
 // `[D-070]`) — vocabulary, directedness, and which types v0.9 actually
 // emits. See `./concept/relation.js`'s module doc for the per-type argument.
@@ -560,6 +563,44 @@ export type {
   UnitSupportState,
 } from './coverage/types.js';
 export { addDays, daysBetween } from './dates.js';
+// `[D-432]` (`ol-egov.141.89.7.25`): the per-basis switch for the reading-based ranking bases,
+// default off, and the lexical-fallback label. See evidence-edge/basis-switch.ts's module doc.
+export type {
+  BasisGateInput,
+  BasisGateRecord,
+  BasisGateVerdict,
+  BasisOffReason,
+  BasisSourceAttribution,
+  BasisSourceAttributions,
+  BasisSwitches,
+  BasisSwitchState,
+  ConceptBasisReading,
+  EvidenceSource,
+  FallbackCause,
+  GateRecordRefusal,
+  HeldOutCellCounts,
+  HeldOutCellShortfall,
+  HeldOutExposureEvent,
+  HeldOutExposureRecord,
+  HeldOutLook,
+  HeldOutLookStanding,
+  PerBasisGateCondition,
+  PostHocReason,
+} from './evidence-edge/basis-switch.js';
+export {
+  attributeBasisSources,
+  classifyHeldOutLook,
+  describeBasisSwitch,
+  edgeEvidenceSource,
+  HELD_OUT_CELL_MINIMUMS,
+  heldOutCellShortfall,
+  NO_BASIS_GATE,
+  NO_HELD_OUT_EXPOSURE,
+  PER_BASIS_GATE_PREREGISTRATION,
+  RANKING_BASES,
+  readConceptBasis,
+  resolveBasisSwitches,
+} from './evidence-edge/basis-switch.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
 // pure projection over past-paper citations and the assessments Base, never
 // stored. See evidence-edge/types.ts's module doc for the edge shape and the
@@ -844,6 +885,20 @@ export type {
   GenerationTriggerKind,
 } from './generation/types.js';
 export { isGenerationJobPayload } from './generation/types.js';
+// `[D-482]`: the declared bound and typed failure reasons for every grading call.
+export type {
+  BoundedCallOptions,
+  BoundedCallReason,
+  BoundedRetryOptions,
+} from './grading/boundedCall.js';
+export {
+  BoundedCallError,
+  boundedCall,
+  boundedCallWithRetries,
+  CORRECTNESS_OVERALL_BOUND_MS,
+  classifyGradingCallFailure,
+  GRADING_CALL_BOUNDS,
+} from './grading/boundedCall.js';
 // `[D-077]`'s content-store minting seam for the SOLO grading pipeline
 // (`ol-0r92.1` / `ol-0r92.10`) — see explainBackSolo.ts's module doc for why
 // this is the one impure export in that file. `ol-cqz8` widens this block to
@@ -888,6 +943,7 @@ export type {
   JudgeCaller,
   MisconceptionCandidate,
   PendingExplainBackGrading,
+  RestatementFinding,
   SourceBlockRef,
 } from './grading/gradingPipeline.js';
 export {
@@ -1634,6 +1690,7 @@ export type {
   ParseMisconceptionLogResult,
 } from './misconception/parse.js';
 export {
+  parseBeliefResolution,
   parseMisconceptionEvent,
   parseMisconceptionLog,
 } from './misconception/parse.js';
@@ -1648,12 +1705,23 @@ export { projectMisconceptions } from './misconception/project.js';
 // for a concept's open misconception, and which `ResolutionEvidenceKind` it
 // demonstrates — see the module doc for why `hasOpenMisconceptionOnConcept`
 // stays the caller's job.
+// `[D-485]` parts 1 and 2 (`ol-egov.141.89.6.88`): the belief-specific step —
+// candidate selection, the injected per-belief decision port, and the pure
+// decision that names the records an explanation moves.
 export type {
+  BeliefResolutionDecisionPort,
+  BeliefResolutionDecisionResult,
   ExplainBackResolutionCandidate,
   RecallResolutionCandidate,
   ResolutionEvidenceCandidate,
+  SelectBeliefResolutionCandidatesInput,
 } from './misconception/resolution-evidence-decision.js';
-export { decideResolutionEvidence } from './misconception/resolution-evidence-decision.js';
+export {
+  decideBeliefResolution,
+  decideResolutionEvidence,
+  runBeliefResolutionDecision,
+  selectBeliefResolutionCandidates,
+} from './misconception/resolution-evidence-decision.js';
 // F5.3a / R7's third trigger for the SAME F2.21 on-demand offer (`[D-083]`/
 // `[D-087]`, `ol-0r92.11`): an unconsumed scheduling observation naming the
 // just-graded instrument's concept as a neighbour. Lives beside
@@ -1679,8 +1747,16 @@ export type {
   McqMisconceptionPick,
   ReconcileMisconceptionStreamsOptions,
 } from './misconception/store.js';
-export { mcqObservationKey, projectMisconceptionsFromAllSources } from './misconception/store.js';
+export {
+  isDerivedMcqMisconceptionKey,
+  mcqObservationKey,
+  projectMisconceptionsFromAllSources,
+} from './misconception/store.js';
 export type {
+  BeliefResolutionDecision,
+  BeliefResolutionEvidence,
+  BeliefResolutionOption,
+  BeliefResolutionProvenance,
   EmbeddingVector as MisconceptionEmbeddingVector,
   MisconceptionEmbedder,
   MisconceptionEvent,
@@ -1692,6 +1768,7 @@ export type {
   SourceCitation as MisconceptionSourceCitation,
 } from './misconception/types.js';
 export {
+  BELIEF_RESOLUTION_OPTIONS,
   MISCONCEPTION_EVENT_SCHEMA_VERSION,
   MISCONCEPTION_STATUSES,
 } from './misconception/types.js';
@@ -2424,6 +2501,11 @@ export {
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
 } from './review-log/explain-back-history.js';
+// `[D-460]`: the explain-back feedback exposure marker, read back — a
+// projection folded from the review log, never stored; see
+// review-log/feedback-shown.ts.
+export type { ExplainBackFeedbackShownAttempt } from './review-log/feedback-shown.js';
+export { explainBackFeedbackShownAttempts } from './review-log/feedback-shown.js';
 // D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
 // (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
 // see review-log/generation-signals.ts's module doc for the named
@@ -2450,6 +2532,7 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendDisputeLogResult,
+  AppendExplainBackFeedbackShownLogResult,
   AppendExplainBackOfferLogResult,
   AppendExplainBackSetAsideLogResult,
   AppendMisconceptionObservedLogResult,
@@ -2462,6 +2545,7 @@ export type {
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
+  ExplainBackFeedbackShownLogRecordInput,
   ExplainBackOfferLogRecordInput,
   ExplainBackSetAsideLogRecordInput,
   MisconceptionObservedLogRecordInput,
@@ -2475,6 +2559,7 @@ export type {
 } from './review-log/write.js';
 export {
   appendDisputeRecord,
+  appendExplainBackFeedbackShownRecord,
   appendExplainBackOfferRecord,
   appendExplainBackSetAsideRecord,
   appendMisconceptionObservedRecord,
@@ -2649,6 +2734,7 @@ export type {
   ClassifyDeclaredConceptInput,
   DeclaredConceptClassification,
   GroveDeclaredState,
+  TaughtSignalEvidence,
 } from './scope/coverage.js';
 export {
   classifyDeclaredConcept,
@@ -2665,6 +2751,17 @@ export type {
   GroveVolunteerCell,
 } from './scope/grove.js';
 export { buildGroveModel } from './scope/grove.js';
+// F8.2's step-two producer (`ol-egov.141.89.7.51`, `[D-465]`): the course's decks and supplied
+// transcripts, read for each concept's name by the examiner side's whole-word rule, become
+// `TaughtSignalEvidence` for `buildGroveModel`'s `taughtSignals`. Pure; the grove provider
+// gathers the text (`packages/plugin/src/grove/taught-signal-material.ts`).
+export type {
+  ProduceTaughtSignalsInput,
+  StepTwoMaterial,
+  StepTwoMaterialKind,
+  StepTwoTextUnit,
+} from './scope/taught-signal-producer.js';
+export { produceTaughtSignals } from './scope/taught-signal-producer.js';
 // The session pipeline (P2-T07's missing half): walk her vault for instruments,
 // bind each to its concept and courses, replay the review log into per-instrument
 // scheduling state, and hand the result to `composeQueue`. `buildReviewSession`
@@ -2754,6 +2851,7 @@ export type {
 // deliberately not wired yet (the arrival declaration, the repair badge).
 export type {
   ClassifiedMateriality,
+  DeclaredMadeBy,
   MaterialityAuthorship,
   MaterialityCorrection,
   MaterialityCues,
@@ -2768,8 +2866,9 @@ export {
   carriesNotHersMarkers,
   classifyMateriality,
   expireCorrectionIfMaterial,
+  factForMadeBy,
   folderPriorFor,
-  hasHersLinkStructure,
+  parseMadeBy,
   resolveMateriality,
   structuralNotHersFragment,
   transcriptMateriality,
@@ -2807,6 +2906,7 @@ export {
 } from './source/passage-identity.js';
 export {
   DEFAULT_SOURCES_FOLDER,
+  declaredMadeByFromFrontmatter,
   isRegisterableDocument,
   projectRegisteredFiles,
   registerSources,
@@ -3021,6 +3121,7 @@ export type {
 } from './study-session/explain-back-grade-write.js';
 export {
   composeGradedExplainBackReviewRecord,
+  findRecordedAttempt,
   recordGradedExplainBackReview,
 } from './study-session/explain-back-grade-write.js';
 export type { ConceptInstrumentIndex } from './study-session/instrument-index.js';
@@ -3097,6 +3198,7 @@ export {
   RECESSION_CLEAN_STREAK_THRESHOLD,
   SNAPBACK_RECESSION_MULTIPLIER,
   type SupportLevelState,
+  supportLevelActuallyShown,
 } from './support-level/ladder.js';
 export { type SupportLevelReviewFields, supportLevelReviewFields } from './support-level/record.js';
 export {
@@ -3118,6 +3220,9 @@ export { extractTier3Evidence } from './tier3-evidence/build.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,
+  // `ol-egov.141.89.7.51`: the derived text tier 3 already extracted, handed back on request
+  // (`ExtractTier3EvidenceOptions.includeDerivedUnits`) for the grove's step-two producer.
+  DerivedTextUnit,
   ExtractTier3EvidenceOptions,
   ExtractTier3EvidenceResult,
   PastPaperCluster,
@@ -3253,6 +3358,16 @@ export {
   type ListUnderCapableVault,
   listFolder,
 } from './vault/list-folder.js';
+// `ol-egov.141.89.104.2`: one queue per vault path for whole-file read-modify-writes and deletes,
+// and the in-queue re-read of one record file. Exported for the plugin's own `.olea/` stores.
+export { pathQueueKey, withPathQueue } from './vault/path-queue.js';
+export {
+  readStoreRecord,
+  readStoreRecordForWrite,
+  type StoreRecordRead,
+  skipUnreadableStoreRecord,
+  UnreadableStoreRecordError,
+} from './vault/store-record.js';
 export {
   isVaultPath,
   type ListOptions,

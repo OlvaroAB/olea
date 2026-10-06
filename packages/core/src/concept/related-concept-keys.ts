@@ -50,7 +50,7 @@
  * still the only path for a per-document edge or an older, key-less replay.
  */
 
-import type { ConceptRelation } from './relation.js';
+import type { ConceptRelation, RelationType } from './relation.js';
 import type { ConceptRecord } from './types.js';
 
 /**
@@ -67,6 +67,24 @@ export interface RelationWithEndpointKeys extends ConceptRelation {
   readonly fromKey?: string;
   readonly toKey?: string;
 }
+
+/**
+ * The relation types F2.19 session grouping reads — `[D-461]` (`ol-egov.141.89.4.30`,
+ * ruled 2026-09-30): causes stays out of session grouping for v0.9, so the new
+ * relation introduces no accidental behaviour change. Every ruled type EXCEPT
+ * `causes`: the four types served today (`RELATION_EMISSION_STATUS`) plus
+ * `related`, which carries no production edges and was counted before this
+ * filter existed, so keeping it leaves behaviour exactly as it was. Explicit,
+ * not "everything but causes" computed at the call: a relation type added
+ * later is out of grouping until a decision puts it here.
+ */
+export const SESSION_GROUPING_RELATION_TYPES: ReadonlySet<RelationType> = new Set<RelationType>([
+  'is-a',
+  'part-of',
+  'contrasts-with',
+  'prerequisite',
+  'related',
+]);
 
 /** {@link resolveRelatedConceptKeys}'s result: the adjacency map plus the honest miss count. */
 export interface RelatedConceptKeysResolution {
@@ -95,6 +113,12 @@ function link(adjacency: Map<string, Set<string>>, a: string, b: string): void {
  * reads. Pure: no I/O, no identity minting — `concepts` supplies every key
  * this function can ever produce for an endpoint resolved by name.
  *
+ * **Only `allowedTypes` count (default {@link SESSION_GROUPING_RELATION_TYPES},
+ * `[D-461]`).** The default is the F2.19 grouping reader's list, so a `causes`
+ * edge never groups a session; the one other reader, the explain-back partner
+ * lookup (`plugin/src/explain-back/request.ts`), passes its own list because it
+ * reads causes by design. An excluded edge is skipped, not counted as a miss.
+ *
  * **Keys an endpoint by `fromKey`/`toKey` directly when the relation carries
  * one, falling back to the exact-name join against `concepts` only when it
  * is absent — `ol-l40p` [REL-9], never the reverse.** A relation reconciled
@@ -116,12 +140,15 @@ function link(adjacency: Map<string, Set<string>>, a: string, b: string): void {
 export function resolveRelatedConceptKeys(
   relations: readonly RelationWithEndpointKeys[],
   concepts: readonly ConceptRecord[],
+  options: { readonly allowedTypes?: ReadonlySet<RelationType> } = {},
 ): RelatedConceptKeysResolution {
+  const allowedTypes = options.allowedTypes ?? SESSION_GROUPING_RELATION_TYPES;
   const keyByName = new Map(concepts.map((concept) => [concept.name, concept.key]));
   const adjacency = new Map<string, Set<string>>();
   let unresolvedEndpointCount = 0;
 
   for (const relation of relations) {
+    if (!allowedTypes.has(relation.type)) continue; // [D-461]: not a type this reader counts; skipped before its endpoints are even resolved
     const fromKey = relation.fromKey ?? keyByName.get(relation.from);
     const toKey = relation.toKey ?? keyByName.get(relation.to);
     if (fromKey === undefined) unresolvedEndpointCount += 1;

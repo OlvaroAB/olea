@@ -63,14 +63,18 @@
  *   never a second, invented text.
  */
 
+import type { ExplainBackGradingProvenance } from 'olea-contracts';
 import {
   type ConceptRecord,
   type ConceptRelation,
+  digestPassage,
+  EXPLAIN_BACK_JUDGE_CONTRACT_VERSION,
   type ExplainBackPromptContext,
   type GradeExplainBackInput,
   type GradeSoloInput,
   type GradingSourceMaterial,
   type RelationSet,
+  type RelationType,
   type RetrieveDeps,
   resolveRelatedConceptKeys,
   retrieve,
@@ -207,7 +211,9 @@ function otherEndKey(
   subjectConceptId: string,
   records: readonly ConceptRecord[],
 ): string | undefined {
-  const adjacency = resolveRelatedConceptKeys([edge], records).relatedConceptKeys;
+  const adjacency = resolveRelatedConceptKeys([edge], records, {
+    allowedTypes: new Set<RelationType>([edge.type]), // the partner lookup reads the edge it was handed, causes included; only grouping is filtered ([D-461])
+  }).relatedConceptKeys;
   const others = adjacency.get(subjectConceptId);
   return others === undefined ? undefined : [...others][0];
 }
@@ -266,6 +272,7 @@ export function buildExplainBackPromptContextFromInstrument(
   instrument: ReviewInstrument,
   sourceBlocks: readonly ExplainBackSourceBlock[],
   misconceptionDigest: GradeExplainBackInput['misconceptionDigest'] = [],
+  permittedConceptIds: readonly string[] = [],
 ): ExplainBackPromptContext {
   const { question, referenceAnswer } = questionAndReferenceAnswer(instrument);
   return {
@@ -273,7 +280,46 @@ export function buildExplainBackPromptContextFromInstrument(
     referenceAnswer,
     sourceBlocks: sourceBlocks.map((entry) => entry.block),
     misconceptionDigest,
+    permittedConceptIds,
   };
+}
+
+/**
+ * `[D-483]`: the minimal grading provenance of the request this prompt context became, each
+ * field taken from the request itself and never invented (digests and version labels only, D-005).
+ * - `requestVersion`: the grading request contract version the judge call is made under
+ *   (`EXPLAIN_BACK_JUDGE_CONTRACT_VERSION`, the very constant the Worker caller sends).
+ * - `passageFingerprints`: `digestPassage` of each source passage sent, in order, the same digest
+ *   space `presentedPassageDigest` uses; omitted when no passage was sent.
+ * `instrumentVersion` and `targetVersion` are omitted: nothing on this request path carries
+ * either (an instrument has no version field, and no target bundle is part of the request).
+ */
+export async function buildExplainBackGradingProvenance(
+  context: Pick<ExplainBackPromptContext, 'sourceBlocks'>,
+): Promise<ExplainBackGradingProvenance> {
+  const passageFingerprints = await Promise.all(
+    context.sourceBlocks.map((block) => digestPassage(block.text)),
+  );
+  return {
+    requestVersion: String(EXPLAIN_BACK_JUDGE_CONTRACT_VERSION),
+    ...(passageFingerprints.length > 0 ? { passageFingerprints } : {}),
+  };
+}
+
+/**
+ * `[D-482]` item 4: the concept ids a misconception candidate may name: the subject, plus the
+ * resolved neighbour when one resolved (never the same id twice). A prompt with no known subject
+ * (a free topic) permits nothing, whatever a neighbour says. The judge is told to name only
+ * these, and the client resolver (`./observation.ts`) refuses anything else.
+ */
+export function permittedConceptIdsFor(
+  subjectConceptId: string | null,
+  neighbourConceptId?: string,
+): readonly string[] {
+  if (subjectConceptId === null) return [];
+  return neighbourConceptId !== undefined && neighbourConceptId !== subjectConceptId
+    ? [subjectConceptId, neighbourConceptId]
+    : [subjectConceptId];
 }
 
 /**
@@ -287,12 +333,14 @@ export function buildExplainBackPromptContextFromTopic(
   topic: string,
   sourceBlocks: readonly ExplainBackSourceBlock[],
   misconceptionDigest: GradeExplainBackInput['misconceptionDigest'] = [],
+  permittedConceptIds: readonly string[] = [],
 ): ExplainBackPromptContext {
   return {
     question: `In your own words: explain ${topic}.`,
     referenceAnswer: joinSourceText(sourceBlocks),
     sourceBlocks: sourceBlocks.map((entry) => entry.block),
     misconceptionDigest,
+    permittedConceptIds,
   };
 }
 
@@ -382,6 +430,7 @@ export function buildGradeExplainBackInputFromTypedAnswer(
     referenceAnswer: context.referenceAnswer,
     sourceBlocks: context.sourceBlocks,
     misconceptionDigest: context.misconceptionDigest,
+    permittedConceptIds: context.permittedConceptIds ?? [],
   };
 }
 

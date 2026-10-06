@@ -27,6 +27,7 @@
  */
 
 import { isValidDeviceId } from '../../review-log/path.js';
+import { withPathQueue } from '../../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../../vault/types.js';
 import {
   type InvalidUnitManifestLogLine,
@@ -71,7 +72,8 @@ function localDateOf(at: string): string {
  * rewriting. Records for the same file are written together, in the order given, so a writer that
  * needs several records to land as a unit (a retirement, an enumeration and the page states it
  * found) passes them in one call: a crash cannot leave the enumeration without its retirement.
- * Returns the paths written, sorted.
+ * Returns the paths written, sorted. Each file's read and write run as one task on that file's
+ * queue (`../../vault/path-queue.ts`), one file after another, so two overlapping appends both land.
  */
 export async function appendUnitManifestRecords(
   vault: VaultSource,
@@ -86,10 +88,12 @@ export async function appendUnitManifestRecords(
   }
   const written: VaultPath[] = [];
   for (const [path, lines] of byPath) {
-    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-    const prefix = needsSeparator ? `${existing}\n` : existing;
-    await vault.write(path, prefix + lines.join(''));
+    await withPathQueue(path, async () => {
+      const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+      const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+      const prefix = needsSeparator ? `${existing}\n` : existing;
+      await vault.write(path, prefix + lines.join(''));
+    });
     written.push(path);
   }
   return written.sort();

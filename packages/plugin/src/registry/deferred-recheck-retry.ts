@@ -99,6 +99,8 @@ export function rearmSpentRetry(
     sinceContentHash: pending.sinceContentHash,
     since: pending.since,
     dispatchedAt: pending.dispatchedAt ?? pending.retriedAt,
+    // `[D-473]` (`ol-egov.141.89.5.52`): the withholding reason, known or not, is carried through.
+    ...(pending.reason !== undefined ? { reason: pending.reason } : {}),
   };
 }
 

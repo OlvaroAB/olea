@@ -97,7 +97,7 @@ describe('the rung is sealed when she submits, not when she accepts', () => {
       modal.indexOf('private acceptGrading('),
     );
     expect(submit).toMatch(
-      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?phase: 'grading'[\s\S]*?support \}[\s\S]*?this\.deps\.grade\(input\)/,
+      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?phase: 'grading'[\s\S]*?support \}[\s\S]*?runGradingAttempt\(/,
     );
     expect(submit).toMatch(/phase: 'graded',[\s\S]{0,200}?support,/);
   });

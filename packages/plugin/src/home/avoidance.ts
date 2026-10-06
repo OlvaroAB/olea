@@ -84,6 +84,7 @@
 import type { GroveCourseModel } from 'olea-core';
 import type { GroveCourseSection } from '../grove/view.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
+import { hasReadModifyWrite } from '../retrieval/serializing-data-host.js';
 
 /** The two answers F4.6 defines — nothing else is a valid value, so this is never free text (see module doc: her "own words" means the literal label she chose, not a paraphrase). */
 export type CourseAvoidanceAnswer = 'leave-for-now' | 'practise-differently';
@@ -316,22 +317,42 @@ export class ObsidianHomeAvoidanceStore {
     return new Map(Object.entries(candidate.courses));
   }
 
-  private async saveOne(course: string, record: CourseAvoidanceRecord): Promise<void> {
-    const existing = await this.host.loadData();
-    const blob: Record<string, unknown> =
-      typeof existing === 'object' && existing !== null
-        ? { ...(existing as Record<string, unknown>) }
-        : {};
-    const currentRaw = blob[HOME_AVOIDANCE_STORAGE_KEY];
-    const current: HomeCourseAvoidance = isHomeCourseAvoidance(currentRaw)
-      ? currentRaw
-      : { version: 1, courses: {} };
-    const value: HomeCourseAvoidance = {
-      version: 1,
-      courses: { ...current.courses, [course]: record },
+  /**
+   * Writes `course`'s row as `next` computes it from the row stored now — one
+   * `readModifyWrite` on the settings file's queue when the host has one
+   * (`ol-egov.141.89.104.2`), so the decision is made from the file as it is,
+   * and another store's key written meanwhile is never discarded. `next`
+   * returning `undefined` writes nothing.
+   */
+  private async saveOne(
+    course: string,
+    next: (stored: CourseAvoidanceRecord | undefined) => CourseAvoidanceRecord | undefined,
+  ): Promise<void> {
+    const merge = (existing: unknown): unknown => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const currentRaw = blob[HOME_AVOIDANCE_STORAGE_KEY];
+      const current: HomeCourseAvoidance = isHomeCourseAvoidance(currentRaw)
+        ? currentRaw
+        : { version: 1, courses: {} };
+      const record = next(current.courses[course]);
+      if (record === undefined) return existing;
+      const value: HomeCourseAvoidance = {
+        version: 1,
+        courses: { ...current.courses, [course]: record },
+      };
+      blob[HOME_AVOIDANCE_STORAGE_KEY] = value;
+      return blob;
     };
-    blob[HOME_AVOIDANCE_STORAGE_KEY] = value;
-    await this.host.saveData(blob);
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return;
+    }
+    const existing = await this.host.loadData();
+    const merged = merge(existing);
+    if (merged !== existing) await this.host.saveData(merged);
   }
 
   /**
@@ -343,7 +364,7 @@ export class ObsidianHomeAvoidanceStore {
   async markAsked(course: string, askedAt: string): Promise<void> {
     const existing = (await this.load()).get(course);
     if (existing !== undefined) return;
-    await this.saveOne(course, { askedAt });
+    await this.saveOne(course, (stored) => (stored === undefined ? { askedAt } : undefined));
   }
 
   /**
@@ -354,8 +375,9 @@ export class ObsidianHomeAvoidanceStore {
    * candidate, so the two can never disagree in production.
    */
   async recordAnswer(course: string, answer: CourseAvoidanceAnswerRecord): Promise<void> {
-    const existing = (await this.load()).get(course);
-    const askedAt = existing?.askedAt ?? answer.recordedAt;
-    await this.saveOne(course, { askedAt, answer });
+    await this.saveOne(course, (stored) => ({
+      askedAt: stored?.askedAt ?? answer.recordedAt,
+      answer,
+    }));
   }
 }

@@ -164,6 +164,19 @@
  * function's own doc for why the merge is untyped by the per-kind reason
  * unions, and `./view.ts#GroveWithheldItem`'s doc for why the result is not
  * nested under any one course.
+ *
+ * ## F8.2 step two, produced here (`ol-egov.141.89.7.51`, `[D-465]`)
+ *
+ * `olea-core#buildGroveModel` takes a `taughtSignals` lookup per concept key,
+ * and this `load()` is what supplies it, so the grove view (`main.ts`) and Home
+ * (`../home/provider.ts`), which both build their grove through this one
+ * function, read the same signal with no wiring of their own. The course's
+ * decks are the text `extractTier3Evidence` already extracts in this load
+ * (`includeDerivedUnits`, no second extraction); its supplied transcripts are
+ * read from the courses folder (`./taught-signal-material.ts`, which states
+ * the cost). `olea-core#produceTaughtSignals` matches each concept's name by
+ * the examiner side's whole-word rule, per course, with no date of any kind;
+ * it adds no scope, so the denominator and its receipt above are untouched.
  */
 
 import type { SourceRegisteredRole } from 'olea-contracts';
@@ -192,6 +205,7 @@ import {
   type InvalidClozeReport,
   type InvalidMcqReport,
   isRegisterableDocument,
+  produceTaughtSignals,
   projectRegisteredFiles,
   readReviewLogFile,
   readReviewLogHistory,
@@ -222,6 +236,7 @@ import {
   ObsidianGrovePriorDenominatorStore,
 } from './prior-denominator-store.js';
 import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js';
+import { deckMaterialFrom, readTranscriptMaterial } from './taught-signal-material.js';
 import type {
   GroveCourseSection,
   GroveScopeCorrectionReceipt,
@@ -702,11 +717,23 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // `files` above — see that function's own doc — so `buildRegistryModel`
         // below can fold a contest resolved `corrected` into the growth stage,
         // not only a `rejected` verdict. Independent of `extractTier3Evidence`,
-        // so paid concurrently.
-        const [tier3, disputes] = await Promise.all([
-          extractTier3Evidence(deps.vault, { vocabulary, registeredFiles }),
+        // so paid concurrently. So is the transcript read for F8.2's step two
+        // (`ol-egov.141.89.7.51`); the decks come back from tier 3 itself
+        // (`includeDerivedUnits`: the text it extracts anyway, not a second
+        // extraction).
+        const [tier3, disputes, transcriptMaterial] = await Promise.all([
+          extractTier3Evidence(deps.vault, {
+            vocabulary,
+            registeredFiles,
+            includeDerivedUnits: true,
+          }),
           disputesFromFiles(deps.vault, files),
+          readTranscriptMaterial(deps.vault, DEFAULT_COURSES_FOLDER),
         ]);
+        const stepTwoMaterial = [
+          ...deckMaterialFrom(tier3.derivedUnits ?? []),
+          ...transcriptMaterial,
+        ];
 
         const registryModel = buildRegistryModel({
           concepts: enumeration.concepts,
@@ -810,6 +837,14 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           // guessed `'complete'` — see `buildGroveModel`'s own doc for this
           // field.
           const courseReadCoverage = readCompletenessByCourse.get(course);
+          // F8.2 step two (`ol-egov.141.89.7.51`): this course's decks and
+          // supplied transcripts naming each of its concepts — see module doc.
+          const taughtSignals = produceTaughtSignals({
+            course,
+            concepts: courseConcepts,
+            material: stepTwoMaterial,
+            sources: tier3.sourcesReport.sources,
+          });
           const built = buildGroveModel({
             course,
             concepts: courseConcepts,
@@ -820,6 +855,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             priorGroundStreaks,
             relations: deps.relations?.() ?? [],
             ...(courseReadCoverage !== undefined ? { readCoverage: courseReadCoverage } : {}),
+            taughtSignals,
           });
           const model: GroveCourseModel = built.model;
           let scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined;

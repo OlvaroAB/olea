@@ -71,7 +71,6 @@
  */
 
 import type { SourceFormat } from '../extract/types.js';
-import { extractWikilinks } from '../frontmatter/read.js';
 import type {
   PassageAuthorship as MaterialityAuthorship,
   PassageCurationAuthority as MaterialityCurationAuthority,
@@ -124,8 +123,6 @@ const FORMAT_CONFIDENCE = 0.95;
 const DECLARED_CONFIDENCE = 1;
 const CORRECTED_CONFIDENCE = 1;
 const FOLDER_PRIOR_CONFIDENCE = 0.55;
-/** Her own structural link signature overriding a not-hers folder prior — still inferred, but a stronger per-document signal than the folder alone (scenario: "her filing bends the prior, never the reverse"). */
-const HERS_OVERRIDE_CONFIDENCE = 0.6;
 /** An embedded/slide structural fragment inside otherwise-hers material — a passage-grain override, not a document-grain one. */
 const FRAGMENT_CONFIDENCE = 0.8;
 
@@ -170,6 +167,10 @@ interface FolderPriorRule {
  * student's literal paths. Checked deepest-segment-first (see
  * `folderPriorFor`), so a kind-named subfolder nested inside a differently-
  * classified parent (the mixed-vault case the ruling calls out) wins.
+ *
+ * **[D-490]: the prior never concludes `hers` authorship.** A folder describes how she files her
+ * material, not who wrote it. A folder she keeps her own notes in gives curation `hers` (she
+ * filed it) and leaves authorship `unknown`; `not-hers` conclusions are unchanged.
  */
 const FOLDER_PRIOR_RULES: readonly FolderPriorRule[] = [
   {
@@ -178,7 +179,7 @@ const FOLDER_PRIOR_RULES: readonly FolderPriorRule[] = [
   },
   {
     pattern: /\bzettelkasten\b/i,
-    fact: { authorship: 'hers', curationAuthority: 'unknown' },
+    fact: { authorship: 'unknown', curationAuthority: 'hers' },
   },
   {
     pattern: /\b(research|readings?|references?)\b/i,
@@ -186,7 +187,7 @@ const FOLDER_PRIOR_RULES: readonly FolderPriorRule[] = [
   },
   {
     pattern: /\b(assignments?|daily[\s-]?notes?)\b/i,
-    fact: { authorship: 'hers', curationAuthority: 'unknown' },
+    fact: { authorship: 'unknown', curationAuthority: 'hers' },
   },
 ];
 
@@ -207,22 +208,6 @@ export function folderPriorFor(path: VaultPath): MaterialityFact | undefined {
     }
   }
   return undefined;
-}
-
-/** Below this many `[[wikilinks]]`, a note's own body is not treated as carrying her characteristic interlinking structure — one incidental link is not a signature. Declared, not fitted. */
-const MIN_WIKILINKS_FOR_HERS_STRUCTURE = 2;
-
-/**
- * A STRUCTURAL (not stylometric) signal that a markdown note is hers:
- * dense `[[wikilink]]` interlinking is how she writes her own Zettelkasten
- * prose, and pasted third-party text does not natively carry Obsidian's
- * link syntax. This is what lets "her filing bends the prior, never the
- * reverse" work without reading it as a style judgment — it is a syntactic
- * count, exactly like `../generate/style-profile.ts`'s `enumeratesList`,
- * not a model of her voice.
- */
-export function hasHersLinkStructure(text: string): boolean {
-  return extractWikilinks(text).length >= MIN_WIKILINKS_FOR_HERS_STRUCTURE;
 }
 
 const EMBED_SYNTAX_RE = /!\[\[[^\]]+\]\]/;
@@ -267,6 +252,36 @@ export function carriesNotHersMarkers(text: string): boolean {
   return citationCount >= MIN_CITATIONS_FOR_DEMOTION;
 }
 
+/** Her `made-by` declaration ([D-490]): who made the note, in her words. */
+export type DeclaredMadeBy = 'assistant' | 'me' | 'mixed';
+
+/**
+ * Reads a raw `made-by` frontmatter value (case and surrounding space tolerant). Anything but
+ * `assistant`, `me` or `mixed` is `undefined`: an invalid value is ignored and the note reads as
+ * undeclared ([D-490]).
+ */
+export function parseMadeBy(raw: unknown): DeclaredMadeBy | undefined {
+  if (typeof raw !== 'string') return undefined;
+  const value = raw.trim().toLowerCase();
+  return value === 'assistant' || value === 'me' || value === 'mixed' ? value : undefined;
+}
+
+/**
+ * What a `made-by` declaration says, and no more. `me` is hers; `assistant` is not-hers with
+ * curation unknown; `mixed` reads nothing as hers in v0.9 (authorship unknown). An assistant note
+ * she later edited still says `assistant`, so it stays not-hers: an edit never erases origin.
+ */
+export function factForMadeBy(madeBy: DeclaredMadeBy): MaterialityFact {
+  switch (madeBy) {
+    case 'me':
+      return { authorship: 'hers', curationAuthority: 'unknown' };
+    case 'assistant':
+      return { authorship: 'not-hers', curationAuthority: 'unknown' };
+    case 'mixed':
+      return { authorship: 'unknown', curationAuthority: 'unknown' };
+  }
+}
+
 export interface MaterialityCues {
   /** Vault-relative path — feeds the folder prior and, indirectly via the caller, the format cue. */
   readonly path: VaultPath;
@@ -274,6 +289,12 @@ export interface MaterialityCues {
   readonly format: SourceFormat | null;
   /** F1.5's frontmatter `role`, when the note declares one — honoured, never required. */
   readonly declaredRole?: SourceRole;
+  /**
+   * Her own `made-by` frontmatter declaration ([D-490], knowledge model 3.2), already parsed by
+   * `parseMadeBy`. Read at the declared tier, after a declared role and before the folder prior.
+   * An invalid value is `undefined` (the note reads as undeclared). Olea never writes this key.
+   */
+  readonly declaredMadeBy?: DeclaredMadeBy;
   /** C3.1's drop-flow declaration (`features/C3-ingestion.md`) — no production source yet; see the module doc. */
   readonly arrivalDeclaredRole?: SourceRole;
   /**
@@ -311,7 +332,7 @@ export function transcriptMateriality(speaker: TranscriptSpeaker): MaterialityFa
  * `features/F1-sources.md`'s scenarios, one per branch:
  *  - format alone → not-hers/instructor, no text ever read (the `SLIDE_EXPORT_FORMATS` branch returns before any text-dependent check runs).
  *  - the folder prior informs and is never load-bearing (no cue → `UNKNOWN_MATERIALITY`, never left "unclassified").
- *  - her filing bends the prior, never the reverse (the `hasHersLinkStructure` override, folder-prior tier only).
+ *  - her filing bends the prior, never the reverse ([D-490]: the prior and links never conclude hers; `hers` comes only from her `made-by` word, her correction or her typed answers).
  *  - stylometry demotes, never promotes (`carriesNotHersMarkers`, `'hers'`-only branch).
  *  - passage grain exists only where the mixture is (`structuralNotHersFragment`, checked against whatever grain `cues.text` is).
  */
@@ -342,27 +363,22 @@ export function classifyMateriality(cues: MaterialityCues): ClassifiedMaterialit
     };
   }
 
+  // TIER 2b — her own `made-by` declaration ([D-490]): her word, declared.
+  if (cues.declaredMadeBy !== undefined) {
+    return {
+      fact: factForMadeBy(cues.declaredMadeBy),
+      provenance: { source: 'declared', confidence: DECLARED_CONFIDENCE },
+    };
+  }
+
   // TIER 3 — inferred, the folder prior. Weak by design ("never load-bearing").
   const prior = folderPriorFor(cues.path);
   if (prior === undefined) {
     return { ...UNKNOWN_MATERIALITY };
   }
 
-  let fact = prior;
-  let confidence = FOLDER_PRIOR_CONFIDENCE;
-
-  // "Her filing bends the prior, never the reverse" — her own structural
-  // signature in the document outranks a not-hers folder prior. Never
-  // touches a format or declared-role conclusion (tiers 1-2, already
-  // returned above) — only ever the folder prior itself.
-  if (
-    fact.authorship === 'not-hers' &&
-    cues.text !== undefined &&
-    hasHersLinkStructure(cues.text)
-  ) {
-    fact = { authorship: 'hers', curationAuthority: 'unknown' };
-    confidence = HERS_OVERRIDE_CONFIDENCE;
-  }
+  const fact = prior;
+  const confidence = FOLDER_PRIOR_CONFIDENCE;
 
   // Passage-grain structural override: an embedded not-hers fragment inside
   // otherwise not-already-not-hers material. Structural, not stylometric —

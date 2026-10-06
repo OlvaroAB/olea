@@ -54,6 +54,7 @@ import {
   verdictLogRecord,
 } from 'olea-contracts';
 import { listFolder } from '../vault/list-folder.js';
+import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { DisputeLogRecordInput } from './contest-record.js';
 import { REVIEW_LOG_FOLDER, reviewLogPath } from './path.js';
@@ -283,6 +284,33 @@ export interface AppendExplainBackSetAsideLogResult {
   readonly path: VaultPath;
 }
 
+/**
+ * The contracts `explainBackFeedbackShownLogRecordV6` shape (`[D-460]`), read
+ * off the current union and narrowed on its own `kind` literal, the same way
+ * `ExplainBackSetAsideLogRecord` above is.
+ */
+type ExplainBackFeedbackShownLogRecord = Extract<
+  ReviewLogEntry,
+  { readonly kind: 'explain-back-feedback-shown' }
+>;
+
+/**
+ * Every feedback-exposure-marker field the caller supplies (`[D-460]`): the
+ * time, the question and the attempt. The writer stamps `schemaVersion`,
+ * `kind` and `eventId`.
+ */
+export type ExplainBackFeedbackShownLogRecordInput = Omit<
+  ExplainBackFeedbackShownLogRecord,
+  'schemaVersion' | 'eventId' | 'kind'
+>;
+
+export interface AppendExplainBackFeedbackShownLogResult {
+  /** The full, validated record actually written (schemaVersion and eventId included). */
+  readonly record: ExplainBackFeedbackShownLogRecord;
+  /** The vault path it was appended to. */
+  readonly path: VaultPath;
+}
+
 function defaultGenerateEventId(): string {
   return globalThis.crypto.randomUUID();
 }
@@ -366,6 +394,11 @@ function localDateOf(timestamp: string): string {
  * Takes `ReviewLogEntry` alone (not `ReviewLogEntry | DisputeLogRecord` as
  * before `ol-qs72`) — `disputeLogRecordV5` is now a member of the contracts
  * union, so every kind this file writes already fits the one type.
+ *
+ * The read and the write run as one task on the day file's queue
+ * (`../vault/path-queue.ts`, `ol-egov.141.89.104.2`): two appends that overlap
+ * on one install both land, in the order they were made, instead of the
+ * second discarding the first one's line.
  */
 async function appendEntryLine(
   vault: VaultSource,
@@ -375,10 +408,12 @@ async function appendEntryLine(
   const path = reviewLogPath(localDateOf(entry.timestamp), deviceId);
   const line = `${JSON.stringify(entry)}\n`;
 
-  const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-  const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-  const prefix = needsSeparator ? `${existing}\n` : existing;
-  await vault.write(path, prefix + line);
+  await withPathQueue(path, async () => {
+    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
+    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
+    const prefix = needsSeparator ? `${existing}\n` : existing;
+    await vault.write(path, prefix + line);
+  });
 
   return path;
 }
@@ -1032,6 +1067,72 @@ export async function appendExplainBackSetAsideRecord(
     // any byte is written, like every other validation failure here.
     throw new Error(
       `appendExplainBackSetAsideRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not an explain-back-set-aside`,
+    );
+  }
+  const path = await appendEntryLine(vault, record, options.deviceId);
+
+  return { record, path };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **explain-back feedback
+ * exposure marker** (`[D-460]`, ruled 2026-09-30; shape from
+ * `ol-egov.141.89.6.86`): the fact that an explain-back attempt's graded
+ * result was displayed, holding the question, the attempt and the time.
+ *
+ * The sibling of `appendExplainBackSetAsideRecord`, sharing the same append
+ * path and durability discipline. `kind` is stamped, not asked for.
+ *
+ * **When it is called.** By the explain-back view BEFORE the graded result
+ * renders (`packages/plugin/src/explain-back/modal.ts`'s `submitAnswer`,
+ * through `ExplainBackModalDeps.recordFeedbackShown`), so a reload after the
+ * result appeared cannot hide that she read it. A rejection is the caller's to
+ * absorb: the view still shows her the result and holds the exposure as shown
+ * for the session; see that method's own doc.
+ *
+ * **Writing it twice is harmless.** Each call appends its own line under its
+ * own `eventId`; readers treat every marker for one attempt as one fact
+ * (`./feedback-shown.ts`'s `explainBackFeedbackShownAttempts`). So a caller
+ * may retry a write that failed without first finding out whether it landed.
+ *
+ * **What calling this does not do.** It writes no review, no rating and no
+ * grade, and no fold that reports what she knows reads it (knowledge model §4:
+ * a persisted fact beside the review event, never one). It takes no answer
+ * text, feedback, verdict or passage (D-005): the input type has no place for
+ * any, and a key smuggled past the types is stripped by the schema.
+ *
+ * **Validated against the current union `reviewLogEntry`**, then narrowed on
+ * its `kind` literal, so a record this writer accepts is by construction one
+ * `./parse.ts` returns as this kind, never an `invalidLines` entry.
+ */
+export async function appendExplainBackFeedbackShownRecord(
+  vault: VaultSource,
+  input: ExplainBackFeedbackShownLogRecordInput,
+  options: AppendReviewLogOptions,
+): Promise<AppendExplainBackFeedbackShownLogResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'explain-back-feedback-shown',
+    eventId: generateEventId(),
+    timestamp: input.timestamp,
+    instrumentId: input.instrumentId,
+    attemptId: input.attemptId,
+  };
+
+  const parsed = reviewLogEntry.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendExplainBackFeedbackShownRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  if (record.kind !== 'explain-back-feedback-shown') {
+    // Unreachable: `kind` is set above and the input cannot override it.
+    // Checked anyway, so the narrowing is proved rather than asserted.
+    throw new Error(
+      `appendExplainBackFeedbackShownRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not an explain-back-feedback-shown`,
     );
   }
   const path = await appendEntryLine(vault, record, options.deviceId);

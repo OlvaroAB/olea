@@ -216,28 +216,42 @@ import {
   diffSittingScopeSnapshots,
   EMPTY_SITTING_SCOPE_SNAPSHOT,
   executeStudyPlanOverComposedRows,
+  hashContent,
   listFolder,
   matchDeletedInstrumentIds,
+  parseCardsWithInvalid,
+  parseMcqBlocks,
   projectInstrumentValidity,
   queueItemsFromComposedSession,
   REVIEW_LOG_EXTENSION,
   REVIEW_LOG_FOLDER,
   readDistractorProvenance,
+  readInstrumentCitation,
   readReviewLogFile,
+  readReviewLogHistory,
   replayedStateOf,
   replayUnconsumedSchedulingObservations,
   resolveInstrumentDuplications,
   resolveInstrumentRepair,
   reviewLogPath,
+  suspendedInstrumentIds,
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
+import type { DraftRecord } from '../generation/types.js';
 import {
   evaluateInstrumentStanding,
   evaluateSchedulingObservationRouting,
 } from '../grading/wiring.js';
+import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import {
+  citedPassagePath,
+  HIDDEN_PATH_SEGMENT,
+} from '../ingestion/materiality/citation-revision-wiring.js';
+import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
@@ -657,6 +671,12 @@ export async function openReviewSession(
     // `composed.queue` (`composeQueue`'s selection) is deliberately never
     // read below; row 6 (`ol-egov.132.6`) retires the call once nothing
     // production reads it anywhere. See the module doc.
+    // `ol-egov.141.89.5.59`: re-read at each presentation, never the frozen `composed.entries`,
+    // because a suspension appended after this open is exactly what it must see.
+    const suspendedAtPresentation = async (): Promise<ReadonlySet<string>> =>
+      suspendedInstrumentIds(
+        (await readReviewLogHistory(input.vault, { additionalPaths })).entries,
+      );
     const reviewSessionBuild: Parameters<typeof buildReviewSession>[0] = {
       vault: input.vault,
       scheduler: input.scheduler,
@@ -1046,12 +1066,38 @@ export async function openReviewSession(
       // byte-for-byte); it is wired anyway so the real reader just above has
       // a real decision to feed, not only a type-reachable one.
       evaluateInstrumentStanding,
-      // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`): the presentation-time changed-source check,
+      // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`; suspension read added by `ol-egov.141.89.5.59`): the presentation-time changed-source check,
       // read fresh from the same store, so a check that went unanswered mid-sitting sets the
       // question aside as could-not-check. Absent store: every item shows, as before.
       ...(input.citationHashStore
-        ? { checkSourceAtPresentation: sourceCheckAtPresentation(input.citationHashStore) }
-        : {}),
+        ? {
+            checkSourceAtPresentation: sourceCheckAtPresentation(
+              input.citationHashStore,
+              suspendedAtPresentation,
+              {
+                vault: input.vault,
+                recordOf: (instrumentId) =>
+                  composed.instruments.records.find(
+                    (record) => record.instrumentId === instrumentId,
+                  ),
+              },
+            ),
+          }
+        : {
+            checkSourceAtPresentation: sourceCheckAtPresentation(
+              undefined,
+              suspendedAtPresentation,
+              {
+                vault: input.vault,
+                recordOf: (instrumentId) =>
+                  composed.instruments.records.find(
+                    (record) => record.instrumentId === instrumentId,
+                  ),
+              },
+            ),
+          }),
+      // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
+      checkDraftSourceAtPresentation: draftSourceCheckAtPresentation(input.vault, pendingDrafts),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -1624,19 +1670,193 @@ async function pendingRevalidationInstrumentIdsFrom(
  * instrument whose persisted `pendingRevalidation` fact is still current right now has a check
  * of its source that has not been answered (in flight, lost, failed, its one `[D-400]` retry
  * spent, or withheld for a passage that cannot be found), so it is `'check-failed'`: set aside
- * for this sitting, nothing written, the fact left for the `[D-400]` recovery. An established
- * change retires the pending fact and suspends the instrument, so it never reads here.
+ * for this sitting, nothing written, the fact left for the `[D-400]` recovery.
+ *
+ * An established change does NOT remove the item from an open session: the revised path
+ * (`citation-revision-wiring.ts`) retires the pending fact, removes the passage record and
+ * appends a suspend record to the review log, so the pending-fact read above finds nothing and
+ * reads clear. `ol-egov.141.89.5.59` (`[D-343]`, `[D-511]`): the suspension is therefore read
+ * here too, from the log, and a suspended instrument is `'suspended'` (dropped silently, as a
+ * fresh composition excludes it). The suspension read throwing propagates, which the session
+ * reads as `'check-failed'` (fail closed).
  */
 export function sourceCheckAtPresentation(
-  store: CitationHashStore,
-): (instrumentId: string) => Promise<'clear' | 'check-failed'> {
+  store: CitationHashStore | undefined,
+  readSuspended?: () => Promise<ReadonlySet<string>>,
+  currentPassage?: CurrentPassageReader,
+): (instrumentId: string) => Promise<'clear' | 'check-failed' | 'suspended'> {
   return async (instrumentId) => {
-    const pending = (await store.loadAll()).get(instrumentId)?.pendingRevalidation;
-    if (pending === undefined) return 'clear';
-    return (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
-      ? 'check-failed'
-      : 'clear';
+    if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
+      return 'suspended';
+    }
+    if (store !== undefined) {
+      const anchor = (await store.loadAll()).get(instrumentId);
+      if (anchor !== undefined) {
+        const pending = anchor.pendingRevalidation;
+        if (
+          pending !== undefined &&
+          (await store.isPendingRevalidationCurrent(instrumentId, pending.sinceContentHash))
+        ) {
+          return 'check-failed';
+        }
+        if (
+          currentPassage !== undefined &&
+          !(await citedPassageUnchanged(instrumentId, anchor, currentPassage))
+        ) {
+          return 'check-failed';
+        }
+      }
+    }
+    // `ol-egov.141.89.5.73` ([D-515]): last, after every check above, and whether or not a store
+    // is supplied. Nothing is cached: one sidecar read and one file read per presentation.
+    if (currentPassage === undefined) return 'clear';
+    return (await nonMarkdownSourceUnchanged(instrumentId, currentPassage))
+      ? 'clear'
+      : 'check-failed';
   };
+}
+
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): whether a question built on a non-markdown source (anything
+ * but a `.md` file that is not the question's own note) still has that file's bytes. Reads the
+ * citation sidecar's `sourceRevision` and hashes the current bytes the way the writer did
+ * (`hashContent` over `readBinary`). A missing revision, an unreadable sidecar, a missing or
+ * unreadable file, or a different hash is `false`: the caller withholds with the existing
+ * could-not-check outcome. A markdown source, or a record with no source, is `true` (not this
+ * check's). Reads only, never writes.
+ */
+async function nonMarkdownSourceUnchanged(
+  instrumentId: string,
+  reader: CurrentPassageReader,
+): Promise<boolean> {
+  try {
+    const record = reader.recordOf(instrumentId);
+    const sourcePath = record?.sourceProvenance?.sourcePath;
+    if (record === undefined || sourcePath === undefined) return true;
+    if (sourcePath === record.notePath || sourcePath.toLowerCase().endsWith('.md')) return true;
+    const citation = await readInstrumentCitation(reader.vault, instrumentId);
+    return await bytesMatchRevision(reader.vault, sourcePath, citation?.sourceRevision);
+  } catch {
+    return false;
+  }
+}
+
+async function bytesMatchRevision(
+  vault: VaultSource,
+  sourcePath: string,
+  expected: string | undefined,
+): Promise<boolean> {
+  if (expected === undefined) return false;
+  try {
+    return (await hashContent(await vault.readBinary(sourcePath))) === expected;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * `ol-egov.141.89.5.73` ([D-515]): the same comparison for a pending draft, against the draft's
+ * own `DraftRecord.sourceCitation` (a draft has no sidecar yet). Drafts are indexed once per
+ * session open (the records are already in hand); each presentation still reads the file afresh.
+ * A draft with no citation, a markdown source, or the draft's own note reads `'clear'`; an
+ * unknown draft id reads `'clear'` (it is not a draft this session holds).
+ */
+export function draftSourceCheckAtPresentation(
+  vault: VaultSource,
+  drafts: readonly DraftRecord[],
+): (draftId: string) => Promise<'clear' | 'check-failed'> {
+  const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
+  return async (draftId) => {
+    const draft = byId.get(draftId);
+    const citation = draft?.sourceCitation;
+    if (draft === undefined || citation === undefined) return 'clear';
+    if (
+      citation.sourcePath === draft.sourcePath ||
+      citation.sourcePath.toLowerCase().endsWith('.md')
+    ) {
+      return 'clear';
+    }
+    return (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision))
+      ? 'clear'
+      : 'check-failed';
+  };
+}
+
+/**
+ * `ol-egov.141.89.5.72` (`[D-514]` item c): what the presentation-time passage check reads. The
+ * vault (read fresh at every presentation, never cached) and the instrument's record, for the
+ * note it lives in and the source its citation names.
+ */
+export interface CurrentPassageReader {
+  readonly vault: VaultSource;
+  readonly recordOf: (instrumentId: string) => VaultInstrumentRecord | undefined;
+}
+
+/**
+ * Whether an anchored citation's own cited passage still reads as the baseline, by the batch
+ * pass's own free code exits and nothing else: passage grain asks `resolveAnchoredPassage`
+ * (`passage-grain.ts:136`, the call at `citation-revision-wiring.ts:690`) and whole-note grain
+ * reads the note minus instrument spans (`citation-revision-wiring.ts:617`). Identical text, or
+ * equal under `canonicalizeForMateriality` (`canonical.ts:99`, the pass's comparison at
+ * `citation-revision-wiring.ts:759-763`), is unchanged; a passage found elsewhere exactly
+ * (`relocated`) is the pass's silent heal, unchanged. Everything else, and every failure to
+ * read or resolve, is `false`: the caller withholds, and the next pass records and routes the
+ * change. Reads only, never writes.
+ */
+async function citedPassageUnchanged(
+  instrumentId: string,
+  anchor: {
+    readonly text: string;
+    readonly sourcePath: VaultPath;
+    readonly passageDigest?: string | undefined;
+  },
+  reader: CurrentPassageReader,
+): Promise<boolean> {
+  try {
+    const record = reader.recordOf(instrumentId);
+    if (record === undefined) return false;
+    const citedPath = citedPassagePath(record);
+    const { vault } = reader;
+    const material = async (path: VaultPath): Promise<string> => {
+      const source = await vault.read(path);
+      const spans = [
+        ...parseCardsWithInvalid(source).cards.map((card) => card.span),
+        ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
+      ];
+      return stripInstrumentSpans(source, spans);
+    };
+    if (anchor.passageDigest === undefined) {
+      const current = await material(citedPath);
+      return (
+        current === anchor.text ||
+        canonicalizeForMateriality(current) === canonicalizeForMateriality(anchor.text)
+      );
+    }
+    const resolution = await resolveAnchoredPassage(
+      {
+        text: anchor.text,
+        passageDigest: anchor.passageDigest,
+        anchorPath: anchor.sourcePath,
+        citedPath,
+      },
+      {
+        exists: (path) => vault.exists(path),
+        material,
+        markdownPaths: async () =>
+          (await vault.list({ extensions: ['md'] })).filter(
+            (path) => !HIDDEN_PATH_SEGMENT.test(path),
+          ),
+      },
+    );
+    if (resolution.kind === 'relocated') return true;
+    if (resolution.kind !== 'present') return false;
+    return (
+      resolution.text === anchor.text ||
+      canonicalizeForMateriality(resolution.text) === canonicalizeForMateriality(anchor.text)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Shared, never mutated — the "no store/ids supplied" reading both new `[D-323]` concerns fall back to. */

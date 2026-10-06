@@ -37,6 +37,16 @@
  * same ShimVaultSource its Vault already uses. The shim's index resolves dot paths on its own
  * (see that file's module doc), so nothing it runs today exercises the fallback branch through
  * these members — they are here so the type is honest about what every real caller provides.
+ *
+ * **Not atomic, on any platform (`ol-egov.141.89.104.2`).** Every write here replaces the file in
+ * place (vault.modify, vault.create or adapter.write), so a crash or a killed app mid-write can
+ * leave a truncated file. No replacement primitive is used, because none has been verified: the
+ * obsidian typings (1.13.1) promise nothing about crash atomicity, and nothing about whether
+ * adapter.rename replaces an existing file, and no fault-injection test has been run against a
+ * real desktop, iOS or Android host's primitive. A fake adapter would test only the algorithm, not
+ * the platform. Until one is verified, what stands between a torn file and her data is the per-path
+ * write queue (no two writes of one file overlap on one install) and the stores' refusal to write
+ * over a record they cannot read (`olea-core`'s `vault/path-queue.ts`, `vault/store-record.ts`).
  */
 
 /** The slice of Obsidian's Stat this module reads. */

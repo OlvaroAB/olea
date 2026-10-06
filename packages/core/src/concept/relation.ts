@@ -207,10 +207,20 @@ export interface ProposedRelation {
 }
 
 /**
- * Who vouches for an edge (C7.10, `[D-070]`). An edge she authored — a link
- * between two of her own concept notes — is strong evidence; one a model
- * proposed from adjacency in the material is not, and **only the first
- * reaches triage as an assertion.**
+ * Where an edge's pairing came from (C7.10, `[D-070]`, meaning amended by
+ * `[D-490]`). **`'hers'` means *linked in a note she keeps*: curation**, a
+ * fact about how her notes are organised, never that she wrote the note or
+ * vouches for the pair (knowledge model §5). The literal keeps its name
+ * because it is persisted: `./relation-cache.ts` writes it into every
+ * `.olea/relations/` attestation and its read-back validator accepts only
+ * these two literals, so renaming it is a persisted-schema change. The
+ * vouching reading is reserved for a link in a note she has declared
+ * `made-by: me`; a link found only in notes declared `made-by: assistant`
+ * never stamps `'hers'` (`./corpus-relations/verdict.ts`'s `provenanceFor`).
+ * `'model-proposed'` is a pairing a model proposed from adjacency in the
+ * material, or one only an assistant's link nominated. **Only `'hers'`
+ * reaches triage as an assertion**, and the passages still decide whether
+ * the edge exists at all.
  *
  * **Both literals are minted in production, and by different stages**
  * *(corrected — this doc previously said nothing mints `'hers'` yet, which
@@ -222,11 +232,14 @@ export interface ProposedRelation {
  *   reads one document's passages and has no view of her links at all.
  * - The **corpus** stage stamps `'hers'` whenever `'her-link'` was among a
  *   candidate's nomination signals (`./corpus-relations/verdict.js`,
- *   `ol-9qwy`): the expensive judgement — *these two ideas belong together* —
- *   is a link she authored. The relation TYPE stays model-inferred from the
- *   combined passages either way, so `[D-082]` is intact: provenance answers
- *   who vouches for the pair, type answers what the relation is, and neither
- *   implies the other.
+ *   `ol-9qwy`), unless every note carrying that link is declared
+ *   `made-by: assistant` (`[D-490]`): the judgement *these two ideas belong
+ *   together* came from how her notes are linked, not from adjacency. An
+ *   undeclared note keeps `'hers'` and today's ordering, read as curation
+ *   only. The relation TYPE stays model-inferred from the combined passages
+ *   either way, so `[D-082]` is intact: provenance answers where the pairing
+ *   came from, type answers what the relation is, and neither implies the
+ *   other.
  *
  * The practical consequence for anything reading this field: `'hers'` can
  * only ever appear on a **corpus-stage** type (`prerequisite`,
@@ -331,11 +344,13 @@ export function stageForRelationType(type: RelationType): RelationStage | undefi
 }
 
 /**
- * How an edge arrives at triage (C7.10, knowledge model §5, R8, `[D-070]`):
- * *"An edge she authored — a link between two of her own concept notes — is
- * strong evidence; one a model proposed from adjacency in the material is
- * not. **Only the first reaches triage as an assertion; the second is a
- * candidate.**"*
+ * How an edge arrives at triage (C7.10, knowledge model §5, R8, F8.4a,
+ * `[D-070]` as amended by `[D-488]`/`[D-490]`): the split is
+ * provenance-gated. An edge whose pairing came from a link in a note she
+ * keeps (`'hers'`, curation) is shown as an assertion; one a model proposed
+ * (`'model-proposed'`, which includes a pairing only an assistant's link
+ * nominated) is a candidate. Either way the introducing passages decided
+ * that the edge exists; a link alone never reaches triage.
  *
  * **This is a property of the TRIAGE surface, not of reader eligibility, and
  * conflating the two is the mistake this type exists to prevent.** The word
@@ -344,7 +359,7 @@ export function stageForRelationType(type: RelationType): RelationStage | undefi
  * 1. `./corpus-relations/types.js`'s `CorpusRelationCandidate` — a nominated
  *    *pair*, before any verdict. Not an edge at all.
  * 2. **This type** — a minted edge's *standing* when it is shown to her:
- *    hers is presented as an assertion, a model's as a proposal awaiting
+ *    a linked pair is presented as an assertion, a model's as a proposal awaiting
  *    corroboration, "never rendered identically"
  *    (`features/F1-sources.md`'s `relations-triage` scenario).
  * 3. `RelationEvidenceState` below — `[D-093]`'s degradation, where an edge
@@ -493,9 +508,16 @@ export interface RelationSet {
  * Rank two attestations of the same edge. Negative means `a` wins.
  *
  * **Provenance outranks confidence, and never the other way round**
- * (`[D-070]`): an edge she authored is strong evidence and a model's
- * self-reported number cannot outbid it. Within one provenance, higher
- * confidence wins; a genuine tie keeps the first seen, which makes the fold
+ * (`[D-070]`): a pairing that came from a link in a note she keeps
+ * (`'hers'`) ranks above a model's proposal, and a model's self-reported
+ * number cannot outbid it. **What that rank claims (`[D-490]`):** curation,
+ * how her notes are organised; her vouching only when the linking note is
+ * declared `made-by: me`. An undeclared note's link keeps this rank as it
+ * always had, with authorship unknown. A link found only in notes declared
+ * `made-by: assistant` arrives here as `'model-proposed'` (stamped so by
+ * `./corpus-relations/verdict.ts`'s `provenanceFor`), so it gets no lift and
+ * competes on confidence alone. Within one provenance, higher confidence
+ * wins; a genuine tie keeps the first seen, which makes the fold
  * order-stable given sorted input.
  *
  * **Confidences are never combined.** Two attestations at 0.6 do not make an
@@ -652,26 +674,26 @@ export function servedRelations(set: RelationSet): readonly ConceptRelation[] {
 }
 
 /**
- * The edges that would reach a triage surface **as assertions** — hers, not
- * a model's (`[D-070]`, and `features/F1-sources.md`'s scenario *"an edge she
- * authored reaches triage as an assertion; a model-proposed edge is a
- * candidate only"*, tagged `@auto:core/registry/relations-triage.spec`).
+ * The edges that would reach a triage surface **as assertions** — a pairing
+ * from a link in a note she keeps, not a model's (`[D-070]` as amended by
+ * `[D-490]`: curation, never her vouching unless the note is declared
+ * `made-by: me`; `features/F1-sources.md`'s relations-triage scenario,
+ * tagged `@auto:core/registry/relations-triage.spec`).
  *
- * **Nothing composes this to a surface, and nothing may.** No contract clause
- * names a concept-relation triage surface — C7.10 rules what triage *shows*,
- * never that a screen exists — and the standing rule *"no user-visible
- * affordance without a clause"* forbids a lane inventing one. This function
- * exists for the same reason `routing/instrument-mix.js`'s `routingReason`
- * does: so that the rule is a checkable value with its own test coverage
- * before a surface reaches for it, rather than being invented at the UI layer
- * against no source of truth on the day one is clauses.
+ * **Nothing composes this to a surface yet; the clause that defines one is
+ * F8.4a** (the concept-relation triage surface, functional scope).
+ * A lane builds that surface only from F8.4a, never from this comment. This
+ * function exists for the same reason `routing/instrument-mix.js`'s
+ * `routingReason` does: so that the rule is a checkable value with its own
+ * test coverage before a surface reaches for it, rather than being invented at
+ * the UI layer against no source of truth.
  *
  * **It is not empty in production, which is what makes the missing clause a
  * live gap rather than a hypothetical one.** Since `ol-9qwy` the corpus stage
- * stamps `'hers'` on any edge her own wikilink helped nominate
+ * stamps `'hers'` on any edge a wiki-link in a note she keeps helped
+ * nominate, unless every such note is declared `made-by: assistant`
  * (`./corpus-relations/verdict.js`), so a real vault with a linked card index
- * yields real assertions here — with nowhere ruled for them to go. The one
- * thing that follows from that is a decision bead, not a screen.
+ * yields real assertions here — with no surface built for them yet.
  */
 export function assertionsForTriage(set: RelationSet): readonly RelationSetEntry[] {
   return set.entries.filter((entry) => entry.triageStanding === 'assertion');

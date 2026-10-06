@@ -18,7 +18,11 @@
  * result does not depend on which order the caller happened to read several
  * devices' files in. Feed this the output of `./merge.js` for that guarantee
  * to hold across devices; a single file is already in append order, but
- * sorting here costs nothing and removes the assumption.
+ * sorting here costs nothing and removes the assumption. At an equal
+ * instant, `resolution-evidence` entries fold before `observed` ones, and the
+ * `eventId` tiebreak applies only within each kind: one accepted attempt stamps
+ * its observations and its resolution evidence with the same timestamp and
+ * random event ids, so id order alone would be a coin flip (`[D-485]` part 1).
  *
  * **Idempotency on replay.** A duplicate event (same `eventId` appearing
  * twice — the ordinary case is an unmerged file re-read, or a defensive
@@ -56,18 +60,34 @@
  * MCQ pick asserts nothing about either field, so it must not be read as
  * asserting their absence. `project.spec.ts`'s "sticky merge" cases pin this.
  *
- * **Resolution folding (M2).** A `resolution-evidence` event downgrades
- * *every* `active`/`fading` record on its `conceptId` one step
- * (`active` → `fading` → `resolved`); `resolved` records are a no-op.
- * **Known imprecision, stated rather than hidden:** when a concept carries
- * more than one open misconception simultaneously, one piece of evidence
- * downgrades all of them, because the event only names a concept, not a
- * specific misconception id (`./events.js`'s doc explains why the grader
- * cannot reliably supply one). This is the conservative-toward-availability
- * side of the M1/M2 trade: M1 already biases toward *not* merging distinct
- * misconceptions into one record, so a shared concept-level resolution
- * signal is the accepted cost of that same conservatism rather than a
- * separate design flaw. Flagged as a Class B call in the bead report.
+ * **Resolution folding (M2, amended by `[D-485]`).** A `resolution-evidence`
+ * event of kind `explanation` downgrades *every* `active`/`fading` record on
+ * its `conceptId` one step (`active` → `fading` → `resolved`); `resolved`
+ * records are a no-op. An event of kind `recall` fades an `active` record to
+ * `fading` but leaves a `fading` record `fading`: recall evidence never
+ * resolves a misconception. This holds on re-projection for every recall
+ * event in the log (the log is never rewritten). A record created or
+ * re-observed by the same attempt is never faded by that attempt's evidence:
+ * the equal-instant ordering above folds the evidence first, so the later
+ * observation leaves it `active` (`[D-485]` part 1, `ol-egov.141.89.6.90`).
+ *
+ * **Belief-specific evidence (`[D-485]` part 1, `ol-egov.141.89.6.88`).** An
+ * event that carries `beliefResolution` moves only the records it names in
+ * `targetMisconceptionIds`, one step each by the same table its
+ * `evidenceKind` selects, and only those still on the event's `conceptId` and
+ * not yet resolved — so it can only ever move a subset of what the
+ * concept-wide rule would have moved for the same event. An empty target list
+ * moves nothing; it never falls back to the concept-wide rule. A name repeated
+ * in the list moves its record once.
+ *
+ * **The concept-wide rule, kept for every event without that field** (every
+ * event written before `[D-485]`, and every event a caller builds with no
+ * per-belief decision, which is still every production caller until the
+ * wiring bead lands): one piece of evidence downgrades every open
+ * misconception on the concept, because such an event names a concept only.
+ * Replaying an old log therefore gives exactly the statuses it always gave
+ * (INV-2). `[D-485]` names this rule's flaw — a correct answer fades beliefs
+ * it never touched — which is why new evidence names its records.
  *
  * **Generalised for cross-stream reconciliation (`ol-2zfj.70`).** The actual
  * fold logic lives in `foldMisconceptionObservations`, over a normalized
@@ -90,6 +110,7 @@ import type {
   MisconceptionEvent,
   MisconceptionRecord,
   MisconceptionStatus,
+  ResolutionEvidenceKind,
   SourceCitation,
 } from './types.js';
 
@@ -107,6 +128,13 @@ function sortKey(entry: {
 const DOWNGRADE: Readonly<Record<MisconceptionStatus, MisconceptionStatus>> = {
   active: 'fading',
   fading: 'resolved',
+  resolved: 'resolved',
+};
+
+/** `[D-485]`: recall evidence fades `active` and never resolves `fading`. */
+const RECALL_DOWNGRADE: Readonly<Record<MisconceptionStatus, MisconceptionStatus>> = {
+  active: 'fading',
+  fading: 'fading',
   resolved: 'resolved',
 };
 
@@ -134,12 +162,20 @@ export interface NormalizedMisconceptionObservation {
   readonly originInstrumentId: string;
 }
 
-/** M2's per-concept resolution signal, normalized the same way. */
+/** M2's resolution signal, normalized the same way. */
 export interface NormalizedMisconceptionResolution {
   readonly kind: 'resolution-evidence';
   readonly eventId: string;
   readonly timestamp: string;
   readonly conceptId: string;
+  /** `[D-485]`: `recall` never resolves; `explanation` keeps the one-step downgrade. */
+  readonly evidenceKind: ResolutionEvidenceKind;
+  /**
+   * `[D-485]` part 1: present only when the event carried `beliefResolution`
+   * (its `targetMisconceptionIds`). Present moves only these records; absent
+   * keeps the concept-wide rule. See this module's doc.
+   */
+  readonly targetMisconceptionIds?: readonly string[];
 }
 
 export type NormalizedMisconceptionFoldEntry =
@@ -176,6 +212,10 @@ export function normalizeMisconceptionEvent(
     eventId: event.eventId,
     timestamp: event.timestamp,
     conceptId: event.conceptId,
+    evidenceKind: event.evidenceKind,
+    ...(event.beliefResolution !== undefined
+      ? { targetMisconceptionIds: event.beliefResolution.targetMisconceptionIds }
+      : {}),
   };
 }
 
@@ -193,6 +233,8 @@ export function foldMisconceptionObservations(
     const ka = sortKey(a);
     const kb = sortKey(b);
     if (ka[0] !== kb[0]) return ka[0] - kb[0];
+    // Same instant: resolution evidence folds before observations ([D-485] part 1).
+    if (a.kind !== b.kind) return a.kind === 'resolution-evidence' ? -1 : 1;
     return ka[1] < kb[1] ? -1 : ka[1] > kb[1] ? 1 : 0;
   });
 
@@ -244,11 +286,23 @@ export function foldMisconceptionObservations(
       continue;
     }
 
-    // resolution-evidence: downgrade every active/fading record on this concept.
+    // resolution-evidence; recall evidence stops at `fading` ([D-485] part 3).
+    const table = entry.evidenceKind === 'recall' ? RECALL_DOWNGRADE : DOWNGRADE;
+    if (entry.targetMisconceptionIds !== undefined) {
+      // [D-485] part 1: only the named records on this concept, one step each.
+      for (const id of new Set(entry.targetMisconceptionIds)) {
+        const record = records.get(id);
+        if (record === undefined || record.conceptId !== entry.conceptId) continue;
+        if (record.status === 'resolved') continue;
+        records.set(id, { ...record, status: table[record.status] });
+      }
+      continue;
+    }
+    // No belief-specific field: every active/fading record on this concept (INV-2).
     for (const [id, record] of records) {
       if (record.conceptId !== entry.conceptId) continue;
       if (record.status === 'resolved') continue;
-      records.set(id, { ...record, status: DOWNGRADE[record.status] });
+      records.set(id, { ...record, status: table[record.status] });
     }
   }
 

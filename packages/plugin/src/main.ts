@@ -44,6 +44,7 @@ import {
   type MisconceptionResolutionEvidenceEvent,
   type NonAttemptLogRecordInput,
   type PendingExplainBackGrading,
+  parseMadeBy,
   pastSessionsFromReviewLog,
   pickNextExplainBackInvitation,
   projectRegisteredFiles,
@@ -95,12 +96,14 @@ import {
 import { enqueueContestRegradeJobOnDispute } from './contest-regrade/enqueue.js';
 import { createContestRegradeEngine, drainContestRegradeQueue } from './contest-regrade/wiring.js';
 import { buildRecognitionClaimCopy } from './course-setup/copy.js';
+import { courseMaterialPaths } from './course-setup/detection-sources.js';
 import { readCourseSetupRecognitions } from './course-setup/recognition-source.js';
 import { wireDocumentSourceRegistration } from './course-setup/register-source-wiring.js';
 import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { obsidianDepthGateGet } from './depth-gate/obsidian-depth-gate-transport.js';
 import { buildDepthGateWiring, type DepthGateWiring } from './depth-gate/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
+import { createRecordFeedbackShown } from './explain-back/feedback-exposure.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
 import {
@@ -145,7 +148,10 @@ import {
 import { GroveView, VIEW_TYPE_OLEA_GROVE } from './grove/view.js';
 import { createLocalHomeProvider } from './home/provider.js';
 import { HomeView, VIEW_TYPE_OLEA_HOME } from './home/view.js';
-import { buildIngestionArrivalWatch } from './ingestion/arrival-watch.js';
+import {
+  buildIngestionArrivalWatch,
+  requestSourceCatchUpExtraction,
+} from './ingestion/arrival-watch.js';
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import { readLectureBundles, teachingEventResolverFrom } from './ingestion/lecture-links.js';
 import { lectureTermsLookup } from './ingestion/lecture-terms.js';
@@ -153,6 +159,7 @@ import { ObsidianCitationHashStore } from './ingestion/materiality/citation-hash
 import {
   adaptMaterialityJudgeAsRevisionJudge,
   buildCitationRevisionWiring,
+  type CitationRevisionActions,
   type CitationRevisionTrigger,
 } from './ingestion/materiality/citation-revision-wiring.js';
 import { ObsidianMaterialityHashStore } from './ingestion/materiality/hash-store.js';
@@ -161,6 +168,11 @@ import {
   createInMemoryPreviousTextTracker,
   type PreviousTextTracker,
 } from './ingestion/materiality/previous-text.js';
+import {
+  listMaterialityRecordPaths,
+  primePreviousTextFromVault,
+} from './ingestion/materiality/prime-previous-text.js';
+import { createPrimingGate } from './ingestion/materiality/priming-gate.js';
 import {
   buildMaterialityWiring,
   type MaterialityEvaluationResult,
@@ -296,7 +308,11 @@ import {
   instrumentIdsInScope,
   resolveCitationPendingRevalidation,
 } from './session-builder/provider.js';
-import { SessionBuilderView, VIEW_TYPE_OLEA_SESSION } from './session-builder/view.js';
+import {
+  type SessionBuilderRequest,
+  SessionBuilderView,
+  VIEW_TYPE_OLEA_SESSION,
+} from './session-builder/view.js';
 import {
   type HeadingOfferSettingSnapshot,
   ObsidianHeadingOfferSettingStore,
@@ -705,6 +721,8 @@ export default class OleaPlugin extends Plugin {
   private materiality: MaterialityTrigger | null = null;
   /** Session-scoped "what did this path last look like" cache feeding `materiality.evaluate`'s `previousText` — see `ingestion/materiality/previous-text.ts`'s module doc for why this is its own tiny cache rather than a read into the keyword index's. */
   private materialityPreviousText: PreviousTextTracker | null = null;
+  /** `ol-egov.141.89.5.85`: opens once the previous-text priming pass settles (any outcome). */
+  private readonly primingGate = createPrimingGate();
   /**
    * `ol-egov.141.89.5.41`: the exact text of Olea's own first-sight stamp writes, by path, until the
    * matching modify event arrives. `evaluateMaterialityChange` treats a note whose text equals its
@@ -1701,6 +1719,9 @@ export default class OleaPlugin extends Plugin {
           leaf,
           () =>
             createBulkReviewController({
+              // `[D-489]`: her cached `made-by` declaration decides "a note you wrote" vs "your notes".
+              madeByFor: (notePath) =>
+                parseMadeBy(this.app.metadataCache.getCache(notePath)?.frontmatter?.['made-by']),
               cache: generationWiring.cache,
               acceptPort: generationWiring.acceptPort,
               editPort: createObsidianEditPort(this.app),
@@ -1818,9 +1839,9 @@ export default class OleaPlugin extends Plugin {
         openRetrospective: () => {
           void this.revealRetrospectiveView();
         },
-        startSession: () => {
+        startSession: (request) => {
           void (async () => {
-            await this.enterStudySessionHolderForStart();
+            await this.enterStudySessionHolderForStart(request);
             void this.revealReviewView();
           })();
         },
@@ -1989,7 +2010,7 @@ export default class OleaPlugin extends Plugin {
       // trigger. Fires once per drained job, best-effort (see `wiring.ts`'s
       // own doc for why a generation failure can never fail the ingestion
       // job it rode in on).
-      onUnitsLanded: (units) => this.onUnitsLanded(units),
+      onUnitsLanded: (units, sourceRevisions) => this.onUnitsLanded(units, sourceRevisions),
       // `ol-2zfj.39` (`[D-133]` end-to-end): a drained `'instrument-revision'`
       // job drafts its successor into the same cache the F3.3 sweep fills,
       // carrying the predecessor id that `accept.ts` stamps on materialize.
@@ -2329,6 +2350,7 @@ export default class OleaPlugin extends Plugin {
     // `ol-egov.141.89.5.19`: held on `this.citationHashStore` too, so the session-builder deps
     // below (and `composeDefaultStudySession`/`extendDefaultStudySession`) read the SAME store
     // this trigger writes pending-revalidation facts to — see that field's own doc.
+    const sessionLoadedAt = this.now().getTime();
     this.citationHashStore = new ObsidianCitationHashStore(this);
     this.citationRevision = buildCitationRevisionWiring({
       store: this.citationHashStore,
@@ -2340,6 +2362,24 @@ export default class OleaPlugin extends Plugin {
       // `navigator.onLine` source `processNowAction`/the [D-420] registry
       // action already use for the identical reachability question.
       isOnline: () => navigator.onLine,
+      // `ol-egov.141.89.5.84` ([D-518]): a withheld question whose cited file has no extracted text
+      // in memory (a restart, or a change made while Obsidian was closed) asks for one catch-up
+      // extraction of that file, once per (file, bytes) per session — `requestSourceCatchUpExtraction`'s
+      // doc. Its landing reaches `onSourceUnitsLanded` through the same route an arrival's does.
+      requestSourceReextraction: async (sourcePath) => {
+        const ingestion = this.ingestion;
+        if (ingestion === null) return;
+        await requestSourceCatchUpExtraction({
+          vault,
+          engine: {
+            list: () => ingestion.engine.list(),
+            enqueue: (input) =>
+              processedRevisionFeed.observeEnqueues(ingestion.engine).enqueue(input),
+          },
+          sourcePath,
+          sessionStamp: sessionLoadedAt,
+        });
+      },
     });
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`
@@ -2408,6 +2448,15 @@ export default class OleaPlugin extends Plugin {
         'Olea: grounding-judge case capture is ENABLED (see judge-case-capture.ts). Remove the config key in data.json to stop it.',
       );
     }
+
+    // `ol-egov.141.89.5.66` (c): seed the previous-text tracker from the vault for every note
+    // whose text still matches its materiality record, so a first small or debounced save after
+    // this load is judged against the settled text; `ol-egov.141.89.5.85`: and mark every note
+    // changed while Obsidian was closed. Never awaited, never failing; counts only are logged
+    // (INV-3). Started before the watch below is registered, so nothing in between can leave
+    // `primingGate` shut: `evaluateMaterialityChange` awaits it, and `run` opens it however
+    // priming ends, skipped included.
+    void this.primingGate.run(() => this.primeMaterialityPreviousText(vault));
 
     this.register(
       vault.watch((event) => {
@@ -2478,6 +2527,33 @@ export default class OleaPlugin extends Plugin {
     );
   }
 
+  /** Runs `primePreviousTextFromVault` once after load; never throws (see its module doc). */
+  private async primeMaterialityPreviousText(vault: VaultSource): Promise<void> {
+    const tracker = this.materialityPreviousText;
+    if (this.materiality === null || tracker === null) return;
+    try {
+      const counts = await primePreviousTextFromVault({
+        tracker,
+        store: new ObsidianMaterialityHashStore(this),
+        recordedPaths: await listMaterialityRecordPaths(() => this.loadData()),
+        markPreviousUnknown: (p) => this.materiality?.markPreviousUnknown(p),
+        readText: async (path) => {
+          if (!(await vault.exists(path))) return null;
+          const text = await vault.read(path);
+          return isOleaHomeNote(text) ? null : text;
+        },
+      });
+      console.debug(
+        `Olea: materiality previous text primed (${counts.primed} primed, ${counts.mismatched} changed since last record, ${counts.unreadable} unreadable, ${counts.alreadyKnown} already seen)`,
+      );
+    } catch (error) {
+      console.error(
+        'Olea: materiality previous-text priming failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
+  }
+
   /**
    * Feeds one observed `'modify'` OR `'create'` event into the materiality
    * trigger (register row 1.4, `TRG-1`). `VaultEvent` carries only a path —
@@ -2509,6 +2585,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async evaluateMaterialityChange(vault: VaultSource, path: VaultPath): Promise<void> {
     if (this.materiality === null || this.materialityPreviousText === null) return;
+    await this.primingGate.whenSettled;
     let currentText: string;
     try {
       currentText = await vault.read(path);
@@ -2771,7 +2848,7 @@ export default class OleaPlugin extends Plugin {
   private async openNextCourseSetupProposal(vault: VaultSource): Promise<void> {
     let paths: readonly VaultPath[];
     try {
-      paths = await vault.list({ extensions: ['md'] });
+      paths = courseMaterialPaths(await vault.list());
     } catch (error) {
       console.error('Olea: course detection could not list the vault', error);
       return;
@@ -3259,10 +3336,28 @@ export default class OleaPlugin extends Plugin {
   private async tickCitationRevisions(): Promise<void> {
     if (this.citationRevision === null) return;
     try {
-      const vault = this.vaultSource;
-      const deviceId = await ensureDeviceId(this);
-      const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
-      await this.citationRevision.tick(vault, {
+      const { vault, actions } = await this.citationRevisionActions();
+      await this.citationRevision.tick(vault, actions);
+    } catch (error) {
+      console.error('Olea: citation-revision batch pass failed', error);
+    }
+  }
+
+  /**
+   * The vault and the suspend/enqueue actions the citation trigger needs, built fresh per call
+   * (see `tickCitationRevisions`). Shared with the units-landed hook (`ol-egov.141.89.5.81`,
+   * `[D-518]`).
+   */
+  private async citationRevisionActions(): Promise<{
+    vault: VaultSource;
+    actions: CitationRevisionActions;
+  }> {
+    const vault = this.vaultSource;
+    const deviceId = await ensureDeviceId(this);
+    const suspendPort = createVaultSuspendPort(vault, deviceId, this.now);
+    return {
+      vault,
+      actions: {
         enqueue: (input) =>
           this.ingestion === null
             ? Promise.resolve(undefined)
@@ -3280,10 +3375,8 @@ export default class OleaPlugin extends Plugin {
             'Olea: a citation relocation proposal is pending confirmation-registry admission (ol-2zfj.35 hand-back)',
           );
         },
-      });
-    } catch (error) {
-      console.error('Olea: citation-revision batch pass failed', error);
-    }
+      },
+    };
   }
 
   /**
@@ -3509,7 +3602,24 @@ export default class OleaPlugin extends Plugin {
    * the F7.8 degrade (`report === null`, no Worker configured or `units`
    * empty), never a stale prior sweep's refusals surviving a no-op one.
    */
-  private async onUnitsLanded(units: readonly ExtractedUnit[]): Promise<void> {
+  private async onUnitsLanded(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    // `ol-egov.141.89.5.81` ([D-518]): a changed non-markdown source's re-extracted units rewrite the
+    // questions held for it. Independent of generation, and never fails the hook.
+    if (
+      sourceRevisions !== undefined &&
+      sourceRevisions.size > 0 &&
+      this.citationRevision !== null
+    ) {
+      try {
+        const { vault, actions } = await this.citationRevisionActions();
+        await this.citationRevision.onSourceUnitsLanded(vault, actions, units, sourceRevisions);
+      } catch (error) {
+        console.error('Olea: citation-revision source rewrite on landed units failed', error);
+      }
+    }
     if (this.generation === null) return;
     try {
       const formatMatch = await this.buildFormatMatchProducer();
@@ -3518,6 +3628,7 @@ export default class OleaPlugin extends Plugin {
         this.draftQuizCardsDeps(),
         { classifier: this.knowledgeKind?.classifier ?? null },
         formatMatch,
+        sourceRevisions,
       );
       this.lastGenerationRefusals = report?.refusals ?? [];
     } catch (error) {
@@ -3755,7 +3866,9 @@ export default class OleaPlugin extends Plugin {
    * `createLocalSessionBuilderProvider` uses for Home and the session
    * builder (`session-builder/provider.ts`'s `composeStudySessionForRequest`,
    * extracted there for exactly this reuse), with no course/topic/concept
-   * steering and C5.5's declared default budget
+   * steering and C5.5's declared default budget — unless `request` is given
+   * (`ol-egov.141.89.10.111`, F4.6/`[D-243]`: Start passes the steering she
+   * chose on Home, and only Start does)
    * (`DEFAULT_SESSION_BUDGET_MINUTES`) — the identical one-liner
    * `home/provider.ts` already calls for Home's own preview
    * (`sessionProvider.load({ budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES })`).
@@ -3782,7 +3895,9 @@ export default class OleaPlugin extends Plugin {
    * the same "nothing frozen" reading `provider.ts` gives its own fields on
    * an unavailable build.
    */
-  private async composeDefaultStudySession(): Promise<ComposedStudySession | null> {
+  private async composeDefaultStudySession(
+    request?: SessionBuilderRequest,
+  ): Promise<ComposedStudySession | null> {
     const wiring = this.review;
     if (wiring === null) return null;
     const now = this.now();
@@ -3822,7 +3937,9 @@ export default class OleaPlugin extends Plugin {
         // instrument too, not only the session-builder leaf.
         ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
       },
-      { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+      // `ol-egov.141.89.10.111` (F4.6, `[D-243]`): Start passes the steering she chose on Home;
+      // every other door passes none and gets C5.5's declared default budget, as before.
+      request ?? { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
       now,
     );
     this.sharedSittingFrozenScope = result?.frozenScope;
@@ -4004,7 +4121,7 @@ export default class OleaPlugin extends Plugin {
    * honest zeros when nothing has been frozen yet or the idle threshold has
    * not passed — see its own doc.
    */
-  private async enterStudySessionHolderForStart(): Promise<void> {
+  private async enterStudySessionHolderForStart(request?: SessionBuilderRequest): Promise<void> {
     const now = this.now();
     const sitting = this.studySessionHolder.getSitting();
     if (sitting.status === 'active') {
@@ -4060,7 +4177,7 @@ export default class OleaPlugin extends Plugin {
       // the idle case.
       this.studySessionHolder.exit();
     }
-    const composed = await this.composeDefaultStudySession();
+    const composed = await this.composeDefaultStudySession(request);
     // `ol-egov.141.89.10.47` (C5.8, `[D-193]`): pass the composition's own
     // plan as `enter`'s third argument, so the composition PLAN is captured
     // at the exact instant this fresh sitting begins, not lazily at the
@@ -4504,6 +4621,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async buildExplainBackObservationContextFor(params: {
     readonly subjectConceptId: string | null;
+    readonly permittedConceptIds?: readonly string[];
     readonly originInstrumentId: string;
     readonly sourceBlocks: readonly ExplainBackSourceBlock[];
     readonly query: string;
@@ -4519,6 +4637,9 @@ export default class OleaPlugin extends Plugin {
     return {
       ...buildExplainBackObservationContext({
         subjectConceptId: params.subjectConceptId,
+        ...(params.permittedConceptIds !== undefined
+          ? { permittedConceptIds: params.permittedConceptIds }
+          : {}),
         originInstrumentId: params.originInstrumentId,
         // Recording the graded verdict into a review-log event is `ol-95vv`'s
         // mastery-fold job, not this view's (see `explain-back/modal.ts`'s
@@ -4801,6 +4922,13 @@ export default class OleaPlugin extends Plugin {
         // she set aside was never followed to acceptance. One whole-log read when an
         // instrument-seeded question is opened; no write, no surface.
         readLoggedAttemptState: createReadLoggedAttemptState({ vault: this.vaultSource }),
+        // `[D-460]` (`ol-egov.141.89.6.86`): the feedback exposure marker, written to the same
+        // log BEFORE a graded result renders, so a reload after she read it cannot make her next
+        // attempt read as a first one. The question, the attempt and the time, nothing else.
+        recordFeedbackShown: createRecordFeedbackShown({
+          vault: this.vaultSource,
+          deviceId: () => ensureDeviceId(this),
+        }),
         loadMisconceptionDigest: (conceptIds) =>
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,

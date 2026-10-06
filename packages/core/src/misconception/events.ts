@@ -13,7 +13,9 @@ import type { MaterialityAuthorship } from '../source/materiality.js';
 import { assertBeliefBearingStatement } from './belief-source.js';
 import type { MisconceptionMatchCandidate } from './matcher.js';
 import { DEFAULT_M1_THRESHOLD, matchExistingMisconception } from './matcher.js';
+import { parseBeliefResolution } from './parse.js';
 import {
+  type BeliefResolutionEvidence,
   type EmbeddingVector,
   MISCONCEPTION_EVENT_SCHEMA_VERSION,
   type MisconceptionObservedEvent,
@@ -35,23 +37,14 @@ export interface ObservationInput {
   /**
    * `[D-101]`'s authorship fact for this statement's source prose (knowledge
    * model §4.1's statement field, amended `[D-101]`): `'hers'` admits;
-   * `'not-hers'`/`'unknown'` both exclude, per `belief-source.ts`'s
-   * `admitBeliefBearingStatement`. **Optional** — no production caller
-   * supplies a real value yet. The observation path today
+   * `'not-hers'`/`'unknown'` exclude, and so does an absent fact (`[D-490]`,
+   * `ol-egov.141.89.6.91`: authorship needs her word, so no fact means no
+   * admission), per `belief-source.ts`'s `admitBeliefBearingStatement`.
+   * Optional in the type only. The one production path
    * (`accepted-grading-observation.ts`'s `buildObservationEventsFromAcceptedGrading`,
-   * called from `packages/plugin/src/grading/wiring.ts`'s
-   * `computeAcceptExplainBackGradingWithObservation`) builds its candidates
-   * from `AcceptedExplainBackGrading.misconceptionCandidates`
-   * (`../grading/gradingPipeline.js`, not this directory's `owns`) with no
-   * authorship fact attached anywhere upstream. The plugin caller that must
-   * start supplying one is `packages/plugin/src/grading/wiring.ts` (or the
-   * materiality wiring it already has under
-   * `packages/plugin/src/ingestion/materiality/`), classifying the graded
-   * answer's source prose via `classifyMateriality`/`resolveMateriality`
-   * before building each `AcceptedGradingMisconceptionCandidate`. Omitting
-   * this field leaves existing behaviour unchanged — see
-   * `admitBeliefBearingStatement`'s own doc for why an absent fact admits
-   * rather than guesses at an exclusion.
+   * called from `packages/plugin/src/grading/wiring.ts`) attaches `'hers'` to
+   * every candidate, because each statement comes from her own typed
+   * explain-back answer (`attachStatementAuthorship` there).
    */
   readonly statementAuthorship?: MaterialityAuthorship;
 }
@@ -154,6 +147,14 @@ export interface ResolutionEvidenceInput {
   readonly originInstrumentId: string;
   readonly originReviewEventId: string | null;
   readonly timestamp: string;
+  /**
+   * `[D-485]` part 1: the per-belief decision's outcome
+   * (`./resolution-evidence-decision.js`'s `decideBeliefResolution` or
+   * `runBeliefResolutionDecision`). Omit it when no per-belief decision ran:
+   * the event is then exactly today's concept-wide shape, with no
+   * `beliefResolution` key at all.
+   */
+  readonly beliefResolution?: BeliefResolutionEvidence;
 }
 
 export interface BuildResolutionEvidenceEventOptions {
@@ -162,14 +163,26 @@ export interface BuildResolutionEvidenceEventOptions {
 
 /**
  * Builds a resolution-evidence event (M2). Unlike an observation, there is
- * no matching decision to make: the event names a concept, not a
- * misconception id, and `./project.js`'s fold applies it to every
- * `active`/`fading` record on that concept — see that module's doc for why.
+ * no matching decision to make here. Without `input.beliefResolution` the
+ * event names a concept only, and `./project.js`'s fold applies it to every
+ * `active`/`fading` record on that concept; with it, the fold moves only the
+ * records it names (`[D-485]`) — see that module's doc.
+ *
+ * Throws on a malformed `beliefResolution` (a caller bug: the decision
+ * functions never produce one), using the same validation the log reader
+ * applies, so every built event parses back to itself byte for byte.
  */
 export function buildResolutionEvidenceEvent(
   input: ResolutionEvidenceInput,
   options: BuildResolutionEvidenceEventOptions = {},
 ): MisconceptionResolutionEvidenceEvent {
+  let beliefResolution: BeliefResolutionEvidence | null = null;
+  if (input.beliefResolution !== undefined) {
+    beliefResolution = parseBeliefResolution(input.beliefResolution);
+    if (beliefResolution === null) {
+      throw new Error('buildResolutionEvidenceEvent: malformed beliefResolution ([D-485])');
+    }
+  }
   const generateEventId = options.generateEventId ?? defaultGenerateId;
   return {
     schemaVersion: MISCONCEPTION_EVENT_SCHEMA_VERSION,
@@ -180,5 +193,6 @@ export function buildResolutionEvidenceEvent(
     originReviewEventId: input.originReviewEventId,
     conceptId: input.conceptId,
     evidenceKind: input.evidenceKind,
+    ...(beliefResolution !== null ? { beliefResolution } : {}),
   };
 }

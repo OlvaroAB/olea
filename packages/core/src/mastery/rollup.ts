@@ -10,7 +10,8 @@
  * being rolled up are the review events her instruments produced, not a
  * concept-to-concept hierarchy: `concept ↔ concept` edges exist in the
  * knowledge model's table (§5, "prerequisite, part-of, contrasts-with") but
- * nothing in this codebase extracts, stores or consumes them, and no
+ * the relation pipeline does extract and cache them (`../concept/relation.ts`,
+ * `../concept/relation-cache.ts`), but nothing in mastery reads them and no
  * functional-scope item asks mastery to climb one. Building a parent-concept
  * rollup over child *concepts* would be inventing a second, un-contracted
  * kind of aggregation on top of the one the knowledge model actually names.
@@ -151,7 +152,7 @@ import type {
   SoloLevel,
   SupportLevel,
 } from 'olea-contracts';
-import { readExplainBackCorrectness } from 'olea-contracts';
+import { readExplainBackCorrectness, restatementFindingOf } from 'olea-contracts';
 import type { Scheduler } from '../scheduler/types.js';
 import { type ReplayResult, replayedStateOf, replaySchedulerStates } from '../session/replay.js';
 import { scoredConceptOf } from '../session/scored-concept.js';
@@ -473,8 +474,9 @@ export interface MasteryRollupOptions {
    * missing**. Such an attempt never qualifies for the top stage; it still
    * counts as a graded attempt everywhere else. The finding is `XBK`'s to
    * produce and, per the ruling, rides `ol-95vv.8`'s review-log version as a
-   * persisted field — until that field exists nothing produces this list, so
-   * it defaults to empty and changes nothing. **Word overlap is never read
+   * persisted field (`[D-483]`: `explainBackCorrectness.restatement`, which the
+   * fold now reads off the record itself). This list is a back-compat override
+   * and adds to the record's own finding; it defaults to empty. **Word overlap is never read
    * here** (`[D-279]`): the fold takes the finding, never the overlap measure,
    * so resemblance alone cannot withhold the top stage, and a correct short
    * definition or necessary technical wording (which the finding's own
@@ -1002,7 +1004,12 @@ function conceptEvidence(
         tiersSucceeded.explanation = true;
       }
       if (qualifiesForTopStage(record, grade, resolved, supersededEventIds)) {
-        if (resolved.explanationMissingEventIds.has(record.eventId)) {
+        // `[D-483]`: the finding is read off the record itself (the producer is the writer, at
+        // accept), so no fold call site can forget it; the option list stays as an override.
+        if (
+          restatementFindingOf(record) !== undefined ||
+          resolved.explanationMissingEventIds.has(record.eventId)
+        ) {
           // `[D-319]`: every other condition held, and the finding shows the
           // requested explanation missing — the one thing that withholds it.
           withheldByRestatementFinding += 1;

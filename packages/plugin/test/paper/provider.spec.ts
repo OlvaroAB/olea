@@ -550,7 +550,16 @@ describe('createLocalPracticePaperProvider — requestPaper() through the journa
     expect(state.record.completion).toEqual({ status: 'complete' });
     expect(state.record.journalId).toBeDefined();
     expect(Object.keys(state).sort()).toEqual(
-      ['course', 'emptySlots', 'items', 'kind', 'partial', 'partialStatement', 'record'].sort(),
+      [
+        'course',
+        'emptySlots',
+        'incompleteStatement',
+        'items',
+        'kind',
+        'partial',
+        'partialStatement',
+        'record',
+      ].sort(),
     );
     expect(scripted.calls).toHaveLength(state.items.length);
   });
@@ -736,8 +745,8 @@ describe('the paper path uses the three-outcome port and the view is unchanged (
     }
   });
 
-  it('adds no student-visible state: the view neither names the journal nor the unfinished error', () => {
+  it('adds no state beyond [D-457]: the view neither names the journal nor the error class, and reads the notice from the provider', () => {
     const view = codeOf('paper/view.ts');
-    expect(view).not.toMatch(/PracticePaperUnfinishedError|unfinished|journal|completion/i);
+    expect(view).not.toMatch(/PracticePaperUnfinishedError|journal|completion/i);
   });
 });

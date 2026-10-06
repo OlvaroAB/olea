@@ -142,7 +142,7 @@ describe('ExplainBackModal loads a real misconception digest for an instrument-s
     // for citation lookup and the accept-time staleness comparison) stays
     // the plain retrieval unchanged.
     expect(body).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*\);/,
+      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
     );
   });
 

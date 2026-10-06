@@ -45,7 +45,11 @@
  */
 
 import type { DraftAcceptPort } from './accept.js';
-import { type SourceMarkerOrigin, sourceMarkerOrigin } from './bulk-review-copy.js';
+import {
+  type DeclaredMadeBy,
+  type SourceMarkerOrigin,
+  sourceMarkerOrigin,
+} from './bulk-review-copy.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { basenameWithoutExtension } from './review-adapter.js';
 import type { DraftQuestion, DraftRecord } from './types.js';
@@ -146,6 +150,7 @@ export interface BulkReviewAcceptRemainderResult {
  */
 export function buildBulkReviewGroups(
   records: readonly DraftRecord[],
+  madeByFor?: BulkReviewMadeByLookup,
 ): readonly BulkReviewGroupViewModel[] {
   // `ol-0r92.88`: this view model is MCQ-shaped (`stem`/`correctAnswer`/
   // `distractors` below) and has no card renderer — a `'qa'`-kind pending
@@ -177,9 +182,13 @@ export function buildBulkReviewGroups(
     // already uses for a per-group aggregate — see `sourceMarkerOrigin`'s
     // own doc for why this is a construction-guaranteed signal, not a
     // filename guess.
-    const origin = sourceMarkerOrigin(first.sourceCitation?.sourcePath);
+    const citationPath = first.sourceCitation?.sourcePath;
+    const origin = sourceMarkerOrigin(
+      citationPath,
+      citationPath === undefined ? undefined : madeByFor?.(citationPath),
+    );
     const sourceMarkerNoteTitle =
-      origin === 'authored-note' && first.sourceCitation !== undefined
+      origin !== 'reading' && first.sourceCitation !== undefined
         ? basenameWithoutExtension(first.sourceCitation.sourcePath)
         : noteTitle;
     groups.push({
@@ -208,7 +217,15 @@ export function buildBulkReviewGroups(
   return groups;
 }
 
+/**
+ * Her `made-by` declaration for a note path (core's `parseMadeBy` over cached frontmatter), or
+ * `undefined` when undeclared or invalid. `[D-489]`: only `'me'` lets the source line say she wrote it.
+ */
+export type BulkReviewMadeByLookup = (notePath: string) => DeclaredMadeBy | undefined;
+
 export interface BulkReviewControllerDeps {
+  /** Omitted, every note she keeps reads "From your notes" (no declaration known). */
+  readonly madeByFor?: BulkReviewMadeByLookup;
   readonly cache: DraftCacheStore;
   readonly acceptPort: DraftAcceptPort;
   readonly editPort: BulkReviewEditPort;
@@ -235,7 +252,7 @@ export class BulkReviewController {
   }
 
   getViewModel(): BulkReviewViewModel {
-    return { groups: buildBulkReviewGroups(this.records) };
+    return { groups: buildBulkReviewGroups(this.records, this.deps.madeByFor) };
   }
 
   private removeLocal(draftId: string): void {

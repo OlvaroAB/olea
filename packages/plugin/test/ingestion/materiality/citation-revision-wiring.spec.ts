@@ -322,7 +322,7 @@ describe('CitationRevisionTrigger.tick', () => {
     expect(second.judgeUnavailable).toBe(1);
   });
 
-  it('advances the baseline on a same-claim (refreshed) verdict, without suspending or enqueuing', async () => {
+  it('[D-508] a same-claim (refreshed) verdict on a changed cited passage takes the rewrite path: no baseline advance', async () => {
     const vault = new MemoryVaultSource({
       [NOTE_PATH]: note(PARAGRAPH_A),
       // [D-398]: a self-referential citation keeps this MCQ tracked under the
@@ -340,14 +340,67 @@ describe('CitationRevisionTrigger.tick', () => {
     const report = await trigger.tick(vault, act);
 
     expect(report.refreshed).toBe(1);
-    expect(act.suspend).not.toHaveBeenCalled();
-    expect(act.enqueue).not.toHaveBeenCalled();
+    expect(act.suspend).toHaveBeenCalledTimes(1);
+    expect(act.enqueue).toHaveBeenCalledTimes(1);
     const stored = await store.loadAll();
-    expect(stored.get(MCQ_ID)?.text).toContain('cold, dry climates');
+    expect(stored.has(MCQ_ID)).toBe(false);
+  });
 
-    // Baseline advanced — a third, identical pass reports unchanged.
-    const third = await trigger.tick(vault, actions());
-    expect(third.refreshed).toBe(0);
+  it('[D-508] an immaterial verdict on a changed cited passage never restores the question: suspend, successor from the current passage, no certifying baseline', async () => {
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    const act = actions();
+    const report = await trigger.tick(vault, act);
+
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(report.refreshed).toBe(1);
+    expect(act.suspend).toHaveBeenCalledWith(MCQ_ID, [expect.any(String)]);
+    expect(act.enqueue).toHaveBeenCalledTimes(1);
+    expect(act.enqueue).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          kind: 'instrument-revision',
+          predecessorInstrumentId: MCQ_ID,
+          newPassageText: expect.stringContaining('cold, dry climates'),
+        }),
+      }),
+    );
+    // The anchor is removed: the changed text is never saved as a baseline
+    // that would let the old question read as current.
+    const stored = await store.loadAll();
+    expect(stored.has(MCQ_ID)).toBe(false);
+  });
+
+  it('[D-508] an immaterial verdict whose enqueue fails keeps the anchor and its pending fact, so it is retried and never restored', async () => {
+    const vault = new MemoryVaultSource({
+      [NOTE_PATH]: note(PARAGRAPH_A),
+      [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
+    });
+    const store = new FakeCitationHashStore();
+    const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
+    const trigger = new CitationRevisionTrigger({ store, judge, clock: fakeClock(0) });
+    await trigger.tick(vault, actions());
+
+    await vault.write(NOTE_PATH, note(PARAGRAPH_B));
+    const failing = actions({
+      enqueue: vi.fn(async () => {
+        throw new Error('queue down');
+      }),
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    await trigger.tick(vault, failing);
+
+    const stored = await store.loadAll();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
+    expect(stored.get(MCQ_ID)?.text).toContain('humid climates');
   });
 
   it('suspends the predecessor and enqueues a successor on a changed-claim (revised) verdict, then retires tracking', async () => {
@@ -707,7 +760,7 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
     expect(stored.has(MCQ_ID)).toBe(false);
   });
 
-  it('@auto:F3.3-D214-revision-reworded — the same claim reworded in the authored note refreshes the tracked baseline silently, never suspending', async () => {
+  it('@auto:F3.3-D214-revision-reworded — [D-508] the same claim reworded in the authored note still takes the rewrite path: suspend, successor, no baseline', async () => {
     const vault = splitHomeNoteVault(PARAGRAPH_A);
     const store = new FakeCitationHashStore();
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) };
@@ -719,11 +772,10 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
     const report = await trigger.tick(vault, act);
 
     expect(report.refreshed).toBe(1);
-    expect(act.suspend).not.toHaveBeenCalled();
-    expect(act.enqueue).not.toHaveBeenCalled();
+    expect(act.suspend).toHaveBeenCalledTimes(1);
+    expect(act.enqueue).toHaveBeenCalledTimes(1);
     const stored = await store.loadAll();
-    expect(stored.get(MCQ_ID)?.sourcePath).toBe(SOURCE_NOTE_PATH);
-    expect(stored.get(MCQ_ID)?.text).toBe(PARAGRAPH_B);
+    expect(stored.has(MCQ_ID)).toBe(false);
   });
 
   it('@auto:F3.3-D214-revision-no-source-write — falls back to home-note-minus-spans, never reading a non-markdown source-provenance path as text', async () => {
@@ -1291,10 +1343,11 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
     expect(workingJudge.judge).toHaveBeenCalledTimes(1);
     expect(report.refreshed).toBe(1);
     expect(report.retryExhausted).toBe(0);
-    expect(act.suspend).not.toHaveBeenCalled();
-    expect(act.enqueue).not.toHaveBeenCalled();
+    // [D-508] resolved as an immaterial answer on a changed cited passage: the rewrite path.
+    expect(act.suspend).toHaveBeenCalledTimes(1);
+    expect(act.enqueue).toHaveBeenCalledTimes(1);
     const stored = await store.loadAll();
-    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+    expect(stored.has(MCQ_ID)).toBe(false);
   });
 
   it("[D-311] a retry's own answer is discarded once a newer edit has raised its own pending state — the same obsolete-answer guard an original dispatch already gets", async () => {

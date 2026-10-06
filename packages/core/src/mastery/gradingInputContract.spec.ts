@@ -11,6 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 import type { SourceBlockRef } from '../grading/gradingPipeline.js';
+import type { DeclaredMadeBy } from '../source/materiality.js';
 import {
   buildGradingSourceMaterial,
   buildSchedulingObservationField,
@@ -395,5 +396,82 @@ describe('buildSchedulingObservationField — kind-general producer, [D-185]', (
       neighbourConceptId: 'concept-y',
     });
     expect(Object.keys(field as object)).toEqual(['neighbourConceptId']);
+  });
+});
+
+// `[D-490]` (`ol-egov.141.89.4.31`, IMPACT.md row 4): grading-input selection follows the same
+// rule the corpus stage stamps provenance by. The linking note is "a note she keeps" (curation):
+// used as her assertion when declared `made-by: me`, kept as today when undeclared, and never used
+// when declared `made-by: assistant`, which reads as a model-proposed edge with no textual
+// provenance does.
+describe('resolveRelationProvenance / buildGradingSourceMaterial — the linking note follows her made-by declaration ([D-490])', () => {
+  function linkedEdge(linkingNoteMadeBy?: DeclaredMadeBy): ResolvedRelationEdge {
+    return {
+      evidence: 'current',
+      provenance: 'hers',
+      introducingPassages: [],
+      linkingNote: block('linking-note'),
+      ...(linkingNoteMadeBy === undefined ? {} : { linkingNoteMadeBy }),
+    };
+  }
+
+  function material(edge: ResolvedRelationEdge) {
+    return buildGradingSourceMaterial({
+      subject: { subjectConceptId: 'concept-x' },
+      subjectDefiningPassages: passages('concept-x', 'x-1'),
+      relation: resolveGradingRelationContext({ neighbourConceptId: 'concept-y', edge }),
+      neighbourDefiningPassages: passages('concept-y', 'y-1'),
+    });
+  }
+
+  it('declared `made-by: me`: the linking note is retrieved as her assertion', () => {
+    expect(resolveRelationProvenance(linkedEdge('me'))).toEqual({
+      kind: 'asserted-no-provenance',
+      linkingNote: block('linking-note'),
+    });
+    const result = material(linkedEdge('me'));
+    expect(result.sourceBlocks.map((b) => b.blockId)).toEqual(['x-1', 'y-1', 'linking-note']);
+    expect(result.omissionDenominator).toBeNull();
+    expect(result.candidateEdgeNomination).toBeNull();
+  });
+
+  it('declared `made-by: assistant`: the linking note is never retrieved, and the edge reads as no-edge', () => {
+    expect(resolveRelationProvenance(linkedEdge('assistant'))).toEqual({ kind: 'no-edge' });
+    const result = material(linkedEdge('assistant'));
+    expect(result.sourceBlocks.map((b) => b.blockId)).toEqual(['x-1', 'y-1']);
+    expect(result.omissionDenominator).toBeNull();
+    // The same outcome a model-proposed edge with no textual provenance already has.
+    const modelProposed = material({
+      evidence: 'current',
+      provenance: 'model-proposed',
+      introducingPassages: [],
+    });
+    expect(result).toEqual(modelProposed);
+  });
+
+  it('undeclared: unchanged, the linking note is retrieved exactly as before [D-490]', () => {
+    expect(resolveRelationProvenance(linkedEdge())).toEqual({
+      kind: 'asserted-no-provenance',
+      linkingNote: block('linking-note'),
+    });
+    expect(material(linkedEdge()).sourceBlocks.map((b) => b.blockId)).toEqual([
+      'x-1',
+      'y-1',
+      'linking-note',
+    ]);
+  });
+
+  it('`mixed` reads as authorship unknown, like an undeclared note: the linking note is retrieved', () => {
+    expect(resolveRelationProvenance(linkedEdge('mixed')).kind).toBe('asserted-no-provenance');
+  });
+
+  it('an edge with introducing passages is read from them whatever the linking note declares: the passages decide', () => {
+    for (const madeBy of ['me', 'assistant', undefined] as const) {
+      const edge = { ...linkedEdge(madeBy), introducingPassages: [block('edge-1')] };
+      expect(resolveRelationProvenance(edge)).toEqual({
+        kind: 'edge-provenance',
+        passages: [block('edge-1')],
+      });
+    }
   });
 });

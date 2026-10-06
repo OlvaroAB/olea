@@ -129,6 +129,11 @@ export interface GenerationWiring {
     draftDeps: DraftQuizCardsDeps | null,
     routing?: GenerationRoutingDeps,
     formatMatch?: (courseCode: string) => FormatMatchDecision | undefined,
+    /**
+     * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> byte digest` taken from the drained
+     * extraction job (never re-read here), recorded as `sourceRevision` on a non-markdown citation.
+     */
+    sourceRevisions?: ReadonlyMap<string, string>,
   ): Promise<GenerationSweepReport | null>;
 }
 
@@ -207,7 +212,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
     acceptPort,
     sourceContentHashFor: createSourceContentHashFor(deps.vault, listConceptsForCourse),
     buildPromptVersionFor: () => createPromptVersionFor(cache),
-    async sweep(units, draftDeps, routing, formatMatch) {
+    async sweep(units, draftDeps, routing, formatMatch, sourceRevisions) {
       if (draftDeps === null) return null;
       if (units.length === 0) return null;
       return runGenerationSweep(units, {
@@ -218,6 +223,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
         coursesFolder,
         ...(routing !== undefined ? { routing } : {}),
         ...(formatMatch !== undefined ? { formatMatch } : {}),
+        ...(sourceRevisions !== undefined ? { sourceRevisions } : {}),
         ...(deps.now !== undefined ? { now: deps.now } : {}),
       });
     },
