@@ -292,6 +292,7 @@ import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { documentReadingBasisFromManifest } from './scope-reading/basis.js';
+import { declaredDemandsReaderForVault } from './scope-reading/declared-demands.js';
 import {
   activeSessionGroupingSentence,
   recordedSessionReason,
@@ -1623,6 +1624,19 @@ export default class OleaPlugin extends Plugin {
             buildSession: (row) => {
               void this.revealHomeView(row.conceptName);
             },
+            // `ol-egov.141.89.9.81` (`[D-437]` B5, `[D-349]`, `[D-429]`): the assessment's declared
+            // demands per concept, read from the scope reading through the ruled explicit
+            // part-to-concept link (an aligned past-paper result naming the part). Each paper's
+            // current revision is the unit manifest's, the digest the writer keyed it by. While the
+            // scope-reading drivers stay off (`[D-534]` 1b) the stores hold no part demand or
+            // alignment result, so this reads nothing and no row changes (the pre-wire replay:
+            // `test/scope-reading/declared-demands.replay.spec.ts`, 0 rows moved).
+            readDeclaredDemands: declaredDemandsReaderForVault({
+              vault,
+              deviceId,
+              manifestsFor: async (paths) =>
+                (await this.unitManifests?.manifestsFor(paths)) ?? new Map(),
+            }),
           }),
         ),
     );
