@@ -23,7 +23,7 @@
  *   `resolveGradingRelationContext`/`buildGradingSourceMaterial`
  *   (`GradingSourceMaterial` is now importable from `olea-core` directly),
  *   and `ol-egov.141.89.6.33` wired `main.ts`/`modal.ts` to call both in
- *   production (`main.ts:3787` supplies `resolveCausesPartner`;
+ *   production (`main.ts:4911` supplies `resolveCausesPartner`;
  *   `modal.ts`'s `resolveGradingSourceBlocks` calls
  *   `buildGradingSourceMaterial`). **But `resolveGradingSourceBlocks`
  *   flattens `GradingSourceMaterial.sourceBlocks` into one undifferentiated

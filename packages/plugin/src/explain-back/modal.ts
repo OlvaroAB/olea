@@ -1137,8 +1137,9 @@ export class ExplainBackModal extends Modal {
     // different string; see `ResolvedPrompt.query`'s own doc,
     // `ol-egov.141.89.6.16`) and a comparison against a widened list would
     // misreport every relation-aware accept as stale. See
-    // `resolveGradingSourceBlocks`'s own doc for why concept-only (today,
-    // always, until a `causes` reader ships) leaves this identical to
+    // `resolveGradingSourceBlocks`'s own doc for why concept-only (every
+    // subject until a `causes` edge is served, which needs the deployed
+    // service prompt that offers it) leaves this identical to
     // `sourceBlocks` regardless.
     const resolvedGrading = await resolveGradingSourceBlocks(
       this.deps,
