@@ -180,6 +180,7 @@ function resumeInputFor(
     declarations: [],
     transport: t.transport,
     vault: s.vault,
+    spend: s.spend,
     enabled: true,
     ...over,
   };
@@ -306,6 +307,7 @@ async function objectives(nUnits: number, nDecl: number) {
     courses: [COURSE],
     declarations,
     vault: s.vault,
+    spend: s.spend,
   };
   return {
     s,

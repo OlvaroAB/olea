@@ -128,11 +128,12 @@ async function paperDriverInput(
     declarations: [],
     transport: t.transport,
     vault: s.vault,
+    spend: s.spend,
   };
 }
 
 describe('the demand refusal limit on the first-delivery path', () => {
-  it('holds back a part refused twice, with no ledger passed in, and still reads the others', async () => {
+  it('holds back a part refused twice, with no refusal ledger passed in (the spend ledger keeps the count), and still reads the others', async () => {
     const s = setup();
     const first = transport(refuseP1);
     const input = await paperDriverInput(s, first, 'doc-a');
@@ -162,7 +163,7 @@ describe('the demand refusal limit on the first-delivery path', () => {
     expect(t4.sent).toHaveLength(0);
   });
 
-  it('uses a ledger the caller passes instead of the session one', async () => {
+  it('uses a refusal ledger the caller passes instead of the spend ledger’s count', async () => {
     const s = setup();
     const refusals = inMemoryRefusalLedger();
     const t1 = transport(refuseP1);
@@ -213,6 +214,7 @@ async function objectivesInput(
     declarations: [outcome('outcome-key1:b', 2), outcome('outcome-key1:a', 1)],
     transport: t.transport,
     vault: s.vault,
+    spend: s.spend,
     enabled: true,
   };
 }

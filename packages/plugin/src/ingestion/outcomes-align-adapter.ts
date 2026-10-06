@@ -61,7 +61,14 @@
  * `ol-egov.141.89.7.68` releasing that file. A workbench caller would not discharge it.
  */
 
-import type { PaperQuestionGroupKind, PaperStimulusForm, WorkerTaskTransport } from 'olea-core';
+import type {
+  PaperQuestionGroupKind,
+  PaperStimulusForm,
+  WorkerTaskRequest,
+  WorkerTaskTransport,
+} from 'olea-core';
+import { sendWithinAllowance } from '../spend/allowance.js';
+import type { SpendLedger } from '../spend/vault-spend-ledger.js';
 
 /** `TASK_IDS.OUTCOMES_ALIGN` (`olea-contracts`, `f1ed01e`), mirrored so this module loads from plain Node. Pinned by this adapter's spec. */
 export const OUTCOMES_ALIGN_TASK_ID = 'outcomes.align.v1';
@@ -241,13 +248,23 @@ export class OutcomesAlignReaderUnavailableError extends Error {
 
 export interface WorkerOutcomesAlignReaderDeps {
   readonly transport: WorkerTaskTransport;
+  /**
+   * `[D-540]` (`ol-egov.141.89.7.76`): when present, every call takes a hold in the spend ledger
+   * first and carries it as `remainingAllowanceUsd` (`../spend/allowance.ts`); a declined hold sends
+   * nothing and reads as `budget-exhausted`, so the driver leaves this and every later call's pairs
+   * pending. Absent: the wire is exactly as before. The scope-reading drivers' entry points refuse to
+   * run without one, so in production an alignment call is never sent without a hold.
+   */
+  readonly spend?: SpendLedger;
 }
 
 export class WorkerOutcomesAlignReader {
   private readonly transport: WorkerTaskTransport;
+  private readonly spend: SpendLedger | undefined;
 
   constructor(deps: WorkerOutcomesAlignReaderDeps) {
     this.transport = deps.transport;
+    this.spend = deps.spend;
   }
 
   async read(request: OutcomesAlignReadRequest): Promise<OutcomesAlignReadResult> {
@@ -266,14 +283,27 @@ export class WorkerOutcomesAlignReader {
       };
     }
 
+    const wire: WorkerTaskRequest = {
+      contractVersion: OUTCOMES_ALIGN_CONTRACT_VERSION,
+      taskId: OUTCOMES_ALIGN_TASK_ID,
+      payload: toPayload(request),
+    };
     let body: unknown;
     try {
-      body = await this.transport.send({
-        contractVersion: OUTCOMES_ALIGN_CONTRACT_VERSION,
-        taskId: OUTCOMES_ALIGN_TASK_ID,
-        payload: toPayload(request),
-      });
+      if (this.spend === undefined) {
+        body = await this.transport.send(wire);
+      } else {
+        const sent = await sendWithinAllowance(this.spend, this.transport, wire);
+        if (sent.kind === 'declined') {
+          throw new OutcomesAlignReaderUnavailableError(
+            'budget-exhausted',
+            `WorkerOutcomesAlignReader: not sent, the spend ledger declined it (${sent.reason}).`,
+          );
+        }
+        body = sent.body;
+      }
     } catch (error) {
+      if (error instanceof OutcomesAlignReaderUnavailableError) throw error;
       throw new OutcomesAlignReaderUnavailableError(
         'offline',
         `WorkerOutcomesAlignReader: the transport failed before any response arrived: ${
