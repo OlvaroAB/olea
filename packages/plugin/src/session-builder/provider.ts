@@ -289,6 +289,7 @@ import type { CompositionProvenance } from '../../../core/src/study-session/comp
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
 // see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
 // resolver from `resolveCitationFreshness` above, never a shared one.
+import { currentRecognitionByConcept, rankedConceptKeys } from '../gap/provider.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
   hasAssessmentSource,
@@ -1086,6 +1087,19 @@ export async function composeStudySessionForRequest(
     instrumentCountsByNotePath(enumeration.records),
   );
 
+  // `[D-371]`/`[D-338]` item 3 (`ol-egov.141.89.9.97`): the recognition credit reads only a correct,
+  // current answer on a standing item, the rule the production gap view supplies
+  // (`../gap/provider.ts`'s `currentRecognitionByConcept`, reused, never a second rule). Without it
+  // a correct answer on an item later found defective still earned credit here. This changes which
+  // recognition counts, never the formula.
+  const currentRecognition = currentRecognitionByConcept(
+    entries,
+    rankedConceptKeys(ranking),
+    deps.scheduler,
+    now,
+    projectInstrumentValidity(entries, disputes),
+  );
+
   // `[D-521]` (ruled 2026-10-06): no `need` here, deliberately. Without it each row scores the
   // ranking's priority × credit, so the session is ordered by the ranking's additive blend (C5.10);
   // the product, relevance × need × credit, is the gap view's formula (`../gap/provider.ts`).
@@ -1094,6 +1108,7 @@ export async function composeStudySessionForRequest(
     assessments: edges.assessmentsRead.records,
     mastery,
     materialPresence,
+    currentRecognition,
     sourceCoverage: edges.tier3.sourceCoverage,
   });
 

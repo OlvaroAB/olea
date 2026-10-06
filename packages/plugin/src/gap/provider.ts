@@ -387,7 +387,7 @@ async function unmetDemandsFor(input: {
 }
 
 /** The concept keys the gap view has rows for: every ranked entry, abstained courses having none. */
-function rankedConceptKeys(ranking: RankOracleResult): readonly string[] {
+export function rankedConceptKeys(ranking: RankOracleResult): readonly string[] {
   const keys = new Set<string>();
   for (const course of ranking.courses) {
     if (course.status !== 'ranked') continue;
@@ -436,7 +436,7 @@ function needByConcept(
  * Without it, `buildGapView` falls back to the mastery join's `tiersSucceeded.recognition`, which
  * reads any past success and removes proven-invalid evidence at the top stage only.
  */
-function currentRecognitionByConcept(
+export function currentRecognitionByConcept(
   entries: readonly ReviewLogEntry[],
   conceptKeys: readonly string[],
   scheduler: Scheduler,
