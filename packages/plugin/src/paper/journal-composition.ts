@@ -53,6 +53,7 @@ import {
   DEFAULT_PAPER_PURPOSE,
   finalizePaperFromJournal,
   hashText,
+  listPaperJournals,
   openPaperJournal,
   PAPER_STRUCTURE_FORMAT_VERSION,
   type PaperBlueprint,
@@ -236,9 +237,19 @@ export async function composePaperThroughJournal(
   );
   const journalId = opened.journal.id;
   // `[D-532]`: only a discard that names her sources or the scope is "her material changed".
-  const materialChanged = (opened.discarded ?? []).some((d) =>
+  // And only when the set-aside journal held at least one landed slot: no landed slot, no saved progress.
+  const materialDiscards = (opened.discarded ?? []).filter((d) =>
     d.changed.some((part) => part === 'sourceVersions' || part === 'scope'),
   );
+  let materialChanged = false;
+  if (materialDiscards.length > 0) {
+    const journals = await listPaperJournals(vault);
+    materialChanged = materialDiscards.some((d) =>
+      Object.values(journals.find((j) => j.record.id === d.journalId)?.record.outcomes ?? {}).some(
+        (outcome) => outcome.status === 'landed',
+      ),
+    );
+  }
   const run = await runPaperJournal(
     vault,
     journalId,

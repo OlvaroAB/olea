@@ -80,6 +80,10 @@ const portOf =
   async (request) =>
     answer(request);
 
+/** The saved attempt: the first topic lands, the rest stay owed. */
+const landFirstOnly: PaperSlotOutcomePort = async (request) =>
+  request.conceptName === 'Topic A' ? generated(request) : OUTAGE;
+
 let nonce = 0;
 const options = () => ({
   generateId: () => `nonce-${++nonce}`,
@@ -92,13 +96,14 @@ async function renderedAfter(
     blueprint: PaperBlueprint;
     scope: PaperCompositionScope;
   }>,
+  firstPort: PaperSlotOutcomePort = landFirstOnly,
 ) {
   const base = await blueprintOf();
   const vault = memoryVault();
   await composePaperThroughJournal({
     vault,
     ...base,
-    port: portOf(() => OUTAGE),
+    port: firstPort,
     options: options(),
   });
   const next = await change(base);
@@ -170,6 +175,14 @@ describe('the changed-material sentence, through the paper view', () => {
       },
       scope: base.scope,
     }));
+    expect(count(text)).toBe(0);
+  });
+
+  it('does not show when the discarded journal had no landed slot (nothing saved was lost)', async () => {
+    const text = await renderedAfter(
+      async () => blueprintOf((i) => `her REVISED note on topic ${i}`),
+      portOf(() => OUTAGE),
+    );
     expect(count(text)).toBe(0);
   });
 
