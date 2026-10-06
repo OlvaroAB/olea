@@ -505,6 +505,64 @@ describe('composeOracleRanking — the join rankOracle had no production caller 
     // so a rejected verdict never reached the fold and the stage stayed `tree`.
     expect(withRejection.mastery.get(widgetKey)?.state).not.toBe('tree');
   });
+
+  /**
+   * `ol-egov.141.89.9.94` (`[D-347]` as ruled, `[D-338]` item 3): the ranking's readiness, a
+   * current reading, keeps a sound review she withheld (availability is not validity; the
+   * attainment matching rule, section 7, judgement J1) and drops one proven invalid. These pin the
+   * ruled reading on the production path; they passed before the bead's change, which makes the
+   * policy explicit at the call site rather than changing it.
+   */
+  describe('the ranking readiness applies the ruled evidence rule (ol-egov.141.89.9.94)', () => {
+    function suspension(reason: 'defect' | 'own-choice' | undefined): ReviewLogEntry {
+      return {
+        schemaVersion: 6,
+        kind: 'suspend',
+        eventId: 'suspend-1',
+        timestamp: '2026-01-11T09:00:00-04:00',
+        instrumentId: 'qa:widget-theory:1',
+        conceptIds: [widgetKey],
+        ...(reason !== undefined ? { reason } : {}),
+      } as ReviewLogEntry;
+    }
+
+    async function widgetFactors(reviewLog: readonly ReviewLogEntry[]) {
+      const result = await composeOracleRanking({
+        vault: source,
+        basePath: BASE_PATH,
+        reviewLog,
+        asOf: '2026-08-15',
+        concepts,
+        retrievability: {
+          scheduler: stubScheduler({ 'qa:widget-theory:1': 0.35 }),
+          now: new Date('2026-08-15T09:00:00.000Z'),
+        },
+      });
+      const course = result.ranking.courses.find((c) => c.course === 'TESTC101');
+      if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+      const entry = course.ranked.find((c) => c.conceptKey === widgetKey);
+      if (entry === undefined) throw new Error('expected Widget theory to be ranked');
+      return entry.factors;
+    }
+
+    const soundReview = () =>
+      review(widgetKey, { rating: 'good', supportLevelShown: 'independent' });
+
+    it('her suspension with no defect recorded (her choice, or no reason) keeps the sound review in readiness and need', async () => {
+      for (const reason of ['own-choice', undefined] as const) {
+        const factors = await widgetFactors([soundReview(), suspension(reason)]);
+        expect(factors.retrievabilityWeight).toBe(0.35);
+        expect(factors.needBasis).toBe('estimated');
+        expect(factors.need).toBeCloseTo(0.65, 12);
+      }
+    });
+
+    it('a suspension recorded as a defect removes the instrument from readiness, so need reads unknown', async () => {
+      const factors = await widgetFactors([soundReview(), suspension('defect')]);
+      expect(factors.retrievabilityWeight).toBeUndefined();
+      expect(factors.needBasis).toBe('unknown');
+    });
+  });
 });
 
 describe("composeOracleRanking — threading oracle.rank.v1's reasoning through (`ol-3ux7.5.57.14.53`)", () => {

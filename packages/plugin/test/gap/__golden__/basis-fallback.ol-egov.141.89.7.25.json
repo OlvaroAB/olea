@@ -16,7 +16,17 @@
                 "oracleRank": 1,
                 "assessmentRelevance": 0.5,
                 "priorityScore": 1.9516129032258065,
-                "gapScore": 1.9516129032258065,
+                "gapScore": 0.5,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,
@@ -81,7 +91,17 @@
                 "oracleRank": 2,
                 "assessmentRelevance": 0.13333333333333333,
                 "priorityScore": 1.5849462365591398,
-                "gapScore": 1.5849462365591398,
+                "gapScore": 0.13333333333333333,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,
@@ -115,7 +135,17 @@
                 "oracleRank": 3,
                 "assessmentRelevance": 0.1,
                 "priorityScore": 1.5516129032258066,
-                "gapScore": 1.5516129032258066,
+                "gapScore": 0.1,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,
@@ -165,7 +195,17 @@
                 "oracleRank": 4,
                 "assessmentRelevance": 0.007142857142857143,
                 "priorityScore": 1.4587557603686636,
-                "gapScore": 1.4587557603686636,
+                "gapScore": 0.007142857142857143,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,
@@ -284,7 +324,17 @@
                 "oracleRank": 1,
                 "assessmentRelevance": 0.4,
                 "priorityScore": 1.8516129032258064,
-                "gapScore": 1.8516129032258064,
+                "gapScore": 0.4,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,
@@ -349,7 +399,17 @@
                 "oracleRank": 2,
                 "assessmentRelevance": 0.1,
                 "priorityScore": 1.5516129032258066,
-                "gapScore": 1.5516129032258066,
+                "gapScore": 0.1,
+                "need": {
+                  "basis": "unknown",
+                  "value": 1,
+                  "readiness": {
+                    "weakest": null,
+                    "instrumentsRead": 0,
+                    "thinEvidenceInstrumentIds": [],
+                    "arithmeticVersion": "att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1"
+                  }
+                },
                 "readiness": {
                   "assessmentFormat": "recall-style",
                   "recognitionEvidence": false,

@@ -497,6 +497,13 @@ function buildRow(
 
   // Need supplied: relevance × need × credit, never the ranking's priority
   // (mastery counted once). A concept missing from the map reads unknown.
+  // `[D-521]` (ruled 2026-10-06), two formulas for two purposes: the product is
+  // the GAP VIEW's row score (the attainment chain spec, section 2.5; the
+  // production gap view supplies need, `plugin/src/gap/provider.ts`); priority ×
+  // credit is what a caller supplying no need gets, the SESSION builder's
+  // ordering, which keeps the ranking's additive blend (C5.10, `../oracle/
+  // rank.ts`'s `blendPriority`). Unknown need enters at its declared value with
+  // its `'unknown'` basis on the row, never as a measured weakness (`[D-348]`).
   const need =
     input.need === undefined
       ? undefined
