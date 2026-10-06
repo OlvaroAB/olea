@@ -6,7 +6,7 @@
  *
  * **This is a thin wrapper, not a second implementation.** The actual join —
  * fold `RelationSet`'s `contrasts-with` entries against
- * `MisconceptionRecord[]` evidence, after name/alias resolution — was already
+ * `MisconceptionRecord[]` evidence, after resolving each record id — was already
  * built, reviewed and tested by `ol-2zfj.20`:
  * `../concept/confusion-pairing/corroborate.js`'s `corroborateConfusionPairs`,
  * 16 tests, closed 2026-08-27. That bead's own close evidence records it was
@@ -79,9 +79,10 @@ export interface ConfusionPairingVerdict {
 
 /**
  * Corroborate every `contrasts-with` edge `relations` currently serves
- * against `records`' evidence of real confusion, resolved to concept names
- * via `concepts`' name/alias index (same identity-space convention
- * `../concept/confusion-pairing/types.js` documents).
+ * against `records`' evidence of real confusion, each record id resolved to a
+ * concept by the scheme `../concept/confusion-pairing/types.js` documents
+ * (production ids are concept keys, resolved through `concepts`' `key`,
+ * `ol-2zfj.27`).
  *
  * Pure: no I/O, no clock, no identity minting. Same inputs, same output.
  *

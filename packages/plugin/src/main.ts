@@ -292,6 +292,7 @@ import type { ReviewSession } from './review/session.js';
 import type { ReviewInstrument, ReviewQueueItem } from './review/types.js';
 import { ReviewView, VIEW_TYPE_OLEA_REVIEW } from './review/view.js';
 import { documentReadingBasisFromManifest } from './scope-reading/basis.js';
+import { declaredDemandsReaderForVault } from './scope-reading/declared-demands.js';
 import {
   activeSessionGroupingSentence,
   recordedSessionReason,
@@ -1629,6 +1630,19 @@ export default class OleaPlugin extends Plugin {
             // need, recognition credit and demand rule. The factory runs when a leaf opens, after
             // `onload` assigned it.
             ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
+            // `ol-egov.141.89.9.81` (`[D-437]` B5, `[D-349]`, `[D-429]`): the assessment's declared
+            // demands per concept, read from the scope reading through the ruled explicit
+            // part-to-concept link (an aligned past-paper result naming the part). Each paper's
+            // current revision is the unit manifest's, the digest the writer keyed it by. While the
+            // scope-reading drivers stay off (`[D-534]` 1b) the stores hold no part demand or
+            // alignment result, so this reads nothing and no row changes (the pre-wire replay:
+            // `test/scope-reading/declared-demands.replay.spec.ts`, 0 rows moved).
+            readDeclaredDemands: declaredDemandsReaderForVault({
+              vault,
+              deviceId,
+              manifestsFor: async (paths) =>
+                (await this.unitManifests?.manifestsFor(paths)) ?? new Map(),
+            }),
           }),
         ),
     );
@@ -2083,6 +2097,15 @@ export default class OleaPlugin extends Plugin {
             const manifest = (await unitManifests.manifestsFor([sourcePath])).get(sourcePath);
             return manifest === undefined ? null : documentReadingBasisFromManifest(manifest);
           },
+        },
+        // `[D-531]` (`ol-egov.141.89.7.68`, `ol-egov.141.89.7.78`): the unit manifest is the page
+        // record retire-on-revision reads. A delivery is placed against the document's current
+        // version (re-hashed from the file's bytes), its pages are marked extracted for that version
+        // only, and a version read in full retires the outcomes it no longer states.
+        revisions: {
+          currentRevision: (sourcePath) => unitManifests.outcomeRevisionPagesFor(sourcePath),
+          markOutcomesExtracted: (sourcePath, revisionDigest, pages) =>
+            unitManifests.recordOutcomeExtraction(sourcePath, revisionDigest, pages),
         },
       },
       // `ol-15f8`/`ol-ua2f`: the standalone-image vision runner (C3.1/C3.3),

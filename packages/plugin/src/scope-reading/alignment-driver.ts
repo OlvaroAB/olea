@@ -79,7 +79,9 @@ import { buildClosedList, CLOSED_LIST_MEMBERSHIP, type ClosedListConcept } from 
 import {
   groupChain,
   identifiedStimulus,
+  type PartRefusalLedger,
   passageAt,
+  REFUSED_PART_LIMIT,
   stemAnchors,
   wireRef,
 } from './demand-driver.js';
@@ -105,6 +107,12 @@ export interface AlignmentDriverInput {
   readonly vault: VaultSource;
   /** Vault paths of registered assessment documents, excluded as description sources. */
   readonly assessmentPaths?: ReadonlySet<string>;
+  /**
+   * Held-back batches (`ol-egov.141.89.7.84`): a batch the reader answered unusably
+   * {@link REFUSED_PART_LIMIT} times under one batch plan is not sent again. Absent: no limit. The
+   * count is the caller's; `runScopeReadingDrivers` and `resumeScopeReading` default to the session ledger.
+   */
+  readonly refusals?: PartRefusalLedger;
 }
 
 export interface AlignmentDriverResult {
@@ -112,6 +120,8 @@ export interface AlignmentDriverResult {
   readonly outcome: 'ran' | 'not-whole-revision' | 'no-reading' | 'nothing-to-align';
   readonly calls: number;
   readonly written: number;
+  /** Batches not sent because the reader refused them {@link REFUSED_PART_LIMIT} times. Absent when none. */
+  readonly heldBack?: number;
 }
 
 /**
@@ -297,7 +307,7 @@ async function alignCourse(
   course: string,
   records: readonly PlanRecord[],
   mode: AlignmentMode,
-): Promise<{ calls: number; written: number }> {
+): Promise<{ calls: number; written: number; heldBack?: number }> {
   const { persistence, ref, recorded, units } = input;
   const statesNothing = recorded.state === 'read-states-nothing';
 
@@ -471,9 +481,17 @@ async function alignCourse(
   let runStamp: ExtractionStamp | undefined;
   let unavailable = false;
   let made = 0;
+  let heldBack = 0;
   for (const call of runPlan.calls) {
     if (unavailable) {
       outcomes.set(call.batchId, { kind: 'failed', reason: 'unavailable' });
+      continue;
+    }
+    // The key names the course, the batch plan and the batch, so a changed plan starts at zero.
+    const heldKey = `align|${course}|${batchPlan}|${call.batchId}`;
+    if (input.refusals !== undefined && input.refusals.count(heldKey) >= REFUSED_PART_LIMIT) {
+      heldBack++;
+      outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
       continue;
     }
     const request: OutcomesAlignReadRequest = {
@@ -506,6 +524,7 @@ async function alignCourse(
           console.error(
             'Olea: an alignment call answered under a different configuration; its pairs stay pending',
           );
+          input.refusals?.record(heldKey);
           outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
           continue;
         }
@@ -522,6 +541,7 @@ async function alignCourse(
         console.error('Olea: an alignment call was not answered usably (ingestion unaffected)', {
           error: error instanceof OutcomesAlignReaderError ? error.code : undefined,
         });
+        input.refusals?.record(heldKey);
         outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
       }
     }
@@ -590,7 +610,8 @@ async function alignCourse(
         : {}),
     };
   });
-  if (results.length === 0) return { calls: made, written: 0 };
+  if (results.length === 0)
+    return { calls: made, written: 0, ...(heldBack > 0 ? { heldBack } : {}) };
   await persistence.recordAlignmentResults({
     ref,
     courseId: course,
@@ -598,7 +619,7 @@ async function alignCourse(
     ...(structureId !== undefined ? { structureId } : {}),
     results,
   });
-  return { calls: made, written: results.length };
+  return { calls: made, written: results.length, ...(heldBack > 0 ? { heldBack } : {}) };
 }
 
 function alignConceptOf(
@@ -640,14 +661,16 @@ export async function runAlignmentDriver(
 
   let calls = 0;
   let written = 0;
+  let heldBack = 0;
   for (const course of [...new Set(input.courses)].sort()) {
     try {
       const done = await alignCourse(input, course, records, mode);
       calls += done.calls;
       written += done.written;
+      heldBack += done.heldBack ?? 0;
     } catch (error) {
       console.error('Olea: alignment results were not recorded (ingestion unaffected)', { error });
     }
   }
-  return { outcome: 'ran', calls, written };
+  return { outcome: 'ran', calls, written, ...(heldBack > 0 ? { heldBack } : {}) };
 }

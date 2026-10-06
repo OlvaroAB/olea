@@ -45,9 +45,20 @@
  *  - *Concept extraction* — `recordConceptExtraction`, called with the sources a concept read pass
  *    consumed in full. It marks only units the text layer read: that pass reads the text layer, never
  *    a vision reading, so it says nothing about a page read from an image.
+ *  - *Outcome extraction* (`[D-531]` B, `ol-egov.141.89.7.78`) — `recordOutcomeExtraction`, the
+ *    outcomes trigger's `markOutcomesExtracted` (`../ingestion/wiring.ts`). It writes the per-page
+ *    "outcomes extracted" mark, the one stored field that ruling authorises, and only for the version
+ *    the file's current bytes are, and only on a page read in full: a page waiting for its image
+ *    reading, read in part, failed or unreadable is never marked. `outcomeRevisionPagesFor` is the
+ *    trigger's `currentRevision`: the same version, re-hashed, with its expected pages, its page
+ *    history since it was listed and every version listed for the path (core's
+ *    `projection.ts#outcomeRevisionPagesOf`). Both run on this store's one queue, so a reading the
+ *    vision runner recorded before its delivery has landed by the time the delivery asks.
  *  - *A reading that changes* resets that unit's extraction state to `not-started`: extraction ran
  *    over the earlier reading, not this one. The two fields are still never derived from each other;
- *    this only stops a stale "extracted" surviving a different reading.
+ *    this only stops a stale "extracted" surviving a different reading. The outcomes mark follows
+ *    the same rule: every writer that rewrites a unit carries it from the folded value only when the
+ *    reading is the same one, never from an entry it was handed.
  *
  * **Revisions.** The digest names the bytes a record speaks for, and a live manifest is trusted only
  * once this session has re-hashed its source (a file can change while Obsidian is closed, and a
@@ -114,6 +125,7 @@ import {
   transcriptEnumeration,
   transcriptPartsRead,
 } from '../../../core/src/ingestion/unit-manifest/transcript-reading.js';
+import type { OutcomeRevisionPages } from '../../../core/src/outcome/retire-on-revision.js';
 import { DEFAULT_LOG_PROBE_DAYS, discoverLogPaths } from '../privacy/log-discovery.js';
 import { isoWithLocalOffset } from '../review/ports.js';
 
@@ -180,6 +192,25 @@ export interface UnitManifestStore {
   recordTranscriptReading(path: VaultPath, partOrdinals: readonly number[]): Promise<void>;
   /** Marks the text-layer units of these sources extracted, for sources a concept read pass consumed in full. A transcript consumed in full has every part read first. */
   recordConceptExtraction(paths: readonly VaultPath[]): Promise<void>;
+  /**
+   * `[D-531]`: the document's current version for the outcomes trigger (`currentRevision`), after
+   * re-hashing the file's bytes: a file changed since it was last listed is listed afresh first,
+   * retiring the old version. `undefined` when the store has not loaded, the path is not a
+   * manifest-able source, or the file cannot be read or enumerated: the page record cannot say.
+   * Serialised with every write, so it reads after any reading already recorded.
+   */
+  outcomeRevisionPagesFor(path: VaultPath): Promise<OutcomeRevisionPages | undefined>;
+  /**
+   * `[D-531]`: marks `pages` of version `revisionDigest` as having had their outcomes extracted
+   * (the trigger's `markOutcomesExtracted`). Writes nothing unless `revisionDigest` is the file's
+   * current bytes, and marks only a page read in full that is not already marked for its reading.
+   * Serialised with every write; rejects when the write fails, and then nothing is marked.
+   */
+  recordOutcomeExtraction(
+    path: VaultPath,
+    revisionDigest: string,
+    pages: readonly number[],
+  ): Promise<void>;
   /** Feeds one vault event: a modify withdraws trust in the path until it is re-hashed; a delete or rename retires it. */
   observe(event: VaultEvent): void;
   /** Called after records land from a writer (a reading, an extraction pass, a retirement), debounced. Returns an unsubscribe. */
@@ -205,6 +236,17 @@ function isManifestable(path: VaultPath): boolean {
 
 function sameReading(a: UnitReadingState | undefined, b: UnitReadingState): boolean {
   return a !== undefined && sameUnitReadingState(a, b);
+}
+
+/**
+ * `[D-531]`: the outcomes mark a rewritten unit keeps, read from the folded entry, whose mark counts
+ * only after its revision's listing (core `projection.ts`). A caller spreads it only when the reading
+ * it writes is the folded entry's own.
+ */
+function outcomeMarkOf(entry: UnitManifestEntry | undefined): {
+  readonly outcomeExtractionState?: 'complete';
+} {
+  return entry?.outcomeExtractionState === 'complete' ? { outcomeExtractionState: 'complete' } : {};
 }
 
 export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitManifestStore {
@@ -388,8 +430,10 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
     // page would read as complete by omission. The source stays unknown and is enumerated later.
     if (live === undefined) return;
     const current = live.entries.find((unit) => unit.page === entry.page);
-    // Extraction ran over the earlier reading, not a different one.
-    const conceptExtractionState = sameReading(current?.readingState, entry.readingState)
+    // Extraction ran over the earlier reading, not a different one. Both marks are carried from the
+    // folded value for the same reading only, never from `entry` (`[D-326]`, `[D-531]`).
+    const same = sameReading(current?.readingState, entry.readingState);
+    const conceptExtractionState = same
       ? (current?.conceptExtractionState ?? 'not-started')
       : 'not-started';
     await append([
@@ -404,6 +448,7 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
         page: entry.page,
         readingState: entry.readingState,
         conceptExtractionState,
+        ...(same ? outcomeMarkOf(current) : {}),
       },
     ]);
     notifyLater();
@@ -478,12 +523,68 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
           page: marked.page,
           readingState: marked.readingState,
           conceptExtractionState: marked.conceptExtractionState,
+          // The reading is unchanged, so the outcomes mark it already had stands (`[D-531]`).
+          ...outcomeMarkOf(entry),
         });
       }
     }
     if (records.length === 0) return;
     await append(records);
     notifyLater();
+  };
+
+  /**
+   * `[D-531]`: re-hashes the file and answers for its current bytes (interface doc). Runs inside
+   * the queue, so it never interleaves with a write.
+   */
+  const currentOutcomeRevision = async (
+    path: VaultPath,
+  ): Promise<OutcomeRevisionPages | undefined> => {
+    if (!isManifestable(path) || unenumerable.has(path)) return undefined;
+    // Always reads and hashes the bytes, whatever this session verified earlier: a file can change
+    // without a vault event having reached the store yet, and a delivery must be placed against the
+    // bytes the file holds now.
+    await ensureEnumerated(path);
+    if (!verified.has(path)) return undefined;
+    return fold.outcomeRevisionPagesOf(path);
+  };
+
+  /** `[D-531]`: the marks for a delivery's pages (interface doc). Returns whether anything was written. */
+  const applyOutcomeExtraction = async (
+    path: VaultPath,
+    revisionDigest: string,
+    pages: readonly number[],
+  ): Promise<boolean> => {
+    if (!isManifestable(path) || unenumerable.has(path)) return false;
+    // The same re-hash as `currentOutcomeRevision`: a delivery of bytes the file no longer holds
+    // marks nothing, because it is late.
+    await ensureEnumerated(path);
+    const live = verified.has(path) ? fold.manifestOf(path) : undefined;
+    if (live === undefined || live.revisionDigest !== revisionDigest) return false;
+    const wanted = new Set(pages);
+    const records: UnitManifestRecord[] = [];
+    for (const entry of live.entries) {
+      if (!wanted.has(entry.page)) continue;
+      // Only a page read in full: a page waiting for its image reading, read in part, failed or
+      // unreadable has no reading whose outcomes this delivery could have extracted in full.
+      if (entry.readingState.kind !== 'read') continue;
+      if (entry.outcomeExtractionState === 'complete') continue;
+      records.push({
+        v: UNIT_MANIFEST_RECORD_VERSION,
+        kind: 'unit',
+        deviceId: deps.deviceId,
+        ...stamp(),
+        sourcePath: path,
+        revisionDigest,
+        unitId: entry.unitId,
+        page: entry.page,
+        readingState: entry.readingState,
+        conceptExtractionState: entry.conceptExtractionState,
+        outcomeExtractionState: 'complete',
+      });
+    }
+    await append(records);
+    return records.length > 0;
   };
 
   const retireRemoved = async (path: VaultPath): Promise<void> => {
@@ -586,6 +687,32 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
           console.error('Olea: could not record concept extraction in the unit manifest', error);
         }
       });
+    },
+
+    async outcomeRevisionPagesFor(path) {
+      if (!loaded && loadPromise !== null) {
+        try {
+          await loadPromise;
+        } catch {
+          // The files could not be read: the page record cannot say, below.
+        }
+      }
+      if (!loaded) return undefined;
+      return run(() => currentOutcomeRevision(path));
+    },
+
+    async recordOutcomeExtraction(path, revisionDigest, pages) {
+      if (!loaded && loadPromise !== null) {
+        try {
+          await loadPromise;
+        } catch {
+          // Unloaded: nothing is marked, below.
+        }
+      }
+      if (!loaded) return;
+      // No notification: no reader of the census shows the mark. A failed write rejects to the
+      // trigger, which logs it; the page then reads as not extracted, the safe direction.
+      await run(() => applyOutcomeExtraction(path, revisionDigest, pages));
     },
 
     observe(event) {

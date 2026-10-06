@@ -221,6 +221,23 @@
  * reader could take it without a new stored value or surface, so it was
  * computed and discarded. Both are removed; a reading's one record is its
  * `onManifestEntry` entry. Core's `vision-page` adapters are untouched.
+ *
+ * **The revision digest, built and switched off (`ol-egov.141.89.7.78`,
+ * `[D-531]`).** With `deps.deliverRevisionDigest` on, a landed page is
+ * delivered with `sourcePath -> hashContent(bytes)` for the very bytes this
+ * job read when it drained (the image, the PDF it rendered, the document whose
+ * images it sent), the same map and hash core's extraction runner gives a
+ * text-layer delivery. The outcomes trigger needs it to place the delivery
+ * against the document's current version and mark the page extracted;
+ * without it a document with any image-read page is never read in full, so it
+ * never retires a stale outcome (safe, and stale). It is off by default, and
+ * `wiring.ts`'s `buildVisionRunner` does not turn it on, because the same sink
+ * feeds `main.ts`'s `onUnitsLanded`, where a digest on a one-page delivery
+ * changes two things she can see: the citation-revision rewrite (`[D-518]`)
+ * replaces the landed text it holds for the whole source with this one
+ * page's, and the generation sweep stamps these pages' questions with a
+ * source revision (`[D-515]`), which changes when they are withheld. Turning
+ * it on is the hub's call once those are settled.
  */
 
 import type {
@@ -241,7 +258,13 @@ import type {
   VaultSource,
   WorkerTaskTransport,
 } from 'olea-core';
-import { docxFigureCue, isExtractionJobPayload, pptxFigureCue, stableUnitId } from 'olea-core';
+import {
+  docxFigureCue,
+  hashContent,
+  isExtractionJobPayload,
+  pptxFigureCue,
+  stableUnitId,
+} from 'olea-core';
 import { PageRenderError } from './page-render/errors.js';
 import type { PageRenderPort } from './page-render/types.js';
 
@@ -708,6 +731,16 @@ export interface WorkerVisionPageRunnerDeps {
    * one" posture `onManifestEntry` already takes.
    */
   readonly onUnknownUnreadableReason?: () => void;
+  /**
+   * `[D-531]` (`ol-egov.141.89.7.78`): when true, a landed page is delivered
+   * with `sourcePath -> hashContent(bytes)` for the bytes this job read, so
+   * the outcomes trigger can place it against the document's current version.
+   * **Absent or false by default, and nothing composes it on yet** — see the
+   * module doc's "The revision digest" section for the two downstream readers
+   * of the same sink that it would change. Nothing else this runner does
+   * depends on it.
+   */
+  readonly deliverRevisionDigest?: boolean;
 }
 
 /**
@@ -881,6 +914,8 @@ async function readAndLandPage(
   sourcePath: VaultPath,
   page: number,
   embeddedIn: EmbeddedInNote | undefined,
+  /** The source's bytes as this job read them: hashed for the delivery's revision digest, when on. */
+  sourceBytes: Uint8Array,
 ): Promise<JobRunOutcome> {
   let result: VisionPageExtractResult;
   try {
@@ -932,7 +967,12 @@ async function readAndLandPage(
       ...embeddedInField,
     },
   };
-  await deps.sink.receive([unit]);
+  if (deps.deliverRevisionDigest === true) {
+    // `[D-531]`: the bytes read when this job drained, never the ones that queued it.
+    await deps.sink.receive([unit], new Map([[sourcePath, await hashContent(sourceBytes)]]));
+  } else {
+    await deps.sink.receive([unit]);
+  }
   return { ok: true };
 }
 
@@ -973,6 +1013,7 @@ async function renderAndLandPdfPage(
       sourcePath,
       page,
       embeddedIn,
+      pdfBytes,
     );
   } catch (error) {
     const code = error instanceof PageRenderError ? error.code : 'render-failed';
@@ -1130,7 +1171,7 @@ async function sendOfficeFigureCueImages(
   const request: VisionPageExtractRequest =
     wireImages.length === 1 && firstImage !== undefined ? firstImage : { images: wireImages };
 
-  return readAndLandPage(deps, job, request, sourcePath, page, embeddedIn);
+  return readAndLandPage(deps, job, request, sourcePath, page, embeddedIn, bytes);
 }
 
 export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): JobRunner {
@@ -1199,6 +1240,7 @@ export function createWorkerVisionPageRunner(deps: WorkerVisionPageRunnerDeps): 
       sourcePath,
       page,
       embeddedIn,
+      bytes,
     );
   };
 }

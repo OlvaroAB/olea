@@ -20,7 +20,7 @@ import {
   type CitedPassage,
   checkHolds,
   type HoldStoreRead,
-  heldEffect,
+  holdEffect,
   NEWER_FACT_HOLD_REASON,
   type PassageCitingArtifactKind,
   readHoldText,
@@ -71,11 +71,13 @@ type Outcome = 'held' | 'as before';
 function floorOutcomes(read: HoldStoreRead): Record<string, Outcome> {
   const outcomes: Record<string, Outcome> = {};
   for (const artifact of ARTIFACTS) {
-    const effect = heldEffect(artifact.kind, checkHolds(read, artifact.cited()));
+    const effect = holdEffect(artifact.kind, checkHolds(read, artifact.cited()));
     if (effect === null) {
       outcomes[artifact.id] = 'as before';
       continue;
     }
+    // every case here reads its store: a hold is a hold, never the unavailable state ([D-539])
+    expect(effect.status).toBe('held');
     expect(effect.supportUse).toBe(false);
     expect(effect.reviewEligible).toBe(false);
     expect(effect.display).toBe(artifact.kind === 'instrument' ? 'not-shown' : 'shown-withdrawn');

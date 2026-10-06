@@ -67,6 +67,7 @@ import type { ExplainBackGradingProvenance } from 'olea-contracts';
 import {
   type ConceptRecord,
   type ConceptRelation,
+  chunksFromIndex,
   digestPassage,
   EXPLAIN_BACK_JUDGE_CONTRACT_VERSION,
   type ExplainBackPromptContext,
@@ -82,6 +83,7 @@ import {
   servedRelations,
 } from 'olea-core';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from '../review/types.js';
+import { ANCHORED_CONTEXT_BUDGET, composeAnchoredSourceBlocks } from './anchor-context.js';
 
 /** One retrieved passage, kept alongside the `{path, blockIndex}` it was minted from — needed later to resolve a graded citation back to a real `SourceCitation` (`./observation.ts`). */
 export interface ExplainBackSourceBlock {
@@ -156,6 +158,33 @@ export async function retrieveExplainBackSourceBlocks(
     path: chunk.path,
     blockIndex: chunk.blockIndex,
   }));
+}
+
+/**
+ * `ol-egov.141.89.6.71` (`[D-453]` with `[D-452]`): the ranked own-note judge context. **UNWIRED**
+ * (nothing in `src/` calls it; held until the one held-out read, see `anchor-context.ts`).
+ *
+ * `ownNotePath` is the subject concept's bound note (`ConceptRecord.boundNotePath`, read by the
+ * caller from the live records for the instrument-seeded subject, the typed topic's matched concept,
+ * or the causes neighbour), `undefined` where none is known. With none this IS
+ * {@link retrieveExplainBackSourceBlocks}. With one, the note's passages lead in the order the
+ * retrieval ranking gives them and the same `retrieve()` ranking (the relevance-filtered list,
+ * uncut) fills the rest of {@link ANCHORED_CONTEXT_BUDGET}. Never throws; the same collapse to
+ * what is available (`[]` for an empty index).
+ */
+export async function retrieveAnchoredExplainBackSourceBlocks(
+  deps: ExplainBackRetrievalDeps,
+  query: string,
+  ownNotePath: string | undefined,
+): Promise<readonly ExplainBackSourceBlock[]> {
+  if (ownNotePath === undefined) return retrieveExplainBackSourceBlocks(deps, query);
+  const corpus = await chunksFromIndex(deps.retrieve.keywordIndex);
+  const result = await retrieve(deps.retrieve, query, { topK: Math.max(corpus.length, 1) });
+  return composeAnchoredSourceBlocks({
+    ownNoteChunks: corpus.filter((chunk) => chunk.path === ownNotePath),
+    ranked: result.status === 'grounded' ? result.chunks : [],
+    budget: ANCHORED_CONTEXT_BUDGET,
+  });
 }
 
 /**

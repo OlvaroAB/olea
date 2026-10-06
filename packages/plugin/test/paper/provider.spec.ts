@@ -248,6 +248,7 @@ describe('createLocalPracticePaperProvider — real Outcome coverage (ol-2zfj.17
     if (state.kind !== 'locked') return;
     expect(state.coverage).toEqual({
       outcomeCount: 1,
+      attachedOutcomeCount: 0,
       outcomeCoverageKnown: true,
       conceptCount: 1,
       conceptCoverageKnown: true,
@@ -595,6 +596,7 @@ describe('createLocalPracticePaperProvider — requestPaper() through the journa
         'incompleteStatement',
         'items',
         'kind',
+        'materialChanged',
         'partial',
         'partialStatement',
         'record',

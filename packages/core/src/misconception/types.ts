@@ -46,12 +46,13 @@ export interface SourceCitation {
 
 /**
  * Which identity scheme a `MisconceptionRecord.conceptId`/`.confusedWithConceptId` value was
- * stamped under (`ol-2zfj.155`, `[D-088]`, C7.11). Every production writer today
- * (`./accepted-grading-observation.js`'s `resolveConceptId` seam) stamps a caller-chosen string
- * whose scheme is not otherwise recorded on the record itself — a future caller switching that
- * seam to `../concept/concept-key.js`'s opaque mint must not have its output silently reread as
- * if it had always been the older, name-keyed scheme, or vice versa. `'legacy-name'` is that
- * older scheme: a plain concept name/alias, or `../concept/concept-key.js`'s
+ * stamped under (`ol-2zfj.155`, `[D-088]`, C7.11). The scheme is not recorded on the record
+ * itself, so it is read off the value's shape. Every production writer now stamps a concept key
+ * (`ol-2zfj.27`): `./accepted-grading-observation.js`'s `resolveConceptId` seam accepts only an id
+ * the grading request permitted (`[D-482]`), and `./store.js` carries an MCQ instrument's
+ * `conceptIds`; the plugin's keys are `../concept/concept-key.js`'s opaque mint. A legacy record
+ * must still never be reread as if it had always been the opaque scheme, or vice versa.
+ * `'legacy-name'` is that older scheme: a plain concept name/alias, or `../concept/concept-key.js`'s
  * `provisionalConceptKey` non-persisted stand-in — no misconception record has ever persisted
  * the latter, but it is still not the opaque scheme, so it classifies the same way.
  * `'opaque-key'` is `../concept/concept-key.js`'s `mintOpaqueConceptKey` output shape, the only
@@ -64,7 +65,7 @@ export type MisconceptionConceptIdScheme = 'legacy-name' | 'opaque-key';
  * string-prefix test, no I/O, no lookup. `` `${OPAQUE_CONCEPT_KEY_PREFIX}:...` `` is the only
  * shape `mintOpaqueConceptKey` ever produces, so that prefix is the sole `'opaque-key'` case;
  * every other value (a plain name, an alias, or a stray `provisionalConceptKey` stand-in) reads
- * as `'legacy-name'`, the pre-migration scheme every production writer uses today. A reader
+ * as `'legacy-name'`, the pre-migration scheme no production writer uses any more. A reader
  * resolving a record's identity (e.g. `../concept/confusion-pairing/corroborate.js`) calls this
  * first and picks its lookup path by the result, rather than trying one lookup space and
  * silently treating a miss as "no such concept."

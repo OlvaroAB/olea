@@ -123,7 +123,7 @@ describe('her correction history for model-decided links ([D-533], ol-egov.141.8
     const vault = new MemoryVaultSource({ '01 Courses/SYN101/Lecture 1.md': '# Lecture 1\n' });
     await recordContainmentCorrection(
       vault,
-      { kind: 'objectives', sourcePath: '03 Research/Objectives A.md', wordingKey: 'v1:abc' },
+      { kind: 'objectives', courseId: 'SYN101', wordingKey: 'v1:abc' },
       'concept-key1:synthetic',
       'declined',
       { now: () => '2026-10-06T00:00:00.000Z' },

@@ -87,26 +87,20 @@
  *
  * - **`assessment-error-adjacency`** — `ol-2zfj.19`, sourced from the grading
  *   judge's pairwise confusion evidence rather than from anything this
- *   module reads out of the vault itself. `workerJudgeCaller.ts` parses a
- *   `confusedWith` name out of the Worker's response, `gradingPipeline.ts`
- *   carries it through as `ObservationInput.confusedWith`, and
- *   `misconception/events.ts`/`project.ts` fold it onto
- *   `MisconceptionRecord.confusedWithConceptId` — an already-projected,
- *   already-in-memory read-model by the time it reaches here (see the
- *   confusion-pairing scoping memo,
- *   `olea-service/docs/direction/papers/confusion-pairing-home/PROPOSAL.md`
- *   §2(a), for the full call chain and why this was the first buildable
- *   producer of the three it considered). **Opt-in, like
- *   `embedding-proximity` and for an analogous reason**: unlike `her-link`
- *   and `assessment-cooccurrence`, which only need what this function
- *   already has in hand (a `VaultSource` and `concepts`), this signal needs
- *   an extra input — the misconception projection — that no caller of this
- *   function is wired to supply yet (there is no client-side misconception
- *   store construction anywhere in `packages/plugin` today). Omitting
- *   `assessmentErrorAdjacency` computes no such signal, the same
- *   "absent, not guessed" contract `embeddingProximity` follows. See
- *   `AssessmentErrorAdjacencyOptions` below for the concept-identity
- *   assumption this pass makes and why.
+ *   module reads out of the vault itself. The judge may name only the concept
+ *   ids the request permits (`[D-482]`), the client resolver accepts only
+ *   those ids, and `misconception/events.ts`/`project.ts` fold them onto
+ *   `MisconceptionRecord.conceptId`/`.confusedWithConceptId` — concept KEYS,
+ *   in an already-projected, already-in-memory read-model by the time they
+ *   reach here (`ol-2zfj.27`). **Opt-in, like `embedding-proximity` and for an
+ *   analogous reason**: unlike `her-link` and `assessment-cooccurrence`, which
+ *   only need what this function already has in hand (a `VaultSource` and
+ *   `concepts`), this signal needs an extra input, the misconception
+ *   projection, which `main.ts`'s corpus pass reads from the vault's
+ *   misconception store and hands in. Omitting `assessmentErrorAdjacency`
+ *   computes no such signal, the same "absent, not guessed" contract
+ *   `embeddingProximity` follows. See `AssessmentErrorAdjacencyOptions` below
+ *   for how the two ids are resolved.
  *
  * **Why this scans every concept's OWN anchor passage, not a dedicated
  * "concept note" folder.** `[D-068]` corroborates concepts from the material
@@ -458,26 +452,26 @@ export interface EmbeddingProximityOptions {
  * `projectMisconceptions`'s current read-model once per batch and hands the
  * result in, same shape any other consumer of the misconception store reads.
  *
- * **Concept identity assumption, stated rather than silently relied on.**
- * `MisconceptionRecord.conceptId`/`confusedWithConceptId` are typed as plain
- * `string` with no identity-space documented on the misconception module
- * itself (no reference to `[D-088]`'s opaque `ConceptRecord.key` anywhere in
- * `packages/core/src/misconception/`), and no production caller populates
- * `ObservationInput.conceptId` yet — `packages/plugin` has no client-side
- * misconception store construction today. This pass resolves both ids
- * against `concepts`' own `name`/`aliases` space, the SAME identity
- * `her-link` and `assessment-cooccurrence` already key on and that
- * `relation.ts` itself documents as this stage's deliberate interim choice
- * ("`from`/`to` are NAMES... [because] C7.11 rules identity is an opaque key
- * never derived from content" but the opaque-key registry does not exist
- * yet). An id that resolves to no known concept name/alias nominates
- * nothing — the same "unrecognised concept nominates nothing" discipline
- * `nominate.js` itself enforces for a signal naming an unknown name. If a
- * future misconception-store caller instead stamps `conceptId` with
- * `[D-088]`'s opaque key, this pass's resolution silently stops matching
- * (every id looks unrecognised) rather than mismatching silently — a caller
- * wiring that store for the first time should verify a resolved-pair count
- * that is not permanently zero.
+ * **Both ids are concept keys, resolved by key (`ol-2zfj.27`, ONT-R1
+ * `ol-2zfj.86`).** Every writer of a misconception record stamps a concept key:
+ * the explain-back accept path records only an id from the request's permitted
+ * list (`explain-back/observation.ts`'s `resolveConceptId`; the list is the
+ * subject's key and the resolved neighbour's key, `explain-back/request.ts`'s
+ * `permittedConceptIdsFor`), and a wrong MCQ pick records its instrument's
+ * `conceptIds` (`olea-core`'s `misconception/store.ts` `normalizeMcqPick`, with
+ * no `confusedWithConceptId`). No writer stamps a name or alias, so this pass
+ * looks each id up in `concepts`' `key` index only, with no name fallback: a
+ * name lookup would match no bound record at all, and under ONT-R1 a name is
+ * an index over identities, never the identity. An id no concept carries as
+ * its key nominates nothing, the same "unrecognised concept nominates nothing"
+ * discipline `nominate.js` enforces for an unknown name.
+ *
+ * **The signal still carries names**, because `NominationSignal.a`/`.b` are
+ * names and `nominate.js` resolves them to every concept holding that name.
+ * So a resolved concept whose name another identity also holds (the
+ * ambiguous names `buildByNameIndex` excludes) nominates nothing here: the
+ * name would let nomination attach her confusion to a concept it was never
+ * about, a merge of evidence across two identities that ONT-R1 rules out.
  */
 export interface AssessmentErrorAdjacencyOptions {
   readonly records: readonly MisconceptionRecord[];
@@ -488,7 +482,7 @@ export interface CorpusRelationVaultContextOptions {
   readonly sourcesFolder?: VaultPath;
   /** Omitted (the default) skips the embedding-proximity signal entirely — see `EmbeddingProximityOptions`'s own doc for why there is no default cache or threshold to fall back to. */
   readonly embeddingProximity?: EmbeddingProximityOptions;
-  /** Omitted (the default) skips the assessment-error-adjacency signal entirely — no caller wires a misconception store into this function yet; see `AssessmentErrorAdjacencyOptions`'s own doc. */
+  /** Omitted (the default) skips the assessment-error-adjacency signal entirely; `main.ts`'s corpus pass supplies the misconception store's records. See `AssessmentErrorAdjacencyOptions`'s own doc. */
   readonly assessmentErrorAdjacency?: AssessmentErrorAdjacencyOptions;
   /**
    * One teaching event counts once (`[D-465]`, knowledge model 5): the SAME resolver the concept
@@ -610,24 +604,31 @@ async function embeddingProximitySignals(
 /**
  * The `assessment-error-adjacency` pass: turn every misconception record's
  * `confusedWithConceptId` into a nomination signal, resolving both ids
- * against `byName` (concept name or alias -> `CorpusConcept`, the same index
- * `her-link`'s wikilink resolution uses) — see
- * `AssessmentErrorAdjacencyOptions`'s own doc for the identity assumption
- * this makes and why. Pure and synchronous: no vault or network access,
- * `records` is already the in-memory read-model.
+ * against `byKey` (concept key -> `CorpusConcept`) and never against a name
+ * or alias — see `AssessmentErrorAdjacencyOptions`'s own doc for why
+ * (`ol-2zfj.27`). `byName` is consulted only to refuse a concept whose name
+ * another identity also holds, since the signal it would emit names it.
+ * Pure and synchronous: no vault or network access, `records` is already the
+ * in-memory read-model.
  */
 function assessmentErrorAdjacencySignals(
+  byKey: ReadonlyMap<string, CorpusConcept>,
   byName: ReadonlyMap<string, CorpusConcept>,
   records: readonly MisconceptionRecord[],
 ): readonly NominationSignal[] {
   const seenPairs = new Set<string>();
   const signals: NominationSignal[] = [];
+  const nameIsItsAlone = (concept: CorpusConcept): boolean => {
+    const holder = byName.get(concept.name);
+    return holder !== undefined && identityOf(holder) === identityOf(concept);
+  };
 
   for (const record of records) {
     if (record.confusedWithConceptId === null) continue;
-    const a = byName.get(record.conceptId);
-    const b = byName.get(record.confusedWithConceptId);
-    if (a === undefined || b === undefined || a.name === b.name) continue;
+    const a = byKey.get(record.conceptId);
+    const b = byKey.get(record.confusedWithConceptId);
+    if (a === undefined || b === undefined || identityOf(a) === identityOf(b)) continue;
+    if (!nameIsItsAlone(a) || !nameIsItsAlone(b)) continue;
     const key = unorderedPairKey(a.name, b.name);
     if (seenPairs.has(key)) continue;
     seenPairs.add(key);
@@ -652,13 +653,28 @@ function identityOf(concept: CorpusConcept): string {
 }
 
 /**
+ * `concept.key` -> `CorpusConcept`, for `assessmentErrorAdjacencySignals`
+ * (`ol-2zfj.27`). Keyless concepts are not indexed: no misconception record
+ * can name one, since every writer stamps a key. Two entries carrying one key
+ * are one identity (`[D-088]`), so the first is kept and nothing is merged.
+ */
+function buildByKeyIndex(concepts: readonly CorpusConcept[]): ReadonlyMap<string, CorpusConcept> {
+  const index = new Map<string, CorpusConcept>();
+  for (const concept of concepts) {
+    if (concept.key !== undefined && !index.has(concept.key)) index.set(concept.key, concept);
+  }
+  return index;
+}
+
+/**
  * `concept.name`/`.aliases` -> `CorpusConcept`, for the `her-link` wikilink
- * pass and `assessmentErrorAdjacencySignals` below. **A name or alias held
+ * pass (and, in `assessmentErrorAdjacencySignals`, only to refuse an
+ * ambiguous name). **A name or alias held
  * by two distinct, differently-keyed concepts is ambiguous within this
  * concept set and is excluded from the index entirely** (rel.md §3 Default
  * 5, `ol-egov.141.89.4.18` — the same key-first, name-for-keyless-only
  * discipline `./nominate.ts`'s widened byName and `./verdict.ts`'s byName
- * fallback both apply): a wikilink or misconception record naming it then
+ * fallback both apply): a wikilink naming it then
  * misses here exactly as a name outside the set would, and nominates
  * nothing for it — never a silent last-write-wins pick of whichever
  * concept happened to be indexed last. Two concepts sharing a name or
@@ -810,7 +826,11 @@ export async function gatherCorpusRelationVaultContext(
 
   if (options.assessmentErrorAdjacency !== undefined) {
     signals.push(
-      ...assessmentErrorAdjacencySignals(byName, options.assessmentErrorAdjacency.records),
+      ...assessmentErrorAdjacencySignals(
+        buildByKeyIndex(concepts),
+        byName,
+        options.assessmentErrorAdjacency.records,
+      ),
     );
   }
 

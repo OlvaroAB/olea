@@ -121,6 +121,15 @@ export type UnitReadingState =
  */
 export type ConceptExtractionState = 'not-started' | 'complete';
 
+/**
+ * Whether the outcomes of a unit's reading have been extracted under its source revision
+ * (`[D-531]` B, `ol-egov.141.89.7.78`): the per-page "outcomes extracted" mark the retire-on-revision
+ * rule reads (`../../outcome/retire-on-revision.ts`). Its own field, like
+ * {@link ConceptExtractionState}, and never derived from it or from `readingState`. Stored only as
+ * `'complete'`; absent reads as `'not-started'`.
+ */
+export type OutcomeExtractionState = 'not-started' | 'complete';
+
 /** One unit's whole record: its stable identity, its reading state, and its concept-extraction state, tracked apart. */
 export interface UnitManifestEntry {
   readonly unitId: string;
@@ -128,6 +137,13 @@ export interface UnitManifestEntry {
   readonly page: number;
   readonly readingState: UnitReadingState;
   readonly conceptExtractionState: ConceptExtractionState;
+  /**
+   * `'complete'` when this reading's outcomes were extracted under the revision since it was last
+   * listed (`./projection.ts`, "When a mark counts"); absent otherwise, which reads as
+   * `'not-started'`. Set only by the projection from a stored mark: a writer never carries it from
+   * an entry it was handed (the plugin store copies it from the folded value, for the same reading).
+   */
+  readonly outcomeExtractionState?: OutcomeExtractionState;
 }
 
 /** The whole completeness record for one source revision — `[D-294]`'s manifest, per unit. */

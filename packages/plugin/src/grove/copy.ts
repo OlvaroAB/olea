@@ -202,6 +202,25 @@ export const GROVE_VOLUNTEER_SECTION_HEADING = 'Also growing here';
 export const GROVE_VOLUNTEER_SECTION_NOTE =
   "Found in your notes, but not named by this course's registered objectives or past papers.";
 
+/**
+ * `[D-537]` (`ol-egov.141.89.7.77`): the section for links Olea's reading makes under a course's
+ * objectives, in the ruled words — S1 for the heading and note, C1 for the two controls, and the
+ * put-back line for the collapsed list of placements she took out (olea-service
+ * `docs/direction/papers/examiner-scope-status/13-correction-control.md`, "The words"). "Olea's
+ * reading" is registry §28's own plain-language name for Olea's labelled reading; the objective
+ * itself is never named by a noun (the registry leaves one undecided), only quoted by its wording.
+ */
+export const GROVE_PLACEMENTS_HEADING = "Olea's reading of this course's objectives";
+export const GROVE_PLACEMENTS_NOTE =
+  "The objectives don't name these concepts, but Olea reads each one as part of the objective shown under it. They aren't counted above.";
+/** C1: the one control beside each placement. */
+export const GROVE_PLACEMENT_TAKE_OUT_ACTION = 'Not part of this';
+/** C1: the one control beside each placement she took out. */
+export const GROVE_PLACEMENT_PUT_BACK_ACTION = 'Put back';
+/** The collapsed list's line, with C1. */
+export const GROVE_PLACEMENTS_TAKEN_OUT_LINE =
+  'You took these out. Olea keeps your choice when the document is edited, unless the objective itself is reworded.';
+
 /** F4.5's stall note for a persisting `ground` cell — information, never a verdict, never "not worth building" (`[D-063]`). */
 export const GROVE_GROUND_STALL_NOTE = 'Still queued — this is taking longer than usual to build.';
 
@@ -378,6 +397,11 @@ export function allGroveStrings(): readonly string[] {
     GROVE_WITHHELD_HEADING,
     GROVE_VOLUNTEER_SECTION_HEADING,
     GROVE_VOLUNTEER_SECTION_NOTE,
+    GROVE_PLACEMENTS_HEADING,
+    GROVE_PLACEMENTS_NOTE,
+    GROVE_PLACEMENT_TAKE_OUT_ACTION,
+    GROVE_PLACEMENT_PUT_BACK_ACTION,
+    GROVE_PLACEMENTS_TAKEN_OUT_LINE,
     GROVE_GROUND_STALL_NOTE,
     OPEN_RETROSPECTIVE_ACTION,
     DISMISS_OFFER_ACTION,

@@ -14,6 +14,12 @@
  *  - `unit` is one page's whole state after a change: its reading state and its concept-extraction
  *    state as two separate fields ([D-326] condition 1), so the fold is "latest record per page" with
  *    no delta to replay. A writer that changes one field copies the other from the folded value.
+ *    Since `[D-531]` (`ol-egov.141.89.7.78`) it may also carry the per-page "outcomes extracted"
+ *    mark, `outcomeExtractionState`, the one stored field that ruling's option B authorises. It is
+ *    written only as `'complete'` and placed after `conceptExtractionState`; a record without it is
+ *    a page whose outcomes are not extracted, so every line written before it reads unchanged and
+ *    writes back byte for byte. The record version is unchanged: an older build reading a marked
+ *    line drops only the mark, which reads as not extracted, the safe direction for the rule.
  *  - `retired` is the explicit retirement of one source revision: the bytes it speaks for are no
  *    longer the source's, or the source is gone. It is what a device writes when it sees the change;
  *    the fold also lets a later enumeration supersede an earlier revision when no device wrote one.
@@ -37,6 +43,7 @@ import type { VaultPath } from '../../vault/types.js';
 import { stableUnitId } from './manifest.js';
 import type {
   ConceptExtractionState,
+  OutcomeExtractionState,
   UnitFailedReason,
   UnitPendingReason,
   UnitProducerProvenance,
@@ -76,6 +83,11 @@ export interface UnitStateRecord extends UnitManifestRecordBase {
   readonly page: number;
   readonly readingState: UnitReadingState;
   readonly conceptExtractionState: ConceptExtractionState;
+  /**
+   * `[D-531]`: present, and `'complete'`, only when this page's outcomes were extracted from this
+   * record's reading under its revision. Never written as `'not-started'`: absence says that.
+   */
+  readonly outcomeExtractionState?: Extract<OutcomeExtractionState, 'complete'>;
 }
 
 /** The retirement of the revision named by `revisionDigest`. */
@@ -242,6 +254,10 @@ export function parseUnitManifestRecord(json: unknown): UnitManifestRecord | nul
       if (json.unitId !== stableUnitId(base.sourcePath, json.page)) return null;
       const readingState = parseUnitReadingState(json.readingState);
       if (readingState === null) return null;
+      // `[D-531]`: absent, or exactly `'complete'`. Any other value is not a mark this build wrote,
+      // so the line is not vouched for (its page reads as unknown, never as extracted).
+      const outcomeMark = json.outcomeExtractionState;
+      if (outcomeMark !== undefined && outcomeMark !== 'complete') return null;
       return {
         ...base,
         kind: 'unit',
@@ -249,6 +265,7 @@ export function parseUnitManifestRecord(json: unknown): UnitManifestRecord | nul
         page: json.page,
         readingState,
         conceptExtractionState: json.conceptExtractionState,
+        ...(outcomeMark === 'complete' ? { outcomeExtractionState: outcomeMark } : {}),
       };
     }
     case 'retired':
@@ -333,6 +350,10 @@ export function serialiseUnitManifestRecord(record: UnitManifestRecord): string 
         page: record.page,
         readingState: canonicalReadingState(record.readingState),
         conceptExtractionState: record.conceptExtractionState,
+        // Last, and only when set: an unmarked record writes exactly the bytes it always did.
+        ...(record.outcomeExtractionState === 'complete'
+          ? { outcomeExtractionState: record.outcomeExtractionState }
+          : {}),
       })}\n`;
     case 'retired':
       return `${JSON.stringify({ ...head, reason: record.reason })}\n`;

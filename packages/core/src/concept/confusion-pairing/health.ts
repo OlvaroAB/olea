@@ -7,13 +7,12 @@
  * belongs to a different bead.
  *
  * **What this checks, and why it is a structural failure mode rather than
- * a fabricated ratio.** `./types.ts`'s top doc and `./corroborate.ts` name
- * the risk this reader inherits from `corpusRelationSignals.ts`'s
- * `AssessmentErrorAdjacencyOptions`: if a future misconception-store caller
- * starts stamping `conceptId`/`confusedWithConceptId` with `[D-088]`'s
- * opaque key instead of a name, EVERY evidence-bearing record silently
- * fails name/alias resolution rather than mismatching loudly — resolution
- * does not degrade gracefully, it goes to zero all at once. A ratio
+ * a fabricated ratio.** Every production record's ids are concept keys
+ * (`./types.ts`'s top doc, `ol-2zfj.27`), and they resolve only through the
+ * `key` a caller supplies on each concept. If a caller stops supplying it, or
+ * the two sides stop sharing one key space, EVERY evidence-bearing record
+ * fails resolution rather than mismatching loudly — resolution does not
+ * degrade gracefully, it goes to zero all at once. A ratio
  * threshold ("resolve at least N% of records") would be a derived constant
  * fitted against nothing — no eval set has ever measured a resolution rate
  * for this reader — which the component register's declared-vs-derived
@@ -23,10 +22,10 @@
  * (`confusedWithConceptId !== null`) failed to resolve, with at least one
  * such record to test against.
  *
- * **Not wired to anything.** Per this bead's brief, this reader has no
- * production caller yet — `ol-2zfj.21` (the open, human-held decision on
- * what "confusion pairing" means as student-visible behaviour) gates that.
- * A harness script driving this check against real material, the way
+ * **Not wired to anything.** No production code calls this check yet; the
+ * reader itself has a production caller (`packages/plugin/src/main.ts`, via
+ * `../../misconception/corroboration.js`). A harness script driving this check
+ * against real material, the way
  * `olea-service`'s `scripts/harness/relation-reader-check.mjs` drives
  * `../../checks/relation-reader-health.ts`, is future work for whoever
  * builds that caller — this function only needs to exist and be correct
@@ -68,7 +67,7 @@ export function checkConfusionPairingResolution(
     return {
       ok: false,
       measured,
-      detail: `all ${result.evidenceBearingRecords} evidence-bearing record(s) failed name/alias resolution — the identity space likely no longer matches (see this module's doc)`,
+      detail: `all ${result.evidenceBearingRecords} evidence-bearing record(s) failed to resolve — the identity space likely no longer matches (see this module's doc)`,
     };
   }
 

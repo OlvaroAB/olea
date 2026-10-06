@@ -11,6 +11,11 @@ import {
   allGroveStrings,
   GROVE_INFERRED_DISCLAIMER,
   GROVE_MATERIAL_GAP_LABEL,
+  GROVE_PLACEMENT_PUT_BACK_ACTION,
+  GROVE_PLACEMENT_TAKE_OUT_ACTION,
+  GROVE_PLACEMENTS_HEADING,
+  GROVE_PLACEMENTS_NOTE,
+  GROVE_PLACEMENTS_TAKEN_OUT_LINE,
   GROVE_VIEW_TITLE,
   groveCoverageSplitLine,
   grovePapersLabel,
@@ -178,5 +183,62 @@ describe('grove copy — vocabulary registry §6 discipline', () => {
     expect(groveStateLabel('sapling')).toBe('sapling');
     expect(groveStateLabel('tree')).toBe('tree');
     expect(groveStateLabel('ground')).toBe('ground');
+  });
+});
+
+/**
+ * `[D-537]` (`ol-egov.141.89.7.77`): the section for links Olea's reading makes under a course's
+ * objectives says exactly S1, C1 and the put-back line of the ruled paper
+ * (olea-service `docs/direction/papers/examiner-scope-status/13-correction-control.md`), and none of
+ * the words that paper lists as taken in another sense.
+ */
+describe('grove copy — Olea’s reading of the objectives ([D-537], S1 and C1)', () => {
+  it('says S1, C1 and the put-back line, word for word', () => {
+    expect(GROVE_PLACEMENTS_HEADING).toBe("Olea's reading of this course's objectives");
+    expect(GROVE_PLACEMENTS_NOTE).toBe(
+      "The objectives don't name these concepts, but Olea reads each one as part of the objective shown under it. They aren't counted above.",
+    );
+    expect(GROVE_PLACEMENT_TAKE_OUT_ACTION).toBe('Not part of this');
+    expect(GROVE_PLACEMENT_PUT_BACK_ACTION).toBe('Put back');
+    expect(GROVE_PLACEMENTS_TAKEN_OUT_LINE).toBe(
+      'You took these out. Olea keeps your choice when the document is edited, unless the objective itself is reworded.',
+    );
+  });
+
+  it('every one of them is among the strings the honesty checks sweep', () => {
+    for (const text of [
+      GROVE_PLACEMENTS_HEADING,
+      GROVE_PLACEMENTS_NOTE,
+      GROVE_PLACEMENT_TAKE_OUT_ACTION,
+      GROVE_PLACEMENT_PUT_BACK_ACTION,
+      GROVE_PLACEMENTS_TAKEN_OUT_LINE,
+    ]) {
+      expect(allGroveStrings()).toContain(text);
+    }
+  });
+
+  it('uses none of the words the paper lists as taken in another sense', () => {
+    const section = [
+      GROVE_PLACEMENTS_HEADING,
+      GROVE_PLACEMENTS_NOTE,
+      GROVE_PLACEMENT_TAKE_OUT_ACTION,
+      GROVE_PLACEMENT_PUT_BACK_ACTION,
+      GROVE_PLACEMENTS_TAKEN_OUT_LINE,
+    ]
+      .join(' ')
+      .toLowerCase();
+    for (const word of [
+      'withdraw',
+      'restore',
+      'not now',
+      'delete',
+      'remove',
+      'volunteer',
+      'declaration',
+      'covered',
+      'score',
+    ]) {
+      expect(section).not.toContain(word);
+    }
   });
 });

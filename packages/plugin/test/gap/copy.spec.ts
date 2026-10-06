@@ -465,7 +465,7 @@ describe('row copy', () => {
     for (const word of forbidden) {
       expect(line.toLowerCase(), `forbidden word "${word}"`).not.toContain(word);
     }
-    expect(line.toLowerCase()).toContain('unknown');
+    expect(line.toLowerCase()).toContain('no recall evidence');
     expect(gapRowLine(r)).toBe(line);
   });
 

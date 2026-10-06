@@ -1,8 +1,9 @@
 /**
  * Her correction history for a model-decided link (`[D-533]`, A strengthened;
- * `ol-egov.141.89.7.26`). Scenarios: olea-service `features/F8-concepts-scope.md`, section
- * "`[D-433]` — Model-decided containment and scope standing", tagged
- * `@auto:core/outcome/containment-correction.spec`.
+ * `ol-egov.141.89.7.26`), keyed on the course and the objective's wording so her choice survives a
+ * rename or move of the document (`[D-537]`, `ol-egov.141.89.7.77`). Scenarios: olea-service
+ * `features/F8-concepts-scope.md`, section "`[D-433]` — Model-decided containment and scope
+ * standing", tagged `@auto:core/outcome/containment-correction.spec`.
  *
  * INV-3: every course code, concept name, path and sentence below is invented.
  */
@@ -25,6 +26,7 @@ import {
   OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
   objectivesDeclarationOf,
   readContainmentCorrection,
+  readContainmentCorrectionState,
   recordContainmentCorrection,
   statedScopeDeclarationOf,
 } from './containment-correction.js';
@@ -32,15 +34,22 @@ import { outcomeLabelDigest } from './source-identity.js';
 import { OUTCOME_RECORD_SCHEMA_VERSION, type OutcomeRecord } from './types.js';
 
 const DOC = '03 Research/Objectives A.md' as VaultPath;
+const COURSE = 'COURSEA';
 const K1 = 'concept-key1:flange';
 const K2 = 'concept-key1:cog';
 
-function outcome(id: string, label: string, blockIndex: number, labelDigest?: string) {
+function outcome(
+  id: string,
+  label: string,
+  blockIndex: number,
+  labelDigest?: string,
+  path: VaultPath = DOC,
+) {
   return {
     id,
-    courses: ['COURSEA'],
+    courses: [COURSE],
     source: {
-      path: DOC,
+      path,
       blockIndex,
       ...(labelDigest !== undefined ? { labelDigest } : {}),
     },
@@ -54,22 +63,55 @@ function outcome(id: string, label: string, blockIndex: number, labelDigest?: st
 }
 
 describe('the declaration identity a correction is keyed on', () => {
-  it("an objectives declaration is its document's path and [D-477]'s wording key, never the outcome id", async () => {
+  it("an objectives declaration is the course and [D-477]'s wording key, never the document's path or the outcome id ([D-537])", async () => {
     const digest = await outcomeLabelDigest('Analyse a loaded frame');
     const declaration = await objectivesDeclarationOf(
       outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, digest),
+      COURSE,
     );
-    expect(declaration).toEqual({ kind: 'objectives', sourcePath: DOC, wordingKey: digest });
+    expect(declaration).toEqual({ kind: 'objectives', courseId: COURSE, wordingKey: digest });
     expect(JSON.stringify(declaration)).not.toContain('outcome-key1:o1');
+    expect(JSON.stringify(declaration)).not.toContain(DOC);
+  });
+
+  it('survives a rename or move of the document: the same wording under another path is the same declaration ([D-537])', async () => {
+    const digest = await outcomeLabelDigest('Analyse a loaded frame');
+    const before = await objectivesDeclarationOf(
+      outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, digest),
+      COURSE,
+    );
+    const renamed = await objectivesDeclarationOf(
+      outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, digest, '03 Research/Aims A.md'),
+      COURSE,
+    );
+    const moved = await objectivesDeclarationOf(
+      outcome('outcome-key1:o1b', 'Analyse a loaded frame', 3, digest, 'Archive/Objectives A.md'),
+      COURSE,
+    );
+    expect(renamed).toEqual(before);
+    expect(moved).toEqual(before);
+    expect(await containmentCorrectionPath(renamed, K1)).toBe(
+      await containmentCorrectionPath(before, K1),
+    );
+  });
+
+  it('is per course: the same wording in another course is another declaration', async () => {
+    const digest = await outcomeLabelDigest('Analyse a loaded frame');
+    const record = outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, digest);
+    expect(await objectivesDeclarationOf(record, 'COURSEB')).not.toEqual(
+      await objectivesDeclarationOf(record, COURSE),
+    );
   });
 
   it('survives an unrelated edit: the same wording minted again on another unit is the same declaration', async () => {
     const digest = await outcomeLabelDigest('Analyse a loaded frame');
     const before = await objectivesDeclarationOf(
       outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, digest),
+      COURSE,
     );
     const after = await objectivesDeclarationOf(
       outcome('outcome-key1:o1-reminted', 'Analyse a loaded frame', 5, digest),
+      COURSE,
     );
     expect(after).toEqual(before);
   });
@@ -77,10 +119,11 @@ describe('the declaration identity a correction is keyed on', () => {
   it('a record minted before [D-477] reads its wording key from its stored label, as [D-477] reads it', async () => {
     const legacy = await objectivesDeclarationOf(
       outcome('outcome-key1:o-old', 'Analyse a loaded frame', 3),
+      COURSE,
     );
     expect(legacy).toEqual({
       kind: 'objectives',
-      sourcePath: DOC,
+      courseId: COURSE,
       wordingKey: await outcomeLabelDigest('Analyse a loaded frame'),
     });
   });
@@ -88,9 +131,11 @@ describe('the declaration identity a correction is keyed on', () => {
   it('changed wording is a different declaration (new evidence)', async () => {
     const a = await objectivesDeclarationOf(
       outcome('outcome-key1:o1', 'Analyse a loaded frame', 3, await outcomeLabelDigest('x')),
+      COURSE,
     );
     const b = await objectivesDeclarationOf(
       outcome('outcome-key1:o2', 'Design a ratchet', 3, await outcomeLabelDigest('y')),
+      COURSE,
     );
     expect(a).not.toEqual(b);
   });
@@ -105,7 +150,7 @@ describe('the declaration identity a correction is keyed on', () => {
   it('the file a pair lives in is opaque, under its own folder, and one per (declaration, concept)', async () => {
     const declaration: ContainmentDeclaration = {
       kind: 'objectives',
-      sourcePath: DOC,
+      courseId: COURSE,
       wordingKey: 'v1:abc',
     };
     const path = await containmentCorrectionPath(declaration, K1);
@@ -125,7 +170,7 @@ describe('recordContainmentCorrection — her own append-only history per (decla
   let vault: FolderSource;
   const declaration: ContainmentDeclaration = {
     kind: 'objectives',
-    sourcePath: DOC,
+    courseId: COURSE,
     wordingKey: 'v1:abc',
   };
 
@@ -198,7 +243,7 @@ describe('recordContainmentCorrection — her own append-only history per (decla
       declaration,
       conceptKey: K1,
       events: [{ kind: 'expired', at: 't0' }],
-      schemaVersion: 1,
+      schemaVersion: OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
     })}\n`;
     await vault.write(path, newer);
     await expect(
@@ -212,10 +257,12 @@ describe('recordContainmentCorrection — her own append-only history per (decla
       declaration,
       conceptKey: K1,
       events: [{ kind: 'declined', at: 't1' }],
-      schemaVersion: 1,
+      schemaVersion: OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
     };
+    expect(OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION).toBe(2);
     expect(isContainmentCorrectionLog(good)).toBe(true);
-    expect(isContainmentCorrectionLog({ ...good, schemaVersion: 2 })).toBe(false);
+    expect(isContainmentCorrectionLog({ ...good, schemaVersion: 1 })).toBe(false);
+    expect(isContainmentCorrectionLog({ ...good, schemaVersion: 3 })).toBe(false);
     expect(isContainmentCorrectionLog({ ...good, events: [] })).toBe(false);
     expect(isContainmentCorrectionLog({ ...good, conceptKey: '' })).toBe(false);
     expect(
@@ -224,6 +271,70 @@ describe('recordContainmentCorrection — her own append-only history per (decla
     expect(
       isContainmentCorrectionLog({ ...good, declaration: { kind: 'objectives', sourcePath: DOC } }),
     ).toBe(false);
+    // The earlier path-keyed shape, whole, is never read as this build's ([D-537]).
+    expect(
+      isContainmentCorrectionLog({
+        ...good,
+        declaration: { kind: 'objectives', sourcePath: DOC, wordingKey: 'v1:abc' },
+      }),
+    ).toBe(false);
+    // A declaration carrying a field beyond its own is another identity, never this one.
+    expect(
+      isContainmentCorrectionLog({
+        ...good,
+        declaration: { ...declaration, sourcePath: DOC },
+      }),
+    ).toBe(false);
+    expect(
+      isContainmentCorrectionLog({
+        ...good,
+        declaration: { kind: 'objectives', courseId: '', wordingKey: 'v1:abc' },
+      }),
+    ).toBe(false);
+  });
+
+  it('a history in the earlier path-keyed shape is unreadable, never matched and never absent ([D-537])', async () => {
+    const path = await containmentCorrectionPath(declaration, K1);
+    const earlier = `${JSON.stringify(
+      {
+        declaration: { kind: 'objectives', sourcePath: DOC, wordingKey: 'v1:abc' },
+        conceptKey: K1,
+        events: [{ kind: 'declined', at: 't0' }],
+        schemaVersion: 1,
+      },
+      null,
+      2,
+    )}\n`;
+    await vault.write(path, earlier);
+    expect((await readContainmentCorrection(vault, declaration, K1)).kind).toBe('unreadable');
+    await expect(
+      recordContainmentCorrection(vault, declaration, K1, 'accepted', { now: () => 't1' }),
+    ).rejects.toBeInstanceOf(UnreadableStoreRecordError);
+    expect(await vault.read(path)).toBe(earlier);
+  });
+
+  it("a history at a pair's path that names another pair is unreadable, never read as this pair's", async () => {
+    const path = await containmentCorrectionPath(declaration, K1);
+    const other = `${JSON.stringify({
+      declaration: { ...declaration, wordingKey: 'v1:other' },
+      conceptKey: K1,
+      events: [{ kind: 'accepted', at: 't0' }],
+      schemaVersion: OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
+    })}\n`;
+    await vault.write(path, other);
+    expect((await readContainmentCorrection(vault, declaration, K1)).kind).toBe('unreadable');
+    const otherConcept = `${JSON.stringify({
+      declaration,
+      conceptKey: K2,
+      events: [{ kind: 'accepted', at: 't0' }],
+      schemaVersion: OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
+    })}\n`;
+    await vault.write(path, otherConcept);
+    expect((await readContainmentCorrection(vault, declaration, K1)).kind).toBe('unreadable');
+    await expect(
+      recordContainmentCorrection(vault, declaration, K1, 'declined', { now: () => 't1' }),
+    ).rejects.toBeInstanceOf(UnreadableStoreRecordError);
+    expect(await vault.read(path)).toBe(otherConcept);
   });
 });
 
@@ -254,6 +365,18 @@ describe('isCorrectedAway — the read-time exclusion, failing closed', () => {
     await vault.write(await containmentCorrectionPath(declaration, K1), 'not json');
     expect(await isCorrectedAway(vault, declaration, K1, identity)).toBe(true);
     expect(await isCorrectedAway(vault, declaration, K2, identity)).toBe(false);
+  });
+
+  it('the state read keeps none, declined, accepted and unreadable apart ([D-537]: the grove lists only the first three)', async () => {
+    expect(await readContainmentCorrectionState(vault, declaration, K1, identity)).toBe('none');
+    await recordContainmentCorrection(vault, declaration, K1, 'declined', { now: () => 't1' });
+    expect(await readContainmentCorrectionState(vault, declaration, K1, identity)).toBe('declined');
+    await recordContainmentCorrection(vault, declaration, K1, 'accepted', { now: () => 't2' });
+    expect(await readContainmentCorrectionState(vault, declaration, K1, identity)).toBe('accepted');
+    await vault.write(await containmentCorrectionPath(declaration, K2), '{"declaration": ');
+    expect(await readContainmentCorrectionState(vault, declaration, K2, identity)).toBe(
+      'unreadable',
+    );
   });
 
   it('[D-378]: a decline recorded under a superseded duplicate key excludes the canonical concept, and the reverse', async () => {

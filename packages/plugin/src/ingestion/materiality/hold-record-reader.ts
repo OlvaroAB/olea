@@ -31,30 +31,44 @@
  *    (M2: before a republished hold arrives, an unreadable hold is not one this device knows);
  *  - new fields are ignored; withdrawal never rides in an optional field.
  *
+ * Ruled (`[D-539]`, David 2026-10-06, on this module's own questions):
+ *  - READ-TIME CHECKING. The floor checks holds when an artifact is read ({@link checkHolds}) and
+ *    sets no anchor reason of its own: there is no anchor writer here, and none is to be added.
+ *  - LEGACY CITATIONS MATCH BY PATH. A citation with no passage digest is matched by its source
+ *    path, so a hold on any passage of that source holds it (functional scope C5.3, as amended by
+ *    `[D-539]`; {@link holdCoversPassage}).
+ *  - A WHOLE STORE THAT CANNOT BE READ IS ITS OWN STATE, `unavailable`, never "no holds" and never
+ *    "held". Its passage-citing artifacts are still kept from presentation (an unreadable store may
+ *    hold anything), but the result says unavailable all the way to the consumer, so it can be shown
+ *    as such ({@link HoldCheck}, {@link HoldEffect}); withholding for it never reads as weak
+ *    knowledge, because that evidence is neither counted nor removed ({@link HoldWithholding}); and a
+ *    failed read is never kept as the answer: {@link HoldStoreReader} reads again on the next tick or
+ *    the next load of a view, without restarting Olea. Single unreadable records stay as M2 has them.
+ *
  * Not ruled, so provisional and named here:
  *  - WHERE the record lives, and its stored layout. `[D-497]` gives both to the hub as persistence
- *    owner, after the device facts (`ol-egov.141.89.104.6`). So this module has no source of its
- *    own: {@link readHoldText} decodes one newline-delimited text, {@link mergeHoldReads} combines
- *    several, and the caller supplies the text once a location is ruled.
+ *    owner, after the device facts (`ol-egov.141.89.104.6`), and `[D-539]` settles them with that
+ *    owner before any install. So this module has no source of its own: the caller supplies a
+ *    {@link HoldStoreSource} listing the store's parts once a location is ruled, {@link readHoldText}
+ *    decodes one newline-delimited text, and {@link mergeHoldReads} combines several.
  *  - The field names {@link classifyHoldRecord} decodes: `id`, `factId`, `reason`, and `passage`
  *    with `sourcePath` and `passageDigest` (the names the instrument citation already uses). They
  *    are the floor's reading of the meaning, not an adopted layout. Whoever adopts the layout
  *    either adopts these names or changes that one function before a floor build ships: a floor
  *    that reads names no writer uses would under-withhold, silently.
+ *  - Any wording for the unavailable state. A surface she sees needs its clause and its registry
+ *    entry first; this module only makes the state impossible to mistake for another.
  *
- * Three readings this module takes where the ruling's letter is silent, each in the
+ * Two readings this module takes where the rulings' letter is silent, each in the
  * over-withholding direction only (Class B, for review):
  *  1. A record whose PASSAGE reads is a hold even when its id, fact id or reason is missing or
  *     malformed. §3.1 calls the envelope (id, fact id, passage); the floor needs only the passage
  *     to withhold, and dropping such a record would under-withhold.
- *  2. A hold store that exists but cannot be read (`unavailable`) holds every artifact that cites
- *     a passage. An unreadable store is never read as "no holds" (compatibility obligation 3:
- *     a consumer's "no record" default must not be permissive). A store that does not exist
- *     (`absent`) holds nothing: nothing was published to it.
- *  3. Passage matching ({@link holdCoversPassage}): two digests under the same passage rule match
- *     when equal, whatever the source path (so a renamed or moved source still matches); when the
- *     digests cannot be compared (either absent, malformed, or under different rule versions), the
- *     hold covers every citation of the same source path.
+ *  2. Passage matching beyond the legacy case ({@link holdCoversPassage}): two digests under the
+ *     same passage rule match when equal, whatever the source path (so a renamed or moved source
+ *     still matches); when the digests cannot be compared (absent, malformed, or under different
+ *     rule versions), the hold covers every citation of the same source path. A store that does not
+ *     exist (`absent`) holds nothing: nothing was published to it.
  */
 
 import { parsePassageDigest } from 'olea-core';
@@ -112,8 +126,11 @@ export interface UnreadableHoldEntry {
 /**
  * What a read of the hold store found.
  *  - `absent`: no hold store exists, so nothing was published to it: no holds.
- *  - `unavailable`: a store exists but could not be read: never "no holds" (reading 2 above).
- *  - `read`: the holds it could read, and every unreadable stretch, reported.
+ *  - `unavailable`: a store exists but could not be read as a whole, or one of its parts could not
+ *    be: its holds are unknown and could name any passage. Never "no holds", and never "held"
+ *    either (`[D-539]`): it is carried as its own state to every consumer.
+ *  - `read`: the holds it could read, and every unreadable stretch, reported. A store that reads is
+ *    never `unavailable` because of what it holds: a corrupt record is reported, not escalated (M2).
  */
 export type HoldStoreRead =
   | { readonly status: 'absent' }
@@ -346,7 +363,139 @@ export function mergeHoldReads(reads: readonly HoldStoreRead[]): HoldStoreRead {
   };
 }
 
-/** Reading 3 in the module doc: does this hold's passage cover this cited passage? */
+/**
+ * Reads one part's text: one file, or one device's log, whichever layout is ruled. Throws when the
+ * part cannot be read, including when it has gone since it was listed: a listed part that vanishes
+ * is a failed read this time, never "no holds" (the next read lists again).
+ */
+export type HoldStorePart = () => Promise<string>;
+
+/**
+ * Where the hold store is, supplied by the caller once the persistence owner rules a location
+ * (`ol-egov.141.89.104.6`). This module reads; the source only lists and fetches.
+ */
+export interface HoldStoreSource {
+  /**
+   * The store's parts. An empty list is no store (`absent`). Throws when the store exists but
+   * cannot be listed.
+   */
+  listParts(): Promise<readonly HoldStorePart[]>;
+}
+
+/**
+ * One read of the whole store. Never throws: a store that cannot be listed, or any part that cannot
+ * be read, makes the whole `unavailable` ({@link mergeHoldReads}); what the parts hold is decoded by
+ * {@link readHoldText}, where an unreadable record is reported and never escalated (M2).
+ */
+export async function readHoldStore(source: HoldStoreSource): Promise<HoldStoreRead> {
+  let parts: readonly HoldStorePart[];
+  try {
+    parts = await source.listParts();
+  } catch {
+    return { status: 'unavailable' };
+  }
+  if (parts.length === 0) return { status: 'absent' };
+  const reads = await Promise.all(
+    parts.map(async (part): Promise<HoldStoreRead> => {
+      try {
+        return readHoldText(await part());
+      } catch {
+        return { status: 'unavailable' };
+      }
+    }),
+  );
+  return mergeHoldReads(reads);
+}
+
+/**
+ * The hold store as last read, with what a consumer needs to show the unavailable state and to clear
+ * it. Counts and times only: never a path, an error message or a record (D-005).
+ */
+export interface HoldStoreState {
+  readonly read: HoldStoreRead;
+  /** Epoch ms when this read finished. */
+  readonly readAt: number;
+  /** Only while unavailable: epoch ms when the current run of failed reads began. */
+  readonly unavailableSince?: number;
+  /** Failed reads in a row, this one included; 0 once a read succeeds. */
+  readonly failedReads: number;
+  /**
+   * Only on the first read that succeeds after a run of failed ones: the run it ends, so a consumer
+   * showing the unavailable state can clear it and compose again.
+   */
+  readonly recovered?: { readonly unavailableSince: number; readonly failedReads: number };
+}
+
+/**
+ * The recovery path for a store that cannot be read (`[D-539]`). It keeps no failed read as the
+ * answer: every {@link read} goes to the store again, so the next load of a view reads afresh, and
+ * the plugin's interval tick calls {@link readIfUnavailable}, which re-reads only while the last
+ * read was unavailable. Either clears the unavailable state as soon as the store reads, without
+ * restarting Olea. Reads started while one is in flight share it. It writes nothing.
+ */
+export class HoldStoreReader {
+  private last: HoldStoreState | undefined;
+  private inFlight: Promise<HoldStoreState> | undefined;
+
+  constructor(
+    private readonly source: HoldStoreSource,
+    private readonly now: () => number = Date.now,
+  ) {}
+
+  /** The last read, or `undefined` before the first: a consumer with none reads first. */
+  get current(): HoldStoreState | undefined {
+    return this.last;
+  }
+
+  /** Reads the store now: the call a consumer makes when it loads, before presentation. */
+  read(): Promise<HoldStoreState> {
+    if (this.inFlight !== undefined) return this.inFlight;
+    const pending = this.readOnce().finally(() => {
+      this.inFlight = undefined;
+    });
+    this.inFlight = pending;
+    return pending;
+  }
+
+  /** The tick's call: reads again only when there is no read yet or the last was unavailable. */
+  readIfUnavailable(): Promise<HoldStoreState> {
+    const last = this.last;
+    if (last !== undefined && last.read.status !== 'unavailable') return Promise.resolve(last);
+    return this.read();
+  }
+
+  private async readOnce(): Promise<HoldStoreState> {
+    const read = await readHoldStore(this.source);
+    const readAt = this.now();
+    const previous = this.last;
+    const failing =
+      previous !== undefined && previous.read.status === 'unavailable' ? previous : undefined;
+    const runStart = failing?.unavailableSince ?? failing?.readAt;
+    const state: HoldStoreState =
+      read.status === 'unavailable'
+        ? {
+            read,
+            readAt,
+            unavailableSince: runStart ?? readAt,
+            failedReads: (failing?.failedReads ?? 0) + 1,
+          }
+        : {
+            read,
+            readAt,
+            failedReads: 0,
+            ...(failing !== undefined && runStart !== undefined
+              ? { recovered: { unavailableSince: runStart, failedReads: failing.failedReads } }
+              : {}),
+          };
+    this.last = state;
+    return state;
+  }
+}
+
+/**
+ * Does this hold's passage cover this cited passage? A legacy citation with no digest is matched by
+ * its source path (C5.3 as amended by `[D-539]`); the rest is reading 2 in the module doc.
+ */
 export function holdCoversPassage(hold: HoldPassage, cited: CitedPassage): boolean {
   const heldDigest =
     hold.passageDigest !== undefined ? parsePassageDigest(hold.passageDigest) : null;
@@ -366,26 +515,29 @@ export interface HoldReasonEntry {
 }
 
 /**
- * The hold check for one artifact, from the passages it cites.
- *  - `held: false`: no hold applies. Other withholding (the anchor's own pending reasons, source
- *    change) still decides as before; this check only ever adds a hold.
- *  - `cause: 'hold'`: one or more readable holds cover a cited passage.
- *  - `cause: 'hold-store-unavailable'`: the store could not be read, and the artifact cites a passage.
+ * The hold check for one artifact, from the passages it cites, made when the artifact is read
+ * (`[D-539]`: read-time checking; nothing is written).
+ *  - `clear`: no hold applies. Other withholding (the anchor's own pending reasons, source change)
+ *    still decides as before; this check only ever adds one.
+ *  - `held`: one or more readable holds cover a cited passage.
+ *  - `unavailable`: the store could not be read, and the artifact cites a passage. Not a hold and
+ *    not clear: the consumer keeps the artifact from presentation and says the check could not be
+ *    made, never that something was withdrawn.
  */
 export type HoldCheck =
-  | { readonly held: false }
-  | { readonly held: true; readonly cause: 'hold'; readonly reasons: readonly HoldReasonEntry[] }
-  | { readonly held: true; readonly cause: 'hold-store-unavailable' };
+  | { readonly status: 'clear' }
+  | { readonly status: 'held'; readonly reasons: readonly HoldReasonEntry[] }
+  | { readonly status: 'unavailable' };
 
 export function checkHolds(read: HoldStoreRead, cited: readonly CitedPassage[]): HoldCheck {
   // An artifact that cites no passage is not a passage-citing artifact: no hold reaches it.
-  if (cited.length === 0) return { held: false };
-  if (read.status === 'absent') return { held: false };
-  if (read.status === 'unavailable') return { held: true, cause: 'hold-store-unavailable' };
+  if (cited.length === 0) return { status: 'clear' };
+  if (read.status === 'absent') return { status: 'clear' };
+  if (read.status === 'unavailable') return { status: 'unavailable' };
   const covering = read.holds.filter((hold) =>
     cited.some((passage) => holdCoversPassage(hold.passage, passage)),
   );
-  if (covering.length === 0) return { held: false };
+  if (covering.length === 0) return { status: 'clear' };
   const seen = new Set<string>();
   const reasons: HoldReasonEntry[] = [];
   for (const hold of covering) {
@@ -398,24 +550,48 @@ export function checkHolds(read: HoldStoreRead, cited: readonly CitedPassage[]):
       ...(hold.factId !== undefined ? { factId: hold.factId } : {}),
     });
   }
-  return { held: true, cause: 'hold', reasons };
+  return { status: 'held', reasons };
 }
 
 /** The two kinds of passage-citing artifact §4.10 names. */
 export type PassageCitingArtifactKind = 'instrument' | 'explanation-claim';
 
-/** What a hold does to one artifact (§4.10: "held"). */
-export interface HeldEffect {
-  /** An instrument is not shown; an explanation claim is shown withdrawn. */
-  readonly display: 'not-shown' | 'shown-withdrawn';
-  readonly supportUse: false;
-  readonly reviewEligible: false;
-}
+/**
+ * What the hold check does to one artifact.
+ *  - `held` (§4.10: "held"): an instrument is not shown; an explanation claim is shown withdrawn.
+ *    Its evidence is removed from the current reading, as evidence that does not stand now.
+ *  - `unavailable` (`[D-539]`): the artifact is kept from presentation and is not reviewable, but
+ *    it is never shown withdrawn: in its place the consumer shows that the check could not be made.
+ *    Its evidence is neither counted as standing (a hold it cannot see may have withdrawn it) nor
+ *    removed (that would read as weak knowledge): a reading it bears on is reported unavailable.
+ */
+export type HoldEffect =
+  | {
+      readonly status: 'held';
+      readonly display: 'not-shown' | 'shown-withdrawn';
+      readonly supportUse: false;
+      readonly reviewEligible: false;
+    }
+  | {
+      readonly status: 'unavailable';
+      readonly display: 'unavailable';
+      readonly supportUse: 'unknown';
+      readonly reviewEligible: false;
+    };
 
-/** `null` when the check holds nothing: the artifact is then decided exactly as before. */
-export function heldEffect(kind: PassageCitingArtifactKind, check: HoldCheck): HeldEffect | null {
-  if (!check.held) return null;
+/** `null` when the check is clear: the artifact is then decided exactly as before. */
+export function holdEffect(kind: PassageCitingArtifactKind, check: HoldCheck): HoldEffect | null {
+  if (check.status === 'clear') return null;
+  if (check.status === 'unavailable') {
+    return {
+      status: 'unavailable',
+      display: 'unavailable',
+      supportUse: 'unknown',
+      reviewEligible: false,
+    };
+  }
   return {
+    status: 'held',
     display: kind === 'instrument' ? 'not-shown' : 'shown-withdrawn',
     supportUse: false,
     reviewEligible: false,
@@ -434,18 +610,42 @@ export function citedPassagesOf(
 }
 
 /**
- * The instruments the holds withhold, as a set to union with the anchor's own pending set
- * (`session-builder/provider.ts`'s `resolveCitationPendingRevalidation`) before presentation.
+ * What the hold check does to a set of instruments, split by the use a consumer makes of it, so
+ * presentation and the knowledge reading cannot be fed the same set by mistake.
  */
-export function resolveHoldWithheldInstruments(
+export interface HoldWithholding {
+  /** The store's state behind this result: `unavailable` is shown once, store-wide, by the consumer. */
+  readonly store: HoldStoreRead['status'];
+  /**
+   * Kept from presentation and not reviewable, held and unavailable alike: union this with the
+   * anchor's own pending set (`session-builder/provider.ts`'s `resolveCitationPendingRevalidation`)
+   * before presentation.
+   */
+  readonly notPresented: ReadonlySet<string>;
+  /** Held by a readable hold: their evidence is removed from the current reading. */
+  readonly evidenceWithdrawn: ReadonlySet<string>;
+  /**
+   * The store could not be read: their evidence is neither counted nor removed, and a reading it
+   * bears on is reported unavailable, never lower. Never add these to a reading's exclusion set.
+   */
+  readonly evidenceUnknown: ReadonlySet<string>;
+}
+
+export function resolveHoldWithholding(
   read: HoldStoreRead,
   instruments: Iterable<{ readonly instrumentId: string; readonly cited: readonly CitedPassage[] }>,
-): ReadonlySet<string> {
-  const held = new Set<string>();
+): HoldWithholding {
+  const notPresented = new Set<string>();
+  const evidenceWithdrawn = new Set<string>();
+  const evidenceUnknown = new Set<string>();
   for (const instrument of instruments) {
-    if (checkHolds(read, instrument.cited).held) held.add(instrument.instrumentId);
+    const check = checkHolds(read, instrument.cited);
+    if (check.status === 'clear') continue;
+    notPresented.add(instrument.instrumentId);
+    if (check.status === 'held') evidenceWithdrawn.add(instrument.instrumentId);
+    else evidenceUnknown.add(instrument.instrumentId);
   }
-  return held;
+  return { store: read.status, notPresented, evidenceWithdrawn, evidenceUnknown };
 }
 
 /** Counts only, for diagnostics and reports: no path, digest, fact id or reason text (D-005). */
