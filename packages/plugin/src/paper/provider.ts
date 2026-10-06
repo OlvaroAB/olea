@@ -103,6 +103,8 @@ export interface PracticePaperReadyState {
   readonly incompleteStatement: IncompletePaperStatement | null;
   readonly items: readonly PracticePaperFaceItem[];
   readonly emptySlots: readonly PaperEmptySlot[];
+  /** `[D-532]`: saved progress was discarded because her material changed; the view shows the ruled sentence once, above the paper. */
+  readonly materialChanged: boolean;
 }
 
 /** The coverage counts a locked paper may state (F4.11, `[D-252]`): counts and whether known, never a share. */
@@ -266,6 +268,7 @@ async function loadCourseState(
 export function buildReadyStateFromRecord(
   course: string,
   record: PaperRecord,
+  options: { readonly materialChanged?: boolean } = {},
 ): PracticePaperReadyState {
   const partialStatement =
     record.compositionAccount.unbuiltDemand === null
@@ -290,6 +293,7 @@ export function buildReadyStateFromRecord(
       response: item.response,
     })),
     emptySlots: record.emptySlots,
+    materialChanged: options.materialChanged === true,
   };
 }
 
@@ -428,7 +432,9 @@ async function composeRequestedPaper(
       owedSlotCount: composed.owedSlotCount,
     });
   }
-  return buildReadyStateFromRecord(course, composed.record);
+  return buildReadyStateFromRecord(course, composed.record, {
+    materialChanged: composed.materialChanged,
+  });
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc. */

@@ -151,6 +151,9 @@ export const PRACTICE_PAPER_AI_UNAVAILABLE_COPY =
  */
 export const UNFINISHED_PAPER_SENTENCE =
   "Olea couldn't finish this paper. Ask again to continue from where it stopped.";
+/** `[D-532]` (registry section 31), VERBATIM: shown once above the paper only when saved progress was discarded because her sources or the course's scope changed. */
+export const MATERIAL_CHANGED_SENTENCE =
+  'Your material changed since this paper was started, so Olea began a new one.';
 /** `[D-532]` sentence 3, VERBATIM: the kept progress was set aside because Olea was updated, so the next request starts afresh. */
 export const AUTHORING_SPEC_CHANGED_SENTENCE =
   "Olea was updated while this paper was being written, so it couldn't be finished. Ask again to start a new paper.";

@@ -596,6 +596,7 @@ describe('createLocalPracticePaperProvider — requestPaper() through the journa
         'incompleteStatement',
         'items',
         'kind',
+        'materialChanged',
         'partial',
         'partialStatement',
         'record',
