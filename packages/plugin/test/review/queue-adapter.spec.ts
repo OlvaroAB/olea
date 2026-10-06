@@ -556,7 +556,7 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
     const plan = {
       envelopeVersion: 1 as const,
       kind: 'study-plan' as const,
-      bodyVersion: 1 as const,
+      bodyVersion: 2 as const,
       policyVersion: 'sp1-test0000000002',
       computedAt: '2026-08-20T09:00:00-04:00',
       freshForSeconds: 3600,
@@ -573,7 +573,13 @@ describe('adaptExecutedReviewQueue — the executed selectionContext passes thro
               weight: 10 - index,
               examProximityDays: 5,
               reasoning: 'test reasoning',
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                {
+                  basis: 'past-paper' as const,
+                  sourcePath: '03 Research/paper.md',
+                  questionLabel: 'Q1',
+                },
+              ],
             })),
           },
         ],

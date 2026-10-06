@@ -107,7 +107,7 @@ function previousPlanWithFloorShare(floorShare: number): StudyPlanEnvelope {
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
     computedAt: '2026-08-09T09:00:00-04:00',
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,

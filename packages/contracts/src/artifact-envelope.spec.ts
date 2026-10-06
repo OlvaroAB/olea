@@ -18,6 +18,7 @@ import {
   RANK_WEIGHTS_ENDPOINT_PATH,
   rankWeightsEnvelope,
   readArtifactEnvelope,
+  STUDY_PLAN_BODY_VERSION,
   STUDY_PLAN_ENVELOPE_CONTRACT_ID,
   STUDY_PLAN_KIND,
   type StudyPlanEnvelope,
@@ -37,7 +38,7 @@ function validPlanEnvelope(): StudyPlanEnvelope {
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion: 'sp1-0123456789abcdef',
     computedAt: '2026-08-16T09:00:00.000Z',
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
@@ -55,7 +56,9 @@ function validPlanEnvelope(): StudyPlanEnvelope {
               weight: 0.72,
               examProximityDays: 9,
               reasoning: 'concept-alpha (COURSE-A): 2 citations across 1 past paper.',
-              citations: [{ sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -421,7 +424,9 @@ describe('the delivered-threshold surfaces share this envelope', () => {
     const toEnvelope = (plan: StudyPlanArtifact): StudyPlanEnvelope => ({
       envelopeVersion: 1,
       kind: 'study-plan',
-      bodyVersion: plan.formatVersion,
+      // `[D-529]`: the field mapping is unchanged, but the body format moved to 2 with the
+      // basis on each citation, so a legacy (format 1) body is carried onto the current one.
+      bodyVersion: STUDY_PLAN_BODY_VERSION,
       policyVersion: plan.planVersion,
       computedAt: plan.computedAt,
       freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,

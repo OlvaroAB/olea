@@ -7,6 +7,7 @@ import {
   type StudyPlanArtifact,
   studyPlanAllocationEntry,
   studyPlanArtifact,
+  studyPlanCitation,
 } from './study-plan.js';
 
 /**
@@ -31,7 +32,7 @@ function validPlan(): StudyPlanArtifact {
             weight: 0.72,
             examProximityDays: 9,
             reasoning: 'concept-alpha (COURSE-A): 2 citations across 1 past paper.',
-            citations: [{ sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
+            citations: [{ basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
           },
         ],
       },
@@ -78,6 +79,27 @@ describe('studyPlanArtifact', () => {
       courses: [{ ...ranked, concepts: [{ ...ranked.concepts[0], citations: [] }] }],
     };
     expect(studyPlanArtifact.safeParse(broken).success).toBe(false);
+  });
+
+  it("[D-529] each citation carries its basis, and a basis never wears another basis's fields", () => {
+    const ok = (c: unknown) => studyPlanCitation.safeParse(c).success;
+    expect(ok({ basis: 'past-paper', sourcePath: 'papers/a.md', questionLabel: 'Q1' })).toBe(true);
+    expect(ok({ basis: 'objectives', sourcePath: 'objectives/a.md' })).toBe(true);
+    expect(ok({ basis: 'assessment-brief', sourcePath: 'assessments/a.md' })).toBe(true);
+    expect(ok({ basis: 'unknown-relevance' })).toBe(true);
+    // A past paper needs its label; the unlabelled shape of the old format has no basis at all.
+    expect(ok({ basis: 'past-paper', sourcePath: 'papers/a.md' })).toBe(false);
+    expect(ok({ sourcePath: 'papers/a.md', questionLabel: 'Q1' })).toBe(false);
+    // The other arms need their source.
+    expect(ok({ basis: 'objectives' })).toBe(false);
+    expect(ok({ basis: 'assessment-brief' })).toBe(false);
+    // Zod objects strip unknown keys rather than reject; the label must not survive on an objectives arm.
+    const parsed = studyPlanCitation.parse({
+      basis: 'objectives',
+      sourcePath: 'objectives/a.md',
+      questionLabel: 'Q1',
+    });
+    expect(parsed).toEqual({ basis: 'objectives', sourcePath: 'objectives/a.md' });
   });
 
   it('rejects a ranked course with an empty concept list and no named reason — that case abstains instead', () => {

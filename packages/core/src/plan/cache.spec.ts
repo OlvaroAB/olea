@@ -30,7 +30,7 @@ function samplePlan(overrides: Partial<StudyPlanEnvelope> = {}): StudyPlanEnvelo
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
     computedAt: COMPUTED_AT,
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
@@ -48,7 +48,9 @@ function samplePlan(overrides: Partial<StudyPlanEnvelope> = {}): StudyPlanEnvelo
               weight: 0.5,
               examProximityDays: 7,
               reasoning: 'concept-alpha (COURSE-A): derived reasoning.',
-              citations: [{ sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -109,6 +111,13 @@ describe('loadCachedStudyPlan', () => {
   it('treats an unknown bodyVersion as absent rather than throwing or migrating', async () => {
     const future = { ...samplePlan(), bodyVersion: 99 };
     const result = await loadCachedStudyPlan(memoryStore(future), NOW);
+    expect(result.plan).toBeNull();
+    expect(result.rejection).toBe('unreadable');
+  });
+
+  it('[D-529] treats a plan in the previous body format (unlabelled citations) as absent, to be rebuilt', async () => {
+    const previous = { ...samplePlan(), bodyVersion: 1 };
+    const result = await loadCachedStudyPlan(memoryStore(previous), NOW);
     expect(result.plan).toBeNull();
     expect(result.rejection).toBe('unreadable');
   });

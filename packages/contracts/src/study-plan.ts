@@ -75,15 +75,45 @@ export const STUDY_PLAN_CONTRACT_ID = 'study-plan.v1';
  * "evidence" field on the study-plan entity, and G5's "every ranking cites or
  * abstains" made structural.
  *
+ * **Each citation carries the basis it was ranked on** (`[D-529]`, F4.2: "each
+ * basis stated for what it is and never folded into another"). Four arms:
+ *
+ * - `'past-paper'`: the paper's path and the question's own label.
+ * - `'objectives'`: the objectives document's path. No label: a name match in
+ *   an objectives document is not a question, and giving it one would be the
+ *   "wears a past paper's clothes" misrepresentation `[D-226]` forbids.
+ * - `'assessment-brief'`: the assessment note's path (its declared scope).
+ *   No label, same reason.
+ * - `'unknown-relevance'`: the marked entry for a concept of the course that
+ *   no assessment evidence reaches (`[D-329]`, `[D-450]`). It has no source
+ *   to point at, so it carries none: a concept without evidence says so
+ *   rather than borrowing another basis's source.
+ *
  * Path plus label, and nothing else. See the module doc for why the question's
  * text is not here.
  */
-export const studyPlanCitation = z.object({
-  /** Vault path of the past paper the citation came from. */
-  sourcePath: z.string().min(1),
-  /** The question's own label within that paper, verbatim (R1/R2). */
-  questionLabel: z.string().min(1),
-});
+export const studyPlanCitation = z.discriminatedUnion('basis', [
+  z.object({
+    basis: z.literal('past-paper'),
+    /** Vault path of the past paper the citation came from. */
+    sourcePath: z.string().min(1),
+    /** The question's own label within that paper, verbatim (R1/R2). */
+    questionLabel: z.string().min(1),
+  }),
+  z.object({
+    basis: z.literal('objectives'),
+    /** Vault path of the objectives document that names the concept. */
+    sourcePath: z.string().min(1),
+  }),
+  z.object({
+    basis: z.literal('assessment-brief'),
+    /** Vault path of the assessment note whose declared scope names the concept. */
+    sourcePath: z.string().min(1),
+  }),
+  z.object({
+    basis: z.literal('unknown-relevance'),
+  }),
+]);
 export type StudyPlanCitation = z.infer<typeof studyPlanCitation>;
 
 /**

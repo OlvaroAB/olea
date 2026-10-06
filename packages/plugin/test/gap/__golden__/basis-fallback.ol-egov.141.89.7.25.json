@@ -264,7 +264,89 @@
       "This is where the evidence points, not where the exam will go. Cover the whole syllabus; let this decide what you do first."
     ],
     "plan": {
-      "threw": "ZodError: [\n  {\n    \"origin\": \"array\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"body\",\n      \"courses\",\n      0,\n      \"concepts\",\n      1,\n      \"citations\"\n    ],\n    \"message\": \"Too small: expected array to have >=1 items\"\n  },\n  {\n    \"origin\": \"array\",\n    \"code\": \"too_small\",\n    \"minimum\": 1,\n    \"inclusive\": true,\n    \"path\": [\n      \"body\",\n      \"courses\",\n      0,\n      \"concepts\",\n      3,\n      \"citations\"\n    ],\n    \"message\": \"Too small: expected array to have >=1 items\"\n  }\n]"
+      "envelope": {
+        "envelopeVersion": 1,
+        "kind": "study-plan",
+        "bodyVersion": 2,
+        "policyVersion": "sp2-7e0407d209621d51",
+        "computedAt": "2026-08-15T13:00:00.000Z",
+        "freshForSeconds": 86400,
+        "governsForSeconds": 604800,
+        "body": {
+          "asOf": "2026-08-15",
+          "courses": [
+            {
+              "course": "TESTC101",
+              "status": "ranked",
+              "concepts": [
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000001",
+                  "rank": 1,
+                  "weight": 1.9516129032258065,
+                  "examProximityDays": 17,
+                  "reasoning": "Widget theory (TESTC101) is ranked above the next concept because it counts for more in your assessments. It appears in past papers, and its course objectives name it. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "basis": "past-paper",
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "questionLabel": "1"
+                    },
+                    {
+                      "basis": "past-paper",
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                      "questionLabel": "1"
+                    },
+                    {
+                      "basis": "objectives",
+                      "sourcePath": "03 Research/TESTC101 Course Objectives.md"
+                    }
+                  ]
+                },
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000003",
+                  "rank": 2,
+                  "weight": 1.5849462365591398,
+                  "examProximityDays": 17,
+                  "reasoning": "Sprocket method (TESTC101) is ranked above the next concept because it counts for more in your assessments. Its course objectives name it. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "basis": "objectives",
+                      "sourcePath": "03 Research/TESTC101 Course Objectives.md"
+                    }
+                  ]
+                },
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000002",
+                  "rank": 3,
+                  "weight": 1.5516129032258066,
+                  "examProximityDays": 17,
+                  "reasoning": "Gizmo law (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "basis": "past-paper",
+                      "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                      "questionLabel": "2"
+                    }
+                  ]
+                },
+                {
+                  "conceptId": "concept-key1:00000000-0000-4000-8000-000000000004",
+                  "rank": 4,
+                  "weight": 1.4587557603686636,
+                  "examProximityDays": 17,
+                  "reasoning": "Flange rule (TESTC101) is ranked last in this course. Its assessments point to it. How well you recall it is not known yet.",
+                  "citations": [
+                    {
+                      "basis": "assessment-brief",
+                      "sourcePath": "02 Assignments/Quiz 1.md"
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      }
     }
   },
   "pastPapersOnly": {
@@ -449,8 +531,8 @@
       "envelope": {
         "envelopeVersion": 1,
         "kind": "study-plan",
-        "bodyVersion": 1,
-        "policyVersion": "sp1-20abcfd6f907a24d",
+        "bodyVersion": 2,
+        "policyVersion": "sp2-9071294a92d05d68",
         "computedAt": "2026-08-15T13:00:00.000Z",
         "freshForSeconds": 86400,
         "governsForSeconds": 604800,
@@ -469,10 +551,12 @@
                   "reasoning": "Widget theory (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet.",
                   "citations": [
                     {
+                      "basis": "past-paper",
                       "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
                       "questionLabel": "1"
                     },
                     {
+                      "basis": "past-paper",
                       "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
                       "questionLabel": "1"
                     }
@@ -486,6 +570,7 @@
                   "reasoning": "Gizmo law (TESTC101) is ranked last in this course. It appears in past papers. How well you recall it is not known yet.",
                   "citations": [
                     {
+                      "basis": "past-paper",
                       "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
                       "questionLabel": "2"
                     }

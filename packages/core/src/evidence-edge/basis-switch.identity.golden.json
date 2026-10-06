@@ -324,6 +324,17 @@
               "distinctSourceCount": 0,
               "objectivesCitations": [],
               "distinctObjectivesSourceCount": 0,
+              "briefCitations": [
+                {
+                  "sourcePath": "02 Assignments/Quiz 1.md",
+                  "provenance": {
+                    "sourcePath": "02 Assignments/Quiz 1.md",
+                    "location": {
+                      "page": 1
+                    }
+                  }
+                }
+              ],
               "contributions": [
                 {
                   "assessmentPath": "02 Assignments/Quiz 1.md",
