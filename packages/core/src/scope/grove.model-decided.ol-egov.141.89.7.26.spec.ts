@@ -38,6 +38,7 @@ import {
 } from '../../test/support/model-decided-fixtures.js';
 import { resolveBasisSwitches } from '../evidence-edge/basis-switch.js';
 import {
+  type CorrectionControlAvailability,
   type ModelDecidedContainmentRead,
   type ReadModelDecidedContainmentInput,
   readModelDecidedContainment,
@@ -88,7 +89,7 @@ describe('the grove from the real read', () => {
   async function readFor(overrides: Overrides): Promise<ModelDecidedContainmentRead> {
     const outcomes = await seedCourse(vault);
     return readModelDecidedContainment(vault, {
-      correctionControlAvailable: true,
+      correctionControlAvailable: { objectives: true, 'assessment-brief': true },
       courseId: COURSE,
       documents: DOCUMENTS,
       alignments: projectionOf(everyBasisAligned()),
@@ -104,13 +105,15 @@ describe('the grove from the real read', () => {
   }
 
   it('her correction control unavailable, every switch on: the golden', async () => {
-    const read = await readFor({ correctionControlAvailable: false });
+    const read = await readFor({
+      correctionControlAvailable: { objectives: false, 'assessment-brief': false },
+    });
     expect(groveWith(read)).toBe(golden());
   });
 
   it('her correction control not stated: the golden', async () => {
     const read = await readFor({
-      correctionControlAvailable: undefined as unknown as boolean,
+      correctionControlAvailable: undefined as unknown as CorrectionControlAvailability,
     });
     expect(groveWith(read)).toBe(golden());
   });
@@ -131,7 +134,12 @@ describe('the grove from the real read', () => {
   it('a model-decided concept no registered source names is listed apart, with its own count; the declared and built counts and the cells are the switch-off values', async () => {
     const read = await readFor({ switches: switchesOn(['objectives']) });
     expect(read.status === 'read' ? read.edges.map((e) => e.conceptKey) : []).toEqual([K_MODEL]);
-    const result = buildGroveModel({ ...groveInput(), modelDecided: read });
+    // `[D-537]`: a placement is listed with its objective's wording, which the caller supplies.
+    const result = buildGroveModel({
+      ...groveInput(),
+      modelDecided: read,
+      objectiveWordings: new Map([[O_MISS, 'Analyse a loaded frame']]),
+    });
     const today = JSON.parse(readFileSync(GOLDEN, 'utf8')).model;
     expect(result.model.status).toBe('declared');
     if (result.model.status !== 'declared') return;
@@ -140,10 +148,11 @@ describe('the grove from the real read', () => {
     expect(rest).toEqual(todayRest);
     expect(result.model.summary.denominatorCount).toBe(today.summary.denominatorCount);
     expect(result.model.summary.builtCount).toBe(today.summary.builtCount);
-    expect(modelDecided).toEqual({
-      count: 1,
-      concepts: [{ conceptKey: K_MODEL, conceptName: 'Flange Rule', outcomeIds: [O_MISS] }],
-    });
+    expect(modelDecided?.count).toBe(1);
+    expect(modelDecided?.declined).toEqual([]);
+    expect(modelDecided?.concepts.map((c) => [c.conceptKey, c.conceptName, c.outcomeIds])).toEqual([
+      [K_MODEL, 'Flange Rule', [O_MISS]],
+    ]);
     // Not shown as a volunteer; the other volunteer stays one.
     expect(volunteers.map((v) => v.conceptKey)).toEqual(
       todayVolunteers
@@ -166,6 +175,7 @@ describe('the grove from the real read', () => {
       {
         count: 0,
         concepts: [],
+        declined: [],
       },
     );
   });
@@ -186,6 +196,7 @@ describe('the grove from the real read', () => {
       {
         count: 0,
         concepts: [],
+        declined: [],
       },
     );
     const today = JSON.parse(readFileSync(GOLDEN, 'utf8')).model;

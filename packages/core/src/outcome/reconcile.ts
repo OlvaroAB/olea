@@ -70,11 +70,15 @@
  * an assessment's stated scope giving a concept standing. It writes nothing: a model-decided link is
  * never put into `OutcomeRecord.conceptKeys`, never written as a near-match record, and never read
  * as hers. It counts only when ALL of these hold, and the read checks them in this order:
- * 1. **Her correction control exists and works.** The read takes a required statement of it;
- *    anything but `true` disables everything, whatever the switches say (`[D-533]`: "a clause alone
- *    is insufficient"). No production caller states it, because no such control exists yet.
+ * 1. **Her correction control exists and works, for that basis.** The read takes a required
+ *    statement of it, split per basis (`[D-537]`): objectives, and an assessment's stated scope.
+ *    Only the literal `true` counts for a basis, and a basis without it reads nothing, whatever its
+ *    switch says (`[D-533]`: "a clause alone is insufficient"). The one production caller is the
+ *    grove provider that hands the view her working control (plugin `grove/provider.ts`), and it
+ *    states it for objectives only: a stated scope has no control, so it stays off.
  * 2. **The basis's switch is on** (`../evidence-edge/basis-switch.ts`, `[D-432]`): objectives for a
- *    declaration, assessment briefs for a stated scope. Both off reads disabled. **A past paper
+ *    declaration, assessment briefs for a stated scope. No basis both stated and on reads disabled.
+ *    **A past paper
  *    never gives containment or standing, whatever its switch says** (`[D-433]`; F4.2: a historical
  *    paper is never proof of current scope): only a result stored as an objectives or stated-scope
  *    reading is ever looked at.
@@ -88,8 +92,19 @@
  * 5. **Her own decisions outrank the model.** A near-match record for the pair that she confirmed
  *    or declined (`[D-256]`), or that this build cannot read, gives no model-decided edge; and her
  *    correction history (`./containment-correction.ts`) removes a pair whose latest decision is a
- *    decline, or whose history cannot be read, keyed on the declaration so it persists across
- *    unrelated edits.
+ *    decline, or whose history cannot be read, keyed on the declaration (the course and the
+ *    objective's wording) so it persists across unrelated edits, a rename and a move.
+ *
+ * **One source for every reader (`[D-537]`: honour her rejection wherever the link contributes).**
+ * The read is the only place her choices are applied, so every reader of these links takes them
+ * from its `edges` and `standings`: the grove today, and the ranking once a reading-based
+ * objectives match is produced. A placement she took out is returned apart, in
+ * `declinedPlacements`, so the grove can list it to put back; it passes every condition above
+ * except her choice, carries `correction: 'declined'`, and its type is not assignable to an edge
+ * (`_assertDeclinedPlacementIsNeverAnEdge` below), so it cannot be handed to a reader of the links
+ * that count. A pair whose history cannot be read is in neither list. A source scan
+ * (`./reconcile.single-source.ol-egov.141.89.7.77.spec.ts`) fails when anything but this read, the
+ * module that defines the views and the scope-reading writer reads stored alignment results raw.
  */
 
 import { conceptIdentityNormalizationIndex } from '../concept/concept-key.js';
@@ -105,6 +120,7 @@ import {
   type ContainmentDeclaration,
   isCorrectedAway,
   objectivesDeclarationOf,
+  readContainmentCorrectionState,
   statedScopeDeclarationOf,
 } from './containment-correction.js';
 import {
@@ -304,7 +320,29 @@ export interface ModelDecidedContainmentEdge {
   /** What her correction of this edge is keyed on (`./containment-correction.ts`). */
   readonly declaration: ContainmentDeclaration;
   readonly provenance: ModelDecidedProvenance;
+  /** Never present: a link that counts carries no correction (module doc, `[D-537]`). */
+  readonly correction?: never;
 }
+
+/**
+ * A placement she took out (`[D-537]`): it would count but for her latest choice, a decline. Listed
+ * apart so the grove can offer to put it back; never a link that counts, and not assignable to one.
+ */
+export interface ModelDecidedDeclinedPlacement {
+  readonly outcomeId: string;
+  readonly conceptKey: string;
+  readonly basis: 'objectives';
+  readonly decidedBy: 'model';
+  readonly correction: 'declined';
+  readonly declaration: ContainmentDeclaration;
+  readonly provenance: ModelDecidedProvenance;
+}
+
+type AssertNever<T extends never> = T;
+/** Compile-time tripwire: a placement she took out can never be passed where a link that counts is expected. */
+type _assertDeclinedPlacementIsNeverAnEdge = AssertNever<
+  Extract<ModelDecidedDeclinedPlacement, ModelDecidedContainmentEdge>
+>;
 
 /** An assessment's stated scope giving a concept standing on that assessment, decided by the model. Never hers. */
 export interface ModelDecidedScopeStanding {
@@ -326,9 +364,23 @@ export type ModelDecidedContainmentRead =
   | { readonly status: 'disabled'; readonly reason: ModelDecidedDisabledReason }
   | {
       readonly status: 'read';
+      /** The links that count. Every reader takes these, and only these (module doc). */
       readonly edges: readonly ModelDecidedContainmentEdge[];
       readonly standings: readonly ModelDecidedScopeStanding[];
+      /** The objectives placements she took out, for putting back only (`[D-537]`). */
+      readonly declinedPlacements: readonly ModelDecidedDeclinedPlacement[];
     };
+
+/**
+ * `[D-537]`: whether her correction control for model-decided links exists in the shipped plugin
+ * and works, per basis. Only the literal `true` counts for a basis.
+ */
+export interface CorrectionControlAvailability {
+  /** Placements under a course's objectives: her control in the grove (plugin `grove/provider.ts`). */
+  readonly objectives: boolean;
+  /** Standing from an assessment's stated scope: no control exists, so no caller states it. */
+  readonly 'assessment-brief': boolean;
+}
 
 /** One registered document at its CURRENT revision, with the digests current for it now. */
 export interface ModelDecidedDocument {
@@ -343,13 +395,13 @@ export interface ModelDecidedDocument {
 
 export interface ReadModelDecidedContainmentInput {
   /**
-   * `[D-533]`: whether her correction control for model-decided links exists in the shipped
-   * plugin and works. Required, and only the literal `true` counts: absent, `false` or anything
-   * else disables every model-decided link, whatever the switches say. A clause defining the
-   * control is not enough. **No production caller states it today: no such control exists**, and
-   * the bead that ships her working control is the one that may.
+   * `[D-533]`, `[D-537]`: whether her correction control for model-decided links exists in the
+   * shipped plugin and works, per basis. Required, and only the literal `true` counts for a basis:
+   * absent, `false`, the earlier single-flag form or anything else disables that basis, whatever
+   * its switch says. A clause defining the control is not enough. **The one production caller is
+   * the grove provider that renders her working control, for objectives only.**
    */
-  readonly correctionControlAvailable: boolean;
+  readonly correctionControlAvailable: CorrectionControlAvailability;
   readonly courseId: string;
   /** The course's outcome records (the caller scopes them, as for the reconciliation). */
   readonly outcomes: readonly OutcomeRecord[];
@@ -407,13 +459,15 @@ export async function readModelDecidedContainment(
   vault: VaultSource,
   input: ReadModelDecidedContainmentInput,
 ): Promise<ModelDecidedContainmentRead> {
-  if (input.correctionControlAvailable !== true) {
+  const control = controlsStated(input.correctionControlAvailable);
+  if (!control.objectives && !control.briefs) {
     return { status: 'disabled', reason: 'correction-control-unavailable' };
   }
   const switches = input.switches ?? resolveBasisSwitches();
-  const objectives = switches.objectives;
-  const briefs = switches['assessment-brief'];
-  if (objectives.status !== 'on' && briefs.status !== 'on') {
+  // A basis reads only when her control is stated for it AND its switch is on.
+  const objectives = control.objectives ? switches.objectives : undefined;
+  const briefs = control.briefs ? switches['assessment-brief'] : undefined;
+  if (objectives?.status !== 'on' && briefs?.status !== 'on') {
     return { status: 'disabled', reason: 'no-containment-basis-on' };
   }
   const canonicalKeys = input.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
@@ -430,6 +484,7 @@ export async function readModelDecidedContainment(
 
   const edges = new Map<string, ModelDecidedContainmentEdge>();
   const standings = new Map<string, ModelDecidedScopeStanding>();
+  const declined = new Map<string, ModelDecidedDeclinedPlacement>();
   for (const document of input.documents) {
     const kind = document.source.documentKind;
     // The past-paper guard: only an objectives or stated-scope reading is ever looked at.
@@ -480,10 +535,29 @@ export async function readModelDecidedContainment(
         );
         if (outcome === undefined) continue;
         const id = pairKey(outcome.id, conceptKey);
-        if (edges.has(id) || attached.has(id)) continue;
+        if (edges.has(id) || declined.has(id) || attached.has(id)) continue;
         if (await nearMatchDecided(vault, outcome.id, conceptKey, canonicalKeys)) continue;
-        const declaration = await objectivesDeclarationOf(outcome);
-        if (await isCorrectedAway(vault, declaration, conceptKey, canonicalKeys)) continue;
+        const declaration = await objectivesDeclarationOf(outcome, input.courseId);
+        const choice = await readContainmentCorrectionState(
+          vault,
+          declaration,
+          conceptKey,
+          canonicalKeys,
+        );
+        // Failing closed: an unreadable history is in neither list, so no control is offered.
+        if (choice === 'unreadable') continue;
+        if (choice === 'declined') {
+          declined.set(id, {
+            outcomeId: outcome.id,
+            conceptKey,
+            basis: 'objectives',
+            decidedBy: 'model',
+            correction: 'declined',
+            declaration,
+            provenance,
+          });
+          continue;
+        }
         edges.set(id, {
           outcomeId: outcome.id,
           conceptKey,
@@ -502,6 +576,22 @@ export async function readModelDecidedContainment(
     status: 'read',
     edges: [...edges].sort(byKey).map(([, edge]) => edge),
     standings: [...standings].sort(byKey).map(([, standing]) => standing),
+    declinedPlacements: [...declined].sort(byKey).map(([, placement]) => placement),
+  };
+}
+
+/** Which halves of the statement hold: only an object whose half is the literal `true` (module doc). */
+function controlsStated(statement: unknown): {
+  readonly objectives: boolean;
+  readonly briefs: boolean;
+} {
+  if (typeof statement !== 'object' || statement === null) {
+    return { objectives: false, briefs: false };
+  }
+  const halves = statement as Record<string, unknown>;
+  return {
+    objectives: halves.objectives === true,
+    briefs: halves['assessment-brief'] === true,
   };
 }
 

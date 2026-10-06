@@ -63,6 +63,7 @@ import {
   outcomeConceptNearMatchRecordPath,
 } from './near-match.js';
 import {
+  type CorrectionControlAvailability,
   type ModelDecidedContainmentRead,
   type ReadModelDecidedContainmentInput,
   readModelDecidedContainment,
@@ -78,6 +79,9 @@ function golden(): string {
   return JSON.stringify(JSON.parse(readFileSync(GOLDEN, 'utf8')));
 }
 const IDENTITY: ConceptKeyCanonicalIndex = { canonicalOf: (k) => k, superseded: new Map() };
+/** `[D-537]`: the statement is per basis. Both halves, for the suites that read both bases. */
+const BOTH_CONTROLS: CorrectionControlAvailability = { objectives: true, 'assessment-brief': true };
+const NO_CONTROL: CorrectionControlAvailability = { objectives: false, 'assessment-brief': false };
 /** What the reconciliation attaches by exact name and alias in this course. */
 const ATTACHED_BY_NAME = [
   { outcomeId: O_EXACT, conceptKey: K_EXACT },
@@ -92,7 +96,7 @@ type ReadOptions = Omit<
 /** Her control available, the given switches, every basis aligned. */
 function readOptions(overrides: Partial<ReadOptions> = {}): ReadOptions {
   return {
-    correctionControlAvailable: true,
+    correctionControlAvailable: BOTH_CONTROLS,
     courseId: COURSE,
     documents: DOCUMENTS,
     alignments: projectionOf(everyBasisAligned()),
@@ -142,7 +146,7 @@ describe('ol-egov.141.89.7.26 — off is exactly today: the golden pinned before
   });
 
   it('her correction control not available (false): the golden, whatever the switches say', async () => {
-    expect(await runAndSerialize(readOptions({ correctionControlAvailable: false }))).toBe(
+    expect(await runAndSerialize(readOptions({ correctionControlAvailable: NO_CONTROL }))).toBe(
       golden(),
     );
   });
@@ -155,7 +159,15 @@ describe('ol-egov.141.89.7.26 — off is exactly today: the golden pinned before
   it('a truthy value that is not true is not her control: the golden', async () => {
     const options = {
       ...readOptions(),
-      correctionControlAvailable: 'yes',
+      correctionControlAvailable: { objectives: 'yes', 'assessment-brief': 'yes' },
+    } as unknown as ReadOptions;
+    expect(await runAndSerialize(options)).toBe(golden());
+  });
+
+  it('the earlier single-flag statement is not her control for any basis ([D-537]): the golden', async () => {
+    const options = {
+      ...readOptions(),
+      correctionControlAvailable: true,
     } as unknown as ReadOptions;
     expect(await runAndSerialize(options)).toBe(golden());
   });
@@ -226,7 +238,7 @@ describe('readModelDecidedContainment — when a model-decided link counts', () 
   }
 
   it('her control unavailable: disabled first, whatever the switches say', async () => {
-    expect(await read({ correctionControlAvailable: false })).toEqual({
+    expect(await read({ correctionControlAvailable: NO_CONTROL })).toEqual({
       status: 'disabled',
       reason: 'correction-control-unavailable',
     });
@@ -243,7 +255,7 @@ describe('readModelDecidedContainment — when a model-decided link counts', () 
         conceptKey: K_MODEL,
         basis: 'objectives',
         decidedBy: 'model',
-        declaration: await objectivesDeclarationOf(miss),
+        declaration: await objectivesDeclarationOf(miss, COURSE),
         provenance: {
           task: READER.task,
           promptVersion: READER.promptVersion,
@@ -325,7 +337,7 @@ describe('readModelDecidedContainment — when a model-decided link counts', () 
         { source: OBJ_REF, conceptKey: K_EXACT, result: aligned(['outcome-key1:unknown']) },
       ]),
     });
-    expect(result).toEqual({ status: 'read', edges: [], standings: [] });
+    expect(result).toEqual({ status: 'read', edges: [], standings: [], declinedPlacements: [] });
   });
 
   it('a result that is not current, not aligned, or from another configuration counts nothing', async () => {
@@ -429,7 +441,7 @@ describe('past-paper alignment never creates containment or scope standing', () 
       }),
       outcomes: await withPaperOutcome(),
     });
-    expect(result).toEqual({ status: 'read', edges: [], standings: [] });
+    expect(result).toEqual({ status: 'read', edges: [], standings: [], declinedPlacements: [] });
   });
 
   it("a caller naming the paper's path as an objectives document reads nothing from it", async () => {
@@ -449,7 +461,7 @@ describe('past-paper alignment never creates containment or scope standing', () 
       }),
       outcomes,
     });
-    expect(result).toEqual({ status: 'read', edges: [], standings: [] });
+    expect(result).toEqual({ status: 'read', edges: [], standings: [], declinedPlacements: [] });
   });
 
   it('only the past-paper switch on: disabled, so a historical paper is never current scope', async () => {
@@ -520,9 +532,15 @@ describe('her correction history undoes a model-decided link at read time', () =
 
   async function declineMiss(kind: 'declined' | 'accepted' = 'declined', at = '2026-10-06T09:00') {
     const miss = outcomes.find((o) => o.id === O_MISS) as OutcomeRecord;
-    await recordContainmentCorrection(vault, await objectivesDeclarationOf(miss), K_MODEL, kind, {
-      now: () => at,
-    });
+    await recordContainmentCorrection(
+      vault,
+      await objectivesDeclarationOf(miss, COURSE),
+      K_MODEL,
+      kind,
+      {
+        now: () => at,
+      },
+    );
   }
 
   it('her correction excludes the edge, and nothing written before it is edited or removed', async () => {
@@ -567,7 +585,8 @@ describe('her correction history undoes a model-decided link at read time', () =
         },
       ]),
     });
-    expect(result).toEqual({ status: 'read', edges: [], standings: [] });
+    expect(edges(result)).toEqual([]);
+    expect(standings(result)).toEqual([]);
   });
 
   it('changed declaration wording is new evidence, and her correction of the old one is kept', async () => {
@@ -583,7 +602,7 @@ describe('her correction history undoes a model-decided link at read time', () =
     const miss = await outcome(O_MISS, 'Analyse a loaded frame', 3);
     const kept = await readContainmentCorrection(
       vault,
-      await objectivesDeclarationOf(miss),
+      await objectivesDeclarationOf(miss, COURSE),
       K_MODEL,
     );
     expect(kept.kind === 'record' ? kept.record.events.map((e) => e.kind) : []).toEqual([
@@ -596,7 +615,7 @@ describe('her correction history undoes a model-decided link at read time', () =
     await declineMiss('accepted', 't2');
     expect(edges(await read())).toContainEqual([O_MISS, K_MODEL]);
     expect(edges(await read({ switches: resolveBasisSwitches() }))).toEqual([]);
-    expect(edges(await read({ correctionControlAvailable: false }))).toEqual([]);
+    expect(edges(await read({ correctionControlAvailable: NO_CONTROL }))).toEqual([]);
     expect(
       edges(
         await read({
@@ -616,7 +635,7 @@ describe('her correction history undoes a model-decided link at read time', () =
   it('her acceptance never makes a link count on its own, and never writes it into her outcome', async () => {
     await declineMiss('accepted', 't1');
     expect(edges(await read({ switches: resolveBasisSwitches() }))).toEqual([]);
-    expect(edges(await read({ correctionControlAvailable: false }))).toEqual([]);
+    expect(edges(await read({ correctionControlAvailable: NO_CONTROL }))).toEqual([]);
     const report = await reconcileOutcomeConcepts(vault, outcomes, CONCEPTS, {
       now: () => NOW,
       modelDecided: readOptions({ switches: switchesOn(['objectives']) }),
@@ -631,7 +650,7 @@ describe('her correction history undoes a model-decided link at read time', () =
   it('an unreadable history excludes its pair, so a rejection inside it is never lost', async () => {
     const miss = outcomes.find((o) => o.id === O_MISS) as OutcomeRecord;
     await vault.write(
-      await containmentCorrectionPath(await objectivesDeclarationOf(miss), K_MODEL),
+      await containmentCorrectionPath(await objectivesDeclarationOf(miss, COURSE), K_MODEL),
       '{"declaration": ',
     );
     const result = await read();
@@ -667,7 +686,11 @@ describe('her correction history undoes a model-decided link at read time', () =
 });
 
 describe('a clause alone never enables a model-decided link', () => {
-  it('no core or plugin source states that her correction control is available', () => {
+  // `[D-537]` (`ol-egov.141.89.7.77`): the statement is per basis now, and the grove provider that
+  // renders her working control states it, for objectives only. That one setter is pinned in
+  // `./reconcile.single-source.ol-egov.141.89.7.77.spec.ts`; this keeps the earlier single-flag
+  // form from ever coming back.
+  it('no core or plugin source states her correction control in the earlier single-flag form', () => {
     const packages = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
     const pattern = /correctionControlAvailable\s*:\s*true\b/;
     const offenders: string[] = [];
