@@ -78,8 +78,11 @@ export interface OutcomeRevisionPages {
   /** The version's explicit list of expected pages, from its enumeration. */
   readonly expectedPages: readonly number[];
   /**
-   * Every recorded page state of this version since it was last listed, oldest first, each the
-   * page's whole state after a change. A page with no entry has not been read.
+   * This version's page states since it was last listed, oldest first, each a page's whole state
+   * after a change: first, for a page whose latest record is older than that listing (a version
+   * returned to after another), that record's reading with `outcomesExtracted` false; then every
+   * record written after the listing, in the page record's own order. A page with no entry has not
+   * been read.
    */
   readonly history: readonly OutcomePageState[];
   /** Every revision digest the page record has listed for this document, the current one included. */
