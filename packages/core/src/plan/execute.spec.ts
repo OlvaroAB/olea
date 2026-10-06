@@ -44,7 +44,7 @@ function rankedCourse(
       weight,
       examProximityDays,
       reasoning: `${conceptId} (${course}): derived reasoning.`,
-      citations: [{ sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
+      citations: [{ basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
     })),
   };
 }
@@ -56,7 +56,7 @@ function plan(
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion,
     computedAt: '2026-08-16T09:00:00.000Z',
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,

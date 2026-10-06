@@ -105,6 +105,10 @@ import { memoryVault, unreadableVault } from './memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
 
+/** The v6 belief stamp's version at the attainment defaults and the declared scheduler (`ol-95vv.13`), spelled out. */
+const BELIEF_STAMP_VERSION =
+  'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1';
+
 /**
  * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` carry
  * the opaque key, never the display name — 'Alpha'/'Beta'/'Gamma' here are
@@ -716,10 +720,13 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // (before this rating) had no scored evidence for it at all — `seed`, not
     // `sprout`, which is what folding this very rating into the slice would
     // wrongly produce (see the discriminating test below for that failure
-    // made concrete).
+    // made concrete). Since `ol-95vv.13` the stamp is v6's whole one: with no
+    // recall review before this one, vitality is too early to say.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
       byConcept: { [unboundKey('Alpha')]: 'seed' },
+      vitalityByConcept: { [unboundKey('Alpha')]: 'early' },
+      arithmeticVersion: BELIEF_STAMP_VERSION,
     });
   });
 
@@ -801,10 +808,14 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // here ever grades an explain-back, and under the high-water-mark model
     // `tree` is reachable only by clearing the depth gate — see
     // `packages/core/src/mastery/rollup.ts`'s module doc, R7/`[D-145]`, MAT-6
-    // / `ol-95vv.7`.)
+    // / `ol-95vv.7`.) Vitality (`ol-95vv.13`) reads the same two prior
+    // reviews at the real clock: each instrument's one `good` review fell due
+    // within days of its August date, so every run after that reads past due.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
       byConcept: { [unboundKey('Alpha')]: 'sprout' },
+      vitalityByConcept: { [unboundKey('Alpha')]: 'tending' },
+      arithmeticVersion: BELIEF_STAMP_VERSION,
     });
   });
 
@@ -970,7 +981,9 @@ describe('P5-T07: a cached plan reaches the real session through executeStudyPla
               weight: 10,
               examProximityDays: 3,
               reasoning: 'test reasoning',
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1058,7 +1071,9 @@ describe("ol-egov.141.89.10.45 — the plan join reads only the composed session
               weight: 10,
               examProximityDays: 3,
               reasoning: "TEST101's own reading",
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1072,7 +1087,9 @@ describe("ol-egov.141.89.10.45 — the plan join reads only the composed session
               weight: 99,
               examProximityDays: 1,
               reasoning: "a different course's much stronger reading of the same concept",
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1143,7 +1160,9 @@ describe("ol-egov.141.89.10.54 — courseId reads the composed session's own dom
               weight: 10,
               examProximityDays: 3,
               reasoning: "the session's own course",
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1157,7 +1176,9 @@ describe("ol-egov.141.89.10.54 — courseId reads the composed session's own dom
               weight: 99,
               examProximityDays: 1,
               reasoning: 'a wider candidate-pool course the session is not about',
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1225,7 +1246,9 @@ describe('ol-egov.141.89.10.45 — a resumed sitting stamps against its composin
               weight: 10,
               examProximityDays: 3,
               reasoning: 'the plan in force when she opened',
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },
@@ -1248,7 +1271,9 @@ describe('ol-egov.141.89.10.45 — a resumed sitting stamps against its composin
               weight: 99,
               examProximityDays: 30,
               reasoning: 'a fresher plan published while the sitting is still held open',
-              citations: [{ sourcePath: '03 Research/paper.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: '03 Research/paper.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },

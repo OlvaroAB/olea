@@ -1306,11 +1306,13 @@ export function computeAllConceptMastery(
  * offered her the item", not a value recomputed after the fact, so the
  * caller is responsible for excluding the not-yet-appended event.
  *
- * **Wired (`ol-rpr4`).** `packages/plugin/src/review/ports.ts`'s
- * `createVaultReviewLogPort` is the production caller: it reads the log to
- * completion, builds this value, and only then calls
- * `appendReviewLogRecord` — see that port's own doc for why that ordering,
- * not a filter, is what keeps the not-yet-appended event out of `entries`.
+ * **No longer the production stamp (`ol-95vv.13`).** This is the v4/v5
+ * stage-only form, folded with no validity set. A v6 writer stamps both axes
+ * and the arithmetic version or nothing (the contract's
+ * `refineBeliefStampComplete`), so `packages/plugin/src/review/ports.ts`'s
+ * `createVaultReviewLogPort`, its production caller since `ol-rpr4`, now
+ * calls `./belief-stamp.ts`'s `masteryAtTimeStamp` instead. Kept for the
+ * readers and tests that build a stage-only value; no writer should stamp it.
  */
 export function masteryAtTimeForConceptIds(
   entries: readonly ReviewLogEntry[],

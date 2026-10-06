@@ -173,46 +173,55 @@ describe('WorkerConceptReader — refuses rather than mis-resolves a confabulate
     await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
   });
 
-  it('throws when a relation names a type outside is-a/part-of', async () => {
+  // `ol-egov.141.89.3.48`: a malformed relation costs that relation, never the read.
+  const VALID_RELATION = { type: 'part-of', fromIndex: 1, toIndex: 2, confidence: 0.8 };
+  const MALFORMED_RELATIONS: readonly (readonly [string, unknown])[] = [
+    ['an unrecognised type', { type: 'contrasts-with', fromIndex: 1, toIndex: 2, confidence: 0.5 }],
+    ['no type', { fromIndex: 1, toIndex: 2, confidence: 0.5 }],
+    ['a non-integer fromIndex', { type: 'is-a', fromIndex: 1.5, toIndex: 2, confidence: 0.5 }],
+    ['a non-integer toIndex', { type: 'is-a', fromIndex: 1, toIndex: 'x', confidence: 0.5 }],
+    ['a fromIndex out of range', { type: 'is-a', fromIndex: 7, toIndex: 1, confidence: 0.5 }],
+    ['a toIndex of zero', { type: 'is-a', fromIndex: 1, toIndex: 0, confidence: 0.5 }],
+    ['no numeric confidence', { type: 'is-a', fromIndex: 1, toIndex: 2 }],
+    ['a NaN confidence', { type: 'is-a', fromIndex: 1, toIndex: 2, confidence: Number.NaN }],
+    ['a non-object entry', 'nonsense'],
+  ];
+
+  it.each(MALFORMED_RELATIONS)(
+    'keeps every concept and the valid relation, and counts the malformed one: %s',
+    async (_label, malformed) => {
+      const transport = new RecordingTransport(() =>
+        okResponse({
+          concepts: [
+            { name: 'A', anchorIndex: 1 },
+            { name: 'B', anchorIndex: 2 },
+          ],
+          relations: [VALID_RELATION, malformed],
+        }),
+      );
+      const reader = new WorkerConceptReader({ transport });
+
+      const result = await reader.read({ passages });
+
+      expect(result.concepts.map((c) => c.name)).toEqual(['A', 'B']);
+      expect(result.relations).toEqual([{ type: 'part-of', from: 'A', to: 'B', confidence: 0.8 }]);
+      expect(result.relationsMalformed).toBe(1);
+    },
+  );
+
+  it('reports no malformed count when every relation is well formed', async () => {
     const transport = new RecordingTransport(() =>
       okResponse({
         concepts: [
           { name: 'A', anchorIndex: 1 },
           { name: 'B', anchorIndex: 2 },
         ],
-        relations: [{ type: 'contrasts-with', fromIndex: 1, toIndex: 2, confidence: 0.5 }],
+        relations: [VALID_RELATION],
       }),
     );
-    const reader = new WorkerConceptReader({ transport });
+    const result = await new WorkerConceptReader({ transport }).read({ passages });
 
-    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
-  });
-
-  it('throws when fromIndex names a concept position that never survived (grounding accounting drifted)', async () => {
-    const transport = new RecordingTransport(() =>
-      okResponse({
-        concepts: [{ name: 'A', anchorIndex: 1 }],
-        relations: [{ type: 'is-a', fromIndex: 7, toIndex: 1, confidence: 0.5 }],
-      }),
-    );
-    const reader = new WorkerConceptReader({ transport });
-
-    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
-  });
-
-  it('throws when a relation carries no numeric confidence — never defaulted', async () => {
-    const transport = new RecordingTransport(() =>
-      okResponse({
-        concepts: [
-          { name: 'A', anchorIndex: 1 },
-          { name: 'B', anchorIndex: 2 },
-        ],
-        relations: [{ type: 'is-a', fromIndex: 1, toIndex: 2 }],
-      }),
-    );
-    const reader = new WorkerConceptReader({ transport });
-
-    await expect(reader.read({ passages })).rejects.toThrow(WorkerConceptReaderError);
+    expect(result.relationsMalformed).toBeUndefined();
   });
 });
 

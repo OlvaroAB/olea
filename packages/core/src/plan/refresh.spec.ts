@@ -35,7 +35,7 @@ function samplePlan(overrides: Partial<StudyPlanEnvelope> = {}): StudyPlanEnvelo
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
     computedAt: COMPUTED_AT,
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
@@ -53,7 +53,9 @@ function samplePlan(overrides: Partial<StudyPlanEnvelope> = {}): StudyPlanEnvelo
               weight: 0.5,
               examProximityDays: 7,
               reasoning: 'concept-alpha (COURSE-A): derived reasoning.',
-              citations: [{ sourcePath: 'papers/2024.md', questionLabel: 'Q1' }],
+              citations: [
+                { basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
+              ],
             },
           ],
         },

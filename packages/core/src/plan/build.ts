@@ -57,6 +57,7 @@ import {
   STUDY_PLAN_BODY_VERSION,
   STUDY_PLAN_KIND,
   type StudyPlanAllocationEntry,
+  type StudyPlanCitation,
   type StudyPlanCourse,
   type StudyPlanEnvelope,
   studyPlanEnvelope,
@@ -170,6 +171,40 @@ function nearestFutureDueDays(entry: ConceptPriority): number | null {
   return nearest;
 }
 
+/**
+ * `[D-529]`: every basis a ranked concept stands on, each cited as itself and never folded into
+ * another (F4.2, `[D-226]`): past-paper questions (path and label), then objectives documents
+ * (path), then assessment briefs (the assessment note's path). Read straight off the ranking
+ * entry's factors, nothing re-derived. A concept with none of the three is the marked
+ * unknown-relevance entry (`[D-329]`, `[D-450]`: it belongs to the course and no assessment
+ * evidence reaches it), cited as exactly that rather than left empty, which the contract
+ * refuses and which used to throw away the whole refresh.
+ *
+ * `entry.citations` is read as before (it equals `factors.citations`); the objectives and brief
+ * lists are optional on the factors for object literals built before they existed.
+ */
+function citationsFor(entry: ConceptPriority): StudyPlanCitation[] {
+  const cited: StudyPlanCitation[] = [
+    ...entry.citations.map(
+      (citation): StudyPlanCitation => ({
+        basis: 'past-paper',
+        sourcePath: citation.sourcePath,
+        questionLabel: citation.questionLabel,
+      }),
+    ),
+    ...(entry.factors.objectivesCitations ?? []).map(
+      (citation): StudyPlanCitation => ({ basis: 'objectives', sourcePath: citation.sourcePath }),
+    ),
+    ...(entry.factors.briefCitations ?? []).map(
+      (citation): StudyPlanCitation => ({
+        basis: 'assessment-brief',
+        sourcePath: citation.sourcePath,
+      }),
+    ),
+  ];
+  return cited.length > 0 ? cited : [{ basis: 'unknown-relevance' }];
+}
+
 function toPlannedConcept(entry: ConceptPriority): PlannedConcept {
   return {
     // The opaque join key (`ol-63e1`, `[D-088]`/`[D-109]`), not the display
@@ -184,10 +219,7 @@ function toPlannedConcept(entry: ConceptPriority): PlannedConcept {
     weight: entry.priorityScore,
     examProximityDays: nearestFutureDueDays(entry),
     reasoning: entry.reasoning,
-    citations: entry.citations.map((citation) => ({
-      sourcePath: citation.sourcePath,
-      questionLabel: citation.questionLabel,
-    })),
+    citations: citationsFor(entry),
   };
 }
 

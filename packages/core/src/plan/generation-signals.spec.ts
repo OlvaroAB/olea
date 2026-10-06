@@ -15,7 +15,7 @@ function plannedConcept(conceptId: string, rank: number): PlannedConcept {
     weight: 1 / rank,
     examProximityDays: null,
     reasoning: `Ranked ${rank}.`,
-    citations: [{ sourcePath: 'papers/p1.md', questionLabel: '1' }],
+    citations: [{ basis: 'past-paper', sourcePath: 'papers/p1.md', questionLabel: '1' }],
   };
 }
 

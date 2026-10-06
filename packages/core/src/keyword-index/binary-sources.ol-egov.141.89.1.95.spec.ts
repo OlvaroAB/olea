@@ -13,8 +13,8 @@
  */
 
 import { strToU8, zipSync } from 'fflate';
-import { describe, expect, it } from 'vitest';
-import { extractFromVault } from '../extract/registry.js';
+import { describe, expect, it, vi } from 'vitest';
+import { EXTRACTORS, extractFromVault } from '../extract/registry.js';
 import type { SourceLocation } from '../extract/types.js';
 import { formatSourceCitation } from '../registry/citation.js';
 import { chunksFromIndex } from '../retrieval/chunks.js';
@@ -901,5 +901,121 @@ describe('a sync and vault events take turns', () => {
     // Her note was read after the first binary and before the last.
     expect(order.indexOf(`text:${NOTE}`)).toBeGreaterThan(order.indexOf(binaries[0] ?? ''));
     expect(order.indexOf(`text:${NOTE}`)).toBeLessThan(order.indexOf(binaries[2] ?? ''));
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// ol-egov.141.89.1.97: the extractor's version, and one extraction per distinct bytes
+// ---------------------------------------------------------------------------------------------
+
+/** Rewrites the persisted JSON as an index written by another extractor version would read. */
+function withExtractorVersion(blob: string | null, version: number | undefined): string {
+  const index = JSON.parse(blob ?? '{}') as {
+    documents: { path: string; extractorVersion?: number }[];
+  };
+  for (const doc of index.documents) {
+    if (doc.path === NOTE) continue;
+    if (version === undefined) delete doc.extractorVersion;
+    else doc.extractorVersion = version;
+  }
+  return JSON.stringify(index);
+}
+
+describe('an extractor change invalidates the binaries the index holds (ol-egov.141.89.1.97)', () => {
+  async function populated() {
+    const vault = vaultWithSources();
+    const store = new JsonStore();
+    const engine = await engineOver(vault, store);
+    await engine.rebuild();
+    return { vault, store, engine };
+  }
+
+  it('a binary indexed under an older extractor is read again at the next load, with its bytes unchanged', async () => {
+    const { vault, store } = await populated();
+    store.blob = withExtractorVersion(store.blob, 0);
+    const reads = vault.binaryReads.length;
+
+    const reloaded = await engineOver(vault, store);
+    await expect(reloaded.syncBinarySources()).resolves.toEqual({ ...NOTHING_DONE, indexed: 3 });
+    expect(vault.binaryReads.length).toBe(reads + 3);
+    expect(texts(reloaded.toPersisted(), PDF)).toHaveLength(2);
+
+    // Now current: the next load reads nothing.
+    vault.refuseBinaryReads = true;
+    const again = await engineOver(vault, store);
+    await expect(again.syncBinarySources()).resolves.toEqual(NOTHING_DONE);
+  });
+
+  it('a modify event on an older-extractor binary with the same bytes extracts it again', async () => {
+    const { vault, store } = await populated();
+    store.blob = withExtractorVersion(store.blob, 0);
+    const reloaded = await engineOver(vault, store);
+    const reads = vault.binaryReads.length;
+    await reloaded.applyEvent({ kind: 'modify', path: PDF });
+    expect(vault.binaryReads.length).toBe(reads + 1);
+    const refreshed = docOf(reloaded.toPersisted(), PDF);
+    expect(refreshed?.extractorVersion).toBeGreaterThan(0);
+    expect(refreshed?.blocks).toHaveLength(2);
+  });
+
+  it('a rename does not carry an older-extractor document across without extracting', async () => {
+    const { vault, store } = await populated();
+    store.blob = withExtractorVersion(store.blob, 0);
+    const reloaded = await engineOver(vault, store);
+    const moved = 'Courses/SYN101/archive/handout.pdf' as VaultPath;
+    vault.bytes(moved, pdfBytes(PDF_PAGES));
+    vault.remove(PDF);
+    const reads = vault.binaryReads.length;
+    await reloaded.applyEvent({ kind: 'rename', path: moved, oldPath: PDF });
+    expect(vault.binaryReads.length).toBe(reads + 1);
+    expect(docOf(reloaded.toPersisted(), moved)?.extractorVersion).toBeGreaterThan(0);
+  });
+
+  it('an index written before the field existed still loads, and is trusted as the first extractor', async () => {
+    const { vault, store } = await populated();
+    store.blob = withExtractorVersion(store.blob, undefined);
+    expect(store.blob).not.toContain('extractorVersion');
+    vault.refuseBinaryReads = true;
+    const reloaded = await engineOver(vault, store);
+    await expect(reloaded.syncBinarySources()).resolves.toEqual(NOTHING_DONE);
+    expect(paths(reloaded.toPersisted())).toEqual([DOC, PDF, DECK, NOTE].sort());
+    expect(reloaded.search('quillmoss').some((h) => h.path === PDF)).toBe(true);
+  });
+
+  it('a rebuild and an event stamp the same version, and a note carries none (C2.4)', async () => {
+    const { engine } = await populated();
+    const index = engine.toPersisted();
+    expect(docOf(index, NOTE)).not.toHaveProperty('extractorVersion');
+    const versions = new Set([PDF, DECK, DOC].map((p) => docOf(index, p)?.extractorVersion));
+    expect(versions.size).toBe(1);
+    expect([...versions][0]).toBeGreaterThan(0);
+  });
+});
+
+describe('the index extracts each distinct set of bytes once, and alone (ol-egov.141.89.1.97)', () => {
+  // Item 1 of the bead. On desktop a modified binary is extracted by the ingestion queue
+  // (`../ingestion/extraction-runner.ts`: with the ingestion options and the embedding note, and
+  // from a queue that outlives a restart) and by this index, which takes no option and holds no
+  // pages. The two are kept apart on purpose: sharing one result would hold whole extraction
+  // results across a queue delay and tie the index to the queue's options. What is pinned here
+  // is that the index's own share of the work is one option-free extraction per distinct bytes.
+  it('extracts a modified binary once, with no options, and not again for the same bytes', async () => {
+    const vault = vaultWithSources();
+    const engine = await engineOver(vault, new JsonStore());
+    await engine.syncBinarySources();
+    const spy = vi.spyOn(EXTRACTORS.pdf, 'extract');
+    try {
+      const changed = pdfBytes(['Mirepine needles drop in a single night.']);
+      vault.bytes(PDF, changed);
+      await engine.applyEvent({ kind: 'modify', path: PDF });
+      await engine.applyEvent({ kind: 'modify', path: PDF });
+      await engine.syncBinarySources();
+      expect(spy).toHaveBeenCalledTimes(1);
+      const call = spy.mock.calls[0] as unknown[];
+      expect(call).toHaveLength(1);
+      expect(Object.keys(call[0] as object).sort()).toEqual(['bytes', 'path']);
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

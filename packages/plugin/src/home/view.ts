@@ -211,7 +211,9 @@ import {
 import { renderSprig } from '../sprig/render-sprig.js';
 import {
   COURSE_AVOIDANCE_LEAVE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT,
   COURSE_AVOIDANCE_PRACTISE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP,
   type CourseAvoidanceAnswer,
   courseAvoidanceQuestionLine,
 } from './avoidance.js';
@@ -573,6 +575,16 @@ export class HomeView extends ItemView {
     const answer = (value: CourseAvoidanceAnswer) => {
       void question.onAnswer(value).then(() => {
         this.activeAvoidanceQuestion = undefined;
+        if (value === 'practise-differently') {
+          // `[D-528]`: feedback only — acknowledge once, in this same card, and
+          // leave the practice unchanged. The next refresh drops the card.
+          card.empty();
+          card.createDiv({
+            cls: 'olea-prose olea-home-offer-reason-line',
+            text: COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT,
+          });
+          return;
+        }
         void this.refresh();
       });
     };
@@ -588,6 +600,10 @@ export class HomeView extends ItemView {
       text: COURSE_AVOIDANCE_PRACTISE_ACTION,
     });
     practise.addEventListener('click', () => answer('practise-differently'));
+    actions.createSpan({
+      cls: 'olea-prose olea-home-offer-reason-line',
+      text: COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP,
+    });
 
     // Dismiss writes nothing (F4.6: "declining changes nothing") — the
     // course was already marked asked when `./provider.ts` first offered it,

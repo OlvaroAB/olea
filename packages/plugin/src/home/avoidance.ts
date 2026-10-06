@@ -218,6 +218,16 @@ export function findAvoidedCourse(
 export const COURSE_AVOIDANCE_LEAVE_ACTION = 'Leave the course for now';
 export const COURSE_AVOIDANCE_PRACTISE_ACTION = 'Practise it differently';
 
+/**
+ * `[D-528]` (F4.6): "Practise it differently" is feedback only. The first line
+ * sits beside the option before the tap; the second shows once after it. Both
+ * are signed copy, verbatim — the request is recorded and the practice stays
+ * unchanged (`../plan/provider.ts` hands that answer to no steering).
+ */
+export const COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP =
+  'This records feedback; your practice will stay the same.';
+export const COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT = 'Feedback recorded.';
+
 /** Reuses `./copy.ts#DISMISS_OFFER_ACTION`'s own label at the call site (`./view.ts`) rather than a second dismiss word — see that constant's own use on the retrospective offer card. */
 
 /**
@@ -237,6 +247,8 @@ export function allCourseAvoidanceStrings(): readonly string[] {
   return [
     COURSE_AVOIDANCE_LEAVE_ACTION,
     COURSE_AVOIDANCE_PRACTISE_ACTION,
+    COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP,
+    COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT,
     courseAvoidanceQuestionLine('TESTC101'),
   ];
 }

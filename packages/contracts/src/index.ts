@@ -310,6 +310,9 @@ export {
 } from './study-plan.js';
 export {
   ALL_TASK_IDS,
+  type ContextPassage,
+  contextPassage,
+  contextPassagesField,
   isKnownTaskId,
   isValidRemainingAllowanceUsd,
   type KnownTaskId,

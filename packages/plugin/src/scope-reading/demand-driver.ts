@@ -40,6 +40,32 @@ import {
 } from '../ingestion/demand-classify-adapter.js';
 import type { DocumentRef, RecordedExtraction, ScopeReadingPersistence } from './persistence.js';
 
+/**
+ * `[D-534]` cost brief, item 5: a part the reader refused twice is marked unread and not retried
+ * until the revision changes. The count is keyed by `refusalKey`, which names the structure record,
+ * so a replaced structure starts again at zero. This module only reads and bumps it: where the
+ * count lives is the caller's (`inMemoryRefusalLedger` is session-long and forgotten on restart; a
+ * count that survives a restart needs a stored field, which this lane does not add).
+ */
+export interface PartRefusalLedger {
+  count(key: string): number;
+  record(key: string): void;
+}
+
+/** A part refused this many times is held back. */
+export const REFUSED_PART_LIMIT = 2;
+
+export const refusalKey = (structureId: string, partId: string): string =>
+  `${structureId}|${partId}`;
+
+export function inMemoryRefusalLedger(): PartRefusalLedger {
+  const counts = new Map<string, number>();
+  return {
+    count: (key) => counts.get(key) ?? 0,
+    record: (key) => void counts.set(key, (counts.get(key) ?? 0) + 1),
+  };
+}
+
 export interface DemandDriverInput {
   readonly persistence: ScopeReadingPersistence;
   readonly ref: DocumentRef;
@@ -47,12 +73,16 @@ export interface DemandDriverInput {
   /** This delivery's landed units; a unit's ordinal is its index. */
   readonly units: readonly ExtractedUnit[];
   readonly transport: WorkerTaskTransport;
+  /** Held-back parts: a part refused {@link REFUSED_PART_LIMIT} times is not sent. Absent: no limit. */
+  readonly refusals?: PartRefusalLedger;
 }
 
 export interface DemandDriverResult {
   readonly sent: number;
   readonly recorded: number;
   readonly skipped: number;
+  /** Parts not sent because the reader refused them {@link REFUSED_PART_LIMIT} times. Absent when none. */
+  readonly heldBack?: number;
 }
 
 type ScopeGroup = PaperQuestionGroup<ScopeReadingAnchor>;
@@ -181,7 +211,11 @@ export function demandRequestFor(
 
 export async function runDemandDriver(input: DemandDriverInput): Promise<DemandDriverResult> {
   const { persistence, ref, recorded, units } = input;
-  const result = { sent: 0, recorded: 0, skipped: 0 };
+  const result: { sent: number; recorded: number; skipped: number; heldBack?: number } = {
+    sent: 0,
+    recorded: 0,
+    skipped: 0,
+  };
   const structure = recorded.structure;
   if (ref.documentKind !== 'past-paper' || structure === undefined) return result;
   const parts = structure.reading.parts;
@@ -192,6 +226,11 @@ export async function runDemandDriver(input: DemandDriverInput): Promise<DemandD
   for (const part of parts) {
     if (partDemandView(projection, ref, part.id).status === 'current') {
       result.skipped++;
+      continue;
+    }
+    const heldKey = refusalKey(structure.structureId, part.id);
+    if (input.refusals !== undefined && input.refusals.count(heldKey) >= REFUSED_PART_LIMIT) {
+      result.heldBack = (result.heldBack ?? 0) + 1;
       continue;
     }
     const request = demandRequestFor(structure.reading, part, units);
@@ -211,6 +250,7 @@ export async function runDemandDriver(input: DemandDriverInput): Promise<DemandD
         return result;
       }
       console.error('Olea: a part demand was not read (ingestion unaffected)', { error });
+      input.refusals?.record(heldKey);
       continue;
     }
     try {

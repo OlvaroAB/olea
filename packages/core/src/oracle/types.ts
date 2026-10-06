@@ -46,6 +46,7 @@ import type { MasteryState } from 'olea-contracts';
 import type { AssessmentReadReport } from '../assessment/types.js';
 import type {
   ConceptAssessmentEdge,
+  EvidenceBriefCitation,
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
@@ -214,6 +215,16 @@ export interface OracleConceptFactors {
    * `rankOracle` itself always sets it.
    */
   readonly distinctObjectivesSourceCount?: number;
+  /**
+   * `[D-529]`: every assessment-brief citation across every SURVIVING contributing edge whose
+   * `basis` is `'assessment-brief'` (`[D-247]`) — the brief-basis sibling of {@link citations}
+   * and {@link objectivesCitations}, deduplicated by `sourcePath` (the assessment note) and
+   * deterministically sorted. **Present only when non-empty** (unlike `objectivesCitations`),
+   * so a ranking with no brief evidence reads exactly as it did before this field existed.
+   * Carried so the study plan can cite a brief-ranked concept by its real basis; it feeds no
+   * score.
+   */
+  readonly briefCitations?: readonly EvidenceBriefCitation[];
   /** One entry per SURVIVING (non-vetoed) assessment this concept has an edge to in this course, sorted by `contribution` descending (ties by `assessmentPath` ascending). */
   readonly contributions: readonly OracleEdgeContribution[];
   /** Edges REMOVED by a veto rather than folded into `contributions` — see `OracleVetoedEdge`. Always present (empty when nothing on this concept was vetoed) from `rankOracle` itself; optional only so object literals built before this field existed still typecheck. */

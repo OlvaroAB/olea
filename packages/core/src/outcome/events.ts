@@ -40,6 +40,8 @@ export interface OutcomeCreatedEvent extends OutcomeEventCommon {
   readonly provenance: OutcomeProvenance;
   /** `[D-253]`'s ratifying amendment — see `./types.ts`'s `OutcomeRecord.extractorSelfRating` for what this is and the no-branching-until-calibrated rule attached to it. Omitted (never `undefined`) when the extractor supplied none. */
   readonly extractorSelfRating?: number;
+  /** `[D-531]`: the version that stated it, when the delivery's version is known (`./types.ts`, `OutcomeRecord.statedInRevision`). Omitted (never `undefined`) otherwise. */
+  readonly statedInRevision?: string;
 }
 
 /**
@@ -57,11 +59,39 @@ export interface OutcomeConceptAttachedEvent extends OutcomeEventCommon {
 /**
  * F8.5's pruning-is-withdrawal pattern (`./types.ts`'s `OutcomeStatus` doc): moves an outcome to
  * `'retired'`. Never deletes the record, and this module never removes a record file for any
- * reason.
+ * reason. Carries no reason (`[D-531]`): retiring on revision (`./retire-on-revision.ts`) is the
+ * only cause of retirement, so a reason field waits for a second cause.
  */
 export interface OutcomeRetiredEvent extends OutcomeEventCommon {
   readonly kind: 'retired';
   readonly outcomeId: string;
 }
 
-export type OutcomeEvent = OutcomeCreatedEvent | OutcomeConceptAttachedEvent | OutcomeRetiredEvent;
+/**
+ * `[D-531]` (`ol-egov.141.89.7.68`): an open delivery of a later version of the outcome's document
+ * stated it again, so its version stamp moves to that version (`./types.ts`,
+ * `OutcomeRecord.statedInRevision`). Changes nothing else, a status included.
+ */
+export interface OutcomeRestatedEvent extends OutcomeEventCommon {
+  readonly kind: 'restated';
+  readonly outcomeId: string;
+  readonly revisionDigest: string;
+}
+
+/**
+ * `[D-272]`, `[D-531]`: a later version of the outcome's document states a retired outcome again,
+ * so it comes back — active, stamped with that version, every other field (its concept links
+ * included) as it was. The same record and id: retirement never deleted it.
+ */
+export interface OutcomeReinstatedEvent extends OutcomeEventCommon {
+  readonly kind: 'reinstated';
+  readonly outcomeId: string;
+  readonly revisionDigest: string;
+}
+
+export type OutcomeEvent =
+  | OutcomeCreatedEvent
+  | OutcomeConceptAttachedEvent
+  | OutcomeRetiredEvent
+  | OutcomeRestatedEvent
+  | OutcomeReinstatedEvent;

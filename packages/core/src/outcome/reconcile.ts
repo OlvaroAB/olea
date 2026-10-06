@@ -63,6 +63,33 @@
  * answering to every wording any of them carries. An outcome then attaches that identity once, by
  * its canonical key, and a near match is proposed once. Two concepts that share only an
  * introducing passage are two identities in the index and stay two entries here.
+ *
+ * **Model-decided containment and scope standing (`[D-433]`, `ol-egov.141.89.7.26`), behind her
+ * correction control (`[D-533]`).** `readModelDecidedContainment` below reads, at read time, the
+ * links `[D-429]`'s alignment results support: an objectives declaration containing a concept, and
+ * an assessment's stated scope giving a concept standing. It writes nothing: a model-decided link is
+ * never put into `OutcomeRecord.conceptKeys`, never written as a near-match record, and never read
+ * as hers. It counts only when ALL of these hold, and the read checks them in this order:
+ * 1. **Her correction control exists and works.** The read takes a required statement of it;
+ *    anything but `true` disables everything, whatever the switches say (`[D-533]`: "a clause alone
+ *    is insufficient"). No production caller states it, because no such control exists yet.
+ * 2. **The basis's switch is on** (`../evidence-edge/basis-switch.ts`, `[D-432]`): objectives for a
+ *    declaration, assessment briefs for a stated scope. Both off reads disabled. **A past paper
+ *    never gives containment or standing, whatever its switch says** (`[D-433]`; F4.2: a historical
+ *    paper is never proof of current scope): only a result stored as an objectives or stated-scope
+ *    reading is ever looked at.
+ * 3. **The result is current and aligned**: its revision is the document's current one, its
+ *    closed-list, coverage and batch-plan digests are the caller's current ones (all three
+ *    required), its frozen-configuration digest is the switch's passing configuration, it is
+ *    `aligned`, and it carries its reader's provenance.
+ * 4. **For containment, the record id names an active outcome of that document and course**, and
+ *    the concept is not already attached to it (stored, or by this run): a pair reached by an
+ *    exact name or alias is read once, as that attachment.
+ * 5. **Her own decisions outrank the model.** A near-match record for the pair that she confirmed
+ *    or declined (`[D-256]`), or that this build cannot read, gives no model-decided edge; and her
+ *    correction history (`./containment-correction.ts`) removes a pair whose latest decision is a
+ *    decline, or whose history cannot be read, keyed on the declaration so it persists across
+ *    unrelated edits.
  */
 
 import { conceptIdentityNormalizationIndex } from '../concept/concept-key.js';
@@ -71,12 +98,27 @@ import {
   type ConceptKeyRecord,
   readConceptKeyCanonicalIndex,
 } from '../concept/key-store.js';
-import { skipUnreadableStoreRecord } from '../vault/store-record.js';
+import { type BasisSwitches, resolveBasisSwitches } from '../evidence-edge/basis-switch.js';
+import { readStoreRecord, skipUnreadableStoreRecord } from '../vault/store-record.js';
 import type { VaultSource } from '../vault/types.js';
 import {
+  type ContainmentDeclaration,
+  isCorrectedAway,
+  objectivesDeclarationOf,
+  statedScopeDeclarationOf,
+} from './containment-correction.js';
+import {
+  isOutcomeConceptNearMatchRecord,
   type OutcomeConceptNearMatchStatus,
+  outcomeConceptNearMatchRecordPath,
   proposeOutcomeConceptNearMatch,
 } from './near-match.js';
+import {
+  alignmentResultsForDocument,
+  type ScopeReadingProjection,
+  type ScopeRevisionRef,
+} from './scope-reading-project.js';
+import type { AlignmentDigests } from './scope-reading-types.js';
 import { attachConceptToOutcome } from './store.js';
 import type { OutcomeRecord } from './types.js';
 
@@ -209,6 +251,15 @@ export interface OutcomeConceptReconciliationReport {
   /** Outcome ids for which no concept matched at all (exact, alias, or near) — see module doc. */
   readonly unattachedOutcomeIds: readonly string[];
   readonly unattachedCount: number;
+  /**
+   * `[D-433]`: the model-decided links, listed apart from `attached` and never written. Present only
+   * when `ReconcileOutcomeConceptsOptions.modelDecided` was supplied and its read was not disabled
+   * (module doc); absent otherwise, so a disabled read leaves the report exactly as it was.
+   */
+  readonly modelDecided?: {
+    readonly edges: readonly ModelDecidedContainmentEdge[];
+    readonly standings: readonly ModelDecidedScopeStanding[];
+  };
 }
 
 export interface ReconcileOutcomeConceptsOptions {
@@ -219,6 +270,239 @@ export interface ReconcileOutcomeConceptsOptions {
    * through to both writers. Read from the vault's `.olea/concepts/` store when omitted.
    */
   readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+  /**
+   * `[D-433]`: read model-decided links after the reconciliation, with this run's outcomes,
+   * attachments and canonical index (module doc). Omitted, nothing is read.
+   */
+  readonly modelDecided?: Omit<
+    ReadModelDecidedContainmentInput,
+    'outcomes' | 'attached' | 'canonicalKeys'
+  >;
+}
+
+// ------------------------------------------------------------------------------------------------
+// Model-decided containment and scope standing ([D-433], [D-533]) — see the module doc
+// ------------------------------------------------------------------------------------------------
+
+/** What a model-decided link was read from: the reader, the document revision and every digest. */
+export interface ModelDecidedProvenance {
+  readonly task: string;
+  readonly promptVersion: string;
+  readonly modelId: string;
+  /** The document and the revision the result was made from. */
+  readonly source: ScopeRevisionRef;
+  readonly digests: AlignmentDigests;
+}
+
+/** An objectives declaration containing a concept, decided by the model. Never hers. */
+export interface ModelDecidedContainmentEdge {
+  readonly outcomeId: string;
+  /** The concept's canonical key (`[D-378]`). */
+  readonly conceptKey: string;
+  readonly basis: 'objectives';
+  readonly decidedBy: 'model';
+  /** What her correction of this edge is keyed on (`./containment-correction.ts`). */
+  readonly declaration: ContainmentDeclaration;
+  readonly provenance: ModelDecidedProvenance;
+}
+
+/** An assessment's stated scope giving a concept standing on that assessment, decided by the model. Never hers. */
+export interface ModelDecidedScopeStanding {
+  /** The assessment's scope key; the standing is on this assessment and no other. */
+  readonly scopeKey: string;
+  readonly conceptKey: string;
+  readonly basis: 'assessment-brief';
+  readonly decidedBy: 'model';
+  readonly declaration: ContainmentDeclaration;
+  readonly provenance: ModelDecidedProvenance;
+}
+
+/** Why nothing was read: in the order the read checks (module doc). */
+export type ModelDecidedDisabledReason =
+  | 'correction-control-unavailable'
+  | 'no-containment-basis-on';
+
+export type ModelDecidedContainmentRead =
+  | { readonly status: 'disabled'; readonly reason: ModelDecidedDisabledReason }
+  | {
+      readonly status: 'read';
+      readonly edges: readonly ModelDecidedContainmentEdge[];
+      readonly standings: readonly ModelDecidedScopeStanding[];
+    };
+
+/** One registered document at its CURRENT revision, with the digests current for it now. */
+export interface ModelDecidedDocument {
+  readonly source: ScopeRevisionRef;
+  /** All three required, so no digest goes unchecked; the frozen configuration comes from the switch. */
+  readonly currentDigests: {
+    readonly closedList: string;
+    readonly coverage: string;
+    readonly batchPlan: string;
+  };
+}
+
+export interface ReadModelDecidedContainmentInput {
+  /**
+   * `[D-533]`: whether her correction control for model-decided links exists in the shipped
+   * plugin and works. Required, and only the literal `true` counts: absent, `false` or anything
+   * else disables every model-decided link, whatever the switches say. A clause defining the
+   * control is not enough. **No production caller states it today: no such control exists**, and
+   * the bead that ships her working control is the one that may.
+   */
+  readonly correctionControlAvailable: boolean;
+  readonly courseId: string;
+  /** The course's outcome records (the caller scopes them, as for the reconciliation). */
+  readonly outcomes: readonly OutcomeRecord[];
+  /** The course's registered documents at their current revisions. A past paper here gives nothing. */
+  readonly documents: readonly ModelDecidedDocument[];
+  /** `[D-429]`'s projection (`./scope-reading-store.ts`'s `load()`). */
+  readonly alignments: ScopeReadingProjection;
+  /** `resolveBasisSwitches`' output. Omitted: every basis off (`NO_BASIS_GATE`). */
+  readonly switches?: BasisSwitches;
+  /** `[D-378]`. Read from the vault's concept store when omitted. */
+  readonly canonicalKeys?: ConceptKeyCanonicalIndex;
+  /** Pairs already attached by exact name or alias in this run, read once as that attachment. */
+  readonly attached?: readonly Pick<OutcomeConceptAttachment, 'outcomeId' | 'conceptKey'>[];
+}
+
+function pairKey(a: string, b: string): string {
+  return JSON.stringify([a, b]);
+}
+
+/** Every key of `conceptKey`'s identity: the canonical key first, then its superseded duplicates. */
+function identityKeys(conceptKey: string, canonicalKeys: ConceptKeyCanonicalIndex): string[] {
+  const canonical = canonicalKeys.canonicalOf(conceptKey);
+  const keys = [canonical];
+  for (const [duplicate, owner] of canonicalKeys.superseded) {
+    if (owner === canonical && duplicate !== canonical) keys.push(duplicate);
+  }
+  return keys;
+}
+
+/** True when a near-match record for the pair is hers (confirmed or declined) or cannot be read. A pending proposal is false. */
+async function nearMatchDecided(
+  vault: VaultSource,
+  outcomeId: string,
+  conceptKey: string,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): Promise<boolean> {
+  for (const key of identityKeys(conceptKey, canonicalKeys)) {
+    const read = await readStoreRecord(
+      vault,
+      outcomeConceptNearMatchRecordPath(outcomeId, key),
+      isOutcomeConceptNearMatchRecord,
+    );
+    if (read.kind === 'unreadable') return true;
+    if (read.kind === 'record' && read.record.status !== 'proposed') return true;
+  }
+  return false;
+}
+
+/**
+ * Reads the model-decided containment edges and scope standings that count now, under every
+ * condition in the module doc. Writes nothing. Edges and standings come back in a fixed order
+ * (by outcome id or scope key, then concept key).
+ */
+export async function readModelDecidedContainment(
+  vault: VaultSource,
+  input: ReadModelDecidedContainmentInput,
+): Promise<ModelDecidedContainmentRead> {
+  if (input.correctionControlAvailable !== true) {
+    return { status: 'disabled', reason: 'correction-control-unavailable' };
+  }
+  const switches = input.switches ?? resolveBasisSwitches();
+  const objectives = switches.objectives;
+  const briefs = switches['assessment-brief'];
+  if (objectives.status !== 'on' && briefs.status !== 'on') {
+    return { status: 'disabled', reason: 'no-containment-basis-on' };
+  }
+  const canonicalKeys = input.canonicalKeys ?? (await readConceptKeyCanonicalIndex(vault));
+
+  const attached = new Set<string>();
+  for (const outcome of input.outcomes) {
+    for (const key of outcome.conceptKeys) {
+      attached.add(pairKey(outcome.id, canonicalKeys.canonicalOf(key)));
+    }
+  }
+  for (const pair of input.attached ?? []) {
+    attached.add(pairKey(pair.outcomeId, canonicalKeys.canonicalOf(pair.conceptKey)));
+  }
+
+  const edges = new Map<string, ModelDecidedContainmentEdge>();
+  const standings = new Map<string, ModelDecidedScopeStanding>();
+  for (const document of input.documents) {
+    const kind = document.source.documentKind;
+    // The past-paper guard: only an objectives or stated-scope reading is ever looked at.
+    const switchState =
+      kind === 'objectives' ? objectives : kind === 'stated-scope' ? briefs : undefined;
+    if (switchState?.status !== 'on') continue;
+    const frozenConfiguration = switchState.record.look.configurationDigest;
+    const views = alignmentResultsForDocument(input.alignments, input.courseId, document.source, {
+      ...document.currentDigests,
+      frozenConfiguration,
+    });
+    for (const view of views) {
+      if (view.status !== 'current' || view.result.kind !== 'aligned') continue;
+      if (view.provenance === undefined) continue;
+      const conceptKey = canonicalKeys.canonicalOf(view.conceptKey);
+      const provenance: ModelDecidedProvenance = {
+        task: view.provenance.task,
+        promptVersion: view.provenance.promptVersion,
+        modelId: view.provenance.modelId,
+        source: document.source,
+        digests: view.digests,
+      };
+
+      if (kind === 'stated-scope') {
+        const scopeKey = document.source.sourcePath;
+        const id = pairKey(scopeKey, conceptKey);
+        if (standings.has(id)) continue;
+        const declaration = statedScopeDeclarationOf(scopeKey);
+        if (await isCorrectedAway(vault, declaration, conceptKey, canonicalKeys)) continue;
+        standings.set(id, {
+          scopeKey,
+          conceptKey,
+          basis: 'assessment-brief',
+          decidedBy: 'model',
+          declaration,
+          provenance,
+        });
+        continue;
+      }
+
+      for (const recordId of view.result.recordIds) {
+        const outcome = input.outcomes.find(
+          (candidate) =>
+            candidate.id === recordId &&
+            candidate.status === 'active' &&
+            candidate.source.path === document.source.sourcePath &&
+            candidate.courses.includes(input.courseId),
+        );
+        if (outcome === undefined) continue;
+        const id = pairKey(outcome.id, conceptKey);
+        if (edges.has(id) || attached.has(id)) continue;
+        if (await nearMatchDecided(vault, outcome.id, conceptKey, canonicalKeys)) continue;
+        const declaration = await objectivesDeclarationOf(outcome);
+        if (await isCorrectedAway(vault, declaration, conceptKey, canonicalKeys)) continue;
+        edges.set(id, {
+          outcomeId: outcome.id,
+          conceptKey,
+          basis: 'objectives',
+          decidedBy: 'model',
+          declaration,
+          provenance,
+        });
+      }
+    }
+  }
+
+  const byKey = (a: [string, unknown], b: [string, unknown]) =>
+    a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0;
+  return {
+    status: 'read',
+    edges: [...edges].sort(byKey).map(([, edge]) => edge),
+    standings: [...standings].sort(byKey).map(([, standing]) => standing),
+  };
 }
 
 /**
@@ -331,10 +615,20 @@ export async function reconcileOutcomeConcepts(
     if (!matchedAny) unattachedOutcomeIds.push(outcome.id);
   }
 
-  return {
+  const report: OutcomeConceptReconciliationReport = {
     attached,
     proposed,
     unattachedOutcomeIds,
     unattachedCount: unattachedOutcomeIds.length,
   };
+  if (options.modelDecided === undefined) return report;
+  // `[D-433]`: read after this run's writes, never written itself; a disabled read changes nothing.
+  const read = await readModelDecidedContainment(vault, {
+    ...options.modelDecided,
+    outcomes,
+    attached,
+    canonicalKeys,
+  });
+  if (read.status === 'disabled') return report;
+  return { ...report, modelDecided: { edges: read.edges, standings: read.standings } };
 }

@@ -12,6 +12,7 @@ import type { SelectionContextV4 } from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
 import { calendarDayFromLocalDate, parseReviewLog, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { createVaultGradeContestPort } from '../../src/review/contest.js';
 import {
   createVaultExplainBackOfferLogPort,
   createVaultNoteExistsPort,
@@ -830,5 +831,125 @@ describe('createVaultReviewLogPort — the named-review-id write seam (row 48, o
     expect(observed.reviewEventId).toBe('named-review-event-3');
     // Only the review took the named id; the observation is its own event.
     expect(observed.eventId).not.toBe('named-review-event-3');
+  });
+});
+
+describe('createVaultReviewLogPort — the v6 belief stamp: both axes and the arithmetic version (ol-95vv.13)', () => {
+  const DEVICE = 'ports-spec-belief-device';
+  const DAY = 24 * 60 * 60 * 1000;
+  const START = Date.parse('2026-03-02T15:00:00Z');
+  /** The attainment arithmetic at its defaults with the declared scheduler, spelled out. */
+  const VERSION = 'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1';
+
+  const SELECTION_CONTEXT: SelectionContextV4 = {
+    dueState: 'due',
+    examProximity: null,
+    yieldRank: null,
+    instrumentTypesOffered: ['qa'],
+    planVersion: null,
+  };
+
+  function instrument(instrumentId: string): ReviewInstrument {
+    return {
+      instrumentId,
+      conceptIds: ['concept-s'],
+      courseCode: 'COGS214',
+      noteTitle: 'Sample note',
+      sourcePath: 'Courses/COGS214/Note.md',
+      blockId: null,
+      draftId: null,
+      type: 'qa',
+      question: 'What is it?',
+      answer: 'It is this.',
+    };
+  }
+
+  /** Rates `instrumentId` `good` through the real port at `at`, and returns the record it wrote. */
+  async function rate(
+    vault: ReturnType<typeof memoryVault>,
+    at: number,
+    instrumentId: string,
+    reviewEventId?: string,
+  ) {
+    const when = new Date(at);
+    await createVaultReviewLogPort(vault, DEVICE, () => when).recordReview({
+      instrument: instrument(instrumentId),
+      rating: 'good',
+      wasUnsure: false,
+      durationMs: 900,
+      selectionContext: SELECTION_CONTEXT,
+      ...(reviewEventId !== undefined ? { reviewEventId } : {}),
+    });
+    const parsed = parseReviewLog(
+      vault.contentOf(reviewLogPath(calendarDayFromLocalDate(when), DEVICE)) ?? '',
+    );
+    expect(parsed.invalidLines).toEqual([]);
+    const written = [...parsed.records]
+      .reverse()
+      .find((record) => record.kind === 'review' && record.timestamp === isoWithLocalOffset(when));
+    if (written?.kind !== 'review') throw new Error('expected the review just written');
+    return written;
+  }
+
+  it('the first review of a concept stamps seed and too early to say, with the version', async () => {
+    const record = await rate(memoryVault(), START, 'qa:s:1');
+    expect(record.masteryAtTime).toEqual({
+      attribution: 'per-concept',
+      byConcept: { 'concept-s': 'seed' },
+      vitalityByConcept: { 'concept-s': 'early' },
+      arithmeticVersion: VERSION,
+    });
+  });
+
+  it('stamps from the log as it stood before this review, vitality at the instant of writing', async () => {
+    const vault = memoryVault();
+    await rate(vault, START, 'qa:s:1');
+    // A day on: the first review counts (sprout) and is not yet due (holding).
+    expect((await rate(vault, START + DAY, 'qa:s:2')).masteryAtTime).toEqual({
+      attribution: 'per-concept',
+      byConcept: { 'concept-s': 'sprout' },
+      vitalityByConcept: { 'concept-s': 'holding' },
+      arithmeticVersion: VERSION,
+    });
+    // Ten days on, both earlier reviews are past due: needs tending. Two
+    // distinct days, so still sprout — this very review's day is not counted.
+    expect((await rate(vault, START + 10 * DAY, 'qa:s:3')).masteryAtTime).toEqual({
+      attribution: 'per-concept',
+      byConcept: { 'concept-s': 'sprout' },
+      vitalityByConcept: { 'concept-s': 'tending' },
+      arithmeticVersion: VERSION,
+    });
+  });
+
+  it('the disputes her log carries reach the stamp: a corrected grade earns nothing toward the stage', async () => {
+    async function history(withContest: boolean) {
+      const vault = memoryVault();
+      await rate(vault, START, 'qa:s:1');
+      await rate(vault, START + DAY, 'qa:s:1');
+      await rate(vault, START + 2 * DAY, 'qa:s:2', 'contested-review');
+      if (withContest) {
+        const contests = createVaultGradeContestPort(vault, DEVICE, () =>
+          isoWithLocalOffset(new Date(START + 2 * DAY + 30 * 60 * 1000)),
+        );
+        const dispute = await contests.contestGrade({
+          instrumentId: 'qa:s:2',
+          conceptIds: ['concept-s'],
+          evidenceBasis: 'basis-1',
+          reviewId: 'contested-review',
+        });
+        await contests.resolveContestedGrade({ dispute, outcome: 'corrected' });
+      }
+      return rate(vault, START + 2 * DAY + 60 * 60 * 1000, 'qa:s:3');
+    }
+    // Control: three distinct days of success reach sapling.
+    expect((await history(false)).masteryAtTime).toMatchObject({
+      byConcept: { 'concept-s': 'sapling' },
+      arithmeticVersion: VERSION,
+    });
+    // The third day's grade was proven wrong on contest: practice only.
+    expect((await history(true)).masteryAtTime).toMatchObject({
+      byConcept: { 'concept-s': 'sprout' },
+      arithmeticVersion: VERSION,
+    });
   });
 });

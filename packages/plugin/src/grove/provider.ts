@@ -726,6 +726,9 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             vocabulary,
             registeredFiles,
             includeDerivedUnits: true,
+            // A registered objectives PDF declares the concepts it names, as a markdown
+            // objectives note does (F8.1, `ol-egov.141.89.7.39`).
+            binaryObjectivesAsObjectives: true,
           }),
           disputesFromFiles(deps.vault, files),
           readTranscriptMaterial(deps.vault, DEFAULT_COURSES_FOLDER),

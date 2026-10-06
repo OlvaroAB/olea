@@ -526,10 +526,12 @@ export class GapView extends ItemView {
    * `renderRow`'s own note.
    *
    * **No vitality/tending mark yet.** The kit draws one on a decayed
-   * mastery-gap sprig; `renderSprig`'s own module doc says vitality "is not
-   * yet a persisted field anywhere in this codebase" (`MAT-2`, `ol-95vv`,
-   * still open) — there is nothing for this method to read, so it draws
-   * none, same as `grove/view.ts` does for the identical reason.
+   * mastery-gap sprig, but `GapRow` carries no vitality reading, so there is
+   * nothing for this method to read and it draws none, as `grove/view.ts`
+   * does. Since `ol-95vv.13` each review's stamp persists vitality, but that
+   * is what was believed when an item was offered, never a current reading:
+   * a mark here reads current vitality, supplied beside `mastery` where
+   * `./provider.ts` builds the model, which nothing does yet.
    */
   private renderMasteryMark(parent: HTMLElement, row: GapRow): void {
     if (row.gapClass === 'material-gap') {

@@ -45,6 +45,22 @@ describe('WorkerGroundingJudge — the frozen vocabulary it mirrors', () => {
 });
 
 describe('WorkerGroundingJudge — the request it builds', () => {
+  // `ol-egov.141.89.1.64`: `olea-contracts`' optional `contextPassagesField` is beside `context`
+  // and nothing here sends it yet, so today's envelope must stay byte for byte what it was. These
+  // literal strings are that pin; a producer that later sends passages adds a test, never edits these.
+  it('sends an envelope byte-identical to the pinned serialisation when no passages are given', async () => {
+    const transport = new RecordingTransport(() => okResponse({ supported: true, reason: 'ok' }));
+    const judge = new WorkerGroundingJudge({ transport });
+
+    await judge.judge({ query: 'What is an ERP?', context: 'ERPs are voltage deflections.' });
+    await judge.judge({ query: 'q', context: 'c', intendedOperation: 'define' });
+
+    expect(transport.sent.map((sent) => JSON.stringify(sent))).toEqual([
+      '{"contractVersion":2,"taskId":"grounding.judge.v1","payload":{"query":"What is an ERP?","context":"ERPs are voltage deflections."}}',
+      '{"contractVersion":2,"taskId":"grounding.judge.v1","payload":{"query":"q","context":"c","intendedOperation":"define"}}',
+    ]);
+  });
+
   it('sends exactly the query and context fields, field for field with the service request shape', async () => {
     const transport = new RecordingTransport(() => okResponse({ supported: true, reason: 'ok' }));
     const judge = new WorkerGroundingJudge({ transport });

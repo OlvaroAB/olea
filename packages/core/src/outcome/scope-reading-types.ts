@@ -276,6 +276,13 @@ export interface AlignmentResultPayload {
   readonly coverage: AlignmentCoverageNote;
   /** A pending result no model produced carries none. */
   readonly provenance?: ScopeReaderProvenance;
+  /**
+   * `[D-534]` 2-ii: the `eventId` of the structure record whose part ids `recordIds` name. Required
+   * on a past-paper result (the store refuses one without it), absent on an objectives result. Part
+   * ids are unique only within one reading of a paper's structure, so the projection reads a result
+   * whose structure is no longer the current one as unverified, never current.
+   */
+  readonly structureId?: string;
 }
 
 // --------------------------------------------------------------------------------------------
@@ -305,5 +312,6 @@ export type AlignmentFreshness =
         | 'coverage'
         | 'batchPlan'
         | 'frozenConfiguration'
+        | 'structure'
       )[];
     };

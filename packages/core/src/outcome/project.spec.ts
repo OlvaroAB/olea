@@ -143,6 +143,86 @@ describe('applyOutcomeEvent — retired', () => {
   });
 });
 
+// ol-egov.141.89.7.68 ([D-531], [D-272]): scenarios "an outcome records the latest version that
+// stated it" and "a later version that states a retired outcome again reinstates it".
+describe('applyOutcomeEvent — the version stamp, restated and reinstated', () => {
+  const at = '2026-10-06T00:00:00Z';
+  const restated = (revisionDigest: string): OutcomeEvent => ({
+    kind: 'restated',
+    schemaVersion: 1,
+    eventId: `evt-restated-${revisionDigest}`,
+    timestamp: at,
+    outcomeId: 'outcome-1',
+    revisionDigest,
+  });
+  const reinstated = (revisionDigest: string): OutcomeEvent => ({
+    kind: 'reinstated',
+    schemaVersion: 1,
+    eventId: `evt-reinstated-${revisionDigest}`,
+    timestamp: at,
+    outcomeId: 'outcome-1',
+    revisionDigest,
+  });
+  const retire: OutcomeEvent = {
+    kind: 'retired',
+    schemaVersion: 1,
+    eventId: 'evt-retire',
+    timestamp: at,
+    outcomeId: 'outcome-1',
+  };
+
+  it('a created event carrying a revision stamps the record; one without leaves no field', () => {
+    const stamped = applyOutcomeEvent(undefined, {
+      ...createdEvent('outcome-1'),
+      statedInRevision: 'rev-1',
+    });
+    expect(stamped?.statedInRevision).toBe('rev-1');
+    const unstamped = applyOutcomeEvent(undefined, createdEvent('outcome-2'));
+    expect(unstamped !== undefined && 'statedInRevision' in unstamped).toBe(false);
+  });
+
+  it('restated moves the stamp to the newer version and changes nothing else', () => {
+    const record = applyOutcomeEvent(undefined, {
+      ...createdEvent('outcome-1'),
+      statedInRevision: 'rev-1',
+    });
+    const updated = applyOutcomeEvent(record, restated('rev-2'));
+    expect(updated).toEqual({ ...record, statedInRevision: 'rev-2' });
+    // Idempotent: the same version again is a true no-op.
+    expect(applyOutcomeEvent(updated, restated('rev-2'))).toBe(updated);
+  });
+
+  it('restated never changes a status: a retired record stays retired', () => {
+    const record = applyOutcomeEvent(undefined, createdEvent('outcome-1'));
+    const retired = applyOutcomeEvent(record, retire);
+    expect(applyOutcomeEvent(retired, restated('rev-2'))?.status).toBe('retired');
+  });
+
+  it('reinstated makes a retired record active again, stamped, with every other field kept', () => {
+    const record = applyOutcomeEvent(undefined, {
+      ...createdEvent('outcome-1'),
+      statedInRevision: 'rev-1',
+    });
+    const attached = applyOutcomeEvent(record, {
+      kind: 'concept-attached',
+      schemaVersion: 1,
+      eventId: 'evt-attach',
+      timestamp: at,
+      outcomeId: 'outcome-1',
+      conceptKey: 'concept-key1:a',
+    });
+    const retired = applyOutcomeEvent(attached, retire);
+    const back = applyOutcomeEvent(retired, reinstated('rev-3'));
+    expect(back).toEqual({ ...attached, statedInRevision: 'rev-3' });
+    expect(applyOutcomeEvent(back, reinstated('rev-3'))).toBe(back);
+  });
+
+  it('restated and reinstated are dropped against no existing record, never minting', () => {
+    expect(applyOutcomeEvent(undefined, restated('rev-2'))).toBeUndefined();
+    expect(applyOutcomeEvent(undefined, reinstated('rev-2'))).toBeUndefined();
+  });
+});
+
 describe('projectOutcomeRecords', () => {
   it('folds a full create/attach/retire sequence for one outcome', () => {
     const events: OutcomeEvent[] = [

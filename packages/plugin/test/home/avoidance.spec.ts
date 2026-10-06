@@ -16,7 +16,9 @@ import type { GroveCourseSection } from '../../src/grove/view.js';
 import {
   allCourseAvoidanceStrings,
   COURSE_AVOIDANCE_LEAVE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT,
   COURSE_AVOIDANCE_PRACTISE_ACTION,
+  COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP,
   type CourseActivity,
   courseActivityFromGrove,
   findAvoidedCourse,
@@ -203,6 +205,16 @@ describe('home avoidance copy — honesty', () => {
   it('the two option labels are the registry §16 words, verbatim', () => {
     expect(COURSE_AVOIDANCE_LEAVE_ACTION.toLowerCase()).toContain('leave the course for now');
     expect(COURSE_AVOIDANCE_PRACTISE_ACTION.toLowerCase()).toContain('practise it differently');
+  });
+
+  it('[D-528] the before-tap line and the acknowledgement are the signed copy, verbatim', () => {
+    expect(COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP).toBe(
+      'This records feedback; your practice will stay the same.',
+    );
+    expect(COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT).toBe('Feedback recorded.');
+    expect(COURSE_AVOIDANCE_PRACTISE_ACTION).toBe('Practise it differently');
+    expect(allCourseAvoidanceStrings()).toContain(COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP);
+    expect(allCourseAvoidanceStrings()).toContain(COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT);
   });
 
   it('no wording asserts a cause — [D-265]’s forbidden framing', () => {

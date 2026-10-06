@@ -26,7 +26,7 @@ export const unitsOf = (n: number): ExtractedUnit[] =>
 export function conceptNotes(names: readonly string[], course = COURSE) {
   const files: Record<string, string> = {};
   names.forEach((name, i) => {
-    files[`Courses/${course}/note-${i}.md`] = [
+    files[`01 Courses/${course}/note-${i}.md`] = [
       '---',
       `topic: [${name}]`,
       `course: ${course}`,

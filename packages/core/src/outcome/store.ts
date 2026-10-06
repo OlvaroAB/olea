@@ -21,6 +21,17 @@
  * matched on their block and their stored label, never rewritten. The rule, its threshold and why
  * there is no positional fallback: `./source-identity.ts`'s module doc.
  *
+ * **The version stamp, and retiring on revision (`[D-531]`, `ol-egov.141.89.7.68`).** A caller that
+ * knows which version of the document a delivery was read from passes it as `options.revision`
+ * (`./retire-on-revision.ts`'s `planOutcomeDelivery` decides what it may be): every record minted
+ * is stamped with it (`OutcomeRecord.statedInRevision`), and an open delivery — the document's
+ * current version, not yet read in full — also restamps each matched record stamped otherwise, and
+ * reinstates a matched record that was retired (`[D-272]`). A reread or an unplaced delivery leaves
+ * matched records exactly as they are. Once the current version has been read in full,
+ * `retireOutcomesOnRevision` retires each active outcome on the document that the version did not
+ * state, through `retireOutcome`. Both run as tasks on the folder's queue key, so a retire pass
+ * never interleaves with a find-or-mint.
+ *
  * **One find-or-mint at a time (`ol-egov.141.89.104.53`, race 1).** Listing the folder and minting
  * a new file span more than one file, so no record file's queue covers them: `resolveOutcomes`
  * runs its whole list, match and mint as one task on the folder's own queue key, taking each new
@@ -61,6 +72,12 @@ import { readStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { OutcomeEvent } from './events.js';
 import { applyOutcomeEvent } from './project.js';
+import {
+  isRetiredByRevision,
+  type OutcomeDeliveryRevision,
+  type OutcomeRevisionPages,
+  outcomeRevisionReadInFull,
+} from './retire-on-revision.js';
 import {
   matchOutcomeCandidates,
   outcomeLabelDigest,
@@ -121,6 +138,8 @@ export function isOutcomeRecord(value: unknown): value is OutcomeRecord {
   if (v.extractorSelfRating !== undefined && typeof v.extractorSelfRating !== 'number') {
     return false;
   }
+  // `[D-531]`: optional, so ABSENT is valid; a PRESENT stamp must be a non-empty string.
+  if (v.statedInRevision !== undefined && !isNonEmptyString(v.statedInRevision)) return false;
   if (!isNonEmptyString(v.mintedAt)) return false;
   if (typeof v.schemaVersion !== 'number') return false;
   return true;
@@ -268,6 +287,12 @@ export interface ResolveOutcomeOptions {
   readonly now?: () => string;
   /** Injectable nonce source for `mintOpaqueOutcomeId`. Defaults to `crypto.randomUUID()`. */
   readonly generateId?: OpaqueIdNonceSource;
+  /**
+   * `[D-531]`: the version of the document this delivery was read from, and whether it restates
+   * (module doc). Omitted when the delivery's version is unknown: then records are minted with no
+   * stamp and matched records are left as they are, as before the rule.
+   */
+  readonly revision?: OutcomeDeliveryRevision;
 }
 
 function defaultNow(): string {
@@ -280,12 +305,16 @@ function defaultNow(): string {
  * is under `./source-identity.ts`'s rule (same block, then same normalised wording, then a near
  * wording, one to one), read back verbatim; candidates that match none mint new records, one per
  * distinct wording on a block, each carrying `source.labelDigest`. **Never mints a second record
- * for a wording a record on that block already has**, and never mutates an existing record.
+ * for a wording a record on that block already has**, and changes an existing record only in its
+ * version stamp and status, and only for an open delivery (`[D-531]`, below).
  *
- * A match refreshes nothing on the existing record (unlike `resolveConceptKey`'s anchor-drift
- * refresh): its label, self-rating and digest stay as first minted. Wording that has changed
- * beyond the near rule is a different outcome and mints a new record; the record it may have
- * replaced is left as it is — retiring it is not this seam's call.
+ * A match refreshes nothing of what was read on the existing record (unlike `resolveConceptKey`'s
+ * anchor-drift refresh): its label, self-rating and digest stay as first minted. With
+ * `options.revision` restating (an open delivery, `[D-531]`), a match moves the record's version
+ * stamp to that version, and a retired match is reinstated; the record returned is then the one
+ * written. Wording that has changed beyond the near rule is a different outcome and mints a new
+ * record; the record it may have replaced is left as it is — retiring it is
+ * `retireOutcomesOnRevision`'s call, once the version has been read in full.
  *
  * **Resolve one extraction's candidates in one call.** Only records stored before the call can be
  * claimed by a near wording, so two wordings from one extraction never fold onto one record. The
@@ -312,6 +341,7 @@ export async function resolveOutcomes(
     const stored = (await listStoredOutcomeRecords(vault)).filter(({ record }) =>
       blocks.has(outcomeSourceBlockKey(record.source)),
     );
+    const pathOf = new Map(stored.map(({ path, record }) => [record, path] as const));
     const keyed = await Promise.all(
       stored.map(async ({ record }) => ({
         record,
@@ -326,8 +356,11 @@ export async function resolveOutcomes(
       const digest = firstIndex === undefined ? undefined : candidates[firstIndex]?.digest;
       if (first === undefined || digest === undefined) continue;
       // A group mints once, from its first candidate: every member shares one normalised wording.
+      const matched = group.match?.record;
       const record =
-        group.match?.record ?? (await mintOutcome(vault, first, digest, now, options.generateId));
+        matched === undefined
+          ? await mintOutcome(vault, first, digest, now, options.generateId, options.revision)
+          : await restateMatched(vault, matched, pathOf.get(matched), now, options.revision);
       for (const index of group.members) resolved[index] = record;
     }
     return resolved;
@@ -352,13 +385,46 @@ export async function resolveOutcome(
   return record;
 }
 
-/** Mints and persists one record for `input`, its source carrying `labelDigest`. Runs inside `resolveOutcomes`' folder task. */
+/**
+ * `[D-531]`: a matched record as an open delivery of `revision.digest` leaves it — reinstated when
+ * retired, restamped when stamped otherwise — written on its own file's queue after reading it
+ * again. Returned as it stands when the delivery does not restate, or nothing changes.
+ */
+async function restateMatched(
+  vault: VaultSource,
+  matched: OutcomeRecord,
+  path: VaultPath | undefined,
+  now: () => string,
+  revision: OutcomeDeliveryRevision | undefined,
+): Promise<OutcomeRecord> {
+  if (revision === undefined || !revision.restates || path === undefined) return matched;
+  if (matched.status === 'active' && matched.statedInRevision === revision.digest) return matched;
+  return withPathQueue(path, async () => {
+    const fresh = await readStoreRecord(vault, path, isOutcomeRecord);
+    if (fresh.kind !== 'record' || fresh.record.id !== matched.id) return matched;
+    const event: OutcomeEvent = {
+      kind: fresh.record.status === 'retired' ? 'reinstated' : 'restated',
+      schemaVersion: 1,
+      eventId: globalThis.crypto.randomUUID(),
+      timestamp: now(),
+      outcomeId: matched.id,
+      revisionDigest: revision.digest,
+    };
+    const updated = applyOutcomeEvent(fresh.record, event);
+    if (updated === undefined || updated === fresh.record) return fresh.record;
+    await vault.write(path, serialize(updated));
+    return updated;
+  });
+}
+
+/** Mints and persists one record for `input`, its source carrying `labelDigest`, stamped with `revision.digest` when given. Runs inside `resolveOutcomes`' folder task. */
 async function mintOutcome(
   vault: VaultSource,
   input: ResolveOutcomeInput,
   labelDigest: string,
   now: () => string,
   generateId: OpaqueIdNonceSource | undefined,
+  revision: OutcomeDeliveryRevision | undefined,
 ): Promise<OutcomeRecord> {
   const id = mintOpaqueOutcomeId(generateId);
   const event: OutcomeEvent = {
@@ -374,6 +440,7 @@ async function mintOutcome(
     ...(input.extractorSelfRating !== undefined
       ? { extractorSelfRating: input.extractorSelfRating }
       : {}),
+    ...(revision !== undefined ? { statedInRevision: revision.digest } : {}),
   };
   const record = applyOutcomeEvent(undefined, event);
   // `applyOutcomeEvent` always returns a record for a `created` event — see its doc — so this
@@ -465,5 +532,42 @@ export async function retireOutcome(
     if (updated === undefined || updated === hit.record) return hit.record;
     await vault.write(hit.path, serialize(updated));
     return updated;
+  });
+}
+
+export interface RetireOutcomesOnRevisionOptions {
+  /** Injectable for deterministic tests. Defaults to `new Date().toISOString().slice(0, 10)`. */
+  readonly now?: () => string;
+}
+
+/**
+ * The retire pass (`[D-531]`, `ol-egov.141.89.7.68`): once `revision` — the document's current
+ * version, as its page record holds it — has been read in full (`./retire-on-revision.ts`'s
+ * `outcomeRevisionReadInFull`), retires each active outcome on that document stamped with another
+ * version the page record has listed, through `retireOutcome`. Records are kept, never deleted, and
+ * no reason is stored. Returns the records it retired, in id order.
+ *
+ * **Refuses, and writes nothing, while the version is not read in full**: the completeness rule is
+ * enforced here, at the store, so no caller can retire on a partial reading. Idempotent: run again
+ * for the same version (a reread, a reload, a crash between the last page and this pass), it
+ * retires only what is still due, which after its first run is nothing. One task on the outcome
+ * folder's queue key, so it never interleaves with `resolveOutcomes`.
+ */
+export async function retireOutcomesOnRevision(
+  vault: VaultSource,
+  revision: OutcomeRevisionPages,
+  options: RetireOutcomesOnRevisionOptions = {},
+): Promise<readonly OutcomeRecord[]> {
+  if (!outcomeRevisionReadInFull(revision)) return [];
+  return withPathQueue(OUTCOME_STORE_FOLDER, async () => {
+    const due = (await listStoredOutcomeRecords(vault))
+      .map(({ record }) => record)
+      .filter((record) => isRetiredByRevision(record, revision))
+      .map((record) => record.id)
+      .sort();
+    const retireOptions = options.now === undefined ? {} : { now: options.now };
+    const retired: OutcomeRecord[] = [];
+    for (const id of due) retired.push(await retireOutcome(vault, id, retireOptions));
+    return retired;
   });
 }

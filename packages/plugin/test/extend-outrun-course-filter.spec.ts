@@ -143,7 +143,7 @@ function planWithRisk(urgentCourse: string, calmCourse: string): StudyPlanEnvelo
   return {
     envelopeVersion: 1,
     kind: 'study-plan',
-    bodyVersion: 1,
+    bodyVersion: 2,
     policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
     computedAt: NOW.toISOString(),
     freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,

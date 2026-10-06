@@ -49,7 +49,7 @@ function concept(
 describe('resolveRelatedConceptKeys', () => {
   it('joins both endpoints of a resolvable relation to a symmetric adjacency entry, keyed on conceptKey (never the name)', () => {
     const concepts = [concept('Photosynthesis', 'key-photo'), concept('Respiration', 'key-resp')];
-    const relations = [edge('related' as RelationType, 'Photosynthesis', 'Respiration')];
+    const relations = [edge('prerequisite', 'Photosynthesis', 'Respiration')];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
 
@@ -74,7 +74,7 @@ describe('resolveRelatedConceptKeys', () => {
   it('drops an edge with one unresolved endpoint from the map, but COUNTS the miss rather than absorbing it silently', () => {
     const concepts = [concept('Photosynthesis', 'key-photo')];
     // 'Respiration' names no known concept.
-    const relations = [edge('related' as RelationType, 'Photosynthesis', 'Respiration')];
+    const relations = [edge('prerequisite', 'Photosynthesis', 'Respiration')];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
 
@@ -85,7 +85,7 @@ describe('resolveRelatedConceptKeys', () => {
 
   it('counts BOTH endpoints when neither resolves (two misses from one edge)', () => {
     const result = resolveRelatedConceptKeys(
-      [edge('related' as RelationType, 'Nowhere', 'AlsoNowhere')],
+      [edge('prerequisite', 'Nowhere', 'AlsoNowhere')],
       [concept('Somewhere', 'key-somewhere')],
     );
 
@@ -96,7 +96,7 @@ describe('resolveRelatedConceptKeys', () => {
   it('is exact-match only, the same derivation evidence-edge/build.ts uses (ol-63e1) — a differently-cased name is an honest miss, not a fold', () => {
     const concepts = [concept('Photosynthesis', 'key-photo'), concept('Respiration', 'key-resp')];
     // Lower-cased 'respiration' does not exact-match 'Respiration'.
-    const relations = [edge('related' as RelationType, 'Photosynthesis', 'respiration')];
+    const relations = [edge('prerequisite', 'Photosynthesis', 'respiration')];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
 
@@ -109,7 +109,7 @@ describe('resolveRelatedConceptKeys', () => {
     const relations = [
       edge('is-a', 'A', 'B'),
       edge('part-of', 'A', 'C'),
-      edge('related' as RelationType, 'B', 'A'),
+      edge('prerequisite', 'B', 'A'),
     ];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
@@ -120,7 +120,7 @@ describe('resolveRelatedConceptKeys', () => {
 
   it('a self-relation (both endpoints resolve to the same key) contributes no adjacency and is not counted as a miss', () => {
     const concepts = [concept('A', 'k-a')];
-    const result = resolveRelatedConceptKeys([edge('related' as RelationType, 'A', 'A')], concepts);
+    const result = resolveRelatedConceptKeys([edge('prerequisite', 'A', 'A')], concepts);
 
     expect(result.unresolvedEndpointCount).toBe(0);
     expect(result.relatedConceptKeys.size).toBe(0);
@@ -141,7 +141,7 @@ describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [
     // no entry in `concepts` to resolve.
     const relations = [
       {
-        ...edge('related' as RelationType, 'Photosynthesis', 'Respiration'),
+        ...edge('prerequisite', 'Photosynthesis', 'Respiration'),
         fromKey: 'key-photo',
         toKey: 'key-resp',
       },
@@ -156,7 +156,7 @@ describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [
 
   it('falls back to the exact-name join when fromKey/toKey are absent — the pre-REL-9 behaviour, unchanged', () => {
     const concepts = [concept('Photosynthesis', 'key-photo'), concept('Respiration', 'key-resp')];
-    const relations = [edge('related' as RelationType, 'Photosynthesis', 'Respiration')];
+    const relations = [edge('prerequisite', 'Photosynthesis', 'Respiration')];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
 
@@ -193,7 +193,7 @@ describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [
   it('a key present on only one endpoint resolves that one by key and the other by name', () => {
     const concepts = [concept('Respiration', 'key-resp')];
     const relations = [
-      { ...edge('related' as RelationType, 'Photosynthesis', 'Respiration'), fromKey: 'key-photo' },
+      { ...edge('prerequisite', 'Photosynthesis', 'Respiration'), fromKey: 'key-photo' },
     ];
 
     const result = resolveRelatedConceptKeys(relations, concepts);
@@ -237,11 +237,20 @@ describe('resolveRelatedConceptKeys — endpoint keys, when present (`ol-l40p` [
       expect(result.relatedConceptKeys.has('k-c')).toBe(false);
     });
 
-    it('names causes as the one excluded type; every other ruled type is allowed', () => {
+    it('the allow-list is exactly the four types F2.19 names; causes and related stay out', () => {
       expect(SESSION_GROUPING_RELATION_TYPES.has('causes')).toBe(false);
+      expect(SESSION_GROUPING_RELATION_TYPES.has('related')).toBe(false);
       expect([...SESSION_GROUPING_RELATION_TYPES].sort()).toEqual(
-        ['contrasts-with', 'is-a', 'part-of', 'prerequisite', 'related'].sort(),
+        ['contrasts-with', 'is-a', 'part-of', 'prerequisite'].sort(),
       );
+    });
+
+    it('a bare related edge does not group a session', () => {
+      const concepts = [concept('A', 'k-a'), concept('B', 'k-b')];
+
+      const result = resolveRelatedConceptKeys([edge('related', 'A', 'B')], concepts);
+
+      expect(result.relatedConceptKeys.size).toBe(0);
     });
 
     it('an explicit allowedTypes override reads causes (the explain-back partner lookup)', () => {

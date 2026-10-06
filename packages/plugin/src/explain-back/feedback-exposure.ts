@@ -110,8 +110,19 @@ export function supportLevelForExposure(
 export interface FeedbackExposureLedger {
   /** A graded result for `attemptId` was shown to her at this question. */
   noteShown(instrumentId: string, attemptId: string): void;
-  /** An attempt at this question was accepted: the exchange ended. */
+  /**
+   * An attempt at this question was accepted. The note of a shown result is
+   * cleared, and, when feedback had been shown, the exchange is held as
+   * continued for the rest of the session (`[D-459]`).
+   */
   settle(instrumentId: string): void;
+  /**
+   * True when an attempt at this question was accepted after feedback was
+   * shown, in this plugin session: reopening the question now continues that
+   * exchange, so the reopened attempt stays assisted (`[D-459]`). A later
+   * session reads her log instead, where the accepted review ends the exchange.
+   */
+  continuedAfterAcceptance(instrumentId: string): boolean;
   /** The latest attempt shown at this question in the open exchange, if any. */
   shown(instrumentId: string): { readonly attemptId: string } | undefined;
 }
@@ -128,6 +139,7 @@ export function createFeedbackExposureLedger(
   capacity: number = FEEDBACK_EXPOSURE_LEDGER_CAPACITY,
 ): FeedbackExposureLedger {
   const shownAttempt = new Map<string, string>();
+  const continued = new Set<string>();
   return {
     noteShown(instrumentId, attemptId) {
       // Re-insert so the map's order is most-recently-noted last.
@@ -140,7 +152,19 @@ export function createFeedbackExposureLedger(
       }
     },
     settle(instrumentId) {
-      shownAttempt.delete(instrumentId);
+      const hadShown = shownAttempt.delete(instrumentId);
+      if (hadShown) {
+        continued.delete(instrumentId);
+        continued.add(instrumentId);
+        while (continued.size > capacity) {
+          const oldest = continued.values().next();
+          if (oldest.done === true) break;
+          continued.delete(oldest.value);
+        }
+      }
+    },
+    continuedAfterAcceptance(instrumentId) {
+      return continued.has(instrumentId);
     },
     shown(instrumentId) {
       const attemptId = shownAttempt.get(instrumentId);
@@ -299,6 +323,11 @@ export async function resolvePriorAttemptState(params: {
 }): Promise<PriorAttemptState> {
   const noted = params.ledger.shown(params.instrumentId);
   if (noted !== undefined) return { exposure: 'shown', lastAttemptId: noted.attemptId };
+  // `[D-459]`: accepted after feedback in this session and reopened: the same exchange, still
+  // assisted. No attempt to follow (the accepted attempt is a review, never a set-aside).
+  if (params.ledger.continuedAfterAcceptance(params.instrumentId)) {
+    return { exposure: 'shown', lastAttemptId: null };
+  }
   if (params.readLogged === undefined) return NO_PRIOR_ATTEMPT;
   try {
     return await params.readLogged(params.instrumentId);

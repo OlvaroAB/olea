@@ -545,8 +545,9 @@ export function isValidRemainingAllowanceUsd(value: unknown): value is number {
  *
  * The tasks that carry it, each of which reads a `sourceChunks` array: see
  * `SOURCE_CHUNK_ORIGIN_TASK_IDS`. `grounding.judge.v1` (a single assembled `context` string) reads
- * no `sourceChunks` and does not carry it. `explain-back.judge.v1` carries a per-block `origin`
- * instead (`sourceBlockOriginField`, `ol-egov.141.89.1.69`).
+ * no `sourceChunks` and does not carry it; it carries an optional per-passage `contextPassages`
+ * instead (`contextPassagesField`, `ol-egov.141.89.1.64`). `explain-back.judge.v1` carries a
+ * per-block `origin` instead (`sourceBlockOriginField`, `ol-egov.141.89.1.69`).
  *
  * Skew: a Worker from before this field strips it as an unknown key, which reads as no
  * transcript passages, exactly as before.
@@ -620,3 +621,40 @@ export function refineSourceChunkOriginAlignment(
  * renders it.
  */
 export const sourceBlockOriginField = transcriptSourceChunkOrigin.nullable().optional();
+
+/**
+ * `ol-egov.141.89.1.64` / `[D-465]` (Class B default, for David's retroactive review):
+ * `grounding.judge.v1`'s optional per-passage context. The request keeps its single assembled
+ * `context` string, unchanged and still required; `contextPassages` sits beside it and carries
+ * the retrieved passages one entry each, `{ text, origin }`, so the judge can be told which
+ * passages are transcript-derived, who was speaking, and what the reader could not hear or see.
+ *
+ * - **Absent is today's request, byte for byte.** A producer that has no passage to send omits
+ *   the key; an empty array carries no passage and reads as absent. The Worker renders passages
+ *   only when at least one is present, so every existing request, and every measured judge
+ *   configuration, sees exactly the prompt it saw before.
+ * - **Intended use, not checked here:** the same passages `context` was assembled from, in the
+ *   same order. The contract does not compare the two; how the Worker renders them is the
+ *   service's half.
+ * - `origin` is the same entry type as `sourceChunkOrigins` (never redefined), or `null` for a
+ *   passage that is not a transcript passage. It is required on every entry, so "not a
+ *   transcript" is a stated value rather than an omission. Roles only, never a speaker name (the
+ *   origin entry is strict); endorsement is not a field.
+ * - `text` is non-empty, as `explain-back.judge.v1`'s block text is. The array is unbounded, as
+ *   `sourceChunkOrigins`, `sourceBlocks` and `context` itself are.
+ * - A passage entry strips an unknown key rather than rejecting it, so a newer client meeting an
+ *   older Worker degrades to the fields that Worker knows.
+ * - Not persisted: transient request context, like `context` itself (D-005).
+ *
+ * Skew: a Worker from before this field strips it as an unknown key, which reads as absent.
+ * Additive and optional, so `CONTRACT_VERSION` is unchanged (the same rule `intendedOperation`
+ * and `sourceChunkOrigins` followed).
+ */
+export const contextPassage = z.object({
+  text: z.string().min(1),
+  origin: transcriptSourceChunkOrigin.nullable(),
+});
+export type ContextPassage = z.infer<typeof contextPassage>;
+
+/** The request field: `grounding.judge.v1`'s optional `contextPassages`. See `contextPassage`. */
+export const contextPassagesField = z.array(contextPassage).optional();

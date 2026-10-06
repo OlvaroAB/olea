@@ -14,14 +14,11 @@ import type {
   SelectionContextV4,
 } from 'olea-contracts';
 import type { MisconceptionResolutionEvidenceEvent, VaultSource } from 'olea-core';
-// `masteryAtTimeForConceptIds` (C5.4's rollup) had no consumer outside core
-// and `packages/workbench` until this bead (`ol-rpr4`), so nothing had ever
-// added it to core's public surface. The lane that wired it reached in by
-// source path — `packages/workbench/src/oracle-bridge.ts` does exactly that —
-// and the orchestrator added the barrel export instead: the workbench is dev
-// tooling, this file is production code that gets bundled into the plugin, and
-// this was the only one of the plugin's 43 core imports reaching past the
-// barrel. A deep import here would also let the module be bundled twice.
+// The belief stamp is built through core's barrel, never a deep import: this
+// file is production code bundled into the plugin, and a deep import would let
+// the module be bundled twice (`ol-rpr4`'s reason for barrelling the stamp's
+// first builder). Since `ol-95vv.13` that builder is `masteryAtTimeStamp`,
+// both axes and the arithmetic version, over one validity projection.
 import {
   appendExplainBackOfferRecord,
   appendMisconceptionEvent,
@@ -30,8 +27,11 @@ import {
   appendSuspendRecord,
   type BuildSchedulingObservationFieldInput,
   buildSchedulingObservationField,
-  masteryAtTimeForConceptIds,
+  createFsrsScheduler,
+  HOLDING_CUT,
+  masteryAtTimeStamp,
   parseMcqBlocks,
+  projectInstrumentValidity,
   type SupportLevelPresentation,
   supportLevelReviewFields,
 } from 'olea-core';
@@ -196,12 +196,20 @@ export function isoWithLocalOffset(date: Date): string {
  * what the system believed when it *offered* her the item, computed from the
  * log **excluding** the event this call is about to append. That exclusion is
  * not implemented as a filter someone could get wrong — it falls out of doing
- * the log read (`readReviewHistory`) and the mastery build
- * (`masteryAtTimeForConceptIds`) to completion *before* `appendReviewLogRecord`
+ * the log read (`readReviewHistory`) and the stamp build
+ * (`masteryAtTimeStamp`) to completion *before* `appendReviewLogRecord`
  * is ever called. The not-yet-written event cannot appear in a log read that
  * finished before it was written. Reordering these two calls is the one edit
  * that would silently break this; `open-session.spec.ts` has a test built to
  * go red if it ever does.
+ *
+ * **Both axes and the arithmetic version, or nothing (v6, MAT-7, `ol-95vv.13`).**
+ * The stamp carries, per concept, the displayed stage and the vitality the
+ * attainment arithmetic reads at `now`, over ONE validity projection of the
+ * log and its disputes (the projection the display readers build), plus the
+ * version string both readings carry. The scheduler is the declared one and
+ * the holding cut is `HOLDING_CUT`, the defaults every vitality reader takes.
+ * No reading takes the stamp back as evidence (strip-invariance).
  *
  * The window read is `SCHEDULING_HISTORY_PROBE_DAYS`, the same bound
  * `open-session.ts` already reads to replay scheduler state for this same
@@ -247,6 +255,9 @@ export function createVaultReviewLogPort(
   /** `ol-3ux7.64.9` [WBX-8]: the plugin's clock seam. Defaults to the real wall clock. */
   clockNow: () => Date = () => new Date(),
 ): ReviewLogPort {
+  // Vitality's scheduler: the declared configuration, the same one every
+  // other vitality reader builds; its version is part of the stamped version.
+  const scheduler = createFsrsScheduler();
   return {
     async recordReview(input) {
       const now = clockNow();
@@ -257,7 +268,14 @@ export function createVaultReviewLogPort(
         today: localToday(now),
         windowDays: SCHEDULING_HISTORY_PROBE_DAYS,
       });
-      const masteryAtTime = masteryAtTimeForConceptIds(history.entries, conceptIds);
+      const masteryAtTime = masteryAtTimeStamp({
+        entries: history.entries,
+        conceptIds,
+        validity: projectInstrumentValidity(history.entries, history.disputes),
+        scheduler,
+        now,
+        holdingCut: HOLDING_CUT,
+      });
 
       // F5.3a / C5.11 (`[D-185]`): built here, from the caller's RAW decision
       // — see `RecordReviewInput.schedulingObservationInput`'s doc for why

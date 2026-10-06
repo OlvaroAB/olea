@@ -180,6 +180,8 @@ export interface ScopeReadingPersistence {
     readonly ref: DocumentRef;
     readonly courseId: string;
     readonly digests: AlignmentDigests;
+    /** `[D-534]`: the structure record the results' part ids name. Required for a past paper (the store refuses without it). */
+    readonly structureId?: string;
     readonly results: readonly {
       readonly conceptKey: string;
       readonly result: AlignmentResult;
@@ -358,6 +360,7 @@ export function createScopeReadingPersistence(
           conceptKey: entry.conceptKey,
           result: entry.result,
           digests: input.digests,
+          ...(input.structureId !== undefined ? { structureId: input.structureId } : {}),
           coverage: entry.coverage,
           ...(entry.provenance !== undefined
             ? {

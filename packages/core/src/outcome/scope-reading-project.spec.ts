@@ -454,6 +454,69 @@ describe('alignment results are current only against the digests they were made 
   });
 });
 
+describe('a past-paper alignment result is current only against the structure it names ([D-534])', () => {
+  const aligned = { kind: 'aligned', recordIds: ['part-1'], refs: [1] } as const;
+  const q = { courseId: 'course-1', source: PAPER('r1'), conceptKey: 'k1' };
+  const withStructure = (e: ScopeReadingLogEntry, structureId?: string): ScopeReadingLogEntry => ({
+    ...e,
+    payload: {
+      ...(e.payload as Record<string, unknown>),
+      ...(structureId !== undefined ? { structureId } : {}),
+    },
+  });
+
+  it('reads current when the named structure is the current one, unverified otherwise', () => {
+    const s1 = structure(PAPER('r1'));
+    const current = projectScopeReadings(
+      logs({
+        paperStructure: [s1],
+        alignmentResult: [withStructure(alignment(PAPER('r1'), 'k1', aligned), s1.eventId)],
+      }),
+    );
+    expect(alignmentResultView(current, q, DIGESTS)).toMatchObject({
+      status: 'current',
+      structureId: s1.eventId,
+    });
+
+    const replaced = projectScopeReadings(
+      logs({
+        paperStructure: [s1, structure(PAPER('r1'), READER_V2)],
+        alignmentResult: [withStructure(alignment(PAPER('r1'), 'k1', aligned), s1.eventId)],
+      }),
+    );
+    expect(alignmentResultView(replaced, q, DIGESTS)).toMatchObject({
+      status: 'unverified',
+      stale: ['structure'],
+    });
+  });
+
+  it('reads unverified with no structure at all, and for a result that names none', () => {
+    const s1 = structure(PAPER('r1'));
+    const none = projectScopeReadings(
+      logs({ alignmentResult: [withStructure(alignment(PAPER('r1'), 'k1', aligned), 'e-gone')] }),
+    );
+    expect(alignmentResultView(none, q, DIGESTS)).toMatchObject({ status: 'unverified' });
+    const unnamed = projectScopeReadings(
+      logs({ paperStructure: [s1], alignmentResult: [alignment(PAPER('r1'), 'k1', aligned)] }),
+    );
+    expect(alignmentResultsForDocument(unnamed, 'course-1', PAPER('r1'), DIGESTS)[0]).toMatchObject(
+      {
+        status: 'unverified',
+        stale: ['structure'],
+      },
+    );
+  });
+
+  it('never applies to an objectives result', () => {
+    const p = projectScopeReadings(
+      logs({ alignmentResult: [alignment(OBJECTIVES('r1'), 'k1', aligned)] }),
+    );
+    expect(alignmentResultView(p, { ...q, source: OBJECTIVES('r1') }, DIGESTS).status).toBe(
+      'current',
+    );
+  });
+});
+
 describe('alignmentFreshness', () => {
   const payload = (digests: AlignmentDigests): AlignmentResultPayload => ({
     source: OBJECTIVES('r1'),

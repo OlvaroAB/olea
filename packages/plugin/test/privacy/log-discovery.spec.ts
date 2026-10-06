@@ -5,7 +5,17 @@
 import type { CalendarDay, ListOptions, VaultPath } from 'olea-core';
 import { misconceptionLogPath, reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import { discoverOleaLayerPaths, isOleaLayerPath } from '../../src/privacy/log-discovery.js';
+// `[D-533]` (`ol-egov.141.89.7.26`): imported by module path, not the `olea-core` barrel, which
+// other lanes are landing exports into this round (the registry's own stance).
+import {
+  OUTCOME_CONTAINMENT_CORRECTION_FOLDER,
+  recordContainmentCorrection,
+} from '../../../core/src/outcome/containment-correction.js';
+import {
+  discoverOleaLayerPaths,
+  isOleaLayerPath,
+  OLEA_LAYER_FOLDERS,
+} from '../../src/privacy/log-discovery.js';
 import { MemoryVaultSource } from './fakes.js';
 
 const TODAY: CalendarDay = '2026-08-25';
@@ -97,5 +107,33 @@ describe('discoverOleaLayerPaths (ol-egov.141.8.7)', () => {
     });
 
     expect(found).toEqual(['.olea/concepts/a.json']);
+  });
+});
+
+describe('her correction history for model-decided links ([D-533], ol-egov.141.89.7.26)', () => {
+  it('is registered as a record folder, so the export carries it as text on disk and the full delete removes it', () => {
+    expect(OUTCOME_CONTAINMENT_CORRECTION_FOLDER).toBe('.olea/outcome-containment-corrections');
+    expect(OLEA_LAYER_FOLDERS).toContainEqual({
+      folder: OUTCOME_CONTAINMENT_CORRECTION_FOLDER,
+      role: 'record',
+    });
+  });
+
+  it('a history the recorder wrote is found by the discovery the export and the delete share', async () => {
+    const vault = new MemoryVaultSource({ '01 Courses/SYN101/Lecture 1.md': '# Lecture 1\n' });
+    await recordContainmentCorrection(
+      vault,
+      { kind: 'objectives', sourcePath: '03 Research/Objectives A.md', wordingKey: 'v1:abc' },
+      'concept-key1:synthetic',
+      'declined',
+      { now: () => '2026-10-06T00:00:00.000Z' },
+    );
+    const found = await discoverOleaLayerPaths(vault, {
+      deviceId: DEVICE_ID,
+      today: TODAY,
+      probeDays: 5,
+    });
+    expect(found).toHaveLength(1);
+    expect(found[0]?.startsWith(`${OUTCOME_CONTAINMENT_CORRECTION_FOLDER}/`)).toBe(true);
   });
 });

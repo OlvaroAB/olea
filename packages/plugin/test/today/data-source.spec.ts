@@ -2803,7 +2803,7 @@ describe('createVaultTrendsSource#listCourseFloorShares', () => {
     return {
       envelopeVersion: 1,
       kind: 'study-plan',
-      bodyVersion: 1,
+      bodyVersion: 2,
       policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
       computedAt: COMPUTED_AT,
       freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,

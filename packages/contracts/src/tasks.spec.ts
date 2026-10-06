@@ -11,6 +11,8 @@ import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import {
   ALL_TASK_IDS,
+  contextPassage,
+  contextPassagesField,
   isKnownTaskId,
   isValidRemainingAllowanceUsd,
   knownTaskId,
@@ -20,6 +22,7 @@ import {
   sourceChunkOriginsField,
   TASK_ENDPOINT_PATH,
   TASK_IDS,
+  transcriptSourceChunkOrigin,
 } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
@@ -291,5 +294,117 @@ describe('sourceBlockOrigin (explain-back.judge per-block transcript origin)', (
   });
   it('misalignment cannot occur: the origin rides on its block', () => {
     expect(one({ origin: [origin] })).toBe(false);
+  });
+});
+
+// `ol-egov.141.89.1.64` / [D-465]: grounding.judge.v1's optional per-passage context.
+describe('contextPassages (grounding.judge.v1 per-passage context with origin)', () => {
+  // `grounding.judge.v1`'s request as it stood before this field, field for field with the
+  // service task's own schema, and the same request with the new fragment beside `context`.
+  const before = z.object({
+    query: z.string().min(1),
+    context: z.string(),
+    intendedOperation: z.enum(['define', 'explain', 'calculate', 'apply', 'compare']).optional(),
+  });
+  const request = before.extend({ contextPassages: contextPassagesField });
+  const origin = { kind: 'transcript', speakerRole: 'lecturer' } as const;
+  const withPassages = (contextPassages: unknown) =>
+    request.safeParse({ query: 'q', context: 'c', contextPassages }).success;
+
+  describe("absent is today's request, byte for byte", () => {
+    // The request fixtures `packages/plugin/test/retrieval/workerGroundingJudge.spec.ts` sends,
+    // with their exact serialisation pinned as literal strings.
+    const pinned: ReadonlyArray<readonly [unknown, string]> = [
+      [
+        { query: 'What is an ERP?', context: 'ERPs are voltage deflections.' },
+        '{"query":"What is an ERP?","context":"ERPs are voltage deflections."}',
+      ],
+      [
+        { query: 'q', context: 'c', intendedOperation: 'define' },
+        '{"query":"q","context":"c","intendedOperation":"define"}',
+      ],
+      [{ query: 'anything', context: '' }, '{"query":"anything","context":""}'],
+    ];
+
+    it.each(pinned)(
+      'a request without the field is accepted and serialises exactly as pinned',
+      (fixture, bytes) => {
+        const parsed = request.safeParse(fixture);
+        expect(parsed.success).toBe(true);
+        expect(JSON.stringify(parsed.data)).toBe(bytes);
+        expect(parsed.data).not.toHaveProperty('contextPassages');
+      },
+    );
+
+    it.each(pinned)('and byte-identically to the request schema without the field', (fixture) => {
+      expect(JSON.stringify(request.parse(fixture))).toBe(JSON.stringify(before.parse(fixture)));
+    });
+  });
+
+  it('a request with passages is accepted: null origin, transcript origin, origin with flags', () => {
+    const contextPassages = [
+      { text: 'A passage from her own notes.', origin: null },
+      { text: 'A lecture passage.', origin },
+      {
+        text: 'Another lecture passage about this graph.',
+        origin: { ...origin, speakerRole: 'unknown', flags: ['inaudible', 'visual-reference'] },
+      },
+    ];
+    const parsed = request.safeParse({ query: 'q', context: 'c', contextPassages });
+    expect(parsed.success).toBe(true);
+    expect(parsed.data?.contextPassages).toEqual(contextPassages);
+  });
+
+  it('an empty array is accepted (it carries no passage, so it reads as absent)', () => {
+    expect(withPassages([])).toBe(true);
+  });
+
+  it('a field that is not an array of passage objects is rejected', () => {
+    expect(withPassages('A passage.')).toBe(false);
+    expect(withPassages({ text: 'A passage.', origin: null })).toBe(false);
+    expect(withPassages([null])).toBe(false);
+    expect(withPassages(['A passage.'])).toBe(false);
+  });
+
+  it('a passage without text, with empty text or with non-string text is rejected', () => {
+    expect(withPassages([{ origin: null }])).toBe(false);
+    expect(withPassages([{ text: '', origin: null }])).toBe(false);
+    expect(withPassages([{ text: 42, origin: null }])).toBe(false);
+  });
+
+  it('a passage must state its origin: a missing origin is rejected, null is the not-a-transcript value', () => {
+    expect(withPassages([{ text: 'A passage.' }])).toBe(false);
+    expect(withPassages([{ text: 'A passage.', origin: null }])).toBe(true);
+  });
+
+  it('an unknown role, flag or kind, or an origin array, is rejected', () => {
+    const bad = (o: unknown) => withPassages([{ text: 'A passage.', origin: o }]);
+    expect(bad({ ...origin, speakerRole: 'student' })).toBe(false);
+    expect(bad({ ...origin, flags: ['mumbled'] })).toBe(false);
+    expect(bad({ ...origin, kind: 'note' })).toBe(false);
+    expect(bad([origin])).toBe(false);
+  });
+
+  it('no speaker name can travel: an extra key on the origin is rejected', () => {
+    expect(withPassages([{ text: 'A passage.', origin: { ...origin, speakerName: 'x' } }])).toBe(
+      false,
+    );
+  });
+
+  it('an unknown key on a passage is stripped, never passed through (a newer client meets an older Worker)', () => {
+    const parsed = request.parse({
+      query: 'q',
+      context: 'c',
+      contextPassages: [{ text: 'A passage.', origin: null, passageId: 'p1' }],
+    });
+    expect(parsed.contextPassages).toEqual([{ text: 'A passage.', origin: null }]);
+  });
+
+  it('reuses the source-chunk origin entry type rather than redefining it', () => {
+    expect(contextPassage.shape.origin.unwrap()).toBe(transcriptSourceChunkOrigin);
+  });
+
+  it('grounding.judge.v1 still carries no sourceChunkOrigins: the per-passage origin rides on the passage', () => {
+    expect([...SOURCE_CHUNK_ORIGIN_TASK_IDS]).not.toContain('grounding.judge.v1');
   });
 });

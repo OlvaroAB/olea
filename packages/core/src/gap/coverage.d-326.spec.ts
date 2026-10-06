@@ -10,6 +10,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import {
+  isFullyRead,
   markConceptExtractionComplete,
   newPendingEntry,
   withReadingState,
@@ -240,5 +241,46 @@ describe('[D-326] the coverage scope reads the completeness record', () => {
       });
       expect(scope.canStateExhaustiveness).toBe(true);
     });
+  });
+});
+
+describe('one fully-read rule (ol-egov.141.89.8.68, [D-448])', () => {
+  const states: readonly [string, UnitReadingState][] = [
+    ['read', READ],
+    ['partial', PARTIAL],
+    ['unreadable blank-page', { kind: 'unreadable', reason: 'blank-page' }],
+    ['unreadable no-text-on-page', { kind: 'unreadable', reason: 'no-text-on-page' }],
+    ['unreadable not-legible', { kind: 'unreadable', reason: 'not-legible' }],
+    ['pending', { kind: 'pending', reason: 'queued' }],
+    ['unavailable', { kind: 'unavailable' }],
+    ['failed', { kind: 'failed', reason: 'render-failed', retryable: false }],
+  ];
+
+  for (const [name, state] of states) {
+    it(`a read unit beside a ${name} unit: coverage says full exactly when isFullyRead does`, () => {
+      const m = manifest('a.pdf', [unit('a.pdf', 1, READ, true), unit('a.pdf', 2, state)]);
+      const completeness = readRecordOf(m)?.readingCompleteness;
+      expect(completeness === 'full').toBe(isFullyRead(m));
+      expect(completeness === 'unsettled').toBe(
+        state.kind === 'pending' || state.kind === 'unavailable',
+      );
+    });
+  }
+
+  it('a partly read or not-legible unit leaves the document not fully read in the coverage reading', () => {
+    for (const state of [
+      PARTIAL,
+      { kind: 'unreadable', reason: 'not-legible' } as UnitReadingState,
+    ]) {
+      const m = manifest('a.pdf', [unit('a.pdf', 1, READ, true), unit('a.pdf', 2, state)]);
+      expect(isFullyRead(m)).toBe(false);
+      expect(readRecordOf(m)?.readingCompleteness).toBe('partial');
+    }
+  });
+
+  it('the empty manifest has no reading in coverage, though isFullyRead is vacuously true', () => {
+    const m = manifest('a.pdf', []);
+    expect(readRecordOf(m)).toBeNull();
+    expect(isFullyRead(m)).toBe(true);
   });
 });

@@ -3,31 +3,14 @@
  * eligible course concept does not disappear from ordinary course planning because assessment
  * alignment is incomplete. `olea-core`'s `composeOracleRanking` admits a concept she has practised
  * that no assessment reaches, at the need-only treatment, for a caller that opts in
- * (`ol-egov.141.89.10.96`). The session composition opted in; the cached plan did not, so the plan
- * Home reads (its per-course allocation, its quiet line, the queue order, the top-band signal) reads
- * such a course as abstained while the session Start composes ranks its practised concepts.
+ * (`ol-egov.141.89.10.96`). The session composition opted in; the cached plan opts in too
+ * (`ol-egov.141.89.10.99`), so the plan Home reads (its per-course allocation, its quiet line, the
+ * queue order, the top-band signal) and the session Start composes agree.
  *
- * **The plan CANNOT take the door yet, and this file is where that is pinned
- * (`ol-egov.141.89.10.99`).** Opting the plan in was built and run: `buildStudyPlan` then throws on
- * every refresh, because `packages/contracts/src/study-plan.ts` requires each planned concept to
- * carry at least one citation ("a ranked concept with no evidence is the case that abstains", a
- * line older than `[D-329]`), and an admitted concept has none by design (unknown relevance, no
- * citation). `refreshStudyPlan` swallows the throw and keeps the old plan, so the plan would stop
- * refreshing for as long as any practised, unlinked concept existed. Loosening that schema is a
- * contract amendment (a persisted, vendored schema): not this lane's, and not taken here.
- *
- * So the file has three parts:
- *
- *  - the SESSION side, live: the composed session ranks the practised concept, and only it, on the
- *    course shape where the door is the only thing eligible. This is the reference the plan must
- *    agree with, and it protects the session's own opt-in;
- *  - the PLAN side, written first and marked `it.fails` with the blocker named: what the plan must
- *    do once its artifact can carry an entry with no citation (rank it, agree with the session, let
- *    the allocation inputs read her practice). Each goes red the day the plan can do it, which is
- *    the signal to remove `.fails` (and to add `admitPractisedUnlinkedConcepts: true` to
- *    `plan/provider.ts`'s `composeOracleRanking` call, if that has not been done);
- *  - the plan as it stands, live: unchanged with no practice, and no course with no assessment
- *    record is touched (`[D-373]`'s door, which is a separate question).
+ * The plan's entry for such a concept is `[D-329]`'s unknown-relevance entry in `[D-529]`'s shape:
+ * a single citation with the basis `unknown-relevance` and no source path, no nearest assessment
+ * claimed. (The earlier block on this bead, "the contract requires a citation", was lifted by
+ * `[D-529]`'s citation shape, client `2de908e0`.)
  *
  * Home is not a separate composition. `home/provider.ts` builds its headline session with
  * `createLocalSessionBuilderProvider` over the same `plan` thunk, which calls
@@ -238,7 +221,7 @@ describe('the composed session ranks a practised concept no assessment reaches �
   });
 });
 
-describe('the cached plan today: blocked on the plan contract, so it does not take the D-447 door (ol-egov.141.89.10.99)', () => {
+describe('the cached plan keeps what the D-447 door does not touch (ol-egov.141.89.10.99)', () => {
   it('with no practice the plan is what it was: only the linked concept is planned', async () => {
     const vault = vaultOf({ linked: true });
     const widget = await instrumentAt(vault, 'Notes/widget.md');
@@ -274,13 +257,8 @@ describe('the cached plan today: blocked on the plan contract, so it does not ta
   });
 });
 
-/**
- * Written first, expected to fail until the plan artifact can carry a concept with no citation.
- * `it.fails` passes while its body fails and goes red once the body passes, so a fix cannot land
- * unnoticed and these cannot rot green-by-skip.
- */
-describe('the cached plan admits a practised concept no assessment reaches ([D-447] option (b)) — EXPECTED TO FAIL until ol-egov.141.89.10.99 is unblocked', () => {
-  it.fails('ranks it at unknown relevance beside a linked concept, which keeps its evidence-based entry; a never-practised unlinked concept stays out', async () => {
+describe('the cached plan admits a practised concept no assessment reaches ([D-447] option (b)) — ol-egov.141.89.10.99', () => {
+  it('ranks it at unknown relevance beside a linked concept, which keeps its evidence-based entry; a never-practised unlinked concept stays out', async () => {
     const vault = vaultOf({ linked: true });
     const widget = await instrumentAt(vault, 'Notes/widget.md');
     const gadget = await instrumentAt(vault, 'Notes/gadget.md');
@@ -292,9 +270,9 @@ describe('the cached plan admits a practised concept no assessment reaches ([D-4
 
     const byKey = new Map(course.concepts.map((c) => [c.conceptId, c]));
     const gadgetEntry = byKey.get(conceptKeyOf(gadget));
-    // `[D-329]`'s unknown-relevance entry: no citation, no nearest assessment claimed.
+    // `[D-329]`'s unknown-relevance entry: the marked unknown-relevance citation, no nearest assessment claimed.
     expect(gadgetEntry).toBeDefined();
-    expect(gadgetEntry?.citations).toEqual([]);
+    expect(gadgetEntry?.citations).toEqual([{ basis: 'unknown-relevance' }]);
     expect(gadgetEntry?.examProximityDays).toBeNull();
 
     // The linked concept is what it was: cited by the past paper.
@@ -304,7 +282,7 @@ describe('the cached plan admits a practised concept no assessment reaches ([D-4
     expect(byKey.has(conceptKeyOf(sprocket))).toBe(false);
   });
 
-  it.fails('a course where only practised, unlinked concepts are eligible ranks in the plan, and the plan and the session agree on it', async () => {
+  it('a course where only practised, unlinked concepts are eligible ranks in the plan, and the plan and the session agree on it', async () => {
     const vault = vaultOf({ linked: false });
     const gadget = await instrumentAt(vault, 'Notes/gadget.md');
     await practise(vault, gadget);
@@ -319,7 +297,7 @@ describe('the cached plan admits a practised concept no assessment reaches ([D-4
     expect(await sessionKeys(vault, plan, COURSE)).toEqual(fromPlan);
   });
 
-  it.fails('the allocation inputs the plan sends read her practice on the admitted concept; an abstained course reads none', async () => {
+  it('the allocation inputs the plan sends read her practice on the admitted concept; an abstained course reads none', async () => {
     const requested: Array<
       readonly { readonly courseId: string; readonly evidenceVolume: number }[]
     > = [];

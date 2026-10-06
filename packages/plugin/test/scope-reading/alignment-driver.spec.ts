@@ -6,10 +6,20 @@
  * "unchanged inputs spend nothing again". Synthetic ids and wording only.
  */
 
-import { alignmentResultsForDocument } from 'olea-core';
+import {
+  ALIGN_CONCEPT_BUDGET,
+  ALIGN_DESCRIPTION_CAP,
+  ALIGN_PASSAGE_BUDGET,
+  ALIGN_RUN_CALL_CAP,
+  alignFrozenConfigurationDigest,
+  alignmentResultsForDocument,
+} from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import type { DocumentReadingBasis } from '../../src/scope-reading/basis.js';
-import type { ClosedListConcept } from '../../src/scope-reading/closed-list.js';
+import {
+  CLOSED_LIST_MEMBERSHIP,
+  type ClosedListConcept,
+} from '../../src/scope-reading/closed-list.js';
 import type { DocumentRef, ExtractionRecordInput } from '../../src/scope-reading/persistence.js';
 import {
   alignAll,
@@ -195,6 +205,29 @@ describe('the alignment driver, objectives', () => {
     } finally {
       hoisted.extra = [];
     }
+  });
+
+  it('the configuration digest uses the answering stamp and the settings as run ([D-534] FC-2)', async () => {
+    const expected = (stamp: { promptVersion: string; modelId: string }) =>
+      alignFrozenConfigurationDigest({
+        documentKind: 'objectives',
+        descriptionCap: ALIGN_DESCRIPTION_CAP,
+        conceptBudget: ALIGN_CONCEPT_BUDGET,
+        passageBudget: ALIGN_PASSAGE_BUDGET,
+        runCallCap: ALIGN_RUN_CALL_CAP,
+        promptVersion: stamp.promptVersion,
+        modelId: stamp.modelId,
+        membership: CLOSED_LIST_MEMBERSHIP,
+      });
+    const digestFor = async (stamp: { promptVersion: string; modelId: string }) => {
+      const r = await objectivesRun((s) => alignAll(s, stamp));
+      await r.run();
+      return (await r.results())[0]?.digests.frozenConfiguration;
+    };
+    const other = { promptVersion: 'p9', modelId: 'm9' };
+    expect(await digestFor(STAMP)).toBe(await expected(STAMP));
+    expect(await digestFor(other)).toBe(await expected(other));
+    expect(await expected(other)).not.toBe(await expected(STAMP));
   });
 
   it('reads not aligned, searched, when every pair was decided and none attests', async () => {
@@ -496,9 +529,39 @@ describe('the alignment driver, past papers', () => {
     expect(records[0]?.headingPath).toEqual(['Section one', 'Q1']);
     const [result] = alignmentResultsForDocument(await persistence.load(), COURSE, PAPER_REF, {});
     expect(result?.result).toMatchObject({ kind: 'aligned', recordIds: ['p1', 'p2', 'p3'] });
+    // [D-534] 2-ii: the result names the structure its part ids came from.
+    expect(result).toMatchObject({
+      status: 'current',
+      structureId: recorded.structure?.structureId,
+    });
   });
 
-  it('puts the structure id in the batch-plan digest only: a replaced structure reads unverified', async () => {
+  it('calls nothing and writes nothing for a past paper with no recorded structure to name ([D-534])', async () => {
+    const { vault, persistence } = setup(conceptNotes(['Alpha idea']));
+    const recorded = await persistence.recordExtraction({
+      ...paper(),
+      paperStructure: { sections: [] },
+    });
+    expect(recorded.structure).toBeUndefined();
+    const t = transport((s) => alignAll(s));
+    const out = await runAlignmentDriver({
+      persistence,
+      ref: PAPER_REF,
+      basis: { ...basisFor(6), pages: [1, 2] },
+      recorded,
+      units,
+      deliveryRevisionDigest: 'r1',
+      courses: [COURSE],
+      declarations: [],
+      transport: t.transport,
+      vault,
+    });
+    expect(out).toMatchObject({ calls: 0, written: 0 });
+    expect(t.sent).toHaveLength(0);
+    expect((await persistence.load()).alignments.size).toBe(0);
+  });
+
+  it('a replaced structure spends again, and the earlier result no longer reads current', async () => {
     const { vault, persistence } = setup(conceptNotes(['Alpha idea']));
     const first = await persistence.recordExtraction(paper());
     const t = transport((s) => alignAll(s));
@@ -523,5 +586,7 @@ describe('the alignment driver, past papers', () => {
     expect(second.structure?.structureId).not.toBe(first.structure?.structureId);
     await runAlignmentDriver({ ...common, recorded: second });
     expect(t.sent).toHaveLength(2);
+    const [latest] = alignmentResultsForDocument(await persistence.load(), COURSE, PAPER_REF, {});
+    expect(latest).toMatchObject({ status: 'current', structureId: second.structure?.structureId });
   });
 });

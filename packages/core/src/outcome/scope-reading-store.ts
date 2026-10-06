@@ -135,6 +135,12 @@ function validateAlignmentResult(payload: AlignmentResultPayload): void {
       'an aligned result must cite the records and passage refs it aligned on',
     );
   }
+  if (payload.source.documentKind === 'past-paper' && !payload.structureId) {
+    refuse(
+      'alignment result',
+      'a past-paper result must name the structure its part ids came from ([D-534])',
+    );
+  }
   if (result.kind !== 'pending' && payload.provenance === undefined) {
     refuse(
       'alignment result',
