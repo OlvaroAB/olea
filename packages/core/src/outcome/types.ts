@@ -125,6 +125,21 @@ export interface OutcomeRecord {
    * use.
    */
   readonly extractorSelfRating?: number;
+  /**
+   * The version stamp (`[D-531]`, `ol-egov.141.89.7.68`): the revision digest — the content hash of
+   * the document's bytes, the same digest the unit manifest keys a revision by — of the latest
+   * version of `source.path` that stated this outcome. Written by `./store.ts` when the record is
+   * minted from a delivery whose version is known, and when an open delivery of a later version
+   * matches the record (restated, or reinstated when it was retired); never by a reread or a late
+   * delivery (`./retire-on-revision.ts`).
+   *
+   * Once that document's current version has been read in full, an active outcome stamped with
+   * another version the page record has listed is retired. **Optional**: absent on a record minted
+   * before this field existed or from a delivery with no known version, and such a record is never
+   * retired on revision, because nothing establishes that its version is older. No reason is
+   * stored beside a retirement: revision is its only cause.
+   */
+  readonly statedInRevision?: string;
   /** ISO date the outcome was first minted. Debugging only — not personal, no content. */
   readonly mintedAt: string;
   readonly schemaVersion: number;
