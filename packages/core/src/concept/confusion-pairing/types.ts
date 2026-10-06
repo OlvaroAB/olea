@@ -67,10 +67,10 @@ import type { RelationSetEntry } from '../relation.js';
 
 /**
  * What this reader needs to know about one concept to resolve a
- * `MisconceptionRecord`'s ids against the name-or-alias space
- * `RelationSet`'s edges are keyed on. Deliberately narrower than
+ * `MisconceptionRecord`'s ids (by `key`, or by name/alias for a legacy id) to
+ * the name `RelationSet`'s edges are keyed on. Deliberately narrower than
  * `../corpus-relations/types.js`'s `CorpusConcept` — no `anchor` — because
- * this reader never touches passage provenance, only name/alias resolution.
+ * this reader never touches passage provenance, only identity resolution.
  */
 export interface ConfusionPairingConcept {
   /** Post-corroboration identity — matches `RelationSetEntry.edge.from`/`.to`. */
@@ -92,7 +92,7 @@ export interface ConfusionPairingConcept {
 
 /**
  * `'corroborated'` — at least one misconception record evidences this pair,
- * either direction, after name/alias resolution. `'uncorroborated'` — none
+ * either direction, after resolving both record ids. `'uncorroborated'` — none
  * does, on the material handed to this run. Deliberately not itself an
  * action ("retire this edge"): the contract's "noise worth retiring"
  * language names a consequence, not a number, and inventing a repetition
