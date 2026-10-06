@@ -563,6 +563,44 @@ export type {
   UnitSupportState,
 } from './coverage/types.js';
 export { addDays, daysBetween } from './dates.js';
+// `[D-432]` (`ol-egov.141.89.7.25`): the per-basis switch for the reading-based ranking bases,
+// default off, and the lexical-fallback label. See evidence-edge/basis-switch.ts's module doc.
+export type {
+  BasisGateInput,
+  BasisGateRecord,
+  BasisGateVerdict,
+  BasisOffReason,
+  BasisSourceAttribution,
+  BasisSourceAttributions,
+  BasisSwitches,
+  BasisSwitchState,
+  ConceptBasisReading,
+  EvidenceSource,
+  FallbackCause,
+  GateRecordRefusal,
+  HeldOutCellCounts,
+  HeldOutCellShortfall,
+  HeldOutExposureEvent,
+  HeldOutExposureRecord,
+  HeldOutLook,
+  HeldOutLookStanding,
+  PerBasisGateCondition,
+  PostHocReason,
+} from './evidence-edge/basis-switch.js';
+export {
+  attributeBasisSources,
+  classifyHeldOutLook,
+  describeBasisSwitch,
+  edgeEvidenceSource,
+  HELD_OUT_CELL_MINIMUMS,
+  heldOutCellShortfall,
+  NO_BASIS_GATE,
+  NO_HELD_OUT_EXPOSURE,
+  PER_BASIS_GATE_PREREGISTRATION,
+  RANKING_BASES,
+  readConceptBasis,
+  resolveBasisSwitches,
+} from './evidence-edge/basis-switch.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
 // pure projection over past-paper citations and the assessments Base, never
 // stored. See evidence-edge/types.ts's module doc for the edge shape and the

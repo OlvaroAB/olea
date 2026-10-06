@@ -14,6 +14,7 @@ import type { Source } from '../source/types.js';
 import { extractTier3Evidence } from '../tier3-evidence/build.js';
 import type { ConceptCitation } from '../tier3-evidence/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { attributeBasisSources, NO_BASIS_GATE, resolveBasisSwitches } from './basis-switch.js';
 import type {
   BuildConceptAssessmentEdgesOptions,
   BuildConceptAssessmentEdgesResult,
@@ -458,6 +459,17 @@ export async function buildConceptAssessmentEdges(
   vault: VaultSource,
   options: BuildConceptAssessmentEdgesOptions,
 ): Promise<BuildConceptAssessmentEdgesResult> {
+  // `[D-432]` (`ol-egov.141.89.7.25`): the per-basis switch, resolved only from recorded gate
+  // results (`./basis-switch.ts`); omitted, every basis is off. Read once here and reported on
+  // `basisSources`. **It changes no edge below**: this function reads no alignment result, so every
+  // edge it builds is the lexical fallback, labelled so, whatever a switch says. The wire stage
+  // (`ol-egov.141.89.7.5`) is where a basis that is on first reads aligned results, and only
+  // results stamped with the passing configuration's digest; enabling one is Class C and recorded
+  // with its gate evidence there, and a moved gate threshold needs a decision bead.
+  const basisSources = attributeBasisSources(
+    resolveBasisSwitches(options.basisGate ?? NO_BASIS_GATE),
+  );
+
   const [assessmentsRead, tier3] = await Promise.all([
     resolveAssessments(vault, options.basePath),
     // `ol-egov.141.89.7.36` (F4.2): a registered objectives document that is a PDF is read into
@@ -652,5 +664,6 @@ export async function buildConceptAssessmentEdges(
     tier3,
     assessmentsWithoutCourse,
     assessmentsWithNoEvidence,
+    basisSources,
   };
 }
