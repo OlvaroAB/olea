@@ -3953,7 +3953,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       expect(result.dominantCourse).toBe('BETA');
       expect(result.focusBranch).toBe('longest-without+never-practised');
       expect(result.focusReason).toBe(
-        "BETA is selected next, because you have gone longest without practising it. You haven't practised this course in Olea yet",
+        "BETA is selected next, because it has gone longest without practice in Olea. You haven't practised this course in Olea yet",
       );
       // Never the share sentence, which is not true of a course that has not started.
       expect(result.focusReason).not.toContain('planned share');
@@ -3996,7 +3996,7 @@ describe('rows 28 to 34 and 49: the course-why sentence states what actually dec
       expect(result.dominantCourse).toBe('ALPHA');
       expect(result.focusBranch).toBe('longest-without-tie-name+never-practised');
       expect(result.focusReason).toBe(
-        "ALPHA is selected next, because you have gone equally long without another course, so it comes first by name. You haven't practised this course in Olea yet",
+        "ALPHA is selected next, because it has gone as long without practice in Olea as another course, so it comes first by name. You haven't practised this course in Olea yet",
       );
     });
   });

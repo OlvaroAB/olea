@@ -1915,8 +1915,11 @@ export default class OleaPlugin extends Plugin {
           void this.revealRetrospectiveView();
         },
         dismiss: (assessmentPath) => provider.dismiss(assessmentPath),
-        // `[D-226]` ruling 1, S1.
-        registerSource: (input) => provider.registerSource(input),
+        // `[D-226]` ruling 1, S1. `ol-egov.141.89.1.95`: the index then regroups it, as for S2.
+        registerSource: async (input) => {
+          await provider.registerSource(input);
+          void this.keywordIndex?.syncBinarySources();
+        },
         app: this.app,
       });
     });
@@ -2180,6 +2183,8 @@ export default class OleaPlugin extends Plugin {
       now: this.now,
       onRegistered: () => {
         void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_GROVE);
+        // `ol-egov.141.89.1.95`: her log raises no vault event, so the index regroups it here.
+        void this.keywordIndex?.syncBinarySources();
       },
     });
 
@@ -2219,6 +2224,11 @@ export default class OleaPlugin extends Plugin {
         store: new ObsidianKeywordIndexStore(this),
         capability,
         watch: (handler) => vault.watch(handler),
+        // `ol-egov.141.89.1.95`: every PDF, deck and document; her registrations give the course.
+        binarySources: {
+          registeredFiles: async () =>
+            projectRegisteredFiles((await readReviewLogHistory(vault)).entries),
+        },
       });
       this.register(this.keywordIndex.unsubscribe);
     } catch (error) {

@@ -215,6 +215,45 @@ describe('createLocalPracticePaperProvider — real Outcome coverage (ol-2zfj.17
     const state = await provider.load('COURSEA');
     expect(state.kind).toBe('locked');
   });
+
+  // ol-egov.141.89.7.61: the locked state carries the counts and whether they are known, so the
+  // wording (held for David) can state a count and its source and never a measured zero. No share,
+  // ratio or percentage is carried.
+  it('a locked course with no declared outcome carries its coverage as unknown, not as a measured zero', async () => {
+    const vault = vaultWithOneConcept({
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-12-01'),
+    });
+    const state = await createLocalPracticePaperProvider(baseDeps({ vault })).load('COURSEA');
+    expect(state.kind).toBe('locked');
+    if (state.kind !== 'locked') return;
+    expect(state.coverage.outcomeCoverageKnown).toBe(false);
+    expect(state.coverage.outcomeCount).toBe(0);
+    expect(state.coverage.conceptCoverageKnown).toBe(true);
+    expect(state.coverage.conceptCount).toBe(1);
+    expect(state.coverage.attachedConceptCount).toBe(0);
+  });
+
+  it('a locked course with a declared outcome carries its counts as known, and no share, ratio or percentage', async () => {
+    const vault = vaultWithOneConcept({
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-12-01'),
+    });
+    await resolveOutcome(vault, {
+      courses: ['COURSEA'],
+      source: { path: CONCEPT_NOTE, blockIndex: 0 },
+      label: 'Cellular respiration',
+      provenance: { promptVersion: 'v1', modelVersion: 'model-a' },
+    });
+    const state = await createLocalPracticePaperProvider(baseDeps({ vault })).load('COURSEA');
+    expect(state.kind).toBe('locked');
+    if (state.kind !== 'locked') return;
+    expect(state.coverage).toEqual({
+      outcomeCount: 1,
+      outcomeCoverageKnown: true,
+      conceptCount: 1,
+      conceptCoverageKnown: true,
+      attachedConceptCount: 0,
+    });
+  });
 });
 
 describe('createLocalPracticePaperProvider — requestPaper()', () => {

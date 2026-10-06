@@ -55,11 +55,12 @@
  * threaded through once one is ever asked for, and so the two scenarios
  * `features/F6-today.md` already commits to under this file's name
  * (`core/today/rhythm.spec`) are answerable now: recorded dates outrank the
- * ask, and an unresolved window never blocks the reading. Neither currently
- * changes `detectRhythm`'s verdict — that wiring is still future work for
- * whoever picks up the term-relative yardstick, unaffected by the tempo
- * wiring above (a term window and a tempo weight are two different inputs;
- * only the second has a source today).
+ * ask, and an unresolved window never blocks the reading. `detectRhythm`
+ * now reads a usable window as a narrow yardstick (`[D-524]`, F6.9): outside
+ * the term no course reads as gone quiet, and inside it the quiet gap runs
+ * from the later of the term start and the last arrival. A missing or invalid
+ * window (not a real day, or start after end) keeps the handling above. No
+ * behind or ahead figure and no new field comes of it; tempo stays internal.
  *
  * ## The three-way status, same discipline as F6.5
  *
@@ -268,10 +269,9 @@ export interface RhythmMeasured {
   readonly maxQuietDays: number;
   /**
    * Whether a resolved term window was supplied when this was computed.
-   * Carried for a caller's own bookkeeping only — see this module's doc: it
-   * does not currently change the verdict, because no term-relative
-   * yardstick is built yet (term dates still have no source; unaffected by
-   * tempo's own wiring below).
+   * Records only that one was supplied, valid or not; whether it was usable
+   * is not reported. See this module's doc for how a usable one is read
+   * (`[D-524]`).
    */
   readonly hadTermWindow: boolean;
 }
@@ -312,7 +312,29 @@ function effectiveQuietDaysThreshold(tempoWeight: number): number {
   return QUIET_DAYS_THRESHOLD / divisor;
 }
 
-function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourseReading {
+/**
+ * `[D-524]`: the declared term as the rhythm reading's narrow yardstick. A window is usable only
+ * when both ends are calendar days and the start is not after the end; anything else is treated as
+ * absent, exactly as before this yardstick existed.
+ */
+function isRealDay(value: string): boolean {
+  if (!isCalendarDay(value)) return false;
+  const parsed = new Date(`${value}T00:00:00.000Z`);
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+}
+
+function usableTermWindow(window: TermWindow | null | undefined): TermWindow | null {
+  if (window === null || window === undefined) return null;
+  if (!isRealDay(window.start) || !isRealDay(window.end)) return null;
+  if (window.start > window.end) return null;
+  return window;
+}
+
+function readCourse(
+  course: RhythmCourseInput,
+  today: CalendarDay,
+  term: TermWindow | null,
+): RhythmCourseReading {
   const { lastMaterialArrivalDay } = course;
   const tempoWeight = course.tempoWeight ?? DECLARED_FLAT_TEMPO_WEIGHT;
   const quietDaysThreshold = effectiveQuietDaysThreshold(tempoWeight);
@@ -353,7 +375,21 @@ function readCourse(course: RhythmCourseInput, today: CalendarDay): RhythmCourse
     };
   }
 
-  const quietDays = daysBetween(lastMaterialArrivalDay, today);
+  if (term !== null && (today < term.start || today > term.end)) {
+    // `[D-524]`: outside her declared term the reading does not say a course has gone quiet.
+    return {
+      course: course.course,
+      status: 'not-observed',
+      quietDays: null,
+      quietDaysThreshold,
+      reason: 'today falls outside her declared term, so no quiet gap is read',
+    };
+  }
+
+  // Inside the term the gap runs from the later of the term start and the last arrival.
+  const gapStart =
+    term !== null && term.start > lastMaterialArrivalDay ? term.start : lastMaterialArrivalDay;
+  const quietDays = daysBetween(gapStart, today);
   if (quietDays < 0) {
     // A last-arrival day after "today" is bad input, not a signal — decline
     // rather than report a negative quiet gap.
@@ -404,7 +440,8 @@ export function detectRhythm(input: RhythmInput): RhythmInsight {
     };
   }
 
-  const courses = input.courses.map((course) => readCourse(course, input.today));
+  const term = usableTermWindow(input.termWindow);
+  const courses = input.courses.map((course) => readCourse(course, input.today, term));
   const hadTermWindow = (input.termWindow ?? null) !== null;
 
   // 'unreadable' is deliberately excluded here, not just 'not-enough-history':

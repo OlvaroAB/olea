@@ -103,6 +103,15 @@ export interface PracticePaperReadyState {
   readonly emptySlots: readonly PaperEmptySlot[];
 }
 
+/** The coverage counts a locked paper may state (F4.11, `[D-252]`): counts and whether known, never a share. */
+export interface LockedCoverageCounts {
+  readonly outcomeCount: number;
+  readonly outcomeCoverageKnown: boolean;
+  readonly conceptCount: number;
+  readonly conceptCoverageKnown: boolean;
+  readonly attachedConceptCount: number;
+}
+
 export type PracticePaperCourseState =
   /** F4.11: "the affordance is absent" — never present with a reason when nothing is ahead. */
   | { readonly kind: 'no-assessment-ahead'; readonly course: string }
@@ -112,6 +121,13 @@ export type PracticePaperCourseState =
       readonly course: string;
       readonly daysUntilNearest: number;
       readonly nearestAssessmentDue: string;
+      /**
+       * ol-egov.141.89.7.61: the counts the locked reason states, with whether each is known (a
+       * course with no active declaration is unknown, never a measured zero). Counts only: the
+       * share the unlock rule reads is internal and never carried here (F8.3). The sentence that
+       * states them is held for a ruling.
+       */
+      readonly coverage: LockedCoverageCounts;
     }
   /** Unlocked, not yet pulled — she has not yet invoked the one affordance. */
   | { readonly kind: 'unlocked-not-pulled'; readonly course: string }
@@ -189,6 +205,13 @@ async function loadCourseState(
       course,
       daysUntilNearest: unlock.daysUntilNearest ?? 0,
       nearestAssessmentDue: unlock.nearestAssessment.due,
+      coverage: {
+        outcomeCount: coverage.outcomeCount,
+        outcomeCoverageKnown: coverage.outcomeCoverageKnown === true,
+        conceptCount: coverage.conceptCount,
+        conceptCoverageKnown: coverage.conceptCoverageKnown === true,
+        attachedConceptCount: coverage.attachedConceptCount,
+      },
     };
   }
   return { kind: 'unlocked-not-pulled', course };

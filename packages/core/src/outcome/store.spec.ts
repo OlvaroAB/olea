@@ -95,10 +95,12 @@ describe('resolveOutcome — mint once, read back thereafter', () => {
       provenance: PROVENANCE,
       extractorSelfRating: 0.6,
     });
+    // `[D-477]`: the same outcome re-extracted is the same wording (here differing only in case and
+    // punctuation, which normalisation removes) — reworded beyond the near rule, it is a new one.
     const second = await resolveOutcome(source, {
       courses: ['COURSEA'],
       source: SOURCE,
-      label: 'Explain X (re-extracted)',
+      label: 'explain X.',
       provenance: PROVENANCE,
       extractorSelfRating: 0.95,
     });
@@ -121,7 +123,7 @@ describe('resolveOutcome — mint once, read back thereafter', () => {
     expect(record.id).not.toContain('Objectives');
   });
 
-  it('re-resolving the same source reference returns the same record and mints no second one', async () => {
+  it('re-resolving the same outcome on the same source returns the same record and mints no second one', async () => {
     const first = await resolveOutcome(source, {
       courses: ['COURSEA'],
       source: SOURCE,
@@ -131,13 +133,31 @@ describe('resolveOutcome — mint once, read back thereafter', () => {
     const second = await resolveOutcome(source, {
       courses: ['COURSEA'],
       source: SOURCE,
-      label: 'Explain X (re-extracted)',
+      label: 'Explain  X',
       provenance: PROVENANCE,
     });
 
     expect(second.id).toBe(first.id);
     const records = await listOutcomeRecords(source);
     expect(records).toHaveLength(1);
+  });
+
+  it('`[D-477]`: a different outcome on the same source reference mints its own record', async () => {
+    const first = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Explain X',
+      provenance: PROVENANCE,
+    });
+    const second = await resolveOutcome(source, {
+      courses: ['COURSEA'],
+      source: SOURCE,
+      label: 'Describe Y',
+      provenance: PROVENANCE,
+    });
+
+    expect(second.id).not.toBe(first.id);
+    expect(await listOutcomeRecords(source)).toHaveLength(2);
   });
 
   it('a different source reference mints a distinct outcome', async () => {
