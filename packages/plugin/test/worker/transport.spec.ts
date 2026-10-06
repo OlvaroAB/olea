@@ -359,7 +359,7 @@ describe('WorkerHttpTransport — item 5 (ol-egov.141.89.10.25): failed calls ar
       text: JSON.stringify(body),
     });
     const slowHttpRequest: HttpRequestFn = async () => {
-      await new Promise((resolve) => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 60));
       return { status: 500, text: JSON.stringify(body) };
     };
     const recordedFast: Record<string, unknown>[] = [];
