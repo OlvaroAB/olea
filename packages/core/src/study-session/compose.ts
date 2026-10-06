@@ -1338,7 +1338,7 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
   'none-behind':
     'all courses with practice ready have reached their planned share, and this one is closest to its share',
   'none-behind-tie-recency':
-    'it is level with another course on planned share, and you have gone longer without it',
+    'it is level with another course on planned share, and it has gone longer without practice in Olea',
   'none-behind-tie-name':
     'it is level with another course on planned share, so it comes first by name',
   // Signed 2026-09-30 (row 31, sheet 19, `ol-egov.141.89.10.86`):
@@ -1347,9 +1347,9 @@ export const FOCUS_REASON_CLAUSE: Readonly<Record<FocusReasonKind, string>> = Ob
   // never the fact: some eligible course is below its planned share and had nothing ready.
   'passed-over-behind':
     'other courses have had less than their planned share of recent practice, but Olea has nothing ready to practise in them yet',
-  'longest-without': 'you have gone longest without practising it',
+  'longest-without': 'it has gone longest without practice in Olea',
   'longest-without-tie-name':
-    'you have gone equally long without another course, so it comes first by name',
+    'it has gone as long without practice in Olea as another course, so it comes first by name',
 });
 
 /** Every {@link FocusReasonKind}, in the table's order. */
