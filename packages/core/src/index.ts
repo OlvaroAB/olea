@@ -1398,6 +1398,8 @@ export type {
 export { buildFullIndex, DEFAULT_INDEX_CHUNK_SIZE } from './keyword-index/build.js';
 export { indexDocument } from './keyword-index/document.js';
 export type {
+  BinarySourcesDeps,
+  BinarySourcesSync,
   KeywordIndexEngineDeps,
   RebuildOptions,
   RebuildResult,
