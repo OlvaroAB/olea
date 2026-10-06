@@ -829,7 +829,11 @@ describe('complete passes through the real ReviewSession', () => {
     const view = reopened.session.getViewModel();
     expect(view.phase).not.toBe('empty');
     expect(view.phase).not.toBe('loading');
-  });
+    // `[D-447]` plan half (`ol-egov.141.89.10.99`): the cached plan now admits the practised
+    // concepts no assessment reaches, as the session already did, so after four rounds of rating
+    // this composition ranks the grown universe in both places and runs past vitest's 5 s default
+    // on a loaded box. Same work, now both halves of it; the bound is time only, not behaviour.
+  }, 30_000);
 
   // `features/F6-today.md` [SESS-12]: "repeated sessions converge on a stable
   // set rather than growing without bound" + "rating a whole session reaches
