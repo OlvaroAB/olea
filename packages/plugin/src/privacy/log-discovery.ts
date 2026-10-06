@@ -89,6 +89,9 @@ import {
 // `[D-533]` (`ol-egov.141.89.7.26`): her correction history for model-decided links, imported by
 // module path for the same reason as the records above.
 import { OUTCOME_CONTAINMENT_CORRECTION_FOLDER } from '../../../core/src/outcome/containment-correction.js';
+// `[D-540]` (`ol-egov.141.89.7.76`): the spend ledger's folder, imported by module path for the
+// same reason as the records above.
+import { SPEND_LEDGER_FOLDER } from '../../../core/src/spend/ledger.js';
 // `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path, never the `olea-core`
 // barrel, which is another live lane's file this round (`session/holder.ts`'s stance).
 import {
@@ -181,6 +184,11 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // Her own decisions, so F7.4 carries each file as the exact text on disk and the full delete
   // removes it, as the ruling requires; never pruned.
   { folder: OUTCOME_CONTAINMENT_CORRECTION_FOLDER, role: 'record' },
+  // `[D-540]` (`ol-egov.141.89.7.76`): the spend ledger, one append-only file per device named by
+  // the device id (holds, settlements, releases and refusal counts: task ids, amounts, times, random
+  // call ids and opaque digests, never her content or a path). Not a C5.2 event log, so F7.4 carries
+  // each file as the exact text on disk and the full delete removes it; never pruned.
+  { folder: SPEND_LEDGER_FOLDER, role: 'record' },
 ];
 
 /**

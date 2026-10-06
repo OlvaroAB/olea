@@ -16,7 +16,7 @@ import {
 
 describe('runScopeReadingDrivers', () => {
   it('runs the demand driver and then the alignment driver on one delivery', async () => {
-    const { vault, persistence } = setup(conceptNotes(['Alpha idea']));
+    const { vault, persistence, spend } = setup(conceptNotes(['Alpha idea']));
     const recorded = await persistence.recordExtraction({
       sourcePath: 'doc-o',
       documentKind: 'objectives',
@@ -38,13 +38,14 @@ describe('runScopeReadingDrivers', () => {
       declarations: [outcome('o1', 0)],
       transport: t.transport,
       vault,
+      spend,
     });
     expect(t.sent.map((s) => s.taskId)).toEqual(['outcomes.align.v1']);
     expect((await persistence.load()).alignments.size).toBe(1);
   });
 
   it('never throws, whatever the transport, the store or the vault does', async () => {
-    const { vault, persistence } = setup(conceptNotes(['Alpha idea']));
+    const { vault, persistence, spend } = setup(conceptNotes(['Alpha idea']));
     const recorded = await persistence.recordExtraction({
       sourcePath: 'doc-o',
       documentKind: 'objectives',
@@ -78,6 +79,7 @@ describe('runScopeReadingDrivers', () => {
           declarations: [outcome('o1', 0)],
           transport: t.transport,
           vault,
+          spend,
         }),
       ).resolves.toBeUndefined();
     } finally {

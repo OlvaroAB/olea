@@ -31,32 +31,35 @@ import type {
   ScopeStructurePart,
   WorkerTaskTransport,
 } from 'olea-core';
-import { partDemandView } from 'olea-core';
+import { demandRefusalMaterial, partDemandView } from 'olea-core';
 import {
   type DemandClassifyPassage,
   DemandClassifyReaderUnavailableError,
   type DemandClassifyReadRequest,
   WorkerDemandClassifyReader,
 } from '../ingestion/demand-classify-adapter.js';
+import type { SpendLedger } from '../spend/vault-spend-ledger.js';
 import type { DocumentRef, RecordedExtraction, ScopeReadingPersistence } from './persistence.js';
 
 /**
  * `[D-534]` cost brief, item 5: a part the reader refused twice is marked unread and not retried
  * until the revision changes. The count is keyed by `refusalKey`, which names the structure record,
  * so a replaced structure starts again at zero. This module only reads and bumps it: where the
- * count lives is the caller's (`inMemoryRefusalLedger` is session-long and forgotten on restart; a
- * count that survives a restart needs a stored field, which this lane does not add).
+ * count lives is the caller's. In production it is the spend ledger (`[D-540]`,
+ * `./drivers.ts`'s `spendRefusalLedger`), which stores each refusal under an opaque key and so
+ * survives a restart; `inMemoryRefusalLedger` lasts as long as the object.
  */
 export interface PartRefusalLedger {
-  count(key: string): number;
-  record(key: string): void;
+  count(key: string): number | Promise<number>;
+  record(key: string): void | Promise<void>;
 }
 
 /** A part refused this many times is held back. */
 export const REFUSED_PART_LIMIT = 2;
 
+/** The part's refusal key: the structure record and the part (`olea-core`'s `demandRefusalMaterial`). */
 export const refusalKey = (structureId: string, partId: string): string =>
-  `${structureId}|${partId}`;
+  demandRefusalMaterial(structureId, partId);
 
 export function inMemoryRefusalLedger(): PartRefusalLedger {
   const counts = new Map<string, number>();
@@ -75,6 +78,12 @@ export interface DemandDriverInput {
   readonly transport: WorkerTaskTransport;
   /** Held-back parts: a part refused {@link REFUSED_PART_LIMIT} times is not sent. Absent: no limit. */
   readonly refusals?: PartRefusalLedger;
+  /**
+   * `[D-540]`: the spend ledger every demand call takes its hold from. A declined hold reads as the
+   * over-budget signal, so the loop stops and the rest stays owed. Absent here, the reader sends
+   * without a hold; the entry points (`./drivers.ts`, `./resume.ts`) never call this without one.
+   */
+  readonly spend?: SpendLedger;
 }
 
 export interface DemandDriverResult {
@@ -222,14 +231,20 @@ export async function runDemandDriver(input: DemandDriverInput): Promise<DemandD
   if (parts === undefined) return result;
 
   const projection = await persistence.load();
-  const reader = new WorkerDemandClassifyReader({ transport: input.transport });
+  const reader = new WorkerDemandClassifyReader({
+    transport: input.transport,
+    ...(input.spend !== undefined ? { spend: input.spend } : {}),
+  });
   for (const part of parts) {
     if (partDemandView(projection, ref, part.id).status === 'current') {
       result.skipped++;
       continue;
     }
     const heldKey = refusalKey(structure.structureId, part.id);
-    if (input.refusals !== undefined && input.refusals.count(heldKey) >= REFUSED_PART_LIMIT) {
+    if (
+      input.refusals !== undefined &&
+      (await input.refusals.count(heldKey)) >= REFUSED_PART_LIMIT
+    ) {
       result.heldBack = (result.heldBack ?? 0) + 1;
       continue;
     }
@@ -250,7 +265,7 @@ export async function runDemandDriver(input: DemandDriverInput): Promise<DemandD
         return result;
       }
       console.error('Olea: a part demand was not read (ingestion unaffected)', { error });
-      input.refusals?.record(heldKey);
+      await input.refusals?.record(heldKey);
       continue;
     }
     try {

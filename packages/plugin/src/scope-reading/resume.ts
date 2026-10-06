@@ -21,6 +21,10 @@
  * value a caller passes. Off, nothing is read, sent or written. `[D-344]` is not extended to these
  * calls, so this module has no production caller: see the report of `ol-egov.141.89.7.73` for where one goes.
  *
+ * **The spend ledger (`[D-540]`, `ol-egov.141.89.7.76`).** Both passes take every call's hold from
+ * the `spend` ledger and read the refusal count from it, so a count survives a restart; switched on
+ * with no ledger, they send nothing (`no-spend-ledger`).
+ *
  * Never throws; every failure is logged content-free (D-005).
  */
 
@@ -35,18 +39,27 @@ import {
   type PartRefusalLedger,
   runDemandDriver,
 } from './demand-driver.js';
-import { SCOPE_READING_DRIVERS_ENABLED, sessionRefusals } from './drivers.js';
-import type { RecordedExtraction } from './persistence.js';
+import {
+  NO_SPEND_LEDGER_MESSAGE,
+  SCOPE_READING_DRIVERS_ENABLED,
+  spendRefusalLedger,
+} from './drivers.js';
+import {
+  type RecordedExtraction,
+  SCOPE_READING_ALIGN_TASK,
+  SCOPE_READING_DEMAND_TASK,
+} from './persistence.js';
 
 export interface ResumeInput extends Omit<AlignmentDriverInput, 'recorded'> {
   /** The switch. Absent, the shipped default {@link SCOPE_READING_DRIVERS_ENABLED} (off). */
   readonly enabled?: boolean;
-  /** Held-back parts and batches. Absent: the session ledger, shared with the first-delivery path. */
+  /** Held-back parts and batches. Absent: the spend ledger's count, shared with the first-delivery path. */
   readonly refusals?: PartRefusalLedger;
 }
 
 export interface ResumeResult {
-  readonly outcome: 'disabled' | 'nothing-recorded' | 'ran' | 'failed';
+  /** `no-spend-ledger`: switched on but given no spend ledger, so nothing was read or sent (`[D-540]`). */
+  readonly outcome: 'disabled' | 'no-spend-ledger' | 'nothing-recorded' | 'ran' | 'failed';
   readonly demand?: DemandDriverResult;
   readonly alignment?: AlignmentDriverResult;
 }
@@ -75,6 +88,11 @@ async function storedExtraction(input: ResumeInput): Promise<RecordedExtraction 
 
 export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResult> {
   if (!(input.enabled ?? SCOPE_READING_DRIVERS_ENABLED)) return { outcome: 'disabled' };
+  const spend = input.spend;
+  if (spend === undefined) {
+    console.error(NO_SPEND_LEDGER_MESSAGE);
+    return { outcome: 'no-spend-ledger' };
+  }
   let recorded: RecordedExtraction | undefined;
   try {
     recorded = await storedExtraction(input);
@@ -83,8 +101,12 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
     return { outcome: 'failed' };
   }
   if (recorded === undefined) return { outcome: 'nothing-recorded' };
-  const refusals = input.refusals ?? sessionRefusals;
-  const driverInput = { ...input, recorded, refusals };
+  const driverInput = {
+    ...input,
+    recorded,
+    spend,
+    refusals: input.refusals ?? spendRefusalLedger(spend, SCOPE_READING_ALIGN_TASK),
+  };
   let demand: DemandDriverResult | undefined;
   let alignment: AlignmentDriverResult | undefined;
   try {
@@ -94,7 +116,8 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
       recorded,
       units: input.units,
       transport: input.transport,
-      refusals,
+      spend,
+      refusals: input.refusals ?? spendRefusalLedger(spend, SCOPE_READING_DEMAND_TASK),
     });
   } catch (error) {
     console.error('Olea: owed part demands were not read (ingestion unaffected)', { error });
@@ -113,11 +136,21 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
 
 export async function alignNewConcepts(input: ResumeInput): Promise<ResumeResult> {
   if (!(input.enabled ?? SCOPE_READING_DRIVERS_ENABLED)) return { outcome: 'disabled' };
+  const spend = input.spend;
+  if (spend === undefined) {
+    console.error(NO_SPEND_LEDGER_MESSAGE);
+    return { outcome: 'no-spend-ledger' };
+  }
   try {
     const recorded = await storedExtraction(input);
     if (recorded === undefined) return { outcome: 'nothing-recorded' };
     const alignment = await runAlignmentDriver(
-      { ...input, recorded, refusals: input.refusals ?? sessionRefusals },
+      {
+        ...input,
+        recorded,
+        spend,
+        refusals: input.refusals ?? spendRefusalLedger(spend, SCOPE_READING_ALIGN_TASK),
+      },
       'new',
     );
     return { outcome: 'ran', alignment };
