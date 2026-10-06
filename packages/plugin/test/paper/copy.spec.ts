@@ -62,8 +62,17 @@ describe('buildPartialPaperStatement', () => {
 });
 
 describe('buildLockedCopy', () => {
+  const input = {
+    course: 'COURSEA',
+    daysUntilNearest: 12,
+    nearestAssessmentDue: '2026-10-01',
+    coverage: { outcomeCount: 10, attachedOutcomeCount: 1, outcomeCoverageKnown: true },
+    topicsNeeded: 3,
+    windowDays: 7,
+  };
+
   it('states a date and a day count, never a percentage or ratio', () => {
-    const copy = buildLockedCopy('COURSEA', 12, '2026-10-01');
+    const copy = buildLockedCopy(input);
     expect(copy).toContain('COURSEA');
     expect(copy).toContain('2026-10-01');
     expect(copy).toContain('12 days');
@@ -71,8 +80,8 @@ describe('buildLockedCopy', () => {
   });
 
   it('singularises "day" for exactly one day', () => {
-    const copy = buildLockedCopy('COURSEA', 1, '2026-10-01');
-    expect(copy).toContain('1 day ');
+    const copy = buildLockedCopy({ ...input, daysUntilNearest: 1 });
+    expect(copy).toContain('(1 day away)');
   });
 });
 

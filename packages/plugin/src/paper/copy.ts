@@ -74,18 +74,69 @@ export function buildPartialPaperStatement(
   return { sentence, pointerPaths: pointerSourceRefs };
 }
 
-/** F8.3-compliant locked-affordance copy — a count and its source would need real Outcome-based coverage data, which this composition does not read yet (see `provider.ts`'s module doc); this never renders a percentage, ratio or completeness figure in its place. */
-export function buildLockedCopy(course: string, daysUntilNearest: number, dueIso: string): string {
+function daysPhrase(n: number): string {
+  return `${n} day${n === 1 ? '' : 's'}`;
+}
+
+function topicsPhrase(n: number): string {
+  return `${n} topic${n === 1 ? '' : 's'}`;
+}
+
+/**
+ * What the locked sentence states ([D-532], F4.11 as amended by [D-252]): the declared scope's topic
+ * count, how many have her material behind them, and the two thresholds. "Topics" is the display word
+ * for what the code counts as outcomes. Counts only, never a share (F8.3).
+ */
+export interface LockedCopyInput {
+  readonly course: string;
+  readonly daysUntilNearest: number;
+  readonly nearestAssessmentDue: string;
+  readonly coverage: {
+    readonly outcomeCount: number;
+    readonly attachedOutcomeCount: number;
+    readonly outcomeCoverageKnown: boolean;
+  };
+  /** The smallest topic count the unlock gate accepts, computed from the gate (`provider.ts`'s `topicsNeededToUnlock`), never typed here. */
+  readonly topicsNeeded: number;
+  /** The proximity window in days, read from the unlock gate. */
+  readonly windowDays: number;
+}
+
+/**
+ * `[D-532]`'s locked sentences, VERBATIM from docs/direction/papers/examiner-scope-status/10-paper-sentences.md
+ * (sentences 1 and 2a). With a declared scope: two counts and the denominator, and both thresholds.
+ * With none: nothing to count, and no number shown (never a measured zero).
+ */
+export function buildLockedCopy(input: LockedCopyInput): string {
+  const { course, daysUntilNearest, nearestAssessmentDue, coverage } = input;
+  const assessment = `on ${nearestAssessmentDue} (${daysPhrase(daysUntilNearest)} away)`;
+  if (!coverage.outcomeCoverageKnown) {
+    return (
+      `The practice paper for ${course} is not available yet. Olea hasn't read a scope for this ` +
+      `course from its past papers or objectives, so there is nothing to count. It unlocks when ` +
+      `your nearest assessment, ${assessment}, is close enough.`
+    );
+  }
   return (
-    `The practice paper for ${course} is not available yet. Its nearest assessment is on ` +
-    `${dueIso} (${daysUntilNearest} day${daysUntilNearest === 1 ? '' : 's'} away) — this unlocks ` +
-    `automatically once that assessment is close enough, or once enough of your material is in place.`
+    `The practice paper for ${course} is not available yet. Its declared scope lists ` +
+    `${topicsPhrase(coverage.outcomeCount)}, and ${coverage.attachedOutcomeCount} of them have your ` +
+    `material behind them. It unlocks when your nearest assessment, ${assessment}, is within ` +
+    `${daysPhrase(input.windowDays)}, or when at least ${input.topicsNeeded} of those ` +
+    `${topicsPhrase(coverage.outcomeCount)} have your material behind them.`
   );
 }
 
-/** Shown when no unpassed assessment exists for the course at all — F4.11: "the affordance is absent," never present with a reason. */
+/** Shown when no unpassed assessment exists for the course at all: today's line, still unruled (`[D-532]` rules only the undated case). */
 export function buildNoAssessmentAheadCopy(course: string): string {
   return `${course} has no upcoming assessment, so there is no practice paper to offer yet.`;
+}
+
+/** `[D-532]` sentence 2b, VERBATIM: the course has assessments but none with a usable date. */
+export function buildUndatedAssessmentCopy(course: string): string {
+  return (
+    `The practice paper for ${course} is not available yet. Olea doesn't know the date of any ` +
+    `upcoming assessment for this course, and the paper unlocks only once there is one ahead.`
+  );
 }
 
 /** F7.8's grey-out copy — shown instead of a broken attempt when no Worker is configured. */
@@ -100,6 +151,9 @@ export const PRACTICE_PAPER_AI_UNAVAILABLE_COPY =
  */
 export const UNFINISHED_PAPER_SENTENCE =
   "Olea couldn't finish this paper. Ask again to continue from where it stopped.";
+/** `[D-532]` sentence 3, VERBATIM: the kept progress was set aside because Olea was updated, so the next request starts afresh. */
+export const AUTHORING_SPEC_CHANGED_SENTENCE =
+  "Olea was updated while this paper was being written, so it couldn't be finished. Ask again to start a new paper.";
 export const INCOMPLETE_PAPER_SENTENCE =
   'This paper is incomplete. Some planned questions could not be written.';
 

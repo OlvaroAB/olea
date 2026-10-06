@@ -91,7 +91,7 @@ describe('the unfinished state', () => {
   });
 
   it('a journal set aside for another authoring specification is not told "continue"', () => {
-    expect(unfinishedPaperNotice(unfinishedError('authoring-spec-changed'))).toBeNull();
+    expect(unfinishedPaperNotice(unfinishedError('authoring-spec-changed'))).not.toBe(UNFINISHED);
     expect(unfinishedPaperNotice(new Error('boom'))).toBeNull();
   });
 
