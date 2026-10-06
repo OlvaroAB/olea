@@ -35,13 +35,13 @@ import {
   type PartRefusalLedger,
   runDemandDriver,
 } from './demand-driver.js';
-import { SCOPE_READING_DRIVERS_ENABLED } from './drivers.js';
+import { SCOPE_READING_DRIVERS_ENABLED, sessionRefusals } from './drivers.js';
 import type { RecordedExtraction } from './persistence.js';
 
 export interface ResumeInput extends Omit<AlignmentDriverInput, 'recorded'> {
   /** The switch. Absent, the shipped default {@link SCOPE_READING_DRIVERS_ENABLED} (off). */
   readonly enabled?: boolean;
-  /** Parts refused twice are held back when given. */
+  /** Held-back parts and batches. Absent: the session ledger, shared with the first-delivery path. */
   readonly refusals?: PartRefusalLedger;
 }
 
@@ -83,7 +83,8 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
     return { outcome: 'failed' };
   }
   if (recorded === undefined) return { outcome: 'nothing-recorded' };
-  const driverInput = { ...input, recorded };
+  const refusals = input.refusals ?? sessionRefusals;
+  const driverInput = { ...input, recorded, refusals };
   let demand: DemandDriverResult | undefined;
   let alignment: AlignmentDriverResult | undefined;
   try {
@@ -93,7 +94,7 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
       recorded,
       units: input.units,
       transport: input.transport,
-      ...(input.refusals !== undefined ? { refusals: input.refusals } : {}),
+      refusals,
     });
   } catch (error) {
     console.error('Olea: owed part demands were not read (ingestion unaffected)', { error });
@@ -110,14 +111,15 @@ export async function resumeScopeReading(input: ResumeInput): Promise<ResumeResu
   };
 }
 
-export async function alignNewConcepts(
-  input: Omit<ResumeInput, 'refusals'>,
-): Promise<ResumeResult> {
+export async function alignNewConcepts(input: ResumeInput): Promise<ResumeResult> {
   if (!(input.enabled ?? SCOPE_READING_DRIVERS_ENABLED)) return { outcome: 'disabled' };
   try {
     const recorded = await storedExtraction(input);
     if (recorded === undefined) return { outcome: 'nothing-recorded' };
-    const alignment = await runAlignmentDriver({ ...input, recorded }, 'new');
+    const alignment = await runAlignmentDriver(
+      { ...input, recorded, refusals: input.refusals ?? sessionRefusals },
+      'new',
+    );
     return { outcome: 'ran', alignment };
   } catch (error) {
     console.error('Olea: new-concept alignment was not run (ingestion unaffected)', { error });
