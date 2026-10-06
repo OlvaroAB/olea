@@ -184,12 +184,14 @@ export class PaperView extends ItemView {
     } catch (error) {
       // `[D-457]`: an outage kept the unfinished paper; she reads the ruled sentence and the same
       // request she already used is offered again ("Ask again"). Any other failure is unchanged.
+      // ol-egov.141.89.7.63: whatever the error, the composing message never stays. A case with
+      // no ruled sentence returns to the request alone (no new wording); the error still surfaces.
       const notice = unfinishedPaperNotice(error);
-      if (notice === null) throw error;
       root.empty();
       root.createEl('h2', { text: this.getDisplayText() });
-      root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
+      if (notice !== null) root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
       this.renderRequestButton(root, course);
+      if (notice === null) throw error;
       return;
     }
     this.justHandedOff.clear();
