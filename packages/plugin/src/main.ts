@@ -2078,6 +2078,15 @@ export default class OleaPlugin extends Plugin {
             return manifest === undefined ? null : documentReadingBasisFromManifest(manifest);
           },
         },
+        // `[D-531]` (`ol-egov.141.89.7.68`, `ol-egov.141.89.7.78`): the unit manifest is the page
+        // record retire-on-revision reads. A delivery is placed against the document's current
+        // version (re-hashed from the file's bytes), its pages are marked extracted for that version
+        // only, and a version read in full retires the outcomes it no longer states.
+        revisions: {
+          currentRevision: (sourcePath) => unitManifests.outcomeRevisionPagesFor(sourcePath),
+          markOutcomesExtracted: (sourcePath, revisionDigest, pages) =>
+            unitManifests.recordOutcomeExtraction(sourcePath, revisionDigest, pages),
+        },
       },
       // `ol-15f8`/`ol-ua2f`: the standalone-image vision runner (C3.1/C3.3),
       // wired the same F7.8 way every other Worker-backed port in this
