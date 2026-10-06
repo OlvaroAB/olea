@@ -55,8 +55,11 @@ const noCount = (s: string) => {
 
 describe('a row with no past-paper basis states no past-paper count (`ol-egov.141.89.7.67`)', () => {
   it('material-gap', () => {
-    expect(gapRowLine(row('material-gap', NONE))).toBe("It isn't in your materials.");
-    expect(materialGapMeta(row('material-gap', NONE))).toBe('Not in your materials');
+    // `[D-538]` (`ol-egov.141.89.7.81`): what Olea did not find, never an absence claim.
+    expect(gapRowLine(row('material-gap', NONE))).toBe(
+      "Olea hasn't found supporting material for it.",
+    );
+    expect(materialGapMeta(row('material-gap', NONE))).toBe('Supporting material not found');
     for (const s of materialGapNarrative(row('material-gap', NONE))) noCount(s);
   });
 
@@ -86,7 +89,7 @@ describe('a row with no past-paper basis states no past-paper count (`ol-egov.14
   it('a mixed row (past paper plus objectives) keeps the past-paper count', () => {
     // distinctSourceCount counts past papers only, so the objectives add nothing to it.
     expect(gapRowLine(row('material-gap', 2))).toBe(
-      "Appears in 2 past papers; it isn't in your materials.",
+      "Appears in 2 past papers; Olea hasn't found supporting material for it.",
     );
     expect(gapRowLine(row('mastery-gap', 1))).toBe(
       "Asked in 1 past paper; you have 3 instruments built but recall here hasn't caught up.",
@@ -98,7 +101,7 @@ describe('a row with no past-paper basis states no past-paper count (`ol-egov.14
       'Appears in 1 past paper; you have notes on it but no cards yet.',
     );
     expect(materialGapMeta(row('material-gap', 2))).toBe(
-      'Asked in 2 past papers · not in your materials',
+      'Asked in 2 past papers · supporting material not found',
     );
     expect(masteryGapMeta(row('mastery-gap', 2))).toBe('3 instruments · asked in 2 past papers');
   });
