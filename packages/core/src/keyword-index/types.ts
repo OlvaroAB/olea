@@ -45,8 +45,8 @@ export interface IndexedBlock {
    */
   readonly part?: number;
   /**
-   * `ol-egov.141.89.1.95`: set only on a block extracted from a registered binary source (a PDF, a
-   * deck, a document; `build.ts`'s `indexRegisteredFile`). It is that extracted unit's own
+   * `ol-egov.141.89.1.95`: set only on a block extracted from a binary source (a PDF, a deck, a
+   * document; `build.ts`'s `indexBinaryBytes`). It is that extracted unit's own
    * `Provenance.location`, verbatim: `page` (the slide number for a deck), its `charRange` within
    * that page's text, and `section` when the format carries one. The same anchor the citation
    * pipeline cites (`../tier3-evidence/build.ts` keeps `unit.provenance` the same way), so a

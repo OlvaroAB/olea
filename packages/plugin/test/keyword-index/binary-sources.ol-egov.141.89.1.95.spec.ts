@@ -1,10 +1,11 @@
 /**
- * `ol-egov.141.89.1.95`, through the plugin's own composer and store: her registered PDF reaches
- * the keyword index on a first run and on the first load after this change, survives a restart
- * through `ObsidianKeywordIndexStore` with nothing extracted again, stays current from the watch,
- * follows a registration, and is retrievable at query time. Also the measurement the bead asks
- * for: whether what the ingestion drain embeds for that PDF joins its index chunks, so the
- * semantic leg can surface it.
+ * `ol-egov.141.89.1.95`, as ruled by David on 2026-10-06 (option a), through the plugin's own
+ * composer and store: every PDF in her vault, registered or not, reaches the keyword index in the
+ * background after a first run and on the first load after this change, survives a restart
+ * through `ObsidianKeywordIndexStore` with nothing extracted again, stays current from the watch
+ * (a rename included), takes its course from a registration, and is retrievable at query time.
+ * Also the measurement the bead asks for: whether what the ingestion drain embeds for that PDF
+ * joins its index chunks, so the semantic leg can surface it.
  *
  * `FolderSource` over a temporary folder stands in for the vault; every string is invented
  * (INV-3); no `obsidian` import.
@@ -121,6 +122,7 @@ function pdfBytes(pages: readonly string[]): Uint8Array {
 }
 
 const PDF = '01 Courses/SYN201/Slides/week-1.pdf' as VaultPath;
+const LOOSE = '01 Courses/SYN201/Slides/week-2.pdf' as VaultPath;
 const NOTE = '01 Courses/SYN201/notes.md' as VaultPath;
 const PAGES = [
   'Ashwillow bark cracks in long vertical seams.',
@@ -130,6 +132,11 @@ const REGISTERED: readonly RegisteredFileSpec[] = [
   { path: PDF, role: 'objectives', course: 'SYN201' },
 ];
 const CAN_DRAIN = { canDrain: true };
+const NOTHING_DONE = { indexed: 0, textless: 0, removed: 0, regrouped: 0, failed: 0 };
+/** Binaries on, her registrations read from `read`. */
+const binaries = (read: () => Promise<readonly RegisteredFileSpec[]>) => ({
+  binarySources: { registeredFiles: read },
+});
 
 let root: string;
 
@@ -149,35 +156,43 @@ afterEach(() => {
   rmSync(root, { recursive: true, force: true });
 });
 
-function pdfDoc(wiring: { engine: { toPersisted(): { documents: readonly { path: string }[] } } }) {
-  return wiring.engine.toPersisted().documents.find((d) => d.path === PDF);
+function pdfDoc(
+  wiring: {
+    engine: {
+      toPersisted(): { documents: readonly { path: string; courses: readonly string[] }[] };
+    };
+  },
+  path: VaultPath = PDF,
+) {
+  return wiring.engine.toPersisted().documents.find((d) => d.path === path);
 }
 
 describe('first run and first load after this change (ol-egov.141.89.1.95)', () => {
-  it('a fresh install indexes a registered PDF in its first rebuild; the background sync then has nothing to add', async () => {
+  it('a fresh install indexes her notes in its first rebuild and every PDF, registered or not, in the background sync', async () => {
+    writeFile(LOOSE, pdfBytes(['Peatmoss holds many times its weight in water.']));
     const vault = new CountingVault(new FolderSource(root));
     const wiring = await buildKeywordIndexWiring({
       vault,
       store: new ObsidianKeywordIndexStore(new JsonDataHost()),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => REGISTERED),
     });
+    // Both PDFs are extracted by the sync, so the awaited first rebuild extracted neither.
+    await expect(wiring.binarySourcesSynced).resolves.toEqual({ ...NOTHING_DONE, indexed: 2 });
+    expect(vault.binaryReads).toBe(2);
+    expect(wiring.engine.toPersisted().documents.map((d) => d.path)).toEqual([PDF, LOOSE, NOTE]);
+    expect(pdfDoc(wiring)?.courses).toEqual(['SYN201']);
+    expect(pdfDoc(wiring, LOOSE)?.courses).toEqual([]);
     const doc = wiring.engine.toPersisted().documents.find((d) => d.path === PDF);
     expect(doc?.blocks.map((b) => b.location?.page)).toEqual([1, 2]);
-    expect(doc?.courses).toEqual(['SYN201']);
-    await expect(wiring.registeredSourcesSynced).resolves.toEqual({
-      indexed: 0,
-      removed: 0,
-      textless: 0,
-      failed: 0,
-    });
+    expect(wiring.engine.search('peatmoss').map((h) => h.path)).toEqual([LOOSE]);
   });
 
-  it('a populated index from before this change gains a registered PDF that was never extracted, on the first load', async () => {
+  it('a populated index from before this change gains every PDF that was never extracted, on the first load', async () => {
     const host = new JsonDataHost();
     const vault = new CountingVault(new FolderSource(root));
-    // Before: the wiring as it was, with no registered sources.
+    // Before: the wiring as it was, with no binaries.
     const before = await buildKeywordIndexWiring({
       vault,
       store: new ObsidianKeywordIndexStore(host),
@@ -187,35 +202,31 @@ describe('first run and first load after this change (ol-egov.141.89.1.95)', () 
     expect(before.engine.toPersisted().documents.map((d) => d.path)).toEqual([NOTE]);
     expect(vault.binaryReads).toBe(0);
 
-    // After: the same persisted index is trusted (no rebuild), and the load's sync extracts the PDF.
+    // After: the same persisted index is trusted (no rebuild), and the load's sync extracts the
+    // PDF, with nothing registered at all.
     const after = await buildKeywordIndexWiring({
       vault,
       store: new ObsidianKeywordIndexStore(host),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => []),
     });
-    await expect(after.registeredSourcesSynced).resolves.toEqual({
-      indexed: 1,
-      removed: 0,
-      textless: 0,
-      failed: 0,
-    });
+    await expect(after.binarySourcesSynced).resolves.toEqual({ ...NOTHING_DONE, indexed: 1 });
     expect(after.engine.toPersisted().documents.map((d) => d.path)).toEqual([PDF, NOTE]);
     expect(vault.binaryReads).toBe(1);
   });
 
-  it('a device that cannot drain (mobile, D-002) never extracts a registered PDF', async () => {
+  it('a device that cannot drain (mobile, D-002) never extracts a PDF', async () => {
     const vault = new CountingVault(new FolderSource(root));
     const wiring = await buildKeywordIndexWiring({
       vault,
       store: new ObsidianKeywordIndexStore(new JsonDataHost()),
       capability: { canDrain: false },
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => REGISTERED),
     });
-    await expect(wiring.registeredSourcesSynced).resolves.toBeNull();
-    await expect(wiring.syncRegisteredSources()).resolves.toBeNull();
+    await expect(wiring.binarySourcesSynced).resolves.toBeNull();
+    await expect(wiring.syncBinarySources()).resolves.toBeNull();
     expect(wiring.engine.toPersisted().documents).toEqual([]);
     expect(vault.binaryReads).toBe(0);
   });
@@ -230,9 +241,9 @@ describe('acceptance through the plugin store: retrieved as a source chunk after
       store: new ObsidianKeywordIndexStore(host),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => REGISTERED),
     });
-    await first.registeredSourcesSynced;
+    await first.binarySourcesSynced;
     const persisted = first.engine.toPersisted();
 
     vault.refuseBinaryReads = true;
@@ -241,9 +252,9 @@ describe('acceptance through the plugin store: retrieved as a source chunk after
       store: new ObsidianKeywordIndexStore(host),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => REGISTERED),
     });
-    await expect(second.registeredSourcesSynced).resolves.toMatchObject({ indexed: 0, failed: 0 });
+    await expect(second.binarySourcesSynced).resolves.toEqual(NOTHING_DONE);
     expect(second.engine.toPersisted()).toEqual(persisted);
 
     const index = second.engine.toPersisted();
@@ -276,13 +287,13 @@ describe('kept current from the watch and from registration', () => {
       store: new ObsidianKeywordIndexStore(new JsonDataHost()),
       capability: CAN_DRAIN,
       watch: fake.watch,
-      registeredFiles: async () => registered.current,
+      ...binaries(async () => registered.current),
     });
-    await wiring.registeredSourcesSynced;
+    await wiring.binarySourcesSynced;
     return { wiring, fire: fake.fire };
   }
 
-  it('a modified registered PDF has its old chunks replaced; a deleted one leaves', async () => {
+  it('a modified PDF has its old chunks replaced; a deleted one leaves', async () => {
     const { wiring, fire } = await live({ current: REGISTERED });
     writeFile(PDF, pdfBytes(['Moorbell flowers close before rain.']));
     fire({ kind: 'modify', path: PDF });
@@ -295,43 +306,44 @@ describe('kept current from the watch and from registration', () => {
     expect(wiring.engine.search('moorbell')).toEqual([]);
   });
 
-  it('a renamed registered PDF leaves the index under its old path', async () => {
+  it('a renamed PDF leaves its old path and is indexed at its new one', async () => {
     const { wiring, fire } = await live({ current: REGISTERED });
     const moved = '01 Courses/SYN201/Slides/old/week-1.pdf' as VaultPath;
     writeFile(moved, pdfBytes(PAGES));
     unlinkSync(join(root, ...PDF.split('/')));
     fire({ kind: 'rename', path: moved, oldPath: PDF });
-    await waitFor(() => pdfDoc(wiring) === undefined);
-    expect(wiring.engine.toPersisted().documents.map((d) => d.path)).toEqual([NOTE]);
+    await waitFor(() => pdfDoc(wiring, moved) !== undefined);
+    expect(wiring.engine.toPersisted().documents.map((d) => d.path)).toEqual([moved, NOTE]);
+    expect(wiring.engine.search('cindergrass').map((h) => h.path)).toEqual([moved]);
   });
 
-  it('a registration adds the PDF at the sync it triggers; an unregistration removes it', async () => {
+  it('a registration regroups the PDF at the sync it triggers; an unregistration ungroups it, and it stays', async () => {
     const registered = { current: [] as readonly RegisteredFileSpec[] };
     const { wiring } = await live(registered);
-    expect(pdfDoc(wiring)).toBeUndefined();
+    expect(pdfDoc(wiring)?.courses).toEqual([]);
 
     registered.current = REGISTERED;
-    await expect(wiring.syncRegisteredSources()).resolves.toMatchObject({ indexed: 1 });
-    expect(pdfDoc(wiring)).toBeDefined();
+    await expect(wiring.syncBinarySources()).resolves.toEqual({ ...NOTHING_DONE, regrouped: 1 });
+    expect(pdfDoc(wiring)?.courses).toEqual(['SYN201']);
 
     registered.current = [];
-    await expect(wiring.syncRegisteredSources()).resolves.toMatchObject({ removed: 1 });
-    expect(pdfDoc(wiring)).toBeUndefined();
+    await expect(wiring.syncBinarySources()).resolves.toEqual({ ...NOTHING_DONE, regrouped: 1 });
+    expect(pdfDoc(wiring)?.courses).toEqual([]);
   });
 
-  it('a failure reading her log is logged by name and resolves null, never rejects', async () => {
+  it('a failure reading her log leaves her PDF indexed and ungrouped, and never rejects', async () => {
     const wiring = await buildKeywordIndexWiring({
       vault: new FolderSource(root),
       store: new ObsidianKeywordIndexStore(new JsonDataHost()),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => {
+      ...binaries(async () => {
         throw new Error('log unreadable');
-      },
+      }),
     });
-    // The first-run rebuild degraded to notes rather than failing the whole index.
-    expect(wiring.engine.toPersisted().documents.map((d) => d.path)).toEqual([NOTE]);
-    await expect(wiring.registeredSourcesSynced).resolves.toBeNull();
+    await expect(wiring.binarySourcesSynced).resolves.toEqual({ ...NOTHING_DONE, indexed: 1 });
+    expect(wiring.engine.toPersisted().documents.map((d) => d.path)).toEqual([PDF, NOTE]);
+    expect(pdfDoc(wiring)?.courses).toEqual([]);
   });
 });
 
@@ -364,7 +376,7 @@ class MarkerProvider implements EmbeddingProvider {
   }
 }
 
-describe('measurement: the semantic leg can surface a registered binary chunk', () => {
+describe('measurement: the semantic leg can surface a binary chunk', () => {
   it('the drained sink units hash to the index chunks, and a query with no shared word retrieves the PDF semantically', async () => {
     const vault = new FolderSource(root);
     const wiring = await buildKeywordIndexWiring({
@@ -372,8 +384,9 @@ describe('measurement: the semantic leg can surface a registered binary chunk', 
       store: new ObsidianKeywordIndexStore(new JsonDataHost()),
       capability: CAN_DRAIN,
       watch: fakeWatch().watch,
-      registeredFiles: async () => REGISTERED,
+      ...binaries(async () => REGISTERED),
     });
+    await wiring.binarySourcesSynced;
     const index = wiring.engine.toPersisted();
     const indexChunks = (await chunksFromIndex(index)).filter((c) => c.path === PDF);
 

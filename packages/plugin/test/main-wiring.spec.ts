@@ -296,26 +296,27 @@ describe('the keyword index store is actually constructed (ol-tuvx)', () => {
   });
 });
 
-describe('registered binary sources reach the keyword index (ol-egov.141.89.1.95)', () => {
+describe('every PDF, deck and document reaches the keyword index (ol-egov.141.89.1.95)', () => {
   // The composer and the engine are tested against fakes (`test/keyword-index/
-  // registered-binaries.ol-egov.141.89.1.95.spec.ts`); these are the source-level checks that
-  // production hands them her real registrations and tells them when one is made.
+  // binary-sources.ol-egov.141.89.1.95.spec.ts`); these are the source-level checks that
+  // production turns binaries on, hands them her real registrations for their courses, and tells
+  // the index when one is made.
 
-  it('passes her registered sources, folded from her log, to the keyword index wiring', () => {
+  it('turns binaries on, with her registered sources, folded from her log, for their courses', () => {
     expect(main).toMatch(
-      /registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\)/,
+      /binarySources: \{\s*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\}/,
     );
   });
 
   it('tells the index after a registration from the file menu (S2)', () => {
     expect(main).toMatch(
-      /onRegistered: \(\) => \{[^}]*void this\.keywordIndex\?\.syncRegisteredSources\(\);/,
+      /onRegistered: \(\) => \{[^}]*void this\.keywordIndex\?\.syncBinarySources\(\);/,
     );
   });
 
   it('tells the index after a registration from the grove (S1)', () => {
     expect(main).toMatch(
-      /registerSource: async \(input\) => \{\s*await provider\.registerSource\(input\);\s*void this\.keywordIndex\?\.syncRegisteredSources\(\);/,
+      /registerSource: async \(input\) => \{\s*await provider\.registerSource\(input\);\s*void this\.keywordIndex\?\.syncBinarySources\(\);/,
     );
   });
 });
@@ -336,7 +337,7 @@ describe('a vault-read failure while building the keyword index never crashes on
 
   it('wraps the construction in try/catch, degrading to the already-handled null state on failure', () => {
     expect(main).toMatch(
-      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*(?:\/\/[^\n]*\n\s*)*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
+      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*(?:\/\/[^\n]*\n\s*)*binarySources: \{\s*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\},\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
     );
   });
 

@@ -70,8 +70,8 @@ export interface RetrievalChunk {
   /** D-465: the 1-based transcript part ordinal, present only for a transcript part (carried from `IndexedBlock.part`). */
   readonly part?: number;
   /**
-   * `ol-egov.141.89.1.95`: present only for a chunk of a registered binary source (a PDF, a deck,
-   * a document), carried from `IndexedBlock.location`: the extracted unit's own page (the slide
+   * `ol-egov.141.89.1.95`: present only for a chunk of a binary source (a PDF, a deck, a
+   * document), carried from `IndexedBlock.location`: the extracted unit's own page (the slide
    * number for a deck), char range and section, the anchor the citation pipeline cites. A hit's
    * `path` + `blockIndex` find this chunk, and so this location.
    */
