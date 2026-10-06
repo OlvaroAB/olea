@@ -2071,6 +2071,54 @@ export {
 } from './outcome/reconcile.js';
 export type { OutcomeConceptCoverage } from './outcome/reconcile-coverage.js';
 export { outcomeConceptCoverage } from './outcome/reconcile-coverage.js';
+// The pure half of the alignment driver (`ol-egov.141.89.7.52`, `[D-431]`): handles, descriptions, the
+// batch plan and omission ledger, coverage, aggregation and the four digests. See its module doc.
+export type {
+  AggregatedConcept,
+  AlignCallUnitView,
+  AlignCoverageState,
+  AlignCoverageUnitInput,
+  AlignDescriptionSource,
+  AlignDigestInputs,
+  AlignHandleInput,
+  AlignPair,
+  AlignPairVerdictKind,
+  BatchPlan,
+  ChosenDescription,
+  ClosedListEntry,
+  CutDescription,
+  FrozenConfigurationInput,
+  PlanConceptInput,
+  PlannedCall,
+  PlanOmission,
+  PlanRecordInput,
+  RevisionCoverage,
+} from './outcome/scope-alignment-plan.js';
+export {
+  ALIGN_CONCEPT_BUDGET,
+  ALIGN_DESCRIPTION_CAP,
+  ALIGN_PASSAGE_BUDGET,
+  ALIGN_RUN_CALL_CAP,
+  ALIGN_TASK_ID,
+  AlignPlanError,
+  aggregateAlignConcept,
+  alignBatchPlanDigest,
+  alignBatchPlanPreimage,
+  alignClosedListDigest,
+  alignCoverageForCall,
+  alignDigestOf,
+  alignDigests,
+  alignFrozenConfigurationDigest,
+  alignFrozenConfigurationPreimage,
+  alignHandleFor,
+  alignRevisionCoverage,
+  assertAlignLedgerComplete,
+  assignAlignHandles,
+  chooseAlignDescription,
+  containsNormalised,
+  cutAlignDescription,
+  planAlignBatches,
+} from './outcome/scope-alignment-plan.js';
 // The examiner-scope reading store (`[D-429]`, `ol-egov.141.89.7.22`): the typed API over the
 // scope-reading log, its projection and views, and the payload types. See each module's own doc.
 // `packages/plugin/src/scope-reading/persistence.ts` reaches all of it through here
