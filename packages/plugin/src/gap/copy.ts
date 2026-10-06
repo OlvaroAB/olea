@@ -455,6 +455,16 @@ function paperCount(n: number): string {
 }
 
 /**
+ * Whether a row has a past-paper basis (`ol-egov.141.89.7.67`, `[D-529]`).
+ * `distinctSourceCount` counts past-paper sources only (core `gap/build.ts`),
+ * so 0 means the concept is ranked on an objectives document or a brief alone,
+ * and such a row never states a past-paper count.
+ */
+function hasPastPaperBasis(row: GapRow): boolean {
+  return row.distinctSourceCount > 0;
+}
+
+/**
  * The mastery-gap row's summary line (F4.3) — what she can act on, never the
  * oracle's own bookkeeping.
  *
@@ -490,10 +500,13 @@ function paperCount(n: number): string {
 export function masteryGapLine(row: GapRow): string {
   const instruments =
     row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  const lead = hasPastPaperBasis(row)
+    ? `Asked in ${paperCount(row.distinctSourceCount)}; you`
+    : 'You';
   if (row.need?.basis === 'unknown') {
-    return `Asked in ${paperCount(row.distinctSourceCount)}; you have ${instruments} built, but recall here is unknown — nothing has been checked yet, so this says nothing about what you know.`;
+    return `${lead} have ${instruments} built, but recall here is unknown — nothing has been checked yet, so this says nothing about what you know.`;
   }
-  return `Asked in ${paperCount(row.distinctSourceCount)}; you have ${instruments} built but recall here hasn't caught up.`;
+  return `${lead} have ${instruments} built but recall here hasn't caught up.`;
 }
 
 /**
@@ -509,9 +522,13 @@ export function masteryGapLine(row: GapRow): string {
 export function gapRowLine(row: GapRow): string {
   switch (row.gapClass) {
     case 'material-gap':
-      return `Appears in ${paperCount(row.distinctSourceCount)}; it isn't in your materials.`;
+      return hasPastPaperBasis(row)
+        ? `Appears in ${paperCount(row.distinctSourceCount)}; it isn't in your materials.`
+        : "It isn't in your materials.";
     case 'coverage-gap':
-      return `Appears in ${paperCount(row.distinctSourceCount)}; you have notes on it but no cards yet.`;
+      return hasPastPaperBasis(row)
+        ? `Appears in ${paperCount(row.distinctSourceCount)}; you have notes on it but no cards yet.`
+        : 'You have notes on it but no cards yet.';
     case 'mastery-gap':
       return masteryGapLine(row);
   }
@@ -544,12 +561,16 @@ export function gapDetailEyebrow(course: string, gapClass: GapDetailClass): stri
 export function masteryGapMeta(row: GapRow): string {
   const instruments =
     row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
-  return `${instruments} · asked in ${paperCount(row.distinctSourceCount)}`;
+  return hasPastPaperBasis(row)
+    ? `${instruments} · asked in ${paperCount(row.distinctSourceCount)}`
+    : instruments;
 }
 
 /** The material-gap detail page's header meta line (`[D-224]`) — F4.10's fact, not a claim about the exam ahead. */
 export function materialGapMeta(row: GapRow): string {
-  return `Asked in ${paperCount(row.distinctSourceCount)} · not in your materials`;
+  return hasPastPaperBasis(row)
+    ? `Asked in ${paperCount(row.distinctSourceCount)} · not in your materials`
+    : 'Not in your materials';
 }
 
 /**
@@ -564,7 +585,9 @@ export function masteryGapNarrative(row: GapRow): readonly string[] {
     row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
   return [
     `Your notes cover this, and ${instruments} are built from them — the material and the practice both exist.`,
-    `It's ranked here because it's been asked in ${paperCount(row.distinctSourceCount)}, and recall on it is worth another pass.`,
+    hasPastPaperBasis(row)
+      ? `It's ranked here because it's been asked in ${paperCount(row.distinctSourceCount)}, and recall on it is worth another pass.`
+      : "It's ranked here because recall on it is worth another pass.",
   ];
 }
 
