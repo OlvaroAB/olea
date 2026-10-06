@@ -43,8 +43,12 @@ import { ensureHomeNoteForConcept } from '../generation/home-note.js';
 import type { PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
-import type { PartialPaperStatement } from './copy.js';
-import { buildPartialPaperStatement } from './copy.js';
+import type { IncompletePaperStatement, PartialPaperStatement } from './copy.js';
+import {
+  buildIncompletePaperStatement,
+  buildPartialPaperStatement,
+  UNFINISHED_PAPER_SENTENCE,
+} from './copy.js';
 import type { PaperDemand } from './demand.js';
 import { composePaperThroughJournal } from './journal-composition.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
@@ -93,6 +97,8 @@ export interface PracticePaperReadyState {
   readonly record: PaperRecord;
   readonly partial: boolean;
   readonly partialStatement: PartialPaperStatement | null;
+  /** `[D-457]`: derived from the record's own completion and empty slots, never persisted. Null for a complete or flat paper. */
+  readonly incompleteStatement: IncompletePaperStatement | null;
   readonly items: readonly PracticePaperFaceItem[];
   readonly emptySlots: readonly PaperEmptySlot[];
 }
@@ -215,6 +221,7 @@ export function buildReadyStateFromRecord(
     record,
     partial: record.compositionAccount.partial,
     partialStatement,
+    incompleteStatement: buildIncompletePaperStatement(record.completion, record.emptySlots),
     items: record.items.map((item) => ({
       slotId: item.slotId,
       conceptName: item.conceptName,
@@ -265,6 +272,18 @@ export class PracticePaperUnfinishedError extends Error {
     this.plannedSlotCount = params.plannedSlotCount;
     this.owedSlotCount = params.owedSlotCount;
   }
+}
+
+/**
+ * `[D-457]`: the sentence she reads when a request ended unfinished, or null when the error is not
+ * one she should be told that about. Only an outage (`'service-unavailable'`) keeps a paper that
+ * "Ask again" continues; a journal set aside for another authoring specification starts afresh, so
+ * the continue sentence would be untrue and is not shown for it.
+ */
+export function unfinishedPaperNotice(error: unknown): string | null {
+  return error instanceof PracticePaperUnfinishedError && error.reason === 'service-unavailable'
+    ? UNFINISHED_PAPER_SENTENCE
+    : null;
 }
 
 export interface PracticePaperViewDeps {

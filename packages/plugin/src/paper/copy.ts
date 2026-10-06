@@ -91,3 +91,73 @@ export function buildNoAssessmentAheadCopy(course: string): string {
 /** F7.8's grey-out copy — shown instead of a broken attempt when no Worker is configured. */
 export const PRACTICE_PAPER_AI_UNAVAILABLE_COPY =
   'Practice papers need Olea AI features, which are not configured yet.';
+
+/**
+ * `[D-457]` (F4.11, vocabulary registry section 31): the two states a paper that is not whole can
+ * be in, each with its own ruled sentence, VERBATIM. Never edit these without the clause.
+ * Neither is ever worded as covering less of the course: a missing question may reduce depth or
+ * demand coverage without removing a topic.
+ */
+export const UNFINISHED_PAPER_SENTENCE =
+  "Olea couldn't finish this paper. Ask again to continue from where it stopped.";
+export const INCOMPLETE_PAPER_SENTENCE =
+  'This paper is incomplete. Some planned questions could not be written.';
+
+/**
+ * One omitted part of a partial paper. It carries the machine reason code only: the slot's free-text
+ * `reason` is developer prose (tiers, file paths, a generator's error) and never reaches her. What
+ * she reads for each code is `OMITTED_PART_REASONS` (`omittedPartLine`).
+ */
+export interface OmittedPaperPart {
+  readonly conceptName: string;
+  readonly reasonCode: string;
+}
+
+/** The partial state's face: the ruled sentence, then the omitted parts, each with its reason. */
+export interface IncompletePaperStatement {
+  readonly sentence: string;
+  readonly omittedParts: readonly OmittedPaperPart[];
+}
+
+/**
+ * Builds the partial state's statement from a finished record's own fields. Null unless the record's
+ * completion is a qualified partial (a flat record has no completion and reads as before). A part
+ * set aside by rank is extent, not a gap, so it is never listed as omitted.
+ */
+export function buildIncompletePaperStatement(
+  completion: { readonly status: string } | undefined,
+  emptySlots: readonly {
+    readonly conceptName: string;
+    readonly reasonCode: string;
+  }[],
+): IncompletePaperStatement | null {
+  if (completion?.status !== 'qualified-partial') return null;
+  return {
+    sentence: INCOMPLETE_PAPER_SENTENCE,
+    omittedParts: emptySlots
+      .filter((slot) => slot.reasonCode !== 'rank-excluded')
+      .map((slot) => ({ conceptName: slot.conceptName, reasonCode: slot.reasonCode })),
+  };
+}
+
+/**
+ * `[D-519]` (vocabulary registry section 31): each omitted part's ruled reason, VERBATIM, by the
+ * reason code the paper records. Never edit these without the registry. `rank-excluded` has no row:
+ * a part set aside by rank is extent, never listed. A code with no row reads by name alone.
+ */
+export const OMITTED_PART_REASONS: Readonly<Record<string, string>> = Object.freeze({
+  'no-held-source': 'Nothing of yours covers this yet.',
+  'demand-unsupported': "Olea can't yet write this kind of question.",
+  'no-held-stimulus':
+    'This question needs a case, extract, table or figure, and none of your material supplies one.',
+  'depends-on-empty-part': 'This part builds on an earlier part that could not be written.',
+  'generator-refused': "Olea couldn't write a question on this that stays within your material.",
+});
+
+/** The line she reads for one omitted part: its name, then its ruled reason when one is ruled. */
+export function omittedPartLine(part: OmittedPaperPart): string {
+  const reason = Object.hasOwn(OMITTED_PART_REASONS, part.reasonCode)
+    ? OMITTED_PART_REASONS[part.reasonCode]
+    : undefined;
+  return reason === undefined ? part.conceptName : `${part.conceptName} — ${reason}`;
+}
