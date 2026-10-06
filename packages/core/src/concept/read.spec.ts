@@ -1203,6 +1203,29 @@ describe('readConcepts — relations (C7.10, [REL-1], [EXT-6])', () => {
     expect(result.concepts.map((c) => c.name)).toEqual(['Ormathel']);
   });
 
+  it('relations a reader skipped as malformed are counted in relationsDropped, and the read still succeeds (ol-egov.141.89.3.48)', async () => {
+    const oneDoc = new MemoryVault({
+      '01 Courses/ABCD101/Notes.md': '# Intro\n\nIntro body about Foo.\n',
+    });
+    const reader: ConceptReaderPort = {
+      read(request) {
+        const path = request.passages[0]?.anchor.sourcePath ?? '';
+        return Promise.resolve({
+          concepts: [proposal('Ormathel', anchorIn(path)), proposal('Quintaris', anchorIn(path))],
+          relations: [{ type: 'part-of', from: 'Ormathel', to: 'Quintaris', confidence: 0.9 }],
+          relationsMalformed: 2,
+        });
+      },
+    };
+    const result = await readConcepts(oneDoc, reader, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name)).toEqual(['Ormathel', 'Quintaris']);
+    expect(result.relations).toHaveLength(1);
+    expect(result.relationsDropped).toBe(2);
+  });
+
   it('contrasts-with and prerequisite never reach the emitted set from the per-document stage, even if proposed', async () => {
     // Same-document anchors as above — a real per-document call can only
     // propose a relation between two concepts it saw together.
