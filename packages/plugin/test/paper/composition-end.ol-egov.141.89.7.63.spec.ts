@@ -17,6 +17,7 @@ vi.mock('obsidian', () => ({
 
 import {
   AUTHORING_SPEC_CHANGED_SENTENCE,
+  COMPOSITION_FAILED_SENTENCE,
   UNFINISHED_PAPER_SENTENCE,
 } from '../../src/paper/copy.js';
 import {
@@ -88,12 +89,15 @@ describe('a composition that ends in an error, through the paper view', () => {
     expect(root.find('button')).toHaveLength(1);
   });
 
-  it('any other failure leaves no composing message, adds no sentence, offers the request again, and still surfaces', async () => {
+  it('any other failure leaves no composing message, shows the signed notice, offers the request again, and still surfaces', async () => {
     const boom = new Error('boom');
     const { root, unhandled } = await pressRequest(boom);
     const text = root.allText();
     expect(text).not.toContain(COMPOSING);
     expect(text).not.toContain('boom');
+    expect(text).toContain('Olea couldn’t finish this paper. Please try again.');
+    expect(text).toContain(COMPOSITION_FAILED_SENTENCE);
+    expect(text).not.toContain(UNFINISHED_PAPER_SENTENCE);
     expect(root.find('button')).toHaveLength(1);
     expect(unhandled).toContain(boom);
   });

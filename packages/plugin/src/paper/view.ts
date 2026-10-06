@@ -40,6 +40,7 @@ import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
   buildUndatedAssessmentCopy,
+  COMPOSITION_FAILED_SENTENCE,
   MATERIAL_CHANGED_SENTENCE,
   omittedPartLine,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
@@ -197,12 +198,15 @@ export class PaperView extends ItemView {
     } catch (error) {
       // `[D-457]`/`[D-532]`: an unfinished paper reads its ruled sentence (outage, or Olea updated)
       // and the same request she already used is offered again ("Ask again"). Any other failure has
-      // no ruled wording: the request is offered again with no new sentence, and the failure still
-      // surfaces. The composing message never outlives the composition (ol-egov.141.89.7.63).
+      // no other ruled wording: sheet v59's short notice shows, the request is offered again, and the
+      // failure still surfaces. The composing message never outlives the composition (ol-egov.141.89.7.63).
       const notice = unfinishedPaperNotice(error);
       root.empty();
       root.createEl('h2', { text: this.getDisplayText() });
-      if (notice !== null) root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
+      root.createEl('p', {
+        cls: 'olea-paper-unfinished',
+        text: notice ?? COMPOSITION_FAILED_SENTENCE,
+      });
       this.renderRequestButton(root, course);
       if (notice === null) throw error;
       return;

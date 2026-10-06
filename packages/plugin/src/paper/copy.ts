@@ -151,6 +151,8 @@ export const PRACTICE_PAPER_AI_UNAVAILABLE_COPY =
  */
 export const UNFINISHED_PAPER_SENTENCE =
   "Olea couldn't finish this paper. Ask again to continue from where it stopped.";
+/** Sheet v59 "Other composition errors", VERBATIM (typographic apostrophe as signed): any composition failure with no other ruled wording. */
+export const COMPOSITION_FAILED_SENTENCE = 'Olea couldn’t finish this paper. Please try again.';
 /** `[D-532]` (registry section 31), VERBATIM: shown once above the paper only when saved progress was discarded because her sources or the course's scope changed. */
 export const MATERIAL_CHANGED_SENTENCE =
   'Your material changed since this paper was started, so Olea began a new one.';
