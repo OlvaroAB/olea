@@ -94,6 +94,22 @@ export function indexedBinaryFormatOf(path: VaultPath): IndexedBinaryFormat | nu
 }
 
 /**
+ * `ol-egov.141.89.1.97`: the version of what a binary's extracted blocks depend on: the extractors
+ * (`../extract/`) and how `indexBinaryBytes` turns their pages into blocks. **Raise it whenever a
+ * change there would alter what an unchanged file yields**; every binary document held under a
+ * lower version is then extracted again at the next sync or event, where before it was read again
+ * only when its bytes changed or the cache was cleared. A change that cannot alter any file's
+ * blocks leaves it alone. `1` is the extractor as it stood when binaries entered the index, and is
+ * what a document persisted without a version is taken to carry (`isCurrentBinaryDocument`).
+ */
+export const BINARY_EXTRACTOR_VERSION = 1;
+
+/** Whether a document's extracted blocks came from the current extractor (`BINARY_EXTRACTOR_VERSION`). */
+export function isCurrentBinaryDocument(doc: IndexedDocument): boolean {
+  return (doc.extractorVersion ?? 1) >= BINARY_EXTRACTOR_VERSION;
+}
+
+/**
  * The course a binary's document carries, by this precedence (`ol-egov.141.89.1.95`):
  *  1. **A registration naming a course** (`RegisteredFileSpec.course`, folded from her "source
  *     registered" events, so a later correction wins): that course, exactly as before the ruling.
@@ -324,6 +340,7 @@ export async function indexBinaryBytes(
     courses: source.courses,
     contentHash: await hashContent(bytes),
     evidenceScope: 1,
+    extractorVersion: BINARY_EXTRACTOR_VERSION,
     blocks,
   };
 }
