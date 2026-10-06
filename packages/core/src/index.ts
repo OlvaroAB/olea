@@ -2166,6 +2166,7 @@ export {
   OUTCOME_STORE_FOLDER,
   outcomeRecordPath,
   resolveOutcome,
+  resolveOutcomes,
   retireOutcome,
 } from './outcome/store.js';
 export type {

@@ -57,6 +57,19 @@ export const OUTCOME_RECORD_SCHEMA_VERSION = 1;
 export interface OutcomeSourceReference {
   readonly path: VaultPath;
   readonly blockIndex: number;
+  /**
+   * `[D-477]` (`ol-egov.141.89.7.53`): which of the outcomes stated in this one block this record
+   * is — a digest of the outcome's own normalised wording (`./source-identity.ts`'s
+   * `outcomeLabelDigest`, `v1:` plus a SHA-256 hex). One block (a PDF page) often states several
+   * outcomes, and `path` plus `blockIndex` alone cannot tell them apart.
+   *
+   * Written by `./store.ts` on every record it mints, computed from the label it is minting with;
+   * a value a caller supplies is never trusted or stored. **Optional, so a record minted before
+   * this field existed stays valid as it is**: such a record is matched on `path` and
+   * `blockIndex`, then by its stored `label` (`./source-identity.ts`'s module doc), and is never
+   * rewritten to add the field. Not an id — `OutcomeRecord.id` stays a random nonce.
+   */
+  readonly labelDigest?: string;
 }
 
 /**

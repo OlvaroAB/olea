@@ -7,12 +7,26 @@
  * nothing to say about it, mirroring `key-store.ts`'s own argument).
  *
  * **Mint vs. lookup, the same conservation shape `[D-088]` gives concept keys.**
- * `resolveOutcome` is the single mint-or-lookup seam: given a source reference, it looks up an
- * existing record matching that source first and returns its `id` (and record) verbatim, or
- * mints a new one — via `../outcome/events.ts`'s `OutcomeCreatedEvent` folded through
+ * `resolveOutcomes` (and `resolveOutcome`, a batch of one) is the single mint-or-lookup seam:
+ * given one extraction's candidates, it looks up the existing record each one is and returns it
+ * verbatim, or mints a new one — via `../outcome/events.ts`'s `OutcomeCreatedEvent` folded through
  * `./project.ts`'s `applyOutcomeEvent` — and persists it. **Read-back is matching, never
- * minting**: a re-extraction over the same objectives passage resolves to the same Outcome
- * rather than duplicating it, the identical shape `resolveConceptKey` already holds for concepts.
+ * minting**: a re-extraction over the same objectives passage resolves to the same Outcomes
+ * rather than duplicating them, the identical shape `resolveConceptKey` already holds for concepts.
+ *
+ * **Which record a candidate is (`[D-477]`).** One block (a PDF page) often states several
+ * outcomes, so a record is identified by its block AND its own wording: each new record carries
+ * `source.labelDigest`, and a candidate matches a record on its block with the same normalised
+ * wording, or failing that one near it, one to one. Records minted before that field existed are
+ * matched on their block and their stored label, never rewritten. The rule, its threshold and why
+ * there is no positional fallback: `./source-identity.ts`'s module doc.
+ *
+ * **One find-or-mint at a time (`ol-egov.141.89.104.53`, race 1).** Listing the folder and minting
+ * a new file span more than one file, so no record file's queue covers them: `resolveOutcomes`
+ * runs its whole list, match and mint as one task on the folder's own queue key, taking each new
+ * record file's key inside it (`../vault/path-queue.ts`'s set-key order). Overlapping calls
+ * therefore run one after the other, in the order they were made, and give the records that order
+ * gives.
  *
  * **Opaque id, same C7.11-shaped argument as `ol-bo48`.** `mintOpaqueOutcomeId` mints a random
  * nonce (`crypto.randomUUID()` by default), never a transform of `label`, `source` or `courses` —
@@ -48,6 +62,11 @@ import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { OutcomeEvent } from './events.js';
 import { applyOutcomeEvent } from './project.js';
 import {
+  matchOutcomeCandidates,
+  outcomeLabelDigest,
+  outcomeSourceBlockKey,
+} from './source-identity.js';
+import {
   OUTCOME_STATUSES,
   type OutcomeProvenance,
   type OutcomeRecord,
@@ -69,7 +88,10 @@ function isStringArray(value: unknown): value is string[] {
 function isOutcomeSourceReference(value: unknown): value is OutcomeSourceReference {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
-  return isNonEmptyString(v.path) && typeof v.blockIndex === 'number';
+  if (!isNonEmptyString(v.path) || typeof v.blockIndex !== 'number') return false;
+  // `[D-477]`: optional, so a record minted before the field existed stays valid; only a PRESENT
+  // value that is not a non-empty string is rejected.
+  return v.labelDigest === undefined || isNonEmptyString(v.labelDigest);
 }
 
 function isOutcomeProvenance(value: unknown): value is OutcomeProvenance {
@@ -231,17 +253,13 @@ function serialize(record: OutcomeRecord): string {
   return `${JSON.stringify(record, null, 2)}\n`;
 }
 
-/** True when two source references name the same passage. */
-function sourceMatches(a: OutcomeSourceReference, b: OutcomeSourceReference): boolean {
-  return a.path === b.path && a.blockIndex === b.blockIndex;
-}
-
 export interface ResolveOutcomeInput {
   readonly courses: readonly string[];
+  /** Where the outcome was found. Only `path` and `blockIndex` are read: `labelDigest` is computed here from `label`, never taken from a caller (`./types.ts`). */
   readonly source: OutcomeSourceReference;
   readonly label: string;
   readonly provenance: OutcomeProvenance;
-  /** `[D-253]`'s ratifying amendment — see `../outcome/types.ts`'s `OutcomeRecord.extractorSelfRating` doc. Threaded through only on the genuine-mint path (below); a source that already matches an existing record returns that record verbatim, per this function's own conservation rule, so a re-extraction never overwrites an already-stored self-rating with a fresh one. */
+  /** `[D-253]`'s ratifying amendment — see `../outcome/types.ts`'s `OutcomeRecord.extractorSelfRating` doc. Threaded through only on the genuine-mint path (below); a candidate that matches an existing record gets that record back verbatim, per this seam's conservation rule, so a re-extraction never overwrites an already-stored self-rating with a fresh one. */
   readonly extractorSelfRating?: number;
 }
 
@@ -257,28 +275,92 @@ function defaultNow(): string {
 }
 
 /**
- * The single mint-or-lookup seam (module doc): resolves `input.source` to an `OutcomeRecord`,
- * reading an existing one back verbatim when its source matches, minting and persisting a new
- * one otherwise. **Never mints a second record for a source that already matches one**, and
- * never mutates `id` on an existing record.
+ * The single mint-or-lookup seam (module doc): resolves one extraction's outcome candidates to
+ * `OutcomeRecord`s, one per input and in input order. Each candidate gets the existing record it
+ * is under `./source-identity.ts`'s rule (same block, then same normalised wording, then a near
+ * wording, one to one), read back verbatim; candidates that match none mint new records, one per
+ * distinct wording on a block, each carrying `source.labelDigest`. **Never mints a second record
+ * for a wording a record on that block already has**, and never mutates an existing record.
  *
- * A match refreshes nothing else on the existing record (unlike `resolveConceptKey`'s
- * anchor-drift refresh): a source reference does not drift the way a note path does on rename —
- * an objectives document's block index is stable across a re-extraction unless the document
- * itself changed, and a changed document is exactly the "recurring name is a same-as candidate
- * resolved on evidence" case `[ONT-R1]` already names for concepts, out of this seam's scope.
+ * A match refreshes nothing on the existing record (unlike `resolveConceptKey`'s anchor-drift
+ * refresh): its label, self-rating and digest stay as first minted. Wording that has changed
+ * beyond the near rule is a different outcome and mints a new record; the record it may have
+ * replaced is left as it is — retiring it is not this seam's call.
+ *
+ * **Resolve one extraction's candidates in one call.** Only records stored before the call can be
+ * claimed by a near wording, so two wordings from one extraction never fold onto one record. The
+ * whole call is one task on the outcome folder's queue key (module doc), so overlapping calls run
+ * one after the other.
+ */
+export async function resolveOutcomes(
+  vault: VaultSource,
+  inputs: readonly ResolveOutcomeInput[],
+  options: ResolveOutcomeOptions = {},
+): Promise<readonly OutcomeRecord[]> {
+  if (inputs.length === 0) return [];
+  const now = options.now ?? defaultNow;
+
+  // Queued before anything is awaited, so overlapping calls run in the order they were made.
+  return withPathQueue(OUTCOME_STORE_FOLDER, async () => {
+    const digests = await Promise.all(inputs.map((input) => outcomeLabelDigest(input.label)));
+    const candidates = inputs.map((input, index) => ({
+      source: { path: input.source.path, blockIndex: input.source.blockIndex },
+      label: input.label,
+      digest: digests[index] as string,
+    }));
+    const blocks = new Set(candidates.map(({ source }) => outcomeSourceBlockKey(source)));
+    const stored = (await listStoredOutcomeRecords(vault)).filter(({ record }) =>
+      blocks.has(outcomeSourceBlockKey(record.source)),
+    );
+    const keyed = await Promise.all(
+      stored.map(async ({ record }) => ({
+        record,
+        key: record.source.labelDigest ?? (await outcomeLabelDigest(record.label)),
+      })),
+    );
+
+    const resolved: OutcomeRecord[] = [];
+    for (const group of matchOutcomeCandidates(keyed, candidates)) {
+      const [firstIndex] = group.members;
+      const first = firstIndex === undefined ? undefined : inputs[firstIndex];
+      const digest = firstIndex === undefined ? undefined : candidates[firstIndex]?.digest;
+      if (first === undefined || digest === undefined) continue;
+      // A group mints once, from its first candidate: every member shares one normalised wording.
+      const record =
+        group.match?.record ?? (await mintOutcome(vault, first, digest, now, options.generateId));
+      for (const index of group.members) resolved[index] = record;
+    }
+    return resolved;
+  });
+}
+
+/**
+ * `resolveOutcomes` for one candidate — a batch of one, on the same queue. **A caller resolving
+ * one extraction's several candidates calls `resolveOutcomes` once instead**: resolved one call at
+ * a time, a later candidate could take, by a near wording, a record an earlier candidate of the
+ * same extraction has just minted.
  */
 export async function resolveOutcome(
   vault: VaultSource,
   input: ResolveOutcomeInput,
   options: ResolveOutcomeOptions = {},
 ): Promise<OutcomeRecord> {
-  const now = options.now ?? defaultNow;
-  const existing = await listStoredOutcomeRecords(vault);
-  const hit = existing.find(({ record }) => sourceMatches(record.source, input.source));
-  if (hit !== undefined) return hit.record;
+  const [record] = await resolveOutcomes(vault, [input], options);
+  // One input always resolves to one record (`resolveOutcomes`' own contract); the guard keeps
+  // the return type honest.
+  if (record === undefined) throw new Error('resolveOutcome: no record resolved for one input');
+  return record;
+}
 
-  const id = mintOpaqueOutcomeId(options.generateId);
+/** Mints and persists one record for `input`, its source carrying `labelDigest`. Runs inside `resolveOutcomes`' folder task. */
+async function mintOutcome(
+  vault: VaultSource,
+  input: ResolveOutcomeInput,
+  labelDigest: string,
+  now: () => string,
+  generateId: OpaqueIdNonceSource | undefined,
+): Promise<OutcomeRecord> {
+  const id = mintOpaqueOutcomeId(generateId);
   const event: OutcomeEvent = {
     kind: 'created',
     schemaVersion: 1,
@@ -286,7 +368,7 @@ export async function resolveOutcome(
     timestamp: now(),
     outcomeId: id,
     courses: input.courses,
-    source: input.source,
+    source: { path: input.source.path, blockIndex: input.source.blockIndex, labelDigest },
     label: input.label,
     provenance: input.provenance,
     ...(input.extractorSelfRating !== undefined
@@ -297,7 +379,7 @@ export async function resolveOutcome(
   // `applyOutcomeEvent` always returns a record for a `created` event — see its doc — so this
   // is unreachable, not a real runtime possibility; the guard just keeps the return type honest.
   if (record === undefined) {
-    throw new Error('resolveOutcome: applyOutcomeEvent returned undefined for a created event');
+    throw new Error('resolveOutcomes: applyOutcomeEvent returned undefined for a created event');
   }
   const path = outcomeRecordPath(record.id);
   await withPathQueue(path, () => vault.write(path, serialize(record)));
