@@ -93,7 +93,7 @@
  */
 
 import type { ExtractionOutcome, SourceFormat } from '../extract/types.js';
-import type { AbsenceGrounding } from '../ingestion/unit-manifest/manifest.js';
+import { type AbsenceGrounding, isFullyRead } from '../ingestion/unit-manifest/manifest.js';
 import type { UnitManifest, UnitManifestEntry } from '../ingestion/unit-manifest/types.js';
 import type { SourceKind, SourceRole } from '../source/types.js';
 import type { SourceCoverage } from '../tier3-evidence/types.js';
@@ -308,7 +308,6 @@ export function readRecordOf(manifest: UnitManifest): SourceRecordReading | null
     (u) => u.readingState.kind === 'pending' || u.readingState.kind === 'unavailable',
   );
   const failing = units.some(isFailingUnit);
-  const partial = units.some((u) => u.readingState.kind === 'partial');
 
   const readState: SourceReadState =
     withMaterial.length > 0
@@ -318,7 +317,8 @@ export function readRecordOf(manifest: UnitManifest): SourceRecordReading | null
         : unsettled
           ? 'not-attempted'
           : 'read-yielded-nothing';
-  const readingCompleteness = unsettled ? 'unsettled' : partial || failing ? 'partial' : 'full';
+  // One fully-read rule ([D-448], ol-egov.141.89.8.68): 'full' is the manifest's own isFullyRead, never a second predicate.
+  const readingCompleteness = unsettled ? 'unsettled' : isFullyRead(manifest) ? 'full' : 'partial';
   const conceptExtraction = unsettled
     ? 'unfinished'
     : withMaterial.length === 0
