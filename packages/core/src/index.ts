@@ -1468,6 +1468,14 @@ export {
   unresolvedPassageInstrumentIds,
   withKnownFalseJudgements,
 } from './mastery/attainment.js';
+// The review's v6 belief stamp (`ol-95vv.13`; MAT-7's `masteryAtTimeV6`): the
+// displayed stage and eligible vitality per concept, with the arithmetic
+// version both carry. Its production caller is the plugin's review-log port.
+export type {
+  MasteryAtTimeStampInput,
+  PerConceptMasteryAtTimeV6,
+} from './mastery/belief-stamp.js';
+export { masteryAtTimeStamp } from './mastery/belief-stamp.js';
 // F2.11's single vocabulary site (D-017). Anything rendering mastery imports
 // from here; there is deliberately no second copy of these five words.
 export type { MasteryDisplay } from './mastery/display.js';
