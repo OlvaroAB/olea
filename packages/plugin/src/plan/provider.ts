@@ -381,23 +381,18 @@ export function createLocalStudyPlanProvider(
         // here on those grounds (the session's own fill still withholds
         // them, `study-session/compose.ts`).
         instrumentInventory: enumeration.records,
-        // `[D-447]` option (b) (ruled 2026-09-29; core half `ol-egov.141.89.10.96`)
-        // is DELIBERATELY NOT opted into here, and cannot be until
-        // `ol-egov.141.89.10.99`'s contract question is answered. Passing
-        // `admitPractisedUnlinkedConcepts: true` would rank a practised concept
-        // no assessment reaches at need-only, with no citation (`[D-329]`), and
-        // `buildStudyPlan` below would throw: `packages/contracts/src/study-plan.ts`
-        // requires every planned concept to carry at least one citation ("a
-        // ranked concept with no evidence is the case that abstains", written
-        // before `[D-329]`). `refreshStudyPlan` swallows the throw and keeps the
-        // old plan, so the plan would stop refreshing for as long as any such
-        // concept existed. The session composition takes the door
-        // (`session-builder/provider.ts`) because it never builds this
-        // artifact. Pinned by `test/plan/practised-unlinked-agreement.d-447.spec.ts`
-        // (`it.fails`), which goes red the day the opt-in works, to be flipped.
+        // `[D-447]` option (b) (ruled 2026-09-29; core half `ol-egov.141.89.10.96`, plan half
+        // `ol-egov.141.89.10.99`): a concept she has practised that no assessment reaches is
+        // ranked at need-only, as the session composition already does
+        // (`session-builder/provider.ts`), so Home's plan and Start's session agree. It carries
+        // no assessment contribution and `buildStudyPlan` marks its single citation
+        // `unknown-relevance` (`[D-529]`, `[D-329]`), the shape the plan contract already has.
+        // This is the production caller of the admission for the cached plan
+        // (`main.ts` `refreshCachedStudyPlan`). `[D-373]`'s door (a course with no assessment
+        // record) stays closed here: `serveCoursesWithoutAssessmentsOnNeed` is not set.
         // `gap/provider.ts` and `registry/provider.ts` stay out for the reason
-        // `oracle/compose.ts` gives: they read scope and coverage, not practice
-        // to serve.
+        // `oracle/compose.ts` gives: they read scope and coverage, not practice to serve.
+        admitPractisedUnlinkedConcepts: true,
       });
 
       // `[DOS-C4-a]` / `ol-feza`: `sittingsSinceFloorMet`'s two inputs,

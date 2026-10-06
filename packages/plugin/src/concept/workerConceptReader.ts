@@ -149,10 +149,12 @@ export class WorkerConceptReader implements ConceptReaderPort {
     const response = readResponseBody(body);
     const concepts = readProposals(response, passages);
     const anchorsRejected = readAnchorsRejected(response);
+    const { relations, malformed } = readRelationProposals(response, concepts);
     return {
       concepts,
-      relations: readRelationProposals(response, concepts),
+      relations,
       ...(anchorsRejected !== undefined ? { anchorsRejected } : {}),
+      ...(malformed > 0 ? { relationsMalformed: malformed } : {}),
     };
   }
 }
@@ -377,16 +379,30 @@ function passageShownAs(
 function readRelationProposals(
   response: Record<string, unknown>,
   concepts: readonly ProposedConcept[],
-): readonly ProposedRelation[] {
+): { readonly relations: readonly ProposedRelation[]; readonly malformed: number } {
   const rawRelations = readResult(response).relations;
-  if (rawRelations === undefined) return [];
+  if (rawRelations === undefined) return { relations: [], malformed: 0 };
   if (!Array.isArray(rawRelations)) {
     throw new WorkerConceptReaderError(
       'WorkerConceptReader: the Worker response carried a `result.relations` that was not an array.',
     );
   }
 
-  return rawRelations.map((raw, index) => toProposedRelation(raw, concepts, index));
+  // `ol-egov.141.89.3.48`: one malformed relation costs that relation, never the read. It is
+  // skipped and counted (`ConceptReadResponse.relationsMalformed`, counts only); the concepts and
+  // every well-formed relation stand. A non-array `relations` field above stays a whole-response
+  // failure — there is no per-relation unit to keep.
+  const relations: ProposedRelation[] = [];
+  let malformed = 0;
+  rawRelations.forEach((raw, index) => {
+    try {
+      relations.push(toProposedRelation(raw, concepts, index));
+    } catch (error) {
+      if (!(error instanceof WorkerConceptReaderError)) throw error;
+      malformed += 1;
+    }
+  });
+  return { relations, malformed };
 }
 
 const PER_DOCUMENT_RELATION_TYPES: ReadonlySet<string> = PER_DOCUMENT_EMITTABLE_TYPES;

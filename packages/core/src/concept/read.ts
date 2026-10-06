@@ -237,6 +237,14 @@ export interface ConceptReadResponse {
    * (`[D-294]`, `[D-326]`).
    */
   readonly anchorsRejected?: number;
+  /**
+   * `ol-egov.141.89.3.48`: how many relations in this response the adapter could not use
+   * (no or unknown type, an index outside the concepts returned, no numeric confidence) and
+   * skipped rather than failing the whole read. **Optional**, absent folds as `0`. `readConcepts`
+   * folds it into `ConceptRead.relationsDropped` beside the relations reconciliation drops. A
+   * count only: never a persisted field, never a relation's content.
+   */
+  readonly relationsMalformed?: number;
 }
 
 /**
@@ -1668,6 +1676,8 @@ export async function readConcepts(
   // `?? 0` fallback would already cover a missing entry too, but writing the
   // entry keeps this map's shape the same as `calls`' own.
   const anchorsRejectedBySource = new Map<VaultPath, number>();
+  // `ol-egov.141.89.3.48`: relations a reader skipped as malformed, folded into `relationsDropped`.
+  let relationsMalformed = 0;
   try {
     for (const { sourcePath, batch } of documentBatches) {
       const response = await reader.read({ passages: batch });
@@ -1676,6 +1686,7 @@ export async function readConcepts(
         for (const relation of response.relations)
           proposedRelations.push({ ...relation, sourcePath });
       }
+      relationsMalformed += response.relationsMalformed ?? 0;
       anchorsRejectedBySource.set(
         sourcePath,
         (anchorsRejectedBySource.get(sourcePath) ?? 0) + (response.anchorsRejected ?? 0),
@@ -1840,7 +1851,7 @@ export async function readConcepts(
     outcome: 'read',
     concepts: sorted,
     relations: reconciled.relations,
-    relationsDropped: totalDropped(reconciled.dropped),
+    relationsDropped: totalDropped(reconciled.dropped) + relationsMalformed,
     coverage: buildCoverage(
       all,
       budgeted,
