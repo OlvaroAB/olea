@@ -504,9 +504,28 @@ export function masteryGapLine(row: GapRow): string {
     ? `Asked in ${paperCount(row.distinctSourceCount)}; you`
     : 'You';
   if (row.need?.basis === 'unknown') {
-    return `${lead} have ${instruments} built, but recall here is unknown — nothing has been checked yet, so this says nothing about what you know.`;
+    return `${lead} have ${instruments} built, but Olea has no recall evidence for it yet, so this says nothing about what you know.`;
   }
   return `${lead} have ${instruments} built but recall here hasn't caught up.`;
+}
+
+/**
+ * The sentence for a row whose earlier answers are excluded from the current
+ * recall reading because the material behind them changed (`[D-522]`,
+ * `[D-536]`; sheet v50 "Unknown-need copy"). It describes exclusion from the
+ * current reading only; her historical attainment is untouched and the
+ * sentence never says otherwise. **No caller yet**: `GapRow` carries no
+ * row-level signal for this case, so the lane that adds one to the row wires
+ * this in. A row with no past-paper basis uses the same form as
+ * {@link masteryGapLine} (pending `[D-538]`).
+ */
+export function changedPassageGapLine(row: GapRow): string {
+  const instruments =
+    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  const lead = hasPastPaperBasis(row)
+    ? `Asked in ${paperCount(row.distinctSourceCount)}; you`
+    : 'You';
+  return `${lead} have ${instruments} built, but the material behind your earlier answers has changed, so they don't count until it's checked again.`;
 }
 
 /**
