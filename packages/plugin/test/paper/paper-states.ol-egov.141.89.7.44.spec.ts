@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildIncompletePaperStatement,
   INCOMPLETE_PAPER_SENTENCE,
+  omittedPartLine,
   UNFINISHED_PAPER_SENTENCE,
 } from '../../src/paper/copy.js';
 import {
@@ -131,12 +132,31 @@ describe('the partial state', () => {
     expect(JSON.stringify(state.incompleteStatement)).not.toMatch(/held source|declared served/);
   });
 
-  it('the view renders an omitted part by its name alone', () => {
+  it('each omitted part reads with its ruled reason, and a code with none ruled reads by name alone ([D-519])', () => {
+    const statement = buildIncompletePaperStatement({ status: 'qualified-partial' }, [
+      slot('a', 'no-held-source', 'r'),
+      slot('b', 'demand-unsupported', 'r'),
+      slot('c', 'no-held-stimulus', 'r'),
+      slot('d', 'depends-on-empty-part', 'r'),
+      slot('e', 'generator-refused', 'r'),
+      slot('f', 'some-future-code' as PaperEmptySlot['reasonCode'], 'r'),
+    ]);
+    expect(statement?.omittedParts.map((p) => omittedPartLine(p))).toEqual([
+      'Concept a — Nothing of yours covers this yet.',
+      "Concept b — Olea can't yet write this kind of question.",
+      'Concept c — This question needs a case, extract, table or figure, and none of your material supplies one.',
+      'Concept d — This part builds on an earlier part that could not be written.',
+      "Concept e — Olea couldn't write a question on this that stays within your material.",
+      'Concept f',
+    ]);
+  });
+
+  it('the view renders an omitted part through its ruled line', () => {
     const view = readFileSync(
       fileURLToPath(new URL('../../src/paper/view.ts', import.meta.url)),
       'utf8',
     );
-    expect(view).toMatch(/omitted\.createEl\('li', \{ text: part\.conceptName \}\)/);
+    expect(view).toMatch(/omitted\.createEl\('li', \{ text: omittedPartLine\(part\) \}\)/);
     expect(view).not.toMatch(/part\.reason|slot\.reason/);
     // The older empty-slot list is not drawn beside the statement, so no part is listed twice.
     expect(view).toMatch(/state\.incompleteStatement === null && state\.emptySlots\.length > 0/);

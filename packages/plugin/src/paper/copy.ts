@@ -105,9 +105,8 @@ export const INCOMPLETE_PAPER_SENTENCE =
 
 /**
  * One omitted part of a partial paper. It carries the machine reason code only: the slot's free-text
- * `reason` is developer prose (tiers, file paths, a generator's error) and never reaches her. The
- * clause lists each part "with its ruled reason", and no wording per code is ruled yet, so the view
- * shows the part's name alone until a ruling words each code (ol-egov.141.89.7.44).
+ * `reason` is developer prose (tiers, file paths, a generator's error) and never reaches her. What
+ * she reads for each code is `OMITTED_PART_REASONS` (`omittedPartLine`).
  */
 export interface OmittedPaperPart {
   readonly conceptName: string;
@@ -139,4 +138,26 @@ export function buildIncompletePaperStatement(
       .filter((slot) => slot.reasonCode !== 'rank-excluded')
       .map((slot) => ({ conceptName: slot.conceptName, reasonCode: slot.reasonCode })),
   };
+}
+
+/**
+ * `[D-519]` (vocabulary registry section 31): each omitted part's ruled reason, VERBATIM, by the
+ * reason code the paper records. Never edit these without the registry. `rank-excluded` has no row:
+ * a part set aside by rank is extent, never listed. A code with no row reads by name alone.
+ */
+export const OMITTED_PART_REASONS: Readonly<Record<string, string>> = Object.freeze({
+  'no-held-source': 'Nothing of yours covers this yet.',
+  'demand-unsupported': "Olea can't yet write this kind of question.",
+  'no-held-stimulus':
+    'This question needs a case, extract, table or figure, and none of your material supplies one.',
+  'depends-on-empty-part': 'This part builds on an earlier part that could not be written.',
+  'generator-refused': "Olea couldn't write a question on this that stays within your material.",
+});
+
+/** The line she reads for one omitted part: its name, then its ruled reason when one is ruled. */
+export function omittedPartLine(part: OmittedPaperPart): string {
+  const reason = Object.hasOwn(OMITTED_PART_REASONS, part.reasonCode)
+    ? OMITTED_PART_REASONS[part.reasonCode]
+    : undefined;
+  return reason === undefined ? part.conceptName : `${part.conceptName} — ${reason}`;
 }

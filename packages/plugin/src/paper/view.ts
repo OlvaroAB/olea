@@ -39,6 +39,7 @@ import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
+  omittedPartLine,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
 import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
@@ -222,8 +223,8 @@ export class PaperView extends ItemView {
       if (state.incompleteStatement.omittedParts.length > 0) {
         const omitted = incomplete.createEl('ul');
         for (const part of state.incompleteStatement.omittedParts) {
-          // The name only: no reason wording is ruled yet, and the recorded reason is developer prose.
-          omitted.createEl('li', { text: part.conceptName });
+          // Its ruled reason (`[D-519]`), never the recorded reason, which is developer prose.
+          omitted.createEl('li', { text: omittedPartLine(part) });
         }
       }
     }
