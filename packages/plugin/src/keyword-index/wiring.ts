@@ -34,6 +34,25 @@
  * this change keeps a declared transcript's old note-shaped blocks until that file is next
  * modified or a rebuild runs (the cache is deletable, D-006).
  *
+ * **Registered binary sources (`ol-egov.141.89.1.95`).** `deps.registeredFiles` is her registered
+ * documents, folded from the "source registered" events in her log (`main.ts` passes
+ * `projectRegisteredFiles` over `readReviewLogHistory`, the same projection the grove, the plan,
+ * the session builder and the registry read). Given it, the engine indexes those PDFs, decks and
+ * documents beside her notes, each block carrying the citation pipeline's page or slide anchor,
+ * and keeps them current from the same watch (see `KeywordIndexEngine`'s module doc). On this
+ * wiring's side:
+ *  - the first-run rebuild above includes them;
+ *  - every load then runs one `syncRegisteredSources` in the background
+ *    (`registeredSourcesSynced`), so plugin load never waits on extraction: on a reload that
+ *    trusts a populated index, a registered file the persisted index lacks (one registered on
+ *    another device, or registered before this change shipped) is extracted then, and one no
+ *    longer registered leaves; one already indexed is trusted, like a note. After a first-run
+ *    rebuild it finds nothing to do, unless that rebuild could not read her log;
+ *  - `syncRegisteredSources` is what a registration calls (S1 in the grove, S2 in the file menu),
+ *    since her event log lives in a dot-folder that raises no vault event.
+ * Only where the drain runs (`capability.canDrain`): extraction is the CPU work D-002 keeps off
+ * mobile, so on a device that cannot drain the index stays notes and transcripts, as before.
+ *
  * **What this does not attempt.** Catching up on vault edits made while
  * Obsidian was closed, on a different device, requires either a full rebuild
  * every launch (real CPU cost on every start, including mobile) or some
@@ -48,6 +67,8 @@ import {
   type DeviceCapability,
   KeywordIndexEngine,
   type KeywordIndexStore,
+  type RegisteredFileSpec,
+  type RegisteredSourcesSync,
   type VaultEvent,
   type VaultSource,
 } from 'olea-core';
@@ -73,12 +94,26 @@ export interface KeywordIndexWiringDeps {
    * (`main.ts` uses `Component.register`).
    */
   readonly watch: (handler: (event: VaultEvent) => void) => () => void;
+  /**
+   * `ol-egov.141.89.1.95`: her registered sources, read fresh on each call (production: the
+   * "source registered" events folded by `projectRegisteredFiles`). Omitted, the index holds notes
+   * and transcripts only, as before. Ignored where `capability.canDrain` is false.
+   */
+  readonly registeredFiles?: () => Promise<readonly RegisteredFileSpec[]>;
 }
 
 export interface KeywordIndexWiring {
   readonly engine: KeywordIndexEngine;
   /** Stops the engine from applying further vault events. Call on unload. */
   readonly unsubscribe: () => void;
+  /**
+   * `ol-egov.141.89.1.95`: brings the index's registered binaries in line with her registered
+   * sources (`KeywordIndexEngine.syncRegisteredSources`). A registration calls it. Never rejects:
+   * a failure is logged by name and resolves `null`.
+   */
+  readonly syncRegisteredSources: () => Promise<RegisteredSourcesSync | null>;
+  /** The background sync every load starts (see the module doc). Never rejects; `null` when there is nothing to sync from. */
+  readonly registeredSourcesSynced: Promise<RegisteredSourcesSync | null>;
 }
 
 /**
@@ -90,7 +125,12 @@ export interface KeywordIndexWiring {
 export async function buildKeywordIndexWiring(
   deps: KeywordIndexWiringDeps,
 ): Promise<KeywordIndexWiring> {
-  const engine = await KeywordIndexEngine.create({ vault: deps.vault, store: deps.store });
+  const registeredFiles = deps.capability.canDrain ? deps.registeredFiles : undefined;
+  const engine = await KeywordIndexEngine.create({
+    vault: deps.vault,
+    store: deps.store,
+    ...(registeredFiles !== undefined ? { registeredFiles } : {}),
+  });
 
   if (engine.toPersisted().documents.length === 0 && deps.capability.canDrain) {
     // Fire-and-forget from this function's own perspective would leave the
@@ -106,5 +146,21 @@ export async function buildKeywordIndexWiring(
     void engine.applyEvent(event);
   });
 
-  return { engine, unsubscribe };
+  const syncRegisteredSources = async (): Promise<RegisteredSourcesSync | null> => {
+    if (registeredFiles === undefined) return null;
+    try {
+      return await engine.syncRegisteredSources();
+    } catch (error) {
+      // D-005: the error's name only; a path or a passage can ride in a message.
+      console.error(
+        'Olea: could not bring registered sources into the keyword index',
+        error instanceof Error ? error.name : 'unknown',
+      );
+      return null;
+    }
+  };
+  // In the background: plugin load never waits on extraction (see the module doc).
+  const registeredSourcesSynced = syncRegisteredSources();
+
+  return { engine, unsubscribe, syncRegisteredSources, registeredSourcesSynced };
 }

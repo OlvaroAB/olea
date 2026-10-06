@@ -296,6 +296,30 @@ describe('the keyword index store is actually constructed (ol-tuvx)', () => {
   });
 });
 
+describe('registered binary sources reach the keyword index (ol-egov.141.89.1.95)', () => {
+  // The composer and the engine are tested against fakes (`test/keyword-index/
+  // registered-binaries.ol-egov.141.89.1.95.spec.ts`); these are the source-level checks that
+  // production hands them her real registrations and tells them when one is made.
+
+  it('passes her registered sources, folded from her log, to the keyword index wiring', () => {
+    expect(main).toMatch(
+      /registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\)/,
+    );
+  });
+
+  it('tells the index after a registration from the file menu (S2)', () => {
+    expect(main).toMatch(
+      /onRegistered: \(\) => \{[^}]*void this\.keywordIndex\?\.syncRegisteredSources\(\);/,
+    );
+  });
+
+  it('tells the index after a registration from the grove (S1)', () => {
+    expect(main).toMatch(
+      /registerSource: async \(input\) => \{\s*await provider\.registerSource\(input\);\s*void this\.keywordIndex\?\.syncRegisteredSources\(\);/,
+    );
+  });
+});
+
 describe('a vault-read failure while building the keyword index never crashes onload (ol-egov.141.89.10.75)', () => {
   // `keyword-index/wiring.ts`'s own rebuild-once step is a real vault walk
   // with no handler of its own — before this bead, a failing read there
@@ -312,7 +336,7 @@ describe('a vault-read failure while building the keyword index never crashes on
 
   it('wraps the construction in try/catch, degrading to the already-handled null state on failure', () => {
     expect(main).toMatch(
-      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
+      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*(?:\/\/[^\n]*\n\s*)*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
     );
   });
 
