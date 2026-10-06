@@ -29,6 +29,8 @@ export interface DocumentReadingBasis {
   readonly unitsRead: number;
   /** Units the manifest names. */
   readonly unitsTotal: number;
+  /** The distinct pages the manifest names, ascending: what a delivery must carry to be the whole revision. Optional so a basis built without a manifest (a test) stays valid; absent means no delivery can be shown to be the whole revision. */
+  readonly pages?: readonly number[];
 }
 
 /** The basis the manifest supports, or `null` when it names no unit. */
@@ -41,5 +43,6 @@ export function documentReadingBasisFromManifest(
     revisionDigest: manifest.revisionDigest,
     unitsRead,
     unitsTotal: manifest.entries.length,
+    pages: [...new Set(manifest.entries.map((entry) => entry.page))].sort((a, b) => a - b),
   };
 }

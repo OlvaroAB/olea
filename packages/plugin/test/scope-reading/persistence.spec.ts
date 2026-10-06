@@ -85,7 +85,10 @@ const paper = (over: Partial<ExtractionRecordInput> = {}): ExtractionRecordInput
 describe('which state an extraction is: recorded, read-states-nothing, or partly read', () => {
   it('records declarations found over a fully read objectives document as recorded, with the reader provenance', async () => {
     const { persistence } = make();
-    expect(await persistence.recordExtraction(objectives())).toEqual({ state: 'recorded' });
+    expect(await persistence.recordExtraction(objectives())).toMatchObject({
+      state: 'recorded',
+      stamp: STAMP,
+    });
     const reading = await persistence.readDocument(OBJ_REF);
     expect(reading.state).toMatchObject({
       status: 'known',
@@ -96,7 +99,7 @@ describe('which state an extraction is: recorded, read-states-nothing, or partly
 
   it('records nothing found over a document read IN FULL as read-states-nothing: an empty result', async () => {
     const { persistence } = make();
-    expect(await persistence.recordExtraction(objectives({ declarationCount: 0 }))).toEqual({
+    expect(await persistence.recordExtraction(objectives({ declarationCount: 0 }))).toMatchObject({
       state: 'read-states-nothing',
     });
     expect((await persistence.readDocument(OBJ_REF)).state).toMatchObject({
@@ -109,7 +112,7 @@ describe('which state an extraction is: recorded, read-states-nothing, or partly
     const result = await persistence.recordExtraction(
       objectives({ declarationCount: 0, coverage: { unitsRead: 2, unitsTotal: 5 } }),
     );
-    expect(result).toEqual({ state: 'partly-read' });
+    expect(result).toMatchObject({ state: 'partly-read' });
     expect((await persistence.readDocument(OBJ_REF)).state).toMatchObject({
       state: { kind: 'partly-read', unitsRead: 2, unitsTotal: 5 },
     });
@@ -139,7 +142,9 @@ describe('which state an extraction is: recorded, read-states-nothing, or partly
 
   it('an extraction that finds no structure in a fully read paper is read-states-nothing and writes no structure', async () => {
     const { persistence } = make();
-    expect(await persistence.recordExtraction(paper({ paperStructure: NO_STRUCTURE }))).toEqual({
+    expect(
+      await persistence.recordExtraction(paper({ paperStructure: NO_STRUCTURE })),
+    ).toMatchObject({
       state: 'read-states-nothing',
     });
     expect((await persistence.readDocument(PAPER_REF)).structure.status).toBe('absent');
@@ -263,5 +268,88 @@ describe('F7.4: the files are Olea layer records the export and the full delete 
     const mine = found.filter((path) => path.includes('/readings/'));
     expect(mine.length).toBe(2);
     for (const path of mine) expect(isInOleaLayerRole(path, 'record')).toBe(true);
+  });
+});
+
+describe('the structure id, the part-demand writer and the alignment writer (ol-egov.141.89.7.52)', () => {
+  it('returns the structure record id and the stored reading, and the same id for an unchanged structure', async () => {
+    const { persistence } = make();
+    const first = await persistence.recordExtraction(paper());
+    expect(first.structure?.structureId).toEqual(expect.any(String));
+    expect(first.structure?.reading.parts).toBeUndefined();
+    const again = await persistence.recordExtraction(paper());
+    expect(again.structure?.structureId).toBe(first.structure?.structureId);
+    expect((await persistence.recordExtraction(objectives())).structure).toBeUndefined();
+  });
+
+  it('writes a part demand with the task and the answer stamp as provenance, against the structure id', async () => {
+    const { persistence } = make();
+    const { structure } = await persistence.recordExtraction(paper());
+    const demand = { status: 'decided', demand: 'calculate', refs: [1] } as const;
+    const first = await persistence.recordPartDemand({
+      ref: PAPER_REF,
+      structureId: structure?.structureId as string,
+      partId: 'p1',
+      demand,
+      stamp: STAMP,
+    });
+    expect(first.appended).toBe(true);
+    const held = [...(await persistence.load()).partDemands.values()][0];
+    expect(held?.payload).toMatchObject({
+      partId: 'p1',
+      structureId: structure?.structureId,
+      provenance: { task: 'demand.classify.v1', promptVersion: '1.1.0', modelId: 'model-a' },
+    });
+  });
+
+  it("writes a course's alignment results in one batch, a pending one without provenance", async () => {
+    const { persistence } = make();
+    const digests = {
+      closedList: 'sha256:a',
+      coverage: 'sha256:b',
+      batchPlan: 'sha256:c',
+      frozenConfiguration: 'sha256:d',
+    };
+    const coverage = { unitsNotRead: [], pairsNotSent: [] };
+    const out = await persistence.recordAlignmentResults({
+      ref: OBJ_REF,
+      courseId: 'TESTC1',
+      digests,
+      results: [
+        {
+          conceptKey: 'concept-key1:a',
+          result: { kind: 'aligned', recordIds: ['o1'], refs: [1] },
+          coverage,
+          provenance: { task: 'outcomes.align.v1', ...STAMP },
+        },
+        {
+          conceptKey: 'concept-key1:b',
+          result: { kind: 'pending', reason: 'unavailable' },
+          coverage,
+        },
+      ],
+    });
+    expect(out).toEqual({ appended: 2, unchanged: 0 });
+    const held = [...(await persistence.load()).alignments.values()].map((e) => e.payload);
+    expect(held.find((p) => p.conceptKey === 'concept-key1:a')?.provenance).toEqual({
+      task: 'outcomes.align.v1',
+      promptVersion: '1.1.0',
+      modelId: 'model-a',
+    });
+    expect(held.find((p) => p.conceptKey === 'concept-key1:b')?.provenance).toBeUndefined();
+    await expect(
+      persistence.recordAlignmentResults({
+        ref: OBJ_REF,
+        courseId: 'TESTC1',
+        digests,
+        results: [
+          {
+            conceptKey: 'concept-key1:c',
+            result: { kind: 'not-aligned', reason: 'searched' },
+            coverage,
+          },
+        ],
+      }),
+    ).rejects.toThrow(/provenance/);
   });
 });
