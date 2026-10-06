@@ -35,29 +35,26 @@ const base = (over: Partial<FeedbackTemplateInput> = {}): FeedbackTemplateInput 
 });
 
 describe('renderExplainBackFeedback', () => {
-  it('names exactly its own verdict, deterministically', () => {
-    const texts = {
-      correct: renderExplainBackFeedback(base({ verdict: 'correct' })),
-      partial: renderExplainBackFeedback(base({ verdict: 'partial' })),
-      incorrect: renderExplainBackFeedback(base({ verdict: 'incorrect' })),
-    };
-    expect(texts.correct).toBe('This explanation was marked correct.');
-    expect(texts.partial).toBe('This explanation was marked partly correct.');
-    expect(texts.incorrect).toBe('This explanation was marked incorrect.');
-    expect(renderExplainBackFeedback(base({ verdict: 'correct' }))).toBe(texts.correct);
-    // the three verdict lines are distinct and none is a substring-confusion of another
-    expect(texts.partial).not.toContain('marked correct');
-    expect(texts.partial).not.toContain('marked incorrect');
-    expect(texts.correct).not.toContain('partly');
+  it('renders no verdict and no grading word for any verdict, deterministically', () => {
+    const issues = [OMISSION, ERROR, CONFUSION];
+    for (const verdict of ['correct', 'partial', 'incorrect'] as const) {
+      const input = base({ verdict, citedIssues: issues, misconceptionCandidates: [CANDIDATE] });
+      const text = renderExplainBackFeedback(input);
+      expect(text).toBe(renderExplainBackFeedback(input));
+      expect(text.toLowerCase()).not.toMatch(/correct|partly|partial|incorrect|marked|verdict/);
+      // the verdict never changes the text
+      expect(text).toBe(renderExplainBackFeedback({ ...input, verdict: 'correct' }));
+      expect(renderExplainBackFeedback(base({ verdict }))).toBe('');
+    }
   });
 
   it('renders each finding once, in order, labelled by kind', () => {
     const text = renderExplainBackFeedback(base({ citedIssues: [CONFUSION, OMISSION, ERROR] }));
     const lines = text.split('\n');
-    expect(lines).toHaveLength(4);
-    expect(lines[1]).toBe('- Mixed up: The answer treats the pump and the tank as one part.');
-    expect(lines[2]).toBe('- Missing: The answer never says why the pump needs a valve.');
-    expect(lines[3]).toBe(
+    expect(lines).toHaveLength(3);
+    expect(lines[0]).toBe('- Mixed up: The answer treats the pump and the tank as one part.');
+    expect(lines[1]).toBe('- Missing: The answer never says why the pump needs a valve.');
+    expect(lines[2]).toBe(
       '- Mistaken: The answer says the valve opens inward. You wrote: "the valve opens inward".',
     );
     for (const d of [CONFUSION, OMISSION].map((i) => i.description)) {
@@ -78,20 +75,18 @@ describe('renderExplainBackFeedback', () => {
   it('renders a candidate with or without findings, never its ids', () => {
     const only = renderExplainBackFeedback(base({ misconceptionCandidates: [CANDIDATE] }));
     expect(only).toBe(
-      'This explanation was marked partly correct.\n- A belief to check: The valve stores pressure. The passage says: The valve only directs flow.',
+      '- A belief to check: The valve stores pressure. The passage says: The valve only directs flow.',
     );
     expect(only).not.toContain('concept-opaque');
     const both = renderExplainBackFeedback(
       base({ citedIssues: [OMISSION], misconceptionCandidates: [CANDIDATE] }),
     );
-    expect(both.split('\n')).toHaveLength(3);
+    expect(both.split('\n')).toHaveLength(2);
     expect(renderExplainBackFeedback(base({ citedIssues: [OMISSION] }))).not.toContain('belief');
   });
 
-  it('with no findings and no candidates is the verdict line alone', () => {
-    expect(renderExplainBackFeedback(base({ verdict: 'incorrect' }))).toBe(
-      'This explanation was marked incorrect.',
-    );
+  it('with no findings and no candidates is an empty string', () => {
+    expect(renderExplainBackFeedback(base({ verdict: 'incorrect' }))).toBe('');
   });
 
   it('skips a finding with no text rather than printing an empty label', () => {
@@ -101,7 +96,7 @@ describe('renderExplainBackFeedback', () => {
         misconceptionCandidates: [{ ...CANDIDATE, statement: '', correction: '' }],
       }),
     );
-    expect(text).toBe('This explanation was marked partly correct.');
+    expect(text).toBe('');
   });
 
   it('ignores the Worker free-text feedback and adds no sentence of its own beyond the fixed ones', () => {
@@ -115,7 +110,6 @@ describe('renderExplainBackFeedback', () => {
     // strip everything a finding/candidate/fixed label carries; nothing may remain
     let rest = renderExplainBackFeedback(a);
     for (const piece of [
-      'This explanation was marked partly correct.',
       'Mistaken:',
       ERROR.description,
       'You wrote:',

@@ -12,14 +12,16 @@
  * `feedback` through. Switching the caller changes what she reads and is held for review.
  *
  * Rules the function keeps (each pinned by `feedbackTemplate.spec.ts`):
- * - It adds no claim of its own. Every sentence is the verdict line, a fixed label, or text a
+ * - It adds no claim of its own. Every sentence is a fixed label, or text a
  *   finding or candidate carries.
- * - The verdict line names the verdict field's own value and nothing else.
+ * - It renders no verdict and no word that grades the attempt as a whole (`[D-217]`): `verdict`
+ *   is accepted for the caller's convenience and never rendered. No findings and no candidates
+ *   gives an empty string.
  * - Her words are quoted only from a finding's `answerSpans`; the passage is never quoted
  *   beyond what a finding or candidate already says.
  * - Candidate `concept` / `confusedWith` are ids, not wording: never shown.
  * - Deterministic: same input, same text. No clock, no randomness, no locale.
- * - The words it adds itself (marked, correct, partly, incorrect, missing, mistaken, mixed up,
+ * - The words it adds itself (missing, mistaken, mixed up,
  *   you wrote, a belief to check, the passage says) are plain English and none is in the
  *   vocabulary registry's forbidden or retired lists.
  */
@@ -31,12 +33,6 @@ export interface FeedbackTemplateInput {
   readonly citedIssues: readonly CitedIssue[];
   readonly misconceptionCandidates: readonly MisconceptionCandidate[];
 }
-
-const VERDICT_LINE: Record<FeedbackTemplateInput['verdict'], string> = {
-  correct: 'This explanation was marked correct.',
-  partial: 'This explanation was marked partly correct.',
-  incorrect: 'This explanation was marked incorrect.',
-};
 
 const KIND_LABEL: Record<CitedIssueKind, string> = {
   omission: 'Missing',
@@ -60,7 +56,7 @@ function ensureStop(text: string): string {
 
 /** Renders the feedback text. Findings first, in the order given, then candidates in the order given. */
 export function renderExplainBackFeedback(input: FeedbackTemplateInput): string {
-  const lines: string[] = [VERDICT_LINE[input.verdict]];
+  const lines: string[] = [];
 
   for (const issue of input.citedIssues) {
     const description = clean(issue.description);
