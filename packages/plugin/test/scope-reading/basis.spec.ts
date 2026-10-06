@@ -30,7 +30,15 @@ describe('the reading basis a manifest gives the scope-reading store', () => {
       revisionDigest: 'rev-9',
       unitsRead: 1,
       unitsTotal: 1,
+      pages: [1],
     });
+  });
+
+  it('names the distinct pages the manifest holds, ascending, so a delivery can be shown to be the whole revision', () => {
+    const basis = documentReadingBasisFromManifest(
+      manifest([entry(3, READ), entry(1, READ), entry(3, READ), entry(2, { kind: 'unavailable' })]),
+    );
+    expect(basis?.pages).toEqual([1, 2, 3]);
   });
 
   it('a fully read document has every unit read', () => {
@@ -74,8 +82,13 @@ describe('the reading basis a manifest gives the scope-reading store', () => {
     expect(documentReadingBasisFromManifest(manifest([]))).toBeNull();
   });
 
-  it('holds counts and a digest only: no path, text or reading reason travels', () => {
+  it('holds counts, page numbers and a digest only: no path, text or reading reason travels', () => {
     const basis = documentReadingBasisFromManifest(manifest([entry(1, READ)]));
-    expect(Object.keys(basis ?? {}).sort()).toEqual(['revisionDigest', 'unitsRead', 'unitsTotal']);
+    expect(Object.keys(basis ?? {}).sort()).toEqual([
+      'pages',
+      'revisionDigest',
+      'unitsRead',
+      'unitsTotal',
+    ]);
   });
 });
