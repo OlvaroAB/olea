@@ -233,6 +233,7 @@ import type {
   ConceptRelation,
   DisputeLogRecord,
   InstrumentCitation,
+  InstrumentValidityProjection,
   OracleMasteryState,
   ReplayResult,
   Scheduler,
@@ -289,6 +290,7 @@ import type { CompositionProvenance } from '../../../core/src/study-session/comp
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
 // see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
 // resolver from `resolveCitationFreshness` above, never a shared one.
+import { rankedConceptKeys } from '../gap/provider.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
   hasAssessmentSource,
@@ -987,6 +989,30 @@ async function disputesFromFiles(
 }
 
 /**
+ * `[D-371]` session half (`ol-egov.141.89.9.97`): per concept key, whether a correct quiz answer on
+ * an instrument not proven invalid exists. The session's recognition credit used to read any past
+ * success (the mastery join's `tiersSucceeded.recognition`); this removes only the answers on
+ * defective instruments and changes nothing else (no recall-estimate threshold, no currency test,
+ * which are the gap view's own reading, `[D-521]`). Scoring follows the mastery fold: the record's
+ * subject is the first of its `conceptIds` (`[D-419]`), a success is any rating but `again`.
+ */
+function recognitionWithoutDefectiveCredit(
+  entries: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  validity: InstrumentValidityProjection,
+): ReadonlyMap<string, boolean> {
+  const credited = new Set<string>();
+  for (const entry of entries) {
+    if (entry.kind !== 'review' || entry.instrumentType !== 'mcq') continue;
+    if (entry.rating === null || entry.rating === 'again') continue;
+    if (validity.provenInvalid.has(entry.instrumentId)) continue;
+    const subject = entry.conceptIds[0];
+    if (subject !== undefined) credited.add(subject);
+  }
+  return new Map(conceptKeys.map((key) => [key, credited.has(key)]));
+}
+
+/**
  * `[SESS-8.4]` (`ol-egov.132.4`) — the ONE place a plugin assembles the
  * study-session composer's real input (the oracle chain, the gap view, her
  * review history, F2.19's two resolvers, A2.5's cached allocation) from a
@@ -1086,6 +1112,17 @@ export async function composeStudySessionForRequest(
     instrumentCountsByNotePath(enumeration.records),
   );
 
+  // `[D-371]` session half (`ol-egov.141.89.9.97`), ruled 2026-10-06 (sheet v50): remove recognition
+  // credit from defective instruments only. A correct answer on an instrument proven invalid
+  // (`projectInstrumentValidity`, the one validity fold) earns none; every other correct answer
+  // earns it as before, whatever its recall estimate. The gap view's recall-estimate threshold is
+  // deliberately not imported: that is a scheduling-policy change of its own (`[D-521]`).
+  const currentRecognition = recognitionWithoutDefectiveCredit(
+    entries,
+    rankedConceptKeys(ranking),
+    projectInstrumentValidity(entries, disputes),
+  );
+
   // `[D-521]` (ruled 2026-10-06): no `need` here, deliberately. Without it each row scores the
   // ranking's priority × credit, so the session is ordered by the ranking's additive blend (C5.10);
   // the product, relevance × need × credit, is the gap view's formula (`../gap/provider.ts`).
@@ -1094,6 +1131,7 @@ export async function composeStudySessionForRequest(
     assessments: edges.assessmentsRead.records,
     mastery,
     materialPresence,
+    currentRecognition,
     sourceCoverage: edges.tier3.sourceCoverage,
   });
 

@@ -173,4 +173,82 @@ describe('the session reads current evidence its own way, and the same evidence 
     // The same ranking underneath: one priority for one concept on both surfaces.
     expect(gapRow.priorityScore).toBeCloseTo(sessionRow.priorityScore, 12);
   });
+
+  /**
+   * `[D-371]`/`[D-338]` item 3 (`ol-egov.141.89.9.97`, F4.3): the session removes recognition credit
+   * from defective instruments only, never importing the gap view's recall threshold. A correct quiz answer on an item later
+   * suspended as defective earns no recognition credit; a suspension with no defect recorded
+   * (`[D-347]` as ruled) keeps it. Only which recognition counts changes, never the formula.
+   */
+  describe('the session credits only current recognition on a standing item ([D-371], ol-egov.141.89.9.97)', () => {
+    const QUIZ_ITEM = 'mcq:widget-theory:1';
+    const logLine = (conceptKey: string, line: Record<string, unknown>) =>
+      `${JSON.stringify({ conceptIds: [conceptKey], ...line })}\n`;
+    const quizAnswer = (conceptKey: string) =>
+      logLine(conceptKey, {
+        schemaVersion: 5,
+        kind: 'review',
+        eventId: 'q1',
+        timestamp: '2026-08-09T09:30:00-04:00',
+        instrumentId: QUIZ_ITEM,
+        instrumentType: 'mcq',
+        rating: 'good',
+        supportLevelShown: 'independent',
+        wasUnsure: false,
+        durationMs: 1200,
+        selectionContext: {
+          dueState: 'due',
+          examProximity: null,
+          yieldRank: null,
+          instrumentTypesOffered: ['mcq'],
+          planVersion: null,
+        },
+      });
+    const suspension = (conceptKey: string, reason: 'defect' | 'own-choice') =>
+      logLine(conceptKey, {
+        schemaVersion: 6,
+        kind: 'suspend',
+        eventId: 's-q1',
+        timestamp: '2026-08-09T10:00:00-04:00',
+        instrumentId: QUIZ_ITEM,
+        reason,
+      });
+
+    async function rowAfter(
+      extra: (conceptKey: string) => string,
+      scheduler: Scheduler = fixedRetrievabilityScheduler(1),
+    ) {
+      const { vault, conceptKey } = await reviewedCardWorld();
+      const path = '.olea/reviews/2026-08-09.olea-testdevice1.jsonl';
+      const base = await vault.read(path);
+      await vault.write(path, base + extra(conceptKey));
+      const [row] = await sessionRows(vault, scheduler);
+      if (row === undefined) throw new Error('expected a session row');
+      return row;
+    }
+
+    it('control: a correct, current quiz answer on a standing item earns the credit', async () => {
+      const row = await rowAfter(quizAnswer);
+      expect(row.readiness.applied).toBe(true);
+    });
+
+    it('REGRESSION (fails pre-fix): an answer on an item later suspended as defective earns no credit', async () => {
+      const row = await rowAfter((key) => quizAnswer(key) + suspension(key, 'defect'));
+      expect(row.readiness.applied).toBe(false);
+      expect(row.readiness.weight).toBe(1);
+    });
+
+    it('PIN ([D-371], ruled 2026-10-06): a correct answer below the retention target still earns the credit; only defective instruments lose it', async () => {
+      // Recall estimate 0.4, under the retention target: the gap view would not count this answer
+      // as current, but importing that threshold is a separate scheduling-policy change.
+      const row = await rowAfter(quizAnswer, fixedRetrievabilityScheduler(0.4));
+      expect(row.readiness.applied).toBe(true);
+      expect(row.readiness.weight).toBeLessThan(1);
+    });
+
+    it('PIN ([D-347] as ruled): her own-choice suspension keeps the sound answer counting', async () => {
+      const row = await rowAfter((key) => quizAnswer(key) + suspension(key, 'own-choice'));
+      expect(row.readiness.applied).toBe(true);
+    });
+  });
 });
