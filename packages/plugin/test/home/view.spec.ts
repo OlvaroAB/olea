@@ -192,3 +192,34 @@ describe('HomeView Start — hands the steering she chose on Home to the start p
     expect(body).toMatch(/courseOrTopic: this\.courseOrTopic/);
   });
 });
+
+describe('HomeView.renderAvoidanceQuestion — "Practise it differently" is feedback only ([D-528], F4.6)', () => {
+  const START = VIEW.indexOf('private renderAvoidanceQuestion(');
+  const BODY = VIEW.slice(START, VIEW.indexOf('\n  }\n', START));
+
+  it('shows the before-tap line beside the option, in the same actions row', () => {
+    const buttonAt = BODY.indexOf('text: COURSE_AVOIDANCE_PRACTISE_ACTION');
+    const lineAt = BODY.indexOf('text: COURSE_AVOIDANCE_PRACTISE_BEFORE_TAP');
+    const dismissAt = BODY.indexOf('text: DISMISS_OFFER_ACTION');
+    expect(buttonAt).toBeGreaterThan(-1);
+    expect(lineAt).toBeGreaterThan(buttonAt);
+    expect(lineAt).toBeLessThan(dismissAt);
+    expect(BODY).toMatch(/actions\.createSpan\(/);
+  });
+
+  it('acknowledges once after the tap by replacing the card, and does not refresh the practice', () => {
+    expect(BODY).toMatch(/value === 'practise-differently'/);
+    expect(BODY).toMatch(/card\.empty\(\);/);
+    expect(BODY.match(/COURSE_AVOIDANCE_PRACTISE_ACKNOWLEDGEMENT/g)).toHaveLength(1);
+    const branch = BODY.slice(
+      BODY.indexOf("value === 'practise-differently'"),
+      BODY.indexOf('void this.refresh()'),
+    );
+    expect(branch).toMatch(/return;/);
+  });
+
+  it('still records the request through onAnswer, with the answer unchanged', () => {
+    expect(BODY).toMatch(/question\.onAnswer\(value\)/);
+    expect(BODY).toMatch(/answer\('practise-differently'\)/);
+  });
+});
