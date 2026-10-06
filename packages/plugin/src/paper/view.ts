@@ -39,6 +39,7 @@ import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
+  buildUndatedAssessmentCopy,
   omittedPartLine,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
@@ -146,12 +147,23 @@ export class PaperView extends ItemView {
       return;
     }
     if (state.kind === 'no-assessment-ahead') {
-      root.createEl('p', { text: buildNoAssessmentAheadCopy(state.course) });
+      root.createEl('p', {
+        text: state.undatedAssessment
+          ? buildUndatedAssessmentCopy(state.course)
+          : buildNoAssessmentAheadCopy(state.course),
+      });
       return;
     }
     if (state.kind === 'locked') {
       root.createEl('p', {
-        text: buildLockedCopy(state.course, state.daysUntilNearest, state.nearestAssessmentDue),
+        text: buildLockedCopy({
+          course: state.course,
+          daysUntilNearest: state.daysUntilNearest,
+          nearestAssessmentDue: state.nearestAssessmentDue,
+          coverage: state.coverage,
+          topicsNeeded: state.topicsNeeded ?? 0,
+          windowDays: state.windowDays,
+        }),
       });
       return;
     }
@@ -182,14 +194,16 @@ export class PaperView extends ItemView {
     try {
       result = await this.deps.requestPaper(course);
     } catch (error) {
-      // `[D-457]`: an outage kept the unfinished paper; she reads the ruled sentence and the same
-      // request she already used is offered again ("Ask again"). Any other failure is unchanged.
+      // `[D-457]`/`[D-532]`: an unfinished paper reads its ruled sentence (outage, or Olea updated)
+      // and the same request she already used is offered again ("Ask again"). Any other failure has
+      // no ruled wording: the request is offered again with no new sentence, and the failure still
+      // surfaces. The composing message never outlives the composition (ol-egov.141.89.7.63).
       const notice = unfinishedPaperNotice(error);
-      if (notice === null) throw error;
       root.empty();
       root.createEl('h2', { text: this.getDisplayText() });
-      root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
+      if (notice !== null) root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
       this.renderRequestButton(root, course);
+      if (notice === null) throw error;
       return;
     }
     this.justHandedOff.clear();

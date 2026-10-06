@@ -16,7 +16,7 @@
 import type { ExtractedUnit, OutcomeRecord, VaultSource, WorkerTaskTransport } from 'olea-core';
 import { runAlignmentDriver } from './alignment-driver.js';
 import type { DocumentReadingBasis } from './basis.js';
-import { runDemandDriver } from './demand-driver.js';
+import { inMemoryRefusalLedger, type PartRefusalLedger, runDemandDriver } from './demand-driver.js';
 import type { DocumentRef, RecordedExtraction, ScopeReadingPersistence } from './persistence.js';
 
 /**
@@ -26,6 +26,14 @@ import type { DocumentRef, RecordedExtraction, ScopeReadingPersistence } from '.
  * the ruling asks to bring back), then flipping this one value, or passing `drivers: { enabled: true, assessmentPaths }` from the `scopeReading` block in `main.ts` (the `assessmentPaths` reader is `resolveAssessments(vault, base).records.map(r => r.path)`).
  */
 export const SCOPE_READING_DRIVERS_ENABLED = false;
+
+/**
+ * The session's refusal count (`ol-egov.141.89.7.84`, `[D-534]` cost brief item 5), shared by the
+ * first-delivery path and the resume pass so a part or batch refused {@link REFUSED_PART_LIMIT} times
+ * is held back on every path. It lasts a session and is forgotten on restart: a count that survives
+ * one needs a stored field, which no lane adds without a ruling.
+ */
+export const sessionRefusals: PartRefusalLedger = inMemoryRefusalLedger();
 
 export interface ScopeReadingDriverInput {
   /** The instance `openScopeReadingWriter` opened. */
@@ -49,16 +57,19 @@ export interface ScopeReadingDriverInput {
   readonly vault: VaultSource;
   /** Registered assessment documents' paths, excluded as description sources. */
   readonly assessmentPaths?: ReadonlySet<string>;
+  /** Held-back parts and batches. Absent: the session ledger {@link sessionRefusals}. */
+  readonly refusals?: PartRefusalLedger;
 }
 
 export async function runScopeReadingDrivers(input: ScopeReadingDriverInput): Promise<void> {
+  const refusals = input.refusals ?? sessionRefusals;
   try {
-    await runDemandDriver(input);
+    await runDemandDriver({ ...input, refusals });
   } catch (error) {
     console.error('Olea: part demands were not read (ingestion unaffected)', { error });
   }
   try {
-    await runAlignmentDriver(input);
+    await runAlignmentDriver({ ...input, refusals });
   } catch (error) {
     console.error('Olea: alignment was not run (ingestion unaffected)', { error });
   }

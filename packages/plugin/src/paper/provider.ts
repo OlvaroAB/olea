@@ -35,6 +35,7 @@ import {
   type PaperGroundingLabel,
   type PaperHandoffResult,
   type PaperRecord,
+  paperDaysUntilDue,
   resolveAssessments,
   type VaultSource,
   writeInstrumentCitation,
@@ -45,6 +46,7 @@ import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { IncompletePaperStatement, PartialPaperStatement } from './copy.js';
 import {
+  AUTHORING_SPEC_CHANGED_SENTENCE,
   buildIncompletePaperStatement,
   buildPartialPaperStatement,
   UNFINISHED_PAPER_SENTENCE,
@@ -106,6 +108,8 @@ export interface PracticePaperReadyState {
 /** The coverage counts a locked paper may state (F4.11, `[D-252]`): counts and whether known, never a share. */
 export interface LockedCoverageCounts {
   readonly outcomeCount: number;
+  /** Declared outcomes with at least one attached concept: the count the unlock gate reads. */
+  readonly attachedOutcomeCount: number;
   readonly outcomeCoverageKnown: boolean;
   readonly conceptCount: number;
   readonly conceptCoverageKnown: boolean;
@@ -114,7 +118,12 @@ export interface LockedCoverageCounts {
 
 export type PracticePaperCourseState =
   /** F4.11: "the affordance is absent" — never present with a reason when nothing is ahead. */
-  | { readonly kind: 'no-assessment-ahead'; readonly course: string }
+  | {
+      readonly kind: 'no-assessment-ahead';
+      readonly course: string;
+      /** `[D-532]`: the course has an assessment record with no usable date (and none ahead), so the view explains it rather than saying there is none. */
+      readonly undatedAssessment: boolean;
+    }
   /** Present, with a reason (`copy.ts`'s `buildLockedCopy`) — see that function's doc for the F8.3 gap this composition cannot yet fill honestly. */
   | {
       readonly kind: 'locked';
@@ -128,6 +137,10 @@ export type PracticePaperCourseState =
        * states them is held for a ruling.
        */
       readonly coverage: LockedCoverageCounts;
+      /** `[D-532]`: the smallest declared-topic count with her material behind it that unlocks the paper, computed from the unlock gate; null when no scope is declared. */
+      readonly topicsNeeded: number | null;
+      /** `[D-532]`: the proximity window in days, read from the unlock gate. */
+      readonly windowDays: number;
     }
   /** Unlocked, not yet pulled — she has not yet invoked the one affordance. */
   | { readonly kind: 'unlocked-not-pulled'; readonly course: string }
@@ -147,6 +160,18 @@ export interface CreateLocalPracticePaperProviderDeps {
    */
   readonly generationPort: () => Promise<PaperSlotOutcomePort | null>;
   readonly now: () => Date;
+}
+
+/**
+ * The smallest whole number of declared topics that unlocks the paper: the least `t` with
+ * `t / topicCount >= gateShare`, using the gate's own comparison (`paper-unlock.ts`), never a float
+ * multiplication. Computed from the gate so a moved gate moves the sentence ([D-532], [D-255]).
+ */
+export function topicsNeededToUnlock(topicCount: number, gateShare: number): number {
+  for (let t = 1; t <= topicCount; t += 1) {
+    if (t / topicCount >= gateShare) return t;
+  }
+  return topicCount;
 }
 
 function isoToday(now: Date): string {
@@ -198,15 +223,27 @@ async function loadCourseState(
     coverage,
   );
 
-  if (unlock.nearestAssessment === null) return { kind: 'no-assessment-ahead', course };
+  if (unlock.nearestAssessment === null) {
+    // `[D-532]`: a record with no readable date is not the same as none ahead.
+    const undatedAssessment = courseAssessments.some(
+      (record) => record.due === undefined || paperDaysUntilDue(asOf, record.due) === null,
+    );
+    return { kind: 'no-assessment-ahead', course, undatedAssessment };
+  }
   if (!unlock.fires) {
     return {
       kind: 'locked',
       course,
       daysUntilNearest: unlock.daysUntilNearest ?? 0,
       nearestAssessmentDue: unlock.nearestAssessment.due,
+      topicsNeeded:
+        coverage.outcomeCoverageKnown === true
+          ? topicsNeededToUnlock(coverage.outcomeCount, unlock.coverageGateShare)
+          : null,
+      windowDays: unlock.proximityWindowDays,
       coverage: {
         outcomeCount: coverage.outcomeCount,
+        attachedOutcomeCount: coverage.attachedOutcomeCount,
         outcomeCoverageKnown: coverage.outcomeCoverageKnown === true,
         conceptCount: coverage.conceptCount,
         conceptCoverageKnown: coverage.conceptCoverageKnown === true,
@@ -263,12 +300,10 @@ export function buildReadyStateFromRecord(
  * holes because the service was down does not exist (only an explicitly qualified partial, a source
  * or capability gap, is ever handed over, and that is a `ready` state).
  *
- * **Data only, and the view is unchanged.** `paper/view.ts`'s `pullPaper` has no failure handling: a
- * rejected `requestPaper` leaves the "Composing" pane, exactly as a transport failure always has.
- * What she is told when a paper could not be finished is a student-visible surface whose clause has
- * to be verified before any wording is written (`ol-egov.141.89.7.5` records the gap), so this error
- * carries counts and an id and no words for her. Content-free (D-005): no concept, note or reason
- * string.
+ * **Data only.** This error carries counts and an id and no words for her; the view reads her
+ * sentence from `unfinishedPaperNotice` (`[D-457]`, `[D-532]`), and a request that ends in any error
+ * never leaves the composing pane (ol-egov.141.89.7.63). Content-free (D-005): no concept, note or
+ * reason string.
  */
 export class PracticePaperUnfinishedError extends Error {
   readonly course: string;
@@ -301,12 +336,13 @@ export class PracticePaperUnfinishedError extends Error {
  * `[D-457]`: the sentence she reads when a request ended unfinished, or null when the error is not
  * one she should be told that about. Only an outage (`'service-unavailable'`) keeps a paper that
  * "Ask again" continues; a journal set aside for another authoring specification starts afresh, so
- * the continue sentence would be untrue and is not shown for it.
+ * the continue sentence would be untrue and she reads `[D-532]`'s own sentence for it instead.
  */
 export function unfinishedPaperNotice(error: unknown): string | null {
-  return error instanceof PracticePaperUnfinishedError && error.reason === 'service-unavailable'
+  if (!(error instanceof PracticePaperUnfinishedError)) return null;
+  return error.reason === 'service-unavailable'
     ? UNFINISHED_PAPER_SENTENCE
-    : null;
+    : AUTHORING_SPEC_CHANGED_SENTENCE;
 }
 
 export interface PracticePaperViewDeps {

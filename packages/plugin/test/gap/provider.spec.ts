@@ -1485,7 +1485,7 @@ describe('createLocalGapProvider — need with its basis ([D-348], F4.3, ol-egov
 
     const line = gapRowLine(row);
     expect(line).toBe(masteryGapLine(row));
-    expect(line).toContain('recall here is unknown');
+    expect(line).toContain('Olea has no recall evidence for it yet');
     expect(line).toContain('this says nothing about what you know');
     expect(line).not.toMatch(DEFICIT_WORDING);
   });
@@ -1776,6 +1776,6 @@ describe('createLocalGapProvider — current readings apply one evidence rule ([
       fixedRetrievabilityScheduler(0.4),
     );
     expect(defective.need?.basis).toBe('unknown');
-    expect(gapRowLine(defective)).toContain('recall here is unknown');
+    expect(gapRowLine(defective)).toContain('Olea has no recall evidence for it yet');
   });
 });
