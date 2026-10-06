@@ -145,7 +145,7 @@ import {
   parseReviewLog,
   reviewLogPath,
 } from 'olea-core';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { COMPOSITION_LOG_FOLDER } from '../../../core/src/study-session/composition-log.js';
 import {
   type ObsidianDataHost,
@@ -207,12 +207,18 @@ const NOT_A_FIXTURE_NOTE: readonly VaultPath[] = ['README.md'];
  * Real wall-clock, read once and then frozen for the whole suite.
  *
  * Not a fixed literal date, and that is deliberate: `createVaultReviewLogPort`
- * timestamps each record from `new Date()` at write time (its doc says why —
- * the log records when the event happened), which also decides which daily file
- * it lands in. A frozen 2026 date in the panel and a real date in the log would
+ * timestamps each record from its clock at write time (its doc says why — the
+ * log records when the event happened), which also decides which daily file it
+ * lands in. A frozen 2026 date in the panel and a real date in the log would
  * make the round-trip assert across two different days, and the "streak now
  * shows today" claim would be untestable. One instant for both keeps the
  * session self-consistent.
+ *
+ * `[ol-egov.141.89.10.124]`: that instant is handed to the log port too
+ * (`createVaultReviewLogPort(source, DEVICE, clock.now)`). Left on its default
+ * live clock, a run crossing midnight stamped a record the day after the
+ * session clock, and the next review threw FSRS "Invalid delta_t -1". The
+ * last describe block below pins that with a Date-only fake clock.
  */
 const NOW = new Date();
 const TODAY = calendarDayFromLocalDate(NOW);
@@ -425,7 +431,7 @@ function ports(): {
   const touched: string[] = [];
   const logged: LoggedReview[] = [];
   const source = vault();
-  const realReviewLog = createVaultReviewLogPort(source, DEVICE);
+  const realReviewLog = createVaultReviewLogPort(source, DEVICE, clock.now);
   const reviewLog: ReviewLogPort = {
     async recordReview(input) {
       logged.push({
@@ -1164,7 +1170,7 @@ describe('[SESS-17] (ol-may1) — cloze and mcq survive the real loop too (claim
     readonly logged: LoggedReview[];
   } {
     const capturedLogged: LoggedReview[] = [];
-    const realReviewLog = createVaultReviewLogPort(source, DEVICE);
+    const realReviewLog = createVaultReviewLogPort(source, DEVICE, clock.now);
     const reviewLog: ReviewLogPort = {
       async recordReview(input) {
         capturedLogged.push({
@@ -1300,4 +1306,89 @@ describe('[SESS-17] (ol-may1) — cloze and mcq survive the real loop too (claim
     );
     expect(reviews.map((record) => record.rating)).toEqual(logged.map((item) => item.rating));
   });
+});
+
+describe('[ol-egov.141.89.10.124] a run that crosses midnight keeps one clock for the session and the log', () => {
+  // Session clock pinned at 23:59:58 local; the system clock then steps past
+  // midnight between rounds, exactly what a slow real run does.
+  const BEFORE_MIDNIGHT = new Date(2026, 9, 6, 23, 59, 58);
+  const AFTER_MIDNIGHT = new Date(2026, 9, 7, 0, 0, 2);
+
+  async function threeRounds(logClock: (() => Date) | undefined): Promise<void> {
+    const sessionNow = new Date(BEFORE_MIDNIGHT);
+    const root = await mkdtemp(
+      join(process.env.OLEA_E2E_TMPDIR ?? tmpdir(), 'olea-review-e2e-midnight-'),
+    );
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      await cp(CROSS_FORMAT_VAULT, root, { recursive: true });
+      const quizPath = join(root, '02 Assignments', 'Quiz 1.md');
+      const futureDue = new Date(sessionNow.getTime() + 45 * 24 * 60 * 60 * 1000)
+        .toISOString()
+        .slice(0, 10);
+      await writeFile(
+        quizPath,
+        (await readFile(quizPath, 'utf8')).replace('due: 2999-01-01', `due: ${futureDue}`),
+        'utf8',
+      );
+      const source = new FolderSource(root);
+      for (const [round, systemTime] of [
+        [1, BEFORE_MIDNIGHT],
+        [2, AFTER_MIDNIGHT],
+        [3, AFTER_MIDNIGHT],
+      ] as const) {
+        vi.setSystemTime(systemTime);
+        const opened = await openReviewSession({
+          vault: source,
+          scheduler: createFsrsScheduler(),
+          deviceId: DEVICE,
+          ports: {
+            reviewLog: createVaultReviewLogPort(source, DEVICE, logClock),
+            suspendPort: { async suspend() {} },
+            editPort: { async edit() {} },
+            noteExists: createVaultNoteExistsPort(source),
+            clock: { now: () => sessionNow },
+            draftAcceptPort: {
+              accept() {
+                throw new Error('midnight: no draft item');
+              },
+              reject() {
+                throw new Error('midnight: no draft item');
+              },
+            },
+          },
+          random: seeded(20260814),
+          studySessionHolder: createStudySessionHolder(),
+          composeDefaultStudySession: async () => {
+            const result = await composeStudySessionForRequest(
+              {
+                vault: source,
+                deviceId: DEVICE,
+                settingsHost: new FakeSettingsHost(),
+                now: () => sessionNow,
+                scheduler: createFsrsScheduler(),
+              },
+              { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
+              sessionNow,
+            );
+            return result?.composed.full ?? null;
+          },
+        });
+        if (!opened.ok) throw opened.error;
+        await driveToCompletion(opened.session, round);
+      }
+    } finally {
+      vi.useRealTimers();
+      await rm(root, { recursive: true, force: true });
+    }
+  }
+
+  it('the old wiring (log port on its live default clock) throws Invalid delta_t', async () => {
+    await expect(threeRounds(undefined)).rejects.toThrow(/delta_t/);
+  }, 120_000);
+
+  it('one clock for the session and the log: three rounds across midnight all complete', async () => {
+    const sessionNow = new Date(BEFORE_MIDNIGHT);
+    await expect(threeRounds(() => sessionNow)).resolves.toBeUndefined();
+  }, 120_000);
 });
