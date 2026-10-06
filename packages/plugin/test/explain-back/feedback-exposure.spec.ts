@@ -770,9 +770,13 @@ describe('the view reads the exposure once, when the question is resolved, and s
       modal.indexOf('private async submitAnswer('),
       modal.indexOf('private acceptGrading('),
     );
+    // `[D-460]` (ol-egov.141.89.6.86) added a closed-view guard before the note and the marker
+    // write after it, inside the same graded-only branch; behaviour is pinned in
+    // `modal-feedback-shown-marker.spec.ts`.
     expect(submit).toMatch(
-      /if \(pending\.grading\.outcome === 'graded'\) \{\s*this\.feedbackExposureLedger\.noteShown\(prompt\.originInstrumentId, attemptId\);\s*\}/,
+      /if \(pending\.grading\.outcome === 'graded'\) \{\s*if \(this\.closed\) return;\s*this\.feedbackExposureLedger\.noteShown\(prompt\.originInstrumentId, attemptId\);/,
     );
+    expect(submit.match(/noteShown\(/g)).toHaveLength(1);
   });
 
   it('clears the note only when an attempt is accepted, never on a stale or failed accept', () => {

@@ -204,6 +204,8 @@ type ConceptBearingEntry = Exclude<
   // the same reason `succession`/the retrospective-offer trio are excluded
   // above.
   | { kind: 'source-registered' }
+  // `[D-460]`: names a question and an attempt, never a concept.
+  | { kind: 'explain-back-feedback-shown' }
 >;
 
 function excludingSuccession(
@@ -215,7 +217,8 @@ function excludingSuccession(
       e.kind !== 'retrospective-offered' &&
       e.kind !== 'retrospective-opened' &&
       e.kind !== 'retrospective-dismissed' &&
-      e.kind !== 'source-registered',
+      e.kind !== 'source-registered' &&
+      e.kind !== 'explain-back-feedback-shown',
   );
 }
 

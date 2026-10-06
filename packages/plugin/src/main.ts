@@ -103,6 +103,7 @@ import { CourseSetupModal } from './course-setup/setup-modal.js';
 import { obsidianDepthGateGet } from './depth-gate/obsidian-depth-gate-transport.js';
 import { buildDepthGateWiring, type DepthGateWiring } from './depth-gate/wiring.js';
 import { ensureDeviceId } from './device/device-id.js';
+import { createRecordFeedbackShown } from './explain-back/feedback-exposure.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
 import {
@@ -4921,6 +4922,13 @@ export default class OleaPlugin extends Plugin {
         // she set aside was never followed to acceptance. One whole-log read when an
         // instrument-seeded question is opened; no write, no surface.
         readLoggedAttemptState: createReadLoggedAttemptState({ vault: this.vaultSource }),
+        // `[D-460]` (`ol-egov.141.89.6.86`): the feedback exposure marker, written to the same
+        // log BEFORE a graded result renders, so a reload after she read it cannot make her next
+        // attempt read as a first one. The question, the attempt and the time, nothing else.
+        recordFeedbackShown: createRecordFeedbackShown({
+          vault: this.vaultSource,
+          deviceId: () => ensureDeviceId(this),
+        }),
         loadMisconceptionDigest: (conceptIds) =>
           this.buildExplainBackMisconceptionDigestFor(conceptIds),
         generateInstrumentId: () => `explain-back:${globalThis.crypto.randomUUID()}`,

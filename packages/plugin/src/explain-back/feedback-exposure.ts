@@ -20,31 +20,45 @@
  *
  * **Where the fact lives.** In memory, on the sealed support and on each entry
  * of the attempt sequence (`./attempt-sequence.ts`); on her log it is carried
- * by the rung the record already has (`guided`, or absent), so **no record
- * shape changes** and nothing here needs `packages/contracts`.
+ * by the rung the record already has (`guided`, or absent), and, since
+ * `[D-460]`, by the **feedback exposure marker**: a record of the question,
+ * the attempt and the time, written BEFORE a graded result renders
+ * (`olea-contracts`' `explainBackFeedbackShownLogRecordV6`, written through
+ * {@link createRecordFeedbackShown}).
  *
  * **Where it is read from.** Three places, in order of confidence:
  *
  * 1. the attempts she set aside in this view (`./attempt-sequence.ts`);
  * 2. {@link FeedbackExposureLedger}, a session note the view writes the moment
  *    a graded result is shown, so a view opened again after she read the
- *    feedback and closed it, or after the set-aside write was lost, still
- *    knows;
+ *    feedback and closed it, or after a set-aside or marker write was lost,
+ *    still knows;
  * 3. her log (`./set-aside-record.ts`'s `createReadLoggedAttemptState`),
  *    read through {@link classifyLoggedFeedbackExposure}: a graded attempt she
- *    set aside and never followed to acceptance is a shown exposure, which is
- *    how a later session knows.
+ *    set aside, or an attempt a marker names, never followed to acceptance is
+ *    a shown exposure, which is how a later session knows, including after a
+ *    view lost before she chose Try again or accepted (a reload).
  *
- * **What nothing available can recover**, and is filed as an open question on
- * the bead: feedback shown in a view that was lost before she chose Try again
- * or accepted, with the session gone (a reload). Neither her log nor the
- * session holds anything, so it reads as a first attempt. Closing that needs a
- * fact written when the feedback is displayed, which is a review-log shape
- * decision, not something to invent here.
+ * **A failed marker write** (`[D-460]`). The view still shows her the result
+ * and never tells her of the failure; the view and the session hold the
+ * exposure as shown (they did show it), so a revision in this session is
+ * guided, never independent. A marker line cut short reads in a later session
+ * as unknown, never as not shown. **What nothing available can recover**: a
+ * write that failed outright, whose retry when she left the result failed too
+ * or never ran (a reload), with neither Try again nor accept: nothing reached
+ * her log, so a later session reads a first attempt. That residual is held
+ * open on `ol-egov.141.89.6.86`.
  *
  * **No content (D-005).** Ids and three-value facts only.
  */
 import type { ReviewLogEntry, SupportLevel } from 'olea-contracts';
+import {
+  appendExplainBackFeedbackShownRecord,
+  type ExplainBackFeedbackShownLogRecordInput,
+  explainBackFeedbackShownAttempts,
+  type VaultSource,
+} from 'olea-core';
+import { isoWithLocalOffset } from '../review/ports.js';
 
 /** Whether she was shown the graded result of an earlier attempt at this question. */
 export type FeedbackExposure = 'shown' | 'not-shown' | 'unknown';
@@ -171,15 +185,26 @@ function millisOf(timestamp: string): number | null {
  * sessions. A later offer of the same question after the exchange ended is
  * not a revision, and is left exactly as it was.
  *
- * - Any graded set-aside in the open exchange: `'shown'`, with the latest open
- *   attempt as the one a new attempt follows.
+ * **The feedback exposure marker** (`[D-460]`) is read the same way: an
+ * attempt a marker names (`olea-core`'s `explainBackFeedbackShownAttempts`,
+ * one per attempt however many times it was written) belongs to the open
+ * exchange unless an accepted review of the same question carries that
+ * attempt's own id (`attemptId`, `[D-483]`) or names it in its chain, or is
+ * timestamped later. That is how a view lost before she chose Try again or
+ * accepted (a reload) still reads as shown.
+ *
+ * - Any graded set-aside or marked attempt in the open exchange: `'shown'`,
+ *   with the latest open attempt, set aside or marked, as the one a new
+ *   attempt follows.
  * - Otherwise a line that could not be parsed and names this question, and is
  *   not older than an accepted review of it: `'unknown'`. It may have been a
- *   set-aside; nothing can confirm it either way. A line with no readable
- *   timestamp is kept as unknown, conservatively.
+ *   set-aside or a marker (a write cut short); nothing can confirm it either
+ *   way. A line with no readable timestamp is kept as unknown, conservatively.
  * - Otherwise `'not-shown'`. Attempts the check could not assess showed her no
  *   feedback (`[D-321]`), so they leave the exposure not shown, though the
- *   latest of them is still the attempt a new one follows.
+ *   latest of them is still the attempt a new one follows. A log written
+ *   before the marker existed reads exactly as it did then: a missing marker
+ *   is not unknown.
  *
  * A confirmed graded attempt outranks an unreadable line: the confirmed fact
  * wins. A review that names an attempt whose record was lost (a dangling
@@ -195,6 +220,8 @@ export function classifyLoggedFeedbackExposure(
   const reviews = history.entries.flatMap((entry) =>
     entry.kind === 'review' && entry.instrumentId === instrumentId ? [entry] : [],
   );
+  // `[D-460]`: the attempts whose graded result her log says was shown, one per attempt.
+  const marked = explainBackFeedbackShownAttempts(history.entries, instrumentId);
 
   const byAttemptId = new Map(setAsides.map((entry) => [entry.attemptId, entry]));
   const closed = new Set<string>();
@@ -204,6 +231,11 @@ export function classifyLoggedFeedbackExposure(
       closed.add(id);
       id = byAttemptId.get(id)?.followsAttemptId;
     }
+  }
+  // `[D-460]`: an accepted attempt's own id ends the exchange its marker belongs to,
+  // whatever either device's clock said.
+  for (const review of reviews) {
+    if (review.attemptId !== undefined) closed.add(review.attemptId);
   }
   let latestReviewMs: number | null = null;
   for (const review of reviews) {
@@ -219,9 +251,12 @@ export function classifyLoggedFeedbackExposure(
   const open = setAsides.filter(
     (entry) => !closed.has(entry.attemptId) && !endedBefore(entry.timestamp),
   );
-  let latestOpen: (typeof open)[number] | undefined;
+  const openMarked = marked.filter(
+    (entry) => !closed.has(entry.attemptId) && !endedBefore(entry.timestamp),
+  );
+  let latestOpen: { readonly attemptId: string } | undefined;
   let latestOpenMs = Number.NEGATIVE_INFINITY;
-  for (const entry of open) {
+  for (const entry of [...open, ...openMarked]) {
     const ms = millisOf(entry.timestamp) ?? Number.NEGATIVE_INFINITY;
     if (latestOpen === undefined || ms >= latestOpenMs) {
       latestOpen = entry;
@@ -230,7 +265,7 @@ export function classifyLoggedFeedbackExposure(
   }
   const lastAttemptId = latestOpen === undefined ? null : latestOpen.attemptId;
 
-  if (open.some((entry) => entry.outcome.kind === 'graded')) {
+  if (open.some((entry) => entry.outcome.kind === 'graded') || openMarked.length > 0) {
     return { exposure: 'shown', lastAttemptId };
   }
 
@@ -274,4 +309,70 @@ export async function resolvePriorAttemptState(params: {
     });
     return { exposure: 'unknown', lastAttemptId: null };
   }
+}
+
+// ---------------------------------------------------------------------------
+// The feedback exposure marker ([D-460])
+// ---------------------------------------------------------------------------
+
+/** The writer `ExplainBackModalDeps.recordFeedbackShown` is: one marker appended to her log. */
+export type RecordFeedbackShown = (input: ExplainBackFeedbackShownLogRecordInput) => Promise<void>;
+
+/**
+ * The marker for one graded result about to be shown: the question, the
+ * attempt and the moment, nothing else (D-005). `at` is the view's own clock.
+ */
+export function feedbackShownRecordInput(params: {
+  readonly instrumentId: string;
+  readonly attemptId: string;
+  readonly at: Date;
+}): ExplainBackFeedbackShownLogRecordInput {
+  return {
+    timestamp: isoWithLocalOffset(params.at),
+    instrumentId: params.instrumentId,
+    attemptId: params.attemptId,
+  };
+}
+
+/**
+ * One marker write whose failure is absorbed: `true` when the write resolved,
+ * `false` when it rejected. Never rejects, so the view can await it before
+ * showing her the result without a failed write ever reaching her. The
+ * failure is logged content-free (D-005): the fact, never the ids.
+ */
+export async function writeFeedbackShown(
+  write: RecordFeedbackShown,
+  input: ExplainBackFeedbackShownLogRecordInput,
+): Promise<boolean> {
+  try {
+    await write(input);
+    return true;
+  } catch (error) {
+    console.error('Olea: feedback exposure marker write failed (the result is still shown)', {
+      error,
+    });
+    return false;
+  }
+}
+
+export interface RecordFeedbackShownDeps {
+  readonly vault: VaultSource;
+  /** Per-install id, resolved per call like every other explain-back write in `main.ts`. */
+  readonly deviceId: () => Promise<string>;
+}
+
+/**
+ * The `ExplainBackModalDeps.recordFeedbackShown` implementation the
+ * composition root wires: one append through `olea-core`'s
+ * `appendExplainBackFeedbackShownRecord`, into the same review log the
+ * set-aside writer appends to and `createReadLoggedAttemptState` reads.
+ * Rejects when the device id or the write fails; the view absorbs it
+ * ({@link writeFeedbackShown}).
+ */
+export function createRecordFeedbackShown(deps: RecordFeedbackShownDeps): RecordFeedbackShown {
+  return async (input) => {
+    await appendExplainBackFeedbackShownRecord(deps.vault, input, {
+      deviceId: await deps.deviceId(),
+    });
+  };
 }
