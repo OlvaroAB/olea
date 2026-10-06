@@ -2015,7 +2015,7 @@ describe('F2.19 production resolvers: relatedConceptKeys/assessmentContext resol
       concept('Bravo', 'key-bravo'),
       concept('Charlie', 'key-charlie'),
     ];
-    const relations = [relationEdge('related' as RelationType, 'Alpha', 'Charlie')];
+    const relations = [relationEdge('prerequisite', 'Alpha', 'Charlie')];
     const { relatedConceptKeys, unresolvedEndpointCount } = resolveRelatedConceptKeys(
       relations,
       concepts,
