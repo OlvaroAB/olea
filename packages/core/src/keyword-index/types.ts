@@ -82,6 +82,15 @@ export interface IndexedDocument {
    * `KeywordIndexEngine.create` discards such a cache so it is rebuilt (D-006: the index is a cache).
    */
   readonly evidenceScope?: 1;
+  /**
+   * `ol-egov.141.89.1.97`: set only on a document extracted from a binary source, to the
+   * `BINARY_EXTRACTOR_VERSION` (`build.ts`) it was extracted under. A binary document whose version
+   * is below the current one is extracted again, bytes unchanged. Absent on every note and
+   * transcript, and on a binary persisted before this field: that is read as version 1, the
+   * extractor as it stood then, so an older index loads and is trusted until the version is next
+   * raised. Optional, so the persisted format stays at version 1.
+   */
+  readonly extractorVersion?: number;
   readonly blocks: readonly IndexedBlock[];
 }
 

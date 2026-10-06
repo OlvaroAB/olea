@@ -56,6 +56,7 @@ import {
   type IndexedBinaryFormat,
   indexBinaryBytes,
   indexedBinaryFormatOf,
+  isCurrentBinaryDocument,
   listIndexedBinaries,
   logBinaryFailure,
   registeredCoursesOf,
@@ -277,7 +278,7 @@ export class KeywordIndexEngine {
 
   /**
    * Brings one binary's document in line with its current bytes and course. Gone from the vault:
-   * its document leaves. Same bytes as the indexed document: kept, its course updated if her
+   * its document leaves. Same bytes as the indexed document, extracted under the current extractor: kept, its course updated if her
    * registrations moved it. A rename's old document with the same bytes and format: moved to the
    * new path. Bytes that already failed to extract this session: left out. Otherwise extracted
    * again (`indexBinaryBytes`) and replaced whole. Throws only when the file cannot be read.
@@ -297,7 +298,11 @@ export class KeywordIndexEngine {
     const contentHash = await hashContent(bytes);
 
     const current = this.documents.get(path);
-    if (current !== undefined && current.contentHash === contentHash) {
+    if (
+      current !== undefined &&
+      current.contentHash === contentHash &&
+      isCurrentBinaryDocument(current)
+    ) {
       if (sameCourses(current.courses, courses)) return 'unchanged';
       this.documents.set(path, { ...current, courses });
       return 'regrouped';
@@ -306,6 +311,7 @@ export class KeywordIndexEngine {
       current === undefined &&
       renamedFrom !== undefined &&
       renamedFrom.contentHash === contentHash &&
+      isCurrentBinaryDocument(renamedFrom) &&
       indexedBinaryFormatOf(renamedFrom.path) === format
     ) {
       // Extraction reads only the bytes, and a block's anchor names no path, so the moved
@@ -335,7 +341,8 @@ export class KeywordIndexEngine {
    * `ol-egov.141.89.1.95`: reconciles the index's binaries against the vault and her registrations
    * (see the module doc). A binary document whose file the vault no longer lists leaves; one whose
    * course her registrations changed is regrouped in place; one the vault lists and the index
-   * lacks is extracted and added; one already indexed is trusted as persisted. Notes and
+   * lacks is extracted and added, as is one held from an older extractor
+   * (`BINARY_EXTRACTOR_VERSION`); one already indexed is trusted as persisted. Notes and
    * transcripts are untouched. Each missing binary is extracted as its own step, with a yield
    * between, and progress is persisted every `chunkSize` binaries, so a sync over a whole vault
    * neither holds vault events back nor loses its work to an early quit. A file that cannot be
@@ -356,6 +363,13 @@ export class KeywordIndexEngine {
         if (!listed.has(doc.path)) {
           this.documents.delete(doc.path);
           counts.removed += 1;
+          changed = true;
+          continue;
+        }
+        if (!isCurrentBinaryDocument(doc)) {
+          // Extracted under an older extractor (`BINARY_EXTRACTOR_VERSION`): out of the index, so
+          // it is extracted again below like a binary the index lacks.
+          this.documents.delete(doc.path);
           changed = true;
           continue;
         }
