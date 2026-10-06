@@ -215,20 +215,12 @@
  * this file, both unchanged by this migration, so neither needed touching
  * here.
  *
- * **The `[D-300]`/`ol-egov.141.89.20` Writing-contract adapter's production
- * caller (`ol-egov.141.89.8.31`).** `readAndLandPage`'s two call sites
- * (`vision-page-runner.ts:857-858` for a failed call, `:878-879` for a
- * settled reading) call `writingOutcomeForFailure`/`writingOutcomeFor` —
- * which call `packages/core/src/stage-contract/adapters/vision-page.ts`'s
- * `writingFromVisionPageCallFailure`/`writingFromVisionPageExtract` —
- * unconditionally, the same real path composed into production above, so
- * that adapter is no longer "no caller yet, like every sibling adapter" (its
- * own module doc's previous words). `deps.onWritingOutcome` says only where
- * the resulting outcome goes, if anywhere; no host supplies one yet, so
- * nothing today persists or otherwise consumes it — a further, separate
- * step, reported rather than built here (see this bead's report). No
- * behaviour of the reading itself changes: the Worker request sent and the
- * `ExtractedUnit`s landed in `deps.sink` are exactly as before.
+ * **No Writing outcome is built here (`ol-egov.141.89.8.67`).** The runner
+ * once built the `[D-300]` Writing-contract outcome on every reading and
+ * handed it to an optional `onWritingOutcome` hook that no host supplied: no
+ * reader could take it without a new stored value or surface, so it was
+ * computed and discarded. Both are removed; a reading's one record is its
+ * `onManifestEntry` entry. Core's `vision-page` adapters are untouched.
  */
 
 import type {
@@ -247,19 +239,13 @@ import type {
   UnitUnreadableReason,
   VaultPath,
   VaultSource,
-  VisionPageCallFailure,
-  VisionPageDraft,
-  VisionPageSeamContext,
   WorkerTaskTransport,
-  WritingOutcome,
 } from 'olea-core';
 import {
   docxFigureCue,
   isExtractionJobPayload,
   pptxFigureCue,
   stableUnitId,
-  writingFromVisionPageCallFailure,
-  writingFromVisionPageExtract,
 } from 'olea-core';
 import { PageRenderError } from './page-render/errors.js';
 import type { PageRenderPort } from './page-render/types.js';
@@ -727,21 +713,6 @@ export interface WorkerVisionPageRunnerDeps {
    * one" posture `onManifestEntry` already takes.
    */
   readonly onUnknownUnreadableReason?: () => void;
-  /**
-   * The Writing-contract outcome for this reading
-   * (`packages/core/src/stage-contract/adapters/vision-page.ts`,
-   * `ol-egov.141.89.20`) — `writingFromVisionPageExtract`/
-   * `writingFromVisionPageCallFailure`, called from this runner's own real
-   * path (`writingOutcomeFor`/`writingOutcomeForFailure`, below)
-   * **unconditionally, on every real reading this runner makes**, whether or
-   * not this is supplied (see those functions' own doc for why: that is what
-   * makes the call itself a production caller, `ol-egov.141.89.8.31`,
-   * distinct from `onManifestEntry`'s "absent by default, pays nothing when
-   * unwired" posture directly above). **No host consumes or persists the
-   * outcome yet** — this file does neither itself; a consumer is a further,
-   * separate step (see this bead's report).
-   */
-  readonly onWritingOutcome?: (outcome: WritingOutcome<VisionPageDraft>) => void;
 }
 
 /**
@@ -895,73 +866,6 @@ async function emitManifestEntry(
 }
 
 /**
- * `vision.extract.v2` has no fallback seat wired (no second model sits
- * behind it for an undecided/unavailable case) — every Writing outcome this
- * runner produces is from the one, `'candidate'`, seat. A declared constant,
- * not derived, for the same reason `VISION_EXTRACT_V2_TASK_ID` is.
- */
-const VISION_PAGE_WRITING_SEAT: VisionPageSeamContext['seat'] = 'candidate';
-
-/**
- * The `[D-300]`/`ol-egov.141.89.20` Writing-contract context for one reading
- * or one failed call: the image(s) actually sent are the only evidence this
- * seam reads. `evidenceDigests` carries one digest per image, in order — for
- * a single-image request this is byte-identical to before this bead (one
- * element, `hashImagePayload` on that one image's own base64); an
- * ordered-list request (`ol-egov.141.89.8.26`'s send wiring) gets one entry
- * per image rather than `hashRequestPayload`'s single joined digest, since
- * `evidenceDigests` is already an array field
- * (`packages/core/src/stage-contract/provenance.ts`) built for exactly this.
- */
-async function visionPageWritingContext(
-  request: VisionPageExtractRequest,
-): Promise<VisionPageSeamContext> {
-  const digests = await Promise.all(
-    imagesOfRequest(request).map((image) => hashImagePayload(image.pageImageBase64)),
-  );
-  return {
-    seat: VISION_PAGE_WRITING_SEAT,
-    taskId: VISION_EXTRACT_V2_TASK_ID,
-    evidenceDigests: digests,
-  };
-}
-
-/**
- * The Writing outcome for one settled reading — `writingFromVisionPageExtract`
- * (`packages/core/src/stage-contract/adapters/vision-page.ts`), called
- * unconditionally from `readAndLandPage`, below, for every `'complete'`,
- * `'partial'` and `'unreadable'` result alike (`ol-egov.141.89.8.31`, giving
- * that adapter its production caller — see its own module doc). Never gated
- * behind `deps.onWritingOutcome`: that field only says where the resulting
- * outcome goes, not whether the adapter runs.
- */
-async function writingOutcomeFor(
-  request: VisionPageExtractRequest,
-  result: VisionPageExtractResult,
-): Promise<WritingOutcome<VisionPageDraft>> {
-  return writingFromVisionPageExtract(result, await visionPageWritingContext(request));
-}
-
-/**
- * The Writing outcome for a call that never reached a settled result —
- * `writingFromVisionPageCallFailure`'s arm, same unconditional-call posture
- * as `writingOutcomeFor` above. Reads `error` the same way
- * `isUnavailableVisionFailure` already does to tell a raw transport failure
- * (`reachedWorker: false`) from a well-formed Worker refusal
- * (`reachedWorker: true`, carrying the Worker's own `code`).
- */
-async function writingOutcomeForFailure(
-  request: VisionPageExtractRequest,
-  error: unknown,
-): Promise<WritingOutcome<VisionPageDraft>> {
-  const failure: VisionPageCallFailure =
-    error instanceof WorkerVisionPageExtractorError
-      ? { reachedWorker: true, ...(error.code !== undefined ? { code: error.code } : {}) }
-      : { reachedWorker: false };
-  return writingFromVisionPageCallFailure(failure, await visionPageWritingContext(request));
-}
-
-/**
  * Sends one already-obtained request (a single standalone-image/rendered-PDF
  * image, or — since `ol-egov.141.89.8.26`'s send wiring — an ordered list of
  * a PPTX/DOCX region's qualifying images) to `vision.extract.v2` and lands
@@ -974,10 +878,6 @@ async function writingOutcomeForFailure(
  * (`'complete'`, `'partial'`, `'unreadable'`) gets one, even when it lands
  * zero `ExtractedUnit`s (a figure-only or unreadable page is still a
  * completed reading, and `[D-326]`'s record exists precisely to say so).
- * Also, since `ol-egov.141.89.8.31`, the one place that produces this
- * reading's Writing-contract outcome
- * (`writingOutcomeFor`/`writingOutcomeForFailure`, above) — unconditionally,
- * on every branch, before `deps.onWritingOutcome` (if any) is told about it.
  */
 async function readAndLandPage(
   deps: WorkerVisionPageRunnerDeps,
@@ -991,12 +891,6 @@ async function readAndLandPage(
   try {
     result = await deps.extractor.extract(request);
   } catch (error) {
-    // Computed unconditionally — not `deps.onWritingOutcome?.(await
-    // writingOutcomeForFailure(...))`, which would never evaluate the
-    // adapter call at all when no consumer is wired (optional-call argument
-    // short-circuiting) and so would not be a real production caller.
-    const writingOutcome = await writingOutcomeForFailure(request, error);
-    deps.onWritingOutcome?.(writingOutcome);
     if (isUnavailableVisionFailure(error)) {
       // `[D-325]`: an outage is never a judgement about the page — retried,
       // the same transient-environment shape a vault read failure gets,
@@ -1014,10 +908,6 @@ async function readAndLandPage(
   }
 
   await emitManifestEntry(deps, sourcePath, page, request, result);
-  // Same "computed first, handed off second" shape as the catch block above,
-  // for the same reason.
-  const writingOutcome = await writingOutcomeFor(request, result);
-  deps.onWritingOutcome?.(writingOutcome);
 
   if (result.outcome === 'unreadable') {
     // INV-5 / honest failure: zero units, not an error — the same shape
