@@ -241,12 +241,7 @@ import type {
   VaultSource,
   WorkerTaskTransport,
 } from 'olea-core';
-import {
-  docxFigureCue,
-  isExtractionJobPayload,
-  pptxFigureCue,
-  stableUnitId,
-} from 'olea-core';
+import { docxFigureCue, isExtractionJobPayload, pptxFigureCue, stableUnitId } from 'olea-core';
 import { PageRenderError } from './page-render/errors.js';
 import type { PageRenderPort } from './page-render/types.js';
 
