@@ -494,8 +494,10 @@ function hasPastPaperBasis(row: GapRow): boolean {
  * `mastery/attainment.ts`). `row.need?.basis === 'unknown'` gets its own
  * sentence that names the absence of evidence and claims nothing about her
  * knowledge; `'estimated'` — or no `need` supplied at all — keeps the
- * existing wording unchanged. The `'unknown'` sentence below is proposed
- * copy, **AWAITING A COPY PASS (Class B)**, per this module's own doc.
+ * existing wording unchanged. The `'unknown'` sentence below is the signed
+ * never-checked sentence (David, sheet v50, "Unknown-need copy"); a row
+ * whose earlier answers were excluded because their passage changed reads
+ * {@link changedPassageGapLine} instead, once a row carries that signal.
  */
 export function masteryGapLine(row: GapRow): string {
   const instruments =

@@ -68,7 +68,7 @@ describe('a row with no past-paper basis states no past-paper count (`ol-egov.14
     const r = row('mastery-gap', NONE);
     expect(gapRowLine(r)).toBe("You have 3 instruments built but recall here hasn't caught up.");
     expect(masteryGapLine({ ...r, need: { basis: 'unknown' } } as GapRow)).toBe(
-      'You have 3 instruments built, but recall here is unknown — nothing has been checked yet, so this says nothing about what you know.',
+      'You have 3 instruments built, but Olea has no recall evidence for it yet, so this says nothing about what you know.',
     );
     expect(masteryGapMeta(r)).toBe('3 instruments');
     expect(masteryGapNarrative(r)).toEqual([
