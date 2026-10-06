@@ -1,6 +1,8 @@
 /**
  * Her correction history for a model-decided link — `[D-533]` (`ol-egov.141.89.7.71`, ruled
- * 2026-10-06, A strengthened), built under `ol-egov.141.89.7.26` (`[D-433]`).
+ * 2026-10-06, A strengthened), built under `ol-egov.141.89.7.26` (`[D-433]`); keyed on the course
+ * and the objective's wording, and given her control in the grove, under `[D-537]`
+ * (`ol-egov.141.89.7.79`, built under `ol-egov.141.89.7.77`).
  *
  * **What it records.** `[D-433]` lets an alignment that the per-basis gate validated count
  * directly: an objectives declaration containing a concept, or an assessment's stated scope giving
@@ -20,16 +22,18 @@
  * model's readings): `[D-533]` rejected both homes.
  *
  * **The declaration identity it is keyed on, so a rejection persists across unrelated edits.**
- * - *Objectives*: the document's path plus `[D-477]`'s wording key — the record's
- *   `source.labelDigest`, or the digest of its stored label for a record minted before that field,
- *   exactly as `./source-identity.ts` reads it. **Never the outcome's id**: `[D-477]` matches a
- *   re-extracted outcome only on the same unit, so an unrelated edit that moves a declaration to
- *   another unit (a page or paragraph inserted before it) mints a new outcome record with a new id.
- *   Its wording key is unchanged, so her rejection still applies. A record never refreshes its
- *   wording key on a near match (`./store.ts`), so one record always has one key. Wording changed
- *   beyond `[D-477]`'s near rule mints a new outcome with a new key: new evidence, as `[D-533]`
- *   part 3 says. Two units of one document stating the same normalised wording share one history,
- *   which is one judgement about one wording and one concept.
+ * - *Objectives*: the course plus `[D-477]`'s wording key — the record's `source.labelDigest`, or
+ *   the digest of its stored label for a record minted before that field, exactly as
+ *   `./source-identity.ts` reads it. **Never the document's path** (`[D-537]`: her choice holds
+ *   when the document is renamed or moved, so a rename is an unrelated edit) **and never the
+ *   outcome's id**: `[D-477]` matches a re-extracted outcome only on the same unit, so an unrelated
+ *   edit that moves a declaration to another unit (a page or paragraph inserted before it) mints a
+ *   new outcome record with a new id. Its wording key is unchanged, so her rejection still applies.
+ *   A record never refreshes its wording key on a near match (`./store.ts`), so one record always
+ *   has one key. Wording changed beyond `[D-477]`'s near rule mints a new outcome with a new key:
+ *   new evidence, as `[D-533]` part 3 says. One wording stated twice in a course (two units, or two
+ *   objectives documents of the course) shares one history: one judgement about one wording and one
+ *   concept in one course. Another course is another history, because she judges it there.
  * - *Stated scope*: the assessment's scope key — `ScopeSourceRef.sourcePath` for a `stated-scope`
  *   reading, which the scope-reading store keeps apart from the digest of the scope's text
  *   (`revisionDigest`), so an edit of her stated scope keeps the key. Standing is per assessment,
@@ -44,7 +48,14 @@
  *
  * **Failing closed.** A file that does not read as a history (torn, or a newer build's shape) is
  * never written over (`../vault/store-record.ts`, T12) and, at read time, excludes its pair: a
- * rejection inside it must never be lost by reading the file as absent.
+ * rejection inside it must never be lost by reading the file as absent. A file at a pair's path
+ * that names another pair is read the same way, never as this pair's.
+ *
+ * **The earlier path-keyed shape (`[D-537]`).** Schema version 1 keyed an objectives declaration on
+ * the document's path. The key changed to the course before any history existed in her vault
+ * (nothing is installed yet), so nothing is migrated. A history in that shape is unreadable to this
+ * build, by its schema version and by its declaration's fields, so it fails closed rather than
+ * being matched to a pair it was not written for.
  *
  * **Concept identity (`[D-378]`).** A decision recorded under a superseded duplicate key and one
  * under the canonical key are one concept's history: `isCorrectedAway` reads every key of the
@@ -71,15 +82,19 @@ import type { OutcomeRecord } from './types.js';
 export const OUTCOME_CONTAINMENT_CORRECTION_FOLDER: VaultPath =
   '.olea/outcome-containment-corrections';
 
-/** Bumped only on a breaking change to the stored shape. A file with any other value is unreadable to this build. */
-export const OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION = 1;
+/**
+ * Bumped only on a breaking change to the stored shape. A file with any other value is unreadable
+ * to this build. 2: an objectives declaration is keyed on the course, not the document's path
+ * (`[D-537]`, module doc).
+ */
+export const OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION = 2;
 
 /** The declaration a correction is about — see the module doc for why each kind is keyed so. */
 export type ContainmentDeclaration =
   | {
       readonly kind: 'objectives';
-      /** The objectives document's vault path (`OutcomeRecord.source.path`). */
-      readonly sourcePath: string;
+      /** The course she judged the placement in (`[D-537]`): never the document's path. */
+      readonly courseId: string;
       /** `[D-477]`'s wording key: `v1:` plus the SHA-256 hex of the normalised wording. */
       readonly wordingKey: string;
     }
@@ -109,12 +124,23 @@ export interface ContainmentCorrectionLog {
 const isNonEmptyString = (value: unknown): value is string =>
   typeof value === 'string' && value.length > 0;
 
+/** True when `value` has exactly these own keys: a declaration is an identity, so one field more is another one. */
+function hasExactly(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  const own = Object.keys(value);
+  return own.length === keys.length && keys.every((key) => own.includes(key));
+}
+
 function isDeclaration(value: unknown): value is ContainmentDeclaration {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
   if (v.kind === 'objectives')
-    return isNonEmptyString(v.sourcePath) && isNonEmptyString(v.wordingKey);
-  if (v.kind === 'stated-scope') return isNonEmptyString(v.scopeKey);
+    return (
+      hasExactly(v, ['kind', 'courseId', 'wordingKey']) &&
+      isNonEmptyString(v.courseId) &&
+      isNonEmptyString(v.wordingKey)
+    );
+  if (v.kind === 'stated-scope')
+    return hasExactly(v, ['kind', 'scopeKey']) && isNonEmptyString(v.scopeKey);
   return false;
 }
 
@@ -137,13 +163,17 @@ export function isContainmentCorrectionLog(value: unknown): value is Containment
   );
 }
 
-/** The declaration identity of an objectives outcome (module doc): its document and `[D-477]` wording key, never its id. */
+/**
+ * The declaration identity of an objectives outcome read for `courseId` (module doc): the course and
+ * `[D-477]`'s wording key, never the document's path and never the outcome's id.
+ */
 export async function objectivesDeclarationOf(
   outcome: Pick<OutcomeRecord, 'source' | 'label'>,
+  courseId: string,
 ): Promise<ContainmentDeclaration> {
   return {
     kind: 'objectives',
-    sourcePath: outcome.source.path,
+    courseId,
     wordingKey: outcome.source.labelDigest ?? (await outcomeLabelDigest(outcome.label)),
   };
 }
@@ -162,6 +192,20 @@ export async function containmentCorrectionPath(
   return `${OUTCOME_CONTAINMENT_CORRECTION_FOLDER}/${name}.json`;
 }
 
+/**
+ * A history this build reads AND that names the pair asked for: a file at a pair's path that names
+ * another pair (or the earlier path-keyed shape) is unreadable, never read as this pair's.
+ */
+function isHistoryOf(
+  declaration: ContainmentDeclaration,
+  conceptKey: string,
+): (value: unknown) => value is ContainmentCorrectionLog {
+  const wanted = canonicalJson({ conceptKey, declaration });
+  return (value: unknown): value is ContainmentCorrectionLog =>
+    isContainmentCorrectionLog(value) &&
+    canonicalJson({ conceptKey: value.conceptKey, declaration: value.declaration }) === wanted;
+}
+
 function serialize(log: ContainmentCorrectionLog): string {
   return `${JSON.stringify(log, null, 2)}\n`;
 }
@@ -176,7 +220,7 @@ function defaultNow(): string {
  * throws `UnreadableStoreRecordError` and is left as it is. The read and the write are one task on
  * the file's queue, so two overlapping decisions both land, in the order made.
  *
- * Her control is its only intended caller, and none exists yet (`[D-533]` part 2).
+ * Her control in the grove is its only production caller (`[D-537]`; plugin `grove/provider.ts`).
  */
 export async function recordContainmentCorrection(
   vault: VaultSource,
@@ -188,7 +232,11 @@ export async function recordContainmentCorrection(
   const now = options.now ?? defaultNow;
   const path = await containmentCorrectionPath(declaration, conceptKey);
   return withPathQueue(path, async () => {
-    const existing = await readStoreRecordForWrite(vault, path, isContainmentCorrectionLog);
+    const existing = await readStoreRecordForWrite(
+      vault,
+      path,
+      isHistoryOf(declaration, conceptKey),
+    );
     const events = existing?.events ?? [];
     if (existing !== undefined && events[events.length - 1]?.kind === kind) return existing;
     const log: ContainmentCorrectionLog = {
@@ -211,7 +259,7 @@ export async function readContainmentCorrection(
   return readStoreRecord(
     vault,
     await containmentCorrectionPath(declaration, conceptKey),
-    isContainmentCorrectionLog,
+    isHistoryOf(declaration, conceptKey),
   );
 }
 
@@ -223,17 +271,25 @@ export function currentContainmentCorrection(
 }
 
 /**
- * True when her decision removes the pair at read time: the latest event across every key of the
- * concept's identity is `declined`, or any of those histories is unreadable (failing closed: a
- * rejection inside it is never lost). No history at all, or a latest `accepted`, is false. Reads
- * each history by its computed path, never by listing.
+ * Her choice for one pair as the read applies it (`[D-537]`): `'none'` (no history), the latest
+ * decision across every key of the concept's identity, or `'unreadable'` when any of those
+ * histories cannot be read. The grove lists a `'declined'` pair for putting back, and lists an
+ * `'unreadable'` one nowhere, so no control is offered for it.
  */
-export async function isCorrectedAway(
+export type ContainmentCorrectionState = 'none' | ContainmentCorrectionKind | 'unreadable';
+
+/**
+ * The pair's state (see `ContainmentCorrectionState`): the latest event across every key of the
+ * concept's identity decides, the canonical key's history winning a same-instant tie; any
+ * unreadable history makes the whole pair `'unreadable'`. Reads each history by its computed
+ * path, never by listing.
+ */
+export async function readContainmentCorrectionState(
   vault: VaultSource,
   declaration: ContainmentDeclaration,
   conceptKey: string,
   canonicalKeys: ConceptKeyCanonicalIndex,
-): Promise<boolean> {
+): Promise<ContainmentCorrectionState> {
   const canonical = canonicalKeys.canonicalOf(conceptKey);
   const keys = [canonical];
   for (const [duplicate, owner] of canonicalKeys.superseded) {
@@ -242,7 +298,7 @@ export async function isCorrectedAway(
   let latest: { readonly event: ContainmentCorrectionEvent; readonly own: boolean } | undefined;
   for (const key of keys) {
     const read = await readContainmentCorrection(vault, declaration, key);
-    if (read.kind === 'unreadable') return true;
+    if (read.kind === 'unreadable') return 'unreadable';
     if (read.kind === 'absent') continue;
     const event = read.record.events[read.record.events.length - 1];
     if (event === undefined) continue;
@@ -255,5 +311,20 @@ export async function isCorrectedAway(
       latest = { event, own };
     }
   }
-  return latest?.event.kind === 'declined';
+  return latest?.event.kind ?? 'none';
+}
+
+/**
+ * True when her decision removes the pair at read time: the latest event across every key of the
+ * concept's identity is `declined`, or any of those histories is unreadable (failing closed: a
+ * rejection inside it is never lost). No history at all, or a latest `accepted`, is false.
+ */
+export async function isCorrectedAway(
+  vault: VaultSource,
+  declaration: ContainmentDeclaration,
+  conceptKey: string,
+  canonicalKeys: ConceptKeyCanonicalIndex,
+): Promise<boolean> {
+  const state = await readContainmentCorrectionState(vault, declaration, conceptKey, canonicalKeys);
+  return state === 'declined' || state === 'unreadable';
 }
