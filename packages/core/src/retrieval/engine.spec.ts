@@ -417,6 +417,47 @@ describe('retrieve — grounded path', () => {
 });
 
 /**
+ * `ol-egov.141.89.1.94` (D-452): the idf-weighted keyword order must be computed over the same
+ * alias-expanded query the keyword index was searched with. Before, `retrieve()` searched with the
+ * expanded query but weighted with the raw one, so a block matched only through an alias token
+ * scored zero and sank below a block matching a common query token.
+ */
+describe('retrieve — the idf keyword order uses the alias-expanded query (D-452)', () => {
+  it('ranks a block matched only through a rare alias above a block matching a common query token', async () => {
+    const provider = new FakeEmbeddingProvider();
+    provider.down = true; // keyword leg alone decides the order
+    const { deps } = await makeDeps(
+      index([
+        {
+          path: 'a.md',
+          blocks: [
+            'The widget is common here.',
+            'Another widget note appears.',
+            'A third widget remark follows.',
+            'Unrelated filler about weather.',
+            'Unrelated filler about rivers.',
+          ],
+        },
+        { path: 'z.md', blocks: ['The sprocket was its earlier name.'] },
+      ]),
+      provider,
+    );
+    const registryOverrides = {
+      version: 1 as const,
+      renames: { 'concept-1': { displayName: 'widget', aliases: ['sprocket'] } },
+      prunedConceptKeys: [],
+    };
+
+    const result = await retrieve({ ...deps, registryOverrides }, 'widget', { topK: 10 });
+
+    expect(result.status).toBe('grounded');
+    if (result.status === 'grounded') {
+      expect(result.chunks[0]?.path).toBe('z.md');
+    }
+  });
+});
+
+/**
  * `ol-egov.141.89.1.47`: `retrieve()` used to accept neither `onJudgeRequest` nor `intendedOperation`
  * and dropped both on the band path, so the JEV-6 capture recorded nothing through it and the
  * intended operation could not reach the judge. The two production callers pass both by a

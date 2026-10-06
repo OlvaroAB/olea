@@ -26,9 +26,10 @@ interface OutcomeEventCommon {
 }
 
 /**
- * Mints a new Outcome. `./store.ts`'s `resolveOutcome` is the only production caller: it looks
- * for an existing record matching `source` first (conservation — never mint a second record for
- * material already read once) and constructs this event only on a genuine miss.
+ * Mints a new Outcome. `./store.ts`'s `resolveOutcomes` is the only production caller: it looks
+ * for the existing record a candidate is first (same block, then same or near wording, `[D-477]`;
+ * conservation — never mint a second record for material already read once) and constructs this
+ * event only on a genuine miss, with `source.labelDigest` set.
  */
 export interface OutcomeCreatedEvent extends OutcomeEventCommon {
   readonly kind: 'created';

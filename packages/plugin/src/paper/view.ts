@@ -39,6 +39,7 @@ import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
+  omittedPartLine,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
 import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
@@ -47,6 +48,7 @@ import type {
   PracticePaperFaceItem,
   PracticePaperViewDeps,
 } from './provider.js';
+import { unfinishedPaperNotice } from './provider.js';
 
 export { VIEW_TYPE_OLEA_PAPER };
 
@@ -158,21 +160,38 @@ export class PaperView extends ItemView {
       return;
     }
     if (state.kind === 'unlocked-not-pulled') {
-      const button = root.createEl('button', { text: 'Give me a practice paper for this course' });
-      button.addEventListener('click', () => {
-        void this.pullPaper(state.course);
-      });
+      this.renderRequestButton(root, state.course);
       return;
     }
     // `state.kind === 'ready'`
     this.renderReady(root, state);
   }
 
+  private renderRequestButton(root: HTMLElement, course: string): void {
+    const button = root.createEl('button', { text: 'Give me a practice paper for this course' });
+    button.addEventListener('click', () => {
+      void this.pullPaper(course);
+    });
+  }
+
   private async pullPaper(course: string): Promise<void> {
     const root = this.contentEl;
     root.empty();
     root.createEl('p', { text: 'Composing your practice paper…' });
-    const result = await this.deps.requestPaper(course);
+    let result: Awaited<ReturnType<PracticePaperViewDeps['requestPaper']>>;
+    try {
+      result = await this.deps.requestPaper(course);
+    } catch (error) {
+      // `[D-457]`: an outage kept the unfinished paper; she reads the ruled sentence and the same
+      // request she already used is offered again ("Ask again"). Any other failure is unchanged.
+      const notice = unfinishedPaperNotice(error);
+      if (notice === null) throw error;
+      root.empty();
+      root.createEl('h2', { text: this.getDisplayText() });
+      root.createEl('p', { cls: 'olea-paper-unfinished', text: notice });
+      this.renderRequestButton(root, course);
+      return;
+    }
     this.justHandedOff.clear();
     if (result.kind === 'ai-unavailable') {
       this.render(result);
@@ -197,6 +216,19 @@ export class PaperView extends ItemView {
       }
     }
 
+    // `[D-457]`: the partial paper's sentence and its omitted parts, also before any item.
+    if (state.incompleteStatement !== null) {
+      const incomplete = root.createDiv({ cls: 'olea-paper-incomplete' });
+      incomplete.createEl('p', { text: state.incompleteStatement.sentence });
+      if (state.incompleteStatement.omittedParts.length > 0) {
+        const omitted = incomplete.createEl('ul');
+        for (const part of state.incompleteStatement.omittedParts) {
+          // Its ruled reason (`[D-519]`), never the recorded reason, which is developer prose.
+          omitted.createEl('li', { text: omittedPartLine(part) });
+        }
+      }
+    }
+
     const list = root.createEl('ul', { cls: 'olea-paper-items' });
     for (const item of state.items) {
       const row = list.createEl('li');
@@ -205,10 +237,13 @@ export class PaperView extends ItemView {
       this.renderHandoffControl(row, state, item);
     }
 
-    if (state.emptySlots.length > 0) {
+    // A partial paper's omitted parts are its statement above (`[D-457]`), so they are not listed
+    // twice. Names only: a slot's recorded reason is developer prose, never her wording, and no
+    // wording per reason is ruled yet (ol-egov.141.89.7.44).
+    if (state.incompleteStatement === null && state.emptySlots.length > 0) {
       const emptyList = root.createEl('ul', { cls: 'olea-paper-empty-slots' });
       for (const slot of state.emptySlots) {
-        emptyList.createEl('li', { text: `${slot.conceptName}: ${slot.reason}` });
+        emptyList.createEl('li', { text: slot.conceptName });
       }
     }
   }

@@ -419,6 +419,18 @@ export const TASK_IDS = {
    * still-open design ruling.
    */
   PROBE_APPLICATION_SOLVE: 'probe-application.solve.v1',
+  /**
+   * W6 · the decision model (Jev), not a Workers AI slot — the per-belief
+   * misconception decision (`[D-485]` part 2, `ol-egov.141.89.6.94`): given one
+   * misconception record's belief and correction, the question's requirement
+   * and her answer, does the answer demonstrate the correct understanding, stay
+   * silent on it, reassert the belief, or is it unclear? One call per candidate
+   * record, never batched. The client-side seam is `packages/core/src/
+   * misconception/resolution-evidence-decision.ts`'s
+   * `BeliefResolutionDecisionPort`; this id is its join key. Built switched off:
+   * the plugin makes no call until switching it on is ruled (a ship call).
+   */
+  MISCONCEPTION_RESOLVE: 'misconception.resolve.v1',
 } as const;
 
 /** The closed catalogue as a value, sorted for stable diffs and golden output. */

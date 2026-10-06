@@ -34,14 +34,21 @@
  * trigger's `openScopeReadingWriter` (`../ingestion/wiring.ts:423`) opens this module at :443, and
  * `triggerOutcomesExtractForLandedUnit` (:641) writes through it: `recordPending` on an unavailable
  * Worker, a reader error or a failed call (:664, :697, :706), and `recordExtraction` after
- * `reconcileResolvedOutcomes` (:720). `main.ts:2064` supplies its `scopeReading` deps. Two members
- * still have no production caller, and both are `ol-egov.141.89.7.5`'s (the wiring register's
+ * `reconcileResolvedOutcomes` (:720). `main.ts:2064` supplies its `scopeReading` deps. Two more
+ * writers, `recordPartDemand` and `recordAlignmentResults`, are called by the drivers
+ * (`./drivers.ts`, `ol-egov.141.89.7.52`) with the structure id `recordExtraction` now returns; the
+ * drivers have NO production caller yet: the one line in `wiring.ts` that calls
+ * `runScopeReadingDrivers` waits on `[D-534]` (automatic spend) and on `ol-egov.141.89.7.68`
+ * releasing that file. Two members still have no production caller (the wiring register's
  * `ScopeReadingStore` row): `recordRegistered`, which waits on registration wiring, and
  * `readDocument`, since nothing reads the store yet. Nothing here reaches a model or a network:
  * INV-1 (no `obsidian` import) and C6 (no server-side state) hold by construction.
  */
 
 import {
+  type AlignmentCoverageNote,
+  type AlignmentDigests,
+  type AlignmentResult,
   createScopeReadingStore,
   type DocumentStateView,
   documentStateView,
@@ -49,6 +56,7 @@ import {
   type ReadingPolicy,
   type ScopeDocumentKind,
   type ScopePaperStructure,
+  type ScopePartDemand,
   type ScopePartDependency,
   type ScopePendingReason,
   type ScopeReaderProvenance,
@@ -70,6 +78,20 @@ export interface ExtractionStamp {
 
 /** The reader's task id — `OUTCOMES_EXTRACT_TASK_ID` in the adapter, restated so this module does not import the adapter's Worker plumbing. */
 export const SCOPE_READING_EXTRACT_TASK = 'outcomes.extract.v1';
+
+/** The demand reader's task id, restated for the same reason (`demand-classify-adapter.ts`'s `DEMAND_CLASSIFY_TASK_ID`). */
+export const SCOPE_READING_DEMAND_TASK = 'demand.classify.v1';
+
+/** The alignment reader's task id, restated for the same reason (`outcomes-align-adapter.ts`'s `OUTCOMES_ALIGN_TASK_ID`). */
+export const SCOPE_READING_ALIGN_TASK = 'outcomes.align.v1';
+
+/** What `recordExtraction` returns: the state it chose, and, when a structure was written or matched unchanged, its id and stored reading. */
+export interface RecordedExtraction {
+  readonly state: 'recorded' | 'read-states-nothing' | 'partly-read';
+  /** The structure record's id (what a part demand names) and the reading as stored. Absent when the call carried no structure. */
+  readonly structure?: { readonly structureId: string; readonly reading: ScopePaperStructure };
+  readonly stamp: ExtractionStamp;
+}
 
 /** An anchor as today's adapter resolves it: the caller's own `OutcomeSourceReference`, of which only the landed-unit ordinal is stored. */
 export interface ExtractedAnchor {
@@ -138,15 +160,33 @@ export interface ScopeReadingPersistenceDeps {
 }
 
 export interface ScopeReadingPersistence {
-  /** The store itself, for callers that write alignment results or part demands. */
+  /** The store itself, for callers that need a read the wrappers below do not offer. */
   readonly store: ScopeReadingStore;
   recordRegistered(ref: DocumentRef): Promise<void>;
   /** Extraction is owed and will be retried. Never an empty result. */
   recordPending(ref: DocumentRef, reason: ScopePendingReason): Promise<void>;
   /** Records what one extraction call returned, choosing `recorded`, `read-states-nothing` or `partly-read` (see the module doc). */
-  recordExtraction(
-    input: ExtractionRecordInput,
-  ): Promise<{ readonly state: 'recorded' | 'read-states-nothing' | 'partly-read' }>;
+  recordExtraction(input: ExtractionRecordInput): Promise<RecordedExtraction>;
+  /** One part's demand verdict, read against the structure record `structureId` names. Task and stamp make its provenance. */
+  recordPartDemand(input: {
+    readonly ref: DocumentRef;
+    readonly structureId: string;
+    readonly partId: string;
+    readonly demand: ScopePartDemand;
+    readonly stamp: ExtractionStamp;
+  }): Promise<{ readonly appended: boolean }>;
+  /** One course's alignment results for one document revision, validated as a whole before any is written. `provenance` is absent for a pending result. */
+  recordAlignmentResults(input: {
+    readonly ref: DocumentRef;
+    readonly courseId: string;
+    readonly digests: AlignmentDigests;
+    readonly results: readonly {
+      readonly conceptKey: string;
+      readonly result: AlignmentResult;
+      readonly coverage: AlignmentCoverageNote;
+      readonly provenance?: { readonly task: string } & ExtractionStamp;
+    }[];
+  }): Promise<{ readonly appended: number; readonly unchanged: number }>;
   /** The state and structure of the document's CURRENT revision, labelled against what the caller says is current. */
   readDocument(ref: DocumentRef, policy?: ReadingPolicy): Promise<DocumentReading>;
   load(): Promise<ScopeReadingProjection>;
@@ -264,13 +304,17 @@ export function createScopeReadingPersistence(
       const fullyRead = unitsRead >= unitsTotal;
 
       // The reading first, then the state that says it exists.
+      let structure: RecordedExtraction['structure'];
       if (foundStructure) {
-        await store.recordPaperStructure({
-          source,
-          provenance,
-          reading: scopePaperStructureFrom(input.paperStructure),
-        });
+        const reading = scopePaperStructureFrom(input.paperStructure);
+        const written = await store.recordPaperStructure({ source, provenance, reading });
+        structure = { structureId: written.structureId, reading };
       }
+      const extra = (state: RecordedExtraction['state']): RecordedExtraction => ({
+        state,
+        ...(structure !== undefined ? { structure } : {}),
+        stamp: input.stamp,
+      });
       const coverageDigest =
         input.coverageDigest !== undefined ? { coverageDigest: input.coverageDigest } : {};
       if (!fullyRead) {
@@ -280,7 +324,7 @@ export function createScopeReadingPersistence(
           provenance,
           ...coverageDigest,
         });
-        return { state: 'partly-read' };
+        return extra('partly-read');
       }
       const state = foundSomething ? 'recorded' : 'read-states-nothing';
       await store.recordDocumentState({
@@ -289,7 +333,43 @@ export function createScopeReadingPersistence(
         provenance,
         ...coverageDigest,
       });
-      return { state };
+      return extra(state);
+    },
+
+    async recordPartDemand(input) {
+      return store.recordPartDemand({
+        source: sourceOf(input.ref),
+        partId: input.partId,
+        structureId: input.structureId,
+        demand: input.demand,
+        provenance: {
+          task: SCOPE_READING_DEMAND_TASK,
+          promptVersion: input.stamp.promptVersion,
+          modelId: input.stamp.modelId,
+        },
+      });
+    },
+
+    async recordAlignmentResults(input) {
+      return store.recordAlignmentResults(
+        input.results.map((entry) => ({
+          source: sourceOf(input.ref),
+          courseId: input.courseId,
+          conceptKey: entry.conceptKey,
+          result: entry.result,
+          digests: input.digests,
+          coverage: entry.coverage,
+          ...(entry.provenance !== undefined
+            ? {
+                provenance: {
+                  task: entry.provenance.task,
+                  promptVersion: entry.provenance.promptVersion,
+                  modelId: entry.provenance.modelId,
+                },
+              }
+            : {}),
+        })),
+      );
     },
 
     async readDocument(ref, policy) {

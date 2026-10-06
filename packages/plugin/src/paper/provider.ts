@@ -43,8 +43,12 @@ import { ensureHomeNoteForConcept } from '../generation/home-note.js';
 import type { PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
-import type { PartialPaperStatement } from './copy.js';
-import { buildPartialPaperStatement } from './copy.js';
+import type { IncompletePaperStatement, PartialPaperStatement } from './copy.js';
+import {
+  buildIncompletePaperStatement,
+  buildPartialPaperStatement,
+  UNFINISHED_PAPER_SENTENCE,
+} from './copy.js';
 import type { PaperDemand } from './demand.js';
 import { composePaperThroughJournal } from './journal-composition.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
@@ -93,8 +97,19 @@ export interface PracticePaperReadyState {
   readonly record: PaperRecord;
   readonly partial: boolean;
   readonly partialStatement: PartialPaperStatement | null;
+  /** `[D-457]`: derived from the record's own completion and empty slots, never persisted. Null for a complete or flat paper. */
+  readonly incompleteStatement: IncompletePaperStatement | null;
   readonly items: readonly PracticePaperFaceItem[];
   readonly emptySlots: readonly PaperEmptySlot[];
+}
+
+/** The coverage counts a locked paper may state (F4.11, `[D-252]`): counts and whether known, never a share. */
+export interface LockedCoverageCounts {
+  readonly outcomeCount: number;
+  readonly outcomeCoverageKnown: boolean;
+  readonly conceptCount: number;
+  readonly conceptCoverageKnown: boolean;
+  readonly attachedConceptCount: number;
 }
 
 export type PracticePaperCourseState =
@@ -106,6 +121,13 @@ export type PracticePaperCourseState =
       readonly course: string;
       readonly daysUntilNearest: number;
       readonly nearestAssessmentDue: string;
+      /**
+       * ol-egov.141.89.7.61: the counts the locked reason states, with whether each is known (a
+       * course with no active declaration is unknown, never a measured zero). Counts only: the
+       * share the unlock rule reads is internal and never carried here (F8.3). The sentence that
+       * states them is held for a ruling.
+       */
+      readonly coverage: LockedCoverageCounts;
     }
   /** Unlocked, not yet pulled — she has not yet invoked the one affordance. */
   | { readonly kind: 'unlocked-not-pulled'; readonly course: string }
@@ -183,6 +205,13 @@ async function loadCourseState(
       course,
       daysUntilNearest: unlock.daysUntilNearest ?? 0,
       nearestAssessmentDue: unlock.nearestAssessment.due,
+      coverage: {
+        outcomeCount: coverage.outcomeCount,
+        outcomeCoverageKnown: coverage.outcomeCoverageKnown === true,
+        conceptCount: coverage.conceptCount,
+        conceptCoverageKnown: coverage.conceptCoverageKnown === true,
+        attachedConceptCount: coverage.attachedConceptCount,
+      },
     };
   }
   return { kind: 'unlocked-not-pulled', course };
@@ -215,6 +244,7 @@ export function buildReadyStateFromRecord(
     record,
     partial: record.compositionAccount.partial,
     partialStatement,
+    incompleteStatement: buildIncompletePaperStatement(record.completion, record.emptySlots),
     items: record.items.map((item) => ({
       slotId: item.slotId,
       conceptName: item.conceptName,
@@ -265,6 +295,18 @@ export class PracticePaperUnfinishedError extends Error {
     this.plannedSlotCount = params.plannedSlotCount;
     this.owedSlotCount = params.owedSlotCount;
   }
+}
+
+/**
+ * `[D-457]`: the sentence she reads when a request ended unfinished, or null when the error is not
+ * one she should be told that about. Only an outage (`'service-unavailable'`) keeps a paper that
+ * "Ask again" continues; a journal set aside for another authoring specification starts afresh, so
+ * the continue sentence would be untrue and is not shown for it.
+ */
+export function unfinishedPaperNotice(error: unknown): string | null {
+  return error instanceof PracticePaperUnfinishedError && error.reason === 'service-unavailable'
+    ? UNFINISHED_PAPER_SENTENCE
+    : null;
 }
 
 export interface PracticePaperViewDeps {

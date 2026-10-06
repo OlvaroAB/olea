@@ -19,6 +19,7 @@
  */
 
 import type { BlockKind } from '../block/types.js';
+import type { SourceLocation } from '../extract/types.js';
 import type { VaultPath } from '../vault/types.js';
 
 /**
@@ -43,6 +44,18 @@ export interface IndexedBlock {
    * so a non-transcript document persists byte-for-byte as before.
    */
   readonly part?: number;
+  /**
+   * `ol-egov.141.89.1.95`: set only on a block extracted from a binary source (a PDF, a deck, a
+   * document; `build.ts`'s `indexBinaryBytes`). It is that extracted unit's own
+   * `Provenance.location`, verbatim: `page` (the slide number for a deck), its `charRange` within
+   * that page's text, and `section` when the format carries one. The same anchor the citation
+   * pipeline cites (`../tier3-evidence/build.ts` keeps `unit.provenance` the same way), so a
+   * retrieved binary chunk cites the passage it came from, not just the file. On such a block
+   * `blockIndex` is the unit's ordinal among the source's non-empty extracted units, never a parse
+   * position, and this field is what locates it. Absent on every markdown and transcript block, so
+   * those persist byte-for-byte as before.
+   */
+  readonly location?: SourceLocation;
 }
 
 /**

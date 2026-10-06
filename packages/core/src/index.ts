@@ -563,6 +563,44 @@ export type {
   UnitSupportState,
 } from './coverage/types.js';
 export { addDays, daysBetween } from './dates.js';
+// `[D-432]` (`ol-egov.141.89.7.25`): the per-basis switch for the reading-based ranking bases,
+// default off, and the lexical-fallback label. See evidence-edge/basis-switch.ts's module doc.
+export type {
+  BasisGateInput,
+  BasisGateRecord,
+  BasisGateVerdict,
+  BasisOffReason,
+  BasisSourceAttribution,
+  BasisSourceAttributions,
+  BasisSwitches,
+  BasisSwitchState,
+  ConceptBasisReading,
+  EvidenceSource,
+  FallbackCause,
+  GateRecordRefusal,
+  HeldOutCellCounts,
+  HeldOutCellShortfall,
+  HeldOutExposureEvent,
+  HeldOutExposureRecord,
+  HeldOutLook,
+  HeldOutLookStanding,
+  PerBasisGateCondition,
+  PostHocReason,
+} from './evidence-edge/basis-switch.js';
+export {
+  attributeBasisSources,
+  classifyHeldOutLook,
+  describeBasisSwitch,
+  edgeEvidenceSource,
+  HELD_OUT_CELL_MINIMUMS,
+  heldOutCellShortfall,
+  NO_BASIS_GATE,
+  NO_HELD_OUT_EXPOSURE,
+  PER_BASIS_GATE_PREREGISTRATION,
+  RANKING_BASES,
+  readConceptBasis,
+  resolveBasisSwitches,
+} from './evidence-edge/basis-switch.js';
 // The concept↔assessment evidence edge (knowledge model §5, F4.2, P5-T03) — a
 // pure projection over past-paper citations and the assessments Base, never
 // stored. See evidence-edge/types.ts's module doc for the edge shape and the
@@ -1360,6 +1398,8 @@ export type {
 export { buildFullIndex, DEFAULT_INDEX_CHUNK_SIZE } from './keyword-index/build.js';
 export { indexDocument } from './keyword-index/document.js';
 export type {
+  BinarySourcesDeps,
+  BinarySourcesSync,
   KeywordIndexEngineDeps,
   RebuildOptions,
   RebuildResult,
@@ -2031,6 +2071,54 @@ export {
 } from './outcome/reconcile.js';
 export type { OutcomeConceptCoverage } from './outcome/reconcile-coverage.js';
 export { outcomeConceptCoverage } from './outcome/reconcile-coverage.js';
+// The pure half of the alignment driver (`ol-egov.141.89.7.52`, `[D-431]`): handles, descriptions, the
+// batch plan and omission ledger, coverage, aggregation and the four digests. See its module doc.
+export type {
+  AggregatedConcept,
+  AlignCallUnitView,
+  AlignCoverageState,
+  AlignCoverageUnitInput,
+  AlignDescriptionSource,
+  AlignDigestInputs,
+  AlignHandleInput,
+  AlignPair,
+  AlignPairVerdictKind,
+  BatchPlan,
+  ChosenDescription,
+  ClosedListEntry,
+  CutDescription,
+  FrozenConfigurationInput,
+  PlanConceptInput,
+  PlannedCall,
+  PlanOmission,
+  PlanRecordInput,
+  RevisionCoverage,
+} from './outcome/scope-alignment-plan.js';
+export {
+  ALIGN_CONCEPT_BUDGET,
+  ALIGN_DESCRIPTION_CAP,
+  ALIGN_PASSAGE_BUDGET,
+  ALIGN_RUN_CALL_CAP,
+  ALIGN_TASK_ID,
+  AlignPlanError,
+  aggregateAlignConcept,
+  alignBatchPlanDigest,
+  alignBatchPlanPreimage,
+  alignClosedListDigest,
+  alignCoverageForCall,
+  alignDigestOf,
+  alignDigests,
+  alignFrozenConfigurationDigest,
+  alignFrozenConfigurationPreimage,
+  alignHandleFor,
+  alignRevisionCoverage,
+  assertAlignLedgerComplete,
+  assignAlignHandles,
+  chooseAlignDescription,
+  containsNormalised,
+  cutAlignDescription,
+  planAlignBatches,
+} from './outcome/scope-alignment-plan.js';
 // The examiner-scope reading store (`[D-429]`, `ol-egov.141.89.7.22`): the typed API over the
 // scope-reading log, its projection and views, and the payload types. See each module's own doc.
 // `packages/plugin/src/scope-reading/persistence.ts` reaches all of it through here
@@ -2128,6 +2216,7 @@ export {
   OUTCOME_STORE_FOLDER,
   outcomeRecordPath,
   resolveOutcome,
+  resolveOutcomes,
   retireOutcome,
 } from './outcome/store.js';
 export type {
@@ -2463,6 +2552,11 @@ export {
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
 } from './review-log/explain-back-history.js';
+// `[D-460]`: the explain-back feedback exposure marker, read back — a
+// projection folded from the review log, never stored; see
+// review-log/feedback-shown.ts.
+export type { ExplainBackFeedbackShownAttempt } from './review-log/feedback-shown.js';
+export { explainBackFeedbackShownAttempts } from './review-log/feedback-shown.js';
 // D-238/F3.7's format-ask further-call trigger signal — GEN-3.5
 // (`ol-2zfj.136`). Her OBSERVED instrument-type order (D7.1), vault-wide;
 // see review-log/generation-signals.ts's module doc for the named
@@ -2489,6 +2583,7 @@ export { upgradeV1, upgradeV2, upgradeV3 } from './review-log/upgrade.js';
 export { latestVerdictByInstrument, reviewLogVerdicts } from './review-log/verdicts.js';
 export type {
   AppendDisputeLogResult,
+  AppendExplainBackFeedbackShownLogResult,
   AppendExplainBackOfferLogResult,
   AppendExplainBackSetAsideLogResult,
   AppendMisconceptionObservedLogResult,
@@ -2501,6 +2596,7 @@ export type {
   AppendSuccessionLogResult,
   AppendSuspendLogResult,
   AppendVerdictLogResult,
+  ExplainBackFeedbackShownLogRecordInput,
   ExplainBackOfferLogRecordInput,
   ExplainBackSetAsideLogRecordInput,
   MisconceptionObservedLogRecordInput,
@@ -2514,6 +2610,7 @@ export type {
 } from './review-log/write.js';
 export {
   appendDisputeRecord,
+  appendExplainBackFeedbackShownRecord,
   appendExplainBackOfferRecord,
   appendExplainBackSetAsideRecord,
   appendMisconceptionObservedRecord,

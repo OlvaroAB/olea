@@ -1692,11 +1692,21 @@ export class CitationRevisionTrigger {
   }
 
   /**
-   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage:
-   * suspend the predecessor, enqueue a successor drafted from the current passage, retire
-   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`); a failed
-   * suspend or enqueue leaves the anchor and its pending fact in place, so the question stays
-   * withheld and the same outcome is retried next pass.
+   * Shared by the `'revised'` and, per [D-508], the `'refreshed'` verdict on a cited passage, and by
+   * the binary-source rewrite: enqueue the successor, THEN suspend the predecessor, then retire
+   * tracking. Guarded against a late reply ([D-351] `isPendingRevalidationCurrent`).
+   *
+   * `ol-egov.141.89.5.88` ([D-508]): the order is enqueue-first so an orphan (a suspended
+   * predecessor with no successor) cannot arise. The suspend record carries no author, so a
+   * restart cannot tell this step's suspension from one the student made herself, and the
+   * suspended skip must stay absolute. Enqueue fails: nothing is suspended, the anchor and its
+   * pending fact stay, the question stays withheld, the step is retried in the session, and after a
+   * restart the hold still stands so the next landing (or the [D-518] catch-up extraction) rewrites
+   * it. Enqueue succeeds and suspend fails: the retry re-enqueues the same input, which the work
+   * queue reports as status 'duplicate' without throwing (`IngestionEngine.enqueue` dedupes on
+   * `contentHash`), then suspends; throughout, the predecessor stays withheld by its pending
+   * fact, so predecessor and successor are never shown together. The anchor is removed only after
+   * both succeed; a bounded number of failed attempts is then recorded and given up on.
    */
   private async suspendAndEnqueueSuccessor(
     instrumentId: string,
@@ -1717,8 +1727,8 @@ export class CitationRevisionTrigger {
         this.confirmedRewrites.delete(instrumentId);
         return;
       }
-      await actions.suspend(predecessorInstrumentId, conceptIds);
       await actions.enqueue(successorEnqueueInput);
+      await actions.suspend(predecessorInstrumentId, conceptIds);
       // Retire tracking only after both succeeded; a failure leaves the entry tracked
       // (pending fact intact) and the SAME outcome is retried next pass, at-least-once.
       await this.deps.store.remove(instrumentId);

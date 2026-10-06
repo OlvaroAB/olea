@@ -23,7 +23,7 @@ import {
 } from './tasks.js';
 
 describe('the closed task-id catalogue', () => {
-  it('is exactly these twenty-five ids, spelled exactly this way', () => {
+  it('is exactly these twenty-six ids, spelled exactly this way', () => {
     // Golden list. Changing it is a contract change: it must move together with
     // the Worker's prompt directory names and be recorded on the owning bead.
     expect(ALL_TASK_IDS).toEqual([
@@ -40,6 +40,7 @@ describe('the closed task-id catalogue', () => {
       'grounding.judge.v1',
       'grounding.judge.v2',
       'materiality.judge.v1',
+      'misconception.resolve.v1',
       'oracle.rank.v1',
       'outcomes.align.v1',
       'outcomes.extract.v1',
@@ -152,7 +153,12 @@ describe('the closed task-id catalogue', () => {
     // naming rule gives an incompatible response shape a new id rather than
     // breaking `v1`'s live client consumer. See `vision.extract.v2`'s own
     // doc comment in `tasks.ts` for what the shape change is.
-    expect(ALL_TASK_IDS).toHaveLength(25);
+    //
+    // `misconception.resolve.v1` (`[D-485]` part 2, `ol-egov.141.89.6.94`) is one
+    // more W6 judgment: a verdict over one belief and an answer that already
+    // exists (demonstrates, silent, reasserts or unclear), run on the decision
+    // model rather than a Workers AI slot. See its own doc comment in `tasks.ts`.
+    expect(ALL_TASK_IDS).toHaveLength(26);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {

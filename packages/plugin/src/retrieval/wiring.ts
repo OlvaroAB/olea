@@ -154,10 +154,10 @@ export async function drainIntoEmbeddingCache(
   params: DrainIntoEmbeddingCacheParams,
 ): Promise<void> {
   const persisted = params.keywordIndex?.toPersisted();
-  // D-465 (`ol-egov.141.89.1.62`): a transcript is indexed once. The keyword index now holds a
-  // transcript's parts (a declared Markdown transcript and a plain-text one), and the transcript job
-  // also lands the same parts in the sink, so a sink unit whose source the index already holds is
-  // left out here rather than listed twice. Every other sink unit (a PDF, a deck) is unchanged.
+  // D-465 (`ol-egov.141.89.1.62`): a sink unit whose source the index already holds is left out
+  // rather than listed twice: a transcript's parts, and since `ol-egov.141.89.1.95` every PDF, deck
+  // and document (the index holds their text-layer units; `retrieve` ranks index chunks only, so a
+  // sink-only unit of an indexed source was never a retrieval candidate either).
   const indexedPaths = new Set(persisted?.documents.map((d) => d.path) ?? []);
   const sinkUnits = params.sink.all().filter((u) => !indexedPaths.has(u.provenance.sourcePath));
   const chunks: RetrievalChunk[] = [

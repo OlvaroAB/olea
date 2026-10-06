@@ -52,10 +52,13 @@
  * mapped back to it here, so the result speaks the stored shape's language
  * (`AlignmentResult.aligned.refs`).
  *
- * **Reachability (`[D-072]`).** Nothing calls this in production yet, deliberately. Its production
- * caller is the wire stage, `ol-egov.141.89.7.5`: the alignment run that plans batches, builds the
- * closed list, calls `read`, aggregates the pairs and writes the alignment store
- * (`packages/core/src/outcome/scope-reading-store.ts`). A workbench caller would not discharge it.
+ * **Reachability (`[D-072]`).** Constructed in production code by `runAlignmentDriver`
+ * (`../scope-reading/alignment-driver.ts`, `ol-egov.141.89.7.52`): the alignment run that plans
+ * batches (`olea-core`'s `scope-alignment-plan.ts`), builds the closed list, calls `read`, aggregates
+ * the pairs and writes the alignment store through `recordAlignmentResults`. That driver has no
+ * production caller yet: `runScopeReadingDrivers` (`../scope-reading/drivers.ts`) is built and tested,
+ * and the one call in `wiring.ts` waits on `[D-534]` (automatic spend) and on
+ * `ol-egov.141.89.7.68` releasing that file. A workbench caller would not discharge it.
  */
 
 import type { PaperQuestionGroupKind, PaperStimulusForm, WorkerTaskTransport } from 'olea-core';

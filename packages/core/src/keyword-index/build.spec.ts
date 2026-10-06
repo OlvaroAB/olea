@@ -216,7 +216,7 @@ function buildPdfBytes(pageText: string): Uint8Array {
   return bytes;
 }
 
-describe('buildFullIndex — registeredFiles (ol-n06g: registered material is citable but was not embeddable)', () => {
+describe('buildFullIndex — binarySources (ol-n06g: registered material is citable but was not embeddable; ol-egov.141.89.1.95: every binary, registration giving the course)', () => {
   let root: string;
 
   beforeEach(async () => {
@@ -239,7 +239,7 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     await writeFile(full, buildPdfBytes(pageText));
   }
 
-  it('without registeredFiles, a binary source is invisible to the index (the gap ol-n06g reports)', async () => {
+  it('without binarySources, a binary source is invisible to the index (the default every non-engine caller keeps)', async () => {
     await writeText('note.md', '---\n---\n\n# A note\n');
     await writePdf('Lectures/deck.pdf', 'Some lecture content about basalt weathering.');
     const vault = new FolderSource(root);
@@ -251,7 +251,7 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     expect(result.index.documents.map((d) => d.path)).toEqual(['note.md']);
   });
 
-  it('a registered PDF is chunked and embeddable — the fix (registeredFiles threaded to extractFromVault, mirroring the concept/citation pipeline)', async () => {
+  it('a registered PDF is chunked and embeddable, carrying its registration’s course (the extraction the concept/citation pipeline runs)', async () => {
     await writeText('note.md', '---\n---\n\n# A note\n');
     await writePdf('Lectures/deck.pdf', 'Some lecture content about basalt weathering.');
     const vault = new FolderSource(root);
@@ -259,7 +259,11 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     const result = await buildFullIndex({
       vault,
       scheduler: { yield: async () => {} },
-      registeredFiles: [{ path: 'Lectures/deck.pdf', role: 'course-material', course: 'GEOL204' }],
+      binarySources: {
+        registeredFiles: [
+          { path: 'Lectures/deck.pdf', role: 'course-material', course: 'GEOL204' },
+        ],
+      },
     });
 
     expect(result.status).toBe('complete');
@@ -288,7 +292,7 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     const result = await buildFullIndex({
       vault,
       scheduler: { yield: async () => {} },
-      registeredFiles: [{ path: 'Lectures/missing.pdf' }],
+      binarySources: { registeredFiles: [{ path: 'Lectures/missing.pdf' }] },
     });
 
     expect(result.status).toBe('complete');
@@ -303,7 +307,7 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     const result = await buildFullIndex({
       vault,
       scheduler: { yield: async () => {} },
-      registeredFiles: [{ path: '03 Research/paper.md', role: 'past-paper' }],
+      binarySources: { registeredFiles: [{ path: '03 Research/paper.md', role: 'past-paper' }] },
     });
 
     expect(result.status).toBe('complete');
@@ -311,12 +315,12 @@ describe('buildFullIndex — registeredFiles (ol-n06g: registered material is ci
     expect(result.index.documents.map((d) => d.path)).toEqual(['03 Research/paper.md']);
   });
 
-  it('omitting registeredFiles entirely reproduces exactly the pre-existing behaviour (backward compatible)', async () => {
+  it('on a vault with no binaries, binarySources changes nothing (backward compatible)', async () => {
     const vault = vaultWithDocs(3);
     const withOption = await buildFullIndex({
       vault,
       scheduler: { yield: async () => {} },
-      registeredFiles: [],
+      binarySources: { registeredFiles: [] },
     });
     const withoutOption = await buildFullIndex({ vault, scheduler: { yield: async () => {} } });
 

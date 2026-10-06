@@ -48,11 +48,13 @@
  * the answer's refs are mapped back to it here, so the verdict speaks the stored shape's language
  * (`ScopePartDemand.refs`).
  *
- * **Reachability (`[D-072]`).** Nothing calls this in production yet, deliberately. Its production
- * caller is the wire stage, `ol-egov.141.89.7.5`: after the structure reading is stored, one call per
- * part, the verdict written to the part-demand store. The paper item port
- * (`../oracle/paper-item-port.ts`) is not its caller: it calls `cards.generate.v1` and
- * `quiz.generate.v1`. A workbench caller would not discharge it.
+ * **Reachability (`[D-072]`).** Constructed in production code by `runDemandDriver`
+ * (`../scope-reading/demand-driver.ts`, `ol-egov.141.89.7.52`): after the structure reading is stored,
+ * one call per part, the verdict written through `recordPartDemand`. That driver has no production
+ * caller yet: `runScopeReadingDrivers` (`../scope-reading/drivers.ts`) is built and tested, and the one
+ * call in `wiring.ts` waits on `[D-534]` (automatic spend) and on `ol-egov.141.89.7.68` releasing that
+ * file. The paper item port (`../oracle/paper-item-port.ts`) is not its caller: it calls
+ * `cards.generate.v1` and `quiz.generate.v1`. A workbench caller would not discharge it.
  */
 
 import type {

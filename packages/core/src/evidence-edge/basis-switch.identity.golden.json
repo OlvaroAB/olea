@@ -1,0 +1,666 @@
+{
+  "ranking": {
+    "courses": [
+      {
+        "course": "TESTC101",
+        "status": "ranked",
+        "ranked": [
+          {
+            "conceptName": "Widget theory",
+            "conceptKey": "concept-prov1:Widget theory",
+            "course": "TESTC101",
+            "rank": 1,
+            "priorityScore": 1.9516129032258065,
+            "factors": {
+              "citations": [
+                {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                  "questionLabel": "1",
+                  "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+                  "provenance": {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "location": {
+                      "page": 1,
+                      "charRange": {
+                        "start": 73,
+                        "end": 168
+                      }
+                    }
+                  }
+                },
+                {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                  "questionLabel": "1",
+                  "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+                  "provenance": {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                    "location": {
+                      "page": 1,
+                      "charRange": {
+                        "start": 73,
+                        "end": 165
+                      }
+                    }
+                  }
+                }
+              ],
+              "distinctSourceCount": 2,
+              "objectivesCitations": [
+                {
+                  "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+                  "provenance": {
+                    "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+                    "location": {
+                      "page": 1,
+                      "charRange": {
+                        "start": 75,
+                        "end": 165
+                      }
+                    }
+                  }
+                }
+              ],
+              "distinctObjectivesSourceCount": 1,
+              "contributions": [
+                {
+                  "assessmentPath": "02 Assignments/Test 1.md",
+                  "yieldRank": 1,
+                  "yieldScore": 1,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.3,
+                  "daysUntilDue": 47,
+                  "examProximityScore": 0.22950819672131145,
+                  "evidenceStrength": 1,
+                  "contribution": 0.3
+                },
+                {
+                  "assessmentPath": "02 Assignments/Quiz 1.md",
+                  "yieldRank": 1,
+                  "yieldScore": 1,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.1,
+                  "daysUntilDue": 17,
+                  "examProximityScore": 0.45161290322580644,
+                  "evidenceStrength": 1,
+                  "contribution": 0.1
+                },
+                {
+                  "assessmentPath": "02 Assignments/Test 1.md",
+                  "yieldRank": 4,
+                  "yieldScore": 0.25,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.3,
+                  "daysUntilDue": 47,
+                  "examProximityScore": 0.22950819672131145,
+                  "evidenceStrength": 0.25,
+                  "contribution": 0.075
+                },
+                {
+                  "assessmentPath": "02 Assignments/Quiz 1.md",
+                  "yieldRank": 4,
+                  "yieldScore": 0.25,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.1,
+                  "daysUntilDue": 17,
+                  "examProximityScore": 0.45161290322580644,
+                  "evidenceStrength": 0.25,
+                  "contribution": 0.025
+                }
+              ],
+              "vetoedEdges": [],
+              "preMasteryScore": 0.5,
+              "masteryState": "seed",
+              "masteryNeedWeight": 1,
+              "needBasis": "unknown",
+              "needOrderingInput": 1,
+              "proximityScore": 0.45161290322580644,
+              "blendWeights": {
+                "relevance": 1,
+                "need": 1,
+                "proximity": 1
+              },
+              "priorityScore": 1.9516129032258065
+            },
+            "citations": [
+              {
+                "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                "questionLabel": "1",
+                "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+                "provenance": {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                  "location": {
+                    "page": 1,
+                    "charRange": {
+                      "start": 73,
+                      "end": 168
+                    }
+                  }
+                }
+              },
+              {
+                "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                "questionLabel": "1",
+                "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+                "provenance": {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+                  "location": {
+                    "page": 1,
+                    "charRange": {
+                      "start": 73,
+                      "end": 165
+                    }
+                  }
+                }
+              }
+            ],
+            "reasoning": "Widget theory (TESTC101) is ranked above the next concept because it counts for more in your assessments. It appears in past papers, and its course objectives name it. How well you recall it is not known yet."
+          },
+          {
+            "conceptName": "Sprocket method",
+            "conceptKey": "concept-prov1:Sprocket method",
+            "course": "TESTC101",
+            "rank": 2,
+            "priorityScore": 1.5849462365591398,
+            "factors": {
+              "citations": [],
+              "distinctSourceCount": 0,
+              "objectivesCitations": [
+                {
+                  "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+                  "provenance": {
+                    "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+                    "location": {
+                      "page": 1,
+                      "charRange": {
+                        "start": 75,
+                        "end": 165
+                      }
+                    }
+                  }
+                }
+              ],
+              "distinctObjectivesSourceCount": 1,
+              "contributions": [
+                {
+                  "assessmentPath": "02 Assignments/Test 1.md",
+                  "yieldRank": 3,
+                  "yieldScore": 0.3333333333333333,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.3,
+                  "daysUntilDue": 47,
+                  "examProximityScore": 0.22950819672131145,
+                  "evidenceStrength": 0.3333333333333333,
+                  "contribution": 0.09999999999999999
+                },
+                {
+                  "assessmentPath": "02 Assignments/Quiz 1.md",
+                  "yieldRank": 3,
+                  "yieldScore": 0.3333333333333333,
+                  "confidence": 1,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.1,
+                  "daysUntilDue": 17,
+                  "examProximityScore": 0.45161290322580644,
+                  "evidenceStrength": 0.3333333333333333,
+                  "contribution": 0.03333333333333333
+                }
+              ],
+              "vetoedEdges": [],
+              "preMasteryScore": 0.13333333333333333,
+              "masteryState": "seed",
+              "masteryNeedWeight": 1,
+              "needBasis": "unknown",
+              "needOrderingInput": 1,
+              "proximityScore": 0.45161290322580644,
+              "blendWeights": {
+                "relevance": 1,
+                "need": 1,
+                "proximity": 1
+              },
+              "priorityScore": 1.5849462365591398
+            },
+            "citations": [],
+            "reasoning": "Sprocket method (TESTC101) is ranked above the next concept because it counts for more in your assessments. Its course objectives name it. How well you recall it is not known yet."
+          },
+          {
+            "conceptName": "Gizmo law",
+            "conceptKey": "concept-prov1:Gizmo law",
+            "course": "TESTC101",
+            "rank": 3,
+            "priorityScore": 1.5516129032258066,
+            "factors": {
+              "citations": [
+                {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                  "questionLabel": "2",
+                  "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+                  "provenance": {
+                    "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                    "location": {
+                      "page": 1,
+                      "charRange": {
+                        "start": 168,
+                        "end": 242
+                      }
+                    }
+                  }
+                }
+              ],
+              "distinctSourceCount": 1,
+              "objectivesCitations": [],
+              "distinctObjectivesSourceCount": 0,
+              "contributions": [
+                {
+                  "assessmentPath": "02 Assignments/Test 1.md",
+                  "yieldRank": 2,
+                  "yieldScore": 0.5,
+                  "confidence": 0.5,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.3,
+                  "daysUntilDue": 47,
+                  "examProximityScore": 0.22950819672131145,
+                  "evidenceStrength": 0.25,
+                  "contribution": 0.075
+                },
+                {
+                  "assessmentPath": "02 Assignments/Quiz 1.md",
+                  "yieldRank": 2,
+                  "yieldScore": 0.5,
+                  "confidence": 0.5,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.1,
+                  "daysUntilDue": 17,
+                  "examProximityScore": 0.45161290322580644,
+                  "evidenceStrength": 0.25,
+                  "contribution": 0.025
+                }
+              ],
+              "vetoedEdges": [],
+              "preMasteryScore": 0.1,
+              "masteryState": "seed",
+              "masteryNeedWeight": 1,
+              "needBasis": "unknown",
+              "needOrderingInput": 1,
+              "proximityScore": 0.45161290322580644,
+              "blendWeights": {
+                "relevance": 1,
+                "need": 1,
+                "proximity": 1
+              },
+              "priorityScore": 1.5516129032258066
+            },
+            "citations": [
+              {
+                "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                "questionLabel": "2",
+                "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+                "provenance": {
+                  "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+                  "location": {
+                    "page": 1,
+                    "charRange": {
+                      "start": 168,
+                      "end": 242
+                    }
+                  }
+                }
+              }
+            ],
+            "reasoning": "Gizmo law (TESTC101) is ranked above the next concept because the assessment evidence for it is stronger. It appears in past papers. How well you recall it is not known yet."
+          },
+          {
+            "conceptName": "Flange rule",
+            "conceptKey": "concept-prov1:Flange rule",
+            "course": "TESTC101",
+            "rank": 4,
+            "priorityScore": 1.4587557603686636,
+            "factors": {
+              "citations": [],
+              "distinctSourceCount": 0,
+              "objectivesCitations": [],
+              "distinctObjectivesSourceCount": 0,
+              "contributions": [
+                {
+                  "assessmentPath": "02 Assignments/Quiz 1.md",
+                  "yieldRank": 2,
+                  "yieldScore": 0.5,
+                  "confidence": 0.14285714285714285,
+                  "assessmentWeightKnown": true,
+                  "assessmentWeightScore": 0.1,
+                  "daysUntilDue": 17,
+                  "examProximityScore": 0.45161290322580644,
+                  "evidenceStrength": 0.07142857142857142,
+                  "contribution": 0.007142857142857143
+                }
+              ],
+              "vetoedEdges": [],
+              "preMasteryScore": 0.007142857142857143,
+              "masteryState": "seed",
+              "masteryNeedWeight": 1,
+              "needBasis": "unknown",
+              "needOrderingInput": 1,
+              "proximityScore": 0.45161290322580644,
+              "blendWeights": {
+                "relevance": 1,
+                "need": 1,
+                "proximity": 1
+              },
+              "priorityScore": 1.4587557603686636
+            },
+            "citations": [],
+            "reasoning": "Flange rule (TESTC101) is ranked last in this course. Its assessments point to it. How well you recall it is not known yet."
+          }
+        ],
+        "vetoedConcepts": []
+      }
+    ],
+    "unattributableAssessments": [],
+    "asOf": "2026-08-15"
+  },
+  "edges": [
+    {
+      "conceptName": "Widget theory",
+      "conceptKey": "concept-prov1:Widget theory",
+      "assessmentPath": "02 Assignments/Quiz 1.md",
+      "course": "TESTC101",
+      "yieldRank": 1,
+      "confidence": 1,
+      "citations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+          "questionLabel": "1",
+          "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 73,
+                "end": 168
+              }
+            }
+          }
+        },
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+          "questionLabel": "1",
+          "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 73,
+                "end": 165
+              }
+            }
+          }
+        }
+      ],
+      "basis": "past-paper"
+    },
+    {
+      "conceptName": "Gizmo law",
+      "conceptKey": "concept-prov1:Gizmo law",
+      "assessmentPath": "02 Assignments/Quiz 1.md",
+      "course": "TESTC101",
+      "yieldRank": 2,
+      "confidence": 0.5,
+      "citations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+          "questionLabel": "2",
+          "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 168,
+                "end": 242
+              }
+            }
+          }
+        }
+      ],
+      "basis": "past-paper"
+    },
+    {
+      "conceptName": "Sprocket method",
+      "conceptKey": "concept-prov1:Sprocket method",
+      "assessmentPath": "02 Assignments/Quiz 1.md",
+      "course": "TESTC101",
+      "yieldRank": 3,
+      "confidence": 1,
+      "citations": [],
+      "basis": "objectives",
+      "objectivesCitations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 75,
+                "end": 165
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "conceptName": "Widget theory",
+      "conceptKey": "concept-prov1:Widget theory",
+      "assessmentPath": "02 Assignments/Quiz 1.md",
+      "course": "TESTC101",
+      "yieldRank": 4,
+      "confidence": 1,
+      "citations": [],
+      "basis": "objectives",
+      "objectivesCitations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 75,
+                "end": 165
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "conceptName": "Flange rule",
+      "conceptKey": "concept-prov1:Flange rule",
+      "assessmentPath": "02 Assignments/Quiz 1.md",
+      "course": "TESTC101",
+      "yieldRank": 2,
+      "confidence": 0.14285714285714285,
+      "citations": [],
+      "basis": "assessment-brief",
+      "briefCitations": [
+        {
+          "sourcePath": "02 Assignments/Quiz 1.md",
+          "provenance": {
+            "sourcePath": "02 Assignments/Quiz 1.md",
+            "location": {
+              "page": 1
+            }
+          }
+        }
+      ]
+    },
+    {
+      "conceptName": "Widget theory",
+      "conceptKey": "concept-prov1:Widget theory",
+      "assessmentPath": "02 Assignments/Test 1.md",
+      "course": "TESTC101",
+      "yieldRank": 1,
+      "confidence": 1,
+      "citations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+          "questionLabel": "1",
+          "questionText": "## Question 1 (10 marks)\n\nExplain the core mechanism behind Widget theory and why it matters.\n\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 73,
+                "end": 168
+              }
+            }
+          }
+        },
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+          "questionLabel": "1",
+          "questionText": "## Question 1 (10 marks)\n\nWidget theory predicts a specific outcome under load — derive it.\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2024.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 73,
+                "end": 165
+              }
+            }
+          }
+        }
+      ],
+      "basis": "past-paper"
+    },
+    {
+      "conceptName": "Gizmo law",
+      "conceptKey": "concept-prov1:Gizmo law",
+      "assessmentPath": "02 Assignments/Test 1.md",
+      "course": "TESTC101",
+      "yieldRank": 2,
+      "confidence": 0.5,
+      "citations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+          "questionLabel": "2",
+          "questionText": "## Question 2 (10 marks)\n\nState Gizmo law and apply it to a loaded frame.\n",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Past Paper 2023.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 168,
+                "end": 242
+              }
+            }
+          }
+        }
+      ],
+      "basis": "past-paper"
+    },
+    {
+      "conceptName": "Sprocket method",
+      "conceptKey": "concept-prov1:Sprocket method",
+      "assessmentPath": "02 Assignments/Test 1.md",
+      "course": "TESTC101",
+      "yieldRank": 3,
+      "confidence": 1,
+      "citations": [],
+      "basis": "objectives",
+      "objectivesCitations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 75,
+                "end": 165
+              }
+            }
+          }
+        }
+      ]
+    },
+    {
+      "conceptName": "Widget theory",
+      "conceptKey": "concept-prov1:Widget theory",
+      "assessmentPath": "02 Assignments/Test 1.md",
+      "course": "TESTC101",
+      "yieldRank": 4,
+      "confidence": 1,
+      "citations": [],
+      "basis": "objectives",
+      "objectivesCitations": [
+        {
+          "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+          "provenance": {
+            "sourcePath": "03 Research/TESTC101 Course Objectives.md",
+            "location": {
+              "page": 1,
+              "charRange": {
+                "start": 75,
+                "end": 165
+              }
+            }
+          }
+        }
+      ]
+    }
+  ],
+  "assessmentsWithoutCourse": [],
+  "assessmentsWithNoEvidence": [],
+  "requestBases": [
+    {
+      "candidate": "TESTC101\u0000concept-prov1:Flange rule",
+      "bases": [
+        {
+          "basis": "assessment-brief",
+          "confidence": 0.14285714285714285
+        }
+      ]
+    },
+    {
+      "candidate": "TESTC101\u0000concept-prov1:Gizmo law",
+      "bases": [
+        {
+          "basis": "past-paper",
+          "confidence": 0.5
+        }
+      ]
+    },
+    {
+      "candidate": "TESTC101\u0000concept-prov1:Sprocket method",
+      "bases": [
+        {
+          "basis": "objectives",
+          "confidence": 1
+        }
+      ]
+    },
+    {
+      "candidate": "TESTC101\u0000concept-prov1:Widget theory",
+      "bases": [
+        {
+          "basis": "objectives",
+          "confidence": 1
+        },
+        {
+          "basis": "past-paper",
+          "confidence": 1
+        }
+      ]
+    }
+  ]
+}

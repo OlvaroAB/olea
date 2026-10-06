@@ -173,12 +173,15 @@ describe('every port the session needs is the real one', () => {
     // `openExplainBackModal` deps (`recordSetAsideAttempt`) awaits it a
     // tenth time to thread the same id into
     // `createRecordSetAsideAttempt`'s own vault write (the Try again
-    // set-aside-attempt event) —
+    // set-aside-attempt event), and `[D-460]`'s `openExplainBackModal` deps
+    // (`recordFeedbackShown`) awaits it an eleventh time to thread the same
+    // id into `createRecordFeedbackShown`'s own vault write (the feedback
+    // exposure marker, written before a graded result renders) —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // ten. The count below tracks known call sites rather than asserting
+    // eleven. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(10);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(11);
   });
 });
 
@@ -293,6 +296,31 @@ describe('the keyword index store is actually constructed (ol-tuvx)', () => {
   });
 });
 
+describe('every PDF, deck and document reaches the keyword index (ol-egov.141.89.1.95)', () => {
+  // The composer and the engine are tested against fakes (`test/keyword-index/
+  // binary-sources.ol-egov.141.89.1.95.spec.ts`); these are the source-level checks that
+  // production turns binaries on, hands them her real registrations for their courses, and tells
+  // the index when one is made.
+
+  it('turns binaries on, with her registered sources, folded from her log, for their courses', () => {
+    expect(main).toMatch(
+      /binarySources: \{\s*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\}/,
+    );
+  });
+
+  it('tells the index after a registration from the file menu (S2)', () => {
+    expect(main).toMatch(
+      /onRegistered: \(\) => \{[^}]*void this\.keywordIndex\?\.syncBinarySources\(\);/,
+    );
+  });
+
+  it('tells the index after a registration from the grove (S1)', () => {
+    expect(main).toMatch(
+      /registerSource: async \(input\) => \{\s*await provider\.registerSource\(input\);\s*void this\.keywordIndex\?\.syncBinarySources\(\);/,
+    );
+  });
+});
+
 describe('a vault-read failure while building the keyword index never crashes onload (ol-egov.141.89.10.75)', () => {
   // `keyword-index/wiring.ts`'s own rebuild-once step is a real vault walk
   // with no handler of its own — before this bead, a failing read there
@@ -309,7 +337,7 @@ describe('a vault-read failure while building the keyword index never crashes on
 
   it('wraps the construction in try/catch, degrading to the already-handled null state on failure', () => {
     expect(main).toMatch(
-      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
+      /try \{\s*this\.keywordIndex = await buildKeywordIndexWiring\(\{\s*vault,\s*store: new ObsidianKeywordIndexStore\(this\),\s*capability,\s*watch: \(handler\) => vault\.watch\(handler\),\s*(?:\/\/[^\n]*\n\s*)*binarySources: \{\s*registeredFiles: async \(\) =>\s*projectRegisteredFiles\(\(await readReviewLogHistory\(vault\)\)\.entries\),\s*\},\s*\}\);\s*this\.register\(this\.keywordIndex\.unsubscribe\);\s*\} catch \(error\) \{\s*console\.error\('Olea: could not build the keyword index', error\);\s*this\.keywordIndex = null;\s*\}/,
     );
   });
 
@@ -2529,8 +2557,39 @@ describe('row 50 (ol-egov.141.89.6.72): a later session reads the explain-back f
     expect(main.match(/createReadLoggedAttemptState\(/g)).toHaveLength(1);
   });
 
-  it('adds no write: the only append in the explain-back deps literal is the set-aside writer', () => {
+  it('builds exactly one set-aside writer', () => {
     expect(main.match(/createRecordSetAsideAttempt\(/g)).toHaveLength(1);
+  });
+});
+
+describe('[D-460] (ol-egov.141.89.6.86): the explain-back view writes the feedback exposure marker before a graded result renders', () => {
+  // The ordering and the failure handling are proved behaviourally in
+  // `test/explain-back/modal-feedback-shown-marker.spec.ts` and the read-back in
+  // `test/explain-back/feedback-shown-marker.spec.ts`; these pins hold that
+  // `main.ts` supplies the writer, into the SAME log the reader reads.
+
+  it('imports createRecordFeedbackShown from the tested module', () => {
+    expect(main).toMatch(
+      /import \{ createRecordFeedbackShown \} from '\.\/explain-back\/feedback-exposure\.js';/,
+    );
+  });
+
+  it("supplies recordFeedbackShown as ExplainBackModal's dep, over the plugin's vault source and device id", () => {
+    expect(main).toMatch(
+      /recordFeedbackShown:\s*createRecordFeedbackShown\(\{\s*vault:\s*this\.vaultSource,\s*deviceId:\s*\(\)\s*=>\s*ensureDeviceId\(this\),?\s*\}\),/,
+    );
+  });
+
+  it('builds the marker writer in the same deps literal as the log reader, so both see one log', () => {
+    const start = main.indexOf('readLoggedAttemptState: createReadLoggedAttemptState(');
+    expect(start).toBeGreaterThan(-1);
+    const end = main.indexOf('loadMisconceptionDigest:', start);
+    expect(end).toBeGreaterThan(start);
+    expect(main.slice(start, end)).toMatch(/recordFeedbackShown:\s*createRecordFeedbackShown\(/);
+  });
+
+  it('builds exactly one marker writer', () => {
+    expect(main.match(/createRecordFeedbackShown\(/g)).toHaveLength(1);
   });
 });
 

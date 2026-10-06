@@ -85,6 +85,7 @@ import type {
   ExtractTier3EvidenceResult,
 } from '../tier3-evidence/types.js';
 import type { VaultPath } from '../vault/types.js';
+import type { BasisGateInput, BasisSourceAttributions } from './basis-switch.js';
 
 /**
  * One past-paper question or sub-part backing an edge — the acceptance
@@ -298,6 +299,16 @@ export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3Evidence
    * product setting.
    */
   readonly includeAssessmentBriefBasis?: boolean;
+  /**
+   * `[D-432]` (`ol-egov.141.89.7.25`): the recorded per-basis gate results and the held-out
+   * exposure record they are checked against (`./basis-switch.ts`). **Omitted, every basis is
+   * off** (`NO_BASIS_GATE`), which is what every production caller passes today; nothing
+   * records a pass yet. Even a basis that resolves on changes no edge here: this module reads no
+   * alignment result, so its edges stay the lexical fallback (`alignment-pending`) until the wire
+   * stage (`ol-egov.141.89.7.5`) supplies results. There is no way to hand this a resolved "on"
+   * state: only records, resolved by `resolveBasisSwitches`.
+   */
+  readonly basisGate?: BasisGateInput;
 }
 
 export interface BuildConceptAssessmentEdgesResult {
@@ -317,4 +328,11 @@ export interface BuildConceptAssessmentEdgesResult {
    * why, instead of inferring it from an edge list that simply lacks them.
    */
   readonly assessmentsWithNoEvidence: readonly VaultPath[];
+  /**
+   * `[D-432]` (`ol-egov.141.89.7.25`): per basis, its switch and where its edges came from. Every
+   * edge above is the lexical fallback today, so every basis reads `source: 'lexical-fallback'`,
+   * `cause: 'switch-off'` (or `'alignment-pending'` for a basis whose switch is on). Internal: no
+   * surface renders it, and nothing above changes with it (`./basis-switch.ts`).
+   */
+  readonly basisSources: BasisSourceAttributions;
 }

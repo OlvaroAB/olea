@@ -121,7 +121,7 @@ import {
   type PersistedJob,
   type QueueStore,
   reconcileOutcomeConcepts,
-  resolveOutcome,
+  resolveOutcomes,
   type StudyPlanStore,
   type UnitManifestEntry,
   type VaultPath,
@@ -677,11 +677,12 @@ async function triggerOutcomesExtractForLandedUnit(
   const reader = new WorkerOutcomesExtractReader({ transport: capturingTransport });
   const passages: OutcomeSourcePassage<OutcomeSourceReference>[] = units.map((unit, index) => ({
     text: unit.text,
-    // `blockIndex` here is this document's own landed-unit ordinal (page/passage order), not a
-    // markdown block index — `OutcomeSourceReference.blockIndex` is an opaque, per-document
-    // distinguishing key (`store.ts`'s own conservation match), and `[D-344]`'s eligible documents
-    // are exactly the ones `isRegisterableDocument` accepts: never markdown, so there is no block
-    // structure to index into in the first place.
+    // `blockIndex` here is this delivery's own landed-unit ordinal (page/passage order), not a
+    // markdown block index — `[D-344]`'s eligible documents are exactly the ones
+    // `isRegisterableDocument` accepts: never markdown, so there is no block structure to index
+    // into in the first place. It restarts at 0 for each delivery, so a document whose vision pages
+    // arrive in their own jobs reuses unit 0; the store's match (`[D-477]`) tells outcomes on one
+    // unit number apart by their wording, so a different outcome there never takes another's record.
     anchor: { path: sourcePath, blockIndex: index },
   }));
 
@@ -1246,7 +1247,7 @@ export interface RunOutcomesExtractOptions {
 
 export interface RunOutcomesExtractResult {
   /**
-   * Resolved through `resolveOutcome` (mint-or-lookup, `[D-088]`-shaped
+   * Resolved through `resolveOutcomes` (mint-or-lookup, `[D-088]`-shaped
    * conservation) — never a bare `OutcomeCandidate`, so a caller always gets
    * back the durable, opaque-id record rather than a transient proposal.
    */
@@ -1268,7 +1269,7 @@ export interface RunOutcomesExtractResult {
 /**
  * Reads outcomes and paper-structure sections from `passages` through
  * `reader`, then resolves every outcome candidate into a persisted
- * `OutcomeRecord` via `resolveOutcome` — the adapter-plus-store composition
+ * `OutcomeRecord` via `resolveOutcomes` — the adapter-plus-store composition
  * this section's module doc names as step 3/4. Concept attachment
  * (`attachConceptToOutcome`) is deliberately NOT called here: nothing in this
  * function has inferred concept keys from the outcome yet — that is a later
@@ -1297,25 +1298,32 @@ export async function runOutcomesExtract(
  * trigger (`triggerOutcomesExtractForLandedUnit` above) can supply a result it already read
  * through its own capturing transport — see that function's own doc for why calling
  * `runOutcomesExtract` itself there would mean a second, budget-doubling `reader.read()` call just
- * to learn the response's D7.3 stamp before this step can run. Behaviour is byte-identical to
- * `runOutcomesExtract`'s own inline version before this bead — this function's body IS that
- * version, unmoved apart from taking `result` as a parameter instead of producing it.
+ * to learn the response's D7.3 stamp before this step can run.
+ *
+ * **One `resolveOutcomes` call per extraction (`[D-477]`, `ol-egov.141.89.7.43`).** Each candidate
+ * was once resolved by its own call under `Promise.all`, and the store matched on block alone, so
+ * which outcomes on one page became records depended on I/O timing and a later revision folded
+ * them all onto one. The store now tells a block's outcomes apart by their wording and resolves
+ * the batch as one task; see `olea-core`'s `outcome/source-identity.ts`.
  */
 async function resolveOutcomeCandidates(
   vault: VaultSource,
   result: OutcomesExtractReadResult<OutcomeSourceReference>,
   options: RunOutcomesExtractOptions,
 ): Promise<RunOutcomesExtractResult> {
-  const outcomes = await Promise.all(
-    result.outcomes.map((candidate) =>
-      resolveOutcome(vault, {
-        courses: options.courses,
-        source: candidate.anchor,
-        label: candidate.label,
-        provenance: options.provenance,
-        extractorSelfRating: candidate.confidence,
-      }),
-    ),
+  // `[D-477]`: one call for the whole extraction, never one call per candidate under
+  // `Promise.all`. The store resolves the batch as one task (list, match by block and wording, mint)
+  // so the records do not depend on I/O timing, and only records stored before this extraction can
+  // be claimed by a near wording, so two outcomes on one page never fold onto one record.
+  const outcomes = await resolveOutcomes(
+    vault,
+    result.outcomes.map((candidate) => ({
+      courses: options.courses,
+      source: candidate.anchor,
+      label: candidate.label,
+      provenance: options.provenance,
+      extractorSelfRating: candidate.confidence,
+    })),
   );
 
   return { outcomes, paperStructure: result.paperStructure };

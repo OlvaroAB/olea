@@ -2791,9 +2791,64 @@ export const explainBackSetAsideLogRecordV6 = z
 export type ExplainBackSetAsideLogRecordV6 = z.infer<typeof explainBackSetAsideLogRecordV6>;
 
 /**
+ * The **feedback exposure marker** (`[D-460]`, ruled 2026-09-30,
+ * `ol-egov.141.89.6.80`; shape from `ol-egov.141.89.6.86`): the fact that an
+ * explain-back attempt's graded result was displayed to her. New at v6,
+ * additive to the v6 discriminated union the way `explainBackSetAsideLogRecordV6`
+ * was — a new `kind` literal, no `schemaVersion` bump, no v5 form.
+ *
+ * **Why it exists.** The graded result shows her the feedback, the missed
+ * points and the cited source, so an answer she writes after it is assisted
+ * (`[D-416]`, row 50 of the 2026-09-29 sheet). The set-aside record says so
+ * only once she chooses Try again; a view lost before Try again or accept (a
+ * reload) left nothing, and a later attempt read as a first one. The view
+ * writes this record **before** the result renders, so a reload after that
+ * point cannot hide that she read it.
+ *
+ * **What is recorded**: the attempt's identity and the time, nothing else.
+ * The identity is two ids, both ones her other records already carry:
+ * `instrumentId`, the question (the id the set-aside record and the accepted
+ * review carry), and `attemptId`, the attempt (minted when she submitted it;
+ * the id the set-aside record and the review's own `attemptId` carry). The
+ * question id is part of the identity because, in the very case this record
+ * exists for, nothing else in her log names the attempt. `timestamp` is the
+ * moment the result was about to be shown.
+ *
+ * **A persisted fact beside the review event, never a review event**
+ * (knowledge model §4, the review event row). It is not evidence: no
+ * growth-stage fold, vitality reading, support-ladder reading, registry,
+ * retrospective or Today reading reads it, and the misconception matcher
+ * never sees it. Its one reader is the explain-back view's exposure reading.
+ *
+ * **Writing it twice is harmless**: readers treat every marker for one
+ * `attemptId` as one fact (`olea-core`'s `explainBackFeedbackShownAttempts`).
+ *
+ * **No content, per D-005**: no answer, feedback, verdict, cited passage or
+ * missed point. `'explain-back-feedback-shown'` is internal vocabulary and is
+ * never printed.
+ */
+export const explainBackFeedbackShownLogRecordV6 = z.object({
+  schemaVersion: z.literal(6),
+  /** Discriminator. Required, never defaulted — see `reviewLogRecordV2`'s doc. */
+  kind: z.literal('explain-back-feedback-shown'),
+  /** Stable unique id; makes two-device merges idempotent. */
+  eventId: z.string().min(1),
+  /** ISO-8601 with offset, the moment the graded result was about to be shown. */
+  timestamp: z.string().datetime({ offset: true }),
+  /** The question the attempt answered: the id its set-aside record and its accepted review carry. */
+  instrumentId: z.string().min(1),
+  /** The attempt whose graded result was shown, minted when she submitted it. */
+  attemptId: z.string().min(1),
+});
+export type ExplainBackFeedbackShownLogRecordV6 = z.infer<
+  typeof explainBackFeedbackShownLogRecordV6
+>;
+
+/**
  * Every shape a **v6** review-log line can take, discriminated by `kind` —
  * the same ten members as `reviewLogEntryV5`, each at version 6, plus the
- * v6-only `explain-back-set-aside` (`[D-416]`), and the union readers parse
+ * v6-only `explain-back-set-aside` (`[D-416]`) and
+ * `explain-back-feedback-shown` (`[D-460]`), and the union readers parse
  * current lines against (`reviewLogEntry`).
  */
 export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
@@ -2808,6 +2863,7 @@ export const reviewLogEntryV6 = z.discriminatedUnion('kind', [
   misconceptionObservedLogRecordV6,
   sourceRegisteredLogRecordV6,
   explainBackSetAsideLogRecordV6,
+  explainBackFeedbackShownLogRecordV6,
 ]);
 export type ReviewLogEntryV6 = z.infer<typeof reviewLogEntryV6>;
 
@@ -2840,6 +2896,8 @@ export const sourceRegisteredLogRecord = sourceRegisteredLogRecordV6;
 export type SourceRegisteredLogRecord = z.infer<typeof sourceRegisteredLogRecordV6>;
 export const explainBackSetAsideLogRecord = explainBackSetAsideLogRecordV6;
 export type ExplainBackSetAsideLogRecord = z.infer<typeof explainBackSetAsideLogRecordV6>;
+export const explainBackFeedbackShownLogRecord = explainBackFeedbackShownLogRecordV6;
+export type ExplainBackFeedbackShownLogRecord = z.infer<typeof explainBackFeedbackShownLogRecordV6>;
 
 /** Current schema version, for writers stamping new records. */
 export const REVIEW_LOG_SCHEMA_VERSION = 6 as const;
