@@ -6,6 +6,7 @@
  * Every fixture string is invented.
  */
 import {
+  appendSuspendRecord,
   citationStorePath,
   enumerateVaultInstruments,
   type ListOptions,
@@ -208,6 +209,19 @@ describe('CitationRevisionTrigger.tick: a confirmed rewrite is retried without t
       enqueue: vi.fn(async () => {
         if (failures-- > 0) throw new Error('queue down');
       }),
+      // The record the production suspend port writes, so the pass reads the suspension.
+      suspend: vi.fn(async (instrumentId: string, conceptIds: readonly string[]) => {
+        await appendSuspendRecord(
+          vault,
+          {
+            kind: 'suspend',
+            timestamp: '2026-02-01T12:00:00.000Z',
+            instrumentId,
+            conceptIds: [...conceptIds],
+          },
+          { deviceId: 'dev-synthetic' },
+        );
+      }),
     });
     await trigger.tick(vault, flaky);
     await trigger.tick(vault, flaky);
@@ -217,8 +231,10 @@ describe('CitationRevisionTrigger.tick: a confirmed rewrite is retried without t
     expect(flaky.enqueue).toHaveBeenCalledTimes(3);
     expect(vi.mocked(judge.judge).mock.calls.length).toBeLessThanOrEqual(1);
     expect(third.revised + third.refreshed).toBe(0);
-    // Tracking retired; any later entry is a fresh baseline of the new text, with no pending fact.
-    expect((await store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+    expect(flaky.suspend).toHaveBeenCalledTimes(1);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the entry keeps its pending fact, the exclusion of
+    // the old question's evidence, and the suspended question is left alone afterwards.
+    expect((await store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('a bounded final failure is recorded and stops retrying, still with no extra judge call', async () => {

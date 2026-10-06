@@ -183,7 +183,10 @@ describe('a held changed-source question ([D-518])', () => {
     expect(input.payload.kind).toBe('instrument-revision');
     expect(input.payload.predecessorInstrumentId).toBe('qa');
     expect(input.payload.newPassageText).toBe('First new line.\n\nSecond new line.');
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its hold.
+    expect((await store.loadAll()).get('qa')?.pendingRevalidation?.reason).toBe(
+      SOURCE_REVISION_REASON,
+    );
     expect(judge.judge).not.toHaveBeenCalled();
   });
 
@@ -202,7 +205,10 @@ describe('a held changed-source question ([D-518])', () => {
     await trigger.tick(vault, actions);
     expect(actions.suspend).toHaveBeenCalledTimes(1);
     expect(actions.enqueue).toHaveBeenCalledTimes(1);
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its hold.
+    expect((await store.loadAll()).get('qa')?.pendingRevalidation?.reason).toBe(
+      SOURCE_REVISION_REASON,
+    );
   });
 
   it('units for bytes other than the held ones are not used', async () => {
@@ -244,7 +250,10 @@ describe('a held changed-source question ([D-518])', () => {
     expect((await store.loadAll()).has('qa')).toBe(true);
     await trigger.tick(vault, actions);
     expect(actions.enqueue).toHaveBeenCalledTimes(2);
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its hold.
+    expect((await store.loadAll()).get('qa')?.pendingRevalidation?.reason).toBe(
+      SOURCE_REVISION_REASON,
+    );
     expect(judge.judge).not.toHaveBeenCalled();
   });
 

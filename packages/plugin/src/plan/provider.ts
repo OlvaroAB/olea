@@ -75,7 +75,10 @@ import {
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
-import { readPendingPassageChanges } from '../attainment/passage-changes.js';
+import {
+  passageChangesForReadings,
+  readPendingPassageChanges,
+} from '../attainment/passage-changes.js';
 // Read-only import — `home/` is a concurrent lane's `owns`, not this bead's
 // (`ol-egov.141.93`). `ObsidianHomeAvoidanceStore` is the durable F4.6
 // record this bead wires into `resolvePlanPolicyCourseInputs` below; nothing
@@ -244,8 +247,9 @@ export interface CreateLocalStudyPlanProviderDeps {
    * `[D-347]`'s changed-passage half, as `[D-522]` ruled (`ol-egov.141.89.9.98`): the plugin's
    * pending-revalidation store, the same instance the citation-revision trigger writes. Every
    * persisted fact in it leaves that instrument's evidence out of the ranking's readiness and need
-   * (`../attainment/passage-changes.ts`); the stage the plan carries never reads it. Omitted, or
-   * a store that cannot be read, keeps every passage: today's reading.
+   * (`../attainment/passage-changes.ts`); the stage the plan carries never reads it. Omitted keeps
+   * every passage: today's reading. A store that cannot be read leaves out every instrument that
+   * could carry a fact (unknown, never credited).
    */
   readonly citationHashStore?: CitationHashStore;
 }
@@ -337,7 +341,7 @@ export function createLocalStudyPlanProvider(
       // instruments she can still be served (the plan's served set,
       // `[D-404]` condition 2). One walk, the same one
       // `session-builder/provider.ts` makes.
-      const [{ entries, files }, enumeration, options, assessmentReport, passageChanges] =
+      const [{ entries, files }, enumeration, options, assessmentReport, passageRead] =
         await Promise.all([
           readReviewLogHistory(deps.vault, { additionalPaths }),
           enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
@@ -348,6 +352,14 @@ export function createLocalStudyPlanProvider(
             ? readPendingPassageChanges(deps.citationHashStore, now)
             : Promise.resolve(undefined),
         ]);
+      // An unreadable store leaves out every instrument that could carry a fact (unknown, never
+      // credited; `passageChangesForReadings`).
+      const passageChanges = passageChangesForReadings(
+        passageRead,
+        enumeration.records,
+        entries,
+        now,
+      );
       const concepts = enumeration.concepts;
       // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
       // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.

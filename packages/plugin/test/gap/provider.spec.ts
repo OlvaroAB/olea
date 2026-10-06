@@ -14,6 +14,9 @@ import { studyPlanEnvelope } from 'olea-contracts';
 import type { PaperDemand, Scheduler, VaultPath } from 'olea-core';
 import {
   addManualAssessmentEntry,
+  appendSuccessionRecord,
+  appendSuspendRecord,
+  citationStorePath,
   createFsrsScheduler,
   daysBetween,
   enumerateVaultInstruments,
@@ -24,7 +27,7 @@ import {
   type RetrievabilityOutput,
   writeInstrumentTarget,
 } from 'olea-core';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
   ASSESSMENT_BRIEF_ATTRIBUTION_CLAUSE,
   gapRowBasisKey,
@@ -42,6 +45,7 @@ import {
   ObsidianCitationHashStore,
   type PendingReason,
 } from '../../src/ingestion/materiality/citation-hash-store.js';
+import { CitationRevisionTrigger } from '../../src/ingestion/materiality/citation-revision-wiring.js';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
@@ -1786,17 +1790,15 @@ describe('createLocalGapProvider — current readings apply one evidence rule ([
 });
 
 /**
- * `ol-egov.141.89.9.98` (F4.3; `[D-347]`'s changed-passage half, as `[D-522]` ruled): the
- * production gap view reads the plugin's existing pending-revalidation store, and every
- * persisted fact in it leaves that instrument's evidence out of the ranking's readiness and need,
- * the view's need, the recognition credit and the demand rule. The exclusion survives a restart
- * (the fact is read from the persisted data on every load) and ends when a successful
- * revalidation clears the fact while the passage stays tracked. The displayed stage keeps the
- * evidence (`[D-338]` items 1 and 2; historical labels kept).
- *
- * Not met, and pinned failing below: `[D-522]` also says the exclusion must not end merely
- * because the store's entry disappears. The citation-revision trigger removes the entry once it
- * has queued a successor and suspended the old question, and the store then keeps no trace.
+ * `ol-egov.141.89.9.98` (F4.3; `[D-347]`'s changed-passage half, as `[D-522]` and `[D-536]`
+ * ruled): the production gap view reads the plugin's existing pending-revalidation store, and
+ * every persisted fact in it leaves that instrument's evidence out of the ranking's readiness and
+ * need, the view's need, the recognition credit and the demand rule. The exclusion survives a
+ * restart (the fact is read from the persisted data on every load) and ends when a successful
+ * revalidation clears the fact while the passage stays tracked; the rewrite path and an accepted
+ * successor leave it in place. A store that cannot be read makes the readings it could affect
+ * unknown, never credited. The displayed stage keeps the evidence (`[D-338]` items 1 and 2;
+ * historical labels kept).
  *
  * Every string here is invented (INV-3).
  */
@@ -1847,18 +1849,6 @@ describe('createLocalGapProvider — a changed cited passage not yet revalidated
         instrumentTypesOffered: [instrumentType],
         planVersion: null,
       },
-    })}\n`;
-  }
-
-  /** The rewrite path's suspension of the old question: no reason recorded, as `createVaultSuspendPort` writes it. */
-  function suspendWithoutReason(conceptKey: string, instrumentId: string): string {
-    return `${JSON.stringify({
-      schemaVersion: 6,
-      kind: 'suspend',
-      eventId: `s-${instrumentId}`,
-      timestamp: '2026-08-09T13:00:00-04:00',
-      instrumentId,
-      conceptIds: [conceptKey],
     })}\n`;
   }
 
@@ -2006,35 +1996,174 @@ describe('createLocalGapProvider — a changed cited passage not yet revalidated
     expect(row.need?.value).toBeCloseTo(0.6, 12);
   });
 
-  // GAP, pinned: `it.fails` passes while the body throws. Today the rewrite path removes the entry
-  // after suspending the old question (reason unrecorded), the store keeps no trace of the change,
-  // and the suspended review counts again as a sound withdrawal ([D-347] J1). This goes red the
-  // day the citation-revision trigger keeps the fact until revalidation succeeds; flip it then.
-  it.fails('GAP ([D-522], not met): the evidence stays out when the entry is removed without a successful revalidation', async () => {
-    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
-    const store = new ObsidianCitationHashStore(new JsonDataHost());
-    await track(store, CARD, key, {});
-    // The rewrite path: the successor queued, the old question suspended, the entry removed.
-    await vault.write(LOG, review(key, CARD, 'qa', 'r1') + suspendWithoutReason(key, CARD));
-    await store.remove(CARD);
-    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+  /** The note the fixture card cites, kept apart from the card's own note. */
+  const SOURCE = 'Notes/widget source.md' as VaultPath;
+
+  /**
+   * The fixture's own card, cited from {@link SOURCE} through a citation sidecar, so the real
+   * citation-revision pass tracks it, with one unaided success on the log.
+   */
+  async function citedCardWorld() {
+    const vault = gapVault();
+    await vault.write(SOURCE, 'Widgets turn when pushed.\n');
+    const card = (await enumerateVaultInstruments(vault, { concepts: { stampConceptKeys: true } }))
+      .records[0];
+    const key = card?.conceptIds[0];
+    if (card === undefined || key === undefined) throw new Error('fixture has no bound card');
+    await vault.write(
+      citationStorePath(card.instrumentId),
+      `${JSON.stringify({ instrumentId: card.instrumentId, sourcePath: SOURCE, page: 1, schemaVersion: 1 })}\n`,
+    );
+    await vault.write(LOG, review(key, card.instrumentId, 'qa', 'r1'));
+    return { vault, key, cardId: card.instrumentId };
+  }
+
+  /**
+   * The real pass over a real store: it baselines the card, the cited note is edited, and the judge
+   * finds the claim changed, so the pass queues a successor and suspends the old question through
+   * the review-log record the production suspend port writes (the rewrite path).
+   */
+  async function rewritten(vault: ReturnType<typeof gapVault>, host: JsonDataHost) {
+    const actions = {
+      enqueue: vi.fn(async () => undefined),
+      suspend: vi.fn(async (instrumentId: string, conceptIds: readonly string[]) => {
+        await appendSuspendRecord(
+          vault,
+          {
+            kind: 'suspend',
+            timestamp: '2026-08-09T13:00:00-04:00',
+            instrumentId,
+            conceptIds: [...conceptIds],
+          },
+          { deviceId: DEVICE },
+        );
+      }),
+    };
+    const judge = { judge: vi.fn(async () => ({ material: true, reason: 'changed claim' })) };
+    const trigger = new CitationRevisionTrigger({
+      store: new ObsidianCitationHashStore(host),
+      judge,
+      clock: { now: () => SEEN },
+    });
+    await trigger.tick(vault, actions);
+    await vault.write(SOURCE, 'Widgets turn only when pulled.\n');
+    await trigger.tick(vault, actions);
+    expect(actions.enqueue).toHaveBeenCalledTimes(1);
+    expect(actions.suspend).toHaveBeenCalledTimes(1);
+    return { trigger, actions, judge };
+  }
+
+  it("REGRESSION (fails pre-fix): after the rewrite path the old question's evidence stays out, before and after a restart ([D-522], [D-536])", async () => {
+    const { vault } = await citedCardWorld();
+    const control = await widgetRow(vault, fixedRetrievabilityScheduler(0.4));
+    expect(control.need?.basis).toBe('estimated');
+
+    const host = new JsonDataHost();
+    await rewritten(vault, host);
+    // Pre-fix: estimated at 0.6, the store entry removed and the suspended review counting again
+    // as a sound withdrawal ([D-347] J1).
+    const row = await widgetRow(
+      vault,
+      fixedRetrievabilityScheduler(0.4),
+      new ObsidianCitationHashStore(host),
+    );
     expect(row.need?.basis).toBe('unknown');
+    expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
+    expect(gapRowLine(row)).toContain('recall here is unknown');
+    expect(row.masteryState).toBe(control.masteryState);
+
+    // The restart: a new plugin instance reads the same data.json text into a new store.
+    const restarted = new ObsidianCitationHashStore(new JsonDataHost(host.json));
+    expect((await widgetRow(vault, fixedRetrievabilityScheduler(0.4), restarted)).need?.basis).toBe(
+      'unknown',
+    );
   });
 
-  it("a store that cannot be read keeps every passage (today's reading), and the view still loads", async () => {
-    const { vault } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
-    const broken: CitationHashStore = {
-      loadAll: async () => {
+  it('REGRESSION (fails pre-fix): an accepted successor closes the workflow but restores no credit; the pass leaves the old question alone ([D-536])', async () => {
+    const { vault, cardId } = await citedCardWorld();
+    const host = new JsonDataHost();
+    const { trigger, actions, judge } = await rewritten(vault, host);
+    const kept = (await new ObsidianCitationHashStore(host).loadAll()).get(cardId);
+    expect(kept?.pendingRevalidation).toBeDefined();
+
+    // The successor is accepted: the record the materialiser writes, naming the old question.
+    await appendSuccessionRecord(
+      vault,
+      {
+        timestamp: '2026-08-09T14:00:00-04:00',
+        predecessorInstrumentId: cardId,
+        successorInstrumentId: 'qa:widget-theory:successor',
+      },
+      { deviceId: DEVICE },
+    );
+    await trigger.tick(vault, actions);
+    await trigger.tick(vault, actions);
+    // No revalidation ran and nothing was redone: the fact stands exactly as the rewrite left it.
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(actions.enqueue).toHaveBeenCalledTimes(1);
+    expect(actions.suspend).toHaveBeenCalledTimes(1);
+    expect((await new ObsidianCitationHashStore(host).loadAll()).get(cardId)).toEqual(kept);
+
+    const row = await widgetRow(
+      vault,
+      fixedRetrievabilityScheduler(0.4),
+      new ObsidianCitationHashStore(host),
+    );
+    expect(row.need?.basis).toBe('unknown');
+    expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
+    // The historical label is kept: the stage reads as it does with no store at all.
+    expect(row.masteryState).toBe(
+      (await widgetRow(vault, fixedRetrievabilityScheduler(0.4))).masteryState,
+    );
+  });
+
+  /** A store over a `data.json` that cannot be read. */
+  function unreadableStore(): CitationHashStore {
+    return new ObsidianCitationHashStore({
+      loadData: async () => {
         throw new Error('data.json unreadable');
       },
-      save: async () => {},
-      remove: async () => {},
-      setPendingRevalidation: async () => {},
-      isPendingRevalidationCurrent: async () => false,
-      recordDispatch: async () => {},
-    };
-    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), broken);
+      saveData: async () => {},
+    });
+  }
+
+  it('REGRESSION (fails pre-fix): a store that cannot be read makes the readings it could affect unknown, never credited, and nothing reads as weak knowledge', async () => {
+    // A review on an instrument no longer in her vault: the store could hold a fact for it.
+    const { vault } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const control = await widgetRow(vault, fixedRetrievabilityScheduler(0.4));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let row: Awaited<ReturnType<typeof widgetRow>>;
+    try {
+      row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), unreadableStore());
+    } finally {
+      logged.mockRestore();
+    }
+    // Pre-fix: estimated at 0.6, the failed read silently keeping every passage.
+    expect(row.need?.basis).toBe('unknown');
+    expect(row.need?.value).toBe(1);
+    expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
+    expect(gapRowLine(row)).toContain('says nothing about what you know');
+    expect(gapRowLine(row)).not.toContain("hasn't caught up");
+    expect(row.masteryState).toBe(control.masteryState);
+    expect(row.gapClass).toBe(control.gapClass);
+  });
+
+  it('a store that cannot be read: a card she wrote herself, which the store never tracks, keeps counting', async () => {
+    const vault = gapVault();
+    const card = (await enumerateVaultInstruments(vault, { concepts: { stampConceptKeys: true } }))
+      .records[0];
+    const key = card?.conceptIds[0];
+    if (card === undefined || key === undefined) throw new Error('fixture has no bound card');
+    await vault.write(LOG, review(key, card.instrumentId, 'qa', 'r1'));
+    const logged = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    let row: Awaited<ReturnType<typeof widgetRow>>;
+    try {
+      row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), unreadableStore());
+    } finally {
+      logged.mockRestore();
+    }
     expect(row.need?.basis).toBe('estimated');
+    expect(row.need?.value).toBeCloseTo(0.6, 12);
   });
 
   it('REGRESSION (fails pre-fix): a success on a card whose cited passage changed meets no declared demand', async () => {

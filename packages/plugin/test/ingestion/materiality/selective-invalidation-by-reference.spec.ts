@@ -242,10 +242,11 @@ describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective
       }),
     );
 
-    // A's tracking is retired (suspended, no longer watched); B's is untouched — same store entry,
-    // same text, same "current" state, never re-baselined and never marked pending.
+    // A is suspended and keeps its entry and pending fact, the exclusion of its old evidence
+    // (`ol-egov.141.89.9.98`, [D-522], [D-536]); B's is untouched — same store entry, same text,
+    // same "current" state, never re-baselined and never marked pending.
     const after = await store.loadAll();
-    expect(after.has(MCQ_A)).toBe(false);
+    expect(after.get(MCQ_A)?.pendingRevalidation).toBeDefined();
     expect(after.get(MCQ_B)).toEqual(baselined.get(MCQ_B));
   });
 
@@ -274,7 +275,9 @@ describe('[ILB-CHG-4](a) CitationRevisionTrigger.tick: invalidation is selective
     expect(act.enqueue).toHaveBeenCalledTimes(1);
 
     const after = await store.loadAll();
-    expect(after.has(MCQ_A)).toBe(false); // A is retired, no certifying baseline
+    // A keeps its old baseline and its pending fact: no certifying baseline (`ol-egov.141.89.9.98`).
+    expect(after.get(MCQ_A)?.pendingRevalidation).toBeDefined();
+    expect(after.get(MCQ_A)?.text).not.toContain(reworded);
     expect(after.get(MCQ_B)?.text).toContain(PARAGRAPH_B_TEXT); // B's reference is exactly as it was
     expect(after.has(MCQ_B)).toBe(true); // still tracked, never retired
   });

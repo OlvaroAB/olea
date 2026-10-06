@@ -218,7 +218,7 @@ export interface CitationAnchorRecord {
 export interface CitationHashStore {
   loadAll(): Promise<ReadonlyMap<string, CitationAnchorRecord>>;
   save(instrumentId: string, record: CitationAnchorRecord): Promise<void>;
-  /** Drops tracking for an instrument whose predecessor has just been suspended (`'revised'`) — its own material no longer needs watching. */
+  /** Drops tracking for an instrument the revision rule no longer tracks (`[D-366]`). Never called by the rewrite path, which keeps the entry and its pending fact (`[D-522]`, `[D-536]`, `ol-egov.141.89.9.98`). */
   remove(instrumentId: string): Promise<void>;
   /**
    * `[D-351]`: set THIS instrument's pending-revalidation fact, read-modify-

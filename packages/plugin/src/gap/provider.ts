@@ -73,12 +73,14 @@ relevance × need × credit (the attainment chain spec, section 2.5). Need reads
 scheduler, instant and validity projection as the ranking's own need term, so the two agree for
 every concept (`[D-371]`).
 
-## Changed passages (`ol-egov.141.89.9.98`, `[D-347]`, `[D-522]`)
+## Changed passages (`ol-egov.141.89.9.98`, `[D-347]`, `[D-522]`, `[D-536]`)
 
 When `main.ts` wires the pending-revalidation store, every persisted fact in it leaves that
 instrument's evidence out of the ranking's readiness and need, this view's need, the recognition
 credit and the demand rule (`../attainment/passage-changes.ts`); the stage the row displays keeps
-it. Read on every load, so a restart keeps the exclusion.
+it. Read on every load, so a restart keeps the exclusion; a rewrite and an accepted successor
+leave the fact in place. A store that cannot be read leaves out every instrument that could carry
+a fact, so those readings are unknown, never silently credited.
 
 ## Unavailable, for two different reasons, one state
  *
@@ -134,7 +136,10 @@ import {
   scoredConceptId,
   unmetDemandsByConcept,
 } from 'olea-core';
-import { readPendingPassageChanges } from '../attainment/passage-changes.js';
+import {
+  passageChangesForReadings,
+  readPendingPassageChanges,
+} from '../attainment/passage-changes.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
   hasAssessmentSource,
@@ -231,8 +236,9 @@ export interface CreateLocalGapProviderDeps {
    * pending-revalidation store, the same instance the citation-revision trigger writes and
    * `session-builder/provider.ts` reads. Every persisted fact in it leaves that instrument's
    * evidence out of this view's ranking readiness, need, recognition credit and demand rule
-   * (`../attainment/passage-changes.ts`). Omitted, or a store that cannot be read, keeps every
-   * passage: today's reading.
+   * (`../attainment/passage-changes.ts`). Omitted keeps every passage: today's reading. A store
+   * that cannot be read leaves out every instrument that could carry a fact (unknown, never
+   * credited; `[D-536]`'s sheet).
    */
   readonly citationHashStore?: CitationHashStore;
 }
@@ -523,7 +529,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // concurrently rather than paying their latency serially, the same
         // discipline `plan/provider.ts` uses for its own three-way
         // `Promise.all`.
-        const [{ entries, files }, enumeration, options, declaredDemands, passageChanges] =
+        const [{ entries, files }, enumeration, options, declaredDemands, passageRead] =
           await Promise.all([
             readReviewLogHistory(deps.vault, { additionalPaths }),
             // `[D-357]`: the permanent concept key, the one her review log carries.
@@ -536,6 +542,14 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
               ? readPendingPassageChanges(deps.citationHashStore, now)
               : Promise.resolve(undefined),
           ]);
+        // A store that cannot be read leaves out every instrument that could carry a fact: those
+        // readings are unknown, never silently credited (`passageChangesForReadings`).
+        const passageChanges = passageChangesForReadings(
+          passageRead,
+          enumeration.records,
+          entries,
+          now,
+        );
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
         const disputes = await disputesFromFiles(deps.vault, files);

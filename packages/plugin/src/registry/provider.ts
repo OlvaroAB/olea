@@ -928,6 +928,14 @@ function createLoadModel(
       // ahead of that Promise.all rather than alongside it — the one dependency between
       // these otherwise-independent reads.
       const disputes = await disputesFromFiles(deps.vault, files);
+      const suspendedIds = suspendedInstrumentIds(entries);
+      // `ol-egov.141.89.9.98` ([D-522], [D-536]): "Being checked" lists only what the
+      // citation-revision pass is still checking. It leaves a suspended question with a check owed
+      // alone (a rewritten predecessor keeps its entry and fact as the exclusion of its evidence,
+      // and her own suspension waits for her unsuspend), so a suspended instrument is not listed.
+      const checkedInstrumentIds = enumeration.records
+        .map((record) => record.instrumentId)
+        .filter((instrumentId) => !suspendedIds.has(instrumentId));
       const [courseRankings, pendingRevalidation] = await Promise.all([
         courseRankingsForNoteOffer(
           deps.vault,
@@ -944,10 +952,7 @@ function createLoadModel(
         // vault pass. See `citationHashStore`'s own doc on `CreateLocalRegistryProviderDeps` for
         // why this is optional and what an omitted store reads as.
         deps.citationHashStore
-          ? pendingRevalidationInstrumentIdsFrom(
-              deps.citationHashStore,
-              enumeration.records.map((record) => record.instrumentId),
-            )
+          ? pendingRevalidationInstrumentIdsFrom(deps.citationHashStore, checkedInstrumentIds)
           : Promise.resolve(EMPTY_PENDING_REVALIDATION_MAP),
       ]);
 
@@ -959,7 +964,7 @@ function createLoadModel(
         now,
         holdingCut,
         overrides,
-        suspendedInstrumentIds: suspendedInstrumentIds(entries),
+        suspendedInstrumentIds: suspendedIds,
         disputes,
         courseRankings,
         // `ol-egov.141.89.10.48`: the full vault listing — see
@@ -1029,12 +1034,10 @@ function createLoadModel(
           enumeration,
           projectInstrumentValidity(entries, disputes).provenInvalid,
         ),
-        // `[D-397]`/`[D-400]`: same `enumeration.records` ids, plus the `pendingRevalidation` map
-        // just resolved above — see `suspectSectionFrom`'s own doc.
-        suspectInstruments: suspectSectionFrom(
-          enumeration.records.map((record) => record.instrumentId),
-          pendingRevalidation,
-        ),
+        // `[D-397]`/`[D-400]`: the `enumeration.records` ids the pass is still checking (suspended
+        // ones left out, `ol-egov.141.89.9.98`), plus the `pendingRevalidation` map just resolved
+        // above — see `suspectSectionFrom`'s own doc.
+        suspectInstruments: suspectSectionFrom(checkedInstrumentIds, pendingRevalidation),
         // `[D-420]`: whether a deferred row offers "check again", and whether it is usable right
         // now — absent when the re-arm port is not wired (`deferredRecheckRearm`'s own doc).
         ...deferredRecheckActionField(deps),

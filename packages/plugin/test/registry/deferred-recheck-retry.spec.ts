@@ -13,7 +13,13 @@
  */
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { citationStorePath, type RevisionJudgePort, type VaultPath } from 'olea-core';
+import {
+  appendSuspendRecord,
+  citationStorePath,
+  type RevisionJudgePort,
+  type VaultPath,
+  type VaultSource,
+} from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   type CitationAnchorRecord,
@@ -85,8 +91,27 @@ class FakeDataHost implements ObsidianDataHost {
   }
 }
 
-function actions() {
-  return { enqueue: vi.fn(async () => undefined), suspend: vi.fn(async () => undefined) };
+/**
+ * The trigger's actions. With `vault`, `suspend` writes the real review-log record the production
+ * suspend port writes, so the pass and the registry read the suspension (`ol-egov.141.89.9.98`).
+ */
+function actions(vault?: VaultSource) {
+  return {
+    enqueue: vi.fn(async () => undefined),
+    suspend: vi.fn(async (instrumentId: string, conceptIds: readonly string[]) => {
+      if (vault === undefined) return;
+      await appendSuspendRecord(
+        vault,
+        {
+          kind: 'suspend',
+          timestamp: NOW.toISOString(),
+          instrumentId,
+          conceptIds: [...conceptIds],
+        },
+        { deviceId: 'olea-testdevice1' },
+      );
+    }),
+  };
 }
 
 function throwingJudge(): RevisionJudgePort & { judge: ReturnType<typeof vi.fn> } {
@@ -118,7 +143,7 @@ async function deferredWorld() {
   const trigger = new CitationRevisionTrigger({ store, judge, clock: { now: () => clock } });
   const pass = async () => {
     clock += 1_000;
-    return trigger.tick(vault, actions());
+    return trigger.tick(vault, actions(vault));
   };
   await pass(); // baseline
   await vault.write(NOTE_PATH, note(PASSAGE_B));
@@ -345,7 +370,9 @@ describe('[D-420] end to end — the real [D-400] gate, the real store shape, th
     world.judge.judge.mockImplementationOnce(async () => ({ material: false }));
     const report = await world.pass();
     expect(report.refreshed).toBe(1);
-    expect((await world.store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the fact, the exclusion of the old
+    // evidence; the suspended question is not listed as being checked.
+    expect((await world.store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeDefined();
     const state = await suspectOf(await provider.load());
     expect(state.suspectInstruments.pendingRevalidation).toEqual([]);
   });
@@ -407,13 +434,14 @@ describe('row 13 — the "couldn\'t check" sentence is for a failed check, never
       SUSPECT_DEFERRED_WITH_ACTION_LINE,
     );
 
-    // A completed finding that the passage's claim changed: the item is suspended and tracking
-    // ends, so there is no pending fact for the row to be read from.
+    // A completed finding that the passage's claim changed: the item is suspended. Its pending fact
+    // is kept as the exclusion of its old evidence (`ol-egov.141.89.9.98`, [D-522], [D-536]), but a
+    // suspended question is not being checked, so no row is read from it.
     expect(await provider.retryDeferredRecheck?.(MCQ_ID)).toBe('rearmed');
     world.judge.judge.mockImplementationOnce(async () => ({ material: true, reason: 'changed' }));
     const report = await world.pass();
     expect(report.revised).toBe(1);
-    expect((await world.store.loadAll()).get(MCQ_ID)).toBeUndefined();
+    expect((await world.store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeDefined();
     const finding = await suspectOf(await provider.load());
     expect(finding.suspectInstruments.pendingRevalidation).toEqual([]);
     expect(finding.suspectInstruments.flagged).toEqual([]);

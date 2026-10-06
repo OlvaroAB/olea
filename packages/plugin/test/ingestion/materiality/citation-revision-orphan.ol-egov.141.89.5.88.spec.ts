@@ -200,7 +200,11 @@ describe('the successor is enqueued before the predecessor is suspended ([D-508]
     expect(result.rewritten).toBe(1);
     expect(restartCalls).toEqual(['enqueue', 'suspend']);
     expect(seen.size).toBe(1);
-    expect((await second.store.loadAll()).has('qa')).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its hold, the
+    // exclusion of the old question's evidence.
+    expect((await second.store.loadAll()).get('qa')?.pendingRevalidation?.reason).toBe(
+      SOURCE_REVISION_REASON,
+    );
   });
 
   it('passage path: enqueue comes first, and a failed enqueue leaves it unsuspended and tracked', async () => {
@@ -223,7 +227,7 @@ describe('the successor is enqueued before the predecessor is suspended ([D-508]
     expect((await bad.store.loadAll()).has('qa')).toBe(true);
   });
 
-  it('enqueue succeeds and suspend fails once: the retry sees duplicate, suspends, and only then drops the anchor', async () => {
+  it('enqueue succeeds and suspend fails once: the retry sees duplicate and suspends, and the anchor and its fact stay', async () => {
     const vault = passageVault();
     const calls: string[] = [];
     let suspendFails = 1;
@@ -239,7 +243,8 @@ describe('the successor is enqueued before the predecessor is suspended ([D-508]
       status: 'duplicate',
       existingStatus: 'queued',
     });
-    expect((await t.store.loadAll()).has('qa')).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): kept, never dropped by the rewrite.
+    expect((await t.store.loadAll()).get('qa')?.pendingRevalidation).toBeDefined();
     expect(t.judge.judge).toHaveBeenCalledTimes(1);
   });
 

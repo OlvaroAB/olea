@@ -286,7 +286,10 @@ import { hasCitationRevisionChangedInScope } from '../../../core/src/concept/rev
 // `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path for the same reason — the
 // `olea-core` barrel is another live lane's file this round.
 import type { CompositionProvenance } from '../../../core/src/study-session/composition-record.js';
-import { readPendingPassageChanges } from '../attainment/passage-changes.js';
+import {
+  passageChangesForReadings,
+  readPendingPassageChanges,
+} from '../attainment/passage-changes.js';
 // `[D-351]`/`[D-330]` (`ol-egov.141.89.5.19`): the plugin's own pending-revalidation store —
 // see `resolveCitationPendingRevalidation`'s own doc below for why this is a second, independent
 // resolver from `resolveCitationFreshness` above, never a shared one.
@@ -460,7 +463,9 @@ export interface CreateLocalSessionBuilderProviderDeps {
    *
    * `[D-522]` (`ol-egov.141.89.9.98`): the same store's persisted facts also leave each changed,
    * unrevalidated passage's evidence out of the ranking's readiness and need
-   * (`../attainment/passage-changes.ts`).
+   * (`../attainment/passage-changes.ts`). A store that cannot be read leaves out every instrument
+   * that could carry a fact there (unknown, never credited); presentation keeps `[D-330]`'s
+   * "unknown never withholds on its own", unchanged.
    */
   readonly citationHashStore?: CitationHashStore;
 }
@@ -1034,18 +1039,21 @@ export async function composeStudySessionForRequest(
   // `undefined` when `deps.readRankWeights` is absent, or a network call to
   // the Worker when it is present — same three-way discipline
   // `plan/provider.ts` and `gap/provider.ts` both use.
-  const [{ entries, files }, enumeration, options, passageChanges] = await Promise.all([
+  const [{ entries, files }, enumeration, options, passageRead] = await Promise.all([
     readReviewLogHistory(deps.vault, { additionalPaths }),
     // `[D-357]`: the permanent concept key, the one her review log carries.
     enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
     deps.readRankWeights?.() ?? Promise.resolve(undefined),
     // `[D-347]`/`[D-522]` (`ol-egov.141.89.9.98`): the cited passages the pending-revalidation
     // store records as changed and not yet revalidated, read from its persisted facts on every
-    // composition (so a restart keeps them); `undefined` with no store, or one that cannot be read.
+    // composition (so a restart keeps them); `undefined` with no store.
     deps.citationHashStore !== undefined
       ? readPendingPassageChanges(deps.citationHashStore, now)
       : Promise.resolve(undefined),
   ]);
+  // A store that cannot be read leaves out every instrument that could carry a fact: those
+  // readings are unknown, never silently credited (`passageChangesForReadings`).
+  const passageChanges = passageChangesForReadings(passageRead, enumeration.records, entries, now);
   // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
   // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
   const disputes = await disputesFromFiles(deps.vault, files);
