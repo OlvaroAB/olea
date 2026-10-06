@@ -105,6 +105,10 @@ import { memoryVault, unreadableVault } from './memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
 
+/** The v6 belief stamp's version at the attainment defaults and the declared scheduler (`ol-95vv.13`), spelled out. */
+const BELIEF_STAMP_VERSION =
+  'att-fold-1;sapling=any-scored-success;withheld=count;scheduler=fsrs6-declared-1';
+
 /**
  * `ol-63e1`: `conceptIds`/`masteryAtTime`/a study plan's `conceptId` carry
  * the opaque key, never the display name — 'Alpha'/'Beta'/'Gamma' here are
@@ -716,10 +720,13 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // (before this rating) had no scored evidence for it at all — `seed`, not
     // `sprout`, which is what folding this very rating into the slice would
     // wrongly produce (see the discriminating test below for that failure
-    // made concrete).
+    // made concrete). Since `ol-95vv.13` the stamp is v6's whole one: with no
+    // recall review before this one, vitality is too early to say.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
       byConcept: { [unboundKey('Alpha')]: 'seed' },
+      vitalityByConcept: { [unboundKey('Alpha')]: 'early' },
+      arithmeticVersion: BELIEF_STAMP_VERSION,
     });
   });
 
@@ -801,10 +808,14 @@ describe('what she rates reaches the review log (D7.1, INV-4)', () => {
     // here ever grades an explain-back, and under the high-water-mark model
     // `tree` is reachable only by clearing the depth gate — see
     // `packages/core/src/mastery/rollup.ts`'s module doc, R7/`[D-145]`, MAT-6
-    // / `ol-95vv.7`.)
+    // / `ol-95vv.7`.) Vitality (`ol-95vv.13`) reads the same two prior
+    // reviews at the real clock: each instrument's one `good` review fell due
+    // within days of its August date, so every run after that reads past due.
     expect(record.masteryAtTime).toEqual({
       attribution: 'per-concept',
       byConcept: { [unboundKey('Alpha')]: 'sprout' },
+      vitalityByConcept: { [unboundKey('Alpha')]: 'tending' },
+      arithmeticVersion: BELIEF_STAMP_VERSION,
     });
   });
 
