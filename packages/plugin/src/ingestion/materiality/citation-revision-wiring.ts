@@ -262,6 +262,7 @@ import type {
   PendingReason,
 } from './citation-hash-store.js';
 import { stripInstrumentSpans } from './citation-material.js';
+import { LandedSourceText } from './landed-source-text.js';
 import {
   type PassageNotes,
   type PassageResolution,
@@ -637,15 +638,13 @@ export class CitationRevisionTrigger {
   private readonly confirmedRewrites = new Map<string, ConfirmedRewrite>();
 
   /**
-   * `ol-egov.141.89.5.81` ([D-518]): the latest re-extracted page texts of each source some tracked
+   * `ol-egov.141.89.5.81` ([D-518]): the re-extracted page texts of each source some tracked
    * question cites, by source path, with the byte hash they were extracted from. Memory only, like
    * {@link confirmedRewrites}: a restart forgets it, the hold stands, and the next extraction of the
-   * file lands again.
+   * file lands again. `ol-egov.141.89.7.82`: deliveries of one version are merged by the pages each
+   * covered, never replacing the file's text; see `landed-source-text.ts` for the rules.
    */
-  private readonly landedSources = new Map<
-    string,
-    { readonly hash: string; readonly pages: ReadonlyMap<number, string> }
-  >();
+  private readonly landedSources = new LandedSourceText();
 
   /** `ol-egov.141.89.5.84`: `sourcePath\n bytes hash` pairs this session already asked a re-extraction for. Memory only. */
   private readonly reextractionAsked = new Set<string>();
@@ -1402,7 +1401,7 @@ export class CitationRevisionTrigger {
   private async requestReextractionOnce(citedPath: string, observed: string): Promise<void> {
     const request = this.deps.requestSourceReextraction;
     if (request === undefined) return;
-    if (this.landedSources.get(citedPath)?.hash === observed) return;
+    if (this.landedSources.current(citedPath)?.hash === observed) return;
     const key = `${citedPath}\n${observed}`;
     if (this.reextractionAsked.has(key)) return;
     this.reextractionAsked.add(key);
@@ -1434,6 +1433,10 @@ export class CitationRevisionTrigger {
    * Remembers, in memory only, the text of each page of every source some tracked question cites,
    * then rewrites every question held for that source ({@link rewriteHeldFromLandedSources}). No
    * judge call; nothing is persisted beyond the existing store.
+   *
+   * `ol-egov.141.89.7.82`: a delivery adds to or replaces only the pages it covers of its own
+   * version (`landed-source-text.ts`), so a page read from its image, delivered alone with the
+   * vision runner's digest, never replaces the text pages of the same bytes.
    */
   async onSourceUnitsLanded(
     vault: VaultSource,
@@ -1460,10 +1463,11 @@ export class CitationRevisionTrigger {
           if (bucket === undefined) pages.set(unit.provenance.location.page, [unit.text]);
           else bucket.push(unit.text);
         }
-        this.landedSources.set(path, {
+        this.landedSources.record(
+          path,
           hash,
-          pages: new Map([...pages].map(([page, texts]) => [page, texts.join('\n\n')] as const)),
-        });
+          new Map([...pages].map(([page, texts]) => [page, texts.join('\n\n')] as const)),
+        );
       }
     } catch (error) {
       console.error('Olea: citation-revision could not record landed source units', error);
@@ -1506,7 +1510,7 @@ export class CitationRevisionTrigger {
       try {
         const citation = await readInstrumentCitation(vault, instrumentId);
         const landed =
-          citation === undefined ? undefined : this.landedSources.get(citation.sourcePath);
+          citation === undefined ? undefined : this.landedSources.current(citation.sourcePath);
         if (citation === undefined || landed === undefined) continue;
         // The hold must be the one raised for these very bytes.
         if (
@@ -1514,13 +1518,11 @@ export class CitationRevisionTrigger {
         ) {
           continue;
         }
+        // Every page of this version landed so far, merged (`ol-egov.141.89.7.82`). A page-less
+        // citation is never held here (core `session/enumerate.ts` gives it no source), so the
+        // whole-file branch is defensive only.
         const text = (
-          citation.page === undefined
-            ? [...landed.pages.entries()]
-                .sort(([a], [b]) => a - b)
-                .map(([, t]) => t)
-                .join('\n\n')
-            : (landed.pages.get(citation.page) ?? '')
+          citation.page === undefined ? landed.wholeText() : landed.pageText(citation.page)
         ).trim();
         if (text.length === 0) {
           result.heldNoText += 1;
