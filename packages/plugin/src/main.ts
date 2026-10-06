@@ -1623,6 +1623,12 @@ export default class OleaPlugin extends Plugin {
             buildSession: (row) => {
               void this.revealHomeView(row.conceptName);
             },
+            // `[D-522]` (`ol-egov.141.89.9.98`): the same pending-revalidation store the
+            // citation-revision trigger writes (see `citationHashStore`'s field doc); its persisted
+            // facts leave a changed, unrevalidated passage's evidence out of this view's readiness,
+            // need, recognition credit and demand rule. The factory runs when a leaf opens, after
+            // `onload` assigned it.
+            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
           }),
         ),
     );
@@ -3718,6 +3724,9 @@ export default class OleaPlugin extends Plugin {
       ...(this.planPolicy?.readPlanPolicy
         ? { readPlanPolicy: this.planPolicy.readPlanPolicy }
         : {}),
+      // `[D-522]` (`ol-egov.141.89.9.98`): the pending-revalidation store's persisted facts leave a
+      // changed, unrevalidated passage's evidence out of the plan's readiness and need.
+      ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
     });
     const result = await refreshStudyPlan({ store, provider, now: this.now });
     if (this.review !== null) this.review.plan = result.plan;

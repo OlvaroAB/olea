@@ -11,7 +11,7 @@
  * the honest pass-through of `sourceCoverage` into `model.scope`.
  */
 import { studyPlanEnvelope } from 'olea-contracts';
-import type { PaperDemand, Scheduler } from 'olea-core';
+import type { PaperDemand, Scheduler, VaultPath } from 'olea-core';
 import {
   addManualAssessmentEntry,
   createFsrsScheduler,
@@ -37,6 +37,11 @@ import {
   readinessNote,
 } from '../../src/gap/copy.js';
 import { createLocalGapProvider } from '../../src/gap/provider.js';
+import {
+  type CitationHashStore,
+  ObsidianCitationHashStore,
+  type PendingReason,
+} from '../../src/ingestion/materiality/citation-hash-store.js';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
@@ -1777,5 +1782,297 @@ describe('createLocalGapProvider — current readings apply one evidence rule ([
     );
     expect(defective.need?.basis).toBe('unknown');
     expect(gapRowLine(defective)).toContain('recall here is unknown');
+  });
+});
+
+/**
+ * `ol-egov.141.89.9.98` (F4.3; `[D-347]`'s changed-passage half, as `[D-522]` ruled): the
+ * production gap view reads the plugin's existing pending-revalidation store, and every
+ * persisted fact in it leaves that instrument's evidence out of the ranking's readiness and need,
+ * the view's need, the recognition credit and the demand rule. The exclusion survives a restart
+ * (the fact is read from the persisted data on every load) and ends when a successful
+ * revalidation clears the fact while the passage stays tracked. The displayed stage keeps the
+ * evidence (`[D-338]` items 1 and 2; historical labels kept).
+ *
+ * Not met, and pinned failing below: `[D-522]` also says the exclusion must not end merely
+ * because the store's entry disappears. The citation-revision trigger removes the entry once it
+ * has queued a successor and suspended the old question, and the store then keeps no trace.
+ *
+ * Every string here is invented (INV-3).
+ */
+describe('createLocalGapProvider — a changed cited passage not yet revalidated ([D-347], [D-522], ol-egov.141.89.9.98)', () => {
+  const NOW = () => new Date('2026-08-10T09:00:00-04:00');
+  const LOG = '.olea/reviews/2026-08-09.olea-testdevice1.jsonl';
+  const CARD = 'qa:widget-theory:1';
+  const QUIZ_ITEM = 'mcq:widget-theory:1';
+  /** When the change was seen: after the review, before `NOW`. */
+  const SEEN = Date.parse('2026-08-09T12:00:00-04:00');
+
+  /**
+   * The plugin's `data.json` as Obsidian keeps it: serialised text, parsed fresh on every read. A
+   * second store built over a copy of the same text is a plugin restart with nothing in memory.
+   */
+  class JsonDataHost implements ObsidianDataHost {
+    constructor(public json = 'null') {}
+    async loadData(): Promise<unknown> {
+      return JSON.parse(this.json);
+    }
+    async saveData(data: unknown): Promise<void> {
+      this.json = JSON.stringify(data);
+    }
+  }
+
+  function review(
+    conceptKey: string,
+    instrumentId: string,
+    instrumentType: 'mcq' | 'qa',
+    eventId: string,
+  ): string {
+    return `${JSON.stringify({
+      schemaVersion: 5,
+      kind: 'review',
+      eventId,
+      timestamp: '2026-08-09T09:00:00-04:00',
+      instrumentId,
+      instrumentType,
+      conceptIds: [conceptKey],
+      rating: 'good',
+      supportLevelShown: 'independent',
+      wasUnsure: false,
+      durationMs: 1200,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: [instrumentType],
+        planVersion: null,
+      },
+    })}\n`;
+  }
+
+  /** The rewrite path's suspension of the old question: no reason recorded, as `createVaultSuspendPort` writes it. */
+  function suspendWithoutReason(conceptKey: string, instrumentId: string): string {
+    return `${JSON.stringify({
+      schemaVersion: 6,
+      kind: 'suspend',
+      eventId: `s-${instrumentId}`,
+      timestamp: '2026-08-09T13:00:00-04:00',
+      instrumentId,
+      conceptIds: [conceptKey],
+    })}\n`;
+  }
+
+  async function widgetWorld(lines: (key: string) => string) {
+    const vault = gapVault();
+    const key = (await extractConcepts(vault, { stampConceptKeys: true })).find(
+      (concept) => concept.name === 'Widget theory',
+    )?.key;
+    if (key === undefined) throw new Error('fixture vault has no Widget theory concept');
+    await vault.write(LOG, lines(key));
+    return { vault, key };
+  }
+
+  /** Tracks `instrumentId`'s cited passage in `store`; with `pending`, records it changed and not yet revalidated. */
+  async function track(
+    store: CitationHashStore,
+    instrumentId: string,
+    conceptKey: string,
+    pending?: { readonly reason?: PendingReason },
+  ): Promise<void> {
+    await store.save(instrumentId, {
+      sourcePath: 'Notes/one.md' as VaultPath,
+      text: 'Front::Back',
+      conceptIds: [conceptKey],
+    });
+    if (pending !== undefined) {
+      await store.setPendingRevalidation(
+        instrumentId,
+        'sha-of-the-edited-passage',
+        SEEN,
+        pending.reason,
+      );
+    }
+  }
+
+  async function widgetRow(
+    vault: ReturnType<typeof gapVault>,
+    scheduler: Scheduler,
+    store?: CitationHashStore,
+    extra: Partial<Parameters<typeof createLocalGapProvider>[0]> = {},
+  ) {
+    const state = await createLocalGapProvider({
+      vault,
+      deviceId: DEVICE,
+      settingsHost: hostWithBasePath(BASE_PATH),
+      now: NOW,
+      scheduler,
+      ...(store !== undefined ? { citationHashStore: store } : {}),
+      ...extra,
+    }).load();
+    if (state.kind !== 'model') throw new Error('expected a model');
+    const course = state.model.courses.find((c) => c.course === 'TESTC101');
+    if (course?.status !== 'ranked') throw new Error('expected TESTC101 to rank');
+    const row = course.rows.find((r) => r.conceptName === 'Widget theory');
+    if (row === undefined) throw new Error('expected Widget theory to be ranked');
+    return row;
+  }
+
+  /** The ranking's need term, at the declared fallback weights (1, 1, 1): priority minus relevance and proximity. */
+  function rankingNeedOf(row: { priorityScore: number; assessmentRelevance?: number }): number {
+    return row.priorityScore - (row.assessmentRelevance ?? Number.NaN) - quizProximityScore(NOW());
+  }
+
+  it('control: the store wired, the card tracked and its passage unchanged, need stays estimated', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const store = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(store, CARD, key);
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+    expect(row.need?.basis).toBe('estimated');
+    expect(row.need?.value).toBeCloseTo(0.6, 12);
+    expect(rankingNeedOf(row)).toBeCloseTo(0.6, 10);
+  });
+
+  it('REGRESSION (fails pre-fix): evidence on a card whose cited passage changed and is not revalidated leaves need unknown, worded as unknown, whatever reason the fact records', async () => {
+    for (const reason of [undefined, 'passage-missing', 'source-revision-changed'] as const) {
+      const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+      const store = new ObsidianCitationHashStore(new JsonDataHost());
+      await track(store, CARD, key, reason === undefined ? {} : { reason });
+      const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+      // Pre-fix: estimated at 0.6, the changed passage's evidence still counting.
+      expect(row.need?.basis).toBe('unknown');
+      expect(row.need?.value).toBe(1);
+      expect(gapRowLine(row)).toContain('recall here is unknown');
+    }
+  });
+
+  it("REGRESSION (fails pre-fix): the ranking's readiness drops the same evidence, so the ranking's need and the view's agree ([D-371])", async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const store = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(store, CARD, key, {});
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+    // Pre-fix: 0.6, one minus the changed passage's recall.
+    expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
+    expect(rankingNeedOf(row)).toBeCloseTo(row.need?.value ?? Number.NaN, 10);
+  });
+
+  it('REGRESSION (fails pre-fix): a correct, current quiz answer on an item whose cited passage changed earns no recognition credit', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, QUIZ_ITEM, 'mcq', 'r1'));
+    const unchanged = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(unchanged, QUIZ_ITEM, key);
+    const control = await widgetRow(vault, fixedRetrievabilityScheduler(1), unchanged);
+    expect(control.readiness.applied).toBe(true);
+
+    const changed = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(changed, QUIZ_ITEM, key, {});
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(1), changed);
+    // Pre-fix: applied, weight 0.6.
+    expect(row.readiness.applied).toBe(false);
+    expect(row.readiness.weight).toBe(1);
+  });
+
+  it('PIN ([D-338] items 1 and 2, [D-522]): the stage the row displays is unchanged by the fact', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const without = await widgetRow(vault, fixedRetrievabilityScheduler(0.4));
+    const store = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(store, CARD, key, {});
+    const withFact = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+    expect(withFact.masteryState).toBe(without.masteryState);
+    expect(withFact.gapClass).toBe(without.gapClass);
+  });
+
+  it('RESTART ([D-522]): a fresh store over the persisted data, nothing held in memory, still leaves the evidence out', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const before = new JsonDataHost();
+    await track(new ObsidianCitationHashStore(before), CARD, key, {});
+    // The restart: a new plugin instance reads the same data.json text into a new store.
+    const after = new ObsidianCitationHashStore(new JsonDataHost(before.json));
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), after);
+    expect(row.need?.basis).toBe('unknown');
+    expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
+  });
+
+  it('ENDS ([D-522]): a successful revalidation that clears the fact while the passage stays tracked counts the evidence again', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const store = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(store, CARD, key, { reason: 'passage-missing' });
+    expect((await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store)).need?.basis).toBe(
+      'unknown',
+    );
+    // The passage found again, standing as it was: the trigger's resolving write keeps the anchor
+    // and drops the fact (`citation-revision-wiring.ts`'s passage-resolved and lift writes).
+    await track(store, CARD, key);
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+    expect(row.need?.basis).toBe('estimated');
+    expect(row.need?.value).toBeCloseTo(0.6, 12);
+  });
+
+  // GAP, pinned: `it.fails` passes while the body throws. Today the rewrite path removes the entry
+  // after suspending the old question (reason unrecorded), the store keeps no trace of the change,
+  // and the suspended review counts again as a sound withdrawal ([D-347] J1). This goes red the
+  // day the citation-revision trigger keeps the fact until revalidation succeeds; flip it then.
+  it.fails('GAP ([D-522], not met): the evidence stays out when the entry is removed without a successful revalidation', async () => {
+    const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const store = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(store, CARD, key, {});
+    // The rewrite path: the successor queued, the old question suspended, the entry removed.
+    await vault.write(LOG, review(key, CARD, 'qa', 'r1') + suspendWithoutReason(key, CARD));
+    await store.remove(CARD);
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), store);
+    expect(row.need?.basis).toBe('unknown');
+  });
+
+  it("a store that cannot be read keeps every passage (today's reading), and the view still loads", async () => {
+    const { vault } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
+    const broken: CitationHashStore = {
+      loadAll: async () => {
+        throw new Error('data.json unreadable');
+      },
+      save: async () => {},
+      remove: async () => {},
+      setPendingRevalidation: async () => {},
+      isPendingRevalidationCurrent: async () => false,
+      recordDispatch: async () => {},
+    };
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(0.4), broken);
+    expect(row.need?.basis).toBe('estimated');
+  });
+
+  it('REGRESSION (fails pre-fix): a success on a card whose cited passage changed meets no declared demand', async () => {
+    const vault = gapVault();
+    const enumeration = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    const record = enumeration.records[0];
+    if (record === undefined || record.instrumentType !== 'qa') {
+      throw new Error('fixture vault has no card');
+    }
+    const conceptKey = record.conceptIds[0];
+    if (conceptKey === undefined) throw new Error('fixture card names no concept');
+    await vault.write(LOG, review(conceptKey, record.instrumentId, 'qa', 'r1'));
+    await writeInstrumentTarget(vault, {
+      instrumentId: record.instrumentId,
+      declaredDemand: 'recall-a-fact',
+      origin: 'heading-cue',
+      questionBinding: await questionBindingOf(record.card),
+      authoredAt: '2026-08-01T10:00:00.000Z',
+      generator: { taskId: 'cards.generate.v1', promptVersion: '1.8.0' },
+    });
+    const readDeclaredDemands = async () =>
+      new Map([[conceptKey, ['recall-a-fact'] as readonly PaperDemand[]]]);
+
+    const unchanged = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(unchanged, record.instrumentId, conceptKey);
+    const met = await widgetRow(vault, fixedRetrievabilityScheduler(1), unchanged, {
+      readDeclaredDemands,
+    });
+    expect(met.unmetDemands).toEqual([]);
+
+    const changed = new ObsidianCitationHashStore(new JsonDataHost());
+    await track(changed, record.instrumentId, conceptKey, {});
+    const row = await widgetRow(vault, fixedRetrievabilityScheduler(1), changed, {
+      readDeclaredDemands,
+    });
+    // Pre-fix: [] — the changed passage's success still met it.
+    expect(row.unmetDemands).toEqual(['recall-a-fact']);
   });
 });

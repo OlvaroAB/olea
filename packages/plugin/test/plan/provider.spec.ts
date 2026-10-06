@@ -10,7 +10,7 @@
  * time.
  */
 import { studyPlanEnvelope } from 'olea-contracts';
-import type { Scheduler } from 'olea-core';
+import type { Scheduler, VaultPath } from 'olea-core';
 import {
   addManualAssessmentEntry,
   createFsrsScheduler,
@@ -19,6 +19,7 @@ import {
   type RetrievabilityOutput,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import { createLocalStudyPlanProvider } from '../../src/plan/provider.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
@@ -584,6 +585,47 @@ describe('createLocalStudyPlanProvider — retrievability reaches the ranking (C
     // builds and consults a real `Scheduler` by default rather than
     // silently staying at the pre-`ol-v7r5.53` always-omitted behaviour.
     expect(weightOf(withHistory)).not.toBe(weightOf(neutralControl));
+  });
+
+  /**
+   * `ol-egov.141.89.9.98` (`[D-347]`'s changed-passage half, as `[D-522]` ruled): the plan reads
+   * the plugin's pending-revalidation store, and a card whose cited passage is recorded as changed
+   * and not yet revalidated gives no readiness evidence, so its concept's need reads unknown at
+   * the declared value 1 rather than one minus its recall. Read from the persisted data, through
+   * the real store; every string invented (INV-3).
+   */
+  it('REGRESSION (fails pre-fix): a changed, unrevalidated cited passage leaves the reviewed card out of the ranking, so need reads unknown ([D-522])', async () => {
+    const storeWith = async (pending: boolean) => {
+      const store = new ObsidianCitationHashStore(new FakeDataHost());
+      await store.save('qa:widget-theory:1', {
+        sourcePath: 'Notes/one.md' as VaultPath,
+        text: 'Front::Back',
+        conceptIds: ['Widget theory'],
+      });
+      if (pending) {
+        await store.setPendingRevalidation(
+          'qa:widget-theory:1',
+          'sha-of-the-edited-passage',
+          Date.parse('2026-08-09T12:00:00-04:00'),
+        );
+      }
+      return store;
+    };
+    const planWith = async (pending: boolean) =>
+      createLocalStudyPlanProvider({
+        vault: await vaultWithOneReview(),
+        deviceId: DEVICE,
+        settingsHost: hostWithBasePath(BASE_PATH),
+        now: NOW,
+        scheduler: fixedRetrievabilityScheduler(1),
+        citationHashStore: await storeWith(pending),
+      }).fetchPlan();
+
+    const tracked = weightOf(await planWith(false));
+    const changed = weightOf(await planWith(true));
+    // Recall 1 is need 0; with the evidence left out, need is unknown at the declared 1.
+    // Pre-fix: equal, the changed passage's evidence still counting.
+    expect(changed).toBeCloseTo(tracked + 1, 10);
   });
 });
 

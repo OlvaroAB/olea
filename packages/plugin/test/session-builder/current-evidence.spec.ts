@@ -6,14 +6,18 @@
  *   `composeStudySessionForRequest` supplies its gap view no need, so its rows carry none and
  *   score the ranking's priority × credit. Pinned here so a later change that supplies need to the
  *   session (and so reorders it) is a visible, ruled change, never an accident.
+ * - `[D-522]` (`ol-egov.141.89.9.98`): the session's ranking reads the plugin's pending-
+ *   revalidation store, and a card whose cited passage is recorded as changed and not yet
+ *   revalidated gives no readiness evidence, so the ranking's need for its concept reads unknown.
  *
  * Every string here is invented (INV-3).
  */
 
-import type { RetrievabilityInput, RetrievabilityOutput, Scheduler } from 'olea-core';
+import type { RetrievabilityInput, RetrievabilityOutput, Scheduler, VaultPath } from 'olea-core';
 import { createFsrsScheduler, enumerateVaultInstruments } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createLocalGapProvider } from '../../src/gap/provider.js';
+import { ObsidianCitationHashStore } from '../../src/ingestion/materiality/citation-hash-store.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
 import { STUDY_PLAN_SETTINGS_STORAGE_KEY } from '../../src/plan/settings-store.js';
 import { DEFAULT_SESSION_BUDGET_MINUTES } from '../../src/session-builder/copy.js';
@@ -126,7 +130,32 @@ async function reviewedCardWorld() {
   return { vault, instrumentId: card.instrumentId, conceptKey };
 }
 
-async function sessionRows(vault: ReturnType<typeof memoryVault>, scheduler: Scheduler) {
+async function storeFor(
+  instrumentId: string,
+  conceptKey: string,
+  pending: boolean,
+): Promise<ObsidianCitationHashStore> {
+  const store = new ObsidianCitationHashStore(new FakeDataHost());
+  await store.save(instrumentId, {
+    sourcePath: 'Notes/one.md' as VaultPath,
+    text: 'Front::Back',
+    conceptIds: [conceptKey],
+  });
+  if (pending) {
+    await store.setPendingRevalidation(
+      instrumentId,
+      'sha-of-the-edited-passage',
+      Date.parse('2026-08-09T12:00:00-04:00'),
+    );
+  }
+  return store;
+}
+
+async function sessionRows(
+  vault: ReturnType<typeof memoryVault>,
+  scheduler: Scheduler,
+  store?: ObsidianCitationHashStore,
+) {
   const result = await composeStudySessionForRequest(
     {
       vault,
@@ -134,6 +163,7 @@ async function sessionRows(vault: ReturnType<typeof memoryVault>, scheduler: Sch
       settingsHost: settingsHost(),
       now: () => NOW,
       scheduler,
+      ...(store !== undefined ? { citationHashStore: store } : {}),
     },
     { budgetMinutes: DEFAULT_SESSION_BUDGET_MINUTES },
     NOW,
@@ -172,5 +202,26 @@ describe('the session reads current evidence its own way, and the same evidence 
     );
     // The same ranking underneath: one priority for one concept on both surfaces.
     expect(gapRow.priorityScore).toBeCloseTo(sessionRow.priorityScore, 12);
+  });
+
+  it("REGRESSION (fails pre-fix): a changed, unrevalidated cited passage leaves the card out of the session's ranking, so need reads unknown ([D-522])", async () => {
+    const { vault, instrumentId, conceptKey } = await reviewedCardWorld();
+    const scheduler = fixedRetrievabilityScheduler(1);
+    const [tracked] = await sessionRows(
+      vault,
+      scheduler,
+      await storeFor(instrumentId, conceptKey, false),
+    );
+    const [changed] = await sessionRows(
+      vault,
+      scheduler,
+      await storeFor(instrumentId, conceptKey, true),
+    );
+    if (tracked === undefined || changed === undefined) throw new Error('expected a session row');
+    // Recall 1 is need 0; with the evidence left out, need is unknown at the declared 1, added at
+    // the declared need weight 1. Pre-fix: equal.
+    expect(changed.priorityScore).toBeCloseTo(tracked.priorityScore + 1, 10);
+    // The stage is the displayed reading and keeps the evidence ([D-338] items 1 and 2).
+    expect(changed.masteryState).toBe(tracked.masteryState);
   });
 });
