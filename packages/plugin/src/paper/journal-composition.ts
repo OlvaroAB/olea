@@ -97,6 +97,8 @@ export type ComposePaperThroughJournalResult =
       readonly kind: 'finished';
       readonly record: PaperRecord;
       readonly resume: PaperJournalOpenDecision;
+      /** `[D-532]`: saved progress was discarded because her sources or the course's scope changed (never for a change to Olea's own authoring settings alone). */
+      readonly materialChanged: boolean;
     }
   /**
    * Work is owed, so no paper was created. `'service-unavailable'`: a slot stayed unavailable after
@@ -233,6 +235,10 @@ export async function composePaperThroughJournal(
     options,
   );
   const journalId = opened.journal.id;
+  // `[D-532]`: only a discard that names her sources or the scope is "her material changed".
+  const materialChanged = (opened.discarded ?? []).some((d) =>
+    d.changed.some((part) => part === 'sourceVersions' || part === 'scope'),
+  );
   const run = await runPaperJournal(
     vault,
     journalId,
@@ -251,7 +257,7 @@ export async function composePaperThroughJournal(
       },
       options,
     );
-    return { kind: 'finished', record, resume: opened.decision };
+    return { kind: 'finished', record, resume: opened.decision, materialChanged };
   }
   return {
     kind: 'unfinished',

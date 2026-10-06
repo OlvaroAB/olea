@@ -40,6 +40,7 @@ import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
   buildUndatedAssessmentCopy,
+  MATERIAL_CHANGED_SENTENCE,
   omittedPartLine,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
@@ -218,6 +219,11 @@ export class PaperView extends ItemView {
     root: HTMLElement,
     state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
   ): void {
+    // `[D-532]`: shown once, only when saved progress was discarded because her material changed.
+    if (state.materialChanged) {
+      root.createEl('p', { text: MATERIAL_CHANGED_SENTENCE, cls: 'olea-paper-material-changed' });
+    }
+
     // [D-262] ruling 4: the statement is drawn BEFORE any item, always — never reordered.
     if (state.partialStatement !== null) {
       const banner = root.createDiv({ cls: 'olea-paper-partial-banner' });
