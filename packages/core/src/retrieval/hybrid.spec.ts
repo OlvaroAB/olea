@@ -371,3 +371,64 @@ describe('hybridRetrieve — a failed rerank call keeps the fused order and neve
     expect(hits).toEqual([]);
   });
 });
+
+describe('hybridRetrieve — the keyword leg ranks by summed idf over matched query tokens (D-452)', () => {
+  const corpus = [
+    chunk('a.md', 0, 'alpha common filler'),
+    chunk('b.md', 0, 'zorbulon rare filler'),
+    chunk('c.md', 0, 'alpha again'),
+    chunk('d.md', 0, 'alpha once more'),
+    chunk('e.md', 0, 'alpha and more'),
+  ];
+  // searchKeywordIndex order: equal distinct-token counts, so path order puts a.md before b.md.
+  const keywordHits = [
+    keywordHit('a.md', 0, 'alpha common filler', 1),
+    keywordHit('b.md', 0, 'zorbulon rare filler', 1),
+    keywordHit('c.md', 0, 'alpha again', 1),
+    keywordHit('d.md', 0, 'alpha once more', 1),
+    keywordHit('e.md', 0, 'alpha and more', 1),
+  ];
+
+  it('ranks a block matching a rarer query token above one matching a common token, at equal match counts', async () => {
+    const hits = await hybridRetrieve({
+      query: 'alpha zorbulon',
+      chunks: corpus,
+      keywordHits,
+      queryVector: null,
+      embeddings: new Map(),
+    });
+    expect(hits[0]?.path).toBe('b.md');
+    expect(hits.slice(1).map((h) => h.path)).toEqual(['a.md', 'c.md', 'd.md', 'e.md']);
+  });
+
+  it('keeps keywordScore as the raw distinct-token count', async () => {
+    const hits = await hybridRetrieve({
+      query: 'alpha zorbulon',
+      chunks: corpus,
+      keywordHits,
+      queryVector: null,
+      embeddings: new Map(),
+    });
+    expect(hits.every((h) => h.keywordScore === 1)).toBe(true);
+  });
+
+  it('still lets two matched tokens outweigh one rare token when the idf sum is larger', async () => {
+    const chunks = [
+      chunk('a.md', 0, 'zorbulon alone'),
+      chunk('b.md', 0, 'zorbulon quixel together'),
+      chunk('c.md', 0, 'filler one'),
+      chunk('d.md', 0, 'filler two'),
+    ];
+    const hits = await hybridRetrieve({
+      query: 'zorbulon quixel',
+      chunks,
+      keywordHits: [
+        keywordHit('b.md', 0, 'zorbulon quixel together', 2),
+        keywordHit('a.md', 0, 'zorbulon alone', 1),
+      ],
+      queryVector: null,
+      embeddings: new Map(),
+    });
+    expect(hits.map((h) => h.path)).toEqual(['b.md', 'a.md']);
+  });
+});

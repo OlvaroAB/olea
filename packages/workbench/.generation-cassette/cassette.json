@@ -98,6 +98,27 @@
           ]
         }
       }
+    },
+    {
+      "taskId": "explain-why.generate.v1",
+      "promptVersion": "1.0.0",
+      "modelId": "claude-sonnet-5-5",
+      "payloadHash": "b305133e7050b24ce22910c66f0ee7a8570f3f0ef4f4d6f4007b681f43f7c55e",
+      "response": {
+        "ok": true,
+        "result": {
+          "explanations": [
+            {
+              "text": "Imbrication comes from a rolling clast striking an already-resting clast, stalling against it and tipping, with following clasts stacking against the same face. It is not the current pushing each clast's flat side into place, so your answer misses the stall-and-tip mechanism. The source's description of the lean direction doesn't match the upstream dip in the answer key, so check that point against your course notes.",
+              "citedChunkIndex": 2
+            }
+          ],
+          "groundingReport": {
+            "citationsAvailable": true,
+            "droppedUngroundedCount": 0
+          }
+        }
+      }
     }
   ]
 }
