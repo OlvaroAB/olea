@@ -552,6 +552,9 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
 
         // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
         // unknown basis is worded as unknown, never as weakness. See `needByConcept`.
+        // `[D-521]` (ruled 2026-10-06): supplying need makes this view's row score the product,
+        // relevance × need × credit, the gap view's own formula (the attainment chain spec, section
+        // 2.5). The session builder supplies none and keeps the ranking's blend (C5.10).
         const conceptKeys = rankedConceptKeys(ranking);
         const need = needByConcept(entries, conceptKeys, scheduler, now, validity);
         // `[D-338]` item 3 (`ol-egov.141.89.9.94`): the recognition credit reads only a correct,
