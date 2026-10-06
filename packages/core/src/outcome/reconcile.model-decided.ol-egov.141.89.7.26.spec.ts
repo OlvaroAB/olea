@@ -407,23 +407,41 @@ describe('past-paper alignment never creates containment or scope standing', () 
     await rm(root, { recursive: true, force: true });
   });
 
+  /** An active outcome read from the paper itself, so only the past-paper guard can refuse its edge. */
+  async function withPaperOutcome(): Promise<readonly OutcomeRecord[]> {
+    const fromPaper = await outcome('outcome-key1:o-paper', 'Explain a sprocket', 0);
+    return [
+      ...outcomes,
+      { ...fromPaper, source: { ...fromPaper.source, path: PAPER_REF.sourcePath } },
+    ];
+  }
+
   it('a current aligned past-paper result gives nothing, even with every switch on', async () => {
     const result = await readModelDecidedContainment(vault, {
       ...readOptions({
         alignments: projectionOf([
-          { source: PAPER_REF, conceptKey: K_MODEL2, result: aligned([O_MISS]) },
+          {
+            source: PAPER_REF,
+            conceptKey: K_MODEL2,
+            result: aligned(['outcome-key1:o-paper', O_MISS]),
+          },
         ]),
       }),
-      outcomes,
+      outcomes: await withPaperOutcome(),
     });
     expect(result).toEqual({ status: 'read', edges: [], standings: [] });
   });
 
   it("a caller naming the paper's path as an objectives document reads nothing from it", async () => {
+    outcomes = await withPaperOutcome();
     const result = await readModelDecidedContainment(vault, {
       ...readOptions({
         alignments: projectionOf([
-          { source: PAPER_REF, conceptKey: K_MODEL2, result: aligned([O_MISS]) },
+          {
+            source: PAPER_REF,
+            conceptKey: K_MODEL2,
+            result: aligned(['outcome-key1:o-paper', O_MISS]),
+          },
         ]),
         documents: [
           { source: { ...PAPER_REF, documentKind: 'objectives' }, currentDigests: CURRENT },
