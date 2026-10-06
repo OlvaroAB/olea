@@ -108,8 +108,14 @@ async function logged(
 }
 
 function setup(vault: MemoryVaultSource, host: JsonDataHost) {
+  // A queued successor, by predecessor: what the production `hasSuccessor` reads from the queue.
+  const queuedFor = new Set<string>();
   const actions = {
-    enqueue: vi.fn(async (_input: unknown): Promise<undefined> => undefined),
+    enqueue: vi.fn(async (_input: unknown): Promise<undefined> => {
+      queuedFor.add('qa');
+      return undefined;
+    }),
+    hasSuccessor: vi.fn(async (instrumentId: string) => queuedFor.has(instrumentId)),
     // The record the production suspend port writes (`review/ports.ts`'s `createVaultSuspendPort`).
     suspend: vi.fn(async (_instrumentId: string, conceptIds: readonly string[]) =>
       logged(vault, 'suspend', '2026-10-05T10:00:00Z', conceptIds),
@@ -241,5 +247,78 @@ describe('the rewrite path keeps the exclusion until a successful revalidation (
     expect(t.actions.suspend).toHaveBeenCalledTimes(1);
     expect(t.actions.enqueue).toHaveBeenCalledTimes(1);
     expect((await t.store.loadAll()).get('qa')).toEqual(kept);
+  });
+
+  describe('she unsuspends an already-rewritten question ([D-536], ruled 2026-10-06)', () => {
+    it('REGRESSION (fails pre-fix): a material verdict after her unsuspend writes no suspend and queues no second successor, and the question stays withheld', async () => {
+      const vault = world();
+      const host = new JsonDataHost();
+      const first = await rewrite(vault, host);
+      await logged(vault, 'unsuspend', '2026-10-05T11:00:00Z');
+      // The passage changes again, so the judge answers material again: pre-fix, a second suspend
+      // (undoing her unsuspend) and a second queued successor.
+      vault.files.set(NOTE, 'Quartz is a hard mineral, and calcite is softest.\n');
+      for (let pass = 0; pass < 3; pass += 1) await first.trigger.tick(vault, first.actions);
+      // After a restart too.
+      const second = setup(vault, new JsonDataHost(host.json));
+      second.actions.hasSuccessor.mockResolvedValue(true);
+      await second.trigger.tick(vault, second.actions);
+      await second.trigger.tick(vault, second.actions);
+      expect(first.actions.suspend).toHaveBeenCalledTimes(1);
+      expect(first.actions.enqueue).toHaveBeenCalledTimes(1);
+      expect(second.actions.suspend).not.toHaveBeenCalled();
+      expect(second.actions.enqueue).not.toHaveBeenCalled();
+      // Still withheld by its fact, so its old reviews stay out of current readings.
+      const kept = (await first.store.loadAll()).get('qa');
+      expect(kept?.pendingRevalidation).toBeDefined();
+      expect(kept?.text).toBe('Quartz is a hard mineral.\n');
+      const read = await readPendingPassageChanges(first.store, NOW);
+      expect(read.kind === 'read' ? read.changes.map((c) => c.instrumentIds) : read).toEqual([
+        ['qa'],
+      ]);
+    });
+
+    it('control: a question with no successor that she unsuspends is still rewritten, as for any held item', async () => {
+      const vault = world();
+      const host = new JsonDataHost();
+      const t = setup(vault, host);
+      const offline = new CitationRevisionTrigger({
+        store: t.store,
+        judge: null,
+        clock: { now: () => 1_000 },
+      });
+      await offline.tick(vault, t.actions);
+      vault.files.set(NOTE, 'Quartz is a hard mineral, and feldspar is softer.\n');
+      await offline.tick(vault, t.actions);
+      await logged(vault, 'suspend', '2026-10-05T09:00:00Z');
+      await logged(vault, 'unsuspend', '2026-10-05T09:30:00Z');
+      await t.trigger.tick(vault, t.actions);
+      expect(t.actions.enqueue).toHaveBeenCalledTimes(1);
+      // The two records above were written by hand; the third is the rewrite's own.
+      expect(t.actions.suspend).toHaveBeenCalledTimes(1);
+    });
+
+    it('a successful revalidation still clears the fact and the exclusion', async () => {
+      const vault = world();
+      const host = new JsonDataHost();
+      const t = await rewrite(vault, host);
+      await logged(vault, 'unsuspend', '2026-10-05T11:00:00Z');
+      // A successful revalidation is the write that re-saves the entry as current, with no fact
+      // (what `citation-hash-store`'s resolvers do once a re-check passes).
+      const entry = (await t.store.loadAll()).get('qa');
+      if (entry === undefined) throw new Error('expected the kept entry');
+      vault.files.set(NOTE, 'Quartz is a hard mineral, and feldspar is softer.\n');
+      await t.store.save('qa', {
+        sourcePath: entry.sourcePath,
+        text: 'Quartz is a hard mineral, and feldspar is softer.\n',
+        conceptIds: entry.conceptIds,
+      });
+      await t.trigger.tick(vault, t.actions);
+      expect((await t.store.loadAll()).get('qa')?.pendingRevalidation).toBeUndefined();
+      const read = await readPendingPassageChanges(t.store, NOW);
+      expect(read).toEqual({ kind: 'read', changes: [] });
+      expect(t.actions.suspend).toHaveBeenCalledTimes(1);
+      expect(t.actions.enqueue).toHaveBeenCalledTimes(1);
+    });
   });
 });

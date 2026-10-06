@@ -1931,7 +1931,7 @@ describe('createLocalGapProvider — a changed cited passage not yet revalidated
       // Pre-fix: estimated at 0.6, the changed passage's evidence still counting.
       expect(row.need?.basis).toBe('unknown');
       expect(row.need?.value).toBe(1);
-      expect(gapRowLine(row)).toContain('recall here is unknown');
+      expect(gapRowLine(row)).toContain('Olea has no recall evidence for it yet');
     }
   });
 
@@ -2069,7 +2069,7 @@ describe('createLocalGapProvider — a changed cited passage not yet revalidated
     );
     expect(row.need?.basis).toBe('unknown');
     expect(rankingNeedOf(row)).toBeCloseTo(1, 10);
-    expect(gapRowLine(row)).toContain('recall here is unknown');
+    expect(gapRowLine(row)).toContain('Olea has no recall evidence for it yet');
     expect(row.masteryState).toBe(control.masteryState);
 
     // The restart: a new plugin instance reads the same data.json text into a new store.

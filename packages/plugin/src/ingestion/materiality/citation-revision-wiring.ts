@@ -419,6 +419,14 @@ export interface CitationRevisionActions {
   /** Writes the predecessor's `kind: 'suspend'` review-log record (existing suspend kind, no new field — `review-log/write.ts`'s `appendSuspendRecord`). */
   readonly suspend: (instrumentId: string, conceptIds: readonly string[]) => Promise<void>;
   /**
+   * `[D-536]` (ruled 2026-10-06, `ol-egov.141.89.9.98`): whether this predecessor already has a
+   * successor from an earlier rewrite, queued or accepted. Asked only when a rewrite is about to be
+   * made for a question that is no longer suspended (she unsuspended it): a question that already
+   * has a successor is then left as she set it, neither suspended nor given another successor, and
+   * stays withheld by its pending fact. Omitted reads as "no successor".
+   */
+  readonly hasSuccessor?: (instrumentId: string) => Promise<boolean>;
+  /**
    * Best-effort notice that a re-bind needs her confirmation
    * (`'relocation-proposed'`) — `[D-093]` forbids healing this silently, but
    * *surfacing* it is the structural-proposal registry's own admission path
@@ -1757,6 +1765,17 @@ export class CitationRevisionTrigger {
       if (!pendingStillCurrent) {
         report.staleResultDiscarded += 1;
         this.confirmedRewrites.delete(instrumentId);
+        return;
+      }
+      // `[D-536]`: she unsuspended an already-rewritten question. Her action stands: no second
+      // suspend record, no second successor, even if the passage changed again. The question
+      // stays withheld by its pending fact (kept here), with its old reviews excluded until a
+      // successful revalidation clears it. A retry of this very rewrite (`confirmedRewrites`) is
+      // not that case: its own enqueue is the successor, and the suspend still has to land.
+      if (
+        !this.confirmedRewrites.has(instrumentId) &&
+        (await actions.hasSuccessor?.(predecessorInstrumentId)) === true
+      ) {
         return;
       }
       await actions.enqueue(successorEnqueueInput);

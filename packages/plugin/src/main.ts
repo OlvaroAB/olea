@@ -1624,12 +1624,6 @@ export default class OleaPlugin extends Plugin {
             buildSession: (row) => {
               void this.revealHomeView(row.conceptName);
             },
-            // `[D-522]` (`ol-egov.141.89.9.98`): the same pending-revalidation store the
-            // citation-revision trigger writes (see `citationHashStore`'s field doc); its persisted
-            // facts leave a changed, unrevalidated passage's evidence out of this view's readiness,
-            // need, recognition credit and demand rule. The factory runs when a leaf opens, after
-            // `onload` assigned it.
-            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
             // `ol-egov.141.89.9.81` (`[D-437]` B5, `[D-349]`, `[D-429]`): the assessment's declared
             // demands per concept, read from the scope reading through the ruled explicit
             // part-to-concept link (an aligned past-paper result naming the part). Each paper's
@@ -1643,6 +1637,12 @@ export default class OleaPlugin extends Plugin {
               manifestsFor: async (paths) =>
                 (await this.unitManifests?.manifestsFor(paths)) ?? new Map(),
             }),
+            // `[D-522]` (`ol-egov.141.89.9.98`): the same pending-revalidation store the
+            // citation-revision trigger writes (see `citationHashStore`'s field doc); its persisted
+            // facts leave a changed, unrevalidated passage's evidence out of this view's readiness,
+            // need, recognition credit and demand rule. The factory runs when a leaf opens, after
+            // `onload` assigned it.
+            ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
           }),
         ),
     );
@@ -3402,6 +3402,29 @@ export default class OleaPlugin extends Plugin {
             ? Promise.resolve(undefined)
             : this.ingestion.engine.enqueue(input),
         suspend: (instrumentId, conceptIds) => suspendPort.suspend(instrumentId, conceptIds),
+        // `[D-536]`: a successor exists once a rewrite queued one (a queue job naming this
+        // predecessor) or she accepted one (a succession record). Read at the moment a rewrite
+        // would otherwise be repeated for a question she unsuspended.
+        hasSuccessor: async (instrumentId) => {
+          const queued = (this.ingestion?.engine.list() ?? []).some((job) => {
+            const payload = job.payload as
+              | { kind?: unknown; predecessorInstrumentId?: unknown }
+              | null
+              | undefined;
+            return (
+              payload?.kind === 'instrument-revision' &&
+              payload.predecessorInstrumentId === instrumentId
+            );
+          });
+          if (queued) return true;
+          const { entries } = await readReviewLogHistory(vault);
+          return entries.some(
+            (entry) =>
+              entry.kind === 'succession' &&
+              (entry as { predecessorInstrumentId?: string }).predecessorInstrumentId ===
+                instrumentId,
+          );
+        },
         // `[D-093]` forbids healing a near-match re-bind silently. Surfacing
         // it to her is the structural-proposal registry's own admission path
         // (`features/F3-learn-from-anything.md`'s `core/accept/*` cluster) —
