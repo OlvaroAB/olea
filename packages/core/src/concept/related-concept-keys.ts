@@ -35,11 +35,13 @@
  * other" for PLACEMENT purposes, a weaker question than the six types' own
  * directed semantics, and grouping two concepts next to each other reads the
  * same regardless of which one is nominally the prerequisite. In production
- * this only ever sees whatever `servedRelations` currently yields —
- * `is-a`/`part-of`/`contrasts-with`/`prerequisite` today
- * (`RELATION_EMISSION_STATUS`); `causes`/`related` carry no production edges
- * yet, so this default has not been exercised against those two and should be
- * revisited if it ever is.
+ * this sees whatever `servedRelations` yields — every type whose
+ * `RELATION_EMISSION_STATUS` is emitted: `is-a`/`part-of`/`contrasts-with`/
+ * `prerequisite`, and `causes` via the corpus stage (the corpus judge offers
+ * it from prompt `1.3.0`, but no live vault carries one until that prompt is
+ * deployed after the evaluation, `ol-egov.141.89.4.26`). `related` is
+ * `'no-reader'` and carries none. Whether this type-agnostic default suits
+ * `causes` for placement is the open F2.19 question on `ol-egov.141.89.4.23`.
  *
  * **The exact-name join is no longer the only join — `ol-l40p` [REL-9],
  * 2026-09-11.** `resolveRelatedConceptKeys` now keys an endpoint by its own
