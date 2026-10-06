@@ -1,8 +1,7 @@
 /**
  * `ol-egov.141.89.7.82` ([D-518], [D-515]): the vision page runner composed with its revision digest
- * switched on, in this test only. Production leaves it off (`ingestion/wiring.ts` buildVisionRunner
- * passes no `deliverRevisionDigest`), because turning it on also changes when questions drafted
- * from image pages are held ([D-515]), which is not ruled.
+ * switched on, as production composes it since sheet v59 (`ingestion/wiring.ts` buildVisionRunner);
+ * the off composition is kept beside it, for comparison.
  *
  * The composition is the one production runs, minus the queue: core's extraction runner reads a
  * synthetic PDF with two text pages and one image page, lands the text pages and enqueues the image
@@ -11,8 +10,8 @@
  * `ingestion/wiring.ts` withUnitsLandedHook and `main.ts` onUnitsLanded do (the trigger before the
  * generation sweep, and only for a delivery that carries a digest).
  *
- * The [D-515] group reports, without deciding, what the digest changes for a question drafted from
- * an image page: its citation records the digest of the delivery it was drafted from
+ * The [D-515] group pins what the digest changes for a question drafted from an image page (ruled
+ * Accept, sheet v59): its citation records the digest of the delivery it was drafted from
  * (`generation/pipeline.ts` citationFromUnit takes `sourceRevisions.get(sourcePath)`), seeded here
  * as that function would write it. Every string and byte is invented (INV-3).
  */
@@ -238,7 +237,7 @@ describe('with the vision digest switched on, a document with text and image pag
     expect(await heldIds(harness)).toEqual([]);
   });
 
-  it('the same composition with the digest off, as today, leaves the image page held with no text', async () => {
+  it('the same composition with the digest off, as before sheet v59, leaves the image page held with no text', async () => {
     const v1 = await hashContent(V1);
     const { vault, harness } = await vaultAt(V1, [
       { id: 'qt1', page: 1, revision: v1 },
@@ -254,7 +253,7 @@ describe('with the vision digest switched on, a document with text and image pag
   });
 });
 
-describe('[D-515], reported and not ruled: when a question drafted from an image page is held', () => {
+describe('[D-515], ruled: when a question drafted from an image page is held', () => {
   /** Drafts the image page's question from a drain of V1, recording what citationFromUnit would. */
   async function draftedFromImagePage(deliverRevisionDigest: boolean) {
     const scratch = new MemoryVaultSource();
@@ -271,7 +270,7 @@ describe('[D-515], reported and not ruled: when a question drafted from an image
     return { vault, harness, revision };
   }
 
-  it('digest off (today): no file version is recorded, so it is held at once and never rewritten', async () => {
+  it('digest off (before sheet v59): no file version is recorded, so it is held at once and never rewritten', async () => {
     const { vault, harness, revision } = await draftedFromImagePage(false);
     expect(revision).toBeUndefined();
     // Held at the first pass, the file unchanged.
