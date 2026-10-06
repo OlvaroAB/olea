@@ -31,10 +31,34 @@
  * breaking a tie; no wall time is ever compared. The latest record per page wins, whole (a record is
  * a state, not a delta). Two devices that read the same page concurrently keep the later; either way
  * the result never says more was read than a record says.
+ *
+ * **The outcomes-extracted mark (`[D-531]` B, `ol-egov.141.89.7.78`).** A unit record may carry the
+ * per-page mark (`./records.ts`). It is the third separate field, derived from neither of the other
+ * two, and it reaches the retire-on-revision rule (`../../outcome/retire-on-revision.ts`) through
+ * {@link UnitManifestFold.outcomeRevisionPagesOf}: the live revision's expected pages (its
+ * enumeration), every listed revision of the path, and its page history. The fold keeps every unit
+ * record per revision for this, not only the latest per page, because the rule asks whether the
+ * revision was ever read in full, and a later record (a page read again, a reading that failed) must
+ * not reopen a revision that was.
+ *
+ * **When a mark counts.** Only after the revision's current listing, and after every listing of any
+ * other revision of the path. The listing is the revision's first enumeration since another revision
+ * of the path was last enumerated: a revision returned to after another (A, then B, then A's bytes
+ * restored) starts a new listing, because while B was current its deliveries restamped the outcomes
+ * A states, and only a fresh extraction of A's pages restamps them back; a mark from A's first
+ * listing would let A read in full on stale stamps and retire outcomes A states. The same bytes
+ * listed again with no other revision between (a second device enumerating them, a file removed and
+ * restored unchanged) keep their listing, so a completed revision stays completed and a later
+ * delivery of it stays a reread. Another device can list a revision after this one's last
+ * enumeration while this one stays live (it listed B, then removed the file); a mark here then
+ * counts only after that other listing. A mark that does not count is the safe direction: the
+ * revision is not read in full until its pages are extracted again.
  */
 
+import type { OutcomePageState, OutcomeRevisionPages } from '../../outcome/retire-on-revision.js';
 import type { VaultPath } from '../../vault/types.js';
 import { newPendingEntry } from './manifest.js';
+import { outcomePageReadingOf } from './outcome-extraction.js';
 import {
   serialiseUnitManifestRecord,
   type UnitManifestRecord,
@@ -91,6 +115,13 @@ export interface UnitManifestFold {
   project(): UnitManifestProjection;
   /** The live manifest of one path, or `undefined` (unknown). */
   manifestOf(path: VaultPath): UnitManifest | undefined;
+  /**
+   * `[D-531]`: the live revision of one path as the retire-on-revision rule reads it: its expected
+   * pages, its page history since it was listed (module doc, "When a mark counts"), and every
+   * revision the path has had listed. `undefined` when no revision is live. The fold cannot know the
+   * file's bytes: a caller checks `revisionDigest` against them before trusting the answer.
+   */
+  outcomeRevisionPagesOf(path: VaultPath): OutcomeRevisionPages | undefined;
   /** The highest clock folded so far. */
   maxClock(): number;
 }
@@ -117,8 +148,12 @@ interface RevisionBucket {
   readonly digest: string;
   enumeratedPages: Set<number> | null;
   enumeratedAt: Stamp | null;
+  /** Every enumeration's stamp, for the listing a mark must follow (module doc, "When a mark counts"). */
+  readonly enumerations: Stamp[];
   retiredAt: Stamp | null;
   readonly units: Map<number, UnitStateRecord>;
+  /** Every unit record of the revision, in arrival order: the page history `[D-531]` replays. */
+  readonly history: UnitStateRecord[];
 }
 
 function isLive(revision: RevisionBucket): boolean {
@@ -128,7 +163,40 @@ function isLive(revision: RevisionBucket): boolean {
   );
 }
 
-function manifestOfRevision(sourcePath: VaultPath, revision: RevisionBucket): UnitManifest {
+/**
+ * `[D-531]`: the stamp a mark on `revision` must follow to count (module doc, "When a mark counts"):
+ * the revision's first enumeration later than every enumeration of the path's other revisions, or,
+ * when none of its enumerations is, the latest of those. `null` only when nothing was enumerated.
+ */
+function markThreshold(
+  revision: RevisionBucket,
+  revisions: ReadonlyMap<string, RevisionBucket>,
+): Stamp | null {
+  let otherLatest: Stamp | null = null;
+  for (const other of revisions.values()) {
+    if (other === revision) continue;
+    for (const stamp of other.enumerations) {
+      if (otherLatest === null || compareStamps(stamp, otherLatest) > 0) otherLatest = stamp;
+    }
+  }
+  let listed: Stamp | null = null;
+  for (const stamp of revision.enumerations) {
+    if (otherLatest !== null && compareStamps(stamp, otherLatest) <= 0) continue;
+    if (listed === null || compareStamps(stamp, listed) < 0) listed = stamp;
+  }
+  return listed ?? otherLatest;
+}
+
+/** Whether a record was written after `threshold`. Nothing is, when there is no threshold. */
+function isAfter(record: Stamp, threshold: Stamp | null): boolean {
+  return threshold !== null && compareStamps(record, threshold) > 0;
+}
+
+function manifestOfRevision(
+  sourcePath: VaultPath,
+  revision: RevisionBucket,
+  threshold: Stamp | null,
+): UnitManifest {
   const pages = new Set<number>(revision.enumeratedPages ?? []);
   for (const page of revision.units.keys()) pages.add(page);
   const entries: UnitManifestEntry[] = [...pages]
@@ -142,9 +210,56 @@ function manifestOfRevision(sourcePath: VaultPath, revision: RevisionBucket): Un
         page,
         readingState: record.readingState,
         conceptExtractionState: record.conceptExtractionState,
+        // `[D-531]`: the mark counts only after the revision's listing (module doc).
+        ...(record.outcomeExtractionState === 'complete' && isAfter(record, threshold)
+          ? { outcomeExtractionState: 'complete' as const }
+          : {}),
       };
     });
   return { sourcePath, revisionDigest: revision.digest, entries };
+}
+
+/**
+ * `[D-531]`: the live revision's page history as `OutcomeRevisionPages.history` defines it. First,
+ * each page whose latest record is older than the listing, with that record's reading and no mark;
+ * then every record written after the listing in the page record's own order (stamp, then the
+ * serialised line, so the same records in any arrival order give the same history; a record read
+ * twice appears once).
+ */
+function outcomeHistoryOf(
+  revision: RevisionBucket,
+  threshold: Stamp | null,
+): readonly OutcomePageState[] {
+  const history: OutcomePageState[] = [];
+  for (const page of [...revision.units.keys()].sort((a, b) => a - b)) {
+    const latest = revision.units.get(page);
+    if (latest === undefined || isAfter(latest, threshold)) continue;
+    history.push({
+      page,
+      reading: outcomePageReadingOf(latest.readingState),
+      outcomesExtracted: false,
+    });
+  }
+  const since = revision.history
+    .filter((record) => isAfter(record, threshold))
+    .map((record) => ({ record, line: serialiseUnitManifestRecord(record) }))
+    .sort((a, b) => {
+      const order = compareStamps(a.record, b.record);
+      if (order !== 0) return order;
+      if (a.line === b.line) return 0;
+      return a.line < b.line ? -1 : 1;
+    });
+  let previousLine: string | null = null;
+  for (const { record, line } of since) {
+    if (line === previousLine) continue;
+    previousLine = line;
+    history.push({
+      page: record.page,
+      reading: outcomePageReadingOf(record.readingState),
+      outcomesExtracted: record.outcomeExtractionState === 'complete',
+    });
+  }
+  return history;
 }
 
 /** The live revision of one path: the enumerated, unretired one enumerated last. `null` when none is live. */
@@ -179,8 +294,10 @@ export function createUnitManifestFold(): UnitManifestFold {
         digest,
         enumeratedPages: null,
         enumeratedAt: null,
+        enumerations: [],
         retiredAt: null,
         units: new Map(),
+        history: [],
       };
       revisions.set(digest, revision);
     }
@@ -192,9 +309,30 @@ export function createUnitManifestFold(): UnitManifestFold {
     if (cached !== undefined) return cached ?? undefined;
     const revisions = paths.get(path);
     const live = revisions === undefined ? null : liveRevision(revisions);
-    const manifest = live === null ? null : manifestOfRevision(path, live);
+    const manifest =
+      live === null || revisions === undefined
+        ? null
+        : manifestOfRevision(path, live, markThreshold(live, revisions));
     cache.set(path, manifest);
     return manifest ?? undefined;
+  };
+
+  const outcomeRevisionPagesOf = (path: VaultPath): OutcomeRevisionPages | undefined => {
+    const revisions = paths.get(path);
+    if (revisions === undefined) return undefined;
+    const live = liveRevision(revisions);
+    if (live === null) return undefined;
+    const threshold = markThreshold(live, revisions);
+    return {
+      sourcePath: path,
+      revisionDigest: live.digest,
+      expectedPages: [...(live.enumeratedPages ?? [])].sort((a, b) => a - b),
+      history: outcomeHistoryOf(live, threshold),
+      knownRevisions: [...revisions.values()]
+        .filter((revision) => revision.enumeratedAt !== null)
+        .map((revision) => revision.digest)
+        .sort(),
+    };
   };
 
   return {
@@ -211,6 +349,7 @@ export function createUnitManifestFold(): UnitManifestFold {
           if (revision.enumeratedAt === null || compareStamps(stamp, revision.enumeratedAt) > 0) {
             revision.enumeratedAt = stamp;
           }
+          revision.enumerations.push(stamp);
           break;
         }
         case 'retired': {
@@ -224,12 +363,14 @@ export function createUnitManifestFold(): UnitManifestFold {
           if (incumbent === undefined || beats(record, incumbent)) {
             revision.units.set(record.page, record);
           }
+          revision.history.push(record);
           break;
         }
       }
       cache.delete(record.sourcePath);
     },
     manifestOf,
+    outcomeRevisionPagesOf,
     maxClock: () => highestClock,
     project() {
       const manifests = new Map<VaultPath, UnitManifest>();
