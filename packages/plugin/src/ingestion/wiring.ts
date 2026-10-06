@@ -128,6 +128,15 @@ import {
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+// `[D-531]`: read from core's source by path, as `../grove/unit-manifest-store.ts` reads the unit
+// manifest's modules, so this needs no edit to core's shared export list.
+import {
+  type OutcomeDeliveryPlan,
+  type OutcomeDeliveryRevision,
+  type OutcomeRevisionPages,
+  planOutcomeDelivery,
+} from '../../../core/src/outcome/retire-on-revision.js';
+import { retireOutcomesOnRevision } from '../../../core/src/outcome/store.js';
 import { type QueueStatusCounts, summarizeQueueStatusCounts } from '../commands/diagnostics.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
 import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
@@ -381,6 +390,44 @@ export interface OutcomesExtractTriggerDeps {
    * half of the answer is dropped and no processing state is written.
    */
   readonly scopeReading?: ScopeReadingTriggerDeps;
+  /**
+   * `[D-531]` (`ol-egov.141.89.7.68`): when present, the trigger retires the outcomes a revised
+   * document no longer states, once the revision has been read in full. Each delivery is placed
+   * against the document's current version (`olea-core`'s `planOutcomeDelivery`): an open delivery
+   * stamps and restamps its outcomes with that version and reinstates one it states again; a reread
+   * changes no matched record; a late delivery (bytes the document no longer has) writes nothing.
+   * After a successful extraction the delivery's pages are marked extracted for its version, and
+   * the retire pass runs (`retireOutcomesOnRevision`, which refuses until every expected page is
+   * settled). Omitted (every caller before this bead) leaves the trigger exactly as it was: no
+   * record is stamped, no page is marked, nothing is retired.
+   */
+  readonly revisions?: OutcomeRevisionTriggerDeps;
+}
+
+/**
+ * What the trigger needs from the document's page record (the unit manifest) to retire on
+ * revision. The page record owns both facts: which version is current, and which pages of it have
+ * had their outcomes extracted.
+ */
+export interface OutcomeRevisionTriggerDeps {
+  /**
+   * The document's current version as its page record holds it, checked against the file's
+   * current bytes: its expected pages, its page history since it was last listed, and every
+   * version listed for the document. `undefined` when the page record cannot say; the delivery is
+   * then unplaced (matched records left as they are, no page marked).
+   */
+  readonly currentRevision: (sourcePath: VaultPath) => Promise<OutcomeRevisionPages | undefined>;
+  /**
+   * Marks `pages` of version `revisionDigest` as having had their outcomes extracted. Writes
+   * nothing for a version that is not the current one, or a page that has not been read.
+   */
+  readonly markOutcomesExtracted: (
+    sourcePath: VaultPath,
+    revisionDigest: string,
+    pages: readonly number[],
+  ) => Promise<void>;
+  /** Injectable for deterministic tests. */
+  readonly now?: () => string;
 }
 
 /**
@@ -645,7 +692,10 @@ function extractOutcomeProvenanceStamp(body: unknown): OutcomeProvenance | null 
  * inside a real `tick()` drain) — exactly "the same queue, retries and background allowance as
  * concept extraction" the ruling asks for. `[D-344]`'s "never by re-registration" falls out the
  * same way: registering an already-ingested, unchanged document creates no new job, so nothing
- * re-fires until its next real revision.
+ * re-fires until its next real revision. One revision can still be delivered more than once (a
+ * catch-up extraction, a note that embeds the file, a workflow update), and each scanned or figure
+ * page arrives in a delivery of its own, which is why `[D-531]` places every delivery against the
+ * document's current version before writing (`planOutcomeRevision`, `settleOutcomeRevision`).
  *
  * **The single Worker call, and why provenance cannot be handed in ahead of it.**
  * `runOutcomesExtract`'s own `options.provenance` is caller-known, supplied BEFORE that function's
@@ -737,12 +787,22 @@ async function triggerOutcomesExtractForLandedUnit(
   }
   const provenance: OutcomeProvenance = stamp;
 
+  // `[D-531]`: placed after the call, since the file can change while it runs. A late delivery
+  // read bytes the document no longer has, so nothing it found is written.
+  const plan = await planOutcomeRevision(deps.revisions, sourcePath, sourceRevisions);
+  if (plan !== undefined && !plan.resolve) {
+    console.info('Olea: an extraction of a replaced version was not recorded', {
+      taskId: OUTCOMES_EXTRACT_TASK_ID,
+    });
+    return;
+  }
+
   const options: RunOutcomesExtractOptions = {
     documentKind: registered.documentKind,
     courses: registered.courses,
     provenance,
   };
-  const resolved = await resolveOutcomeCandidates(vault, result, options);
+  const resolved = await resolveOutcomeCandidates(vault, result, options, plan?.revision);
   await reconcileResolvedOutcomes(vault, resolved, options);
   // `[D-429]`: after the Outcome records, so a `recorded` state never outruns the declarations it
   // stands for. The structure half of the answer, dropped here before this bead, is kept.
@@ -771,6 +831,64 @@ async function triggerOutcomesExtractForLandedUnit(
     } catch (error) {
       console.error('Olea: scope reading drivers failed (ingestion unaffected)', { error });
     }
+  }
+  // `[D-531]`: mark this delivery's pages and run the retire pass, after its outcome records.
+  if (deps.revisions !== undefined && plan !== undefined) {
+    await settleOutcomeRevision(vault, deps.revisions, sourcePath, units, plan);
+  }
+}
+
+/**
+ * `[D-531]`: where this delivery stands against the document's current version. `undefined` when
+ * the trigger has no page record to ask (`deps.revisions` omitted). A page record that cannot be
+ * read places the delivery nowhere (unplaced), never as current.
+ */
+async function planOutcomeRevision(
+  revisions: OutcomeRevisionTriggerDeps | undefined,
+  sourcePath: VaultPath,
+  sourceRevisions: ReadonlyMap<string, string> | undefined,
+): Promise<OutcomeDeliveryPlan | undefined> {
+  if (revisions === undefined) return undefined;
+  let current: OutcomeRevisionPages | undefined;
+  try {
+    current = await revisions.currentRevision(sourcePath);
+  } catch (error) {
+    console.error('Olea: the page record could not be read; the delivery is unplaced', { error });
+    current = undefined;
+  }
+  return planOutcomeDelivery(current, sourceRevisions?.get(sourcePath));
+}
+
+/**
+ * `[D-531]`, after a successful extraction whose outcomes are recorded: marks the pages this
+ * delivery carried as extracted for its version (open and reread deliveries only), then runs the
+ * retire pass against the current version. The pass refuses until that version has been read in
+ * full, and retires only what is still due, so running it after every delivery retires each stale
+ * outcome once. Never fails the job it rode in on.
+ */
+async function settleOutcomeRevision(
+  vault: VaultSource,
+  revisions: OutcomeRevisionTriggerDeps,
+  sourcePath: VaultPath,
+  units: readonly ExtractedUnit[],
+  plan: OutcomeDeliveryPlan,
+): Promise<void> {
+  try {
+    if (plan.markPages && plan.revision !== undefined) {
+      const pages = [...new Set(units.map((unit) => unit.provenance.location.page))].sort(
+        (a, b) => a - b,
+      );
+      await revisions.markOutcomesExtracted(sourcePath, plan.revision.digest, pages);
+    }
+    const current = await revisions.currentRevision(sourcePath);
+    if (current === undefined) return;
+    await retireOutcomesOnRevision(
+      vault,
+      current,
+      revisions.now === undefined ? {} : { now: revisions.now },
+    );
+  } catch (error) {
+    console.error('Olea: retiring outcomes on revision failed (ingestion unaffected)', { error });
   }
 }
 
@@ -1365,6 +1483,7 @@ async function resolveOutcomeCandidates(
   vault: VaultSource,
   result: OutcomesExtractReadResult<OutcomeSourceReference>,
   options: RunOutcomesExtractOptions,
+  revision?: OutcomeDeliveryRevision,
 ): Promise<RunOutcomesExtractResult> {
   // `[D-477]`: one call for the whole extraction, never one call per candidate under
   // `Promise.all`. The store resolves the batch as one task (list, match by block and wording, mint)
@@ -1379,6 +1498,8 @@ async function resolveOutcomeCandidates(
       provenance: options.provenance,
       extractorSelfRating: candidate.confidence,
     })),
+    // `[D-531]`: the delivery's version, when the trigger placed it (`planOutcomeRevision`).
+    revision === undefined ? {} : { revision },
   );
 
   return { outcomes, paperStructure: result.paperStructure };
