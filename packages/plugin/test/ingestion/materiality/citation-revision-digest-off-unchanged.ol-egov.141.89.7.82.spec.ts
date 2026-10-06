@@ -1,10 +1,11 @@
 /**
- * `ol-egov.141.89.7.82` ([D-518]): with the vision digest off, as the ingestion is composed today,
- * the rewrite after a file changes behaves exactly as it did before pages of one version were
- * merged. Today only the extraction runner's text-layer deliveries carry a digest (core
- * `ingestion/extraction-runner.ts` runNoteJob and runSourceJob; the vision page runner delivers
- * none while `deliverRevisionDigest` is off), and each covers every text-layer page of the bytes it
- * read, so a repeat of a version always covers the same pages.
+ * `ol-egov.141.89.7.82` ([D-518]): with the vision digest off, as the ingestion was composed before
+ * the digest was switched on (sheet v59), the rewrite after a file changes behaves exactly as it did
+ * before pages of one version were merged. Then only the extraction runner's text-layer deliveries
+ * carry a digest (core `ingestion/extraction-runner.ts` runNoteJob and runSourceJob; the vision page
+ * runner delivers none while `deliverRevisionDigest` is off), and each covers every text-layer page
+ * of the bytes it read, so a repeat of a version always covers the same pages. Kept as the oracle
+ * for text-layer deliveries, which the switch does not change.
  *
  * The oracle below is the rule before this change: the text held for a file is the latest
  * delivery's, whole. For every prefix of a sequence of such deliveries (a repeat, a note embedding

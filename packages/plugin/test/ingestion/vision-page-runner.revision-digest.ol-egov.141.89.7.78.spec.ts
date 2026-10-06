@@ -3,13 +3,11 @@
  * `deliverRevisionDigest` on, a page read from its image is delivered with the content hash of the
  * very bytes the runner read, keyed by its source, so the outcomes trigger can place it against the
  * document's current version and the page record can count the page extracted. With it off (the
- * default, and what `ingestion/wiring.ts`'s `buildVisionRunner` composes today) the delivery carries
- * no digest and nothing else the runner does changes. Written to olea-service
- * `features/F4-oracle.md`, F4.1, the scenario tagged with this file.
- *
- * Why it ships off: the same sink feeds `main.ts`'s `onUnitsLanded`, where a digest on a one-page
- * vision delivery would reach the citation-revision rewrite (`[D-518]`) and the generation
- * citations (`[D-515]`), which today see none for these deliveries. See the runner's field doc.
+ * runner's own default; `ingestion/wiring.ts`'s `buildVisionRunner` turns it on since
+ * `ol-egov.141.89.7.82`, sheet v59) the delivery carries no digest and nothing else the runner does
+ * changes. Written to olea-service `features/F4-oracle.md`, F4.1, the scenario tagged with this
+ * file. The production composition with the digest on is pinned in
+ * `retire-on-revision.vision-digest-on.ol-egov.141.89.7.82.spec.ts`.
  *
  * Every string and byte below is invented (INV-3).
  */
