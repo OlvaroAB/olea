@@ -88,70 +88,34 @@
  * via `probeDays` for a caller with a real reason to bound it (e.g. a test).
  *
  * ===========================================================================
- * THE IDENTITY-SPACE CAVEAT — VERIFIED, NOT ASSUMED (`ol-2zfj.22`'s brief)
+ * WHAT THE TWO CONCEPT FIELDS CARRY (`ol-2zfj.27`, `[D-482]`, ONT-R1 `ol-2zfj.86`)
  * ===========================================================================
- * `corpusRelationSignals.ts`'s `AssessmentErrorAdjacencyOptions` already
- * documents the risk it could not close without this store existing: does
- * `MisconceptionRecord.conceptId`/`.confusedWithConceptId` hold a concept
- * NAME (what `her-link`/`assessment-cooccurrence` key on) or `[D-088]`'s
- * opaque `ConceptRecord.key` (what review-log `conceptIds` now carry, per
- * `today/data-source.ts`'s `createVaultTrendsSource` doc: "A concept's id is
- * its opaque key, not its name")? If the latter, that resolution "silently
- * stops matching... rather than mismatching silently" — a store shipped
- * without checking would be exactly the failure this bead's brief warns
- * against.
+ * `MisconceptionRecord.conceptId`/`.confusedWithConceptId` hold concept KEYS
+ * (`ConceptRecord.key`, `[D-088]`), never a name or the judge's own wording.
+ * Traced end to end:
  *
- * **Traced end to end. It is neither a canonical name nor an opaque key —
- * it is free text the grading judge invented, with NO concept vocabulary of
- * either kind ever given to it to draw from:**
+ * 1. The grading request carries `permittedConceptIds`: the subject's key and,
+ *    when a causes partner resolved, the neighbour's key
+ *    (`explain-back/request.ts`'s `permittedConceptIdsFor`; the subject is
+ *    `instrument.conceptIds[0]`, the neighbour a `ConceptRecord.key`). The
+ *    Worker tells the judge to name only those and drops any candidate that
+ *    names anything else (`olea-service`'s `src/tasks/explainBackJudge.ts`
+ *    grounding).
+ * 2. The client resolver accepts only an exact id from that same list
+ *    (`explain-back/observation.ts`'s `resolveConceptId`), so a stale Worker's
+ *    free label is refused as `'unresolved-concept'`, and
+ *    `olea-core`'s `buildObservationEventsFromAcceptedGrading` refuses a
+ *    concept confused with itself.
+ * 3. A wrong MCQ pick (Stream B) records its instrument's `conceptIds`, also
+ *    keys, with no `confusedWithConceptId` (`olea-core`'s
+ *    `misconception/store.ts` `normalizeMcqPick`).
  *
- * 1. `olea-service/src/tasks/explainBackJudge.ts`'s `misconceptionCandidate`
- *    zod schema types `concept`/`confusedWith` as bare `z.string().min(1)` —
- *    no enum, no id format, no reference to any concept list.
- * 2. That same file's `buildPrompt` never sends the model a concept name or
- *    id list of any kind — only `sourceBlocks` (raw excerpt text keyed by an
- *    unrelated `blockId`) and `misconceptionDigest` (prior misconceptions'
- *    own `concept` strings, for context, not as a controlled vocabulary).
- *    There is no request-side concept identity for the model to echo back,
- *    canonical or opaque — it names a concept purely from what it read in
- *    the question/answer/source text.
- * 3. `packages/core/src/grading/workerJudgeCaller.ts`'s `readMisconception
- *    Candidates` (~line 204–253) parses `concept` (line 218) and
- *    `confusedWith` (line 240) off the wire response as plain strings with no
- *    further validation against any identity space — it cannot check what
- *    was never sent.
- * 4. `gradingPipeline.ts`'s module doc (its "WHAT THIS EMITS" section) states
- *    the mapping is field-for-field: a `MisconceptionCandidate`'s `concept`/
- *    `confusedWith` become `ObservationInput.conceptId`/
- *    `.confusedWithConceptId` verbatim, at whatever integration point wires
- *    the grading pipeline to `misconception/events.ts` (not yet built —
- *    `ol-p4t04`'s own scope, separate from this bead).
- * 5. `misconception/types.ts`'s own doc corroborates from the other side:
- *    `conceptId` carries "no reference to `[D-088]`'s opaque
- *    `ConceptRecord.key` anywhere in `packages/core/src/misconception/`".
- *
- * **Verdict: the identity spaces are the same CATEGORY (free-text labels),
- * so records CAN match `corpusRelationSignals.ts`'s `byName` lookup — but
- * nothing GUARANTEES a match.** `assessmentErrorAdjacencySignals` resolves
- * both ids via an EXACT `Map.get` against `CorpusConcept.name`/`.aliases`
- * (`corpusRelationSignals.ts` lines ~330–334) — unlike `her-link`/
- * `assessment-cooccurrence` in the SAME file, which both use
- * `mentionsTerm`'s case-insensitive, word-bounded regex. A judge-invented
- * label that paraphrases, abbreviates, or differs in case from the concept's
- * canonical `name`/`aliases` resolves to nothing, silently (the documented,
- * accepted "unrecognised concept nominates nothing" behaviour) — this is a
- * real, live risk given the model is never shown the canonical name list, not
- * a hypothetical. **This store does no resolution of its own and ships none**
- * — `AssessmentErrorAdjacencyOptions`'s own doc already commits to "a plain
- * array... stays agnostic to how any of it was computed", so fixing the
- * match rate (e.g. loosening `assessmentErrorAdjacencySignals` to the same
- * `mentionsTerm`-style matching the other two signals use, or having the
- * grader's prompt list known concept names) belongs to whoever owns that
- * file or the prompt, not to this store. Flagged here so a caller wiring
- * this store for the first time watches the resolved-pair count rather than
- * assuming zero means "no misconceptions" when it may mean "no exact-string
- * matches yet" — exactly the caution `AssessmentErrorAdjacencyOptions`'s own
- * doc already asks for.
+ * **This store does no resolution of its own** and hands records through
+ * verbatim. A consumer resolves the two ids by concept key: the
+ * `assessment-error-adjacency` signal (`concept/corpusRelationSignals.ts`) and
+ * the confusion-pairing reader (`olea-core`'s `concept/confusion-pairing/`)
+ * both do. A consumer that looked ids up by name or alias would match no
+ * record at all.
  */
 
 import {

@@ -46,30 +46,21 @@
  * concern: both inputs are already-computed, in-memory, transient-batch
  * shapes (the same "posted and forgotten" posture the corpus stage itself
  * uses), and this reader adds no new one. Whether — and how — a
- * corroboration verdict is ever shown to her is the open, human-held
- * decision at `ol-2zfj.21`; until it closes, this reader has no caller and
- * yields data nobody renders (`[D-072]` clause 5's named exception).
+ * corroboration verdict is ever shown to her was `ol-2zfj.21`'s question;
+ * `[D-130]` ruled corroboration-only with no surface, so the production caller
+ * (`packages/plugin/src/main.ts`, via `../../misconception/corroboration.js`)
+ * holds the verdicts in memory and nothing renders them.
  *
- * **Identity-space convention, restated from `packages/plugin/src/concept/
- * corpusRelationSignals.ts`'s `AssessmentErrorAdjacencyOptions` doc, because
- * this reader inherits the identical risk.** `MisconceptionRecord.conceptId`/
- * `.confusedWithConceptId` are plain `string`, with no identity-space
- * documented on the misconception module itself and no production caller
- * populating them from `[D-088]`'s opaque `ConceptRecord.key` today. This
- * reader resolves both against `ConfusionPairingConcept`'s `name`/`aliases`
- * space — the SAME interim identity `her-link`, `assessment-cooccurrence`
- * and `assessment-error-adjacency` already key on, and that `../relation.js`
- * itself documents as the fold's deliberate interim choice ("`from`/`to` are
- * NAMES... because C7.11 rules identity is an opaque key never derived from
- * content, but the opaque-key registry does not exist yet"). **If a future
- * misconception-store caller starts stamping `conceptId` with that opaque
- * key instead of a name, this reader's resolution does not mismatch
- * silently — it silently stops matching anything at all** (every id looks
- * unrecognised), which is exactly why `unresolvedRecords` and
- * `evidenceBearingRecords` are both reported rather than only a merged
- * count: a caller wiring a real misconception store for the first time
- * should verify `unresolvedRecords` is not permanently equal to
- * `evidenceBearingRecords`. `./health.ts` makes that check concrete.
+ * **What the ids carry today (`ol-2zfj.27`).** Every writer of a misconception record stamps
+ * both ids with a concept KEY: the explain-back accept path binds only ids the grading request
+ * permitted (`[D-482]`; `packages/plugin/src/explain-back/observation.ts`'s `resolveConceptId`),
+ * and a wrong MCQ pick carries its instrument's `conceptIds` (`../../misconception/store.js`). The
+ * plugin stamps opaque keys (`concept-key1:`), so the opaque-key path above is the one production
+ * records take, and it resolves only when the
+ * caller supplies `ConfusionPairingConcept.key` (`packages/plugin/src/main.ts`'s
+ * `corroborateConfusionPairings` call site does). `unresolvedRecords` and
+ * `evidenceBearingRecords` are both reported so a caller that stops passing `key` shows as every
+ * record unresolved rather than as "no evidence"; `./health.ts` makes that check concrete.
  */
 
 import type { RelationSetEntry } from '../relation.js';
@@ -89,9 +80,9 @@ export interface ConfusionPairingConcept {
   /**
    * `[D-088]`'s opaque concept key, when the caller has one (`ol-bo48`'s `mintOpaqueConceptKey`
    * output, or the sidecar it persists). `null`/`undefined` while a caller has not wired the key
-   * store through to this reader yet — today's only production caller does not
-   * (`packages/plugin/src/main.ts`'s `corroborateConfusionPairings` call site passes
-   * `name`/`aliases` alone). Optional, not required: widening this field must never force every
+   * store through to this reader; the production caller does (`packages/plugin/src/main.ts`'s
+   * `corroborateConfusionPairings` call site passes `key: concept.key`, `ol-2zfj.164`), and every
+   * production record's ids are keys (`ol-2zfj.27`). Optional, not required: widening this field must never force every
    * existing construction site to change (see this module's top doc, "the legacy read path").
    * This reader's own edge join still keys on `name`, unchanged — `key` is consulted only to
    * resolve an `'opaque-key'`-scheme `MisconceptionRecord` id back to a concept.

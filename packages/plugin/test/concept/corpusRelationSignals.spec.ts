@@ -14,6 +14,7 @@ import {
   hashText,
   type ListOptions,
   type MisconceptionRecord,
+  OPAQUE_CONCEPT_KEY_PREFIX,
   type PersistedEmbeddingCache,
   type RetrievalChunk,
   type Unsubscribe,
@@ -709,14 +710,30 @@ describe('gatherCorpusRelationVaultContext — embedding-proximity nomination si
 });
 
 // ---- assessment-error-adjacency nomination signal (`ol-2zfj.19`) -----------
+//
+// `ol-2zfj.27`: every writer stamps a misconception record's two ids with concept KEYS (the
+// explain-back accept path binds only permitted ids, `[D-482]`), so the fixtures below carry keys
+// and the concepts carry the matching `key`. A record carrying a name or alias is not something any
+// writer produces; it is asserted to nominate nothing.
 
 const CITATION = { path: 'Courses/Sample/notes.md' as VaultPath, blockIndex: 1 };
+const TYPE_I_KEY = `${OPAQUE_CONCEPT_KEY_PREFIX}:type-i-nonce`;
+const TYPE_II_KEY = `${OPAQUE_CONCEPT_KEY_PREFIX}:type-ii-nonce`;
+
+function keyed(
+  name: string,
+  sourcePath: VaultPath,
+  range: [number, number],
+  key: string,
+): CorpusConcept {
+  return { ...concept(name, sourcePath, range), key };
+}
 
 function misconceptionRecord(overrides: Partial<MisconceptionRecord> = {}): MisconceptionRecord {
   return {
     id: 'm-1',
-    conceptId: 'Type I error',
-    confusedWithConceptId: 'Type II error',
+    conceptId: TYPE_I_KEY,
+    confusedWithConceptId: TYPE_II_KEY,
     statement: 'Believes a false positive and a false negative are the same thing.',
     correction: 'A Type I error rejects a true null; a Type II error fails to reject a false one.',
     citation: CITATION,
@@ -724,20 +741,20 @@ function misconceptionRecord(overrides: Partial<MisconceptionRecord> = {}): Misc
     lastSeen: '2026-08-16T09:00:00-04:00',
     occurrenceCount: 1,
     status: 'active',
-    originInstrumentId: 'explain-back:Type I error:1',
+    originInstrumentId: 'explain-back:type-i:1',
     ...overrides,
   };
 }
 
 describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomination signal', () => {
-  it("nominates a pair from a misconception record's confusedWithConceptId", async () => {
+  it("nominates a pair from a misconception record's two concept keys", async () => {
     const vault = new MemoryVault({
       'A.md': 'A Type I error is a false positive.',
       'B.md': 'A Type II error is a false negative.',
     });
     const concepts = [
-      concept('Type I error', 'A.md', [0, 36]),
-      concept('Type II error', 'B.md', [0, 37]),
+      keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY),
+      keyed('Type II error', 'B.md', [0, 37], TYPE_II_KEY),
     ];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
@@ -755,8 +772,8 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
       'B.md': 'A Type II error is a false negative.',
     });
     const concepts = [
-      concept('Type I error', 'A.md', [0, 36]),
-      concept('Type II error', 'B.md', [0, 37]),
+      keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY),
+      keyed('Type II error', 'B.md', [0, 37], TYPE_II_KEY),
     ];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts);
@@ -766,7 +783,7 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
 
   it('nominates nothing for a record with no confusedWithConceptId', async () => {
     const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
-    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+    const concepts = [keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY)];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
       assessmentErrorAdjacency: {
@@ -777,27 +794,29 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
     expect(signals).toEqual([]);
   });
 
-  it('nominates nothing when either id does not resolve to a known concept', async () => {
+  it('nominates nothing when either key is carried by no concept in the set', async () => {
     const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
-    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+    const concepts = [keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY)];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
       assessmentErrorAdjacency: {
-        records: [misconceptionRecord({ confusedWithConceptId: 'Some unknown concept' })],
+        records: [
+          misconceptionRecord({ confusedWithConceptId: `${OPAQUE_CONCEPT_KEY_PREFIX}:unknown` }),
+        ],
       },
     });
 
     expect(signals).toEqual([]);
   });
 
-  it('never nominates a self-pair when a record names the same concept on both sides', async () => {
+  it('never nominates a self-pair when a record carries the same key on both sides', async () => {
     const vault = new MemoryVault({ 'A.md': 'A Type I error is a false positive.' });
-    const concepts = [concept('Type I error', 'A.md', [0, 36])];
+    const concepts = [keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY)];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
       assessmentErrorAdjacency: {
         records: [
-          misconceptionRecord({ conceptId: 'Type I error', confusedWithConceptId: 'Type I error' }),
+          misconceptionRecord({ conceptId: TYPE_I_KEY, confusedWithConceptId: TYPE_I_KEY }),
         ],
       },
     });
@@ -811,8 +830,8 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
       'B.md': 'A Type II error is a false negative.',
     });
     const concepts = [
-      concept('Type I error', 'A.md', [0, 36]),
-      concept('Type II error', 'B.md', [0, 37]),
+      keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY),
+      keyed('Type II error', 'B.md', [0, 37], TYPE_II_KEY),
     ];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
@@ -821,8 +840,8 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
           misconceptionRecord({ id: 'm-1' }),
           misconceptionRecord({
             id: 'm-2',
-            conceptId: 'Type II error',
-            confusedWithConceptId: 'Type I error',
+            conceptId: TYPE_II_KEY,
+            confusedWithConceptId: TYPE_I_KEY,
           }),
         ],
       },
@@ -831,29 +850,52 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
     expect(signals).toHaveLength(1);
   });
 
-  it('matches against an alias, not only the canonical name', async () => {
+  it('a record carrying a name or alias instead of a key nominates nothing (ol-2zfj.27: no writer stamps one)', async () => {
     const vault = new MemoryVault({
       'A.md': 'A Type I error is a false positive.',
       'B.md': 'A Type II error is a false negative.',
     });
     const concepts: CorpusConcept[] = [
-      concept('Type I error', 'A.md', [0, 36]),
+      keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY),
       {
-        name: 'Type II error',
+        ...keyed('Type II error', 'B.md', [0, 37], TYPE_II_KEY),
         aliases: ['Beta error'],
-        anchor: { sourcePath: 'B.md', location: { page: 1, charRange: { start: 0, end: 37 } } },
       },
     ];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
       assessmentErrorAdjacency: {
-        records: [misconceptionRecord({ confusedWithConceptId: 'Beta error' })],
+        records: [
+          misconceptionRecord({
+            id: 'm-1',
+            conceptId: 'Type I error',
+            confusedWithConceptId: 'Type II error',
+          }),
+          misconceptionRecord({ id: 'm-2', confusedWithConceptId: 'Beta error' }),
+        ],
       },
     });
 
-    expect(signals).toEqual([
-      { kind: 'assessment-error-adjacency', a: 'Type I error', b: 'Type II error' },
-    ]);
+    expect(signals).toEqual([]);
+  });
+
+  it('a keyless concept is never resolved, even by a record id equal to its name', async () => {
+    const vault = new MemoryVault({
+      'A.md': 'A Type I error is a false positive.',
+      'B.md': 'A Type II error is a false negative.',
+    });
+    const concepts = [
+      keyed('Type I error', 'A.md', [0, 36], TYPE_I_KEY),
+      concept('Type II error', 'B.md', [0, 37]),
+    ];
+
+    const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
+      assessmentErrorAdjacency: {
+        records: [misconceptionRecord({ confusedWithConceptId: 'Type II error' })],
+      },
+    });
+
+    expect(signals).toEqual([]);
   });
 
   it('composes with the other three signal kinds when several are wired at once', async () => {
@@ -862,8 +904,8 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
       'B.md': 'A Type II error is a false negative.',
     });
     const concepts = [
-      concept('Type I error', 'A.md', [0, 76]),
-      concept('Type II error', 'B.md', [0, 37]),
+      keyed('Type I error', 'A.md', [0, 76], TYPE_I_KEY),
+      keyed('Type II error', 'B.md', [0, 37], TYPE_II_KEY),
     ];
 
     const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
@@ -883,9 +925,9 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
   });
 
   it(
-    'a misconception record naming a conceptId shared by two distinct, differently-keyed ' +
-      'concepts nominates nothing, rather than resolving to whichever one this module ' +
-      'happened to index last (ol-egov.141.89.4.18)',
+    'a record bound to one of two differently-keyed concepts sharing a name nominates nothing: ' +
+      'the signal names its endpoints, and nomination would read that name as either concept ' +
+      '(ol-egov.141.89.4.18, ONT-R1)',
     async () => {
       const vault = new MemoryVault({
         'B.md': 'Loam, one of two distinct coined concepts sharing this exact name.',
@@ -893,15 +935,15 @@ describe('gatherCorpusRelationVaultContext — assessment-error-adjacency nomina
         'D.md': 'A Silt error is unrelated.',
       });
       const concepts: CorpusConcept[] = [
-        { ...concept('Loam', 'B.md', [0, 67]), key: 'key-loam-b' },
-        { ...concept('Loam', 'C.md', [0, 65]), key: 'key-loam-c' },
-        concept('Silt error', 'D.md', [0, 26]),
+        keyed('Loam', 'B.md', [0, 67], 'key-loam-b'),
+        keyed('Loam', 'C.md', [0, 65], 'key-loam-c'),
+        keyed('Silt error', 'D.md', [0, 26], 'key-silt'),
       ];
 
       const { signals } = await gatherCorpusRelationVaultContext(vault, concepts, {
         assessmentErrorAdjacency: {
           records: [
-            misconceptionRecord({ conceptId: 'Loam', confusedWithConceptId: 'Silt error' }),
+            misconceptionRecord({ conceptId: 'key-loam-b', confusedWithConceptId: 'key-silt' }),
           ],
         },
       });
