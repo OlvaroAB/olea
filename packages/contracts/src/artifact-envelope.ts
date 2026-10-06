@@ -101,7 +101,7 @@
 import { z } from 'zod';
 import { contracts } from './registry.js';
 import { soloLevel } from './review-log.js';
-import { studyPlanAllocationEntry, studyPlanCourse } from './study-plan.js';
+import { type StudyPlanCitation, studyPlanAllocationEntry, studyPlanCourse } from './study-plan.js';
 import { responseStamp } from './worker.js';
 
 /** The envelope wrapper shape this build writes and is willing to read. */
@@ -736,16 +736,21 @@ export type StudyPlanBody = z.infer<typeof studyPlanBody>;
 /**
  * The study plan's inline evidence, read as the shared basis slot.
  *
- * Pure and total: every `plannedConcept` yields a valid `ClaimBasis`, which is
- * the evidence that the slot is a generalisation of what P5-T05 already built
- * rather than a second, parallel way of citing work.
+ * Pure and total over a past-paper-cited concept: it yields a valid `ClaimBasis`,
+ * which is the evidence that the slot is a generalisation of what P5-T05 already
+ * built rather than a second, parallel way of citing work. **A concept cited only
+ * on objectives, a brief or as unknown relevance yields an empty `evidence` list**
+ * (`[D-529]`): the slot's `locator` is a question label and those citations have
+ * none, so the result does not satisfy `claimBasis`'s non-empty rule. Nothing
+ * calls this function today; a caller that arrives must settle that first (an
+ * open question on `ol-egov.141.89.7.64`, not decided here).
  */
 export function plannedConceptBasis(concept: {
   rank: number;
   weight: number;
   examProximityDays: number | null;
   reasoning: string;
-  citations: readonly { sourcePath: string; questionLabel: string }[];
+  citations: readonly StudyPlanCitation[];
 }): ClaimBasis {
   return {
     reasoning: concept.reasoning,
@@ -756,16 +761,29 @@ export function plannedConceptBasis(concept: {
         ? []
         : [{ name: 'examProximityDays', value: concept.examProximityDays }]),
     ],
-    evidence: concept.citations.map((citation) => ({
-      kind: 'source' as const,
-      sourcePath: citation.sourcePath,
-      locator: citation.questionLabel,
-    })),
+    // Only a past-paper citation has a locator (its question label); an objectives or brief
+    // citation has none and is not given a placeholder (`[D-529]`, `[D-226]`), and the marked
+    // unknown-relevance entry has no source at all.
+    evidence: concept.citations.flatMap((citation) =>
+      citation.basis === 'past-paper'
+        ? [
+            {
+              kind: 'source' as const,
+              sourcePath: citation.sourcePath,
+              locator: citation.questionLabel,
+            },
+          ]
+        : [],
+    ),
   };
 }
 
 export const STUDY_PLAN_KIND = 'study-plan';
-export const STUDY_PLAN_BODY_VERSION = 1;
+/**
+ * `[D-529]`: 2. Version 1 plans carried unlabelled past-paper citations only; a cached
+ * plan of another body version is treated as absent and rebuilt (`readArtifactEnvelope`).
+ */
+export const STUDY_PLAN_BODY_VERSION = 2;
 export const STUDY_PLAN_ENVELOPE_CONTRACT_ID = 'study-plan-envelope.v1';
 export const studyPlanEnvelope = artifactEnvelope(
   STUDY_PLAN_KIND,

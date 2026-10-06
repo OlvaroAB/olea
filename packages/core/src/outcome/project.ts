@@ -17,6 +17,8 @@ import type {
   OutcomeConceptAttachedEvent,
   OutcomeCreatedEvent,
   OutcomeEvent,
+  OutcomeReinstatedEvent,
+  OutcomeRestatedEvent,
   OutcomeRetiredEvent,
 } from './events.js';
 import { OUTCOME_RECORD_SCHEMA_VERSION, type OutcomeRecord } from './types.js';
@@ -42,6 +44,8 @@ function applyCreated(
     ...(event.extractorSelfRating !== undefined
       ? { extractorSelfRating: event.extractorSelfRating }
       : {}),
+    // `[D-531]`: the version that stated it, when known; omitted otherwise, same discipline.
+    ...(event.statedInRevision !== undefined ? { statedInRevision: event.statedInRevision } : {}),
     mintedAt: event.timestamp,
     schemaVersion: OUTCOME_RECORD_SCHEMA_VERSION,
   };
@@ -60,11 +64,25 @@ function applyRetired(existing: OutcomeRecord, _event: OutcomeRetiredEvent): Out
   return { ...existing, status: 'retired' };
 }
 
+/** `[D-531]`: the stamp moves to the version that stated the outcome again; nothing else changes. */
+function applyRestated(existing: OutcomeRecord, event: OutcomeRestatedEvent): OutcomeRecord {
+  if (existing.statedInRevision === event.revisionDigest) return existing;
+  return { ...existing, statedInRevision: event.revisionDigest };
+}
+
+/** `[D-272]`, `[D-531]`: active again and stamped with the version that stated it; nothing else changes. */
+function applyReinstated(existing: OutcomeRecord, event: OutcomeReinstatedEvent): OutcomeRecord {
+  if (existing.status === 'active' && existing.statedInRevision === event.revisionDigest) {
+    return existing;
+  }
+  return { ...existing, status: 'active', statedInRevision: event.revisionDigest };
+}
+
 /**
  * Applies one event against `existing` (the record currently on disk, or `undefined` when none
  * has been minted yet). Returns `undefined` only when `existing` was `undefined` and `event` was
- * not a `created` event — an attach or retire with no matching record is dropped rather than
- * inventing a parent, mirroring `../concept/key-store.ts`'s `bindConceptKeyToNote` throwing
+ * not a `created` event — an attach, retire, restate or reinstate with no matching record is
+ * dropped rather than inventing a parent, mirroring `../concept/key-store.ts`'s `bindConceptKeyToNote` throwing
  * rather than minting on a similar rebind-shaped miss. `./store.ts` treats that `undefined` as
  * "no write, and this is a caller error" for attach/retire, and as "mint" for `created`.
  */
@@ -74,8 +92,16 @@ export function applyOutcomeEvent(
 ): OutcomeRecord | undefined {
   if (event.kind === 'created') return applyCreated(existing, event);
   if (existing === undefined) return undefined;
-  if (event.kind === 'concept-attached') return applyConceptAttached(existing, event);
-  return applyRetired(existing, event);
+  switch (event.kind) {
+    case 'concept-attached':
+      return applyConceptAttached(existing, event);
+    case 'retired':
+      return applyRetired(existing, event);
+    case 'restated':
+      return applyRestated(existing, event);
+    case 'reinstated':
+      return applyReinstated(existing, event);
+  }
 }
 
 /**

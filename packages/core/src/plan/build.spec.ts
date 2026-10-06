@@ -108,7 +108,7 @@ describe('buildStudyPlan', () => {
       expect(concept.citations.length).toBeGreaterThan(0);
     }
     expect(course.concepts[0]?.citations).toEqual([
-      { sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
+      { basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
     ]);
   });
 
@@ -326,7 +326,7 @@ describe('buildStudyPlan', () => {
 
     it('names its own format, so versions from two formats can never collide', async () => {
       const version = await studyPlanVersion('2026-08-16', []);
-      expect(version).toMatch(/^sp1-[0-9a-f]{16}$/);
+      expect(version).toMatch(/^sp2-[0-9a-f]{16}$/);
     });
 
     // `ol-egov.141.89.10.23`: `floorsFundable` never reaches `StudyPlanBody`,
@@ -600,5 +600,116 @@ describe('buildStudyPlan', () => {
       if (course?.status !== 'ranked') throw new Error('expected a ranked course');
       expect(course.concepts[0]?.examProximityDays).toBeNull();
     });
+  });
+});
+
+describe('[D-529] each plan citation carries the basis the concept was ranked on', () => {
+  const OBJECTIVES = 'objectives/course-a.md' as VaultPath;
+  const BRIEF = 'assessments/quiz-1.md' as VaultPath;
+
+  /** A concept with no past-paper citation: its evidence is whichever other basis is passed. */
+  function offPaperConcept(
+    conceptName: string,
+    rank: number,
+    bases: {
+      objectives?: readonly VaultPath[];
+      brief?: readonly VaultPath[];
+      past?: readonly EvidenceQuestionCitation[];
+    },
+  ): ConceptPriority {
+    const past = bases.past ?? [];
+    const base = conceptPriority({ conceptName, rank, citations: past });
+    const provenance = (p: VaultPath) => ({
+      sourcePath: p,
+      location: { page: 1 as const },
+    });
+    return {
+      ...base,
+      factors: {
+        ...base.factors,
+        objectivesCitations: (bases.objectives ?? []).map((p) => ({
+          sourcePath: p,
+          provenance: provenance(p),
+        })),
+        ...(bases.brief === undefined || bases.brief.length === 0
+          ? {}
+          : {
+              briefCitations: bases.brief.map((p) => ({
+                sourcePath: p,
+                provenance: provenance(p),
+              })),
+            }),
+      },
+    };
+  }
+
+  async function citationsOf(concepts: readonly ConceptPriority[]) {
+    const plan = await buildStudyPlan({
+      ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: concepts }]),
+      computedAt: COMPUTED_AT,
+    });
+    const course = plan.body.courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected a ranked course');
+    return course.concepts.map((c) => c.citations);
+  }
+
+  it('an objectives-only concept cites its objectives document, with no question label', async () => {
+    const [cited] = await citationsOf([
+      offPaperConcept('concept-obj', 1, { objectives: [OBJECTIVES] }),
+    ]);
+    expect(cited).toEqual([{ basis: 'objectives', sourcePath: OBJECTIVES }]);
+  });
+
+  it('a brief-only concept cites its assessment note, with no question label', async () => {
+    const [cited] = await citationsOf([offPaperConcept('concept-brief', 1, { brief: [BRIEF] })]);
+    expect(cited).toEqual([{ basis: 'assessment-brief', sourcePath: BRIEF }]);
+  });
+
+  it('a concept on several bases cites every one, each as itself, past papers first', async () => {
+    const [cited] = await citationsOf([
+      offPaperConcept('concept-mixed', 1, {
+        past: [citation('papers/2024.md', 'Q1')],
+        objectives: [OBJECTIVES],
+        brief: [BRIEF],
+      }),
+    ]);
+    expect(cited).toEqual([
+      { basis: 'past-paper', sourcePath: 'papers/2024.md', questionLabel: 'Q1' },
+      { basis: 'objectives', sourcePath: OBJECTIVES },
+      { basis: 'assessment-brief', sourcePath: BRIEF },
+    ]);
+  });
+
+  it('the marked unknown-relevance entry is cited as unknown relevance and the plan builds', async () => {
+    const [cited] = await citationsOf([offPaperConcept('concept-unknown', 1, {})]);
+    expect(cited).toEqual([{ basis: 'unknown-relevance' }]);
+  });
+
+  it('a mixed-basis course builds one plan whose every concept cites its own basis', async () => {
+    const cited = await citationsOf([
+      offPaperConcept('concept-a', 1, { past: [citation('papers/2024.md', 'Q1')] }),
+      offPaperConcept('concept-b', 2, { objectives: [OBJECTIVES] }),
+      offPaperConcept('concept-c', 3, { brief: [BRIEF] }),
+      offPaperConcept('concept-d', 4, {}),
+    ]);
+    expect(cited.map((c) => c.map((x) => x.basis))).toEqual([
+      ['past-paper'],
+      ['objectives'],
+      ['assessment-brief'],
+      ['unknown-relevance'],
+    ]);
+  });
+
+  it('plans that differ only in a citation basis do not share a version', async () => {
+    const version = async (c: ConceptPriority) => {
+      const plan = await buildStudyPlan({
+        ranking: ranking([{ course: 'COURSE-A', status: 'ranked', ranked: [c] }]),
+        computedAt: COMPUTED_AT,
+      });
+      return plan.policyVersion;
+    };
+    expect(await version(offPaperConcept('concept-x', 1, { objectives: [OBJECTIVES] }))).not.toBe(
+      await version(offPaperConcept('concept-x', 1, { brief: [BRIEF] })),
+    );
   });
 });

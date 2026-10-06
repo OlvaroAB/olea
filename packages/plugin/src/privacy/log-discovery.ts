@@ -86,6 +86,9 @@ import {
   UNIT_MANIFEST_FOLDER,
   unitManifestLogPath,
 } from '../../../core/src/ingestion/unit-manifest/log.js';
+// `[D-533]` (`ol-egov.141.89.7.26`): her correction history for model-decided links, imported by
+// module path for the same reason as the records above.
+import { OUTCOME_CONTAINMENT_CORRECTION_FOLDER } from '../../../core/src/outcome/containment-correction.js';
 // `[D-395]` (`ol-egov.141.89.10.65`): imported from its own module path, never the `olea-core`
 // barrel, which is another live lane's file this round (`session/holder.ts`'s stance).
 import {
@@ -173,6 +176,11 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   // as the exact text on disk and the full delete removes it; never pruned, and absence of a record
   // is the permanent unspecified state, so a full delete leaves every instrument unspecified.
   { folder: INSTRUMENT_TARGET_STORE_FOLDER, role: 'record' },
+  // `[D-533]` (`ol-egov.141.89.7.26`): her correction history for a model-decided objectives or
+  // stated-scope link, one append-only file per (declaration, concept) named by an opaque digest.
+  // Her own decisions, so F7.4 carries each file as the exact text on disk and the full delete
+  // removes it, as the ruling requires; never pruned.
+  { folder: OUTCOME_CONTAINMENT_CORRECTION_FOLDER, role: 'record' },
 ];
 
 /**

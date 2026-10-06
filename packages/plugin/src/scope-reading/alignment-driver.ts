@@ -258,10 +258,45 @@ type CallOutcome =
   | { readonly kind: 'answered'; readonly read: OutcomesAlignReadResult }
   | { readonly kind: 'failed'; readonly reason: 'failed-alignment' | 'unavailable' };
 
+/**
+ * What a pass aligns. `all` is the delivery's full run. `owed` is the resume pass: only the concepts
+ * whose result is absent, stale against the structure or coverage, pending on an outage or a refusal,
+ * or still short of pairs past the run cap. `new` is the incremental pass: only the concepts with no
+ * result at all (scp.md S.4, "a new concept in the course").
+ */
+export type AlignmentMode = 'all' | 'owed' | 'new';
+
+type OwedClass = 'settled' | 'retry' | 'cap-remainder';
+
+type StoredView = ReturnType<typeof alignmentResultsForDocument>[number];
+
+const runCapCount = (view: StoredView): number =>
+  view.coverage.pairsNotSent.find((p) => p.reason === 'run-cap')?.count ?? 0;
+
+/**
+ * Whether a keyed concept's stored result leaves work owed. The closed-list and batch-plan digests
+ * are deliberately not asked: a closed list that grew leaves earlier results unverified yet usable
+ * (scp.md S.6), and re-sending them would re-spend for no new answer.
+ */
+function owedClass(view: StoredView | undefined, mode: AlignmentMode): OwedClass {
+  if (view === undefined) return 'retry';
+  if (mode === 'new') return 'settled';
+  if (view.status === 'unverified') return 'retry';
+  if (view.result.kind === 'pending') {
+    const { reason } = view.result;
+    // An over-budget record or group stays over budget until the structure changes.
+    if (reason === 'over-call-budget' || reason === 'group-over-budget') return 'settled';
+    if (reason === 'no-stable-key') return 'settled';
+    return reason === 'run-cap' ? 'cap-remainder' : 'retry';
+  }
+  return runCapCount(view) > 0 ? 'cap-remainder' : 'settled';
+}
+
 async function alignCourse(
   input: AlignmentDriverInput,
   course: string,
   records: readonly PlanRecord[],
+  mode: AlignmentMode,
 ): Promise<{ calls: number; written: number }> {
   const { persistence, ref, recorded, units } = input;
   const statesNothing = recorded.state === 'read-states-nothing';
@@ -315,22 +350,75 @@ async function alignCourse(
   });
   const structureId =
     ref.documentKind === 'past-paper' ? recorded.structure?.structureId : undefined;
+  // `[D-534]` 2-ii: a past-paper result names the structure its part ids came from. With none
+  // recorded there is nothing to name, so nothing is called or written: absence, never a verdict.
+  if (ref.documentKind === 'past-paper' && structureId === undefined) {
+    return { calls: 0, written: 0 };
+  }
   const closedList = await alignClosedListDigest(closedListEntries);
   const batchPlan = await alignBatchPlanDigest(plan, structureId);
 
-  // Idempotency: every keyed concept already settled and current against the three digests.
   const keyed = listed.filter((c) => c.stableKey);
-  const existing = alignmentResultsForDocument(await persistence.load(), course, ref, {
-    closedList,
-    coverage: coverage.digest,
-    batchPlan,
-  });
-  const settled = new Set(
-    existing
-      .filter((v) => v.status === 'current' && v.result.kind !== 'pending')
-      .map((v) => v.conceptKey),
-  );
-  if (keyed.length > 0 && keyed.every((c) => settled.has(c.key))) return { calls: 0, written: 0 };
+  let targets: readonly ClosedListConcept[] = listed;
+  let runPlan: BatchPlan = plan;
+  if (mode === 'all') {
+    // Idempotency: every keyed concept already settled and current against the three digests.
+    const existing = alignmentResultsForDocument(await persistence.load(), course, ref, {
+      closedList,
+      coverage: coverage.digest,
+      batchPlan,
+    });
+    const settled = new Set(
+      existing
+        .filter((v) => v.status === 'current' && v.result.kind !== 'pending')
+        .map((v) => v.conceptKey),
+    );
+    if (keyed.length > 0 && keyed.every((c) => settled.has(c.key))) {
+      return { calls: 0, written: 0 };
+    }
+  } else {
+    // Resume and incremental passes: only the owed concepts, planned on their own so the call cap
+    // is spent on them. The digests stay the full plan's, so a resumed result reads current beside
+    // the settled ones; each pair of an owed concept is still decided in exactly one call.
+    const stored = new Map(
+      alignmentResultsForDocument(await persistence.load(), course, ref, {
+        coverage: coverage.digest,
+      }).map((v) => [v.conceptKey, v]),
+    );
+    const classes = new Map(keyed.map((c) => [c.key, owedClass(stored.get(c.key), mode)] as const));
+    const chosenKeys = new Set(
+      keyed.filter((c) => classes.get(c.key) !== 'settled').map((c) => c.key),
+    );
+    const planFor = (keys: ReadonlySet<string>): BatchPlan =>
+      planAlignBatches({
+        records: planRecords,
+        concepts: listed
+          .filter((c) => keys.has(c.key))
+          .map((c) => ({ conceptId: c.conceptId, handle: handles.get(c.conceptId) ?? null })),
+        passageBudget: ALIGN_PASSAGE_BUDGET,
+        conceptBudget: ALIGN_CONCEPT_BUDGET,
+        callCap: ALIGN_RUN_CALL_CAP,
+        batchPrefix: '',
+      });
+    let resumed = planFor(chosenKeys);
+    // A remainder past the cap that this plan would leave as large as it is is not worth another spend.
+    for (;;) {
+      const stuck = [...chosenKeys].filter((key) => {
+        if (classes.get(key) !== 'cap-remainder') return false;
+        const view = stored.get(key);
+        const still = resumed.omitted.filter(
+          (o) => o.conceptId === key && o.reason === 'run-cap',
+        ).length;
+        return view !== undefined && still >= runCapCount(view);
+      });
+      if (stuck.length === 0) break;
+      for (const key of stuck) chosenKeys.delete(key);
+      resumed = planFor(chosenKeys);
+    }
+    if (chosenKeys.size === 0) return { calls: 0, written: 0 };
+    targets = listed.filter((c) => chosenKeys.has(c.key));
+    runPlan = resumed;
+  }
 
   const configuration = (stamp: ExtractionStamp | undefined): FrozenConfigurationInput => ({
     documentKind: ref.documentKind,
@@ -347,7 +435,7 @@ async function alignCourse(
   if (statesNothing) {
     const frozenConfiguration = await alignFrozenConfigurationDigest(configuration(recorded.stamp));
     const digests = { closedList, coverage: coverage.digest, batchPlan, frozenConfiguration };
-    const results = listed.map((concept) => ({
+    const results = targets.map((concept) => ({
       conceptKey: concept.key,
       result: (concept.stableKey
         ? { kind: 'not-aligned', reason: 'states-no-scope' }
@@ -364,7 +452,13 @@ async function alignCourse(
         : {}),
     }));
     if (results.length === 0) return { calls: 0, written: 0 };
-    await persistence.recordAlignmentResults({ ref, courseId: course, digests, results });
+    await persistence.recordAlignmentResults({
+      ref,
+      courseId: course,
+      digests,
+      ...(structureId !== undefined ? { structureId } : {}),
+      results,
+    });
     return { calls: 0, written: results.length };
   }
 
@@ -377,7 +471,7 @@ async function alignCourse(
   let runStamp: ExtractionStamp | undefined;
   let unavailable = false;
   let made = 0;
-  for (const call of plan.calls) {
+  for (const call of runPlan.calls) {
     if (unavailable) {
       outcomes.set(call.batchId, { kind: 'failed', reason: 'unavailable' });
       continue;
@@ -388,7 +482,7 @@ async function alignCourse(
       courseContext: { courseId: course, courseName: course },
       coverage: {
         digest: coverage.digest,
-        units: alignCoverageForCall(coverage, call, plan.calls, anchoredRefs),
+        units: alignCoverageForCall(coverage, call, runPlan.calls, anchoredRefs),
       },
       records: call.recordIds.map((id) => (recordById.get(id) as PlanRecord).wire),
       concepts: call.conceptIds.map((key) =>
@@ -434,9 +528,9 @@ async function alignCourse(
   }
 
   // Pairs per concept: from the ledger, or from the call the pair was in.
-  const omittedAt = new Map(plan.omitted.map((o) => [`${o.recordId}|${o.conceptId}`, o.reason]));
-  const pairsByConcept = new Map<string, AlignPair[]>(listed.map((c) => [c.key, []]));
-  for (const call of plan.calls) {
+  const omittedAt = new Map(runPlan.omitted.map((o) => [`${o.recordId}|${o.conceptId}`, o.reason]));
+  const pairsByConcept = new Map<string, AlignPair[]>(targets.map((c) => [c.key, []]));
+  for (const call of runPlan.calls) {
     const outcome = outcomes.get(call.batchId) as CallOutcome;
     const handleToKey = new Map(call.conceptIds.map((key) => [handles.get(key) as string, key]));
     for (const recordId of call.recordIds) {
@@ -472,7 +566,7 @@ async function alignCourse(
 
   const frozenConfiguration = await alignFrozenConfigurationDigest(configuration(runStamp));
   const digests = { closedList, coverage: coverage.digest, batchPlan, frozenConfiguration };
-  const results = listed.map((concept) => {
+  const results = targets.map((concept) => {
     const { result, coverage: note } = aggregateAlignConcept(
       pairsByConcept.get(concept.key) ?? [],
       coverage,
@@ -497,7 +591,13 @@ async function alignCourse(
     };
   });
   if (results.length === 0) return { calls: made, written: 0 };
-  await persistence.recordAlignmentResults({ ref, courseId: course, digests, results });
+  await persistence.recordAlignmentResults({
+    ref,
+    courseId: course,
+    digests,
+    ...(structureId !== undefined ? { structureId } : {}),
+    results,
+  });
   return { calls: made, written: results.length };
 }
 
@@ -518,6 +618,7 @@ function alignConceptOf(
 
 export async function runAlignmentDriver(
   input: AlignmentDriverInput,
+  mode: AlignmentMode = 'all',
 ): Promise<AlignmentDriverResult> {
   const { recorded, ref } = input;
   if (recorded.state !== 'recorded' && recorded.state !== 'read-states-nothing') {
@@ -541,7 +642,7 @@ export async function runAlignmentDriver(
   let written = 0;
   for (const course of [...new Set(input.courses)].sort()) {
     try {
-      const done = await alignCourse(input, course, records);
+      const done = await alignCourse(input, course, records, mode);
       calls += done.calls;
       written += done.written;
     } catch (error) {

@@ -1,0 +1,33 @@
+{
+  "report": {
+    "attached": [
+      {
+        "outcomeId": "outcome-key1:o-exact",
+        "conceptKey": "concept-key1:widget",
+        "kind": "exact-name"
+      },
+      {
+        "outcomeId": "outcome-key1:o-alias",
+        "conceptKey": "concept-key1:gizmo",
+        "kind": "accepted-alias"
+      }
+    ],
+    "proposed": [
+      {
+        "outcomeId": "outcome-key1:o-near",
+        "conceptKey": "concept-key1:sprocket",
+        "status": "declined"
+      }
+    ],
+    "unattachedOutcomeIds": ["outcome-key1:o-miss"],
+    "unattachedCount": 1
+  },
+  "files": {
+    ".olea/outcome-near-match/outcome-key1%3Ao-near%20concept-key1%3Asprocket.json": "{\n  \"outcomeId\": \"outcome-key1:o-near\",\n  \"conceptKey\": \"concept-key1:sprocket\",\n  \"status\": \"declined\",\n  \"reason\": \"token-set-containment\",\n  \"proposedAt\": \"2026-10-02T00:00:00.000Z\",\n  \"declinedAt\": \"2026-10-03T00:00:00.000Z\",\n  \"schemaVersion\": 1\n}\n",
+    ".olea/outcomes/outcome-key1%3Ao-alias.json": "{\n  \"id\": \"outcome-key1:o-alias\",\n  \"courses\": [\n    \"COURSEA\"\n  ],\n  \"source\": {\n    \"path\": \"03 Research/Objectives A.md\",\n    \"blockIndex\": 1,\n    \"labelDigest\": \"v1:a1533f9afd7e181dd2a77d375226d545270148c7f8ac246859663c0bfb12db41\"\n  },\n  \"label\": \"Gizmo rule\",\n  \"conceptKeys\": [\n    \"concept-key1:gizmo\"\n  ],\n  \"status\": \"active\",\n  \"provenance\": {\n    \"promptVersion\": \"v1\",\n    \"modelVersion\": \"model-a\"\n  },\n  \"mintedAt\": \"2026-10-01\",\n  \"schemaVersion\": 1\n}\n",
+    ".olea/outcomes/outcome-key1%3Ao-exact.json": "{\n  \"id\": \"outcome-key1:o-exact\",\n  \"courses\": [\n    \"COURSEA\"\n  ],\n  \"source\": {\n    \"path\": \"03 Research/Objectives A.md\",\n    \"blockIndex\": 0,\n    \"labelDigest\": \"v1:f6e08a2987be85882f60eeddb5c0f0cc5012445c51291665ef3fb31780dad3bd\"\n  },\n  \"label\": \"Widget theory\",\n  \"conceptKeys\": [\n    \"concept-key1:widget\"\n  ],\n  \"status\": \"active\",\n  \"provenance\": {\n    \"promptVersion\": \"v1\",\n    \"modelVersion\": \"model-a\"\n  },\n  \"mintedAt\": \"2026-10-01\",\n  \"schemaVersion\": 1\n}\n",
+    ".olea/outcomes/outcome-key1%3Ao-miss.json": "{\n  \"id\": \"outcome-key1:o-miss\",\n  \"courses\": [\n    \"COURSEA\"\n  ],\n  \"source\": {\n    \"path\": \"03 Research/Objectives A.md\",\n    \"blockIndex\": 3,\n    \"labelDigest\": \"v1:d7c144357b355c9f3457be96b7de87fdc8d0f06fc98f19d7c98b846075761d87\"\n  },\n  \"label\": \"Analyse a loaded frame\",\n  \"conceptKeys\": [],\n  \"status\": \"active\",\n  \"provenance\": {\n    \"promptVersion\": \"v1\",\n    \"modelVersion\": \"model-a\"\n  },\n  \"mintedAt\": \"2026-10-01\",\n  \"schemaVersion\": 1\n}\n",
+    ".olea/outcomes/outcome-key1%3Ao-near.json": "{\n  \"id\": \"outcome-key1:o-near\",\n  \"courses\": [\n    \"COURSEA\"\n  ],\n  \"source\": {\n    \"path\": \"03 Research/Objectives A.md\",\n    \"blockIndex\": 2,\n    \"labelDigest\": \"v1:6a1edde43871d947d5b813c1089bc606f54a0488742031f94456bc177cddf859\"\n  },\n  \"label\": \"Sprocket method\",\n  \"conceptKeys\": [],\n  \"status\": \"active\",\n  \"provenance\": {\n    \"promptVersion\": \"v1\",\n    \"modelVersion\": \"model-a\"\n  },\n  \"mintedAt\": \"2026-10-01\",\n  \"schemaVersion\": 1\n}\n",
+    ".olea/outcomes/outcome-key1%3Ao-retired.json": "{\n  \"id\": \"outcome-key1:o-retired\",\n  \"courses\": [\n    \"COURSEA\"\n  ],\n  \"source\": {\n    \"path\": \"03 Research/Objectives A.md\",\n    \"blockIndex\": 4,\n    \"labelDigest\": \"v1:9d20f2f2abf1fa8314165dd7e1773b22c1ed2ca4a8a424a098f82740365ee9f5\"\n  },\n  \"label\": \"Design a ratchet\",\n  \"conceptKeys\": [],\n  \"status\": \"retired\",\n  \"provenance\": {\n    \"promptVersion\": \"v1\",\n    \"modelVersion\": \"model-a\"\n  },\n  \"mintedAt\": \"2026-10-01\",\n  \"schemaVersion\": 1\n}\n"
+  }
+}

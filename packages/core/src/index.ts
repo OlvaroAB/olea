@@ -2022,6 +2022,27 @@ export type {
 // The canonical JSON text of a value (object keys sorted at every depth): the one serialiser the
 // scope-reading event ids and the paper reuse fingerprint hash over (`ol-egov.141.89.7.32`).
 export { canonicalJson } from './outcome/canonical-json.js';
+// `[D-533]` (`ol-egov.141.89.7.26`): her correction history for a model-decided link; `[D-433]`'s
+// read of those links is with the reconciliation below, disabled until her correction control
+// exists and works. See `./outcome/containment-correction.js`'s and `./outcome/reconcile.js`'s docs.
+export type {
+  ContainmentCorrectionEvent,
+  ContainmentCorrectionKind,
+  ContainmentCorrectionLog,
+  ContainmentDeclaration,
+} from './outcome/containment-correction.js';
+export {
+  containmentCorrectionPath,
+  currentContainmentCorrection,
+  isContainmentCorrectionLog,
+  isCorrectedAway,
+  OUTCOME_CONTAINMENT_CORRECTION_FOLDER,
+  OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
+  objectivesDeclarationOf,
+  readContainmentCorrection,
+  recordContainmentCorrection,
+  statedScopeDeclarationOf,
+} from './outcome/containment-correction.js';
 // The Outcome node (`[ONT-R5]`, knowledge model §4, functional scope F4.1, component register
 // row 1.1b): an examiner-declared unit of scope, the parent of the concepts inferred from how it
 // is taught and examined. `[D-253 / OUT-1]` proposes the field set for ratification; the module
@@ -2065,16 +2086,24 @@ export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
 // rule and the same-as reuse judgement call, and `./outcome/reconcile-coverage.js`'s for the two
 // named-but-unbuilt consumers (component register rows 1.1b and 2.11).
 export type {
+  ModelDecidedContainmentEdge,
+  ModelDecidedContainmentRead,
+  ModelDecidedDisabledReason,
+  ModelDecidedDocument,
+  ModelDecidedProvenance,
+  ModelDecidedScopeStanding,
   OutcomeConceptAttachment,
   OutcomeConceptMatchKind,
   OutcomeConceptProposal,
   OutcomeConceptReconciliationReport,
   OutcomeConceptRegistryEntry,
+  ReadModelDecidedContainmentInput,
   ReconcileOutcomeConceptsOptions,
 } from './outcome/reconcile.js';
 export {
   classifyOutcomeConceptMatch,
   conceptRegistryEntryFromRecord,
+  readModelDecidedContainment,
   reconcileOutcomeConcepts,
 } from './outcome/reconcile.js';
 export type { OutcomeConceptCoverage } from './outcome/reconcile-coverage.js';
@@ -2807,6 +2836,8 @@ export type {
   GroveCourseModel,
   GroveCourseSummary,
   GroveMaterialGapCell,
+  GroveModelDecidedCell,
+  GroveModelDecidedListing,
   GroveVolunteerCell,
 } from './scope/grove.js';
 export { buildGroveModel } from './scope/grove.js';

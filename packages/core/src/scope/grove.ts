@@ -63,7 +63,9 @@
  * per the registry's own ruling that this is NOT a fourth olive noun) — plus
  * `volunteers`, concepts she has that no registered source names at all
  * (F8.2's "self-sown", never hidden or auto-pruned). No concept is ever
- * silently dropped from all three.
+ * silently dropped from all three. (When model-decided containment is read, a
+ * fourth list, `modelDecided`, takes a volunteer the model places in a
+ * declaration: see the section below. Nothing is dropped from all four.)
  *
  * ## A declared concept with no note of hers can open on a deck or a transcript (F8.2 step two)
  *
@@ -99,6 +101,22 @@
  * `../session/containment.ts`'s `filterContainmentCoPresence` already ruled
  * for session composition, not a second rule for the same asymmetry.
  *
+ * ## Model-decided concepts are listed apart, never counted as declared (`[D-433]`, `[D-533]`, `ol-egov.141.89.7.26`)
+ *
+ * `BuildGroveModelInput.modelDecided` carries `../outcome/reconcile.js#readModelDecidedContainment`'s
+ * result, unmodified. When that read is disabled (her correction control is not available, or no
+ * containment basis is switched on) or absent, this module is exactly what it was before:
+ * no new field, no changed array. When it read, a concept of this course that an objectives
+ * declaration contains by the model's decision, and that no registered source names, is listed in
+ * `modelDecided` with its own count, and leaves `volunteers` (a registered source now names it, by
+ * the model's reading); it never enters `cells`, `materialGaps`, `denominatorCount` or
+ * `builtCount`, so the persisted prior denominator keeps its meaning. A concept already declared is
+ * counted once, as declared. A stated-scope standing is per assessment and gives no grove entry;
+ * past-paper alignment never reaches the read. **A renderer that shows `volunteers` must show
+ * `modelDecided` too**, or a concept would vanish from her view: nothing renders it today (it has
+ * no copy clause), which is safe only because no production caller can enable the read until her
+ * correction control ships, and that control is where she sees and corrects this listing.
+ *
  * ## INV-1 / §7.1
  *
  * Pure. No `obsidian`, no vault I/O, no clock — every input is already
@@ -111,6 +129,7 @@ import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import type { ModelDecidedContainmentRead } from '../outcome/reconcile.js';
 import type { ConceptAttestation } from '../source/transcript-scope.js';
 import { declaredScopeNamesFrom } from '../source/transcript-scope.js';
 import type { Source, SourceRole } from '../source/types.js';
@@ -160,6 +179,20 @@ export interface GroveMaterialGapCell {
 export interface GroveVolunteerCell {
   readonly conceptKey: string;
   readonly conceptName: string;
+}
+
+/** A concept an objectives declaration contains by the model's decision (`[D-433]`), listed apart: never declared, never hers. */
+export interface GroveModelDecidedCell {
+  readonly conceptKey: string;
+  readonly conceptName: string;
+  /** The outcomes whose model-decided edge reaches it, sorted. Opaque ids. */
+  readonly outcomeIds: readonly string[];
+}
+
+/** The separate listing and its own count — see the module doc. */
+export interface GroveModelDecidedListing {
+  readonly count: number;
+  readonly concepts: readonly GroveModelDecidedCell[];
 }
 
 /** F8.3: the count and the denominator's source, carried separately — never their ratio. See the tripwire below this type. */
@@ -225,6 +258,9 @@ type _assertNoCoverageScalarOnSummary = AssertNever<
 type _assertNoCoverageScalarOnCell = AssertNever<
   Extract<keyof GroveCell, ForbiddenCoverageScalarKey>
 >;
+type _assertNoCoverageScalarOnModelDecided = AssertNever<
+  Extract<keyof GroveModelDecidedListing, ForbiddenCoverageScalarKey>
+>;
 
 /** One course's grove reading — a three-way status, never a single shape that always claims to be a real `grove` (see module doc). */
 export type GroveCourseModel =
@@ -245,6 +281,8 @@ export type GroveCourseModel =
       readonly materialGaps: readonly GroveMaterialGapCell[];
       readonly volunteers: readonly GroveVolunteerCell[];
       readonly summary: GroveCourseSummary;
+      /** `[D-433]`: present only when `BuildGroveModelInput.modelDecided` read (module doc). */
+      readonly modelDecided?: GroveModelDecidedListing;
     };
 
 /** A registered source's role counts toward F8.1's denominator only for these two — F1.5's own two document kinds. `'course-material'` (F3.1) never declares scope. */
@@ -342,6 +380,12 @@ export interface BuildGroveModelInput {
    * scope or move the denominator (`[D-465]`: a transcript opens, never scopes).
    */
   readonly taughtSignals?: ReadonlyMap<string, TaughtSignalEvidence>;
+  /**
+   * `[D-433]`, `[D-533]`: `readModelDecidedContainment`'s result for this course, unmodified — never
+   * a value built by hand, since the read is where her correction control, the switches and her
+   * corrections are checked. Absent or disabled: today's grove exactly (module doc).
+   */
+  readonly modelDecided?: ModelDecidedContainmentRead;
 }
 
 export interface BuildGroveModelResult {
@@ -488,8 +532,11 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     }
   }
 
+  const modelDecided = modelDecidedListing(input, declaredNames);
+  const listedApart = new Set(modelDecided?.concepts.map((cell) => cell.conceptKey) ?? []);
   const volunteers: GroveVolunteerCell[] = input.concepts
     .filter((concept) => isVolunteer(concept.name, declaredNames))
+    .filter((concept) => !listedApart.has(concept.key))
     .map((concept) => ({ conceptKey: concept.key, conceptName: concept.name }))
     .sort(byConceptName);
 
@@ -509,7 +556,37 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
       materialGaps: [...materialGaps].sort(byConceptName),
       volunteers,
       summary,
+      ...(modelDecided !== undefined ? { modelDecided } : {}),
     },
     nextGroundStreaks,
   };
+}
+
+/**
+ * `[D-433]`'s separate listing (module doc): `undefined` when the read is absent or disabled, so the
+ * model is today's. Only containment edges count, only for a concept of this course that no
+ * registered source names; a concept already declared is counted once, as declared.
+ */
+function modelDecidedListing(
+  input: BuildGroveModelInput,
+  declaredNames: ReadonlySet<string>,
+): GroveModelDecidedListing | undefined {
+  const read = input.modelDecided;
+  if (read === undefined || read.status !== 'read') return undefined;
+  const outcomesByKey = new Map<string, Set<string>>();
+  for (const edge of read.edges) {
+    if (edge.basis !== 'objectives' || edge.decidedBy !== 'model') continue;
+    const set = outcomesByKey.get(edge.conceptKey) ?? new Set<string>();
+    set.add(edge.outcomeId);
+    outcomesByKey.set(edge.conceptKey, set);
+  }
+  const concepts: GroveModelDecidedCell[] = input.concepts
+    .filter((concept) => outcomesByKey.has(concept.key) && !declaredNames.has(concept.name))
+    .map((concept) => ({
+      conceptKey: concept.key,
+      conceptName: concept.name,
+      outcomeIds: [...(outcomesByKey.get(concept.key) ?? [])].sort(),
+    }))
+    .sort(byConceptName);
+  return { count: concepts.length, concepts };
 }

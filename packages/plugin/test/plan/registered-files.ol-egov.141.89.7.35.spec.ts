@@ -80,7 +80,9 @@ describe('createLocalStudyPlanProvider — forwards registered documents to the 
     expect(course.concepts).toHaveLength(1);
     const concept = course.concepts[0];
     expect(concept?.reasoning).toContain(`${CONCEPT} (${COURSE})`);
-    expect(concept?.citations).toEqual([{ sourcePath: PAST_PAPER_PDF, questionLabel: '1' }]);
+    expect(concept?.citations).toEqual([
+      { basis: 'past-paper', sourcePath: PAST_PAPER_PDF, questionLabel: '1' },
+    ]);
     // The approved history sentence (row 33), never a claim about the assessment ahead.
     expect(concept?.reasoning).toContain('It appears in past papers.');
   });

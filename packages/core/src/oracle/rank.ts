@@ -299,6 +299,7 @@ import { daysBetween } from '../dates.js';
 import type {
   ConceptAssessmentEdge,
   ConceptEvidenceBasis,
+  EvidenceBriefCitation,
   EvidenceObjectivesCitation,
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
@@ -855,6 +856,25 @@ function unionObjectivesCitations(
     }
   }
   return [...seen.values()].sort(compareObjectivesCitations);
+}
+
+/**
+ * `[D-529]`: `unionObjectivesCitations`'s `'assessment-brief'`-basis sibling — deduplicated by
+ * `sourcePath` (the assessment note) and sorted the same way. Carried on the factors only so the
+ * study plan can cite the basis; it feeds no score.
+ */
+function unionBriefCitations(
+  edges: readonly ConceptAssessmentEdge[],
+): readonly EvidenceBriefCitation[] {
+  const seen = new Map<string, EvidenceBriefCitation>();
+  for (const edge of edges) {
+    for (const citation of edge.briefCitations ?? []) {
+      if (!seen.has(citation.sourcePath)) seen.set(citation.sourcePath, citation);
+    }
+  }
+  return [...seen.values()].sort((a, b) =>
+    a.sourcePath < b.sourcePath ? -1 : a.sourcePath > b.sourcePath ? 1 : 0,
+  );
 }
 
 /**
@@ -1601,11 +1621,14 @@ function rankOneCourse(
     const distinctObjectivesSourceCount = new Set(objectivesCitations.map((c) => c.sourcePath))
       .size;
 
+    const briefCitations = unionBriefCitations(survivingEdges);
+
     const factors: OracleConceptFactors & OracleProximityFactors = {
       citations,
       distinctSourceCount,
       objectivesCitations,
       distinctObjectivesSourceCount,
+      ...(briefCitations.length > 0 ? { briefCitations } : {}),
       contributions,
       vetoedEdges,
       preMasteryScore,
