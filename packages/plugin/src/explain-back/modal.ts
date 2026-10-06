@@ -1495,8 +1495,9 @@ export class ExplainBackModal extends Modal {
       afterFeedback: support.feedbackExposure === 'shown',
     };
     const result = await this.deps.acceptWithObservation(pending, context);
-    // Row 50: an accepted attempt ends the exchange, so a later offer of this
-    // question is not a revision. A stale or failed accept ends nothing.
+    // Row 50 and `[D-459]`: an accepted attempt ends the exchange in her log, so a genuinely
+    // later offer (a later session) is fresh; the session note keeps it as continued, so
+    // reopening in this session stays assisted. A stale or failed accept ends nothing.
     if (result !== null && result.status === 'accepted') {
       this.feedbackExposureLedger.settle(prompt.originInstrumentId);
     }
