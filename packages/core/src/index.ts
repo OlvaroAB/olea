@@ -1401,6 +1401,7 @@ export type {
   KeywordIndexEngineDeps,
   RebuildOptions,
   RebuildResult,
+  RegisteredSourcesSync,
 } from './keyword-index/engine.js';
 export { KeywordIndexEngine } from './keyword-index/engine.js';
 export type { SearchHit, SearchOptions } from './keyword-index/query.js';

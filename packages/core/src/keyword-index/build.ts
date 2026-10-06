@@ -29,17 +29,27 @@
  * citable in the concept/citation pipeline. `registeredFiles` closes that gap
  * by mirroring the exact same mechanism rather than inventing a parallel one:
  * classify each spec with `registerSources`, then run every non-markdown
- * result through the same `extractFromVault` call `collectDerivedSources`
- * uses (see `indexRegisteredFile` below). A markdown registration needs
+ * result through the same extraction `collectDerivedSources` runs (see
+ * `indexRegisteredBytes` below). A markdown registration needs
  * nothing extra here — `vault.list({ extensions })` above already lists every
  * markdown path in the vault, registered or not — mirroring
  * `collectCandidates`'s own `if (source.format === null) continue`.
+ *
+ * **Kept current, with passage anchors (`ol-egov.141.89.1.95`).** `KeywordIndexEngine` now passes
+ * the vault's registered sources here on every rebuild, and builds a registered binary's document
+ * on a change event through the same `indexRegisteredBytes`, so the rebuilt and the incrementally
+ * maintained index agree by construction (C2.4) for binaries as for notes. Each extracted block
+ * keeps its unit's `Provenance.location` (`IndexedBlock.location`).
  */
 
-import { extractFromVault } from '../extract/registry.js';
+import { EXTRACTORS, formatFromExtension } from '../extract/registry.js';
 import type { SourceFormat } from '../extract/types.js';
 import { hashContent } from '../ingestion/hash.js';
-import { DEFAULT_SOURCES_FOLDER, registerSources } from '../source/register.js';
+import {
+  DEFAULT_SOURCES_FOLDER,
+  isRegisterableDocument,
+  registerSources,
+} from '../source/register.js';
 import type { RegisteredFileSpec } from '../source/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { indexDocument } from './document.js';
@@ -160,17 +170,68 @@ export async function buildFullIndex(options: BuildFullIndexOptions): Promise<Bu
 }
 
 /**
+ * A registered file this index extracts (`ol-egov.141.89.1.95`): one `RegisteredFileSpec` that
+ * passes the gate `registerSources` itself applies to `registeredFiles`
+ * (`../source/register.js#isRegisterableDocument`: never markdown, and a format some extractor
+ * reads), with that format resolved. Existence is the caller's to check, as `registerSources`
+ * checks it.
+ */
+export interface RegisteredBinary {
+  readonly path: VaultPath;
+  readonly format: SourceFormat;
+  readonly course: string | undefined;
+}
+
+/**
+ * `spec` as a `RegisteredBinary`, or `null` when this index would not extract it (a markdown or
+ * plain-text registration is already covered by the ordinary scan, and an unsupported format is
+ * what `registerSources` reports as `'unsupported-format'`). `KeywordIndexEngine` uses this to
+ * classify one path at event time without a folder scan; `buildFullIndex` above reaches the same
+ * answer through `registerSources`.
+ */
+export function registeredBinaryOf(spec: RegisteredFileSpec): RegisteredBinary | null {
+  if (!isRegisterableDocument(spec.path)) return null;
+  const format = formatFromExtension(spec.path);
+  if (format === null) return null;
+  return { path: spec.path, format, course: spec.course };
+}
+
+/**
+ * One `IndexedDocument` for a registered non-markdown source, read from the vault. See
+ * `indexRegisteredBytes`, which does the work; this only reads the bytes.
+ */
+export async function indexRegisteredFile(
+  vault: VaultSource,
+  source: RegisteredBinary,
+): Promise<IndexedDocument | null> {
+  return indexRegisteredBytes(source, await vault.readBinary(source.path));
+}
+
+/**
  * One `IndexedDocument` for a registered non-markdown source, built from the
- * SAME extraction call `../tier3-evidence/build.js#collectDerivedSources`
- * runs for the concept/citation pipeline — a PDF registered via
- * `registeredFiles` is chunked from the exact text the citation pipeline
- * already cites, not a second, independently-derived copy of it.
+ * SAME extraction `../tier3-evidence/build.js#collectDerivedSources` runs for
+ * the concept/citation pipeline: `EXTRACTORS[format].extract` with no options,
+ * which is exactly the call `extractFromVault` makes once it has read the
+ * bytes. So a registered PDF is chunked from the exact text the citation
+ * pipeline already cites, not a second, independently-derived copy of it. The
+ * bytes are taken as given so the content hash and the extraction come from one
+ * read (the same rule `../ingestion/extraction-runner.ts` follows, [D-515]),
+ * and so `KeywordIndexEngine` can hash first and extract only on a change.
  *
  * Extracted text carries no block structure of its own the way a parsed
  * markdown document does, so every extracted unit becomes one `'paragraph'`
  * block (the closest existing `BlockKind`), numbered from zero within this
  * synthesized document — a document of its own, never spliced into any real
- * note's block indices.
+ * note's block indices. **Each block keeps its unit's own
+ * `Provenance.location`** (`ol-egov.141.89.1.95`; `IndexedBlock.location`):
+ * the page (or slide) number, the char range within it, and the section when
+ * the format has one, so a retrieved chunk cites the same passage the citation
+ * pipeline would.
+ *
+ * `evidenceScope: 1` ([D-491]): a registered source is her course material, never one of Olea's
+ * own instruments or home-note scaffolding, so the exclusion holds for it trivially. Without the
+ * marker `KeywordIndexEngine.create` would read the whole persisted cache as pre-[D-491] and drop
+ * it on every load.
  *
  * Returns `null` when extraction yielded no usable text (an unreadable file,
  * a page routed to vision with nothing on the text layer): an empty document
@@ -179,23 +240,23 @@ export async function buildFullIndex(options: BuildFullIndexOptions): Promise<Bu
  * nothing can ever match — the same "no searchable text, no entry" rule
  * `document.ts`'s `indexBlocks` already applies per block.
  */
-async function indexRegisteredFile(
-  vault: VaultSource,
-  source: {
-    readonly path: VaultPath;
-    readonly format: SourceFormat;
-    readonly course: string | undefined;
-  },
+export async function indexRegisteredBytes(
+  source: RegisteredBinary,
+  bytes: Uint8Array,
 ): Promise<IndexedDocument | null> {
-  const bytes = await vault.readBinary(source.path);
-  const result = await extractFromVault(vault, source.path, source.format);
+  const result = await EXTRACTORS[source.format].extract({ path: source.path, bytes });
 
   const blocks: IndexedBlock[] = [];
   for (const page of result.pages) {
     for (const unit of page.units) {
       const text = unit.text.trim();
       if (text === '') continue;
-      blocks.push({ blockIndex: blocks.length, kind: 'paragraph', text });
+      blocks.push({
+        blockIndex: blocks.length,
+        kind: 'paragraph',
+        text,
+        location: unit.provenance.location,
+      });
     }
   }
   if (blocks.length === 0) return null;
@@ -209,6 +270,7 @@ async function indexRegisteredFile(
     // markdown document with no `course` frontmatter).
     courses: source.course !== undefined ? [source.course] : [],
     contentHash: await hashContent(bytes),
+    evidenceScope: 1,
     blocks,
   };
 }
