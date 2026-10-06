@@ -74,12 +74,32 @@
  * own count, and never on a growth (F1.5(c) already treats a growing
  * denominator as unremarkable — `groveSummaryLine`'s own new numbers say
  * that without ceremony).
+ *
+ * **Olea's reading of the course's objectives, with her control (`[D-537]`,
+ * `ol-egov.141.89.7.77`).** `renderPlacements` draws the section the ruling
+ * places below the declared concepts and above "Also growing here": each
+ * concept Olea's reading places under one of the objectives, with the
+ * quoted wording of every objective it falls under (which opens the
+ * document), one "Not part of this" beside each placement, and the
+ * placements she took out in a collapsed list, each with "Put back". The
+ * controls call `GroveViewState.placementControl`, which `./provider.ts`
+ * builds beside the read it states her control for — the one place that
+ * statement is made — and then read the whole grove again, as a dismiss
+ * does. The section's count is the concepts it lists, shown as a bare
+ * numeral beside the heading; nothing in it is a score (F8.3), and it never
+ * touches the declared or built count.
  */
 
 import type { App } from 'obsidian';
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import type { SourceRegisteredRole } from 'olea-contracts';
-import type { GroveCourseModel, UnreadableFile, VaultPath } from 'olea-core';
+import type {
+  ContainmentDeclaration,
+  GroveCourseModel,
+  GroveModelDecidedListing,
+  UnreadableFile,
+  VaultPath,
+} from 'olea-core';
 import {
   RegisterSourceFileModal,
   RegisterSourceRoleModal,
@@ -99,6 +119,11 @@ import {
   GROVE_NO_COURSES_HEADING,
   GROVE_NO_SOURCE_BODY,
   GROVE_NO_SOURCE_HEADING,
+  GROVE_PLACEMENT_PUT_BACK_ACTION,
+  GROVE_PLACEMENT_TAKE_OUT_ACTION,
+  GROVE_PLACEMENTS_HEADING,
+  GROVE_PLACEMENTS_NOTE,
+  GROVE_PLACEMENTS_TAKEN_OUT_LINE,
   GROVE_REGISTER_ACTION,
   GROVE_UNAVAILABLE,
   GROVE_UNREADABLE_HEADING,
@@ -197,10 +222,35 @@ export interface GroveWithheldItem {
   readonly reason: string;
 }
 
+/** One placement her control acts on (`[D-537]`): the history it is kept in is keyed on these two. */
+export interface GrovePlacementRef {
+  readonly declaration: ContainmentDeclaration;
+  readonly conceptKey: string;
+}
+
+/**
+ * `[D-537]`: her control on a placement, built by `./provider.ts` beside the read it states her
+ * control for. Each call appends her choice to the placement's history in Olea's own folder and
+ * resolves; the view then reads the grove again. A history that cannot be read rejects, and the
+ * next read lists that placement nowhere.
+ */
+export interface GrovePlacementControl {
+  /** "Not part of this": appends a declined entry. */
+  readonly takeOut: (placement: GrovePlacementRef) => Promise<void>;
+  /** "Put back": appends an accepted entry. */
+  readonly putBack: (placement: GrovePlacementRef) => Promise<void>;
+}
+
 export type GroveViewState =
   | {
       readonly kind: 'model';
       readonly courses: readonly GroveCourseSection[];
+      /**
+       * `[D-537]`: her control on each placement in a course's `modelDecided` listing. Optional so a
+       * caller that predates it (the workbench's grove scenarios) stays valid; without it the
+       * section is drawn without controls.
+       */
+      readonly placementControl?: GrovePlacementControl;
       /**
        * `[D-334]`: every withheld item in the vault, not scoped to any one
        * course — a broken block can sit in a note bound to no concept at
@@ -301,7 +351,9 @@ export class GroveView extends ItemView {
       return;
     }
 
-    for (const section of state.courses) this.renderCourse(root, section);
+    for (const section of state.courses) {
+      this.renderCourse(root, section, state.placementControl);
+    }
 
     // `ol-l5og.18.2`: one legend for the whole screen, not one per course —
     // only when at least one course actually reached the real grid (the
@@ -312,7 +364,11 @@ export class GroveView extends ItemView {
     }
   }
 
-  private renderCourse(parent: HTMLElement, section: GroveCourseSection): void {
+  private renderCourse(
+    parent: HTMLElement,
+    section: GroveCourseSection,
+    placementControl: GrovePlacementControl | undefined,
+  ): void {
     const box = parent.createDiv({ cls: 'olea-grove-course' });
     box.createDiv({ cls: 'olea-grove-course-name', text: section.course });
 
@@ -350,6 +406,7 @@ export class GroveView extends ItemView {
           section.model,
           section.unreadableFiles,
           section.scopeCorrectionReceipt,
+          placementControl,
         );
         break;
     }
@@ -393,6 +450,7 @@ export class GroveView extends ItemView {
     model: Extract<GroveCourseModel, { readonly status: 'declared' }>,
     unreadableFiles: readonly UnreadableFile[],
     scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined,
+    placementControl: GrovePlacementControl | undefined,
   ): void {
     // F8.3: the count and the denominator's source, shown separately — never
     // their ratio, and no percentage anywhere on this line.
@@ -487,6 +545,9 @@ export class GroveView extends ItemView {
       }
     }
 
+    // `[D-537]`: below the declared concepts, above "Also growing here".
+    this.renderPlacements(parent, model.modelDecided, placementControl);
+
     if (model.volunteers.length > 0) {
       const volunteerBox = parent.createDiv({ cls: 'olea-grove-volunteers' });
       volunteerBox.createDiv({
@@ -504,6 +565,111 @@ export class GroveView extends ItemView {
         });
       }
     }
+  }
+
+  /**
+   * `[D-537]`, S1 and C1: the section for links Olea's reading makes under the course's objectives
+   * (module doc). Drawn only when it has something to list: a placed concept, or a placement she
+   * took out. The note and the count describe the listed concepts, so they are drawn only when
+   * there is one; the collapsed list is drawn only when she has taken something out.
+   */
+  private renderPlacements(
+    parent: HTMLElement,
+    listing: GroveModelDecidedListing | undefined,
+    control: GrovePlacementControl | undefined,
+  ): void {
+    if (listing === undefined) return;
+    if (listing.concepts.length === 0 && listing.declined.length === 0) return;
+    const box = parent.createDiv({ cls: 'olea-grove-placements' });
+    const heading = box.createDiv({ cls: 'olea-grove-placements-heading' });
+    heading.createSpan({
+      cls: 'olea-grove-placements-heading-text',
+      text: GROVE_PLACEMENTS_HEADING,
+    });
+    if (listing.concepts.length > 0) {
+      // F8.3: a count of the concepts listed, a bare numeral, never a ratio.
+      heading.createSpan({ cls: 'olea-grove-placements-count', text: String(listing.count) });
+      box.createDiv({ cls: 'olea-grove-placements-note', text: GROVE_PLACEMENTS_NOTE });
+    }
+    for (const concept of listing.concepts) {
+      const entry = box.createDiv({ cls: 'olea-grove-placement-concept' });
+      entry.createDiv({ cls: 'olea-grove-concept-name', text: concept.conceptName });
+      for (const placement of concept.placements) {
+        const row = entry.createDiv({ cls: 'olea-grove-placement-row' });
+        this.renderPlacementWording(row, placement.wording, placement.documentPath);
+        if (control !== undefined) {
+          this.renderPlacementAction(
+            row,
+            'olea-grove-placement-take-out',
+            GROVE_PLACEMENT_TAKE_OUT_ACTION,
+            () =>
+              control.takeOut({
+                declaration: placement.declaration,
+                conceptKey: placement.conceptKey,
+              }),
+          );
+        }
+      }
+    }
+    if (listing.declined.length === 0) return;
+    // Collapsed by default: `details` without `open`.
+    const takenOut = box.createEl('details', { cls: 'olea-grove-placements-taken-out' });
+    takenOut.createEl('summary', {
+      cls: 'olea-grove-placements-taken-out-line',
+      text: GROVE_PLACEMENTS_TAKEN_OUT_LINE,
+    });
+    for (const placement of listing.declined) {
+      const row = takenOut.createDiv({ cls: 'olea-grove-placement-row' });
+      row.createSpan({ cls: 'olea-grove-concept-name', text: placement.conceptName });
+      this.renderPlacementWording(row, placement.wording, placement.documentPath);
+      if (control !== undefined) {
+        this.renderPlacementAction(
+          row,
+          'olea-grove-placement-put-back',
+          GROVE_PLACEMENT_PUT_BACK_ACTION,
+          () =>
+            control.putBack({
+              declaration: placement.declaration,
+              conceptKey: placement.conceptKey,
+            }),
+        );
+      }
+    }
+  }
+
+  /** The objective's own wording, quoted, as the way to open the document it is in (`[D-537]`). */
+  private renderPlacementWording(
+    parent: HTMLElement,
+    wording: string,
+    documentPath: VaultPath,
+  ): void {
+    const link = parent.createEl('a', { cls: 'olea-grove-placement-wording', text: wording });
+    // An `href` keeps it a real, focusable link (Enter opens it); the click handler opens the
+    // document instead of following it.
+    link.setAttribute('href', '#');
+    link.setAttribute('data-href', documentPath);
+    link.addEventListener('click', (event) => {
+      event.preventDefault();
+      void this.deps.app.workspace.openLinkText(documentPath, '', false);
+    });
+  }
+
+  /** One C1 control: writes her choice, then reads the grove again whatever the write did. */
+  private renderPlacementAction(
+    parent: HTMLElement,
+    cls: string,
+    text: string,
+    choose: () => Promise<void>,
+  ): void {
+    const button = parent.createEl('button', { cls, text });
+    button.addEventListener('click', () => {
+      button.disabled = true;
+      void choose()
+        .catch((error: unknown) => {
+          console.error('Olea: could not record your choice on this placement', error);
+        })
+        .then(() => this.refresh());
+    });
   }
 
   /**

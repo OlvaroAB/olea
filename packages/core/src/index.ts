@@ -2029,6 +2029,7 @@ export type {
   ContainmentCorrectionEvent,
   ContainmentCorrectionKind,
   ContainmentCorrectionLog,
+  ContainmentCorrectionState,
   ContainmentDeclaration,
 } from './outcome/containment-correction.js';
 export {
@@ -2040,6 +2041,7 @@ export {
   OUTCOME_CONTAINMENT_CORRECTION_SCHEMA_VERSION,
   objectivesDeclarationOf,
   readContainmentCorrection,
+  readContainmentCorrectionState,
   recordContainmentCorrection,
   statedScopeDeclarationOf,
 } from './outcome/containment-correction.js';
@@ -2086,8 +2088,10 @@ export { applyOutcomeEvent, projectOutcomeRecords } from './outcome/project.js';
 // rule and the same-as reuse judgement call, and `./outcome/reconcile-coverage.js`'s for the two
 // named-but-unbuilt consumers (component register rows 1.1b and 2.11).
 export type {
+  CorrectionControlAvailability,
   ModelDecidedContainmentEdge,
   ModelDecidedContainmentRead,
+  ModelDecidedDeclinedPlacement,
   ModelDecidedDisabledReason,
   ModelDecidedDocument,
   ModelDecidedProvenance,
@@ -2837,7 +2841,9 @@ export type {
   GroveCourseSummary,
   GroveMaterialGapCell,
   GroveModelDecidedCell,
+  GroveModelDecidedDeclinedPlacement,
   GroveModelDecidedListing,
+  GroveModelDecidedPlacement,
   GroveVolunteerCell,
 } from './scope/grove.js';
 export { buildGroveModel } from './scope/grove.js';

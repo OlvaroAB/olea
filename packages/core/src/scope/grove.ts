@@ -113,9 +113,19 @@
  * `builtCount`, so the persisted prior denominator keeps its meaning. A concept already declared is
  * counted once, as declared. A stated-scope standing is per assessment and gives no grove entry;
  * past-paper alignment never reaches the read. **A renderer that shows `volunteers` must show
- * `modelDecided` too**, or a concept would vanish from her view: nothing renders it today (it has
- * no copy clause), which is safe only because no production caller can enable the read until her
- * correction control ships, and that control is where she sees and corrects this listing.
+ * `modelDecided` too**, or a concept would vanish from her view: the grove view renders it as the
+ * section `[D-537]` rules, beside her control on each placement.
+ *
+ * **Each placement, and the ones she took out (`[D-537]`, `ol-egov.141.89.7.77`).** A listed
+ * concept carries one entry per placement: the objective's wording (from
+ * `BuildGroveModelInput.objectiveWordings`, which the caller fills from the same outcome records
+ * the read was given), the document it is in, and the declaration her choice is keyed on. One
+ * wording stated in two documents of the course is one placement, since one choice covers both. A
+ * placement whose wording is not supplied is not listed; a concept left with none stays a volunteer,
+ * so nothing vanishes. The read's `declinedPlacements` are listed in `modelDecided.declined`, under
+ * the same rules, for her to put back; they never list a concept apart, so a concept whose every
+ * placement she took out is a volunteer again (F8.2's "one state however it was reached" holds:
+ * the list holds her choices, not marks on a volunteer).
  *
  * ## INV-1 / §7.1
  *
@@ -129,7 +139,13 @@ import type { ConceptRelation } from '../concept/relation.js';
 import type { ConceptRecord } from '../concept/types.js';
 import type { ConceptMaterialPresence } from '../gap/build.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
-import type { ModelDecidedContainmentRead } from '../outcome/reconcile.js';
+import { canonicalJson } from '../outcome/canonical-json.js';
+import type { ContainmentDeclaration } from '../outcome/containment-correction.js';
+import type {
+  ModelDecidedContainmentEdge,
+  ModelDecidedContainmentRead,
+  ModelDecidedDeclinedPlacement,
+} from '../outcome/reconcile.js';
 import type { ConceptAttestation } from '../source/transcript-scope.js';
 import { declaredScopeNamesFrom } from '../source/transcript-scope.js';
 import type { Source, SourceRole } from '../source/types.js';
@@ -181,18 +197,40 @@ export interface GroveVolunteerCell {
   readonly conceptName: string;
 }
 
+/** One placement of a concept under one objective (`[D-537]`): what she reads, opens and corrects. */
+export interface GroveModelDecidedPlacement {
+  readonly outcomeId: string;
+  readonly conceptKey: string;
+  /** The objective's wording as stored (`OutcomeRecord.label`): shown, quoted, under the concept. */
+  readonly wording: string;
+  /** The objectives document the placement was read from: the one her link opens. */
+  readonly documentPath: VaultPath;
+  /** What her choice on this placement is keyed on (`../outcome/containment-correction.ts`). */
+  readonly declaration: ContainmentDeclaration;
+}
+
+/** A placement she took out, listed for putting back (`[D-537]`). Never lists its concept apart. */
+export interface GroveModelDecidedDeclinedPlacement extends GroveModelDecidedPlacement {
+  readonly conceptName: string;
+}
+
 /** A concept an objectives declaration contains by the model's decision (`[D-433]`), listed apart: never declared, never hers. */
 export interface GroveModelDecidedCell {
   readonly conceptKey: string;
   readonly conceptName: string;
   /** The outcomes whose model-decided edge reaches it, sorted. Opaque ids. */
   readonly outcomeIds: readonly string[];
+  /** One per objective it is placed under, by wording (`[D-537]`); never empty. */
+  readonly placements: readonly GroveModelDecidedPlacement[];
 }
 
 /** The separate listing and its own count — see the module doc. */
 export interface GroveModelDecidedListing {
+  /** Concepts listed apart (`concepts.length`); the placements she took out are not counted. */
   readonly count: number;
   readonly concepts: readonly GroveModelDecidedCell[];
+  /** The placements she took out, for putting back (`[D-537]`). */
+  readonly declined: readonly GroveModelDecidedDeclinedPlacement[];
 }
 
 /** F8.3: the count and the denominator's source, carried separately — never their ratio. See the tripwire below this type. */
@@ -386,6 +424,12 @@ export interface BuildGroveModelInput {
    * corrections are checked. Absent or disabled: today's grove exactly (module doc).
    */
   readonly modelDecided?: ModelDecidedContainmentRead;
+  /**
+   * `[D-537]`: the wording of each objective a placement may name, by outcome id
+   * (`OutcomeRecord.label`), from the same outcome records the read was given. A placement whose
+   * wording is absent here is not listed (module doc). Absent: no placement is listed.
+   */
+  readonly objectiveWordings?: ReadonlyMap<string, string>;
 }
 
 export interface BuildGroveModelResult {
@@ -573,20 +617,93 @@ function modelDecidedListing(
 ): GroveModelDecidedListing | undefined {
   const read = input.modelDecided;
   if (read === undefined || read.status !== 'read') return undefined;
-  const outcomesByKey = new Map<string, Set<string>>();
-  for (const edge of read.edges) {
-    if (edge.basis !== 'objectives' || edge.decidedBy !== 'model') continue;
-    const set = outcomesByKey.get(edge.conceptKey) ?? new Set<string>();
-    set.add(edge.outcomeId);
-    outcomesByKey.set(edge.conceptKey, set);
-  }
-  const concepts: GroveModelDecidedCell[] = input.concepts
-    .filter((concept) => outcomesByKey.has(concept.key) && !declaredNames.has(concept.name))
-    .map((concept) => ({
-      conceptKey: concept.key,
-      conceptName: concept.name,
-      outcomeIds: [...(outcomesByKey.get(concept.key) ?? [])].sort(),
+  const wordings = input.objectiveWordings ?? new Map<string, string>();
+  // Only a concept of this course that no registered source names is ever listed, standing or not.
+  const listable = new Map(
+    input.concepts
+      .filter((concept) => !declaredNames.has(concept.name))
+      .map((concept) => [concept.key, concept] as const),
+  );
+
+  const standing = placementsByConcept(
+    read.edges.filter((edge) => edge.basis === 'objectives' && edge.decidedBy === 'model'),
+    listable,
+    wordings,
+  );
+  const concepts: GroveModelDecidedCell[] = [...standing]
+    .map(([conceptKey, placements]) => ({
+      conceptKey,
+      conceptName: listable.get(conceptKey)?.name ?? '',
+      outcomeIds: [...new Set(placements.map((p) => p.outcomeId))].sort(),
+      placements,
     }))
     .sort(byConceptName);
-  return { count: concepts.length, concepts };
+
+  const declined: GroveModelDecidedDeclinedPlacement[] = [
+    ...placementsByConcept(
+      read.declinedPlacements.filter((placement) => placement.correction === 'declined'),
+      listable,
+      wordings,
+    ),
+  ]
+    .flatMap(([conceptKey, placements]) =>
+      placements.map((placement) => ({
+        ...placement,
+        conceptName: listable.get(conceptKey)?.name ?? '',
+      })),
+    )
+    .sort((a, b) => byConceptName(a, b) || byPlacement(a, b));
+
+  return { count: concepts.length, concepts, declined };
+}
+
+function byPlacement(a: GroveModelDecidedPlacement, b: GroveModelDecidedPlacement): number {
+  for (const [x, y] of [
+    [a.wording, b.wording],
+    [a.documentPath, b.documentPath],
+    [a.outcomeId, b.outcomeId],
+  ] as const) {
+    if (x !== y) return x < y ? -1 : 1;
+  }
+  return 0;
+}
+
+/**
+ * Placements per listable concept, sorted, one per declaration (one choice covers one wording in
+ * every document of the course, so it is one placement). A placement with no wording is dropped.
+ */
+function placementsByConcept(
+  links: readonly (ModelDecidedContainmentEdge | ModelDecidedDeclinedPlacement)[],
+  listable: ReadonlyMap<string, ConceptRecord>,
+  wordings: ReadonlyMap<string, string>,
+): ReadonlyMap<string, readonly GroveModelDecidedPlacement[]> {
+  const byConcept = new Map<string, GroveModelDecidedPlacement[]>();
+  for (const link of links) {
+    if (!listable.has(link.conceptKey)) continue;
+    const wording = wordings.get(link.outcomeId);
+    if (wording === undefined) continue;
+    const list = byConcept.get(link.conceptKey) ?? [];
+    list.push({
+      outcomeId: link.outcomeId,
+      conceptKey: link.conceptKey,
+      wording,
+      documentPath: link.provenance.source.sourcePath as VaultPath,
+      declaration: link.declaration,
+    });
+    byConcept.set(link.conceptKey, list);
+  }
+  const out = new Map<string, readonly GroveModelDecidedPlacement[]>();
+  for (const [conceptKey, list] of byConcept) {
+    const seen = new Set<string>();
+    out.set(
+      conceptKey,
+      [...list].sort(byPlacement).filter((placement) => {
+        const identity = canonicalJson(placement.declaration);
+        if (seen.has(identity)) return false;
+        seen.add(identity);
+        return true;
+      }),
+    );
+  }
+  return out;
 }

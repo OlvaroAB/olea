@@ -177,12 +177,29 @@
  * the cost). `olea-core#produceTaughtSignals` matches each concept's name by
  * the examiner side's whole-word rule, per course, with no date of any kind;
  * it adds no scope, so the denominator and its receipt above are untouched.
+ *
+ * ## Olea's reading of the objectives, and her control on it (`[D-537]`, `ol-egov.141.89.7.77`)
+ *
+ * This module is where her correction control for links Olea's reading makes under a course's
+ * objectives works: `load()` hands the view `placementControl` (`./view.ts` draws "Not part of
+ * this" and "Put back" from it), whose handlers append her choice to the placement's history in
+ * Olea's own folder (`olea-core#recordContainmentCorrection`), and in the same `load()` it reads
+ * the placements (`olea-core#readModelDecidedContainment`) stating her control **for objectives
+ * only**, the one place any production code states it. An assessment's stated scope has no control
+ * and stays off. The statement enables nothing on its own: the read still needs the objectives
+ * basis switch on, resolved from a passing held-out gate record (`[D-433]`, `[D-432]`), and a
+ * current aligned result. Its inputs (the course's outcome records, its documents at their current
+ * revisions with their digests, the stored alignment results and the switches) come from
+ * `CreateLocalGroveProviderDeps.modelDecidedSources`; with none supplied, as `main.ts` passes today,
+ * the read is made with every basis off, returns disabled, and the grove is exactly as before.
+ * Supplying them with the switch is the wire bead's (`ol-egov.141.89.7.5`).
  */
 
 import type { SourceRegisteredRole } from 'olea-contracts';
 import {
   type AssessmentRecord,
   appendSourceRegisteredRecord,
+  type BasisSwitches,
   buildGroveModel,
   buildMaterialPresence,
   buildRegistryModel,
@@ -205,12 +222,21 @@ import {
   type InvalidClozeReport,
   type InvalidMcqReport,
   isRegisterableDocument,
+  type ModelDecidedContainmentRead,
+  type ModelDecidedDocument,
+  NO_BASIS_GATE,
+  type OutcomeRecord,
   produceTaughtSignals,
   projectRegisteredFiles,
+  projectScopeReadings,
+  readModelDecidedContainment,
   readReviewLogFile,
   readReviewLogHistory,
+  recordContainmentCorrection,
   resolveAssessments,
+  resolveBasisSwitches,
   reviewLogPath,
+  type ScopeReadingProjection,
   suspendedInstrumentIds,
   type UnitManifest,
   type UnreadableFile,
@@ -239,10 +265,32 @@ import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js
 import { deckMaterialFrom, readTranscriptMaterial } from './taught-signal-material.js';
 import type {
   GroveCourseSection,
+  GrovePlacementControl,
+  GrovePlacementRef,
   GroveScopeCorrectionReceipt,
   GroveViewState,
   GroveWithheldItem,
 } from './view.js';
+
+/**
+ * `[D-537]`: what the read of one course's placements needs besides her control (module doc).
+ * The caller scopes `outcomes` to the course; `documents` are the course's registered documents at
+ * their current revisions; `switches` are `olea-core#resolveBasisSwitches`' output.
+ */
+export interface GroveModelDecidedSources {
+  readonly outcomes: readonly OutcomeRecord[];
+  readonly documents: readonly ModelDecidedDocument[];
+  readonly alignments: ScopeReadingProjection;
+  readonly switches: BasisSwitches;
+}
+
+/** No sources supplied: every basis off (`NO_BASIS_GATE`), nothing to read, so the read is disabled. */
+const NO_MODEL_DECIDED_SOURCES: GroveModelDecidedSources = {
+  outcomes: [],
+  documents: [],
+  alignments: projectScopeReadings({ documentState: [], paperStructure: [], alignmentResult: [] }),
+  switches: resolveBasisSwitches(NO_BASIS_GATE),
+};
 
 export interface CreateLocalGroveProviderDeps {
   readonly vault: VaultSource;
@@ -287,6 +335,12 @@ export interface CreateLocalGroveProviderDeps {
   readonly unitManifests?: (
     paths: readonly VaultPath[],
   ) => ReadonlyMap<VaultPath, UnitManifest> | Promise<ReadonlyMap<VaultPath, UnitManifest>>;
+  /**
+   * `[D-537]`: the inputs of one course's placement read (module doc), or `undefined` for none. A
+   * thunk per course and per `load()`, so a later alignment or a switch turned on reaches a grove
+   * already open. Omitted, as `main.ts` passes today: every basis off, nothing listed.
+   */
+  readonly modelDecidedSources?: (course: string) => Promise<GroveModelDecidedSources | undefined>;
 }
 
 /** The data half of `GroveViewDeps` — `main.ts` adds `openRetrospective` at the construction site. */
@@ -662,6 +716,56 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
   });
   const scheduler = createFsrsScheduler();
 
+  /**
+   * `[D-537]`: one course's placements, and the wording of every objective they may name. Her
+   * control is stated here, for objectives only, because `placementControl` below is the working
+   * control the view draws for them; the read still needs the objectives switch on (module doc). A
+   * read that fails lists nothing, so every concept stays where today's grove puts it.
+   */
+  async function readPlacements(course: string): Promise<
+    | {
+        readonly read: ModelDecidedContainmentRead;
+        readonly objectiveWordings: ReadonlyMap<string, string>;
+      }
+    | undefined
+  > {
+    try {
+      const sources = (await deps.modelDecidedSources?.(course)) ?? NO_MODEL_DECIDED_SOURCES;
+      const read = await readModelDecidedContainment(deps.vault, {
+        correctionControlAvailable: { objectives: true, 'assessment-brief': false },
+        courseId: course,
+        outcomes: sources.outcomes,
+        documents: sources.documents,
+        alignments: sources.alignments,
+        switches: sources.switches,
+      });
+      return {
+        read,
+        objectiveWordings: new Map(sources.outcomes.map((o) => [o.id, o.label] as const)),
+      };
+    } catch (error) {
+      console.error('Olea: could not read the placements under the objectives', error);
+      return undefined;
+    }
+  }
+
+  /** `[D-537]`: her control, handed to the view with every `load()` (`./view.ts`). */
+  const record =
+    (kind: 'declined' | 'accepted') =>
+    async (placement: GrovePlacementRef): Promise<void> => {
+      await recordContainmentCorrection(
+        deps.vault,
+        placement.declaration,
+        placement.conceptKey,
+        kind,
+        { now: () => deps.now().toISOString() },
+      );
+    };
+  const placementControl: GrovePlacementControl = {
+    takeOut: record('declined'),
+    putBack: record('accepted'),
+  };
+
   return {
     async load(): Promise<GroveViewState> {
       try {
@@ -828,6 +932,13 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         // reason (`[D-184]`, `ol-v7r5.32`): only a `'declared'` course ever
         // has a real `GroveCourseSummary` to hand forward as the NEXT read's
         // prior.
+        // `[D-537]`: each course's placements, read before the sections are built (module doc).
+        const placementsByCourse = new Map(
+          await Promise.all(
+            [...courseNames].map(async (course) => [course, await readPlacements(course)] as const),
+          ),
+        );
+
         const nextGroundStreaks = new Map<string, number>();
         const nextPriorDenominators = new Map<string, GrovePriorDenominatorEntry>();
         const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => {
@@ -848,6 +959,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             material: stepTwoMaterial,
             sources: tier3.sourcesReport.sources,
           });
+          const placements = placementsByCourse.get(course);
           const built = buildGroveModel({
             course,
             concepts: courseConcepts,
@@ -859,6 +971,12 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             relations: deps.relations?.() ?? [],
             ...(courseReadCoverage !== undefined ? { readCoverage: courseReadCoverage } : {}),
             taughtSignals,
+            ...(placements !== undefined
+              ? {
+                  modelDecided: placements.read,
+                  objectiveWordings: placements.objectiveWordings,
+                }
+              : {}),
           });
           const model: GroveCourseModel = built.model;
           let scopeCorrectionReceipt: GroveScopeCorrectionReceipt | undefined;
@@ -899,6 +1017,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           // `[D-334]`: computed off the same `enumeration` this call already
           // paid for above — no second walk.
           withheldInstruments: withheldInstrumentsFromEnumeration(enumeration),
+          placementControl,
         };
       } catch (error) {
         console.error('Olea: could not compose the grove', error);
