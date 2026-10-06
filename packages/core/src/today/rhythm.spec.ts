@@ -269,3 +269,104 @@ describe("detectRhythm — 'arrivalDayUnknown' input (ol-egov.141.89.11.24, [D-4
     expect(result.measured?.courses[0]?.status).toBe('unreadable');
   });
 });
+
+describe('detectRhythm — the declared term as a narrow yardstick ([D-524], F6.9)', () => {
+  const inTerm: TermWindow = { start: '2026-09-01', end: '2026-12-15' };
+
+  it('inside the term, measures the gap from the later of term start and the last arrival', () => {
+    // last arrival 60 days ago (before the term start, 29 days ago): the gap is 29, not 60.
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 60)],
+      termWindow: inTerm,
+    });
+    expect(result.measured?.courses[0]?.quietDays).toBe(29);
+    expect(result.status).toBe('observed');
+  });
+
+  it('inside the term, a term start close to today keeps a recent term from reading as quiet', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 60)],
+      termWindow: { start: '2026-09-20', end: '2026-12-15' },
+    });
+    expect(result.measured?.courses[0]?.quietDays).toBe(10);
+    expect(result.status).toBe('not-observed');
+    expect(result.measured?.quietestCourse).toBeNull();
+  });
+
+  it('inside the term, an arrival after the term start is measured from its own day', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 5)],
+      termWindow: inTerm,
+    });
+    expect(result.measured?.courses[0]?.quietDays).toBe(5);
+  });
+
+  it('before the term starts, never says a course has gone quiet', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 90)],
+      termWindow: { start: '2026-10-15', end: '2026-12-15' },
+    });
+    expect(result.status).not.toBe('observed');
+    expect(result.measured?.courses[0]?.status).not.toBe('observed');
+    expect(result.measured?.quietestCourse).toBeNull();
+  });
+
+  it('after the term ends, never says a course has gone quiet', () => {
+    const result = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 90)],
+      termWindow: { start: '2026-05-01', end: '2026-08-31' },
+    });
+    expect(result.status).not.toBe('observed');
+    expect(result.measured?.courses[0]?.status).not.toBe('observed');
+    expect(result.measured?.quietestCourse).toBeNull();
+  });
+
+  it('the term start and end days themselves are inside the term', () => {
+    const onStart = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 90)],
+      termWindow: { start: TODAY, end: '2026-12-15' },
+    });
+    expect(onStart.measured?.courses[0]?.quietDays).toBe(0);
+    const onEnd = detectRhythm({
+      today: TODAY,
+      courses: [course('C1', 90)],
+      termWindow: { start: '2026-09-01', end: TODAY },
+    });
+    expect(onEnd.measured?.courses[0]?.quietDays).toBe(29);
+  });
+
+  it("missing or invalid dates keep today's handling", () => {
+    const base = detectRhythm({ today: TODAY, courses: [course('C1', 60)] });
+    const bads: TermWindow[] = [
+      { start: 'not-a-day' as CalendarDay, end: '2026-12-15' },
+      { start: '2026-09-01', end: '2026-13-45' as CalendarDay },
+      { start: '2026-12-15', end: '2026-09-01' },
+    ];
+    for (const termWindow of [null, undefined, ...bads]) {
+      const got = detectRhythm({
+        today: TODAY,
+        courses: [course('C1', 60)],
+        ...(termWindow === undefined ? {} : { termWindow }),
+      });
+      expect(got.status).toBe(base.status);
+      expect(got.measured?.courses).toEqual(base.measured?.courses);
+      expect(got.measured?.maxQuietDays).toBe(base.measured?.maxQuietDays);
+    }
+  });
+
+  it('adds no figure beyond the existing reading shape', () => {
+    const result = detectRhythm({ today: TODAY, courses: [course('C1', 60)], termWindow: inTerm });
+    expect(Object.keys(result.measured ?? {}).sort()).toEqual(
+      ['courses', 'hadTermWindow', 'maxQuietDays', 'quietestCourse'].sort(),
+    );
+    expect(Object.keys(result.measured?.courses[0] ?? {}).sort()).toEqual(
+      ['course', 'quietDays', 'quietDaysThreshold', 'reason', 'status'].sort(),
+    );
+  });
+});
