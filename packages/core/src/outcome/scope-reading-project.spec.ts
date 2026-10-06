@@ -459,7 +459,10 @@ describe('a past-paper alignment result is current only against the structure it
   const q = { courseId: 'course-1', source: PAPER('r1'), conceptKey: 'k1' };
   const withStructure = (e: ScopeReadingLogEntry, structureId?: string): ScopeReadingLogEntry => ({
     ...e,
-    payload: { ...e.payload, ...(structureId !== undefined ? { structureId } : {}) },
+    payload: {
+      ...(e.payload as Record<string, unknown>),
+      ...(structureId !== undefined ? { structureId } : {}),
+    },
   });
 
   it('reads current when the named structure is the current one, unverified otherwise', () => {
