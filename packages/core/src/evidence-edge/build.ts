@@ -7,6 +7,7 @@
 import { resolveAssessments } from '../assessment/resolve.js';
 import { readDeclaredScope } from '../assessment/scope.js';
 import type { AssessmentRecord } from '../assessment/types.js';
+import type { ConceptRecord } from '../concept/types.js';
 import { extractFromVault } from '../extract/registry.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
 import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
@@ -257,6 +258,42 @@ function findMentionedConceptNames(
   return hits;
 }
 
+/** Resolves the edge key for a matched name in one course — see {@link conceptKeyResolver}. */
+type ConceptKeyResolver = (course: string, conceptName: string) => string;
+
+/**
+ * The `ConceptAssessmentEdge.conceptKey` an edge of `course` takes for a matched
+ * `conceptName` (`ol-63e1`), resolved for the edge's own course first (`[D-402]`).
+ *
+ * **Why course first.** `[D-402]` mints one identity per course for a wording two courses
+ * name, and its binding condition 2 keeps each course's assessment demand on its own side:
+ * "neither extraction nor a confirmed link pools one course's assessment material or demand
+ * reading into the other course's." A name-only map holds one key per wording, the last record
+ * listed, so an edge of course X could take course Y's identity for a split wording while X's own
+ * identity got no edge at all; which one won depended on extraction order. Here an edge takes the
+ * identity whose `courses` include its course whenever one exists.
+ *
+ * **Everything else is unchanged.** A wording with no identity in the edge's course falls back
+ * to the wording's identity elsewhere (the last record listed, exactly as before), and a wording
+ * with no record at all falls back to the name itself (`./types.js`). Whether a course's
+ * assessment term should take another course's identity at all when the course has none of its
+ * own is a separate question no ruling answers yet; this function keeps today's answer to it.
+ * Within one course a wording has at most one identity (`../concept/extract.ts`'s
+ * `identityGroups`); the first listed wins if that ever fails.
+ */
+function conceptKeyResolver(concepts: readonly ConceptRecord[]): ConceptKeyResolver {
+  const byName = new Map(concepts.map((concept) => [concept.name, concept.key]));
+  const byCourseAndName = new Map<string, string>();
+  for (const concept of concepts) {
+    for (const course of concept.courses) {
+      const slot = `${course}\u0000${concept.name}`;
+      if (!byCourseAndName.has(slot)) byCourseAndName.set(slot, concept.key);
+    }
+  }
+  return (course, conceptName) =>
+    byCourseAndName.get(`${course}\u0000${conceptName}`) ?? byName.get(conceptName) ?? conceptName;
+}
+
 /**
  * `[D-247]`/`[D-399]`: the `'assessment-brief'` edges for ONE assessment —
  * deliberately NOT pooled across the course the way past-paper/objectives
@@ -303,7 +340,7 @@ function briefEdgesForAssessment(
   course: string,
   declaredScope: string | undefined,
   conceptNames: readonly string[],
-  conceptKeyByName: ReadonlyMap<string, string>,
+  conceptKeyFor: ConceptKeyResolver,
   courseEvidence: readonly CourseEvidenceEntry[],
 ): ConceptAssessmentEdge[] {
   if (declaredScope === undefined) return [];
@@ -330,7 +367,7 @@ function briefEdgesForAssessment(
   const seenKeys = new Set<string>();
   for (const conceptName of [...mentioned].sort()) {
     if (sameStatementElsewhere.has(conceptName)) continue;
-    const conceptKey = conceptKeyByName.get(conceptName) ?? conceptName;
+    const conceptKey = conceptKeyFor(course, conceptName);
     if (seenKeys.has(conceptKey)) continue;
     seenKeys.add(conceptKey);
     edges.push({
@@ -482,7 +519,8 @@ export async function buildConceptAssessmentEdges(
   // `ol-63e1`: the opaque join key for each vocabulary/concept name matched
   // against tier-3 material — see `./types.js`'s `ConceptAssessmentEdge.conceptKey`
   // doc for why a missing entry falls back to the name rather than throwing.
-  const conceptKeyByName = new Map(options.concepts.map((concept) => [concept.name, concept.key]));
+  // `[D-402]`: resolved for the edge's own course first — see `conceptKeyResolver`.
+  const conceptKeyFor = conceptKeyResolver(options.concepts);
 
   const questionIndex = await buildQuestionIndex(vault, tier3.sourcesReport.sources);
   resolveCitations(tier3.citations, questionIndex);
@@ -634,7 +672,7 @@ export async function buildConceptAssessmentEdges(
           course,
           await readDeclaredScope(vault, record.path),
           conceptNames,
-          conceptKeyByName,
+          conceptKeyFor,
           courseEvidence,
         )
       : [];
@@ -645,7 +683,7 @@ export async function buildConceptAssessmentEdges(
     courseEvidence.forEach((entry, index) => {
       edges.push({
         conceptName: entry.conceptName,
-        conceptKey: conceptKeyByName.get(entry.conceptName) ?? entry.conceptName,
+        conceptKey: conceptKeyFor(course, entry.conceptName),
         assessmentPath: record.path,
         course,
         yieldRank: index + 1,

@@ -197,14 +197,17 @@ export interface ConceptAssessmentEdge {
   /**
    * The opaque, stable join key (`ConceptRecord.key`, `ol-il6m`) for the same
    * concept `conceptName` names — resolved from
-   * `BuildConceptAssessmentEdgesOptions.concepts` by exact name match.
+   * `BuildConceptAssessmentEdgesOptions.concepts` by exact name match, the
+   * identity of the edge's own {@link course} first (`[D-402]`: a wording two
+   * courses name has one identity per course; `build.ts`'s `conceptKeyResolver`).
    * **This is the identity a review-log `conceptIds` entry now carries**
    * (`ol-63e1`'s coordinated flip): `oracle/compose.ts` joins mastery on this
    * field, never on `conceptName`. Falls back to `conceptName` itself only
    * when no matching `ConceptRecord` is found (a vocabulary term with no
-   * corresponding record — should not happen against a consistent vault
-   * snapshot; documented rather than thrown, matching this package's "degrade
-   * to a named, inspectable value" discipline elsewhere).
+   * corresponding record: the default vocabulary reads note titles that no
+   * course's material attests, so this does happen; documented rather than
+   * thrown, matching this package's "degrade to a named, inspectable value"
+   * discipline elsewhere).
    */
   readonly conceptKey: string;
   /** The `AssessmentRecord.path` this edge targets — the natural key, matching how the rest of this package identifies a note-backed record. */
