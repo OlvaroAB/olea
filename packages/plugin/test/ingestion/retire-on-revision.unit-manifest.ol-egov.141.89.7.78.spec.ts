@@ -268,22 +268,23 @@ describe('composed as main.ts composes it, retire on revision runs ([D-531])', (
     expect(records.get(ALPHA)?.status).toBe('active');
   });
 
-  it('a document read from its image is not read in full while its image deliveries carry no digest', async () => {
+  it('a document read from its image is read in full once its image page is extracted (ol-egov.141.89.7.82)', async () => {
     const run = await composeAsMainTs();
     run.answer = [ALPHA, BETA];
     // The source job finds no text layer and queues the image reading; the next tick reads it.
     await run.deliver('scan-v1', SCAN);
     expect(await run.tick()).toMatchObject({ kind: 'ran', outcome: 'done' });
     await run.store.idle();
+    const digest = await hashContent(SCAN_BYTES);
     const records = await byLabel(run.vault);
     expect(records.size).toBe(2);
-    // Unplaced: minted with no stamp, so nothing can ever retire them on revision (safe, and stale).
-    for (const record of records.values()) expect('statedInRevision' in record).toBe(false);
-    expect(marks(run.vault)).toEqual([]);
+    // The image delivery carries the digest of the bytes read (`buildVisionRunner` turns it on), so
+    // it is placed against the document's version: stamped with it, and its page marked.
+    for (const record of records.values()) expect(record.statedInRevision).toBe(digest);
+    expect(marks(run.vault)).toEqual([{ digest, page: 1 }]);
     const pages = await run.store.outcomeRevisionPagesFor(SCAN);
-    expect(
-      pages?.history.map((state) => [state.page, state.reading, state.outcomesExtracted]),
-    ).toEqual([[1, 'read', false]]);
-    expect(pages === undefined ? true : outcomeRevisionReadInFull(pages)).toBe(false);
+    expect(pages?.revisionDigest).toBe(digest);
+    expect(pages?.history.at(-1)).toEqual({ page: 1, reading: 'read', outcomesExtracted: true });
+    expect(pages === undefined ? false : outcomeRevisionReadInFull(pages)).toBe(true);
   });
 });

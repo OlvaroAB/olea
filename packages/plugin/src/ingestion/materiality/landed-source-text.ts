@@ -6,9 +6,10 @@
  *
  * **Pages of one version are merged, never replaced.** A file's text reaches the rewrite in more
  * than one delivery: the extraction runner's text-layer delivery covers every text-layer page of
- * the bytes it read, in one call (core `ingestion/extraction-runner.ts`), and, once the vision page
+ * the bytes it read, in one call (core `ingestion/extraction-runner.ts`), and, since the vision page
  * runner delivers its revision digest (`deliverRevisionDigest`, `ingestion/vision-page-runner.ts`,
- * off by default), each page read from its image arrives alone. Each delivery is kept apart under
+ * switched on in `ingestion/wiring.ts` buildVisionRunner by `ol-egov.141.89.7.82`, sheet v59), each
+ * page read from its image arrives alone. Each delivery is kept apart under
  * the set of pages it covered: a later delivery of the same bytes covering the same pages replaces
  * that one (a repeat, or a note embedding the file), and one covering other pages is added beside
  * it. A page's text is every delivery that covered it, the delivery covering more pages first
@@ -20,12 +21,15 @@
  * is set aside, at most {@link SET_ASIDE_VERSIONS} per file, and comes back with its pages when a
  * later delivery of its bytes lands, so a late delivery of older bytes (a reading that drained
  * before the file changed) never loses the newer version's pages: the newer version's next
- * delivery brings them back. Text of one version is never mixed with another's.
+ * delivery brings them back. Text of one version is never mixed with another's. A late delivery
+ * never reaches a question held for newer bytes, since the rewrite reads a version only for a hold
+ * raised for those very bytes; ignoring the late delivery outright (the strict rule, which would
+ * also save its calls) is deferred by the same ruling.
  *
- * **Today's composition reads exactly as before.** With the vision digest off, only the text-layer
- * delivery carries a digest, and it always covers the same pages for the same bytes, so the
- * current version's text is always the latest delivery's, whole: the rule this replaced
- * (`citation-revision-digest-off-unchanged.ol-egov.141.89.7.82.spec.ts` pins it).
+ * **Text-layer deliveries read exactly as before.** Without the vision digest (a runner composed
+ * with it off), only the text-layer delivery carries a digest, and it always covers the same pages
+ * for the same bytes, so the current version's text is always the latest delivery's, whole: the
+ * rule this replaced (`citation-revision-digest-off-unchanged.ol-egov.141.89.7.82.spec.ts` pins it).
  */
 
 /** One delivery's text for one file: each page it covered, with its units' texts joined. */

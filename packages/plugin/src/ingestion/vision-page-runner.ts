@@ -222,22 +222,22 @@
  * computed and discarded. Both are removed; a reading's one record is its
  * `onManifestEntry` entry. Core's `vision-page` adapters are untouched.
  *
- * **The revision digest, built and switched off (`ol-egov.141.89.7.78`,
- * `[D-531]`).** With `deps.deliverRevisionDigest` on, a landed page is
- * delivered with `sourcePath -> hashContent(bytes)` for the very bytes this
- * job read when it drained (the image, the PDF it rendered, the document whose
- * images it sent), the same map and hash core's extraction runner gives a
- * text-layer delivery. The outcomes trigger needs it to place the delivery
- * against the document's current version and mark the page extracted;
- * without it a document with any image-read page is never read in full, so it
- * never retires a stale outcome (safe, and stale). It is off by default, and
- * `wiring.ts`'s `buildVisionRunner` does not turn it on, because the same sink
- * feeds `main.ts`'s `onUnitsLanded`, where a digest on a one-page delivery
- * changes two things she can see: the citation-revision rewrite (`[D-518]`)
- * replaces the landed text it holds for the whole source with this one
- * page's, and the generation sweep stamps these pages' questions with a
- * source revision (`[D-515]`), which changes when they are withheld. Turning
- * it on is the hub's call once those are settled.
+ * **The revision digest (`ol-egov.141.89.7.78`, `[D-531]`; on since `ol-egov.141.89.7.82`, sheet
+ * v59).** With `deps.deliverRevisionDigest` on, a landed page is delivered with
+ * `sourcePath -> hashContent(bytes)` for the very bytes this job read when it drained (the image,
+ * the PDF it rendered, the document whose images it sent), the same map and hash core's extraction
+ * runner gives a text-layer delivery. The field defaults to off; `wiring.ts`'s `buildVisionRunner`,
+ * the one production composition, turns it on. Three readers of the same sink use it: the
+ * outcomes trigger places the delivery against the document's current version and marks the page
+ * extracted, so a document with an image-read page can be read in full and retire its stale
+ * outcomes (`[D-531]`); `main.ts`'s `onUnitsLanded` hands it to the citation-revision rewrite
+ * (`[D-518]`), which adds this page's text beside the other pages of its version, never replacing
+ * them (`materiality/landed-source-text.ts`); and the generation sweep records it on a question
+ * drafted from the page (`[D-515]`), so the question is shown while the file is unchanged and held
+ * when it changes. A delivery of bytes the file no longer has (a reading begun before the file
+ * changed) restores nothing: the outcomes trigger writes nothing for it, and a question drafted or
+ * rewritten from it records the older bytes, so it is neither shown nor accepted while the file
+ * holds newer ones.
  */
 
 import type {
@@ -735,10 +735,10 @@ export interface WorkerVisionPageRunnerDeps {
    * `[D-531]` (`ol-egov.141.89.7.78`): when true, a landed page is delivered
    * with `sourcePath -> hashContent(bytes)` for the bytes this job read, so
    * the outcomes trigger can place it against the document's current version.
-   * **Absent or false by default, and nothing composes it on yet** — see the
-   * module doc's "The revision digest" section for the two downstream readers
-   * of the same sink that it would change. Nothing else this runner does
-   * depends on it.
+   * Absent or false by default; `wiring.ts`'s `buildVisionRunner` turns it on
+   * (`ol-egov.141.89.7.82`). See the module doc's "The revision digest"
+   * section for the readers of the same sink that use it. Nothing else this
+   * runner does depends on it.
    */
   readonly deliverRevisionDigest?: boolean;
 }

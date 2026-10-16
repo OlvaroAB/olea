@@ -218,8 +218,9 @@ export interface IngestionWiringDeps {
     /**
      * `ol-egov.141.89.5.73` ([D-515]): `sourcePath -> SHA-256 of that file's own bytes`, computed
      * by core's extraction from the one read it makes, for every extracted non-markdown source
-     * (standalone or embedded in a note). Absent for vision-page and transcript landings. Never
-     * read from the file again.
+     * (standalone or embedded in a note), and by the vision page runner for the bytes it read
+     * (`ol-egov.141.89.7.82`, `buildVisionRunner`). Absent for transcript landings. Never read
+     * from the file again.
      */
     sourceRevisions?: ReadonlyMap<string, string>,
   ) => Promise<void> | void;
@@ -560,6 +561,22 @@ async function openScopeReadingWriter(
  * unchanged into `WorkerVisionPageRunnerDeps.pageRenderer` — this function
  * makes no decision about it, it only carries `IngestionWiringDeps`'
  * optional field through to the one place that reads it.
+ *
+ * **The revision digest is on (`ol-egov.141.89.7.82`; sheet v59, "Image-page
+ * revision digest", Accept).** A page read from its image is delivered with
+ * the digest of the bytes the runner read, like a text-layer delivery, so:
+ * the outcomes trigger can place it and mark it, and a document with an
+ * image-read page can be read in full and retire its stale outcomes
+ * (`[D-531]`); the citation-revision rewrite merges it with the other pages of
+ * its version (`[D-518]`, `materiality/landed-source-text.ts`); and a question
+ * drafted from it records that version, so it is shown while the file is
+ * unchanged and held when it changes (`[D-515]`). A delivery of bytes the file
+ * no longer has restores nothing: the outcomes trigger writes nothing for it
+ * (`planOutcomeDelivery`'s `'late'`), and a question drafted or rewritten from
+ * it records the older bytes, so the presentation check and the accept guard
+ * refuse it while the file holds newer ones. The ruling defers the strict
+ * late-delivery optimisation: such a delivery still costs its calls, made
+ * through the same transports and queue as every other.
  */
 async function buildVisionRunner(
   vision: NonNullable<IngestionWiringDeps['vision']>,
@@ -579,6 +596,7 @@ async function buildVisionRunner(
     sink,
     ...(pageRenderer ? { pageRenderer } : {}),
     ...(vision.onManifestEntry ? { onManifestEntry: vision.onManifestEntry } : {}),
+    deliverRevisionDigest: true,
   });
 }
 
