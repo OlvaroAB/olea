@@ -2,6 +2,7 @@
 
 import type { ExtractedUnit, OutcomeRecord, WorkerTaskTransport } from 'olea-core';
 import { createScopeReadingPersistence } from '../../src/scope-reading/persistence.js';
+import { createVaultSpendLedger } from '../../src/spend/vault-spend-ledger.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 export const STAMP = { promptVersion: 'p1', modelId: 'm1' };
@@ -42,7 +43,10 @@ export function conceptNotes(names: readonly string[], course = COURSE) {
 export function setup(files: Record<string, string> = {}) {
   const vault = memoryVault(files);
   const persistence = createScopeReadingPersistence({ vault, deviceId: 'olea-dev1', now });
-  return { vault, persistence };
+  // `[D-540]` (`ol-egov.141.89.7.76`): the drivers' entry points send nothing without a spend
+  // ledger, so every driver input built here carries one over the same vault.
+  const spend = createVaultSpendLedger({ vault, deviceId: async () => 'olea-dev1' });
+  return { vault, persistence, spend };
 }
 
 export function outcome(id: string, blockIndex: number, path = 'doc-o'): OutcomeRecord {

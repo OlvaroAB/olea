@@ -61,9 +61,12 @@ import type {
   PaperDemand,
   PaperStimulusForm,
   ScopePartDemand,
+  WorkerTaskRequest,
   WorkerTaskTransport,
 } from 'olea-core';
 import { PAPER_DEMANDS } from 'olea-core';
+import { sendWithinAllowance } from '../spend/allowance.js';
+import type { SpendLedger } from '../spend/vault-spend-ledger.js';
 
 /** `TASK_IDS.DEMAND_CLASSIFY` (`olea-contracts`, `f1ed01e`), mirrored so this module loads from plain Node. Pinned by this adapter's spec. */
 export const DEMAND_CLASSIFY_TASK_ID = 'demand.classify.v1';
@@ -165,25 +168,48 @@ export class DemandClassifyReaderUnavailableError extends Error {
 
 export interface WorkerDemandClassifyReaderDeps {
   readonly transport: WorkerTaskTransport;
+  /**
+   * `[D-540]` (`ol-egov.141.89.7.76`): when present, every call takes a hold in the spend ledger
+   * first and carries it as `remainingAllowanceUsd` (`../spend/allowance.ts`); a declined hold sends
+   * nothing and reads as `budget-exhausted`, the drivers' existing over-budget signal. Absent: the
+   * wire is exactly as before (no allowance key). The scope-reading drivers' entry points refuse
+   * to run without one, so in production a demand call is never sent without a hold.
+   */
+  readonly spend?: SpendLedger;
 }
 
 export class WorkerDemandClassifyReader {
   private readonly transport: WorkerTaskTransport;
+  private readonly spend: SpendLedger | undefined;
 
   constructor(deps: WorkerDemandClassifyReaderDeps) {
     this.transport = deps.transport;
+    this.spend = deps.spend;
   }
 
   async read(request: DemandClassifyReadRequest): Promise<DemandClassifyReadResult> {
     citableUnitIndexes(request); // a request whose answer could not be mapped back is refused before a call is spent
+    const wire: WorkerTaskRequest = {
+      contractVersion: DEMAND_CLASSIFY_CONTRACT_VERSION,
+      taskId: DEMAND_CLASSIFY_TASK_ID,
+      payload: toPayload(request),
+    };
     let body: unknown;
     try {
-      body = await this.transport.send({
-        contractVersion: DEMAND_CLASSIFY_CONTRACT_VERSION,
-        taskId: DEMAND_CLASSIFY_TASK_ID,
-        payload: toPayload(request),
-      });
+      if (this.spend === undefined) {
+        body = await this.transport.send(wire);
+      } else {
+        const sent = await sendWithinAllowance(this.spend, this.transport, wire);
+        if (sent.kind === 'declined') {
+          throw new DemandClassifyReaderUnavailableError(
+            'budget-exhausted',
+            `WorkerDemandClassifyReader: not sent, the spend ledger declined it (${sent.reason}).`,
+          );
+        }
+        body = sent.body;
+      }
     } catch (error) {
+      if (error instanceof DemandClassifyReaderUnavailableError) throw error;
       throw new DemandClassifyReaderUnavailableError(
         'offline',
         `WorkerDemandClassifyReader: the transport failed before any response arrived: ${

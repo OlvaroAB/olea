@@ -3055,6 +3055,52 @@ export type {
   UnreadableReason,
 } from './source/unreadable.js';
 export { findUnreadableFiles, reasonForExtractionOutcome } from './source/unreadable.js';
+// `[D-540]` (`ol-egov.141.89.7.76`): the spend ledger's stored format, its 120-day period sum, the
+// admission rule (scope reads pause at 80 percent of USD 12, extraction runs to 100 percent) and
+// each task's declared per-call price ceiling. Pure; the plugin's `spend/` folder holds the vault
+// store and the adapters' allowance helper.
+export {
+  admitSpend,
+  alignmentRefusalMaterial,
+  demandRefusalMaterial,
+  deviceOfSpendLedgerPath,
+  type ParsedSpendLine,
+  parseSpendLedgerLine,
+  SPEND_LEDGER_FOLDER,
+  SPEND_LEDGER_VERSION,
+  type SpendAdmission,
+  type SpendHoldEntry,
+  type SpendLedgerDiagnostics,
+  type SpendLedgerEntry,
+  type SpendLineProblem,
+  type SpendRefusalEntry,
+  type SpendReleaseEntry,
+  type SpendSettleEntry,
+  type SpendSummary,
+  serializeSpendLedgerEntry,
+  spendLedgerPath,
+  spendRefusalKey,
+  summarizeSpendLedger,
+} from './spend/ledger.js';
+export {
+  BILLABLE_CALLS_PER_REQUEST,
+  DECLARED_INPUT_OVERBOUND_TOKENS,
+  holdUsdFor,
+  inputBoundTokens,
+  isSpendTaskId,
+  perCallCeilingUsd,
+  RESERVATION_TOKENS_PER_CHARACTER,
+  SCOPE_READING_PAUSE_FRACTION,
+  SPEND_LIMIT_USD,
+  SPEND_PERIOD_DAYS,
+  SPEND_TASK_IDS,
+  SPEND_TASK_PRICES,
+  type SpendTaskId,
+  type SpendTaskPrice,
+  STALE_HOLD_HOURS,
+  toMicroUsd,
+  WORST_CASE_HOLD_USD,
+} from './spend/prices.js';
 // The two shared stage contracts, Decision and Writing, their shared
 // provenance/failure arm, and one small pure adapter per existing core seam
 // (`ol-egov.141.89.20`, design in `[D-300]`'s review) — landed the same way

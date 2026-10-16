@@ -50,6 +50,7 @@ import {
   alignClosedListDigest,
   alignCoverageForCall,
   alignFrozenConfigurationDigest,
+  alignmentRefusalMaterial,
   alignmentResultsForDocument,
   alignRevisionCoverage,
   assignAlignHandles,
@@ -74,6 +75,7 @@ import {
   type OutcomesAlignReadResult,
   WorkerOutcomesAlignReader,
 } from '../ingestion/outcomes-align-adapter.js';
+import type { SpendLedger } from '../spend/vault-spend-ledger.js';
 import type { DocumentReadingBasis } from './basis.js';
 import { buildClosedList, CLOSED_LIST_MEMBERSHIP, type ClosedListConcept } from './closed-list.js';
 import {
@@ -110,9 +112,16 @@ export interface AlignmentDriverInput {
   /**
    * Held-back batches (`ol-egov.141.89.7.84`): a batch the reader answered unusably
    * {@link REFUSED_PART_LIMIT} times under one batch plan is not sent again. Absent: no limit. The
-   * count is the caller's; `runScopeReadingDrivers` and `resumeScopeReading` default to the session ledger.
+   * count is the caller's; `runScopeReadingDrivers` and `resumeScopeReading` default to the spend
+   * ledger's (`[D-540]`), which survives a restart.
    */
   readonly refusals?: PartRefusalLedger;
+  /**
+   * `[D-540]`: the spend ledger every alignment call takes its hold from. A declined hold reads as
+   * the over-budget signal: this and every later call's pairs stay pending. Absent here, the reader
+   * sends without a hold; the entry points (`./drivers.ts`, `./resume.ts`) never call this without one.
+   */
+  readonly spend?: SpendLedger;
 }
 
 export interface AlignmentDriverResult {
@@ -473,7 +482,10 @@ async function alignCourse(
   }
 
   // Calls, one at a time. The first stamp is the run's; a different one is a failed alignment.
-  const reader = new WorkerOutcomesAlignReader({ transport: input.transport });
+  const reader = new WorkerOutcomesAlignReader({
+    transport: input.transport,
+    ...(input.spend !== undefined ? { spend: input.spend } : {}),
+  });
   const recordById = new Map(records.map((r) => [r.id, r]));
   const conceptByKey = new Map(listed.map((c) => [c.key, c]));
   const anchoredRefs = new Set(records.flatMap((r) => r.wire.passages.map((p) => p.ref)));
@@ -488,8 +500,11 @@ async function alignCourse(
       continue;
     }
     // The key names the course, the batch plan and the batch, so a changed plan starts at zero.
-    const heldKey = `align|${course}|${batchPlan}|${call.batchId}`;
-    if (input.refusals !== undefined && input.refusals.count(heldKey) >= REFUSED_PART_LIMIT) {
+    const heldKey = alignmentRefusalMaterial(course, batchPlan, call.batchId);
+    if (
+      input.refusals !== undefined &&
+      (await input.refusals.count(heldKey)) >= REFUSED_PART_LIMIT
+    ) {
       heldBack++;
       outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
       continue;
@@ -524,7 +539,7 @@ async function alignCourse(
           console.error(
             'Olea: an alignment call answered under a different configuration; its pairs stay pending',
           );
-          input.refusals?.record(heldKey);
+          await input.refusals?.record(heldKey);
           outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
           continue;
         }
@@ -541,7 +556,7 @@ async function alignCourse(
         console.error('Olea: an alignment call was not answered usably (ingestion unaffected)', {
           error: error instanceof OutcomesAlignReaderError ? error.code : undefined,
         });
-        input.refusals?.record(heldKey);
+        await input.refusals?.record(heldKey);
         outcomes.set(call.batchId, { kind: 'failed', reason: 'failed-alignment' });
       }
     }

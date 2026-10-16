@@ -104,6 +104,7 @@ import type {
   PaperStimulus,
   PaperStimulusForm,
   PaperStimulusNotIdentifiedReason,
+  WorkerTaskRequest,
   WorkerTaskTransport,
 } from 'olea-core';
 import {
@@ -111,6 +112,8 @@ import {
   PAPER_STIMULUS_FORMS,
   PAPER_STIMULUS_NOT_IDENTIFIED_REASONS,
 } from 'olea-core';
+import { sendWithinAllowance } from '../spend/allowance.js';
+import type { SpendLedger } from '../spend/vault-spend-ledger.js';
 
 /** `TASK_IDS.OUTCOMES_EXTRACT`-to-be — see this file's module doc. Pinned by this adapter's own spec. */
 export const OUTCOMES_EXTRACT_TASK_ID = 'outcomes.extract.v1';
@@ -245,13 +248,24 @@ export class OutcomesExtractReaderUnavailableError extends Error {
 
 export interface WorkerOutcomesExtractReaderDeps {
   readonly transport: WorkerTaskTransport;
+  /**
+   * `[D-540]` (`ol-egov.141.89.7.76`): when present, every call takes a hold in the spend ledger
+   * first and carries it as `remainingAllowanceUsd` (`../spend/allowance.ts`). Outcome extraction
+   * shares the USD 12 with the scope reads and runs to 100 percent of it; a declined hold sends
+   * nothing and reads as `budget-exhausted`, which the trigger records as owed (`over-budget`).
+   * Absent (every caller today, until the switch-on composition passes one): the wire is exactly as
+   * before, with no allowance key.
+   */
+  readonly spend?: SpendLedger;
 }
 
 export class WorkerOutcomesExtractReader {
   private readonly transport: WorkerTaskTransport;
+  private readonly spend: SpendLedger | undefined;
 
   constructor(deps: WorkerOutcomesExtractReaderDeps) {
     this.transport = deps.transport;
+    this.spend = deps.spend;
   }
 
   async read<TAnchor>(
@@ -265,17 +279,30 @@ export class WorkerOutcomesExtractReader {
       return { outcomes: [], paperStructure: { sections: [] } };
     }
 
+    const wire: WorkerTaskRequest = {
+      contractVersion: OUTCOMES_EXTRACT_CONTRACT_VERSION,
+      taskId: OUTCOMES_EXTRACT_TASK_ID,
+      payload: {
+        sourceChunks: passages.map((passage) => passage.text),
+        documentKind: request.documentKind,
+      },
+    };
     let body: unknown;
     try {
-      body = await this.transport.send({
-        contractVersion: OUTCOMES_EXTRACT_CONTRACT_VERSION,
-        taskId: OUTCOMES_EXTRACT_TASK_ID,
-        payload: {
-          sourceChunks: passages.map((passage) => passage.text),
-          documentKind: request.documentKind,
-        },
-      });
+      if (this.spend === undefined) {
+        body = await this.transport.send(wire);
+      } else {
+        const sent = await sendWithinAllowance(this.spend, this.transport, wire);
+        if (sent.kind === 'declined') {
+          throw new OutcomesExtractReaderUnavailableError(
+            'budget-exhausted',
+            `WorkerOutcomesExtractReader: not sent, the spend ledger declined it (${sent.reason}).`,
+          );
+        }
+        body = sent.body;
+      }
     } catch (error) {
+      if (error instanceof OutcomesExtractReaderUnavailableError) throw error;
       throw new OutcomesExtractReaderUnavailableError(
         'offline',
         `WorkerOutcomesExtractReader: the transport failed before any response arrived: ${
