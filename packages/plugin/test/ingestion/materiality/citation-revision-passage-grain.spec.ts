@@ -787,8 +787,8 @@ describe('segmentation-rule versions (D-446, row 42)', () => {
   });
 });
 
-describe('the legacy grain is untouched', () => {
-  it('an instrument whose citation carries no digest still judges the whole note on any edit, as before', async () => {
+describe('a citation with no passage digest is tracked at whole-note grain', () => {
+  it('an instrument whose citation carries no digest judges the whole note on any edit', async () => {
     const { vault, store } = await fixture({ digest: undefined });
     const judge = judgeSaying(false);
     const t = trigger(store, judge);
