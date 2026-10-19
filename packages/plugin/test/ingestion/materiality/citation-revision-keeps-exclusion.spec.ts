@@ -8,7 +8,13 @@
  * changed-passage section. Synthetic text only (INV-3).
  */
 import type { ListOptions, Unsubscribe, VaultEvent, VaultPath, VaultSource } from 'olea-core';
-import { appendSuccessionRecord, appendSuspendRecord, citationStorePath } from 'olea-core';
+import {
+  appendSuccessionRecord,
+  appendSuspendRecord,
+  citationStorePath,
+  readReviewLogHistory,
+  suspendedInstrumentIds,
+} from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { readPendingPassageChanges } from '../../../src/attainment/passage-changes.js';
 import { ObsidianCitationHashStore } from '../../../src/ingestion/materiality/citation-hash-store.js';
@@ -247,6 +253,57 @@ describe('the rewrite path keeps the exclusion until a successful revalidation (
     expect(t.actions.suspend).toHaveBeenCalledTimes(1);
     expect(t.actions.enqueue).toHaveBeenCalledTimes(1);
     expect((await t.store.loadAll()).get('qa')).toEqual(kept);
+  });
+
+  describe('the suspend failed and the plugin restarted before the retry (ol-egov.141.89.5.94)', () => {
+    it('REGRESSION (fails pre-fix): the next pass suspends the old question once and keeps its exclusion', async () => {
+      const vault = world();
+      const host = new JsonDataHost();
+      const first = setup(vault, host);
+      first.actions.suspend.mockRejectedValueOnce(new Error('suspend write failed'));
+      await first.trigger.tick(vault, first.actions);
+      vault.files.set(NOTE, 'Quartz is a hard mineral, and feldspar is softer.\n');
+      const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+      try {
+        await first.trigger.tick(vault, first.actions);
+      } finally {
+        spy.mockRestore();
+      }
+      // The enqueue landed, the suspend failed: nothing in the log yet.
+      expect(first.actions.enqueue).toHaveBeenCalledTimes(1);
+      expect(suspendedInstrumentIds((await readReviewLogHistory(vault)).entries).has('qa')).toBe(
+        false,
+      );
+
+      // The restart: a new trigger over the same data; the queue still holds the successor.
+      const second = setup(vault, new JsonDataHost(host.json));
+      second.actions.hasSuccessor.mockResolvedValue(true);
+      await second.trigger.tick(vault, second.actions);
+      await second.trigger.tick(vault, second.actions);
+      await second.trigger.tick(vault, second.actions);
+
+      expect(second.actions.suspend).toHaveBeenCalledTimes(1);
+      const entries = (await readReviewLogHistory(vault)).entries;
+      expect(entries.filter((e) => e.kind === 'suspend')).toHaveLength(1);
+      expect(suspendedInstrumentIds(entries).has('qa')).toBe(true);
+      const kept = (await second.store.loadAll()).get('qa');
+      expect(kept?.pendingRevalidation).toBeDefined();
+      expect(kept?.text).toBe('Quartz is a hard mineral.\n');
+    });
+
+    it('a question she unsuspended after the rewrite suspend gets no re-suspend and no second successor, across a restart', async () => {
+      const vault = world();
+      const host = new JsonDataHost();
+      await rewrite(vault, host);
+      await logged(vault, 'unsuspend', '2026-10-05T11:00:00Z');
+      const second = setup(vault, new JsonDataHost(host.json));
+      second.actions.hasSuccessor.mockResolvedValue(true);
+      await second.trigger.tick(vault, second.actions);
+      await second.trigger.tick(vault, second.actions);
+      expect(second.actions.suspend).not.toHaveBeenCalled();
+      expect(second.actions.enqueue).not.toHaveBeenCalled();
+      expect((await second.store.loadAll()).get('qa')?.pendingRevalidation).toBeDefined();
+    });
   });
 
   describe('she unsuspends an already-rewritten question ([D-536], ruled 2026-10-06)', () => {
