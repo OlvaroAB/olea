@@ -131,14 +131,41 @@
  * `ol-egov.141.89.3.18`'s, not this module's.
  *
  * Three things stay one identity, each because something other than the
- * wording joins it: a concept **bound to her note** (the note is the
- * identity, and the key store matches it regardless of course); courses
- * joined by **one citing note filed under both** (her own cross-listing, not a
- * coincidence of wording, so a proposal would show her the same note twice);
- * and **citations from notes in no course**, which belong to no course's
- * material and stay with every identity of the wording (with its only
- * identity, exactly as before, when there is one), forming their own identity
- * only when no course cites the wording at all.
+ * wording joins it: a concept **bound to her note** (the note is the identity,
+ * and the key store matches it regardless of course; the next section limits
+ * which courses bind to it); courses joined by **one citing note
+ * filed under both** (her own cross-listing, not a coincidence of wording, so a
+ * proposal would show her the same note twice); and **citations from notes in
+ * no course**, which belong to no course's material and stay with every
+ * identity of the wording (with its only identity, exactly as before, when
+ * there is one), forming their own identity only when no course cites the
+ * wording at all.
+ *
+ * **A home-note topic binds only within its own course's reading set
+ * (`ol-egov.141.89.3.53`, `[D-544]`, `[D-402]`).** An accepted draft for course
+ * C lands in C's home note, whose `topic:` names the identity it was drafted
+ * for (the plugin's `generation/home-note.ts`). When that identity is the
+ * course-scoped one `./course-scoped-identity.ts` mints because only course
+ * D's concept note carried the wording, binding the home note's topic to D's
+ * note by title would join C back into D's identity by the wording alone,
+ * which `[D-402]` rules out. So a course whose only citations of a wording are
+ * Olea's own home notes (`isHomeNoteDocument`, the `[D-491]` marker) binds to
+ * a reachable note only when that course's own reading set holds it (F1.3,
+ * `[D-248]`: the note sits in the course's folders or documents, or one of its
+ * course-folder notes links it — `readingSetHolds`, the set
+ * `../retrieval/course-reading-set.ts` scopes drafting to), never because
+ * another course's material links it. Such a course keeps an identity of its
+ * own, exactly as if the note did not exist, and if that identity mints, its
+ * mint names the note-bound identity so she is proposed the same-as link
+ * (`keysFor`); a confirmed same-as link stays the only join. A home note's
+ * topic never decides a binding on its own: where her own material in C also
+ * cites the wording, C's binding is what that material gives it, and the home
+ * note follows, so one course never holds two identities of one wording.
+ *
+ * Her own plain-string `topic:` in a course whose reading set does not hold the
+ * note still binds by today's rule, through whichever course reaches it. That
+ * case meets `[D-402]` the same way and is left as an open question on the
+ * bead rather than changed here.
  *
  * **Definition capture at bind time (`[DF-13]`).** Knowledge model §3 says a
  * bound concept note is canonical because it "adopts her name, her
@@ -160,6 +187,7 @@ import { parseDocument } from '../block/parse.js';
 import type { Provenance } from '../extract/types.js';
 import { parseFrontmatter } from '../frontmatter/parse.js';
 import { extractWikilinks, readList, readScalar, wikilinkTarget } from '../frontmatter/read.js';
+import { isHomeNoteDocument } from '../keyword-index/evidence-scope.js';
 import { OLEA_UID_KEY } from '../uid/stamp.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { provisionalConceptKey } from './concept-key.js';
@@ -202,6 +230,12 @@ interface IdentityGroup {
   readonly courses: readonly string[];
   /** Its introducing notes, sorted: its own courses' citations plus any course-less ones. */
   readonly sourcePaths: readonly VaultPath[];
+  /**
+   * Whether the identity binds to the wording's concept note: only when one of its own courses
+   * may bind to it, or when it has no course at all (`ol-egov.141.89.3.53`, module doc "A
+   * home-note topic binds only within its own course's reading set").
+   */
+  readonly bound: boolean;
   /** A stamped subtree pass only: the vault-wide identity's key this group takes (`[D-357]`). */
   readonly vaultWideKey?: string;
 }
@@ -256,9 +290,14 @@ function joinedCourseGroups(
  * How one wording's citations become concept identities (`[D-402]`, module doc "One wording,
  * two courses").
  *
- * - **Bound to her note** (`bound`): one identity, every course unioned. The identity is the
- *   note she wrote, which the key store already matches regardless of course; the wording is
- *   not what joins it.
+ * - **Bound to her note** (`bindsIn` given: the wording's title matches exactly one reachable
+ *   note, and `bindsIn` says which courses may bind to it): one identity for every group of
+ *   joined courses with a course that may, unioned. The identity is the note she wrote, which
+ *   the key store matches regardless of course; the wording is not what joins it. A group with
+ *   no such course never binds (`ol-egov.141.89.3.53`, module doc "A home-note topic binds only
+ *   within its own course's reading set"): it is an identity of its own, exactly as if the note
+ *   did not exist. With no course citing the wording at all, the course-less citations bind, as
+ *   before.
  * - **Otherwise, one identity per group of joined courses** (`joinedCourseGroups`). Identical
  *   wording in two courses is two identities, one per course, whose course lists never
  *   overlap. Citations from notes in no course belong to no course's material in particular,
@@ -268,11 +307,11 @@ function joinedCourseGroups(
  * - **A stamped subtree pass** (`vaultWide` given) groups by the vault-wide identities
  *   instead, so it never keys a concept differently from the whole-vault readers (`[D-357]`):
  *   a wording with one vault-wide key stays one group; a wording split vault-wide groups its
- *   courses by the key each course has there.
+ *   courses by the key each course has there. Whether a group binds is still this pass's own.
  */
 function identityGroups(
   acc: NameAccumulator,
-  bound: boolean,
+  bindsIn: ((course: string) => boolean) | undefined,
   vaultWide: VaultWideIdentities | undefined,
 ): IdentityGroup[] {
   const courseSlots = [...acc.bySlot.keys()].filter((slot) => slot !== NO_COURSE).sort(byCodeUnit);
@@ -282,14 +321,23 @@ function identityGroups(
     for (const course of courses) for (const path of acc.bySlot.get(course) ?? []) paths.add(path);
     return [...paths].sort(byCodeUnit);
   };
+  /** A group binds when one of its courses may bind to the note, or it has no course. */
+  const binds = (courses: readonly string[]): boolean =>
+    bindsIn !== undefined && (courses.length === 0 || courses.some(bindsIn));
   const group = (courses: readonly string[], vaultWideKey?: string): IdentityGroup => ({
     courses,
     sourcePaths: pathsOf(courses),
+    bound: binds(courses),
     ...(vaultWideKey !== undefined ? { vaultWideKey } : {}),
   });
   const localGroups = (courses: readonly string[]): IdentityGroup[] => {
-    if (bound || courses.length <= 1) return [group(courses)];
-    return joinedCourseGroups(courses, acc.joins).map((courses) => group(courses));
+    if (courses.length <= 1) return [group(courses)];
+    const joined = joinedCourseGroups(courses, acc.joins);
+    if (bindsIn === undefined) return joined.map((courses) => group(courses));
+    // The note joins every group that reaches it into one identity; the others stay apart.
+    const reaching = joined.filter(binds).flat().sort(byCodeUnit);
+    const apart = joined.filter((courses) => !binds(courses)).map((courses) => group(courses));
+    return reaching.length > 0 ? [group(reaching), ...apart] : apart;
   };
 
   if (vaultWide === undefined || vaultWide.keys.length === 0) return localGroups(courseSlots);
@@ -409,6 +457,11 @@ export interface LinkClosure {
   readonly byTitle: ReadonlyMap<string, VaultPath[]>;
   /** Course → the link targets whose resolution actually entered that course's closure. */
   readonly titlesByCourse: ReadonlyMap<string, ReadonlySet<string>>;
+  /**
+   * Course → the closure documents it reached: the closure half of that course's own reading
+   * set, which a topic of that course binds within (`ol-egov.141.89.3.53`).
+   */
+  readonly pathsByCourse: ReadonlyMap<string, ReadonlySet<VaultPath>>;
   /** Course → how many closure documents it reached. Equal to the cap exactly when it degraded. */
   readonly countsByCourse: ReadonlyMap<string, number>;
 }
@@ -520,6 +573,7 @@ export async function resolveLinkClosure(
     paths: [...reached].sort(byCodeUnit),
     byTitle,
     titlesByCourse,
+    pathsByCourse,
     countsByCourse,
   };
 }
@@ -619,6 +673,40 @@ export async function extractConcepts(
   // path is an ambiguity to record, never a race to resolve — `resolveTitle`.
   const reachableByTitle = closure.byTitle;
 
+  /**
+   * `ol-egov.141.89.3.53`: which courses' own reading sets hold `path` — F1.3's (`[D-248]`) course
+   * folders and course documents, by the attribution `./course.js`'s `notePathCourses` gives the
+   * note, plus each course's own one-hop closure. The same set `../retrieval/course-reading-set.ts`
+   * scopes drafting to.
+   */
+  async function readingSetHolds(path: VaultPath): Promise<(course: string) => boolean> {
+    const doc = parseDocument(await contentFor(path));
+    const first = doc.blocks[0];
+    const explicit =
+      first?.kind === 'frontmatter' ? readList(parseFrontmatter(first.inner), 'course').items : [];
+    const attributed = new Set(notePathCourses(path, explicit, coursesFolder));
+    return (course) =>
+      attributed.has(course) || closure.pathsByCourse.get(course)?.has(path) === true;
+  }
+
+  // `ol-egov.141.89.3.53`: the walked notes that are Olea's own home notes (`[D-491]`'s marker).
+  const homeNotes = new Set<VaultPath>();
+
+  /**
+   * Which courses citing a wording may bind to its concept note `path` (module doc, "A home-note
+   * topic binds only within its own course's reading set"): a course whose own reading set holds
+   * the note, or one whose citations include her own material, which keeps today's binding. A
+   * course cited only by Olea's home notes is held to its own reading set.
+   */
+  async function bindingCourses(
+    acc: NameAccumulator,
+    path: VaultPath,
+  ): Promise<(course: string) => boolean> {
+    const holds = await readingSetHolds(path);
+    return (course) =>
+      holds(course) || [...(acc.bySlot.get(course) ?? [])].some((cited) => !homeNotes.has(cited));
+  }
+
   // `[D-402]`: every citation is kept per wording AND course — never pooled by wording alone —
   // so identical wording in two courses can become two identities (`identityGroups`).
   const byName = new Map<string, NameAccumulator>();
@@ -647,6 +735,7 @@ export async function extractConcepts(
     // course-folder note whose body wikilinks a concept, so this no longer
     // `continue`s past it; see the reference-based pass below.
     const fm = first?.kind === 'frontmatter' ? parseFrontmatter(first.inner) : undefined;
+    if (isHomeNoteDocument(doc)) homeNotes.add(path);
 
     // Her live convention writes `topic` values as wikilinks pointing at the
     // Zettelkasten note — `topic: [[Quartz cleavage]]` — so a `topic` item
@@ -759,6 +848,12 @@ export async function extractConcepts(
     readonly vaultWideKey?: string;
     /** Set when the wording has several identities in this pass (`[D-402]`); see `keysFor`. */
     readonly courseScoped?: boolean;
+    /**
+     * Another identity of the wording this one is recorded against if it mints: the note-bound
+     * identity it stayed apart from (`ol-egov.141.89.3.53`; `./key-store.js`'s
+     * `ConceptKeyRequest.collisionsWith`).
+     */
+    readonly collisionsWith?: readonly string[];
   }
 
   /**
@@ -788,6 +883,16 @@ export async function extractConcepts(
    * `resolveConceptKeys` together, which lists the store once and resolves them in order inside
    * the store's queue — so a second pass running at the same time waits, then finds what this one
    * minted, instead of minting its own key for the same brand-new concept.
+   *
+   * **A course identity kept apart from a note-bound one (`ol-egov.141.89.3.53`).** When a
+   * wording's concept note binds some courses but a course whose reading set does not hold it
+   * stays apart (`identityGroups`), the note-bound identity is a note anchor, which the store's
+   * at-mint normalisation index never compares against a topic. So the apart identity names the
+   * bound identity's key in `collisionsWith`, and if it mints, the ingestion tick proposes the
+   * same-as link she confirms or declines, as for any wording split by course. Its key is not
+   * known until the bound identity resolves, so such candidates go to a second call of this
+   * function, one more store turn, after the first; a concurrent pass's turns queue behind each
+   * of this pass's in order, so it still finds whatever this one minted.
    *
    * Gated on `options.stampConceptKeys` (see `ExtractConceptsOptions`'s doc) — off by default so
    * a call against a shared, tracked fixture vault never writes into it; falls back to the
@@ -827,7 +932,13 @@ export async function extractConcepts(
               aliases: [],
               introducingPaths: [...candidate.sourcePaths].sort(),
             };
-      requests.push({ tier: candidate.tier, anchor });
+      requests.push({
+        tier: candidate.tier,
+        anchor,
+        ...(candidate.collisionsWith !== undefined
+          ? { collisionsWith: candidate.collisionsWith }
+          : {}),
+      });
     }
     const resolved = await resolveConceptKeys(vault, requests, { runTopicNames });
     unresolved.forEach(({ i }, j) => {
@@ -875,36 +986,76 @@ export async function extractConcepts(
     vaultWideByName = index;
   }
 
-  const drafts = (
-    await Promise.all(
-      [...byName].map(async ([name, acc]) => {
-        const { bound, ambiguous } = resolveTitle(reachableByTitle, name);
-        const definition = bound !== undefined ? await definitionFor(bound, name) : undefined;
-        const tier: ConceptTier = bound !== undefined ? 1 : 2;
-        const groups = identityGroups(acc, bound !== undefined, vaultWideByName?.get(name));
-        return groups.map((group) => ({
+  const draftsByName = await Promise.all(
+    [...byName].map(async ([name, acc]) => {
+      const { bound: titleMatch, ambiguous } = resolveTitle(reachableByTitle, name);
+      // `ol-egov.141.89.3.53`: the title match binds only the groups with a course that may bind
+      // to it (`bindingCourses`, `identityGroups`); a group that stays apart is tier 2, unbound.
+      const bindsIn = titleMatch !== undefined ? await bindingCourses(acc, titleMatch) : undefined;
+      const groups = identityGroups(acc, bindsIn, vaultWideByName?.get(name));
+      const definition =
+        titleMatch !== undefined && groups.some((group) => group.bound)
+          ? await definitionFor(titleMatch, name)
+          : undefined;
+      return groups.map((group) => {
+        const tier: ConceptTier = group.bound ? 1 : 2;
+        return {
           name,
           group,
-          courseScoped: groups.length > 1,
-          bound,
+          // A note-bound identity keeps the stand-in it always had; only the others need
+          // qualifying by course to stay distinct.
+          courseScoped: groups.length > 1 && !group.bound,
+          bound: group.bound ? titleMatch : undefined,
           ambiguous,
-          definition,
+          definition: group.bound ? definition : undefined,
           tier,
-        }));
-      }),
-    )
-  ).flat();
-  const draftKeys = await keysFor(
-    drafts.map((draft) => ({
-      tier: draft.tier,
-      name: draft.name,
-      boundNotePath: draft.bound,
-      courses: draft.group.courses,
-      sourcePaths: draft.group.sourcePaths,
-      ...(draft.group.vaultWideKey !== undefined ? { vaultWideKey: draft.group.vaultWideKey } : {}),
-      ...(draft.courseScoped ? { courseScoped: true } : {}),
-    })),
+        };
+      });
+    }),
   );
+  const drafts = draftsByName.flat();
+  // An identity kept apart from a note-bound identity of its wording names that identity's key
+  // if it mints (`keysFor`), so it is resolved after it: draft index -> its bound sibling's index.
+  const boundSiblingOf = new Map<number, number>();
+  let offset = 0;
+  for (const wordingDrafts of draftsByName) {
+    const boundAt = wordingDrafts.findIndex((draft) => draft.bound !== undefined);
+    wordingDrafts.forEach((draft, i) => {
+      if (boundAt !== -1 && draft.bound === undefined && draft.group.vaultWideKey === undefined) {
+        boundSiblingOf.set(offset + i, offset + boundAt);
+      }
+    });
+    offset += wordingDrafts.length;
+  }
+  const candidateOf = (draft: (typeof drafts)[number]): KeyCandidate => ({
+    tier: draft.tier,
+    name: draft.name,
+    boundNotePath: draft.bound,
+    courses: draft.group.courses,
+    sourcePaths: draft.group.sourcePaths,
+    ...(draft.group.vaultWideKey !== undefined ? { vaultWideKey: draft.group.vaultWideKey } : {}),
+    ...(draft.courseScoped ? { courseScoped: true } : {}),
+  });
+  const draftKeys: (string | undefined)[] = drafts.map(() => undefined);
+  const firstTurn = drafts.flatMap((_, i) => (boundSiblingOf.has(i) ? [] : [i]));
+  const firstKeys = await keysFor(
+    firstTurn.map((i) => candidateOf(drafts[i] as (typeof drafts)[number])),
+  );
+  firstTurn.forEach((i, j) => {
+    draftKeys[i] = firstKeys[j];
+  });
+  const secondTurn = [...boundSiblingOf.keys()];
+  if (secondTurn.length > 0) {
+    const secondKeys = await keysFor(
+      secondTurn.map((i) => ({
+        ...candidateOf(drafts[i] as (typeof drafts)[number]),
+        collisionsWith: [draftKeys[boundSiblingOf.get(i) as number] as string],
+      })),
+    );
+    secondTurn.forEach((i, j) => {
+      draftKeys[i] = secondKeys[j];
+    });
+  }
   const records: ConceptRecord[] = drafts.map(
     ({ name, group, bound, ambiguous, definition, tier }, i) => ({
       key: draftKeys[i] as string,
