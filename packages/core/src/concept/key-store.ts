@@ -203,6 +203,14 @@ export interface ConceptKeyRecord {
    * rename-signature match — is unchanged: nothing here is minted, retired or merged because of a
    * collision; the acting happens one layer up.
    *
+   * **`[D-544]` adds one more source of entries** (`ol-egov.141.89.3.52`): a course-scoped
+   * identity, minted because a course's own assessment documents name a wording only another
+   * course's identity carried, records that identity's key here too (`ConceptKeyRequest
+   * .collisionsWith`), whether or not it is topic-anchored. That identity is usually bound to a note,
+   * so the normalisation index above never sees it; recording it here is what lets the existing
+   * proposal step propose the same-as link `[D-544]` rules, through the same machinery and with the
+   * same "never confirmed automatically" guarantee.
+   *
    * Absent when no collision was found at mint — the common case, since ONT-R1's own measured
    * fact is that the identity rule bites on roughly one concept in nine. **Never recomputed
    * afterwards**: a record minted later, whose wording happens to normalise the same as THIS
@@ -717,6 +725,17 @@ function defaultNow(): string {
 export interface ConceptKeyRequest {
   readonly tier: ConceptTier;
   readonly anchor: ConceptKeyAnchor;
+  /**
+   * `[D-544]` (`ol-egov.141.89.3.52`): other identities this candidate shares its wording with
+   * that the normalisation index cannot see, recorded on the record alongside the index's own
+   * collisions **only if this request mints**, so the ingestion tick's
+   * `proposeSameAsFromMintCollisions` (`./same-as.js`) proposes a same-as link to each and confirms
+   * none. The one caller is `./course-scoped-identity.ts`: a course-scoped identity minted for a
+   * wording only another course held, where that course's identity is bound to a note and so never
+   * enters the topic-only normalisation index. A lookup that finds an existing record writes
+   * nothing here, the same "captured once, at mint" rule `normalizationCollisions` follows.
+   */
+  readonly collisionsWith?: readonly string[];
 }
 
 /**
@@ -800,11 +819,14 @@ async function resolveOne(
   // ONT-R1's "at mint" normalisation index (`ol-2zfj.86`, C7.11): only meaningful for a topic
   // anchor (see `findNormalizationCollisions`'s doc for why a note anchor is excluded). Computed
   // against the listing this pass already holds — no second vault read — over this candidate's
-  // own wording (`name` plus any `aliases` it already carries).
-  const normalizationCollisions =
-    anchor.kind === 'topic'
+  // own wording (`name` plus any `aliases` it already carries). `[D-544]`: a request's own
+  // `collisionsWith` is appended, de-duplicated, never including the new key itself.
+  const normalizationCollisions = dedupeAliases([
+    ...(anchor.kind === 'topic'
       ? findNormalizationCollisions(state.entries, [anchor.name, ...anchor.aliases])
-      : [];
+      : []),
+    ...(request.collisionsWith ?? []).filter((other) => other !== key),
+  ]);
   const record: ConceptKeyRecord = {
     key,
     tier,

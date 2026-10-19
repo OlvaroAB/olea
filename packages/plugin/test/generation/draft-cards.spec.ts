@@ -84,7 +84,9 @@ function index(
     version: 1,
     documents: docs.map((doc) => ({
       path: doc.path,
-      courses: [],
+      // `[D-544]`: drafting retrieves within the request's own course only, so every fixture
+      // document here is the requested course's material (`REQUEST.courseCode`).
+      courses: ['COGS214'],
       contentHash: 'unused',
       blocks: doc.blocks.map((text, blockIndex) => ({
         blockIndex,

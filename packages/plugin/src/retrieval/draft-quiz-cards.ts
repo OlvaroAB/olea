@@ -135,6 +135,11 @@
  * the `'drafted'` result's `response` field itself. Returning the raw response transiently
  * (never persisted here, per D-005) is enough to prove the wiring; shaping it
  * into an accept-ready `McqFields` is `ol-p3t07a`'s job.
+ *
+ * **Grounded in the request's own course only (`[D-544]`, `ol-egov.141.89.3.52`).** Every call
+ * retrieves within `request.courseCode`'s reading set (`./drafting-scope.ts`), so another course's
+ * notes never satisfy this course's grounding, and a course whose own material is thin gets the
+ * stated refusal rather than a draft grounded elsewhere.
  */
 
 import {
@@ -166,6 +171,7 @@ import {
   type SourceOriginFrontmatterHost,
   sourceChunkOriginsFragment,
 } from '../source-origin.js';
+import { draftingScope } from './drafting-scope.js';
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
 
 /**
@@ -421,6 +427,8 @@ export async function draftQuizCardsForConcept(
       request.intendedDemand === undefined
         ? undefined
         : demandToJudgeOperation(request.intendedDemand),
+    // `[D-544]`: the course's own reading set only, on every call — see `./drafting-scope.ts`.
+    scope: draftingScope(deps.retrieve.keywordIndex, request.courseCode, deps.frontmatterHost),
   };
   const grounding = await retrieve(deps.retrieve, request.conceptName, retrieveOptions);
 

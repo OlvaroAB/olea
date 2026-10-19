@@ -7,8 +7,11 @@
 import { resolveAssessments } from '../assessment/resolve.js';
 import { readDeclaredScope } from '../assessment/scope.js';
 import type { AssessmentRecord } from '../assessment/types.js';
+import { resolveCourseScopedIdentities } from '../concept/course-scoped-identity.js';
+import { conceptRecordSize } from '../concept/size.js';
 import type { ConceptRecord } from '../concept/types.js';
 import { extractFromVault } from '../extract/registry.js';
+import type { Provenance } from '../extract/types.js';
 import { segmentPastPaper } from '../source/segment-past-paper.js';
 import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
 import type { Source } from '../source/types.js';
@@ -262,36 +265,173 @@ function findMentionedConceptNames(
 type ConceptKeyResolver = (course: string, conceptName: string) => string;
 
 /**
+ * Marks an edge key that is a course-scoped identity still to be resolved (`[D-544]`) — see
+ * {@link conceptKeyResolver}. Never leaves this module: every one is replaced before the edges are
+ * returned. The NUL bytes keep it from ever equalling a real key or wording.
+ */
+const COURSE_SCOPED_PENDING = '\u0000course-scoped\u0000';
+
+function pendingCourseScopedKey(course: string, conceptName: string): string {
+  return `${COURSE_SCOPED_PENDING}${course}\u0000${conceptName}`;
+}
+
+function parsePendingCourseScopedKey(
+  key: string,
+): { readonly course: string; readonly conceptName: string } | undefined {
+  if (!key.startsWith(COURSE_SCOPED_PENDING)) return undefined;
+  const rest = key.slice(COURSE_SCOPED_PENDING.length);
+  const split = rest.indexOf('\u0000');
+  return { course: rest.slice(0, split), conceptName: rest.slice(split + 1) };
+}
+
+/**
  * The `ConceptAssessmentEdge.conceptKey` an edge of `course` takes for a matched
- * `conceptName` (`ol-63e1`), resolved for the edge's own course first (`[D-402]`).
+ * `conceptName` (`ol-63e1`), resolved for the edge's own course first (`[D-402]`), and never to
+ * another course's identity (`[D-544]`). In order:
  *
- * **Why course first.** `[D-402]` mints one identity per course for a wording two courses
- * name, and its binding condition 2 keeps each course's assessment demand on its own side:
- * "neither extraction nor a confirmed link pools one course's assessment material or demand
- * reading into the other course's." A name-only map holds one key per wording, the last record
- * listed, so an edge of course X could take course Y's identity for a split wording while X's own
- * identity got no edge at all; which one won depended on extraction order. Here an edge takes the
- * identity whose `courses` include its course whenever one exists.
- *
- * **Everything else is unchanged.** A wording with no identity in the edge's course falls back
- * to the wording's identity elsewhere (the last record listed, exactly as before), and a wording
- * with no record at all falls back to the name itself (`./types.js`). Whether a course's
- * assessment term should take another course's identity at all when the course has none of its
- * own is a separate question no ruling answers yet; this function keeps today's answer to it.
- * Within one course a wording has at most one identity (`../concept/extract.ts`'s
- * `identityGroups`); the first listed wins if that ever fails.
+ *  1. **The course's own identity of the wording**, spelled exactly. `[D-402]` mints one identity
+ *     per course for a wording two courses name, and its binding condition 2 keeps each course's
+ *     assessment demand on its own side, so an edge takes the identity whose `courses` include its
+ *     course whenever one exists. Within one course a wording has at most one identity
+ *     (`../concept/extract.ts`'s `identityGroups`); the first listed wins if that ever fails.
+ *  2. **The course's own identity in another letter case** (`[D-544]`). The vocabulary match
+ *     returns the Zettelkasten title's casing (R2), while her `topic:` may differ only in case
+ *     (`oracle/compose.ts`'s `ol-5y40` fallback). Matched on course and lower-cased wording, never
+ *     wording alone, so another course's identity is never reached this way.
+ *  3. **An identity of the wording with no course at all** keeps being taken, as before: it is in
+ *     no course, so taking it crosses no course boundary.
+ *  4. **A wording only other courses' identities carry: a course-scoped identity of this course**
+ *     (`[D-544]`, `../concept/course-scoped-identity.ts`). Before the ruling the edge took the
+ *     other course's identity (the last record listed), which ranked that course's concept here,
+ *     served its instruments through this course's rows, and left this course nothing to draft. The
+ *     resolver returns a pending marker; {@link buildConceptAssessmentEdges} resolves every marker
+ *     in one batch once all edges and their citing documents are known.
+ *  5. **A wording with no record at all** keeps the wording itself as its key (`./types.js`),
+ *     exactly as before.
  */
 function conceptKeyResolver(concepts: readonly ConceptRecord[]): ConceptKeyResolver {
-  const byName = new Map(concepts.map((concept) => [concept.name, concept.key]));
   const byCourseAndName = new Map<string, string>();
+  const byCourseAndFolded = new Map<string, string>();
+  const courseLessByName = new Map<string, string>();
+  const coursedNames = new Set<string>();
   for (const concept of concepts) {
+    if (concept.courses.length === 0) {
+      if (!courseLessByName.has(concept.name)) courseLessByName.set(concept.name, concept.key);
+      continue;
+    }
+    coursedNames.add(concept.name);
     for (const course of concept.courses) {
       const slot = `${course}\u0000${concept.name}`;
       if (!byCourseAndName.has(slot)) byCourseAndName.set(slot, concept.key);
+      const folded = `${course}\u0000${concept.name.toLowerCase()}`;
+      if (!byCourseAndFolded.has(folded)) byCourseAndFolded.set(folded, concept.key);
     }
   }
   return (course, conceptName) =>
-    byCourseAndName.get(`${course}\u0000${conceptName}`) ?? byName.get(conceptName) ?? conceptName;
+    byCourseAndName.get(`${course}\u0000${conceptName}`) ??
+    byCourseAndFolded.get(`${course}\u0000${conceptName.toLowerCase()}`) ??
+    courseLessByName.get(conceptName) ??
+    (coursedNames.has(conceptName) ? pendingCourseScopedKey(course, conceptName) : conceptName);
+}
+
+/** Every key of another course's identity carrying `conceptName` exactly, in listing order. */
+function otherCourseKeys(
+  concepts: readonly ConceptRecord[],
+  course: string,
+  conceptName: string,
+): readonly string[] {
+  const keys: string[] = [];
+  for (const concept of concepts) {
+    if (concept.name !== conceptName || concept.courses.length === 0) continue;
+    if (concept.courses.includes(course) || keys.includes(concept.key)) continue;
+    keys.push(concept.key);
+  }
+  return keys;
+}
+
+/** Every document an edge cites, with the provenance it cites it at, in the edge's own order. */
+function edgeCitedPassages(edge: ConceptAssessmentEdge): readonly Provenance[] {
+  return [
+    ...edge.citations.map((citation) => citation.provenance),
+    ...(edge.objectivesCitations ?? []).map((citation) => citation.provenance),
+    ...(edge.briefCitations ?? []).map((citation) => citation.provenance),
+  ];
+}
+
+/**
+ * `[D-544]`: replaces every pending course-scoped key in `edges` with the key of that course's own
+ * identity of the wording, resolved in one batch (`../concept/course-scoped-identity.ts`), and
+ * returns those identities as tier-3 `ConceptRecord`s: the course, the wording, the course's own
+ * citing documents as `sourcePaths`, and the first passage cited (past paper, then objectives, then
+ * a declared scope, as the edges list them) as `anchor`, so a registry that lists the identity can
+ * show where her course's documents name it.
+ */
+async function resolvePendingCourseScopedKeys(
+  vault: VaultSource,
+  edges: readonly ConceptAssessmentEdge[],
+  options: BuildConceptAssessmentEdgesOptions,
+): Promise<{
+  readonly edges: ConceptAssessmentEdge[];
+  readonly courseScopedConcepts: readonly ConceptRecord[];
+}> {
+  const pending = new Map<
+    string,
+    { course: string; conceptName: string; paths: Set<VaultPath>; passages: Provenance[] }
+  >();
+  for (const edge of edges) {
+    const parsed = parsePendingCourseScopedKey(edge.conceptKey);
+    if (parsed === undefined) continue;
+    let entry = pending.get(edge.conceptKey);
+    if (entry === undefined) {
+      entry = { ...parsed, paths: new Set(), passages: [] };
+      pending.set(edge.conceptKey, entry);
+    }
+    for (const passage of edgeCitedPassages(edge)) {
+      entry.paths.add(passage.sourcePath);
+      entry.passages.push(passage);
+    }
+  }
+  if (pending.size === 0) return { edges: [...edges], courseScopedConcepts: [] };
+
+  const entries = [...pending.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  const keys = await resolveCourseScopedIdentities(
+    vault,
+    entries.map(([, entry]) => ({
+      course: entry.course,
+      name: entry.conceptName,
+      introducingPaths: [...entry.paths],
+      otherKeys: otherCourseKeys(options.concepts, entry.course, entry.conceptName),
+    })),
+    {
+      ...(options.stampConceptKeys !== undefined
+        ? { stampConceptKeys: options.stampConceptKeys }
+        : {}),
+    },
+  );
+  const resolved = new Map<string, string>();
+  const courseScopedConcepts: ConceptRecord[] = [];
+  entries.forEach(([pendingKey, entry], i) => {
+    const key = keys[i] as string;
+    resolved.set(pendingKey, key);
+    const sourcePaths = [...entry.paths].sort();
+    const anchor = entry.passages[0];
+    courseScopedConcepts.push({
+      key,
+      name: entry.conceptName,
+      tier: 3,
+      courses: [entry.course],
+      sourcePaths,
+      size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
+      ...(anchor !== undefined ? { anchor } : {}),
+    });
+  });
+  return {
+    edges: edges.map((edge) => {
+      const key = resolved.get(edge.conceptKey);
+      return key === undefined ? edge : { ...edge, conceptKey: key };
+    }),
+    courseScopedConcepts,
+  };
 }
 
 /**
@@ -491,6 +631,12 @@ function sourcePathsByCourseForRole(
  * setup (no configured Base) produce real edges rather than zero, with no
  * change to a readable Base's own output (`resolveAssessments` returns that
  * report unchanged but for the added `source: 'base'` field).
+ *
+ * **The one write it can make (`[D-544]`).** With `options.stampConceptKeys`, a
+ * course-scoped identity is resolved through the persisted key store
+ * (`conceptKeyResolver`, step 4): looked up, and minted only the first time,
+ * exactly as extraction stamps every other identity. Nothing else is written,
+ * and without the option nothing at all is.
  */
 export async function buildConceptAssessmentEdges(
   vault: VaultSource,
@@ -519,7 +665,8 @@ export async function buildConceptAssessmentEdges(
   // `ol-63e1`: the opaque join key for each vocabulary/concept name matched
   // against tier-3 material — see `./types.js`'s `ConceptAssessmentEdge.conceptKey`
   // doc for why a missing entry falls back to the name rather than throwing.
-  // `[D-402]`: resolved for the edge's own course first — see `conceptKeyResolver`.
+  // `[D-402]`: resolved for the edge's own course first, and `[D-544]`: never to another
+  // course's identity — see `conceptKeyResolver`.
   const conceptKeyFor = conceptKeyResolver(options.concepts);
 
   const questionIndex = await buildQuestionIndex(vault, tier3.sourcesReport.sources);
@@ -696,12 +843,17 @@ export async function buildConceptAssessmentEdges(
     edges.push(...briefEdges);
   }
 
+  // `[D-544]`: a wording only another course's identity carried keys to this course's own
+  // course-scoped identity, resolved once every edge and its citing documents are known.
+  const resolved = await resolvePendingCourseScopedKeys(vault, edges, options);
+
   return {
-    edges,
+    edges: resolved.edges,
     assessmentsRead,
     tier3,
     assessmentsWithoutCourse,
     assessmentsWithNoEvidence,
     basisSources,
+    courseScopedConcepts: resolved.courseScopedConcepts,
   };
 }

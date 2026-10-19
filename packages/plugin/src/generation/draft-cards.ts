@@ -38,6 +38,9 @@
  * (added by this bead, in this same directory) are what a future
  * `pipeline.ts` integration would call to shape this file's raw `response`
  * into a `DraftRecord.card`.
+ *
+ * **Grounded in the request's own course only (`[D-544]`, `ol-egov.141.89.3.52`)**, exactly as
+ * `draftQuizCardsForConcept` is: see `../retrieval/drafting-scope.ts`.
  */
 
 import {
@@ -65,6 +68,7 @@ import {
   retrieve,
 } from 'olea-core';
 import type { GenerationPurpose, RegisterHint } from '../retrieval/draft-quiz-cards.js';
+import { draftingScope } from '../retrieval/drafting-scope.js';
 import { WorkerGroundingJudge } from '../retrieval/workerGroundingJudge.js';
 import {
   type SourceChunkOrigins,
@@ -198,6 +202,8 @@ export async function draftCardsForConcept(
       request.intendedDemand === undefined
         ? undefined
         : demandToJudgeOperation(request.intendedDemand),
+    // `[D-544]`: the course's own reading set only, on every call.
+    scope: draftingScope(deps.retrieve.keywordIndex, request.courseCode, deps.frontmatterHost),
   };
   const grounding = await retrieve(deps.retrieve, request.conceptName, retrieveOptions);
 

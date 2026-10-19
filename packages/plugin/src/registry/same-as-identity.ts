@@ -30,6 +30,13 @@
  * `DEFAULT_MAX_PASSAGES_PER_READ` documents for its own budget, chosen only to keep one row
  * legible, never a signal any decision reads.
  *
+ * **A tier-3 identity's passage is where her document names it (`[D-544]`, `ol-egov.141.89.3.52`).**
+ * A course-scoped identity, minted because the course's own assessment documents name a wording
+ * only another course held, has those documents as its only material, and they are often PDFs. So
+ * for a tier-3 entry the excerpt is the first paragraph naming the concept, read from the note or,
+ * for a binary source, from the product extractor's text at the cited page; every other entry is
+ * excerpted exactly as before.
+ *
  * **"A proposal that cannot show its passages is not shown" (F8.4a) is enforced here, not in the
  * view.** `buildSameAsIdentityProposals` drops a link whose either endpoint concept is not in
  * `concepts` (pruned out of this model's walk, or a key with no matching row at all — a
@@ -59,6 +66,8 @@ import {
   type ConceptKeyCanonicalIndex,
   confirmSameAsLink,
   declineSameAsLink,
+  extractFromVault,
+  formatFromExtension,
   type RegistryConceptEntry,
   type RegistrySourceLocation,
   readConceptKeyCanonicalIndex,
@@ -130,11 +139,62 @@ function excerptFromNote(content: string, location: RegistrySourceLocation): str
     if (match) body = content.slice(match.index + match[0].length);
   }
 
-  const paragraph = firstNonEmptyParagraph(body);
+  return boundedExcerpt(firstNonEmptyParagraph(body));
+}
+
+function boundedExcerpt(paragraph: string): string {
   if (paragraph.length === 0) return '';
   return paragraph.length > IDENTITY_PROPOSAL_EXCERPT_CHAR_BUDGET
     ? `${paragraph.slice(0, IDENTITY_PROPOSAL_EXCERPT_CHAR_BUDGET).trimEnd()}…`
     : paragraph;
+}
+
+/** `content` without a leading `---` frontmatter block — properties are never the passage. */
+function withoutFrontmatter(content: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---[^\n]*(\r?\n|$)/.exec(content);
+  return match === null ? content : content.slice(match[0].length);
+}
+
+/**
+ * `[D-544]` (`ol-egov.141.89.3.52`): the excerpt for a tier-3 identity, one found only in her
+ * course documents — in production, a course-scoped identity minted because the course's own
+ * assessment documents name a wording only another course held. Its passage is where her course's
+ * document names it, so the excerpt is the first paragraph that names `name` (case-insensitive,
+ * word-bounded, the matcher the edge builder used), after any frontmatter, falling back to the first
+ * paragraph. `[D-402]` condition 1: she decides on the material, not the shared word.
+ */
+function excerptNaming(text: string, name: string): string {
+  const body = withoutFrontmatter(text);
+  const pattern = new RegExp(`\\b${escapeForRegExp(name)}\\b`, 'iu');
+  for (const paragraph of body.split(/\n\s*\n/)) {
+    const collapsed = paragraph.replace(/\s+/g, ' ').trim();
+    if (collapsed.length > 0 && pattern.test(collapsed)) return boundedExcerpt(collapsed);
+  }
+  return boundedExcerpt(firstNonEmptyParagraph(body));
+}
+
+/**
+ * The text a passage is excerpted from: a note's own content, or — `[D-544]`, since a registered
+ * past paper or objectives document is often a PDF — a binary source's extracted text at the cited
+ * page, read through the product's extractor, never its raw bytes. `undefined` when it cannot be
+ * read or yields no text.
+ */
+async function sourceTextAt(
+  vault: VaultSource,
+  location: RegistrySourceLocation,
+): Promise<string | undefined> {
+  const format = formatFromExtension(location.sourcePath);
+  try {
+    if (format === null) return await vault.read(location.sourcePath);
+    const result = await extractFromVault(vault, location.sourcePath, format);
+    const text = result.pages
+      .filter((page) => location.page === undefined || page.page === location.page)
+      .flatMap((page) => page.units.map((unit) => unit.text))
+      .join('\n\n');
+    return text.trim() === '' ? undefined : text;
+  } catch {
+    return undefined;
+  }
 }
 
 /**
@@ -148,6 +208,15 @@ async function passageForConcept(
 ): Promise<SameAsIdentityPassage | undefined> {
   const location = entry.sourceLocations[0];
   if (location === undefined) return undefined;
+
+  if (entry.tier === 3) {
+    // `[D-544]`: a tier-3 identity's passage is where her course document names it (see
+    // `excerptNaming`); every other identity is excerpted exactly as before.
+    const text = await sourceTextAt(vault, location);
+    if (text === undefined) return undefined;
+    const excerpt = excerptNaming(text, entry.displayName);
+    return excerpt === '' ? undefined : { location, excerpt };
+  }
 
   let content: string;
   try {

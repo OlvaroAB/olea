@@ -2419,13 +2419,20 @@ export {
 } from './retrieval/compositeSignals.js';
 export type { CosineHit } from './retrieval/cosine.js';
 export { cosinePercentile, cosineSimilarity, topKByCosine } from './retrieval/cosine.js';
+export type { CourseReadingSetOptions } from './retrieval/course-reading-set.js';
+// `[D-544]` (`ol-egov.141.89.3.52`): drafting retrieval is scoped to the course's own reading set.
+export {
+  courseReadingSetResolver,
+  frontmatterWikilinkTargets,
+  ownCourseScope,
+} from './retrieval/course-reading-set.js';
 export { demandToJudgeOperation, judgeOperationToDemand } from './retrieval/demand.js';
 export type { EmbeddingCacheEngineDeps } from './retrieval/embeddingCache.js';
 export {
   EmbeddingCacheEngine,
   emptyEmbeddingCache,
 } from './retrieval/embeddingCache.js';
-export type { RetrieveDeps, RetrieveOptions } from './retrieval/engine.js';
+export type { CourseScopedRetrieval, RetrieveDeps, RetrieveOptions } from './retrieval/engine.js';
 export { retrieve } from './retrieval/engine.js';
 export type { GateStageSummary } from './retrieval/gateStageRecorder.js';
 export { GateStageRecorder } from './retrieval/gateStageRecorder.js';
@@ -2465,6 +2472,9 @@ export { hybridRetrieve } from './retrieval/hybrid.js';
 export type { Lexicon } from './retrieval/lexicon.js';
 export { buildLexicon, idfFor, lexicalCoverage, tokenize } from './retrieval/lexicon.js';
 export { D112_GROUNDING_BAND } from './retrieval/operating-point.js';
+export type { RetrievalScope } from './retrieval/request.js';
+export type { CourseOf } from './retrieval/scopeFilter.js';
+export { applyScope } from './retrieval/scopeFilter.js';
 export type {
   CachedEmbeddingEntry,
   EmbeddingCacheStore,

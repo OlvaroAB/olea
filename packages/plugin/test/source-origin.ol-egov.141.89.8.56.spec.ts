@@ -201,7 +201,9 @@ async function retrieveDepsFor(targetPath: string) {
   const docs: PersistedKeywordIndex['documents'][number][] = [
     {
       path: targetPath,
-      courses: [],
+      // `[D-544]`: drafting retrieves within the request's own course only, so the fixture's
+      // material is that course's (`REQUEST.courseCode`).
+      courses: ['COURSE-A'],
       contentHash: 'unused',
       blocks: [{ blockIndex: 0, kind: 'paragraph', text: TARGET }],
     },
@@ -211,7 +213,7 @@ async function retrieveDepsFor(targetPath: string) {
     provider.vectors.set(text, unit(2 + i));
     docs.push({
       path: `filler/${i}.md`,
-      courses: [],
+      courses: ['COURSE-A'],
       contentHash: 'unused',
       blocks: [{ blockIndex: 0, kind: 'paragraph', text }],
     });

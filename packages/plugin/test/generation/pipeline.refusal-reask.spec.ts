@@ -501,7 +501,9 @@ describe('through buildGenerationWiring and the real drafting path (the producti
     const docs: { path: string; courses: string[]; contentHash: string; blocks: unknown[] }[] = [
       {
         path: 'course/lecture.md',
-        courses: [],
+        // `[D-544]`: drafting retrieves within the swept course only, so the fixture's material is
+        // that course's.
+        courses: ['COGS214'],
         contentHash: 'unused',
         blocks: [{ blockIndex: 0, kind: 'paragraph', text: TARGET }],
       },
@@ -511,7 +513,7 @@ describe('through buildGenerationWiring and the real drafting path (the producti
       vectors.set(text, axis(2 + i));
       docs.push({
         path: `filler/${i}.md`,
-        courses: [],
+        courses: ['COGS214'],
         contentHash: 'unused',
         blocks: [{ blockIndex: 0, kind: 'paragraph', text }],
       });
