@@ -222,17 +222,17 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     expect(third.newlyBaselined).toBe(0); // not re-baselined as if it were a fresh sighting
   });
 
-  it('never clears a pending fact when the RESOLVING write fails, and clears it exactly once once the retry succeeds — text and the cleared flag land together, never split', async () => {
+  it('the rewrite path makes no resolving write: the pending fact and the old text stay together in the one record ([D-522], [D-536])', async () => {
     const vault = new MemoryVaultSource({
       [NOTE_PATH]: note(PARAGRAPH_A),
       // [D-398]: keeps this MCQ tracked under the new authorship-based rule.
       [citationStorePath(MCQ_ID)]: citationSidecar(MCQ_ID, NOTE_PATH),
     });
-    // Call #1: baseline (tick 1). `citation-revision-wiring.ts` has no floor or debounce at this
-    // grain (`material-change.ts`'s own doc: "any hash difference... reaches the judge, once
-    // relocation has been ruled out"), so tick 2 makes three more calls, in order: the `[D-400]`
-    // dispatch-tracking write (call #2), the SETTING write (call #3), and the RESOLVING write
-    // (call #4) -- fail exactly the last of those.
+    // Call #1: baseline (tick 1). Tick 2 then makes exactly two writes, in order: the `[D-400]`
+    // dispatch-tracking write (call #2) and the SETTING write (call #3). Before
+    // `ol-egov.141.89.9.98` the rewrite made a third, resolving write (the anchor's removal); a
+    // failure armed on call #4 now finds nothing to fail, because the rewrite keeps the entry and
+    // its fact as the exclusion of the old question's evidence ([D-522], [D-536]).
     const host = new FlakyDataHost(new Set([4]));
     const store = new ObsidianCitationHashStore(host);
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) }; // same claim -> 'refreshed'
@@ -242,37 +242,20 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     await trigger.tick(vault, actions()); // tick 1: baseline (call #1)
     await vault.write(NOTE_PATH, note(PARAGRAPH_B));
 
-    // Tick 2: the `[D-400]` dispatch record (call #2) and `setPendingRevalidation` (call #3) both
-    // succeed, followed, in the same pass, by the judge's answer and `applyOutcome`'s resolving
-    // `store.save` (call #4) -- the one set up to fail.
-    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {});
     const secondTick = await trigger.tick(vault, act);
-    consoleError.mockRestore();
     expect(judge.judge).toHaveBeenCalledOnce();
-    expect(secondTick.refreshed).toBe(1); // the outcome was decided...
-    expect(host.saveDataCallCount).toBe(4); // ...dispatch (#2) and set (#3) succeeded, resolve (#4) failed
+    expect(secondTick.refreshed).toBe(1);
+    expect(act.enqueue).toHaveBeenCalledOnce();
+    expect(act.suspend).toHaveBeenCalledOnce();
+    expect(host.saveDataCallCount).toBe(3); // dispatch (#2) and set (#3); no resolving write
 
-    // Never half-applied: the pending fact is untouched (never lost -- it is not silently read as
-    // current) AND the anchor's `text` is untouched (never a split state where the flag clears but
-    // the text does not, or vice versa -- both live in the one object this write replaces whole).
-    const afterFailedResolve = await store.loadAll();
-    const pendingHash = afterFailedResolve.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash;
-    expect(pendingHash).toBeDefined();
-    expect(afterFailedResolve.get(MCQ_ID)?.text).toContain('humid climates'); // still the OLD text
-
-    // Tick 3 (the retry -- the SAME periodic tick main.ts already drives this from): the judge's
-    // answer was already acted on (`ol-egov.141.89.5.77`), so the retry repeats only the resolving
-    // step with NO new judge call and no `[D-400]` budget: the one write (call #5) succeeds.
-    const thirdTick = await trigger.tick(vault, actions());
-    expect(host.saveDataCallCount).toBe(5);
-    expect(judge.judge).toHaveBeenCalledOnce();
-    const afterRetry = await store.loadAll();
-    // [D-508] the resolving write is now the anchor's removal (the rewrite path), so a
-    // successful retry leaves no entry at all, and never a baseline for the changed text.
-    expect(afterRetry.has(MCQ_ID)).toBe(false);
-    expect(afterRetry.size).toBe(0);
-    expect(thirdTick.staleResultDiscarded).toBe(0); // a genuine retry, never mistaken for a stale one
-    expect(thirdTick.retryExhausted).toBe(0); // resolved before the retry itself could go unanswered
+    // Never split: the pending fact and the OLD text stand together in the one record, so the
+    // changed text is never a certifying baseline and the old evidence stays excluded.
+    const after = await store.loadAll();
+    expect(after.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash).toBeDefined();
+    expect(after.get(MCQ_ID)?.text).toContain('humid climates');
+    expect(after.size).toBe(1);
+    expect(secondTick.staleResultDiscarded).toBe(0);
   });
 
   it('sanity check: the store key this all lives under is exactly CITATION_ANCHOR_STORAGE_KEY, one entry per instrument, on the real host', async () => {

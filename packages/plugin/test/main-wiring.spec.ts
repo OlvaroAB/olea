@@ -1990,9 +1990,29 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   // asserted separately there) — the other five readers (session-builder,
   // both direct compose calls, Home, and the review-tab open/extend site)
   // are unaffected and still match.
-  it('the four compose call sites (three direct, one via Home) plus the review-tab open/extend site receive it — exactly five occurrences of the plain one-line spread', () => {
+  // `ol-egov.141.89.9.98` (`[D-522]`) adds two more readers of the same plain spread: the gap
+  // view's `createLocalGapProvider` and the study plan's `createLocalStudyPlanProvider`, each of
+  // which reads the store's persisted facts to leave a changed, unrevalidated passage's evidence
+  // out of its current readings. Pinned at their own sites below; five plus two is seven.
+  it('the four compose call sites (three direct, one via Home), the review-tab open/extend site, the gap view and the study plan receive it — exactly seven occurrences of the plain one-line spread', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(5);
+    expect(occurrences.length).toBe(7);
+  });
+
+  it("[D-522] (ol-egov.141.89.9.98): the gap view's createLocalGapProvider construction receives the store", () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createLocalGapProvider\\(\\{[\\s\\S]{0,2400}?buildSession: \\(row\\) => \\{\\s*void this\\.revealHomeView\\(row\\.conceptName\\);\\s*\\},[\\s\\S]{0,500}?${citationSpread},\\s*\\}\\),`,
+      ),
+    );
+  });
+
+  it("[D-522] (ol-egov.141.89.9.98): refreshCachedStudyPlan's createLocalStudyPlanProvider receives the store", () => {
+    expect(main).toMatch(
+      new RegExp(
+        `const provider = createLocalStudyPlanProvider\\(\\{[\\s\\S]{0,1400}?readPlanPolicy: this\\.planPolicy\\.readPlanPolicy \\}\\s*:\\s*\\{\\}\\),[\\s\\S]{0,400}?${citationSpread},\\s*\\}\\);\\s*const result = await refreshStudyPlan\\(`,
+      ),
+    );
   });
 });
 

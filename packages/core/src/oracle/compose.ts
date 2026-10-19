@@ -130,7 +130,7 @@ import type {
   BuildConceptAssessmentEdgesResult,
   ConceptAssessmentEdge,
 } from '../evidence-edge/types.js';
-import { readAllConceptReadiness } from '../mastery/attainment.js';
+import { type PassageChangeFact, readAllConceptReadiness } from '../mastery/attainment.js';
 import type { ConceptMasteryResult, MasteryRollupOptions } from '../mastery/rollup.js';
 import { computeAllConceptMastery, foldConceptStage } from '../mastery/rollup.js';
 import type { InstrumentValidityProjection } from '../mastery/validity.js';
@@ -167,6 +167,15 @@ export interface ComposeRetrievabilityInput {
    * a fresh `new Date()`.
    */
   readonly now: Date;
+  /**
+   * `[D-347]`'s changed-passage half, as `[D-522]` ruled (`ol-egov.141.89.9.98`): the cited
+   * passages recorded as changed and not yet revalidated, read by the caller from the plugin's
+   * pending-revalidation store. Each listed instrument's evidence is left out of readiness, so
+   * out of the ranking's need term too (`AttainmentOptions.passageChanges`). Never read by
+   * the mastery join: the displayed stage keeps it. Omitted reads as no passage changed, today's
+   * reading for a caller with no store.
+   */
+  readonly passageChanges?: readonly PassageChangeFact[];
 }
 
 export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOptions {
@@ -977,7 +986,7 @@ function resolveRetrievabilityScores(
   validity: InstrumentValidityProjection,
 ): ReadonlyMap<string, number> | undefined {
   if (retrievabilityInput === undefined) return undefined;
-  const { scheduler, now } = retrievabilityInput;
+  const { scheduler, now, passageChanges } = retrievabilityInput;
   // `[D-347]` as ruled (`ol-egov.141.89.9.94`): a sound review she withheld keeps counting in
   // readiness, because "a personal withdrawal or replacement does not automatically invalidate a
   // sound review" (the attainment matching rule, section 7, judgement J1); `validity` removes the
@@ -985,9 +994,11 @@ function resolveRetrievabilityScores(
   // (c), dropping every withheld instrument, was the proposal the ruling did not adopt. The gap
   // view's need, recognition credit and demand rule pass the same policy
   // (`plugin/src/gap/provider.ts`'s `RULED_CURRENT_READING`). A changed, unrevalidated passage
-  // (`AttainmentOptions.passageChanges`) has no production input yet.
+  // is excluded when the caller passes the pending-revalidation store's facts (`[D-522]`,
+  // `ol-egov.141.89.9.98`): `passageChanges`.
   const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity, {
     withheldEvidence: 'count',
+    ...(passageChanges !== undefined ? { passageChanges } : {}),
   });
   const scores = new Map<string, number>();
   for (const [conceptKey, reading] of readings) {

@@ -52,7 +52,8 @@
  * ones is `[D-347]`, ruled 2026-09-25 (exclude evidence whose support is
  * defective or unresolved; a sound withdrawal or replacement is not
  * invalidity) — the passage-validity half is built (`passageChanges`,
- * `ol-egov.141.89.9.84`), and the rest sits behind
+ * `ol-egov.141.89.9.84`; its production input is the plugin's pending-revalidation store,
+ * `[D-522]`, `ol-egov.141.89.9.98`), and the rest sits behind
  * {@link WithheldEvidencePolicy}, whose ruled reading is `'count'`: every production caller
  * passes it explicitly (`ol-egov.141.89.9.94`). Readiness additionally
  * needs an unaided (independent) success (`[D-264]`); need carries a basis

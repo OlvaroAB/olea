@@ -565,15 +565,17 @@ describe('an edited passage: the judge sees the passage, and only when it is unm
     expect(judge.judge).toHaveBeenCalledWith({ previousText: PASSAGE, currentText: EDITED });
     expect(report.refreshed).toBe(1);
     // [D-508] an immaterial verdict never restores the question: the instrument is suspended, a
-    // successor is drafted from the current passage, and the anchor is removed (no certifying
-    // baseline is saved for the edited passage).
+    // successor is drafted from the current passage, and no certifying baseline is saved for the
+    // edited passage: the anchor keeps its old passage and its pending fact (`ol-egov.141.89.9.98`).
     expect(a.suspend).toHaveBeenCalledWith(MCQ_ID, expect.anything());
     expect(a.enqueue).toHaveBeenCalledTimes(1);
     const enqueued = a.enqueue.mock.calls[0]?.[0] as unknown as {
       payload: { newPassageText: string };
     };
     expect(enqueued.payload.newPassageText).toBe(EDITED);
-    expect((await store.loadAll()).has(MCQ_ID)).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the entry and its fact stay, the old baseline kept.
+    expect((await store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeDefined();
+    expect((await store.loadAll()).get(MCQ_ID)?.text).toBe(PASSAGE);
   });
 
   it('a changed-claim verdict suspends the instrument and drafts the successor from the passage', async () => {
@@ -593,7 +595,9 @@ describe('an edited passage: the judge sees the passage, and only when it is unm
       payload: { newPassageText: string };
     };
     expect(enqueued.payload.newPassageText).toBe(EDITED);
-    expect((await store.loadAll()).has(MCQ_ID)).toBe(false);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the entry and its fact stay, the old baseline kept.
+    expect((await store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toBeDefined();
+    expect((await store.loadAll()).get(MCQ_ID)?.text).toBe(PASSAGE);
   });
 
   it('two segments that both resemble the edited passage are ambiguous, and nothing is judged', async () => {

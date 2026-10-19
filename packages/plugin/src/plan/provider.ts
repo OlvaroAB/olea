@@ -75,12 +75,17 @@ import {
   resolvePlanPolicyCourseInputs,
   reviewLogPath,
 } from 'olea-core';
+import {
+  passageChangesForReadings,
+  readPendingPassageChanges,
+} from '../attainment/passage-changes.js';
 // Read-only import — `home/` is a concurrent lane's `owns`, not this bead's
 // (`ol-egov.141.93`). `ObsidianHomeAvoidanceStore` is the durable F4.6
 // record this bead wires into `resolvePlanPolicyCourseInputs` below; nothing
 // in `home/avoidance.ts` is edited by this bead.
 import type { CourseAvoidanceRecord } from '../home/avoidance.js';
 import { ObsidianHomeAvoidanceStore } from '../home/avoidance.js';
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import { type ObsidianDataHost, ObsidianStudyPlanSettingsStore } from './settings-store.js';
@@ -238,6 +243,15 @@ export interface CreateLocalStudyPlanProviderDeps {
    * stays absent from the wire shape precisely as it did before this bead.
    */
   readonly studyPlanStore?: StudyPlanStore;
+  /**
+   * `[D-347]`'s changed-passage half, as `[D-522]` ruled (`ol-egov.141.89.9.98`): the plugin's
+   * pending-revalidation store, the same instance the citation-revision trigger writes. Every
+   * persisted fact in it leaves that instrument's evidence out of the ranking's readiness and need
+   * (`../attainment/passage-changes.ts`); the stage the plan carries never reads it. Omitted keeps
+   * every passage: today's reading. A store that cannot be read leaves out every instrument that
+   * could carry a fact (unknown, never credited).
+   */
+  readonly citationHashStore?: CitationHashStore;
 }
 
 /**
@@ -327,12 +341,25 @@ export function createLocalStudyPlanProvider(
       // instruments she can still be served (the plan's served set,
       // `[D-404]` condition 2). One walk, the same one
       // `session-builder/provider.ts` makes.
-      const [{ entries, files }, enumeration, options, assessmentReport] = await Promise.all([
-        readReviewLogHistory(deps.vault, { additionalPaths }),
-        enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
-        deps.readRankWeights?.() ?? Promise.resolve(undefined),
-        resolveAssessments(deps.vault, config.assignmentsBasePath),
-      ]);
+      const [{ entries, files }, enumeration, options, assessmentReport, passageRead] =
+        await Promise.all([
+          readReviewLogHistory(deps.vault, { additionalPaths }),
+          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
+          deps.readRankWeights?.() ?? Promise.resolve(undefined),
+          resolveAssessments(deps.vault, config.assignmentsBasePath),
+          // `[D-522]` (`ol-egov.141.89.9.98`): read from the persisted store on every refresh.
+          deps.citationHashStore !== undefined
+            ? readPendingPassageChanges(deps.citationHashStore, now)
+            : Promise.resolve(undefined),
+        ]);
+      // An unreadable store leaves out every instrument that could carry a fact (unknown, never
+      // credited; `passageChangesForReadings`).
+      const passageChanges = passageChangesForReadings(
+        passageRead,
+        enumeration.records,
+        entries,
+        now,
+      );
       const concepts = enumeration.concepts;
       // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
       // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
@@ -374,7 +401,13 @@ export function createLocalStudyPlanProvider(
         // state. Wiring it here is what makes `readReadinessRecall`'s
         // undefined-vs-defined distinction reach `resolvePlanPolicyCourseInputs`
         // below, not just `rankOracle`'s own blend.
-        retrievability: { scheduler, now },
+        // `[D-522]` (`ol-egov.141.89.9.98`): a cited passage changed and not yet revalidated
+        // leaves that instrument's evidence out of readiness and need, as on the gap view.
+        retrievability: {
+          scheduler,
+          now,
+          ...(passageChanges !== undefined ? { passageChanges } : {}),
+        },
         ...(options !== undefined ? { options } : {}),
         // `[D-404]`: the suspension fold over `entries` happens inside
         // `composeOracleRanking`. No citation-freshness or
