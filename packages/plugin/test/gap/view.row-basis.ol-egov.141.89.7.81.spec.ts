@@ -271,7 +271,7 @@ describe('the gap view shows objectives-only and assessment-only rows naming the
     ]);
     expect(root.find('olea-gap-detail-narrative-line').map((el) => el.text)).toEqual([
       "Its course objectives name it; Olea hasn't found supporting material for it.",
-      'So Olea has nothing to build practice from yet — this says nothing about what you know.',
+      'So Olea has nothing to build practice from yet. This says nothing about what you know.',
     ]);
   });
 });

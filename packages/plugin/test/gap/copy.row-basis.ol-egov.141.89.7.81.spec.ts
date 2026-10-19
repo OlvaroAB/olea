@@ -265,7 +265,7 @@ describe('the material-gap narrative and the counterweight say what was not foun
     const material = row('material-gap', 0, ASSESS);
     expect(materialGapNarrative(material)).toEqual([
       gapRowLine(material),
-      'So Olea has nothing to build practice from yet — this says nothing about what you know.',
+      'So Olea has nothing to build practice from yet. This says nothing about what you know.',
     ]);
   });
   it('the breakdown counts material gaps as not found', () => {
