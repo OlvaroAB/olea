@@ -450,6 +450,34 @@ describe('readConcepts — an unreadable vault is reported, never a silent empty
     expect(result.detail).toContain('upstream-error');
   });
 
+  it('a refused call drops only its own document, which coverage records as not read (D-448)', async () => {
+    const two = '01 Courses/ABCD101/Lecture Two.md';
+    const one = '01 Courses/ABCD101/Lecture One.md';
+    const port: ConceptReaderPort = {
+      read: (request) => {
+        const path = request.passages[0]?.anchor.sourcePath as VaultPath;
+        if (path === two) return Promise.reject(new Error('upstream-error'));
+        return Promise.resolve({ concepts: [proposal('Ormathel', anchorIn(path))] });
+      },
+    };
+
+    const result = await readConcepts(BARE_VAULT, port, { budget: BUDGET });
+
+    expect(result.outcome).toBe('read');
+    if (result.outcome !== 'read') return;
+    expect(result.concepts.map((c) => c.name)).toEqual(['Ormathel']);
+    const rowOne = result.coverage.find((r) => r.sourcePath === one);
+    const rowTwo = result.coverage.find((r) => r.sourcePath === two);
+    expect(rowOne?.passagesRead).toBeGreaterThan(0);
+    expect(rowOne?.calls).toBe(1);
+    expect(rowTwo?.passagesOffered).toBeGreaterThan(0);
+    expect(rowTwo?.passagesRead).toBe(0);
+    expect(rowTwo?.calls).toBe(0);
+    expect(rowTwo?.conceptsFound).toBe(0);
+    // A refusal is not the budget cutting the document short.
+    expect(rowTwo?.truncatedByBudget).toBe(false);
+  });
+
   it('every document looked at gets a coverage row, including one that yielded nothing', async () => {
     const reader = new ScriptedReader([
       proposal('Ormathel', anchorIn('01 Courses/ABCD101/Lecture One.md')),
