@@ -136,6 +136,8 @@ one scored concept, several context concepts.
 import { parseDocument } from '../block/parse.js';
 import type { HeadingBlock } from '../block/types.js';
 import { extractConcepts } from '../concept/extract.js';
+import { listConceptKeyRecords } from '../concept/key-store.js';
+import { conceptRecordSize } from '../concept/size.js';
 import type { ConceptRecord, ExtractConceptsOptions } from '../concept/types.js';
 import { noteTitle } from '../concept/zettelkasten.js';
 import type { Provenance } from '../extract/types.js';
@@ -453,6 +455,59 @@ function wouldBeOrdinal(
 }
 
 /**
+ * `[D-068]` (`ol-egov.141.89.3.51`): the concepts the material read minted, as records.
+ *
+ * The read mints a permanent key for a concept it finds in a course's material and her conventions
+ * do not name: a tier-3 key anchored on the course and the wording, with the course's own passages'
+ * documents as introducing material (`../concept/read.ts`'s `uncorroboratedKeyRequest`). A
+ * `[D-544]` course-scoped identity is the same kind of key. `extractConcepts` reads her filing
+ * conventions only, so neither reached the list the ranking reads; this lists them beside it.
+ *
+ * What stays true: a key her records already carry is never listed again (`[D-088]`, one concept
+ * one key), nor a wording a record already holds in that course; a wording minted in two courses is
+ * two records, one per course, never joined (`[D-402]`); a key none of whose introducing material
+ * still exists is not listed (a concept a later run cannot find evidence for is not looked up
+ * again, `./key-store.ts`); a key with no course is not listed (nothing is guessed). The records
+ * are listed only. They are never offered to the instrument binding below, so listing one binds no
+ * instrument: an instrument still binds by her own `topic:`s alone.
+ */
+async function readMintedConcepts(
+  vault: VaultSource,
+  extracted: readonly ConceptRecord[],
+  under: VaultPath | undefined,
+): Promise<readonly ConceptRecord[]> {
+  const keys = new Set(extracted.map((concept) => concept.key));
+  const heldInCourse = new Set(
+    extracted.flatMap((concept) =>
+      concept.courses.map((course) => `${course}\u0000${concept.name}`),
+    ),
+  );
+  const out: ConceptRecord[] = [];
+  for (const { record } of await listConceptKeyRecords(vault)) {
+    const { anchor } = record;
+    if (record.tier !== 3 || anchor.kind !== 'topic' || anchor.course === '') continue;
+    if (keys.has(record.key) || heldInCourse.has(`${anchor.course}\u0000${anchor.name}`)) continue;
+    const sourcePaths: VaultPath[] = [];
+    for (const path of anchor.introducingPaths ?? []) {
+      if (under !== undefined && !path.startsWith(`${under}/`)) continue;
+      if (await vault.exists(path)) sourcePaths.push(path);
+    }
+    if (sourcePaths.length === 0) continue;
+    sourcePaths.sort();
+    keys.add(record.key);
+    out.push({
+      key: record.key,
+      name: anchor.name,
+      tier: 3,
+      courses: [anchor.course],
+      sourcePaths,
+      size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
+    });
+  }
+  return out;
+}
+
+/**
  * Every schedulable instrument in the vault, bound to its concept and courses.
  *
  * Vault order (`VaultSource.list` is sorted) then source order within a note,
@@ -471,6 +526,11 @@ export async function enumerateVaultInstruments(
     ...(options.concepts ?? {}),
     ...(options.under !== undefined ? { under: options.under } : {}),
   });
+  // `[D-068]`: listed beside her records, but kept out of the instrument binding just below.
+  const listedConcepts =
+    options.concepts?.stampConceptKeys === true
+      ? [...concepts, ...(await readMintedConcepts(vault, concepts, options.under))]
+      : concepts;
   const byPath = new Map<VaultPath, ConceptRecord[]>();
   for (const concept of concepts) {
     for (const path of concept.sourcePaths) {
@@ -759,6 +819,6 @@ export async function enumerateVaultInstruments(
     invalidCardBlocks,
     invalidClozeBlocks,
     unbound,
-    concepts,
+    concepts: listedConcepts,
   };
 }

@@ -43,7 +43,12 @@ import type {
   SchedulableInstrumentType,
   VaultSource,
 } from 'olea-core';
-import { DEFAULT_COURSES_FOLDER, hashText } from 'olea-core';
+import {
+  conceptRecordSize,
+  DEFAULT_COURSES_FOLDER,
+  hashText,
+  listConceptKeyRecords,
+} from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
@@ -71,6 +76,12 @@ export interface GenerationWiringDeps {
 export interface GenerationWiring {
   readonly cache: DraftCacheStore;
   readonly acceptPort: DraftAcceptPort;
+  /**
+   * The sweep's candidate concepts for a course (see `listConceptsForCourseFactory`): her records
+   * plus the keys the material read and `[D-544]` minted for it. Exposed so a caller or spec can
+   * read exactly what the sweep will try.
+   */
+  readonly listConceptsForCourse: (courseCode: string) => Promise<readonly ConceptRecord[]>;
   /**
    * `GenerationArrivalDeps.sourceContentHashFor`'s real, local-state-only
    * implementation (`ol-egov.141.89.5.25`, D-381) — `packages/plugin/src
@@ -137,12 +148,57 @@ export interface GenerationWiring {
   ): Promise<GenerationSweepReport | null>;
 }
 
+/**
+ * The sweep's candidates for a course: the records her filing conventions give it
+ * (`extractConceptsFromVault` under the course folder), plus every key the course holds that
+ * extraction does not read (`[D-068]`, `[D-544]`, `ol-egov.141.89.3.51`).
+ *
+ * Those keys are tier-3, topic-anchored on this course: a concept the material read minted for it,
+ * and each course-scoped identity its own assessment documents raised for a wording only another
+ * course held. Without them a ranked wording of that kind is never tried, so the course neither
+ * drafts nor states a refusal for it. Trying one is what lets a thin course state its refusal:
+ * drafting is scoped to the course's own reading set (`[D-544]`), so a wording only other courses'
+ * notes explain ends in a stated refusal, never a draft grounded elsewhere.
+ *
+ * Never a second key for a concept already listed (`[D-088]`): a key, or a wording the course
+ * already holds, is skipped. Another course's key for the same wording is not this course's
+ * (`[D-402]`). A key none of whose introducing material still exists is not listed.
+ */
 function listConceptsForCourseFactory(
   vault: VaultSource,
   coursesFolder: string,
 ): (courseCode: string) => Promise<readonly ConceptRecord[]> {
-  return (courseCode) =>
-    extractConceptsFromVault(vault, { under: `${coursesFolder}/${courseCode}` });
+  return async (courseCode) => {
+    const extracted = await extractConceptsFromVault(vault, {
+      under: `${coursesFolder}/${courseCode}`,
+    });
+    const keys = new Set(extracted.map((concept) => concept.key));
+    const names = new Set(
+      extracted.filter((c) => c.courses.includes(courseCode)).map((c) => c.name),
+    );
+    const minted: ConceptRecord[] = [];
+    for (const { record } of await listConceptKeyRecords(vault)) {
+      const { anchor } = record;
+      if (record.tier !== 3 || anchor.kind !== 'topic' || anchor.course !== courseCode) continue;
+      if (keys.has(record.key) || names.has(anchor.name)) continue;
+      const sourcePaths: string[] = [];
+      for (const path of anchor.introducingPaths ?? []) {
+        if (await vault.exists(path)) sourcePaths.push(path);
+      }
+      if (sourcePaths.length === 0) continue;
+      sourcePaths.sort();
+      keys.add(record.key);
+      minted.push({
+        key: record.key,
+        name: anchor.name,
+        tier: 3,
+        courses: [courseCode],
+        sourcePaths,
+        size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
+      });
+    }
+    return minted.length === 0 ? extracted : [...extracted, ...minted];
+  };
 }
 
 /** `GenerationWiring.sourceContentHashFor`'s implementation — see that field's own doc. */
@@ -210,6 +266,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
   return {
     cache,
     acceptPort,
+    listConceptsForCourse,
     sourceContentHashFor: createSourceContentHashFor(deps.vault, listConceptsForCourse),
     buildPromptVersionFor: () => createPromptVersionFor(cache),
     async sweep(units, draftDeps, routing, formatMatch, sourceRevisions) {
