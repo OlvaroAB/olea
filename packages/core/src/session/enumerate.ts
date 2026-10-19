@@ -470,12 +470,16 @@ function wouldBeOrdinal(
  * again, `./key-store.ts`); a key with no course is not listed (nothing is guessed). The records
  * are listed only. They are never offered to the instrument binding below, so listing one binds no
  * instrument: an instrument still binds by her own `topic:`s alone.
+ *
+ * `scope.under` keeps only introducing material below that folder; `scope.course` lists only that
+ * course's keys (the sweep's per-course list); with neither, every course's keys are listed.
  */
-async function readMintedConcepts(
+export async function readMintedConcepts(
   vault: VaultSource,
   extracted: readonly ConceptRecord[],
-  under: VaultPath | undefined,
+  scope: { readonly under?: VaultPath | undefined; readonly course?: string | undefined } = {},
 ): Promise<readonly ConceptRecord[]> {
+  const { under, course } = scope;
   const keys = new Set(extracted.map((concept) => concept.key));
   const heldInCourse = new Set(
     extracted.flatMap((concept) =>
@@ -486,6 +490,7 @@ async function readMintedConcepts(
   for (const { record } of await listConceptKeyRecords(vault)) {
     const { anchor } = record;
     if (record.tier !== 3 || anchor.kind !== 'topic' || anchor.course === '') continue;
+    if (course !== undefined && anchor.course !== course) continue;
     if (keys.has(record.key) || heldInCourse.has(`${anchor.course}\u0000${anchor.name}`)) continue;
     const sourcePaths: VaultPath[] = [];
     for (const path of anchor.introducingPaths ?? []) {
@@ -529,7 +534,7 @@ export async function enumerateVaultInstruments(
   // `[D-068]`: listed beside her records, but kept out of the instrument binding just below.
   const listedConcepts =
     options.concepts?.stampConceptKeys === true
-      ? [...concepts, ...(await readMintedConcepts(vault, concepts, options.under))]
+      ? [...concepts, ...(await readMintedConcepts(vault, concepts, { under: options.under }))]
       : concepts;
   const byPath = new Map<VaultPath, ConceptRecord[]>();
   for (const concept of concepts) {

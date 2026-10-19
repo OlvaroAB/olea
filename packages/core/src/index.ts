@@ -2905,7 +2905,7 @@ export {
 } from './session/cluster.js';
 export { toDueInstruments } from './session/due-instruments.js';
 export type { EnumerateVaultInstrumentsOptions } from './session/enumerate.js';
-export { enumerateVaultInstruments } from './session/enumerate.js';
+export { enumerateVaultInstruments, readMintedConcepts } from './session/enumerate.js';
 export type { FloorLoadConcept, FloorLoadTally } from './session/floor-load.js';
 export { floorLoadOf } from './session/floor-load.js';
 export type { ReadReviewLogHistoryOptions, ReviewLogHistory } from './session/history.js';

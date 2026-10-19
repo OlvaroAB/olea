@@ -43,12 +43,7 @@ import type {
   SchedulableInstrumentType,
   VaultSource,
 } from 'olea-core';
-import {
-  conceptRecordSize,
-  DEFAULT_COURSES_FOLDER,
-  hashText,
-  listConceptKeyRecords,
-} from 'olea-core';
+import { DEFAULT_COURSES_FOLDER, hashText, readMintedConcepts } from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
@@ -172,31 +167,7 @@ function listConceptsForCourseFactory(
     const extracted = await extractConceptsFromVault(vault, {
       under: `${coursesFolder}/${courseCode}`,
     });
-    const keys = new Set(extracted.map((concept) => concept.key));
-    const names = new Set(
-      extracted.filter((c) => c.courses.includes(courseCode)).map((c) => c.name),
-    );
-    const minted: ConceptRecord[] = [];
-    for (const { record } of await listConceptKeyRecords(vault)) {
-      const { anchor } = record;
-      if (record.tier !== 3 || anchor.kind !== 'topic' || anchor.course !== courseCode) continue;
-      if (keys.has(record.key) || names.has(anchor.name)) continue;
-      const sourcePaths: string[] = [];
-      for (const path of anchor.introducingPaths ?? []) {
-        if (await vault.exists(path)) sourcePaths.push(path);
-      }
-      if (sourcePaths.length === 0) continue;
-      sourcePaths.sort();
-      keys.add(record.key);
-      minted.push({
-        key: record.key,
-        name: anchor.name,
-        tier: 3,
-        courses: [courseCode],
-        sourcePaths,
-        size: conceptRecordSize({ sourcePaths, boundNotePath: undefined }),
-      });
-    }
+    const minted = await readMintedConcepts(vault, extracted, { course: courseCode });
     return minted.length === 0 ? extracted : [...extracted, ...minted];
   };
 }
