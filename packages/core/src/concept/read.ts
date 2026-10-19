@@ -1722,7 +1722,15 @@ export async function readConcepts(
         ...base,
       };
     }
-    throw error;
+    // A failure while folding a reply (not the call itself) still ends the read as it always did.
+    return {
+      outcome: 'unrecognised',
+      concepts: [],
+      reason: 'reader-failed',
+      detail: `The reader was reached and failed: ${error instanceof Error ? error.message : String(error)}`,
+      coverage: buildCoverage(all, [], NO_CONCEPTS),
+      ...base,
+    };
   }
   // Every call refused: nothing was read, so the outcome is today's.
   if (readBatches.length === 0) {
