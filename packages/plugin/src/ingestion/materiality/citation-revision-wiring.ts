@@ -225,6 +225,7 @@
  * `[D-427]`'s separate, open question, not this one).
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildSuccessorRevisionEnqueueInput,
   type CitedPassageRevisionOutcome,
@@ -398,7 +399,7 @@ export const SOURCE_REVISION_REASON: PendingReason = 'source-revision-changed';
 
 /**
  * `ol-egov.141.89.5.77`: how many times in all (the first attempt included) a confirmed rewrite's
- * suspend-then-enqueue step is tried across passes before the failure is recorded and given up.
+ * enqueue-then-suspend step is tried across passes before the failure is recorded and given up.
  */
 const SUCCESSOR_RETRY_BOUND = 5;
 
@@ -421,7 +422,8 @@ export interface CitationRevisionActions {
   /**
    * `[D-536]` (ruled 2026-10-06, `ol-egov.141.89.9.98`): whether this predecessor already has a
    * successor from an earlier rewrite, queued or accepted. Asked only when a rewrite is about to be
-   * made for a question that is no longer suspended (she unsuspended it): a question that already
+   * made for a question whose review log shows her unsuspend after a suspend
+   * (`ol-egov.141.89.5.94`; a rewrite whose suspend never landed is retried, not asked): a question that already
    * has a successor is then left as she set it, neither suspended nor given another successor, and
    * stays withheld by its pending fact. Omitted reads as "no successor".
    */
@@ -647,6 +649,14 @@ export class CitationRevisionTrigger {
    * ordinary `[D-400]` budget then governs, which keeps the question withheld, never restored.
    */
   private readonly confirmedRewrites = new Map<string, ConfirmedRewrite>();
+  /**
+   * `ol-egov.141.89.5.94`: instruments whose review log shows an `unsuspend` after an earlier
+   * `suspend`, refreshed from the log at the start of each pass that can read it. Only these are
+   * asked `hasSuccessor`: an unsuspend after a suspend is her undoing of the rewrite's suspend.
+   * A rewrite whose suspend never landed (a failure, then a restart) leaves no such record, so its
+   * suspend is retried instead of being read as hers. An unreadable log leaves the set empty.
+   */
+  private unsuspendedAfterSuspend: ReadonlySet<string> = new Set();
 
   /**
    * `ol-egov.141.89.5.81` ([D-518]): the re-extracted page texts of each source some tracked
@@ -778,6 +788,7 @@ export class CitationRevisionTrigger {
       // it) is left alone by the pass, read from the same log by the shared fold the presentation
       // path uses, so an `unsuspend` lifts it here too.
       suspendedIds = suspendedInstrumentIds(entries);
+      this.unsuspendedAfterSuspend = unsuspendedAfterSuspendIds(entries);
       suspensionKnown = true;
       const provenInvalid = projectInstrumentValidity(entries).provenInvalid;
       rejectedInstrumentIds = new Set(
@@ -1525,7 +1536,9 @@ export class CitationRevisionTrigger {
     }
     let suspendedIds: ReadonlySet<string>;
     try {
-      suspendedIds = suspendedInstrumentIds((await readReviewLogHistory(vault)).entries);
+      const { entries } = await readReviewLogHistory(vault);
+      suspendedIds = suspendedInstrumentIds(entries);
+      this.unsuspendedAfterSuspend = unsuspendedAfterSuspendIds(entries);
     } catch (error) {
       // `ol-egov.141.89.9.98`: a rewritten question keeps its entry and hold, so an unknown
       // suspension is never taken for none; the rewrite waits for a pass that can read the log.
@@ -1747,6 +1760,11 @@ export class CitationRevisionTrigger {
    * `contentHash`), then suspends; throughout, the predecessor stays withheld by its pending
    * fact, so predecessor and successor are never shown together. A bounded number of failed
    * attempts is recorded and given up on.
+   *
+   * `ol-egov.141.89.5.94`: the same state after a RESTART (the successor queued, no suspend
+   * record, the in-session retry memory gone) is retried too: the next pass judges once more,
+   * re-enqueues (reported as a duplicate) and suspends. The question that she unsuspended after
+   * the rewrite's suspend is told apart by the review log, not by the queued successor.
    */
   private async suspendAndEnqueueSuccessor(
     instrumentId: string,
@@ -1770,10 +1788,14 @@ export class CitationRevisionTrigger {
       // `[D-536]`: she unsuspended an already-rewritten question. Her action stands: no second
       // suspend record, no second successor, even if the passage changed again. The question
       // stays withheld by its pending fact (kept here), with its old reviews excluded until a
-      // successful revalidation clears it. A retry of this very rewrite (`confirmedRewrites`) is
-      // not that case: its own enqueue is the successor, and the suspend still has to land.
+      // successful revalidation clears it. That case is told by the review log (an unsuspend after
+      // a suspend), never by a queued successor alone: a rewrite whose enqueue landed but whose
+      // suspend failed, then a restart, has a successor and no suspend record, and its suspend is
+      // retried (`ol-egov.141.89.5.94`). A retry of this very rewrite in the session
+      // (`confirmedRewrites`) is not that case either.
       if (
         !this.confirmedRewrites.has(instrumentId) &&
+        this.unsuspendedAfterSuspend.has(predecessorInstrumentId) &&
         (await actions.hasSuccessor?.(predecessorInstrumentId)) === true
       ) {
         return;
@@ -1811,6 +1833,33 @@ export class CitationRevisionTrigger {
       );
     }
   }
+}
+
+/**
+ * `ol-egov.141.89.5.94`: the instruments whose latest suspension event is an `unsuspend` that
+ * follows a `suspend`, ordered as `suspendedInstrumentIds` orders them (timestamp, then event id).
+ */
+function unsuspendedAfterSuspendIds(entries: readonly ReviewLogEntry[]): ReadonlySet<string> {
+  const events = entries
+    .filter(
+      (e): e is Extract<ReviewLogEntry, { kind: 'suspend' | 'unsuspend' }> =>
+        e.kind === 'suspend' || e.kind === 'unsuspend',
+    )
+    .sort((a, b) => {
+      const d = Date.parse(a.timestamp) - Date.parse(b.timestamp);
+      return d !== 0 ? d : a.eventId < b.eventId ? -1 : a.eventId > b.eventId ? 1 : 0;
+    });
+  const sawSuspend = new Set<string>();
+  const result = new Set<string>();
+  for (const e of events) {
+    if (e.kind === 'suspend') {
+      sawSuspend.add(e.instrumentId);
+      result.delete(e.instrumentId);
+    } else if (sawSuspend.has(e.instrumentId)) {
+      result.add(e.instrumentId);
+    }
+  }
+  return result;
 }
 
 /**
