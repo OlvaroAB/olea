@@ -64,9 +64,9 @@ import {
   type GapRowEvidenceBases,
   gapDetailEyebrow,
   gapRowLine,
-  MATERIAL_GAP_HEADING,
   masteryGapMeta,
   masteryGapNarrative,
+  materialGapHeading,
   materialGapMeta,
   materialGapNarrative,
   pastPaperChips,
@@ -583,7 +583,9 @@ export class GapView extends ItemView {
       section.createDiv({ cls: 'olea-gap-heading', text: COVERAGE_GAP_HEADING });
     }
     if (material.length > 0) {
-      section.createDiv({ cls: 'olea-gap-heading', text: MATERIAL_GAP_HEADING });
+      // `[D-538]` H1: the heading names the bases present among these rows, never past papers
+      // for a material gap ranked without one.
+      section.createDiv({ cls: 'olea-gap-heading', text: materialGapHeading(material) });
     }
 
     // The scope, always — this is the whole of ol-cvsc at the render layer, and

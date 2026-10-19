@@ -138,6 +138,29 @@ export interface ConceptMaterialPresence {
   readonly size?: ConceptSize;
 }
 
+/**
+ * How a row's course-objectives evidence reaches it (`[D-538]`): `'named'` when at least one
+ * surviving objectives citation is an explicit name match, `'inferred'` when every one is a link
+ * Olea's reading made (`[D-432]`, a citation marked `alignment: 'semantic'`). The rule is
+ * `oracle/rank.ts`'s `objectivesAlignmentOf`, read the same way, so the row and the ranking's own
+ * reason never disagree: the registry reserves "its course objectives name it" for a name match
+ * (§29, row 33). **The only producer today is the exact-name scan**, so every row reads `'named'`
+ * until the alignment lane marks its citations.
+ */
+export type GapRowObjectivesLink = 'named' | 'inferred';
+
+/** See {@link GapRow.basis}. */
+export interface GapRowBasis {
+  /** The row's surviving objectives evidence, by how it links the concept; `null` when none survives. */
+  readonly objectives: GapRowObjectivesLink | null;
+  /**
+   * The assessment notes whose own declared scope names this concept (`[D-247]`/`[D-399]`'s
+   * `'assessment-brief'` basis: each `briefCitations` entry's `sourcePath`, which is always that
+   * assessment's own note), surviving edges only, de-duplicated and sorted. Empty when none.
+   */
+  readonly assessmentPaths: readonly VaultPath[];
+}
+
 /** One row of the gap view. */
 export interface GapRow {
   /** Display only (R2, verbatim) — never a join key; use {@link conceptKey}. */
@@ -251,9 +274,26 @@ export interface GapRow {
   /** The strongest-contributing assessment (`rank.ts` sorts `contributions` by contribution), or `null` if the entry somehow carried none. Whose `type` selected the format. */
   readonly targetAssessmentPath: VaultPath | null;
   readonly assessmentFormat: AssessmentFormat;
-  /** The past-paper questions behind this row, from the oracle entry, verbatim. Never empty for a ranked entry. */
+  /**
+   * The past-paper questions behind this row, from the oracle entry, verbatim. **Empty for a row
+   * ranked without a past paper** (an objectives document or an assessment's declared scope alone,
+   * `[D-226]` ruling 2, `[D-399]`); {@link basis} then carries what it rests on.
+   */
   readonly citations: readonly EvidenceQuestionCitation[];
+  /** Distinct past-paper sources behind this row, counting past papers only (`[D-529]`). */
   readonly distinctSourceCount: number;
+  /**
+   * What this row's ranking rests on besides its past papers (`[D-538]`,
+   * `ol-egov.141.89.7.81`), read from the entry's SURVIVING evidence only, so the copy layer can
+   * name each basis for what it is and never one the ranking dropped (an assessment already sat is
+   * vetoed before this is read, C5.10). Set by {@link buildGapView} on every row it builds.
+   *
+   * **Optional only so object literals built before this field existed still typecheck** (the same
+   * reason as {@link assessmentRelevance}); a row without it is one no build produced, and the copy
+   * layer names no basis but its past papers for it. Not persisted, and not in the vendored
+   * contracts: it lives as long as the view model does.
+   */
+  readonly basis?: GapRowBasis;
   /** The oracle's own mechanically-assembled reasoning, verbatim — never re-narrated here. */
   readonly reasoning: string;
   readonly notePaths: readonly VaultPath[];
@@ -457,6 +497,28 @@ function assessmentTypesByPath(
   return types;
 }
 
+/**
+ * {@link GapRowBasis} from an entry's factors. Reads only what `rankOracle` kept: its objectives
+ * and brief citations are unions over the SURVIVING edges, so a vetoed edge names nothing here.
+ */
+function basisOf(entry: ConceptPriority): GapRowBasis {
+  // The alignment marker is not on `EvidenceObjectivesCitation`'s type yet; `oracle/rank.ts` reads
+  // it through the same widening (see `GapRowObjectivesLink`).
+  const objectivesCitations = (entry.factors.objectivesCitations ?? []) as readonly {
+    readonly alignment?: 'name' | 'semantic';
+  }[];
+  const objectives: GapRowObjectivesLink | null =
+    objectivesCitations.length === 0
+      ? null
+      : objectivesCitations.some((c) => c.alignment !== 'semantic')
+        ? 'named'
+        : 'inferred';
+  const assessmentPaths = [
+    ...new Set((entry.factors.briefCitations ?? []).map((c) => c.sourcePath)),
+  ].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+  return { objectives, assessmentPaths };
+}
+
 function buildRow(
   entry: ConceptPriority,
   input: BuildGapViewInput,
@@ -531,6 +593,7 @@ function buildRow(
     assessmentFormat,
     citations: entry.citations,
     distinctSourceCount: entry.factors.distinctSourceCount,
+    basis: basisOf(entry),
     reasoning: entry.reasoning,
     notePaths: presence?.notePaths ?? [],
     instrumentCount: presence?.instrumentCount ?? 0,
