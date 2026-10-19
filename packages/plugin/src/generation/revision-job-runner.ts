@@ -736,14 +736,11 @@ export async function runInstrumentRevisionJob(
   const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
 
   if (target.instrumentType === 'qa') {
-    // Held behind the spend decision (`[D-261]`): a Q&A successor is drafted
-    // only when a caller supplies `draftCardForConcept` explicitly. No
-    // production composition does, so a suspended Q&A card enqueues its
-    // revision job but makes no `cards.generate.v1` call until spend is
-    // authorised and the composition root opts in (`draftCardsForConcept` is
-    // the intended supplier then).
-    const draftCardForConcept = deps.draftCardForConcept;
-    if (draftCardForConcept === undefined) return { ok: true };
+    // `ol-egov.141.89.5.92` ([D-508], [D-541]): defaults to the real `draftCardsForConcept`, as the
+    // quiz branch does, so a withheld generated card gets a `cards.generate.v1` successor in
+    // production. It drafts under the drafting scope ([D-544]) inside `draft-cards.ts`. Spend stays
+    // gated by [D-261] at deploy, not by a missing seam. A test injects its own to avoid a Worker.
+    const draftCardForConcept = deps.draftCardForConcept ?? draftCardsForConcept;
     const demandFields = await successorDemandFields(
       deps.vault,
       demandCounter,
