@@ -72,6 +72,18 @@
  * sentence is new wording, **AWAITING A COPY PASS (Class B)** — not yet
  * reviewed by David, unlike the ratified strings above.
  *
+ * **`[D-538]` (`ol-egov.141.89.7.81`): each row names its basis.** A row
+ * states every basis its ranking rests on and no other, in the signed words:
+ * past papers counted ("Appears in" / "Asked in"), the course objectives only
+ * as "its course objectives name it" for an explicit name match, a link Olea's
+ * reading inferred as Olea's reading, and an assessment note's own declared
+ * scope as "its assessments point to it" — never as a brief, since that scope
+ * may be words she typed herself. Where her material holds nothing for it,
+ * the copy says what Olea did not find ("supporting material not found"),
+ * never that it is absent. {@link basisClauses} and {@link basisFragments} are
+ * the one place each phrase is written; the row line, both header lines, the
+ * mastery narrative and the material-gap heading read them.
+ *
  * **INV-1.** No `obsidian` import here — this module is unit-tested, which is
  * the entire point of it being separate from `view.ts`.
  */
@@ -111,8 +123,15 @@ export const COVERAGE_VIEW_TITLE = 'Coverage';
  * later when testing through the finished alpha product." So this is a
  * reversible default carrying his authority, not a lane quietly editing
  * ratified copy — and the full inventory is in run 16's report to read back.
+ *
+ * **Amended under `[D-538]` (2026-10-06).** The second half no longer asserts
+ * absence ("missing from your materials"): it says what Olea did not find.
+ * And the heading names the bases present among the material gaps it heads
+ * ({@link materialGapHeading}), so a material gap ranked on the objectives
+ * alone is never headed as named by past papers. This constant is the
+ * past-paper form, the one the ratified heading was written for.
  */
-export const MATERIAL_GAP_HEADING = 'Named by your past papers, missing from your materials';
+export const MATERIAL_GAP_HEADING = 'Named by your past papers, supporting material not found';
 
 /** The coverage-gap section heading (F4.5: notes exist, cards do not). */
 export const COVERAGE_GAP_HEADING = 'In your notes, not yet in your cards';
@@ -305,28 +324,33 @@ export function rankingAttribution(rows: readonly GapRow[], bases?: GapRowEviden
 }
 
 /**
- * Which non-past-paper bases stand behind `rows`. With `bases` supplied, read
- * directly off each row's own edges. Without it, the objectives-basis
- * paragraph above's inference stands unchanged: a ranked row with zero
- * citations is read as objectives-basis — which a brief-only row would
- * wrongly share, and is exactly why a caller that has the edges passes them.
+ * Which non-past-paper bases stand behind `rows`.
+ *
+ * **A row's own carried basis wins** (`GapRow.basis`, `[D-538]`,
+ * `ol-egov.141.89.7.81`): the core build reads it from the ranking's
+ * SURVIVING evidence, so an assessment already sat (its edge vetoed, C5.10)
+ * is never named here. `bases` is built from every edge before the veto, so it
+ * is read only for a row that carries no basis (one no build produced). With
+ * neither, the objectives-basis paragraph above's inference stands unchanged:
+ * a ranked row with zero citations is read as objectives-basis — which a
+ * brief-only row would wrongly share, and is exactly why a caller that has the
+ * edges passes them.
  */
 function nonPaperBases(
   rows: readonly GapRow[],
   bases: GapRowEvidenceBases | undefined,
 ): { readonly hasObjectivesEvidence: boolean; readonly hasBriefEvidence: boolean } {
-  if (bases === undefined) {
-    return {
-      hasObjectivesEvidence: rows.some((row) => row.citations.length === 0),
-      hasBriefEvidence: false,
-    };
-  }
   let hasObjectivesEvidence = false;
   let hasBriefEvidence = false;
   for (const row of rows) {
-    const rowBases = bases.get(gapRowBasisKey(row.course, row.conceptKey));
+    if (row.basis !== undefined) {
+      if (row.basis.objectives !== null) hasObjectivesEvidence = true;
+      if (row.basis.assessmentPaths.length > 0) hasBriefEvidence = true;
+      continue;
+    }
+    const rowBases = bases?.get(gapRowBasisKey(row.course, row.conceptKey));
     if (rowBases === undefined) {
-      // A row the caller's edges do not cover: the unsupplied inference, per row.
+      // No edges supplied, or a row they do not cover: the unsupplied inference, per row.
       if (row.citations.length === 0) hasObjectivesEvidence = true;
       continue;
     }
@@ -408,7 +432,8 @@ export function syllabusCounterweightBreakdown(rows: readonly GapRow[]): string 
     parts.push(`${nothingBuilt} with nothing built`);
   }
   if (noMaterial > 0) {
-    parts.push(`${noMaterial} with no material`);
+    // `[D-538]`: what Olea did not find, never a claim that her material lacks it.
+    parts.push(`${noMaterial} with no supporting material found`);
   }
   return parts.join(' · ');
 }
@@ -464,6 +489,125 @@ function hasPastPaperBasis(row: GapRow): boolean {
   return row.distinctSourceCount > 0;
 }
 
+// ---------------------------------------------------------------------------
+// `[D-538]` — one phrase per basis, written once (`ol-egov.141.89.7.81`)
+// ---------------------------------------------------------------------------
+
+/**
+ * "Its course objectives name it" — registry §29's ruled sentence (row 33), word
+ * for word, and only for an explicit name match (`GapRow.basis.objectives ===
+ * 'named'`).
+ */
+const OBJECTIVES_NAME_IT = 'its course objectives name it';
+
+/**
+ * A link Olea's reading made between the concept and the objectives
+ * (`[D-432]`'s semantic alignment): never "name it", and never §29's "covered
+ * by" either, since "cover" means her material on this surface (F4.10, F8.3).
+ * Built from registry §28's "Olea's reading" and §35's own account of the same
+ * fact ("which Olea's reading places under one of its objectives").
+ * **Proposed by `ol-egov.141.89.7.81`, needing a registry entry before any row
+ * carries an inferred link**; nothing produces one today (core
+ * `gap/build.ts`'s `GapRowObjectivesLink`).
+ */
+const OBJECTIVES_INFERRED = "Olea's reading places it under its course objectives";
+
+/**
+ * An assessment note's own declared scope (the `'assessment-brief'` basis):
+ * registry §29's ruled "Its assessments point to it.", chosen by `[D-538]` over
+ * "the brief names it", because the scope property may hold words she typed
+ * herself rather than the course's document.
+ */
+const ASSESSMENTS_POINT_TO_IT = 'its assessments point to it';
+
+/** The header-line forms of the three phrases above; "your", as the ratified heading says it. */
+const NAMED_BY_OBJECTIVES = 'named by your course objectives';
+const INFERRED_UNDER_OBJECTIVES = "placed under your course objectives by Olea's reading";
+const POINTED_TO_BY_ASSESSMENTS = 'pointed to by your assessments';
+
+/**
+ * `[D-538]`: "supporting material not found", in place of an absence claim
+ * ("it isn't in your materials"). A material gap is a concept no note of hers
+ * was found naming (core `classifyGap`), which is what Olea found, not a fact
+ * about her vault. The sentence names Olea as the one that looked; the
+ * header-line and heading form is the ruling's own phrase.
+ */
+const NOT_FOUND_SENTENCE = "Olea hasn't found supporting material for it.";
+const SUPPORTING_MATERIAL_NOT_FOUND = 'supporting material not found';
+
+/** Registry §29's ruled sentence for a concept with no recall evidence (`[D-348]`, §22). */
+const RECALL_NOT_KNOWN_YET = 'How well you recall it is not known yet.';
+
+/** How the past-paper basis is worded where it stands: the row line's frame by class, or the narrative's. */
+type PastPaperFrame = 'appears' | 'asked' | 'narrative';
+
+function pastPaperClause(n: number, frame: PastPaperFrame): string {
+  switch (frame) {
+    case 'appears':
+      return `appears in ${paperCount(n)}`;
+    case 'asked':
+      return `asked in ${paperCount(n)}`;
+    case 'narrative':
+      return `it's been asked in ${paperCount(n)}`;
+  }
+}
+
+function objectivesLink(row: GapRow): 'named' | 'inferred' | null {
+  return row.basis?.objectives ?? null;
+}
+
+function hasAssessmentBasis(row: GapRow): boolean {
+  return (row.basis?.assessmentPaths.length ?? 0) > 0;
+}
+
+/**
+ * Every basis a row's ranking rests on, as sentence clauses, in `[D-538]`'s
+ * order: past papers, objectives, assessments. Only past papers are counted;
+ * the objectives and the assessments never carry a count and are never said
+ * to appear in or be asked in anything (`[D-529]`). A row carrying no basis
+ * (one no build produced) names its past papers only.
+ */
+function basisClauses(row: GapRow, frame: PastPaperFrame): string[] {
+  const clauses: string[] = [];
+  if (hasPastPaperBasis(row)) clauses.push(pastPaperClause(row.distinctSourceCount, frame));
+  const objectives = objectivesLink(row);
+  if (objectives === 'named') clauses.push(OBJECTIVES_NAME_IT);
+  if (objectives === 'inferred') clauses.push(OBJECTIVES_INFERRED);
+  if (hasAssessmentBasis(row)) clauses.push(ASSESSMENTS_POINT_TO_IT);
+  return clauses;
+}
+
+/** The same bases as header-line fragments, joined by the caller with " · ". */
+function basisFragments(row: GapRow): string[] {
+  const fragments: string[] = [];
+  if (hasPastPaperBasis(row)) fragments.push(pastPaperClause(row.distinctSourceCount, 'asked'));
+  const objectives = objectivesLink(row);
+  if (objectives === 'named') fragments.push(NAMED_BY_OBJECTIVES);
+  if (objectives === 'inferred') fragments.push(INFERRED_UNDER_OBJECTIVES);
+  if (hasAssessmentBasis(row)) fragments.push(POINTED_TO_BY_ASSESSMENTS);
+  return fragments;
+}
+
+/** `a`, `a, and b`, `a, b, and c`: after the first clause the rest join with ", and". */
+function joinClauses(clauses: readonly string[]): string {
+  if (clauses.length <= 1) return clauses[0] ?? '';
+  return `${clauses.slice(0, -1).join(', ')}, and ${clauses[clauses.length - 1]}`;
+}
+
+function capitalise(text: string): string {
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+/** A row line: its bases, then the class's own clause after a semicolon; with no basis, the clause alone. */
+function withBasisLead(row: GapRow, frame: PastPaperFrame, clause: string): string {
+  const lead = basisClauses(row, frame);
+  return capitalise(lead.length === 0 ? clause : `${joinClauses(lead)}; ${clause}`);
+}
+
+function instrumentsLabel(row: GapRow): string {
+  return row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+}
+
 /**
  * The mastery-gap row's summary line (F4.3) — what she can act on, never the
  * oracle's own bookkeeping.
@@ -498,17 +642,25 @@ function hasPastPaperBasis(row: GapRow): boolean {
  * never-checked sentence (David, sheet v50, "Unknown-need copy"); a row
  * whose earlier answers were excluded because their passage changed reads
  * {@link changedPassageGapLine} instead, once a row carries that signal.
+ *
+ * **`[D-538]`.** The lead names every basis the row rests on
+ * ({@link basisClauses}); the clause after the semicolon, the signed
+ * unknown-need one included, is unchanged.
  */
 export function masteryGapLine(row: GapRow): string {
-  const instruments =
-    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
-  const lead = hasPastPaperBasis(row)
-    ? `Asked in ${paperCount(row.distinctSourceCount)}; you`
-    : 'You';
+  const instruments = instrumentsLabel(row);
   if (row.need?.basis === 'unknown') {
-    return `${lead} have ${instruments} built, but Olea has no recall evidence for it yet, so this says nothing about what you know.`;
+    return withBasisLead(
+      row,
+      'asked',
+      `you have ${instruments} built, but Olea has no recall evidence for it yet, so this says nothing about what you know.`,
+    );
   }
-  return `${lead} have ${instruments} built but recall here hasn't caught up.`;
+  return withBasisLead(
+    row,
+    'asked',
+    `you have ${instruments} built but recall here hasn't caught up.`,
+  );
 }
 
 /**
@@ -518,24 +670,26 @@ export function masteryGapLine(row: GapRow): string {
  * current reading only; her historical attainment is untouched and the
  * sentence never says otherwise. **No caller yet**: `GapRow` carries no
  * row-level signal for this case, so the lane that adds one to the row wires
- * this in. A row with no past-paper basis uses the same form as
- * {@link masteryGapLine} (pending `[D-538]`).
+ * this in. Its lead names the row's bases the same way as
+ * {@link masteryGapLine}'s (`[D-538]`).
  */
 export function changedPassageGapLine(row: GapRow): string {
-  const instruments =
-    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
-  const lead = hasPastPaperBasis(row)
-    ? `Asked in ${paperCount(row.distinctSourceCount)}; you`
-    : 'You';
-  return `${lead} have ${instruments} built, but the material behind your earlier answers has changed, so they don't count until it's checked again.`;
+  return withBasisLead(
+    row,
+    'asked',
+    `you have ${instrumentsLabel(row)} built, but the material behind your earlier answers has changed, so they don't count until it's checked again.`,
+  );
 }
 
 /**
  * One gap row's sentence, per class.
  *
- * The material-gap line is **ratified copy**, with its count derived rather
- * than hard-coded. Its second clause is a statement about what was ingested,
- * not a judgement about her notes, and it is phrased that way deliberately.
+ * The material-gap line began as **ratified copy** ("Appears in N past
+ * papers; it isn't in your materials.", F4.10's own example). Under
+ * `[D-538]` its lead names every basis the row rests on, and its second
+ * clause says what Olea did not find rather than asserting the material is
+ * absent: a statement about what was ingested, never a judgement about her
+ * notes. The coverage-gap line takes the same lead.
  *
  * The mastery-gap line is {@link masteryGapLine} — see that function's doc for
  * why this stopped being the oracle's raw `reasoning` string.
@@ -543,13 +697,9 @@ export function changedPassageGapLine(row: GapRow): string {
 export function gapRowLine(row: GapRow): string {
   switch (row.gapClass) {
     case 'material-gap':
-      return hasPastPaperBasis(row)
-        ? `Appears in ${paperCount(row.distinctSourceCount)}; it isn't in your materials.`
-        : "It isn't in your materials.";
+      return withBasisLead(row, 'appears', NOT_FOUND_SENTENCE);
     case 'coverage-gap':
-      return hasPastPaperBasis(row)
-        ? `Appears in ${paperCount(row.distinctSourceCount)}; you have notes on it but no cards yet.`
-        : 'You have notes on it but no cards yet.';
+      return withBasisLead(row, 'appears', 'you have notes on it but no cards yet.');
     case 'mastery-gap':
       return masteryGapLine(row);
   }
@@ -578,52 +728,88 @@ export function gapDetailEyebrow(course: string, gapClass: GapDetailClass): stri
  * data-model change is in this bead's `owns`: view/copy/provider only, same
  * disclosed gap `ol-l5og.18.3`'s close evidence already recorded). This
  * states what is actually known instead of a placeholder for what is not.
+ * Then each basis the row rests on (`[D-538]`), joined the same way.
  */
 export function masteryGapMeta(row: GapRow): string {
-  const instruments =
-    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
-  return hasPastPaperBasis(row)
-    ? `${instruments} · asked in ${paperCount(row.distinctSourceCount)}`
-    : instruments;
-}
-
-/** The material-gap detail page's header meta line (`[D-224]`) — F4.10's fact, not a claim about the exam ahead. */
-export function materialGapMeta(row: GapRow): string {
-  return hasPastPaperBasis(row)
-    ? `Asked in ${paperCount(row.distinctSourceCount)} · not in your materials`
-    : 'Not in your materials';
+  return [instrumentsLabel(row), ...basisFragments(row)].join(' · ');
 }
 
 /**
- * The mastery-gap detail page's narrative (F4.3, `[D-224]`) — two sentences,
- * never pass5g's attempt-by-attempt story (its `ATTEMPTS` table), which needs
- * per-attempt history this pipeline does not expose to the plugin layer
- * (same disclosed gap as {@link masteryGapMeta}). What exists, then why it is
- * ranked here — both COUNTED facts, no fitted score.
+ * The material-gap detail page's header meta line (`[D-224]`) — F4.10's fact,
+ * not a claim about the exam ahead: each basis (`[D-538]`), then what Olea did
+ * not find.
+ */
+export function materialGapMeta(row: GapRow): string {
+  return capitalise([...basisFragments(row), SUPPORTING_MATERIAL_NOT_FOUND].join(' · '));
+}
+
+/**
+ * The material-gap section heading (H1 of `[D-538]`): the bases present among
+ * the material gaps it heads, in the same nouns as the rows, then what Olea did
+ * not find. Past papers and objectives that name it share one "named by";
+ * a heading over past-paper rows alone is {@link MATERIAL_GAP_HEADING}. Rows of
+ * another class are not read.
+ */
+export function materialGapHeading(rows: readonly GapRow[]): string {
+  const material = rows.filter((row) => row.gapClass === 'material-gap');
+  const namedBy = [
+    ...(material.some(hasPastPaperBasis) ? ['your past papers'] : []),
+    ...(material.some((row) => objectivesLink(row) === 'named') ? ['your course objectives'] : []),
+  ];
+  const parts = [
+    ...(namedBy.length > 0 ? [`named by ${namedBy.join(' and ')}`] : []),
+    ...(material.some((row) => objectivesLink(row) === 'inferred')
+      ? [INFERRED_UNDER_OBJECTIVES]
+      : []),
+    ...(material.some(hasAssessmentBasis) ? [POINTED_TO_BY_ASSESSMENTS] : []),
+    SUPPORTING_MATERIAL_NOT_FOUND,
+  ];
+  return capitalise(parts.join(', '));
+}
+
+/**
+ * The mastery-gap detail page's narrative (F4.3, `[D-224]`) — never pass5g's
+ * attempt-by-attempt story (its `ATTEMPTS` table), which needs per-attempt
+ * history this pipeline does not expose to the plugin layer (same disclosed
+ * gap as {@link masteryGapMeta}). What exists, then why it is ranked here —
+ * COUNTED facts and named bases, no fitted score.
+ *
+ * **Why it is ranked here names its bases (`[D-538]`)**: the row's score is
+ * relevance times need (`[D-521]`), and the relevance comes from the bases, so
+ * recall alone is never the whole reason. **A row whose need is unknown**
+ * (`[D-348]`, registry §22) is never told recall is "worth another pass": it
+ * reads §29's ruled "How well you recall it is not known yet." after its bases.
  */
 export function masteryGapNarrative(row: GapRow): readonly string[] {
-  const instruments =
-    row.instrumentCount === 1 ? '1 instrument' : `${row.instrumentCount} instruments`;
+  const first = `Your notes cover this, and ${instrumentsLabel(row)} are built from them — the material and the practice both exist.`;
+  const bases = basisClauses(row, 'narrative');
+  if (row.need?.basis === 'unknown') {
+    return [
+      first,
+      ...(bases.length > 0 ? [`It's ranked here because ${joinClauses(bases)}.`] : []),
+      RECALL_NOT_KNOWN_YET,
+    ];
+  }
   return [
-    `Your notes cover this, and ${instruments} are built from them — the material and the practice both exist.`,
-    hasPastPaperBasis(row)
-      ? `It's ranked here because it's been asked in ${paperCount(row.distinctSourceCount)}, and recall on it is worth another pass.`
-      : "It's ranked here because recall on it is worth another pass.",
+    first,
+    `It's ranked here because ${joinClauses([...bases, 'recall on it is worth another pass'])}.`,
   ];
 }
 
 /**
  * The material-gap detail page's narrative (F4.10, `[D-224]`) — the same fact
- * {@link gapRowLine} states, plus F4.10's own distinction spelled out: a gap
- * in the material, never a judgement about what she knows. Never the kit's
- * quoted "one note that touched it" — `GapRow.notePaths` is empty by
- * definition for a material gap (`classifyGap`: no note names it at all), so
- * there is no mention to quote, honestly.
+ * {@link gapRowLine} states, then F4.10's own distinction: never a judgement
+ * about what she knows. Under `[D-538]` it no longer calls this "a gap in your
+ * material", an absence claim; it says what Olea has to build from, and
+ * reuses the signed unknown-need sentence's "this says nothing about what you
+ * know". Never the kit's quoted "one note that touched it" — `GapRow.notePaths`
+ * is empty by definition for a material gap (`classifyGap`: no note names it at
+ * all), so there is no mention to quote, honestly.
  */
 export function materialGapNarrative(row: GapRow): readonly string[] {
   return [
     gapRowLine(row),
-    "So there's nothing to build practice from yet — this is a gap in your material, not in what you know.",
+    'So Olea has nothing to build practice from yet. This says nothing about what you know.',
   ];
 }
 
@@ -670,7 +856,7 @@ export function pastPaperChipLabel(citation: EvidenceQuestionCitation): string {
   return `${name} · ${citation.questionLabel}`;
 }
 
-/** A row's chip strip, in citation order — `citations` is never empty for a ranked entry (`GapRow`'s own doc). */
+/** A row's chip strip, in citation order — empty for a row ranked without a past paper (`GapRow.citations`), which draws no chips. */
 export function pastPaperChips(row: GapRow): readonly string[] {
   return row.citations.map(pastPaperChipLabel);
 }

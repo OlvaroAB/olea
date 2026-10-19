@@ -419,7 +419,7 @@ describe('F4.9 — always advises covering the full syllabus', () => {
 describe('row copy', () => {
   it('states a material gap as a fact about what was ingested', () => {
     expect(gapRowLine(row({ gapClass: 'material-gap', distinctSourceCount: 3 }))).toBe(
-      "Appears in 3 past papers; it isn't in your materials.",
+      "Appears in 3 past papers; Olea hasn't found supporting material for it.",
     );
   });
 
@@ -533,7 +533,9 @@ describe('the syllabus counterweight (pass5g, `[D-224]`)', () => {
       row({ gapClass: 'coverage-gap' }),
       row({ gapClass: 'material-gap' }),
     ];
-    expect(syllabusCounterweightBreakdown(mixed)).toBe('2 with nothing built · 1 with no material');
+    expect(syllabusCounterweightBreakdown(mixed)).toBe(
+      '2 with nothing built · 1 with no supporting material found',
+    );
     expect(syllabusCounterweightBreakdown([row({ gapClass: 'mastery-gap' })])).toBeNull();
   });
 });
@@ -627,7 +629,7 @@ describe('the per-concept detail page copy (STY-2, `[D-224]`)', () => {
     const meta = materialGapMeta(
       row({ gapClass: 'material-gap', distinctSourceCount: 2, notePaths: [] }),
     );
-    expect(meta).toBe('Asked in 2 past papers · not in your materials');
+    expect(meta).toBe('Asked in 2 past papers · supporting material not found');
   });
 
   it('the mastery-gap narrative names what exists and why it is ranked, with no fitted number', () => {
@@ -640,13 +642,13 @@ describe('the per-concept detail page copy (STY-2, `[D-224]`)', () => {
     expect(joined).toContain('1 past paper');
   });
 
-  it('the material-gap narrative states a gap in the material, never in what she knows (F4.10)', () => {
+  it('the material-gap narrative states what Olea has to build from, never a judgement of what she knows (F4.10, [D-538])', () => {
     const lines = materialGapNarrative(
       row({ gapClass: 'material-gap', distinctSourceCount: 3, notePaths: [] }),
     );
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe(gapRowLine(row({ gapClass: 'material-gap', distinctSourceCount: 3 })));
-    expect(lines.join(' ')).toContain('not in what you know');
+    expect(lines.join(' ')).toContain('This says nothing about what you know');
   });
 });
 

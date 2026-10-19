@@ -184,7 +184,20 @@ afterEach(() => {
 });
 
 /** Maps become sorted entry lists and sets sorted arrays, so nothing a view reads is lost to `JSON.stringify`. */
-function canonical(_key: string, value: unknown): unknown {
+function canonical(key: string, value: unknown): unknown {
+  // `ol-egov.141.89.7.81` (`[D-538]`) carries each row's surviving basis onto `GapRow.basis`: data
+  // added after this golden was written, read by the copy layer. What she sees from it is pinned by
+  // `copy.row-basis.ol-egov.141.89.7.81.spec.ts` and `view.row-basis.ol-egov.141.89.7.81.spec.ts`;
+  // this suite keeps comparing everything else byte for byte, the framing sentence (which now reads
+  // that field) included. Only the row field's object shape is dropped, never a string `basis`.
+  if (
+    key === 'basis' &&
+    typeof value === 'object' &&
+    value !== null &&
+    'assessmentPaths' in value
+  ) {
+    return undefined;
+  }
   if (value instanceof Map) {
     return [...value.entries()].sort(([a], [b]) => (String(a) < String(b) ? -1 : 1));
   }
