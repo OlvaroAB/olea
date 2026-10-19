@@ -1219,6 +1219,8 @@ function buildCoverage(
   found: ReadonlyMap<VaultPath, number>,
   calls: ReadonlyMap<VaultPath, number> = NO_CALLS,
   anchorsRejected: ReadonlyMap<VaultPath, number> = NO_ANCHORS_REJECTED,
+  /** Passages per document whose call the reader refused (D-448): offered and sent, not read, and not the budget's doing. */
+  refused: ReadonlyMap<VaultPath, number> = NO_ANCHORS_REJECTED,
 ): readonly ConceptReadCoverage[] {
   const rows = new Map<
     VaultPath,
@@ -1260,7 +1262,7 @@ function buildCoverage(
       passagesRead: row.read,
       conceptsFound: found.get(sourcePath) ?? 0,
       calls: calls.get(sourcePath) ?? 0,
-      truncatedByBudget: row.read < row.offered,
+      truncatedByBudget: row.read + (refused.get(sourcePath) ?? 0) < row.offered,
       sections: [...row.sections],
       anchorsRejected: anchorsRejected.get(sourcePath) ?? 0,
       ...(row.parts.length > 0 ? { partsRead: [...new Set(row.parts)].sort((a, b) => a - b) } : {}),
@@ -1678,9 +1680,25 @@ export async function readConcepts(
   const anchorsRejectedBySource = new Map<VaultPath, number>();
   // `ol-egov.141.89.3.48`: relations a reader skipped as malformed, folded into `relationsDropped`.
   let relationsMalformed = 0;
+  // `ol-egov.141.89.3.55` (D-448): a call the reader refused loses only its own batch. The batches
+  // that ran are kept; the refused ones are remembered so coverage records their documents as not read.
+  const readBatches: DocumentBatch[] = [];
+  const refusedBatches: DocumentBatch[] = [];
+  let firstRefusal: unknown;
   try {
-    for (const { sourcePath, batch } of documentBatches) {
-      const response = await reader.read({ passages: batch });
+    for (const documentBatch of documentBatches) {
+      const { sourcePath, batch } = documentBatch;
+      let response: Awaited<ReturnType<ConceptReaderPort['read']>>;
+      try {
+        response = await reader.read({ passages: batch });
+      } catch (error) {
+        // No connection, budget or desktop ends the whole read, as before.
+        if (error instanceof ConceptReaderUnavailableError) throw error;
+        if (refusedBatches.length === 0) firstRefusal = error;
+        refusedBatches.push(documentBatch);
+        continue;
+      }
+      readBatches.push(documentBatch);
       proposals.push(...response.concepts);
       if (response.relations !== undefined) {
         for (const relation of response.relations)
@@ -1704,15 +1722,24 @@ export async function readConcepts(
         ...base,
       };
     }
+    throw error;
+  }
+  // Every call refused: nothing was read, so the outcome is today's.
+  if (readBatches.length === 0) {
     return {
       outcome: 'unrecognised',
       concepts: [],
       reason: 'reader-failed',
-      detail: `The reader was reached and failed: ${error instanceof Error ? error.message : String(error)}`,
+      detail: `The reader was reached and failed: ${firstRefusal instanceof Error ? firstRefusal.message : String(firstRefusal)}`,
       coverage: buildCoverage(all, [], NO_CONCEPTS),
       ...base,
     };
   }
+  const refusedPassages = new Map<VaultPath, number>();
+  for (const { sourcePath, batch } of refusedBatches) {
+    refusedPassages.set(sourcePath, (refusedPassages.get(sourcePath) ?? 0) + batch.length);
+  }
+  const readPassages = readBatches.flatMap(({ batch }) => batch);
 
   // Her conventions, gathered afterwards and used only to decide whose
   // naming wins. `extractConcepts` is one corroborating source now, and this
@@ -1854,11 +1881,14 @@ export async function readConcepts(
     relationsDropped: totalDropped(reconciled.dropped) + relationsMalformed,
     coverage: buildCoverage(
       all,
-      budgeted,
+      readPassages,
       found,
-      callsBySource(documentBatches),
+      callsBySource(readBatches),
       anchorsRejectedBySource,
+      refusedPassages,
     ),
     ...base,
+    // A refused batch's passages were sent but not read.
+    passagesRead: readPassages.length,
   };
 }
