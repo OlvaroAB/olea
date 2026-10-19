@@ -1076,6 +1076,10 @@ export async function composeStudySessionForRequest(
     // (`ol-63e1`) — already extracted by the instrument walk above, so
     // this pays no second walk.
     concepts: enumeration.concepts,
+    // `[D-544]` (`ol-egov.141.89.3.52`): `concepts` carries stamped keys, so a course-scoped
+    // identity (a wording her course's own documents name but only another course held) is
+    // resolved through the same key store. This is the production caller.
+    stampConceptKeys: true,
     // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from the
     // "source registered" events already in `entries` — the same projection `grove/provider.ts`
     // reads. Without it a registered past-paper PDF never became a ranking edge, so a course

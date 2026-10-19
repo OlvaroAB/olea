@@ -359,6 +359,8 @@ export function createLocalStudyPlanProvider(
         disputes,
         asOf: today,
         concepts,
+        // `[D-544]`: stamped keys above, so a course-scoped identity is stamped too.
+        stampConceptKeys: true,
         // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered — the "source
         // registered" events already in `entries` — folded into the `RegisteredFileSpec[]` the
         // evidence-edge builder reads, exactly as `grove/provider.ts` folds them for its own

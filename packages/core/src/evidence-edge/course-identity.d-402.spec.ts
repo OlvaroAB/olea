@@ -5,9 +5,10 @@
  * resolved `conceptKey` through a name-only map, so a split wording's demand in one course could
  * land on the other course's identity, and which one depended on extraction order.
  *
- * Also pinned, unchanged on purpose: a wording with no identity in the edge's course still takes
- * the wording's identity elsewhere (whether it should is not ruled), and a wording with no record
- * at all still falls back to its name.
+ * Also pinned: a wording with no identity in the edge's course no longer takes the wording's
+ * identity elsewhere. That was left unruled here, and `[D-544]` (2026-10-17) answered it: the
+ * course gets a course-scoped identity of its own (`./course-scoped-identity.d-544.spec.ts` covers
+ * it in full). A wording with no record at all still falls back to its name.
  *
  * Every fixture string here is INVENTED — course codes, concept names, assessment text — per
  * INV-3; nothing below is drawn from a real vault.
@@ -166,7 +167,7 @@ describe('buildConceptAssessmentEdges — [D-402] an edge keys to its own course
     expect(keysOf('TWO202')).toEqual([IN_TWO.key]);
   });
 
-  it("unchanged (not ruled): a wording with no identity in the edge's course still takes its identity elsewhere", async () => {
+  it("ruled by [D-544]: a wording with no identity in the edge's course keys to a course-scoped identity, never the other course's", async () => {
     await write(
       '02 Assignments/Essay.md',
       assessmentNote('ONE101', 'Essay', `scope: Covers ${WORDING}.\n`),
@@ -175,10 +176,12 @@ describe('buildConceptAssessmentEdges — [D-402] an edge keys to its own course
       basePath: BASE_PATH,
       concepts: [IN_TWO],
     });
-    expect(result.edges.map((e) => [e.course, e.conceptKey])).toEqual([['ONE101', IN_TWO.key]]);
+    expect(result.edges.map((e) => [e.course, e.conceptKey])).toEqual([
+      ['ONE101', `concept-prov1:${WORDING}@ONE101`],
+    ]);
   });
 
-  it('unchanged: in a course holding neither identity, the last-listed identity is taken, and a wording with no record keeps its name', async () => {
+  it('ruled by [D-544]: a course holding neither identity takes neither; a wording with no record keeps its name', async () => {
     await write(
       '02 Assignments/Essay.md',
       assessmentNote('THR303', 'Essay', `scope: Covers ${WORDING}.\n`),
@@ -187,7 +190,7 @@ describe('buildConceptAssessmentEdges — [D-402] an edge keys to its own course
       basePath: BASE_PATH,
       concepts: [IN_ONE, IN_TWO],
     });
-    expect(split.edges.map((e) => e.conceptKey)).toEqual([IN_TWO.key]);
+    expect(split.edges.map((e) => e.conceptKey)).toEqual([`concept-prov1:${WORDING}@THR303`]);
 
     await write(
       '03 Research/THR303 Past Paper 2024.md',

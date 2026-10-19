@@ -199,7 +199,10 @@ export interface ConceptAssessmentEdge {
    * concept `conceptName` names — resolved from
    * `BuildConceptAssessmentEdgesOptions.concepts` by exact name match, the
    * identity of the edge's own {@link course} first (`[D-402]`: a wording two
-   * courses name has one identity per course; `build.ts`'s `conceptKeyResolver`).
+   * courses name has one identity per course; `build.ts`'s `conceptKeyResolver`),
+   * and never another course's identity (`[D-544]`): a wording only other
+   * courses' identities carry keys to a course-scoped identity of this course,
+   * listed in `BuildConceptAssessmentEdgesResult.courseScopedConcepts`.
    * **This is the identity a review-log `conceptIds` entry now carries**
    * (`ol-63e1`'s coordinated flip): `oracle/compose.ts` joins mastery on this
    * field, never on `conceptName`. Falls back to `conceptName` itself only
@@ -312,6 +315,14 @@ export interface BuildConceptAssessmentEdgesOptions extends ExtractTier3Evidence
    * state: only records, resolved by `resolveBasisSwitches`.
    */
   readonly basisGate?: BasisGateInput;
+  /**
+   * `[D-544]` (`ol-egov.141.89.3.52`): resolve a course-scoped identity through the persisted key
+   * store (`../concept/course-scoped-identity.js`), looked up first and minted only the first time.
+   * Set it exactly when `concepts` carries stamped keys, which every plugin ranking caller's
+   * `enumerateVaultInstruments(..., { concepts: { stampConceptKeys: true } })` does. Omitted, a
+   * course-scoped identity takes a provisional stand-in key and nothing is written.
+   */
+  readonly stampConceptKeys?: boolean;
 }
 
 export interface BuildConceptAssessmentEdgesResult {
@@ -338,4 +349,13 @@ export interface BuildConceptAssessmentEdgesResult {
    * surface renders it, and nothing above changes with it (`./basis-switch.ts`).
    */
   readonly basisSources: BasisSourceAttributions;
+  /**
+   * `[D-544]` (`ol-egov.141.89.3.52`): the course-scoped identities the edges above key to — one per
+   * course and wording its own assessment documents name but only another course's identity carried
+   * — as tier-3 records of that course alone, with the course's own citing documents as
+   * `sourcePaths` and the first cited passage as `anchor`. They are not in `concepts` (extraction
+   * does not see assessment documents), so a consumer that lists concepts for her, such as the
+   * registry, appends them. Empty when no edge needed one.
+   */
+  readonly courseScopedConcepts: readonly ConceptRecord[];
 }

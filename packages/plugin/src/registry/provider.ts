@@ -660,6 +660,13 @@ async function disputesFromFiles(
  * registry down with it — `[]` (no course rankings this load) degrades every
  * concept's `noteOffer.eligible` to `false`, exactly the same "absent is a
  * real, non-error state" `BuildRegistryModelInput.courseRankings` documents.
+ *
+ * **`[D-544]` (`ol-egov.141.89.3.52`): also the course-scoped identities the ranking keyed to** —
+ * one per course and wording her course's own assessment documents name but only another course's
+ * identity carried. Extraction does not see assessment documents, so `concepts` lacks them; the
+ * caller lists them beside it, so the registry shows the course's own identity and F8.4a's identity
+ * section can show its same-as proposal with the course's own passage. Empty whenever the ranking
+ * is.
  */
 async function courseRankingsForNoteOffer(
   vault: VaultSource,
@@ -671,21 +678,27 @@ async function courseRankingsForNoteOffer(
   scheduler: Scheduler,
   now: Date,
   disputes: readonly DisputeLogRecord[],
-): Promise<readonly CourseOracleRanking[]> {
+): Promise<{
+  readonly courses: readonly CourseOracleRanking[];
+  readonly courseScopedConcepts: readonly ConceptRecord[];
+}> {
+  const none = { courses: [], courseScopedConcepts: [] };
   try {
     const config = await new ObsidianStudyPlanSettingsStore(settingsHost).load();
-    if (!(await hasAssessmentSource(vault, config))) return [];
+    if (!(await hasAssessmentSource(vault, config))) return none;
     // `[D-110]` (`ol-v7r5.55` [IL-D7]): same-tick `undefined` when
     // `readRankWeights` is absent, or a network call to the Worker when
     // present — mirrors `plan/provider.ts`/`gap/provider.ts`'s own read.
     const options = await (readRankWeights?.() ?? Promise.resolve(undefined));
-    const { ranking } = await composeOracleRanking({
+    const { ranking, edges } = await composeOracleRanking({
       vault,
       basePath: config.assignmentsBasePath,
       reviewLog: entries,
       disputes,
       asOf,
       concepts,
+      // `[D-544]`: `concepts` carries stamped keys, so a course-scoped identity is stamped too.
+      stampConceptKeys: true,
       // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from the
       // "source registered" events already in `entries` — the same projection
       // `grove/provider.ts` reads. Without it the note-offer gate ranked without the past
@@ -702,14 +715,27 @@ async function courseRankingsForNoteOffer(
       // assign `undefined` to it, matching the other two callers.
       ...(options !== undefined ? { options } : {}),
     });
-    return ranking.courses;
+    return { courses: ranking.courses, courseScopedConcepts: edges.courseScopedConcepts };
   } catch (error) {
     console.error(
       'Olea: could not compose F4.2 rankings for the note-offer gate ([D-176]) — the offer will not appear this load',
       error,
     );
-    return [];
+    return none;
   }
+}
+
+/**
+ * `[D-544]`: `concepts` plus each course-scoped identity it does not already carry, by key — the
+ * list the registry is built from (see `courseRankingsForNoteOffer`'s doc).
+ */
+function withCourseScopedConcepts(
+  concepts: readonly ConceptRecord[],
+  courseScoped: readonly ConceptRecord[],
+): readonly ConceptRecord[] {
+  if (courseScoped.length === 0) return concepts;
+  const keys = new Set(concepts.map((concept) => concept.key));
+  return [...concepts, ...courseScoped.filter((concept) => !keys.has(concept.key))];
 }
 
 /**
@@ -928,7 +954,7 @@ function createLoadModel(
       // ahead of that Promise.all rather than alongside it — the one dependency between
       // these otherwise-independent reads.
       const disputes = await disputesFromFiles(deps.vault, files);
-      const [courseRankings, pendingRevalidation] = await Promise.all([
+      const [noteOfferRanking, pendingRevalidation] = await Promise.all([
         courseRankingsForNoteOffer(
           deps.vault,
           deps.settingsHost,
@@ -951,8 +977,14 @@ function createLoadModel(
           : Promise.resolve(EMPTY_PENDING_REVALIDATION_MAP),
       ]);
 
+      const courseRankings = noteOfferRanking.courses;
       const model = buildRegistryModel({
-        concepts: withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
+        // `[D-544]`: the course-scoped identities the ranking keyed to are listed beside the
+        // extracted concepts, each under its own course — see `courseRankingsForNoteOffer`.
+        concepts: withCourseScopedConcepts(
+          withPassageAnchors(enumeration.concepts, deps.conceptRecords?.() ?? null),
+          noteOfferRanking.courseScopedConcepts,
+        ),
         instrumentRecords: enumeration.records,
         entries,
         scheduler,
