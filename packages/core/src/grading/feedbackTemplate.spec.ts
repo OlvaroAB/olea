@@ -75,7 +75,7 @@ describe('renderExplainBackFeedback', () => {
   it('renders a candidate with or without findings, never its ids', () => {
     const only = renderExplainBackFeedback(base({ misconceptionCandidates: [CANDIDATE] }));
     expect(only).toBe(
-      '- A belief to check: The valve stores pressure. The passage says: The valve only directs flow.',
+      '- A belief to check: The valve stores pressure. The valve only directs flow.',
     );
     expect(only).not.toContain('concept-opaque');
     const both = renderExplainBackFeedback(
@@ -116,7 +116,6 @@ describe('renderExplainBackFeedback', () => {
       '"the valve opens inward"',
       'A belief to check:',
       'The valve stores pressure.',
-      'The passage says:',
       'The valve only directs flow.',
     ])
       rest = rest.replace(piece, '');

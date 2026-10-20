@@ -300,10 +300,10 @@ export function explainBackInsufficientNotesRefusal(sourceBlockCount: number): s
  * (F5.4's Socratic follow-ups are shed for S3), so "full depth" is read as
  * this honest proxy: correct, with nothing the grader found to flag.
  *
- * **What names the specific evidence** is `grading.feedback` — the grader's
- * own per-answer text, not a second, separately-invented sentence — appended
- * after the milestone fact, the same composition `mcqFeedbackSentence` above
- * already uses for "model text plus one derived clause."
+ * **The milestone is the whole sentence.** `ol-egov.141.89.6.98` (David,
+ * 2026-10-20): the Worker's free-text `grading.feedback` is never shown to
+ * her (the findings and misconception regions are the feedback), so it is no
+ * longer appended after the milestone fact.
  *
  * **`first`, not "first this session":** the caller decides whether this is
  * actually the first full-depth explanation ever (mastery/stage state this
@@ -327,7 +327,7 @@ export function explainBackInsufficientNotesRefusal(sourceBlockCount: number): s
 export function explainBackFullDepthEncouragement(
   grading: Pick<
     AcceptedExplainBackGrading,
-    'verdict' | 'missedPoints' | 'citedIssues' | 'misconceptionCandidates' | 'feedback'
+    'verdict' | 'missedPoints' | 'citedIssues' | 'misconceptionCandidates'
   >,
 ): string | null {
   if (
@@ -339,8 +339,7 @@ export function explainBackFullDepthEncouragement(
     return null;
   }
   const milestone = "That's the first time this concept has been explained at full depth.";
-  const feedback = grading.feedback.trim();
-  return feedback === '' ? milestone : `${milestone} ${feedback}`;
+  return milestone;
 }
 
 /**
