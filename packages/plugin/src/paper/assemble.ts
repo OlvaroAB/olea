@@ -53,18 +53,19 @@
  *   concept's name (`paper-blueprint.ts`'s own doc). Omitting the parameter (or passing `[]`,
  *   the default) reproduces the old degraded behaviour exactly — no concept gets an `outcomeId`,
  *   `outcomes` is empty, and emphasis matches concept names only, same as before this wiring.
- * - **structure (past-paper structure/composition, `[D-262]`'s demand reading).** Always `null`
- *   — no `recoverStructure`-equivalent production reader exists in either package. `null` is the
- *   type's own legal "nothing was recoverable" state
- *   (`PaperRecoveredStructure | null`'s own doc). **This is the one degradation that changes
- *   what the surface can DEMONSTRATE, not only its fidelity**: with no real demand readings,
- *   `dominantDemand` always falls to `DEFAULT_INTENDED_DEMAND` ('recall-a-fact'), which both
- *   existing generators declare, so `buildPaperBlueprint`'s `partial`/`unbuiltDemand` fields can
- *   never fire against a REAL course composed by this module today. The mechanism and its render
- *   are still fully built and unit-tested (`copy.spec.ts`, `provider.spec.ts`) against an
- *   INJECTED `PaperRecoveredStructure` — this module's `structure: null` default is what a real
- *   composition gets until a structure-recovery reader is wired; a follow-on bead is the honest
- *   next step, not a fix owed by this one.
+ * - **structure (past-paper structure/composition, F4.11 input (b); `[D-548]`,
+ *   `ol-egov.141.89.7.87`).** The caller's reading of her stored past-paper readings
+ *   (`./provider.ts`'s `pastPaperStructureForCourse`, over `olea-core`'s
+ *   `paperRecoveredStructureFromReadings`), passed through unchanged; `null` (the default) when no
+ *   reading counts, which is the type's own "nothing was recoverable" state and keeps the declared
+ *   standard extent exactly as before. It sets the paper's LENGTH only: the median past-paper item
+ *   count for a standard paper, clamped 1 to 8 (`extentSlotCountTarget`). It carries no demand
+ *   reading (nothing records which papers are sealed, and demand is read from non-sealed papers
+ *   only), so `dominantDemand` still falls to `DEFAULT_INTENDED_DEMAND` ('recall-a-fact'), which
+ *   both existing generators declare, and `buildPaperBlueprint`'s `partial`/`unbuiltDemand` fields
+ *   still cannot fire against a REAL course composed by this module. The mechanism and its render
+ *   are fully built and unit-tested (`copy.spec.ts`, `provider.spec.ts`) against an INJECTED
+ *   `PaperRecoveredStructure` carrying demands.
  *
  * **Coverage share for the unlock rule** is also wired now, one level up (`unlock.ts`'s own
  * module doc, `ol-2zfj.172`): `provider.ts`'s `loadCourseState` reads the same
@@ -81,6 +82,7 @@ import {
   type OutcomeRecord,
   type PaperAssessment,
   type PaperHeldSource,
+  type PaperRecoveredStructure,
   type PaperScopeConcept,
   type PaperScopeOutcome,
   type VaultPath,
@@ -234,6 +236,10 @@ export function buildAssessmentsForCourse(
  * surface from — see this repo's proposed-decision note (ol-egov.141.6.17's report) rather than
  * inventing one here. `'assessment-simulation'` is also, independent of that gap, the one purpose
  * this caller's own `masteryScore: null` degradation (module doc) makes a true no-op either way.
+ *
+ * **`structure` (`[D-548]`).** The course's past-paper reading, or `null` (the default) when there
+ * is none; see the module doc. It is passed as given: which readings count is decided where the
+ * store is read, never here.
  */
 export async function buildBlueprintInputForCourse(
   vault: VaultSource,
@@ -246,6 +252,7 @@ export async function buildBlueprintInputForCourse(
   course: string,
   asOf: string,
   outcomes: readonly OutcomeRecord[] = [],
+  structure: PaperRecoveredStructure | null = null,
 ): Promise<BuildPaperBlueprintInput> {
   return {
     course,
@@ -253,7 +260,7 @@ export async function buildBlueprintInputForCourse(
     concepts: await buildScopeConceptsForCourse(vault, concepts, course, outcomes),
     outcomes: buildScopeOutcomesForCourse(outcomes, course),
     assessments: buildAssessmentsForCourse(assessmentRecords, course),
-    structure: null,
+    structure,
     purpose: DEFAULT_PAPER_PURPOSE,
     alpha: PRACTICE_PAPER_ALPHA_DECLARED,
     formatClassOf,

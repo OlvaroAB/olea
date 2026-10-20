@@ -29,7 +29,12 @@
  */
 
 import type { App, TFile } from 'obsidian';
-import { courseFromPath, type VaultSource, type WorkerTaskTransport } from 'olea-core';
+import {
+  courseFromPath,
+  type PaperRecoveredStructure,
+  type VaultSource,
+  type WorkerTaskTransport,
+} from 'olea-core';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { buildPracticePaperGenerationPort, type ObsidianDataHost } from './generation-port.js';
@@ -54,6 +59,11 @@ export interface BuildPracticePaperProviderDeps {
   readonly createTransport: (config: WorkerConfig) => WorkerTaskTransport;
   readonly settingsStore: { load(): Promise<PersistedStudyPlanConfig> };
   readonly now?: () => Date;
+  /**
+   * `[D-548]` (`ol-egov.141.89.7.87`): the course's past-paper structure, from her stored readings
+   * (`pastPaperStructureReaderForVault`, supplied by `main.ts`). Omitted: the declared standard extent.
+   */
+  readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc for exactly what `main.ts` supplies and why each piece is injected rather than built here. */
@@ -64,6 +74,7 @@ export function buildPracticePaperProvider(
     vault: deps.vault,
     settingsStore: deps.settingsStore,
     now: deps.now ?? (() => new Date()),
+    ...(deps.readPastPaperStructure ? { readPastPaperStructure: deps.readPastPaperStructure } : {}),
     generationPort: () =>
       buildPracticePaperGenerationPort({
         dataHost: deps.dataHost,

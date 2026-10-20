@@ -1816,6 +1816,7 @@ export {
   isEligibleConcept as isEligiblePaperConcept,
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
+  normalisePaperRecoveredStructure,
   PAPER_TAUGHT_ELIGIBLE_SIGNALS,
   slotWeightForPurpose,
   taskIdForFormatClass as paperTaskIdForFormatClass,
@@ -1869,6 +1870,11 @@ export {
   paperJournalPath,
   runPaperJournal,
 } from './oracle/paper-journal.js';
+export type { PastPaperStoredReading } from './oracle/paper-recovered-structure.js';
+export {
+  paperRecoveredStructureFromReadings,
+  pastPaperReadingCounts,
+} from './oracle/paper-recovered-structure.js';
 export type {
   CreatePaperInput,
   PaperCompositionAccount,

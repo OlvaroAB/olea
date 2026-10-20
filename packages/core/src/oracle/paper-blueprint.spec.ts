@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildPaperBlueprint,
   conceptWeight,
+  DEFAULT_INTENDED_DEMAND,
   DEFAULT_PAPER_PURPOSE,
   demandServedByGenerator,
   dominantDemand,
@@ -12,9 +13,11 @@ import {
   isEligibleConcept,
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
+  normalisePaperRecoveredStructure,
   PAPER_GENERATOR_DECLARED_DEMANDS,
   significantDemands,
   slotWeightForPurpose,
+  validatePaperRecoveredStructure,
   validatePaperScope,
 } from './paper-blueprint.js';
 import type {
@@ -111,11 +114,25 @@ describe('extentSlotCountTarget', () => {
       sittings: [
         {
           regime: 'current',
-          sections: [{ label: 'A', questionForm: 'MCQ', itemCount: 20, marks: 20 }],
+          sections: [
+            {
+              label: 'A',
+              questionForm: 'MCQ',
+              itemCount: 20,
+              marks: { status: 'stated', value: 20 },
+            },
+          ],
         },
         {
           regime: 'historical',
-          sections: [{ label: 'A', questionForm: 'MCQ', itemCount: 5, marks: 5 }],
+          sections: [
+            {
+              label: 'A',
+              questionForm: 'MCQ',
+              itemCount: 5,
+              marks: { status: 'stated', value: 5 },
+            },
+          ],
         },
       ],
     };
@@ -418,7 +435,14 @@ describe('purpose [D-277]', () => {
         sittings: [
           {
             regime: 'current',
-            sections: [{ label: 'A', questionForm: 'x', itemCount, marks: itemCount }],
+            sections: [
+              {
+                label: 'A',
+                questionForm: 'x',
+                itemCount,
+                marks: { status: 'stated', value: itemCount },
+              },
+            ],
           },
         ],
       };
@@ -537,7 +561,13 @@ describe('demand vocabulary [D-262]', () => {
           regime: 'current',
           sourceRef,
           sections: [
-            { label: 'Section A', questionForm: 'short-answer', itemCount: 5, marks: 20, demands },
+            {
+              label: 'Section A',
+              questionForm: 'short-answer',
+              itemCount: 5,
+              marks: { status: 'stated', value: 20 },
+              demands,
+            },
           ],
         },
       ],
@@ -561,7 +591,13 @@ describe('demand vocabulary [D-262]', () => {
           {
             regime: 'current',
             sections: [
-              { label: 'A', questionForm: 'x', itemCount: 1, marks: 1, demands: ['calculate'] },
+              {
+                label: 'A',
+                questionForm: 'x',
+                itemCount: 1,
+                marks: { status: 'stated', value: 1 },
+                demands: ['calculate'],
+              },
             ],
           },
         ],
@@ -596,10 +632,16 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'A',
                 questionForm: 'x',
                 itemCount: 2,
-                marks: 10,
+                marks: { status: 'stated', value: 10 },
                 demands: ['interpret-printed-result', 'interpret-printed-result'],
               },
-              { label: 'B', questionForm: 'y', itemCount: 1, marks: 5, demands: ['recall-a-fact'] },
+              {
+                label: 'B',
+                questionForm: 'y',
+                itemCount: 1,
+                marks: { status: 'stated', value: 5 },
+                demands: ['recall-a-fact'],
+              },
             ],
           },
         ],
@@ -624,14 +666,14 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'Many short recall questions',
                 questionForm: 'short-answer',
                 itemCount: 10,
-                marks: 10,
+                marks: { status: 'stated', value: 10 },
                 demands: Array(10).fill('recall-a-fact'),
               },
               {
                 label: 'One mark-heavy question',
                 questionForm: 'essay',
                 itemCount: 1,
-                marks: 15,
+                marks: { status: 'stated', value: 15 },
                 demands: ['interpret-printed-result'],
               },
             ],
@@ -666,21 +708,21 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'Recall section',
                 questionForm: 'multiple-choice',
                 itemCount: 20,
-                marks: 60,
+                marks: { status: 'stated', value: 60 },
                 demands: Array(20).fill('recall-a-fact'),
               },
               {
                 label: 'Apply section',
                 questionForm: 'essay',
                 itemCount: 2,
-                marks: 20,
+                marks: { status: 'stated', value: 20 },
                 demands: Array(2).fill('apply-to-unfamiliar-case'),
               },
               {
                 label: 'Compare section — below the bar',
                 questionForm: 'short-answer',
                 itemCount: 1,
-                marks: 1,
+                marks: { status: 'stated', value: 1 },
                 demands: ['compare-or-choose'],
               },
             ],
@@ -706,14 +748,14 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'A',
                 questionForm: 'x',
                 itemCount: 3,
-                marks: 75,
+                marks: { status: 'stated', value: 75 },
                 demands: Array(3).fill('recall-a-fact'),
               },
               {
                 label: 'B',
                 questionForm: 'y',
                 itemCount: 1,
-                marks: 25,
+                marks: { status: 'stated', value: 25 },
                 demands: ['apply-to-unfamiliar-case'],
               },
             ],
@@ -742,14 +784,14 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'Partially read',
                 questionForm: 'short-answer',
                 itemCount: 10,
-                marks: 100,
+                marks: { status: 'stated', value: 100 },
                 demands: ['recall-a-fact'],
               },
               {
                 label: 'Fully read',
                 questionForm: 'y',
                 itemCount: 1,
-                marks: 10,
+                marks: { status: 'stated', value: 10 },
                 demands: ['calculate'],
               },
             ],
@@ -923,14 +965,14 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'Many short recall questions',
                 questionForm: 'multiple-choice',
                 itemCount: 20,
-                marks: 60,
+                marks: { status: 'stated', value: 60 },
                 demands: Array(20).fill('recall-a-fact'),
               },
               {
                 label: 'A mark-heavy minority section',
                 questionForm: 'essay',
                 itemCount: 2,
-                marks: 20,
+                marks: { status: 'stated', value: 20 },
                 demands: Array(2).fill('apply-to-unfamiliar-case'),
               },
             ],
@@ -980,7 +1022,7 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'Recall',
                 questionForm: 'multiple-choice',
                 itemCount: 19,
-                marks: 95,
+                marks: { status: 'stated', value: 95 },
                 demands: Array(19).fill('recall-a-fact'),
               },
               {
@@ -990,7 +1032,7 @@ describe('demand vocabulary [D-262]', () => {
                 label: 'One small unsupported question',
                 questionForm: 'short-answer',
                 itemCount: 1,
-                marks: 5,
+                marks: { status: 'stated', value: 5 },
                 demands: ['calculate'],
               },
             ],
@@ -1011,5 +1053,151 @@ describe('demand vocabulary [D-262]', () => {
       expect(blueprint.unbuiltDemand).toBeNull();
       expect(blueprint.slots).toHaveLength(1);
     });
+  });
+});
+
+// Scenarios: olea-service/features/F4-oracle.md — the `[D-548]` scenarios of "F4.11 pipeline —
+// blueprint, generation, the vault object, the unlock rule [PAPER-3]" (`ol-egov.141.89.7.87`),
+// tagged `@auto:core/oracle/paper-blueprint.spec`. Synthetic ids only.
+describe('[D-548] — unknown section marks, and the length a paper in progress started with', () => {
+  const held = [{ kind: 'notes' as const, sourceId: 's', chunks: ['x'] }];
+  const eightConcepts = Array.from({ length: 8 }, (_, index) =>
+    concept({ conceptKey: `c${index}`, heldSources: [...held] }),
+  );
+  const input = {
+    course: 'COURSEA',
+    asOf: '2026-10-20',
+    assessments: [{ type: 'exam', due: '2026-11-30' }],
+    alpha: 0.5 as const,
+    formatClassOf: recallFormatClassOf,
+    concepts: eightConcepts,
+  };
+  function sittingsOf(...totals: readonly number[]): PaperRecoveredStructure {
+    return {
+      sittingCount: totals.length,
+      currentCount: 0,
+      historicalCount: 0,
+      sittings: totals.map((itemCount) => ({
+        regime: 'unknown' as const,
+        sections: [
+          { label: 'A', questionForm: 'x', itemCount, marks: { status: 'unknown' as const } },
+        ],
+      })),
+    };
+  }
+
+  it('a section of unknown marks that carries a demand makes the mark-weighted shares no evidence, never a share computed without it', () => {
+    const structure: PaperRecoveredStructure = {
+      sittingCount: 1,
+      currentCount: 1,
+      historicalCount: 0,
+      sittings: [
+        {
+          regime: 'current',
+          sourceRef: 'paper-A',
+          sections: [
+            {
+              label: 'A',
+              questionForm: 'x',
+              itemCount: 2,
+              marks: { status: 'stated', value: 10 },
+              demands: ['calculate', 'calculate'],
+            },
+            {
+              label: 'B',
+              questionForm: 'y',
+              itemCount: 4,
+              marks: { status: 'unknown' },
+              demands: Array(4).fill('recall-a-fact'),
+            },
+          ],
+        },
+      ],
+    };
+    // Read without B, calculate would hold the whole share and be the dominant demand.
+    expect(significantDemands(structure)).toEqual([]);
+    expect(dominantDemand(structure)).toBe(DEFAULT_INTENDED_DEMAND);
+    const blueprint = buildPaperBlueprint({ ...input, structure });
+    expect(blueprint.intendedDemand).toBe(DEFAULT_INTENDED_DEMAND);
+    expect(blueprint.unbuiltDemand).toBeNull();
+  });
+
+  it('unknown marks on a section with no demand change nothing, and the item count still sets the length', () => {
+    const structure = sittingsOf(3, 4, 7);
+    expect(dominantDemand(structure)).toBe(DEFAULT_INTENDED_DEMAND);
+    const blueprint = buildPaperBlueprint({ ...input, structure });
+    expect(blueprint.slots).toHaveLength(4);
+    expect(blueprint.emptySlots.filter((s) => s.reasonCode === 'rank-excluded')).toHaveLength(4);
+    expect(blueprint.structureSummary).toEqual({
+      sittingCount: 3,
+      currentCount: 0,
+      historicalCount: 0,
+    });
+  });
+
+  it('a bare finite non-negative number is read as stated marks, unknown stays unknown, and anything else is refused', () => {
+    const withMarks = (marks: unknown): PaperRecoveredStructure =>
+      ({
+        ...sittingsOf(3),
+        sittings: [
+          {
+            regime: 'unknown' as const,
+            sections: [{ label: 'A', questionForm: 'x', itemCount: 3, marks }],
+          },
+        ],
+      }) as unknown as PaperRecoveredStructure;
+    const markOf = (s: PaperRecoveredStructure | null): unknown =>
+      s?.sittings[0]?.sections[0]?.marks;
+
+    expect(markOf(normalisePaperRecoveredStructure(withMarks(3)))).toEqual({
+      status: 'stated',
+      value: 3,
+    });
+    expect(markOf(normalisePaperRecoveredStructure(withMarks(0)))).toEqual({
+      status: 'stated',
+      value: 0,
+    });
+    const unknown = withMarks({ status: 'unknown' });
+    expect(normalisePaperRecoveredStructure(unknown)).toBe(unknown);
+    expect(markOf(normalisePaperRecoveredStructure(unknown))).toEqual({ status: 'unknown' });
+    expect(() => validatePaperRecoveredStructure(withMarks(3))).not.toThrow();
+    expect(() => buildPaperBlueprint({ ...input, structure: withMarks(3) })).not.toThrow();
+    for (const bad of [
+      Number.NaN,
+      -1,
+      Number.POSITIVE_INFINITY,
+      { status: 'stated', value: -1 },
+      { status: 'stated', value: Number.NaN },
+      { status: 'other' },
+      'x',
+      null,
+    ]) {
+      expect(() => validatePaperRecoveredStructure(withMarks(bad))).toThrow();
+      expect(() => buildPaperBlueprint({ ...input, structure: withMarks(bad) })).toThrow();
+    }
+    expect(() => validatePaperRecoveredStructure(sittingsOf(3))).not.toThrow();
+    expect(() => validatePaperRecoveredStructure(null)).not.toThrow();
+    expect(normalisePaperRecoveredStructure(null)).toBeNull();
+  });
+
+  it('a recorded slot count is the cap whatever the readings now say, and every other input is read as given', () => {
+    const withReading = { ...input, structure: sittingsOf(3, 4, 7) };
+    expect(buildPaperBlueprint(withReading).slots).toHaveLength(4);
+    const startedAtSix = buildPaperBlueprint({ ...withReading, slotCount: 6 });
+    expect(startedAtSix.slots).toHaveLength(6);
+    expect(startedAtSix.slots).toEqual(buildPaperBlueprint({ ...input, structure: null }).slots);
+    expect(startedAtSix.emptySlots.map((s) => s.slotId)).toEqual(['excluded-6', 'excluded-7']);
+    // Every other input is read as given: the readings' summary is still today's.
+    expect(startedAtSix.structureSummary?.sittingCount).toBe(3);
+  });
+
+  it('a recorded slot count goes through the same clamp, and a non-finite one is refused', () => {
+    expect(buildPaperBlueprint({ ...input, structure: null, slotCount: 40 }).slots).toHaveLength(
+      MAX_BLUEPRINT_SLOTS_DECLARED,
+    );
+    expect(buildPaperBlueprint({ ...input, structure: null, slotCount: 0 }).slots).toHaveLength(1);
+    expect(() => buildPaperBlueprint({ ...input, structure: null, slotCount: Number.NaN })).toThrow(
+      /finite/,
+    );
   });
 });

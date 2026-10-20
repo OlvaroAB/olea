@@ -19,7 +19,8 @@
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import type { VaultSource } from 'olea-core';
+import type { ReviewLogEntry } from 'olea-contracts';
+import type { UnitManifest, VaultSource } from 'olea-core';
 import {
   addManualAssessmentEntry,
   attachConceptToOutcome,
@@ -49,7 +50,12 @@ import {
   type CreateLocalPracticePaperProviderDeps,
   createLocalPracticePaperProvider,
   PracticePaperUnfinishedError,
+  pastPaperStructureReaderForVault,
 } from '../../src/paper/provider.js';
+import {
+  createScopeReadingPersistence,
+  type ExtractedPaperStructure,
+} from '../../src/scope-reading/persistence.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const BASE_PATH = '02 Assignments/Assignments.base';
@@ -789,5 +795,255 @@ describe('the paper path uses the three-outcome port and the view is unchanged (
   it('adds no state beyond [D-457]: the view neither names the journal nor the error class, and reads the notice from the provider', () => {
     const view = codeOf('paper/view.ts');
     expect(view).not.toMatch(/PracticePaperUnfinishedError|journal|completion/i);
+  });
+});
+
+/**
+ * `[D-548]` (`ol-egov.141.89.7.87`): the practice paper's length follows her stored past-paper
+ * reading. Scenarios: features/F4-oracle.md, "a stored reading of her past papers sets the paper's
+ * length" and "with no stored reading, the paper keeps the declared standard extent", tagged
+ * `@auto:plugin/paper/provider.spec`. Every reading is written through SCP's own persistence
+ * (`recordExtraction`, the ingestion trigger's call) and read back through the production reader,
+ * `pastPaperStructureReaderForVault`. Seven synthetic topics; invented paths and wording (INV-3).
+ */
+describe('createLocalPracticePaperProvider — the paper’s length follows her stored past-paper reading ([D-548])', () => {
+  const DEVICE = 'olea-dev1';
+  const TOPICS = ['Alpha', 'Beta', 'Gamma', 'Delta', 'Epsilon', 'Zeta', 'Eta'].map(
+    (name) => `${name} theory`,
+  );
+  const PAPERS = ['03 Research/COURSEA Paper 1.pdf', '03 Research/COURSEA Paper 2.pdf'];
+  const PAPER_3 = '03 Research/COURSEA Paper 3.pdf';
+
+  function lengthVault(): VaultSource {
+    const files: Record<string, string> = {
+      '02 Assignments/exam.md': assessmentNote('COURSEA', 'exam', '2026-09-22'),
+    };
+    TOPICS.forEach((topic, index) => {
+      files[`05 Zettelkasten/${topic}.md`] = `# ${topic}\n`;
+      files[`Notes/${index}.md`] = [
+        '---',
+        `topic: [${topic}]`,
+        'course: COURSEA',
+        '---',
+        '',
+        `Front ${index}::Back ${index}`,
+        '',
+      ].join('\n');
+    });
+    return fakeVault(files);
+  }
+
+  const registered = (path: string, course: string): ReviewLogEntry =>
+    ({
+      schemaVersion: 6,
+      kind: 'source-registered',
+      eventId: `registered-${path}`,
+      timestamp: '2026-10-01T09:00:00Z',
+      path,
+      role: 'past-paper',
+      course,
+    }) as unknown as ReviewLogEntry;
+
+  /** A paper of `itemCounts.length` sections, read in full unless `unitsRead` says otherwise; no marks stated. */
+  async function recordPaper(
+    vault: VaultSource,
+    path: string,
+    itemCounts: readonly number[],
+    options: { readonly revision?: string; readonly unitsRead?: number } = {},
+  ): Promise<void> {
+    const structure: ExtractedPaperStructure = {
+      sections: itemCounts.map((itemCount, index) => ({
+        label: `Section ${index + 1}`,
+        questionForm: 'short answer',
+        itemCount,
+        anchor: { blockIndex: index },
+      })),
+    };
+    await createScopeReadingPersistence({ vault, deviceId: DEVICE }).recordExtraction({
+      sourcePath: path,
+      documentKind: 'past-paper',
+      revisionDigest: options.revision ?? 'r1',
+      coverage: { unitsRead: options.unitsRead ?? 4, unitsTotal: 4 },
+      declarationCount: 0,
+      paperStructure: structure,
+      stamp: { promptVersion: 'p1', modelId: 'm1' },
+    });
+  }
+
+  const manifestsAt =
+    (revisions: Readonly<Record<string, string>>) =>
+    async (paths: readonly string[]): Promise<ReadonlyMap<string, UnitManifest>> =>
+      new Map(
+        paths
+          .filter((path) => revisions[path] !== undefined)
+          .map((path) => [
+            path,
+            { sourcePath: path, revisionDigest: revisions[path] as string, entries: [] },
+          ]),
+      );
+
+  let nonce = 0;
+  function providerWith(
+    vault: VaultSource,
+    readPastPaperStructure?: CreateLocalPracticePaperProviderDeps['readPastPaperStructure'],
+  ) {
+    const calls: PaperItemGenerationRequest[] = [];
+    const generationPort: PaperSlotOutcomePort = async (request) => {
+      calls.push(request);
+      return {
+        status: 'generated',
+        taskId: request.taskId,
+        promptVersion: 'v1',
+        response: { ok: true, result: { cards: [{ front: 'q', back: 'a' }] } },
+      };
+    };
+    const provider = createLocalPracticePaperProvider({
+      ...baseDeps({ vault }),
+      generationPort: async () => generationPort,
+      now: () => new Date(`2026-09-19T00:00:00.${String(nonce++ % 1000).padStart(3, '0')}Z`),
+      ...(readPastPaperStructure !== undefined ? { readPastPaperStructure } : {}),
+    });
+    return { provider, calls };
+  }
+
+  async function readyPaper(provider: ReturnType<typeof providerWith>['provider']) {
+    const state = await provider.requestPaper('COURSEA');
+    if (state.kind !== 'ready') throw new Error(`expected ready, got ${state.kind}`);
+    return state;
+  }
+
+  it('three fully read past papers of 3, 4 and 7 questions plan 4 questions instead of the declared 6, through the production reader', async () => {
+    const vault = lengthVault();
+    await recordPaper(vault, PAPERS[0] as string, [3]);
+    await recordPaper(vault, PAPERS[1] as string, [2, 2]);
+    await recordPaper(vault, PAPER_3, [5, 2]);
+    const reader = pastPaperStructureReaderForVault({
+      vault,
+      deviceId: DEVICE,
+      manifestsFor: manifestsAt({
+        [PAPERS[0] as string]: 'r1',
+        [PAPERS[1] as string]: 'r1',
+        [PAPER_3]: 'r1',
+      }),
+      reviewLog: async () => [...PAPERS, PAPER_3].map((path) => registered(path, 'COURSEA')),
+    });
+    const structure = await reader('COURSEA');
+    expect(structure?.sittings.map((sitting) => sitting.regime)).toEqual([
+      'unknown',
+      'unknown',
+      'unknown',
+    ]);
+    // Marks the papers do not state stay unknown, never zero ([D-431]).
+    expect(structure?.sittings[0]?.sections[0]?.marks).toEqual({ status: 'unknown' });
+
+    const { provider, calls } = providerWith(vault, reader);
+    const state = await readyPaper(provider);
+    expect(state.items).toHaveLength(4);
+    expect(calls).toHaveLength(4);
+    expect(state.emptySlots.filter((slot) => slot.reasonCode === 'rank-excluded')).toHaveLength(3);
+    expect(state.record.compositionAccount.structureSummary).toEqual({
+      sittingCount: 3,
+      currentCount: 0,
+      historicalCount: 0,
+    });
+    // No demand is carried from the readings: the paper's demand and face are as before.
+    expect(state.record.compositionAccount.intendedDemand).toBe('recall-a-fact');
+    expect(state.partialStatement).toBeNull();
+    expect((await listPaperJournals(vault))[0]?.record.extent?.slotCount).toBe(4);
+  });
+
+  it('with no reader, the declared standard extent of 6 stands and the composition records no past-paper structure', async () => {
+    const vault = lengthVault();
+    const { provider, calls } = providerWith(vault);
+    const state = await readyPaper(provider);
+    expect(state.items).toHaveLength(6);
+    expect(calls).toHaveLength(6);
+    expect(state.record.compositionAccount.structureSummary).toBeNull();
+  });
+
+  it('readings that do not count leave the declared 6: a paper read only in part, a reading of an earlier revision, a paper of another course', async () => {
+    const vault = lengthVault();
+    await recordPaper(vault, PAPERS[0] as string, [2], { unitsRead: 2 });
+    await recordPaper(vault, PAPERS[1] as string, [2], { revision: 'r-old' });
+    await recordPaper(vault, PAPER_3, [2]);
+    const reader = pastPaperStructureReaderForVault({
+      vault,
+      deviceId: DEVICE,
+      manifestsFor: manifestsAt({
+        [PAPERS[0] as string]: 'r1',
+        [PAPERS[1] as string]: 'r-new',
+        [PAPER_3]: 'r1',
+      }),
+      reviewLog: async () => [
+        registered(PAPERS[0] as string, 'COURSEA'),
+        registered(PAPERS[1] as string, 'COURSEA'),
+        registered(PAPER_3, 'COURSEB'),
+      ],
+    });
+    expect(await reader('COURSEA')).toBeNull();
+    const { provider } = providerWith(vault, reader);
+    const state = await readyPaper(provider);
+    expect(state.items).toHaveLength(6);
+    expect(state.record.compositionAccount.structureSummary).toBeNull();
+  });
+
+  it('a reader that fails reads as no reading: the paper composes at the declared 6', async () => {
+    const vault = lengthVault();
+    const { provider } = providerWith(vault, async () => {
+      throw new Error('store unreadable');
+    });
+    const state = await readyPaper(provider);
+    expect(state.items).toHaveLength(6);
+  });
+
+  it('an unfinished paper started before the reading arrived resumes on its own 6, and only the next new paper plans 4', async () => {
+    const vault = lengthVault();
+    const down: PaperSlotOutcomePort = async (request) =>
+      request.conceptName === 'Epsilon theory'
+        ? { status: 'unavailable', reason: 'transport-failure' }
+        : {
+            status: 'generated',
+            taskId: request.taskId,
+            promptVersion: 'v1',
+            response: { ok: true, result: { cards: [{ front: 'q', back: 'a' }] } },
+          };
+    const unfinished = await createLocalPracticePaperProvider({
+      ...baseDeps({ vault }),
+      generationPort: async () => down,
+    })
+      .requestPaper('COURSEA')
+      .then(
+        () => null,
+        (error: unknown) => error,
+      );
+    expect(unfinished).toBeInstanceOf(PracticePaperUnfinishedError);
+
+    await recordPaper(vault, PAPERS[0] as string, [3]);
+    await recordPaper(vault, PAPERS[1] as string, [4]);
+    await recordPaper(vault, PAPER_3, [7]);
+    const reader = pastPaperStructureReaderForVault({
+      vault,
+      deviceId: DEVICE,
+      manifestsFor: manifestsAt({
+        [PAPERS[0] as string]: 'r1',
+        [PAPERS[1] as string]: 'r1',
+        [PAPER_3]: 'r1',
+      }),
+      reviewLog: async () => [...PAPERS, PAPER_3].map((path) => registered(path, 'COURSEA')),
+    });
+    const resumed = providerWith(vault, reader);
+    const state = await readyPaper(resumed.provider);
+    expect(state.items).toHaveLength(6);
+    expect(state.materialChanged).toBe(false);
+    // Only what was still owed is drafted: nothing already written is paid for again.
+    expect(resumed.calls.map((call) => call.conceptName)).toEqual([
+      'Epsilon theory',
+      'Eta theory',
+      'Gamma theory',
+    ]);
+    expect(state.record.compositionAccount.structureSummary).toBeNull();
+
+    const next = providerWith(vault, reader);
+    expect((await readyPaper(next.provider)).items).toHaveLength(4);
   });
 });

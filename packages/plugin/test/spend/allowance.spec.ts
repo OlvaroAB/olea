@@ -24,6 +24,7 @@ import {
   WorkerOutcomesExtractReader,
 } from '../../src/ingestion/outcomes-extract-adapter.js';
 import { sendWithinAllowance } from '../../src/spend/allowance.js';
+import { WorkerHttpTransport } from '../../src/worker/transport.js';
 import { successEnvelope } from '../oracle/worker-envelope-fixtures.js';
 import { memoryVault } from '../review/memory-vault.js';
 import {
@@ -219,7 +220,7 @@ describe('what a call keeps', () => {
   });
 
   it('a success whose attempt count the client cannot see keeps the whole hold', async () => {
-    // The Worker reports attempts in a header the transport does not pass on today (precondition 5).
+    // A transport that records no attempt count (a test double) leaves it unknown.
     const vault = memoryVault();
     const spend = ledgerOver(vault);
     const t = new RecordingTransport(() => successEnvelope({ outcomes: [], sections: [] }));
@@ -248,6 +249,41 @@ describe('what a call keeps', () => {
     );
     expect(result.kind).toBe('sent');
     expect((await spend.summary()).spentMicroUsd).toBe(1_000);
+  });
+
+  describe('through the real transport, from the x-olea-attempts header', () => {
+    const request: WorkerTaskRequest = {
+      contractVersion: 1,
+      taskId: 'outcomes.extract.v1',
+      payload: { sourceChunks: ['One synthetic sentence.'], documentKind: 'objectives' },
+    };
+    const over = (headers?: Record<string, string>) =>
+      new WorkerHttpTransport(
+        async () => ({
+          status: 200,
+          text: JSON.stringify(successEnvelope({ outcomes: [], sections: [] })),
+          ...(headers ? { headers } : {}),
+        }),
+        { baseUrl: 'https://example.invalid', token: 'T' },
+      );
+
+    it('a 1-attempt response settles at its reported cost, with no attemptsOf passed', async () => {
+      const spend = ledgerOver(memoryVault());
+      await sendWithinAllowance(spend, over({ 'x-olea-attempts': '1' }), request);
+      expect((await spend.summary()).spentMicroUsd).toBe(1_000);
+    });
+
+    it('a 2-attempt response keeps the whole hold', async () => {
+      const spend = ledgerOver(memoryVault());
+      await sendWithinAllowance(spend, over({ 'x-olea-attempts': '2' }), request);
+      expect((await spend.summary()).spentMicroUsd).toBe(Math.round(EXTRACT_HOLD * 1e6));
+    });
+
+    it('an absent count keeps the whole hold, as today', async () => {
+      const spend = ledgerOver(memoryVault());
+      await sendWithinAllowance(spend, over(), request);
+      expect((await spend.summary()).spentMicroUsd).toBe(Math.round(EXTRACT_HOLD * 1e6));
+    });
   });
 
   it('the caller’s payload is sent as given', async () => {

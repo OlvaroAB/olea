@@ -198,6 +198,54 @@ describe('paper journal ([D-430] part 3)', () => {
         openPaperJournal(vault, { course: 'COURSEA', fingerprint: FP, plan: backwards }, { now }),
       ).rejects.toThrow(/dependency order/);
     });
+
+    // `[D-548]` (`ol-egov.141.89.7.87`): "a reading that arrives after a paper started leaves that
+    // paper on its recorded plan" — the journal records the length its plan was made at.
+    it('records the length its plan was made at, reads it back, and records none when given none', async () => {
+      const extent = {
+        slotCount: 6,
+        structureSummary: { sittingCount: 2, currentCount: 0, historicalCount: 0 },
+      };
+      const opened = await openPaperJournal(
+        vault,
+        { course: 'COURSEA', fingerprint: FP, plan: PLAN, extent },
+        { now },
+      );
+      expect(opened.journal.extent).toEqual(extent);
+      const listed = await listPaperJournals(vault);
+      expect(listed[0]?.record.extent).toEqual(extent);
+      const other = await open(FP, 'COURSEB');
+      expect(other.journal).not.toHaveProperty('extent');
+    });
+
+    it('the recorded length is not part of the reuse check: the same fingerprint and plan resume whatever length is offered', async () => {
+      const first = await openPaperJournal(
+        vault,
+        {
+          course: 'COURSEA',
+          fingerprint: FP,
+          plan: PLAN,
+          extent: { slotCount: 6, structureSummary: null },
+        },
+        { now },
+      );
+      const again = await openPaperJournal(
+        vault,
+        {
+          course: 'COURSEA',
+          fingerprint: FP,
+          plan: PLAN,
+          extent: {
+            slotCount: 4,
+            structureSummary: { sittingCount: 3, currentCount: 0, historicalCount: 0 },
+          },
+        },
+        { now },
+      );
+      expect(again.decision).toBe('resumed');
+      expect(again.journal.id).toBe(first.journal.id);
+      expect(again.journal.extent).toEqual({ slotCount: 6, structureSummary: null });
+    });
   });
 
   describe('running: an outage retains the unfinished paper', () => {
@@ -466,6 +514,24 @@ describe('applyPaperJournalEvent — the pure fold', () => {
       plan: PLAN,
     });
 
+  it('carries the length an opened event records, and adds none when it records none', () => {
+    const extent = { slotCount: 4, structureSummary: null };
+    const withLength = applyPaperJournalEvent(undefined, {
+      kind: 'opened',
+      schemaVersion: 1,
+      eventId: 'e0',
+      timestamp: '2026-09-29T00:00:00.000Z',
+      journalId: 'paper-journal-key1:k',
+      course: 'COURSEA',
+      fingerprint: FP,
+      blueprintDigest: 'digest',
+      plan: PLAN,
+      extent,
+    });
+    expect(withLength?.extent).toEqual(extent);
+    expect(opened()).not.toHaveProperty('extent');
+  });
+
   const at = (eventId: string) => ({
     schemaVersion: 1 as const,
     eventId,
@@ -569,6 +635,43 @@ describe('isPaperJournalRecord', () => {
         schemaVersion: 1,
       }),
     ).toBe(false);
+  });
+
+  it('accepts a journal with no recorded length or a well-formed one, and refuses a malformed one', () => {
+    const journal = {
+      id: 'paper-journal-key1:j',
+      course: 'COURSEA',
+      createdAt: '2026-09-29T00:00:00.000Z',
+      updatedAt: '2026-09-29T00:00:00.000Z',
+      fingerprint: FP,
+      blueprintDigest: 'digest',
+      plan: PLAN,
+      outcomes: {},
+      status: 'open',
+      schemaVersion: 1,
+    };
+    expect(isPaperJournalRecord(journal)).toBe(true);
+    expect(
+      isPaperJournalRecord({ ...journal, extent: { slotCount: 6, structureSummary: null } }),
+    ).toBe(true);
+    expect(
+      isPaperJournalRecord({
+        ...journal,
+        extent: {
+          slotCount: 4,
+          structureSummary: { sittingCount: 1, currentCount: 0, historicalCount: 0 },
+        },
+      }),
+    ).toBe(true);
+    for (const extent of [
+      null,
+      { slotCount: 0, structureSummary: null },
+      { slotCount: 2.5, structureSummary: null },
+      { slotCount: 4 },
+      { slotCount: 4, structureSummary: { sittingCount: 1 } },
+    ]) {
+      expect(isPaperJournalRecord({ ...journal, extent })).toBe(false);
+    }
   });
 });
 

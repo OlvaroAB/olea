@@ -218,6 +218,7 @@ import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
 import { buildKeywordIndexWiring, type KeywordIndexWiring } from './keyword-index/wiring.js';
 import { createVaultMisconceptionStore } from './misconception/store.js';
 import { OLEA_COMMAND_PRACTICE_PAPER_OPEN } from './paper/ids.js';
+import { pastPaperStructureReaderForVault } from './paper/provider.js';
 import { PaperView, VIEW_TYPE_OLEA_PAPER } from './paper/view.js';
 import { buildPracticePaperProvider, courseForActiveFileInApp } from './paper/wiring.js';
 import type { PlanPolicyHttpPost } from './plan/plan-policy-provider.js';
@@ -1661,6 +1662,13 @@ export default class OleaPlugin extends Plugin {
       createTransport: createObsidianWorkerTransport,
       settingsStore: new ObsidianStudyPlanSettingsStore(this),
       now: this.now,
+      // `[D-548]` (`ol-egov.141.89.7.87`): the paper's length follows her stored past-paper
+      // reading, read as the declared-demands reader above is (same store, same manifests).
+      readPastPaperStructure: pastPaperStructureReaderForVault({
+        vault,
+        deviceId,
+        manifestsFor: async (paths) => (await this.unitManifests?.manifestsFor(paths)) ?? new Map(),
+      }),
     });
     this.registerView(VIEW_TYPE_OLEA_PAPER, (leaf) => new PaperView(leaf, practicePaper));
 

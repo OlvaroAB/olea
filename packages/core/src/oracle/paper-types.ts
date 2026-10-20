@@ -116,7 +116,15 @@ export interface PaperRecoveredSection {
   readonly label: string;
   readonly questionForm: string;
   readonly itemCount: number;
-  readonly marks: number;
+  /**
+   * The section's marks as the paper prints them. **Unknown stays unknown** (`[D-431]`,
+   * `ol-egov.141.89.7.87`): a section whose marks the paper does not state reads `'unknown'`,
+   * exactly as the stored reading keeps it (`../outcome/scope-reading-types.ts`'s
+   * `ScopeStructureSection.marks`), and is never counted as zero, averaged or estimated from its
+   * item count (see `PaperMarks`). `./paper-blueprint.ts`'s mark-weighted demand shares read an
+   * unknown mark as no evidence for a share, never as a share computed without it.
+   */
+  readonly marks: PaperMarks;
   /**
    * F4.11 ruling 1 — the demand(s) this section's own questions ask, read from the past paper
    * itself. `undefined`/empty when not (yet) recovered at this grain — the same honest-placeholder
@@ -127,9 +135,16 @@ export interface PaperRecoveredSection {
   readonly demands?: readonly PaperDemand[];
 }
 
-/** One recovered sitting, carrying F4.2's current/historical regime qualifier alongside its recovered sections (empty when only file existence, not content, was recoverable). */
+/**
+ * One recovered sitting, carrying F4.2's current/historical regime qualifier alongside its
+ * recovered sections (empty when only file existence, not content, was recoverable). `'unknown'`
+ * when nothing records the paper's regime (`ol-egov.141.89.7.87`): no production fact on the client
+ * carries one yet, so a sitting read from her stored reading is never assumed current. A sitting of
+ * unknown regime counts toward `PaperRecoveredStructure.sittingCount` and toward neither
+ * `currentCount` nor `historicalCount`.
+ */
 export interface PaperRecoveredSitting {
-  readonly regime: 'current' | 'historical';
+  readonly regime: 'current' | 'historical' | 'unknown';
   readonly sections: readonly PaperRecoveredSection[];
   /**
    * An opaque pointer to this sitting's own source (never opened by this pipeline) — carried so a
@@ -142,9 +157,13 @@ export interface PaperRecoveredSitting {
 }
 
 /**
- * The composition of the course's own past assessment evidence — F4.11 input (b), NEVER including
- * a sealed judge-reference sitting (the caller's own responsibility; see `./paper-blueprint.ts`'s
- * blinding note, mirroring `playback-paper.mjs`'s `assertNotSealedPath`).
+ * The composition of the course's own past assessment evidence — F4.11 input (b). A sealed
+ * judge-reference sitting never supplies a demand reading or a source pointer here (the caller's
+ * own responsibility; see `./paper-blueprint.ts`'s blinding note, mirroring `playback-paper.mjs`'s
+ * `assertNotSealedPath`, which keeps sealed sittings out entirely). F4.11 lets a sealed paper
+ * inform structure and composition "the same as any other past paper", never grounding: so a caller
+ * that knows no seal (`./paper-recovered-structure.ts`, over her stored reading) carries sections
+ * only, with no `demands` and no `sourceRef`, and every registered paper counts.
  */
 export interface PaperRecoveredStructure {
   readonly sittingCount: number;
