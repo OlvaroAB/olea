@@ -548,6 +548,38 @@ describe('purpose [D-277]', () => {
 // Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Assessment demand and the gap it
 // admits [D-262]", tagged `@auto:core/oracle/paper-blueprint.spec`.
 describe('demand vocabulary [D-262]', () => {
+  describe('[D-438] P1 — the demand basis and the original structure slot count', () => {
+    const base = {
+      course: 'COURSEA',
+      asOf: '2026-09-16',
+      assessments: [{ type: 'exam', due: '2026-09-30' }],
+      alpha: 0.5 as const,
+      formatClassOf: recallFormatClassOf,
+      concepts: [],
+    };
+
+    it('a blueprint with no reading records the recall fallback as a default, never a reading', () => {
+      const b = buildPaperBlueprint({ ...base, structure: null });
+      expect(b.intendedDemand).toBe('recall-a-fact');
+      expect(b.intendedDemandBasis).toBe('default-no-reading');
+    });
+
+    it('a blueprint whose structure supplied the demand records it as read', () => {
+      const b = buildPaperBlueprint({
+        ...base,
+        structure: structureWithDemands(['recall-a-fact', 'recall-a-fact']),
+      });
+      expect(b.intendedDemandBasis).toBe('read');
+    });
+
+    it('structureSlotCount is the extent target before any exclusion, and the slotCount override does not move it', () => {
+      const b = buildPaperBlueprint({ ...base, structure: null, steering: { extent: 'longer' } });
+      expect(b.structureSlotCount).toBe(extentSlotCountTarget('longer', null));
+      const resumed = buildPaperBlueprint({ ...base, structure: null, slotCount: 2 });
+      expect(resumed.structureSlotCount).toBe(extentSlotCountTarget('standard', null));
+    });
+  });
+
   function structureWithDemands(
     demands: readonly PaperDemand[],
     sourceRef = 'past-paper-1',

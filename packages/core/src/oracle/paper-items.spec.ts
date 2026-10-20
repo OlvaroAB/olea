@@ -102,6 +102,8 @@ describe('fillPaperBlueprintSlots', () => {
     expect(result.emptySlots).toHaveLength(1);
     expect(result.emptySlots[0]?.reasonCode).toBe('generator-refused');
     expect(result.emptySlots[0]?.reason).toContain('below-composite-threshold');
+    // `[D-438]` P2: an unmet slot keeps its original demand.
+    expect(result.emptySlots[0]?.intendedDemand).toBe('recall-a-fact');
   });
 
   it('never blends a refused slot into the generated items list', async () => {

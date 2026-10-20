@@ -383,6 +383,10 @@ export interface BuildGroveModelInput {
   readonly mastery: ReadonlyMap<string, ConceptMasteryResult>;
   /** Per concept KEY, the ground-streak each concept carried into THIS evaluation — absent means "never read ground before". See `./coverage.js`'s module doc for why this module holds none of this itself. */
   readonly priorGroundStreaks?: ReadonlyMap<string, number>;
+  /** `[D-557]`: the token of the processing pass this evaluation belongs to — absent means today's count-every-read behaviour (`./coverage.js` `processingPassId`). */
+  readonly processingPassId?: string;
+  /** Per concept KEY, the last pass token each concept's streak was counted at (`nextProcessingPassIds` of the previous call). */
+  readonly priorProcessingPassIds?: ReadonlyMap<string, string>;
   /**
    * `RelationSet`'s served edges for `course`, whole (`is-a`, `part-of`, …) —
    * optional, and this is the C7.9 fold's on/off switch (`ol-5phn`,
@@ -436,6 +440,8 @@ export interface BuildGroveModelResult {
   readonly model: GroveCourseModel;
   /** Every concept's ground-streak AFTER this evaluation, keyed by concept KEY — a concept no longer `ground` is simply absent (its streak resets), not zeroed. Hand this whole map back as the next call's `priorGroundStreaks` for the same course. */
   readonly nextGroundStreaks: ReadonlyMap<string, number>;
+  /** `[D-557]`: every `ground` concept's last pass token AFTER this evaluation, keyed by concept KEY; empty when no `processingPassId` was supplied. */
+  readonly nextProcessingPassIds: ReadonlyMap<string, string>;
 }
 
 /**
@@ -460,12 +466,20 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
   // sufficient on its own.
   if (denominatorSourcePaths.length === 0) {
     if (input.concepts.length === 0) {
-      return { model: { status: 'no-registered-source', course }, nextGroundStreaks: emptyStreaks };
+      return {
+        model: { status: 'no-registered-source', course },
+        nextGroundStreaks: emptyStreaks,
+        nextProcessingPassIds: new Map(),
+      };
     }
     const concepts: GroveVolunteerCell[] = input.concepts
       .map((concept) => ({ conceptKey: concept.key, conceptName: concept.name }))
       .sort(byConceptName);
-    return { model: { status: 'inferred', course, concepts }, nextGroundStreaks: emptyStreaks };
+    return {
+      model: { status: 'inferred', course, concepts },
+      nextGroundStreaks: emptyStreaks,
+      nextProcessingPassIds: new Map(),
+    };
   }
 
   // D-465 (`ol-egov.141.89.8.55`), the mention-is-not-scope guard: every citation for this course is
@@ -528,6 +542,7 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
   const cells: GroveCell[] = [];
   const materialGaps: GroveMaterialGapCell[] = [];
   const nextGroundStreaks = new Map<string, number>();
+  const nextProcessingPassIds = new Map<string, string>();
 
   for (const conceptName of declaredNames) {
     if (foldedContainerNames.has(conceptName)) continue;
@@ -553,6 +568,14 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
       instrumentCount: presence?.instrumentCount ?? 0,
       ...(masteryState !== undefined ? { masteryState } : {}),
       priorGroundStreak: emptyStreaks.get(concept.key) ?? 0,
+      ...(input.processingPassId !== undefined
+        ? {
+            processingPassId: input.processingPassId,
+            ...(input.priorProcessingPassIds?.get(concept.key) !== undefined
+              ? { priorProcessingPassId: input.priorProcessingPassIds.get(concept.key) }
+              : {}),
+          }
+        : {}),
       ...(taughtSignal !== undefined ? { taughtSignal } : {}),
     });
 
@@ -573,6 +596,9 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
     });
     if (classification.state === 'ground') {
       nextGroundStreaks.set(concept.key, classification.groundStreak);
+      if (classification.groundStreakProcessingPassId !== undefined) {
+        nextProcessingPassIds.set(concept.key, classification.groundStreakProcessingPassId);
+      }
     }
   }
 
@@ -603,6 +629,7 @@ export function buildGroveModel(input: BuildGroveModelInput): BuildGroveModelRes
       ...(modelDecided !== undefined ? { modelDecided } : {}),
     },
     nextGroundStreaks,
+    nextProcessingPassIds,
   };
 }
 

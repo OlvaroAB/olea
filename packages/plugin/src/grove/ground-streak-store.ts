@@ -51,13 +51,11 @@
  * `isGroveGroundStreaks` below is unchanged and still rejects anything but a
  * plain integer count per concept).
  *
- * **No production caller wires this pair yet.** `./provider.ts` still calls
- * only `load`/`save`, unchanged, and `../../core/src/scope/grove.ts` still
- * calls `classifyDeclaredConcept` without `processingPassId` — both files
- * are `ol-egov.141.89.7.4`'s (sequenced after this bead), not this bead's to
- * edit. Wiring these two new methods into that call, minting a real
- * per-sweep token from the generation/ingestion queue, is that bead's work;
- * this store only makes the durable half ready for it to call.
+ * **Wired by `[D-557]` (`ol-egov.141.89.7.89`).** `./provider.ts` loads this
+ * pair beside `load`, passes the map and the queue's pass token
+ * (`./processing-pass-token.ts`) into `buildGroveModel`, and saves the next
+ * map beside `save`, only when a token exists. With no persisted queue there
+ * is no token, and the streak counts every read, as before.
  */
 
 import type { ObsidianDataHost } from '../plan/settings-store.js';

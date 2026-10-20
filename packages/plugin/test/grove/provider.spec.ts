@@ -9,6 +9,7 @@
  * `buildGroveModel`'s own acceptance criteria, which is `packages/core/
  * src/scope/grove.spec.ts` and `coverage.spec.ts`'s job.
  */
+
 import {
   addManualAssessmentEntry,
   buildRegistryModel,
@@ -20,6 +21,7 @@ import {
   type VaultPath,
 } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
+import { ObsidianGroveGroundStreakStore } from '../../src/grove/ground-streak-store.js';
 import { createLocalGroveProvider } from '../../src/grove/provider.js';
 import type { GroveCourseSection, GroveViewState } from '../../src/grove/view.js';
 import type { ObsidianDataHost } from '../../src/plan/settings-store.js';
@@ -733,6 +735,45 @@ describe('createLocalGroveProvider — load', () => {
         pastPaperCitationCount: 0,
       },
     ]);
+  });
+
+  it('with a queue that has run, two grove reads in one pass count once and a new pass advances the streak; the pass map is stored through the store ([D-557])', async () => {
+    const host = hostWithBasePath(BASE_PATH);
+    const vault = fixtureVaultGroundOnly();
+    const queue = (attempts: number) => ({
+      version: 1,
+      headroom: null,
+      jobs: [
+        {
+          contentHash: 'h1',
+          label: 'job',
+          payload: null,
+          enqueuedAt: 1,
+          status: 'done',
+          attempts,
+          doneAt: 2,
+        },
+      ],
+    });
+    const stallOf = async () => {
+      const provider = createLocalGroveProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: host,
+        now: () => NOW,
+      });
+      const sections = await sectionsFrom(await provider.load());
+      const model = modelOf(sections.find((c) => c.course === 'TESTC101'));
+      if (model.status !== 'declared') throw new Error(`expected declared, got ${model.status}`);
+      return model.cells[0]?.stall;
+    };
+    (host.blob as Record<string, unknown>).ingestionQueue = queue(1);
+    expect(await stallOf()).toBe(false);
+    expect(await stallOf()).toBe(false); // same pass: a re-read
+    const store = new ObsidianGroveGroundStreakStore(host);
+    expect([...(await store.loadProcessingPasses()).values()]).toEqual(['q1:1:2']);
+    (host.blob as Record<string, unknown>).ingestionQueue = queue(2);
+    expect(await stallOf()).toBe(true); // a second pass
   });
 
   it('a concept that stops reading ground has its streak reset, not left stale, in the persisted store', async () => {

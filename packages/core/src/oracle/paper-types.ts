@@ -390,7 +390,11 @@ export interface PaperBlueprintSlot {
  * **What is deliberately NOT a reason code: an outage.** A service that could not be reached (after
  * the one retry) is work owed, never a fact about her material or the course's shape, so it is never
  * recorded here (`./paper-journal.ts`: the unfinished paper is retained and resumed instead).
- * `[D-438]`'s `source-support-refused` joins this union with the demand-carriage build, not here.
+ * - `'source-support-refused'` — `[D-438]` (P2): the per-slot support check (`./paper-support.ts`)
+ *   judged the slot's evidence package for its demand and the slot ended empty, with
+ *   `PaperEmptySlot.supportRefusal` naming which of four outcomes (a confirmed source gap, an empty
+ *   retrieval, or a judge that abstained). Not an established source gap in every case, which is why
+ *   the detail is required beside the code. No wording for it exists yet, and none is added here.
  */
 export type PaperEmptySlotReasonCode =
   | 'no-held-source'
@@ -398,7 +402,19 @@ export type PaperEmptySlotReasonCode =
   | 'rank-excluded'
   | 'demand-unsupported'
   | 'no-held-stimulus'
-  | 'depends-on-empty-part';
+  | 'depends-on-empty-part'
+  | 'source-support-refused';
+
+/**
+ * `[D-438]` P2: which way the support check refused a slot, in drafting's own vocabulary
+ * (`DraftingRefusalReason`, minus `could-not-check`, which is a service failure and never an
+ * empty-slot reason).
+ */
+export type PaperSupportRefusal =
+  | 'not-enough-in-notes'
+  | 'notes-disagree'
+  | 'nothing-retrieved'
+  | 'could-not-decide';
 
 /** A ranked, eligible concept the blueprint could not fill — F4.10's never-invent rule, named rather than silently dropped (mirrors `playback-paper.mjs`'s `emptySlots`). */
 export interface PaperEmptySlot {
@@ -409,6 +425,10 @@ export interface PaperEmptySlot {
   readonly reason: string;
   /** `[D-430]`: present exactly when `reasonCode` is `'depends-on-empty-part'` — the empty slot at the root of the dependency chain (never itself a `'depends-on-empty-part'` slot). */
   readonly causedBySlotId?: string;
+  /** `[D-438]` P2: the slot's ORIGINAL demand, never replaced. Optional so a record written before this shape still reads; a reader of an absent value takes the account's composition-wide `intendedDemand`. */
+  readonly intendedDemand?: PaperDemand;
+  /** `[D-438]` P2: present exactly when `reasonCode` is `'source-support-refused'`. */
+  readonly supportRefusal?: PaperSupportRefusal;
 }
 
 /** The blueprint's own free parameter — the coverage/mastery weighting share (mirrors `playback-paper.mjs`'s `BLUEPRINT_WEIGHTING_SETTINGS_DECLARED`; the same three declared points, not re-declared as a distinct constant — see `./paper-blueprint.ts`). */
@@ -444,6 +464,15 @@ export interface PaperBlueprint {
   readonly formatClass: PaperFormatClass;
   /** F4.11 ruling 1/7 (`[D-262]`) — the demand this composition's slots intend (see `PaperBlueprintSlot.intendedDemand`). `'recall-a-fact'` when input (b) recovered nothing to read — the honest default every existing generator already serves, so a course with no demand data behaves exactly as it did before this ruling. */
   readonly intendedDemand: PaperDemand;
+  /**
+   * `[D-438]` P1 — whether `intendedDemand` was READ from the evidence or is the recall fallback
+   * recorded as a default. A defaulted demand is never a reading: hand-off writes a target record
+   * only for `'read'`. Optional on the type, like `purpose`, so a record written before this field
+   * (and hand-built fixtures) stay valid and read as no basis; `buildPaperBlueprint` always sets it.
+   */
+  readonly intendedDemandBasis?: PaperBlueprintDemandBasis;
+  /** `[D-438]` P1 — the extent target (`extentSlotCountTarget`) before any rank, eligibility or support exclusion: the denominator of yield against the original structure. Optional for the same reason; `buildPaperBlueprint` always sets it. */
+  readonly structureSlotCount?: number;
   readonly steering: PaperSteering;
   readonly structureSummary: {
     readonly sittingCount: number;
@@ -555,6 +584,9 @@ export type PaperPartDemandReading =
 
 /** `[D-438]` P1's per-part basis: `'read'` for a demand the paper's own reading supplied (a decided demand or an unsupported operation), `'not-read'` for cannot-tell and pending. */
 export type PaperIntendedDemandBasis = 'read' | 'not-read';
+
+/** `[D-438]` P1's flat-blueprint basis: `'read'` when the paper's evidence supplied the demand, `'default-no-reading'` for the recall fallback. */
+export type PaperBlueprintDemandBasis = 'read' | 'default-no-reading';
 
 /** One part of a structured paper — the unit a slot fills. */
 export interface PaperStructuredPart {

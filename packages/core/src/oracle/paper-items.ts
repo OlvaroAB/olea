@@ -133,6 +133,7 @@ export async function fillPaperBlueprintSlots(
         conceptName: slot.conceptName,
         reasonCode: 'generator-refused',
         reason: `generator refused: ${result.reason}`,
+        intendedDemand: slot.intendedDemand,
       });
       continue;
     }
