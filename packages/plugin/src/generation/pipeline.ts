@@ -209,6 +209,7 @@ import type {
   ExtractedUnit,
   GroundingRefusalReason,
   InstrumentCitation,
+  KnowledgeKindClassification,
   RoutingSelectionObservation,
   VaultSource,
 } from 'olea-core';
@@ -1125,7 +1126,15 @@ export async function runGenerationSweep(
       // never a `quiz.generate.v1` send: a candidate this routes away from
       // is cheaper to discover here than as a refusal.
       if (routing !== undefined) {
-        const classification = await classifyForRouting(routing, deps.vault, candidate);
+        // A throw while routing this one candidate costs this candidate only: it routes as
+        // unclassified ("never guessed", routing.ts) and the sweep moves on. Nothing about the
+        // candidate or the error is logged (D-005); it is counted in `skippedRouting` below.
+        let classification: KnowledgeKindClassification;
+        try {
+          classification = await classifyForRouting(routing, deps.vault, candidate);
+        } catch {
+          classification = { status: 'unclassified', confidence: undefined, method: 'model' };
+        }
         const inventory = (await getInventory()).get(candidate.key) ?? EMPTY_INVENTORY;
         const decision = decideConceptRouting(classification, inventory);
         const deficit = quizDeficit(decision);
