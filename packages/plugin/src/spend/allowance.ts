@@ -13,14 +13,15 @@
  *
  * **The attempt count.** Settlement at the reported cost needs the response to prove one billable
  * call. The Worker says how many it made in the `x-olea-attempts` header, which the plugin's
- * transport drops today (paper precondition 5, `worker/transport.ts`, not this module's file).
- * `attemptsOf` is the seam that change plugs into; absent, the attempt count is unknown and the call
- * keeps its whole hold.
+ * transport now surfaces (`ol-egov.141.89.7.88`, `attemptsOfWorkerBody`). `attemptsOf` is the seam;
+ * left out it defaults to that reader. A count the response did not carry (header absent or
+ * malformed, or a transport that does not record it) is unknown and the call keeps its whole hold.
  *
  * No `obsidian` import (INV-1). Nothing here logs content (D-005).
  */
 
 import type { WorkerTaskRequest, WorkerTaskTransport } from 'olea-core';
+import { attemptsOfWorkerBody } from '../worker/transport.js';
 import type {
   SpendDeclineReason,
   SpendLedger,
@@ -33,7 +34,7 @@ export type AllowanceSendResult =
   | { readonly kind: 'declined'; readonly reason: SpendDeclineReason };
 
 export interface AllowanceSendOptions {
-  /** How many billable calls the response says the request made, when the transport can see it. */
+  /** How many billable calls the response says the request made, when the transport can see it. Defaults to `attemptsOfWorkerBody`. */
   readonly attemptsOf?: (body: unknown) => number | undefined;
 }
 
@@ -89,7 +90,7 @@ export async function sendWithinAllowance(
 
   let attempts: number | undefined;
   try {
-    attempts = options.attemptsOf?.(body);
+    attempts = (options.attemptsOf ?? attemptsOfWorkerBody)(body);
   } catch {
     attempts = undefined;
   }

@@ -44,6 +44,46 @@ export interface WorkerConfig {
 export interface HttpResponseLike {
   readonly status: number;
   readonly text: string;
+  /**
+   * The response headers, when the adapter has them (`ol-egov.141.89.7.88`). Optional so every
+   * existing producer and test double stays valid; absent, the Worker's `x-olea-attempts` count is
+   * unknown. Lookup is case-insensitive.
+   */
+  readonly headers?: Readonly<Record<string, string>>;
+}
+
+/** The Worker's response header naming how many billable calls the request made. */
+export const ATTEMPTS_HEADER = 'x-olea-attempts';
+
+/**
+ * Side channel for the attempt count (`ol-egov.141.89.7.88`): keyed by the parsed body object that
+ * `sendWorkerTask` returns, so the return value and every caller of it are untouched. Weak, so it
+ * holds nothing once the body is dropped.
+ */
+const attemptsByBody = new WeakMap<object, number>();
+
+/** A whole number of at least 1 from the header's value, else undefined. */
+export function parseAttemptsHeader(value: unknown): number | undefined {
+  if (typeof value !== 'string' || !/^\s*\d+\s*$/.test(value)) return undefined;
+  const n = Number(value);
+  return Number.isSafeInteger(n) && n >= 1 ? n : undefined;
+}
+
+function headerValue(headers: Readonly<Record<string, string>> | undefined, name: string) {
+  if (!headers) return undefined;
+  for (const key of Object.keys(headers)) {
+    if (key.toLowerCase() === name) return headers[key];
+  }
+  return undefined;
+}
+
+/**
+ * The billable-call count the Worker reported for the response that produced `body`, when `body`
+ * came from `sendWorkerTask`/`WorkerHttpTransport.send` and the header was a whole number of at
+ * least 1; otherwise undefined. Plugs into `spend/allowance.ts`'s `attemptsOf`.
+ */
+export function attemptsOfWorkerBody(body: unknown): number | undefined {
+  return typeof body === 'object' && body !== null ? attemptsByBody.get(body) : undefined;
 }
 
 /**
@@ -116,11 +156,17 @@ export async function sendWorkerTask(
     );
   }
 
+  let parsed: unknown;
   try {
-    return JSON.parse(response.text);
+    parsed = JSON.parse(response.text);
   } catch {
     throw new WorkerTransportError('olea: the Worker response was not valid JSON.');
   }
+  if (typeof parsed === 'object' && parsed !== null) {
+    const attempts = parseAttemptsHeader(headerValue(response.headers, ATTEMPTS_HEADER));
+    if (attempts !== undefined) attemptsByBody.set(parsed, attempts);
+  }
+  return parsed;
 }
 
 /**

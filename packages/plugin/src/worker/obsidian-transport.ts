@@ -42,7 +42,8 @@ import { WorkerHttpTransport } from './transport.js';
 /** `HttpRequestFn` over Obsidian's `requestUrl`. */
 export const obsidianHttpRequest: HttpRequestFn = async ({ url, method, headers, body }) => {
   const response = await requestUrl({ url, method, headers, body, throw: false });
-  return { status: response.status, text: response.text };
+  // `headers` carries the Worker's `x-olea-attempts` count to the spend ledger (`ol-egov.141.89.7.88`).
+  return { status: response.status, text: response.text, headers: response.headers };
 };
 
 /**

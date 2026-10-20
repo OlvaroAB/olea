@@ -13,6 +13,7 @@ import { TASK_ENDPOINT_PATH } from 'olea-contracts';
 import type { WorkerTaskRequest } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
+  attemptsOfWorkerBody,
   buildTaskUrl,
   type HttpRequestFn,
   sendWorkerTask,
@@ -408,5 +409,46 @@ describe('transport.ts never logs — no console call exists in the source at al
     }
     expect(thrown).toBeInstanceOf(WorkerTransportError);
     expect((thrown as Error).message).not.toContain(CONFIG.token);
+  });
+});
+
+describe('x-olea-attempts (ol-egov.141.89.7.88): surfaced beside the body, never in it', () => {
+  const body = { ok: true, stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'm' } };
+  const sendWith = async (headers?: Record<string, string>) => {
+    const httpRequest: HttpRequestFn = async () => ({
+      status: 200,
+      text: JSON.stringify(body),
+      ...(headers ? { headers } : {}),
+    });
+    return new WorkerHttpTransport(httpRequest, CONFIG).send(REQUEST);
+  };
+
+  it('a whole number of at least 1 is read, whatever the header name case', async () => {
+    expect(attemptsOfWorkerBody(await sendWith({ 'x-olea-attempts': '1' }))).toBe(1);
+    expect(attemptsOfWorkerBody(await sendWith({ 'X-Olea-Attempts': '3' }))).toBe(3);
+  });
+
+  it('the returned body is exactly the parsed JSON either way', async () => {
+    expect(await sendWith({ 'x-olea-attempts': '2' })).toEqual(body);
+    expect(await sendWith()).toEqual(body);
+  });
+
+  it('an absent header or no headers at all is undefined', async () => {
+    expect(attemptsOfWorkerBody(await sendWith())).toBeUndefined();
+    expect(
+      attemptsOfWorkerBody(await sendWith({ 'content-type': 'application/json' })),
+    ).toBeUndefined();
+  });
+
+  it('a malformed value is undefined', async () => {
+    for (const bad of ['', '0', '-1', '1.5', 'two', '1e3', 'NaN', '99999999999999999999']) {
+      expect(attemptsOfWorkerBody(await sendWith({ 'x-olea-attempts': bad }))).toBeUndefined();
+    }
+  });
+
+  it('a body the transport did not produce, or a non-object, is undefined', () => {
+    expect(attemptsOfWorkerBody({ ok: true })).toBeUndefined();
+    expect(attemptsOfWorkerBody(null)).toBeUndefined();
+    expect(attemptsOfWorkerBody('1')).toBeUndefined();
   });
 });
