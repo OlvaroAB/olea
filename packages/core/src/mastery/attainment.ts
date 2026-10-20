@@ -64,6 +64,12 @@
  * **Operational failure is never a fact about her**: an event whose
  * timestamp cannot be read is left out of an as-of fold, and a concept the
  * log never names reads seed, too early to say, and unknown need.
+ *
+ * **Evidence whose hold check could not be made** (`[D-539]`;
+ * `ol-egov.141.89.104.56`) is neither excluded nor counted: a current reading
+ * that would read it is not made, and says so ({@link UnavailableCurrentReading},
+ * through the `…OrUnavailable` readers at the end of this module). The readers
+ * that take no such input are unchanged.
  */
 
 import type {
@@ -97,6 +103,7 @@ import {
 } from './validity.js';
 import {
   isRecallTier,
+  type ReadinessRecallInstrument,
   type ReadinessRecallReading,
   readReadinessRecall,
   readVitality,
@@ -1014,6 +1021,25 @@ export function readAllConceptReadiness(
   validity: InstrumentValidityProjection,
   options: AttainmentOptions = {},
 ): ReadonlyMap<string, ConceptReadinessReading> {
+  const fold = readinessFold(entries, scheduler, now, validity, options);
+  const result = new Map<string, ConceptReadinessReading>();
+  for (const id of conceptIds) result.set(id, fold.read(fold.eligible(id)));
+  return result;
+}
+
+/**
+ * The readiness fold's setup, shared by {@link readAllConceptReadiness} and
+ * {@link readAllConceptReadinessOrUnavailable}: one replay over the standing
+ * evidence and one eligibility rule, so the two can never read a concept two
+ * ways.
+ */
+function readinessFold(
+  entries: readonly ReviewLogEntry[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+  options: AttainmentOptions,
+) {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
   const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
@@ -1021,24 +1047,30 @@ export function readAllConceptReadiness(
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed = replaySchedulerStates(standing, scheduler);
   const independent = instrumentsWithIndependentSuccess(standing);
-  const result = new Map<string, ConceptReadinessReading>();
-  for (const id of conceptIds) {
-    const instruments = conceptVitalityInstruments(entries, id, replayed)
-      .filter(
-        (instrument) =>
-          !excludedFromCurrent(
-            instrument.instrumentId,
-            'readiness',
-            validity,
-            policy,
-            unresolvedPassage,
-            carried,
-          ),
-      )
-      .map((instrument) => ({
-        ...instrument,
-        hasIndependentSuccess: independent.has(instrument.instrumentId),
-      }));
+
+  /** Every instrument with evidence for the concept, each with whether it has an unaided success. */
+  const all = (conceptId: string): readonly ReadinessRecallInstrument[] =>
+    conceptVitalityInstruments(entries, conceptId, replayed).map((instrument) => ({
+      ...instrument,
+      hasIndependentSuccess: independent.has(instrument.instrumentId),
+    }));
+
+  /** The eligibility rule; `carriedBy: false` leaves out only J3's carried predecessor. */
+  const excluded = (instrumentId: string, carriedBy = true): boolean =>
+    excludedFromCurrent(
+      instrumentId,
+      'readiness',
+      validity,
+      policy,
+      unresolvedPassage,
+      carriedBy ? carried : undefined,
+    );
+
+  /** The concept's instruments the eligibility rule admits. */
+  const eligible = (conceptId: string): readonly ReadinessRecallInstrument[] =>
+    all(conceptId).filter((instrument) => !excluded(instrument.instrumentId));
+
+  const read = (instruments: readonly ReadinessRecallInstrument[]): ConceptReadinessReading => {
     const reading = readReadinessRecall({ instruments, scheduler, now });
     const thin = instruments
       .filter(
@@ -1050,9 +1082,40 @@ export function readAllConceptReadiness(
       )
       .map((instrument) => instrument.instrumentId)
       .sort();
-    result.set(id, { ...reading, thinEvidenceInstrumentIds: thin, arithmeticVersion });
-  }
-  return result;
+    return { ...reading, thinEvidenceInstrumentIds: thin, arithmeticVersion };
+  };
+
+  /**
+   * The instruments in `evidenceUnknown` that this concept's readiness would read (`[D-539]`).
+   * One counts when the readiness fold's own filter would read it (a recall-tier instrument with
+   * a review and an unaided success: asked of {@link readReadinessRecall} itself, so this can
+   * never drift from it) and nothing excludes it on purpose. Evidence excluded on purpose (proven
+   * invalid, a changed passage not yet revalidated, withheld under the policy) stays out whatever
+   * its hold check says, so no reading depends on it. A predecessor left out only because an
+   * active successor carries it (J3) is left out only while that successor stands: when the
+   * successor is unknown and the predecessor would otherwise be read, the reading depends on the
+   * successor, which is named.
+   */
+  const unknownRead = (conceptId: string, evidenceUnknown: ReadonlySet<string>): string[] => {
+    if (evidenceUnknown.size === 0) return [];
+    const reads = (instrument: ReadinessRecallInstrument): boolean =>
+      readReadinessRecall({ instruments: [instrument], scheduler, now }).instrumentsRead > 0;
+    const found = new Set<string>();
+    for (const instrument of all(conceptId)) {
+      if (excluded(instrument.instrumentId, false)) continue;
+      const carrier = carried?.get(instrument.instrumentId);
+      if (carrier !== undefined) {
+        if (evidenceUnknown.has(carrier) && reads(instrument)) found.add(carrier);
+        continue;
+      }
+      if (evidenceUnknown.has(instrument.instrumentId) && reads(instrument)) {
+        found.add(instrument.instrumentId);
+      }
+    }
+    return [...found].sort();
+  };
+
+  return { arithmeticVersion, eligible, read, unknownRead };
 }
 
 /** Whether need rests on eligible evidence, or on none (`[D-348]`, ruled). */
@@ -1080,14 +1143,20 @@ export function readNeed(
   readiness: ReadinessRecallReading,
   options: { readonly unknownNeedValue?: number } = {},
 ): NeedReading {
-  const unknownValue = options.unknownNeedValue ?? UNKNOWN_NEED_VALUE;
-  if (!(Number.isFinite(unknownValue) && unknownValue >= 0 && unknownValue <= 1)) {
-    throw new RangeError(`readNeed: unknownNeedValue must be within [0, 1], got ${unknownValue}`);
-  }
+  const unknownValue = unknownNeedValueOf(options);
   if (readiness.weakest === null) {
     return { basis: 'unknown', value: unknownValue, readiness };
   }
   return { basis: 'estimated', value: 1 - readiness.weakest.recallProbability, readiness };
+}
+
+/** {@link readNeed}'s declared unknown value, checked to lie within `[0, 1]`. */
+function unknownNeedValueOf(options: { readonly unknownNeedValue?: number }): number {
+  const unknownValue = options.unknownNeedValue ?? UNKNOWN_NEED_VALUE;
+  if (!(Number.isFinite(unknownValue) && unknownValue >= 0 && unknownValue <= 1)) {
+    throw new RangeError(`readNeed: unknownNeedValue must be within [0, 1], got ${unknownValue}`);
+  }
+  return unknownValue;
 }
 
 /** The latest rated review per instrument, by `(instant, eventId)`. */
@@ -1137,19 +1206,45 @@ export function readAllCurrentRecognition(
   validity: InstrumentValidityProjection,
   options: AttainmentOptions & { readonly holdingCut?: number } = {},
 ): ReadonlyMap<string, boolean> {
+  const fold = recognitionFold(entries, scheduler, now, validity, options);
+  const result = new Map<string, boolean>();
+  for (const id of conceptIds) result.set(id, fold.current(fold.candidates(id)));
+  return result;
+}
+
+/**
+ * The recognition credit's setup, shared by {@link readAllCurrentRecognition} and
+ * {@link readAllCurrentRecognitionOrUnavailable}: the quiz instruments the credit reads for a
+ * concept (a recognition item with a review, not excluded for need), and whether one of them
+ * holds a correct, current answer.
+ */
+function recognitionFold(
+  entries: readonly ReviewLogEntry[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+  options: AttainmentOptions & { readonly holdingCut?: number },
+) {
   const policy = withheldPolicyOf(options);
+  // Read only for an unavailable reading, so the credit alone validates exactly what it did before.
+  const arithmeticVersion = (): string => versionOf(options, scheduler.configuration?.version);
   const cut = options.holdingCut ?? HOLDING_CUT;
   const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed: ReplayResult = replaySchedulerStates(standing, scheduler);
   const latest = latestRatedReviewByInstrument(standing);
-  const result = new Map<string, boolean>();
-  for (const id of conceptIds) {
-    let current = false;
-    for (const instrument of conceptVitalityInstruments(entries, id, replayed)) {
-      if (instrument.instrumentType !== 'mcq' || instrument.state === null) continue;
-      if (excludedFromCurrent(instrument.instrumentId, 'need', validity, policy, unresolvedPassage))
-        continue;
+
+  const candidates = (conceptId: string): readonly VitalityInstrument[] =>
+    conceptVitalityInstruments(entries, conceptId, replayed).filter(
+      (instrument) =>
+        instrument.instrumentType === 'mcq' &&
+        instrument.state !== null &&
+        !excludedFromCurrent(instrument.instrumentId, 'need', validity, policy, unresolvedPassage),
+    );
+
+  const current = (instruments: readonly VitalityInstrument[]): boolean => {
+    for (const instrument of instruments) {
+      if (instrument.state === null) continue;
       const last = latest.get(instrument.instrumentId);
       if (last === undefined || last.rating === null || last.rating === 'again') continue;
       const { recallProbability } = scheduler.retrievability({
@@ -1157,12 +1252,140 @@ export function readAllCurrentRecognition(
         state: instrument.state,
         now,
       });
-      if (recallProbability >= cut) {
-        current = true;
-        break;
-      }
+      if (recallProbability >= cut) return true;
     }
-    result.set(id, current);
+    return false;
+  };
+
+  return { arithmeticVersion, candidates, current };
+}
+
+// ---------------------------------------------------------------------------
+// Evidence whose hold check could not be made (`[D-539]`; `ol-egov.141.89.104.56`)
+// ---------------------------------------------------------------------------
+
+/**
+ * **A current reading that could not be made** (`[D-539]`, ruled 2026-10-06; the hold reader's
+ * `evidenceUnknown`, `plugin/src/ingestion/materiality/hold-record-reader.ts`). When the hold
+ * store cannot be read as a whole, the hold check cannot be made for anything that cites a
+ * passage. That evidence is neither counted (a hold the reader cannot see may have withdrawn it)
+ * nor removed (removing it would read as weak knowledge, which `[D-539]` forbids). So a reading
+ * that would read any of it is not made at all, rather than computed over the rest as if the rest
+ * were complete: readiness is a minimum, so dropping an instrument could raise it or leave it with
+ * nothing, and the recognition credit is an "any", so dropping one could withhold it.
+ *
+ * It carries no number, so nothing can rank, score or word it as a reading of her knowledge, and
+ * it is kept apart from three things it is not:
+ *  - **excluded** evidence ({@link excludedFromCurrent}: proven invalid, a changed passage not yet
+ *    revalidated, withheld under the policy, a carried predecessor), removed on purpose. Evidence
+ *    excluded on purpose stays excluded whatever its hold check says, and never makes a reading
+ *    unavailable;
+ *  - **no evidence yet**: a readiness reading whose `weakest` is `null`, so need's basis
+ *    `'unknown'` (`[D-348]`), a fact about what her log holds;
+ *  - **a low reading**.
+ * Its words are a surface's, once a clause and a registry entry name them; this module returns
+ * facts only.
+ */
+export interface UnavailableCurrentReading {
+  readonly status: 'unavailable';
+  /** The instruments the reading would read whose hold check could not be made, sorted. Never empty. */
+  readonly evidenceUnknownInstrumentIds: readonly string[];
+  readonly arithmeticVersion: string;
+}
+
+/** A current reading that was made, with nothing unknown under it. */
+export interface AvailableCurrentReading<T> {
+  readonly status: 'available';
+  readonly reading: T;
+}
+
+/** A current reading, or the fact that it could not be made ({@link UnavailableCurrentReading}). */
+export type CurrentReadingOrUnavailable<T> = AvailableCurrentReading<T> | UnavailableCurrentReading;
+
+/**
+ * {@link readAllConceptReadiness}, with `[D-539]`'s input: the instruments whose hold check could
+ * not be made (`evidenceUnknown`). A concept whose readiness would read any of them reads
+ * {@link UnavailableCurrentReading}; every other concept reads exactly what
+ * {@link readAllConceptReadiness} reads, from the same fold. `evidenceUnknown` is never an
+ * exclusion: an instrument in it is not left out of anything. No production caller yet: the
+ * hold store has no ruled location (`ol-egov.141.89.104.6`); the gap view's provider takes it
+ * (`plugin/src/gap/provider.ts`).
+ */
+export function readAllConceptReadinessOrUnavailable(
+  entries: readonly ReviewLogEntry[],
+  conceptIds: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+  evidenceUnknown: ReadonlySet<string>,
+  options: AttainmentOptions = {},
+): ReadonlyMap<string, CurrentReadingOrUnavailable<ConceptReadinessReading>> {
+  const fold = readinessFold(entries, scheduler, now, validity, options);
+  const result = new Map<string, CurrentReadingOrUnavailable<ConceptReadinessReading>>();
+  for (const id of conceptIds) {
+    const unknown = fold.unknownRead(id, evidenceUnknown);
+    result.set(
+      id,
+      unknown.length > 0
+        ? {
+            status: 'unavailable',
+            evidenceUnknownInstrumentIds: unknown,
+            arithmeticVersion: fold.arithmeticVersion,
+          }
+        : { status: 'available', reading: fold.read(fold.eligible(id)) },
+    );
+  }
+  return result;
+}
+
+/**
+ * {@link readNeed} over a readiness reading that may be unavailable: an unavailable readiness
+ * gives an unavailable need, never need with basis `'unknown'` (that basis says her log holds no
+ * eligible evidence, which is a different fact, `[D-348]`).
+ */
+export function readNeedOrUnavailable(
+  readiness: CurrentReadingOrUnavailable<ReadinessRecallReading>,
+  options: { readonly unknownNeedValue?: number } = {},
+): CurrentReadingOrUnavailable<NeedReading> {
+  unknownNeedValueOf(options);
+  if (readiness.status === 'unavailable') return readiness;
+  return { status: 'available', reading: readNeed(readiness.reading, options) };
+}
+
+/**
+ * {@link readAllCurrentRecognition}, with `[D-539]`'s input. A concept whose credit would read a
+ * quiz instrument whose hold check could not be made (a recognition item with a review that
+ * nothing excludes on purpose) reads {@link UnavailableCurrentReading}, never "no current
+ * answer"; every other concept reads exactly what {@link readAllCurrentRecognition} reads. No
+ * production caller yet (see {@link readAllConceptReadinessOrUnavailable}).
+ */
+export function readAllCurrentRecognitionOrUnavailable(
+  entries: readonly ReviewLogEntry[],
+  conceptIds: readonly string[],
+  scheduler: Scheduler,
+  now: Date,
+  validity: InstrumentValidityProjection,
+  evidenceUnknown: ReadonlySet<string>,
+  options: AttainmentOptions & { readonly holdingCut?: number } = {},
+): ReadonlyMap<string, CurrentReadingOrUnavailable<boolean>> {
+  const fold = recognitionFold(entries, scheduler, now, validity, options);
+  const result = new Map<string, CurrentReadingOrUnavailable<boolean>>();
+  for (const id of conceptIds) {
+    const candidates = fold.candidates(id);
+    const unknown = candidates
+      .map((instrument) => instrument.instrumentId)
+      .filter((instrumentId) => evidenceUnknown.has(instrumentId))
+      .sort();
+    result.set(
+      id,
+      unknown.length > 0
+        ? {
+            status: 'unavailable',
+            evidenceUnknownInstrumentIds: unknown,
+            arithmeticVersion: fold.arithmeticVersion(),
+          }
+        : { status: 'available', reading: fold.current(candidates) },
+    );
   }
   return result;
 }
