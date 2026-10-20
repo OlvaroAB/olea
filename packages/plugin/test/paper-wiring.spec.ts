@@ -42,7 +42,7 @@ describe('the practice-paper view and command are registered, not merely written
 
   it('registers the paper view type against a real buildPracticePaperProvider composition', () => {
     expect(main).toMatch(
-      /const practicePaper = buildPracticePaperProvider\(\{\s*vault,\s*dataHost: this,\s*createTransport: createObsidianWorkerTransport,\s*settingsStore: new ObsidianStudyPlanSettingsStore\(this\),\s*now: this\.now,\s*\}\);/,
+      /const practicePaper = buildPracticePaperProvider\(\{\s*vault,\s*dataHost: this,\s*createTransport: createObsidianWorkerTransport,\s*settingsStore: new ObsidianStudyPlanSettingsStore\(this\),\s*now: this\.now,\s*(?:\/\/[^\n]*\n\s*)*readPastPaperStructure: pastPaperStructureReaderForVault\(\{\s*vault,\s*deviceId,\s*manifestsFor:[\s\S]*?\}\),\s*\}\);/,
     );
     expect(main).toMatch(
       /this\.registerView\(VIEW_TYPE_OLEA_PAPER, \(leaf\) => new PaperView\(leaf, practicePaper\)\);/,

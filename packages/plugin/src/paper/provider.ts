@@ -49,7 +49,9 @@ import {
   type PaperHandoffResult,
   type PaperRecord,
   type PaperRecoveredStructure,
+  type PastPaperStoredReading,
   paperDaysUntilDue,
+  paperRecoveredStructureFromReadings,
   type ReadingPolicy,
   readReviewLogHistory,
   resolveAssessments,
@@ -61,10 +63,6 @@ import {
   type VaultSource,
   writeInstrumentCitation,
 } from 'olea-core';
-import {
-  type PastPaperStoredReading,
-  paperRecoveredStructureFromReadings,
-} from '../../../core/src/oracle/paper-recovered-structure.js';
 import { ensureHomeNoteForConcept } from '../generation/home-note.js';
 import type { PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';

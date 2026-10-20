@@ -145,33 +145,57 @@ export function validatePaperScope(concepts: readonly PaperScopeConcept[]): void
 }
 
 /**
- * Throws when a recovered section's marks are not `PaperMarks` (`ol-egov.141.89.7.87`, `[D-431]`):
- * stated (a finite, non-negative value) or unknown. A bare number is the shape this type had before
- * marks could be unknown; reading one as either state would be a guess, so a caller still passing
- * it is told, never silently re-read.
+ * `ol-egov.141.89.7.87`, `[D-431]`: a recovered section's marks as `PaperMarks`. A bare finite,
+ * non-negative number is the shape this type had before marks could be unknown, and it has always
+ * meant the marks the paper prints (the service harness still passes it), so it is read as
+ * `{ status: 'stated', value }`. A `PaperMarks` that is stated (finite, non-negative) or unknown
+ * passes unchanged; unknown stays unknown, never zero. Anything else (NaN, a negative, another
+ * shape) throws. Returns the structure unchanged (the same object) when no section needed it.
  */
-export function validatePaperRecoveredStructure(structure: PaperRecoveredStructure | null): void {
-  for (const sitting of structure?.sittings ?? []) {
-    for (const section of sitting.sections) {
+export function normalisePaperRecoveredStructure(
+  structure: PaperRecoveredStructure | null,
+): PaperRecoveredStructure | null {
+  if (structure === null) return null;
+  let changed = false;
+  const sittings = structure.sittings.map((sitting) => {
+    let sittingChanged = false;
+    const sections = sitting.sections.map((section) => {
       const marks: unknown = section.marks;
-      const value =
-        typeof marks === 'object' && marks !== null
-          ? (marks as { readonly status?: unknown; readonly value?: unknown })
-          : undefined;
-      const known =
-        value?.status === 'unknown' ||
-        (value?.status === 'stated' &&
-          typeof value.value === 'number' &&
-          Number.isFinite(value.value) &&
-          value.value >= 0);
-      if (!known) {
-        throw new Error(
-          'buildPaperBlueprint: a recovered section carries marks that are neither stated (a ' +
-            'finite, non-negative value) nor unknown; marks are `PaperMarks`, never a bare number.',
-        );
+      if (typeof marks === 'number') {
+        if (Number.isFinite(marks) && marks >= 0) {
+          sittingChanged = true;
+          return { ...section, marks: { status: 'stated', value: marks } as const };
+        }
+      } else {
+        const value =
+          typeof marks === 'object' && marks !== null
+            ? (marks as { readonly status?: unknown; readonly value?: unknown })
+            : undefined;
+        if (
+          value?.status === 'unknown' ||
+          (value?.status === 'stated' &&
+            typeof value.value === 'number' &&
+            Number.isFinite(value.value) &&
+            value.value >= 0)
+        ) {
+          return section;
+        }
       }
-    }
-  }
+      throw new Error(
+        'buildPaperBlueprint: a recovered section carries marks that are neither stated (a ' +
+          'finite, non-negative value or number) nor unknown.',
+      );
+    });
+    if (!sittingChanged) return sitting;
+    changed = true;
+    return { ...sitting, sections };
+  });
+  return changed ? { ...structure, sittings } : structure;
+}
+
+/** Throws when a recovered section's marks are none of the shapes {@link normalisePaperRecoveredStructure} reads (a bare finite non-negative number is read as stated). */
+export function validatePaperRecoveredStructure(structure: PaperRecoveredStructure | null): void {
+  normalisePaperRecoveredStructure(structure);
 }
 
 /** `1` when a concept carries at least one allowed held source, else `0` — declared, binary; mirrors the harness tier's `conceptCoverageScore`. No richer graded coverage signal exists to compute from (component register row 2.11's own "Undecided"). */
@@ -590,7 +614,7 @@ export interface BuildPaperBlueprintInput {
 /** Assembles the blueprint. See the module doc for ruling 3's steering and the blinding responsibility this function does not itself enforce. */
 export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBlueprint {
   validatePaperScope(input.concepts);
-  validatePaperRecoveredStructure(input.structure);
+  const structure = normalisePaperRecoveredStructure(input.structure);
   if (input.slotCount !== undefined && !Number.isFinite(input.slotCount)) {
     throw new Error('buildPaperBlueprint: a recorded slot count must be a finite number.');
   }
@@ -602,10 +626,10 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
 
   // F4.11 ruling 1/7 (`[D-262]`): routing now asks which generator declares the slot's intended
   // demand, never the format-class/assessment-type word alone. `demandReadings`/`intendedDemand`
-  // are read from input (b) — never from a sealed sitting, since `input.structure` is already the
+  // are read from input (b) — never from a sealed sitting, since `structure` is already the
   // caller's blinded, non-holdout-only read (module doc).
-  const demandReadings = flattenDemandReadings(input.structure);
-  const intendedDemand = dominantDemand(input.structure);
+  const demandReadings = flattenDemandReadings(structure);
+  const intendedDemand = dominantDemand(structure);
   const demandSupported = demandServedByGenerator(taskId, intendedDemand);
 
   // `[DEMAND-7]` (ol-egov.141.6.11): the gap check reads every SIGNIFICANT demand the evidence
@@ -615,7 +639,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   // read of the same evidence for the face-statement fields only. Falls back to `[intendedDemand]`
   // when nothing cleared the significance bar (e.g. no recovered evidence at all), so a course
   // with no demand data keeps exactly its pre-`[DEMAND-7]` behaviour.
-  const significant = significantDemands(input.structure);
+  const significant = significantDemands(structure);
   const demandsForGapCheck = significant.length > 0 ? significant : [intendedDemand];
   // Already ranked highest-share-first (`significantDemands`'s own doc), so the first unsupported
   // entry is the highest-share significant demand the routed generator cannot serve.
@@ -636,7 +660,7 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   const slotCap =
     input.slotCount !== undefined
       ? clampSlotCount(input.slotCount)
-      : extentSlotCountTarget(steering.extent, input.structure);
+      : extentSlotCountTarget(steering.extent, structure);
   const candidates = ranked.slice(0, slotCap);
   const rankExcluded = ranked.slice(slotCap);
 
@@ -733,11 +757,11 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     formatClass,
     intendedDemand,
     steering,
-    structureSummary: input.structure
+    structureSummary: structure
       ? {
-          sittingCount: input.structure.sittingCount,
-          currentCount: input.structure.currentCount,
-          historicalCount: input.structure.historicalCount,
+          sittingCount: structure.sittingCount,
+          currentCount: structure.currentCount,
+          historicalCount: structure.historicalCount,
         }
       : null,
     eligibleCount: eligible.length,

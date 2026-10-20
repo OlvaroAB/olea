@@ -13,6 +13,7 @@ import {
   isEligibleConcept,
   MAX_BLUEPRINT_SLOTS_DECLARED,
   matchesEmphasis,
+  normalisePaperRecoveredStructure,
   PAPER_GENERATOR_DECLARED_DEMANDS,
   significantDemands,
   slotWeightForPurpose,
@@ -1134,32 +1135,49 @@ describe('[D-548] — unknown section marks, and the length a paper in progress 
     });
   });
 
-  it('a section whose marks are a bare number, or neither stated nor unknown, is refused, never re-read as either', () => {
-    const bare = {
-      ...sittingsOf(3),
-      sittings: [
-        {
-          regime: 'unknown' as const,
-          sections: [{ label: 'A', questionForm: 'x', itemCount: 3, marks: 3 }],
-        },
-      ],
-    } as unknown as PaperRecoveredStructure;
-    expect(() => validatePaperRecoveredStructure(bare)).toThrow(/never a bare number/);
-    expect(() => buildPaperBlueprint({ ...input, structure: bare })).toThrow(/never a bare number/);
-    const negative = {
-      ...sittingsOf(3),
-      sittings: [
-        {
-          regime: 'unknown' as const,
-          sections: [
-            { label: 'A', questionForm: 'x', itemCount: 3, marks: { status: 'stated', value: -1 } },
-          ],
-        },
-      ],
-    } as PaperRecoveredStructure;
-    expect(() => validatePaperRecoveredStructure(negative)).toThrow();
+  it('a bare finite non-negative number is read as stated marks, unknown stays unknown, and anything else is refused', () => {
+    const withMarks = (marks: unknown): PaperRecoveredStructure =>
+      ({
+        ...sittingsOf(3),
+        sittings: [
+          {
+            regime: 'unknown' as const,
+            sections: [{ label: 'A', questionForm: 'x', itemCount: 3, marks }],
+          },
+        ],
+      }) as unknown as PaperRecoveredStructure;
+    const markOf = (s: PaperRecoveredStructure | null): unknown =>
+      s?.sittings[0]?.sections[0]?.marks;
+
+    expect(markOf(normalisePaperRecoveredStructure(withMarks(3)))).toEqual({
+      status: 'stated',
+      value: 3,
+    });
+    expect(markOf(normalisePaperRecoveredStructure(withMarks(0)))).toEqual({
+      status: 'stated',
+      value: 0,
+    });
+    const unknown = withMarks({ status: 'unknown' });
+    expect(normalisePaperRecoveredStructure(unknown)).toBe(unknown);
+    expect(markOf(normalisePaperRecoveredStructure(unknown))).toEqual({ status: 'unknown' });
+    expect(() => validatePaperRecoveredStructure(withMarks(3))).not.toThrow();
+    expect(() => buildPaperBlueprint({ ...input, structure: withMarks(3) })).not.toThrow();
+    for (const bad of [
+      Number.NaN,
+      -1,
+      Number.POSITIVE_INFINITY,
+      { status: 'stated', value: -1 },
+      { status: 'stated', value: Number.NaN },
+      { status: 'other' },
+      'x',
+      null,
+    ]) {
+      expect(() => validatePaperRecoveredStructure(withMarks(bad))).toThrow();
+      expect(() => buildPaperBlueprint({ ...input, structure: withMarks(bad) })).toThrow();
+    }
     expect(() => validatePaperRecoveredStructure(sittingsOf(3))).not.toThrow();
     expect(() => validatePaperRecoveredStructure(null)).not.toThrow();
+    expect(normalisePaperRecoveredStructure(null)).toBeNull();
   });
 
   it('a recorded slot count is the cap whatever the readings now say, and every other input is read as given', () => {
