@@ -31,8 +31,14 @@
 
 import type { RandomSource } from 'olea-core';
 import { mathRandomSource, presentMcq } from 'olea-core';
-import type { McqItem, McqOption, ReviewQueueItem, SelectionContextV4 } from '../review/types.js';
-import type { DraftQuestion, DraftRecord } from './types.js';
+import type {
+  McqItem,
+  McqOption,
+  QaCard,
+  ReviewQueueItem,
+  SelectionContextV4,
+} from '../review/types.js';
+import type { DraftCardContent, DraftQuestion, DraftRecord } from './types.js';
 
 /** Matches `review/queue-adapter.ts`'s own `OPTION_IDS` convention (the letters `keymap.ts` binds). */
 const OPTION_IDS = 'abcdefghij';
@@ -46,12 +52,11 @@ export function basenameWithoutExtension(path: string): string {
 }
 
 /**
- * `ol-0r92.88`: `DraftRecord.question` is optional now that a `'qa'`-kind
- * draft carries `card` instead (`types.ts`) — no such draft reaches this
- * module in production today (no card-drafting pipeline exists yet, so
- * every `'pending'` record the review queue renders is still MCQ-shaped),
- * but this throws a named error rather than a bare `undefined` crash if one
- * ever does, before an MCQ-only renderer like this one is ready for it.
+ * `ol-0r92.88`: `DraftRecord.question` is optional because a `'qa'`-kind draft
+ * carries `card` instead (`types.ts`). A card draft is presented by
+ * `toDraftCardItem` below (`ol-egov.141.89.105.6`); only a record carrying
+ * neither shape reaches this throw, which names the record rather than
+ * crashing on a bare `undefined`.
  */
 function requireMcqQuestion(record: DraftRecord): DraftQuestion {
   if (record.question === undefined) {
@@ -79,11 +84,47 @@ function presentDraftOptions(record: DraftRecord, random: RandomSource): readonl
   }));
 }
 
+/**
+ * `ol-egov.141.89.105.6`: a pending question-and-answer card draft as a `QaCard` carrying its
+ * `draftId` (the same new-badge condition an MCQ draft carries). The review screen already
+ * renders it: front first, her recall, then the reveal with edit-before-saving and reject, and
+ * rating accepts it ([D-097], [D-189], F3.3). Nothing here throws for a card.
+ */
+function toDraftCardItem(record: DraftRecord, card: DraftCardContent): ReviewQueueItem {
+  const instrument: QaCard = {
+    instrumentId: record.draftId,
+    draftId: record.draftId,
+    conceptIds: [...record.conceptIds],
+    courseCode: record.courseCode,
+    noteTitle: basenameWithoutExtension(record.sourcePath),
+    sourcePath: record.sourcePath,
+    blockId: null,
+    type: 'qa',
+    question: card.front,
+    answer: card.back,
+  };
+  return {
+    instrument,
+    priorState: null,
+    selectionContext: {
+      dueState: 'new',
+      examProximity: null,
+      yieldRank: null,
+      // The review-log field records what the queue offered; 'qa' is already a valid value.
+      instrumentTypesOffered: ['qa'],
+      planVersion: null,
+    },
+  };
+}
+
 /** F3.3's "new badge" carries no separate boolean anywhere in this shape — `instrument.draftId !== null` on a `ReviewInstrument` IS the badge condition, so there is exactly one place `view.ts` can get this wrong: reading the wrong field. See that module's doc. */
 export function toDraftReviewQueueItem(
   record: DraftRecord,
   random: RandomSource = mathRandomSource,
 ): ReviewQueueItem {
+  if (record.instrumentType === 'qa' && record.card !== undefined) {
+    return toDraftCardItem(record, record.card);
+  }
   const question = requireMcqQuestion(record);
   const instrument: McqItem = {
     instrumentId: record.draftId,
