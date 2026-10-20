@@ -24,7 +24,18 @@ export function unit(text: string, page: number, section?: string): ExtractedUni
 export const unitsOf = (n: number): ExtractedUnit[] =>
   Array.from({ length: n }, (_, i) => unit(`Unit ${i} text.`, i + 1));
 
-export function conceptNotes(names: readonly string[], course = COURSE) {
+/** Where the kit's definition notes sit: the Zettelkasten folder the real enumeration reads (`closed-list.binding.spec.ts`). */
+export const DEFINITION_FOLDER = '05 Zettelkasten';
+
+/** The invented definition `conceptNotes` gives a concept: one paragraph under its heading. */
+export const definitionOf = (name: string) => `${name} is a made-up thing for tests.`;
+
+/**
+ * Course notes under the DEFAULT courses folder (`01 Courses`, core `concept/course.ts:47`), each
+ * linking to a note named after its concept, so the real `enumerateVaultInstruments` binds the
+ * concept's definition (`ol-egov.141.89.7.74`). Pass `bind: false` for concepts with no note.
+ */
+export function conceptNotes(names: readonly string[], course = COURSE, bind = true) {
   const files: Record<string, string> = {};
   names.forEach((name, i) => {
     files[`01 Courses/${course}/note-${i}.md`] = [
@@ -33,9 +44,12 @@ export function conceptNotes(names: readonly string[], course = COURSE) {
       `course: ${course}`,
       '---',
       '',
-      `Body ${i}.`,
+      `Body ${i}.${bind ? ` See [[${name}]].` : ''}`,
       '',
     ].join('\n');
+    if (bind) {
+      files[`${DEFINITION_FOLDER}/${name}.md`] = `# ${name}\n\n${definitionOf(name)}\n`;
+    }
   });
   return files;
 }

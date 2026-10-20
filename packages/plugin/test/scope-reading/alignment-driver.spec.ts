@@ -26,6 +26,7 @@ import {
   alignNone,
   COURSE,
   conceptNotes,
+  definitionOf,
   outcome,
   type Sent,
   STAMP,
@@ -163,7 +164,12 @@ describe('the alignment driver, objectives', () => {
           anchorRef: string;
           passages: { ref: string; role: string }[];
         }[];
-        concepts: { handle: string; name: string; descriptionNone?: string }[];
+        concepts: {
+          handle: string;
+          name: string;
+          description?: { text: string; source: string };
+          descriptionNone?: string;
+        }[];
         courseContext: { courseId: string };
       };
       expect(payload.batchId).toBe('b1');
@@ -172,7 +178,13 @@ describe('the alignment driver, objectives', () => {
         ['r2', 'declaration', 'u2'],
       ]);
       expect(payload.concepts.map((c) => c.handle)).toEqual(['c001', 'c002', 'c003']);
-      expect(payload.concepts.every((c) => c.descriptionNone === 'no-source-recorded')).toBe(true);
+      // The kit binds each concept's definition (ol-egov.141.89.7.74), so every keyed concept is
+      // sent with it, never as no-source-recorded.
+      for (const c of payload.concepts) {
+        expect(c.descriptionNone).toBeUndefined();
+        expect(c.description?.source).toBe('her-definition');
+        expect(c.description?.text).toContain(definitionOf(c.name));
+      }
       expect(JSON.stringify(r.sent)).not.toContain('unitIndex');
       expect(JSON.stringify(r.sent)).not.toContain('outcome-key1');
 
