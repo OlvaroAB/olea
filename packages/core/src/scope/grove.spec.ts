@@ -407,6 +407,57 @@ describe('buildGroveModel — ground-streak plumbing (F4.5)', () => {
   });
 });
 
+describe('buildGroveModel — ground stall counts processing passes ([D-557], ol-egov.141.89.7.89)', () => {
+  const objectivesPath = '03 Research/objectives.md' as VaultPath;
+  const conceptA = concept('key-a', 'Invented Concept A');
+  const read = (extra: {
+    priorGroundStreaks?: ReadonlyMap<string, number>;
+    processingPassId?: string;
+    priorProcessingPassIds?: ReadonlyMap<string, string>;
+  }) =>
+    buildGroveModel({
+      course: COURSE,
+      concepts: [conceptA],
+      sources: [objectivesSource(objectivesPath)],
+      citations: [citation('Invented Concept A', 'objectives', objectivesPath)],
+      materialPresence: new Map([['key-a', presence(conceptA.sourcePaths, 0)]]),
+      mastery: new Map(),
+      ...extra,
+    });
+  const stall = (r: ReturnType<typeof read>) => {
+    if (r.model.status !== 'declared') throw new Error('expected declared');
+    return r.model.cells[0]?.stall;
+  };
+
+  it('two reads within one pass count once; a new pass advances the streak', () => {
+    const first = read({ processingPassId: 'p1' });
+    expect(first.nextGroundStreaks.get('key-a')).toBe(1);
+    expect(first.nextProcessingPassIds.get('key-a')).toBe('p1');
+    const again = read({
+      processingPassId: 'p1',
+      priorGroundStreaks: first.nextGroundStreaks,
+      priorProcessingPassIds: first.nextProcessingPassIds,
+    });
+    expect(again.nextGroundStreaks.get('key-a')).toBe(1);
+    expect(stall(again)).toBe(false);
+    const next = read({
+      processingPassId: 'p2',
+      priorGroundStreaks: again.nextGroundStreaks,
+      priorProcessingPassIds: again.nextProcessingPassIds,
+    });
+    expect(next.nextGroundStreaks.get('key-a')).toBe(2);
+    expect(stall(next)).toBe(true);
+  });
+
+  it('with no pass token, every read counts and no pass map is returned (today)', () => {
+    const first = read({});
+    const second = read({ priorGroundStreaks: first.nextGroundStreaks });
+    expect(second.nextGroundStreaks.get('key-a')).toBe(2);
+    expect(stall(second)).toBe(true);
+    expect(second.nextProcessingPassIds.size).toBe(0);
+  });
+});
+
 describe('buildGroveModel — C7.9 part-of fold (`ol-5phn`), relations input', () => {
   it('a broad area and its own declared part are never counted as separate peers against the denominator', () => {
     const objectivesPath = '03 Research/objectives.md' as VaultPath;

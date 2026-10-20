@@ -243,6 +243,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { ObsidianQueueStore } from '../ingestion/queue-store.js';
 import type { ObsidianDataHost } from '../plan/settings-store.js';
 import { ObsidianStudyPlanSettingsStore } from '../plan/settings-store.js';
 import { ObsidianRegistryOverridesStore } from '../registry/overrides-store.js';
@@ -261,6 +262,7 @@ import {
   type GrovePriorDenominatorEntry,
   ObsidianGrovePriorDenominatorStore,
 } from './prior-denominator-store.js';
+import { processingPassTokenFromQueue } from './processing-pass-token.js';
 import { ObsidianGroveReadCompletenessStore } from './read-completeness-store.js';
 import { deckMaterialFrom, readTranscriptMaterial } from './taught-signal-material.js';
 import type {
@@ -698,6 +700,8 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
   const overridesStore = new ObsidianRegistryOverridesStore(deps.settingsHost);
   // F4.5/`ol-0r92.20`: the durable ground-streak store — see module doc.
   const groundStreakStore = new ObsidianGroveGroundStreakStore(deps.settingsHost);
+  // `[D-557]`: the stall counts processing passes; the token comes from the ingestion queue's own persisted state.
+  const queueStore = new ObsidianQueueStore(deps.settingsHost);
   // `[D-184]`/`ol-v7r5.32`: the durable prior-denominator store for the
   // scope-correction receipt — see module doc.
   const priorDenominatorStore = new ObsidianGrovePriorDenominatorStore(deps.settingsHost);
@@ -788,6 +792,8 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           assessmentRecords,
           overrides,
           priorGroundStreaks,
+          priorProcessingPassIds,
+          processingPassToken,
           priorDenominators,
           readCompletenessByCourse,
         ] = await Promise.all([
@@ -798,6 +804,8 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           safeAssessmentRecords(deps.vault, assignmentsBasePath),
           overridesStore.load(),
           groundStreakStore.load(),
+          groundStreakStore.loadProcessingPasses(),
+          queueStore.load().then(processingPassTokenFromQueue),
           priorDenominatorStore.load(),
           readCompletenessStore.load(),
         ]);
@@ -940,6 +948,7 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         );
 
         const nextGroundStreaks = new Map<string, number>();
+        const nextProcessingPassIds = new Map<string, string>();
         const nextPriorDenominators = new Map<string, GrovePriorDenominatorEntry>();
         const courses: GroveCourseSection[] = [...courseNames].sort().map((course) => {
           const courseConcepts = visibleConcepts.filter((concept) =>
@@ -968,6 +977,9 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
             materialPresence,
             mastery: masteryByKey,
             priorGroundStreaks,
+            ...(processingPassToken !== null
+              ? { processingPassId: processingPassToken, priorProcessingPassIds }
+              : {}),
             relations: deps.relations?.() ?? [],
             ...(courseReadCoverage !== undefined ? { readCoverage: courseReadCoverage } : {}),
             taughtSignals,
@@ -983,6 +995,9 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
           if (model.status === 'declared') {
             for (const [conceptKey, streak] of built.nextGroundStreaks) {
               nextGroundStreaks.set(conceptKey, streak);
+            }
+            for (const [conceptKey, passId] of built.nextProcessingPassIds) {
+              nextProcessingPassIds.set(conceptKey, passId);
             }
             const currentDenominator: GrovePriorDenominatorEntry = {
               denominatorCount: model.summary.denominatorCount,
@@ -1009,6 +1024,9 @@ export function createLocalGroveProvider(deps: CreateLocalGroveProviderDeps): Gr
         });
 
         await groundStreakStore.save(nextGroundStreaks);
+        if (processingPassToken !== null) {
+          await groundStreakStore.saveProcessingPasses(nextProcessingPassIds);
+        }
         await priorDenominatorStore.save(nextPriorDenominators);
 
         return {
