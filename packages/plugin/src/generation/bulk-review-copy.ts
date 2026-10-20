@@ -112,13 +112,22 @@ export function bulkReviewCompletionTally(counts: {
 export const BULK_REVIEW_COMPLETION_HEADING = 'Done.';
 
 /**
- * The one item shape `draftQuizCardsForConcept` currently produces
- * (`types.ts`'s own doc on `DraftQuestion`) — Q&A and cloze never reach this
- * cache, so a type mark for either would be unreachable by real data.
- * Kept as its own constant rather than a literal in the view so a second
- * generator, when one exists, has one place to add its own label.
+ * A quiz draft's row mark (`draftQuizCardsForConcept`'s item shape). Kept as its own constant
+ * rather than a literal in the view so each generator's kind has one place for its own label.
  */
 export const BULK_REVIEW_ITEM_TYPE_LABEL = 'MCQ';
+
+/**
+ * A question-and-answer card draft's row mark, parallel to `BULK_REVIEW_ITEM_TYPE_LABEL`
+ * (`[D-555]`, ruled by David 2026-10-20, `ol-egov.141.89.105.18`; `ol-egov.141.89.105.6`). The
+ * row shows the card's front and, beneath it, its back, with no "correct" mark.
+ */
+export const BULK_REVIEW_CARD_ITEM_TYPE_LABEL = 'Q&A';
+
+/** The mark a row carries for its kind: "MCQ" for a quiz draft, "Q&A" for a card draft. */
+export function bulkReviewItemTypeLabel(itemType: 'mcq' | 'qa'): string {
+  return itemType === 'qa' ? BULK_REVIEW_CARD_ITEM_TYPE_LABEL : BULK_REVIEW_ITEM_TYPE_LABEL;
+}
 
 /**
  * `[STY-6]` (`ol-l5og.18.15`) — the document header's right slot when nothing

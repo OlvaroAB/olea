@@ -24,7 +24,7 @@
  *
  * **`acceptRemainder` is the batch action `ol-p3t07a`'s own acceptance
  * criteria names** ("clearing 40 drafts from one deck must take minutes"):
- * one call, one group, every still-pending item in it accepted through the
+ * one call, one group, every still-pending item the list shows for it accepted through the
  * same `accept()` this controller already exposes per item — sequentially,
  * not in parallel, so two accepts in the same group never race
  * `cache-store.ts`'s shared `index.json` write within one process (that
@@ -90,15 +90,20 @@ export interface BulkReviewItemViewModel {
    * answer alongside its distractor pool — the same content the accepted
    * instrument would show at first presentation, just visible up front
    * here rather than behind a reveal, because the clearing row's whole
-   * point is judging a claim before it lands (F3.3). Every real draft this
-   * cache holds is quiz-shaped today (`types.ts`'s own doc on
-   * `DraftQuestion` — `draftQuizCardsForConcept` is the one generator
-   * feeding this cache), so `distractors` is never empty in production; a
-   * hypothetical future short-answer draft would carry it empty and the
-   * view renders no pool for that case rather than an empty one.
+   * point is judging a claim before it lands (F3.3). A quiz draft
+   * (`DraftQuestion`, from `draftQuizCardsForConcept`) carries its distractor
+   * pool; a card draft (`DraftCardContent`, `ol-egov.141.89.105.6`) carries
+   * its back here and an empty `distractors`, and the view renders the back
+   * beneath the front with no pool and no "correct" mark (`[D-555]`).
    */
   readonly correctAnswer: string;
   readonly distractors: readonly string[];
+  /**
+   * `[D-555]` (`ol-egov.141.89.105.6`): which kind this row is. `'mcq'` rows are as above. A
+   * `'qa'` row is a question-and-answer card draft: `stem` carries its front, `correctAnswer`
+   * its back (shown beneath the front, with no "correct" mark) and `distractors` is empty.
+   */
+  readonly itemType: 'mcq' | 'qa';
 }
 
 export interface BulkReviewGroupViewModel {
@@ -140,6 +145,44 @@ export interface BulkReviewAcceptRemainderResult {
 }
 
 /**
+ * `ol-egov.141.89.105.6`: a draft the list shows. A pending quiz draft (`question`) or a pending
+ * question-and-answer card draft (`card`, `[D-555]`); a record carrying neither cannot be
+ * rendered and is not listed. `acceptRemainder` filters by this same predicate, so "Accept the
+ * rest" accepts exactly the drafts the list shows.
+ */
+function isListablePending(r: DraftRecord): boolean {
+  if (r.status !== 'pending') return false;
+  return r.instrumentType === 'qa' ? r.card !== undefined : r.question !== undefined;
+}
+
+function toItemViewModel(r: DraftRecord): BulkReviewItemViewModel {
+  const base = {
+    draftId: r.draftId,
+    conceptName: r.conceptName,
+    createdAt: r.createdAt,
+    conceptIds: r.conceptIds,
+  };
+  if (r.instrumentType === 'qa' && r.card !== undefined) {
+    return {
+      ...base,
+      stem: r.card.front,
+      correctAnswer: r.card.back,
+      distractors: [],
+      itemType: 'qa',
+    };
+  }
+  // `isListablePending` guarantees `question` for every non-card record that reaches here.
+  const question = r.question as DraftQuestion;
+  return {
+    ...base,
+    stem: question.stem,
+    correctAnswer: question.correctAnswer,
+    distractors: question.distractors,
+    itemType: 'mcq',
+  };
+}
+
+/**
  * Groups still-`pending` records by `sourcePath`. Both groups and the items
  * within each group are ordered oldest-first (`createdAt`), so the document
  * — and the draft within it — she has been waiting on longest reads first.
@@ -152,19 +195,8 @@ export function buildBulkReviewGroups(
   records: readonly DraftRecord[],
   madeByFor?: BulkReviewMadeByLookup,
 ): readonly BulkReviewGroupViewModel[] {
-  // `ol-0r92.88`: this view model is MCQ-shaped (`stem`/`correctAnswer`/
-  // `distractors` below) and has no card renderer — a `'qa'`-kind pending
-  // record (none exist in production yet; no card-drafting pipeline is
-  // wired) is excluded here rather than crashing the whole triage list over
-  // one item it cannot render, matching this function's own "filters
-  // defensively" posture for `status`. The type predicate narrows `question`
-  // from optional to present for every item kept, so the `.map` below reads
-  // it without a repeated guard.
-  const pending = records.filter(
-    (r): r is DraftRecord & { readonly question: DraftQuestion } =>
-      r.status === 'pending' && r.question !== undefined,
-  );
-  const bySourcePath = new Map<string, (DraftRecord & { readonly question: DraftQuestion })[]>();
+  const pending = records.filter(isListablePending);
+  const bySourcePath = new Map<string, DraftRecord[]>();
   for (const record of pending) {
     const list = bySourcePath.get(record.sourcePath) ?? [];
     list.push(record);
@@ -197,15 +229,7 @@ export function buildBulkReviewGroups(
       courseCode: first.courseCode,
       sourceMarkerOrigin: origin,
       sourceMarkerNoteTitle,
-      items: sorted.map((r) => ({
-        draftId: r.draftId,
-        stem: r.question.stem,
-        conceptName: r.conceptName,
-        createdAt: r.createdAt,
-        conceptIds: r.conceptIds,
-        correctAnswer: r.question.correctAnswer,
-        distractors: r.question.distractors,
-      })),
+      items: sorted.map(toItemViewModel),
     });
   }
 
@@ -303,7 +327,9 @@ export class BulkReviewController {
    * not stop the rest.
    */
   async acceptRemainder(sourcePath: string): Promise<BulkReviewAcceptRemainderResult> {
-    const draftIds = this.records.filter((r) => r.sourcePath === sourcePath).map((r) => r.draftId);
+    const draftIds = this.records
+      .filter((r) => r.sourcePath === sourcePath && isListablePending(r))
+      .map((r) => r.draftId);
 
     const accepted: string[] = [];
     const failed: { draftId: string; error: unknown }[] = [];

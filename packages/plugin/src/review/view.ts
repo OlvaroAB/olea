@@ -1500,7 +1500,14 @@ export class ReviewView extends ItemView {
     });
 
     const answerBlock = body.createDiv({ cls: 'olea-review-answer-block' });
-    answerBlock.createDiv({ cls: 'olea-review-eyebrow', text: 'From your own note' });
+    // `[D-555]` (`ol-egov.141.89.105.18`): a generated card's reveal carries no "From your own
+    // note" label, as a generated MCQ draft's reveal carries none; a card she wrote herself
+    // keeps it. The only signal the item carries is `draftId`, so this holds at a card's first
+    // serve; once accepted, the card is an ordinary vault instrument and reads as authored
+    // until `ol-egov.141.89.105.19` reads the after-acceptance half from another signal.
+    if (instrument.draftId === null) {
+      answerBlock.createDiv({ cls: 'olea-review-eyebrow', text: 'From your own note' });
+    }
     if (instrument.type === 'qa') {
       answerBlock.createEl('p', { text: instrument.answer });
     } else {
