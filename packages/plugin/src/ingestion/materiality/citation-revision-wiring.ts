@@ -904,10 +904,24 @@ export class CitationRevisionTrigger {
           passage = { sourcePath: resolution.sourcePath, rule: resolution.rule };
           reformattedByLadder = resolution.via === 'exact';
         } else if (currentRecord !== undefined) {
-          current = {
-            kind: 'found-at-anchor',
-            text: await materialFor(citedPassagePath(currentRecord)),
-          };
+          const wholeNote = await materialFor(citedPassagePath(currentRecord));
+          if (canonicalizeForMateriality(wholeNote).length === 0) {
+            // `ol-egov.141.89.5.95` (C5.3 as amended by [D-508], [D-543]): a whole cited note with
+            // no groundable content has no current passage to rewrite from. Withheld exactly as
+            // a missing passage is at passage grain: no judge call, nothing suspended, no
+            // successor, no baseline adopted, so refilled content takes the ordinary route.
+            await this.applyPassageResolution(
+              instrumentId,
+              previous,
+              currentRecord,
+              { kind: 'unresolved', reason: 'missing' },
+              passageNotes,
+              actions,
+              report,
+            );
+            continue;
+          }
+          current = { kind: 'found-at-anchor', text: wholeNote };
         } else if (previous.passageDigest !== undefined) {
           // The instrument itself is gone: there is no passage to judge, and relocating a
           // passage-grain anchor among whole notes would compare the wrong grain.
