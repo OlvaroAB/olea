@@ -48,6 +48,14 @@ export interface ReviewInstrumentCommon {
    */
   readonly draftId: string | null;
   /**
+   * `[D-555]` (`ol-egov.141.89.105.19`): `true` when this vault instrument has a citation record,
+   * which only Olea's generation paths write (a card she wrote herself has none), so the reveal
+   * omits "From your own note". Read once at session open (`open-session.ts`), in memory only,
+   * never persisted. Absent means no record was found (a card she wrote, or one accepted before
+   * the record was always written).
+   */
+  readonly oleaGenerated?: boolean;
+  /**
    * Row 3.9's chooser decision for this instrument ([SUPP-3], `ol-lpl4`) —
    * mirrors `olea-core`'s `StudySessionItem.supportLevel` ([SUPP-2],
    * `ol-95vv.4`), threaded here rather than left off this queue's own item

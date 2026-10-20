@@ -3436,6 +3436,12 @@ button.olea-review-mcq-option:hover {
   color: var(--olea-host-muted);
 }
 
+/* `[D-555]`: a card draft's back, beneath its front, with no "correct" mark. */
+.olea-bulk-review-item-back {
+  font: 400 14px / 1.4 var(--olea-host-content-font);
+  color: var(--olea-host-muted);
+}
+
 /* ---- The MCQ pool she is judging (`[STY-0e]`; every real draft carries one) ---- */
 
 .olea-bulk-review-item-pool {

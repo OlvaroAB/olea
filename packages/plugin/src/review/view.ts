@@ -1500,12 +1500,11 @@ export class ReviewView extends ItemView {
     });
 
     const answerBlock = body.createDiv({ cls: 'olea-review-answer-block' });
-    // `[D-555]` (`ol-egov.141.89.105.18`): a generated card's reveal carries no "From your own
-    // note" label, as a generated MCQ draft's reveal carries none; a card she wrote herself
-    // keeps it. The only signal the item carries is `draftId`, so this holds at a card's first
-    // serve; once accepted, the card is an ordinary vault instrument and reads as authored
-    // until `ol-egov.141.89.105.19` reads the after-acceptance half from another signal.
-    if (instrument.draftId === null) {
+    // `[D-555]` (`ol-egov.141.89.105.18`, `.19`): a generated card's reveal carries no "From your
+    // own note" label, as a generated MCQ draft's reveal carries none; a card she wrote herself
+    // keeps it. A pending draft says so by `draftId`; an accepted one by `oleaGenerated`, read
+    // from its citation record when the session opened.
+    if (instrument.draftId === null && instrument.oleaGenerated !== true) {
       answerBlock.createDiv({ cls: 'olea-review-eyebrow', text: 'From your own note' });
     }
     if (instrument.type === 'qa') {
