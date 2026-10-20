@@ -4,8 +4,10 @@
  * [GEN-3.4], `[D-238]`).
  *
  * Proves: an `'mcq'` payload drafts and caches a pending record naming the
- * concept's own note; `'qa'`/`'cloze'` fail honestly and non-retryably
- * (component register row 2.1); the Worker-unconfigured (F7.8), refused,
+ * concept's own note; a `'qa'` payload drafts through the card drafter and
+ * caches a pending `'qa'` card record (`ol-egov.141.89.105.10`, including
+ * the recall trigger a recall-style course asks for); `'cloze'` fails
+ * honestly and non-retryably (component register row 2.1); the Worker-unconfigured (F7.8), refused,
  * unparseable/empty and transport-throw outcomes mirror
  * `revision-job-runner.spec.ts`'s own coverage of the identical shapes; an
  * unresolvable concept key fails non-retryably rather than guessing;
@@ -20,6 +22,7 @@ import {
   createVaultDraftCacheStore,
   type DraftCacheStore,
 } from '../../src/generation/cache-store.js';
+import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
 import {
   createGenerationDraftRunner,
   createHasAnyBuiltKind,
@@ -61,6 +64,16 @@ const groundedResponse = (stem: string): DraftQuizCardsResult => ({
   },
 });
 
+const groundedCards = (front: string): DraftCardsResult => ({
+  status: 'drafted',
+  request: { courseCode: 'COGS214', conceptName: front, sourceChunks: ['chunk'] },
+  response: {
+    ok: true,
+    stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'test-model' },
+    result: { cards: [{ front, back: 'the answer', subject: front }] },
+  },
+});
+
 const refusedResponse: DraftQuizCardsResult = { status: 'refused', reason: 'no-hits' };
 
 describe('runGenerationDraftJob', () => {
@@ -95,20 +108,99 @@ describe('runGenerationDraftJob', () => {
     } satisfies Partial<DraftRecord>);
   });
 
-  it('a qa payload fails honestly and non-retryably (component register row 2.1)', async () => {
-    const vault = new MemoryVaultSource();
+  it('a qa payload drafts through the card drafter and caches a pending qa card record', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
     const cache = createVaultDraftCacheStore(vault);
+    const draftForConcept = vi.fn(async () => groundedResponse('Working memory'));
+    const draftCardForConcept = vi.fn(async () => groundedCards('What is working memory?'));
 
     const outcome = await runGenerationDraftJob(
-      { vault, cache, draftDeps: () => ({}) as never },
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        listConceptsForCourse: async () => [concept('Working memory')],
+        draftForConcept,
+        draftCardForConcept,
+        generateDraftId: () => 'draft-qa-1',
+      },
       payload({ instrumentKind: 'qa' }),
     );
 
-    expect(outcome).toEqual({
-      ok: false,
-      retryable: false,
-      reason: expect.stringContaining('qa'),
+    expect(outcome).toEqual({ ok: true });
+    expect(draftForConcept).not.toHaveBeenCalled();
+    expect(draftCardForConcept).toHaveBeenCalledWith(expect.anything(), {
+      courseCode: 'COGS214',
+      conceptName: 'Working memory',
     });
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]).toMatchObject({
+      draftId: 'draft-qa-1',
+      status: 'pending',
+      instrumentType: 'qa',
+      conceptIds: ['key-Working memory'],
+      sourcePath: COURSE_NOTE_PATH,
+      card: { front: 'What is working memory?', back: 'the answer' },
+    } satisfies Partial<DraftRecord>);
+    expect(pending[0]?.provenance.taskId).toBe('cards.generate.v1');
+    expect(pending[0]?.question).toBeUndefined();
+  });
+
+  it('a recall trigger for a recall-style course produces a card', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+
+    const outcome = await runGenerationDraftJob(
+      {
+        vault,
+        cache,
+        draftDeps: () => ({}) as never,
+        listConceptsForCourse: async () => [concept('Working memory')],
+        draftCardForConcept: async () => groundedCards('What is working memory?'),
+      },
+      payload({ instrumentKind: 'qa', trigger: 'format-ask' }),
+    );
+
+    expect(outcome).toEqual({ ok: true });
+    const pending = await cache.listPending();
+    expect(pending).toHaveLength(1);
+    expect(pending[0]?.instrumentType).toBe('qa');
+  });
+
+  it('a qa job follows the same refused, unparseable and transport-throw outcomes as mcq', async () => {
+    const run = async (draftCardForConcept: () => Promise<DraftCardsResult>) => {
+      const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+      const cache = createVaultDraftCacheStore(vault);
+      const outcome = await runGenerationDraftJob(
+        {
+          vault,
+          cache,
+          draftDeps: () => ({}) as never,
+          listConceptsForCourse: async () => [concept('Working memory')],
+          draftCardForConcept,
+        },
+        payload({ instrumentKind: 'qa' }),
+      );
+      return { outcome, cached: (await cache.list()).length };
+    };
+
+    expect(await run(async () => ({ status: 'refused', reason: 'no-hits' }))).toEqual({
+      outcome: { ok: true },
+      cached: 0,
+    });
+    expect(
+      await run(async () => ({
+        status: 'drafted',
+        request: { courseCode: 'COGS214', conceptName: 'x', sourceChunks: [] },
+        response: { ok: true, result: { cards: [] } },
+      })),
+    ).toEqual({ outcome: { ok: true }, cached: 0 });
+    expect(
+      await run(async () => {
+        throw new Error('network');
+      }),
+    ).toEqual({ outcome: { ok: false, retryable: true }, cached: 0 });
   });
 
   it('a cloze payload fails the same honest, non-retryable way', async () => {
@@ -216,17 +308,19 @@ describe('runGenerationDraftJob', () => {
     });
   });
 
-  it('never sends a transport call for a qa/cloze payload — the honest failure is returned before draftForConcept could be called', async () => {
+  it('never sends a transport call for a cloze payload — the honest failure is returned before either drafter could be called', async () => {
     const vault = new MemoryVaultSource();
     const cache = createVaultDraftCacheStore(vault);
     const draftForConcept = vi.fn(async () => groundedResponse('x'));
+    const draftCardForConcept = vi.fn(async () => groundedCards('x'));
 
     await runGenerationDraftJob(
-      { vault, cache, draftDeps: () => ({}) as never, draftForConcept },
+      { vault, cache, draftDeps: () => ({}) as never, draftForConcept, draftCardForConcept },
       payload({ instrumentKind: 'cloze' }),
     );
 
     expect(draftForConcept).not.toHaveBeenCalled();
+    expect(draftCardForConcept).not.toHaveBeenCalled();
   });
 });
 

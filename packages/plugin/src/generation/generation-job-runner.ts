@@ -20,14 +20,17 @@
  * directly too, so a test can exercise the drafting logic without going
  * through `JobRunnerView` plumbing.
  *
- * ## Only `'mcq'` has an execution path (component register row 2.1)
+ * ## `'mcq'` and `'qa'` have an execution path (`ol-egov.141.89.105.10`)
  *
- * `packages/core/src/generation/primary-kind.ts`'s own doc: "no generation
- * task produces Q&A/cloze drafts client-side at all." A `'qa'`/`'cloze'`
- * payload — `primaryKindFor`'s own floor is `'mcq'`, so this should be rare,
- * but F2.14's recorded preference can still name either — returns an
- * honest, classified, NON-retryable failure rather than guessing or
- * crashing. Retrying would not help: no code path exists to service it yet.
+ * `'mcq'` drafts through `quiz.generate.v1` (`draftQuizCardsForConcept`);
+ * `'qa'` drafts through `cards.generate.v1` (`draftCardsForConcept`, the
+ * drafter the F3.3 sweep and `revision-job-runner.ts` already use,
+ * `[D-541]`) and caches `instrumentType: 'qa'` / `card` records, the shape
+ * `accept.ts` already materialises. Every trigger's "other kind" defaults to
+ * `'qa'` first, so without this the recall-style trigger `[D-238]` names
+ * could never produce a card. A `'cloze'` payload (F2.14's recorded
+ * preference can still name it) returns an honest, classified, NON-retryable
+ * failure rather than guessing or crashing: no drafting task exists for it.
  *
  * ## Resolving a note to draft into, absent an `ExtractedUnit`
  *
@@ -97,12 +100,19 @@ import type {
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
+import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
+import { draftCardsForConcept } from './draft-cards.js';
 import { hashSourceRevision } from './home-note.js';
-import { extractDraftedProvenance, extractDraftedQuestions } from './response.js';
-import type { DraftRecord } from './types.js';
+import {
+  extractDraftedCards,
+  extractDraftedCardsProvenance,
+  extractDraftedProvenance,
+  extractDraftedQuestions,
+} from './response.js';
+import type { DraftCardContent, DraftProvenance, DraftQuestion, DraftRecord } from './types.js';
 
-/** `instrumentKind`s this runner can actually service today — see this module's doc / component register row 2.1. */
-const SUPPORTED_INSTRUMENT_KINDS: ReadonlySet<string> = new Set(['mcq']);
+/** `instrumentKind`s this runner can actually service today — see this module's doc. */
+const SUPPORTED_INSTRUMENT_KINDS: ReadonlySet<string> = new Set(['mcq', 'qa']);
 
 export interface GenerationDraftJobDeps {
   readonly vault: VaultSource;
@@ -126,6 +136,15 @@ export interface GenerationDraftJobDeps {
     deps: DraftQuizCardsDeps,
     request: DraftQuizCardsRequest,
   ) => Promise<DraftQuizCardsResult>;
+  /**
+   * The `'qa'` job's drafter: defaults to the real `draftCardsForConcept`, the one the sweep uses.
+   * `DraftCardsDeps` matches `DraftQuizCardsDeps` field for field (`draft-cards.ts`), so the one
+   * resolved `draftDeps` serves either.
+   */
+  readonly draftCardForConcept?: (
+    deps: DraftCardsDeps,
+    request: DraftCardsRequest,
+  ) => Promise<DraftCardsResult>;
   /** Defaults to `deriveDraftId` (deterministic, `(courseCode, conceptName, sequence)` — `cache-store.ts`). */
   readonly generateDraftId?: (
     courseCode: string,
@@ -144,12 +163,65 @@ function defaultListConceptsForCourse(
     extractConcepts(vault, { under: `${coursesFolder}/${courseCode}`, stampConceptKeys: true });
 }
 
+interface DraftedContent {
+  readonly contents: readonly (DraftQuestion | DraftCardContent)[];
+  readonly provenance: DraftProvenance;
+}
+
+/** `'mcq'`: `quiz.generate.v1`. `'retry'` is a transport throw; `null` is nothing to cache. */
+async function draftMcqContent(
+  deps: GenerationDraftJobDeps,
+  draftDeps: DraftQuizCardsDeps,
+  payload: GenerationJobPayload,
+): Promise<DraftedContent | 'retry' | null> {
+  const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
+  let result: DraftQuizCardsResult;
+  try {
+    result = await draftForConcept(draftDeps, {
+      courseCode: payload.courseCode,
+      conceptName: payload.conceptName,
+    });
+  } catch {
+    return 'retry';
+  }
+  if (result.status === 'refused') return null;
+
+  const questions = extractDraftedQuestions(result.response);
+  const provenance = extractDraftedProvenance(result.response);
+  if (questions === null || provenance === null || questions.length === 0) return null;
+  return { contents: questions, provenance };
+}
+
+/** `'qa'`: `cards.generate.v1`, the same three outcomes as {@link draftMcqContent}. */
+async function draftQaContent(
+  deps: GenerationDraftJobDeps,
+  draftDeps: DraftCardsDeps,
+  payload: GenerationJobPayload,
+): Promise<DraftedContent | 'retry' | null> {
+  const draftCardForConcept = deps.draftCardForConcept ?? draftCardsForConcept;
+  let result: DraftCardsResult;
+  try {
+    result = await draftCardForConcept(draftDeps, {
+      courseCode: payload.courseCode,
+      conceptName: payload.conceptName,
+    });
+  } catch {
+    return 'retry';
+  }
+  if (result.status === 'refused') return null;
+
+  const cards = extractDraftedCards(result.response);
+  const provenance = extractDraftedCardsProvenance(result.response);
+  if (cards === null || provenance === null || cards.length === 0) return null;
+  return { contents: cards, provenance };
+}
+
 /**
- * Drafts one drained `'generation'` job (`payload.instrumentKind === 'mcq'`
- * only — see this module's doc) and caches the result as one or more
- * `pending` `DraftRecord`s, exactly the shape `pipeline.ts`'s sweep already
- * caches, so `BulkReviewView`/the review session's passive-accept path reads
- * either indistinguishably. Never throws — a drafting call's own failure
+ * Drafts one drained `'generation'` job (`'mcq'` or `'qa'` — see this
+ * module's doc) and caches the result as one or more `pending`
+ * `DraftRecord`s, exactly the shape `pipeline.ts`'s sweep already caches,
+ * so `BulkReviewView`/the review session's passive-accept path reads either
+ * indistinguishably. Never throws — a drafting call's own failure
  * (network, malformed transport response) is caught and reported
  * `retryable: true`, matching `revision-job-runner.ts`'s identical catch.
  */
@@ -158,9 +230,8 @@ export async function runGenerationDraftJob(
   payload: GenerationJobPayload,
 ): Promise<JobRunOutcome> {
   if (!SUPPORTED_INSTRUMENT_KINDS.has(payload.instrumentKind)) {
-    // Honest, classified, NON-retryable: component register row 2.1 — no
-    // client generation task exists for 'qa'/'cloze' yet, and retrying
-    // cannot change that.
+    // Honest, classified, NON-retryable: no client generation task exists
+    // for 'cloze', and retrying cannot change that.
     return {
       ok: false,
       retryable: false,
@@ -203,34 +274,19 @@ export async function runGenerationDraftJob(
     };
   }
 
-  const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
-  let result: DraftQuizCardsResult;
-  try {
-    result = await draftForConcept(draftDeps, {
-      courseCode: payload.courseCode,
-      conceptName: payload.conceptName,
-    });
-  } catch {
-    return { ok: false, retryable: true };
-  }
-
-  if (result.status === 'refused') {
-    // F4.5's grounded-by-construction argument (`pipeline.ts`'s own doc):
-    // not an error, nothing to cache. D-238's "one call... ever" for the
-    // primary kind means this refusal SPENDS that one call — the job is
-    // done, not retried; a further call for this concept only happens on
-    // one of the four named triggers, never automatically because the
-    // first one refused.
-    return { ok: true };
-  }
-
-  const questions = extractDraftedQuestions(result.response);
-  const provenance = extractDraftedProvenance(result.response);
-  if (questions === null || provenance === null || questions.length === 0) {
-    // Unparseable or empty — nothing content-bearing to cache. Not an error,
-    // same posture `revision-job-runner.ts` takes for the identical case.
-    return { ok: true };
-  }
+  // One drafter per kind; each yields the cached content shape and its provenance, or `null`
+  // for a draft with nothing content-bearing to cache.
+  const drafted =
+    payload.instrumentKind === 'qa'
+      ? await draftQaContent(deps, draftDeps, payload)
+      : await draftMcqContent(deps, draftDeps, payload);
+  if (drafted === 'retry') return { ok: false, retryable: true };
+  // A grounded refusal (F4.5's grounded-by-construction argument, `pipeline.ts`'s own doc) is not
+  // an error, and neither is an unparseable or empty reply (the posture `revision-job-runner.ts`
+  // takes): nothing to cache. D-238's "one call... ever" for the primary kind means a refusal
+  // SPENDS that one call; a further call only happens on one of the four named triggers, never
+  // automatically because the first one refused.
+  if (drafted === null) return { ok: true };
 
   const generateDraftId = deps.generateDraftId ?? deriveDraftId;
   const now = deps.now ?? (() => new Date());
@@ -242,7 +298,7 @@ export async function runGenerationDraftJob(
 
   const createdAt = now().toISOString();
   let sequence = 0;
-  for (const question of questions) {
+  for (const content of drafted.contents) {
     const record: DraftRecord = {
       draftId: await generateDraftId(payload.courseCode, payload.conceptName, sequence),
       status: 'pending',
@@ -252,8 +308,10 @@ export async function runGenerationDraftJob(
       sourcePath,
       ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
       createdAt,
-      question,
-      provenance,
+      ...(payload.instrumentKind === 'qa'
+        ? { instrumentType: 'qa' as const, card: content as DraftCardContent }
+        : { question: content as DraftQuestion }),
+      provenance: drafted.provenance,
       firstServedAt: null,
     };
     await deps.cache.put(record);
