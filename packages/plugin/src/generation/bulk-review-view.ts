@@ -103,8 +103,8 @@ import {
   BULK_REVIEW_COMPLETION_HEADING,
   BULK_REVIEW_DECK_REASSURANCE,
   BULK_REVIEW_EMPTY_TEXT,
-  BULK_REVIEW_ITEM_TYPE_LABEL,
   bulkReviewCompletionTally,
+  bulkReviewItemTypeLabel,
   sourceMarkerText,
 } from './bulk-review-copy.js';
 import { BULK_REVIEW_HINTS, resolveBulkReviewKey } from './bulk-review-keymap.js';
@@ -673,6 +673,7 @@ export class BulkReviewView extends ItemView {
       readonly conceptIds: readonly string[];
       readonly correctAnswer: string;
       readonly distractors: readonly string[];
+      readonly itemType: 'mcq' | 'qa';
     }[],
   ): void {
     // A document with nothing left pending is no longer a GROUP of drafts
@@ -757,11 +758,12 @@ export class BulkReviewView extends ItemView {
         attr: { tabindex: '0', [ROW_DRAFT_ID_ATTR]: item.draftId },
       });
       const body = row.createDiv({ cls: 'olea-bulk-review-item-body' });
-      // `[STY-0e]`: every real F3.3 draft is quiz-shaped today (this
-      // module's own `BulkReviewItemViewModel` doc) — Q&A/cloze marks would
-      // be unreachable by real data, so only the one type this cache ever
-      // produces gets one.
-      body.createDiv({ cls: 'olea-bulk-review-item-type', text: BULK_REVIEW_ITEM_TYPE_LABEL });
+      // `[D-555]`: a question-and-answer card draft's row is marked "Q&A" where a quiz row is
+      // marked "MCQ".
+      body.createDiv({
+        cls: 'olea-bulk-review-item-type',
+        text: bulkReviewItemTypeLabel(item.itemType),
+      });
       const content = body.createDiv({ cls: 'olea-bulk-review-item-content' });
       content.createDiv({ cls: 'olea-bulk-review-item-stem', text: item.stem });
       content.createDiv({ cls: 'olea-bulk-review-item-concept', text: item.conceptName });
@@ -771,7 +773,10 @@ export class BulkReviewView extends ItemView {
       // split, this file's own module doc); what she is checking is whether
       // the drafted correct answer and its distractors are worth keeping.
       // Absent, not empty, for a hypothetical draft with no distractors.
-      if (item.distractors.length > 0) {
+      if (item.itemType === 'qa') {
+        // `[D-555]`: the card's back, beneath its front, with no "correct" mark.
+        content.createDiv({ cls: 'olea-bulk-review-item-back', text: item.correctAnswer });
+      } else if (item.distractors.length > 0) {
         const pool = content.createDiv({ cls: 'olea-bulk-review-item-pool' });
         const correct = pool.createDiv({
           cls: 'olea-bulk-review-item-option olea-bulk-review-item-option--correct',

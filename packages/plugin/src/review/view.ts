@@ -1500,7 +1500,13 @@ export class ReviewView extends ItemView {
     });
 
     const answerBlock = body.createDiv({ cls: 'olea-review-answer-block' });
-    answerBlock.createDiv({ cls: 'olea-review-eyebrow', text: 'From your own note' });
+    // `[D-555]` (`ol-egov.141.89.105.18`, `.19`): a generated card's reveal carries no "From your
+    // own note" label, as a generated MCQ draft's reveal carries none; a card she wrote herself
+    // keeps it. A pending draft says so by `draftId`; an accepted one by `oleaGenerated`, read
+    // from its citation record when the session opened.
+    if (instrument.draftId === null && instrument.oleaGenerated !== true) {
+      answerBlock.createDiv({ cls: 'olea-review-eyebrow', text: 'From your own note' });
+    }
     if (instrument.type === 'qa') {
       answerBlock.createEl('p', { text: instrument.answer });
     } else {
