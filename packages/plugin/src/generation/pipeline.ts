@@ -467,6 +467,71 @@ export interface GenerationSweepReport {
    * sweep considered nothing — which that check reads as red, not green.
    */
   readonly routingObservations: readonly RoutingSelectionObservation[];
+  /**
+   * `ol-egov.141.89.105.9` (`[D-439]` point 6): one entry per course the sweep visited, in the
+   * order visited — the kind it drafted that course as and why (`SweepCourseKind`), which the
+   * per-concept composer reasons do not give. Content-free (INV-3): a course code, two kind
+   * labels and a reason code, never a concept name or note path. Empty when nothing was visited.
+   */
+  readonly courseKinds: readonly SweepCourseKind[];
+}
+
+/**
+ * Why a course was drafted as the kind it was (`ol-egov.141.89.105.9`): the first three are
+ * `primaryKindFor`'s own order (`[D-238]`: F4.8's format match, then her recorded preference, then
+ * the floor); the last two are the cases where the kind asked for was not the kind drafted.
+ */
+export type SweepKindReason =
+  | 'format-class'
+  | 'recorded-preference'
+  | 'floor'
+  | 'card-supplier-absent'
+  | 'cloze-asked-multiple-choice-drafted';
+
+export interface SweepCourseKind {
+  readonly courseCode: string;
+  /** The kind this sweep drafted the course as: `'qa'` only through the card supplier, otherwise multiple choice. */
+  readonly kind: 'mcq' | 'qa';
+  /**
+   * The kind `primaryKindFor` asked for, or `null` when the composition supplied no kind inputs
+   * (`deps.kindInputsFor` absent, so nothing was asked and multiple choice is by construction).
+   */
+  readonly asked: string | null;
+  readonly reason: SweepKindReason;
+}
+
+/** Which reason applies, from the path the sweep actually took for this course. */
+function courseKindChoice(
+  courseCode: string,
+  inputs: PrimaryKindInput | undefined,
+  asked: string | null,
+  hasCardSupplier: boolean,
+  draftsCards: boolean,
+): SweepCourseKind {
+  const kind = draftsCards ? 'qa' : 'mcq';
+  // No kind inputs supplied: nothing was asked, so multiple choice is the floor by construction —
+  // and when no card supplier is composed either, its absence is the reason the card path is shut.
+  if (inputs === undefined || asked === null) {
+    return {
+      courseCode,
+      kind,
+      asked: null,
+      reason: hasCardSupplier ? 'floor' : 'card-supplier-absent',
+    };
+  }
+  if (asked === 'cloze') {
+    return { courseCode, kind, asked, reason: 'cloze-asked-multiple-choice-drafted' };
+  }
+  if (asked === 'qa' && !draftsCards) {
+    return { courseCode, kind, asked, reason: 'card-supplier-absent' };
+  }
+  const reason: SweepKindReason =
+    inputs.formatMatch !== null
+      ? 'format-class'
+      : inputs.recordedPreference.length > 0
+        ? 'recorded-preference'
+        : 'floor';
+  return { courseCode, kind, asked, reason };
 }
 
 const ZERO_REPORT: GenerationSweepReport = {
@@ -478,6 +543,7 @@ const ZERO_REPORT: GenerationSweepReport = {
   skippedRouting: 0,
   routingObservations: [],
   refusals: [],
+  courseKinds: [],
 };
 
 /**
@@ -979,6 +1045,8 @@ export async function runGenerationSweep(
   let skippedRouting = 0;
   // `[H-1.8a]`: one classified entry per refusal — see `GenerationSweepReport.refusals`' own doc.
   const refusals: GenerationRefusalNotice[] = [];
+  // `ol-egov.141.89.105.9`: the kind each visited course was drafted as, and why — see `GenerationSweepReport.courseKinds`.
+  const courseKinds: SweepCourseKind[] = [];
 
   for (const courseCode of [...courseCodes].sort()) {
     if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
@@ -1008,10 +1076,18 @@ export async function runGenerationSweep(
     // `ol-0r92.132`: the format-routing's own answer (`[D-238]`), consulted once per course like
     // `courseFormatMatch`. Q&A drafting needs the kind to be `'qa'` AND the card supplier; anything
     // else keeps the quiz path unchanged.
-    const courseDraftsCards =
-      deps.kindInputsFor !== undefined &&
-      deps.cardDraftDeps !== undefined &&
-      primaryKindFor(deps.kindInputsFor(courseCode)) === 'qa';
+    const kindInputs = deps.kindInputsFor?.(courseCode);
+    const askedKind = kindInputs === undefined ? null : primaryKindFor(kindInputs);
+    const courseDraftsCards = deps.cardDraftDeps !== undefined && askedKind === 'qa';
+    courseKinds.push(
+      courseKindChoice(
+        courseCode,
+        kindInputs,
+        askedKind,
+        deps.cardDraftDeps !== undefined,
+        courseDraftsCards,
+      ),
+    );
     const askRouting = courseDraftsCards ? sweepCardRouting : sweepRouting;
     const askDemandFields = courseDraftsCards ? sweepCardDemandFields : sweepDemandFields;
 
@@ -1390,5 +1466,6 @@ export async function runGenerationSweep(
     skippedRouting,
     routingObservations,
     refusals,
+    courseKinds,
   };
 }
