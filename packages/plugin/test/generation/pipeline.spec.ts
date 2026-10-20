@@ -345,7 +345,7 @@ describe('runGenerationSweep', () => {
       listConceptsForCourse: async () => many,
       draftForConcept: async (_deps, request) => {
         calls += 1;
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
     });
 
@@ -689,6 +689,63 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
     });
   });
 
+  it("one candidate's routing failure costs only that candidate; the other is still drafted (`ol-egov.141.89.3.56`)", async () => {
+    // `exists` throws for the first candidate's source: a failure that escapes the classifier
+    // port's own handling, so only the sweep's per-candidate guard can contain it.
+    class ThrowingExistsVault extends MemoryVaultSource {
+      override async exists(path: string): Promise<boolean> {
+        if (path === 'bad.md') throw new Error('routing blew up');
+        return super.exists(path);
+      }
+    }
+    const vault = new ThrowingExistsVault({
+      'bad.md': 'x',
+      [CONCEPT_NOTE]: `${frontmatter('Working memory')}## What is it?\n\nA short-term store.\n`,
+    });
+    const cache = createVaultDraftCacheStore(vault);
+    const drafted: string[] = [];
+    let classifyCalls = 0;
+    const classifier: KnowledgeKindClassifierPort = {
+      async classify() {
+        classifyCalls += 1;
+        return { kind: 'category', confidence: 0.9 };
+      },
+    };
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        {
+          key: `${conceptKey}-a`,
+          name: 'Alpha',
+          tier: 2,
+          courses: ['COGS214'],
+          sourcePaths: ['bad.md'],
+        },
+        {
+          key: `${conceptKey}-b`,
+          name: 'Beta',
+          tier: 2,
+          courses: ['COGS214'],
+          sourcePaths: [CONCEPT_NOTE],
+        },
+      ],
+      draftForConcept: async (_deps, request) => {
+        drafted.push(request.conceptName);
+        return groundedResponse('Working memory');
+      },
+      routing: { classifier },
+    });
+    expect(classifyCalls).toBe(1);
+    expect(drafted).toHaveLength(1);
+    expect(report.attempted).toBe(1);
+    expect(report.drafted).toBe(1);
+    expect(report.skippedRouting).toBe(1);
+    expect(report.routingObservations).toHaveLength(2);
+    expect(report.routingObservations.filter((o) => o.kind === null)).toHaveLength(1);
+  });
+
   it('a concept whose real inventory already meets the routed quiz target is skipped without a drafting call', async () => {
     const vault = new MemoryVaultSource({
       [CONCEPT_NOTE]: [
@@ -760,7 +817,7 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
       listConceptsForCourse: async () => [concept('Working memory')],
       draftForConcept: async (_deps, request) => {
         seenRequest = request;
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
     });
 
@@ -784,7 +841,7 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
       ],
       draftForConcept: async (_deps, request) => {
         seenRequests.push(request);
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
       formatMatch: (courseCode) =>
         courseCode === 'COGS214'
@@ -812,7 +869,7 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
       listConceptsForCourse: async () => [concept('Working memory')],
       draftForConcept: async (_deps, request) => {
         seenRequest = request;
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
       // Opted in, but declines every course — the same as it never having
       // been supplied at all.
@@ -836,7 +893,7 @@ describe('purpose-at-build consultation (`ol-0r92.35` / `[D-188]`, opt-in via `d
       listConceptsForCourse: async () => [concept('Working memory')],
       draftForConcept: async (_deps, request) => {
         seenRequest = request;
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
       formatMatch: () => ({}),
     });
@@ -980,7 +1037,7 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
       ],
       draftForConcept: async (_deps, request) => {
         seen.push({ ...request });
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
     });
 
@@ -1006,7 +1063,7 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
       listConceptsForCourse: async () => [concept('Working memory')],
       draftForConcept: async (_deps, request) => {
         seen = { ...request };
-        return groundedResponse(request.conceptName);
+        return groundedResponse('Working memory');
       },
       formatMatch: () => ({}),
     });

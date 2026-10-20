@@ -94,6 +94,50 @@ describe('buildKnowledgeKindSourceMaterial', () => {
   });
 });
 
+describe('buildKnowledgeKindSourceMaterial: only markdown is read as text (`ol-egov.141.89.3.56`)', () => {
+  /** Records every path handed to `read`, and throws for any path in `throwing`. */
+  class RecordingVault extends MemoryVaultSource {
+    readonly reads: string[] = [];
+    constructor(
+      initial: Record<string, string>,
+      private readonly throwing: readonly string[] = [],
+    ) {
+      super(initial);
+    }
+    override async read(path: string): Promise<string> {
+      this.reads.push(path);
+      if (this.throwing.includes(path)) throw new Error('refused');
+      return super.read(path);
+    }
+  }
+
+  it('a concept whose only sources are PDFs gets no routing input, and no PDF is read as text', async () => {
+    const vault = new RecordingVault({ 'a.pdf': '%PDF-1.7 raw bytes', 'B.PDF': '%PDF-1.7' });
+    const passages = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['a.pdf', 'B.PDF'],
+    });
+    expect(passages).toEqual([]);
+    expect(vault.reads).toEqual([]);
+  });
+
+  it('a PDF among markdown sources is skipped while the notes are still read', async () => {
+    const vault = new RecordingVault({ 'a.md': 'note text', 'x.pdf': '%PDF' });
+    const passages = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['x.pdf', 'a.md'],
+    });
+    expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['a.md']);
+    expect(vault.reads).toEqual(['a.md']);
+  });
+
+  it('a read that throws contributes nothing, exactly as a missing note does', async () => {
+    const vault = new RecordingVault({ 'a.md': 'bad', 'b.md': 'good' }, ['a.md']);
+    const passages = await buildKnowledgeKindSourceMaterial(vault, {
+      sourcePaths: ['a.md', 'b.md'],
+    });
+    expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['b.md']);
+  });
+});
+
 describe("buildKnowledgeKindSourceMaterial: Olea's own stamp never reaches the model", () => {
   const STAMP = ['olea-cloze-ids:', '  block-a1: cloze-1', '  block-b2: cloze-2', ''].join('\n');
 

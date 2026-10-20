@@ -117,8 +117,11 @@ export interface ConceptRoutingDecision {
  * then each of `concept.sourcePaths` whole, as one passage per note — the
  * disclosed minimal reading this module doc explains. `boundNotePath` comes
  * first and is never read twice if it also happens to appear in
- * `sourcePaths`. A missing or empty note contributes nothing (never
- * fabricated); a concept with no readable source note at all returns `[]`,
+ * `sourcePaths`. Only a markdown note (`.md`) is ever read, and only as
+ * text: any other source path (a PDF above all, whose bytes and metadata must
+ * never reach a classifier, `ol-pdfmeta`) contributes nothing and is never
+ * passed to `vault.read`. A missing or empty note, or one whose read throws,
+ * contributes nothing (never fabricated); a concept with no readable source note at all returns `[]`,
  * which `classifyKnowledgeKind`'s own INV-5 guard turns into a clean
  * `'not-run'` — no network call is ever made on empty context.
  *
@@ -139,8 +142,16 @@ export async function buildKnowledgeKindSourceMaterial(
       ? [concept.boundNotePath, ...concept.sourcePaths.filter((p) => p !== concept.boundNotePath)]
       : concept.sourcePaths;
   for (const sourcePath of orderedPaths) {
+    if (!sourcePath.toLowerCase().endsWith('.md')) continue;
     if (!(await vault.exists(sourcePath))) continue;
-    const text = stripOleaFrontmatter(await vault.read(sourcePath));
+    let raw: string;
+    try {
+      raw = await vault.read(sourcePath);
+    } catch {
+      // A read that throws is treated exactly as a missing note: nothing, never fabricated.
+      continue;
+    }
+    const text = stripOleaFrontmatter(raw);
     if (text.trim().length === 0) continue;
     passages.push({
       text,
