@@ -88,6 +88,7 @@
 import type {
   PaperAssessment,
   PaperBlueprint,
+  PaperBlueprintDemandBasis,
   PaperBlueprintSlot,
   PaperDemand,
   PaperDemandReading,
@@ -478,7 +479,7 @@ export function flattenDemandReadings(
  * Returns an empty map when nothing is attributable — the same "no evidence" case `dominantDemand`
  * falls to `DEFAULT_INTENDED_DEMAND` for and `significantDemands` returns `[]` for.
  */
-function demandMarkShares(
+export function demandMarkShares(
   structure: PaperRecoveredStructure | null,
 ): ReadonlyMap<PaperDemand, number> {
   const totals = new Map<PaperDemand, number>();
@@ -630,6 +631,8 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
   // caller's blinded, non-holdout-only read (module doc).
   const demandReadings = flattenDemandReadings(structure);
   const intendedDemand = dominantDemand(structure);
+  const intendedDemandBasis: PaperBlueprintDemandBasis =
+    demandMarkShares(structure).size > 0 ? 'read' : 'default-no-reading';
   const demandSupported = demandServedByGenerator(taskId, intendedDemand);
 
   // `[DEMAND-7]` (ol-egov.141.6.11): the gap check reads every SIGNIFICANT demand the evidence
@@ -661,6 +664,9 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     input.slotCount !== undefined
       ? clampSlotCount(input.slotCount)
       : extentSlotCountTarget(steering.extent, structure);
+  // `[D-438]` P1: the extent target before any exclusion. Not the `slotCount` override, which is
+  // the length a paper already in progress was planned at, not the structure's.
+  const structureSlotCount = extentSlotCountTarget(steering.extent, structure);
   const candidates = ranked.slice(0, slotCap);
   const rankExcluded = ranked.slice(slotCap);
 
@@ -756,6 +762,8 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
     alpha: input.alpha,
     formatClass,
     intendedDemand,
+    intendedDemandBasis,
+    structureSlotCount,
     steering,
     structureSummary: structure
       ? {
