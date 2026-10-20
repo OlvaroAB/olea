@@ -266,6 +266,7 @@ import type { GenerationRoutingDeps } from './routing.js';
 import {
   buildConceptInstrumentInventory,
   classifyForRouting,
+  createDerivedUnitSupplier,
   decideConceptRouting,
   EMPTY_INVENTORY,
   quizDeficit,
@@ -961,6 +962,10 @@ export async function runGenerationSweep(
     return inventoryPromise;
   };
 
+  // `[D-547]`: the extracted units a PDF-only identity's routing input reads, built at most once
+  // per sweep and only when such an identity is first routed.
+  const derivedUnitSupplier = createDerivedUnitSupplier(deps.vault);
+
   // `[MOM-8.1 / BD-1]`: what selection actually did, one entry per candidate
   // that reached the routing consultation point — see
   // `GenerationSweepReport.routingObservations`.
@@ -1131,7 +1136,12 @@ export async function runGenerationSweep(
         // candidate or the error is logged (D-005); it is counted in `skippedRouting` below.
         let classification: KnowledgeKindClassification;
         try {
-          classification = await classifyForRouting(routing, deps.vault, candidate);
+          classification = await classifyForRouting(
+            routing,
+            deps.vault,
+            candidate,
+            derivedUnitSupplier,
+          );
         } catch {
           classification = { status: 'unclassified', confidence: undefined, method: 'model' };
         }

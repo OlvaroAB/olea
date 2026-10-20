@@ -746,6 +746,45 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
     expect(report.routingObservations.filter((o) => o.kind === null)).toHaveLength(1);
   });
 
+  it('a PDF-sourced concept with no extracted unit naming it routes as unclassified and is skipped, with no PDF text read and no classifier call (`[D-547]`)', async () => {
+    class RecordingVault extends MemoryVaultSource {
+      readonly reads: string[] = [];
+      override async read(path: string): Promise<string> {
+        this.reads.push(path);
+        return super.read(path);
+      }
+    }
+    const vault = new RecordingVault({ 'Courses/COGS214/paper.pdf': '%PDF-1.7' });
+    const cache = createVaultDraftCacheStore(vault);
+    let classifyCalls = 0;
+    const classifier: KnowledgeKindClassifierPort = {
+      async classify() {
+        classifyCalls += 1;
+        return { kind: 'category', confidence: 0.9 };
+      },
+    };
+    const report = await runGenerationSweep([embeddedUnit(COURSE_FOLDER_NOTE)], {
+      vault,
+      cache,
+      draftDeps: {} as never,
+      listConceptsForCourse: async () => [
+        {
+          key: `${conceptKey}-pdf`,
+          name: 'Alpha',
+          tier: 3,
+          courses: ['COGS214'],
+          sourcePaths: ['Courses/COGS214/paper.pdf'],
+        },
+      ],
+      draftForConcept: async () => groundedResponse('Alpha'),
+      routing: { classifier },
+    });
+    expect(classifyCalls).toBe(0);
+    expect(report.attempted).toBe(0);
+    expect(report.skippedRouting).toBe(1);
+    expect(vault.reads.filter((r) => r.endsWith('.pdf'))).toEqual([]);
+  });
+
   it('a concept whose real inventory already meets the routed quiz target is skipped without a drafting call', async () => {
     const vault = new MemoryVaultSource({
       [CONCEPT_NOTE]: [
