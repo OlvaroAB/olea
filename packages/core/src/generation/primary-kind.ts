@@ -13,16 +13,18 @@
  * preference still gets `DEFAULT_PRIMARY_KIND_FLOOR`.
  *
  * **Why the floor is `'mcq'`, not `'qa'` (F2.14 lists Q&A first).**
- * `packages/plugin/src/commands/create-card.ts`'s own module doc states the
- * gap plainly: "no generation task produces Q&A/cloze drafts client-side at
- * all (every generative task the plugin calls today is `quiz.generate.v1`,
- * MCQ-shaped)." `cards.generate.v1` exists as a Worker task id and has
- * private-repo prompt work against it (GEN-3.2/GEN-3.3), but no client
- * caller — component register row 2.1's "cards have no accept path at all"
- * is the same still-open gap. A floor this function could not actually
- * service would be worse than an honest one: `'mcq'` is declared here
- * (plain English, not fitted) as the only kind with an execution path today,
- * and is expected to change the moment that gap closes.
+ * The floor is the kind every deployment can service. `cards.generate.v1`
+ * now has a client drafter (`packages/plugin/src/generation/draft-cards.ts`)
+ * and the sweep in `packages/plugin/src/generation/pipeline.ts` routes a
+ * course whose primary kind comes out `'qa'` through it (`ol-0r92.132`), but
+ * only when the composition supplies `deps.kindInputsFor` and
+ * `deps.cardDraftDeps`, and no composition root supplies either today. The
+ * queue path (`packages/plugin/src/ingestion/generation-queue.ts`) still
+ * executes `'mcq'` only. A floor this function could not actually service
+ * everywhere would be worse than an honest one: `'mcq'` is declared here
+ * (plain English, not fitted) as the kind with an execution path in every
+ * composition, and is expected to change when the Q&A route is wired in by
+ * default.
  */
 
 import type { SchedulableInstrumentType } from './types.js';

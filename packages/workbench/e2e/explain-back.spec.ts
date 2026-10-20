@@ -20,7 +20,8 @@
  *
  * Scenarios asserted (F5.1, `[D-163]`, `[D-171]`, F6.8/V5, C4.7/`[D-089]`):
  *   - a fresh, free-form prompt moves from the topic phase to the answering phase
- *   - a graded answer renders feedback, missed points and cited issues
+ *   - a graded answer renders missed points and cited issues as the feedback, and no free-text
+ *     paragraph (`ol-egov.141.89.6.98`, David 2026-10-20)
  *   - the `[D-171]` "See in registry" affordance appears with cited issues and hands off for real
  *   - declining ("Try again") returns to answering with her typed answer intact
  *   - accepting a clean grading shows the one honest F6.8 encouragement line
@@ -66,12 +67,8 @@ test('explain-back-graded-feedback: a graded answer renders feedback, missed poi
 
   // `[D-217]` (`ol-0r92.48`): the graded phase renders no verdict heading at
   // all — the old three-verdict wording this test asserted ("Part of this
-  // holds up.") is rejected wording; only the fact-based feedback line and
-  // the headings below render here now.
+  // holds up.") is rejected wording; only the headings below render here now.
   await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
-  await expect(panel(page).locator('.olea-explain-back-feedback')).toContainText(
-    'effect on half-life is missing',
-  );
   // `[STY-0d]` (`ol-l5og.18.4`): the missed/cited headings moved from the flat
   // `.olea-explain-back-heading` class into the two edge-differentiated
   // regions' own `.olea-explain-back-region-head` — only the misconception
@@ -89,6 +86,10 @@ test('explain-back-graded-feedback: a graded answer renders feedback, missed poi
     hasText: 'Worth a closer look',
   });
   await expect(misconceptionHeading).toBeVisible();
+  // `ol-egov.141.89.6.98` (David, 2026-10-20): the regions above are the
+  // feedback; the grader's free-text paragraph is never shown.
+  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveCount(0);
+  await expect(panel(page)).not.toContainText('effect on half-life is missing');
 });
 
 test('explain-back-graded-feedback: the D-171 "See in registry" affordance hands off through the real function', async ({
@@ -116,9 +117,11 @@ test('explain-back-graded-feedback: declining ("Try again") returns to answering
   const typedAnswer = 'The alpha mechanism does something specific.';
   await panel(page).locator('.olea-explain-back-answer').fill(typedAnswer);
   await panel(page).getByRole('button', { name: 'Check this' }).click();
-  // `[D-217]`: the graded phase shows the feedback line, never an outcome
-  // heading — see the sibling test above.
-  await expect(panel(page).locator('.olea-explain-back-feedback')).toBeVisible();
+  // `[D-217]`: the graded phase shows its regions, never an outcome heading
+  // — see the sibling test above.
+  await expect(
+    panel(page).locator('.olea-explain-back-region-head', { hasText: 'From your notes' }),
+  ).toBeVisible();
 
   await panel(page).getByRole('button', { name: 'Try again' }).click();
 
@@ -136,12 +139,13 @@ test('explain-back-graded-clean: accepting a clean grading shows the one honest 
   await panel(page).locator('.olea-explain-back-answer').fill('A complete, correct explanation.');
   await panel(page).getByRole('button', { name: 'Check this' }).click();
 
-  // `[D-217]`: no verdict heading in the graded phase — just the fact-based
-  // feedback line `cleanGrading()` sets.
+  // `[D-217]`: no verdict heading in the graded phase; and
+  // `ol-egov.141.89.6.98`: no free-text paragraph either, so a clean grading
+  // shows only the decision buttons.
+  await expect(panel(page).getByRole('button', { name: 'Keep this' })).toBeVisible();
   await expect(panel(page).locator('.olea-explain-back-outcome')).toHaveCount(0);
-  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveText(
-    'This names the mechanism and its target correctly.',
-  );
+  await expect(panel(page).locator('.olea-explain-back-feedback')).toHaveCount(0);
+  await expect(panel(page)).not.toContainText('This names the mechanism');
   // Clean: none of the three headings, and no D-171 registry action.
   await expect(panel(page).locator('.olea-explain-back-heading')).toHaveCount(0);
   await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
@@ -150,6 +154,10 @@ test('explain-back-graded-clean: accepting a clean grading shows the one honest 
 
   await expect(panel(page).locator('.olea-explain-back-encouragement')).toContainText(
     "That's the first time this concept has been explained at full depth.",
+  );
+  // The milestone is the whole sentence: the grader's free text is not appended.
+  await expect(panel(page).locator('.olea-explain-back-encouragement')).not.toContainText(
+    'This names the mechanism',
   );
   await expect(panel(page).getByRole('button', { name: 'Done' })).toBeVisible();
   // The workbench fixture's deps never wire `recordSoloGradeAndReview`

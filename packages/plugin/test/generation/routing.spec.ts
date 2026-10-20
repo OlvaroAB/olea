@@ -10,14 +10,21 @@
  * multi-concept instrument into every concept it names; and the pure
  * decision function reads `instrumentMixGaps` faithfully.
  */
-import type { ConceptInstrumentInventory, KnowledgeKindClassifierPort } from 'olea-core';
+import type {
+  ConceptInstrumentInventory,
+  DerivedTextUnit,
+  KnowledgeKindClassifierPort,
+} from 'olea-core';
 import { extractConcepts } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   buildConceptInstrumentInventory,
   buildKnowledgeKindSourceMaterial,
   classifyForRouting,
+  createDerivedUnitSupplier,
   decideConceptRouting,
+  MAX_ROUTING_UNIT_CHARS,
+  MAX_ROUTING_UNITS_PER_IDENTITY,
   quizDeficit,
 } from '../../src/generation/routing.js';
 import { MemoryVaultSource } from './fakes.js';
@@ -111,13 +118,100 @@ describe('buildKnowledgeKindSourceMaterial: only markdown is read as text (`ol-e
     }
   }
 
-  it('a concept whose only sources are PDFs gets no routing input, and no PDF is read as text', async () => {
+  const unit = (
+    sourcePath: string,
+    text: string,
+    extra: Partial<DerivedTextUnit> = {},
+  ): DerivedTextUnit => ({
+    sourcePath,
+    duplicateSourcePaths: [],
+    courses: ['C1'],
+    role: undefined,
+    format: 'pdf',
+    text,
+    templateHeadEnd: 0,
+    ...extra,
+  });
+
+  it('a PDF-only concept is routed on the extracted units of its own PDFs that name it, and no PDF is read as text (`[D-547]`)', async () => {
     const vault = new RecordingVault({ 'a.pdf': '%PDF-1.7 raw bytes', 'B.PDF': '%PDF-1.7' });
-    const passages = await buildKnowledgeKindSourceMaterial(vault, {
-      sourcePaths: ['a.pdf', 'B.PDF'],
+    const units = [
+      unit('a.pdf', 'page one has nothing relevant'),
+      unit('a.pdf', 'page two defines Entropy in full'),
+      unit('B.PDF', 'the entropy of a source', { duplicateSourcePaths: [] }),
+      unit('other.pdf', 'another document naming entropy'),
+      unit('dup.pdf', 'a copy naming Entropy', { duplicateSourcePaths: ['a.pdf'] }),
+    ];
+    const passages = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['a.pdf', 'B.PDF'] },
+      async () => units,
+    );
+    expect(passages.map((p) => [p.anchor.sourcePath, p.anchor.location.page])).toEqual([
+      ['a.pdf', 2],
+      ['B.PDF', 1],
+      ['dup.pdf', 1],
+    ]);
+    expect(passages[0]?.anchor.location.charRange).toEqual({
+      start: 0,
+      end: 'page two defines Entropy in full'.length,
     });
-    expect(passages).toEqual([]);
     expect(vault.reads).toEqual([]);
+  });
+
+  it('a PDF-only concept with no extracted unit naming it, or an unreadable unit source, gets no input', async () => {
+    const vault = new RecordingVault({});
+    const none = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['a.pdf'] },
+      async () => [unit('a.pdf', 'nothing relevant'), unit('z.pdf', 'Entropy elsewhere')],
+    );
+    expect(none).toEqual([]);
+    const thrown = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['a.pdf'] },
+      async () => {
+        throw new Error('refused');
+      },
+    );
+    expect(thrown).toEqual([]);
+    expect(await buildKnowledgeKindSourceMaterial(vault, { sourcePaths: ['a.pdf'] })).toEqual([]);
+    expect(vault.reads).toEqual([]);
+  });
+
+  it('the units are bounded per identity and per unit', async () => {
+    const vault = new RecordingVault({});
+    const many = Array.from({ length: MAX_ROUTING_UNITS_PER_IDENTITY + 3 }, () =>
+      unit('a.pdf', `Entropy ${'x'.repeat(MAX_ROUTING_UNIT_CHARS * 2)}`),
+    );
+    const passages = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['a.pdf'] },
+      async () => many,
+    );
+    expect(passages).toHaveLength(MAX_ROUTING_UNITS_PER_IDENTITY);
+    expect(passages.every((p) => p.text.length === MAX_ROUTING_UNIT_CHARS)).toBe(true);
+  });
+
+  it("markdown sources keep today's behaviour: units are never consulted when a note is a source", async () => {
+    const vault = new RecordingVault({ 'a.md': 'note text' });
+    let asked = 0;
+    const passages = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['x.pdf', 'a.md'] },
+      async () => {
+        asked += 1;
+        return [unit('x.pdf', 'Entropy')];
+      },
+    );
+    expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['a.md']);
+    expect(asked).toBe(0);
+  });
+
+  it('the default unit supplier over a vault with no registered documents yields nothing, and never reads a PDF', async () => {
+    const vault = new RecordingVault({ 'a.pdf': '%PDF-1.7' });
+    expect(await createDerivedUnitSupplier(vault)()).toEqual([]);
+    expect(vault.reads.filter((r) => r.endsWith('.pdf'))).toEqual([]);
   });
 
   it('a PDF among markdown sources is skipped while the notes are still read', async () => {

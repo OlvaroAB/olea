@@ -64,6 +64,7 @@
 import type {
   ConceptInstrumentInventory,
   ConceptRecord,
+  DerivedTextUnit,
   InstrumentMix,
   InstrumentMixGap,
   KnowledgeKindClassification,
@@ -76,9 +77,13 @@ import {
   classifyKnowledgeKind,
   EMPTY_INVENTORY,
   enumerateVaultInstruments,
+  extractTier3Evidence,
+  findMentionedTermsAfter,
   instrumentMixGaps,
+  projectRegisteredFiles,
   ROUTING_GROUP_INSTRUMENT_TYPES,
   ROUTING_GROUPS,
+  readReviewLogHistory,
   routeKnowledgeKindClassification,
 } from 'olea-core';
 import { PROVISIONAL_CONFIDENCE_FLOOR } from './constants.js';
@@ -134,7 +139,8 @@ export interface ConceptRoutingDecision {
  */
 export async function buildKnowledgeKindSourceMaterial(
   vault: VaultSource,
-  concept: Pick<ConceptRecord, 'sourcePaths' | 'boundNotePath'>,
+  concept: Pick<ConceptRecord, 'sourcePaths' | 'boundNotePath'> & { readonly name?: string },
+  derivedUnits?: DerivedUnitSupplier,
 ): Promise<readonly KnowledgeKindSourcePassage[]> {
   const passages: KnowledgeKindSourcePassage[] = [];
   const orderedPaths: readonly VaultPath[] =
@@ -164,6 +170,85 @@ export async function buildKnowledgeKindSourceMaterial(
       },
     });
   }
+  // `[D-547]`: an identity introduced ONLY by non-markdown sources (a PDF, a deck) has no note to
+  // read, so its input is the extracted units of those same documents that name it.
+  if (
+    passages.length === 0 &&
+    derivedUnits !== undefined &&
+    concept.name !== undefined &&
+    orderedPaths.length > 0 &&
+    !orderedPaths.some((p) => p.toLowerCase().endsWith('.md'))
+  ) {
+    passages.push(...(await namingUnitPassages(derivedUnits, concept.name, orderedPaths)));
+  }
+  return passages;
+}
+
+/**
+ * `[D-547]` (`ol-egov.141.89.3.56` part 2, under `[D-544]`): where a PDF-only identity's routing
+ * input comes from. The units are tier 3's own derived text (`extractTier3Evidence`'s
+ * `includeDerivedUnits`): text only, no PDF metadata (`ol-pdfmeta`), and the file's bytes are never
+ * handed to `vault.read` here. A throw yields no units. Built once per sweep, on first need.
+ */
+export type DerivedUnitSupplier = () => Promise<readonly DerivedTextUnit[]>;
+
+/** Declared (plain-English, never fitted) bounds on one identity's unit input. The LOOP probe measured at most about 16k characters per identity (1 to 7 units of 579 to 3,334 characters), inside both. */
+export const MAX_ROUTING_UNITS_PER_IDENTITY = 8;
+export const MAX_ROUTING_UNIT_CHARS = 4000;
+
+export function createDerivedUnitSupplier(vault: VaultSource): DerivedUnitSupplier {
+  let pending: Promise<readonly DerivedTextUnit[]> | null = null;
+  return () => {
+    pending ??= (async () => {
+      try {
+        const { entries } = await readReviewLogHistory(vault);
+        const result = await extractTier3Evidence(vault, {
+          // Units do not depend on the vocabulary; naming is decided per identity below.
+          vocabulary: [],
+          registeredFiles: projectRegisteredFiles(entries),
+          includeDerivedUnits: true,
+          binaryObjectivesAsObjectives: true,
+        });
+        return result.derivedUnits ?? [];
+      } catch {
+        return [];
+      }
+    })();
+    return pending;
+  };
+}
+
+async function namingUnitPassages(
+  supplier: DerivedUnitSupplier,
+  name: string,
+  introducingPaths: readonly VaultPath[],
+): Promise<KnowledgeKindSourcePassage[]> {
+  let units: readonly DerivedTextUnit[];
+  try {
+    units = await supplier();
+  } catch {
+    return [];
+  }
+  const own = new Set<string>(introducingPaths);
+  const pageOf = new Map<string, number>();
+  const passages: KnowledgeKindSourcePassage[] = [];
+  for (const unit of units) {
+    const page = (pageOf.get(unit.sourcePath) ?? 0) + 1;
+    pageOf.set(unit.sourcePath, page);
+    if (!own.has(unit.sourcePath) && !unit.duplicateSourcePaths.some((p) => own.has(p))) continue;
+    // Tier 3's own "names it" rule, template heading excluded.
+    if (findMentionedTermsAfter(unit.text, [name], unit.templateHeadEnd).length === 0) continue;
+    const text = unit.text.slice(0, MAX_ROUTING_UNIT_CHARS);
+    if (text.trim().length === 0) continue;
+    passages.push({
+      text,
+      anchor: {
+        sourcePath: unit.sourcePath,
+        location: { page, charRange: { start: 0, end: text.length } },
+      },
+    });
+    if (passages.length >= MAX_ROUTING_UNITS_PER_IDENTITY) break;
+  }
   return passages;
 }
 
@@ -177,6 +262,7 @@ export async function classifyForRouting(
   routing: GenerationRoutingDeps,
   vault: VaultSource,
   concept: ConceptRecord,
+  derivedUnits: DerivedUnitSupplier = createDerivedUnitSupplier(vault),
 ): Promise<KnowledgeKindClassification> {
   const UNCLASSIFIED: KnowledgeKindClassification = {
     status: 'unclassified',
@@ -185,7 +271,7 @@ export async function classifyForRouting(
   };
   if (routing.classifier === null) return UNCLASSIFIED;
 
-  const sourceMaterial = await buildKnowledgeKindSourceMaterial(vault, concept);
+  const sourceMaterial = await buildKnowledgeKindSourceMaterial(vault, concept, derivedUnits);
   const result = await classifyKnowledgeKind(
     routing.classifier,
     { conceptName: concept.name, sourceMaterial },

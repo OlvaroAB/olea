@@ -3368,7 +3368,9 @@ export {
   type SupportLadderTier,
   type SupportLevel,
 } from './support-level/types.js';
-export { extractTier3Evidence } from './tier3-evidence/build.js';
+// `findMentionedTermsAfter`: tier 3's own "names it" rule, exported for the sweep's routing input
+// (`ol-egov.141.89.3.56`, `[D-547]`) so routing and the producer never disagree on what naming means.
+export { extractTier3Evidence, findMentionedTermsAfter } from './tier3-evidence/build.js';
 export type {
   ConceptCitation,
   ConceptCitationKind,

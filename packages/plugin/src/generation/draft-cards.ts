@@ -28,16 +28,18 @@
  * **What this file deliberately does NOT do**, same posture
  * `draft-quiz-cards.ts` states for itself: it does not decide whether a
  * generated card is the concept's primary kind (`primary-kind.ts`'s
- * `primaryKindFor`, `[D-238]`, is a caller's job — `pipeline.ts`'s, not
- * this file's), does not cache a `DraftRecord`, does not open a draft/accept
- * modal, and does not record an accept/edit/reject event. Those remain
- * `pipeline.ts`'s integration to make (out of this bead's `owns` — see this
- * package's own lane notes: `pipeline.ts`/`cache-store.ts` changed the same
- * day this bead was worked and are owned by a different lane this round) and
- * `response.ts`'s `extractDraftedCards`/`extractDraftedCardsProvenance`
- * (added by this bead, in this same directory) are what a future
- * `pipeline.ts` integration would call to shape this file's raw `response`
- * into a `DraftRecord.card`.
+ * `primaryKindFor`, `[D-238]`, is a caller's job), does not cache a
+ * `DraftRecord`, does not open a draft/accept modal, and does not record an
+ * accept/edit/reject event.
+ *
+ * **Its callers.** `pipeline.ts`'s sweep calls it (as the default
+ * `deps.draftCardForConcept`) for a course whose `primaryKindFor` is `'qa'`,
+ * and shapes the raw `response` with `response.ts`'s
+ * `extractDraftedCards`/`extractDraftedCardsProvenance` into a
+ * `DraftRecord.card` (`ol-0r92.132`, opt-in: it runs only when the
+ * composition supplies `kindInputsFor` and `cardDraftDeps`, and no
+ * composition root does today). `revision-job-runner.ts` also calls it, for
+ * revising a Q&A card.
  *
  * **Grounded in the request's own course only (`[D-544]`, `ol-egov.141.89.3.52`)**, exactly as
  * `draftQuizCardsForConcept` is: see `../retrieval/drafting-scope.ts`.
