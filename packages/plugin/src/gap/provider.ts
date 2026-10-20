@@ -82,6 +82,17 @@ it. Read on every load, so a restart keeps the exclusion; a rewrite and an accep
 leave the fact in place. A store that cannot be read leaves out every instrument that could carry
 a fact, so those readings are unknown, never silently credited.
 
+## Evidence whose hold check could not be made (`ol-egov.141.89.104.56`, `[D-539]`)
+
+When the hold store cannot be read as a whole, the hold reader reports the evidence it bears on as
+unknown (`../ingestion/materiality/hold-record-reader.ts`'s `evidenceUnknown`), and
+`deps.readHoldEvidenceUnknown` hands that set in. It is never an exclusion: a concept whose need,
+recognition credit or demand rule would read any of it has those readings not made at all
+(`olea-core`'s `readAllConceptReadinessOrUnavailable` and its siblings), is named in the state's
+`readingsUnavailable`, and is never listed (`./readings-unavailable.ts`). Every other concept reads
+exactly as before. **No production caller passes it yet**: the hold store has no ruled location
+(`ol-egov.141.89.104.6`). No words are added for the state; `./view.ts` names where they attach.
+
 ## Unavailable, for two different reasons, one state
  *
  * `GapViewState` (`./view.ts`) is `{kind:'model', model} | {kind:'unavailable'}`
@@ -122,6 +133,7 @@ import {
   composeOracleRanking,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  excludedFromCurrent,
   formatFromExtension,
   projectInstrumentDemands,
   projectInstrumentValidity,
@@ -135,12 +147,20 @@ import {
   reviewLogPath,
   scoredConceptId,
   unmetDemandsByConcept,
+  unresolvedPassageInstrumentIds,
 } from 'olea-core';
+// Deep import: these readers are not barrelled in `olea-core`'s index (outside this bead's `owns`).
+import {
+  readAllConceptReadinessOrUnavailable,
+  readAllCurrentRecognitionOrUnavailable,
+  readNeedOrUnavailable,
+} from 'olea-core/src/mastery/attainment.js';
 import {
   passageChangesForReadings,
   readPendingPassageChanges,
 } from '../attainment/passage-changes.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import type { HoldWithholding } from '../ingestion/materiality/hold-record-reader.js';
 import {
   hasAssessmentSource,
   type ObsidianDataHost,
@@ -148,6 +168,7 @@ import {
 } from '../plan/settings-store.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import { gapRowEvidenceBases } from './copy.js';
+import type { GapReadingsUnavailable } from './readings-unavailable.js';
 import type { GapViewDeps, GapViewState } from './view.js';
 
 export interface CreateLocalGapProviderDeps {
@@ -241,6 +262,26 @@ export interface CreateLocalGapProviderDeps {
    * credited; `[D-536]`'s sheet).
    */
   readonly citationHashStore?: CitationHashStore;
+  /**
+   * `[D-539]` (`ol-egov.141.89.104.56`): the instruments whose hold check could not be made, as
+   * the hold reader reports them (`resolveHoldWithholding(...).evidenceUnknown`, over the hold
+   * store's current read and these instruments' cited passages). Handed the instruments this load
+   * enumerated and the review log it read, so a caller resolves holds over the same instruments
+   * every reading here reads, the ones her log names but her vault no longer holds included.
+   *
+   * Never an exclusion: a concept whose need, recognition credit or demand rule would read any of
+   * it is unavailable, never computed over the rest and never listed (see the module doc). An
+   * empty set, or omitting this, keeps today's readings. A reader that throws fails the load into
+   * the view's existing unavailable state, which says the check could not be made and decides
+   * nothing: with no answer at all, no reading here can be trusted to stand.
+   *
+   * **No production caller yet**: the hold store's location is unruled (`ol-egov.141.89.104.6`),
+   * so `main.ts` passes none. Wiring it is `main.ts`'s, with the store.
+   */
+  readonly readHoldEvidenceUnknown?: (scope: {
+    readonly records: readonly VaultInstrumentRecord[];
+    readonly entries: readonly ReviewLogEntry[];
+  }) => Promise<HoldWithholding['evidenceUnknown']>;
 }
 
 /**
@@ -395,6 +436,10 @@ function currentReadingOptions(passageChanges: readonly PassageChangeFact[] | un
  * The gap view's `unmetDemands`: per concept whose declared demands were read, the demands no
  * qualifying review shows now (`[D-349]`). A concept not read has no entry. With nothing declared
  * the map is empty and no instrument is read.
+ *
+ * `unavailable` (`[D-539]`): the asked concepts whose demand rule would read evidence whose hold
+ * check could not be made, so whose answer cannot be given. Their entries are left in the map for
+ * now; the caller sets those concepts aside whole.
  */
 async function unmetDemandsFor(input: {
   readonly vault: VaultSource;
@@ -405,10 +450,16 @@ async function unmetDemandsFor(input: {
   readonly scheduler: Scheduler;
   readonly now: Date;
   readonly passageChanges: readonly PassageChangeFact[] | undefined;
-}): Promise<ReadonlyMap<string, readonly PaperDemand[]>> {
+  readonly evidenceUnknown: ReadonlySet<string> | undefined;
+}): Promise<{
+  readonly unmetDemands: ReadonlyMap<string, readonly PaperDemand[]>;
+  readonly unavailable: ReadonlySet<string>;
+}> {
   const { declaredDemands } = input;
   // Nothing read: no concept can be asked, so no fold runs and no instrument is looked up.
-  if (declaredDemands === undefined || declaredDemands.size === 0) return new Map();
+  if (declaredDemands === undefined || declaredDemands.size === 0) {
+    return { unmetDemands: new Map(), unavailable: new Set() };
+  }
   const asked = new Set<string>(
     [...declaredDemands].filter(([, demands]) => demands.length > 0).map(([key]) => key),
   );
@@ -416,7 +467,7 @@ async function unmetDemandsFor(input: {
     asked.size === 0
       ? new Map<string, readonly PaperDemand[]>()
       : await readInstrumentDemands(input.vault, input.records, input.entries, asked);
-  return unmetDemandsByConcept({
+  const unmetDemands = unmetDemandsByConcept({
     declaredDemands,
     instrumentDemands,
     entries: input.entries,
@@ -425,6 +476,58 @@ async function unmetDemandsFor(input: {
     now: input.now,
     ...currentReadingOptions(input.passageChanges),
   });
+  return {
+    unmetDemands,
+    unavailable: demandRuleUnavailable(
+      input.entries,
+      asked,
+      instrumentDemands,
+      input.validity,
+      input.now,
+      input.passageChanges,
+      input.evidenceUnknown,
+    ),
+  };
+}
+
+/**
+ * `[D-539]`: the asked concepts whose demand rule would read evidence whose hold check could not
+ * be made. The demand rule (`olea-core`'s `gap/demand.ts`) reads, per concept, the reviews that
+ * credit it on an instrument declaring a demand and not excluded for need; one naming an unknown
+ * instrument makes the concept's answer unknowable, whatever the rest shows. Wider than the rule
+ * (a failed review counts here too), never narrower: set aside, never credited.
+ */
+function demandRuleUnavailable(
+  entries: readonly ReviewLogEntry[],
+  asked: ReadonlySet<string>,
+  instrumentDemands: ReadonlyMap<string, readonly PaperDemand[]>,
+  validity: InstrumentValidityProjection,
+  now: Date,
+  passageChanges: readonly PassageChangeFact[] | undefined,
+  evidenceUnknown: ReadonlySet<string> | undefined,
+): ReadonlySet<string> {
+  const unavailable = new Set<string>();
+  if (evidenceUnknown === undefined || evidenceUnknown.size === 0) return unavailable;
+  const unresolvedPassage = unresolvedPassageInstrumentIds(passageChanges, now);
+  for (const entry of entries) {
+    if (entry.kind !== 'review' || !evidenceUnknown.has(entry.instrumentId)) continue;
+    const scored = scoredConceptId(entry.conceptIds);
+    if (scored === undefined || !asked.has(scored)) continue;
+    if ((instrumentDemands.get(entry.instrumentId) ?? []).length === 0) continue;
+    if (
+      excludedFromCurrent(
+        entry.instrumentId,
+        'need',
+        validity,
+        RULED_CURRENT_READING.withheldEvidence,
+        unresolvedPassage,
+      )
+    ) {
+      continue;
+    }
+    unavailable.add(scored);
+  }
+  return unavailable;
 }
 
 /** The concept keys the gap view has rows for: every ranked entry, abstained courses having none. */
@@ -497,6 +600,85 @@ function currentRecognitionByConcept(
 }
 
 /**
+ * `[D-539]` (`ol-egov.141.89.104.56`): need and the recognition credit per ranked concept, and the
+ * concepts whose readings could not be made because evidence they read could not be hold-checked.
+ * With no such evidence, exactly {@link needByConcept} and {@link currentRecognitionByConcept}.
+ * Otherwise the same readings from `olea-core`'s `…OrUnavailable` readers, under the same options:
+ * a concept unavailable in either reading has neither, and is named, never given need unknown (that
+ * says her log holds no evidence, a different fact) and never a credit read over the rest.
+ */
+function currentReadingsFor(input: {
+  readonly entries: readonly ReviewLogEntry[];
+  readonly conceptKeys: readonly string[];
+  readonly scheduler: Scheduler;
+  readonly now: Date;
+  readonly validity: InstrumentValidityProjection;
+  readonly passageChanges: readonly PassageChangeFact[] | undefined;
+  readonly evidenceUnknown: ReadonlySet<string> | undefined;
+}): {
+  readonly need: ReadonlyMap<string, NeedReading>;
+  readonly currentRecognition: ReadonlyMap<string, boolean>;
+  readonly unavailable: ReadonlySet<string>;
+} {
+  const { entries, conceptKeys, scheduler, now, validity, passageChanges, evidenceUnknown } = input;
+  if (evidenceUnknown === undefined || evidenceUnknown.size === 0) {
+    return {
+      need: needByConcept(entries, conceptKeys, scheduler, now, validity, passageChanges),
+      currentRecognition: currentRecognitionByConcept(
+        entries,
+        conceptKeys,
+        scheduler,
+        now,
+        validity,
+        passageChanges,
+      ),
+      unavailable: new Set(),
+    };
+  }
+  const options = currentReadingOptions(passageChanges);
+  const readiness = readAllConceptReadinessOrUnavailable(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    evidenceUnknown,
+    options,
+  );
+  const credit = readAllCurrentRecognitionOrUnavailable(
+    entries,
+    conceptKeys,
+    scheduler,
+    now,
+    validity,
+    evidenceUnknown,
+    options,
+  );
+  const need = new Map<string, NeedReading>();
+  const currentRecognition = new Map<string, boolean>();
+  const unavailable = new Set<string>();
+  for (const [conceptKey, reading] of readiness) {
+    const needReading = readNeedOrUnavailable(reading);
+    const creditReading = credit.get(conceptKey);
+    if (needReading.status === 'unavailable' || creditReading?.status !== 'available') {
+      unavailable.add(conceptKey);
+      continue;
+    }
+    need.set(conceptKey, needReading.reading);
+    currentRecognition.set(conceptKey, creditReading.reading);
+  }
+  return { need, currentRecognition, unavailable };
+}
+
+/** The state's `readingsUnavailable`, or nothing when every reading was made. */
+function readingsUnavailableOf(
+  ...sets: readonly ReadonlySet<string>[]
+): GapReadingsUnavailable | undefined {
+  const conceptKeys = [...new Set(sets.flatMap((set) => [...set]))].sort();
+  return conceptKeys.length === 0 ? undefined : { conceptKeys };
+}
+
+/**
  * A `GapViewDeps` whose `load` composes a fresh `GapViewModel` from the vault
  * and the review log, entirely on-device, no Worker call — the gap-view twin
  * of `createLocalStudyPlanProvider`.
@@ -550,6 +732,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           entries,
           now,
         );
+        // `[D-539]` (`ol-egov.141.89.104.56`): the evidence whose hold check could not be made,
+        // over the instruments this load reads. Never an exclusion; see `readHoldEvidenceUnknown`.
+        const evidenceUnknown =
+          deps.readHoldEvidenceUnknown === undefined
+            ? undefined
+            : await deps.readHoldEvidenceUnknown({ records: enumeration.records, entries });
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
         const disputes = await disputesFromFiles(deps.vault, files);
@@ -604,7 +792,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // assessment's, per concept. A concept whose demands were not read has no entry (absent is
         // not empty), so today, with no declared-demands reader in production, no row carries the
         // field. See the module doc's section on the composition root.
-        const unmetDemands = await unmetDemandsFor({
+        const demandRule = await unmetDemandsFor({
           vault: deps.vault,
           declaredDemands,
           records: enumeration.records,
@@ -613,6 +801,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           scheduler,
           now,
           passageChanges,
+          evidenceUnknown,
         });
 
         // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
@@ -621,17 +810,34 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // relevance × need × credit, the gap view's own formula (the attainment chain spec, section
         // 2.5). The session builder supplies none and keeps the ranking's blend (C5.10).
         const conceptKeys = rankedConceptKeys(ranking);
-        const need = needByConcept(entries, conceptKeys, scheduler, now, validity, passageChanges);
         // `[D-338]` item 3 (`ol-egov.141.89.9.94`): the recognition credit reads only a correct,
-        // current answer on a standing item. See `currentRecognitionByConcept`.
-        const currentRecognition = currentRecognitionByConcept(
+        // current answer on a standing item. See `currentRecognitionByConcept`. `[D-539]`: a
+        // concept whose need or credit would read evidence whose hold check could not be made has
+        // neither, and is set aside with any whose demand rule would. See `currentReadingsFor`.
+        const current = currentReadingsFor({
           entries,
           conceptKeys,
           scheduler,
           now,
           validity,
           passageChanges,
+          evidenceUnknown,
+        });
+        const { need, currentRecognition } = current;
+        // Only concepts the view has rows for: a demand asked of an unranked concept lists nothing.
+        const readingsUnavailable = readingsUnavailableOf(
+          current.unavailable,
+          new Set([...demandRule.unavailable].filter((key) => conceptKeys.includes(key))),
         );
+        // A set-aside concept's demand answer is not given: absent, as for a concept not read.
+        const unmetDemands =
+          readingsUnavailable === undefined
+            ? demandRule.unmetDemands
+            : new Map(
+                [...demandRule.unmetDemands].filter(
+                  ([conceptKey]) => !readingsUnavailable.conceptKeys.includes(conceptKey),
+                ),
+              );
 
         // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): what the durable manifest says of each source
         // an extractor reads, so a page still waiting is never read as absent or as read in full.
@@ -665,7 +871,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // brief-only row (once she declares a scope) would wrongly share.
         const bases = gapRowEvidenceBases(edges.edges);
 
-        return { kind: 'model', model, bases };
+        return {
+          kind: 'model',
+          model,
+          bases,
+          ...(readingsUnavailable !== undefined ? { readingsUnavailable } : {}),
+        };
       } catch (error) {
         console.error('Olea: could not compose the gap view', error);
         return { kind: 'unavailable' };
