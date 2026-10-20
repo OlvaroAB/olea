@@ -38,7 +38,7 @@ async function baselined(): Promise<{ vault: MemoryVaultSource; harness: Harness
     vault,
     QUESTIONS.map((q) => ({ ...q, revision: v0 })),
   );
-  const harness = setup();
+  const harness = setup(vault);
   await harness.trigger.tick(vault, harness.actions);
   expect(await heldIds(harness)).toEqual([]);
   return { vault, harness };

@@ -174,7 +174,7 @@ async function vaultAt(bytes: Uint8Array, questions: readonly QuestionSpec[]) {
   const vault = new MemoryVaultSource();
   vault.binaries.set(DOC, bytes);
   seedQuestions(vault, questions);
-  const harness = setup();
+  const harness = setup(vault);
   await harness.trigger.tick(vault, harness.actions);
   return { vault, harness };
 }
@@ -258,7 +258,7 @@ describe('[D-515], ruled: when a question drafted from an image page is held', (
   async function draftedFromImagePage(deliverRevisionDigest: boolean) {
     const scratch = new MemoryVaultSource();
     scratch.binaries.set(DOC, V1);
-    const { drain, landings } = compose(scratch, setup(), deliverRevisionDigest);
+    const { drain, landings } = compose(scratch, setup(scratch), deliverRevisionDigest);
     await drain(READING_V1);
     const imageDelivery = landings.find((landing) =>
       landing.units.some((unit) => unit.provenance.location.page === 3),

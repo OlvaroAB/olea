@@ -13,7 +13,7 @@ import type {
   VaultPath,
   VaultSource,
 } from 'olea-core';
-import { citationStorePath, hashContent } from 'olea-core';
+import { appendSuspendRecord, citationStorePath, hashContent } from 'olea-core';
 import { vi } from 'vitest';
 import { ObsidianCitationHashStore } from '../../../src/ingestion/materiality/citation-hash-store.js';
 import {
@@ -110,11 +110,25 @@ export function seedQuestions(vault: MemoryVaultSource, questions: readonly Ques
   }
 }
 
-export function setup() {
+/**
+ * With `vault`, the suspend step writes the review-log record the production suspend port writes,
+ * so the pass reads a rewritten question as suspended and leaves it alone ([D-522], [D-536]).
+ */
+export function setup(vault?: MemoryVaultSource) {
   const enqueue = vi.fn(async (_input: unknown): Promise<undefined> => undefined);
-  const suspend = vi.fn(
-    async (_id: string, _concepts: readonly string[]): Promise<void> => undefined,
-  );
+  const suspend = vi.fn(async (id: string, concepts: readonly string[]): Promise<void> => {
+    if (vault === undefined) return;
+    await appendSuspendRecord(
+      vault,
+      {
+        kind: 'suspend',
+        timestamp: '2026-10-05T10:00:00Z',
+        instrumentId: id,
+        conceptIds: [...concepts],
+      },
+      { deviceId: 'dev-synthetic' },
+    );
+  });
   const requestSourceReextraction = vi.fn(async (_path: string): Promise<void> => undefined);
   const store = new ObsidianCitationHashStore(new FakeDataHost());
   const judge: RevisionJudgePort & { judge: ReturnType<typeof vi.fn> } = {
@@ -173,11 +187,18 @@ export function rewrites(harness: Harness): Map<string, { text: string; revision
   return out;
 }
 
-/** The ids whose anchor is still held for a changed file. */
+/**
+ * The ids whose anchor is still held for a changed file and not yet rewritten. A rewritten
+ * question keeps its entry and fact as the exclusion of its evidence (`[D-522]`, [D-536]), so a
+ * question that has been given a successor is no longer waiting for one.
+ */
 export async function heldIds(harness: Harness): Promise<string[]> {
   const held: string[] = [];
+  const rewritten = rewrites(harness);
   for (const [id, anchor] of await harness.store.loadAll()) {
-    if (anchor.pendingRevalidation?.reason === SOURCE_REVISION_REASON) held.push(id);
+    if (anchor.pendingRevalidation?.reason === SOURCE_REVISION_REASON && !rewritten.has(id)) {
+      held.push(id);
+    }
   }
   return held.sort();
 }

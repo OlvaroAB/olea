@@ -175,6 +175,20 @@
  * prompt: a stratification input by the service's own account, and a change to what the judge reads
  * that the operating-point measurement should be aware of.
  *
+ * **Q&A cards where the format-routing chooses Q&A (`ol-0r92.132`, held Class C, opt-in).** When
+ * the composition supplies `deps.kindInputsFor` (the inputs `primaryKindFor` reads, `[D-238]`) AND
+ * `deps.cardDraftDeps`, a course whose primary kind comes out `'qa'` is drafted through
+ * `cards.generate.v1` (`draftCardsForConcept`: the same evidence check and exact checks, since the
+ * card supplier mirrors the quiz one) instead of `quiz.generate.v1`. The ask is the same recall
+ * intent, routed against the card generator; the result is cached as the same `DraftRecord`
+ * (`instrumentType: 'qa'`, `card`) through the same citation, hash, demand-stamping, dedupe and
+ * refusal-memory path, and accepted by `materialize-card.ts`. Nothing else changes: no quota, no
+ * per-concept kind (the kind is read once per course, like `formatMatch`), no cloze generator
+ * (`'cloze'` keeps the quiz path unchanged), and with either dep absent every request is
+ * byte-identical to before. The routing consultation above still counts the quiz group. Self-
+ * reported success on such a card is not demonstrated unaided performance, and this changes
+ * nothing in how evidence folds.
+ *
  * **The demand travels on each cached draft (`[D-437]`, `ol-egov.141.89.2.30`).** Each record this
  * sweep caches carries `DraftRecord.demand` (origin `sweep`), stamped by {@link draftDemandForQuestion}
  * from the request the drafting call actually sent (`result.request`) and the response it returned:
@@ -195,6 +209,7 @@ import type {
   ExtractedUnit,
   GroundingRefusalReason,
   InstrumentCitation,
+  KnowledgeKindClassification,
   RoutingSelectionObservation,
   VaultSource,
 } from 'olea-core';
@@ -206,7 +221,10 @@ import {
   DemandRoutingCounter,
   hashText,
   judgeDraftedDemand,
+  PAPER_DEMANDS,
   type PaperDemand,
+  type PrimaryKindInput,
+  primaryKindFor,
   routeDemandAsk,
 } from 'olea-core';
 // The sweep's recall constant is deliberately NOT in the `olea-core` barrel (row 38: authoring
@@ -224,6 +242,12 @@ import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from './constants.js';
 import {
+  type DraftCardsDeps,
+  type DraftCardsRequest,
+  type DraftCardsResult,
+  draftCardsForConcept,
+} from './draft-cards.js';
+import {
   type DraftedDemandCarry,
   draftDemandCarriage,
   draftedDemandFactsOf,
@@ -232,6 +256,8 @@ import {
 import { CITED_CHUNK_DIGEST_ENABLED, withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import {
+  extractDraftedCards,
+  extractDraftedCardsProvenance,
   extractDraftedGroundedIn,
   extractDraftedProvenance,
   extractDraftedQuestions,
@@ -244,7 +270,13 @@ import {
   EMPTY_INVENTORY,
   quizDeficit,
 } from './routing.js';
-import type { DraftDemandCarriage, DraftDemandOrigin, DraftRecord } from './types.js';
+import type {
+  DraftCardContent,
+  DraftDemandCarriage,
+  DraftDemandOrigin,
+  DraftQuestion,
+  DraftRecord,
+} from './types.js';
 
 export type { GenerationRoutingDeps };
 
@@ -277,6 +309,22 @@ export interface GenerationPipelineDeps {
   ) => string | Promise<string>;
   /** Component 2.2's routing consultation — see the module doc's own section. Omitted preserves pre-`ol-tz7v` behaviour. */
   readonly routing?: GenerationRoutingDeps;
+  /**
+   * Sweep-drafted Q&A cards (`ol-0r92.132`, held Class C): the inputs to `primaryKindFor`
+   * (`[D-238]`: F4.8's format match first, then her recorded preference) for a course. The sweep
+   * drafts a course's concepts through `cards.generate.v1` ONLY when this AND `cardDraftDeps` are
+   * both supplied and `primaryKindFor` returns `'qa'`; every other case (either absent, `'mcq'`,
+   * `'cloze'`) is the quiz path, byte-identical to before. No composition root supplies either
+   * today. There is no quota, no per-concept kind and no cloze generator here (`[D-439]`).
+   */
+  readonly kindInputsFor?: (courseCode: string) => PrimaryKindInput;
+  /** What `cards.generate.v1` drafting needs — the card-shaped sibling of `draftDeps`. See `kindInputsFor`. */
+  readonly cardDraftDeps?: DraftCardsDeps;
+  /** Defaults to the real `draftCardsForConcept`; injected so a test needs no Worker. */
+  readonly draftCardForConcept?: (
+    deps: DraftCardsDeps,
+    request: DraftCardsRequest,
+  ) => Promise<DraftCardsResult>;
   /**
    * F4.8/`[D-188]`'s purpose-at-build capability (`ol-0r92.35`), opt-in the
    * same way `routing` above is — see the module doc's own section. Absent
@@ -739,6 +787,37 @@ export function sweepDemandKey(
     : `${purposeKey}|intended:${fields.intendedDemand}`;
 }
 
+/**
+ * `draftedDemandCarryOf` for a `cards.generate.v1` response: the same request and acknowledgement
+ * reading, with each card's own `declaredDemand` read from `result.cards[i]` by position (the
+ * order `extractDraftedCards` walks). A word outside the five is read as absent, never coerced.
+ * (The revision runner holds the same reading privately; it cannot be imported here without a
+ * cycle, and the two are pinned by the same `declaredDemand` wire member.)
+ */
+function draftedCardDemandCarryOf(
+  request: SentDemandFields,
+  response: unknown,
+): DraftedDemandCarry {
+  const carry = draftedDemandCarryOf(request, response);
+  const cards =
+    typeof response === 'object' && response !== null && (response as { ok?: unknown }).ok === true
+      ? ((response as { result?: { cards?: unknown } }).result?.cards ?? null)
+      : null;
+  if (!Array.isArray(cards)) return { ...carry, declaredDemands: [] };
+  return {
+    ...carry,
+    declaredDemands: cards.map((card): PaperDemand | undefined => {
+      const word =
+        typeof card === 'object' && card !== null
+          ? (card as { declaredDemand?: unknown }).declaredDemand
+          : undefined;
+      return typeof word === 'string' && (PAPER_DEMANDS as readonly string[]).includes(word)
+        ? (word as PaperDemand)
+        : undefined;
+    }),
+  };
+}
+
 function defaultGenerateDraftId(
   courseCode: string,
   conceptName: string,
@@ -866,6 +945,11 @@ export async function runGenerationSweep(
   const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
   const sweepRouting = routeDemandAsk(SWEEP_RECALL_ASK, 'quiz.generate.v1');
   const sweepDemandFields = authoringDemandFields(sweepRouting);
+  // The card-shaped ask, routed against the card generator (`ol-0r92.132`); used only for a course
+  // whose primary kind is `'qa'` and whose composition supplied the card supplier.
+  const sweepCardRouting = routeDemandAsk(SWEEP_RECALL_ASK, 'cards.generate.v1');
+  const sweepCardDemandFields = authoringDemandFields(sweepCardRouting);
+  const draftCardForConcept = deps.draftCardForConcept ?? draftCardsForConcept;
 
   // Built at most once per sweep, and only if routing was actually opted
   // into — a real vault walk (`enumerateVaultInstruments`) is not worth
@@ -916,6 +1000,15 @@ export async function runGenerationSweep(
     // per course, not per concept: purpose is a property of the course's
     // nearest assessment, never of any one concept's material.
     const courseFormatMatch = formatMatch?.(courseCode);
+    // `ol-0r92.132`: the format-routing's own answer (`[D-238]`), consulted once per course like
+    // `courseFormatMatch`. Q&A drafting needs the kind to be `'qa'` AND the card supplier; anything
+    // else keeps the quiz path unchanged.
+    const courseDraftsCards =
+      deps.kindInputsFor !== undefined &&
+      deps.cardDraftDeps !== undefined &&
+      primaryKindFor(deps.kindInputsFor(courseCode)) === 'qa';
+    const askRouting = courseDraftsCards ? sweepCardRouting : sweepRouting;
+    const askDemandFields = courseDraftsCards ? sweepCardDemandFields : sweepDemandFields;
 
     // D-381 (`ol-egov.141.89.5.18`; chg.md §11's cache-key audit): this
     // course's embedding-note path and its CURRENT content digest, computed
@@ -962,7 +1055,8 @@ export async function runGenerationSweep(
     // The demand is `purpose`/`registerHint` and, since decision-sheet row 38, the sweep's
     // explicit recall intent (`ol-egov.141.89.2.20`): an intent that joined the ask must join
     // this key, or a changed demand would read as unchanged and stay held.
-    const demand = sweepDemandKey(courseFormatMatch, sweepDemandFields);
+    // A changed kind is a changed ask, so a refusal held under one kind is not held under the other.
+    const demand = `${sweepDemandKey(courseFormatMatch, askDemandFields)}${courseDraftsCards ? '|kind:qa' : ''}`;
     let courseUnitPieces: Promise<readonly string[]> | null = null;
     const evidencePieces = async (candidate: ConceptRecord): Promise<readonly string[]> => {
       courseUnitPieces ??= unitEvidencePieces(units, courseCode, coursesFolder);
@@ -1032,7 +1126,15 @@ export async function runGenerationSweep(
       // never a `quiz.generate.v1` send: a candidate this routes away from
       // is cheaper to discover here than as a refusal.
       if (routing !== undefined) {
-        const classification = await classifyForRouting(routing, deps.vault, candidate);
+        // A throw while routing this one candidate costs this candidate only: it routes as
+        // unclassified ("never guessed", routing.ts) and the sweep moves on. Nothing about the
+        // candidate or the error is logged (D-005); it is counted in `skippedRouting` below.
+        let classification: KnowledgeKindClassification;
+        try {
+          classification = await classifyForRouting(routing, deps.vault, candidate);
+        } catch {
+          classification = { status: 'unclassified', confidence: undefined, method: 'model' };
+        }
         const inventory = (await getInventory()).get(candidate.key) ?? EMPTY_INVENTORY;
         const decision = decideConceptRouting(classification, inventory);
         const deficit = quizDeficit(decision);
@@ -1062,32 +1164,39 @@ export async function runGenerationSweep(
       memory.noteAsked(courseCode, candidate.key, sweepOrdinal);
       // Counted where the ask is made: a concept skipped as a duplicate, as held or by routing
       // makes no ask and is not counted. Whether the ask then drafts or refuses is another fact.
-      demandCounter.record(candidate.key, sweepRouting);
+      demandCounter.record(candidate.key, askRouting);
       // Taken BEFORE the ask, so a refusal is remembered against the evidence it was
       // actually made on, never against something that changed while the call was out.
       const pieces = await evidencePieces(candidate);
-      let result: Awaited<ReturnType<typeof draftQuizCardsForConcept>>;
+      const request = {
+        courseCode,
+        conceptName: candidate.name,
+        // `[D-437]` row 38: the sweep's recall intent, authoring intent only — see the module
+        // doc. No heading is sent: the sweep's ask has no source.
+        ...askDemandFields,
+        // F4.8/`[D-188]`: `purpose`/`registerHint` are set together, only
+        // when this course's nearest assessment is format-matched — see
+        // `deps.formatMatch`'s doc. Every other course omits both, so
+        // `quiz.generate.v1` sees exactly the request it saw before this
+        // bead (`ol-0r92.35`).
+        ...(courseFormatMatch === undefined
+          ? {}
+          : {
+              purpose: 'readiness' as const,
+              ...(courseFormatMatch.registerHint === undefined
+                ? {}
+                : { registerHint: courseFormatMatch.registerHint }),
+            }),
+      };
+      // The one place the two kinds differ: which generator is asked and how its reply is read.
+      // Everything after (evidence check inside the drafting call, citation, hash, demand
+      // stamping, `cache.put`) is shared.
+      let result: DraftQuizCardsResult | DraftCardsResult;
       try {
-        result = await draftForConcept(deps.draftDeps, {
-          courseCode,
-          conceptName: candidate.name,
-          // `[D-437]` row 38: the sweep's recall intent, authoring intent only — see the module
-          // doc. No heading is sent: the sweep's ask has no source.
-          ...sweepDemandFields,
-          // F4.8/`[D-188]`: `purpose`/`registerHint` are set together, only
-          // when this course's nearest assessment is format-matched — see
-          // `deps.formatMatch`'s doc. Every other course omits both, so
-          // `quiz.generate.v1` sees exactly the request it saw before this
-          // bead (`ol-0r92.35`).
-          ...(courseFormatMatch === undefined
-            ? {}
-            : {
-                purpose: 'readiness' as const,
-                ...(courseFormatMatch.registerHint === undefined
-                  ? {}
-                  : { registerHint: courseFormatMatch.registerHint }),
-              }),
-        });
+        result =
+          courseDraftsCards && deps.cardDraftDeps !== undefined
+            ? await draftCardForConcept(deps.cardDraftDeps, request)
+            : await draftForConcept(deps.draftDeps, request);
       } catch {
         // A generative call failing outright (network, malformed transport
         // response) is not a refusal (which never throws) and not cached —
@@ -1115,12 +1224,18 @@ export async function runGenerationSweep(
       memory.recordOutcome(courseCode, candidate.key, null, demand, pieces);
       memory.noteJudgeAnswered();
 
-      const questions = extractDraftedQuestions(result.response);
-      const provenance = extractDraftedProvenance(result.response);
+      const questions: readonly (DraftQuestion | DraftCardContent)[] | null = courseDraftsCards
+        ? extractDraftedCards(result.response)
+        : extractDraftedQuestions(result.response);
+      const provenance = courseDraftsCards
+        ? extractDraftedCardsProvenance(result.response)
+        : extractDraftedProvenance(result.response);
       if (questions === null || provenance === null) continue; // unparseable — nothing content-bearing to cache; revisited next sweep
       // `[D-437]` (`ol-egov.141.89.2.30`): what the request carried and the response returned about
       // demand, read once per candidate and split per question below.
-      const demandCarry = draftedDemandCarryOf(result.request, result.response);
+      const demandCarry = courseDraftsCards
+        ? draftedCardDemandCarryOf(result.request, result.response)
+        : draftedDemandCarryOf(result.request, result.response);
 
       let notePath = courseNotePath;
       // `[D-181]`: the unit that resolved this course's drafting target for this sweep — the same
@@ -1169,7 +1284,11 @@ export async function runGenerationSweep(
       // Read parallel to `questions` (each question is its own record, so each is resolved on its
       // own citation); `undefined` when citations are not trusted, so nothing below reads them.
       const groundedIn = citedChunkDigest
-        ? extractDraftedGroundedIn(result.response, 'questions', result.request.sourceChunks.length)
+        ? extractDraftedGroundedIn(
+            result.response,
+            courseDraftsCards ? 'cards' : 'questions',
+            result.request.sourceChunks.length,
+          )
         : undefined;
 
       // `ol-0r92.87`: the snapshot the drafted questions were actually
@@ -1232,7 +1351,11 @@ export async function runGenerationSweep(
           ...(questionCitation !== undefined ? { sourceCitation: questionCitation } : {}),
           ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
           createdAt,
-          question,
+          // One of the two, never both (`DraftRecord.card`'s doc). A card draft names its kind
+          // explicitly; a quiz draft keeps the unset-means-`'mcq'` default every earlier producer used.
+          ...(courseDraftsCards
+            ? { instrumentType: 'qa' as const, card: question as DraftCardContent }
+            : { question: question as DraftQuestion }),
           provenance,
           firstServedAt: null,
           // `[D-437]`: present exactly when the request carried a demand; a draft with none has no

@@ -920,7 +920,19 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     const vault = vaultWithReviewLog([
       reviewRecord(conceptKey, instrumentId, { rating: 'good', supportLevelShown: 'independent' }),
     ]);
-    const { scheduler, calls } = countingScheduler({ [instrumentId]: 1 });
+    // `[D-522]` (`ol-egov.141.89.9.98`): the pending fact raised below also leaves this card's
+    // evidence out of the ranking's readiness, so a rebuild no longer asks `retrievability` about
+    // it. The review log's replay (`schedule`), which every rebuild runs and a reused sitting does
+    // not, is the rebuild counter here instead.
+    const counted = countingScheduler({ [instrumentId]: 1 });
+    let replays = 0;
+    const scheduler: Scheduler = {
+      schedule(input) {
+        replays += 1;
+        return counted.scheduler.schedule(input);
+      },
+      retrievability: (input) => counted.scheduler.retrievability(input),
+    };
     const citationHashStore = new ObsidianCitationHashStore(new FakeDataHost());
     await citationHashStore.save(instrumentId, {
       sourcePath: 'Notes/one.md',
@@ -939,7 +951,7 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
     });
 
     const first = await provider.load({ budgetMinutes: 60 });
-    const callsAfterFirst = calls();
+    const replaysAfterFirst = replays;
     if (first.kind !== 'model') throw new Error(`expected a session model, got ${first.kind}`);
     expect(first.model.items.some((item) => item.conceptName === 'Widget theory')).toBe(true);
 
@@ -950,7 +962,7 @@ describe('createLocalSessionBuilderProvider — the freeze contract (RBLD-2, ol-
 
     const second = await provider.load({ budgetMinutes: 60 });
 
-    expect(calls()).toBeGreaterThan(callsAfterFirst); // a real rebuild ran
+    expect(replays).toBeGreaterThan(replaysAfterFirst); // a real rebuild ran
     expect(second).not.toBe(first);
     if (second.kind !== 'model')
       throw new Error(`expected a fresh 'model' state, got ${second.kind}`);

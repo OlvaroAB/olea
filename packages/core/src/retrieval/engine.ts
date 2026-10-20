@@ -51,6 +51,11 @@
  * a caller that does not yet assemble one (every caller as of this bead —
  * see that bead's report for the two named call sites still to wire) sees
  * byte-identical behaviour to before this option existed.
+ *
+ * **Course scope, when `options.scope` is supplied (`[D-544]`, `ol-egov.141.89.3.52`).** The index
+ * is narrowed to the scope's documents before anything else runs, and so is the embedding snapshot
+ * the cosine leg and the band's signals rank — see `RetrieveOptions.scope`. Every drafting call
+ * passes its own course; a call that passes none reads the whole index as before.
  */
 
 import { searchKeywordIndex } from '../keyword-index/query.js';
@@ -72,7 +77,14 @@ import {
   resolveGroundedContext,
 } from './groundedContext.js';
 import { hybridRetrieve } from './hybrid.js';
-import type { EmbeddingProvider, EmbeddingVector, RerankProvider } from './types.js';
+import type { RetrievalScope } from './request.js';
+import { applyScope, type CourseOf } from './scopeFilter.js';
+import type {
+  EmbeddingProvider,
+  EmbeddingVector,
+  RerankProvider,
+  RetrievalChunk,
+} from './types.js';
 
 export interface RetrieveDeps {
   readonly keywordIndex: PersistedKeywordIndex;
@@ -174,6 +186,34 @@ export interface RetrieveOptions {
    * without `band`. Omitting it sends the request exactly as before.
    */
   readonly intendedOperation?: IntendedOperation | undefined;
+  /**
+   * `[D-544]` (`ol-egov.141.89.3.52`): the course material this call may draw on. Applied FIRST,
+   * before keyword search, embedding and the band's signals, so a document outside the scope is
+   * never a candidate, never a keyword hit, and never moves `top1` or the margin the band reads.
+   * That last point is why the embedding snapshot is narrowed too: the cosine leg and the composite
+   * signals otherwise rank every cached embedding in the vault, and another course's passage would
+   * still lift the best cosine this call is judged on while the hits shown came from this course.
+   *
+   * Drafting always passes its own course (`./course-reading-set.ts`'s `ownCourseScope` over
+   * `courseReadingSetResolver`): "another course's material must not silently satisfy local
+   * grounding". Omitted, the whole index is read exactly as before, which is what the non-drafting
+   * callers (explain-why, explain-back) still do.
+   */
+  readonly scope?: CourseScopedRetrieval | undefined;
+}
+
+/** `RetrieveOptions.scope` — a `RetrievalScope` and the resolver it is applied with (`./scopeFilter.ts`). */
+export interface CourseScopedRetrieval {
+  readonly scope: RetrievalScope;
+  readonly courseOf: CourseOf;
+}
+
+/** `index` with only the documents `scope` admits, in the same order. */
+function scopeKeywordIndex(
+  index: PersistedKeywordIndex,
+  scope: CourseScopedRetrieval,
+): PersistedKeywordIndex {
+  return { ...index, documents: applyScope(index.documents, scope.scope, scope.courseOf) };
 }
 
 /**
@@ -187,16 +227,22 @@ export async function retrieve(
   query: string,
   options: RetrieveOptions = {},
 ): Promise<GroundingResult> {
-  const chunks = await chunksFromIndex(deps.keywordIndex);
+  const keywordIndex =
+    options.scope === undefined
+      ? deps.keywordIndex
+      : scopeKeywordIndex(deps.keywordIndex, options.scope);
+  const chunks = await chunksFromIndex(keywordIndex);
   const keywordQuery = deps.registryOverrides
     ? expandQueryWithAliases(query, deps.registryOverrides)
     : query;
-  const keywordHits = searchKeywordIndex(deps.keywordIndex, keywordQuery);
+  const keywordHits = searchKeywordIndex(keywordIndex, keywordQuery);
 
   // Best-effort: fills in whatever embeddings are missing, but never blocks
   // or fails retrieval if the provider is unreachable (see module doc).
   await deps.embeddingCache.ensureEmbeddings(chunks).catch(() => undefined);
-  const embeddings = deps.embeddingCache.snapshot();
+  const snapshot = deps.embeddingCache.snapshot();
+  // `[D-544]`: a scoped call ranks only its own chunks' embeddings (see `RetrieveOptions.scope`).
+  const embeddings = options.scope === undefined ? snapshot : embeddingsOfChunks(snapshot, chunks);
 
   const queryVector = await embedQuery(deps.embeddingProvider, deps.embeddingCache.modelId, query);
 
@@ -254,6 +300,19 @@ export async function retrieve(
       : {}),
     ...(compositeSignals !== undefined ? { compositeSignals } : {}),
   });
+}
+
+/** The entries of `snapshot` whose content hash is one of `chunks`' — a scoped call's own embeddings. */
+function embeddingsOfChunks<V>(
+  snapshot: ReadonlyMap<string, V>,
+  chunks: readonly RetrievalChunk[],
+): ReadonlyMap<string, V> {
+  const scoped = new Map<string, V>();
+  for (const chunk of chunks) {
+    const vector = snapshot.get(chunk.contentHash);
+    if (vector !== undefined) scoped.set(chunk.contentHash, vector);
+  }
+  return scoped;
 }
 
 async function embedQuery(

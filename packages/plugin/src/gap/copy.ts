@@ -809,7 +809,7 @@ export function masteryGapNarrative(row: GapRow): readonly string[] {
 export function materialGapNarrative(row: GapRow): readonly string[] {
   return [
     gapRowLine(row),
-    'So Olea has nothing to build practice from yet — this says nothing about what you know.',
+    'So Olea has nothing to build practice from yet. This says nothing about what you know.',
   ];
 }
 

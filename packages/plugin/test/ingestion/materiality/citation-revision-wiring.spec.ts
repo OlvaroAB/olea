@@ -45,6 +45,7 @@
  * counts as an attempt, it never widens the bound itself.
  */
 import {
+  appendSuspendRecord,
   citationStorePath,
   enumerateVaultInstruments,
   type ListOptions,
@@ -342,8 +343,10 @@ describe('CitationRevisionTrigger.tick', () => {
     expect(report.refreshed).toBe(1);
     expect(act.suspend).toHaveBeenCalledTimes(1);
     expect(act.enqueue).toHaveBeenCalledTimes(1);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact,
+    // the exclusion of the old question's evidence, until a successful revalidation.
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('[D-508] an immaterial verdict on a changed cited passage never restores the question: suspend, successor from the current passage, no certifying baseline', async () => {
@@ -373,10 +376,11 @@ describe('CitationRevisionTrigger.tick', () => {
         }),
       }),
     );
-    // The anchor is removed: the changed text is never saved as a baseline
-    // that would let the old question read as current.
+    // The changed text is never saved as a baseline that would let the old question read as
+    // current: the anchor keeps its old baseline and its pending fact (`ol-egov.141.89.9.98`).
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
+    expect(stored.get(MCQ_ID)?.text).toContain('humid climates');
   });
 
   it('[D-508] an immaterial verdict whose enqueue fails keeps the anchor and its pending fact, so it is retried and never restored', async () => {
@@ -403,7 +407,7 @@ describe('CitationRevisionTrigger.tick', () => {
     expect(stored.get(MCQ_ID)?.text).toContain('humid climates');
   });
 
-  it('suspends the predecessor and enqueues a successor on a changed-claim (revised) verdict, then retires tracking', async () => {
+  it('suspends the predecessor and enqueues a successor on a changed-claim (revised) verdict, then leaves the suspended predecessor alone', async () => {
     const vault = new MemoryVaultSource({
       [NOTE_PATH]: note(PARAGRAPH_A),
       // [D-398]: a self-referential citation keeps this MCQ tracked under the
@@ -434,13 +438,31 @@ describe('CitationRevisionTrigger.tick', () => {
       }),
     );
 
-    // Tracking retired: the predecessor is suspended, so the SAME id is
-    // treated as a fresh first-sighting next pass (the MCQ block itself is
-    // untouched in the vault — only the material around it changed).
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the entry and its pending fact are kept, the
+    // exclusion of the old question's evidence. With the predecessor suspended (the record the
+    // production suspend port writes), the next pass leaves it alone: no judge call, no second
+    // suspension or successor, no fresh baseline.
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
-    const next = await trigger.tick(vault, actions());
-    expect(next.newlyBaselined).toBe(1);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
+    await appendSuspendRecord(
+      vault,
+      {
+        kind: 'suspend',
+        timestamp: '2026-02-01T12:00:00.000Z',
+        instrumentId: MCQ_ID,
+        conceptIds: [...(stored.get(MCQ_ID)?.conceptIds ?? [])],
+      },
+      { deviceId: 'dev-synthetic' },
+    );
+    const nextAct = actions();
+    const next = await trigger.tick(vault, nextAct);
+    expect(next.newlyBaselined).toBe(0);
+    expect(judge.judge).toHaveBeenCalledTimes(1);
+    expect(nextAct.suspend).not.toHaveBeenCalled();
+    expect(nextAct.enqueue).not.toHaveBeenCalled();
+    expect((await store.loadAll()).get(MCQ_ID)?.pendingRevalidation).toEqual(
+      stored.get(MCQ_ID)?.pendingRevalidation,
+    );
   });
 
   it('never re-points a citation on its own authority — a near-only match surfaces via the hook, never heals silently', async () => {
@@ -559,7 +581,7 @@ describe('CitationRevisionTrigger.tick', () => {
     expect(record?.text).toContain('humid climates');
   });
 
-  it('[D-351] clears pendingRevalidation on a same-claim (refreshed) resolution', async () => {
+  it('[D-351]/[D-536] a same-claim (refreshed) resolution takes the rewrite path and keeps the pending fact, the exclusion of the old evidence', async () => {
     const vault = new MemoryVaultSource({
       [NOTE_PATH]: note(PARAGRAPH_A),
       // [D-398]: a self-referential citation keeps this MCQ tracked under the
@@ -575,8 +597,9 @@ describe('CitationRevisionTrigger.tick', () => {
     await vault.write(NOTE_PATH, note(PARAGRAPH_B));
     await trigger.tick(vault, actions());
 
+    // `ol-egov.141.89.9.98`: a rewrite no longer clears the fact (D-522, D-536).
     const stored = await store.loadAll();
-    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('[D-351] a late refreshed result for an earlier edit is discarded once a newer edit has raised its own pending state — no restore, no stale clear', async () => {
@@ -756,8 +779,9 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
     expect(await vault.read(HOME_NOTE_PATH)).toBe(homeNoteBefore);
     expect(await vault.read(SOURCE_NOTE_PATH)).toBe(PARAGRAPH_B);
 
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact.
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('@auto:F3.3-D214-revision-reworded — [D-508] the same claim reworded in the authored note still takes the rewrite path: suspend, successor, no baseline', async () => {
@@ -774,8 +798,9 @@ describe('CitationRevisionTrigger.tick — [D-214] split home note (ol-0r92.46)'
     expect(report.refreshed).toBe(1);
     expect(act.suspend).toHaveBeenCalledTimes(1);
     expect(act.enqueue).toHaveBeenCalledTimes(1);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact.
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('@auto:F3.3-D214-revision-no-source-write — falls back to home-note-minus-spans, never reading a non-markdown source-provenance path as text', async () => {
@@ -1185,8 +1210,9 @@ describe('CitationRevisionTrigger.tick — [D-366] Q&A/cloze widening', () => {
           }),
         }),
       );
+      // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact.
       const stored = await store.loadAll();
-      expect(stored.has(instrumentId)).toBe(false);
+      expect(stored.get(instrumentId)?.pendingRevalidation).toBeDefined();
     });
 
     it('cloze: a changed-claim revision suspends the predecessor and enqueues a successor, exactly like the MCQ path', async () => {
@@ -1346,8 +1372,9 @@ describe('CitationRevisionTrigger.tick — [D-400] restart recovery', () => {
     // [D-508] resolved as an immaterial answer on a changed cited passage: the rewrite path.
     expect(act.suspend).toHaveBeenCalledTimes(1);
     expect(act.enqueue).toHaveBeenCalledTimes(1);
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact.
     const stored = await store.loadAll();
-    expect(stored.has(MCQ_ID)).toBe(false);
+    expect(stored.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it("[D-311] a retry's own answer is discarded once a newer edit has raised its own pending state — the same obsolete-answer guard an original dispatch already gets", async () => {
@@ -1508,7 +1535,8 @@ describe('CitationRevisionTrigger.tick — outage (Worker unreachable) recovery'
     expect(report.refreshed).toBe(1);
     expect(report.retryExhausted).toBe(0);
     const afterReconnect = await store.loadAll();
-    expect(afterReconnect.get(MCQ_ID)?.pendingRevalidation).toBeUndefined();
+    // `ol-egov.141.89.9.98` ([D-522], [D-536]): the rewrite keeps the entry and its pending fact.
+    expect(afterReconnect.get(MCQ_ID)?.pendingRevalidation).toBeDefined();
   });
 
   it('a genuine provider failure while reachable still spends the [D-400] budget exactly as before — an outage never widens the bound, it only stops it being spent for nothing', async () => {

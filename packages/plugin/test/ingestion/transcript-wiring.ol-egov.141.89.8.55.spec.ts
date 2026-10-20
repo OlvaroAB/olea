@@ -56,7 +56,7 @@ class RecordingEnqueuer implements JobEnqueuer {
 }
 
 describe('the arrival watch routes transcripts to the transcript job kind', () => {
-  async function arrive(paths: readonly string[]) {
+  async function arrive(paths: readonly string[], expected = 0) {
     const enqueuer = new RecordingEnqueuer();
     let fire: (event: VaultEvent) => void = () => undefined;
     buildIngestionArrivalWatch({
@@ -68,14 +68,15 @@ describe('the arrival watch routes transcripts to the transcript job kind', () =
       },
     });
     for (const path of paths) fire({ kind: 'create', path } as VaultEvent);
-    // Each arrival is fire-and-forget; let the reads and hashes settle.
-    await vi.waitFor(() => expect(enqueuer.calls.length).toBeGreaterThanOrEqual(0));
+    // Each arrival is fire-and-forget: wait until the expected jobs are enqueued (a slow CI runner
+    // can take longer than a fixed sleep), then let any further reads and hashes settle.
+    await vi.waitFor(() => expect(enqueuer.calls.length).toBeGreaterThanOrEqual(expected));
     await new Promise((resolve) => setTimeout(resolve, 20));
     return enqueuer.calls;
   }
 
   it('a plain-text transcript is enqueued as a transcript job with the plain-text format', async () => {
-    const calls = await arrive([PLAIN]);
+    const calls = await arrive([PLAIN], 1);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.payload).toEqual({
       kind: 'transcript',
@@ -86,7 +87,7 @@ describe('the arrival watch routes transcripts to the transcript job kind', () =
   });
 
   it('a Markdown file declaring role transcript is enqueued as a transcript job, not left to the note path', async () => {
-    const calls = await arrive([DECLARED]);
+    const calls = await arrive([DECLARED], 1);
     expect(calls).toHaveLength(1);
     expect(calls[0]?.payload).toEqual({
       kind: 'transcript',

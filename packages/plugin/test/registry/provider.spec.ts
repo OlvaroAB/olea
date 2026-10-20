@@ -13,6 +13,8 @@ import {
   addManualAssessmentEntry,
   appendDisputeRecord,
   appendReviewLogRecord,
+  appendSuccessionRecord,
+  appendSuspendRecord,
   type ConceptRecord,
   conceptKeyRecordPath,
   contestClaim,
@@ -250,6 +252,64 @@ describe("createLocalRegistryProvider — the [D-397]/[D-400] suspect-instrument
     expect(state.suspectInstruments.pendingRevalidation).toEqual([
       { instrumentId, deferred: true },
     ]);
+  });
+
+  /**
+   * `ol-egov.141.89.9.98` ([D-522], [D-536]): "Being checked" lists only what the
+   * citation-revision pass is still checking. A rewrite keeps the old question's entry and pending
+   * fact (the exclusion of its evidence) and suspends it, and the pass leaves a suspended question
+   * with a check owed alone, so a suspended instrument is not listed; an accepted successor changes
+   * nothing here, and her unsuspend lists it again because the pass resumes the check.
+   */
+  it('REGRESSION (fails pre-fix): a suspended instrument with a kept pending fact is not listed as being checked, before or after its successor is accepted', async () => {
+    const vault = fixtureVault();
+    const instrumentId = await instrumentIdFrom(vault);
+    const store = new FakeCitationHashStore();
+    await store.save(instrumentId, {
+      sourcePath: 'Notes/one.md',
+      text: 'irrelevant to this resolver',
+      conceptIds: [],
+      pendingRevalidation: { sinceContentHash: 'hash-1', since: 0, dispatchedAt: 1, retriedAt: 2 },
+    });
+    const load = async () => {
+      const state = await createLocalRegistryProvider({
+        vault,
+        deviceId: DEVICE,
+        settingsHost: new FakeDataHost(),
+        now: () => NOW,
+        editPort: new FakeEditPort(),
+        citationHashStore: store,
+      }).load();
+      if (state.kind !== 'model') throw new Error(`expected a model, got ${state.kind}`);
+      return state.suspectInstruments;
+    };
+    const suspendOrNot = (kind: 'suspend' | 'unsuspend', timestamp: string) =>
+      appendSuspendRecord(
+        vault,
+        { kind, timestamp, instrumentId, conceptIds: ['concept-a'] },
+        { deviceId: DEVICE },
+      );
+
+    // The rewrite's suspension. Pre-fix: listed, and as deferred, a finding read as a failed check.
+    await suspendOrNot('suspend', '2026-02-01T10:00:00Z');
+    expect(await load()).toEqual({ pendingRevalidation: [], flagged: [] });
+
+    await appendSuccessionRecord(
+      vault,
+      {
+        timestamp: '2026-02-01T11:00:00Z',
+        predecessorInstrumentId: instrumentId,
+        successorInstrumentId: 'qa:successor:1',
+      },
+      { deviceId: DEVICE },
+    );
+    expect(await load()).toEqual({ pendingRevalidation: [], flagged: [] });
+    // The fact itself is untouched: the registry only reads it.
+    expect((await store.loadAll()).get(instrumentId)?.pendingRevalidation).toBeDefined();
+
+    // Her unsuspend: the pass checks it again, so it is listed again.
+    await suspendOrNot('unsuspend', '2026-02-01T11:30:00Z');
+    expect((await load()).pendingRevalidation).toEqual([{ instrumentId, deferred: true }]);
   });
 });
 

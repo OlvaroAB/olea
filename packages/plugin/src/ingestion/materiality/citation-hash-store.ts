@@ -78,8 +78,11 @@ export interface ObsidianDataHost {
  * mismatch against this record's own `text` (before any judge call resolves
  * it), cleared once resolved (an `immaterial` verdict restores to current;
  * `material`/`uncertain`/an unavailable verdict confirm the change, and
- * `citation-revision-wiring.ts` retires the whole record via `remove` in
- * that case, so no separate clearing write applies there).
+ * `citation-revision-wiring.ts` KEEPS the record and this fact, `[D-522]`/
+ * `[D-536]`: the fact is the persisted exclusion of the old question's
+ * evidence from current readings and ends only with a successful
+ * revalidation, not with the rewrite, its queued successor or an accepted
+ * successor).
  *
  * **Keyed to the particular source revision being checked** — David's own
  * clarification: "a late result for an earlier edit must not clear a newer
@@ -218,7 +221,7 @@ export interface CitationAnchorRecord {
 export interface CitationHashStore {
   loadAll(): Promise<ReadonlyMap<string, CitationAnchorRecord>>;
   save(instrumentId: string, record: CitationAnchorRecord): Promise<void>;
-  /** Drops tracking for an instrument whose predecessor has just been suspended (`'revised'`) — its own material no longer needs watching. */
+  /** Drops tracking for an instrument the revision rule no longer tracks (`[D-366]`). Never called by the rewrite path, which keeps the entry and its pending fact (`[D-522]`, `[D-536]`, `ol-egov.141.89.9.98`). */
   remove(instrumentId: string): Promise<void>;
   /**
    * `[D-351]`: set THIS instrument's pending-revalidation fact, read-modify-

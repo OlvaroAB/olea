@@ -73,6 +73,15 @@ relevance × need × credit (the attainment chain spec, section 2.5). Need reads
 scheduler, instant and validity projection as the ranking's own need term, so the two agree for
 every concept (`[D-371]`).
 
+## Changed passages (`ol-egov.141.89.9.98`, `[D-347]`, `[D-522]`, `[D-536]`)
+
+When `main.ts` wires the pending-revalidation store, every persisted fact in it leaves that
+instrument's evidence out of the ranking's readiness and need, this view's need, the recognition
+credit and the demand rule (`../attainment/passage-changes.ts`); the stage the row displays keeps
+it. Read on every load, so a restart keeps the exclusion; a rewrite and an accepted successor
+leave the fact in place. A store that cannot be read leaves out every instrument that could carry
+a fact, so those readings are unknown, never silently credited.
+
 ## Unavailable, for two different reasons, one state
  *
  * `GapViewState` (`./view.ts`) is `{kind:'model', model} | {kind:'unavailable'}`
@@ -97,6 +106,7 @@ import type {
   InstrumentValidityProjection,
   NeedReading,
   PaperDemand,
+  PassageChangeFact,
   RankOracleOptions,
   RankOracleResult,
   Scheduler,
@@ -126,6 +136,11 @@ import {
   scoredConceptId,
   unmetDemandsByConcept,
 } from 'olea-core';
+import {
+  passageChangesForReadings,
+  readPendingPassageChanges,
+} from '../attainment/passage-changes.js';
+import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
 import {
   hasAssessmentSource,
   type ObsidianDataHost,
@@ -216,6 +231,16 @@ export interface CreateLocalGapProviderDeps {
   readonly unitManifests?: (
     paths: readonly VaultPath[],
   ) => ReadonlyMap<VaultPath, UnitManifest> | Promise<ReadonlyMap<VaultPath, UnitManifest>>;
+  /**
+   * `[D-347]`'s changed-passage half, as `[D-522]` ruled (`ol-egov.141.89.9.98`): the plugin's
+   * pending-revalidation store, the same instance the citation-revision trigger writes and
+   * `session-builder/provider.ts` reads. Every persisted fact in it leaves that instrument's
+   * evidence out of this view's ranking readiness, need, recognition credit and demand rule
+   * (`../attainment/passage-changes.ts`). Omitted keeps every passage: today's reading. A store
+   * that cannot be read leaves out every instrument that could carry a fact (unknown, never
+   * credited; `[D-536]`'s sheet).
+   */
+  readonly citationHashStore?: CitationHashStore;
 }
 
 /**
@@ -345,11 +370,26 @@ async function readInstrumentDemands(
  * is visible at the call site; option (c), dropping every withheld instrument, was the proposal
  * the ruling did not adopt. The same policy `oracle/compose.ts` passes to the ranking's readiness.
  *
- * Not yet applied anywhere in production: the ruling's other exclusion, a cited passage changed
- * and not yet revalidated (`AttainmentOptions.passageChanges`). No production reader has that
- * input; see `ol-egov.141.89.9.94`'s notes.
+ * The ruling's other exclusion, a cited passage changed and not yet revalidated, is applied with
+ * it by {@link currentReadingOptions} when the pending-revalidation store is wired (`[D-522]`,
+ * `ol-egov.141.89.9.98`).
  */
 const RULED_CURRENT_READING = { withheldEvidence: 'count' } as const;
+
+/**
+ * {@link RULED_CURRENT_READING}, plus the changed, unrevalidated passages when the store was read
+ * (`[D-522]`): every current reading this view supplies takes the same options, so need, the
+ * credit, the demand rule and the ranking's readiness never apply two evidence rules to one
+ * concept (`[D-371]`).
+ */
+function currentReadingOptions(passageChanges: readonly PassageChangeFact[] | undefined): {
+  readonly withheldEvidence: 'count';
+  readonly passageChanges?: readonly PassageChangeFact[];
+} {
+  return passageChanges === undefined
+    ? RULED_CURRENT_READING
+    : { ...RULED_CURRENT_READING, passageChanges };
+}
 
 /**
  * The gap view's `unmetDemands`: per concept whose declared demands were read, the demands no
@@ -364,6 +404,7 @@ async function unmetDemandsFor(input: {
   readonly validity: InstrumentValidityProjection;
   readonly scheduler: Scheduler;
   readonly now: Date;
+  readonly passageChanges: readonly PassageChangeFact[] | undefined;
 }): Promise<ReadonlyMap<string, readonly PaperDemand[]>> {
   const { declaredDemands } = input;
   // Nothing read: no concept can be asked, so no fold runs and no instrument is looked up.
@@ -382,7 +423,7 @@ async function unmetDemandsFor(input: {
     validity: input.validity,
     scheduler: input.scheduler,
     now: input.now,
-    ...RULED_CURRENT_READING,
+    ...currentReadingOptions(input.passageChanges),
   });
 }
 
@@ -415,6 +456,7 @@ function needByConcept(
   scheduler: Scheduler,
   now: Date,
   validity: InstrumentValidityProjection,
+  passageChanges: readonly PassageChangeFact[] | undefined,
 ): ReadonlyMap<string, NeedReading> {
   const readiness = readAllConceptReadiness(
     entries,
@@ -422,7 +464,7 @@ function needByConcept(
     scheduler,
     now,
     validity,
-    RULED_CURRENT_READING,
+    currentReadingOptions(passageChanges),
   );
   const need = new Map<string, NeedReading>();
   for (const [conceptKey, reading] of readiness) need.set(conceptKey, readNeed(reading));
@@ -442,6 +484,7 @@ function currentRecognitionByConcept(
   scheduler: Scheduler,
   now: Date,
   validity: InstrumentValidityProjection,
+  passageChanges: readonly PassageChangeFact[] | undefined,
 ): ReadonlyMap<string, boolean> {
   return readAllCurrentRecognition(
     entries,
@@ -449,7 +492,7 @@ function currentRecognitionByConcept(
     scheduler,
     now,
     validity,
-    RULED_CURRENT_READING,
+    currentReadingOptions(passageChanges),
   );
 }
 
@@ -486,13 +529,27 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // concurrently rather than paying their latency serially, the same
         // discipline `plan/provider.ts` uses for its own three-way
         // `Promise.all`.
-        const [{ entries, files }, enumeration, options, declaredDemands] = await Promise.all([
-          readReviewLogHistory(deps.vault, { additionalPaths }),
-          // `[D-357]`: the permanent concept key, the one her review log carries.
-          enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
-          deps.readRankWeights?.() ?? Promise.resolve(undefined),
-          readDeclared(deps),
-        ]);
+        const [{ entries, files }, enumeration, options, declaredDemands, passageRead] =
+          await Promise.all([
+            readReviewLogHistory(deps.vault, { additionalPaths }),
+            // `[D-357]`: the permanent concept key, the one her review log carries.
+            enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
+            deps.readRankWeights?.() ?? Promise.resolve(undefined),
+            readDeclared(deps),
+            // `[D-522]` (`ol-egov.141.89.9.98`): the changed, unrevalidated cited passages, read
+            // from the persisted pending-revalidation store on every load, so a restart keeps them.
+            deps.citationHashStore !== undefined
+              ? readPendingPassageChanges(deps.citationHashStore, now)
+              : Promise.resolve(undefined),
+          ]);
+        // A store that cannot be read leaves out every instrument that could carry a fact: those
+        // readings are unknown, never silently credited (`passageChangesForReadings`).
+        const passageChanges = passageChangesForReadings(
+          passageRead,
+          enumeration.records,
+          entries,
+          now,
+        );
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
         const disputes = await disputesFromFiles(deps.vault, files);
@@ -511,6 +568,8 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // (`ol-63e1`) — already extracted by the instrument walk above, so
           // this pays no second walk.
           concepts: enumeration.concepts,
+          // `[D-544]`: stamped keys above, so a course-scoped identity is stamped too.
+          stampConceptKeys: true,
           // F1.5 / F4.2 (`ol-egov.141.89.7.35`): the documents she has registered, folded from
           // the "source registered" events already in `entries` — the same projection
           // `grove/provider.ts` reads. Without it a registered past-paper PDF never became a
@@ -521,7 +580,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // `session-builder/provider.ts` already pass, so this view's
           // ranking reads her real recall state rather than the neutral
           // default — see `scheduler`'s own doc on `CreateLocalGapProviderDeps`.
-          retrievability: { scheduler, now },
+          // `[D-522]`: the same changed passages leave the ranking's readiness and need too.
+          retrievability: {
+            scheduler,
+            now,
+            ...(passageChanges !== undefined ? { passageChanges } : {}),
+          },
           // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered
           // component 3.3 weights when `deps.readRankWeights` resolved one
           // — `exactOptionalPropertyTypes`: omit the key entirely rather
@@ -548,6 +612,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           validity,
           scheduler,
           now,
+          passageChanges,
         });
 
         // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
@@ -556,7 +621,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
         // relevance × need × credit, the gap view's own formula (the attainment chain spec, section
         // 2.5). The session builder supplies none and keeps the ranking's blend (C5.10).
         const conceptKeys = rankedConceptKeys(ranking);
-        const need = needByConcept(entries, conceptKeys, scheduler, now, validity);
+        const need = needByConcept(entries, conceptKeys, scheduler, now, validity, passageChanges);
         // `[D-338]` item 3 (`ol-egov.141.89.9.94`): the recognition credit reads only a correct,
         // current answer on a standing item. See `currentRecognitionByConcept`.
         const currentRecognition = currentRecognitionByConcept(
@@ -565,6 +630,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           scheduler,
           now,
           validity,
+          passageChanges,
         );
 
         // `[D-445]`/`[D-448]` (`ol-egov.141.89.8.44`): what the durable manifest says of each source

@@ -648,7 +648,7 @@ describe('the per-concept detail page copy (STY-2, `[D-224]`)', () => {
     );
     expect(lines).toHaveLength(2);
     expect(lines[0]).toBe(gapRowLine(row({ gapClass: 'material-gap', distinctSourceCount: 3 })));
-    expect(lines.join(' ')).toContain('this says nothing about what you know');
+    expect(lines.join(' ')).toContain('This says nothing about what you know');
   });
 });
 

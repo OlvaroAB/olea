@@ -1,7 +1,7 @@
 /**
  * `ol-egov.141.89.5.81` ([D-518], [D-508]): the batch pass leaves a SUSPENDED instrument alone. A
- * rewritten predecessor lost its store record on purpose; the next pass must not re-seed it, re-raise
- * its hold or suspend and enqueue it again. The suspend action here writes the real review-log
+ * rewritten predecessor keeps its store record and pending fact (`ol-egov.141.89.9.98`, [D-522],
+ * [D-536]); the next pass must not re-seed it, re-judge it, or suspend and enqueue it again. The suspend action here writes the real review-log
  * record, so the pass reads suspension the way the presentation path does. Synthetic text only.
  */
 import type {
@@ -141,7 +141,7 @@ describe('a suspended predecessor is not seen again ([D-518])', () => {
     await trigger.tick(vault, actions);
     expect(actions.suspend).toHaveBeenCalledTimes(1);
     expect(actions.enqueue).toHaveBeenCalledTimes(1);
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    expect((await store.loadAll()).get('qa')?.pendingRevalidation).toBeDefined();
     expect(judge.judge).not.toHaveBeenCalled();
   });
 
@@ -156,10 +156,11 @@ describe('a suspended predecessor is not seen again ([D-518])', () => {
     await trigger.tick(vault, actions);
     expect(judge.judge).toHaveBeenCalledTimes(1);
     expect(actions.suspend).toHaveBeenCalledTimes(1);
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    const kept = (await store.loadAll()).get('qa');
+    expect(kept?.pendingRevalidation).toBeDefined();
     await trigger.tick(vault, actions);
     await trigger.tick(vault, actions);
-    expect((await store.loadAll()).has('qa')).toBe(false);
+    expect((await store.loadAll()).get('qa')).toEqual(kept);
     expect(judge.judge).toHaveBeenCalledTimes(1);
     expect(actions.suspend).toHaveBeenCalledTimes(1);
     expect(actions.enqueue).toHaveBeenCalledTimes(1);
