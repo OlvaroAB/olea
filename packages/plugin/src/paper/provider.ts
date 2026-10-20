@@ -12,9 +12,19 @@
  * `resolveAssessments` — F1.2's Base-or-manual-fallback choice, `ol-egov.141.8.10` — and, since
  * `ol-2zfj.172`, real Outcome coverage and Outcome labels via
  * `listOutcomeRecords`/`outcomeConceptCoverage`) and which are still honestly degraded because no
- * production reader exists yet anywhere in this repo (taughtSignal, mastery, past-paper
- * structure/demand recovery). Composing those remaining readers is a separate, multi-bead effort
- * this bead's own `owns` (`packages/plugin/src/paper/`) does not cover.
+ * production reader exists yet anywhere in this repo (taughtSignal, mastery, past-paper demand).
+ * Composing those remaining readers is a separate, multi-bead effort this bead's own `owns`
+ * (`packages/plugin/src/paper/`) does not cover.
+ *
+ * **The paper's length follows her stored past-paper reading (`[D-548]`, `ol-egov.141.89.7.87`).**
+ * `requestPaper` reads the course's past-paper structure through `readPastPaperStructure`
+ * ({@link pastPaperStructureReaderForVault} in production: SCP's store over her vault, read the way
+ * `../scope-reading/declared-demands.ts` reads it) and passes it to `assemble.ts`, so a standard
+ * paper plans the median past-paper item count, clamped 1 to 8; with no reading, or a read that
+ * fails, the declared standard extent stands, exactly as before. The slot count the paper was
+ * planned at, and the same composition planned at another count, go to the journal, so a paper she
+ * left unfinished resumes on the plan it started with and the new length applies from the next new
+ * paper (`./journal-composition.ts`). Nothing she reads changes wording.
  *
  * **F1.2's fallback now reaches this provider (`ol-egov.141.8.10`).** `loadCourseState` no longer
  * exits to `'assignments-not-configured'` on a blank/unreadable Base alone — it reads through
@@ -24,9 +34,12 @@
  * `'no-assessment-ahead'`/`'locked'`/`'unlocked-not-pulled'` state off whatever `records` it has).
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import {
   buildPaperBlueprint,
+  documentStateView,
   enumerateVaultInstruments,
+  extentSlotCountTarget,
   handOffPaperItem,
   isEligiblePaperConcept,
   listOutcomeRecords,
@@ -35,14 +48,32 @@ import {
   type PaperGroundingLabel,
   type PaperHandoffResult,
   type PaperRecord,
+  type PaperRecoveredStructure,
   paperDaysUntilDue,
+  type ReadingPolicy,
+  readReviewLogHistory,
   resolveAssessments,
+  type ScopeReadingProjection,
+  type ScopeRevisionRef,
+  structureView,
+  type UnitManifest,
+  type VaultPath,
   type VaultSource,
   writeInstrumentCitation,
 } from 'olea-core';
+import {
+  type PastPaperStoredReading,
+  paperRecoveredStructureFromReadings,
+} from '../../../core/src/oracle/paper-recovered-structure.js';
 import { ensureHomeNoteForConcept } from '../generation/home-note.js';
 import type { PaperSlotOutcomePort } from '../oracle/paper-item-port.js';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
+import {
+  currentRevisionsFromManifests,
+  type RegisteredPastPaper,
+  registeredPastPapersFrom,
+} from '../scope-reading/declared-demands.js';
+import { createScopeReadingPersistence } from '../scope-reading/persistence.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { IncompletePaperStatement, PartialPaperStatement } from './copy.js';
 import {
@@ -162,6 +193,130 @@ export interface CreateLocalPracticePaperProviderDeps {
    */
   readonly generationPort: () => Promise<PaperSlotOutcomePort | null>;
   readonly now: () => Date;
+  /**
+   * `[D-548]` (`ol-egov.141.89.7.87`): the course's past-paper reading, as the paper's recovered
+   * structure, or `null` when no reading counts. Production:
+   * {@link pastPaperStructureReaderForVault}. Omitted, or a read that throws: none, so the paper
+   * keeps the declared standard extent (an unfinished paper keeps its own length either way,
+   * `./journal-composition.ts`).
+   */
+  readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+}
+
+/**
+ * `[D-548]`: the course's past-paper structure from the scope-reading projection — one reading per
+ * paper registered now as a past paper of `course`, at the revision the caller says is current, and
+ * counted only as `olea-core`'s `paperRecoveredStructureFromReadings` allows (a current structure
+ * over a revision read in full; no regime, no seal, no demand). `null` when none counts. Pure.
+ *
+ * `currentRevisions` names only revisions the unit manifest could verify
+ * ({@link currentRevisionsFromManifests}); a paper it leaves out has no current revision, and none
+ * of its readings counts.
+ */
+export function pastPaperStructureForCourse(
+  projection: ScopeReadingProjection,
+  papers: readonly RegisteredPastPaper[],
+  currentRevisions: ReadonlyMap<VaultPath, string>,
+  course: string,
+  policy?: ReadingPolicy,
+): PaperRecoveredStructure | null {
+  const paths = [
+    ...new Set(papers.filter((paper) => paper.courses.includes(course)).map((p) => p.path)),
+  ].sort();
+  const readings: PastPaperStoredReading[] = [];
+  for (const path of paths) {
+    const revisionDigest = currentRevisions.get(path);
+    if (revisionDigest === undefined) continue;
+    const source: ScopeRevisionRef = {
+      sourcePath: path,
+      documentKind: 'past-paper',
+      revisionDigest,
+    };
+    readings.push({
+      state: documentStateView(projection, source),
+      structure: structureView(projection, source, policy),
+    });
+  }
+  return paperRecoveredStructureFromReadings(readings);
+}
+
+/** What {@link createPastPaperStructureReader} reads through: the same three seams `../scope-reading/declared-demands.ts`'s reader takes. */
+export interface PastPaperStructureReaderDeps {
+  /** The scope-reading projection: `ScopeReadingPersistence.load` (`../scope-reading/persistence.ts`). */
+  readonly loadScopeReadings: () => Promise<ScopeReadingProjection>;
+  /** The documents registered NOW as past papers (`registeredPastPapersFrom`). */
+  readonly registeredPastPapers: () => Promise<readonly RegisteredPastPaper[]>;
+  /** Each path's current revision digest; a path left out has no current revision. */
+  readonly currentRevisions: (
+    paths: readonly VaultPath[],
+  ) => Promise<ReadonlyMap<VaultPath, string>>;
+  /** Reader prompt versions accepted. Omitted: any version, the projection's own default. */
+  readonly policy?: ReadingPolicy;
+}
+
+/** `[D-548]`: the provider's `readPastPaperStructure` over those seams. Reads only; nothing it reads is logged (D-005). Throws when a seam throws. */
+export function createPastPaperStructureReader(
+  deps: PastPaperStructureReaderDeps,
+): (course: string) => Promise<PaperRecoveredStructure | null> {
+  return async (course) => {
+    const papers = (await deps.registeredPastPapers()).filter((paper) =>
+      paper.courses.includes(course),
+    );
+    if (papers.length === 0) return null;
+    const [projection, revisions] = await Promise.all([
+      deps.loadScopeReadings(),
+      deps.currentRevisions([...new Set(papers.map((paper) => paper.path))].sort()),
+    ]);
+    return pastPaperStructureForCourse(projection, papers, revisions, course, deps.policy);
+  };
+}
+
+export interface VaultPastPaperStructureDeps {
+  readonly vault: VaultSource;
+  /** This install's stable device id (`../device/device-id.ts`): names its own scope-reading files. */
+  readonly deviceId: string;
+  /** The unit manifest's reader boundary (`../grove/unit-manifest-store.ts`'s `manifestsFor`). */
+  readonly manifestsFor: (
+    paths: readonly VaultPath[],
+  ) => Promise<ReadonlyMap<VaultPath, UnitManifest>>;
+  readonly coursesFolder?: VaultPath;
+  /** Injectable for tests; production reads `readReviewLogHistory(vault)`, as the writer does. */
+  readonly reviewLog?: () => Promise<readonly ReviewLogEntry[]>;
+}
+
+/**
+ * `[D-548]`: the production `readPastPaperStructure` — SCP's store over her vault, her review log's
+ * registrations for the papers, and the unit manifest for each paper's current revision, composed
+ * exactly as `../scope-reading/declared-demands.ts`'s `declaredDemandsReaderForVault` composes
+ * them. The store is opened at each read, so a device id it refuses fails that read, which the
+ * provider reads as no reading.
+ */
+export function pastPaperStructureReaderForVault(
+  deps: VaultPastPaperStructureDeps,
+): (course: string) => Promise<PaperRecoveredStructure | null> {
+  const reviewLog =
+    deps.reviewLog ?? (async () => (await readReviewLogHistory(deps.vault)).entries);
+  return createPastPaperStructureReader({
+    loadScopeReadings: () =>
+      createScopeReadingPersistence({ vault: deps.vault, deviceId: deps.deviceId }).load(),
+    registeredPastPapers: async () =>
+      registeredPastPapersFrom(await reviewLog(), deps.coursesFolder),
+    currentRevisions: async (paths) =>
+      currentRevisionsFromManifests(await deps.manifestsFor(paths)),
+  });
+}
+
+/** The course's past-paper structure, or `null` with no reader or a read that throws: the declared extent then stands (`[D-548]`). */
+async function readPastPaperStructureFor(
+  deps: CreateLocalPracticePaperProviderDeps,
+  course: string,
+): Promise<PaperRecoveredStructure | null> {
+  if (deps.readPastPaperStructure === undefined) return null;
+  try {
+    return await deps.readPastPaperStructure(course);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -261,9 +416,9 @@ async function loadCourseState(
  * `requestPaper` so it is directly testable against a hand-built `PaperRecord` — see
  * `test/paper/provider.spec.ts`'s "face states the gap" scenarios, which construct a record with
  * `compositionAccount.unbuiltDemand` set rather than driving the whole vault/Worker pipeline to
- * reach one (this composition's own `structure: null` default means a REAL course can never reach
- * `unbuiltDemand !== null` today — see `assemble.ts`'s module doc — so this is the only way to
- * exercise the render honestly until a real past-paper structure reader exists).
+ * reach one (the past-paper structure this composition passes carries no demand reading, so a REAL
+ * course can never reach `unbuiltDemand !== null` today — see `assemble.ts`'s module doc — and this
+ * is the only way to exercise the render honestly until a demand reader is wired).
  */
 export function buildReadyStateFromRecord(
   course: string,
@@ -392,11 +547,13 @@ async function composeRequestedPaper(
 
   const config = await deps.settingsStore.load();
   const asOf = isoToday(deps.now());
-  const [{ records }, enumeration, outcomeRecords] = await Promise.all([
+  const [{ records }, enumeration, outcomeRecords, structure] = await Promise.all([
     resolveAssessments(deps.vault, config.assignmentsBasePath),
     // `[D-357]`: the permanent concept key, the one her review log carries.
     enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } }),
     listOutcomeRecords(deps.vault),
+    // `[D-548]`: her stored past-paper reading sets the length; none keeps the declared extent.
+    readPastPaperStructureFor(deps, course),
   ]);
 
   const input = await buildBlueprintInputForCourse(
@@ -406,12 +563,19 @@ async function composeRequestedPaper(
     course,
     asOf,
     outcomeRecords.map((entry) => entry.record),
+    structure,
   );
   const blueprint = buildPaperBlueprint(input);
 
   const composed = await composePaperThroughJournal({
     vault: deps.vault,
     blueprint,
+    // `[D-548]`: the length this composition was planned at, and the same composition at another
+    // length, so an unfinished paper resumes on the plan it started with.
+    extent: {
+      slotCount: extentSlotCountTarget(input.steering?.extent, input.structure),
+      planAt: (slotCount) => buildPaperBlueprint({ ...input, slotCount }),
+    },
     scope: {
       eligibleConceptKeys: input.concepts
         .filter(isEligiblePaperConcept)

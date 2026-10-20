@@ -216,6 +216,49 @@ describe('buildScopeOutcomesForCourse', () => {
 });
 
 describe('buildBlueprintInputForCourse', () => {
+  // `[D-548]` (`ol-egov.141.89.7.87`): "with no stored reading, the paper keeps the declared
+  // standard extent" (features/F4-oracle.md, `@auto:plugin/paper/assemble.spec`).
+  it('passes no past-paper structure by default, so a standard paper keeps the declared 6, exactly as before', async () => {
+    const vault = fakeVault({});
+    const concepts = Array.from({ length: 7 }, (_, i) =>
+      concept({ key: `k${i}`, name: `Topic ${i}`, definition: 'text' }),
+    );
+    const input = await buildBlueprintInputForCourse(vault, concepts, [], 'COURSEA', '2026-10-20');
+    expect(input.structure).toBeNull();
+    const blueprint = buildPaperBlueprint(input);
+    expect(blueprint.slots).toHaveLength(6);
+    expect(blueprint.structureSummary).toBeNull();
+  });
+
+  it('passes the past-paper structure it is given through unchanged, and the length follows it ([D-548])', async () => {
+    const vault = fakeVault({});
+    const concepts = Array.from({ length: 7 }, (_, i) =>
+      concept({ key: `k${i}`, name: `Topic ${i}`, definition: 'text' }),
+    );
+    const structure = {
+      sittingCount: 3,
+      currentCount: 0,
+      historicalCount: 0,
+      sittings: [3, 4, 7].map((itemCount) => ({
+        regime: 'unknown' as const,
+        sections: [
+          { label: 'A', questionForm: 'x', itemCount, marks: { status: 'unknown' as const } },
+        ],
+      })),
+    };
+    const input = await buildBlueprintInputForCourse(
+      vault,
+      concepts,
+      [],
+      'COURSEA',
+      '2026-10-20',
+      [],
+      structure,
+    );
+    expect(input.structure).toBe(structure);
+    expect(buildPaperBlueprint(input).slots).toHaveLength(4);
+  });
+
   it('declares the purpose explicitly as DEFAULT_PAPER_PURPOSE (ol-egov.141.6.17) — no clause names a choice surface, so the caller states the default rather than leaving it to buildPaperBlueprint', async () => {
     const vault = fakeVault({});
     const concepts = [concept({ key: 'k1', name: 'In course', definition: 'text' })];

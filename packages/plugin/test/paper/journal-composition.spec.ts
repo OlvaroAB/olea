@@ -20,13 +20,16 @@
  */
 
 import {
+  type BuildPaperBlueprintInput,
   buildPaperBlueprint,
   type ConceptRecord,
+  extentSlotCountTarget,
   fillPaperBlueprintSlots,
   listPaperJournals,
   listPaperRecords,
   type PaperBlueprint,
   type PaperItemGenerationRequest,
+  type PaperRecoveredStructure,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import type {
@@ -535,5 +538,214 @@ describe('what the journal keeps stays in her vault and holds no server state (C
     const vault = memoryVault();
     await compose(vault, blueprint, scope, scriptedPort((r) => generated(r)).port);
     expect(vault.writes.every((path) => path.startsWith('.olea/papers/'))).toBe(true);
+  });
+});
+
+/**
+ * `[D-548]` (`ol-egov.141.89.7.87`, David 2026-10-20): "A paper she left unfinished picks up where
+ * it stopped, on the plan it started with." Scenarios: features/F4-oracle.md, "a reading that
+ * arrives after a paper started leaves that paper on its recorded plan", "a paper set aside for a
+ * change of hers starts afresh at the reading's length, and the reading is not named as the
+ * change", and the clarified "a changed source, scope, structure or authoring specification
+ * discards the journal, naming which", tagged `@auto:plugin/paper/journal-composition.spec`. Seven
+ * synthetic topics: the declared standard extent plans 6 of them; a reading of papers of 3, 4 and 7
+ * questions plans 4.
+ */
+describe('an unfinished paper resumes on the plan it started with ([D-548])', () => {
+  const READING: PaperRecoveredStructure = {
+    sittingCount: 3,
+    currentCount: 0,
+    historicalCount: 0,
+    sittings: [3, 4, 7].map((itemCount) => ({
+      regime: 'unknown' as const,
+      sections: [
+        { label: 'A', questionForm: 'x', itemCount, marks: { status: 'unknown' as const } },
+      ],
+    })),
+  };
+
+  async function inputOf(
+    options: {
+      readonly structure?: PaperRecoveredStructure | null;
+      readonly definitionOf?: (index: number) => string;
+      readonly alpha?: BuildPaperBlueprintInput['alpha'];
+    } = {},
+  ): Promise<{ input: BuildPaperBlueprintInput; scope: PaperCompositionScope }> {
+    const concepts = Array.from({ length: 7 }, (_, index) =>
+      concept(index, options.definitionOf?.(index)),
+    );
+    const assembled = await buildBlueprintInputForCourse(
+      memoryVault(),
+      concepts,
+      [{ course: COURSE, type: 'exam', due: '2026-09-22' }],
+      COURSE,
+      AS_OF,
+      [],
+      options.structure ?? null,
+    );
+    return {
+      input: options.alpha === undefined ? assembled : { ...assembled, alpha: options.alpha },
+      scope: { eligibleConceptKeys: concepts.map((c) => c.key), outcomes: [] },
+    };
+  }
+
+  /** The provider's call (`provider.ts`): the blueprint, its slot count, and the same composition at another count. */
+  function composeAsProvider(
+    vault: ReturnType<typeof memoryVault>,
+    composition: { input: BuildPaperBlueprintInput; scope: PaperCompositionScope },
+    port: PaperSlotOutcomePort,
+  ) {
+    const { input, scope } = composition;
+    return composePaperThroughJournal({
+      vault,
+      blueprint: buildPaperBlueprint(input),
+      scope,
+      port,
+      options: freshOptions(),
+      extent: {
+        slotCount: extentSlotCountTarget(input.steering?.extent, input.structure),
+        planAt: (slotCount) => buildPaperBlueprint({ ...input, slotCount }),
+      },
+    });
+  }
+
+  /** Down from the fourth topic on: three questions land, then the paper stops. */
+  const downFromTopicD = () =>
+    scriptedPort((request) =>
+      ['Topic D', 'Topic E', 'Topic F', 'Topic G'].includes(request.conceptName)
+        ? OUTAGE
+        : generated(request),
+    );
+
+  it('records the length its plan was made at on the journal it opens', async () => {
+    const vault = memoryVault();
+    const result = await composeAsProvider(vault, await inputOf(), downFromTopicD().port);
+    expect(result).toMatchObject({ kind: 'unfinished', plannedSlotCount: 6, owedSlotCount: 3 });
+    expect((await listPaperJournals(vault))[0]?.record.extent).toEqual({
+      slotCount: 6,
+      structureSummary: null,
+    });
+  });
+
+  it('a reading that arrives later leaves the paper on its plan: nothing is discarded, nothing written is drafted again, and the next new paper takes the new length', async () => {
+    const vault = memoryVault();
+    await composeAsProvider(vault, await inputOf(), downFromTopicD().port);
+
+    const withReading = await inputOf({ structure: READING });
+    expect(buildPaperBlueprint(withReading.input).slots).toHaveLength(4);
+    const up = scriptedPort((request) => generated(request));
+    const resumed = await composeAsProvider(vault, withReading, up.port);
+
+    expect(resumed.kind).toBe('finished');
+    if (resumed.kind !== 'finished') return;
+    expect(resumed.resume).toBe('resumed');
+    expect(resumed.materialChanged).toBe(false);
+    expect(up.calls.map((call) => call.conceptName)).toEqual(['Topic D', 'Topic E', 'Topic F']);
+    expect(resumed.record.items.map((item) => item.slotId)).toEqual([
+      'slot-0',
+      'slot-1',
+      'slot-2',
+      'slot-3',
+      'slot-4',
+      'slot-5',
+    ]);
+    // Its plan-time empty slots and its reading summary are the ones it started with.
+    expect(resumed.record.emptySlots.map((slot) => [slot.slotId, slot.reasonCode])).toEqual([
+      ['excluded-6', 'rank-excluded'],
+    ]);
+    expect(resumed.record.compositionAccount.structureSummary).toBeNull();
+    expect(resumed.record.completion).toEqual({ status: 'complete' });
+    const journals = (await listPaperJournals(vault)).map((entry) => entry.record);
+    expect(journals.map((journal) => journal.status)).toEqual(['completed']);
+
+    const next = scriptedPort((request) => generated(request));
+    const fresh = await composeAsProvider(vault, withReading, next.port);
+    expect(fresh.kind === 'finished' && fresh.resume).toBe('fresh');
+    expect(fresh.kind === 'finished' && fresh.record.items).toHaveLength(4);
+    expect(fresh.kind === 'finished' && fresh.record.compositionAccount.structureSummary).toEqual({
+      sittingCount: 3,
+      currentCount: 0,
+      historicalCount: 0,
+    });
+    expect(next.calls).toHaveLength(4);
+  });
+
+  it('a journal opened before the length was recorded was planned with no reading, and resumes on that plan', async () => {
+    const vault = memoryVault();
+    const before = await inputOf();
+    // The composition as it ran before `[D-548]`: no slot count passed, none recorded.
+    await compose(vault, buildPaperBlueprint(before.input), before.scope, downFromTopicD().port);
+    expect((await listPaperJournals(vault))[0]?.record).not.toHaveProperty('extent');
+
+    const up = scriptedPort((request) => generated(request));
+    const resumed = await composeAsProvider(vault, await inputOf({ structure: READING }), up.port);
+    expect(resumed.kind === 'finished' && resumed.resume).toBe('resumed');
+    expect(resumed.kind === 'finished' && resumed.record.items).toHaveLength(6);
+    expect(up.calls).toHaveLength(3);
+  });
+
+  it('a paper started on a reading keeps that length when the reading is no longer read', async () => {
+    const vault = memoryVault();
+    const started = await composeAsProvider(
+      vault,
+      await inputOf({ structure: READING }),
+      scriptedPort((request) =>
+        ['Topic C', 'Topic D'].includes(request.conceptName) ? OUTAGE : generated(request),
+      ).port,
+    );
+    expect(started).toMatchObject({ kind: 'unfinished', plannedSlotCount: 4, owedSlotCount: 2 });
+
+    const up = scriptedPort((request) => generated(request));
+    const resumed = await composeAsProvider(vault, await inputOf({ structure: null }), up.port);
+    expect(resumed.kind === 'finished' && resumed.resume).toBe('resumed');
+    expect(resumed.kind === 'finished' && resumed.record.items).toHaveLength(4);
+    expect(
+      resumed.kind === 'finished' && resumed.record.compositionAccount.structureSummary,
+    ).toEqual({ sittingCount: 3, currentCount: 0, historicalCount: 0 });
+    expect(up.calls.map((call) => call.conceptName)).toEqual(['Topic C', 'Topic D']);
+  });
+
+  it('a note of hers edited as the reading arrives sets the paper aside naming its sources and nothing else; the fresh paper takes the new length', async () => {
+    const vault = memoryVault();
+    await composeAsProvider(vault, await inputOf(), downFromTopicD().port);
+
+    const up = scriptedPort((request) => generated(request));
+    const result = await composeAsProvider(
+      vault,
+      await inputOf({
+        structure: READING,
+        definitionOf: (index) => `her REVISED note on topic ${index}`,
+      }),
+      up.port,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    expect(result.resume).toBe('discarded-and-fresh');
+    expect(result.materialChanged).toBe(true);
+    expect(result.record.items).toHaveLength(4);
+    const discarded = (await listPaperJournals(vault)).filter(
+      (entry) => entry.record.status === 'discarded',
+    );
+    expect(discarded.map((entry) => entry.record.discard)).toEqual([
+      { reason: 'reuse-incompatible', changed: ['sourceVersions'] },
+    ]);
+  });
+
+  it('a change to Olea’s own authoring as the reading arrives is named as that alone: the reading is not a change of hers, so no changed-material sentence', async () => {
+    const vault = memoryVault();
+    await composeAsProvider(vault, await inputOf(), downFromTopicD().port);
+
+    const result = await composeAsProvider(
+      vault,
+      await inputOf({ structure: READING, alpha: 0.25 }),
+      scriptedPort((request) => generated(request)).port,
+    );
+    expect(result.kind === 'finished' && result.resume).toBe('discarded-and-fresh');
+    expect(result.kind === 'finished' && result.materialChanged).toBe(false);
+    expect(result.kind === 'finished' && result.record.items).toHaveLength(4);
+    const discarded = (await listPaperJournals(vault)).filter(
+      (entry) => entry.record.status === 'discarded',
+    );
+    expect(discarded.map((entry) => entry.record.discard?.changed)).toEqual([['authoringSpec']]);
   });
 });

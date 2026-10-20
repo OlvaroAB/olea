@@ -26,9 +26,11 @@
  *
  * **What this function does NOT do.** It never calls a generator — see `./paper-items.ts` for
  * turning a blueprint's slots into generated items. It never reads a sealed judge-reference
- * sitting — `structure` is the CALLER's responsibility to have already excluded one (this
- * function has no vault access and cannot enforce that itself; the caller mirrors
- * `playback-paper.mjs`'s `assertNotSealedPath`/`nonHoldoutPastPaperSources`).
+ * sitting's demand — `structure` is the CALLER's responsibility to have already excluded one (this
+ * function has no vault access and cannot enforce that itself; the harness caller mirrors
+ * `playback-paper.mjs`'s `assertNotSealedPath`/`nonHoldoutPastPaperSources`, and the production
+ * caller, which knows no seal, carries sections only, with no demand and no source pointer:
+ * `./paper-recovered-structure.ts`). A past paper's text never grounds an item either way.
  *
  * **Ruling 3 — emphasis.** A scope area the examiner already attests (an Outcome's own label, or
  * a concept's own name) is matched case-insensitively and substring-wise against
@@ -43,7 +45,10 @@
  * table (`EXTENT_FALLBACK_SLOT_COUNT_DECLARED`). Either way the result is clamped to
  * `MAX_BLUEPRINT_SLOTS_DECLARED` — a product-sanity ceiling, declared and unfitted, matching the
  * harness tier's own value so a dry run and a real composition never disagree about "how large is
- * too large for a practice paper."
+ * too large for a practice paper." **A paper already in progress keeps its length** (`[D-548]`,
+ * `ol-egov.141.89.7.87`): a caller that plans a composition again for an unfinished paper passes
+ * the slot count that paper started with (`BuildPaperBlueprintInput.slotCount`), which is then the
+ * cap whatever the readings now say.
  *
  * **Format class and a specific past sitting are never steering dials** — ruling 3's own text.
  * `formatClass` is derived from `assessments` exactly as `dominantFormatClass` does in the harness
@@ -133,6 +138,36 @@ export function validatePaperScope(concepts: readonly PaperScopeConcept[]): void
           `buildPaperBlueprint: concept "${concept.conceptKey}" cites a held source of kind ` +
             `"${held.kind}", which this pipeline never grounds a generated item in. Allowed: ` +
             `${ALLOWED_HELD_SOURCE_KINDS.join(', ')}.`,
+        );
+      }
+    }
+  }
+}
+
+/**
+ * Throws when a recovered section's marks are not `PaperMarks` (`ol-egov.141.89.7.87`, `[D-431]`):
+ * stated (a finite, non-negative value) or unknown. A bare number is the shape this type had before
+ * marks could be unknown; reading one as either state would be a guess, so a caller still passing
+ * it is told, never silently re-read.
+ */
+export function validatePaperRecoveredStructure(structure: PaperRecoveredStructure | null): void {
+  for (const sitting of structure?.sittings ?? []) {
+    for (const section of sitting.sections) {
+      const marks: unknown = section.marks;
+      const value =
+        typeof marks === 'object' && marks !== null
+          ? (marks as { readonly status?: unknown; readonly value?: unknown })
+          : undefined;
+      const known =
+        value?.status === 'unknown' ||
+        (value?.status === 'stated' &&
+          typeof value.value === 'number' &&
+          Number.isFinite(value.value) &&
+          value.value >= 0);
+      if (!known) {
+        throw new Error(
+          'buildPaperBlueprint: a recovered section carries marks that are neither stated (a ' +
+            'finite, non-negative value) nor unknown; marks are `PaperMarks`, never a bare number.',
         );
       }
     }
@@ -308,7 +343,12 @@ export function extentSlotCountTarget(
               ? totals.length - 1
               : Math.floor((totals.length - 1) / 2)
         ] ?? EXTENT_FALLBACK_SLOT_COUNT_DECLARED[key]);
-  return Math.max(1, Math.min(MAX_BLUEPRINT_SLOTS_DECLARED, Math.round(target)));
+  return clampSlotCount(target);
+}
+
+/** Any slot count, rounded and clamped to `[1, MAX_BLUEPRINT_SLOTS_DECLARED]`: the one clamp both the extent target and a recorded slot count go through. */
+function clampSlotCount(count: number): number {
+  return Math.max(1, Math.min(MAX_BLUEPRINT_SLOTS_DECLARED, Math.round(count)));
 }
 
 /** The dominant F4.8 format class across the course's own assessments — mirrors the harness tier's `dominantFormatClass` (falls to `'written'`, the least format-committal class, with no assessments at all). Never steerable (ruling 3). */
@@ -400,7 +440,11 @@ export function flattenDemandReadings(
  *
  * Marks are recovered at SECTION grain only (`PaperRecoveredSection.marks`) — no per-question mark
  * exists to read (the private repo's own recovery ceiling: full sub-part structure recovers for a
- * minority of papers). A section carrying more than one demand splits its marks evenly across its
+ * minority of papers). **A section whose marks are unknown makes every share unknown** (`[D-431]`,
+ * `ol-egov.141.89.7.87`): its marks are never counted as zero and never estimated from its item
+ * count, and a share computed over the other sections alone would inflate theirs, so the map is
+ * empty — the "no evidence" case below — whenever any attributable section that carries a demand
+ * has unknown marks. A section carrying more than one demand splits its marks evenly across its
  * own `itemCount` — the least-assumption reading available at this grain, and exact (not an
  * assumption at all) for the common case this bead's five-course sample mostly is: a section whose
  * every question shares one demand. `itemCount` is the denominator rather than the recovered
@@ -420,8 +464,9 @@ function demandMarkShares(
     for (const section of sitting.sections) {
       const demands = section.demands ?? [];
       if (demands.length === 0) continue;
+      if (section.marks.status !== 'stated') return new Map();
       const denom = section.itemCount > 0 ? section.itemCount : demands.length;
-      const perItemMarks = section.marks / denom;
+      const perItemMarks = section.marks.value / denom;
       for (const demand of demands) {
         totals.set(demand, (totals.get(demand) ?? 0) + perItemMarks);
         totalMarks += perItemMarks;
@@ -530,6 +575,14 @@ export interface BuildPaperBlueprintInput {
   readonly purpose?: PaperPurpose;
   readonly alpha: PaperWeightingAlpha;
   readonly steering?: PaperSteering;
+  /**
+   * `[D-548]` (`ol-egov.141.89.7.87`): the slot count a paper already in progress was planned at,
+   * passed when the composition is planned again for that paper. Given, it is the slot cap (rounded
+   * and clamped to `[1, MAX_BLUEPRINT_SLOTS_DECLARED]`), in place of `extentSlotCountTarget`'s
+   * reading of `steering.extent` and `structure`; every other input is read as given. Omitted: the
+   * cap is `extentSlotCountTarget(steering.extent, structure)`, as before.
+   */
+  readonly slotCount?: number;
   /** F4.8's word→class table (`../assessment/format-class.js`'s `formatClassOf`), injected so this module has no opinion of its own about the mapping. */
   readonly formatClassOf: (type: string) => PaperFormatClass;
 }
@@ -537,6 +590,10 @@ export interface BuildPaperBlueprintInput {
 /** Assembles the blueprint. See the module doc for ruling 3's steering and the blinding responsibility this function does not itself enforce. */
 export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBlueprint {
   validatePaperScope(input.concepts);
+  validatePaperRecoveredStructure(input.structure);
+  if (input.slotCount !== undefined && !Number.isFinite(input.slotCount)) {
+    throw new Error('buildPaperBlueprint: a recorded slot count must be a finite number.');
+  }
   const steering = input.steering ?? {};
   const purpose = input.purpose ?? DEFAULT_PAPER_PURPOSE;
   const outcomesById = new Map((input.outcomes ?? []).map((o) => [o.outcomeId, o]));
@@ -576,7 +633,10 @@ export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBluep
       (a, b) => b.weight - a.weight || a.concept.conceptName.localeCompare(b.concept.conceptName),
     );
 
-  const slotCap = extentSlotCountTarget(steering.extent, input.structure);
+  const slotCap =
+    input.slotCount !== undefined
+      ? clampSlotCount(input.slotCount)
+      : extentSlotCountTarget(steering.extent, input.structure);
   const candidates = ranked.slice(0, slotCap);
   const rankExcluded = ranked.slice(slotCap);
 

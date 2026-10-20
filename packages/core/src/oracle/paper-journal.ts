@@ -25,8 +25,9 @@
  * of partial paper there is. A paper with holes because the service was down does not exist.
  *
  * **What the journal stores, and what it does not.** Slot outcomes as they land, the slot plan (ids,
- * concept, task, dependencies), the fingerprint and its digest. It stores no `sourceChunks` and no
- * copy of her material: the resumed request recomposes the blueprint (deterministic for a matching
+ * concept, task, dependencies), the fingerprint and its digest, and the length the plan was made at
+ * (`PaperJournalExtent`, `[D-548]`). It stores no `sourceChunks` and no copy of her material: the
+ * resumed request recomposes the blueprint at that length (deterministic for a matching
  * fingerprint) and this journal supplies only what already landed. Landed items are the generated
  * items the finished paper would hold anyway. One JSON file per journal, under the paper store's own
  * folder (`.olea/papers/journals/`), so the F7.4 export and full delete already carry it, and it is
@@ -74,6 +75,7 @@ import {
   paperBlueprintDigest,
 } from './paper-structure.js';
 import type {
+  PaperBlueprint,
   PaperEmptySlot,
   PaperEmptySlotReasonCode,
   PaperGeneratorTaskId,
@@ -119,6 +121,26 @@ export type PaperJournalSlotOutcome =
 
 export type PaperJournalStatus = 'open' | 'completed' | 'discarded';
 
+/**
+ * The length the journal's plan was made at (`[D-548]`, `ol-egov.141.89.7.87`): an unfinished paper
+ * resumes on the plan it started with, so a reading of her past papers that arrives afterwards is
+ * not a change to that paper. Counts only, no content.
+ *
+ * - `slotCount` — the slot cap the plan was made at (`./paper-blueprint.ts`'s
+ *   `extentSlotCountTarget`, or the `slotCount` it was planned again at);
+ * - `structureSummary` — the past-paper readings that length was read from, as the blueprint states
+ *   them (`PaperBlueprint.structureSummary`); `null` when the plan was made with none.
+ *
+ * Absent on a journal opened before the length was recorded. Every such journal was planned with no
+ * past-paper reading (the plugin passed no structure until `[D-548]`), so its length is the
+ * declared one for its extent; the caller reads it so
+ * (`packages/plugin/src/paper/journal-composition.ts`).
+ */
+export interface PaperJournalExtent {
+  readonly slotCount: number;
+  readonly structureSummary: PaperBlueprint['structureSummary'];
+}
+
 export type PaperJournalDiscardReason =
   | 'reuse-incompatible'
   | 'authoring-spec-changed'
@@ -139,6 +161,8 @@ export interface PaperJournalRecord {
   /** One digest over the four components (scp.md 2.6's blueprint digest). */
   readonly blueprintDigest: string;
   readonly plan: readonly PaperJournalPlanSlot[];
+  /** `[D-548]`: the length the plan was made at. Absent on a journal opened before it was recorded (see `PaperJournalExtent`). */
+  readonly extent?: PaperJournalExtent;
   /** Keyed by slot id; a slot with no entry has not been attempted. */
   readonly outcomes: Readonly<Record<string, PaperJournalSlotOutcome>>;
   readonly status: PaperJournalStatus;
@@ -162,6 +186,7 @@ export type PaperJournalEvent =
       readonly fingerprint: PaperReuseFingerprint;
       readonly blueprintDigest: string;
       readonly plan: readonly PaperJournalPlanSlot[];
+      readonly extent?: PaperJournalExtent;
     })
   | (JournalEventCommon & {
       readonly kind: 'slot-landed';
@@ -213,6 +238,7 @@ export function applyPaperJournalEvent(
       fingerprint: event.fingerprint,
       blueprintDigest: event.blueprintDigest,
       plan: event.plan,
+      ...(event.extent !== undefined ? { extent: event.extent } : {}),
       outcomes: {},
       status: 'open',
       schemaVersion: PAPER_JOURNAL_SCHEMA_VERSION,
@@ -271,6 +297,21 @@ function isNonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
+/** A recorded length: a whole slot count of at least one, and a readings summary of three whole counts or `null`. */
+function isPaperJournalExtent(value: unknown): value is PaperJournalExtent {
+  if (typeof value !== 'object' || value === null) return false;
+  const v = value as Record<string, unknown>;
+  if (typeof v.slotCount !== 'number' || !Number.isInteger(v.slotCount) || v.slotCount < 1) {
+    return false;
+  }
+  if (v.structureSummary === null) return true;
+  if (typeof v.structureSummary !== 'object') return false;
+  const summary = v.structureSummary as Record<string, unknown>;
+  return ['sittingCount', 'currentCount', 'historicalCount'].every(
+    (key) => typeof summary[key] === 'number' && Number.isInteger(summary[key]),
+  );
+}
+
 /** Runtime validation, shallow like `isPaperRecord`. Refuses a paper record: a journal has a `plan` and `outcomes`, a paper has `items`. */
 export function isPaperJournalRecord(value: unknown): value is PaperJournalRecord {
   if (typeof value !== 'object' || value === null) return false;
@@ -284,6 +325,7 @@ export function isPaperJournalRecord(value: unknown): value is PaperJournalRecor
     if (!isNonEmptyString(fp[key])) return false;
   }
   if (!Array.isArray(v.plan)) return false;
+  if (v.extent !== undefined && !isPaperJournalExtent(v.extent)) return false;
   if (typeof v.outcomes !== 'object' || v.outcomes === null || Array.isArray(v.outcomes))
     return false;
   if (v.status !== 'open' && v.status !== 'completed' && v.status !== 'discarded') return false;
@@ -384,6 +426,12 @@ export interface OpenPaperJournalInput {
   readonly fingerprint: PaperReuseFingerprint;
   /** In authoring (dependency) order. */
   readonly plan: readonly PaperJournalPlanSlot[];
+  /**
+   * `[D-548]`: the length the plan was made at, recorded on a journal this call opens. Not part of
+   * the reuse check: a caller that wants an unfinished paper kept on its own length plans the
+   * composition again at the recorded one before it calls (`PaperJournalExtent`).
+   */
+  readonly extent?: PaperJournalExtent;
 }
 
 export type PaperJournalOpenDecision = 'fresh' | 'resumed' | 'discarded-and-fresh';
@@ -469,6 +517,7 @@ export async function openPaperJournal(
     fingerprint: input.fingerprint,
     blueprintDigest,
     plan: input.plan,
+    ...(input.extent !== undefined ? { extent: input.extent } : {}),
   });
   if (opened === undefined)
     throw new Error('openPaperJournal: an opened event produced no journal');
