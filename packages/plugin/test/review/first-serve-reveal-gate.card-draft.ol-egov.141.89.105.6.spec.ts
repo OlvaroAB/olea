@@ -91,10 +91,11 @@ describe('the reveal label ([D-555])', () => {
   const start = VIEW.indexOf('private renderReveal(');
   const reveal = VIEW.slice(start, VIEW.indexOf('private ', start + 20));
 
-  it('draws "From your own note" only when the item is not a pending draft', () => {
+  it('draws "From your own note" only when the item is neither a pending draft nor Olea-generated', () => {
     const labelAt = reveal.indexOf("'From your own note'");
     expect(labelAt).toBeGreaterThan(-1);
     const before = reveal.slice(Math.max(0, labelAt - 160), labelAt);
     expect(before).toMatch(/instrument\.draftId === null/);
+    expect(before).toMatch(/instrument\.oleaGenerated !== true/);
   });
 });

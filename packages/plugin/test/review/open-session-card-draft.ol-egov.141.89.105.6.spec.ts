@@ -8,6 +8,7 @@ import {
   calendarDayFromLocalDate,
   createFsrsScheduler,
   enumerateVaultInstruments,
+  writeInstrumentCitation,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
@@ -131,5 +132,55 @@ describe('opening a review session with a pending card draft', () => {
     if (vm.phase !== 'front') return;
     expect(vm.instrument.type).toBe('qa');
     expect(vm.instrument.draftId).toBe('card-draft-1');
+  });
+});
+
+describe('an accepted card carries the Olea-generated fact from its citation record ([D-555], ol-egov.141.89.105.19)', () => {
+  async function openFirst(v: ReturnType<typeof vault>) {
+    const holder = createStudySessionHolder();
+    holder.enter(NOW, await composed(v));
+    const outcome = await openReviewSession({
+      vault: v,
+      scheduler: createFsrsScheduler(),
+      deviceId: DEVICE,
+      ports: {
+        reviewLog: createVaultReviewLogPort(v, DEVICE),
+        suspendPort: createVaultSuspendPort(v, DEVICE),
+        editPort: { async edit() {} },
+        noteExists: createVaultNoteExistsPort(v),
+        clock: { now: () => NOW },
+        draftAcceptPort: {
+          accept: () => Promise.reject(new Error('unused')),
+          reject: () => Promise.reject(new Error('unused')),
+        },
+      },
+      random: fixedRandom,
+      probeDays: 30,
+      studySessionHolder: holder,
+      composeDefaultStudySession: () => Promise.reject(new Error('unreachable')),
+    } as never);
+    if (!outcome.ok) throw new Error(`the session failed to open: ${String(outcome.error)}`);
+    const item = outcome.scheduledQueue[0];
+    if (item === undefined) throw new Error('no scheduled item');
+    return item.instrument;
+  }
+
+  it('marks a card that has a citation record', async () => {
+    const v = vault();
+    const [record] = (await enumerateVaultInstruments(v)).records;
+    if (record === undefined) throw new Error('no record');
+    await writeInstrumentCitation(v, record.instrumentId, {
+      sourcePath: 'Courses/TEST101/Week one.md',
+    });
+    const instrument = await openFirst(v);
+    expect(instrument.type).toBe('qa');
+    expect(instrument.draftId).toBeNull();
+    expect(instrument.oleaGenerated).toBe(true);
+  });
+
+  it('leaves a card she wrote, which has no record, unmarked', async () => {
+    const instrument = await openFirst(vault());
+    expect(instrument.type).toBe('qa');
+    expect(instrument.oleaGenerated).toBeUndefined();
   });
 });

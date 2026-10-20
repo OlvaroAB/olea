@@ -969,7 +969,8 @@ export async function openReviewSession(
     // `adaptExecutedReviewQueue` — see `OpenReviewSessionInput.frozenQueue`'s
     // doc. Every existing caller (this suite, the workbench) omits it and
     // gets today's unfrozen behaviour, unchanged.
-    const scheduled =
+    const scheduled = await markOleaGeneratedCards(
+      input.vault,
       input.frozenQueue === undefined
         ? adaptExecutedReviewQueue(adapterInput)
         : input.frozenQueueMode === 'extend'
@@ -979,7 +980,8 @@ export async function openReviewSession(
               ...(input.frozenQueueStaleness !== undefined
                 ? { staleness: input.frozenQueueStaleness }
                 : {}),
-            });
+            }),
+    );
 
     // F5.3a / R7's third trigger (`ol-0r92.11`, `[D-083]`/`[D-087]`): read
     // once per opened session, off the SAME `composed.entries` this module
@@ -1221,6 +1223,29 @@ export async function openReviewSession(
   } catch (error) {
     return { ok: false, error };
   }
+}
+
+/**
+ * `[D-555]` (`ol-egov.141.89.105.19`): marks each scheduled question-and-answer card that has a
+ * citation record as Olea-generated, so its reveal carries no "From your own note" label. One
+ * sidecar read per card at session open; in memory only. A failed read leaves the item unmarked.
+ */
+async function markOleaGeneratedCards(
+  vault: VaultSource,
+  items: readonly ReviewQueueItem[],
+): Promise<readonly ReviewQueueItem[]> {
+  return Promise.all(
+    items.map(async (item) => {
+      if (item.instrument.type !== 'qa' || item.instrument.draftId !== null) return item;
+      try {
+        const citation = await readInstrumentCitation(vault, item.instrument.instrumentId);
+        if (citation === undefined) return item;
+        return { ...item, instrument: { ...item.instrument, oleaGenerated: true } };
+      } catch {
+        return item;
+      }
+    }),
+  );
 }
 
 /**
