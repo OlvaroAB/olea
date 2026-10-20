@@ -77,6 +77,11 @@ import {
   syllabusCounterweightBreakdown,
   syllabusCounterweightSentence,
 } from './copy.js';
+import {
+  type GapReadingsUnavailable,
+  isListedGapRow,
+  listedGapRows,
+} from './readings-unavailable.js';
 
 /** A course whose ranking succeeded — the half of {@link GapCourseView} a detail page can be opened against. */
 type RankedCourseView = Extract<GapCourseView, { status: 'ranked' }>;
@@ -134,6 +139,13 @@ export type GapViewState =
        * `provider.ts`) still renders the pre-`[D-399]` inference unchanged.
        */
       readonly bases?: GapRowEvidenceBases;
+      /**
+       * `[D-539]` (`ol-egov.141.89.104.56`): the concepts whose current readings could not be made,
+       * because evidence they read could not be hold-checked (`./readings-unavailable.ts`). Their
+       * rows stay in `model`, so the counts it states stay true, but they are never listed and
+       * their pages never open: a row would word need they do not have. Absent: none.
+       */
+      readonly readingsUnavailable?: GapReadingsUnavailable;
     }
   | { readonly kind: 'unavailable' };
 
@@ -178,11 +190,16 @@ interface GapDetailTarget {
 function findDetailRow(
   model: GapViewModel,
   target: GapDetailTarget,
+  unavailable?: GapReadingsUnavailable,
 ): { readonly course: RankedCourseView; readonly row: GapRow } | null {
   for (const course of model.courses) {
     if (course.status !== 'ranked' || course.course !== target.course) continue;
+    // `[D-539]`: a row whose readings are unavailable has no page, as it has no place in the list.
     const row = course.rows.find(
-      (r) => r.conceptKey === target.conceptKey && r.gapClass !== 'coverage-gap',
+      (r) =>
+        r.conceptKey === target.conceptKey &&
+        r.gapClass !== 'coverage-gap' &&
+        isListedGapRow(r, unavailable),
     );
     if (row !== undefined) return { course, row };
   }
@@ -237,8 +254,9 @@ export class GapView extends ItemView {
       return;
     }
 
-    const { model, bases } = state;
-    const opened = this.detail !== null ? findDetailRow(model, this.detail) : null;
+    const { model, bases, readingsUnavailable } = state;
+    const opened =
+      this.detail !== null ? findDetailRow(model, this.detail, readingsUnavailable) : null;
     if (this.detail !== null && opened === null) {
       // The row this page was open on is gone from a fresh read (or was
       // never a mastery/material gap to begin with) — the list is the only
@@ -250,7 +268,9 @@ export class GapView extends ItemView {
       return;
     }
 
-    for (const course of model.courses) this.renderCourse(root, course, bases);
+    for (const course of model.courses) {
+      this.renderCourse(root, course, bases, readingsUnavailable);
+    }
     this.renderCoverage(root, model);
   }
 
@@ -320,6 +340,7 @@ export class GapView extends ItemView {
     parent: HTMLElement,
     course: GapCourseView,
     bases?: GapRowEvidenceBases,
+    readingsUnavailable?: GapReadingsUnavailable,
   ): void {
     const section = parent.createDiv({ cls: 'olea-gap-course' });
     section.createDiv({ cls: 'olea-gap-course-name', text: course.course });
@@ -345,7 +366,13 @@ export class GapView extends ItemView {
     this.renderSyllabusCounterweight(section, course.course, course.rows);
 
     const list = section.createDiv({ cls: 'olea-gap-rows' });
-    for (const row of course.rows) this.renderRow(list, row, course.course);
+    // `[D-539]` (`ol-egov.141.89.104.56`): a concept whose readings are unavailable is not listed,
+    // as a gap or a weakness; the framing and the counterweight above still read every ranked row.
+    // THE RENDER POINT for the unavailable state's words: once a clause and a registry entry name
+    // them, they are drawn here, beside the list, from `readingsUnavailable`. Nothing is drawn yet.
+    for (const row of listedGapRows(course.rows, readingsUnavailable)) {
+      this.renderRow(list, row, course.course);
+    }
   }
 
   private renderSyllabusCounterweight(
