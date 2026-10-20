@@ -34,20 +34,18 @@ function bodyBetween(startMarker: string, endMarker: string): string {
 }
 
 describe('renderGradedPhase — branches on the unable-to-assess outcome before touching any graded-only field', () => {
-  it('checks grading.outcome and delegates to renderUnableToAssessPhase, returning before the feedback paragraph', () => {
+  it('checks grading.outcome and delegates to renderUnableToAssessPhase, returning before the graded regions', () => {
     const body = bodyBetween('private renderGradedPhase(', 'private renderUnableToAssessPhase(');
     const guardIndex = body.search(/grading\.outcome\s*===\s*'unable-to-assess'/);
     expect(guardIndex).toBeGreaterThan(-1);
     expect(body).toMatch(
       /this\.renderUnableToAssessPhase\(\s*root,\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*support,?\s*\)/,
     );
-    // The guard's own `return;` must precede the feedback paragraph and the
+    // The guard's own `return;` must precede the graded regions and the
     // Accept button — never fall through to render graded-only content.
     const returnIndex = body.indexOf('return;', guardIndex);
-    const feedbackIndex = body.indexOf("cls: 'olea-explain-back-feedback'");
     const acceptButtonIndex = body.indexOf('EXPLAIN_BACK_ACCEPT_LABEL');
     expect(returnIndex).toBeGreaterThan(guardIndex);
-    expect(returnIndex).toBeLessThan(feedbackIndex);
     expect(returnIndex).toBeLessThan(acceptButtonIndex);
   });
 });

@@ -1976,7 +1976,11 @@ export class ExplainBackModal extends Modal {
     // than a verdict-shaped placeholder — see `explainBackDepthHeading`'s own
     // doc (`./copy.ts`) and `renderAcceptedPhase` below, where the heading
     // renders once a depth level actually comes back.
-    root.createEl('p', { cls: 'olea-explain-back-feedback', text: grading.feedback });
+    //
+    // `ol-egov.141.89.6.98` (David, 2026-10-20): no separate feedback
+    // paragraph. The findings and misconception regions below ARE the
+    // feedback; the Worker's free-text `grading.feedback` still arrives (the
+    // `[D-318]` experiment seam) but is never shown to her here.
 
     this.renderGradedRegions(root, prompt, grading);
 

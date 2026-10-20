@@ -8,8 +8,10 @@
  * an input: where a model-written feedback writer is ever enabled it is an experiment behind
  * the same seam and never changes the verdict or invents a finding.
  *
- * Status: UNWIRED. Nothing calls this yet; `gradingPipeline.ts` still passes the Worker's
- * `feedback` through. Switching the caller changes what she reads and is held for review.
+ * Status: UNWIRED, and ruled never to be wired as a paragraph (David, 2026-10-20): the graded
+ * view's findings and misconception regions are the feedback; the Worker's free-text `feedback`
+ * is the `[D-318]` experiment seam and is not shown. The correction is model-written, so no
+ * "the passage says" prefix is put in front of it.
  *
  * Rules the function keeps (each pinned by `feedbackTemplate.spec.ts`):
  * - It adds no claim of its own. Every sentence is a fixed label, or text a
@@ -22,7 +24,7 @@
  * - Candidate `concept` / `confusedWith` are ids, not wording: never shown.
  * - Deterministic: same input, same text. No clock, no randomness, no locale.
  * - The words it adds itself (missing, mistaken, mixed up,
- *   you wrote, a belief to check, the passage says) are plain English and none is in the
+ *   you wrote, a belief to check) are plain English and none is in the
  *   vocabulary registry's forbidden or retired lists.
  */
 
@@ -72,7 +74,7 @@ export function renderExplainBackFeedback(input: FeedbackTemplateInput): string 
     if (statement === '' && correction === '') continue;
     const parts: string[] = [];
     if (statement !== '') parts.push(`A belief to check: ${ensureStop(statement)}`);
-    if (correction !== '') parts.push(`The passage says: ${ensureStop(correction)}`);
+    if (correction !== '') parts.push(ensureStop(correction));
     lines.push(`- ${parts.join(' ')}${quotedSpans(candidate.answerSpans)}`);
   }
 

@@ -621,13 +621,11 @@ describe('explainBackFullDepthEncouragement (F6.8, V5, item 32)', () => {
     expect(text).toBe("That's the first time this concept has been explained at full depth.");
   });
 
-  it('appends the grader’s own feedback as the specific evidence, never inventing a second sentence', () => {
+  it('never shows the Worker’s free-text feedback, whatever it says (ol-egov.141.89.6.98)', () => {
     const text = explainBackFullDepthEncouragement(
       grading({ feedback: 'Your explanation covered both the mechanism and its limits.' }),
     );
-    expect(text).toBe(
-      "That's the first time this concept has been explained at full depth. Your explanation covered both the mechanism and its limits.",
-    );
+    expect(text).toBe("That's the first time this concept has been explained at full depth.");
   });
 
   it('never states a verdict word or effort/discipline language (V6)', () => {
