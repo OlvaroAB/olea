@@ -1818,18 +1818,25 @@ export {
   matchesEmphasis,
   normalisePaperRecoveredStructure,
   PAPER_TAUGHT_ELIGIBLE_SIGNALS,
+  paperBlueprintCandidateSlotIds,
   slotWeightForPurpose,
   taskIdForFormatClass as paperTaskIdForFormatClass,
   validatePaperScope,
 } from './oracle/paper-blueprint.js';
 export type {
   FillPaperBlueprintResult,
+  PaperEarlierPart,
   PaperGeneratedItem,
   PaperItemGenerationPort,
   PaperItemGenerationRequest,
   PaperItemGenerationResult,
+  PaperSharedPassage,
 } from './oracle/paper-items.js';
-export { fillPaperBlueprintSlots, paperItemMcqCandidate } from './oracle/paper-items.js';
+export {
+  fillPaperBlueprintSlots,
+  paperItemEarlierPart,
+  paperItemMcqCandidate,
+} from './oracle/paper-items.js';
 // The practice paper's resumable journal (`[D-430]`, `ol-egov.141.89.7.23`): the driver over the
 // slot calls, the Worker-envelope classifier, and the finalize step. See `./oracle/paper-journal.js`'s
 // own module doc. `packages/plugin/src/oracle/paper-item-port.ts` reads the envelope through
@@ -1864,6 +1871,7 @@ export {
   openPaperJournal,
   PAPER_JOURNAL_FOLDER,
   PAPER_JOURNAL_SCHEMA_VERSION,
+  PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION,
   PAPER_SLOT_RETRIES_DECLARED,
   PaperJournalUnfinishedError,
   paperJournalOwedSlotIds,
@@ -1873,6 +1881,7 @@ export {
 export type { PastPaperStoredReading } from './oracle/paper-recovered-structure.js';
 export {
   paperRecoveredStructureFromReadings,
+  paperStructureTemplateOf,
   pastPaperReadingCounts,
 } from './oracle/paper-recovered-structure.js';
 export type {
@@ -1915,26 +1924,39 @@ export type {
   PaperClassifiableReasonCode,
   PaperCountedMarks,
   PaperEmptyOutcome,
+  PaperGroupNeedingStimulus,
   PaperMarksDisagreements,
   PaperReuseComparison,
   PaperReuseInputs,
   PaperReuseSlotPlanEntry,
+  PaperStructuredPlan,
+  PaperStructuredPlanSlot,
   PaperStructureProblem,
   PaperStructureProblemCode,
+  StructuredPaperShapeResult,
 } from './oracle/paper-structure.js';
+// `[D-559]` (`ol-egov.141.89.7.93`): the paper written in its structured form from her stored
+// reading — which questions it takes, the shape, and the plan — and a recorded shape read back.
 export {
+  buildStructuredPaperShape,
   classifyPaperCompletion,
   comparePaperReuseFingerprints,
   countedPaperMarks,
   emptySlotGapKind,
+  isRecordedPaperStructuredShape,
   paperBlueprintDigest,
+  paperGroupsNeedingStimulus,
   paperIntendedDemandBasis,
+  paperNoneHeldGroupIdsFromPlan,
   paperPartsInDependencyOrder,
   paperReuseFingerprint,
   paperYieldAgainstStructure,
+  planStructuredPaper,
   propagatePaperEmptiness,
   reconcilePaperStructureMarks,
+  selectPaperTemplateParts,
   validatePaperStructure,
+  withPaperHeldStimuli,
 } from './oracle/paper-structure.js';
 // `[D-262]`'s five demand words: the one vocabulary every demand-carrying type above uses.
 // F4.11's practice-paper generation pipeline (`[D-250]`/`[D-252]`, component register row 2.11,
@@ -1986,7 +2008,9 @@ export type {
   PaperStructuredPart,
   PaperStructuredSection,
   PaperStructuredShape,
+  PaperStructureTemplate,
   PaperTaughtSignal,
+  PaperTemplatePart,
   PaperTimeAllowance,
   PaperWeightingAlpha,
 } from './oracle/paper-types.js';

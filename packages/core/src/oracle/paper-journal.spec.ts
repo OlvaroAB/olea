@@ -14,11 +14,14 @@ import {
   OPAQUE_PAPER_JOURNAL_ID_PREFIX,
   openPaperJournal,
   PAPER_JOURNAL_FOLDER,
+  PAPER_JOURNAL_SCHEMA_VERSION,
+  PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION,
   type PaperJournalPlanSlot,
   PaperJournalUnfinishedError,
   type PaperSlotGenerationOutcome,
   type PaperSlotGenerationRequest,
   paperJournalOwedSlotIds,
+  paperJournalPath,
   runPaperJournal,
 } from './paper-journal.js';
 import {
@@ -27,7 +30,12 @@ import {
   PAPER_STORE_FOLDER,
   type PaperCompositionAccount,
 } from './paper-store.js';
-import type { PaperEmptySlot, PaperReuseFingerprint } from './paper-types.js';
+import {
+  PAPER_STRUCTURE_FORMAT_VERSION,
+  type PaperEmptySlot,
+  type PaperReuseFingerprint,
+  type PaperStructuredShape,
+} from './paper-types.js';
 
 // Scenarios: olea-service/features/F4-oracle.md, F4.11 (`[D-430]` part 3), filed as owed on the
 // D-430 build bead. Synthetic ids only.
@@ -729,5 +737,207 @@ describe('classifyPaperSlotWorkerResult — read from the real Worker envelope (
       classifyPaperSlotWorkerResult({ success: false, error: { code: 'grounding-refused' } })
         .status,
     ).toBe('unavailable');
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-560], David 2026-10-21: "The journal stores the paper's structure in a
+// new version. An unfinished paper always resumes on its own structure, even if her past-paper
+// reading changes. An old journal reads as flat and resumes flat."). Scenarios: features/F4-oracle.md,
+// "an unfinished structured paper resumes on its own structure after her reading changes", "a
+// journal written before the structure was recorded reads as flat" and "an unfinished flat paper
+// resumes on its flat plan after this change", tagged `@auto:core/oracle/paper-journal.spec`.
+// Synthetic ids and labels only.
+const STRUCTURE: PaperStructuredShape = {
+  formatVersion: PAPER_STRUCTURE_FORMAT_VERSION,
+  structureBasis: 'current-or-transitional',
+  structureSlotCount: 3,
+  sections: [],
+  groups: [
+    {
+      groupId: 'q1',
+      kind: 'parent-question',
+      sectionId: null,
+      label: 'Question 1',
+      slotIds: ['slot-0', 'slot-1'],
+      stimulusNeed: { status: 'not-needed' },
+      heldStimulus: null,
+    },
+    {
+      groupId: 'q2',
+      kind: 'shared-stimulus',
+      sectionId: null,
+      label: 'Question 2',
+      slotIds: ['slot-2'],
+      stimulusNeed: { status: 'needed', form: 'table' },
+      heldStimulus: null,
+    },
+  ],
+  parts: [
+    {
+      slotId: 'slot-0',
+      groupId: 'q1',
+      label: '1(a)',
+      questionForm: 'short answer',
+      marks: { status: 'stated', value: 2 },
+      dependsOn: { status: 'unknown' },
+      demand: { status: 'not-read' },
+    },
+    {
+      slotId: 'slot-1',
+      groupId: 'q1',
+      label: '1(b)',
+      questionForm: 'short answer',
+      marks: { status: 'unknown' },
+      dependsOn: { status: 'stated', onSlotIds: ['slot-0'] },
+      demand: { status: 'not-read' },
+    },
+    {
+      slotId: 'slot-2',
+      groupId: 'q2',
+      label: '2',
+      questionForm: 'short answer',
+      marks: { status: 'stated', value: 3 },
+      dependsOn: { status: 'unknown' },
+      demand: { status: 'not-read' },
+    },
+  ],
+  totalMarks: { status: 'unknown' },
+  timeAllowance: { status: 'unknown' },
+};
+
+describe('the journal records the structure its plan was made on ([D-560])', () => {
+  let root: string;
+  let vault: FolderSource;
+  let tick = 0;
+  const now = () => `2026-10-21T00:00:${String(tick++).padStart(2, '0')}.000Z`;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'olea-paper-journal-structure-'));
+    vault = new FolderSource(root);
+    tick = 0;
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const openWith = (structure?: PaperStructuredShape) =>
+    openPaperJournal(
+      vault,
+      { course: 'COURSEA', fingerprint: FP, plan: PLAN, ...(structure ? { structure } : {}) },
+      { now },
+    );
+
+  it('records the structure at version 2 and reads it back whole; a flat journal stays version 1 with none', async () => {
+    const structured = await openWith(STRUCTURE);
+    expect(structured.journal.schemaVersion).toBe(PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION);
+    const listed = await listPaperJournals(vault);
+    expect(listed[0]?.record.structure).toEqual(STRUCTURE);
+    await discardPaperJournal(vault, structured.journal.id, { reason: 'abandoned' }, { now });
+
+    const flat = await openWith();
+    expect(flat.journal.schemaVersion).toBe(PAPER_JOURNAL_SCHEMA_VERSION);
+    expect(flat.journal).not.toHaveProperty('structure');
+  });
+
+  it('resumes only on the structure it recorded: the same fingerprint over another structure, or none, is named a structure change', async () => {
+    const first = await openWith(STRUCTURE);
+    const again = await openWith(STRUCTURE);
+    expect(again.decision).toBe('resumed');
+    expect(again.journal.id).toBe(first.journal.id);
+
+    const flat = await openWith();
+    expect(flat.decision).toBe('discarded-and-fresh');
+    expect(flat.discarded).toEqual([{ journalId: first.journal.id, changed: ['structure'] }]);
+
+    const other = await openWith({
+      ...STRUCTURE,
+      groups: STRUCTURE.groups.map((g) => ({ ...g, label: `${g.label}, another sitting` })),
+    });
+    expect(other.decision).toBe('discarded-and-fresh');
+    expect(other.discarded).toEqual([{ journalId: flat.journal.id, changed: ['structure'] }]);
+  });
+
+  it('a journal written by the earlier version, with no recorded structure, reads as flat and resumes flat', async () => {
+    const id = `${OPAQUE_PAPER_JOURNAL_ID_PREFIX}:earlier`;
+    const earlier = {
+      id,
+      course: 'COURSEA',
+      createdAt: '2026-10-01T00:00:00.000Z',
+      updatedAt: '2026-10-01T00:00:00.000Z',
+      fingerprint: FP,
+      blueprintDigest: 'digest',
+      plan: PLAN,
+      outcomes: { 'slot-0': { status: 'landed', item: item('slot-0') } },
+      status: 'open',
+      schemaVersion: 1,
+    };
+    await vault.write(paperJournalPath(id), `${JSON.stringify(earlier, null, 2)}\n`);
+    const listed = await listPaperJournals(vault);
+    expect(listed.map((entry) => entry.record.id)).toEqual([id]);
+    expect(listed[0]?.record.structure).toBeUndefined();
+
+    const resumed = await openWith();
+    expect(resumed.decision).toBe('resumed');
+    expect(resumed.journal.id).toBe(id);
+    expect(paperJournalOwedSlotIds(resumed.journal)).toEqual(['slot-1', 'slot-2']);
+  });
+
+  it('finishes into a structured paper record carrying the structure the journal recorded', async () => {
+    const opened = await openWith(STRUCTURE);
+    const g = scripted({});
+    const run = await runPaperJournal(vault, opened.journal.id, { generate: g.generate }, { now });
+    expect(run.kind).toBe('ready');
+    expect(g.calls[1]?.dependencyItems.map((i) => i.slotId)).toEqual(['slot-0']);
+    const paper = await finalizePaperFromJournal(
+      vault,
+      opened.journal.id,
+      { asOf: '2026-10-21', compositionAccount: ACCOUNT, planTimeEmptySlots: [] },
+      { now },
+    );
+    expect(paper.structure).toEqual(STRUCTURE);
+    expect(paper.schemaVersion).toBe(2);
+    expect(paper.completion).toEqual({ status: 'complete' });
+  });
+
+  it('refuses a journal whose recorded structure is not the shape it claims, or disagrees with its own plan', async () => {
+    const base = {
+      id: `${OPAQUE_PAPER_JOURNAL_ID_PREFIX}:j`,
+      course: 'COURSEA',
+      createdAt: '2026-10-21T00:00:00.000Z',
+      updatedAt: '2026-10-21T00:00:00.000Z',
+      fingerprint: FP,
+      blueprintDigest: 'digest',
+      plan: PLAN,
+      outcomes: {},
+      status: 'open',
+      schemaVersion: 2,
+      structure: STRUCTURE,
+    };
+    expect(isPaperJournalRecord(base)).toBe(true);
+    const { structure: _structure, ...withoutStructure } = base;
+    const refused: unknown[] = [
+      withoutStructure,
+      { ...base, schemaVersion: 1 },
+      { ...base, structure: { ...STRUCTURE, formatVersion: 'paper-structure-v9' } },
+      { ...base, structure: { ...STRUCTURE, groups: STRUCTURE.groups.slice(1) } },
+      {
+        ...base,
+        structure: { ...STRUCTURE, parts: STRUCTURE.parts.map((p) => ({ ...p, demand: {} })) },
+      },
+      {
+        ...base,
+        plan: PLAN.map((slot) =>
+          slot.slotId === 'slot-1' ? { ...slot, dependsOnSlotIds: [] } : slot,
+        ),
+      },
+      { ...base, plan: [...PLAN, { ...PLAN[0], slotId: 'slot-9' }] },
+    ];
+    for (const value of refused) expect(isPaperJournalRecord(value)).toBe(false);
+
+    // On disk, a refused journal is never resumed: the next request opens a fresh one.
+    await vault.write(paperJournalPath(base.id), JSON.stringify(withoutStructure));
+    expect(await listPaperJournals(vault)).toEqual([]);
+    expect((await openWith(STRUCTURE)).decision).toBe('fresh');
   });
 });

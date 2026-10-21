@@ -1,22 +1,31 @@
 import { describe, expect, it } from 'vitest';
+import { buildPaperBlueprint, paperBlueprintCandidateSlotIds } from './paper-blueprint.js';
 import {
+  buildStructuredPaperShape,
   classifyPaperCompletion,
   comparePaperReuseFingerprints,
   countedPaperMarks,
   emptySlotGapKind,
+  isRecordedPaperStructuredShape,
   type PaperEmptyOutcome,
   type PaperReuseInputs,
   paperBlueprintDigest,
+  paperGroupsNeedingStimulus,
   paperIntendedDemandBasis,
+  paperNoneHeldGroupIdsFromPlan,
   paperPartsInDependencyOrder,
   paperReuseFingerprint,
   paperYieldAgainstStructure,
+  planStructuredPaper,
   propagatePaperEmptiness,
   reconcilePaperStructureMarks,
+  selectPaperTemplateParts,
   validatePaperStructure,
+  withPaperHeldStimuli,
 } from './paper-structure.js';
 import {
   PAPER_STRUCTURE_FORMAT_VERSION,
+  type PaperBlueprint,
   type PaperEmptySlotReasonCode,
   type PaperMarks,
   type PaperPartDependency,
@@ -24,6 +33,8 @@ import {
   type PaperStructuredPart,
   type PaperStructuredSection,
   type PaperStructuredShape,
+  type PaperStructureTemplate,
+  type PaperTemplatePart,
 } from './paper-types.js';
 
 // Scenarios: olea-service/features/F4-oracle.md, F4.11 (`[D-430]`), filed as owed on the D-430
@@ -259,10 +270,23 @@ describe('propagatePaperEmptiness', () => {
       parts: [part('a', 'g1'), part('b', 'g1'), part('c', 'g2'), part('d', 'g3')],
       sections: [section('s1', ['g1', 'g3'])],
     });
-    const out = propagatePaperEmptiness(s, new Map());
+    // `[D-562]`: the lookup looked for g1's material and found none.
+    const out = propagatePaperEmptiness(s, new Map(), new Set(['g1']));
     expect([...out.keys()].sort()).toEqual(['a', 'b', 'c']);
     expect(out.get('a')?.reasonCode).toBe('no-held-stimulus');
     expect(out.has('d')).toBe(false);
+  });
+
+  it('never names a needed group the lookup did not look for: not looking is not finding none ([D-562])', () => {
+    const s = shape({
+      groups: [
+        group('g1', ['a', 'b'], { stimulusNeed: { status: 'needed', form: 'table' } }),
+        group('g2', ['c', 'd'], { stimulusNeed: { status: 'needed', form: 'figure' } }),
+      ],
+    });
+    expect(propagatePaperEmptiness(s, new Map()).size).toBe(0);
+    const onlyG2 = propagatePaperEmptiness(s, new Map(), new Set(['g2']));
+    expect([...onlyG2.keys()].sort()).toEqual(['c', 'd']);
   });
 
   it('does not name a group whose need is met, not needed, or not identified', () => {
@@ -286,7 +310,7 @@ describe('propagatePaperEmptiness', () => {
         group('g2', ['c', 'd']),
       ],
     });
-    const out = propagatePaperEmptiness(s, own({ a: 'no-held-source' }));
+    const out = propagatePaperEmptiness(s, own({ a: 'no-held-source' }), new Set(['g1']));
     expect(out.get('a')?.reasonCode).toBe('no-held-source');
     expect(out.get('b')?.reasonCode).toBe('no-held-stimulus');
   });
@@ -326,7 +350,7 @@ describe('propagatePaperEmptiness', () => {
         part('d', 'g2', { dependsOn: { status: 'stated', onSlotIds: ['b', 'a'] } }),
       ],
     });
-    const out = propagatePaperEmptiness(s, new Map());
+    const out = propagatePaperEmptiness(s, new Map(), new Set(['g1']));
     expect(out.get('d')).toMatchObject({
       reasonCode: 'depends-on-empty-part',
       causedBySlotId: 'a',
@@ -588,5 +612,473 @@ describe('reuse fingerprint: four things, each named', () => {
       sourceVersions: [{ sourceId: 's1', revisionDigest: 'other' }],
     });
     expect(comparePaperReuseFingerprints(base, moved).compatible).toBe(false);
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-559], [D-562]): the paper written in its structured form from her
+// stored reading. Scenarios: features/F4-oracle.md, "her stored reading's groups and parts shape
+// her paper", "a part built on a part that could not be written is listed with its ruled reason",
+// "a group needing a case or figure that none of her material supplies is listed with its ruled
+// reason" and "a reading without groups or parts composes as today". Synthetic ids only.
+
+type TemplateGroup = PaperStructureTemplate['groups'][number];
+
+function tpart(
+  id: string,
+  groupId: string,
+  overrides: Partial<PaperTemplatePart> = {},
+): PaperTemplatePart {
+  return {
+    id,
+    label: id,
+    groupId,
+    questionForm: 'short answer',
+    marks: stated(2),
+    dependsOn: { status: 'unknown' },
+    ...overrides,
+  };
+}
+
+function tgroup(
+  id: string,
+  kind: TemplateGroup['kind'],
+  overrides: Partial<TemplateGroup> = {},
+): TemplateGroup {
+  return {
+    id,
+    kind,
+    label: id,
+    memberLabels: [],
+    anchor: null,
+    stimulus: { status: 'none' },
+    ...overrides,
+  };
+}
+
+function template(
+  groups: readonly TemplateGroup[],
+  parts: readonly PaperTemplatePart[],
+  overrides: Partial<PaperStructureTemplate> = {},
+): PaperStructureTemplate {
+  return {
+    groups,
+    parts,
+    totalMarks: UNKNOWN,
+    timeAllowance: { status: 'unknown' },
+    ...overrides,
+  };
+}
+
+/** Question 1 (1a, 1b building on 1a), question 2 on a shared table (2a, 2b), and question 3 alone in section B. */
+const COURSE_A = template(
+  [
+    tgroup('secA', 'section'),
+    tgroup('q1', 'parent-question', { parentGroupId: 'secA' }),
+    tgroup('q2', 'shared-stimulus', {
+      parentGroupId: 'secA',
+      stimulus: { status: 'identified', form: 'table', anchor: null },
+    }),
+    tgroup('secB', 'section'),
+  ],
+  [
+    tpart('p1a', 'q1'),
+    tpart('p1b', 'q1', { dependsOn: { status: 'stated', onPartIds: ['p1a'] } }),
+    tpart('p2a', 'q2'),
+    tpart('p2b', 'q2'),
+    tpart('p3', 'secB', { marks: UNKNOWN }),
+  ],
+  { totalMarks: stated(8) },
+);
+
+/** A real blueprint over `count` synthetic concepts at `slotCount`; the concepts at `unheld` have no held source (they rank last). */
+function blueprintOver(
+  count: number,
+  slotCount: number,
+  unheld: readonly number[] = [],
+): PaperBlueprint {
+  return buildPaperBlueprint({
+    course: 'COURSEA',
+    asOf: '2026-10-21',
+    concepts: Array.from({ length: count }, (_, index) => ({
+      conceptKey: `k${index}`,
+      conceptName: `Topic ${String.fromCharCode(65 + index)}`,
+      taughtSignal: 'yes' as const,
+      heldSources: unheld.includes(index)
+        ? []
+        : [{ kind: 'notes' as const, sourceId: `n${index}`, chunks: [`note ${index}`] }],
+      masteryScore: null,
+    })),
+    assessments: [{ type: 'exam', due: '2026-10-30' }],
+    structure: null,
+    alpha: 0.5,
+    slotCount,
+    formatClassOf: () => 'written',
+  });
+}
+
+function built(t: PaperStructureTemplate, partIds: readonly string[], slotIds: readonly string[]) {
+  const result = buildStructuredPaperShape(t, partIds, slotIds);
+  if (result.status !== 'built') throw new Error(`refused: ${JSON.stringify(result.problems)}`);
+  return result.shape;
+}
+
+describe('which questions a structured paper takes [D-559]', () => {
+  it('takes whole questions in printed order, as many as fit, skipping one that does not fit for a later one that does', () => {
+    expect(selectPaperTemplateParts(COURSE_A, 5)).toEqual(['p1a', 'p1b', 'p2a', 'p2b', 'p3']);
+    expect(selectPaperTemplateParts(COURSE_A, 4)).toEqual(['p1a', 'p1b', 'p2a', 'p2b']);
+    expect(selectPaperTemplateParts(COURSE_A, 3)).toEqual(['p1a', 'p1b', 'p3']);
+    expect(selectPaperTemplateParts(COURSE_A, 1)).toEqual(['p3']);
+    expect(selectPaperTemplateParts(COURSE_A, 0)).toEqual([]);
+  });
+
+  it('never splits a question: a choice keeps every alternative, so a choice larger than the paper is skipped', () => {
+    const choice = template(
+      [
+        tgroup('c', 'choice', { memberLabels: ['4', '5'], choose: 1 }),
+        tgroup('q4', 'parent-question', { parentGroupId: 'c' }),
+        tgroup('q5', 'parent-question', { parentGroupId: 'c' }),
+        tgroup('q6', 'parent-question'),
+      ],
+      [tpart('p4a', 'q4'), tpart('p4b', 'q4'), tpart('p5a', 'q5'), tpart('p6', 'q6')],
+    );
+    expect(selectPaperTemplateParts(choice, 2)).toEqual(['p6']);
+    expect(selectPaperTemplateParts(choice, 3)).toEqual(['p4a', 'p4b', 'p5a']);
+    expect(selectPaperTemplateParts(choice, 4)).toEqual(['p4a', 'p4b', 'p5a', 'p6']);
+  });
+
+  it('skips a question that states a dependency on a part it does not take, on itself, on nothing, or on a later part', () => {
+    const t = template(
+      [
+        tgroup('q1', 'parent-question'),
+        tgroup('q2', 'parent-question'),
+        tgroup('q3', 'parent-question'),
+      ],
+      [
+        tpart('p1', 'q1', { dependsOn: { status: 'stated', onPartIds: ['nowhere'] } }),
+        tpart('p2', 'q2', { dependsOn: { status: 'stated', onPartIds: [] } }),
+        tpart('p3a', 'q3', { dependsOn: { status: 'stated', onPartIds: ['p3b'] } }),
+        tpart('p3b', 'q3'),
+      ],
+    );
+    expect(selectPaperTemplateParts(t, 8)).toEqual([]);
+  });
+});
+
+describe('the structured shape of a paper over her stored reading [D-559]', () => {
+  it('fills the parts, in printed order, with the candidates in ranking order, and keeps every group, label, form, mark and dependency as the reading states them', () => {
+    const blueprint = blueprintOver(5, 5);
+    const slotIds = paperBlueprintCandidateSlotIds(blueprint);
+    expect(slotIds).toEqual(['slot-0', 'slot-1', 'slot-2', 'slot-3', 'slot-4']);
+    const shape = built(COURSE_A, selectPaperTemplateParts(COURSE_A, 5), slotIds);
+    expect(shape.parts.map((p) => [p.slotId, p.label, p.groupId])).toEqual([
+      ['slot-0', 'p1a', 'q1'],
+      ['slot-1', 'p1b', 'q1'],
+      ['slot-2', 'p2a', 'q2'],
+      ['slot-3', 'p2b', 'q2'],
+      ['slot-4', 'p3', 'secB'],
+    ]);
+    expect(shape.parts[1]?.dependsOn).toEqual({ status: 'stated', onSlotIds: ['slot-0'] });
+    expect(shape.parts[0]?.dependsOn).toEqual({ status: 'unknown' });
+    expect(shape.parts[4]?.marks).toEqual(UNKNOWN);
+    for (const p of shape.parts) expect(p.demand).toEqual({ status: 'not-read' });
+    expect(shape.groups.map((g) => [g.groupId, g.kind, g.parentGroupId, g.slotIds])).toEqual([
+      ['secA', 'section', undefined, []],
+      ['q1', 'parent-question', 'secA', ['slot-0', 'slot-1']],
+      ['q2', 'shared-stimulus', 'secA', ['slot-2', 'slot-3']],
+      ['secB', 'section', undefined, ['slot-4']],
+    ]);
+    expect(shape.groups.find((g) => g.groupId === 'q2')?.stimulusNeed).toEqual({
+      status: 'needed',
+      form: 'table',
+    });
+    expect(shape.groups.every((g) => g.heldStimulus === null && g.sectionId === null)).toBe(true);
+    expect(shape.sections).toEqual([]);
+    expect(shape.structureSlotCount).toBe(5);
+    expect(validatePaperStructure(shape)).toEqual([]);
+    expect(paperPartsInDependencyOrder(shape).map((p) => p.slotId)).toEqual([
+      'slot-0',
+      'slot-1',
+      'slot-2',
+      'slot-3',
+      'slot-4',
+    ]);
+  });
+
+  it('maps the three stimulus states apart: identified is needed with its form, none is not needed, not identified stays not identified', () => {
+    const t = template(
+      [
+        tgroup('g1', 'shared-stimulus', {
+          stimulus: { status: 'identified', form: 'extract', anchor: null },
+        }),
+        tgroup('g2', 'parent-question', { stimulus: { status: 'none' } }),
+        tgroup('g3', 'parent-question', {
+          stimulus: { status: 'not-identified', form: 'figure', reason: 'figure-not-in-text' },
+        }),
+      ],
+      [tpart('a', 'g1'), tpart('b', 'g2'), tpart('c', 'g3')],
+    );
+    const shape = built(t, ['a', 'b', 'c'], ['slot-0', 'slot-1', 'slot-2']);
+    expect(shape.groups.map((g) => g.stimulusNeed)).toEqual([
+      { status: 'needed', form: 'extract' },
+      { status: 'not-needed' },
+      { status: 'not-identified' },
+    ]);
+  });
+
+  it('a choice offers the alternatives the paper prints and answers k of them, or k unknown when unstated', () => {
+    const t = (choose?: number) =>
+      template(
+        [
+          tgroup('c', 'choice', {
+            memberLabels: ['a', 'b'],
+            ...(choose !== undefined ? { choose } : {}),
+          }),
+        ],
+        [tpart('a', 'c'), tpart('b', 'c')],
+      );
+    expect(built(t(1), ['a', 'b'], ['slot-0', 'slot-1']).groups[0]?.choice).toEqual({
+      alternatives: 2,
+      choose: 1,
+    });
+    expect(built(t(), ['a', 'b'], ['slot-0', 'slot-1']).groups[0]?.choice).toEqual({
+      alternatives: 2,
+      choose: null,
+    });
+  });
+
+  it('keeps the printed total and time only when every part is taken; a paper of some questions prints neither, and a total that disagrees with its parts reads unknown', () => {
+    const slots = ['slot-0', 'slot-1', 'slot-2', 'slot-3', 'slot-4'];
+    const all = template(
+      COURSE_A.groups,
+      COURSE_A.parts.map((p) => ({ ...p, marks: stated(2) })),
+      {
+        totalMarks: stated(10),
+        timeAllowance: { status: 'stated', minutes: 90 },
+      },
+    );
+    expect(built(all, selectPaperTemplateParts(all, 5), slots).totalMarks).toEqual(stated(10));
+    expect(built(all, selectPaperTemplateParts(all, 5), slots).timeAllowance).toEqual({
+      status: 'stated',
+      minutes: 90,
+    });
+    const some = built(all, selectPaperTemplateParts(all, 4), slots);
+    expect(some.totalMarks).toEqual(UNKNOWN);
+    expect(some.timeAllowance).toEqual({ status: 'unknown' });
+    const disagrees = template(all.groups, all.parts, { totalMarks: stated(11) });
+    expect(built(disagrees, selectPaperTemplateParts(disagrees, 5), slots).totalMarks).toEqual(
+      UNKNOWN,
+    );
+  });
+
+  it('refuses, never throws, a template that does not hold together or a paper with too few candidates', () => {
+    const refused = (t: PaperStructureTemplate, ids: readonly string[], slots: readonly string[]) =>
+      buildStructuredPaperShape(t, ids, slots).status;
+    const slots = ['slot-0', 'slot-1', 'slot-2'];
+    expect(
+      refused(template([tgroup('g', 'parent-question')], [tpart('a', 'gone')]), ['a'], slots),
+    ).toBe('refused');
+    expect(
+      refused(
+        template(
+          [
+            tgroup('g1', 'parent-question', { parentGroupId: 'g2' }),
+            tgroup('g2', 'parent-question', { parentGroupId: 'g1' }),
+          ],
+          [tpart('a', 'g1')],
+        ),
+        ['a'],
+        slots,
+      ),
+    ).toBe('refused');
+    expect(refused(COURSE_A, ['p1a', 'p1b'], ['slot-0'])).toBe('refused');
+    expect(refused(COURSE_A, [], slots)).toBe('refused');
+    // A choice whose printed alternatives the reading's parts do not cover.
+    const uncovered = template(
+      [tgroup('c', 'choice', { memberLabels: ['a', 'b', 'x'], choose: 1 })],
+      [tpart('a', 'c'), tpart('b', 'c')],
+    );
+    expect(refused(uncovered, ['a', 'b'], slots)).toBe('refused');
+  });
+});
+
+describe('the plan of a structured paper, with the reasons decided before any call [D-559]', () => {
+  it('writes the parts in dependency order, each with the slots it depends on', () => {
+    const blueprint = blueprintOver(5, 5);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const planned = planStructuredPaper(blueprint, shape);
+    expect(
+      planned?.plan.map((slot) => [slot.slotId, slot.conceptName, slot.dependsOnSlotIds]),
+    ).toEqual([
+      ['slot-0', 'Topic A', []],
+      ['slot-1', 'Topic B', ['slot-0']],
+      ['slot-2', 'Topic C', []],
+      ['slot-3', 'Topic D', []],
+      ['slot-4', 'Topic E', []],
+    ]);
+    expect(planned?.planTimeEmptySlots).toEqual([]);
+  });
+
+  it('names the dependent of a source gap with the gap as its root, and lists the gap before it', () => {
+    // slot-0 is Topic A (held), slot-1 Topic B (no held source): a concept with no held source
+    // ranks last, so its part is printed first here by hand, with the other part building on it.
+    const blueprint = blueprintOver(2, 2, [1]);
+    const shape = shape_with([
+      part('slot-1', 'q', { dependsOn: { status: 'unknown' } }),
+      part('slot-0', 'q', { dependsOn: { status: 'stated', onSlotIds: ['slot-1'] } }),
+    ]);
+    const planned = planStructuredPaper(blueprint, shape);
+    expect(planned?.plan).toEqual([]);
+    expect(
+      planned?.planTimeEmptySlots.map((e) => [e.slotId, e.reasonCode, e.causedBySlotId]),
+    ).toEqual([
+      ['slot-1', 'no-held-source', undefined],
+      ['slot-0', 'depends-on-empty-part', 'slot-1'],
+    ]);
+    expect(planned?.planTimeEmptySlots[1]?.conceptName).toBe('Topic A');
+  });
+
+  it('a group the lookup found nothing for ends no-held-stimulus, unless a part has an earlier reason; a group it did not look for is planned', () => {
+    const blueprint = blueprintOver(5, 5, [4]);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    expect(paperGroupsNeedingStimulus(shape)).toEqual([
+      { groupId: 'q2', form: 'table', slotIds: ['slot-2', 'slot-3'] },
+    ]);
+    const notLooked = planStructuredPaper(blueprint, shape);
+    expect(notLooked?.plan.map((slot) => slot.slotId)).toEqual([
+      'slot-0',
+      'slot-1',
+      'slot-2',
+      'slot-3',
+    ]);
+    const noneHeld = planStructuredPaper(blueprint, shape, new Set(['q2']));
+    expect(noneHeld?.plan.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-1']);
+    expect(noneHeld?.planTimeEmptySlots.map((e) => [e.slotId, e.reasonCode])).toEqual([
+      ['slot-2', 'no-held-stimulus'],
+      ['slot-3', 'no-held-stimulus'],
+      ['slot-4', 'no-held-source'],
+    ]);
+  });
+
+  it('a held stimulus is recorded on its group by source and chunk, and the group is planned', () => {
+    const blueprint = blueprintOver(5, 5);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const held = withPaperHeldStimuli(
+      shape,
+      new Map([['q2', { form: 'table' as const, sourceId: 'n2', chunkIndex: 0 }]]),
+    );
+    expect(held.groups.find((g) => g.groupId === 'q2')?.heldStimulus).toEqual({
+      form: 'table',
+      sourceId: 'n2',
+      chunkIndex: 0,
+    });
+    expect(planStructuredPaper(blueprint, held, new Set(['q2']))?.plan).toHaveLength(5);
+  });
+
+  it('the blueprint’s rank-excluded slots follow the parts’ empty slots, and a shape over another blueprint is refused', () => {
+    const blueprint = blueprintOver(7, 5);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    expect(
+      planStructuredPaper(blueprint, shape)?.planTimeEmptySlots.map((e) => e.reasonCode),
+    ).toEqual(['rank-excluded', 'rank-excluded']);
+    expect(planStructuredPaper(blueprintOver(7, 4), shape)).toBeNull();
+  });
+});
+
+function shape_with(parts: readonly PaperStructuredPart[]): PaperStructuredShape {
+  return shape({
+    sections: [],
+    groups: [
+      group(
+        'q',
+        parts.map((p) => p.slotId),
+        { sectionId: null },
+      ),
+    ],
+    parts,
+    structureSlotCount: parts.length,
+  });
+}
+
+describe('on resume, the groups the lookup found nothing for are read back from the recorded plan [D-560, D-562]', () => {
+  it('reproduces the plan it was made with, whichever groups were found none for', () => {
+    const blueprint = blueprintOver(5, 5);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const own = new Set(blueprint.emptySlots.map((e) => e.slotId));
+    for (const noneHeld of [new Set<string>(), new Set(['q2'])]) {
+      const planned = planStructuredPaper(blueprint, shape, noneHeld);
+      const read = paperNoneHeldGroupIdsFromPlan(
+        shape,
+        new Set(planned?.plan.map((slot) => slot.slotId)),
+        own,
+      );
+      expect([...read]).toEqual([...noneHeld]);
+      expect(planStructuredPaper(blueprint, shape, read)).toEqual(planned);
+    }
+  });
+
+  it('where the plan cannot tell, the group reads as not looked for, which never claims her material lacks something', () => {
+    // Every part of the needed group is empty for a reason of its own (only Topic A is held).
+    const blueprint = blueprintOver(5, 5, [1, 2, 3, 4]);
+    const shape = built(
+      COURSE_A,
+      selectPaperTemplateParts(COURSE_A, 5),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const own = new Set(blueprint.emptySlots.map((e) => e.slotId));
+    const planned = planStructuredPaper(blueprint, shape, new Set(['q2']));
+    const read = paperNoneHeldGroupIdsFromPlan(
+      shape,
+      new Set(planned?.plan.map((slot) => slot.slotId)),
+      own,
+    );
+    expect([...read]).toEqual([]);
+    expect(planStructuredPaper(blueprint, shape, read)).toEqual(planned);
+  });
+});
+
+describe('a recorded structure is read back only when it is the shape it claims [D-560]', () => {
+  const blueprint = blueprintOver(5, 5);
+  const good = built(
+    COURSE_A,
+    selectPaperTemplateParts(COURSE_A, 5),
+    paperBlueprintCandidateSlotIds(blueprint),
+  );
+
+  it('accepts a shape the builder made, through JSON and back', () => {
+    expect(isRecordedPaperStructuredShape(JSON.parse(JSON.stringify(good)))).toBe(true);
+  });
+
+  it('refuses a missing field, an unknown value, a malformed held stimulus, or a shape that is not well formed', () => {
+    const variants: unknown[] = [
+      null,
+      { ...good, formatVersion: 'paper-structure-v0' },
+      { ...good, structureBasis: 'regime-unknown' },
+      { ...good, parts: [{ ...good.parts[0], demand: { status: 'read', demand: 'explain' } }] },
+      { ...good, groups: good.groups.map((g) => ({ ...g, heldStimulus: { form: 'table' } })) },
+      { ...good, parts: good.parts.map((p) => ({ ...p, marks: { status: 'stated', value: -2 } })) },
+      { ...good, groups: good.groups.slice(1) },
+      { ...good, timeAllowance: undefined },
+    ];
+    for (const value of variants) expect(isRecordedPaperStructuredShape(value)).toBe(false);
   });
 });

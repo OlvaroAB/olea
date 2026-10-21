@@ -26,6 +26,16 @@
  * left unfinished resumes on the plan it started with and the new length applies from the next new
  * paper (`./journal-composition.ts`). Nothing she reads changes wording.
  *
+ * **The paper is written in its structured form when her stored reading has groups and parts
+ * (`[D-559]`, `ol-egov.141.89.7.93`).** The same read carries the first counted reading's groups and
+ * parts (`PaperRecoveredStructure.template`, `olea-core`'s `paperRecoveredStructureFromReadings`),
+ * and `requestPaper` passes them to the composition, which takes whole questions of that reading,
+ * writes parts in dependency order with the earlier part's question beside a dependent one, and
+ * records the structure on the journal and the paper. A reading with sections only, or none, is the
+ * flat paper as before. A group that shares material is asked of `stimulusLookup` (`[D-562]`); none
+ * is supplied in production yet (`ol-egov.141.89.7.98` wires it), so such a group is written without
+ * shared material. The ruled sentences for a partial paper are the view's, unchanged.
+ *
  * **F1.2's fallback now reaches this provider (`ol-egov.141.8.10`).** `loadCourseState` no longer
  * exits to `'assignments-not-configured'` on a blank/unreadable Base alone — it reads through
  * `resolveAssessments` first and only reports that state when NEITHER a real Base NOR any manual
@@ -81,7 +91,7 @@ import {
   UNFINISHED_PAPER_SENTENCE,
 } from './copy.js';
 import type { PaperDemand } from './demand.js';
-import { composePaperThroughJournal } from './journal-composition.js';
+import { composePaperThroughJournal, type PaperStimulusLookup } from './journal-composition.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
 
 /**
@@ -199,6 +209,12 @@ export interface CreateLocalPracticePaperProviderDeps {
    * `./journal-composition.ts`).
    */
   readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+  /**
+   * `[D-562]` (`ol-egov.141.89.7.93`): the shared-material lookup a structured paper's groups are
+   * asked of. Omitted: the composition does not look, so a group that shares material is written
+   * without it and is never `no-held-stimulus` (`./journal-composition.ts`).
+   */
+  readonly stimulusLookup?: PaperStimulusLookup;
 }
 
 /**
@@ -583,6 +599,9 @@ async function composeRequestedPaper(
         conceptKeys: outcome.conceptKeys,
       })),
     },
+    // `[D-559]`: her stored reading's groups and parts shape the paper; none, the flat paper.
+    template: structure?.template ?? null,
+    ...(deps.stimulusLookup !== undefined ? { stimulusLookup: deps.stimulusLookup } : {}),
     port,
   });
   if (composed.kind === 'unfinished') {

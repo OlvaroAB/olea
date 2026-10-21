@@ -1046,4 +1046,108 @@ describe('createLocalPracticePaperProvider — the paper’s length follows her 
     const next = providerWith(vault, reader);
     expect((await readyPaper(next.provider)).items).toHaveLength(4);
   });
+
+  // ol-egov.141.89.7.93 ([D-559]): "her stored reading's groups and parts shape her paper", through
+  // the production reader and requestPaper. Synthetic labels and paths only.
+  it('a stored reading with groups and parts shapes the paper through the production reader: each part in its group, written in dependency order, and the structure recorded', async () => {
+    const vault = lengthVault();
+    const structure: ExtractedPaperStructure = {
+      sections: [
+        {
+          label: 'Section 1',
+          questionForm: 'short answer',
+          itemCount: 3,
+          anchor: { blockIndex: 0 },
+        },
+      ],
+      questionGroups: [
+        {
+          id: 'q1',
+          kind: 'parent-question',
+          label: 'Question 1',
+          memberLabels: ['1(a)', '1(b)'],
+          anchor: { blockIndex: 1 },
+          stimulus: { status: 'none' },
+        },
+        {
+          id: 'q2',
+          kind: 'parent-question',
+          label: 'Question 2',
+          memberLabels: ['2'],
+          anchor: { blockIndex: 3 },
+          stimulus: { status: 'none' },
+        },
+      ],
+      questionParts: [
+        {
+          id: 'p1a',
+          label: '1(a)',
+          groupId: 'q1',
+          instructionAnchor: { blockIndex: 1 },
+          questionForm: 'short answer',
+          marks: 2,
+        },
+        {
+          id: 'p1b',
+          label: '1(b)',
+          groupId: 'q1',
+          instructionAnchor: { blockIndex: 2 },
+          questionForm: 'short answer',
+          dependsOn: { status: 'stated', onPartIds: ['p1a'] },
+        },
+        {
+          id: 'p2',
+          label: '2',
+          groupId: 'q2',
+          instructionAnchor: { blockIndex: 3 },
+          questionForm: 'short answer',
+          marks: 3,
+        },
+      ],
+    };
+    const paper = PAPERS[0] as string;
+    await createScopeReadingPersistence({ vault, deviceId: DEVICE }).recordExtraction({
+      sourcePath: paper,
+      documentKind: 'past-paper',
+      revisionDigest: 'r1',
+      coverage: { unitsRead: 4, unitsTotal: 4 },
+      declarationCount: 0,
+      paperStructure: structure,
+      stamp: { promptVersion: 'p1', modelId: 'm1' },
+    });
+    const reader = pastPaperStructureReaderForVault({
+      vault,
+      deviceId: DEVICE,
+      manifestsFor: manifestsAt({ [paper]: 'r1' }),
+      reviewLog: async () => [registered(paper, 'COURSEA')],
+    });
+    expect((await reader('COURSEA'))?.template?.parts.map((part) => part.id)).toEqual([
+      'p1a',
+      'p1b',
+      'p2',
+    ]);
+
+    const { provider, calls } = providerWith(vault, reader);
+    const state = await readyPaper(provider);
+    expect(calls.map((call) => call.conceptName)).toEqual([
+      'Alpha theory',
+      'Beta theory',
+      'Delta theory',
+    ]);
+    expect(state.record.schemaVersion).toBe(2);
+    expect(state.record.structure?.parts.map((part) => [part.label, part.groupId])).toEqual([
+      ['1(a)', 'q1'],
+      ['1(b)', 'q1'],
+      ['2', 'q2'],
+    ]);
+    expect(state.record.structure?.parts.map((part) => part.marks)).toEqual([
+      { status: 'stated', value: 2 },
+      { status: 'unknown' },
+      { status: 'stated', value: 3 },
+    ]);
+    const journal = (await listPaperJournals(vault))[0]?.record;
+    expect(journal?.plan.map((slot) => slot.dependsOnSlotIds)).toEqual([[], ['slot-0'], []]);
+    expect(journal?.structure).toEqual(state.record.structure);
+    expect(state.incompleteStatement).toBeNull();
+  });
 });
