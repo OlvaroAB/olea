@@ -76,6 +76,20 @@ export const EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE =
   "Olea couldn't tell whether this was a real attempt at an answer, so nothing was graded.";
 
 /**
+ * `[D-564]` (c) condition 2 / `ol-egov.141.89.6.113`: shown instead of the message above when the
+ * judge declined a genuine attempt — her notes as delivered cannot decide, or the question cannot
+ * be answered as asked (`./decline-kind.ts`). It says Olea could not check the answer against what
+ * it was given and that nothing was graded; it never implies she did not really try.
+ *
+ * **PLACEHOLDER COPY — no ruled string exists for this outcome**, the same posture
+ * `EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE` states for itself: David rules the wording. Swept by
+ * `copy.spec.ts` like every other string here. Nothing she sees uses it until a judge sends the
+ * genuine-attempt prefixes (the production judge, prompt 1.6.0, never does).
+ */
+export const EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE =
+  "Olea couldn't check this answer against what it was given, so nothing was graded.";
+
+/**
  * `[D-322]` (vocabulary registry §19, "Practice-only"): shown before she answers a freeform
  * explain-back prompt (command palette or Home, naming no subject) whose topic did not resolve to
  * one concept — an ambiguous match, or no match at all (`./request.ts`'s

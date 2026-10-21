@@ -54,7 +54,8 @@ describe('renderUnableToAssessPhase — no grade, no verdict badge, no Accept bu
   const body = bodyBetween('private renderUnableToAssessPhase(', 'private renderGradedRegions(');
 
   it('renders the placeholder message and only the Try again (discard) action', () => {
-    expect(body).toMatch(/EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE/);
+    // `[D-564]` (c): the message is chosen by the decline kind (`../../src/explain-back/decline-kind.ts`).
+    expect(body).toMatch(/declineMessageFor\(\s*declineKindOf\(/);
     expect(body).toMatch(/EXPLAIN_BACK_DISCARD_LABEL/);
     expect(body).toMatch(
       /this\.discardGrading\(prompt, answer, pending, durationMs, attemptId, support\)/,

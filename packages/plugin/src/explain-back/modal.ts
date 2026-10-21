@@ -142,9 +142,9 @@ import {
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
   EXPLAIN_BACK_TOPIC_PROMPT,
-  EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
   explainBackDepthHeading,
 } from './copy.js';
+import { declineKindOf, declineMessageFor } from './decline-kind.js';
 import {
   type FeedbackExposureLedger,
   feedbackShownRecordInput,
@@ -2079,7 +2079,11 @@ export class ExplainBackModal extends Modal {
   ): void {
     root.createEl('p', {
       cls: 'olea-explain-back-feedback',
-      text: EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
+      text: declineMessageFor(
+        declineKindOf(
+          pending.grading.outcome === 'unable-to-assess' ? pending.grading.reason : undefined,
+        ),
+      ),
     });
     const actions = root.createDiv({ cls: 'olea-explain-back-actions' });
     const discard = actions.createEl('button', { text: EXPLAIN_BACK_DISCARD_LABEL });
