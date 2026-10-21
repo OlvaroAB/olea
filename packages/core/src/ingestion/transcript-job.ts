@@ -13,6 +13,11 @@
  * `workflowVersion` is `TRANSCRIPT_WORKFLOW_VERSION`, kept apart from
  * `EXTRACTION_WORKFLOW_VERSION`.
  *
+ * A drained job hands its parts to the sink with the bytes hash of the version
+ * they were read from (`ExtractedUnitSink.receive`'s `sourceRevisions`, one
+ * entry), so a question drafted from them records that version as its
+ * citation's `sourceRevision` (`ol-egov.141.89.5.97`, [D-518], [D-567]).
+ *
  * **Unknown values are rejected visibly.** At enqueue (`buildTranscriptEnqueueInput`)
  * an unknown format throws. At drain, a persisted payload of this kind with an
  * unknown or unread format fails, not to be retried, with a reason naming the
@@ -35,6 +40,7 @@ import {
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { VersionedEnqueueInput } from './engine.js';
 import type { ExtractedUnitSink } from './extraction-runner.js';
+import { hashContent } from './hash.js';
 import type { JobRunner, JobRunnerView, JobRunOutcome } from './types.js';
 
 /** Names the reader version a transcript job was queued under. Not `EXTRACTION_WORKFLOW_VERSION`. */
@@ -134,11 +140,13 @@ async function runTranscriptJob(
     };
   }
   try {
-    const result = await readTranscriptFromVault(
-      deps.vault,
-      payload.sourcePath as VaultPath,
-      payload.transcriptFormat,
-    );
+    const sourcePath = payload.sourcePath as VaultPath;
+    // `ol-egov.141.89.5.97` ([D-518], [D-567]): the version these parts were read from, as the
+    // bytes hash the citation pass compares a citation's `sourceRevision` against. Taken before and
+    // after the text read, so a file changed while it was being read is read again rather than
+    // pairing one version's hash with another's text.
+    const before = await hashContent(await deps.vault.readBinary(sourcePath));
+    const result = await readTranscriptFromVault(deps.vault, sourcePath, payload.transcriptFormat);
     if (!result.ok) {
       return { ok: false, retryable: false, reason: describeTranscriptFailure(result) };
     }
@@ -149,7 +157,12 @@ async function runTranscriptJob(
         reason: 'transcript has no readable text (empty-document)',
       };
     }
-    await deps.sink.receive(transcriptUnitsForQueue(payload.sourcePath as VaultPath, result.parts));
+    const after = await hashContent(await deps.vault.readBinary(sourcePath));
+    if (after !== before) return { ok: false, retryable: true };
+    await deps.sink.receive(
+      transcriptUnitsForQueue(sourcePath, result.parts),
+      new Map([[sourcePath, after]]),
+    );
     return { ok: true };
   } catch {
     // A file removed between enqueue and drain, or a transient read error.

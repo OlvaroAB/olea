@@ -163,6 +163,16 @@
  * top-ranked chunk is never taken. Naming it for those drafts needs the response to cite its
  * chunk: a wire change, filed as a bead.
  *
+ * **A lecture transcript's citation (`ol-egov.141.89.5.97`, `[D-567]`, `[D-518]`).** A unit that
+ * is a transcript part (the queue's `transcriptPart` marker) is cited with the bytes hash of the
+ * version its parts were read from (`sourceRevision`, plain text and declared Markdown alike), so a
+ * first sighting is seeded rather than withheld. It names a part (the ordinal in `page`, the digest
+ * of that part's spoken text in `passageDigest`) only when the request's single grounding chunk
+ * stands once inside one part of that version (`withTranscriptPart`); otherwise it carries no
+ * passage digest and the whole transcript is protected, the same representation a note's
+ * whole-note grain has under `[D-543]`. The first unit's part is never taken for the one the
+ * question was drafted from. The note rule (`withGroundingPassage`) does not apply to a transcript.
+ *
  * **Explicit recall intent, for this sweep only (`[D-437]`, decision-sheet row 38,
  * `ol-egov.141.89.2.20`).** Every ask the sweep makes carries `intendedDemand: 'recall-a-fact'`
  * (`SWEEP_RECALL_ASK`, routed against `quiz.generate.v1` like any other ask, and sent through
@@ -236,6 +246,7 @@ import {
 // intent for this sweep and no other path; `packages/core/src/routing/demand-ask-callers.spec.ts`
 // pins its callers by source text), so this one import stays a deliberate deep one.
 import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
+import { namedTranscriptPart, spokenText } from '../ingestion/materiality/transcript-grain.js';
 import type { GenerationPrioritySignal } from '../ingestion/wiring.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
@@ -259,7 +270,12 @@ import {
   draftedDemandFactsOf,
   extractDraftedDemand,
 } from './draft-demand.js';
-import { CITED_CHUNK_DIGEST_ENABLED, withGroundingPassage } from './grounding-passage.js';
+import {
+  CITED_CHUNK_DIGEST_ENABLED,
+  citedGroundingChunk,
+  soleGroundingChunk,
+  withGroundingPassage,
+} from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import {
   extractDraftedCards,
@@ -968,8 +984,11 @@ function citationFromUnit(
 ): InstrumentCitation {
   const { location, sourcePath } = unit.provenance;
   // `ol-egov.141.89.5.73` ([D-515]): only a non-markdown source that is not the question's own note.
+  // `ol-egov.141.89.5.97` ([D-518]): a lecture transcript records its version whatever its
+  // extension, declared Markdown included, so its first sighting is seeded, never withheld.
   const revision =
-    sourcePath.toLowerCase().endsWith('.md') || sourcePath === ownNotePath
+    sourcePath === ownNotePath ||
+    (sourcePath.toLowerCase().endsWith('.md') && !isTranscriptUnit(unit))
       ? undefined
       : sourceRevisions?.get(sourcePath);
   return {
@@ -978,6 +997,42 @@ function citationFromUnit(
     ...(location.section !== undefined ? { section: location.section } : {}),
     ...(revision !== undefined ? { sourceRevision: revision } : {}),
   };
+}
+
+/** `ol-egov.141.89.5.97`: a part of a lecture transcript, by the queue's own marker (D-466). */
+function isTranscriptUnit(unit: ExtractedUnit): boolean {
+  return unit.provenance.location.transcriptPart !== undefined;
+}
+
+/**
+ * `ol-egov.141.89.5.97` (`[D-567]`, C5.3 "Which part"): `citation`, a transcript citation built by
+ * {@link citationFromUnit}, naming the part its question was drafted from when that can be named
+ * without guessing, and otherwise naming none. The chunk is found the way `withGroundingPassage`
+ * finds a note's (`[D-446]` option (a)): the request's one chunk, or, when the caller passes one,
+ * the item's own `groundedIn` naming exactly one chunk. The part is the one that chunk stands in,
+ * once, among `units` of the cited transcript (the parts of the version the citation's
+ * `sourceRevision` names): `page` becomes its ordinal and `passageDigest` the digest of its spoken
+ * text (`namedTranscriptPart`). Several chunks, a chunk from elsewhere, one standing twice or
+ * across a part boundary: no passage digest, and the whole transcript is protected (`[D-543]`'s
+ * representation). A citation that already names a part is returned as it is.
+ */
+async function withTranscriptPart(
+  citation: InstrumentCitation,
+  units: readonly ExtractedUnit[],
+  sourceChunks: readonly string[],
+  groundedIn?: readonly number[],
+): Promise<InstrumentCitation> {
+  if (citation.passageDigest !== undefined) return citation;
+  const chunk = soleGroundingChunk(sourceChunks) ?? citedGroundingChunk(sourceChunks, groundedIn);
+  if (chunk === undefined) return citation;
+  const parts = units
+    .filter((unit) => unit.provenance.sourcePath === citation.sourcePath && isTranscriptUnit(unit))
+    .sort((a, b) => a.provenance.location.page - b.provenance.location.page)
+    .map((unit) => ({ ordinal: unit.provenance.location.page, spoken: spokenText(unit.text) }));
+  const named = await namedTranscriptPart(parts, chunk);
+  return named === undefined
+    ? citation
+    : { ...citation, page: named.page, passageDigest: named.passageDigest };
 }
 
 /**
@@ -1463,15 +1518,24 @@ export async function runGenerationSweep(
       // `citedChunkDigest` holds (off until measured). Otherwise no digest: the accept-time seal
       // then mints one only for a source with a single body passage, and everything else keeps
       // whole-note grain.
+      // `ol-egov.141.89.5.97` (`[D-567]`): a transcript part is named by the same chunk rule, among
+      // the transcript's own parts, never by the note rule.
+      const transcriptCited = sourceUnit !== undefined && isTranscriptUnit(sourceUnit);
       const sourceCitation =
         sourceUnit === undefined
           ? undefined
-          : await withGroundingPassage(
-              deps.vault,
-              citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
-              notePath,
-              result.request.sourceChunks,
-            );
+          : transcriptCited
+            ? await withTranscriptPart(
+                citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
+                units,
+                result.request.sourceChunks,
+              )
+            : await withGroundingPassage(
+                deps.vault,
+                citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
+                notePath,
+                result.request.sourceChunks,
+              );
       // Read parallel to `questions` (each question is its own record, so each is resolved on its
       // own citation); `undefined` when citations are not trusted, so nothing below reads them.
       const groundedIn = citedChunkDigest
@@ -1523,13 +1587,20 @@ export async function runGenerationSweep(
         const questionCitation =
           sourceCitation === undefined || groundedIn?.[questionIndex] === undefined
             ? sourceCitation
-            : await withGroundingPassage(
-                deps.vault,
-                sourceCitation,
-                notePath,
-                result.request.sourceChunks,
-                groundedIn[questionIndex],
-              );
+            : transcriptCited
+              ? await withTranscriptPart(
+                  sourceCitation,
+                  units,
+                  result.request.sourceChunks,
+                  groundedIn[questionIndex],
+                )
+              : await withGroundingPassage(
+                  deps.vault,
+                  sourceCitation,
+                  notePath,
+                  result.request.sourceChunks,
+                  groundedIn[questionIndex],
+                );
         const record: DraftRecord = {
           draftId,
           status: 'pending',

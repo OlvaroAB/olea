@@ -54,12 +54,16 @@ import {
   digestPassage,
   hashContent,
   PASSAGE_RESEMBLANCE_FLOOR,
+  PASSAGE_RULES,
+  type PassageRule,
+  parsePassageDigest,
   readTranscriptText,
   resolveTranscriptFormat,
   type TranscriptFormat,
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { canonicalizeForMateriality } from './canonical.js';
 
 /** Extensions that make a file a transcript by its path alone; Markdown is one only when it declares so. */
 const TRANSCRIPT_EXTENSIONS: ReadonlySet<string> = new Set(['txt', 'vtt', 'srt']);
@@ -346,8 +350,22 @@ export async function namedTranscriptPart(
   return { page: holder.ordinal, passageDigest: await digestPassage(holder.spoken) };
 }
 
+/** The whole transcript as a whole-transcript anchor holds it: every part's spoken words, in order. */
+export function wholeTranscriptText(version: TranscriptVersion): string {
+  return version.words.join(' ');
+}
+
 export type TranscriptSeed =
-  | { readonly kind: 'seeded'; readonly text: string }
+  | {
+      readonly kind: 'seeded';
+      readonly text: string;
+      /**
+       * Present for a part-grain anchor: the citation's passage digest, which the anchor keeps so
+       * every later pass and the presentation check read it at part grain. Absent: the anchor holds
+       * the whole transcript (`[D-543]`'s representation, `[D-567]`).
+       */
+      readonly passageDigest?: string;
+    }
   | {
       readonly kind: 'withheld';
       readonly reason: 'passage-missing' | 'passage-ambiguous';
@@ -356,40 +374,100 @@ export type TranscriptSeed =
     };
 
 /**
- * PERSISTENCE 2.9: an anchor is seeded from the citation's part number only in the version the
- * citation was drafted from (the current bytes hash equal to `sourceRevision`), and only when that
- * part's text stands exactly once in the version. Anything less is withheld: a citation with no
- * recorded version, a changed file, a missing part, or text that stands twice.
+ * PERSISTENCE 2.9 with `[D-567]`: an anchor is seeded only in the version the citation was drafted
+ * from (the current bytes hash equal to `sourceRevision`); a citation with no recorded version, or
+ * a file changed since, is withheld as `passage-missing`, keyed to the bytes observed.
+ *  - A citation that names a part (it carries a passage digest, {@link namedTranscriptPart}) is
+ *    seeded at the one part of that version whose spoken text has that digest, when that text
+ *    stands exactly once in the version; a digest two parts share, or a part whose text stands
+ *    twice, is withheld as `passage-ambiguous`. The part number is a label and is not read.
+ *  - A citation that names none is seeded with the whole transcript's spoken text: any content
+ *    change to it is then a change to the cited material, as a whole note is under `[D-543]`. So is
+ *    a citation whose digest names no part of the version it was drafted from (a digest a Markdown
+ *    seal minted for a paragraph, or one under a rule this build does not carry): no part can be
+ *    named without guessing, and the whole transcript is protected, never less.
  */
-export function seedFromCitedPart(
+export async function seedFromCitation(
   version: TranscriptVersion | undefined,
-  citation: { readonly page?: number; readonly sourceRevision?: string } | undefined,
-): TranscriptSeed {
+  citation: { readonly sourceRevision?: string; readonly passageDigest?: string } | undefined,
+  rules: readonly PassageRule[] = PASSAGE_RULES,
+): Promise<TranscriptSeed> {
   const observed = version?.bytesHash ?? '';
   if (
     version === undefined ||
-    citation?.page === undefined ||
-    citation.sourceRevision === undefined ||
+    citation?.sourceRevision === undefined ||
     citation.sourceRevision !== version.bytesHash
   ) {
     return { kind: 'withheld', reason: 'passage-missing', observed };
   }
-  const part = version.parts.find((candidate) => candidate.ordinal === citation.page);
-  if (part === undefined || part.spoken === '') {
-    return { kind: 'withheld', reason: 'passage-missing', observed };
+  const digest = citation.passageDigest;
+  const parsed = digest === undefined ? null : parsePassageDigest(digest);
+  const rule = parsed === null ? undefined : rules.find((r) => r.version === parsed.version);
+  if (digest !== undefined && rule !== undefined) {
+    const matches: { readonly ordinal: number; readonly spoken: string }[] = [];
+    for (const part of version.parts) {
+      if (part.spoken !== '' && (await digestPassage(part.spoken, rule)) === digest) {
+        matches.push(part);
+      }
+    }
+    const [only] = matches;
+    if (matches.length > 1) return { kind: 'withheld', reason: 'passage-ambiguous', observed };
+    if (only !== undefined) {
+      const located = resolveTranscriptPassage(only.spoken, version.words);
+      return located.kind === 'present'
+        ? { kind: 'seeded', text: located.text, passageDigest: digest }
+        : { kind: 'withheld', reason: 'passage-ambiguous', observed };
+    }
   }
-  const located = resolveTranscriptPassage(part.spoken, version.words);
-  if (located.kind !== 'present') {
-    return { kind: 'withheld', reason: 'passage-ambiguous', observed };
-  }
-  return { kind: 'seeded', text: located.text };
+  const whole = wholeTranscriptText(version);
+  return whole === ''
+    ? { kind: 'withheld', reason: 'passage-missing', observed }
+    : { kind: 'seeded', text: whole };
 }
 
 /**
- * The presentation-time half, for the session's own check (`review/open-session.ts`'s
- * `citedPassageUnchanged` would call it for a transcript anchor; not wired yet, see
- * `ol-egov.141.89.5.43`'s hand-back): true only when the anchored passage stands, exactly and
- * once, in the transcript at the anchor's path now. Reads only; every failure is `false`.
+ * Whether an anchored transcript passage still reads as the anchor holds it, at the anchor's own
+ * grain, by the citation pass's free exits and nothing else: at part grain (the anchor carries a
+ * passage digest) the passage stands exactly once in the transcript at the anchor's path now, or
+ * its one resembling region differs from it only in formatting; at whole grain the transcript's
+ * spoken text now is the anchor's, or differs only in formatting. Reads only; every failure is
+ * `false`.
+ */
+export async function transcriptAnchorUnchanged(
+  vault: VaultSource,
+  anchor: {
+    readonly sourcePath: VaultPath;
+    readonly text: string;
+    readonly passageDigest?: string | undefined;
+  },
+): Promise<boolean> {
+  if (anchor.text === '') return false;
+  return anchorReadsUnchanged(await readTranscriptVersion(vault, anchor.sourcePath), anchor);
+}
+
+function anchorReadsUnchanged(
+  read: TranscriptRead,
+  anchor: { readonly text: string; readonly passageDigest?: string | undefined },
+): boolean {
+  if (anchor.text === '' || read.kind !== 'read') return false;
+  let current: string;
+  if (anchor.passageDigest === undefined) {
+    current = wholeTranscriptText(read.version);
+  } else {
+    const resolution = resolveTranscriptPassage(anchor.text, read.version.words);
+    if (resolution.kind === 'unresolved') return false;
+    current = resolution.text;
+  }
+  return (
+    current === anchor.text ||
+    canonicalizeForMateriality(current) === canonicalizeForMateriality(anchor.text)
+  );
+}
+
+/**
+ * The presentation-time half at part grain (`ol-egov.141.89.5.43`): true only when the anchored
+ * passage stands, exactly and once, in the transcript at the anchor's path now. Reads only; every
+ * failure is `false`. The session reads both grains through {@link transcriptAnchorCheck}.
  */
 export async function transcriptAnchorStandsUnchanged(
   vault: VaultSource,
@@ -399,4 +477,38 @@ export async function transcriptAnchorStandsUnchanged(
   const read = await readTranscriptVersion(vault, anchor.sourcePath);
   if (read.kind !== 'read') return false;
   return resolveTranscriptPassage(anchor.text, read.version.words).kind === 'present';
+}
+
+/**
+ * `ol-egov.141.89.5.97` (`[D-567]`, `[D-543]`): the presentation-time check for an instrument whose
+ * anchor holds a lecture-transcript passage, mirroring how the citation pass decides it follows one
+ * (`citation-revision-wiring.ts`, `transcriptCitationPath`): the citation names a `.txt`/`.vtt`/
+ * `.srt` file, or Markdown whose file at the anchor's path declares itself a transcript, and the
+ * anchor no longer sits at the instrument's own note (where an anchor made before part grain
+ * applied sits; the pass re-seeds it). `undefined` when the anchor is not such an anchor (the
+ * caller's other checks apply); otherwise {@link transcriptAnchorUnchanged}. Changed bytes alone
+ * never decide it: only the anchored passage, at its own grain. Reads only.
+ */
+export async function transcriptAnchorCheck(
+  vault: VaultSource,
+  record: {
+    readonly notePath: VaultPath;
+    readonly sourceProvenance?: { readonly sourcePath: VaultPath } | undefined;
+  },
+  anchor: {
+    readonly sourcePath: VaultPath;
+    readonly text: string;
+    readonly passageDigest?: string | undefined;
+  },
+): Promise<boolean | undefined> {
+  const cited = record.sourceProvenance?.sourcePath;
+  if (cited === undefined || cited === record.notePath) return undefined;
+  if (anchor.sourcePath === record.notePath) return undefined;
+  const byExtension = hasTranscriptExtension(cited);
+  if (!byExtension && !cited.toLowerCase().endsWith('.md')) return undefined;
+  const read = await readTranscriptVersion(vault, anchor.sourcePath);
+  // A Markdown file that is not (or no longer) a declared transcript is her note: not this check's.
+  if (!byExtension && (read.kind === 'not-a-transcript' || read.kind === 'absent'))
+    return undefined;
+  return anchorReadsUnchanged(read, anchor);
 }

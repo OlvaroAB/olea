@@ -8,8 +8,11 @@
 import {
   digestPassage,
   type EnqueueInput,
+  enumerateVaultInstruments,
   type InstrumentRevisionJobPayload,
   readInstrumentCitation,
+  readReviewLogHistory,
+  suspendedInstrumentIds,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
@@ -23,6 +26,7 @@ import type {
   DraftQuizCardsDeps,
   DraftQuizCardsResult,
 } from '../../src/retrieval/draft-quiz-cards.js';
+import { sourceCheckAtPresentation } from '../../src/review/open-session.js';
 import {
   bytesHashOf,
   citeTranscriptPart,
@@ -82,6 +86,20 @@ async function seededLecture() {
   await h.pass(vault);
   expect(await h.withheld(['q-four'])).toEqual(new Set());
   return { vault, h };
+}
+
+/** The session's presentation-time check over the harness's store, as `open-session.ts` builds it. */
+function presentationCheck(vault: MemoryVault, h: ReturnType<typeof harness>) {
+  return async (instrumentId: string) => {
+    const { records } = await enumerateVaultInstruments(vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    return sourceCheckAtPresentation(
+      h.store,
+      async () => suspendedInstrumentIds((await readReviewLogHistory(vault)).entries),
+      { vault, recordOf: (id) => records.find((record) => record.instrumentId === id) },
+    )(instrumentId);
+  };
 }
 
 /** The job the pass enqueued for `q-four`'s rewrite. */
@@ -153,6 +171,9 @@ describe('a rewritten transcript question reaches her (ol-egov.141.89.5.104)', (
     expect(anchors.get(instrumentId)?.text).toBe(spoken(cues.slice(9, 12)));
     expect(anchors.get(instrumentId)?.pendingRevalidation).toBeUndefined();
     expect(await h.withheld([instrumentId])).toEqual(new Set());
+    // `ol-egov.141.89.5.97`: and the session's presentation check, as `open-session.ts` builds it,
+    // shows it (read at part grain, never set aside on changed bytes alone).
+    expect(await presentationCheck(vault, h)(instrumentId)).toBe('clear');
     // The old question stays withheld; it is never shown beside its successor.
     expect(await h.withheld(['q-four'])).toEqual(new Set(['q-four']));
   });

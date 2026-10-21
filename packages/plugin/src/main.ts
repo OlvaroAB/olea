@@ -2432,7 +2432,30 @@ export default class OleaPlugin extends Plugin {
           sessionStamp: sessionLoadedAt,
         });
       },
+      // `ol-egov.141.89.5.97` ([D-567], [D-465]): a lecture-transcript citation is followed by its
+      // passage's text, at the part its question was drafted from or, when it names none, the whole
+      // transcript; the session's presentation check reads the same grain (`review/open-session.ts`).
+      transcriptPartGrain: true,
     });
+    // `ol-egov.141.89.5.97` (PERSISTENCE.md 2.2 L2; `ol-egov.141.89.5.100`): a rename Olea sees is
+    // lineage. One handler moves both records that follow a file by its path: the citation anchors
+    // that last saw a transcript passage at the old path, and the file's processed-revision row with
+    // its version and day. A rename made while Obsidian was closed arrives as a delete and a create,
+    // and nothing is moved: its transcript questions are withheld, and the file has an unknown day.
+    this.register(
+      vault.watch((event) => {
+        if (event.kind !== 'rename' || event.oldPath === undefined) return;
+        const oldPath = event.oldPath;
+        const newPath = event.path;
+        void this.citationRevision?.onSourceRenamed(vault, oldPath, newPath).catch((error) => {
+          console.error(
+            'Olea: citation anchors could not follow a rename',
+            error instanceof Error ? error.name : 'unknown',
+          );
+        });
+        void processedRevisionFeed.renamed(oldPath, newPath);
+      }),
+    );
     // F6.9's rhythm reading (`ol-v7r5.6`): both stores are local `data.json`
     // projections over `this`, same construction shape as `materiality`
     // above — no Worker token needed for either.
