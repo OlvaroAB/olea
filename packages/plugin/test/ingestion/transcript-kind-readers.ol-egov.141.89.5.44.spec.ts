@@ -10,11 +10,13 @@
 // the source text: a kind read through some other spelling (a lookup table, a computed key) is not
 // seen, and is named here when it is written.
 //
-// Also, found beside case F1: the one transcript exclusion on the note-level change trigger is for
-// declared Markdown; a plain-text transcript is not excluded (pinned below with `it.fails`).
+// Also, found beside case F1: the transcript exclusion on the note-level change trigger was for
+// declared Markdown only; since ol-egov.141.89.5.102 a plain-text transcript is excluded too
+// (checked below).
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { resolveTranscriptFormat, type VaultPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 
 const ROOT = fileURLToPath(new URL('../../../../', import.meta.url));
@@ -110,11 +112,12 @@ describe('B5: every reader of a job’s kind decides what a transcript job is to
 
 // PERSISTENCE.md 1.1 row 15: a transcript never enters the note-level change trigger, and "the
 // design excludes every transcript path explicitly". `main.ts`'s `evaluateMaterialityChange` (the
-// handler for every vault `create` and `modify`, lines 2524-2527) returns early only for Markdown
-// that declares itself a transcript (line 2652). A plain-text transcript goes on to
-// `this.materiality.evaluate` (on a first sighting it answers `judge-unavailable`), and that answer
-// or a material verdict takes it to `triggerAuthoredNoteGenerationIfObserved`, which lands the
-// whole file as one authored-note unit. A code defect; no persisted change. Read the way
+// handler for every vault `create` and `modify`) returned early only for Markdown that declares
+// itself a transcript. A plain-text transcript went on to `this.materiality.evaluate` (on a first
+// sighting it answers `judge-unavailable`), and that answer or a material verdict took it to
+// `triggerAuthoredNoteGenerationIfObserved`, which landed the whole file as one authored-note unit.
+// Fixed by ol-egov.141.89.5.102: the exclusion by path uses the test the arrival watch and
+// process-now apply before enqueueing the `'transcript'` job kind. Read the way
 // `transcript-wiring.ol-egov.141.89.8.55.spec.ts` reads `main.ts` (it cannot be imported under
 // Vitest): the source with comments removed.
 describe('F1, beside it: a plain-text transcript is kept off the note-level change trigger', () => {
@@ -123,6 +126,8 @@ describe('F1, beside it: a plain-text transcript is kept off the note-level chan
   ).replace(/\/\/.*$/gm, '');
   const body = main.slice(main.indexOf('private async evaluateMaterialityChange'));
   const evaluate = body.indexOf('this.materiality.evaluate(');
+  const noteFeed = body.indexOf('this.processedRevisionFeed?.noteEvaluated(');
+  const generationHook = body.indexOf('this.triggerAuthoredNoteGenerationIfObserved(');
 
   it('the declared-Markdown exclusion stands before the gate (case F1 itself)', () => {
     const declared = body.indexOf('if (declaresTranscript(currentText)) return;');
@@ -130,9 +135,43 @@ describe('F1, beside it: a plain-text transcript is kept off the note-level chan
     expect(declared).toBeLessThan(evaluate);
   });
 
-  it.fails('[defect: main.ts:2652 excludes declared Markdown only] a transcript by its path is excluded before the gate', () => {
+  it('a transcript by its path is excluded before the gate, the processed-revision note feed and the generation hook (ol-egov.141.89.5.102)', () => {
+    expect(evaluate).toBeGreaterThan(-1);
+    expect(noteFeed).toBeGreaterThan(evaluate);
+    expect(generationHook).toBeGreaterThan(evaluate);
     const byPath = body.search(/hasTranscriptExtension\(|resolveTranscriptFormat\(/);
     expect(byPath).toBeGreaterThan(-1);
     expect(byPath).toBeLessThan(evaluate);
+    // The same test, with the same outcome, that the arrival watch and process-now enqueue by.
+    const guard = body.indexOf(
+      "if (resolveTranscriptFormat(path, currentText).kind === 'transcript') return;",
+    );
+    expect(guard).toBeGreaterThan(-1);
+    expect(guard + 'if ('.length).toBe(byPath);
+    for (const file of [
+      'packages/plugin/src/ingestion/arrival-watch.ts',
+      'packages/plugin/src/ingestion/process-now.ts',
+    ]) {
+      const source = stripComments(readFileSync(join(ROOT, file), 'utf8'));
+      expect(source, file).toMatch(
+        /resolveTranscriptFormat\(path, (?:text|await deps\.vault\.read\(path\))\)/,
+      );
+      expect(source, file).toMatch(/resolution\.kind [!=]== 'transcript'/);
+    }
+  });
+
+  it('that test excludes plain text and declared Markdown, and leaves her undeclared notes on the gate', () => {
+    const excluded = (path: string, text: string): boolean =>
+      resolveTranscriptFormat(path as VaultPath, text).kind === 'transcript';
+    const spoken = 'Today we cover the second law.';
+    expect(excluded('Course A/Lectures/week-03.txt', spoken)).toBe(true);
+    expect(excluded('Course A/Lectures/WEEK-03.TXT', spoken)).toBe(true);
+    expect(
+      excluded('Course A/Lectures/week-03.md', `---\nrole: transcript\n---\n${spoken}\n`),
+    ).toBe(true);
+    expect(excluded('Course A/Notes/entropy.md', '# Entropy\n\nMy own summary.\n')).toBe(false);
+    // No reader in this build, so not enqueued as a transcript either; covered once its reader lands.
+    expect(excluded('Course A/Lectures/week-03.vtt', 'WEBVTT\n')).toBe(false);
+    expect(excluded('Course A/Lectures/week-03.srt', '1\n')).toBe(false);
   });
 });

@@ -57,6 +57,13 @@
  *    been rebuilt (`rebuiltOn: null`) says it cannot say, which the rhythm source reads as "could
  *    not read" (`null`), never as an empty list of courses.
  *
+ * **A rename Olea saw moves the row** ({@link applyRenamed}; lineage, PERSISTENCE.md 2.2 and 1.1
+ * row 10, `ol-egov.141.89.5.100`): the row is keyed by path, and a move is not new material, so the
+ * file keeps its version and day at its new path. A rename Olea did not see (made while it was
+ * closed, or on another device) arrives as a delete and a create, and the new path is a file the
+ * next rebuild finds with no row: an unknown day, as for any file found that way. No field is
+ * added.
+ *
  * ## Two fields beyond the three the ruling names, flagged for review
  *
  * The ruling names fingerprint, first-processed day and state. Three more are here because the
@@ -268,6 +275,32 @@ export function applyRebuild(
   return { version: 2, rebuiltOn: day, revisions };
 }
 
+/**
+ * Pure. A rename Olea saw (lineage, PERSISTENCE.md 2.2 L2 and 1.1 row 10): the file's row moves
+ * from `oldPath` to `newPath` with its fingerprint, state and day unchanged, counted for
+ * `courses` (the new path's). A move is not new material, so it never gives the file a new day.
+ * Returns `current` itself (nothing moves) when `oldPath` has no row, when the new path counts for
+ * no course (the row stays, as for a file no longer found), or when `newPath` already holds a row:
+ * that row is another file's and is kept, and the renamed file is then processed as new, as for a
+ * rename Olea did not see. Never asserts a day.
+ */
+export function applyRenamed(
+  current: PersistedProcessedRevisions,
+  oldPath: VaultPath,
+  newPath: VaultPath,
+  courses: readonly string[],
+): PersistedProcessedRevisions {
+  if (oldPath === newPath) return current;
+  const previous = current.revisions[oldPath];
+  if (previous === undefined || current.revisions[newPath] !== undefined) return current;
+  const moved = normalisedCourses(courses);
+  if (moved.length === 0) return current;
+  const revisions: Record<VaultPath, ProcessedRevisionRow> = { ...current.revisions };
+  delete revisions[oldPath];
+  revisions[newPath] = { ...previous, courses: moved };
+  return { ...current, revisions };
+}
+
 export class ObsidianProcessedRevisionStore {
   /**
    * @param now The clock every recorded day is read from. Injected so a caller cannot record any
@@ -308,6 +341,18 @@ export class ObsidianProcessedRevisionStore {
   async rebuild(found: readonly ProcessedRevisionInput[]): Promise<void> {
     const day = calendarDayFromLocalDate(this.now());
     await this.update((current) => applyRebuild(current, found, day));
+  }
+
+  /**
+   * A rename Olea saw: moves the file's row to its new path, keeping its version and day (see
+   * {@link applyRenamed}). Reads no clock: a move records no day.
+   */
+  async recordRenamed(
+    oldPath: VaultPath,
+    newPath: VaultPath,
+    courses: readonly string[],
+  ): Promise<void> {
+    await this.update((current) => applyRenamed(current, oldPath, newPath, courses));
   }
 
   private async update(

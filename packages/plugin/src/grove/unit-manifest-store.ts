@@ -265,6 +265,15 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
   const verified = new Set<VaultPath>();
   /** Paths the last enumeration could not enumerate, until the file changes: the census keeps its own verdict. */
   const unenumerable = new Set<VaultPath>();
+  /**
+   * The spoken text of each part of the transcript revision this session enumerated, by path, for the
+   * carry rule (PERSISTENCE 2.5; `[D-465]`). Memory only and never written: after a restart it is
+   * empty, nothing persisted maps an old part to a new one, and every part is read again (`[D-385]`).
+   */
+  const transcriptParts = new Map<
+    VaultPath,
+    { revisionDigest: string; texts: readonly string[] }
+  >();
   let loadPromise: Promise<void> | null = null;
   const listeners = new Set<() => void>();
   let notifyHandle: unknown = null;
@@ -333,13 +342,53 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
    * one, so it is left to the census's own verdict. The text is read as the transcript queue job
    * reads it, so the same bytes cut into the same parts.
    */
-  const transcriptEnumerationOf = async (path: VaultPath): Promise<SourceEnumeration | null> => {
+  const transcriptEnumerationOf = async (
+    path: VaultPath,
+  ): Promise<{ enumeration: SourceEnumeration; texts: readonly string[] } | null> => {
     const text = await deps.vault.read(path);
     const resolved = resolveTranscriptFormat(path, text);
     if (resolved.kind !== 'transcript') return null;
     const result = readTranscriptText(text, resolved.format);
     if (!result.ok) return null;
-    return transcriptEnumeration(result.parts.length);
+    return {
+      enumeration: transcriptEnumeration(result.parts.length),
+      texts: result.parts.map((part) => part.text),
+    };
+  };
+
+  /**
+   * The carry rule (PERSISTENCE 2.5): the pages of the new version whose spoken text equals a part of
+   * the previous version, which this session enumerated, keep that part's `complete` concept-extraction
+   * state. Matched on equal text only, never on the ordinal. A text that occurs more than once in
+   * either version matches nothing (conservative: the part is read again).
+   */
+  const carriedConceptPages = (
+    path: VaultPath,
+    live: UnitManifest | undefined,
+    texts: readonly string[],
+  ): ReadonlySet<number> => {
+    const carried = new Set<number>();
+    const previous = transcriptParts.get(path);
+    if (live === undefined || previous === undefined) return carried;
+    if (previous.revisionDigest !== live.revisionDigest) return carried;
+    const countOf = (list: readonly string[]): Map<string, number> => {
+      const counts = new Map<string, number>();
+      for (const text of list) counts.set(text, (counts.get(text) ?? 0) + 1);
+      return counts;
+    };
+    const oldCounts = countOf(previous.texts);
+    const newCounts = countOf(texts);
+    const oldPageOf = new Map<string, number>();
+    previous.texts.forEach((text, index) => {
+      oldPageOf.set(text, index + 1);
+    });
+    texts.forEach((text, index) => {
+      if (oldCounts.get(text) !== 1 || newCounts.get(text) !== 1) return;
+      const oldPage = oldPageOf.get(text);
+      const was = live.entries.find((unit) => unit.page === oldPage);
+      if (was?.conceptExtractionState === 'complete') carried.add(index + 1);
+    });
+    return carried;
   };
 
   /**
@@ -367,9 +416,16 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
     }
 
     let enumeration: SourceEnumeration | null = null;
+    let newTexts: readonly string[] | null = null;
+    let carried: ReadonlySet<number> = new Set();
     try {
       if (format === null) {
-        enumeration = await transcriptEnumerationOf(path);
+        const transcript = await transcriptEnumerationOf(path);
+        enumeration = transcript?.enumeration ?? null;
+        if (transcript !== null) {
+          newTexts = transcript.texts;
+          carried = carriedConceptPages(path, live, transcript.texts);
+        }
       } else {
         enumeration = enumerationOfExtraction(
           await extract({ path, bytes, format, options: deps.extractOptions?.() }),
@@ -385,6 +441,7 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
       // The pass could not enumerate these bytes. The old revision, if any, no longer describes the
       // file, so it is retired; nothing new is claimed.
       await append(records);
+      transcriptParts.delete(path);
       unenumerable.add(path);
       verified.delete(path);
       return records.length > 0;
@@ -412,7 +469,24 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
         conceptExtractionState: 'not-started',
       });
     }
+    // A carried part: waiting to be read as every part is, but its concept extraction stands.
+    for (const page of [...carried].sort((a, b) => a - b)) {
+      records.push({
+        v: UNIT_MANIFEST_RECORD_VERSION,
+        kind: 'unit',
+        deviceId: deps.deviceId,
+        ...stamp(),
+        sourcePath: path,
+        revisionDigest: digest,
+        unitId: stableUnitId(path, page),
+        page,
+        readingState: { kind: 'pending', reason: 'queued' },
+        conceptExtractionState: 'complete',
+      });
+    }
     await append(records);
+    if (newTexts === null) transcriptParts.delete(path);
+    else transcriptParts.set(path, { revisionDigest: digest, texts: newTexts });
     unenumerable.delete(path);
     verified.add(path);
     return true;
@@ -591,6 +665,7 @@ export function createVaultUnitManifestStore(deps: UnitManifestStoreDeps): UnitM
     const live = fold.manifestOf(path);
     verified.delete(path);
     unenumerable.delete(path);
+    transcriptParts.delete(path);
     if (live === undefined) return;
     await append([retirement(path, live.revisionDigest, 'source-removed')]);
     notifyLater();

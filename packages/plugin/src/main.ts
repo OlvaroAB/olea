@@ -56,6 +56,7 @@ import {
   readReviewLogHistory,
   refreshStudyPlan,
   resolveAssessments,
+  resolveTranscriptFormat,
   type Scheduler,
   type SittingScopeSnapshot,
   servedRelations,
@@ -2650,6 +2651,13 @@ export default class OleaPlugin extends Plugin {
     // (the arrival watch and process-now enqueue it), so it stays off the materiality gate, the
     // processed-revision note feed and the authored-note generation sweep.
     if (declaresTranscript(currentText)) return;
+    // `ol-egov.141.89.5.102` (PERSISTENCE.md 1.1 row 15): a plain-text transcript stays off too,
+    // not only declared Markdown. A `.txt` is one by the same test the arrival watch and process-now
+    // apply before enqueueing the `'transcript'` job kind, so the two cannot disagree; before this,
+    // a plain-text transcript's first sighting answered `judge-unavailable` and went to the
+    // generation sweep as one whole-file authored-note unit. A `.vtt` or `.srt` has no reader in
+    // this build (`no-reader`, never enqueued) and is covered here once its reader lands.
+    if (resolveTranscriptFormat(path, currentText).kind === 'transcript') return;
     // `ol-egov.141.89.5.41`: the first-sight stamp (`instrument-stamping/port.ts`) is Olea's own
     // write into her authored note: not a change to her source. Matched on the exact written text,
     // so a stamp plus a real edit (different text) still goes through the gate below.
