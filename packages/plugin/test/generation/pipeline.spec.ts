@@ -136,6 +136,7 @@ describe('runGenerationSweep', () => {
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
+      courseKinds: [],
     });
     // Nothing was created — the folder-less path never reaches the home-note step.
     expect(await vault.list()).toEqual([]);
@@ -162,6 +163,9 @@ describe('runGenerationSweep', () => {
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
 
     const pending = await cache.listPending();
@@ -327,6 +331,9 @@ describe('runGenerationSweep', () => {
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
   });
 
@@ -384,6 +391,9 @@ describe('runGenerationSweep', () => {
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
     expect(await cache.list()).toEqual([]);
 
@@ -459,6 +469,9 @@ describe('runGenerationSweep', () => {
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
   });
 });
@@ -493,6 +506,9 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: false, kind: null, deficit: null, generated: true }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
 
     const pending = await cache.listPending();
@@ -640,6 +656,9 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       skippedRefused: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: false }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
     expect(await cache.list()).toEqual([]);
   });
@@ -686,6 +705,9 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       skippedRefused: 0,
       skippedRouting: 0,
       routingObservations: [{ consulted: true, kind: 'category', deficit: 2, generated: true }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
   });
 
@@ -839,6 +861,9 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       skippedRefused: 0,
       skippedRouting: 1,
       routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: false }],
+      courseKinds: [
+        { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
+      ],
     });
   });
 });

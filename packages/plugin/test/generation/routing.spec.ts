@@ -159,6 +159,58 @@ describe('buildKnowledgeKindSourceMaterial: only markdown is read as text (`ol-e
     expect(vault.reads).toEqual([]);
   });
 
+  it("a course-scoped PDF-only concept is routed on the passage of its own course's reading set that names it, not on the assessment units (`[D-553]`, `[D-544]`)", async () => {
+    const vault = new RecordingVault({
+      '01 Courses/C1/lecture.md':
+        'Intro paragraph.\n\nEntropy is the measure of disorder.\n\nUnrelated closing.',
+      '01 Courses/C1/(Olea) home.md':
+        '---\nolea-home-note: true\n---\n\nEntropy generated practice',
+      '01 Courses/C2/other.md': 'Entropy in another course entirely.',
+      '01 Courses/C1/exam.pdf': '%PDF',
+    });
+    let asked = 0;
+    const passages = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['01 Courses/C1/exam.pdf'], courses: ['C1'] },
+      async () => {
+        asked += 1;
+        return [unit('01 Courses/C1/exam.pdf', 'Entropy in an exam question')];
+      },
+    );
+    expect(passages.map((p) => [p.anchor.sourcePath, p.text])).toEqual([
+      ['01 Courses/C1/lecture.md', 'Entropy is the measure of disorder.'],
+    ]);
+    const start = 'Intro paragraph.\n\n'.length;
+    expect(passages[0]?.anchor.location.charRange).toEqual({
+      start,
+      end: start + 'Entropy is the measure of disorder.'.length,
+    });
+    expect(asked).toBe(0);
+    expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+    expect(vault.reads.some((r) => r.endsWith('.pdf'))).toBe(false);
+  });
+
+  it("a course-scoped PDF-only concept whose course's reading set never names it routes on the assessment text; another course's passage is never used (`[D-553]`, `[D-544]`)", async () => {
+    const vault = new RecordingVault({
+      '01 Courses/C2/other.md': 'Entropy in another course entirely.',
+      '01 Courses/C1/lecture.md': 'Nothing relevant here.',
+    });
+    const passages = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['01 Courses/C1/exam.pdf'], courses: ['C1'] },
+      async () => [unit('01 Courses/C1/exam.pdf', 'Entropy in an exam question')],
+    );
+    expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['01 Courses/C1/exam.pdf']);
+    // No course at all: no reading set is consulted, and nothing is borrowed from any course.
+    const none = await buildKnowledgeKindSourceMaterial(
+      vault,
+      { name: 'Entropy', sourcePaths: ['x.pdf'] },
+      async () => [],
+    );
+    expect(none).toEqual([]);
+    expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+  });
+
   it('a PDF-only concept with no extracted unit naming it, or an unreadable unit source, gets no input', async () => {
     const vault = new RecordingVault({});
     const none = await buildKnowledgeKindSourceMaterial(

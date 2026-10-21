@@ -91,6 +91,31 @@ One thing this does **not** do, and must not: emit one candidate per
 in one session and be offered to her twice. One instrument, one candidate,
 one scored concept, several context concepts.
 
+## `[D-558]`: an item in Olea's home note follows the concept it was drafted for
+
+Everything above is how an item in a note binds when the note is read as a
+whole, which is right for her notes. Olea's own home note is different: its
+`topic:` list is Olea's accumulation of every concept ever drafted into it,
+not a statement that each item tests each topic, so reading it the same way
+scored an item drafted for course A's concept on the note's first topic and
+served it as course D's item whenever the note also listed a concept D shares.
+`[D-558]` ruled the fix, and `./drafted-for.ts` holds the record: each item
+Olea materialises into a home note records the concept it was drafted for, and
+this walk gives that item **that concept alone** as `conceptIds` (so it is the
+scored concept, and the only one the instrument index files the item under)
+and **that concept's courses** as `courses`. The note's other topics are not
+kept as context for it: the study-session index has no course filter, so a
+context concept is a route by which another course's row reaches the item —
+the very leak the ruling closes. An item drafted for a concept A and D share
+still lists both courses (concept to course M:N).
+
+Unchanged: an item with no record (anything she wrote, in any note, and every
+item in a home note written before the ruling) binds exactly as above. A record
+whose key no longer resolves to a concept this walk extracted falls back to the
+same binding, so a record never withholds an item. The resolution looks first
+among the concepts the extractor bound to the note, then among every extracted
+concept; `[D-068]`'s minted records stay out of the binding, as before.
+
 ## `ol-8ae9`: a heading's ordinal counts every occupant, stamped or not
  *
  * A Q&A card's block id is both its identity carrier (rule 4 in `instrument-id.ts`) and, before
@@ -155,6 +180,7 @@ import type {
 } from '../instrument/types.js';
 import { OLEA_UID_KEY } from '../uid/stamp.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { draftedForItemKey, readDraftedFor } from './drafted-for.js';
 import type { InstrumentIdSource } from './instrument-id.js';
 import { provisionalInstrumentId } from './instrument-id.js';
 import { orderNoteConcepts } from './scored-concept.js';
@@ -544,6 +570,11 @@ export async function enumerateVaultInstruments(
       else bucket.push(concept);
     }
   }
+  // `[D-558]`: a home-note item's recorded concept, looked up by its key (first record wins).
+  const conceptByKey = new Map<string, ConceptRecord>();
+  for (const concept of concepts) {
+    if (!conceptByKey.has(concept.key)) conceptByKey.set(concept.key, concept);
+  }
 
   const paths = await vault.list({
     ...(options.under !== undefined ? { under: options.under } : {}),
@@ -696,11 +727,29 @@ export async function enumerateVaultInstruments(
     const noteConcepts = byPath.get(notePath) ?? [];
     const ordered = orderNoteConcepts(topicsOf(source), noteConcepts);
 
+    // `[D-558]` (this module's doc): an item Olea drafted into its home note binds to the concept
+    // its record names, when that resolves. Empty for every note that is not a home note.
+    const draftedFor = readDraftedFor(doc);
+    const draftedForConceptOf = (instrument: ParsedInstrument): ConceptRecord | undefined => {
+      if (draftedFor.size === 0) return undefined;
+      const itemKey = draftedForItemKey({
+        instrumentType: instrument.type,
+        explicitId: instrument.explicitId,
+        blockId: instrument.blockId,
+      });
+      const conceptKey = itemKey === null ? undefined : draftedFor.get(itemKey);
+      if (conceptKey === undefined) return undefined;
+      return (
+        noteConcepts.find((concept) => concept.key === conceptKey) ?? conceptByKey.get(conceptKey)
+      );
+    };
+
     // An instrument in a note that resolves to no concept at all is still
     // reported rather than logged: `conceptIds` is non-empty by schema, and
     // inventing an entry to satisfy it is exactly the guess this whole bead
-    // forbids.
-    if (ordered.length === 0) {
+    // forbids. (`[D-558]`: an item whose record resolves is bound even then;
+    // the loop below reports the rest one by one.)
+    if (ordered.length === 0 && !instruments.some((i) => draftedForConceptOf(i) !== undefined)) {
       for (const instrument of instruments) {
         unbound.push({ notePath, instrumentType: instrument.type, span: instrument.span });
       }
@@ -781,6 +830,18 @@ export async function enumerateVaultInstruments(
         stampedClozeId,
       });
 
+      // `[D-558]`: a recorded home-note item scores the concept it was drafted for and belongs to
+      // that concept's courses only; the note's other topics are not its context (module doc).
+      // Its ordinal slot above is taken either way, so binding never moves a sibling's id.
+      const draftedForConcept = draftedForConceptOf(instrument);
+      if (draftedForConcept === undefined && ordered.length === 0) {
+        unbound.push({ notePath, instrumentType: instrument.type, span: instrument.span });
+        continue;
+      }
+      const itemConceptIds = draftedForConcept === undefined ? conceptIds : [draftedForConcept.key];
+      const itemCourses =
+        draftedForConcept === undefined ? courses : [...new Set(draftedForConcept.courses)].sort();
+
       // `[D-181]`'s passage-citation sidecar (`ol-2zfj.52`): a targeted read by the
       // `[D-177]`-frozen id, never a scan — `citation-store.ts`'s own addressing
       // discipline. `undefined` (no sidecar, or one page couldn't honestly convert —
@@ -792,8 +853,8 @@ export async function enumerateVaultInstruments(
 
       const common = {
         instrumentId,
-        conceptIds,
-        courses,
+        conceptIds: itemConceptIds,
+        courses: itemCourses,
         notePath,
         noteTitle: title,
         noteUid,

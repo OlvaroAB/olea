@@ -230,3 +230,40 @@ describe('sweep Q&A cards: only where the format-routing chooses Q&A (ol-0r92.13
     expect(cards[0]).toMatchObject({ front: 'What is Working memory 0?' });
   });
 });
+
+describe('the sweep records the kind each course was drafted as, and why (ol-egov.141.89.105.9)', () => {
+  const PREF: PrimaryKindInput = { formatMatch: null, recordedPreference: ['qa', 'mcq'] };
+  const course = (kind: 'mcq' | 'qa', asked: string | null, reason: string) => [
+    { courseCode: 'COGS214', kind, asked, reason },
+  ];
+
+  it.each([
+    ['a known format', QA, course('qa', 'qa', 'format-class')],
+    ['a known multiple-choice format', MCQ, course('mcq', 'mcq', 'format-class')],
+    ['no format and no preference (the floor)', NONE, course('mcq', 'mcq', 'floor')],
+    ['a recorded preference', PREF, course('qa', 'qa', 'recorded-preference')],
+    [
+      'cloze asked, multiple choice drafted',
+      CLOZE,
+      course('mcq', 'cloze', 'cloze-asked-multiple-choice-drafted'),
+    ],
+  ])('%s', async (_label, kind, expected) => {
+    const { run } = setup({ kind });
+    expect((await run()).courseKinds).toEqual(expected);
+  });
+
+  it('a Q&A course with no card supplier is drafted as multiple choice, and says the supplier is absent', async () => {
+    const { run } = setup({ kind: QA, withCardDeps: false });
+    expect((await run()).courseKinds).toEqual(course('mcq', 'qa', 'card-supplier-absent'));
+  });
+
+  it('with no kind inputs and no card supplier (every composition today) nothing was asked, and the reason is the absent supplier', async () => {
+    const { run } = setup({ withCardDeps: false });
+    expect((await run()).courseKinds).toEqual(course('mcq', null, 'card-supplier-absent'));
+  });
+
+  it('with a card supplier but no kind inputs nothing was asked, and multiple choice is the floor', async () => {
+    const { run } = setup({});
+    expect((await run()).courseKinds).toEqual(course('mcq', null, 'floor'));
+  });
+});

@@ -109,7 +109,7 @@ describe('the ingestion composition carries the seams the store needs', () => {
 
   it('returns the routing options its extraction ran with', () => {
     expect(wiring).toMatch(
-      /return \{ engine, sink, \.\.\.\(extractOptions \? \{ extractOptions \} : \{\}\) \};/,
+      /return \{\s*engine,\s*sink,\s*\.\.\.\(extractOptions \? \{ extractOptions \} : \{\}\),/,
     );
   });
 });

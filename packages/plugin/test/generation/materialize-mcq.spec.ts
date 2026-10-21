@@ -540,3 +540,126 @@ describe('materializeAcceptedDraft — ol-0r92.87 stale-input guard', () => {
     expect(result.instrumentId).toMatch(/^mcq-/);
   });
 });
+
+// `[D-558]` (`ol-egov.141.89.9.99`) — features/F3-learn-from-anything.md, the `[D-558]` block of the
+// home-note feature: "accepting a multiple-choice draft records its concept in the same write, in
+// Olea's own layer only" — @auto:plugin/generation/materialize-mcq.spec
+describe('materializeAcceptedDraft — [D-558] the drafted-for record', () => {
+  // Synthetic vault: course D's code sorts first, as on the run that found the defect.
+  const COURSE_A = 'ZZZ100';
+  const COURSE_D = 'AAA100';
+  const SOURCE = `01 Courses/${COURSE_A}/Lecture.pdf`;
+  const HER_NOTES: Readonly<Record<string, string>> = {
+    [`01 Courses/${COURSE_D}/d-note.md`]:
+      '---\ntopic:\n  - Shared idea\n---\n\nSee [[Shared idea]].\n',
+    [`01 Courses/${COURSE_A}/a-note.md`]:
+      '---\ntopic:\n  - Shared idea\n  - Only-A idea\n---\n\nSee [[Shared idea]].\n',
+    '05 Zettelkasten/Shared idea.md': 'A note she wrote.\n',
+  };
+  const question = (stem: string) => ({
+    stem,
+    correctAnswer: 'right',
+    distractors: ['w', 'x', 'y', 'z'],
+    feedback: 'f',
+  });
+
+  /** The concept keys as the product extracts them. */
+  async function keysOf(vault: MemoryVaultSource): Promise<{ shared: string; onlyA: string }> {
+    const { concepts } = await enumerateVaultInstruments(vault);
+    const shared = concepts.find((c) => c.name === 'Shared idea')?.key;
+    const onlyA = concepts.find((c) => c.name === 'Only-A idea')?.key;
+    if (shared === undefined || onlyA === undefined)
+      throw new Error('test setup: concepts missing');
+    return { shared, onlyA };
+  }
+
+  it('records the concept beside the item in the one write that inserts it, every other byte as without the record', async () => {
+    const withRecord = new MemoryVaultSource(HER_NOTES);
+    const without = new MemoryVaultSource(HER_NOTES);
+    const notePath = await ensureHomeNoteForConcept(withRecord, SOURCE, 'Only-A idea');
+    await ensureHomeNoteForConcept(without, SOURCE, 'Only-A idea');
+    if (notePath === null) throw new Error('test setup: expected a home note path');
+    const { onlyA } = await keysOf(withRecord);
+
+    let writes = 0;
+    const write = withRecord.write.bind(withRecord);
+    withRecord.write = async (path, content) => {
+      if (path === notePath) writes += 1;
+      await write(path, content);
+    };
+    const input = { sourcePath: notePath, question: question('Q?'), draftId: 'draft-1' };
+    const recorded = await materializeAcceptedDraft(withRecord, {
+      ...input,
+      draftedForConceptKey: onlyA,
+    });
+    const plain = await materializeAcceptedDraft(without, input);
+
+    expect(writes).toBe(1);
+    expect(recorded.instrumentId).toBe(plain.instrumentId); // the concept is not part of the id
+    const line = `olea-drafted-for:\n  ${recorded.instrumentId}: ${onlyA}\n`;
+    const written = withRecord.raw(notePath) ?? '';
+    expect(written).toContain(line);
+    expect(written.replace(line, '')).toBe(without.raw(notePath));
+  });
+
+  it('a note she wrote is never given the record (INV-6), whatever the caller names', async () => {
+    const notePath = `01 Courses/${COURSE_A}/a-note.md`;
+    const withKey = new MemoryVaultSource(HER_NOTES);
+    const without = new MemoryVaultSource(HER_NOTES);
+    const input = { sourcePath: notePath, question: question('Q?'), draftId: 'draft-2' };
+    await materializeAcceptedDraft(withKey, { ...input, draftedForConceptKey: 'concept-key1:k' });
+    await materializeAcceptedDraft(without, input);
+    expect(withKey.raw(notePath)).not.toContain('olea-drafted-for');
+    expect(withKey.raw(notePath)).toBe(without.raw(notePath));
+  });
+
+  it('on the successor path the record lands in the same write as the predecessor field', async () => {
+    const vault = new MemoryVaultSource(HER_NOTES);
+    const notePath = await ensureHomeNoteForConcept(vault, SOURCE, 'Only-A idea');
+    if (notePath === null) throw new Error('test setup: expected a home note path');
+    const result = await materializeAcceptedDraft(
+      vault,
+      {
+        sourcePath: notePath,
+        question: question('Successor?'),
+        predecessorInstrumentId: 'mcq-old-1',
+        draftedForConceptKey: 'concept-key1:k',
+      },
+      { deviceId: 'device-a', now: () => new Date('2026-10-20T09:00:00Z') },
+    );
+    const written = vault.raw(notePath) ?? '';
+    expect(written).toContain(`olea-drafted-for:\n  ${result.instrumentId}: concept-key1:k\n`);
+    expect(parseMcqBlocks(written).instruments[0]?.predecessor).toBe('mcq-old-1');
+  });
+
+  it('regression: two items drafted into one multi-topic home note keep their own concept and courses', async () => {
+    // Drafted in this order, so the note's first topic is the shared concept — the order under
+    // which the whole-note binding credited the A-only item to the shared concept and course D.
+    const vault = new MemoryVaultSource(HER_NOTES);
+    const { shared, onlyA } = await keysOf(vault);
+    const sharedNote = await ensureHomeNoteForConcept(vault, SOURCE, 'Shared idea');
+    if (sharedNote === null) throw new Error('test setup: expected a home note path');
+    const sharedItem = await materializeAcceptedDraft(vault, {
+      sourcePath: sharedNote,
+      question: question('For the shared idea?'),
+      draftId: 'draft-shared',
+      draftedForConceptKey: shared,
+    });
+    const onlyANote = await ensureHomeNoteForConcept(vault, SOURCE, 'Only-A idea');
+    expect(onlyANote).toBe(sharedNote);
+    const onlyAItem = await materializeAcceptedDraft(vault, {
+      sourcePath: sharedNote,
+      question: question('For the only-A idea?'),
+      draftId: 'draft-only-a',
+      draftedForConceptKey: onlyA,
+    });
+
+    const { records, unbound } = await enumerateVaultInstruments(vault);
+    expect(unbound).toEqual([]);
+    const byId = new Map(records.map((r) => [r.instrumentId, r]));
+    expect(byId.get(onlyAItem.instrumentId)?.conceptIds).toEqual([onlyA]);
+    expect(byId.get(onlyAItem.instrumentId)?.courses).toEqual([COURSE_A]);
+    expect(byId.get(sharedItem.instrumentId)?.conceptIds).toEqual([shared]);
+    expect(byId.get(sharedItem.instrumentId)?.courses).toEqual([COURSE_D, COURSE_A]);
+  });
+});

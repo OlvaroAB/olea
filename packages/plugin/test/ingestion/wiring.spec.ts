@@ -16,7 +16,13 @@
  * for what stays unproven and the `@manual` scenario in
  * `features/C3-ingestion.md`.
  */
-import { OPERATING_FRESH_FOR_SECONDS, OPERATING_GOVERNS_FOR_SECONDS } from 'olea-contracts';
+import type { StudyPlanEnvelope } from 'olea-contracts';
+import {
+  GOVERNING_FRESH_FOR_SECONDS,
+  GOVERNING_GOVERNS_FOR_SECONDS,
+  OPERATING_FRESH_FOR_SECONDS,
+  OPERATING_GOVERNS_FOR_SECONDS,
+} from 'olea-contracts';
 import type {
   ExtractedUnit,
   GenerationJobPayload,
@@ -740,6 +746,7 @@ describe('buildIngestionRunner — deps.generation (ol-2zfj.63 [GEN-3.1], [D-238
       queueStore,
       capability: CAN_DRAIN,
       generation: {
+        firstCallOwner: 'queue',
         draft: async (job) => {
           draftCalls.push(job.payload);
           return { ok: true };
@@ -796,6 +803,7 @@ describe('buildIngestionRunner — deps.generation (ol-2zfj.63 [GEN-3.1], [D-238
       queueStore: new MemoryQueueStore(),
       capability: CAN_DRAIN,
       generation: {
+        firstCallOwner: 'queue',
         draft: async (job) => {
           draftCalls.push(job.payload);
           return { ok: true };
@@ -816,6 +824,273 @@ describe('buildIngestionRunner — deps.generation (ol-2zfj.63 [GEN-3.1], [D-238
     const secondTick = await engine.tick();
     expect(secondTick).toEqual({ kind: 'idle', reason: 'nothing-eligible' }); // nothing was enqueued
     expect(draftCalls).toHaveLength(0);
+  });
+});
+
+// `ol-egov.141.89.105.11`: one path for the first generation call. The sweep owns it by default;
+// the queue keeps only the further calls (and, with `firstCallOwner: 'queue'`, today's arrival enqueue).
+
+const OWNER_COURSE = 'A';
+const OWNER_CONCEPTS = ['c1', 'c2', 'c3', 'c4', 'c5'].map((key) => ({
+  name: key,
+  key,
+  courses: [OWNER_COURSE],
+}));
+
+function ownerPlan(conceptKey: string): StudyPlanEnvelope {
+  return {
+    envelopeVersion: 1,
+    kind: 'study-plan',
+    bodyVersion: 2,
+    policyVersion: 'sp1-aaaaaaaaaaaaaaaa',
+    computedAt: '2026-09-26T08:00:00.000Z',
+    freshForSeconds: GOVERNING_FRESH_FOR_SECONDS,
+    governsForSeconds: GOVERNING_GOVERNS_FOR_SECONDS,
+    body: {
+      asOf: '2026-09-26',
+      courses: [
+        {
+          course: OWNER_COURSE,
+          status: 'ranked',
+          concepts: [
+            {
+              conceptId: conceptKey,
+              rank: 1,
+              weight: 1,
+              examProximityDays: null,
+              reasoning: 'top ranked',
+              citations: [{ basis: 'past-paper', sourcePath: 'papers/p1.md', questionLabel: '1' }],
+            },
+          ],
+        },
+      ],
+    },
+  };
+}
+
+/** Lists nothing, so the further-call path's vault walks (instruments, review log) read an empty vault, not the binary lecture. */
+class EmptyListingVault extends MemoryVaultSource {
+  override async list(): Promise<readonly VaultPath[]> {
+    return [];
+  }
+}
+
+/** A fake draft cache keyed by concept and kind, counting every write. */
+function ownerFixture(options: {
+  owner?: 'sweep' | 'queue';
+  sweepDrafts?: readonly string[];
+  plan?: StudyPlanEnvelope | null;
+  formatMatch?: 'mcq' | 'qa';
+  priority?: GenerationDepsForTest['priority'];
+}) {
+  const vault = new EmptyListingVault();
+  vault.setBinary(
+    `01 Courses/${OWNER_COURSE}/lecture.pdf`,
+    buildOnePagePdf('Osmosis moves water across a membrane.'),
+  );
+  const cached = new Set<string>();
+  const puts = new Map<string, number>();
+  const put = (conceptKey: string, kind: string) => {
+    const id = `${conceptKey}|${kind}`;
+    cached.add(id);
+    puts.set(id, (puts.get(id) ?? 0) + 1);
+  };
+  const draftCalls: string[] = [];
+  const sweepDrafts = [...(options.sweepDrafts ?? [])];
+  const generation: GenerationDepsForTest = {
+    ...(options.owner ? { firstCallOwner: options.owner } : {}),
+    draft: async (job) => {
+      const payload = job.payload as GenerationJobPayload;
+      draftCalls.push(`${payload.conceptKey}|${payload.instrumentKind}`);
+      put(payload.conceptKey, payload.instrumentKind);
+      return { ok: true };
+    },
+    hasAnyBuiltKind: async (_course, conceptKey) =>
+      [...cached].some((id) => id.startsWith(`${conceptKey}|`)),
+    listConceptsForCourse: async () => OWNER_CONCEPTS as never,
+    ...(options.formatMatch ? { formatMatchFor: () => options.formatMatch } : {}),
+    ...(options.priority ? { priority: options.priority } : {}),
+    furtherCallTriggers: {
+      studyPlanStore: {
+        async load() {
+          return options.plan ?? null;
+        },
+        async save() {},
+      },
+      hasDraftOfKind: async (_course, conceptKey, kind) => cached.has(`${conceptKey}|${kind}`),
+      now: () => new Date('2026-09-26T09:00:00.000Z'),
+    },
+  };
+  return {
+    vault,
+    cached,
+    puts,
+    draftCalls,
+    generation,
+    /** The fake sweep: caches an mcq draft for the next concepts it was told to cover. */
+    onUnitsLanded: async () => {
+      for (const key of sweepDrafts.splice(0, sweepDrafts.length)) put(key, 'mcq');
+    },
+    queueSweep: (keys: readonly string[]) => sweepDrafts.push(...keys),
+  };
+}
+
+type GenerationDepsForTest = NonNullable<Parameters<typeof buildIngestionRunner>[0]['generation']>;
+
+async function landAndDrain(
+  engine: Awaited<ReturnType<typeof buildIngestionRunner>>['engine'],
+  hash: string,
+) {
+  await engine.enqueue({
+    contentHash: hash,
+    label: 'a lecture PDF',
+    payload: {
+      kind: 'source',
+      sourcePath: `01 Courses/${OWNER_COURSE}/lecture.pdf`,
+      format: 'pdf',
+    },
+  });
+  while ((await engine.tick()).kind === 'ran') {
+    /* drain to idle */
+  }
+}
+
+describe('buildIngestionRunner — the first generation call has one owner ([D-238], ol-egov.141.89.105.11)', () => {
+  it('default owner is the sweep: after a landing the queue enqueues nothing and draft is never called, so concepts the sweep did not draft wait for the next landing', async () => {
+    const f = ownerFixture({ sweepDrafts: ['c1', 'c2', 'c3'] });
+    const { engine } = await buildIngestionRunner({
+      vault: f.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      onUnitsLanded: f.onUnitsLanded,
+      generation: f.generation,
+    });
+    await landAndDrain(engine, 'land-1');
+    expect(f.draftCalls).toEqual([]);
+    expect([...f.cached].sort()).toEqual(['c1|mcq', 'c2|mcq', 'c3|mcq']);
+  });
+
+  it("an explicit 'sweep' behaves as the default, and 'queue' keeps today's arrival enqueue", async () => {
+    const sweepOwned = ownerFixture({ owner: 'sweep' });
+    const a = await buildIngestionRunner({
+      vault: sweepOwned.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: sweepOwned.generation,
+    });
+    await landAndDrain(a.engine, 'land-sweep');
+    expect(sweepOwned.draftCalls).toEqual([]);
+
+    const queueOwned = ownerFixture({ owner: 'queue' });
+    const b = await buildIngestionRunner({
+      vault: queueOwned.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: queueOwned.generation,
+    });
+    await landAndDrain(b.engine, 'land-queue');
+    expect(queueOwned.draftCalls.sort()).toEqual(OWNER_CONCEPTS.map((c) => `${c.key}|mcq`));
+  });
+
+  it('further calls: a concept with a pending mcq draft gets no mcq job, and a concept with no draft gets no job', async () => {
+    const f = ownerFixture({ sweepDrafts: ['c1'], formatMatch: 'mcq' });
+    const { engine } = await buildIngestionRunner({
+      vault: f.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      onUnitsLanded: f.onUnitsLanded,
+      generation: f.generation,
+    });
+    await landAndDrain(engine, 'land-format-ask');
+    // The format-ask names mcq for every concept (none has an mcq instrument in the vault): c1 is
+    // already drafted as mcq (dropped), c2..c5 have no draft at all (filtered out).
+    expect(f.draftCalls).toEqual([]);
+  });
+
+  it('further calls: a pending-draft concept entering the top band gets exactly one qa job, and nothing is written twice across two drains and a second landing', async () => {
+    const f = ownerFixture({ sweepDrafts: ['c1'], plan: ownerPlan('c1') });
+    const { engine, sink } = await buildIngestionRunner({
+      vault: f.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      onUnitsLanded: f.onUnitsLanded,
+      generation: f.generation,
+    });
+    await landAndDrain(engine, 'land-top-band');
+    expect(f.draftCalls).toEqual(['c1|qa']);
+    // A second landing: the same trigger fires again, but the qa draft now exists.
+    await landAndDrain(engine, 'land-top-band-again');
+    expect(f.draftCalls).toEqual(['c1|qa']);
+    for (const count of f.puts.values()) expect(count).toBe(1);
+    expect(sink.forSource(`01 Courses/${OWNER_COURSE}/lecture.pdf`).length).toBeGreaterThan(0);
+  });
+
+  it('the exposed after-landing step gives the same result for a directly landed unit as for a drained job', async () => {
+    const drained = ownerFixture({ sweepDrafts: ['c1'], plan: ownerPlan('c1') });
+    const a = await buildIngestionRunner({
+      vault: drained.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      onUnitsLanded: drained.onUnitsLanded,
+      generation: drained.generation,
+    });
+    await landAndDrain(a.engine, 'drained');
+
+    const direct = ownerFixture({ sweepDrafts: ['c1'], plan: ownerPlan('c1') });
+    const b = await buildIngestionRunner({
+      vault: direct.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      generation: direct.generation,
+    });
+    // Land the same unit by hand: extract it through a throwaway runner, then run the sweep and the step.
+    const probe = await buildIngestionRunner({
+      vault: direct.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+    });
+    await landAndDrain(probe.engine, 'probe');
+    const units = probe.sink.forSource(`01 Courses/${OWNER_COURSE}/lecture.pdf`);
+    await direct.onUnitsLanded();
+    expect(b.afterLanding).toBeDefined();
+    await b.afterLanding?.(units);
+    while ((await b.engine.tick()).kind === 'ran') {
+      /* drain to idle */
+    }
+    expect(direct.draftCalls).toEqual(drained.draftCalls);
+    expect(direct.draftCalls).toEqual(['c1|qa']);
+  });
+
+  it('afterLanding is absent when deps.generation is omitted', async () => {
+    const wiring = await buildIngestionRunner({
+      vault: new MemoryVaultSource(),
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+    });
+    expect(wiring.afterLanding).toBeUndefined();
+  });
+
+  it('further-call jobs drain by need, then yield, then arrival order (the first call claims no such order)', async () => {
+    // Top band names one concept only, so ask for qa on every drafted concept through the format-ask.
+    const f = ownerFixture({
+      sweepDrafts: ['c1', 'c2', 'c3'],
+      formatMatch: 'qa',
+      priority: (payload) =>
+        payload.conceptKey === 'c3'
+          ? { need: 0.9, expectedYield: 1 }
+          : payload.conceptKey === 'c2'
+            ? { need: 0.5, expectedYield: 5 }
+            : { need: 0.5, expectedYield: 1 },
+    });
+    const { engine } = await buildIngestionRunner({
+      vault: f.vault,
+      queueStore: new MemoryQueueStore(),
+      capability: CAN_DRAIN,
+      onUnitsLanded: f.onUnitsLanded,
+      generation: f.generation,
+    });
+    await landAndDrain(engine, 'land-order');
+    expect(f.draftCalls).toEqual(['c3|qa', 'c2|qa', 'c1|qa']);
   });
 });
 

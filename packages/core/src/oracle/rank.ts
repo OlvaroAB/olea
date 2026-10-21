@@ -436,6 +436,55 @@ const DECLARED_FALLBACK_MASTERY_NEED_WEIGHT: Readonly<Record<OracleMasteryState,
 const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
 
 /**
+ * DECLARED (`[D-554]`, `ol-egov.141.89.10.126`) — the most a wrong answer can add to a concept's
+ * need, as a share of the need term's whole range (need runs over `[0, 1]`, so the share is the
+ * number added before the need weight applies). **Plain-English defense of 1/4:** a concept she
+ * got wrong most recently should keep visibly more priority than an otherwise identical concept
+ * she got right, which needs only that the lift be above zero; it must not be large enough to
+ * outrank a concept whose need is a quarter of the range higher (so a wrong answer alone never
+ * outranks real, much larger need or sooner-due evidence), and not so small that a typical gap
+ * between two concepts' need readings swallows it. A quarter sits inside that band; it is a pin,
+ * not a fit, and the band is wide (see the sweep range below). The lift is added to the need
+ * ordering input and the sum is held at the need term's own maximum (1), so the need term can
+ * never exceed its stated range, and it moves no relevance or proximity term, so one course's
+ * rows cannot be moved above another's by more than `weights.need` times this share.
+ *
+ * **Provisional, to be calibrated by the five-course rerun.** Sweep for the rerun: 0.05 to 0.5.
+ * Revisit when the rerun has measured, with other inputs matched, how often a valid wrong answer
+ * keeps more priority than a correct one, and how often the lifted concept is re-served too
+ * early (the spacing check); then David ratifies the measured point (`[D-554]`).
+ */
+export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
+
+/**
+ * DECLARED (`[D-554]`, `ol-egov.141.89.10.126`) — how long a wrong answer's lift lasts, in
+ * calendar days: it falls in a straight line from its full size on the day of the wrong answer to
+ * nothing at this many days, and is exactly zero from then on. **Plain-English defense of 7:** a
+ * wrong answer is a reason to come back to the concept within about a week, the span in which a
+ * missed item is most likely to still be recoverable by one more attempt; past it, the ordinary
+ * recall estimate (which the lift does not replace) carries the concept. A pin, not a fit.
+ * Provisional; rerun sweep 3 to 14 days; same revisit condition as the share above.
+ */
+export const DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS = 7;
+
+/**
+ * `[D-554]` — additive to `RankOracleInput`, typed HERE for the same reason the other additive
+ * inputs are. Keyed by `conceptKey`: the calendar day (`YYYY-MM-DD`) of the concept's most recent
+ * VALID answer, for each concept whose most recent valid answer was wrong. A concept answered
+ * correctly since, absent from the review log, or whose wrong answer was excluded as invalid is
+ * simply not in the map (absence is no lift, never a penalty). The producer is
+ * `./compose.ts`'s `resolveLastWrongAnswerDays`; this module only reads the day.
+ */
+export interface RankOracleWrongAnswerInput {
+  readonly lastWrongAnswerDay?: ReadonlyMap<string, string>;
+}
+
+/** `[D-554]` — reported on a factors object only when a lift applied (absent means byte-identical to before). */
+export interface OracleWrongAnswerLiftFactors {
+  readonly wrongAnswerLift?: number;
+}
+
+/**
  * DECLARED FALLBACK (`[D-332]`, `ol-egov.141.89.10.78`; the proximity weight
  * `[D-410]`, `ol-egov.141.89.10.82`) — the blend weights used when
  * `options.blendWeights` is absent, which is every caller until the
@@ -973,6 +1022,38 @@ function resolveNeed(
 }
 
 /**
+ * `[D-554]`: the bounded wrong-answer lift for one concept, and the need it yields. The lift is
+ * `cap * max(0, 1 - ageDays / window)`: full size on the day of the wrong answer, nothing at the
+ * window's end. It applies only to a need that has a measured number (an unknown need is already
+ * ordered at the maximum), and the lifted ordering input never exceeds the need term's maximum.
+ * The reported `need` is unchanged: the lift moves the ordering input only.
+ */
+function applyWrongAnswerLift(
+  need: NeedResolution,
+  lastWrongAnswerDay: ReadonlyMap<string, string> | undefined,
+  conceptKey: string,
+  asOf: Date,
+): NeedResolution & OracleWrongAnswerLiftFactors {
+  const day = lastWrongAnswerDay?.get(conceptKey);
+  if (day === undefined || need.need === undefined) return need;
+  const answered = dateFromCalendarDay(day);
+  if (answered === null) {
+    throw new Error(
+      `rankOracle: lastWrongAnswerDay.${conceptKey} must be a YYYY-MM-DD calendar day, got ${JSON.stringify(day)}`,
+    );
+  }
+  const ageDays = Math.max(0, (asOf.getTime() - answered.getTime()) / 86_400_000);
+  const lift =
+    DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE *
+    Math.max(0, 1 - ageDays / DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS);
+  if (lift === 0) return need;
+  const lifted = Math.min(UNKNOWN_NEED_VALUE, need.needOrderingInput + lift);
+  const applied = lifted - need.needOrderingInput;
+  if (applied <= 0) return need;
+  return { ...need, needOrderingInput: lifted, wrongAnswerLift: applied };
+}
+
+/**
  * `[D-332]`'s blend with `[D-410]`'s proximity term: the three terms add, weighted; see the module doc.
  *
  * **Purpose (`[D-521]`, ruled 2026-10-06): this is the RANKING's formula** — the order the study
@@ -1463,15 +1544,22 @@ function buildUnknownRelevanceEntry(
   retrievability: ReadonlyMap<string, number> | undefined,
   demandAwareReadiness: ReadonlyMap<string, number> | undefined,
   resolved: ResolvedOptions,
+  lastWrongAnswerDay: ReadonlyMap<string, string> | undefined,
+  asOf: Date,
 ): RankedEntry {
   const masteryState = resolveMasteryState(mastery, conceptKey);
   const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
   const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
-  const need = resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey);
+  const need = applyWrongAnswerLift(
+    resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey),
+    lastWrongAnswerDay,
+    conceptKey,
+    asOf,
+  );
   const preMasteryScore = DECLARED_FALLBACK_UNKNOWN_RELEVANCE;
   // No edge, so no dated assessment: proximity adds nothing ([D-410]).
   const proximityScore = 0;
-  const factors: OracleConceptFactors & OracleProximityFactors = {
+  const factors: OracleConceptFactors & OracleProximityFactors & OracleWrongAnswerLiftFactors = {
     citations: [],
     distinctSourceCount: 0,
     objectivesCitations: [],
@@ -1527,6 +1615,8 @@ function rankOneCourse(
   conceptInstrumentEligibility:
     | ReadonlyMap<string, readonly ConceptInstrumentEligibilityFact[]>
     | undefined,
+  // `[D-554]`: see `RankOracleWrongAnswerInput`. `undefined` keeps every outcome byte-identical.
+  lastWrongAnswerDay: ReadonlyMap<string, string> | undefined,
 ): CourseOracleRanking {
   if (edgesForCourse.length === 0 && courseConceptUniverse === undefined) {
     const paths = noEvidencePathsForCourse.slice().sort();
@@ -1609,7 +1699,12 @@ function rankOneCourse(
     const masteryState = resolveMasteryState(mastery, conceptKey);
     const masteryNeedWeight = resolved.masteryNeedWeight[masteryState];
     const retrievabilityWeight = resolveRetrievabilityWeight(retrievability, conceptKey);
-    const need = resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey);
+    const need = applyWrongAnswerLift(
+      resolveNeed(retrievabilityWeight, demandAwareReadiness, conceptKey),
+      lastWrongAnswerDay,
+      conceptKey,
+      asOf,
+    );
     // Citations reflect only SURVIVING evidence — a vetoed edge contributed
     // nothing to this concept's score, so its citations are not offered as
     // evidence for it either (reasoning matches what actually drove it).
@@ -1623,7 +1718,7 @@ function rankOneCourse(
 
     const briefCitations = unionBriefCitations(survivingEdges);
 
-    const factors: OracleConceptFactors & OracleProximityFactors = {
+    const factors: OracleConceptFactors & OracleProximityFactors & OracleWrongAnswerLiftFactors = {
       citations,
       distinctSourceCount,
       objectivesCitations,
@@ -1698,6 +1793,8 @@ function rankOneCourse(
           retrievability,
           demandAwareReadiness,
           resolved,
+          lastWrongAnswerDay,
+          asOf,
         ),
       );
     }
@@ -1748,7 +1845,8 @@ export function rankOracle(
     RankOracleTiebreakInput &
     RankOracleCourseConceptsInput &
     RankOracleEligibilityInput &
-    RankOracleNeedInput,
+    RankOracleNeedInput &
+    RankOracleWrongAnswerInput,
 ): RankOracleResult {
   const asOfDate = dateFromCalendarDay(input.asOf);
   if (asOfDate === null) {
@@ -1812,6 +1910,7 @@ export function rankOracle(
       input.tiebreakEligible,
       input.courseConcepts?.get(course),
       input.conceptInstrumentEligibility,
+      input.lastWrongAnswerDay,
     ),
   );
 

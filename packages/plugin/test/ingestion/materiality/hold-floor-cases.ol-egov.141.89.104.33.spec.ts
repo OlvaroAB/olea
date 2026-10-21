@@ -1,7 +1,7 @@
 /**
  * [D-500] / [D-502] (ol-egov.141.89.104.33): the floor column ("Dev3") of the mixed-version cases,
  * service repo docs/direction/papers/knowledge-graph/VALIDATION-FREEZE.md §4.9 (O2, O3, O5) and
- * §4.10 (M1-M11), run against the hold-record reader and the consumer hold check.
+ * §4.10 (M1-M11), plus M12 and M13 from GOLD-REVIEW-DAVID.md §1.2, run against the hold-record reader and the consumer hold check.
  *
  * The fixture world is that document's §2, synthetic (Varn, skell, tamber, Orm): passage π4 is
  * part 9 of the lecture 4 transcript, π8 is page 6 of the lecture 4 slides; instruments i:7 and
@@ -31,6 +31,8 @@ const SLIDES_A4 = 'Orm course/Lecture 4 slides.pdf';
 
 let pi4: CitedPassage;
 let pi8: CitedPassage;
+let pi41: CitedPassage;
+let pi42: CitedPassage;
 
 beforeAll(async () => {
   pi4 = {
@@ -42,6 +44,15 @@ beforeAll(async () => {
   pi8 = {
     sourcePath: SLIDES_A4,
     passageDigest: await digestPassage('Skell causes the Orm level to drop.'),
+  };
+  // course B passages used by M12 and M13 only
+  pi41 = {
+    sourcePath: 'Varn course/Reading 41.md',
+    passageDigest: await digestPassage('The Orm marker sits at the Orm surface.'),
+  };
+  pi42 = {
+    sourcePath: 'Varn course/Reading 42.md',
+    passageDigest: await digestPassage('Tamber is stated as a rate of change.'),
   };
 });
 
@@ -64,13 +75,19 @@ const hold4 = () => hold('hold4', 'cor:9', pi4);
 const hold8 = () => hold('hold8', 'cor:9', pi8);
 const hold4b = () => hold('hold4b', 'cor:12', pi4);
 const hold4c = () => hold('hold4c', 'cor:14', pi4);
+const hold8c = () => hold('hold8c', 'cor:14', pi8);
+const hold41 = () => hold('hold41', 'cor:16', pi41);
+const hold42 = () => hold('hold42', 'cor:16', pi42);
 const lines = (...records: string[]) => `${records.join('\n')}\n`;
 
 type Outcome = 'held' | 'as before';
 
-function floorOutcomes(read: HoldStoreRead): Record<string, Outcome> {
+function floorOutcomes(
+  read: HoldStoreRead,
+  artifacts: readonly Artifact[] = ARTIFACTS,
+): Record<string, Outcome> {
   const outcomes: Record<string, Outcome> = {};
-  for (const artifact of ARTIFACTS) {
+  for (const artifact of artifacts) {
     const effect = holdEffect(artifact.kind, checkHolds(read, artifact.cited()));
     if (effect === null) {
       outcomes[artifact.id] = 'as before';
@@ -98,6 +115,7 @@ describe('the floor column of the publishing-holds cases (§4.10)', () => {
     expect(floorOutcomes(readHoldText(lines(hold4(), hold8())))).toEqual(ALL_HELD);
   });
 
+  // M2 is tested as the freeze states it today; it may change under per-file integrity (another lane is drafting it).
   it('M2: hold4 is corrupt and hold8 readable; before the republished hold4, nothing citing π4 is held', () => {
     const corrupt = hold4().slice(0, 23);
     const before = readHoldText(lines(corrupt, hold8()));
@@ -111,6 +129,8 @@ describe('the floor column of the publishing-holds cases (§4.10)', () => {
     expect(after.unreadable).toEqual(before.unreadable);
   });
 
+  // M3 (reworded reason: approved by David 2026-10-17, awaiting the reviewer's acceptance: ol-egov.141.89.104.13).
+  // Floor part only: the aware device's release of i:10 at t2 needs F, which the floor cannot read.
   it('M3: holds first, then F; the floor holds at t1 and t2', () => {
     const t1 = readHoldText(lines(hold4(), hold8()));
     expect(floorOutcomes(t1)).toEqual(ALL_HELD);
@@ -147,8 +167,12 @@ describe('the floor column of the publishing-holds cases (§4.10)', () => {
     expect(floorOutcomes(readHoldText(lines(hold4(), lecturer)))).toEqual(ALL_HELD);
   });
 
+  // M9 (added π8 holds: approved by David 2026-10-17, awaiting the reviewer's acceptance: ol-egov.141.89.104.13).
+  // Floor part only: i:10 is over-withheld here; its release on an aware device is not expressible.
   it('M9: every reason resolvable by an aware device; the floor still holds all three', () => {
-    expect(floorOutcomes(readHoldText(lines(hold4(), hold4c())))).toEqual(ALL_HELD);
+    expect(floorOutcomes(readHoldText(lines(hold4(), hold4c(), hold8(), hold8c())))).toEqual(
+      ALL_HELD,
+    );
   });
 
   it('M10: a repeated publication is one hold, one id', () => {
@@ -157,14 +181,47 @@ describe('the floor column of the publishing-holds cases (§4.10)', () => {
     expect(floorOutcomes(read)).toEqual(ALL_HELD);
   });
 
-  it('M11: after M9, the floor opens the same vault; held, and reading changes nothing', () => {
-    const stored = lines(hold4(), hold4c(), hold8());
+  // M11 (restated: approved by David 2026-10-17, awaiting the reviewer's acceptance: ol-egov.141.89.104.13).
+  // Floor part only: the aware device's "recovery publishes nothing" is not expressible in the reader.
+  it('M11: after M9 with hold4, hold8, hold4c, hold8c present, the floor opens the vault; held, nothing written', () => {
+    const stored = lines(hold4(), hold4c(), hold8(), hold8c());
     const read = readHoldText(stored);
     const frozen = Object.freeze(read);
     expect(floorOutcomes(frozen)).toEqual(ALL_HELD);
     expect(readHoldText(stored)).toEqual(read);
     // the reader has no write path: the stored text is a string, and nothing hands it back
-    expect(stored).toBe(lines(hold4(), hold4c(), hold8()));
+    expect(stored).toBe(lines(hold4(), hold4c(), hold8(), hold8c()));
+  });
+
+  // M12 (new row: approved by David 2026-10-17, awaiting the reviewer's acceptance: ol-egov.141.89.104.13).
+  // Floor part only: Dev2's needs-recheck (not withdrawn) and Dev2's republication of the holds at t1 are not expressible.
+  it('M12: F = cor:16, holds on π42 and π41; as before at t1, i:12 not shown / no / no at t2', () => {
+    const i12: Artifact = { id: 'i:12', kind: 'instrument', cited: () => [pi41] };
+    // t1: F only, no holds yet ([D-492]: the floor does not know of the withdrawal)
+    expect(floorOutcomes({ status: 'absent' }, [i12])).toEqual({ 'i:12': 'as before' });
+    // t2: F and its holds
+    const t2 = readHoldText(lines(hold42(), hold41()));
+    expect(floorOutcomes(t2, [i12])).toEqual({ 'i:12': 'held' });
+    const effect = holdEffect('instrument', checkHolds(t2, i12.cited()));
+    expect(effect).toMatchObject({
+      display: 'not-shown',
+      supportUse: false,
+      reviewEligible: false,
+    });
+  });
+
+  // M13 (new row: approved by David 2026-10-17, awaiting the reviewer's acceptance: ol-egov.141.89.104.13).
+  // Floor part only: Dev2's eligibility of i:15 depends on fd:32's dependencies, which the floor cannot read.
+  it('M13: i:15 also cites π41; at t2 the floor over-withholds it (not shown / no / no)', () => {
+    const i15: Artifact = { id: 'i:15', kind: 'instrument', cited: () => [pi41] };
+    const t2 = readHoldText(lines(hold42(), hold41()));
+    expect(floorOutcomes(t2, [i15])).toEqual({ 'i:15': 'held' });
+    const effect = holdEffect('instrument', checkHolds(t2, i15.cited()));
+    expect(effect).toMatchObject({
+      display: 'not-shown',
+      supportUse: false,
+      reviewEligible: false,
+    });
   });
 });
 
