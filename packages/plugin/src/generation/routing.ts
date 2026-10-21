@@ -81,6 +81,7 @@ import type {
   KnowledgeKindClassification,
   KnowledgeKindClassifierPort,
   KnowledgeKindSourcePassage,
+  PersistedKeywordIndex,
   RoutingGroup,
   SchedulableInstrumentType,
   VaultPath,
@@ -88,11 +89,13 @@ import type {
 } from 'olea-core';
 import {
   classifyKnowledgeKind,
+  courseReadingSetResolver,
   DEFAULT_COURSES_FOLDER,
   EMPTY_INVENTORY,
   enumerateVaultInstruments,
   extractTier3Evidence,
   findMentionedTermsAfter,
+  frontmatterWikilinkTargets,
   instrumentMixGaps,
   projectRegisteredFiles,
   ROUTING_GROUP_INSTRUMENT_TYPES,
@@ -101,6 +104,7 @@ import {
   routeKnowledgeKind,
   routeKnowledgeKindClassification,
 } from 'olea-core';
+import type { SourceOriginFrontmatterHost } from '../source-origin.js';
 import { PROVISIONAL_CONFIDENCE_FLOOR } from './constants.js';
 import { isOleaHomeNote } from './home-note.js';
 import { stripOleaFrontmatter } from './strip-olea-frontmatter.js';
@@ -123,6 +127,17 @@ export interface GenerationRoutingDeps {
    * `findings/KCT-3-confidence-floor.md` in olea-service) when omitted.
    */
   readonly confidenceFloor?: number;
+}
+
+/**
+ * `[D-553]`, `[D-544]`, F1.3 `[D-248]`: what routing needs to read "the course's reading set" the way
+ * drafting does (`../retrieval/drafting-scope.ts`'s `draftingScope`): the keyword index the sweep's
+ * drafting already holds and, optionally, the host that supplies frontmatter links. Absent, routing
+ * falls back to the markdown notes under the course folder.
+ */
+export interface RoutingReadingSet {
+  readonly keywordIndex: PersistedKeywordIndex;
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 /** One concept's routing verdict — everything a caller needs to decide whether to draft. */
@@ -160,6 +175,7 @@ export async function buildKnowledgeKindSourceMaterial(
   },
   derivedUnits?: DerivedUnitSupplier,
   coursesFolder: VaultPath = DEFAULT_COURSES_FOLDER,
+  readingSet?: RoutingReadingSet,
 ): Promise<readonly KnowledgeKindSourcePassage[]> {
   const passages: KnowledgeKindSourcePassage[] = [];
   const orderedPaths: readonly VaultPath[] =
@@ -200,7 +216,13 @@ export async function buildKnowledgeKindSourceMaterial(
     !orderedPaths.some((p) => p.toLowerCase().endsWith('.md'))
   ) {
     passages.push(
-      ...(await readingSetPassages(vault, concept.name, concept.courses ?? [], coursesFolder)),
+      ...(await readingSetPassages(
+        vault,
+        concept.name,
+        concept.courses ?? [],
+        coursesFolder,
+        readingSet,
+      )),
     );
     if (passages.length === 0 && derivedUnits !== undefined) {
       passages.push(...(await namingUnitPassages(derivedUnits, concept.name, orderedPaths)));
@@ -257,22 +279,45 @@ async function readingSetPassages(
   name: string,
   courses: readonly (string | undefined)[],
   coursesFolder: VaultPath,
+  readingSet?: RoutingReadingSet,
 ): Promise<KnowledgeKindSourcePassage[]> {
   const passages: KnowledgeKindSourcePassage[] = [];
   const courseCodes = [
     ...new Set(courses.filter((c): c is string => c !== undefined && c !== '')),
   ].sort();
+  // The same resolver drafting scopes with (`courseReadingSetResolver`): a course's folder, the
+  // documents registered to it, and the notes its course notes link once. Built once per call.
+  const frontmatterHost = readingSet?.frontmatterHost;
+  const courseOf =
+    readingSet === undefined
+      ? undefined
+      : courseReadingSetResolver(readingSet.keywordIndex, {
+          coursesFolder,
+          ...(frontmatterHost === undefined
+            ? {}
+            : {
+                frontmatterLinksFor: (path: VaultPath) =>
+                  frontmatterWikilinkTargets(frontmatterHost.frontmatterFor(path)),
+              }),
+        });
   for (const course of courseCodes) {
     const root = `${coursesFolder}/${course}/`;
     let paths: readonly VaultPath[];
-    try {
-      paths = await vault.list({ under: `${coursesFolder}/${course}`, extensions: ['md'] });
-    } catch {
-      continue;
+    if (readingSet !== undefined && courseOf !== undefined) {
+      paths = readingSet.keywordIndex.documents
+        .map((doc) => doc.path)
+        .filter((path) => path.toLowerCase().endsWith('.md') && courseOf(path).includes(course));
+    } else {
+      try {
+        paths = await vault.list({ under: `${coursesFolder}/${course}`, extensions: ['md'] });
+      } catch {
+        continue;
+      }
     }
     for (const path of paths) {
       if (passages.length >= MAX_ROUTING_UNITS_PER_IDENTITY) return passages;
-      if (!path.startsWith(root) || !path.toLowerCase().endsWith('.md')) continue;
+      if (!path.toLowerCase().endsWith('.md')) continue;
+      if (readingSet === undefined && !path.startsWith(root)) continue;
       let raw: string;
       try {
         raw = await vault.read(path);
@@ -348,6 +393,7 @@ export async function classifyForRouting(
   concept: ConceptRecord,
   derivedUnits: DerivedUnitSupplier = createDerivedUnitSupplier(vault),
   coursesFolder: VaultPath = DEFAULT_COURSES_FOLDER,
+  readingSet?: RoutingReadingSet,
 ): Promise<KnowledgeKindClassification> {
   const UNCLASSIFIED: KnowledgeKindClassification = {
     status: 'unclassified',
@@ -361,6 +407,7 @@ export async function classifyForRouting(
     concept,
     derivedUnits,
     coursesFolder,
+    readingSet,
   );
   const result = await classifyKnowledgeKind(
     routing.classifier,

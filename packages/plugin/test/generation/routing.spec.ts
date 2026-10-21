@@ -14,6 +14,7 @@ import type {
   ConceptInstrumentInventory,
   DerivedTextUnit,
   KnowledgeKindClassifierPort,
+  PersistedKeywordIndex,
 } from 'olea-core';
 import { extractConcepts } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -213,6 +214,90 @@ describe('buildKnowledgeKindSourceMaterial: only markdown is read as text (`ol-e
     );
     expect(none).toEqual([]);
     expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+  });
+
+  describe('the reading set drafting uses (`[D-553]`, `[D-544]`, F1.3 `[D-248]`)', () => {
+    const indexOf = (docs: Record<string, string>): PersistedKeywordIndex => ({
+      version: 1,
+      documents: Object.entries(docs).map(([path, text]) => ({
+        path,
+        courses: [],
+        contentHash: 'h',
+        blocks: [{ blockIndex: 0, kind: 'paragraph', text }],
+      })),
+    });
+    const files = {
+      '01 Courses/C1/lecture.md': 'See [[Linked note]] for more.',
+      'Notes/Linked note.md': 'Entropy is the measure of disorder.',
+      '01 Courses/C2/other.md': 'Entropy in another course entirely. See [[Elsewhere]].',
+      'Notes/Elsewhere.md': 'Entropy elsewhere.',
+      'Notes/Unlinked.md': 'Entropy unlinked.',
+    };
+    const concept = { name: 'Entropy', sourcePaths: ['01 Courses/C1/exam.pdf'], courses: ['C1'] };
+
+    it('a note linked once from a course note, outside the course folder, supplies the passage', async () => {
+      const vault = new RecordingVault(files);
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        undefined,
+        { keywordIndex: indexOf(files) },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['Notes/Linked note.md']);
+      expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+      expect(vault.reads).not.toContain('Notes/Elsewhere.md');
+      expect(vault.reads).not.toContain('Notes/Unlinked.md');
+    });
+
+    it('a link made only by frontmatter joins the set when the host supplies it', async () => {
+      const docs = {
+        '01 Courses/C1/lecture.md': 'Body with no links.',
+        'Notes/Fm.md': 'Entropy via frontmatter.',
+      };
+      const vault = new RecordingVault(docs);
+      const host = {
+        frontmatterFor: (path: string) =>
+          path === '01 Courses/C1/lecture.md' ? { topic: '[[Fm]]' } : undefined,
+      };
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        undefined,
+        { keywordIndex: indexOf(docs), frontmatterHost: host },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['Notes/Fm.md']);
+    });
+
+    it('a non-default courses folder is honoured', async () => {
+      const docs = {
+        'Papers/C1/lecture.md': 'Entropy here. See [[Side]].',
+        'Notes/Side.md': 'Entropy side.',
+        '01 Courses/C1/old.md': 'Entropy in the default folder.',
+      };
+      const vault = new RecordingVault(docs);
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        'Papers',
+        { keywordIndex: indexOf(docs) },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual([
+        'Papers/C1/lecture.md',
+        'Notes/Side.md',
+      ]);
+    });
+
+    it("with no index, today's course-folder behaviour", async () => {
+      const vault = new RecordingVault(files);
+      const passages = await buildKnowledgeKindSourceMaterial(vault, concept, async () => []);
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual([]);
+      const named = new RecordingVault({ '01 Courses/C1/lecture.md': 'Entropy here.' });
+      const folder = await buildKnowledgeKindSourceMaterial(named, concept, async () => []);
+      expect(folder.map((p) => p.anchor.sourcePath)).toEqual(['01 Courses/C1/lecture.md']);
+    });
   });
 
   it('a PDF-only concept with no extracted unit naming it, or an unreadable unit source, gets no input', async () => {

@@ -268,7 +268,7 @@ import {
   extractDraftedProvenance,
   extractDraftedQuestions,
 } from './response.js';
-import type { GenerationRoutingDeps, KnowledgeKindLabels } from './routing.js';
+import type { GenerationRoutingDeps, KnowledgeKindLabels, RoutingReadingSet } from './routing.js';
 import {
   buildConceptInstrumentInventory,
   classifyForRouting,
@@ -1299,6 +1299,19 @@ export async function runGenerationSweep(
       // (`courseDraftsCards`); the label is kept for the further calls, and
       // the observation records the deficit of the group this call spends on.
       if (routing !== undefined) {
+        // `[D-553]`: routing reads the course's reading set from the same keyword index and
+        // frontmatter host drafting scopes with (`draftingScope`). A deps object without an index
+        // (a test double) leaves routing on the course folder alone.
+        const draftingIndex = deps.draftDeps.retrieve?.keywordIndex;
+        const routingReadingSet: RoutingReadingSet | undefined =
+          draftingIndex === undefined
+            ? undefined
+            : {
+                keywordIndex: draftingIndex,
+                ...(deps.draftDeps.frontmatterHost !== undefined
+                  ? { frontmatterHost: deps.draftDeps.frontmatterHost }
+                  : {}),
+              };
         // A throw while routing this one candidate costs this candidate only: it routes as
         // unclassified ("never guessed", routing.ts) and is still asked. Nothing about the
         // candidate or the error is logged (D-005).
@@ -1309,6 +1322,8 @@ export async function runGenerationSweep(
             deps.vault,
             candidate,
             derivedUnitSupplier,
+            coursesFolder,
+            routingReadingSet,
           );
         } catch {
           classification = { status: 'unclassified', confidence: undefined, method: 'model' };
