@@ -10,11 +10,15 @@
  * payload shape's one definition, kept beside the outcome that produces it
  * so the two cannot drift apart silently.
  *
- * `contentHash` is set to the NEW passage's hash, not a fresh random value:
- * the queue's own idempotency (D-002) then does its ordinary job — a second
- * device observing the same edit and reaching the same verdict enqueues the
- * identical `contentHash` and is recognised as a duplicate rather than
- * double-drafting the successor.
+ * `contentHash` is the NEW passage's hash joined with the predecessor's id,
+ * not a fresh random value: the queue's own idempotency (D-002) then does its
+ * ordinary job — a second device observing the same edit to the same
+ * predecessor and reaching the same verdict enqueues the identical
+ * `contentHash` and is recognised as a duplicate rather than double-drafting
+ * the successor. The predecessor's id is part of the key because two questions
+ * citing one passage, rewritten by one change, share the new passage's hash;
+ * keyed on the hash alone the queue dropped the second as a duplicate and that
+ * predecessor stayed suspended with no successor (`ol-egov.141.89.5.112`).
  */
 
 import type { EnqueueInput } from '../../ingestion/types.js';
@@ -47,7 +51,7 @@ export function buildSuccessorRevisionEnqueueInput(
     ...(sourceRevision !== undefined ? { sourceRevision } : {}),
   };
   return {
-    contentHash: event.newContentHash,
+    contentHash: `${event.newContentHash}\n${event.instrumentId}`,
     label: `instrument-revision:${event.instrumentId}`,
     payload,
   };

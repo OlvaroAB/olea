@@ -16,9 +16,9 @@ describe('buildSuccessorRevisionEnqueueInput', () => {
     change: 'the claim changed',
   };
 
-  it('keys contentHash on the NEW passage hash, for cross-device idempotency', () => {
+  it('keys contentHash on the NEW passage hash and the predecessor id, for cross-device idempotency', () => {
     const result = buildSuccessorRevisionEnqueueInput(event, 'the updated passage text');
-    expect(result.contentHash).toBe('bbbb');
+    expect(result.contentHash).toBe('bbbb\ninst-001');
   });
 
   it('labels the job with the predecessor instrument id', () => {
