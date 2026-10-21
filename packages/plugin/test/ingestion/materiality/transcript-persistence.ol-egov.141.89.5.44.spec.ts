@@ -29,6 +29,7 @@ import { createVaultUnitManifestStore } from '../../../src/grove/unit-manifest-s
 import {
   type ResolvedLinksPort,
   readLectureBundles,
+  readTranscriptCopyGroups,
   teachingEventResolverFrom,
 } from '../../../src/ingestion/lecture-links.js';
 import { readTranscriptVersion } from '../../../src/ingestion/materiality/transcript-grain.js';
@@ -581,17 +582,17 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
 
   // PERSISTENCE.md section 3 C6: "the two files are one teaching event (a T6 guard)", that is, the
   // kept file and its re-export change neither a concept's size nor its allocation (PROPOSAL.md 4.5:
-  // duplicated content never raises extent). Not so: a teaching event is a lecture bundle, made only
-  // by her explicit links (`lecture-links.ts`, `teachingEventResolverFrom`), and an unlinked
-  // transcript is its own event (core `concept/size.ts`, `countPassagesByTeachingEvent`, lines
-  // 206-225), so the re-export counts again. With a note linking both they are one event (core
-  // `concept/repetition-guards.ol-egov.141.89.3.43.spec.ts`). A code gap in the repetition guard
-  // (duplicated content at a second path); no persisted change.
-  it.fails('C6 [not built: an unlinked kept re-export counts as a second teaching event, core concept/size.ts:206-225] the kept file and its re-export leave the concept size reading where it was', async () => {
+  // duplicated content never raises extent). Built under ol-egov.141.89.5.101 (D-565): byte-identical
+  // transcripts are one teaching event, grouped in memory from their bytes (`lecture-links.ts`,
+  // `readTranscriptCopyGroups`); a corrected or re-cut export still needs her links.
+  it('C6 the kept file and its byte-identical re-export leave the concept size reading where it was', async () => {
     const reExport = '01 Courses/COURSEA/Lecture 3/transcript v2.txt';
     const vault = await lectureVault();
     vault.files.set(reExport, transcriptOf(LECTURE));
-    const teachingEventOf = teachingEventResolverFrom(readLectureBundles(linksPort(vault)));
+    const teachingEventOf = teachingEventResolverFrom(
+      readLectureBundles(linksPort(vault)),
+      await readTranscriptCopyGroups(linksPort(vault), vault),
+    );
     const note = {
       sourcePath: '01 Courses/COURSEA/notes/an idea.md',
       location: { page: 1, charRange: { start: 0, end: 10 } },
