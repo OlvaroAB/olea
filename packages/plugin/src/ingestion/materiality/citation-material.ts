@@ -5,12 +5,13 @@
  * text with every instrument block's own span removed, so an instrument's
  * OWN wording never counts as a change to the passage it cites.
  *
- * Pure and total — no vault access, no parsing beyond the spans it is
- * handed. `enumerateVaultInstruments` (olea-core) already parsed the note
- * once to produce those spans; this never re-parses.
+ * `stripInstrumentSpans` is pure and total — no vault access, no parsing
+ * beyond the spans it is handed. {@link stripQuestionBlocks}
+ * (`ol-egov.141.89.5.113`) parses the note for those spans itself: every
+ * question block in it, whether or not it is bound to a course.
  */
 
-import type { SourceSpan } from 'olea-core';
+import { parseCardsWithInvalid, parseMcqBlocks, type SourceSpan } from 'olea-core';
 
 /**
  * Removes every span in `spans` from `source`, concatenating what remains in
@@ -29,4 +30,19 @@ export function stripInstrumentSpans(source: string, spans: readonly SourceSpan[
   }
   if (cursor < source.length) result += source.slice(cursor);
   return result;
+}
+
+/**
+ * `ol-egov.141.89.5.113` (C5.3 as amended by `[D-543]`): the material of a cited note, the whole
+ * note, its frontmatter included, minus the question blocks. Every block the two instrument parsers
+ * find is stripped (`parseCardsWithInvalid`'s cards and `parseMcqBlocks`'s multiple-choice blocks),
+ * whether or not it is bound to a course, the same blocks the session's presentation check strips
+ * (`review/open-session.ts`, `citedPassageUnchanged`), so the citation pass and that check read one
+ * text. A note with no question block is returned as it is.
+ */
+export function stripQuestionBlocks(source: string): string {
+  return stripInstrumentSpans(source, [
+    ...parseCardsWithInvalid(source).cards.map((card) => card.span),
+    ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
+  ]);
 }

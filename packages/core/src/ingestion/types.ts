@@ -261,10 +261,24 @@ export interface JobRunnerView {
  * - `ok: false, retryable: false` — a permanent failure (e.g.
  *   `invalid-request`, or `grounding-refused` if a caller ever routes that
  *   through this path) that a retry cannot fix.
+ *
+ * `notAttempted: true` on a retryable outcome (`ol-egov.141.89.5.111`): the
+ * runner could not make the call its job exists for, because what that call
+ * needs is not there right now (no Worker configured, the Worker could not be
+ * reached, or a check that must come first could not run for the same
+ * reason). Such an outcome says nothing about the job, so the engine defers
+ * it without counting the attempt against `MAX_ATTEMPTS`: an outage, however
+ * long, never fails a job, and the job resumes when the call can be made
+ * (`engine.ts`, `recordOutcome`). Nothing persisted changes shape.
  */
 export type JobRunOutcome =
   | { readonly ok: true; readonly budgetHeadroom?: number }
-  | { readonly ok: false; readonly retryable: true; readonly budgetHeadroom?: number }
+  | {
+      readonly ok: false;
+      readonly retryable: true;
+      readonly budgetHeadroom?: number;
+      readonly notAttempted?: true;
+    }
   | { readonly ok: false; readonly retryable: false; readonly reason: string };
 
 /** Attempts one submission for `job`. Supplied by the host; the engine calls it at most once per tick. */

@@ -189,7 +189,7 @@ describe('runInstrumentRevisionJob', () => {
       payload(),
     );
 
-    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(outcome).toEqual({ ok: false, retryable: true, notAttempted: true });
   });
 
   it('a grounded refusal caches nothing and is a recorded non-retryable failure', async () => {
@@ -656,7 +656,7 @@ describe('runInstrumentRevisionJob: the predecessor demand is restated as the su
       payload(),
     );
 
-    expect(outcome).toEqual({ ok: false, retryable: true });
+    expect(outcome).toEqual({ ok: false, retryable: true, notAttempted: true });
     expect(counter.counts()).toEqual([]);
   });
 

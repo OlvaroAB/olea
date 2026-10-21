@@ -1,18 +1,22 @@
-// `ol-egov.141.89.5.111`: two findings from code reading (discovered by ol-egov.141.89.5.107), each
-// shown or disproved here through the production construction.
+// `ol-egov.141.89.5.111`: two findings from code reading (discovered by ol-egov.141.89.5.107), shown
+// here through the production construction (client f653ec04, as `it.fails` tests), and the fix.
 //
-// 1. A renamed PDF or other binary source is never followed: its questions stay withheld, while a
-//    renamed lecture transcript is followed through `onSourceRenamed` (`main.ts`'s vault rename
-//    handler calls it, as these tests do).
-// 2. A missing Worker or a transport failure counts against the queue's attempts on a revision job,
-//    so an outage can fail the job and leave the old question suspended with nothing replacing it.
-//    The job is put on the queue by the citation pass itself and drained by `buildIngestionRunner`,
-//    the runner chain `main.ts` drains.
+// 1. A renamed PDF or other binary source was never followed: its questions stayed withheld, while a
+//    renamed lecture transcript was followed through `onSourceRenamed` (`main.ts`'s vault rename
+//    handler calls it, as these tests do). A fix that moved the question's citation to the file's new
+//    path was written and is HELD for David's ruling (it changes a citation record's write-once
+//    rule, Class C), so the follow tests are pinned again as `it.fails`; an unseen move withholds.
+// 2. A missing Worker or a transport failure counted against the queue's attempts on a revision job,
+//    and an unreachable Worker read as a refusal, so an outage failed the job and left the old
+//    question suspended with nothing replacing it. Now an outage leaves the job waiting, uncounted,
+//    and it completes once the Worker is back; a genuine refusal still fails the job. The job is put
+//    on the queue by the citation pass itself and drained by `buildIngestionRunner`, the runner chain
+//    `main.ts` drains.
 //
-// A finding that holds is pinned with `it.fails`, its name saying what is wrong, so it turns red
-// once the behaviour is fixed and is then flipped to a plain `it`. Each was run once as a plain test
-// and failed on its own assertion. Every course, lecture, file and sentence here is invented.
+// The outage tests are plain `it`; the held rename tests are `it.fails`. Every course, lecture, file and sentence
+// here is invented.
 import {
+  citationStorePath,
   EmbeddingCacheEngine,
   type EmbeddingCacheStore,
   type EmbeddingProvider,
@@ -20,10 +24,12 @@ import {
   type ExtractedUnit,
   enumerateVaultInstruments,
   hashContent,
+  MAX_ATTEMPTS,
   type PersistedEmbeddingCache,
   type PersistedJob,
   type PersistedKeywordIndex,
   type RevisionJudgePort,
+  readInstrumentCitation,
   readReviewLogHistory,
   suspendedInstrumentIds,
   type WorkerTaskRequest,
@@ -148,20 +154,23 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     expect(h.judge.judge).not.toHaveBeenCalled();
   });
 
-  it('a renamed PDF: onSourceRenamed moves nothing (it follows transcripts only)', async () => {
+  it('a renamed PDF: onSourceRenamed moves nothing (it follows transcripts only), and its citation stays as written', async () => {
     const { vault, h } = await pdfSeeded();
+    const before = vault.files.get(citationStorePath('q-pdf'));
     expect(await renamePdfAsSeen(vault, h)).toBe(0);
+    expect(vault.files.get(citationStorePath('q-pdf'))).toBe(before);
   });
 
-  it.fails('[defect ol-egov.141.89.5.111: a renamed PDF is never followed] a PDF renamed while Olea runs, bytes unchanged, is still served at the new path after the next pass', async () => {
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] a PDF renamed while Olea runs, bytes unchanged, is still served at the new path after the next pass', async () => {
     const { vault, h } = await pdfSeeded();
     await renamePdfAsSeen(vault, h);
     await h.pass(vault);
     expect(await h.withheld(['q-pdf'])).toEqual(new Set());
     expect(await presentedAs(h, vault, 'q-pdf')).toBe('clear');
+    expect(h.judge.judge).not.toHaveBeenCalled();
   });
 
-  it.fails('[defect ol-egov.141.89.5.111: a renamed PDF is never followed] once the renamed file is extracted at its new path, its question is served again', async () => {
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] once the renamed file is extracted at its new path, its question is served again', async () => {
     const { vault, h } = await pdfSeeded();
     await renamePdfAsSeen(vault, h);
     await h.pass(vault);
@@ -169,6 +178,84 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     await h.pass(vault);
     expect(await h.withheld(['q-pdf'])).toEqual(new Set());
     expect(await presentedAs(h, vault, 'q-pdf')).toBe('clear');
+  });
+
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] a hold raised before the rename was seen (the pass read the old path first) lifts once the citation follows', async () => {
+    const { vault, h } = await pdfSeeded();
+    vault.binaries.delete(PDF);
+    vault.binaries.set(PDF_RENAMED, PDF_BYTES);
+    await h.pass(vault);
+    expect(await h.withheld(['q-pdf'])).toEqual(new Set(['q-pdf']));
+    await h.trigger.onSourceRenamed(vault, PDF, PDF_RENAMED);
+    await h.pass(vault);
+    expect(await h.withheld(['q-pdf'])).toEqual(new Set());
+    expect(await presentedAs(h, vault, 'q-pdf')).toBe('clear');
+  });
+
+  it('an unseen move (a delete and a create, no rename event) still withholds', async () => {
+    const { vault, h } = await pdfSeeded();
+    vault.binaries.delete(PDF);
+    vault.binaries.set(PDF_RENAMED, PDF_BYTES);
+    await h.pass(vault);
+    await pdfUnitsLandAtNewPath(vault, h);
+    await h.pass(vault);
+    expect(await h.withheld(['q-pdf'])).toEqual(new Set(['q-pdf']));
+    expect(await presentedAs(h, vault, 'q-pdf')).toBe('check-failed');
+    expect(await readInstrumentCitation(vault, 'q-pdf')).toMatchObject({ sourcePath: PDF });
+  });
+
+  it('a file renamed into a note is not the same kind of source: nothing moves and the question is withheld', async () => {
+    const { vault, h } = await pdfSeeded();
+    const asNote = 'Course A/Lecture 3/slides as a note.md';
+    vault.binaries.delete(PDF);
+    vault.files.set(asNote, 'Invented note text, no longer slides.\n');
+    expect(await h.trigger.onSourceRenamed(vault, PDF, asNote)).toBe(0);
+    await h.pass(vault);
+    expect(await h.withheld(['q-pdf'])).toEqual(new Set(['q-pdf']));
+    expect(await readInstrumentCitation(vault, 'q-pdf')).toMatchObject({ sourcePath: PDF });
+  });
+
+  it('a rename event naming a path where no file stands moves nothing', async () => {
+    const { vault, h } = await pdfSeeded();
+    const before = vault.files.get(citationStorePath('q-pdf'));
+    expect(await h.trigger.onSourceRenamed(vault, PDF, PDF_RENAMED)).toBe(0);
+    expect(vault.files.get(citationStorePath('q-pdf'))).toBe(before);
+  });
+
+  it('a rename of a file no tracked question cites moves nothing', async () => {
+    const { vault, h } = await pdfSeeded();
+    const other = 'Course A/Lecture 4/other slides.pdf';
+    vault.binaries.set(other, PDF_BYTES);
+    const snapshot = vault.snapshot();
+    vault.binaries.delete(other);
+    vault.binaries.set(`${other}.renamed.pdf`, PDF_BYTES);
+    expect(await h.trigger.onSourceRenamed(vault, other, `${other}.renamed.pdf`)).toBe(0);
+    expect(vault.files.get(citationStorePath('q-pdf'))).toBe(
+      snapshot.get(citationStorePath('q-pdf')),
+    );
+  });
+
+  it.fails("[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] the file's extracted text moves with it, so a successor waiting for that text finds it at the new path", async () => {
+    const { vault, h } = await pdfSeeded();
+    const units: ExtractedUnit[] = [
+      {
+        text: 'Invented slide text for page 2.',
+        provenance: { sourcePath: PDF, location: { page: 2 } },
+      },
+    ];
+    const hash = await hashContent(PDF_BYTES);
+    await h.trigger.onSourceUnitsLanded(
+      vault,
+      { enqueue: async () => undefined, suspend: async () => undefined },
+      units,
+      new Map([[PDF, hash]]),
+    );
+    expect(h.trigger.landedSourceText(PDF, hash, 2)).toBe('Invented slide text for page 2.');
+    await renamePdfAsSeen(vault, h);
+    expect(h.trigger.landedSourceText(PDF_RENAMED, hash, 2)).toBe(
+      'Invented slide text for page 2.',
+    );
+    expect(h.trigger.landedSourceText(PDF, hash, 2)).toBeUndefined();
   });
 });
 
@@ -209,6 +296,7 @@ function noteWith(prose: string): string {
 interface OutageSetup {
   readonly vault: MemoryVault;
   readonly engine: Awaited<ReturnType<typeof buildIngestionRunner>>['engine'];
+  readonly cache: ReturnType<typeof createVaultDraftCacheStore>;
 }
 
 /**
@@ -227,11 +315,12 @@ async function suspendedWithJobQueued(
     `${JSON.stringify({ instrumentId: 'q-note', sourcePath: NOTE, page: 1, schemaVersion: 2 })}\n`,
   );
   const host = new FakeDataHost();
+  const cache = createVaultDraftCacheStore(vault);
   const { engine } = await buildIngestionRunner({
     vault,
     queueStore: new ObsidianQueueStore(host),
     capability: { canDrain: true },
-    revision: { cache: createVaultDraftCacheStore(vault), draftDeps },
+    revision: { cache, draftDeps },
   });
   const judge: RevisionJudgePort = {
     judge: vi.fn(async () => ({ material: true, reason: 'scripted' })),
@@ -250,7 +339,7 @@ async function suspendedWithJobQueued(
   await trigger.tick(vault, actions);
   vault.files.set(NOTE, noteWith(NOTE_PROSE_AFTER));
   await trigger.tick(vault, actions);
-  return { vault, engine };
+  return { vault, engine, cache };
 }
 
 function revisionJob(setup: OutageSetup): PersistedJob | undefined {
@@ -301,11 +390,11 @@ const keywordIndex: PersistedKeywordIndex = {
 
 async function realDraftDeps(
   transport: { send(request: WorkerTaskRequest): Promise<unknown> },
-  embeddingsReachable: boolean,
+  embeddingsReachable: () => boolean,
 ): Promise<DraftQuizCardsDeps> {
   const provider: EmbeddingProvider = {
     embed: async (request) => {
-      if (!embeddingsReachable) throw new TypeError('Failed to fetch');
+      if (!embeddingsReachable()) throw new TypeError('Failed to fetch');
       return { vectors: request.texts.map(() => [1, 0, 0]) };
     },
   };
@@ -320,11 +409,69 @@ async function realDraftDeps(
   } as DraftQuizCardsDeps;
 }
 
-const SUPPORTED = {
+const STAMP = { contractVersion: 1, promptVersion: '1.0.0', modelId: 'invented-model' };
+const SUPPORTED = { ok: true, stamp: STAMP, result: { supported: true, reason: 'scripted' } };
+const NOT_SUPPORTED = { ok: true, stamp: STAMP, result: { supported: false, reason: 'scripted' } };
+const JUDGE_ERROR = { ok: false, code: 'upstream-error', message: 'invented upstream failure' };
+const DRAFTED = {
   ok: true,
-  stamp: { contractVersion: 1, promptVersion: '1.0.0', modelId: 'invented-model' },
-  result: { supported: true, reason: 'scripted' },
+  stamp: STAMP,
+  result: {
+    questions: [
+      {
+        stem: 'Which invented statement about the kalomi rule holds now?',
+        correctAnswer: 'It fails above the venido line',
+        distractors: ['It holds above the line', 'It never holds', 'It always holds'],
+        feedback: 'Invented feedback.',
+      },
+    ],
+  },
 };
+
+/**
+ * What the Worker does, switchable mid-test:
+ *  - `none`: no Worker configured (`draftDeps()` answers `null`);
+ *  - `unreachable`: configured, and nothing reaches it (embeddings and every task call fail);
+ *  - `generation-unreachable`: the embeddings and the judge are answered, the generation call fails;
+ *  - `up`, `rejects`, `judge-errors`: reachable, and the judge supports, rejects or answers an error.
+ */
+type WorkerState =
+  | 'none'
+  | 'unreachable'
+  | 'generation-unreachable'
+  | 'up'
+  | 'rejects'
+  | 'judge-errors';
+
+async function scriptedWorker(initial: WorkerState) {
+  let state: WorkerState = initial;
+  const transport = {
+    send: vi.fn(async (request: WorkerTaskRequest): Promise<unknown> => {
+      if (state === 'none' || state === 'unreachable') throw new TypeError('Failed to fetch');
+      if (request.taskId === 'grounding.judge.v1') {
+        if (state === 'rejects') return NOT_SUPPORTED;
+        if (state === 'judge-errors') return JUDGE_ERROR;
+        return SUPPORTED;
+      }
+      if (state === 'generation-unreachable') throw new TypeError('Failed to fetch');
+      return DRAFTED;
+    }),
+  };
+  const deps = await realDraftDeps(transport, () => state !== 'unreachable' && state !== 'none');
+  const sent = (taskId: string): number =>
+    transport.send.mock.calls.filter(([request]) => request.taskId === taskId).length;
+  return {
+    draftDeps: (): DraftQuizCardsDeps | null => (state === 'none' ? null : deps),
+    set: (next: WorkerState) => {
+      state = next;
+    },
+    judgeCalls: () => sent('grounding.judge.v1'),
+    generationCalls: () => sent('quiz.generate.v1'),
+  };
+}
+
+/** More drains than the queue's attempt cap allows counted retries. */
+const OUTLASTS_THE_CAP = MAX_ATTEMPTS + 4;
 
 describe('claim 2: an outage while a revision job waits (ol-egov.141.89.5.111)', () => {
   afterEach(() => {
@@ -344,42 +491,105 @@ describe('claim 2: an outage while a revision job waits (ol-egov.141.89.5.111)',
     });
   });
 
-  it.fails('[defect ol-egov.141.89.5.111: with no Worker configured, every drain spends one of the queue attempts, and the job fails at the attempt cap] the job waits through the outage instead of failing', async () => {
+  it('with no Worker configured, the job waits through the outage, uncounted, instead of failing', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
     const setup = await suspendedWithJobQueued(() => null);
     await drainThroughOutage(setup, 12);
-    expect(revisionJob(setup)?.status).not.toBe('failed');
+    expect(revisionJob(setup)?.status).toBe('deferred');
+    expect(revisionJob(setup)?.attempts).toBe(0);
   });
 
-  it.fails('[defect ol-egov.141.89.5.111: a transport failure on the drafting call spends one of the queue attempts, and the job fails at the attempt cap] the job waits through the outage instead of failing', async () => {
+  it('a transport failure on the generation call: the job waits through the outage, uncounted, and the judge is asked once', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
     // The Worker answers the grounding judge and the embeddings; the generation call never arrives.
-    const transport = {
-      send: vi.fn(async (request: WorkerTaskRequest): Promise<unknown> => {
-        if (request.taskId === 'grounding.judge.v1') return SUPPORTED;
-        throw new TypeError('Failed to fetch');
-      }),
-    };
-    const deps = await realDraftDeps(transport, true);
-    const setup = await suspendedWithJobQueued(() => deps);
+    const worker = await scriptedWorker('generation-unreachable');
+    const setup = await suspendedWithJobQueued(worker.draftDeps);
     await drainThroughOutage(setup, 12);
-    expect(revisionJob(setup)?.status).not.toBe('failed');
+    expect(revisionJob(setup)?.status).toBe('deferred');
+    expect(revisionJob(setup)?.attempts).toBe(0);
+    expect(worker.generationCalls()).toBe(12);
+    expect(worker.judgeCalls()).toBe(1);
   });
 
-  it.fails('[defect ol-egov.141.89.5.111: an unreachable Worker reads as a grounded refusal in the real drafting call, and the job fails on its first attempt, not retried] the job waits through the outage instead of failing', async () => {
+  it('a Worker configured but unreachable through the real drafting call: the job waits, uncounted, and nothing reads it as a refusal', async () => {
     vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
     // The Worker is configured and unreachable: the embeddings and every task call fail.
-    const transport = {
-      send: vi.fn(async (_request: WorkerTaskRequest): Promise<unknown> => {
-        throw new TypeError('Failed to fetch');
-      }),
-    };
-    const deps = await realDraftDeps(transport, false);
-    const setup = await suspendedWithJobQueued(() => deps);
+    const worker = await scriptedWorker('unreachable');
+    const setup = await suspendedWithJobQueued(worker.draftDeps);
     await drainThroughOutage(setup, 12);
-    expect(revisionJob(setup)?.status).not.toBe('failed');
+    expect(revisionJob(setup)?.status).toBe('deferred');
+    expect(revisionJob(setup)?.attempts).toBe(0);
+    expect(worker.judgeCalls()).toBe(0);
+  });
+
+  it.each([
+    ['no Worker configured', 'none', 1],
+    ['the generation call unreachable', 'generation-unreachable', 1],
+    ['the Worker unreachable', 'unreachable', 1],
+  ] as const)(
+    'an outage outlasting the attempt cap (%s): once the Worker is back the job completes and its successor is drafted',
+    async (_label, outage, judgeCalls) => {
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
+      const worker = await scriptedWorker(outage);
+      const setup = await suspendedWithJobQueued(worker.draftDeps);
+      await drainThroughOutage(setup, OUTLASTS_THE_CAP);
+      expect(revisionJob(setup)).toMatchObject({ status: 'deferred', attempts: 0 });
+      expect(await setup.cache.listPending()).toEqual([]);
+
+      worker.set('up');
+      await drainThroughOutage(setup, 1);
+      expect(revisionJob(setup)?.status).toBe('done');
+      const drafts = await setup.cache.listPending();
+      expect(drafts).toHaveLength(1);
+      expect(drafts[0]).toMatchObject({ predecessorInstrumentId: 'q-note', courseCode: 'COURSEA' });
+      // The judge was asked once in all: a held answer covers every retry of the same request.
+      expect(worker.judgeCalls()).toBe(judgeCalls);
+      expect(await predecessorSuspended(setup.vault)).toBe(true);
+    },
+  );
+
+  it('a genuine refusal still fails the job on its first attempt, as before', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
+    const worker = await scriptedWorker('rejects');
+    const setup = await suspendedWithJobQueued(worker.draftDeps);
+    await drainThroughOutage(setup, 1);
+    const job = revisionJob(setup);
+    expect(job?.status).toBe('failed');
+    expect(job?.attempts).toBe(1);
+    expect(job?.failedReason).toContain('the grounded draft was refused');
+    expect(worker.generationCalls()).toBe(0);
+  });
+
+  it('an outage, then a genuine refusal once the Worker is back: the job fails then, with the refusal', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
+    const worker = await scriptedWorker('unreachable');
+    const setup = await suspendedWithJobQueued(worker.draftDeps);
+    await drainThroughOutage(setup, OUTLASTS_THE_CAP);
+    worker.set('rejects');
+    await drainThroughOutage(setup, 1);
+    expect(revisionJob(setup)).toMatchObject({ status: 'failed', attempts: 1 });
+    expect(revisionJob(setup)?.failedReason).toContain('the grounded draft was refused');
+  });
+
+  it('a judge that answers with an error is neither an outage nor a refusal: a counted retry, bounded by the cap', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-10-01T09:00:00Z'));
+    const worker = await scriptedWorker('judge-errors');
+    const setup = await suspendedWithJobQueued(worker.draftDeps);
+    await drainThroughOutage(setup, 1);
+    expect(revisionJob(setup)).toMatchObject({ status: 'deferred', attempts: 1 });
+    await drainThroughOutage(setup, 12);
+    expect(revisionJob(setup)).toMatchObject({
+      status: 'failed',
+      attempts: MAX_ATTEMPTS + 1,
+      failedReason: `attempt cap reached (${MAX_ATTEMPTS} attempts)`,
+    });
+    expect(worker.generationCalls()).toBe(0);
   });
 });

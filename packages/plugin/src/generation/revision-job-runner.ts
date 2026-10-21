@@ -115,6 +115,28 @@
  * `retryable: false` with a reason, which the queue records as a `failed` job with that
  * `failedReason`. A grounded refusal is not an empty draft and is unchanged.
  *
+ * ## An outage leaves the job waiting (`ol-egov.141.89.5.111`)
+ *
+ * The boundary document's offline rule (`docs/Olea_architecture_boundary.md` §1, service repo:
+ * reconnection drains the client work queue) asks that an outage leave this job waiting, never
+ * failed, since a failed job leaves the old question suspended with nothing replacing it. Before
+ * this, a missing Worker or a transport failure was a counted retry, so a long enough outage failed
+ * the job at the queue's attempt cap (each retry also spending a grounding-judge call), and an
+ * unreachable Worker reached through the real drafting call failed it at once, because the gate's
+ * could-not-check refusal was read as a refusal of the successor.
+ *
+ * Now an attempt whose generation call could not be made returns `notAttempted` (`olea-core`'s
+ * `JobRunOutcome`), which the queue defers without counting: no Worker configured; a Worker call
+ * that failed with no response at all (the transport threw, which {@link watchWorkerCalls} sees),
+ * on the generation call or on the judge call the gate makes first; or the gate's numeric check that
+ * could not run (`composite-check-unavailable`: no embedding to compare, offline or not computed
+ * yet; nothing is sent for judgment then). The job resumes on the queue's first tick after its
+ * backoff once the call can be made. A judge that answered but could not be read, and a throw with
+ * every call answered, are counted retries under the queue's cap; every other refusal fails the job
+ * as before. While the job waits for a generation call, the judge's answer to the identical request
+ * is held in memory ({@link heldJudgeAnswersFor}) and reused, so no further judge call is made until
+ * the generation call goes through. Nothing is persisted: no field, key or format is added.
+ *
  * ## Why this bypasses `runGenerationSweep`'s cache dedupe
  *
  * `runGenerationSweep` skips a (courseCode, conceptName) pair the cache
@@ -244,11 +266,14 @@ import {
   askFromInstrumentReading,
   authoringDemandFields,
   CURRENT_PASSAGE_RULE,
+  type DemandRouting,
   type DemandRoutingCounter,
   type EnqueueInput,
   type EnqueueResult,
   enumerateVaultInstruments,
+  type GroundingRefusalReason,
   hashContent,
+  hashText,
   type InstrumentCitation,
   type InstrumentRevisionJobPayload,
   type JobRunner,
@@ -260,8 +285,6 @@ import {
   PASSAGE_RULES,
   type PaperDemand,
   type PersistedJob,
-  parseCardsWithInvalid,
-  parseMcqBlocks,
   parsePassageDigest,
   projectInstrumentValidity,
   type QuestionBindingBlock,
@@ -273,10 +296,11 @@ import {
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
+  type WorkerTaskRequest,
   type WorkerTaskTransport,
 } from 'olea-core';
 import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
-import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { stripQuestionBlocks } from '../ingestion/materiality/citation-material.js';
 import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import {
   hasTranscriptExtension,
@@ -292,6 +316,7 @@ import type {
   DraftQuizCardsResult,
 } from '../retrieval/draft-quiz-cards.js';
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
+import { GROUNDING_JUDGE_TASK_ID } from '../retrieval/workerGroundingJudge.js';
 import type { DraftCacheStore } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
@@ -333,7 +358,8 @@ export function isInstrumentRevisionJobPayload(
  * How many attempts an empty or unparseable successor draft gets before the job is recorded as
  * failed. A declared constant, not fitted: each attempt is a generation call, so the bound is small;
  * a malformed reply is usually a one-off the next attempt clears. It sits below the queue's own
- * attempt cap, which still governs retries of transport failures.
+ * attempt cap, which still governs every other counted retry (an outage is not counted: module
+ * doc, "An outage leaves the job waiting").
  */
 export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
 
@@ -382,6 +408,102 @@ export interface CitedSourceNow {
 }
 
 const GENERATION_TASK_IDS: ReadonlySet<string> = new Set(['quiz.generate.v1', 'cards.generate.v1']);
+
+/**
+ * `ol-egov.141.89.5.111`: the call this job exists for could not be made (module doc, "An outage
+ * leaves the job waiting"). The queue defers the job without counting the attempt (`olea-core`'s
+ * `JobRunOutcome.notAttempted`).
+ */
+const NOT_ATTEMPTED: JobRunOutcome = { ok: false, retryable: true, notAttempted: true };
+
+/**
+ * `ol-egov.141.89.5.111`: the grounding judge's answer to one request, kept in memory while the job
+ * waits for a generation call that cannot be made, so a retry asks the judge nothing it has already
+ * answered. `requestKey` is a hash of the whole request (task, contract, query and passages); any
+ * difference is a new question for the judge.
+ */
+interface HeldJudgeAnswer {
+  readonly requestKey: string;
+  readonly response: unknown;
+}
+
+const heldJudgeAnswersByCache = new WeakMap<DraftCacheStore, Map<string, HeldJudgeAnswer>>();
+
+/**
+ * The judge answers held for jobs waiting through an outage, by predecessor id: one map per draft
+ * cache instance, so per plugin session in production (the posture `demandRoutingCounterFor` takes).
+ * An entry lives only while its job is waiting; any other outcome of that job removes it.
+ */
+function heldJudgeAnswersFor(cache: DraftCacheStore): Map<string, HeldJudgeAnswer> {
+  let held = heldJudgeAnswersByCache.get(cache);
+  if (held === undefined) {
+    held = new Map();
+    heldJudgeAnswersByCache.set(cache, held);
+  }
+  return held;
+}
+
+async function judgeRequestKey(request: WorkerTaskRequest): Promise<string> {
+  return hashText(
+    JSON.stringify([request.contractVersion, request.taskId, request.payload ?? null]),
+  );
+}
+
+function isAnsweredBody(body: unknown): boolean {
+  return typeof body === 'object' && body !== null && (body as { ok?: unknown }).ok === true;
+}
+
+/** One drafting attempt's Worker calls, as {@link watchWorkerCalls} saw them. */
+interface WatchedWorkerCalls<T> {
+  readonly deps: T;
+  /** Whether a call failed with no response at all (the transport threw: no connection, or no usable body). */
+  readonly unreachable: () => boolean;
+  /** The judge's answer this attempt received or reused, if it got one. */
+  readonly judged: () => HeldJudgeAnswer | undefined;
+}
+
+/**
+ * `ol-egov.141.89.5.111`: `draftDeps` with its transport watched, so the runner can tell an outage
+ * from a refusal (module doc, "An outage leaves the job waiting"). A send that throws marks the
+ * attempt unreachable and rethrows unchanged. A grounding-judge request identical to `held`'s is
+ * answered from `held` without being sent. Every other request, and every response, passes through.
+ */
+function watchWorkerCalls<T extends { readonly transport: WorkerTaskTransport }>(
+  draftDeps: T,
+  held: HeldJudgeAnswer | undefined,
+): WatchedWorkerCalls<T> {
+  const inner = draftDeps.transport;
+  let unreachable = false;
+  let judged: HeldJudgeAnswer | undefined;
+  return {
+    deps: {
+      ...draftDeps,
+      transport: {
+        send: async (request) => {
+          const requestKey =
+            request.taskId === GROUNDING_JUDGE_TASK_ID ? await judgeRequestKey(request) : undefined;
+          if (requestKey !== undefined && held !== undefined && held.requestKey === requestKey) {
+            judged = held;
+            return held.response;
+          }
+          let response: unknown;
+          try {
+            response = await inner.send(request);
+          } catch (error) {
+            unreachable = true;
+            throw error;
+          }
+          if (requestKey !== undefined && isAnsweredBody(response)) {
+            judged = { requestKey, response };
+          }
+          return response;
+        },
+      },
+    },
+    unreachable: () => unreachable,
+    judged: () => judged,
+  };
+}
 
 /**
  * `draftDeps` with its transport wrapped so a generation request carries `passage` first in
@@ -455,8 +577,9 @@ export interface RevisionJobRunnerDeps {
    * Read fresh on every drained job, not captured at construction — the same
    * "read whatever is current" posture `ingestion/wiring.ts`'s own module
    * doc states for `this.knowledgeKind?.classifier`. `null` means the Worker
-   * isn't configured (F7.8); the job is then deferred (`retryable: true`)
-   * rather than failed outright, since this is a transient configuration
+   * isn't configured (F7.8); the job then waits (`notAttempted`, not counted
+   * against the queue's attempts: module doc, "An outage leaves the job
+   * waiting") rather than failing, since this is a transient configuration
    * state, not a fact about the job.
    */
   readonly draftDeps: () => DraftQuizCardsDeps | null;
@@ -485,7 +608,8 @@ export interface RevisionJobRunnerDeps {
    * Where this runner counts each successor ask's routing outcome, per concept and per reason
    * (`[D-437]`). Absent, `demandRoutingCounterFor(deps.cache)`: the session counter the sweep and
    * the heading offer share. An ask that was never made (a rejected predecessor, no Worker, a cloze
-   * predecessor) is not counted. Local and in memory (D-005); nothing is persisted or sent.
+   * predecessor, an attempt the outage kept from its generation call) is not counted. Local and in
+   * memory (D-005); nothing is persisted or sent.
    */
   readonly demandCounter?: DemandRoutingCounter;
   /**
@@ -547,24 +671,20 @@ async function resolveRevisionTarget(
 }
 
 /**
- * The successor's demand fields (`[D-437]`): the predecessor's declared demand restated as the
- * ask, routed against the generator the successor goes through, counted, and reduced to what the
- * request carries. Empty (and the request today's) unless the predecessor declared a demand the
- * generator serves. Reads the predecessor's record and writes nothing.
+ * The successor's demand routing (`[D-437]`): the predecessor's declared demand restated as the
+ * ask and routed against the generator the successor goes through; `authoringDemandFields` reduces
+ * it to what the request carries, empty (and the request today's) unless the predecessor declared a
+ * demand the generator serves. Not counted here: the caller counts it once the attempt is known to
+ * have been made (`ol-egov.141.89.5.111`). Reads the predecessor's record and writes nothing.
  */
-async function successorDemandFields(
+async function successorDemandRouting(
   vault: VaultSource,
-  counter: DemandRoutingCounter,
   target: RevisionTarget,
   predecessorInstrumentId: string,
   taskId: 'quiz.generate.v1' | 'cards.generate.v1',
-): Promise<AuthoringDemandFields> {
+): Promise<DemandRouting> {
   const reading = await readInstrumentDemand(vault, predecessorInstrumentId, target.block);
-  const routing = counter.record(
-    target.conceptKey,
-    routeDemandAsk(askFromInstrumentReading(reading), taskId),
-  );
-  return authoringDemandFields(routing);
+  return routeDemandAsk(askFromInstrumentReading(reading), taskId);
 }
 
 /**
@@ -582,7 +702,8 @@ async function standsRejected(vault: VaultSource, instrumentId: string): Promise
 /** One "nothing to cache" reason, shared by both drafting branches below — see their own doc. */
 type SuccessorDraftOutcome<TContent> =
   | { readonly kind: 'thrown' }
-  | { readonly kind: 'nothing-to-cache' }
+  /** The grounding gate refused, for this reason (`ol-egov.141.89.5.111`: an outage is told apart by it). */
+  | { readonly kind: 'refused'; readonly reason: GroundingRefusalReason }
   /** Unparseable or empty reply: retried under `REVISION_EMPTY_DRAFT_MAX_ATTEMPTS`, then a recorded failure. */
   | { readonly kind: 'empty-draft' }
   | {
@@ -650,19 +771,17 @@ async function draftMcqSuccessor(
   } catch {
     // A generative call failing outright (network, malformed transport
     // response) — retryable, same posture `pipeline.ts`'s per-concept catch
-    // uses and `createExtractionJobRunner`'s own catch-all.
+    // uses and `createExtractionJobRunner`'s own catch-all. Whether it was an
+    // outage is the caller's to tell (`ol-egov.141.89.5.111`).
     return { kind: 'thrown' };
   }
 
   if (result.status === 'refused') {
-    // A grounded refusal is not an error (F4.5's grounded-by-construction
-    // argument, `pipeline.ts`'s own doc) — nothing to cache, and the job
-    // succeeded at doing exactly what it was asked: check whether a
-    // successor could be grounded right now. `[D-093]`'s revision-detection
-    // caller (unbuilt — see the module doc) owns deciding whether a refused
-    // successor needs a different signal back to her; this runner only owns
-    // not pretending a refusal is a transport failure.
-    return { kind: 'nothing-to-cache' };
+    // Nothing to cache. Which refusal it was decides what the job does: a
+    // check that could not run is not a refusal of the successor
+    // (`ol-egov.141.89.5.111`, {@link undraftedOutcome}); this runner only
+    // owns not pretending one is the other.
+    return { kind: 'refused', reason: result.reason };
   }
 
   const questions = extractDraftedQuestions(result.response);
@@ -707,7 +826,7 @@ async function draftQaSuccessor(
   }
 
   if (result.status === 'refused') {
-    return { kind: 'nothing-to-cache' };
+    return { kind: 'refused', reason: result.reason };
   }
 
   const cards = extractDraftedCards(result.response);
@@ -834,11 +953,7 @@ async function notePassageNow(
   const cited = predecessor.sourcePath;
   let material: string;
   try {
-    const source = await vault.read(cited);
-    material = stripInstrumentSpans(source, [
-      ...parseCardsWithInvalid(source).cards.map((card) => card.span),
-      ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
-    ]);
+    material = stripQuestionBlocks(await vault.read(cited));
   } catch {
     return passage;
   }
@@ -956,7 +1071,9 @@ function transcriptPassageNow(
  * `ol-egov.141.89.5.81` ([D-518]), `ol-egov.141.89.5.107`: the successor's passage and citation for
  * a non-markdown source (a PDF, slide deck or document). The citation keeps the predecessor's path,
  * page and section and records the bytes its passage was extracted from, which the accept guard and
- * the presentation check verify against the file later.
+ * the presentation check verify against the file later. The predecessor's citation names the file
+ * where it stands: a rename Olea saw moves it (`ol-egov.141.89.5.111`,
+ * `CitationRevisionTrigger.onSourceRenamed`), so the successor cites the new path.
  *
  *  - The job carries the hash of the bytes its page text was re-extracted from. While the file still
  *    has those bytes (or cannot be read, or no citation pass is composed), that hash is recorded
@@ -1045,6 +1162,62 @@ function noSuccessorOutcome(payload: InstrumentRevisionJobPayload, why: string):
 }
 
 /**
+ * `ol-egov.141.89.5.111`: what a drafting attempt that cached nothing tells the queue (module doc,
+ * "An outage leaves the job waiting"). `unreachable` is whether one of the attempt's Worker calls
+ * failed with no response at all.
+ *
+ *  - The generation call, or the judge call before it, failed with no response: an outage, so the
+ *    job waits uncounted ({@link NOT_ATTEMPTED}). The gate's numeric check that could not run
+ *    (`composite-check-unavailable`: no embedding to compare, offline or not yet computed) is the
+ *    same, decided before any judge call, so nothing was sent for judgment.
+ *  - A throw with every call answered, and a judge that answered but could not be read
+ *    (`judge-unavailable`: an error, a timeout or an unusable verdict): a counted retry, bounded by
+ *    the queue's cap. Neither is a fact about the successor.
+ *  - An empty or unparseable reply: {@link emptyDraftOutcome}.
+ *  - Every other refusal is the gate refusing the successor, which fails the job as before.
+ */
+function undraftedOutcome(
+  drafted: Exclude<SuccessorDraftOutcome<unknown>, { readonly kind: 'drafted' }>,
+  unreachable: boolean,
+  payload: InstrumentRevisionJobPayload,
+  attempts: number,
+): JobRunOutcome {
+  switch (drafted.kind) {
+    case 'thrown':
+      return unreachable ? NOT_ATTEMPTED : { ok: false, retryable: true };
+    case 'empty-draft':
+      return emptyDraftOutcome(payload, attempts);
+    case 'refused':
+      if (drafted.reason === 'composite-check-unavailable') return NOT_ATTEMPTED;
+      if (drafted.reason === 'judge-unavailable') {
+        return unreachable ? NOT_ATTEMPTED : { ok: false, retryable: true };
+      }
+      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+  }
+}
+
+/**
+ * `ol-egov.141.89.5.111`: settles one drafting attempt's bookkeeping. While the job waits uncounted
+ * (`waiting`), the judge's answer is held so the next attempt asks the judge nothing it already
+ * answered; any other outcome drops it. The demand ask is counted only when the attempt was made.
+ */
+function settleDraftAttempt(
+  waiting: boolean,
+  watched: WatchedWorkerCalls<unknown>,
+  held: Map<string, HeldJudgeAnswer>,
+  payload: InstrumentRevisionJobPayload,
+  countAsk: () => void,
+): void {
+  if (waiting) {
+    const judged = watched.judged();
+    if (judged !== undefined) held.set(payload.predecessorInstrumentId, judged);
+    return;
+  }
+  held.delete(payload.predecessorInstrumentId);
+  countAsk();
+}
+
+/**
  * Drafts a successor for one drained `'instrument-revision'` job and caches
  * it as a `DraftRecord` carrying `predecessorInstrumentId` — the piece
  * `accept.ts` forwards to `materializeAcceptedDraft`/
@@ -1074,9 +1247,10 @@ export async function runInstrumentRevisionJob(
   if (draftDeps === null) {
     // F7.8's "grey out, don't crash" posture: the Worker isn't configured
     // right now, which is a transient fact about this session, not a
-    // permanent property of the job — resumed the next time the engine
-    // retries it, same as a `transient-error` outcome.
-    return { ok: false, retryable: true };
+    // permanent property of the job. `ol-egov.141.89.5.111`: it waits
+    // uncounted, so it is resumed once a Worker is configured however long
+    // that takes (module doc, "An outage leaves the job waiting").
+    return NOT_ATTEMPTED;
   }
 
   const target = await resolveRevisionTarget(deps.vault, payload.predecessorInstrumentId);
@@ -1108,24 +1282,31 @@ export async function runInstrumentRevisionJob(
     // production. It drafts under the drafting scope ([D-544]) inside `draft-cards.ts`. Spend stays
     // gated by [D-261] at deploy, not by a missing seam. A test injects its own to avoid a Worker.
     const draftCardForConcept = deps.draftCardForConcept ?? draftCardsForConcept;
-    const demandFields = await successorDemandFields(
+    const routing = await successorDemandRouting(
       deps.vault,
-      demandCounter,
       target,
       payload.predecessorInstrumentId,
       'cards.generate.v1',
     );
+    // `ol-egov.141.89.5.111`: the attempt's Worker calls are watched, so an outage is told from a
+    // refusal (module doc, "An outage leaves the job waiting").
+    const held = heldJudgeAnswersFor(deps.cache);
+    const watched = watchWorkerCalls(draftDeps, held.get(payload.predecessorInstrumentId));
     const drafted = await draftQaSuccessor(
-      withPassageTransport(draftDeps, source.passage),
+      withPassageTransport(watched.deps, source.passage),
       draftCardForConcept,
       target,
-      demandFields,
+      authoringDemandFields(routing),
     );
-    if (drafted.kind === 'thrown') return { ok: false, retryable: true };
-    if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') {
-      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    const countAsk = (): void => {
+      demandCounter.record(target.conceptKey, routing);
+    };
+    if (drafted.kind !== 'drafted') {
+      const outcome = undraftedOutcome(drafted, watched.unreachable(), payload, attempts);
+      settleDraftAttempt(outcome === NOT_ATTEMPTED, watched, held, payload, countAsk);
+      return outcome;
     }
+    settleDraftAttempt(false, watched, held, payload, countAsk);
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
@@ -1172,24 +1353,30 @@ export async function runInstrumentRevisionJob(
 
   if (target.instrumentType === 'mcq') {
     const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
-    const demandFields = await successorDemandFields(
+    const routing = await successorDemandRouting(
       deps.vault,
-      demandCounter,
       target,
       payload.predecessorInstrumentId,
       'quiz.generate.v1',
     );
+    // `ol-egov.141.89.5.111`: see the cards branch above.
+    const held = heldJudgeAnswersFor(deps.cache);
+    const watched = watchWorkerCalls(draftDeps, held.get(payload.predecessorInstrumentId));
     const drafted = await draftMcqSuccessor(
-      withPassageTransport(draftDeps, source.passage),
+      withPassageTransport(watched.deps, source.passage),
       draftForConcept,
       target,
-      demandFields,
+      authoringDemandFields(routing),
     );
-    if (drafted.kind === 'thrown') return { ok: false, retryable: true };
-    if (drafted.kind === 'empty-draft') return emptyDraftOutcome(payload, attempts);
-    if (drafted.kind === 'nothing-to-cache') {
-      return noSuccessorOutcome(payload, 'the grounded draft was refused');
+    const countAsk = (): void => {
+      demandCounter.record(target.conceptKey, routing);
+    };
+    if (drafted.kind !== 'drafted') {
+      const outcome = undraftedOutcome(drafted, watched.unreachable(), payload, attempts);
+      settleDraftAttempt(outcome === NOT_ATTEMPTED, watched, held, payload, countAsk);
+      return outcome;
     }
+    settleDraftAttempt(false, watched, held, payload, countAsk);
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
@@ -1356,8 +1543,9 @@ export async function redraftSetAsideSuccessor(
  * read it ({@link transcriptSuccessorSource}, {@link binarySuccessorSource}): a lecture transcript
  * (a `.txt`/`.vtt`/`.srt` file, or Markdown that declares itself one) at the path its predecessor's
  * anchor holds (moved only by a rename Olea saw), else the path cited, versioned only when it reads
- * as a transcript; any other file at the path cited, by its bytes hash. `undefined` when it cannot
- * be read there.
+ * as a transcript; any other file by its bytes hash, at the path the predecessor's own citation names
+ * now (`ol-egov.141.89.5.111`: a rename Olea saw moves it, `CitationRevisionTrigger.onSourceRenamed`),
+ * else the path cited. `undefined` when it cannot be read there.
  */
 async function citedSourceStanding(
   deps: SetAsideRedraftDeps,
@@ -1371,8 +1559,16 @@ async function citedSourceStanding(
     const read = await readTranscriptVersion(deps.vault, path);
     return read.kind === 'read' ? { path, version: read.version.bytesHash } : undefined;
   }
-  const version = await bytesHashNow(deps.vault, cited);
-  return version === undefined ? undefined : { path: cited, version };
+  const followed = (await readInstrumentCitation(deps.vault, predecessorId))?.sourcePath;
+  const path =
+    followed !== undefined &&
+    followed !== ownNotePath &&
+    !followed.toLowerCase().endsWith('.md') &&
+    !hasTranscriptExtension(followed)
+      ? followed
+      : cited;
+  const version = await bytesHashNow(deps.vault, path);
+  return version === undefined ? undefined : { path, version };
 }
 
 /**

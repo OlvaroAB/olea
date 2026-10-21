@@ -292,7 +292,9 @@ describe('evaluateCitedPassageRevision', () => {
       expect(outcome.predecessorInstrumentId).toBe('inst-8');
       expect(outcome.event.change).toBe('sign of the reaction flipped');
       expect(outcome.successorEnqueueInput.label).toBe('instrument-revision:inst-8');
-      expect(outcome.successorEnqueueInput.contentHash).toBe(outcome.event.newContentHash);
+      expect(outcome.successorEnqueueInput.contentHash).toBe(
+        `${outcome.event.newContentHash}\n${outcome.event.instrumentId}`,
+      );
     }
   });
 
