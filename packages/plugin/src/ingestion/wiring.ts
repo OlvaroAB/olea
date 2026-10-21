@@ -108,6 +108,7 @@ import {
   type ExtractOptions,
   type GenerationJobPayload,
   IngestionQueueEngine,
+  isTranscriptJobPayload,
   isTranscriptKind,
   type JobRunner,
   type JobRunnerView,
@@ -1222,6 +1223,11 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     store: deps.queueStore,
     capability: deps.capability,
     runner: transcriptAwareRunner,
+    // `ol-egov.141.89.5.98` (D-465): a transcript job an older build failed with the unrecognised-payload
+    // reason is put back to `queued` once on start. The predicate must be no wider than the runner: the
+    // transcript-aware runner serves every transcript-kind payload before its fallback, so a re-armed job
+    // that fails again carries this build's own reason and is not re-armed again.
+    recognisesPayload: isTranscriptJobPayload,
     // `ol-2zfj.38`: the ENQUEUE debounce is always in force from this
     // construction onward — see `enqueue-debounce.ts`'s own doc for why it
     // is declared, not derived, and `EngineDeps.enqueueDebounce`'s doc for
