@@ -166,6 +166,7 @@ import {
   buildCitationRevisionWiring,
   type CitationRevisionActions,
   type CitationRevisionTrigger,
+  citedSourceNowFrom,
 } from './ingestion/materiality/citation-revision-wiring.js';
 import { ObsidianMaterialityHashStore } from './ingestion/materiality/hash-store.js';
 import { createOwnWriteLedger } from './ingestion/materiality/own-write-ledger.js';
@@ -2055,6 +2056,10 @@ export default class OleaPlugin extends Plugin {
         cache: generationWiring.cache,
         draftDeps: () => this.draftQuizCardsDeps(),
         now: this.now,
+        // `ol-egov.141.89.5.107`: the successor is drafted where its cited source stands when the
+        // job runs (a rename the citation pass saw, a changed file's landed text), read from the
+        // trigger built below.
+        citedSourceNow: citedSourceNowFrom(() => this.citationRevision),
       },
       // `deps.generation` (`[D-238]`) is deliberately NOT supplied here yet —
       // held, not omitted by oversight. `ol-2zfj.63` [GEN-3.1] built and

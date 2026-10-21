@@ -50,6 +50,34 @@
  * already in `sourceChunks` is not added twice. Retrieval's own grounding gate still decides whether
  * a draft is made at all; the passage is added to what the model reads, not to what the gate judged.
  *
+ * ## ...against its source as it stands when the job runs (`ol-egov.141.89.5.107`, `[D-508]`, `[D-567]`)
+ *
+ * The job's passage and version were read when the rewrite was decided, and the job may drain much
+ * later (no Worker configured, offline, other work first). If the cited source changed again or was
+ * renamed meanwhile, a successor citing the older version or path was set aside at every
+ * presentation (or withheld at first sighting) while its predecessor stayed suspended, so the
+ * question was gone. {@link successorSourceOf} therefore reads the source as it stands, BEFORE the
+ * drafting call, and settles both the passage the successor is drafted from and its citation:
+ *
+ *  - A lecture transcript is read at the path its predecessor's anchor holds now, which only a
+ *    rename Olea saw moves (`CitationRevisionTrigger.onSourceRenamed`; never a search by content),
+ *    and the citation records the version read there. When that is not the version the job's
+ *    passage was read from, the passage is the job's own if it still stands exactly once, else the
+ *    one changed region the citation pass's own ladder finds for it, else (and for a question that
+ *    named no part) the whole transcript as it stands; the part is named in that version by
+ *    `[D-567]`'s rule, so a whole-transcript passage names none and the whole is protected.
+ *  - A non-markdown file whose bytes changed again since its page was read is drafted from that
+ *    page's text as extracted from the bytes now, once this session holds it
+ *    (`CitationRevisionTrigger.landedSourceText`, the text the pass's own rewrite reads). Until it
+ *    lands the job waits (`retryable`, drafting nothing), at most
+ *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason.
+ *  - A Markdown note is drafted and cited exactly as before.
+ *
+ * Reading once, before drafting, is the bound: the job drafts once, from what it read, and records
+ * that version. A change made while the draft is being written is not chased. What the citation
+ * pass knows arrives through `deps.citedSourceNow` (memory and plugin data, never a network call);
+ * no field, key or format is added to the job, the draft or the citation.
+ *
  * ## An empty or unparseable draft is retried, then fails loudly (`ol-egov.141.89.5.75`)
  *
  * A reply that parses to nothing (no questions or cards, or a body that is not the expected shape)
@@ -196,6 +224,7 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  MAX_ATTEMPTS,
   PAPER_DEMANDS,
   type PaperDemand,
   projectInstrumentValidity,
@@ -213,6 +242,9 @@ import {
   hasTranscriptExtension,
   namedTranscriptPart,
   readTranscriptVersion,
+  resolveTranscriptPassage,
+  type TranscriptVersion,
+  wholeTranscriptText,
 } from '../ingestion/materiality/transcript-grain.js';
 import type {
   DraftQuizCardsDeps,
@@ -264,6 +296,40 @@ export function isInstrumentRevisionJobPayload(
  * attempt cap, which still governs retries of transport failures.
  */
 export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
+
+/**
+ * `ol-egov.141.89.5.107`: how many attempts a successor job waits for the text of a non-markdown
+ * source that changed again after its page was read, before ending with a recorded reason. A
+ * declared constant, not fitted: the queue's own attempt cap, so the job waits as long as the queue
+ * retries any job (its backoff spans about an hour, enough for the changed file's own extraction to
+ * land) and ends with its own reason one attempt before the queue would park it. A waiting attempt
+ * reads a hash and memory only; it makes no drafting call.
+ */
+export const REVISION_SOURCE_TEXT_MAX_ATTEMPTS = MAX_ATTEMPTS;
+
+/**
+ * `ol-egov.141.89.5.107`: what the citation pass knows about a rewritten question's cited source
+ * that the vault alone does not say, read when the successor is drafted (module doc, "against its
+ * source as it stands"). Production builds it from the plugin's one `CitationRevisionTrigger`
+ * (`citedSourceNowFrom`, composed in `main.ts`). Both reads are memory or plugin data.
+ */
+export interface CitedSourceNow {
+  /**
+   * Where the citation pass last saw this instrument's cited passage (its anchor's path), or
+   * `undefined` when it holds no anchor. A rewritten question keeps its anchor, and a rename Olea
+   * saw moves a transcript anchor, so for a lecture transcript this is where the file stands now.
+   */
+  readonly anchoredPath: (instrumentId: string) => Promise<VaultPath | undefined>;
+  /**
+   * The text this session extracted from `path` when its bytes hashed to `bytesHash`: `page`'s, or
+   * every page's when `page` is `undefined`. `undefined` when none is held for those bytes.
+   */
+  readonly landedText: (
+    path: VaultPath,
+    bytesHash: string,
+    page: number | undefined,
+  ) => Promise<string | undefined>;
+}
 
 const GENERATION_TASK_IDS: ReadonlySet<string> = new Set(['quiz.generate.v1', 'cards.generate.v1']);
 
@@ -372,6 +438,12 @@ export interface RevisionJobRunnerDeps {
    * predecessor) is not counted. Local and in memory (D-005); nothing is persisted or sent.
    */
   readonly demandCounter?: DemandRoutingCounter;
+  /**
+   * `ol-egov.141.89.5.107`: see {@link CitedSourceNow}. Absent (tests, and any host without a
+   * citation pass), a transcript is read at the path its citation names and a non-markdown source
+   * keeps the version its job carries, as before.
+   */
+  readonly citedSourceNow?: CitedSourceNow;
 }
 
 interface RevisionTarget {
@@ -617,111 +689,224 @@ async function sourceContentHashOf(
 }
 
 /**
+ * `ol-egov.141.89.5.107`: the passage a successor is drafted from and the citation it records,
+ * settled from the cited source as it stands before the drafting call (module doc, "against its
+ * source as it stands").
+ */
+type SuccessorSource =
+  | {
+      readonly kind: 'ready';
+      readonly passage: string;
+      readonly citation: InstrumentCitation | undefined;
+    }
+  /** A non-markdown source changed again after its page was read, and its new text has not landed. */
+  | { readonly kind: 'waiting' };
+
+/**
  * `ol-egov.141.89.5.79` ([D-508]): the successor's source citation. The sweep builds one from a
  * sweep unit; this job has none, so it is rebuilt from the predecessor's own citation (which note,
- * page and section the question cited) and the current passage text the job carries. The passage
- * digest is minted by `withGroundingPassage` with the passage as the one chunk, the same sealing
- * the sweep applies, so it equals what a new question on this passage would get; it is omitted
- * (whole-note grain) when the passage is not exactly one passage of the cited note.
+ * page and section the question cited) and the passage the successor is drafted from. For a
+ * Markdown note the passage digest is minted by `withGroundingPassage` with the passage as the one
+ * chunk, the same sealing the sweep applies, so it equals what a new question on this passage would
+ * get; it is omitted (whole-note grain) when the passage is not exactly one passage of the cited
+ * note. A lecture transcript is {@link transcriptSuccessorSource}'s; any other file
+ * {@link binarySuccessorSource}'s.
  *
- * A non-markdown source keeps its path, page and section; its `sourceRevision` is carried only
- * while it is still the file's byte hash now (never a stale one). No citation at all when the
- * predecessor had none or cited its own note (the self-referential fallback): accept then mints
- * its own, as before.
- *
- * A lecture transcript ({@link transcriptSuccessorCitation}) cites the version its passage was read
- * from and, under `[D-567]`, the part that passage names in it.
+ * No citation at all when the predecessor had none or cited its own note (the self-referential
+ * fallback): accept then mints its own, as before, and the job's passage is drafted from. Never
+ * throws: a read that fails leaves no citation and the job's passage, today's behaviour.
  */
-async function successorCitationOf(
-  vault: VaultSource,
-  predecessorInstrumentId: string,
+async function successorSourceOf(
+  deps: RevisionJobRunnerDeps,
+  payload: InstrumentRevisionJobPayload,
   ownNotePath: VaultPath,
-  passage: string,
-  payloadSourceRevision?: string,
-): Promise<InstrumentCitation | undefined> {
+): Promise<SuccessorSource> {
+  const passage = payload.newPassageText;
   try {
-    const predecessor = await readInstrumentCitation(vault, predecessorInstrumentId);
-    if (predecessor === undefined || predecessor.sourcePath === ownNotePath) return undefined;
+    const predecessor = await readInstrumentCitation(deps.vault, payload.predecessorInstrumentId);
+    if (predecessor === undefined || predecessor.sourcePath === ownNotePath) {
+      return { kind: 'ready', passage, citation: undefined };
+    }
     const base: InstrumentCitation = {
       sourcePath: predecessor.sourcePath,
       ...(predecessor.page !== undefined ? { page: predecessor.page } : {}),
       ...(predecessor.section !== undefined ? { section: predecessor.section } : {}),
     };
-    const transcript = await transcriptSuccessorCitation(
-      vault,
+    const transcript = await transcriptSuccessorSource(
+      deps,
+      payload,
       predecessor,
       base,
-      passage,
-      payloadSourceRevision,
+      ownNotePath,
     );
     if (transcript !== undefined) return transcript;
     if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
-      return passage.trim().length === 0
-        ? base
-        : await withGroundingPassage(vault, base, ownNotePath, [passage]);
+      return {
+        kind: 'ready',
+        passage,
+        citation:
+          passage.trim().length === 0
+            ? base
+            : await withGroundingPassage(deps.vault, base, ownNotePath, [passage]),
+      };
     }
-    // `ol-egov.141.89.5.81` ([D-518]): units re-extracted from changed bytes carry the hash they were
-    // read from, recorded as a fresh question's citation would. The accept guard and the
-    // presentation check verify it against the file's bytes later.
-    if (payloadSourceRevision !== undefined) {
-      return { ...base, sourceRevision: payloadSourceRevision };
-    }
-    if (
-      predecessor.sourceRevision !== undefined &&
-      (await vault.exists(predecessor.sourcePath)) &&
-      (await hashContent(await vault.readBinary(predecessor.sourcePath))) ===
-        predecessor.sourceRevision
-    ) {
-      return { ...base, sourceRevision: predecessor.sourceRevision };
-    }
-    return base;
+    return await binarySuccessorSource(deps, payload, predecessor, base);
   } catch {
-    return undefined; // never throws: no citation is today's behaviour
+    return { kind: 'ready', passage, citation: undefined };
   }
 }
 
 /**
- * `ol-egov.141.89.5.104` ([D-567], [D-508]): the successor's citation when the predecessor cites a
- * lecture transcript (a `.txt`/`.vtt`/`.srt` file, or Markdown that declares itself one);
- * `undefined` for any other source. The successor is drafted from the passage the change left (the
- * job's `newPassageText`), read from the transcript version whose bytes hash the job carries
- * (`payloadSourceRevision`, set by the citation pass). It cites that version, so it is seeded and
- * presented on first sighting, and names the part that passage names in it by the same rule a new
- * question gets (`namedTranscriptPart`): a part only when the passage stands once inside one part,
- * otherwise no part, and the whole transcript is protected.
+ * `ol-egov.141.89.5.104`, `ol-egov.141.89.5.107` ([D-567], [D-508]): the successor's passage and
+ * citation when the predecessor cites a lecture transcript (a `.txt`/`.vtt`/`.srt` file, or Markdown
+ * that declares itself one); `undefined` for any other source.
  *
- * The version is recorded only as the file's bytes hash now. When the file has changed again since
- * the passage was read, the job's hash is recorded as it is (never the newer one, which the
- * successor was not drafted from) and no part is named: the successor is then withheld at first
- * sighting, as any question on a transcript that changed after drafting is. A job queued by an
- * earlier build carries no hash; the predecessor's is then kept only while it still equals the
- * bytes. A transcript that is gone or cannot be read records no version.
+ * The transcript is read where it stands now: at the path the predecessor's anchor holds
+ * (`deps.citedSourceNow.anchoredPath`), which a rename Olea saw moved there, else the path the
+ * citation names. An anchor at the question's own note (one made before part grain applied) is not
+ * a transcript path and is not followed. The citation records that path and the version read there
+ * (its bytes hash), so the successor is seeded and presented on first sighting, and names the part
+ * its passage names in that version by the rule a new question gets (`namedTranscriptPart`): a part
+ * only when the passage stands once inside one part, otherwise none, and the whole transcript is
+ * protected.
+ *
+ * The passage is the job's own (`newPassageText`, the passage the change left) when the version read
+ * is the one it was read from (the job's `sourceRevision`, or for a job queued by an earlier build
+ * the predecessor's). Otherwise the transcript changed again before drafting, and the passage is
+ * {@link transcriptPassageNow}'s. A transcript that is gone or cannot be read records no version,
+ * as before; a Markdown file that does not read as a transcript is her note (`undefined`).
  */
-async function transcriptSuccessorCitation(
-  vault: VaultSource,
+async function transcriptSuccessorSource(
+  deps: RevisionJobRunnerDeps,
+  payload: InstrumentRevisionJobPayload,
   predecessor: InstrumentCitation,
   base: InstrumentCitation,
-  passage: string,
-  payloadSourceRevision: string | undefined,
-): Promise<InstrumentCitation | undefined> {
-  const path = predecessor.sourcePath;
-  const markdown = path.toLowerCase().endsWith('.md');
-  if (!markdown && !hasTranscriptExtension(path)) return undefined;
-  const read = await readTranscriptVersion(vault, path);
+  ownNotePath: VaultPath,
+): Promise<SuccessorSource | undefined> {
+  const cited = predecessor.sourcePath;
+  const markdown = cited.toLowerCase().endsWith('.md');
+  if (!markdown && !hasTranscriptExtension(cited)) return undefined;
+  const anchored = await deps.citedSourceNow?.anchoredPath(payload.predecessorInstrumentId);
+  const path = anchored !== undefined && anchored !== ownNotePath ? anchored : cited;
+  const read = await readTranscriptVersion(deps.vault, path);
   // An undeclared Markdown file is her note; a Markdown file that is gone cannot be told apart and
   // keeps the note handling, as the citation pass does.
   if (markdown && read.kind !== 'read') return undefined;
-  if (read.kind !== 'read') return base;
-  const now = read.version.bytesHash;
-  const revision = payloadSourceRevision ?? predecessor.sourceRevision;
-  if (revision === undefined) return base;
-  if (revision !== now) {
-    return payloadSourceRevision === undefined ? base : { ...base, sourceRevision: revision };
+  const here: InstrumentCitation = path === cited ? base : { ...base, sourcePath: path };
+  if (read.kind !== 'read') {
+    return { kind: 'ready', passage: payload.newPassageText, citation: here };
   }
-  const named = await namedTranscriptPart(read.version.parts, passage);
-  return named === undefined
-    ? { ...base, sourceRevision: now }
-    : { ...base, page: named.page, passageDigest: named.passageDigest, sourceRevision: now };
+  const version = read.version;
+  const readFrom = payload.sourceRevision ?? predecessor.sourceRevision;
+  const passage =
+    readFrom === version.bytesHash
+      ? payload.newPassageText
+      : transcriptPassageNow(predecessor, payload.newPassageText, version);
+  const named = await namedTranscriptPart(version.parts, passage);
+  return {
+    kind: 'ready',
+    passage,
+    citation:
+      named === undefined
+        ? { ...here, sourceRevision: version.bytesHash }
+        : {
+            ...here,
+            page: named.page,
+            passageDigest: named.passageDigest,
+            sourceRevision: version.bytesHash,
+          },
+  };
+}
+
+/**
+ * `ol-egov.141.89.5.107` ([D-567]): the passage to draft from in a transcript version other than the
+ * one the job's passage was read from. A question whose citation named a part is followed by the
+ * citation pass's own ladder (`resolveTranscriptPassage`, text only, this one file): its passage
+ * standing exactly once is drafted from as it is; the one changed region the ladder finds for it is
+ * the passage as it reads now. A passage that is missing or ambiguous, and a question that named no
+ * part (the whole transcript was its grain), are drafted from the whole transcript as it stands,
+ * which then names no part and is protected whole. Never a guessed part.
+ */
+function transcriptPassageNow(
+  predecessor: InstrumentCitation,
+  passage: string,
+  version: TranscriptVersion,
+): string {
+  if (predecessor.passageDigest !== undefined) {
+    const found = resolveTranscriptPassage(passage, version.words);
+    if (found.kind === 'present') return passage;
+    if (found.kind === 'changed') return found.text;
+  }
+  return wholeTranscriptText(version);
+}
+
+/**
+ * `ol-egov.141.89.5.81` ([D-518]), `ol-egov.141.89.5.107`: the successor's passage and citation for
+ * a non-markdown source (a PDF, slide deck or document). The citation keeps the predecessor's path,
+ * page and section and records the bytes its passage was extracted from, which the accept guard and
+ * the presentation check verify against the file later.
+ *
+ *  - The job carries the hash of the bytes its page text was re-extracted from. While the file still
+ *    has those bytes (or cannot be read, or no citation pass is composed), that hash is recorded
+ *    with the job's passage, as a fresh question's citation would record it.
+ *  - The file changed again since: the successor is drafted from the cited page's text as extracted
+ *    from the bytes now, once this session holds it (`deps.citedSourceNow.landedText`), and records
+ *    those bytes. Until then the job waits (`'waiting'`); the changed file's own extraction lands it.
+ *  - A job queued by an earlier build carries no hash: the predecessor's is kept only while it is
+ *    still the file's bytes hash, never a stale one.
+ */
+async function binarySuccessorSource(
+  deps: RevisionJobRunnerDeps,
+  payload: InstrumentRevisionJobPayload,
+  predecessor: InstrumentCitation,
+  base: InstrumentCitation,
+): Promise<SuccessorSource> {
+  const passage = payload.newPassageText;
+  const now = await bytesHashNow(deps.vault, predecessor.sourcePath);
+  const readFrom = payload.sourceRevision;
+  if (readFrom === undefined) {
+    return {
+      kind: 'ready',
+      passage,
+      citation:
+        predecessor.sourceRevision !== undefined && predecessor.sourceRevision === now
+          ? { ...base, sourceRevision: now }
+          : base,
+    };
+  }
+  if (now === undefined || now === readFrom || deps.citedSourceNow === undefined) {
+    return { kind: 'ready', passage, citation: { ...base, sourceRevision: readFrom } };
+  }
+  const text = await deps.citedSourceNow.landedText(predecessor.sourcePath, now, predecessor.page);
+  return text === undefined
+    ? { kind: 'waiting' }
+    : { kind: 'ready', passage: text, citation: { ...base, sourceRevision: now } };
+}
+
+/** The file's bytes hash now, as a citation's `sourceRevision` records it; `undefined` when it is gone or cannot be read. */
+async function bytesHashNow(vault: VaultSource, path: VaultPath): Promise<string | undefined> {
+  try {
+    return (await vault.exists(path)) ? await hashContent(await vault.readBinary(path)) : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * `ol-egov.141.89.5.107`: a successor waiting for a changed non-markdown source's new text is
+ * retried by the queue until {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS}, then recorded as failed with
+ * a reason. A waiting attempt makes no drafting call.
+ */
+function sourceTextWaitOutcome(
+  payload: InstrumentRevisionJobPayload,
+  attempts: number,
+): JobRunOutcome {
+  if (attempts < REVISION_SOURCE_TEXT_MAX_ATTEMPTS) return { ok: false, retryable: true };
+  return {
+    ok: false,
+    retryable: false,
+    reason: `instrument-revision job: the cited file of predecessor ${payload.predecessorInstrumentId} changed again after its page was read, and no text for its bytes now landed within ${REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts; the predecessor stays suspended`,
+  };
 }
 
 /** Retry an empty or unparseable draft until the bound, then fail with a reason the queue records. */
@@ -795,6 +980,16 @@ export async function runInstrumentRevisionJob(
   const now = deps.now ?? (() => new Date());
   const demandCounter = deps.demandCounter ?? demandRoutingCounterFor(deps.cache);
 
+  // `ol-egov.141.89.5.107`: the passage to draft from and the citation to record, read from the
+  // cited source as it stands, once, before any drafting call or demand ask (module doc, "against
+  // its source as it stands"). A changed file whose new text has not landed waits, bounded. A cloze
+  // predecessor drafts nothing (below), so nothing is read for it.
+  const source: SuccessorSource =
+    target.instrumentType === 'cloze'
+      ? { kind: 'ready', passage: payload.newPassageText, citation: undefined }
+      : await successorSourceOf(deps, payload, target.sourcePath);
+  if (source.kind === 'waiting') return sourceTextWaitOutcome(payload, attempts);
+
   if (target.instrumentType === 'qa') {
     // `ol-egov.141.89.5.92` ([D-508], [D-541]): defaults to the real `draftCardsForConcept`, as the
     // quiz branch does, so a withheld generated card gets a `cards.generate.v1` successor in
@@ -809,7 +1004,7 @@ export async function runInstrumentRevisionJob(
       'cards.generate.v1',
     );
     const drafted = await draftQaSuccessor(
-      withPassageTransport(draftDeps, payload.newPassageText),
+      withPassageTransport(draftDeps, source.passage),
       draftCardForConcept,
       target,
       demandFields,
@@ -822,13 +1017,7 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
-    const sourceCitation = await successorCitationOf(
-      deps.vault,
-      payload.predecessorInstrumentId,
-      target.sourcePath,
-      payload.newPassageText,
-      payload.sourceRevision,
-    );
+    const sourceCitation = source.citation;
     let cachedCount = 0;
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
@@ -879,7 +1068,7 @@ export async function runInstrumentRevisionJob(
       'quiz.generate.v1',
     );
     const drafted = await draftMcqSuccessor(
-      withPassageTransport(draftDeps, payload.newPassageText),
+      withPassageTransport(draftDeps, source.passage),
       draftForConcept,
       target,
       demandFields,
@@ -892,13 +1081,7 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
-    const sourceCitation = await successorCitationOf(
-      deps.vault,
-      payload.predecessorInstrumentId,
-      target.sourcePath,
-      payload.newPassageText,
-      payload.sourceRevision,
-    );
+    const sourceCitation = source.citation;
     let cachedCount = 0;
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.

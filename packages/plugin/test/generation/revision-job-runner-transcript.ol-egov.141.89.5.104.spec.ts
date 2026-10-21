@@ -16,10 +16,7 @@ import {
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
-import {
-  materializeAcceptedDraft,
-  StaleSourceRevisionError,
-} from '../../src/generation/materialize-mcq.js';
+import { materializeAcceptedDraft } from '../../src/generation/materialize-mcq.js';
 import { runInstrumentRevisionJob } from '../../src/generation/revision-job-runner.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import type {
@@ -192,18 +189,22 @@ describe('a rewritten transcript question reaches her (ol-egov.141.89.5.104)', (
     expect(record.sourceCitation?.passageDigest).toBeUndefined();
   });
 
-  it('a transcript changed again before drafting: the successor records the version its passage was read from, never the newer one', async () => {
+  it('a transcript changed again before drafting: the successor cites the version that stands then, so accepting it is not refused (ol-egov.141.89.5.107)', async () => {
     const { vault, h } = await seededLecture();
     const cues = corrected();
     vault.files.set(TRANSCRIPT, transcriptOf(cues));
     await h.pass(vault);
     const payload = enqueuedJob(h);
-    vault.files.set(TRANSCRIPT, transcriptOf([...cues, cue(93)]));
+    const now = [...cues, cue(93)];
+    vault.files.set(TRANSCRIPT, transcriptOf(now));
 
     const record = await draftSuccessor(vault, payload);
-    expect(record.sourceCitation?.sourceRevision).toBe(payload.sourceRevision);
-    expect(record.sourceCitation?.passageDigest).toBeUndefined();
-    // Accepting it is refused, as for any plain-text source whose bytes moved on ([D-515]).
-    await expect(accept(vault, record)).rejects.toThrow(StaleSourceRevisionError);
+    expect(record.sourceCitation?.sourceRevision).toBe(await bytesHashOf(transcriptOf(now)));
+    expect(record.sourceCitation?.sourceRevision).not.toBe(payload.sourceRevision);
+    expect(record.sourceCitation?.passageDigest).toBe(
+      await digestPassage(spoken(now.slice(9, 12))),
+    );
+    const instrumentId = await accept(vault, record);
+    expect(await readInstrumentCitation(vault, instrumentId)).toEqual(record.sourceCitation);
   });
 });
