@@ -5,7 +5,7 @@
 // F4.2 acceptance (`ol-p5t04`): "every ranking carries reasoning + citations
 // or abstains; adversarial no-evidence course test refuses." This suite
 // proves both halves without a model call — `rankOracle` needs none.
-import type { MasteryState } from 'olea-contracts';
+import type { MasteryState, ReviewLogEntry, ReviewLogRecord } from 'olea-contracts';
 import { describe, expect, it } from 'vitest';
 import type { AssessmentReadReport, AssessmentRecord } from '../assessment/types.js';
 import type {
@@ -15,6 +15,8 @@ import type {
   EvidenceQuestionCitation,
 } from '../evidence-edge/types.js';
 import type { ConceptMasteryResult } from '../mastery/rollup.js';
+import { projectInstrumentValidity } from '../mastery/validity.js';
+import { resolveLastWrongAnswerDays } from './compose.js';
 import type {
   OracleProximityFactors,
   RankBlendWeightsWithProximity,
@@ -23,6 +25,8 @@ import type {
 } from './rank.js';
 import {
   conceptEligibilityVeto,
+  DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE,
+  DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS,
   decidingFactors,
   RANK_REASON_PHRASES,
   rankOracle,
@@ -2835,5 +2839,225 @@ describe('rankOracle — the reason names what decided, from the actual factor v
         );
       }
     }
+  });
+});
+
+describe('rankOracle — the bounded wrong-answer lift to need ([D-554], ol-egov.141.89.10.126)', () => {
+  // Two concepts with identical evidence and identical recall; only the last answer differs.
+  const pairInput = (
+    extra: Partial<Parameters<typeof rankOracle>[0]> = {},
+  ): Parameters<typeof rankOracle>[0] => ({
+    evidence: {
+      edges: [edge({ conceptName: 'right' }), edge({ conceptName: 'wrong' })],
+      assessmentsRead: readReport([assessment()]),
+      assessmentsWithNoEvidence: [],
+    },
+    mastery: new Map([
+      ['right', masteryResult('right', 'sprout')],
+      ['wrong', masteryResult('wrong', 'sprout')],
+    ]),
+    retrievability: new Map([
+      ['right', 0.5],
+      ['wrong', 0.5],
+    ]),
+    asOf: ASOF,
+    ...extra,
+  });
+  const entries = (input: Parameters<typeof rankOracle>[0]) => {
+    const course = rankOracle(input).courses[0];
+    if (course?.status !== 'ranked') throw new Error('expected ranked');
+    return course.ranked;
+  };
+  const get = (input: Parameters<typeof rankOracle>[0], key: string) => {
+    const e = entries(input).find((x) => x.conceptKey === key);
+    if (e === undefined) throw new Error(key);
+    return e;
+  };
+  const wrongOn = (day: string) => ({ lastWrongAnswerDay: new Map([['wrong', day]]) });
+
+  it('the declared constants are the stated cap and window', () => {
+    expect(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE).toBe(0.25);
+    expect(DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS).toBe(7);
+  });
+
+  it('with other inputs matched, a wrongly answered concept ranks above a correctly answered one', () => {
+    const input = pairInput(wrongOn(ASOF));
+    expect(entries(input).map((e) => e.conceptKey)).toEqual(['wrong', 'right']);
+    expect(get(input, 'wrong').priorityScore).toBeGreaterThan(get(input, 'right').priorityScore);
+  });
+
+  it('without the input, the pair ties and the output carries no lift field (byte-identical to before)', () => {
+    const input = pairInput();
+    expect(get(input, 'wrong').priorityScore).toBe(get(input, 'right').priorityScore);
+    expect('wrongAnswerLift' in get(input, 'wrong').factors).toBe(false);
+    expect(JSON.stringify(rankOracle(input))).toBe(JSON.stringify(rankOracle(pairInput({}))));
+  });
+
+  it('the lift is bounded: never above the cap share of the need term, times the need weight', () => {
+    for (const w of [1, 2.5]) {
+      const input = pairInput({
+        ...wrongOn(ASOF),
+        options: { blendWeights: { relevance: 1, need: w } },
+      });
+      const gain = get(input, 'wrong').priorityScore - get(input, 'right').priorityScore;
+      expect(gain).toBeGreaterThan(0);
+      expect(gain).toBeLessThanOrEqual(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE * w + 1e-12);
+    }
+    // Held at the need term's own maximum: need 0.9 + 0.25 lifts to 1, not 1.15; need 1 gains nothing.
+    const high = pairInput({
+      ...wrongOn(ASOF),
+      retrievability: new Map([
+        ['right', 0.1],
+        ['wrong', 0.1],
+      ]),
+    });
+    expect(get(high, 'wrong').factors.needOrderingInput).toBe(1);
+    expect(get(high, 'wrong').factors.need).toBeCloseTo(0.9, 12);
+  });
+
+  it('the lift decays in a straight line to exactly nothing within the window', () => {
+    const lifts = [0, 7, 8, 30].map((age) => {
+      const d = new Date(Date.UTC(2026, 7, 16) - age * 86_400_000).toISOString().slice(0, 10);
+      const e = get(pairInput(wrongOn(d)), 'wrong');
+      return (e.factors.needOrderingInput ?? 0) - 0.5;
+    });
+    expect(lifts[0]).toBeCloseTo(0.25, 12);
+    expect(lifts[1]).toBe(0);
+    expect(lifts[2]).toBe(0);
+    expect(lifts[3]).toBe(0);
+    const at = (d: string) => get(pairInput(wrongOn(d)), 'wrong').factors.needOrderingInput;
+    expect(at('2026-08-13')).toBeCloseTo(0.5 + (0.25 * 4) / 7, 12);
+    expect(at('2026-08-09')).toBe(0.5);
+    expect('wrongAnswerLift' in get(pairInput(wrongOn('2026-08-09')), 'wrong').factors).toBe(false);
+  });
+
+  it('the reported need is unchanged and the state step is untouched: the lift moves only the ordering input', () => {
+    const base = get(pairInput(), 'wrong');
+    const lifted = get(pairInput(wrongOn(ASOF)), 'wrong');
+    expect(lifted.factors.need).toBe(base.factors.need);
+    expect(lifted.factors.masteryState).toBe(base.factors.masteryState);
+    expect(lifted.factors.masteryNeedWeight).toBe(base.factors.masteryNeedWeight);
+    expect(lifted.factors.wrongAnswerLift).toBeCloseTo(0.25, 12);
+  });
+
+  it('unknown need is not lifted (already ordered at the maximum)', () => {
+    const { retrievability: _noRecall, ...input } = pairInput(wrongOn(ASOF));
+    expect(get(input, 'wrong').factors.needOrderingInput).toBe(1);
+    expect('wrongAnswerLift' in get(input, 'wrong').factors).toBe(false);
+  });
+
+  it('a wrong answer does not outrank a concept whose need is more than the cap higher (a nudge, not a jump)', () => {
+    const input = pairInput({
+      ...wrongOn(ASOF),
+      retrievability: new Map([
+        ['right', 0.2], // need 0.8
+        ['wrong', 0.5], // need 0.5, lifted to 0.75 at most
+      ]),
+    });
+    expect(entries(input).map((e) => e.conceptKey)).toEqual(['right', 'wrong']);
+  });
+
+  it('spacing: the lift is a pure function of the calendar day, so a concept answered wrong is lifted for a bounded window and no longer', () => {
+    // Re-serving inside one session is the session builder\'s rule (one pass per concept); the
+    // ranking holds no session state and the lift only fades with the days since the answer.
+    const same = JSON.stringify(rankOracle(pairInput(wrongOn(ASOF))));
+    expect(JSON.stringify(rankOracle(pairInput(wrongOn(ASOF))))).toBe(same);
+    const later = pairInput({ ...wrongOn(ASOF), asOf: '2026-08-23' });
+    expect(entries(later).map((e) => e.conceptKey)).toEqual(['right', 'wrong']);
+  });
+
+  it("course fairness: the lift cannot move one course's row above another's by more than the cap times the need weight", () => {
+    const input: Parameters<typeof rankOracle>[0] = {
+      evidence: {
+        edges: [
+          edge({ conceptName: 'a1', course: 'COURSEA', assessmentPath: 'Assessments/A.md' }),
+          edge({ conceptName: 'b1', course: 'COURSEB', assessmentPath: 'Assessments/B.md' }),
+        ],
+        assessmentsRead: readReport([
+          assessment({ path: 'Assessments/A.md', course: 'COURSEA' }),
+          assessment({ path: 'Assessments/B.md', course: 'COURSEB' }),
+        ]),
+        assessmentsWithNoEvidence: [],
+      },
+      mastery: new Map([
+        ['a1', masteryResult('a1', 'sprout')],
+        ['b1', masteryResult('b1', 'sprout')],
+      ]),
+      retrievability: new Map([
+        ['a1', 0.5],
+        ['b1', 0.5],
+      ]),
+      asOf: ASOF,
+    };
+    const score = (extra: Partial<Parameters<typeof rankOracle>[0]>, key: string) => {
+      for (const c of rankOracle({ ...input, ...extra }).courses) {
+        if (c.status !== 'ranked') continue;
+        const e = c.ranked.find((x) => x.conceptKey === key);
+        if (e !== undefined) return e.priorityScore;
+      }
+      throw new Error(key);
+    };
+    const gap0 = score({}, 'b1') - score({}, 'a1');
+    const lifted = { lastWrongAnswerDay: new Map([['a1', ASOF]]) };
+    const gap1 = score(lifted, 'b1') - score(lifted, 'a1');
+    expect(gap0 - gap1).toBeGreaterThan(0);
+    expect(gap0 - gap1).toBeLessThanOrEqual(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE + 1e-12);
+    // And b1 is not touched at all.
+    expect(score(lifted, 'b1')).toBe(score({}, 'b1'));
+  });
+});
+
+describe('resolveLastWrongAnswerDays — the producer of the wrong-answer lift input ([D-554])', () => {
+  const rec = (overrides: Partial<ReviewLogRecord>): ReviewLogEntry =>
+    ({
+      schemaVersion: 6,
+      kind: 'review',
+      eventId: 'e1',
+      timestamp: '2026-08-10T09:00:00-04:00',
+      instrumentId: 'qa:c1:1',
+      instrumentType: 'qa',
+      conceptIds: ['c1'],
+      rating: 'again',
+      wasUnsure: false,
+      durationMs: 1000,
+      selectionContext: {
+        dueState: 'due',
+        examProximity: null,
+        yieldRank: null,
+        instrumentTypesOffered: ['qa'],
+        planVersion: null,
+      },
+      masteryAtTime: { attribution: 'per-concept', byConcept: { c1: 'sprout' } },
+      ...overrides,
+    }) as ReviewLogEntry;
+  const read = (log: readonly ReviewLogEntry[]) =>
+    resolveLastWrongAnswerDays(log, ['c1'], projectInstrumentValidity(log, []));
+
+  it('a last answer of again yields its calendar day', () => {
+    expect([...read([rec({})])]).toEqual([['c1', '2026-08-10']]);
+  });
+  it('only the scored concept is lifted: a context concept the answer names gets nothing ([D-419])', () => {
+    const log = [rec({ conceptIds: ['c1', 'c2'] })];
+    expect([
+      ...resolveLastWrongAnswerDays(log, ['c1', 'c2'], projectInstrumentValidity(log, [])),
+    ]).toEqual([['c1', '2026-08-10']]);
+  });
+  it('a later correct answer ends the lift; a later wrong one moves the day', () => {
+    expect(
+      read([
+        rec({}),
+        rec({ eventId: 'e2', timestamp: '2026-08-11T09:00:00-04:00', rating: 'good' }),
+      ]).size,
+    ).toBe(0);
+    expect(
+      read([rec({ eventId: 'e2', timestamp: '2026-08-12T09:00:00-04:00' }), rec({})]).get('c1'),
+    ).toBe('2026-08-12');
+  });
+  it('an attempt without a rating, and a concept not asked for, yield nothing', () => {
+    expect(read([rec({ rating: null })]).size).toBe(0);
+    expect(
+      resolveLastWrongAnswerDays([rec({})], ['other'], projectInstrumentValidity([rec({})], []))
+        .size,
+    ).toBe(0);
   });
 });

@@ -35,11 +35,25 @@
  * `buildFormatMatch` producer has no way to reach production regardless of
  * what `main.ts` composes. Omitted or `undefined` preserves the pre-
  * `ol-v7r5.37` behaviour exactly, the same as `routing` above.
+ *
+ * **`sweep`'s `firstKind` parameter (`ol-egov.141.89.105.7`; F3.3, F4.8 as amended by `[D-550]`,
+ * `[D-551]` (a)), taken at call time like `formatMatch`.** The sweep could already draft
+ * question-and-answer cards where `primaryKindFor` answers `'qa'` (`ol-0r92.132`), but only when
+ * its deps carried `kindInputsFor` and `cardDraftDeps`, and this seam had no parameter for either,
+ * so no caller could supply them. `firstKind.kindInputsFor` is `kind-inputs.ts`'s producer
+ * (exposed here as {@link GenerationWiring.buildKindInputs}); `firstKind.draftCards` opts in to
+ * the card drafter, which is handed this sweep's own `draftDeps`: the quiz deps already satisfy
+ * the card deps structurally (`revision-job-runner.ts`'s `draftCardForConcept` doc), so there is
+ * no second deps value to assemble or to drift. Omitted, every request is byte-identical to
+ * before. `main.ts` does not pass it yet: composing it there is `ol-0r92.132`'s, behind the spend
+ * go (`[D-261]`, `ol-egov.141.45`).
  */
 
 import type {
+  AssessmentRecord,
   ConceptRecord,
   ExtractedUnit,
+  PrimaryKindInput,
   SchedulableInstrumentType,
   VaultSource,
 } from 'olea-core';
@@ -49,6 +63,7 @@ import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
 import { createDraftAcceptPort } from './accept.js';
 import { createVaultDraftCacheStore, type DraftCacheStore } from './cache-store.js';
+import { buildKindInputs, type KindInputs } from './kind-inputs.js';
 import type { FormatMatchDecision } from './pipeline.js';
 import { type GenerationSweepReport, runGenerationSweep } from './pipeline.js';
 import type { GenerationRoutingDeps } from './routing.js';
@@ -66,6 +81,20 @@ export interface GenerationWiringDeps {
    * unchanged from before this bead.
    */
   readonly now?: () => Date;
+}
+
+/**
+ * The sweep's first-kind opt-in (`ol-egov.141.89.105.7`) — see the module doc's own section.
+ */
+export interface SweepFirstKind {
+  /** The inputs `primaryKindFor` reads per course: {@link GenerationWiring.buildKindInputs}'s `kindInputsFor`. */
+  readonly kindInputsFor: (courseCode: string) => PrimaryKindInput;
+  /**
+   * `true`: a course whose first kind is `'qa'` is drafted through `cards.generate.v1`, with this
+   * sweep's own `draftDeps` as the card drafter's deps. `false`: every course keeps the quiz path,
+   * and the sweep's per-course record says the card supplier is absent where a card was asked for.
+   */
+  readonly draftCards: boolean;
 }
 
 export interface GenerationWiring {
@@ -117,6 +146,14 @@ export interface GenerationWiring {
     (instrumentKind: SchedulableInstrumentType) => string | undefined
   >;
   /**
+   * `kind-inputs.ts`'s `buildKindInputs` over this wiring's vault and clock (`ol-egov.141.89.105.7`):
+   * the first-kind inputs for {@link SweepFirstKind.kindInputsFor}, and, from the same reading, the
+   * `formatMatchFor` and `recordedPreferenceFor` the ingestion seam's further-call triggers take,
+   * so the first kind and the format-ask trigger read one mapping. Reads her review log once; a
+   * caller builds it once per sweep from the assessments it already read for `formatMatch`.
+   */
+  buildKindInputs(assessments: readonly AssessmentRecord[]): Promise<KindInputs>;
+  /**
    * Runs one sweep over `units` against `draftDeps` (assembled by the caller
    * from `RetrievalWiring`, `null` when the Worker isn't configured — F7.8;
    * a `null` here means the sweep is skipped, same "grey out, don't crash"
@@ -140,6 +177,8 @@ export interface GenerationWiring {
      * extraction job (never re-read here), recorded as `sourceRevision` on a non-markdown citation.
      */
     sourceRevisions?: ReadonlyMap<string, string>,
+    /** `ol-egov.141.89.105.7`: the first-kind inputs and the card opt-in — see {@link SweepFirstKind}. Omitted preserves the quiz-only sweep exactly. */
+    firstKind?: SweepFirstKind,
   ): Promise<GenerationSweepReport | null>;
 }
 
@@ -240,7 +279,13 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
     listConceptsForCourse,
     sourceContentHashFor: createSourceContentHashFor(deps.vault, listConceptsForCourse),
     buildPromptVersionFor: () => createPromptVersionFor(cache),
-    async sweep(units, draftDeps, routing, formatMatch, sourceRevisions) {
+    buildKindInputs: (assessments) =>
+      buildKindInputs({
+        vault: deps.vault,
+        assessments,
+        ...(deps.now !== undefined ? { now: deps.now } : {}),
+      }),
+    async sweep(units, draftDeps, routing, formatMatch, sourceRevisions, firstKind) {
       if (draftDeps === null) return null;
       if (units.length === 0) return null;
       return runGenerationSweep(units, {
@@ -253,6 +298,9 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
         ...(formatMatch !== undefined ? { formatMatch } : {}),
         ...(sourceRevisions !== undefined ? { sourceRevisions } : {}),
         ...(deps.now !== undefined ? { now: deps.now } : {}),
+        // `ol-egov.141.89.105.7`: the card drafter is handed the same deps value the quiz path uses.
+        ...(firstKind !== undefined ? { kindInputsFor: firstKind.kindInputsFor } : {}),
+        ...(firstKind?.draftCards === true ? { cardDraftDeps: draftDeps } : {}),
       });
     },
   };

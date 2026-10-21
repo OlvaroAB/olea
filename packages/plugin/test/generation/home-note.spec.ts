@@ -16,8 +16,12 @@ import {
   hashSourceRevision,
   homeNotePathForSource,
   isOleaHomeNote,
+  recordDraftedForConcept,
 } from '../../src/generation/home-note.js';
-import { StaleSourceRevisionError } from '../../src/generation/materialize-mcq.js';
+import {
+  materializeAcceptedDraft,
+  StaleSourceRevisionError,
+} from '../../src/generation/materialize-mcq.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import { MemoryVaultSource } from './fakes.js';
 
@@ -212,5 +216,85 @@ describe('ol-egov.141.6.27 — several concepts drafted into one home note stay 
     const note = vault.raw(path) ?? '';
     await vault.write(path, note.replace('Olea created this note', 'Someone rewrote this note'));
     await expect(port.accept('draft-0', 'accepted')).rejects.toThrow(StaleSourceRevisionError);
+  });
+});
+
+// `[D-558]` (`ol-egov.141.89.9.99`) — features/F3-learn-from-anything.md, the `[D-558]` block of the
+// home-note feature: "the record round-trips byte-identically and survives the topic list growing"
+// — @auto:plugin/generation/home-note.spec
+describe('[D-558] recordDraftedForConcept', () => {
+  const SOURCE = '01 Courses/GEOL204/Lecture 4.pdf';
+
+  it('records an item on a home note, once; a retry and a caller naming no concept change nothing', async () => {
+    const vault = new MemoryVaultSource();
+    const notePath = await ensureHomeNoteForConcept(vault, SOURCE, 'Osmosis');
+    if (notePath === null) throw new Error('home note unexpectedly refused');
+    const before = await vault.read(notePath);
+
+    const once = recordDraftedForConcept(before, 'mcq-0123456789abcdef', 'concept-key1:k-one');
+    expect(once).toBe(
+      before.replace(
+        `${HOME_NOTE_MARKER_KEY}: true\n`,
+        `${HOME_NOTE_MARKER_KEY}: true\nolea-drafted-for:\n  mcq-0123456789abcdef: concept-key1:k-one\n`,
+      ),
+    );
+    expect(recordDraftedForConcept(once, 'mcq-0123456789abcdef', 'concept-key1:k-one')).toBe(once);
+    expect(recordDraftedForConcept(before, 'mcq-0123456789abcdef', undefined)).toBe(before);
+  });
+
+  it('returns a note she wrote unchanged (INV-6)', () => {
+    const hers = '---\ntopic: Osmosis\n---\n\nHer prose.\n';
+    expect(recordDraftedForConcept(hers, 'mcq-0123456789abcdef', 'concept-key1:k-one')).toBe(hers);
+  });
+
+  it('the record survives a later concept growing the topic list, byte for byte', async () => {
+    const vault = new MemoryVaultSource();
+    const notePath = await ensureHomeNoteForConcept(vault, SOURCE, 'Osmosis');
+    if (notePath === null) throw new Error('home note unexpectedly refused');
+    const recorded = recordDraftedForConcept(
+      await vault.read(notePath),
+      'mcq-0123456789abcdef',
+      'concept-key1:k-one',
+    );
+    await vault.write(notePath, recorded);
+
+    await ensureHomeNoteForConcept(vault, SOURCE, 'Diffusion');
+    const grown = await vault.read(notePath);
+    expect(readList(frontmatterOf(grown), 'topic').items).toEqual(['Osmosis', 'Diffusion']);
+    expect(grown).toBe(recorded.replace('  - Osmosis\n', '  - Osmosis\n  - Diffusion\n'));
+  });
+
+  it("recording one item never makes a sibling draft's snapshot stale", async () => {
+    const vault = new MemoryVaultSource();
+    const notePath = await ensureHomeNoteForConcept(vault, SOURCE, 'Osmosis');
+    if (notePath === null) throw new Error('home note unexpectedly refused');
+    await ensureHomeNoteForConcept(vault, SOURCE, 'Diffusion');
+    const snapshot = await hashSourceRevision(await vault.read(notePath));
+    const question = (stem: string) => ({
+      stem,
+      correctAnswer: 'Right',
+      distractors: ['A', 'B', 'C', 'D'],
+      feedback: 'See the source.',
+    });
+
+    await materializeAcceptedDraft(vault, {
+      sourcePath: notePath,
+      question: question('First?'),
+      draftId: 'draft-0',
+      expectedSourceContentHash: snapshot,
+      draftedForConceptKey: 'concept-key1:k-one',
+    });
+    await expect(
+      materializeAcceptedDraft(vault, {
+        sourcePath: notePath,
+        question: question('Second?'),
+        draftId: 'draft-1',
+        expectedSourceContentHash: snapshot,
+        draftedForConceptKey: 'concept-key1:k-two',
+      }),
+    ).resolves.toMatchObject({ instrumentId: expect.stringMatching(/^mcq-/) });
+    expect(await vault.read(notePath)).toMatch(
+      /olea-drafted-for:\n {2}mcq-[0-9a-f]{16}: concept-key1:k-one\n {2}mcq-[0-9a-f]{16}: concept-key1:k-two\n/,
+    );
   });
 });

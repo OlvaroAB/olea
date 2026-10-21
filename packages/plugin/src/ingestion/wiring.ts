@@ -96,6 +96,7 @@
 import {
   buildConceptKeyCanonicalIndex,
   type ConceptKeyRecord,
+  type ConceptRecord,
   conceptRegistryEntryFromRecord,
   createExtractionJobRunner,
   createTranscriptAwareJobRunner,
@@ -299,8 +300,17 @@ export interface IngestionWiringDeps {
    * is ever recognised and no primary-kind call is ever enqueued.
    */
   readonly generation?: {
-    /** Services one drained `'generation'` job — see `GenerationAwareJobRunnerDeps.draft` (`generation-queue.ts`). No production implementation is composed yet (named follow-up, this bead's close evidence): the real one calls `draftQuizCardsForConcept` for `instrumentKind === 'mcq'` and returns an honest, non-retryable failure for `'qa'`/`'cloze'` (component register row 2.1 — no client generation task exists for either yet). */
+    /** Services one drained `'generation'` job — see `GenerationAwareJobRunnerDeps.draft` (`generation-queue.ts`). No production implementation is composed yet (named follow-up, this bead's close evidence): the real one (`generation-job-runner.ts`) drafts `'mcq'` and `'qa'` and returns an honest, non-retryable failure for any other kind (component register row 2.1). */
     readonly draft: (job: JobRunnerView) => Promise<JobRunOutcome>;
+    /**
+     * `ol-egov.141.89.105.11`: who makes the FIRST generation call of a concept (F3.3). `'sweep'`
+     * (the default, and the ruled owner for v0.9) leaves it to `runGenerationSweep`, which carries
+     * the cap, routing, the refusal memory, the register and the recall intent: this module then
+     * enqueues no arrival-time primary-kind job. `'queue'` keeps the arrival enqueue
+     * (`enqueuePrimaryGenerationCallsForLandedUnits`) for a post-v0.9 composition. The further-call
+     * triggers run under either owner. See `docs/dev/intelligence-build/instrument-primary-call-owner.md`.
+     */
+    readonly firstCallOwner?: 'sweep' | 'queue';
     /** See `GenerationArrivalDeps.hasAnyBuiltKind`'s own doc — no production implementation is wired yet either. */
     readonly hasAnyBuiltKind: (courseCode: string, conceptKey: string) => Promise<boolean>;
     /** Defaults to a real vault walk (`extractConcepts`) — see `buildGenerationArrivalDeps`. Injected here only so a test never needs a real vault. */
@@ -345,6 +355,16 @@ export interface IngestionWiringDeps {
     readonly furtherCallTriggers?: {
       /** A2.5's cached plan (`plan/cache.ts#loadCachedStudyPlan`) — the top-band signal's source. */
       readonly studyPlanStore: StudyPlanStore;
+      /**
+       * Whether the concept already has a cached draft of this kind (any status; absent
+       * `instrumentType` means multiple choice) — `createHasDraftOfKind`
+       * (`generation/generation-job-runner.ts`). A further call for a kind already drafted is dropped.
+       */
+      readonly hasDraftOfKind: (
+        courseCode: string,
+        conceptKey: string,
+        kind: string,
+      ) => Promise<boolean>;
       /** Injected for determinism under test; production passes `() => new Date()`. */
       readonly now?: () => Date;
     };
@@ -611,6 +631,13 @@ export interface IngestionWiring {
    * calls text-layer here is a page the queue did not send to vision.
    */
   readonly extractOptions?: ExtractOptions;
+  /**
+   * `ol-egov.141.89.105.11`: the generation step the sink hook runs after a landing (the arrival
+   * enqueue under `firstCallOwner: 'queue'`, then the further-call triggers), exposed so a caller
+   * that lands an authored note directly can run it after its sweep. Present only when
+   * `deps.generation` is. Never throws.
+   */
+  readonly afterLanding?: (units: readonly ExtractedUnit[]) => Promise<void>;
 }
 
 /** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. Passes core's `sourcePath -> byte hash` map through ([D-515]). */
@@ -646,28 +673,40 @@ function withUnitsLandedHook(
  */
 function withGenerationEnqueueHook(
   inner: ExtractedUnitSink,
-  generationArrivalDeps: GenerationArrivalDeps,
-  furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined,
+  afterLanding: NonNullable<IngestionWiring['afterLanding']>,
 ): ExtractedUnitSink {
   return {
     async receive(units, sourceRevisions) {
       await inner.receive(units, sourceRevisions);
+      await afterLanding(units);
+    },
+  };
+}
+
+/**
+ * The generation step after a landing: the arrival enqueue only when the queue owns the first call
+ * (`firstCallOwner: 'queue'`), then the further-call triggers. Best-effort, never throws.
+ */
+function buildAfterLanding(
+  generationArrivalDeps: GenerationArrivalDeps,
+  furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined,
+  firstCallOwner: 'sweep' | 'queue',
+): NonNullable<IngestionWiring['afterLanding']> {
+  return async (units) => {
+    if (firstCallOwner === 'queue') {
       try {
         await enqueuePrimaryGenerationCallsForLandedUnits(units, generationArrivalDeps);
       } catch (error) {
         console.error('Olea: generation-enqueue hook failed (ingestion unaffected)', error);
       }
-      if (furtherCallTriggerDeps !== undefined) {
-        try {
-          await enqueueFurtherGenerationCallsForLandedUnits(units, furtherCallTriggerDeps);
-        } catch (error) {
-          console.error(
-            'Olea: further-generation-trigger hook failed (ingestion unaffected)',
-            error,
-          );
-        }
+    }
+    if (furtherCallTriggerDeps !== undefined) {
+      try {
+        await enqueueFurtherGenerationCallsForLandedUnits(units, furtherCallTriggerDeps);
+      } catch (error) {
+        console.error('Olea: further-generation-trigger hook failed (ingestion unaffected)', error);
       }
-    },
+    }
   };
 }
 
@@ -1060,6 +1099,7 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
   // doc: "enqueue calls made before bind are a programmer error," and
   // nothing calls `tick()` until the caller does, after this function
   // returns).
+  let afterLanding: IngestionWiring['afterLanding'];
   if (deps.generation) {
     const generationArrivalDeps = buildGenerationArrivalDeps(
       {
@@ -1082,13 +1122,37 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     // composition — reuses `generationArrivalDeps.listConceptsForCourse`
     // (already resolved above, real-vault-walk by default) rather than
     // re-deriving it a second way.
-    const furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined = deps.generation
-      .furtherCallTriggers
+    // `ol-egov.141.89.105.11`: a further call is only ever the SECOND call. Its concept list keeps
+    // only concepts with a cached draft (the first call was made), and its enqueuer drops a job for
+    // a kind the concept already has a draft of.
+    const furtherCallTriggers = deps.generation.furtherCallTriggers;
+    const furtherCallTriggerDeps: FurtherGenerationTriggerDeps | undefined = furtherCallTriggers
       ? {
           vault: deps.vault,
-          studyPlanStore: deps.generation.furtherCallTriggers.studyPlanStore,
-          enqueuer,
-          listConceptsForCourse: generationArrivalDeps.listConceptsForCourse,
+          studyPlanStore: furtherCallTriggers.studyPlanStore,
+          enqueuer: {
+            async enqueue(input) {
+              if (isGenerationJobPayload(input.payload)) {
+                const { courseCode, conceptKey, instrumentKind } = input.payload;
+                if (
+                  await furtherCallTriggers.hasDraftOfKind(courseCode, conceptKey, instrumentKind)
+                ) {
+                  // Already drafted: nothing queued. Same shape the engine answers for a known job.
+                  return { status: 'duplicate', existingStatus: 'done' };
+                }
+              }
+              return enqueuer.enqueue(input);
+            },
+          },
+          listConceptsForCourse: async (courseCode) => {
+            const concepts = await generationArrivalDeps.listConceptsForCourse(courseCode);
+            const kept: ConceptRecord[] = [];
+            for (const concept of concepts) {
+              if (await deps.generation?.hasAnyBuiltKind(courseCode, concept.key))
+                kept.push(concept);
+            }
+            return kept;
+          },
           ...(deps.generation.formatMatchFor
             ? { formatMatchFor: deps.generation.formatMatchFor }
             : {}),
@@ -1100,11 +1164,12 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
             : {}),
         }
       : undefined;
-    runnerSink = withGenerationEnqueueHook(
-      runnerSink,
+    afterLanding = buildAfterLanding(
       generationArrivalDeps,
       furtherCallTriggerDeps,
+      deps.generation.firstCallOwner ?? 'sweep',
     );
+    runnerSink = withGenerationEnqueueHook(runnerSink, afterLanding);
   }
   const visionRunner = deps.vision
     ? await buildVisionRunner(deps.vision, deps.vault, runnerSink, deps.pageRenderer)
@@ -1174,7 +1239,12 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     priority: (a, b) => compareGenerationPriority(a, b, deps.generation?.priority),
   });
   enqueuer.bind(engine);
-  return { engine, sink, ...(extractOptions ? { extractOptions } : {}) };
+  return {
+    engine,
+    sink,
+    ...(extractOptions ? { extractOptions } : {}),
+    ...(afterLanding ? { afterLanding } : {}),
+  };
 }
 
 /**

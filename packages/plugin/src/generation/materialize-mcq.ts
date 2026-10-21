@@ -239,6 +239,20 @@
  * and its result has no `demand` member. **This is one of the two production callers of the
  * target-record writer that `target-store-callers.spec.ts` (T7) allows**; the other is
  * `materialize-card.ts`.
+ *
+ * ## The drafted-for record (`[D-558]`, `ol-egov.141.89.9.99`)
+ *
+ * When `input.draftedForConceptKey` is supplied (the concept the draft was drafted for,
+ * `DraftRecord.conceptIds[0]`) and the target note is one of Olea's own home notes, the note's
+ * `olea-drafted-for` map gains one line naming this item's frozen id and that concept
+ * (`home-note.ts`'s `recordDraftedForConcept`, over `olea-core`'s `session/drafted-for.ts`), and
+ * enumeration then binds the item to that concept and its courses alone. The line is spliced into
+ * the same in-memory content as the block, its id and any `predecessor:` field, so the item and
+ * its record land in **one** vault write. A note she wrote is never given the record (INV-6), a
+ * retry finds the line already there and writes it no second time, and the instrument id is
+ * derived exactly as before (the concept is not part of it). The record sits in the frontmatter,
+ * which `sourceRevisionText` leaves out of a home note's revision hash, so recording one item never
+ * makes a sibling draft stale.
  */
 
 import {
@@ -270,7 +284,7 @@ import {
   type MaterializedDemand,
   planInstrumentDemand,
 } from './demand-target.js';
-import { sourceRevisionMatches } from './home-note.js';
+import { recordDraftedForConcept, sourceRevisionMatches } from './home-note.js';
 import type { DraftQuestion } from './types.js';
 
 export interface MaterializeAcceptedDraftInput {
@@ -318,6 +332,13 @@ export interface MaterializeAcceptedDraftInput {
    * member to the result.
    */
   readonly demand?: MaterializeDemandInput;
+  /**
+   * `[D-558]` (`ol-egov.141.89.9.99`): the key of the concept this draft was drafted for
+   * (`DraftRecord.conceptIds[0]`). Recorded beside the item when the note is one of Olea's home
+   * notes — see the module doc's own section. `undefined` records nothing, and the item keeps the
+   * whole-note binding, exactly as before this field.
+   */
+  readonly draftedForConceptKey?: string;
 }
 
 /**
@@ -569,9 +590,14 @@ export async function materializeAcceptedDraft(
       ? { instrumentId: stamped.id }
       : { instrumentId: stamped.id, demand: demandPlan.demand };
 
+  // `[D-558]`: the drafted-for record, spliced into the text about to be written — see the module
+  // doc's own section. A no-op for a note that is not an Olea home note, or with no concept named.
+  const withDraftedFor = (content: string): string =>
+    recordDraftedForConcept(content, stamped.id, input.draftedForConceptKey);
+
   if (input.predecessorInstrumentId === undefined) {
     await recordDemand();
-    await vault.write(input.sourcePath, stamped.content);
+    await vault.write(input.sourcePath, withDraftedFor(stamped.content));
     return resultOf();
   }
 
@@ -597,7 +623,7 @@ export async function materializeAcceptedDraft(
     input.predecessorInstrumentId,
   );
   await recordDemand();
-  await vault.write(input.sourcePath, predecessorStamp.content);
+  await vault.write(input.sourcePath, withDraftedFor(predecessorStamp.content));
 
   const now = deps.now ?? (() => new Date());
   const event = buildSuccessionEvent(input.predecessorInstrumentId, stamped.id, {

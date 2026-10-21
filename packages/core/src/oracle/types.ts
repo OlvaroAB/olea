@@ -266,6 +266,12 @@ export interface OracleConceptFactors {
    * `rankOracle` always sets it; optional for the object-literal reason above.
    */
   readonly needOrderingInput?: number;
+  /**
+   * `[D-554]`: how much a recent valid wrong answer lifted {@link needOrderingInput} above
+   * {@link need} (bounded and fading, `./rank.ts` `DECLARED_WRONG_ANSWER_LIFT_*`). Present only when
+   * a lift applied; {@link need} itself is never changed by it.
+   */
+  readonly wrongAnswerLift?: number;
   /** The blend weights this entry's `priorityScore` was computed with (`RankOracleOptions.blendWeights`, or `./rank.ts`'s declared fallback). `rankOracle` always sets it. */
   readonly blendWeights?: RankBlendWeights;
   /**

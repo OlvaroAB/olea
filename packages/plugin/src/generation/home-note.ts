@@ -56,6 +56,20 @@
  * source therefore reuses the same note and, at most, appends a `topic:`
  * entry it did not already have — it never recreates or duplicates it.
  *
+ * **`[D-558]`: the `topic:` list keeps the note's concepts reachable; each item
+ * records its own.** Read as a whole, the grown list gave every item in the
+ * note every topic (the first as its scored concept) and the union of their
+ * courses, so an item drafted for one course's concept was served as another
+ * course's whenever the note also named a concept the two courses share. Each
+ * item Olea materialises here now records the concept it was drafted for, in
+ * the note's own frontmatter (`olea-drafted-for`, an item-id to concept-key
+ * map), and enumeration binds the item to that concept and its courses
+ * alone. The format, and both its writer and its reader, live in `olea-core`'s
+ * `session/drafted-for.ts`; `recordDraftedForConcept` below is the plugin's
+ * door to the writer, called by the materializers in the same write that
+ * inserts the item. An item with no record (every item before the ruling)
+ * keeps the whole-note binding.
+ *
  * **`[D-214]`'s second caller: a source that is ALREADY a `.md` file.**
  * `ol-0r92.45` reuses this exact module for an authored note she wrote
  * herself, via `pipeline.ts`'s pre-existing bare-drop branch
@@ -84,6 +98,9 @@ import {
   serializeFrontmatter,
   setEntryValue,
 } from 'olea-core';
+// Not in `olea-core`'s barrel (whose `index.ts` another lane holds); a direct module import, the
+// same way `pipeline.ts` reaches core modules the barrel does not list.
+import { recordDraftedFor } from 'olea-core/src/session/drafted-for.js';
 
 /**
  * Frontmatter key marking a note as one of Olea's own home-note artifacts —
@@ -224,6 +241,27 @@ export async function ensureHomeNoteForConcept(
 
   await ensureTopicIncludes(vault, notePath, conceptName);
   return notePath;
+}
+
+/**
+ * `[D-558]`: `content` — the note text a materializer is about to write, with the item already
+ * inserted and stamped — plus the record that the item whose own identity is `itemKey` (a
+ * multiple-choice block's `id:`, a card's block id) was drafted for the concept `conceptKey`, so
+ * the item and its record land in one vault write. See the module doc's `[D-558]` paragraph.
+ *
+ * Returns `content` unchanged when `conceptKey` is `undefined` (a caller with no drafted-for
+ * concept to name), when `content` is not one of Olea's home notes (INV-6: a note she wrote is
+ * never given the record, and her items there keep today's binding), and when the item is already
+ * recorded (a retry: the first record stands). Never throws over the record itself: a record that
+ * cannot be written leaves the item with today's binding rather than failing her accept.
+ */
+export function recordDraftedForConcept(
+  content: string,
+  itemKey: string,
+  conceptKey: string | undefined,
+): string {
+  if (conceptKey === undefined || conceptKey === '') return content;
+  return recordDraftedFor(content, itemKey, conceptKey);
 }
 
 /**
