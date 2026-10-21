@@ -445,14 +445,21 @@ const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
  * outranks real, much larger need or sooner-due evidence), and not so small that a typical gap
  * between two concepts' need readings swallows it. A quarter sits inside that band; it is a pin,
  * not a fit, and the band is wide (see the sweep range below). The lift is added to the need
- * ordering input and the sum is held at the need term's own maximum (1), so the need term can
- * never exceed its stated range, and it moves no relevance or proximity term, so one course's
+ * ordering input whatever the need basis (a multiple-choice-only concept's unknown need is
+ * ordered at 1, and the lift is added to that), not held at the need term's maximum
+ * (`ol-egov.141.89.10.128`), and it moves no relevance or proximity term, so one course's
  * rows cannot be moved above another's by more than `weights.need` times this share.
  *
- * **Provisional, to be calibrated by the five-course rerun.** Sweep for the rerun: 0.05 to 0.5.
- * Revisit when the rerun has measured, with other inputs matched, how often a valid wrong answer
- * keeps more priority than a correct one, and how often the lifted concept is re-served too
- * early (the spacing check); then David ratifies the measured point (`[D-554]`).
+ * **Provisional and NOT yet calibrated.** The five-course rerun could not calibrate it: one
+ * answering session never gives a concept an earlier unaided success followed by a later valid
+ * wrong answer, so the lift's effect was zero by construction (every grid point identical), and
+ * a pending draft card's first answer recorded no independent support until `[D-517]` (a) was
+ * fixed (`ol-egov.141.89.9.102`). The grid is next read over a two-session learner (correct on
+ * the first session, wrong on a later day; `ol-egov.141.89.10.131`), sweep 0.05 to 0.5. Revisit
+ * when a review log holds a counted unaided success on a recall card followed by a valid wrong
+ * answer on a later day: how often that wrong answer keeps more priority than a correct one, and
+ * how often the lifted concept is re-served too early (the spacing check). A written
+ * pre-commitment comes first (`[D-194]`); then David ratifies the measured point (`[D-554]`).
  */
 export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
 
@@ -463,7 +470,8 @@ export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
  * wrong answer is a reason to come back to the concept within about a week, the span in which a
  * missed item is most likely to still be recoverable by one more attempt; past it, the ordinary
  * recall estimate (which the lift does not replace) carries the concept. A pin, not a fit.
- * Provisional; rerun sweep 3 to 14 days; same revisit condition as the share above.
+ * Provisional and not yet calibrated (the five-course rerun could not, see the share above);
+ * sweep 3 to 14 days over the two-session learner; same revisit condition as the share above.
  */
 export const DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS = 7;
 
@@ -1022,11 +1030,14 @@ function resolveNeed(
 }
 
 /**
+/**
  * `[D-554]`: the bounded wrong-answer lift for one concept, and the need it yields. The lift is
  * `cap * max(0, 1 - ageDays / window)`: full size on the day of the wrong answer, nothing at the
- * window's end. It applies only to a need that has a measured number (an unknown need is already
- * ordered at the maximum), and the lifted ordering input never exceeds the need term's maximum.
- * The reported `need` is unchanged: the lift moves the ordering input only.
+ * window's end. It acts whatever the need basis (a concept answered only by multiple choice has
+ * unknown need, ordered at the declared value 1, and a valid wrong answer still lifts it: the
+ * unlifted value stays 1 and the lift is added) and is not held at the need term's maximum, so the
+ * ordering input may exceed 1 by at most the cap. The reported `need`, its basis and its source are
+ * unchanged: the lift moves the ordering input only, and need is never given a number by it.
  */
 function applyWrongAnswerLift(
   need: NeedResolution,
@@ -1035,7 +1046,7 @@ function applyWrongAnswerLift(
   asOf: Date,
 ): NeedResolution & OracleWrongAnswerLiftFactors {
   const day = lastWrongAnswerDay?.get(conceptKey);
-  if (day === undefined || need.need === undefined) return need;
+  if (day === undefined) return need;
   const answered = dateFromCalendarDay(day);
   if (answered === null) {
     throw new Error(
@@ -1047,10 +1058,7 @@ function applyWrongAnswerLift(
     DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE *
     Math.max(0, 1 - ageDays / DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS);
   if (lift === 0) return need;
-  const lifted = Math.min(UNKNOWN_NEED_VALUE, need.needOrderingInput + lift);
-  const applied = lifted - need.needOrderingInput;
-  if (applied <= 0) return need;
-  return { ...need, needOrderingInput: lifted, wrongAnswerLift: applied };
+  return { ...need, needOrderingInput: need.needOrderingInput + lift, wrongAnswerLift: lift };
 }
 
 /**
@@ -1314,6 +1322,20 @@ export function decidingFactors(
 }
 
 /**
+ * `[D-554]`: whether the need term favours `entry` over `next` before any wrong-answer lift: each
+ * side's ordering input less its own reported lift. Equal to the plain need comparison when
+ * neither carries a lift.
+ */
+function unliftedNeedFavours(
+  entry: OracleConceptFactors & OracleProximityFactors,
+  next: OracleConceptFactors & OracleProximityFactors,
+): boolean {
+  const unlifted = (f: OracleConceptFactors & OracleProximityFactors): number =>
+    (f.needOrderingInput ?? UNKNOWN_NEED_VALUE) - (f.wrongAnswerLift ?? 0);
+  return unlifted(entry) > unlifted(next);
+}
+
+/**
  * The evidence sentence's own strength for a concept, without the weight: the sum of yield and
  * confidence across its surviving contributions. What "the assessment evidence for it is
  * stronger" is compared on.
@@ -1500,10 +1522,16 @@ function buildReasoning(
       // needs a strictly higher term); stated rather than guessed if the blend ever changes.
       position = 'is ranked just above the next concept, on everything taken together';
     } else {
-      namesUnknownNeed = deciding.includes('need') && factors.needBasis === 'unknown';
+      // Need is named as the cause only when the UNLIFTED need favours the concept; when the
+      // wrong-answer lift alone puts it ahead, no true phrase names that cause, so it is left out
+      // (`ol-egov.141.89.10.128`).
+      const namedFactors = deciding.filter(
+        (factor) => factor !== 'need' || unliftedNeedFavours(factors, next),
+      );
+      namesUnknownNeed = namedFactors.includes('need') && factors.needBasis === 'unknown';
       // A factor with no drafted phrase true of it is left out, never given a false one; when
       // none is left the reason names no cause and the evidence sentence carries what it rests on.
-      const phrases = deciding
+      const phrases = namedFactors
         .map((factor) => factorPhrase(factor, factors, next, currentLinks))
         .filter((phrase): phrase is string => phrase !== undefined);
       position =

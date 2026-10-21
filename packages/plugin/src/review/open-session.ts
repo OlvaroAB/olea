@@ -373,8 +373,8 @@ export interface OpenReviewSessionInput {
   readonly plan?: StudyPlanEnvelope | null;
   /**
    * F3.3/`[D-097]`'s "new" badge (`ol-p3t07a`): every `status: 'pending'`
-   * record is read fresh and merged into today's queue, ahead of the
-   * ordinarily-scheduled items. Omitted means no drafts are offered — a
+   * record is read fresh and merged into today's queue, AFTER the
+   * instruments the session builder chose (`[D-568]`). Omitted means no drafts are offered — a
    * caller with no generation pipeline wired (a test, the workbench) gets
    * exactly the queue `buildReviewSession` composed, unchanged.
    */
@@ -607,7 +607,7 @@ export type OpenReviewSessionOutcome =
       readonly itemCount: number;
       /**
        * The frozen-eligible portion of the session's queue — `scheduled`
-       * below, BEFORE any pending drafts are prepended. {@link
+       * below, BEFORE any pending drafts are appended. {@link
        * createReviewSessionOpener} reads this to track what the freeze
        * already holds (`extend`'s diff base) and to build the next
        * material-arrival watermark. Never rendered directly by a view.
@@ -1022,13 +1022,15 @@ export async function openReviewSession(
       : EMPTY_INSTRUMENT_ID_SET;
 
     // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): every still-pending
-    // draft, read fresh, ahead of the ordinarily-scheduled items — see
-    // `OpenReviewSessionInput.draftCache`'s doc. `[]` when no cache is
-    // wired, so this is a pure addition and never removes or reorders
+    // draft, read fresh, AFTER the instruments the session builder chose
+    // (`[D-568]`, `ol-egov.141.89.10.130`; before it they went first with no
+    // limit, so 403 drafts sat ahead of the due instruments). Drafts keep their
+    // own order and are all kept (no new cap); see `OpenReviewSessionInput.draftCache`'s
+    // doc. `[]` when no cache is wired, so this never removes or reorders
     // anything `composeQueue`/`executeStudyPlan` decided.
     const pendingDrafts = input.draftCache ? await input.draftCache.listPending() : [];
     const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
-    const queue = [...draftItems, ...scheduled];
+    const queue = [...scheduled, ...draftItems];
 
     const session = new ReviewSession({
       queue,

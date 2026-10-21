@@ -97,7 +97,7 @@ async function composed(v: ReturnType<typeof vault>): Promise<ComposedStudySessi
 }
 
 describe('opening a review session with a pending card draft', () => {
-  it('opens, serving the card draft first as a new draft and the due item after it', async () => {
+  it('opens, serving the due item first and the card draft after it', async () => {
     const v = vault();
     const cache = createVaultDraftCacheStore(v);
     await cache.put(CARD_DRAFT);
@@ -126,12 +126,12 @@ describe('opening a review session with a pending card draft', () => {
     } as never);
     if (!outcome.ok) throw new Error(`the session failed to open: ${String(outcome.error)}`);
     expect(outcome.itemCount).toBe(2);
+    expect(outcome.scheduledQueue.length).toBe(1);
     await outcome.session.start();
     const vm = outcome.session.getViewModel();
     expect(vm.phase).toBe('front');
     if (vm.phase !== 'front') return;
-    expect(vm.instrument.type).toBe('qa');
-    expect(vm.instrument.draftId).toBe('card-draft-1');
+    expect(vm.instrument.draftId).toBeNull();
   });
 });
 

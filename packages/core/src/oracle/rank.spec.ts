@@ -2903,16 +2903,6 @@ describe('rankOracle — the bounded wrong-answer lift to need ([D-554], ol-egov
       expect(gain).toBeGreaterThan(0);
       expect(gain).toBeLessThanOrEqual(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE * w + 1e-12);
     }
-    // Held at the need term's own maximum: need 0.9 + 0.25 lifts to 1, not 1.15; need 1 gains nothing.
-    const high = pairInput({
-      ...wrongOn(ASOF),
-      retrievability: new Map([
-        ['right', 0.1],
-        ['wrong', 0.1],
-      ]),
-    });
-    expect(get(high, 'wrong').factors.needOrderingInput).toBe(1);
-    expect(get(high, 'wrong').factors.need).toBeCloseTo(0.9, 12);
   });
 
   it('the lift decays in a straight line to exactly nothing within the window', () => {
@@ -2940,10 +2930,204 @@ describe('rankOracle — the bounded wrong-answer lift to need ([D-554], ol-egov
     expect(lifted.factors.wrongAnswerLift).toBeCloseTo(0.25, 12);
   });
 
-  it('unknown need is not lifted (already ordered at the maximum)', () => {
-    const { retrievability: _noRecall, ...input } = pairInput(wrongOn(ASOF));
-    expect(get(input, 'wrong').factors.needOrderingInput).toBe(1);
-    expect('wrongAnswerLift' in get(input, 'wrong').factors).toBe(false);
+  // ol-egov.141.89.10.128 / D-554: a concept answered only by multiple choice has unknown need
+  // (no recall reading), and a valid wrong answer still lifts it, by the declared cap.
+  const unknownPair = (extra: Partial<Parameters<typeof rankOracle>[0]> = {}) => {
+    const { retrievability: _noRecall, ...input } = pairInput(extra);
+    return input;
+  };
+
+  it('acceptance: a matched pair of multiple-choice-only concepts, the wrong one ranks above the right one by exactly the cap times the need weight', () => {
+    for (const w of [1, 2.5]) {
+      const input = unknownPair({
+        ...wrongOn(ASOF),
+        options: { blendWeights: { relevance: 1, need: w } },
+      });
+      expect(entries(input).map((e) => e.conceptKey)).toEqual(['wrong', 'right']);
+      const gain = get(input, 'wrong').priorityScore - get(input, 'right').priorityScore;
+      expect(gain).toBeCloseTo(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE * w, 12);
+      for (const key of ['wrong', 'right']) {
+        expect(get(input, key).factors.needBasis).toBe('unknown');
+        expect(get(input, key).factors.need).toBeUndefined();
+      }
+      expect(get(input, 'wrong').factors.wrongAnswerLift).toBeCloseTo(0.25, 12);
+      expect('wrongAnswerLift' in get(input, 'right').factors).toBe(false);
+    }
+  });
+
+  it('unknown-need rows with no lift keep an ordering input of exactly 1, and the output without the input is byte-identical', () => {
+    const base = unknownPair();
+    expect(get(base, 'wrong').factors.needOrderingInput).toBe(1);
+    expect(get(base, 'right').factors.needOrderingInput).toBe(1);
+    const plain = JSON.stringify(rankOracle(base));
+    expect(JSON.stringify(rankOracle(unknownPair({ lastWrongAnswerDay: new Map() })))).toBe(plain);
+    // A wrong answer outside the window, and one for a concept not ranked, change nothing either.
+    expect(JSON.stringify(rankOracle(unknownPair(wrongOn('2026-08-09'))))).toBe(plain);
+    expect(
+      JSON.stringify(rankOracle(unknownPair({ lastWrongAnswerDay: new Map([['other', ASOF]]) }))),
+    ).toBe(plain);
+  });
+
+  it('the fade for unknown need: at ages 0, 4, 7 and 8 days the lift is 0.25, 0.25 x 3/7, 0 and 0, above 1', () => {
+    const at = (age: number) => {
+      const d = new Date(Date.UTC(2026, 7, 16) - age * 86_400_000).toISOString().slice(0, 10);
+      return get(unknownPair(wrongOn(d)), 'wrong').factors;
+    };
+    expect((at(0).needOrderingInput ?? 0) - 1).toBeCloseTo(0.25, 12);
+    expect((at(4).needOrderingInput ?? 0) - 1).toBeCloseTo((0.25 * 3) / 7, 12);
+    expect(at(7).needOrderingInput).toBe(1);
+    expect(at(8).needOrderingInput).toBe(1);
+    expect('wrongAnswerLift' in at(7)).toBe(false);
+    expect('wrongAnswerLift' in at(8)).toBe(false);
+  });
+
+  it('a row ranked at need only, with no assessment link (the course-concepts path), is lifted the same way', () => {
+    const input: Parameters<typeof rankOracle>[0] = {
+      evidence: { edges: [], assessmentsRead: readReport([]), assessmentsWithNoEvidence: [] },
+      courseConcepts: new Map([
+        [
+          'COURSEA',
+          new Map([
+            ['right', 'right'],
+            ['wrong', 'wrong'],
+          ]),
+        ],
+      ]),
+      lastWrongAnswerDay: new Map([['wrong', ASOF]]),
+      asOf: ASOF,
+    };
+    expect(entries(input).map((e) => e.conceptKey)).toEqual(['wrong', 'right']);
+    expect(get(input, 'wrong').factors.needBasis).toBe('unknown');
+    expect(get(input, 'wrong').factors.needOrderingInput).toBeCloseTo(1.25, 12);
+    expect(get(input, 'wrong').factors.wrongAnswerLift).toBeCloseTo(0.25, 12);
+    expect('wrongAnswerLift' in get(input, 'right').factors).toBe(false);
+  });
+
+  it('a wrong unknown-need concept does not outrank one that is ahead on relevance by more than the cap', () => {
+    const input = (extra: Partial<Parameters<typeof rankOracle>[0]>) => {
+      const base = unknownPair(extra);
+      return {
+        ...base,
+        evidence: {
+          ...base.evidence,
+          edges: [
+            edge({ conceptName: 'right' }),
+            edge({ conceptName: 'wrong', confidence: 0.2, yieldRank: 1 }),
+          ],
+        },
+      };
+    };
+    const w = { options: { blendWeights: { relevance: 4, need: 1 } } };
+    const gap0 = get(input(w), 'right').priorityScore - get(input(w), 'wrong').priorityScore;
+    expect(gap0).toBeGreaterThan(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE);
+    const lifted = input({ ...w, ...wrongOn(ASOF) });
+    expect(entries(lifted).map((e) => e.conceptKey)).toEqual(['right', 'wrong']);
+    expect(get(lifted, 'right').priorityScore - get(lifted, 'wrong').priorityScore).toBeCloseTo(
+      gap0 - DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE,
+      12,
+    );
+  });
+
+  it('no hold at the maximum in the measured case: need 0.9 lifts to 1.15, and a multiple-choice-only miss (1.25) orders above a measured miss (1.15)', () => {
+    const high = pairInput({
+      ...wrongOn(ASOF),
+      retrievability: new Map([
+        ['right', 0.1],
+        ['wrong', 0.1],
+      ]),
+    });
+    expect(get(high, 'wrong').factors.needOrderingInput).toBeCloseTo(1.15, 12);
+    expect(get(high, 'wrong').factors.need).toBeCloseTo(0.9, 12);
+    expect(get(high, 'wrong').factors.wrongAnswerLift).toBeCloseTo(0.25, 12);
+    const mixed = pairInput({
+      lastWrongAnswerDay: new Map([
+        ['wrong', ASOF],
+        ['right', ASOF],
+      ]),
+      retrievability: new Map([['wrong', 0.1]]),
+    });
+    // 'right' has no recall reading (multiple choice only), 'wrong' is measured at need 0.9.
+    expect(get(mixed, 'right').factors.needOrderingInput).toBeCloseTo(1.25, 12);
+    expect(get(mixed, 'wrong').factors.needOrderingInput).toBeCloseTo(1.15, 12);
+    expect(entries(mixed).map((e) => e.conceptKey)).toEqual(['right', 'wrong']);
+  });
+
+  it("course fairness for unknown need: the other course's row is untouched, and the gap moves by at most the cap times the need weight", () => {
+    const input: Parameters<typeof rankOracle>[0] = {
+      evidence: {
+        edges: [
+          edge({ conceptName: 'a1', course: 'COURSEA', assessmentPath: 'Assessments/A.md' }),
+          edge({ conceptName: 'b1', course: 'COURSEB', assessmentPath: 'Assessments/B.md' }),
+        ],
+        assessmentsRead: readReport([
+          assessment({ path: 'Assessments/A.md', course: 'COURSEA' }),
+          assessment({ path: 'Assessments/B.md', course: 'COURSEB' }),
+        ]),
+        assessmentsWithNoEvidence: [],
+      },
+      mastery: new Map([
+        ['a1', masteryResult('a1', 'sprout')],
+        ['b1', masteryResult('b1', 'sprout')],
+      ]),
+      asOf: ASOF,
+    };
+    const score = (extra: Partial<Parameters<typeof rankOracle>[0]>, key: string) => {
+      for (const c of rankOracle({ ...input, ...extra }).courses) {
+        if (c.status !== 'ranked') continue;
+        const e = c.ranked.find((x) => x.conceptKey === key);
+        if (e !== undefined) return e.priorityScore;
+      }
+      throw new Error(key);
+    };
+    const gap0 = score({}, 'b1') - score({}, 'a1');
+    const lifted = { lastWrongAnswerDay: new Map([['a1', ASOF]]) };
+    const gap1 = score(lifted, 'b1') - score(lifted, 'a1');
+    expect(gap0 - gap1).toBeGreaterThan(0);
+    expect(gap0 - gap1).toBeLessThanOrEqual(DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE + 1e-12);
+    expect(score(lifted, 'b1')).toBe(score({}, 'b1'));
+  });
+
+  describe('the reason names need only when the unlifted need favours the concept', () => {
+    it('when the lift alone decides between two unknown-need concepts, no need phrase is named and recall is said to be unknown', () => {
+      const input = unknownPair(wrongOn(ASOF));
+      const reasoning = get(input, 'wrong').reasoning;
+      expect(entries(input)[0]?.conceptKey).toBe('wrong');
+      expect(reasoning).not.toContain(RANK_REASON_PHRASES.needUnknown);
+      expect(reasoning).not.toContain(RANK_REASON_PHRASES.need);
+      expect(reasoning).not.toContain('because');
+      expect(reasoning).toContain(RANK_REASON_PHRASES.recallUnknown);
+    });
+
+    it('when the lift alone puts a measured concept above one with higher need, there is no "recall is lower" phrase', () => {
+      const input = pairInput({
+        ...wrongOn(ASOF),
+        retrievability: new Map([
+          ['wrong', 0.5], // need 0.5, lifted to 0.75
+          ['right', 0.4], // need 0.6
+        ]),
+      });
+      expect(entries(input)[0]?.conceptKey).toBe('wrong');
+      const reasoning = get(input, 'wrong').reasoning;
+      expect(reasoning).not.toContain(RANK_REASON_PHRASES.need);
+      expect(reasoning).not.toContain('because');
+    });
+
+    it('when the unlifted need also favours the concept, the need phrase is kept', () => {
+      const measured = pairInput({
+        ...wrongOn(ASOF),
+        retrievability: new Map([
+          ['wrong', 0.4], // need 0.6
+          ['right', 0.5], // need 0.5
+        ]),
+      });
+      expect(get(measured, 'wrong').reasoning).toContain(RANK_REASON_PHRASES.need);
+      // Unknown need against a measured need: the unlifted 1 is above 0.5, so it is named.
+      const unknown = pairInput({
+        ...wrongOn(ASOF),
+        retrievability: new Map([['right', 0.5]]),
+      });
+      expect(get(unknown, 'wrong').reasoning).toContain(RANK_REASON_PHRASES.needUnknown);
+    });
   });
 
   it('a wrong answer does not outrank a concept whose need is more than the cap higher (a nudge, not a jump)', () => {

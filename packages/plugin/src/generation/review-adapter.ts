@@ -30,7 +30,7 @@
  */
 
 import type { RandomSource } from 'olea-core';
-import { mathRandomSource, presentMcq } from 'olea-core';
+import { chooseSupportLevel, mathRandomSource, presentMcq } from 'olea-core';
 import type {
   McqItem,
   McqOption,
@@ -102,6 +102,12 @@ function toDraftCardItem(record: DraftRecord, card: DraftCardContent): ReviewQue
     type: 'qa',
     question: card.front,
     answer: card.back,
+    // `[D-517]` (a), `ol-egov.141.89.9.102`: a pending draft card is a recall screen with no
+    // prompt shown, so its first answer must carry a chooser decision for `review/session.ts`'s
+    // `supportLevelShownOnRecall` to record what was SHOWN (independent), exactly as an accepted
+    // recall card does. Without one the record had no support level and her unaided answer earned
+    // no readiness credit. No history exists for a pending draft, hence the cold-start offer.
+    supportLevel: chooseSupportLevel([]),
   };
   return {
     instrument,
