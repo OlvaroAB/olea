@@ -6,9 +6,11 @@
 // A restart is a new engine over the queue exactly as it was saved, as JSON text (the way
 // data.json holds it): nothing in memory survives it. The newer build is the runner composition
 // with the transcript kind (`createTranscriptAwareJobRunner` outermost, over the extraction runner,
-// as the plugin's `buildIngestionRunner` composes it). The older build is the extraction runner
-// alone: the composition from before the change, which has no transcript kind. Every text is
-// invented ("course A").
+// as the plugin's `buildIngestionRunner` composes it), and it names the payloads that runner serves
+// (`isTranscriptJobPayload`, the engine's `recognisesPayload`) so a job an older build failed for
+// want of that kind is re-armed on load (ol-egov.141.89.5.98). The older build is the extraction
+// runner alone: the composition from before the change, which has no transcript kind and names
+// nothing. Every text is invented ("course A").
 
 import { describe, expect, it } from 'vitest';
 import {
@@ -25,6 +27,7 @@ import { hashText } from './hash.js';
 import {
   buildTranscriptEnqueueInput,
   createTranscriptAwareJobRunner,
+  isTranscriptJobPayload,
   TRANSCRIPT_WORKFLOW_VERSION,
 } from './transcript-job.js';
 import type { JobRunner, PersistedJob, PersistedQueue, QueueStore } from './types.js';
@@ -61,25 +64,35 @@ function collectingSink(): { sink: ExtractedUnitSink; received: ExtractedUnit[][
 
 const noFollowOn = { enqueue: async () => ({ status: 'queued' as const }) };
 
+/** What a build hands the engine: its runner, and the payloads that runner serves, if it names any. */
+interface Build {
+  readonly runner: JobRunner;
+  readonly recognisesPayload?: (payload: unknown) => boolean;
+}
+
 /** The newer build: the transcript kind outermost, everything else to the extraction runner. */
-function newerRunner(vault: VaultSource, sink: ExtractedUnitSink): JobRunner {
-  return createTranscriptAwareJobRunner({
-    vault,
-    sink,
-    fallback: createExtractionJobRunner({ vault, enqueuer: noFollowOn, sink }),
-  });
+function newerBuild(vault: VaultSource, sink: ExtractedUnitSink): Build {
+  return {
+    runner: createTranscriptAwareJobRunner({
+      vault,
+      sink,
+      fallback: createExtractionJobRunner({ vault, enqueuer: noFollowOn, sink }),
+    }),
+    recognisesPayload: isTranscriptJobPayload,
+  };
 }
 
 /** The older build: the extraction runner alone, which knows no transcript kind. */
-function olderRunner(vault: VaultSource, sink: ExtractedUnitSink): JobRunner {
-  return createExtractionJobRunner({ vault, enqueuer: noFollowOn, sink });
+function olderBuild(vault: VaultSource, sink: ExtractedUnitSink): Build {
+  return { runner: createExtractionJobRunner({ vault, enqueuer: noFollowOn, sink }) };
 }
 
-function start(store: QueueStore, runner: JobRunner): Promise<IngestionQueueEngine> {
+function start(store: QueueStore, build: Build): Promise<IngestionQueueEngine> {
   return IngestionQueueEngine.create({
     store,
     capability: { canDrain: true },
-    runner,
+    runner: build.runner,
+    ...(build.recognisesPayload ? { recognisesPayload: build.recognisesPayload } : {}),
     clock: { now: () => 1_000_000 },
     random: { next: () => 0 },
   });
@@ -112,10 +125,10 @@ async function failedByOlderBuild(): Promise<{
 }> {
   const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
   const store = new TextQueueStore();
-  const newer = await start(store, newerRunner(vault, collectingSink().sink));
+  const newer = await start(store, newerBuild(vault, collectingSink().sink));
   await newer.enqueue(await plainInput());
   const queuedText = store.text as string;
-  const older = await start(store, olderRunner(vault, collectingSink().sink));
+  const older = await start(store, olderBuild(vault, collectingSink().sink));
   await older.tick();
   return { store, vault, queuedText };
 }
@@ -124,7 +137,7 @@ describe('A1: each transcript job records its exact format and is read by that f
   it('a plain-text and a declared Markdown job are persisted with their format, reloaded, and each read by its reader', async () => {
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN, [DECLARED]: DECLARED_MARKDOWN });
     const store = new TextQueueStore();
-    const first = await start(store, newerRunner(vault, collectingSink().sink));
+    const first = await start(store, newerBuild(vault, collectingSink().sink));
     await first.enqueue(await plainInput());
     await first.enqueue(
       buildTranscriptEnqueueInput({
@@ -144,7 +157,7 @@ describe('A1: each transcript job records its exact format and is read by that f
 
     // Restart: a new engine over the saved text.
     const { sink, received } = collectingSink();
-    const second = await start(store, newerRunner(vault, sink));
+    const second = await start(store, newerBuild(vault, sink));
     expect(await second.tick()).toMatchObject({ kind: 'ran', outcome: 'done' });
     expect(await second.tick()).toMatchObject({ kind: 'ran', outcome: 'done' });
     expect(received.map((units) => units[0]?.provenance.sourcePath)).toEqual([PLAIN, DECLARED]);
@@ -159,7 +172,7 @@ describe('A2: a declaration removed after the job is queued', () => {
   it('fails at drain after a restart, not to be retried, with a reason saying so, and no parts are written', async () => {
     const vault = new MemoryVault({ [DECLARED]: DECLARED_MARKDOWN });
     const store = new TextQueueStore();
-    const first = await start(store, newerRunner(vault, collectingSink().sink));
+    const first = await start(store, newerBuild(vault, collectingSink().sink));
     await first.enqueue(
       buildTranscriptEnqueueInput({
         sourcePath: DECLARED,
@@ -170,7 +183,7 @@ describe('A2: a declaration removed after the job is queued', () => {
     await vault.write(DECLARED, UNDECLARED_MARKDOWN);
 
     const { sink, received } = collectingSink();
-    const second = await start(store, newerRunner(vault, sink));
+    const second = await start(store, newerBuild(vault, sink));
     expect(await second.tick()).toMatchObject({ kind: 'ran', outcome: 'failed' });
     expect(await second.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
     const [job] = second.list();
@@ -205,7 +218,7 @@ describe('A4: a persisted job with an unknown transcriptFormat', () => {
     const before = identity(store.jobs()[0] as Record<string, unknown>);
 
     const { sink, received } = collectingSink();
-    const engine = await start(store, newerRunner(vault, sink));
+    const engine = await start(store, newerBuild(vault, sink));
     expect(await engine.tick()).toMatchObject({ kind: 'ran', outcome: 'failed' });
     expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
     const saved = store.jobs()[0] as Record<string, unknown>;
@@ -246,7 +259,7 @@ describe('B1: a transcript job persisted in each status, then a restart', () => 
     const store = new TextQueueStore();
     store.text = JSON.stringify(persisted);
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
-    const engine = await start(store, newerRunner(vault, collectingSink().sink));
+    const engine = await start(store, newerBuild(vault, collectingSink().sink));
     const expected = persisted.jobs.map((job) =>
       job.status === 'in-flight' ? { ...job, status: 'queued' } : job,
     );
@@ -254,7 +267,7 @@ describe('B1: a transcript job persisted in each status, then a restart', () => 
     expect(store.jobs()).toEqual(expected);
     const afterFirst = store.text;
 
-    const again = await start(store, newerRunner(vault, collectingSink().sink));
+    const again = await start(store, newerBuild(vault, collectingSink().sink));
     expect(again.list()).toEqual(expected);
     expect(store.text).toBe(afterFirst);
   });
@@ -263,14 +276,14 @@ describe('B1: a transcript job persisted in each status, then a restart', () => 
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
     const store = new TextQueueStore();
     // The first session dies while the transcript is being read: the runner never settles.
-    const stalled = await start(store, () => new Promise(() => undefined));
+    const stalled = await start(store, { runner: () => new Promise(() => undefined) });
     await stalled.enqueue(await plainInput());
     void stalled.tick();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(store.jobs()[0]?.status).toBe('in-flight');
 
     const { sink, received } = collectingSink();
-    const engine = await start(store, newerRunner(vault, sink));
+    const engine = await start(store, newerBuild(vault, sink));
     expect(engine.list()[0]?.status).toBe('queued');
     expect(await engine.tick()).toMatchObject({ kind: 'ran', outcome: 'done' });
     expect(await engine.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
@@ -296,7 +309,7 @@ describe('B2: the same queue drained by the older build', () => {
     const { store, vault } = await failedByOlderBuild();
     const before = store.text;
     const { sink, received } = collectingSink();
-    const older = await start(store, olderRunner(vault, sink));
+    const older = await start(store, olderBuild(vault, sink));
     expect(await older.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
     expect(older.snapshot()).toMatchObject({ failed: 1, queued: 0, done: 0 });
     expect(store.text).toBe(before);
@@ -306,7 +319,7 @@ describe('B2: the same queue drained by the older build', () => {
   it('the older build saving its own work leaves the transcript job’s bytes as they were', async () => {
     const { store, vault } = await failedByOlderBuild();
     const transcriptBytes = JSON.stringify(store.jobs()[0]);
-    const older = await start(store, olderRunner(vault, collectingSink().sink));
+    const older = await start(store, olderBuild(vault, collectingSink().sink));
     await older.enqueue({
       contentHash: 'hash-deck',
       label: 'Course A/Lecture 3/slides.pdf',
@@ -319,30 +332,143 @@ describe('B2: the same queue drained by the older build', () => {
 });
 
 describe('B3: back on the newer build', () => {
-  it('the half that holds today: the job the older build failed is loaded intact, never dropped', async () => {
+  it('the job the older build failed is kept, never dropped: one job, its payload, hash, version, path and label as they were', async () => {
     const { store, vault } = await failedByOlderBuild();
     const before = store.jobs();
-    const newer = await start(store, newerRunner(vault, collectingSink().sink));
-    expect(newer.list()).toEqual(before);
+    const newer = await start(store, newerBuild(vault, collectingSink().sink));
+    expect(newer.list()).toHaveLength(before.length);
+    expect(identity(store.jobs()[0] as Record<string, unknown>)).toBe(
+      identity(before[0] as Record<string, unknown>),
+    );
   });
 
   // PERSISTENCE.md 2.7: "on every load, the newer build puts back to `queued` any job that is
-  // `failed` with the unrecognised-payload reason and whose payload it now recognises". Not built:
-  // `IngestionQueueEngine.create` (engine.ts, `create`, lines 328-344) corrects only `in-flight`
-  // jobs, and the plugin's `buildIngestionRunner` (wiring.ts, the `IngestionQueueEngine.create`
-  // call) passes no recogniser. So the job stays `failed`, and because the engine's dedup treats any
-  // recorded status as settled for that content and version, the transcript is never read on this
-  // device until its bytes or the reader version change. A code defect: the fix uses an existing
-  // status and an existing field, no persisted change. Pinned as an expected failure so that the fix
-  // turns this red and it is flipped to a plain `it`.
-  it.fails('B3 [defect: no load-time re-arm, engine.ts:328-344] the job is re-armed and runs once', async () => {
+  // `failed` with the unrecognised-payload reason and whose payload it now recognises". Built by
+  // ol-egov.141.89.5.98: `IngestionQueueEngine.create` re-arms such a job when the build names the
+  // payloads its runner serves (`recognisesPayload`). Only `status` and `failedReason` change, and
+  // the correction is saved at once. Existing status, existing fields: no persisted change.
+  it('B3: the job is re-armed and runs once, and the same input is then a duplicate of a done job', async () => {
     const { store, vault } = await failedByOlderBuild();
+    const failed = store.jobs()[0] as Record<string, unknown>;
+    expect(failed.attempts).toBe(1);
     const { sink, received } = collectingSink();
-    const newer = await start(store, newerRunner(vault, sink));
+    const newer = await start(store, newerBuild(vault, sink));
     expect(newer.list()[0]?.status).toBe('queued');
+    const { failedReason: _reason, ...kept } = failed;
+    expect(JSON.stringify(store.jobs()[0])).toBe(JSON.stringify({ ...kept, status: 'queued' }));
+
     expect(await newer.tick()).toMatchObject({ kind: 'ran', outcome: 'done' });
     expect(await newer.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
     expect(received).toHaveLength(1);
+    expect(store.jobs()[0]).toMatchObject({ status: 'done', attempts: 2 });
+    expect(await newer.enqueue(await plainInput())).toEqual({
+      status: 'duplicate',
+      existingStatus: 'done',
+    });
+  });
+
+  it('at most once: a re-armed job that fails again under this build is left failed by the next start, and nothing runs', async () => {
+    const { store, vault } = await failedByOlderBuild();
+    // Before the newer build drains it, the transcript is emptied: this build fails it, with its own reason.
+    await vault.write(PLAIN, '');
+    const newer = await start(store, newerBuild(vault, collectingSink().sink));
+    expect(await newer.tick()).toMatchObject({ kind: 'ran', outcome: 'failed' });
+    expect(store.jobs()[0]).toMatchObject({
+      status: 'failed',
+      attempts: 2,
+      failedReason: 'transcript has no readable text (empty-document)',
+    });
+    const afterFailure = store.text;
+
+    for (let restart = 0; restart < 2; restart++) {
+      const { sink, received } = collectingSink();
+      const again = await start(store, newerBuild(vault, sink));
+      expect(again.list()[0]?.status).toBe('failed');
+      expect(await again.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+      expect(received).toEqual([]);
+      expect(store.text).toBe(afterFailure);
+    }
+  });
+
+  it('a kind this build does not serve either, failed with the unrecognised-payload reason by this build, is not re-armed on the next start', async () => {
+    const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
+    const store = new TextQueueStore();
+    const newer = await start(store, newerBuild(vault, collectingSink().sink));
+    await newer.enqueue({
+      contentHash: 'hash-later-kind',
+      label: 'Course A/Lecture 3/later.bin',
+      payload: { kind: 'a-later-kind', sourcePath: 'Course A/Lecture 3/later.bin' },
+    });
+    expect(await newer.tick()).toMatchObject({ kind: 'ran', outcome: 'failed' });
+    expect(store.jobs()[0]?.failedReason).toBe(
+      'unrecognised ingestion job payload for hash-later-kind',
+    );
+    const afterFailure = store.text;
+
+    const again = await start(store, newerBuild(vault, collectingSink().sink));
+    expect(again.list()[0]?.status).toBe('failed');
+    expect(await again.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(store.text).toBe(afterFailure);
+  });
+
+  it('only a payload this build serves, failed with the unrecognised-payload reason for its own hash, is re-armed', async () => {
+    const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
+    const transcriptPayload = {
+      kind: 'transcript',
+      sourcePath: PLAIN,
+      transcriptFormat: 'plain-text',
+    };
+    const failedJob = (contentHash: string, payload: unknown, failedReason: string) => ({
+      contentHash,
+      label: PLAIN,
+      payload,
+      enqueuedAt: 5,
+      status: 'failed',
+      attempts: 1,
+      failedReason,
+    });
+    const unrecognised = (hash: string) => `unrecognised ingestion job payload for ${hash}`;
+    const store = new TextQueueStore();
+    store.text = JSON.stringify({
+      version: 1,
+      headroom: null,
+      jobs: [
+        // A transcript payload with a format outside the closed set: this build cannot read it either.
+        failedJob(
+          'h-wav',
+          { kind: 'transcript', sourcePath: PLAIN, transcriptFormat: 'wav' },
+          unrecognised('h-wav'),
+        ),
+        // A source payload the extraction runner rejects: not a kind this build added.
+        failedJob(
+          'h-source',
+          { kind: 'source', sourcePath: 'Course A/slides.key', format: 'keynote' },
+          unrecognised('h-source'),
+        ),
+        // The unrecognised text, but for another job's hash: not this job's own record.
+        failedJob('h-own', transcriptPayload, unrecognised('h-other')),
+        // Retired by a newer revision of the same path, and parked by the attempt cap.
+        failedJob(
+          'h-superseded',
+          transcriptPayload,
+          'superseded — a newer revision of this source was enqueued (content hash h-x)',
+        ),
+        failedJob('h-capped', transcriptPayload, 'attempt cap reached (8 attempts)'),
+      ],
+    });
+    const before = store.text;
+    const { sink, received } = collectingSink();
+    const newer = await start(store, newerBuild(vault, sink));
+    expect(newer.list().map((job) => job.status)).toEqual([
+      'failed',
+      'failed',
+      'failed',
+      'failed',
+      'failed',
+    ]);
+    expect(await newer.tick()).toEqual({ kind: 'idle', reason: 'nothing-eligible' });
+    expect(store.text).toBe(before);
+    expect(received).toEqual([]);
   });
 
   it('a transcript job failed for another reason is not re-armed, and the same input stays a duplicate', async () => {
@@ -367,7 +493,7 @@ describe('B3: back on the newer build', () => {
       ],
     });
     const before = store.text;
-    const newer = await start(store, newerRunner(vault, collectingSink().sink));
+    const newer = await start(store, newerBuild(vault, collectingSink().sink));
     expect(newer.list()[0]?.status).toBe('failed');
     expect(await newer.enqueue(input)).toEqual({ status: 'duplicate', existingStatus: 'failed' });
     expect(store.text).toBe(before);
@@ -421,7 +547,7 @@ describe('B4: a queue of the four existing kinds', () => {
     const store = new TextQueueStore();
     store.text = JSON.stringify({ version: 1, jobs: existing, headroom: 0.5 });
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
-    const newer = await start(store, newerRunner(vault, collectingSink().sink));
+    const newer = await start(store, newerBuild(vault, collectingSink().sink));
     await newer.enqueue(await plainInput());
     const saved = JSON.parse(store.text) as { version: number; jobs: unknown[]; headroom: unknown };
     expect(saved.version).toBe(1);
@@ -437,7 +563,7 @@ describe('B6, the queue half: a byte-identical copy at a second path', () => {
   it('is a duplicate job and does not run; the one job reads the first path only', async () => {
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN, [COPY]: LONG_PLAIN });
     const store = new TextQueueStore();
-    const first = await start(store, newerRunner(vault, collectingSink().sink));
+    const first = await start(store, newerBuild(vault, collectingSink().sink));
     const hash = await hashText(LONG_PLAIN);
     expect(
       await first.enqueue(
@@ -449,7 +575,7 @@ describe('B6, the queue half: a byte-identical copy at a second path', () => {
       ),
     ).toEqual({ status: 'queued' });
     const { sink, received } = collectingSink();
-    const second = await start(store, newerRunner(vault, sink));
+    const second = await start(store, newerBuild(vault, sink));
     expect(
       await second.enqueue(
         buildTranscriptEnqueueInput({

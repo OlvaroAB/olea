@@ -25,7 +25,10 @@
  * process dies while a submission is outstanding, the persisted queue is
  * left with that job at `in-flight`; `IngestionQueueEngine.create` (below)
  * requeues any such job back to `queued` on the next load rather than
- * leaving it stranded. Content-hash idempotency (`enqueue`'s dedup check)
+ * leaving it stranded. The same load re-arms a job an older build failed
+ * only because it had no runner for the payload's kind, when the caller says
+ * this build's runner serves it (`EngineDeps.recognisesPayload`, PERSISTENCE
+ * 2.7). Content-hash idempotency (`enqueue`'s dedup check)
  * is what makes that requeue-and-retry safe rather than a double-charge
  * risk on the client's own bookkeeping.
  *
@@ -260,6 +263,64 @@ export interface EngineDeps {
    * caller needing several distinct allowances composes several engines.
    */
   readonly workflowAllowance?: WorkflowAllowanceConfig;
+  /**
+   * PERSISTENCE 2.7 (`ol-egov.141.89.5.98`, D-465): which payloads `runner` serves that an
+   * older build's runner may not have. Supplied, `create` puts back to `'queued'` every job
+   * that is `'failed'` with exactly `unrecognisedPayloadReason(contentHash)` for its own
+   * content hash AND whose payload this predicate accepts: a job an older build failed only
+   * because it had no runner for that kind. Without the re-arm, `enqueue`'s dedup treats the
+   * failed record as settled for that content and version, so the content is never read on
+   * this device until its bytes or workflow version change. A job failed for any other reason
+   * stays failed, and so does one whose payload this predicate does not accept.
+   *
+   * **It must accept only payloads `runner` itself serves.** That is what limits the re-arm to
+   * once: a re-armed job that fails again under this build fails with `runner`'s own reason,
+   * never the unrecognised-payload one, so the next `create` leaves it failed. No persisted
+   * marker is needed. A predicate wider than the runner would re-arm the same job on every
+   * start. It must also be total over any JSON value, since `payload` is read back from disk.
+   *
+   * Omitted: no failed job is re-armed; `create` corrects only `in-flight` jobs, as before this
+   * field existed. The engine still never inspects `payload` itself; only this predicate does.
+   */
+  readonly recognisesPayload?: (payload: unknown) => boolean;
+}
+
+/**
+ * The exact `failedReason` a build records for a job whose payload its runner did not
+ * recognise: `createExtractionJobRunner`'s text (`extraction-runner.ts`), the fallback the
+ * ingestion queue's composed runner ends in, unchanged since the first commit of this
+ * repository. Older builds
+ * have already persisted it, so it is matched as written. If the runner's message is ever
+ * reworded, the new text is added beside this one here, never put in its place.
+ */
+export function unrecognisedPayloadReason(contentHash: string): string {
+  return `unrecognised ingestion job payload for ${contentHash}`;
+}
+
+/**
+ * PERSISTENCE 2.7 (`ol-egov.141.89.5.98`): re-arms each job an older build failed only for want
+ * of a runner for its kind, when this build's runner serves that payload — see
+ * `EngineDeps.recognisesPayload`. Told apart from every other failure by two things the record
+ * already holds: `failedReason` is exactly `unrecognisedPayloadReason(contentHash)`, and
+ * `recognisesPayload(payload)` is true. Drops only `failedReason` (and any defer keys, absent on
+ * a failed job); every other field, `attempts` included, is kept as recorded. Returns the
+ * corrected array and whether anything changed.
+ */
+function rearmFailedAsUnrecognised(
+  jobs: readonly PersistedJob[],
+  recognisesPayload: ((payload: unknown) => boolean) | null,
+): { jobs: readonly PersistedJob[]; changed: boolean } {
+  if (recognisesPayload === null) return { jobs, changed: false };
+  let changed = false;
+  const next = jobs.map((job): PersistedJob => {
+    if (job.status !== 'failed') return job;
+    if (job.failedReason !== unrecognisedPayloadReason(job.contentHash)) return job;
+    if (!recognisesPayload(job.payload)) return job;
+    changed = true;
+    const { failedReason: _failedReason, ...rest } = clearDefer(job);
+    return { ...rest, status: 'queued' };
+  });
+  return { jobs: changed ? next : jobs, changed };
 }
 
 /** Any job left `in-flight` belongs to a session that died before recording an outcome — requeue it (see the module doc's "persist-before-await" note). Returns the corrected array and whether anything changed. */
@@ -321,13 +382,19 @@ export class IngestionQueueEngine {
 
   /**
    * Loads persisted state (if any) and constructs the engine. Requeues any
-   * stale `in-flight` job (see the module doc) and persists that correction
-   * immediately, so a second `create` in a row — simulating two crashes
-   * back to back — is idempotent and never re-derives a different result.
+   * stale `in-flight` job (see the module doc) and, when
+   * `deps.recognisesPayload` is supplied, re-arms any job an older build
+   * failed only because it did not recognise the payload (PERSISTENCE 2.7;
+   * that field's doc). Persists either correction immediately, so a second
+   * `create` in a row — simulating two crashes back to back — is idempotent
+   * and never re-derives a different result.
    */
   static async create(deps: EngineDeps): Promise<IngestionQueueEngine> {
     const loaded = await deps.store.load();
-    const { jobs, changed } = requeueStaleInFlight(loaded?.jobs ?? []);
+    const requeued = requeueStaleInFlight(loaded?.jobs ?? []);
+    const rearmed = rearmFailedAsUnrecognised(requeued.jobs, deps.recognisesPayload ?? null);
+    const jobs = rearmed.jobs;
+    const changed = requeued.changed || rearmed.changed;
     const headroom = loaded?.headroom ?? null;
     // A queue can only ever have been persisted as 'exhausted' if some prior
     // session observed it; reconstruct budgetResumeAt from whatever
