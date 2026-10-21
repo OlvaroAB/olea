@@ -666,8 +666,10 @@ export interface PaperStructuredGroup {
    * (`[D-562]`, `ol-egov.141.89.7.93`): a named empty group when the composition looked in her held
    * material and found nothing (its parts are `no-held-stimulus` empty slots), or a group written
    * without shared material when the composition did not look (its parts are written or empty for
-   * reasons of their own, never `no-held-stimulus`). Until the lookup (`ol-egov.141.89.7.98`) is
-   * wired, the production composition never looks.
+   * reasons of their own, never `no-held-stimulus`). The production composition looks through
+   * the plugin's held-material lookup (`packages/plugin/src/paper/stimulus-lookup.ts`, over this
+   * package's `lookUpPaperGroupStimulus`), and records a held stimulus only when its passage can
+   * travel to the question writer.
    */
   readonly heldStimulus: PaperHeldStimulus | null;
 }

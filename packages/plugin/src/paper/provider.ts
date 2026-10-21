@@ -32,9 +32,13 @@
  * and `requestPaper` passes them to the composition, which takes whole questions of that reading,
  * writes parts in dependency order with the earlier part's question beside a dependent one, and
  * records the structure on the journal and the paper. A reading with sections only, or none, is the
- * flat paper as before. A group that shares material is asked of `stimulusLookup` (`[D-562]`); none
- * is supplied in production yet (`ol-egov.141.89.7.98` wires it), so such a group is written without
- * shared material. The ruled sentences for a partial paper are the view's, unchanged.
+ * flat paper as before. A group that shares material is asked of the shared-passage lookup
+ * (`[D-562]`): in production `./stimulus-lookup.ts`'s, over the held sources of the group's concepts
+ * (the blueprint input's own), with every document registered now as a past paper
+ * (`readRegisteredPastPaperPaths`, any course) and every resolved assessment record's note kept out
+ * of it. A held passage reaches the face beside its group's parts (`PracticePaperReadyState.passages`,
+ * her text and its source's path, never stored). The ruled sentences for a partial paper are the
+ * view's, unchanged.
  *
  * **F1.2's fallback now reaches this provider (`ol-egov.141.8.10`).** `loadCourseState` no longer
  * exits to `'assignments-not-configured'` on a blank/unreadable Base alone — it reads through
@@ -46,6 +50,7 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import {
+  type AssessmentRecord,
   buildPaperBlueprint,
   documentStateView,
   enumerateVaultInstruments,
@@ -59,8 +64,10 @@ import {
   type PaperHandoffResult,
   type PaperRecord,
   type PaperRecoveredStructure,
+  type PaperScopeConcept,
   type PastPaperStoredReading,
   paperDaysUntilDue,
+  paperGroupsNeedingStimulus,
   paperRecoveredStructureFromReadings,
   type ReadingPolicy,
   readReviewLogHistory,
@@ -91,7 +98,12 @@ import {
   UNFINISHED_PAPER_SENTENCE,
 } from './copy.js';
 import type { PaperDemand } from './demand.js';
-import { composePaperThroughJournal, type PaperStimulusLookup } from './journal-composition.js';
+import {
+  composePaperThroughJournal,
+  type PaperFacePassageText,
+  type PaperStimulusLookup,
+} from './journal-composition.js';
+import { createHeldMaterialStimulusLookup } from './stimulus-lookup.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
 
 /**
@@ -131,6 +143,19 @@ export interface PracticePaperFaceItem {
   readonly response: unknown;
 }
 
+/**
+ * `[D-562]`: a group's held passage as the face shows it, above the group's parts: her text exactly
+ * as held, and its source's path (`PaperHeldStimulus.sourceId`), shown the way the partial banner
+ * shows its pointer paths. No wording of Olea's. Never persisted: the record keeps the pointer only.
+ */
+export interface PracticePaperFacePassage {
+  readonly groupId: string;
+  readonly text: string;
+  readonly sourceId: string;
+  /** The group's parts, nested groups included, in printed order. */
+  readonly slotIds: readonly string[];
+}
+
 /** What the view renders once a paper has been composed. `partialStatement` is placed BEFORE `items` by the view — ruling 4: "before she opens it" — never a footnote after them. */
 export interface PracticePaperReadyState {
   readonly kind: 'ready';
@@ -144,6 +169,8 @@ export interface PracticePaperReadyState {
   readonly emptySlots: readonly PaperEmptySlot[];
   /** `[D-532]`: saved progress was discarded because her material changed; the view shows the ruled sentence once, above the paper. */
   readonly materialChanged: boolean;
+  /** `[D-562]`: each group's held passage, for the view to show above the group's first item. `[]` when none is held. */
+  readonly passages: readonly PracticePaperFacePassage[];
 }
 
 /** The coverage counts a locked paper may state (F4.11, `[D-252]`): counts and whether known, never a share. */
@@ -211,10 +238,20 @@ export interface CreateLocalPracticePaperProviderDeps {
   readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
   /**
    * `[D-562]` (`ol-egov.141.89.7.93`): the shared-material lookup a structured paper's groups are
-   * asked of. Omitted: the composition does not look, so a group that shares material is written
-   * without it and is never `no-held-stimulus` (`./journal-composition.ts`).
+   * asked of, overriding the production one below (tests). Omitted, with
+   * `readRegisteredPastPaperPaths` omitted too: the composition does not look, so a group that
+   * shares material is written without it and is never `no-held-stimulus`
+   * (`./journal-composition.ts`).
    */
   readonly stimulusLookup?: PaperStimulusLookup;
+  /**
+   * `[D-562]`: the vault paths of the documents registered now as past papers, of any course. With
+   * it, each request builds the production lookup (`./stimulus-lookup.ts`) over the blueprint
+   * input's held sources, keeping these papers and every resolved assessment record's note out of
+   * it. A read that throws leaves every source's status unknown, so nothing is searched and no
+   * group is claimed to have none (`../paper/wiring.ts` supplies it from her review log).
+   */
+  readonly readRegisteredPastPaperPaths?: () => Promise<readonly VaultPath[]>;
 }
 
 /**
@@ -437,7 +474,11 @@ async function loadCourseState(
 export function buildReadyStateFromRecord(
   course: string,
   record: PaperRecord,
-  options: { readonly materialChanged?: boolean } = {},
+  options: {
+    readonly materialChanged?: boolean;
+    /** `[D-562]`: the held passages' text by group, from the composition (never from the record). */
+    readonly passages?: readonly PaperFacePassageText[];
+  } = {},
 ): PracticePaperReadyState {
   const partialStatement =
     record.compositionAccount.unbuiltDemand === null
@@ -463,7 +504,47 @@ export function buildReadyStateFromRecord(
     })),
     emptySlots: record.emptySlots,
     materialChanged: options.materialChanged === true,
+    passages: facePassagesOf(record, options.passages ?? []),
   };
+}
+
+/**
+ * `[D-562]`: the face's passages — each group the record's structure holds a passage for, with the
+ * text the composition read for it, its source's path and its parts. A group whose text was not
+ * handed over shows nothing (no placeholder, no wording). Pure.
+ */
+function facePassagesOf(
+  record: PaperRecord,
+  texts: readonly PaperFacePassageText[],
+): readonly PracticePaperFacePassage[] {
+  if (record.structure === undefined || texts.length === 0) return [];
+  const textByGroup = new Map(texts.map((entry) => [entry.groupId, entry.text] as const));
+  const groupById = new Map(record.structure.groups.map((g) => [g.groupId, g] as const));
+  return paperGroupsNeedingStimulus(record.structure).flatMap((needing) => {
+    const held = groupById.get(needing.groupId)?.heldStimulus;
+    const text = textByGroup.get(needing.groupId);
+    if (held === null || held === undefined || text === undefined) return [];
+    return [{ groupId: needing.groupId, text, sourceId: held.sourceId, slotIds: needing.slotIds }];
+  });
+}
+
+/**
+ * `[D-562]`: which passages the view shows before which item — each passage once, before the first
+ * of `state.items` that is one of its group's parts, an outer group's before an inner one's. A
+ * passage none of whose parts was written is not shown: there is nothing for it to sit above. Pure.
+ */
+export function facePassagesBeforeItems(
+  state: Pick<PracticePaperReadyState, 'items' | 'passages'>,
+): ReadonlyMap<string, readonly PracticePaperFacePassage[]> {
+  const out = new Map<string, PracticePaperFacePassage[]>();
+  for (const passage of state.passages) {
+    const first = state.items.find((item) => passage.slotIds.includes(item.slotId));
+    if (first === undefined) continue;
+    const before = out.get(first.slotId) ?? [];
+    before.push(passage);
+    out.set(first.slotId, before);
+  }
+  return out;
 }
 
 /**
@@ -580,6 +661,8 @@ async function composeRequestedPaper(
     structure,
   );
   const blueprint = buildPaperBlueprint(input);
+  const stimulusLookup =
+    deps.stimulusLookup ?? heldMaterialLookupFor(deps, input.concepts, records);
 
   const composed = await composePaperThroughJournal({
     vault: deps.vault,
@@ -601,7 +684,8 @@ async function composeRequestedPaper(
     },
     // `[D-559]`: her stored reading's groups and parts shape the paper; none, the flat paper.
     template: structure?.template ?? null,
-    ...(deps.stimulusLookup !== undefined ? { stimulusLookup: deps.stimulusLookup } : {}),
+    // `[D-562]`: a group that shares material takes one passage from her held material.
+    ...(stimulusLookup !== undefined ? { stimulusLookup } : {}),
     port,
   });
   if (composed.kind === 'unfinished') {
@@ -615,6 +699,28 @@ async function composeRequestedPaper(
   }
   return buildReadyStateFromRecord(course, composed.record, {
     materialChanged: composed.materialChanged,
+    passages: composed.passages,
+  });
+}
+
+/**
+ * `[D-562]`: the production shared-passage lookup for one request, over the held sources the
+ * blueprint was built from; `undefined` without `readRegisteredPastPaperPaths` (the composition then
+ * does not look). The assessment papers kept out are every document registered now as a past paper,
+ * of any course, and every resolved assessment record's note; they are read only if a group is
+ * looked for, and a read that throws leaves them unknown.
+ */
+function heldMaterialLookupFor(
+  deps: CreateLocalPracticePaperProviderDeps,
+  concepts: readonly PaperScopeConcept[],
+  records: readonly AssessmentRecord[],
+): PaperStimulusLookup | undefined {
+  const readRegistered = deps.readRegisteredPastPaperPaths;
+  if (readRegistered === undefined) return undefined;
+  return createHeldMaterialStimulusLookup({
+    concepts,
+    assessmentPaperPaths: async () =>
+      new Set<string>([...(await readRegistered()), ...records.map((record) => record.path)]),
   });
 }
 

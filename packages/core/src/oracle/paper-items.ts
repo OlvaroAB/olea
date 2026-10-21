@@ -71,16 +71,19 @@ export interface PaperItemGenerationRequest {
    * `[D-561]` (`ol-egov.141.89.7.93`): for a part that states a dependency, the earlier parts it
    * builds on, in paper order — each one's question and, when written, its answer, read off the
    * landed item (`paperItemEarlierPart`). Present ONLY for a part with a stated dependency whose
-   * earlier part landed; any other request carries no such key. Her held material in transit
-   * (D-005), never logged. **Not yet on the wire:** the plugin's port payload leaves it out until the
-   * contract field (`ol-egov.141.89.7.97`) is merged.
+   * earlier parts landed; any other request carries no such key, and a dependent part is never
+   * requested without it (the plugin's composition refuses the part instead). Olea's own questions
+   * in transit (D-005), never logged. On the wire as the contract's `earlierParts`
+   * (`olea-contracts`' `authoringEarlierPartsField`, `ol-egov.141.89.7.97`): the plugin's port
+   * checks it against that schema and never sends one the Worker would refuse.
    */
   readonly earlierParts?: readonly PaperEarlierPart[];
   /**
    * `[D-562]` (`ol-egov.141.89.7.93`): for a part in a group that shares material, that group's one
    * passage from her held material, as text. Present ONLY when the composition's stimulus lookup
-   * found one (a figure never travels: its content is not text). Not yet on the wire, for the same
-   * reason as `earlierParts`.
+   * found one (a figure never travels: its content is not text). On the wire as the contract's
+   * `sharedPassage` (`authoringSharedPassageField`), checked the same way. The passage's chunk is
+   * also among the request's `sourceChunks`, so a question built on it is grounded in it.
    */
   readonly sharedPassage?: PaperSharedPassage;
 }

@@ -13,6 +13,7 @@ import {
   paperGroupsNeedingStimulus,
   paperIntendedDemandBasis,
   paperNoneHeldGroupIdsFromPlan,
+  paperPartConceptSlotIds,
   paperPartsInDependencyOrder,
   paperReuseFingerprint,
   paperYieldAgainstStructure,
@@ -765,17 +766,19 @@ describe('which questions a structured paper takes [D-559]', () => {
 });
 
 describe('the structured shape of a paper over her stored reading [D-559]', () => {
-  it('fills the parts, in printed order, with the candidates in ranking order, and keeps every group, label, form, mark and dependency as the reading states them', () => {
+  it('fills the parts that state no dependency, in printed order, with the candidates in ranking order, a part that states one with a candidate after them, and keeps every group, label, form, mark and dependency as the reading states them', () => {
     const blueprint = blueprintOver(5, 5);
     const slotIds = paperBlueprintCandidateSlotIds(blueprint);
     expect(slotIds).toEqual(['slot-0', 'slot-1', 'slot-2', 'slot-3', 'slot-4']);
     const shape = built(COURSE_A, selectPaperTemplateParts(COURSE_A, 5), slotIds);
+    // [D-561] (Class B, ol-egov.141.89.7.93): 1(b) builds on 1(a), so it takes the candidate after
+    // the four parts that state no dependency; its concept is 1(a)'s (planStructuredPaper).
     expect(shape.parts.map((p) => [p.slotId, p.label, p.groupId])).toEqual([
       ['slot-0', 'p1a', 'q1'],
-      ['slot-1', 'p1b', 'q1'],
-      ['slot-2', 'p2a', 'q2'],
-      ['slot-3', 'p2b', 'q2'],
-      ['slot-4', 'p3', 'secB'],
+      ['slot-4', 'p1b', 'q1'],
+      ['slot-1', 'p2a', 'q2'],
+      ['slot-2', 'p2b', 'q2'],
+      ['slot-3', 'p3', 'secB'],
     ]);
     expect(shape.parts[1]?.dependsOn).toEqual({ status: 'stated', onSlotIds: ['slot-0'] });
     expect(shape.parts[0]?.dependsOn).toEqual({ status: 'unknown' });
@@ -783,9 +786,9 @@ describe('the structured shape of a paper over her stored reading [D-559]', () =
     for (const p of shape.parts) expect(p.demand).toEqual({ status: 'not-read' });
     expect(shape.groups.map((g) => [g.groupId, g.kind, g.parentGroupId, g.slotIds])).toEqual([
       ['secA', 'section', undefined, []],
-      ['q1', 'parent-question', 'secA', ['slot-0', 'slot-1']],
-      ['q2', 'shared-stimulus', 'secA', ['slot-2', 'slot-3']],
-      ['secB', 'section', undefined, ['slot-4']],
+      ['q1', 'parent-question', 'secA', ['slot-0', 'slot-4']],
+      ['q2', 'shared-stimulus', 'secA', ['slot-1', 'slot-2']],
+      ['secB', 'section', undefined, ['slot-3']],
     ]);
     expect(shape.groups.find((g) => g.groupId === 'q2')?.stimulusNeed).toEqual({
       status: 'needed',
@@ -797,10 +800,10 @@ describe('the structured shape of a paper over her stored reading [D-559]', () =
     expect(validatePaperStructure(shape)).toEqual([]);
     expect(paperPartsInDependencyOrder(shape).map((p) => p.slotId)).toEqual([
       'slot-0',
+      'slot-4',
       'slot-1',
       'slot-2',
       'slot-3',
-      'slot-4',
     ]);
   });
 
@@ -910,16 +913,20 @@ describe('the plan of a structured paper, with the reasons decided before any ca
       paperBlueprintCandidateSlotIds(blueprint),
     );
     const planned = planStructuredPaper(blueprint, shape);
+    // [D-561]: 1(b) is written on 1(a)'s concept; the parts that state no dependency keep ranking
+    // order, and the lowest-ranked candidate, whose place 1(b) took, is named rank-excluded.
     expect(
       planned?.plan.map((slot) => [slot.slotId, slot.conceptName, slot.dependsOnSlotIds]),
     ).toEqual([
       ['slot-0', 'Topic A', []],
-      ['slot-1', 'Topic B', ['slot-0']],
+      ['slot-4', 'Topic A', ['slot-0']],
+      ['slot-1', 'Topic B', []],
       ['slot-2', 'Topic C', []],
       ['slot-3', 'Topic D', []],
-      ['slot-4', 'Topic E', []],
     ]);
-    expect(planned?.planTimeEmptySlots).toEqual([]);
+    expect(planned?.planTimeEmptySlots.map((e) => [e.slotId, e.conceptName, e.reasonCode])).toEqual(
+      [['excluded-4', 'Topic E', 'rank-excluded']],
+    );
   });
 
   it('names the dependent of a source gap with the gap as its root, and lists the gap before it', () => {
@@ -937,33 +944,37 @@ describe('the plan of a structured paper, with the reasons decided before any ca
     ).toEqual([
       ['slot-1', 'no-held-source', undefined],
       ['slot-0', 'depends-on-empty-part', 'slot-1'],
+      ['excluded-0', 'rank-excluded', undefined],
     ]);
-    expect(planned?.planTimeEmptySlots[1]?.conceptName).toBe('Topic A');
+    // [D-561]: the dependent is about the concept of the part it builds on, so it is named by that
+    // concept; the concept whose candidate place it took is named rank-excluded, never dropped.
+    expect(planned?.planTimeEmptySlots.map((e) => e.conceptName)).toEqual([
+      'Topic B',
+      'Topic B',
+      'Topic A',
+    ]);
   });
 
   it('a group the lookup found nothing for ends no-held-stimulus, unless a part has an earlier reason; a group it did not look for is planned', () => {
-    const blueprint = blueprintOver(5, 5, [4]);
+    // Topics C, D and E have no held source: 2(b) (slot-2) and 3 (slot-3) are empty for that reason.
+    const blueprint = blueprintOver(5, 5, [2, 3, 4]);
     const shape = built(
       COURSE_A,
       selectPaperTemplateParts(COURSE_A, 5),
       paperBlueprintCandidateSlotIds(blueprint),
     );
     expect(paperGroupsNeedingStimulus(shape)).toEqual([
-      { groupId: 'q2', form: 'table', slotIds: ['slot-2', 'slot-3'] },
+      { groupId: 'q2', form: 'table', slotIds: ['slot-1', 'slot-2'] },
     ]);
     const notLooked = planStructuredPaper(blueprint, shape);
-    expect(notLooked?.plan.map((slot) => slot.slotId)).toEqual([
-      'slot-0',
-      'slot-1',
-      'slot-2',
-      'slot-3',
-    ]);
+    expect(notLooked?.plan.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-4', 'slot-1']);
     const noneHeld = planStructuredPaper(blueprint, shape, new Set(['q2']));
-    expect(noneHeld?.plan.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-1']);
+    expect(noneHeld?.plan.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-4']);
     expect(noneHeld?.planTimeEmptySlots.map((e) => [e.slotId, e.reasonCode])).toEqual([
-      ['slot-2', 'no-held-stimulus'],
-      ['slot-3', 'no-held-stimulus'],
-      ['slot-4', 'no-held-source'],
+      ['slot-1', 'no-held-stimulus'],
+      ['slot-2', 'no-held-source'],
+      ['slot-3', 'no-held-source'],
+      ['excluded-4', 'rank-excluded'],
     ]);
   });
 
@@ -993,10 +1004,165 @@ describe('the plan of a structured paper, with the reasons decided before any ca
       selectPaperTemplateParts(COURSE_A, 5),
       paperBlueprintCandidateSlotIds(blueprint),
     );
+    // The blueprint's two, then the candidate 1(b) took the place of ([D-561]).
     expect(
-      planStructuredPaper(blueprint, shape)?.planTimeEmptySlots.map((e) => e.reasonCode),
-    ).toEqual(['rank-excluded', 'rank-excluded']);
+      planStructuredPaper(blueprint, shape)?.planTimeEmptySlots.map((e) => [
+        e.slotId,
+        e.reasonCode,
+      ]),
+    ).toEqual([
+      ['excluded-5', 'rank-excluded'],
+      ['excluded-6', 'rank-excluded'],
+      ['excluded-4', 'rank-excluded'],
+    ]);
     expect(planStructuredPaper(blueprintOver(7, 4), shape)).toBeNull();
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-561], Class B for David's review): a part that builds on an earlier part
+// is about that part's concept. Synthetic ids only.
+describe('a part that builds on an earlier part is written on that part’s concept [D-561]', () => {
+  /** Question 1 (a; b on a; c on b), question 2 (d), question 3 (e; f on e and on a). */
+  const CHAINED = template(
+    [
+      tgroup('q1', 'parent-question'),
+      tgroup('q2', 'parent-question'),
+      tgroup('q3', 'parent-question'),
+    ],
+    [
+      tpart('a', 'q1'),
+      tpart('b', 'q1', { dependsOn: { status: 'stated', onPartIds: ['a'] } }),
+      tpart('c', 'q1', { dependsOn: { status: 'stated', onPartIds: ['b'] } }),
+      tpart('d', 'q2'),
+      tpart('e', 'q3'),
+      tpart('f', 'q3', { dependsOn: { status: 'stated', onPartIds: ['e', 'a'] } }),
+    ],
+  );
+
+  it('through a chain and on the first of several in printed order; the parts that state none keep ranking order; slot ids stay unique and the order stays the dependency order', () => {
+    const blueprint = blueprintOver(6, 6);
+    const shape = built(
+      CHAINED,
+      selectPaperTemplateParts(CHAINED, 6),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    expect(shape.parts.map((p) => [p.label, p.slotId])).toEqual([
+      ['a', 'slot-0'],
+      ['b', 'slot-3'],
+      ['c', 'slot-4'],
+      ['d', 'slot-1'],
+      ['e', 'slot-2'],
+      ['f', 'slot-5'],
+    ]);
+    expect(validatePaperStructure(shape)).toEqual([]);
+    expect(new Set(shape.parts.map((p) => p.slotId)).size).toBe(6);
+    expect([...paperPartConceptSlotIds(shape)]).toEqual([
+      ['slot-0', 'slot-0'],
+      ['slot-3', 'slot-0'],
+      ['slot-4', 'slot-0'],
+      ['slot-1', 'slot-1'],
+      ['slot-2', 'slot-2'],
+      ['slot-5', 'slot-0'],
+    ]);
+
+    const planned = planStructuredPaper(blueprint, shape);
+    expect(
+      planned?.plan.map((slot) => [slot.slotId, slot.conceptName, slot.dependsOnSlotIds]),
+    ).toEqual([
+      ['slot-0', 'Topic A', []],
+      ['slot-3', 'Topic A', ['slot-0']],
+      ['slot-4', 'Topic A', ['slot-3']],
+      ['slot-1', 'Topic B', []],
+      ['slot-2', 'Topic C', []],
+      ['slot-5', 'Topic A', ['slot-2', 'slot-0']],
+    ]);
+    // The candidates whose places the three dependent parts took are named, never dropped.
+    expect(planned?.planTimeEmptySlots.map((e) => [e.slotId, e.conceptName, e.reasonCode])).toEqual(
+      [
+        ['excluded-3', 'Topic D', 'rank-excluded'],
+        ['excluded-4', 'Topic E', 'rank-excluded'],
+        ['excluded-5', 'Topic F', 'rank-excluded'],
+      ],
+    );
+    // The blueprint it writes from holds the earlier part's concept, source and chunks at each
+    // dependent part's own slot id, and planning over it again gives the same plan.
+    const written = planned?.blueprint;
+    expect(
+      written?.slots.map((s) => [s.slotId, s.conceptKey, s.heldSourceId, s.sourceChunks]),
+    ).toEqual([
+      ['slot-0', 'k0', 'n0', ['note 0']],
+      ['slot-1', 'k1', 'n1', ['note 1']],
+      ['slot-2', 'k2', 'n2', ['note 2']],
+      ['slot-3', 'k0', 'n0', ['note 0']],
+      ['slot-4', 'k0', 'n0', ['note 0']],
+      ['slot-5', 'k0', 'n0', ['note 0']],
+    ]);
+    expect(written !== undefined && planStructuredPaper(written, shape)).toEqual(planned);
+  });
+
+  it('never takes the reason of the candidate whose place it took: a part on a held concept is written', () => {
+    // Topic C has no held source and ranks last, so its candidate (slot-2) is the one 1(b) takes.
+    const t = template(
+      [tgroup('q1', 'parent-question'), tgroup('q2', 'parent-question')],
+      [
+        tpart('a', 'q1'),
+        tpart('b', 'q1', { dependsOn: { status: 'stated', onPartIds: ['a'] } }),
+        tpart('c', 'q2'),
+      ],
+    );
+    const blueprint = blueprintOver(3, 3, [2]);
+    const shape = built(
+      t,
+      selectPaperTemplateParts(t, 3),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const planned = planStructuredPaper(blueprint, shape);
+    expect(planned?.plan.map((slot) => [slot.slotId, slot.conceptName])).toEqual([
+      ['slot-0', 'Topic A'],
+      ['slot-2', 'Topic A'],
+      ['slot-1', 'Topic B'],
+    ]);
+    expect(planned?.planTimeEmptySlots.map((e) => [e.slotId, e.conceptName, e.reasonCode])).toEqual(
+      [['excluded-2', 'Topic C', 'rank-excluded']],
+    );
+  });
+
+  it('on resume, a dependent part in a group the lookup found nothing for is read back as that, whatever was left at its slot id', () => {
+    const t = template(
+      [
+        tgroup('q1', 'parent-question'),
+        tgroup('q2', 'shared-stimulus', {
+          stimulus: { status: 'identified', form: 'table', anchor: null },
+        }),
+        tgroup('q3', 'parent-question'),
+      ],
+      [
+        tpart('a', 'q1'),
+        tpart('b', 'q2', { dependsOn: { status: 'stated', onPartIds: ['a'] } }),
+        tpart('c', 'q3'),
+      ],
+    );
+    // Topic C (slot-2, no held source) is the candidate the dependent part b takes the place of.
+    const blueprint = blueprintOver(3, 3, [2]);
+    const shape = built(
+      t,
+      selectPaperTemplateParts(t, 3),
+      paperBlueprintCandidateSlotIds(blueprint),
+    );
+    const planned = planStructuredPaper(blueprint, shape, new Set(['q2']));
+    expect(planned?.plan.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-1']);
+    expect(planned?.planTimeEmptySlots.map((e) => [e.slotId, e.reasonCode])).toEqual([
+      ['slot-2', 'no-held-stimulus'],
+      ['excluded-2', 'rank-excluded'],
+    ]);
+    const own = new Set(blueprint.emptySlots.map((e) => e.slotId));
+    const read = paperNoneHeldGroupIdsFromPlan(
+      shape,
+      new Set(planned?.plan.map((slot) => slot.slotId)),
+      own,
+    );
+    expect([...read]).toEqual(['q2']);
+    expect(planStructuredPaper(blueprint, shape, read)).toEqual(planned);
   });
 });
 

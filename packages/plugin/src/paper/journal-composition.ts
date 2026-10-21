@@ -34,21 +34,32 @@
  * - parts are written in dependency order, and a part whose stated dependency is empty before any
  *   call ends `depends-on-empty-part` and is never requested (a dependency that ends empty while
  *   being written is the journal's to propagate, the same way);
+ * - a part that states a dependency is written on the concept of the first part it depends on, so
+ *   a part built on another asks about the same thing (core's `planStructuredPaper`, rule 2 of its
+ *   part-to-slot rule; Class B, flagged on `ol-egov.141.89.7.93`). The composition writes from the
+ *   blueprint that plan returns, so the item, the fingerprint and the paper all carry that concept;
  * - a group whose template shares material is asked of the stimulus lookup
- *   (`ComposePaperThroughJournalInput.stimulusLookup`, `[D-562]`). A held passage is recorded on the
- *   group by source and chunk, and its text travels with each of the group's parts' requests
- *   (`sharedPassage`). A group the lookup found nothing for ends empty, `no-held-stimulus`. A group
- *   it did not look for (the default, until `ol-egov.141.89.7.98`'s lookup is wired) is written
- *   without shared material and is never given that reason;
+ *   (`ComposePaperThroughJournalInput.stimulusLookup`, `[D-562]`; production's is
+ *   `./stimulus-lookup.ts`, over the held sources of the group's concepts). A held passage that can
+ *   travel (text within the contract's limits, never a figure) is recorded on the group by source
+ *   and chunk, its text travels with each of the group's parts' requests (`sharedPassage`), and its
+ *   chunk is added to each such part's `sourceChunks` when not already there, so a question built
+ *   on it is grounded in it. A held passage that cannot travel is not recorded, and the group is
+ *   written without it. A group the lookup found nothing for ends empty, `no-held-stimulus`. A
+ *   group it did not look for is written without shared material and is never given that reason;
  * - a dependent part's request carries the earlier parts' questions and answers (`earlierParts`,
- *   `[D-561]`), read off their landed items; a part with no stated dependency carries no such key;
+ *   `[D-561]`), read off their landed items; a part with no stated dependency carries no such key.
+ *   **A dependent part is never requested without them**: when an earlier part's landed item has
+ *   no readable question, the part ends `generator-refused` and is not written standalone (and the
+ *   port refuses one whose earlier parts are over the contract's limits the same way,
+ *   `../oracle/paper-item-port.ts`; Class B, flagged on the bead);
  * - the finished paper records the structure (`PaperRecord.structure`, schema version 2), and its
- *   omitted parts read through the ruled sentences already on the view (`[D-457]`, `[D-519]`).
+ *   omitted parts read through the ruled sentences already on the view (`[D-457]`, `[D-519]`). The
+ *   finished result also hands back each held passage's text by group (`passages`), for the face
+ *   to show above the group's parts; it is never stored.
  *
  * A reading with no groups or parts, a template no question of which fits, or a template that does
- * not hold together composes the flat paper exactly as before. Neither request field is on the wire
- * yet: the port's payload (`../oracle/paper-item-port.ts`) leaves both out until the contract field
- * (`ol-egov.141.89.7.97`) is merged.
+ * not hold together composes the flat paper exactly as before.
  *
  * **The three outcomes are read apart, by the port, not the classifier.** The generator is built from
  * `PaperSlotOutcomePort` (`../oracle/paper-item-port.ts`, `createWorkerPaperSlotOutcomePort`), which
@@ -105,6 +116,7 @@
  * data (counts and a journal id, no reason text and no content, D-005) for the caller to act on.
  */
 
+import { authoringSharedPassage } from 'olea-contracts';
 import {
   buildStructuredPaperShape,
   canonicalJson,
@@ -141,6 +153,7 @@ import {
   paperItemEarlierPart,
   paperJournalOwedSlotIds,
   paperNoneHeldGroupIdsFromPlan,
+  paperPartConceptSlotIds,
   paperReuseFingerprint,
   planStructuredPaper,
   runPaperJournal,
@@ -164,7 +177,7 @@ export interface PaperStimulusLookupRequest {
   readonly course: string;
   readonly groupId: string;
   readonly need: Extract<PaperGroupStimulusNeed, { readonly status: 'needed' }>;
-  /** The concepts of every part in the group (nested groups included), in printed order: keys only. */
+  /** The concepts the group's parts (nested groups included) are written on, in printed order, each once: keys only. */
   readonly conceptKeys: readonly string[];
 }
 
@@ -215,6 +228,12 @@ export interface ComposePaperThroughJournalInput {
 
 type PaperJournalExtent = NonNullable<PaperJournalRecord['extent']>;
 
+/** `[D-562]`: one group's held passage text, as the finished result hands it to the face. */
+export interface PaperFacePassageText {
+  readonly groupId: string;
+  readonly text: string;
+}
+
 type SetAsideJournal = {
   readonly journalId: string;
   readonly changed: readonly (keyof PaperReuseFingerprint)[];
@@ -228,6 +247,12 @@ export type ComposePaperThroughJournalResult =
       readonly resume: PaperJournalOpenDecision;
       /** `[D-532]`: saved progress was discarded because her sources or the course's scope changed (never for a change to Olea's own authoring settings alone). */
       readonly materialChanged: boolean;
+      /**
+       * `[D-562]`: each group's held passage as she wrote it, by group, for the face to show above
+       * the group's parts. Her text in transit: never stored (the record keeps the pointer only)
+       * and never logged (D-005). `[]` for a flat paper or a paper with no held passage.
+       */
+      readonly passages: readonly PaperFacePassageText[];
     }
   /**
    * Work is owed, so no paper was created. `'service-unavailable'`: a slot stayed unavailable after
@@ -252,6 +277,8 @@ interface PlannedComposition {
   readonly structure: PaperStructuredShape | undefined;
   /** `[D-562]`: each held passage's text, by the slot of every part it travels with. */
   readonly passageBySlot: ReadonlyMap<string, PaperSharedPassage>;
+  /** `[D-562]`: each held passage, by its group, for the face. */
+  readonly passageByGroup: ReadonlyMap<string, PaperSharedPassage>;
   /** `[D-562]`: each held passage's digest input, by group (her text, digested, never stored). */
   readonly passageVersions: readonly { readonly sourceId: string; readonly text: string | null }[];
   /** `[D-548]`: the length a journal this composition opens records; absent without `extent`. */
@@ -321,15 +348,22 @@ function flatComposition(
     planTimeEmptySlots: blueprint.emptySlots,
     structure: undefined,
     passageBySlot: new Map(),
+    passageByGroup: new Map(),
     passageVersions: [],
     extent,
   };
 }
 
-/** A held passage as the request carries it: a figure never travels, its content not being text, and a blank chunk is no passage. */
+/**
+ * A held passage as the request carries it, or `null` when it cannot travel: a figure never does,
+ * its content not being text, and neither does a passage the contract's own schema refuses (blank,
+ * or over `AUTHORING_SHARED_PASSAGE_MAX_CHARS`), because the Worker would refuse every request
+ * that carried it (`../oracle/paper-item-port.ts`). The text is never trimmed or cut.
+ */
 function sharedPassageOf(stimulus: PaperHeldStimulus, text: string): PaperSharedPassage | null {
-  if (stimulus.form === 'figure' || text.trim().length === 0) return null;
-  return { form: stimulus.form, text };
+  if (stimulus.form === 'figure') return null;
+  const passage = { form: stimulus.form, text };
+  return authoringSharedPassage.safeParse(passage).success ? passage : null;
 }
 
 const sameStimulus = (a: PaperHeldStimulus, b: PaperHeldStimulus): boolean =>
@@ -370,14 +404,26 @@ function passagesBySlot(
   return out;
 }
 
-function conceptKeysOf(blueprint: PaperBlueprint, slotIds: readonly string[]): readonly string[] {
+/**
+ * The concepts `slotIds`' parts are written on, in order, each once: a part that states a
+ * dependency is written on its earlier part's concept (`paperPartConceptSlotIds`), never on the
+ * candidate whose slot id it holds.
+ */
+function conceptKeysOf(
+  blueprint: PaperBlueprint,
+  shape: PaperStructuredShape,
+  slotIds: readonly string[],
+): readonly string[] {
   const conceptBySlot = new Map(
     [...blueprint.slots, ...blueprint.emptySlots].map((s) => [s.slotId, s.conceptKey] as const),
   );
-  return slotIds.flatMap((id) => {
-    const key = conceptBySlot.get(id);
-    return key === undefined ? [] : [key];
-  });
+  const conceptSlot = paperPartConceptSlotIds(shape);
+  const out: string[] = [];
+  for (const id of slotIds) {
+    const key = conceptBySlot.get(conceptSlot.get(id) ?? id);
+    if (key !== undefined && !out.includes(key)) out.push(key);
+  }
+  return out;
 }
 
 /**
@@ -412,24 +458,29 @@ async function structuredComposition(
       course: blueprint.course,
       groupId: group.groupId,
       need: { status: 'needed', form: group.form },
-      conceptKeys: conceptKeysOf(planned, group.slotIds),
+      conceptKeys: conceptKeysOf(planned, built.shape, group.slotIds),
     });
     if (outcome.status === 'none-held') noneHeld.add(group.groupId);
     if (outcome.status !== 'held') continue;
+    // A passage that cannot travel is not recorded: the group is written without it, as a group
+    // not looked for is, and is never given `no-held-stimulus`.
+    const passage = sharedPassageOf(outcome.stimulus, outcome.text);
+    if (passage === null) continue;
     held.set(group.groupId, outcome.stimulus);
     passageVersions.push({ sourceId: stimulusSourceKey(outcome.stimulus), text: outcome.text });
-    const passage = sharedPassageOf(outcome.stimulus, outcome.text);
-    if (passage !== null) passageByGroup.set(group.groupId, passage);
+    passageByGroup.set(group.groupId, passage);
   }
   const shape = withPaperHeldStimuli(built.shape, held);
   const structured = planStructuredPaper(planned, shape, noneHeld);
   if (structured === null) return null;
   return {
-    blueprint: planned,
+    // `[D-561]`: the blueprint the plan writes from, a dependent part on its earlier part's concept.
+    blueprint: structured.blueprint,
     plan: structured.plan,
     planTimeEmptySlots: structured.planTimeEmptySlots,
     structure: shape,
     passageBySlot: passagesBySlot(shape, passageByGroup),
+    passageByGroup,
     passageVersions,
     extent: { slotCount: partIds.length, structureSummary: planned.structureSummary },
   };
@@ -468,6 +519,7 @@ async function recordedComposition(
       need: group.stimulusNeed,
       conceptKeys: conceptKeysOf(
         startedOn,
+        shape,
         paperGroupsNeedingStimulus(shape).find((g) => g.groupId === group.groupId)?.slotIds ?? [],
       ),
     });
@@ -490,11 +542,12 @@ async function recordedComposition(
   const structured = planStructuredPaper(startedOn, shape, noneHeld);
   if (structured === null) return null;
   return {
-    blueprint: startedOn,
+    blueprint: structured.blueprint,
     plan: structured.plan,
     planTimeEmptySlots: structured.planTimeEmptySlots,
     structure: shape,
     passageBySlot: passagesBySlot(shape, passageByGroup),
+    passageByGroup,
     passageVersions,
     extent: recorded,
   };
@@ -521,23 +574,46 @@ function itemFrom(
   };
 }
 
-/** `[D-561]`: the earlier parts a dependent slot builds on, in paper (plan) order, each read off its landed item; `[]` for a slot that states no dependency. */
+/**
+ * `[D-561]`: the earlier parts a dependent slot builds on, in paper (plan) order, each read off its
+ * landed item; `[]` for a slot that states no dependency. **Every one or none**: a dependency with
+ * no landed item, or whose item carries no readable question, refuses the part, because a dependent
+ * part sent without its earlier parts would be written standalone (Class B, flagged on
+ * `ol-egov.141.89.7.93`: the part ends `generator-refused`).
+ */
 function earlierPartsOf(
   slot: PaperJournalPlanSlot,
   dependencyItems: readonly PaperGeneratedItem[],
   planIndex: ReadonlyMap<string, number>,
-): readonly PaperEarlierPart[] {
-  if (slot.dependsOnSlotIds.length === 0) return [];
-  return [...dependencyItems]
-    .sort(
-      (a, b) =>
-        (planIndex.get(a.slotId) ?? Number.MAX_SAFE_INTEGER) -
-        (planIndex.get(b.slotId) ?? Number.MAX_SAFE_INTEGER),
-    )
-    .flatMap((item) => {
-      const part = paperItemEarlierPart(item);
-      return part === undefined ? [] : [part];
-    });
+):
+  | { readonly status: 'ready'; readonly parts: readonly PaperEarlierPart[] }
+  | {
+      readonly status: 'refused';
+      readonly reason: 'earlier-part-missing' | 'earlier-part-unreadable';
+    } {
+  const itemBySlot = new Map(dependencyItems.map((item) => [item.slotId, item] as const));
+  const parts: PaperEarlierPart[] = [];
+  const ordered = [...new Set(slot.dependsOnSlotIds)].sort(
+    (a, b) =>
+      (planIndex.get(a) ?? Number.MAX_SAFE_INTEGER) - (planIndex.get(b) ?? Number.MAX_SAFE_INTEGER),
+  );
+  for (const slotId of ordered) {
+    const item = itemBySlot.get(slotId);
+    if (item === undefined) return { status: 'refused', reason: 'earlier-part-missing' };
+    const part = paperItemEarlierPart(item);
+    if (part === undefined) return { status: 'refused', reason: 'earlier-part-unreadable' };
+    parts.push(part);
+  }
+  return { status: 'ready', parts };
+}
+
+/** `[D-562]`: a part's grounding chunks with its group's passage among them, appended when not already there, so a question built on the passage is grounded in it. */
+function groundingChunksWith(
+  sourceChunks: readonly string[],
+  passage: PaperSharedPassage | undefined,
+): readonly string[] {
+  if (passage === undefined || sourceChunks.includes(passage.text)) return sourceChunks;
+  return [...sourceChunks, passage.text];
 }
 
 /** The journal's generator over the three-outcome port: one call per slot, the outcomes mapped one to one. */
@@ -551,13 +627,16 @@ function slotGeneratorOver(
   return async ({ slot, dependencyItems }) => {
     const planned = bySlotId.get(slot.slotId);
     if (planned === undefined) return { status: 'unavailable', reason: 'slot-not-in-blueprint' };
-    const earlierParts = earlierPartsOf(slot, dependencyItems, planIndex);
+    const earlier = earlierPartsOf(slot, dependencyItems, planIndex);
+    // Never written standalone: a dependent part without its earlier parts is refused, not sent.
+    if (earlier.status === 'refused') return earlier;
+    const earlierParts = earlier.parts;
     const sharedPassage = composition.passageBySlot.get(slot.slotId);
     const request: PaperItemGenerationRequest = {
       taskId: planned.taskId,
       courseCode: blueprint.course,
       conceptName: planned.conceptName,
-      sourceChunks: planned.sourceChunks,
+      sourceChunks: groundingChunksWith(planned.sourceChunks, sharedPassage),
       purpose: 'readiness',
       // `[D-437]` W1: the slot's demand travels only when it was read from her papers.
       ...(blueprint.intendedDemandBasis === 'read'
@@ -760,7 +839,16 @@ export async function composePaperThroughJournal(
       },
       options,
     );
-    return { kind: 'finished', record, resume: decision, materialChanged };
+    return {
+      kind: 'finished',
+      record,
+      resume: decision,
+      materialChanged,
+      passages: [...composition.passageByGroup].map(([groupId, passage]) => ({
+        groupId,
+        text: passage.text,
+      })),
+    };
   }
   return {
     kind: 'unfinished',

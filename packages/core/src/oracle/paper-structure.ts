@@ -43,6 +43,7 @@ import {
   PAPER_STIMULUS_FORMS,
   PAPER_STRUCTURE_FORMAT_VERSION,
   type PaperBlueprint,
+  type PaperBlueprintSlot,
   type PaperEmptySlot,
   type PaperEmptySlotReasonCode,
   type PaperExtent,
@@ -627,13 +628,20 @@ export function comparePaperReuseFingerprints(
 //    when fewer concepts are eligible) and only if every dependency it states falls on a part
 //    already taken or earlier in itself. A question that does not fit, or that depends on a part not
 //    taken, is skipped and the next is tried. Nothing is split: a choice keeps all its alternatives.
-// 2. *Which concept fills which part.* The parts taken, in printed order, take the blueprint's
-//    candidates in ranking order: the first part the top-ranked concept, and so on
-//    (`paperBlueprintCandidateSlotIds`). So a part's slot id is that candidate's slot id, and a part
-//    whose candidate the blueprint left empty (no held source, an unserved demand) is empty for that
-//    reason. Weighting a part by the concepts aligned to its question (scp.md S.14) needs alignment
-//    results, which production does not write yet: today's ranking order is used instead (Class B,
-//    flagged on the bead).
+// 2. *Which concept fills which part.* The parts that state no dependency, in printed order, take
+//    the blueprint's candidates in ranking order: the first such part the top-ranked concept, and so
+//    on (`paperBlueprintCandidateSlotIds`). So such a part's slot id is that candidate's slot id, and
+//    a part whose candidate the blueprint left empty (no held source, an unserved demand) is empty
+//    for that reason. **A part that states a dependency is about the concept of the first part it
+//    depends on** (in printed order; through a chain, the chain's first part's concept): it builds
+//    on that part, so it asks about the same thing (`[D-561]`; Class B, flagged on
+//    `ol-egov.141.89.7.93`). It takes one of the candidates left after the parts that state none,
+//    the lowest-ranked last, as its slot id only (`paperPartConceptSlotIds`), and
+//    `planStructuredPaper` writes it from its earlier part's concept. The candidate whose slot id it
+//    took no longer reaches the paper, and is named rank-excluded there, never silently dropped
+//    (`[D-258]`). Weighting a part by the concepts aligned to its question (scp.md S.14) needs
+//    alignment results, which production does not write yet: today's ranking order is used instead
+//    (Class B, flagged on the bead).
 // 3. *What a part carries.* Its group, label, question form and marks as the reading states them;
 //    its dependencies, mapped from the reading's part ids to slot ids (unknown stays unknown); and a
 //    demand of `not-read`, because a part's demand is not read into the paper while no seal is
@@ -773,12 +781,18 @@ export function buildStructuredPaperShape(
 
   const chosen = new Set(partIds);
   const slotOfPart = new Map<string, string>();
-  template.parts
-    .filter((p) => chosen.has(p.id))
-    .forEach((p, index) => {
-      const slotId = candidateSlotIds[index];
-      if (slotId !== undefined) slotOfPart.set(p.id, slotId);
-    });
+  // Rule 2: the parts that state no dependency take the candidates in ranking order first; a part
+  // that states one takes a candidate after them, its concept being its earlier part's.
+  const chosenParts = template.parts.filter((p) => chosen.has(p.id));
+  const statesDependency = (p: PaperTemplatePart): boolean =>
+    p.dependsOn.status === 'stated' && p.dependsOn.onPartIds.length > 0;
+  [
+    ...chosenParts.filter((p) => !statesDependency(p)),
+    ...chosenParts.filter(statesDependency),
+  ].forEach((p, index) => {
+    const slotId = candidateSlotIds[index];
+    if (slotId !== undefined) slotOfPart.set(p.id, slotId);
+  });
 
   const parts: PaperStructuredPart[] = [];
   for (const p of template.parts) {
@@ -917,9 +931,13 @@ export function paperNoneHeldGroupIdsFromPlan(
     }
     return undefined;
   };
+  // A part written on an earlier part's concept has no reason of its own (`planStructuredPaper`):
+  // whatever the blueprint left at its slot id was another concept's.
+  const conceptSlot = paperPartConceptSlotIds(shape);
   const out = new Set<string>();
   for (const p of shape.parts) {
-    if (plannedSlotIds.has(p.slotId) || ownEmptySlotIds.has(p.slotId)) continue;
+    if (plannedSlotIds.has(p.slotId)) continue;
+    if (conceptSlot.get(p.slotId) === p.slotId && ownEmptySlotIds.has(p.slotId)) continue;
     const dependencies = p.dependsOn.status === 'stated' ? p.dependsOn.onSlotIds : [];
     if (!dependencies.every((id) => plannedSlotIds.has(id))) continue;
     const groupId = nearestUnheld(p.groupId);
@@ -940,8 +958,77 @@ export interface PaperStructuredPlanSlot {
 export interface PaperStructuredPlan {
   /** The parts to be written, in dependency order, each with the slots it depends on (every one of them in the plan). */
   readonly plan: readonly PaperStructuredPlanSlot[];
-  /** Every slot that ends empty before any call: the parts' own and propagated reasons in dependency order, then the blueprint's empty slots that are not parts (rank exclusion). */
+  /**
+   * Every slot that ends empty before any call: the parts' own and propagated reasons in dependency
+   * order, then the blueprint's empty slots that are not parts (rank exclusion), then the candidates
+   * a part written on an earlier part's concept took the place of (rank exclusion, rule 2).
+   */
   readonly planTimeEmptySlots: readonly PaperEmptySlot[];
+  /**
+   * `[D-561]` (rule 2): the blueprint the plan is written from. A part that states a dependency
+   * holds, at its own slot id, its earlier part's concept, held source and chunks; the candidate it
+   * took the place of is a rank-excluded empty slot. Every other slot is the given blueprint's.
+   * Calling this function again over it gives the same plan.
+   */
+  readonly blueprint: PaperBlueprint;
+}
+
+/**
+ * `[D-561]` (`ol-egov.141.89.7.93`, Class B): the slot whose concept each part of `shape` is written
+ * on, by slot id. A part that states a dependency is written on the concept of the first part it
+ * depends on, in printed order, and through a chain on the chain's first part's (rule 2 above);
+ * every other part on its own slot's concept. Pure.
+ */
+export function paperPartConceptSlotIds(shape: PaperStructuredShape): ReadonlyMap<string, string> {
+  const index = new Map(shape.parts.map((p, i) => [p.slotId, i] as const));
+  const partBySlot = new Map(shape.parts.map((p) => [p.slotId, p] as const));
+  const firstDependency = (p: PaperStructuredPart): string | undefined => {
+    if (p.dependsOn.status !== 'stated') return undefined;
+    let first: string | undefined;
+    for (const id of p.dependsOn.onSlotIds) {
+      const at = index.get(id);
+      if (at === undefined || id === p.slotId) continue;
+      if (first === undefined || at < (index.get(first) ?? Number.MAX_SAFE_INTEGER)) first = id;
+    }
+    return first;
+  };
+  const out = new Map<string, string>();
+  for (const p of shape.parts) {
+    const seen = new Set<string>([p.slotId]);
+    let root = p.slotId;
+    let next = firstDependency(p);
+    while (next !== undefined && !seen.has(next)) {
+      seen.add(next);
+      root = next;
+      const at = partBySlot.get(next);
+      next = at === undefined ? undefined : firstDependency(at);
+    }
+    out.set(p.slotId, root);
+  }
+  return out;
+}
+
+const CANDIDATE_RANK = /^slot-(\d+)$/;
+
+/** The rank-excluded empty slot for a candidate whose slot id a part written on an earlier part's concept took (rule 2). */
+function displacedCandidate(
+  occupant: { readonly conceptKey: string; readonly conceptName: string } & Partial<
+    Pick<PaperEmptySlot, 'intendedDemand'>
+  >,
+  slotId: string,
+  taken: ReadonlySet<string>,
+): PaperEmptySlot {
+  const ranked = `excluded-${CANDIDATE_RANK.exec(slotId)?.[1] ?? slotId}`;
+  return {
+    slotId: taken.has(ranked) ? `excluded-${slotId}` : ranked,
+    conceptKey: occupant.conceptKey,
+    conceptName: occupant.conceptName,
+    reasonCode: 'rank-excluded',
+    reason:
+      'its candidate place went to a part that builds on an earlier part and is written on that ' +
+      "part's concept; the concepts ranked above it took the paper's other parts",
+    ...(occupant.intendedDemand !== undefined ? { intendedDemand: occupant.intendedDemand } : {}),
+  };
 }
 
 /**
@@ -949,7 +1036,9 @@ export interface PaperStructuredPlan {
  * blueprint's: no held source, an unserved demand) and every reason they pass on before any call
  * (`propagatePaperEmptiness`: no held stimulus for a group in `noneHeldGroupIds`, the ones the
  * stimulus lookup found nothing for, then depends on an empty part), so a part whose
- * dependency is already empty is never asked for and never reaches the journal. `null` when the
+ * dependency is already empty is never asked for and never reaches the journal. A part that states
+ * a dependency is written on its earlier part's concept (rule 2, `paperPartConceptSlotIds`), so it
+ * has no reason of its own: its earlier part's, or its group's, passes to it. `null` when the
  * shape's parts and the blueprint's candidates are not the same slots: the shape was made over
  * another blueprint, and nothing is guessed. Pure.
  */
@@ -965,9 +1054,12 @@ export function planStructuredPaper(
   }
   const slotById = new Map(blueprint.slots.map((s) => [s.slotId, s] as const));
   const emptyById = new Map(blueprint.emptySlots.map((e) => [e.slotId, e] as const));
+  const conceptSlot = paperPartConceptSlotIds(shape);
+  const conceptOf = (slotId: string): string => conceptSlot.get(slotId) ?? slotId;
+  const onAnother = (slotId: string): boolean => conceptOf(slotId) !== slotId;
   const ownEmpty = new Map<string, PaperEmptyOutcome>();
   for (const p of shape.parts) {
-    const empty = emptyById.get(p.slotId);
+    const empty = onAnother(p.slotId) ? undefined : emptyById.get(p.slotId);
     if (empty === undefined) continue;
     ownEmpty.set(p.slotId, {
       reasonCode: empty.reasonCode,
@@ -981,42 +1073,71 @@ export function planStructuredPaper(
   const plan: PaperStructuredPlanSlot[] = [];
   const planned = new Set<string>();
   const planTimeEmptySlots: PaperEmptySlot[] = [];
+  const writtenSlots: PaperBlueprintSlot[] = blueprint.slots.filter((s) => !onAnother(s.slotId));
+  const writtenEmpty: PaperEmptySlot[] = blueprint.emptySlots.filter((e) => !onAnother(e.slotId));
+  const displaced: PaperEmptySlot[] = [];
+  const taken = new Set([...slotById.keys(), ...emptyById.keys()]);
   for (const p of ordered) {
     const outcome = outcomes.get(p.slotId);
-    const own = emptyById.get(p.slotId);
-    const slot = slotById.get(p.slotId);
+    const conceptAt = conceptOf(p.slotId);
+    const own = onAnother(p.slotId) ? undefined : emptyById.get(p.slotId);
+    const slot = slotById.get(conceptAt);
+    if (onAnother(p.slotId)) {
+      const occupant = slotById.get(p.slotId) ?? emptyById.get(p.slotId);
+      const concept = slot ?? emptyById.get(conceptAt);
+      if (occupant !== undefined && occupant.conceptKey !== concept?.conceptKey) {
+        const candidate = displacedCandidate(occupant, p.slotId, taken);
+        taken.add(candidate.slotId);
+        displaced.push(candidate);
+      }
+      if (slot !== undefined) writtenSlots.push({ ...slot, slotId: p.slotId });
+    }
     if (outcome !== undefined) {
-      if (own !== undefined) planTimeEmptySlots.push(own);
-      else if (slot !== undefined) {
-        planTimeEmptySlots.push({
-          slotId: p.slotId,
-          conceptKey: slot.conceptKey,
-          conceptName: slot.conceptName,
-          reasonCode: outcome.reasonCode,
-          reason: outcome.reason,
-          ...(outcome.causedBySlotId !== undefined
-            ? { causedBySlotId: outcome.causedBySlotId }
-            : {}),
-        });
-      } else return null;
+      if (own !== undefined) {
+        planTimeEmptySlots.push(own);
+        continue;
+      }
+      const concept = slot ?? emptyById.get(conceptAt);
+      if (concept === undefined) return null;
+      const empty: PaperEmptySlot = {
+        slotId: p.slotId,
+        conceptKey: concept.conceptKey,
+        conceptName: concept.conceptName,
+        reasonCode: outcome.reasonCode,
+        reason: outcome.reason,
+        ...(outcome.causedBySlotId !== undefined ? { causedBySlotId: outcome.causedBySlotId } : {}),
+      };
+      planTimeEmptySlots.push(empty);
+      if (onAnother(p.slotId) && slot === undefined) writtenEmpty.push(empty);
       continue;
     }
     if (slot === undefined) return null;
     const dependsOnSlotIds = p.dependsOn.status === 'stated' ? [...p.dependsOn.onSlotIds] : [];
     if (dependsOnSlotIds.some((id) => !planned.has(id))) return null;
     plan.push({
-      slotId: slot.slotId,
+      slotId: p.slotId,
       conceptKey: slot.conceptKey,
       conceptName: slot.conceptName,
       taskId: slot.taskId,
       dependsOnSlotIds,
     });
-    planned.add(slot.slotId);
+    planned.add(p.slotId);
   }
   for (const empty of blueprint.emptySlots) {
     if (!partSlotIds.has(empty.slotId)) planTimeEmptySlots.push(empty);
   }
-  return { plan, planTimeEmptySlots };
+  planTimeEmptySlots.push(...displaced);
+  const rank = new Map(candidates.map((id, index) => [id, index] as const));
+  const rankOf = (slotId: string): number => rank.get(slotId) ?? Number.MAX_SAFE_INTEGER;
+  return {
+    plan,
+    planTimeEmptySlots,
+    blueprint: {
+      ...blueprint,
+      slots: writtenSlots.sort((a, b) => rankOf(a.slotId) - rankOf(b.slotId)),
+      emptySlots: [...writtenEmpty, ...displaced],
+    },
+  };
 }
 
 // --------------------------------------------------------------------------------------------

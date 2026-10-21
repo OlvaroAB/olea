@@ -1884,6 +1884,20 @@ export {
   paperStructureTemplateOf,
   pastPaperReadingCounts,
 } from './oracle/paper-recovered-structure.js';
+// `[D-562]` (`ol-egov.141.89.7.98`, wired by `ol-egov.141.89.7.93`): the shared-passage lookup over
+// her held, non-sealed material for one paper group. See `./oracle/paper-stimulus.js`'s module doc.
+export type {
+  PaperStimulusLookup as PaperGroupStimulusLookupResult,
+  PaperStimulusLookupInput,
+  PaperStimulusNotLookedReason,
+  PaperStimulusSource,
+} from './oracle/paper-stimulus.js';
+export {
+  heldStimulusText,
+  lookUpPaperGroupStimulus,
+  PAPER_STIMULUS_MAX_CHARS,
+  PAPER_STIMULUS_NOT_LOOKED_REASONS,
+} from './oracle/paper-stimulus.js';
 export type {
   CreatePaperInput,
   PaperCompositionAccount,
@@ -1948,6 +1962,7 @@ export {
   paperGroupsNeedingStimulus,
   paperIntendedDemandBasis,
   paperNoneHeldGroupIdsFromPlan,
+  paperPartConceptSlotIds,
   paperPartsInDependencyOrder,
   paperReuseFingerprint,
   paperYieldAgainstStructure,

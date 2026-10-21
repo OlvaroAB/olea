@@ -51,8 +51,8 @@
  *    floor set high turns a short passage she holds into a claim that none is held.
  * 5. **The length band and the size cap.** A chosen chunk is at most `PAPER_STIMULUS_MAX_CHARS`
  *    (6000) characters as written, counted as JavaScript string length, which is how the request
- *    field counts (`AUTHORING_SHARED_PASSAGE_MAX_CHARS` in `olea-contracts`'
- *    `authoring-paper-context.ts`, added by another lane, `ol-egov.141.89.7.97`). A prose chunk's
+ *    field counts: the constant IS the request field's (`AUTHORING_SHARED_PASSAGE_MAX_CHARS` in
+ *    `olea-contracts`' `authoring-paper-context.ts`, `ol-egov.141.89.7.97`). A prose chunk's
  *    band is therefore 30 words to 6000 characters. **A chunk over the cap is never chosen**, and
  *    one that holds the form over the cap means her material does supply one: `'not-looked'`,
  *    `'qualifying-over-cap'`, never `'none-held'`.
@@ -77,9 +77,11 @@
  *
  * **What this does not do.** It never judges whether a passage suits the group's questions (the
  * writer builds on it), never ranks by concept relevance beyond the caller's order, and never reads
- * text a chunk does not carry. It is not exported from the package index: `ol-egov.141.89.7.93`
- * wires it into the paper path.
+ * text a chunk does not carry. The package index exports it, and the plugin's paper path asks it
+ * once per group (`packages/plugin/src/paper/stimulus-lookup.ts`, `ol-egov.141.89.7.93`).
  */
+
+import { AUTHORING_SHARED_PASSAGE_MAX_CHARS } from 'olea-contracts';
 
 import type {
   PaperGroupStimulusNeed,
@@ -89,12 +91,12 @@ import type {
 } from './paper-types.js';
 
 /**
- * The longest chunk that may be chosen, in characters (JavaScript string length). Declared to
- * match the request field `AUTHORING_SHARED_PASSAGE_MAX_CHARS` (`olea-contracts`,
- * `authoring-paper-context.ts`, `ol-egov.141.89.7.97`), so a chosen passage is never refused or cut
- * on the wire.
+ * The longest chunk that may be chosen, in characters (JavaScript string length): the request
+ * field's own limit, `AUTHORING_SHARED_PASSAGE_MAX_CHARS` (`olea-contracts`,
+ * `authoring-paper-context.ts`, `ol-egov.141.89.7.97`), imported rather than restated, so a chosen
+ * passage is never refused or cut on the wire and the two can never drift.
  */
-export const PAPER_STIMULUS_MAX_CHARS = 6000;
+export const PAPER_STIMULUS_MAX_CHARS: number = AUTHORING_SHARED_PASSAGE_MAX_CHARS;
 
 /** Declared: the fewest words of running text that make a chunk a scenario or an extract (rule 4). */
 export const PAPER_STIMULUS_PROSE_MIN_WORDS = 30;

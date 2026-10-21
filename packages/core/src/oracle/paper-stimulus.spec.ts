@@ -1,3 +1,4 @@
+import { AUTHORING_SHARED_PASSAGE_MAX_CHARS } from 'olea-contracts';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   chunkHoldsNonTextContent,
@@ -249,6 +250,9 @@ describe('lookUpPaperGroupStimulus: the size cap', () => {
 
   it('declares the cap of the request field, and the two declared floors', () => {
     expect(PAPER_STIMULUS_MAX_CHARS).toBe(6000);
+    // ol-egov.141.89.7.93: the cap is the contract field's own limit, so a chosen passage is never
+    // refused on the wire (the Worker parses with the same constant).
+    expect(PAPER_STIMULUS_MAX_CHARS).toBe(AUTHORING_SHARED_PASSAGE_MAX_CHARS);
     expect(PAPER_STIMULUS_PROSE_MIN_WORDS).toBe(30);
     expect(PAPER_STIMULUS_DELIMITED_MIN_ROWS).toBe(3);
   });

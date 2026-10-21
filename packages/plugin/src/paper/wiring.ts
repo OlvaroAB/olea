@@ -26,16 +26,27 @@
  * applies within one repo). A note that sits outside the courses folder (or loose inside it)
  * resolves to `undefined`, and the command is hidden — the same "no supported target, hide the
  * palette entry" rule `OLEA_COMMAND_PROCESS_NOTE_NOW`'s own `checkCallback` already follows.
+ *
+ * **The shared-passage lookup is composed here, from `vault` alone (`[D-562]`,
+ * `ol-egov.141.89.7.93`).** A structured paper's group that shares a case, extract, table or data
+ * set takes one passage from her held material (`./stimulus-lookup.ts`, over the held sources the
+ * blueprint is built from). What it must never search is every document registered as a past
+ * paper, of any course, which this file reads from her review log
+ * (`registeredPastPaperPathsForVault`) and hands the provider as `readRegisteredPastPaperPaths`; the
+ * provider adds every resolved assessment record's note. `main.ts`'s existing call is unchanged.
  */
 
 import type { App, TFile } from 'obsidian';
 import {
   courseFromPath,
   type PaperRecoveredStructure,
+  readReviewLogHistory,
+  type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
 import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
+import { registeredPastPapersFrom } from '../scope-reading/declared-demands.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { buildPracticePaperGenerationPort, type ObsidianDataHost } from './generation-port.js';
 import { createLocalPracticePaperProvider, type PracticePaperViewDeps } from './provider.js';
@@ -64,6 +75,27 @@ export interface BuildPracticePaperProviderDeps {
    * (`pastPaperStructureReaderForVault`, supplied by `main.ts`). Omitted: the declared standard extent.
    */
   readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+  /**
+   * `[D-562]` (`ol-egov.141.89.7.93`): the vault paths of the documents registered now as past
+   * papers, of any course, which a group's shared passage is never taken from. Omitted: read from
+   * her review log through `vault` ({@link registeredPastPaperPathsForVault}), so `main.ts` passes
+   * nothing new.
+   */
+  readonly readRegisteredPastPaperPaths?: () => Promise<readonly VaultPath[]>;
+}
+
+/**
+ * `[D-562]`: every document whose latest registration is as a past paper, of any course, read from
+ * her review log the way `./provider.ts`'s past-paper reader reads it (`registeredPastPapersFrom`).
+ * Paths only; nothing is logged (D-005).
+ */
+export function registeredPastPaperPathsForVault(
+  vault: VaultSource,
+): () => Promise<readonly VaultPath[]> {
+  return async () =>
+    registeredPastPapersFrom((await readReviewLogHistory(vault)).entries).map(
+      (paper) => paper.path,
+    );
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc for exactly what `main.ts` supplies and why each piece is injected rather than built here. */
@@ -75,6 +107,10 @@ export function buildPracticePaperProvider(
     settingsStore: deps.settingsStore,
     now: deps.now ?? (() => new Date()),
     ...(deps.readPastPaperStructure ? { readPastPaperStructure: deps.readPastPaperStructure } : {}),
+    // `[D-562]`: a structured paper's shared passage comes from her held material, never a paper
+    // registered as a past paper of any course (`./stimulus-lookup.ts`).
+    readRegisteredPastPaperPaths:
+      deps.readRegisteredPastPaperPaths ?? registeredPastPaperPathsForVault(deps.vault),
     generationPort: () =>
       buildPracticePaperGenerationPort({
         dataHost: deps.dataHost,
