@@ -46,8 +46,10 @@
  * call, matched by `key`, reading `ConceptRecord.sourcePaths[0]` — a note
  * that, by `ConceptRecord`'s own construction, already exists and already
  * names this concept (her `topic:` note, or the bound Zettelkasten note for
- * a tier-3 mint), so no `ensureHomeNoteForConcept` complexity is needed
- * here the way `pipeline.ts` needs it for a raw, note-less document drop.
+ * a tier-3 mint). That note is HERS and is only the SOURCE: the draft's target is Olea's own home
+ * note beside it, created or reused through `ensureHomeNoteForConcept` exactly as the sweep does
+ * (`[D-214]` part 2, `[D-179]`, INV-6, `ol-egov.141.89.105.20`); a collision with a file of hers
+ * caches nothing.
  *
  * **`listConceptsForCourse`'s default stamps the permanent concept key
  * (`[D-357]`), exactly as `generation-queue.ts`'s `buildGenerationArrivalDeps`
@@ -102,7 +104,7 @@ import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
-import { hashSourceRevision } from './home-note.js';
+import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -288,12 +290,27 @@ export async function runGenerationDraftJob(
   // automatically because the first one refused.
   if (drafted === null) return { ok: true };
 
+  // INV-6 / `[D-214]` part 2 / `[D-179]` (`ol-egov.141.89.105.20`): the draft's target is Olea's
+  // OWN home note beside the concept's source, created or reused (its `topic:` list grown) by the
+  // same `ensureHomeNoteForConcept` the sweep uses, never `sourcePath` itself, which is hers and
+  // would take the item at accept. Resolved only now a draft is actually about to be cached, as the
+  // sweep does. `null`: a file that is not Olea's already sits at that path, so nothing is safe to
+  // write into; cache nothing, as the sweep skips, and say so.
+  const homeNote = await ensureHomeNoteForConcept(deps.vault, sourcePath, payload.conceptName);
+  if (homeNote === null) {
+    return {
+      ok: false,
+      retryable: false,
+      reason: `generation job: a file that is not Olea's own already sits at the home note path beside the source for concept ${payload.conceptKey}, so nothing was cached (INV-6)`,
+    };
+  }
+
   const generateDraftId = deps.generateDraftId ?? deriveDraftId;
   const now = deps.now ?? (() => new Date());
   // `ol-0r92.87`'s stale-input guard, the same snapshot-at-draft-time
   // `pipeline.ts` takes — see that module's own doc.
-  const sourceContentHash = (await deps.vault.exists(sourcePath))
-    ? await hashSourceRevision(await deps.vault.read(sourcePath))
+  const sourceContentHash = (await deps.vault.exists(homeNote))
+    ? await hashSourceRevision(await deps.vault.read(homeNote))
     : undefined;
 
   const createdAt = now().toISOString();
@@ -305,7 +322,7 @@ export async function runGenerationDraftJob(
       courseCode: payload.courseCode,
       conceptName: payload.conceptName,
       conceptIds: [payload.conceptKey],
-      sourcePath,
+      sourcePath: homeNote,
       ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
       createdAt,
       ...(payload.instrumentKind === 'qa'

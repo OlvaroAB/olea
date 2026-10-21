@@ -18,6 +18,7 @@
 
 import type { ConceptRecord, GenerationJobPayload } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
+import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import {
   createVaultDraftCacheStore,
   type DraftCacheStore,
@@ -30,11 +31,14 @@ import {
   hasBuiltAnyKindForConcept,
   runGenerationDraftJob,
 } from '../../src/generation/generation-job-runner.js';
+import { isOleaHomeNote } from '../../src/generation/home-note.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
 
 const COURSE_NOTE_PATH = '01 Courses/COGS214/Week 2.md';
+// `[D-214]`: a `.md` source gets a sibling home note, never itself (`homeNotePathForSource`).
+const HOME_NOTE_PATH = '01 Courses/COGS214/Week 2 (Olea).md';
 const COURSE_NOTE = '---\ntopic: [Working memory]\ncourse: COGS214\n---\n\nSome notes.\n';
 
 function concept(name: string, key = `key-${name}`): ConceptRecord {
@@ -78,7 +82,7 @@ const groundedCards = (front: string): DraftCardsResult => ({
 const refusedResponse: DraftQuizCardsResult = { status: 'refused', reason: 'no-hits' };
 
 describe('runGenerationDraftJob', () => {
-  it('drafts an mcq job and caches a pending record naming the concept’s own note', async () => {
+  it('drafts an mcq job and caches a pending record naming Olea’s home note beside the concept’s note', async () => {
     const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
     const cache = createVaultDraftCacheStore(vault);
 
@@ -105,7 +109,7 @@ describe('runGenerationDraftJob', () => {
       courseCode: 'COGS214',
       conceptName: 'Working memory',
       conceptIds: ['key-Working memory'],
-      sourcePath: COURSE_NOTE_PATH,
+      sourcePath: HOME_NOTE_PATH,
     } satisfies Partial<DraftRecord>);
   });
 
@@ -141,7 +145,7 @@ describe('runGenerationDraftJob', () => {
       status: 'pending',
       instrumentType: 'qa',
       conceptIds: ['key-Working memory'],
-      sourcePath: COURSE_NOTE_PATH,
+      sourcePath: HOME_NOTE_PATH,
       card: { front: 'What is working memory?', back: 'the answer' },
     } satisfies Partial<DraftRecord>);
     expect(pending[0]?.provenance.taskId).toBe('cards.generate.v1');
@@ -323,6 +327,82 @@ describe('runGenerationDraftJob', () => {
     expect(draftForConcept).not.toHaveBeenCalled();
     expect(draftCardForConcept).not.toHaveBeenCalled();
   });
+});
+
+describe('the job runner never targets her authored note (INV-6, ol-egov.141.89.105.20)', () => {
+  const deps = (vault: MemoryVaultSource, cache: DraftCacheStore) => ({
+    vault,
+    cache,
+    draftDeps: () => ({}) as never,
+    listConceptsForCourse: async () => [concept('Working memory')],
+    draftForConcept: async () => groundedResponse('Working memory'),
+    draftCardForConcept: async () => groundedCards('What is working memory?'),
+    generateDraftId: () => 'draft-h',
+    now: () => new Date('2026-09-25T10:00:00-04:00'),
+  });
+
+  for (const kind of ['mcq', 'qa'] as const) {
+    it(`a drained ${kind} job caches a draft targeting the home note, created with the concept in its topics`, async () => {
+      const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+      const cache = createVaultDraftCacheStore(vault);
+
+      expect(
+        await runGenerationDraftJob(deps(vault, cache), payload({ instrumentKind: kind })),
+      ).toEqual({
+        ok: true,
+      });
+
+      const pending = await cache.listPending();
+      expect(pending).toHaveLength(1);
+      expect(pending[0]?.sourcePath).toBe(HOME_NOTE_PATH);
+      expect(pending[0]?.sourcePath).not.toBe(COURSE_NOTE_PATH);
+      expect(pending[0]?.conceptIds[0]).toBe('key-Working memory');
+      const home = await vault.read(HOME_NOTE_PATH);
+      expect(isOleaHomeNote(home)).toBe(true);
+      expect(home).toContain('Working memory');
+      expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
+    });
+
+    it(`an accepted ${kind} job draft lands in the home note and leaves her note byte-identical`, async () => {
+      const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+      const cache = createVaultDraftCacheStore(vault);
+      await runGenerationDraftJob(deps(vault, cache), payload({ instrumentKind: kind }));
+      const homeBefore = await vault.read(HOME_NOTE_PATH);
+
+      const port = createDraftAcceptPort({
+        vault,
+        cache,
+        deviceId: 'device-a',
+        now: () => new Date('2026-09-25T11:00:00-04:00'),
+        generateEventId: () => 'event-1',
+      });
+      await port.accept('draft-h', 'accepted');
+
+      expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
+      const homeAfter = await vault.read(HOME_NOTE_PATH);
+      expect(homeAfter).not.toBe(homeBefore);
+      expect(homeAfter).toContain(kind === 'qa' ? 'What is working memory?' : 'Working memory');
+    });
+
+    it(`a ${kind} job caches nothing when her own file already sits at the home note path`, async () => {
+      const hers = '---\ntopic: [Other]\n---\n\nMine.\n';
+      const vault = new MemoryVaultSource({
+        [COURSE_NOTE_PATH]: COURSE_NOTE,
+        [HOME_NOTE_PATH]: hers,
+      });
+      const cache = createVaultDraftCacheStore(vault);
+
+      const outcome = await runGenerationDraftJob(
+        deps(vault, cache),
+        payload({ instrumentKind: kind }),
+      );
+
+      expect(outcome).toMatchObject({ ok: false, retryable: false });
+      expect(await cache.listPending()).toHaveLength(0);
+      expect(await vault.read(HOME_NOTE_PATH)).toBe(hers);
+      expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
+    });
+  }
 });
 
 describe('createGenerationDraftRunner', () => {
