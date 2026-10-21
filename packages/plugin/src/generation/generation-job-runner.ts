@@ -406,3 +406,23 @@ export function createHasAnyBuiltKind(
 ): (courseCode: string, conceptKey: string) => Promise<boolean> {
   return (courseCode, conceptKey) => hasBuiltAnyKindForConcept(cache, courseCode, conceptKey);
 }
+
+/**
+ * `ol-egov.141.89.105.11`: whether the concept already has a cached draft of `kind`, any status
+ * (a record is never deleted, so any status proves the call was made). An absent
+ * `DraftRecord.instrumentType` means multiple choice. Used by the further-call enqueuer to drop a
+ * job for a kind already drafted.
+ */
+export function createHasDraftOfKind(
+  cache: DraftCacheStore,
+): (courseCode: string, conceptKey: string, kind: string) => Promise<boolean> {
+  return async (courseCode, conceptKey, kind) => {
+    const records = await cache.list();
+    return records.some(
+      (record) =>
+        record.courseCode === courseCode &&
+        record.conceptIds.includes(conceptKey) &&
+        (record.instrumentType ?? 'mcq') === kind,
+    );
+  };
+}

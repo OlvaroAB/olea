@@ -26,6 +26,7 @@ import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
 import {
   createGenerationDraftRunner,
   createHasAnyBuiltKind,
+  createHasDraftOfKind,
   hasBuiltAnyKindForConcept,
   runGenerationDraftJob,
 } from '../../src/generation/generation-job-runner.js';
@@ -413,5 +414,40 @@ describe('hasBuiltAnyKindForConcept / createHasAnyBuiltKind', () => {
     const hasAnyBuiltKind = createHasAnyBuiltKind(cache);
     expect(await hasAnyBuiltKind('COGS214', 'key-Working memory')).toBe(true);
     expect(await hasAnyBuiltKind('COGS214', 'key-Unbuilt')).toBe(false);
+  });
+});
+
+describe('createHasDraftOfKind', () => {
+  async function cacheWith(instrumentType?: 'qa'): Promise<DraftCacheStore> {
+    const cache = createVaultDraftCacheStore(new MemoryVaultSource());
+    await cache.put({
+      draftId: 'd1',
+      status: 'pending',
+      courseCode: 'COGS214',
+      conceptName: 'Working memory',
+      conceptIds: ['key-Working memory'],
+      sourcePath: COURSE_NOTE_PATH,
+      createdAt: '2026-09-25T10:00:00.000Z',
+      ...(instrumentType
+        ? { instrumentType, card: { front: 'f', back: 'b' } }
+        : { question: { stem: 's', correctAnswer: 'a', distractors: ['b'], feedback: 'f' } }),
+      provenance: { taskId: 'quiz.generate.v1', promptVersion: '1.0.0', modelId: 'test-model' },
+      firstServedAt: null,
+    } as DraftRecord);
+    return cache;
+  }
+
+  it('reads an absent instrumentType as multiple choice, scoped to the pair', async () => {
+    const has = createHasDraftOfKind(await cacheWith());
+    expect(await has('COGS214', 'key-Working memory', 'mcq')).toBe(true);
+    expect(await has('COGS214', 'key-Working memory', 'qa')).toBe(false);
+    expect(await has('COGS214', 'key-Other', 'mcq')).toBe(false);
+    expect(await has('OTHER', 'key-Working memory', 'mcq')).toBe(false);
+  });
+
+  it('matches a question-and-answer record only for qa', async () => {
+    const has = createHasDraftOfKind(await cacheWith('qa'));
+    expect(await has('COGS214', 'key-Working memory', 'qa')).toBe(true);
+    expect(await has('COGS214', 'key-Working memory', 'mcq')).toBe(false);
   });
 });
