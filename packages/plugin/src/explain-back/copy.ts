@@ -76,6 +76,28 @@ export const EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE =
   "Olea couldn't tell whether this was a real attempt at an answer, so nothing was graded.";
 
 /**
+ * `[D-564]` (c) condition 2 / `ol-egov.141.89.6.113`: shown instead of the message above when the
+ * judge declined a genuine attempt because her notes as delivered cannot decide
+ * (`./decline-kind.ts`, the `insufficient-material:` reason). David ruled this wording on
+ * 2026-10-21 under `[D-564]` (c); it replaces the PLACEHOLDER posture for this string.
+ *
+ * It says Olea could not find enough, never that her notes lack it: the gap may be in what
+ * retrieval handed over (vocabulary registry `[D-263]`'s reason). Swept by `copy.spec.ts`.
+ */
+export const EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE =
+  "Olea couldn't find enough in your notes to check this answer, so nothing was graded.";
+
+/**
+ * `[D-564]` (c) condition 2 / `ol-egov.141.89.6.113`: shown when the judge declined a genuine
+ * attempt because the question is defective or contradictory (`./decline-kind.ts`, the
+ * `defective-question:` reason). David ruled this wording on 2026-10-21 under `[D-564]` (c); it
+ * replaces the PLACEHOLDER posture for this string. The fault is placed on the question, never on
+ * her answer. Swept by `copy.spec.ts`.
+ */
+export const EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE =
+  "This question couldn't be answered as asked, so nothing was graded. That's down to the question, not your answer.";
+
+/**
  * `[D-322]` (vocabulary registry §19, "Practice-only"): shown before she answers a freeform
  * explain-back prompt (command palette or Home, naming no subject) whose topic did not resolve to
  * one concept — an ambiguous match, or no match at all (`./request.ts`'s
