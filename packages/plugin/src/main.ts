@@ -4363,6 +4363,12 @@ export default class OleaPlugin extends Plugin {
       // F3.3/`[D-097]`'s new-badge merge (`ol-p3t07a`): whatever the cache
       // holds pending, read fresh at open time, exactly like the plan above.
       ...(this.generation ? { draftCache: this.generation.cache } : {}),
+      // `ol-egov.141.89.5.108`: a successor draft the session sets aside for a source that moved on
+      // goes back to the revision job, through the ingestion wiring that composes that runner (read
+      // when it is set aside; nothing before the ingestion wiring is up).
+      redraftSetAsideSuccessor: async (draft) => {
+        await this.ingestion?.redraftSetAsideSuccessor?.(draft);
+      },
       // C7.9's containment co-presence filter (`ol-v7r5.7`, `session/build.ts`):
       // the live, served relation fold, read fresh at open time — `[]` before
       // the first corpus-relation batch has run.
