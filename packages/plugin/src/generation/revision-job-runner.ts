@@ -71,7 +71,14 @@
  *    (`CitationRevisionTrigger.landedSourceText`, the text the pass's own rewrite reads). Until it
  *    lands the job waits (`retryable`, drafting nothing), at most
  *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason.
- *  - A Markdown note is drafted and cited exactly as before.
+ *  - An ordinary Markdown note (`ol-egov.141.89.5.110`, `[D-446]`, `[D-543]`) is read as it stands
+ *    too. A question that named a passage is drafted from the job's passage while it still stands
+ *    word for word in the note, else from the passage the citation pass's ladder finds for it in
+ *    that note, else from the whole note; a question protected at whole-note grain, from the whole
+ *    note as it stands. The citation names that passage only when it stands once in the note, so a
+ *    whole-note passage names none and the whole note is protected. Before this, a note changed
+ *    again was drafted from the older passage and then baselined at the newer note as a whole, so
+ *    the second change was never checked ({@link notePassageNow}).
  *
  * Reading once, before drafting, is the bound: the job drafts once, from what it read, and records
  * that version. A change made while the draft is being written is not chased. What the citation
@@ -236,6 +243,7 @@ import {
   type AuthoringDemandFields,
   askFromInstrumentReading,
   authoringDemandFields,
+  CURRENT_PASSAGE_RULE,
   type DemandRoutingCounter,
   type EnqueueInput,
   type EnqueueResult,
@@ -246,10 +254,15 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  locatePassageByText,
   MAX_ATTEMPTS,
   PAPER_DEMANDS,
+  PASSAGE_RULES,
   type PaperDemand,
   type PersistedJob,
+  parseCardsWithInvalid,
+  parseMcqBlocks,
+  parsePassageDigest,
   projectInstrumentValidity,
   type QuestionBindingBlock,
   readInstrumentCitation,
@@ -262,6 +275,9 @@ import {
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
+import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import {
   hasTranscriptExtension,
   namedTranscriptPart,
@@ -775,19 +791,81 @@ async function successorSourceOf(
     );
     if (transcript !== undefined) return transcript;
     if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
+      // `ol-egov.141.89.5.110`: the note as it stands, when it changed again before drafting.
+      const now = await notePassageNow(deps.vault, predecessor, passage);
       return {
         kind: 'ready',
-        passage,
+        passage: now,
         citation:
-          passage.trim().length === 0
+          now.trim().length === 0
             ? base
-            : await withGroundingPassage(deps.vault, base, ownNotePath, [passage]),
+            : await withGroundingPassage(deps.vault, base, ownNotePath, [now]),
       };
     }
     return await binarySuccessorSource(deps, payload, predecessor, base);
   } catch {
     return { kind: 'ready', passage, citation: undefined };
   }
+}
+
+/**
+ * `ol-egov.141.89.5.110` ([D-446], [D-543], [D-508]): the passage to draft a successor from when its
+ * predecessor cites an ordinary Markdown note, read from the note as it stands when the job runs
+ * (its material: the text minus question blocks, as the presentation check reads it). The citation
+ * is then made from that passage by the shared rule (`withGroundingPassage`), so it names a passage
+ * only when that passage stands once in the note; otherwise the whole note is its grain.
+ *
+ *  - A question that named a passage: the job's own passage while it still stands word for word in
+ *    the note (drafted and cited as before); otherwise the note changed again before drafting, and
+ *    the passage is the one the citation pass's own ladder finds for it in this note alone
+ *    (`resolveAnchoredPassage`: a formatting-only change, or the one edited region resembling it),
+ *    else the whole note.
+ *  - A question protected at whole-note grain: the whole note as it stands, when it reads
+ *    differently from the job's beyond formatting.
+ *
+ * A note that cannot be read keeps the job's passage, as before. Never another note: a passage
+ * moved elsewhere is the citation pass's to heal, not this job's to follow.
+ */
+async function notePassageNow(
+  vault: VaultSource,
+  predecessor: InstrumentCitation,
+  passage: string,
+): Promise<string> {
+  const cited = predecessor.sourcePath;
+  let material: string;
+  try {
+    const source = await vault.read(cited);
+    material = stripInstrumentSpans(source, [
+      ...parseCardsWithInvalid(source).cards.map((card) => card.span),
+      ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
+    ]);
+  } catch {
+    return passage;
+  }
+  const digest = predecessor.passageDigest;
+  if (digest === undefined) {
+    return canonicalizeForMateriality(material) === canonicalizeForMateriality(passage)
+      ? passage
+      : material;
+  }
+  const parsed = parsePassageDigest(digest);
+  const rule =
+    (parsed === null
+      ? undefined
+      : PASSAGE_RULES.find((candidate) => candidate.version === parsed.version)) ??
+    CURRENT_PASSAGE_RULE;
+  if (locatePassageByText(rule.segment(material), rule.normalise(passage)).status !== 'absent') {
+    return passage;
+  }
+  const found = await resolveAnchoredPassage(
+    { text: passage, passageDigest: digest, anchorPath: cited, citedPath: cited },
+    {
+      exists: async (path) => path === cited,
+      material: async () => material,
+      markdownPaths: async () => [],
+    },
+  );
+  return found.kind === 'present' ? found.text : material;
 }
 
 /**
