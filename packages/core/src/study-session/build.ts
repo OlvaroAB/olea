@@ -30,9 +30,8 @@
  * her free-text `type` to one of three DECLARED classes — `'recall-style'`,
  * `'written'`, `'practical'` — per `[D-246]` / `[VOC-7]`; an unrecognised word
  * falls to `'written'` rather than being guessed at. This module consumes
- * `GapRow.assessmentFormat` verbatim and only ever prefers `'recall-style'`
- * toward an `'mcq'` instrument (`typesMatching` below) — widening that
- * instrument mapping further is still not this module's call. An `'unknown'`
+ * `GapRow.assessmentFormat` verbatim and prefers the kind the one mapping
+ * (`../assessment/first-kind.ts`, `[D-550]`) names for it (`typesMatching` below). An `'unknown'`
  * format (no assessment to derive one from at all) expresses no preference
  * and reorders nothing.
  *
@@ -196,6 +195,7 @@
  * argument), nothing stored.
  */
 
+import { firstKindForFormatClass } from '../assessment/first-kind.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSizeBand } from '../concept/size.js';
 import { daysBetween } from '../dates.js';
@@ -899,15 +899,15 @@ function nextAssessmentOf(
 /**
  * Instrument types that satisfy an `AssessmentFormat`.
  *
- * Only `'recall-style'` maps to anything, and it maps to `'mcq'` alone — the
- * same single entry this had before `[D-246]` widened which `type` *words*
- * reach `'recall-style'`. `'written'` and `'practical'` express no instrument
- * preference here, same as `'unknown'` always has: nothing in the contract
- * says a `qa`/`cloze` instrument should be preferred for either, so this
- * module still widens nothing on its own.
+ * Reads the one mapping (`../assessment/first-kind.ts`, F4.8 as amended by `[D-550]`): recall-style
+ * prefers `'mcq'`; written and practical prefer the question-and-answer card (`'qa'`), the same
+ * kind the primary-kind producer asks for, so the item she is shown is the kind her course
+ * generated first. `'unknown'` (no assessment at all) expresses no preference. This changes only
+ * which of a concept's already-built instruments wins a same-day slot (F2.17); it adds or removes
+ * no item from the session mix (`[D-187]`).
  */
 function typesMatching(format: AssessmentFormat): readonly SchedulableInstrumentType[] {
-  return format === 'recall-style' ? ['mcq'] : [];
+  return format === 'unknown' ? [] : [firstKindForFormatClass(format)];
 }
 
 /**
