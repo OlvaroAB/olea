@@ -19,9 +19,9 @@ import { expect, test } from '@playwright/test';
 import { gotoSimulator, resetSimulator } from '../helpers.js';
 import { ribbonViewTypes } from '../tour-helpers.js';
 import {
+  advanceToFirstMcq,
   captureJourneyStep,
   driverContest,
-  firstRatableScreenKind,
   frame,
   PERSONA,
   WORLD,
@@ -52,7 +52,9 @@ test(`@auto-web:simulator/journeys/contest-review ${WORLD}/${PERSONA} — contes
 
   // Answer the MCQ, if one is due, so the session is in `mcq-answered` — the only phase the
   // grade-contest gesture renders in (see this file's own module doc).
-  const kind = await firstRatableScreenKind(page);
+  // The session serves the builder's instruments first and appends drafts after them ([D-568]),
+  // so the MCQ is searched for by rating past any leading cards, not assumed at position 0.
+  const kind = await advanceToFirstMcq(page);
   if (kind === 'mcq') {
     await frame(page).locator('.olea-review-mcq-option').first().click();
     await frame(page)

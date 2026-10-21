@@ -24,6 +24,7 @@
  */
 import { type Browser, expect, type Page, test } from '@playwright/test';
 import { frame, gotoSimulator, resetSimulator } from './helpers.js';
+import { advanceToFirstMcq } from './journeys/journeys-helpers.js';
 import { openViewSurface } from './tour-helpers.js';
 
 const WORLD = process.env.WB_SIM_WORLD ?? 'fixture';
@@ -42,6 +43,8 @@ async function firstMcqOptionOrder(page: Page, drawFirst = 0): Promise<string[]>
   }
   await resetSimulator(page);
   await openViewSurface(page, REVIEW_VIEW_TYPE);
+  // Instruments come first and drafts after them ([D-568]): rate past any leading cards to the MCQ.
+  expect(await advanceToFirstMcq(page)).toBe('mcq');
   const options = frame(page).locator('.olea-review-mcq-option');
   await expect(options.first()).toBeVisible();
   const texts = (await options.allInnerTexts()).map((text) => text.replace(/\s+/g, ' ').trim());

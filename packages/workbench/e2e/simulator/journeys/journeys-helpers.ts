@@ -256,6 +256,27 @@ export async function clickRatingGood(page: Page): Promise<void> {
   await clickAndWaitForNextScreen(page, '.olea-review-rating-btn--good');
 }
 
+/**
+ * Rates past leading Q&A/cloze cards (the real reveal-then-good gesture) until the queue reaches
+ * a multiple-choice item, and returns the screen kind it stopped on: `'mcq'`, or `'empty'`/
+ * `'complete'` if the queue holds none. A session serves the session builder's instruments first
+ * and appends pending drafts after them (`[D-568]`), so an MCQ is no longer guaranteed to be the
+ * first item — callers that need one search forward rather than assuming position 0. Bounded (50
+ * items) like {@link rateRemainingQueue}.
+ */
+export async function advanceToFirstMcq(page: Page): Promise<'empty' | 'complete' | 'mcq'> {
+  for (let i = 0; i < 50; i += 1) {
+    // eslint-disable-next-line no-await-in-loop -- each rating must settle before the next read.
+    const kind = await firstRatableScreenKind(page);
+    if (kind !== 'card') return kind;
+    // eslint-disable-next-line no-await-in-loop -- see above.
+    await revealCard(page);
+    // eslint-disable-next-line no-await-in-loop -- see above.
+    await clickRatingGood(page);
+  }
+  throw new Error('advanceToFirstMcq: no multiple-choice item within 50 real-gesture ratings.');
+}
+
 /** Answers the current MCQ by clicking its first option (a real click gesture), waits for feedback, then advances via the footer's real "next item" button. */
 export async function answerAndAdvanceMcq(page: Page): Promise<void> {
   await frame(page).locator('.olea-review-mcq-option').first().click();
