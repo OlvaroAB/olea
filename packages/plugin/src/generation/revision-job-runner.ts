@@ -285,8 +285,6 @@ import {
   PASSAGE_RULES,
   type PaperDemand,
   type PersistedJob,
-  parseCardsWithInvalid,
-  parseMcqBlocks,
   parsePassageDigest,
   projectInstrumentValidity,
   type QuestionBindingBlock,
@@ -302,7 +300,7 @@ import {
   type WorkerTaskTransport,
 } from 'olea-core';
 import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
-import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { stripQuestionBlocks } from '../ingestion/materiality/citation-material.js';
 import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import {
   hasTranscriptExtension,
@@ -955,11 +953,7 @@ async function notePassageNow(
   const cited = predecessor.sourcePath;
   let material: string;
   try {
-    const source = await vault.read(cited);
-    material = stripInstrumentSpans(source, [
-      ...parseCardsWithInvalid(source).cards.map((card) => card.span),
-      ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
-    ]);
+    material = stripQuestionBlocks(await vault.read(cited));
   } catch {
     return passage;
   }

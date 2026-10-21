@@ -79,8 +79,9 @@
  * ===========================================================================
  * See `citation-hash-store.ts`'s module doc for the full Class B reasoning.
  * In one line: an instrument's cited passage is its home note's own text
- * with every instrument block's span stripped out
- * (`citation-material.ts`'s `stripInstrumentSpans`) — never the instrument's
+ * with every question block's span stripped out, bound to a course or not
+ * (`citation-material.ts`'s `stripQuestionBlocks`, `ol-egov.141.89.5.113`: the
+ * same blocks the session's presentation check strips) — never the instrument's
  * own wording. That keeps the predecessor instrument physically unchanged in
  * the vault when a `'revised'` outcome suspends it (a real, still-present
  * block gets suspended, not one whose bytes a judge call just rewrote), at
@@ -314,7 +315,7 @@ import type {
   CitationHashStore,
   PendingReason,
 } from './citation-hash-store.js';
-import { stripInstrumentSpans } from './citation-material.js';
+import { stripQuestionBlocks } from './citation-material.js';
 import { LandedSourceText } from './landed-source-text.js';
 import {
   type PassageNotes,
@@ -881,23 +882,17 @@ export class CitationRevisionTrigger {
       enumeration.records.map((record) => [record.instrumentId, record] as const),
     );
 
-    // Every instrument's own span, of every type, in the note it lives in —
-    // what `stripInstrumentSpans` removes to get at "the material," per
-    // this module's own doc.
-    const spansByPath = new Map<VaultPath, { start: number; end: number }[]>();
-    for (const record of enumeration.records) {
-      const span = record.instrumentType === 'mcq' ? record.mcq.span : record.card.span;
-      const bucket = spansByPath.get(record.notePath);
-      if (bucket === undefined) spansByPath.set(record.notePath, [span]);
-      else bucket.push(span);
-    }
-
+    // "The material," per this module's own doc: the note minus every question block in it.
+    // `ol-egov.141.89.5.113` (C5.3 as amended by [D-543]): every block the instrument parsers find,
+    // bound to a course or not, exactly as the session's presentation check strips them
+    // (`stripQuestionBlocks`). Before, only the blocks the vault walk enumerates (those bound to a
+    // course) were stripped, so a cited note holding a block bound to no course never read the same
+    // on both sides, and its question was set aside at every presentation.
     const materialCache = new Map<VaultPath, string>();
     const materialFor = async (notePath: VaultPath): Promise<string> => {
       const cached = materialCache.get(notePath);
       if (cached !== undefined) return cached;
-      const source = await vault.read(notePath);
-      const material = stripInstrumentSpans(source, spansByPath.get(notePath) ?? []);
+      const material = stripQuestionBlocks(await vault.read(notePath));
       materialCache.set(notePath, material);
       return material;
     };
@@ -1042,6 +1037,9 @@ export class CitationRevisionTrigger {
       // `ol-egov.141.89.5.76`: the ladder's own verdict that the passage stands unchanged in
       // everything but whitespace and line breaks (`via: 'exact'`, a [D-446] normalised match).
       let reformattedByLadder = false;
+      // `ol-egov.141.89.5.113`: a whole-note anchor saved before every question block was stripped,
+      // whose note is otherwise unchanged (set in the whole-note branch below).
+      let restrippedBaseline = false;
       try {
         if (transcriptPath !== undefined && currentRecord !== undefined) {
           // `ol-egov.141.89.5.43`: unchanged, withheld or (re-)seeded is settled there; a passage
@@ -1132,6 +1130,12 @@ export class CitationRevisionTrigger {
             continue;
           }
           current = { kind: 'found-at-anchor', text: wholeNote };
+          // `ol-egov.141.89.5.113`: an anchor an earlier build saved with a block bound to no course
+          // left in holds the same material when that text, stripped by the current rule, reads as
+          // the note does now: a free exit like a reformat, no judge call (the free exit below).
+          restrippedBaseline =
+            canonicalizeForMateriality(stripQuestionBlocks(previous.text)) ===
+            canonicalizeForMateriality(wholeNote);
         } else if (previous.passageDigest !== undefined) {
           // The instrument itself is gone: there is no passage to judge, and relocating a
           // passage-grain anchor among whole notes would compare the wrong grain.
@@ -1163,6 +1167,7 @@ export class CitationRevisionTrigger {
         current.kind === 'found-at-anchor' &&
         current.text !== previous.text &&
         (reformattedByLadder ||
+          restrippedBaseline ||
           canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text))
       ) {
         report.formattingOnly += 1;
