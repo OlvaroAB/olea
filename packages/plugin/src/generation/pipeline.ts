@@ -401,6 +401,13 @@ export interface GenerationPipelineDeps {
  * fallback when `sentenceShapes` is absent.
  */
 export interface FormatMatchDecision {
+  /**
+   * The kind the course's format class matches (`firstKindForFormatClass`: multiple choice for
+   * recall-style, the question-and-answer card for written and practical, `[D-550]`). The register
+   * reaches only a request drafting this kind (F4.8 "Scope of the match": the matched instrument
+   * only). Absent reads as multiple choice, the recall-style course as before.
+   */
+  readonly matchedKind?: 'mcq' | 'qa';
   readonly registerHint?: {
     readonly terminology: readonly string[];
     readonly sentenceShapes?: readonly string[];
@@ -1109,6 +1116,14 @@ export async function runGenerationSweep(
         courseDraftsCards,
       ),
     );
+    // F4.8 "Scope of the match": the register is the matched instrument's alone. A written course
+    // still drafting multiple choice (no card supplier, or the kind not composed) asks as if
+    // unmatched, so its quiz carries neither `purpose` nor `registerHint`.
+    const draftedKind = courseDraftsCards ? 'qa' : 'mcq';
+    const appliedFormatMatch =
+      courseFormatMatch !== undefined && (courseFormatMatch.matchedKind ?? 'mcq') === draftedKind
+        ? courseFormatMatch
+        : undefined;
     const askRouting = courseDraftsCards ? sweepCardRouting : sweepRouting;
     const askDemandFields = courseDraftsCards ? sweepCardDemandFields : sweepDemandFields;
 
@@ -1158,7 +1173,7 @@ export async function runGenerationSweep(
     // explicit recall intent (`ol-egov.141.89.2.20`): an intent that joined the ask must join
     // this key, or a changed demand would read as unchanged and stay held.
     // A changed kind is a changed ask, so a refusal held under one kind is not held under the other.
-    const demand = `${sweepDemandKey(courseFormatMatch, askDemandFields)}${courseDraftsCards ? '|kind:qa' : ''}`;
+    const demand = `${sweepDemandKey(appliedFormatMatch, askDemandFields)}${courseDraftsCards ? '|kind:qa' : ''}`;
     let courseUnitPieces: Promise<readonly string[]> | null = null;
     const evidencePieces = async (candidate: ConceptRecord): Promise<readonly string[]> => {
       courseUnitPieces ??= unitEvidencePieces(units, courseCode, coursesFolder);
@@ -1285,13 +1300,13 @@ export async function runGenerationSweep(
         // `deps.formatMatch`'s doc. Every other course omits both, so
         // `quiz.generate.v1` sees exactly the request it saw before this
         // bead (`ol-0r92.35`).
-        ...(courseFormatMatch === undefined
+        ...(appliedFormatMatch === undefined
           ? {}
           : {
               purpose: 'readiness' as const,
-              ...(courseFormatMatch.registerHint === undefined
+              ...(appliedFormatMatch.registerHint === undefined
                 ? {}
-                : { registerHint: courseFormatMatch.registerHint }),
+                : { registerHint: appliedFormatMatch.registerHint }),
             }),
       };
       // The one place the two kinds differ: which generator is asked and how its reply is read.

@@ -6,8 +6,8 @@
  * vault, and proves `buildFormatMatch`'s vault-backed composition end to end:
  * a course whose nearest not-yet-passed assessment is a quiz gets a register
  * hint quoting her registered objectives/past-paper sources verbatim; a
- * course whose nearest assessment is not a quiz, or has none upcoming, gets
- * no format match at all.
+ * written or practical course gets the same (`ol-egov.141.89.105.24`, `[D-550]`); a
+ * course with none upcoming gets no format match at all.
  */
 import type { AssessmentRecord, QuestionBlock, TextPaperQuestionGrouping } from 'olea-core';
 import { segmentPastPaper } from 'olea-core';
@@ -225,9 +225,75 @@ describe('buildFormatMatch', () => {
     expect(seen[0]?.[1].placements.length).toBeGreaterThan(0);
   });
 
-  it('does not format-match a course whose nearest upcoming assessment is not a quiz', async () => {
+  it.each([
+    ['Assignment', 'written'],
+    ['Essay', 'written'],
+    ['Lab', 'practical'],
+    ['Practical', 'practical'],
+    ['Portfolio review', 'an unrecognised type, which falls to written'],
+  ])(
+    'format-matches a %s course (%s) with the same register hint a quiz course gets',
+    async (type) => {
+      const vault = vaultWith({});
+      const assessments = [assessment({ type, due: '2026-09-10' })];
+      const formatMatch = await buildFormatMatch({ vault, assessments, now: NOW });
+      const quizMatch = await buildFormatMatch({
+        vault,
+        assessments: [assessment({ type: 'Quiz', due: '2026-09-10' })],
+        now: NOW,
+      });
+
+      const decision = formatMatch('COGS214');
+      expect(decision).toBeDefined();
+      expect(decision?.registerHint?.terminology.some((t) => t.includes('phonological loop'))).toBe(
+        true,
+      );
+      expect(decision?.registerHint?.sentenceShapes).toContain(
+        'Define chunking in your own words.',
+      );
+      expect(decision?.registerHint).toEqual(quizMatch('COGS214')?.registerHint);
+      expect(quizMatch('COGS214')?.matchedKind).toBe('mcq');
+      expect(decision?.matchedKind).toBe('qa');
+    },
+  );
+
+  it("quotes only the matched course's own sources for a written course, never another course's", async () => {
+    const vault = new MemoryVaultSource({
+      '03 Research/COGS214 Course Objectives.md': OBJECTIVES_NOTE,
+      '03 Research/COGS214 Past Paper.md': PAST_PAPER_NOTE,
+      '03 Research/OTHER101 Course Objectives.md': OBJECTIVES_NOTE.replace(
+        /COGS214/g,
+        'OTHER101',
+      ).replace('phonological loop', 'zebra stripe'),
+    });
+    const assessments = [
+      assessment({ path: 'a.md', course: 'COGS214', type: 'Essay', due: '2026-09-10' }),
+      assessment({ path: 'b.md', course: 'OTHER101', type: 'Lab', due: '2026-09-10' }),
+    ];
+    const formatMatch = await buildFormatMatch({ vault, assessments, now: NOW });
+    const own = formatMatch('COGS214')?.registerHint;
+    const other = formatMatch('OTHER101')?.registerHint;
+    expect(own?.terminology.join(' ')).toContain('phonological loop');
+    expect(own?.terminology.join(' ')).not.toContain('zebra stripe');
+    expect(other?.terminology.join(' ')).toContain('zebra stripe');
+    expect(other?.sentenceShapes).toBeUndefined();
+  });
+
+  it('matches per course: a written course and a recall-style course each get their own decision', async () => {
     const vault = vaultWith({});
-    const assessments = [assessment({ type: 'Assignment', due: '2026-09-10' })];
+    const assessments = [
+      assessment({ path: 'a.md', course: 'COGS214', type: 'Essay', due: '2026-09-10' }),
+      assessment({ path: 'b.md', course: 'OTHER101', type: 'Quiz', due: '2026-09-10' }),
+    ];
+    const formatMatch = await buildFormatMatch({ vault, assessments, now: NOW });
+    expect(formatMatch('COGS214')).toBeDefined();
+    expect(formatMatch('OTHER101')).toBeDefined();
+    expect(formatMatch('NOT_A_COURSE')).toBeUndefined();
+  });
+
+  it('does not format-match a written course whose only assessment has already passed', async () => {
+    const vault = vaultWith({});
+    const assessments = [assessment({ type: 'Essay', due: '2026-08-01' })];
     const formatMatch = await buildFormatMatch({ vault, assessments, now: NOW });
     expect(formatMatch('COGS214')).toBeUndefined();
   });

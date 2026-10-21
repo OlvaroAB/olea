@@ -14,6 +14,7 @@ import { describe, expect, it } from 'vitest';
 import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import type { DraftCardsDeps, DraftCardsResult } from '../../src/generation/draft-cards.js';
+import type { FormatMatchDecision } from '../../src/generation/pipeline.js';
 import {
   demandRoutingCounterFor,
   draftDemandRefusalCounterFor,
@@ -91,6 +92,7 @@ function setup(options: {
   readonly kind?: PrimaryKindInput;
   readonly withCardDeps?: boolean;
   readonly cardOutcome?: (name: string) => DraftCardsResult;
+  readonly formatMatch?: FormatMatchDecision;
 }) {
   const vault = new MemoryVaultSource({ [NOTE]: NOTE_TEXT });
   const cache = createVaultDraftCacheStore(vault);
@@ -109,6 +111,7 @@ function setup(options: {
       ...(options.kind === undefined
         ? {}
         : { kindInputsFor: () => options.kind as PrimaryKindInput }),
+      ...(options.formatMatch === undefined ? {} : { formatMatch: () => options.formatMatch }),
       ...(options.withCardDeps === false ? {} : { cardDraftDeps: {} as DraftCardsDeps }),
       draftCardForConcept: async (_d, request) => {
         cardAsks.push({ ...request });
@@ -265,5 +268,60 @@ describe('the sweep records the kind each course was drafted as, and why (ol-ego
   it('with a card supplier but no kind inputs nothing was asked, and multiple choice is the floor', async () => {
     const { run } = setup({});
     expect((await run()).courseKinds).toEqual(course('mcq', null, 'floor'));
+  });
+});
+
+describe('the register reaches only the matched instrument (ol-egov.141.89.105.24, F4.8, D-550)', () => {
+  const HINT = { terminology: ['a term from her objectives'] };
+
+  it('a written course drafting cards sends the readiness purpose and the register hint', async () => {
+    const { cardAsks, quizAsks, run } = setup({
+      kind: QA,
+      formatMatch: { matchedKind: 'qa', registerHint: HINT },
+    });
+    await run();
+    expect(quizAsks).toEqual([]);
+    expect(cardAsks).toHaveLength(1);
+    expect(cardAsks[0]).toMatchObject({ purpose: 'readiness', registerHint: HINT });
+  });
+
+  it('a written course still drafting multiple choice (no card supplier) sends neither', async () => {
+    const { cardAsks, quizAsks, run } = setup({
+      kind: QA,
+      withCardDeps: false,
+      formatMatch: { matchedKind: 'qa', registerHint: HINT },
+    });
+    await run();
+    expect(cardAsks).toEqual([]);
+    expect(quizAsks).toHaveLength(1);
+    expect('purpose' in (quizAsks[0] ?? {})).toBe(false);
+    expect('registerHint' in (quizAsks[0] ?? {})).toBe(false);
+  });
+
+  it('a written course whose kind is not composed (multiple choice) sends neither on its quiz', async () => {
+    const { quizAsks, run } = setup({
+      kind: MCQ,
+      formatMatch: { matchedKind: 'qa', registerHint: HINT },
+    });
+    await run();
+    expect(quizAsks).toHaveLength(1);
+    expect('purpose' in (quizAsks[0] ?? {})).toBe(false);
+    expect('registerHint' in (quizAsks[0] ?? {})).toBe(false);
+  });
+
+  it('a recall-style course keeps the hint on its quiz exactly as before', async () => {
+    const { quizAsks, run } = setup({
+      kind: MCQ,
+      formatMatch: { matchedKind: 'mcq', registerHint: HINT },
+    });
+    await run();
+    expect(quizAsks[0]).toMatchObject({ purpose: 'readiness', registerHint: HINT });
+  });
+
+  it('a course with no format match sends neither on cards', async () => {
+    const { cardAsks, run } = setup({ kind: QA });
+    await run();
+    expect('purpose' in (cardAsks[0] ?? {})).toBe(false);
+    expect('registerHint' in (cardAsks[0] ?? {})).toBe(false);
   });
 });
