@@ -22,10 +22,13 @@
  *    at all (`consulted: false`). In the production sweep that is what an
  *    omitted `deps.routing` looks like: drafting proceeds unconditionally
  *    and `concepts.classify.v1`'s label reaches nothing a student meets.
- * 2. **Consulted and overruled.** Routing reported the group's target
- *    already met or excluded (`deficit === 0`) and the generative capability
- *    was spent on that candidate anyway. The consultation happened; its
- *    verdict changed nothing.
+ * 2. **Consulted and made a veto.** `[D-549]`: the format chooses a concept's
+ *    first instrument and routing never decides whether that first call is
+ *    made; it orders the follow-on practice by the groups' deficits. A
+ *    zero-deficit first call is therefore RULED behaviour, never a finding.
+ *    The defect is the reverse: a candidate that consulted routing and was
+ *    then NOT asked (`generated: false`) is the removed gate come back —
+ *    routing deciding "no first call" from its own deficit.
  *
  * **An empty batch is RED, not green.** `n === 0` means nothing was
  * observed, which is precisely the state a silently-unwired selection path
@@ -64,7 +67,8 @@ export interface RoutingSelectionObservation {
   readonly kind: string | null;
   /**
    * The deficit routing reported for the group the selection path is about
-   * to spend its generative capability on. `null` when not consulted.
+   * to spend its generative capability on (it orders the follow-on practice;
+   * it does not gate this call, `[D-549]`). `null` when not consulted.
    */
   readonly deficit: number | null;
   /** Did selection go on to spend the generative capability on this candidate? */
@@ -78,10 +82,10 @@ export interface RoutingSelectionMeasured {
   readonly consulted: number;
   /** Of those, how many did NOT — the bypass. */
   readonly bypassed: number;
-  /** Consulted, reported a zero deficit, and were generated for anyway — the verdict ignored. */
-  readonly overruled: number;
-  /** Consulted, reported a zero deficit, and were correctly not generated for. */
-  readonly honoured: number;
+  /** Consulted and then not asked — routing used as a veto on the first call, which `[D-549]` rules out. */
+  readonly vetoed: number;
+  /** Consulted, reported a zero deficit, and were asked anyway — ruled behaviour under `[D-549]`; reported, never failed on. */
+  readonly askedAtZeroDeficit: number;
   /**
    * Distinct routing labels observed, the unclassified reading counted as
    * its own value. Reported, never failed on: a sweep over one course's
@@ -94,8 +98,8 @@ export interface RoutingSelectionMeasured {
 const UNCLASSIFIED_KEY = '(unclassified)';
 
 /**
- * Fails when routing never reached selection, or reached it and changed
- * nothing. See the module doc for why an empty batch is red.
+ * Fails when routing never reached selection, or reached it and vetoed a
+ * first call (`[D-549]`). See the module doc for why an empty batch is red.
  */
 export function checkRoutingReachesSelection(
   observations: readonly RoutingSelectionObservation[],
@@ -103,8 +107,8 @@ export function checkRoutingReachesSelection(
   const n = observations.length;
   let consulted = 0;
   let bypassed = 0;
-  let overruled = 0;
-  let honoured = 0;
+  let vetoed = 0;
+  let askedAtZeroDeficit = 0;
   const kinds = new Set<string>();
 
   for (const observation of observations) {
@@ -114,18 +118,16 @@ export function checkRoutingReachesSelection(
     }
     consulted += 1;
     kinds.add(observation.kind ?? UNCLASSIFIED_KEY);
-    if (observation.deficit === 0) {
-      if (observation.generated) overruled += 1;
-      else honoured += 1;
-    }
+    if (!observation.generated) vetoed += 1;
+    else if (observation.deficit === 0) askedAtZeroDeficit += 1;
   }
 
   const measured: RoutingSelectionMeasured = {
     n,
     consulted,
     bypassed,
-    overruled,
-    honoured,
+    vetoed,
+    askedAtZeroDeficit,
     distinctKinds: kinds.size,
   };
 
@@ -144,16 +146,16 @@ export function checkRoutingReachesSelection(
       detail: `${bypassed} of ${n} candidates reached selection without consulting routing — the classification reaches nothing`,
     };
   }
-  if (overruled > 0) {
+  if (vetoed > 0) {
     return {
       ok: false,
       measured,
-      detail: `${overruled} of ${consulted} consulted candidates were generated for despite a zero deficit — routing was consulted and overruled`,
+      detail: `${vetoed} of ${consulted} consulted candidates were not asked — routing vetoed a first call, which [D-549] rules out`,
     };
   }
   return {
     ok: true,
     measured,
-    detail: `all ${n} candidates consulted routing and honoured its verdict (${honoured} withheld, ${measured.distinctKinds} distinct labels)`,
+    detail: `all ${n} candidates consulted routing and none was vetoed (${askedAtZeroDeficit} asked at a zero deficit, ${measured.distinctKinds} distinct labels)`,
   };
 }

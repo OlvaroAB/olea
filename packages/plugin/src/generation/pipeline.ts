@@ -46,9 +46,10 @@
  * problem, out of scope) — a course-wide "what's still undrafted" sweep,
  * re-run every tick, converges on the same set eventually and is a correct,
  * if coarse-grained, reading of F3.3's "when material lands" for a first
- * build. F3.7's mastery/yield ORDERING is not implemented here either — see
- * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` doc for why a small cap bounds
- * that gap's cost rather than needing to close it in this bead.
+ * build. F3.7's mastery/yield ORDERING reaches the sweep through the optional
+ * `deps.drainOrderFor` (`[D-368]`: need, then expected yield, the rotation as the
+ * tie-break); with it absent the order is the rotation, and the small cap in
+ * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` bounds the cost of that gap.
  *
  * **A refused concept gets no cache entry, by construction (F4.5's
  * grounded-by-construction argument).** `draftQuizCardsForConcept` already
@@ -102,21 +103,23 @@
  * `refusals` yet — see that field's own doc for why finishing the wiring
  * sits outside this bead's owned paths.
  *
- * **Routing consultation (`ol-tz7v` / `[WIRE-7]`), opt-in via `deps.routing`.**
- * When absent, every candidate is drafted exactly as before this bead —
- * `pipeline.spec.ts`'s whole existing suite never supplies it, so nothing
- * about their expectations changes. When present, each new (not
- * cache-deduped) candidate is routed through `routing.ts`'s
- * `classifyForRouting` / `decideConceptRouting` against a **real** per-concept
- * instrument inventory (`buildConceptInstrumentInventory`, one vault walk per
- * sweep) before this sweep's one generation capability — `quiz.generate.v1`
- * MCQ drafting — is invoked: a candidate whose routed mix already has its
- * `quiz` group met or excluded (`quizDeficit === 0`) is skipped rather than
- * drafted, counted separately in `GenerationSweepReport.skippedRouting`
- * rather than `attempted`, since no transport call — not even the local
- * `retrieve()` a refusal costs — is made for it. It is re-consulted every
- * sweep, the same as a refused concept, because nothing about "routing says
- * not yet" writes a cache entry either.
+ * **Routing consultation (`ol-tz7v` / `[WIRE-7]`), opt-in via `deps.routing`; never a gate since
+ * `[D-549]` (`ol-egov.141.89.105.8`).** David's ruling (2026-10-20, option (a)): the assessment format
+ * chooses a concept's first instrument (the course's first kind, below), the knowledge
+ * classification guides the practice that follows, an unknown classification never silently blocks
+ * practice, and drafting that cannot be done is a stated refusal. Before it, a candidate whose routed
+ * mix had its `quiz` group met or excluded (`quizDeficit === 0`, which every unclassified concept
+ * reads) was passed over on every sweep with no reason stated. Now, present or absent, routing never
+ * stops a candidate being asked: every undrafted, unheld candidate is asked up to the cap, and one
+ * that cannot be drafted is refused through the drafter's own refusal, which lands in `refusals` and
+ * the refusal memory like any other. When present, each asked candidate is first routed through
+ * `routing.ts`'s `classifyForRouting` / `decideConceptRouting` against a **real** per-concept
+ * instrument inventory (`buildConceptInstrumentInventory`, one vault walk per sweep), for two
+ * readers: the routing observation (`routingObservations`, with the deficit of the group the call
+ * spends on: quiz for multiple choice, recall for cards), and the label kept in
+ * `KnowledgeKindLabels`, which the further-call triggers read to order the concept's next kinds
+ * (`followOnKindOrder`). `skippedRouting` is therefore always `0`; the field stays so the report's
+ * shape and its readers do not change.
  *
  * **Purpose-at-build consultation (`ol-0r92.35` / `[D-188]`), opt-in via
  * `deps.formatMatch`.** When absent — every caller today, `pipeline.spec.ts`
@@ -185,7 +188,8 @@
  * refusal-memory path, and accepted by `materialize-card.ts`. Nothing else changes: no quota, no
  * per-concept kind (the kind is read once per course, like `formatMatch`), no cloze generator
  * (`'cloze'` keeps the quiz path unchanged), and with either dep absent every request is
- * byte-identical to before. The routing consultation above still counts the quiz group. Self-
+ * byte-identical to before. The knowledge kind never changes this kind (`[D-549]`); the routing
+ * observation reads the recall group's deficit for a card course. Self-
  * reported success on such a card is not demonstrated unaided performance, and this changes
  * nothing in how evidence folds.
  *
@@ -207,6 +211,7 @@
 import type {
   ConceptRecord,
   ExtractedUnit,
+  GenerationJobPayload,
   GroundingRefusalReason,
   InstrumentCitation,
   KnowledgeKindClassification,
@@ -231,6 +236,7 @@ import {
 // intent for this sweep and no other path; `packages/core/src/routing/demand-ask-callers.spec.ts`
 // pins its callers by source text), so this one import stays a deliberate deep one.
 import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
+import type { GenerationPrioritySignal } from '../ingestion/wiring.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
@@ -262,14 +268,15 @@ import {
   extractDraftedProvenance,
   extractDraftedQuestions,
 } from './response.js';
-import type { GenerationRoutingDeps } from './routing.js';
+import type { GenerationRoutingDeps, KnowledgeKindLabels, RoutingReadingSet } from './routing.js';
 import {
   buildConceptInstrumentInventory,
   classifyForRouting,
   createDerivedUnitSupplier,
   decideConceptRouting,
   EMPTY_INVENTORY,
-  quizDeficit,
+  groupDeficit,
+  knowledgeKindLabelsFor,
 } from './routing.js';
 import type {
   DraftCardContent,
@@ -308,8 +315,14 @@ export interface GenerationPipelineDeps {
     conceptName: string,
     sequence: number,
   ) => string | Promise<string>;
-  /** Component 2.2's routing consultation — see the module doc's own section. Omitted preserves pre-`ol-tz7v` behaviour. */
+  /** Component 2.2's routing consultation — see the module doc's own section. Omitted, nothing is classified; present or omitted, no candidate is passed over by routing (`[D-549]`). */
   readonly routing?: GenerationRoutingDeps;
+  /**
+   * `[D-549]` (`ol-egov.141.89.105.8`): where the label each asked candidate's routing read is kept
+   * for the further-call triggers. Absent, the sweep uses `knowledgeKindLabelsFor(deps.vault)`: one
+   * per vault object, which the triggers read by default too. Only written when `routing` is present.
+   */
+  readonly knowledgeKindLabels?: KnowledgeKindLabels;
   /**
    * Sweep-drafted Q&A cards (`ol-0r92.132`, held Class C): the inputs to `primaryKindFor`
    * (`[D-238]`: F4.8's format match first, then her recorded preference) for a course. The sweep
@@ -319,6 +332,16 @@ export interface GenerationPipelineDeps {
    * today. There is no quota, no per-concept kind and no cloze generator here (`[D-439]`).
    */
   readonly kindInputsFor?: (courseCode: string) => PrimaryKindInput;
+  /**
+   * `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): the drain-order reading the sweep orders a course's
+   * candidates by when it spends the per-sweep cap, the same reading the queue drains by
+   * (`createGenerationPrioritySource(...).priority`, current need then expected yield). Higher need
+   * is asked first, then higher expected yield, and a full tie keeps the rotation below. It
+   * orders and never selects: every undrafted concept is still asked up to the cap (`[D-549]`).
+   * Optional; absent, or answering `null` for any candidate of a course (no reading composed yet),
+   * the course keeps the rotation exactly as before. No composition root supplies it today.
+   */
+  readonly drainOrderFor?: (payload: GenerationJobPayload) => GenerationPrioritySignal | null;
   /** What `cards.generate.v1` drafting needs — the card-shaped sibling of `draftDeps`. See `kindInputsFor`. */
   readonly cardDraftDeps?: DraftCardsDeps;
   /** Defaults to the real `draftCardsForConcept`; injected so a test needs no Worker. */
@@ -391,6 +414,13 @@ export interface GenerationPipelineDeps {
  * fallback when `sentenceShapes` is absent.
  */
 export interface FormatMatchDecision {
+  /**
+   * The kind the course's format class matches (`firstKindForFormatClass`: multiple choice for
+   * recall-style, the question-and-answer card for written and practical, `[D-550]`). The register
+   * reaches only a request drafting this kind (F4.8 "Scope of the match": the matched instrument
+   * only). Absent reads as multiple choice, the recall-style course as before.
+   */
+  readonly matchedKind?: 'mcq' | 'qa';
   readonly registerHint?: {
     readonly terminology: readonly string[];
     readonly sentenceShapes?: readonly string[];
@@ -451,7 +481,11 @@ export interface GenerationSweepReport {
    * + `skippedRefused` account for every candidate the sweep reached, each once.
    */
   readonly skippedRefused: number;
-  /** Concepts routing (`deps.routing`) determined do not currently warrant this sweep's one generation capability — never drafted, never cached, so re-consulted next sweep. Always `0` when `deps.routing` is absent. */
+  /**
+   * Concepts routing passed over without an ask. Always `0` since `[D-549]` (`ol-egov.141.89.105.8`):
+   * the knowledge kind never stops a first call (module doc). Kept so the report's shape, and the
+   * development host's run record that sums it, do not change.
+   */
   readonly skippedRouting: number;
   /**
    * `[MOM-8.1 / BD-1]` (`ol-3ux7.5.57.9.1`) — component register row 2.2's
@@ -465,6 +499,10 @@ export interface GenerationSweepReport {
    * goes red when `consulted` is `false` (routing bypassed) or when a zero
    * deficit was generated for anyway (routing overruled). Empty when the
    * sweep considered nothing — which that check reads as red, not green.
+   * Since `[D-549]` every consulted candidate is asked (`generated: true`), and `deficit` is that of
+   * the group its call spends on (quiz for multiple choice, recall for cards), so a zero-deficit
+   * first call, which the ruling asks for, reads to that check as overruled: the check's premise is
+   * the pre-ruling gate, and re-pointing it is outside this module (`ol-egov.141.89.105.8`'s report).
    */
   readonly routingObservations: readonly RoutingSelectionObservation[];
   /**
@@ -972,6 +1010,38 @@ async function digestOfPath(vault: VaultSource, path: string): Promise<string> {
 }
 
 /**
+ * `[D-368]`'s order over a course's already-rotated candidates: higher `need` first, then higher
+ * `expectedYield`, equal readings keeping their given (rotation) order. Returns the input
+ * unchanged when no reading is composed or any candidate has none.
+ */
+function drainOrdered(
+  rotated: readonly ConceptRecord[],
+  drainOrderFor: ((payload: GenerationJobPayload) => GenerationPrioritySignal | null) | undefined,
+  courseCode: string,
+  instrumentKind: 'mcq' | 'qa',
+): readonly ConceptRecord[] {
+  if (drainOrderFor === undefined) return rotated;
+  const keyed: { candidate: ConceptRecord; signal: GenerationPrioritySignal }[] = [];
+  for (const candidate of rotated) {
+    const signal = drainOrderFor({
+      kind: 'generation',
+      courseCode,
+      conceptKey: candidate.key,
+      conceptName: candidate.name,
+      instrumentKind,
+      trigger: 'arrival',
+    });
+    if (signal === null) return rotated;
+    keyed.push({ candidate, signal });
+  }
+  return keyed
+    .sort(
+      (a, b) => b.signal.need - a.signal.need || b.signal.expectedYield - a.signal.expectedYield,
+    )
+    .map((entry) => entry.candidate);
+}
+
+/**
  * Runs one sweep over the units one ingestion job just produced (or, when a
  * caller wants a course-wide catch-up, any batch of previously-accumulated
  * units — see `wiring.ts`). Never throws: a drafting call's own failure
@@ -1003,6 +1073,8 @@ export async function runGenerationSweep(
   const now = deps.now ?? (() => new Date());
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
   const routing = deps.routing;
+  // `[D-549]`: the labels the further-call triggers read, written only when routing is consulted.
+  const knowledgeKindLabels = deps.knowledgeKindLabels ?? knowledgeKindLabelsFor(deps.vault);
   const formatMatch = deps.formatMatch;
   const memory = deps.refusalMemory ?? refusalMemoryFor(deps.cache);
   const citedChunkDigest = deps.citedChunkDigest ?? CITED_CHUNK_DIGEST_ENABLED;
@@ -1042,7 +1114,8 @@ export async function runGenerationSweep(
   let refused = 0;
   let skippedDuplicate = 0;
   let skippedRefused = 0;
-  let skippedRouting = 0;
+  // `[D-549]`: routing never passes a candidate over, so this stays 0 (the report field's own doc).
+  const skippedRouting = 0;
   // `[H-1.8a]`: one classified entry per refusal — see `GenerationSweepReport.refusals`' own doc.
   const refusals: GenerationRefusalNotice[] = [];
   // `ol-egov.141.89.105.9`: the kind each visited course was drafted as, and why — see `GenerationSweepReport.courseKinds`.
@@ -1088,6 +1161,24 @@ export async function runGenerationSweep(
         courseDraftsCards,
       ),
     );
+    // `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): with a drain-order reading composed, the cap goes
+    // to the higher current need first, then the higher expected yield; the rotation above is the
+    // tie-break (a stable sort over it). Without one, or if any candidate has no reading, the
+    // rotation stands untouched.
+    const visitOrder = drainOrdered(
+      rotated,
+      deps.drainOrderFor,
+      courseCode,
+      courseDraftsCards ? 'qa' : 'mcq',
+    );
+    // F4.8 "Scope of the match": the register is the matched instrument's alone. A written course
+    // still drafting multiple choice (no card supplier, or the kind not composed) asks as if
+    // unmatched, so its quiz carries neither `purpose` nor `registerHint`.
+    const draftedKind = courseDraftsCards ? 'qa' : 'mcq';
+    const appliedFormatMatch =
+      courseFormatMatch !== undefined && (courseFormatMatch.matchedKind ?? 'mcq') === draftedKind
+        ? courseFormatMatch
+        : undefined;
     const askRouting = courseDraftsCards ? sweepCardRouting : sweepRouting;
     const askDemandFields = courseDraftsCards ? sweepCardDemandFields : sweepDemandFields;
 
@@ -1137,7 +1228,7 @@ export async function runGenerationSweep(
     // explicit recall intent (`ol-egov.141.89.2.20`): an intent that joined the ask must join
     // this key, or a changed demand would read as unchanged and stay held.
     // A changed kind is a changed ask, so a refusal held under one kind is not held under the other.
-    const demand = `${sweepDemandKey(courseFormatMatch, askDemandFields)}${courseDraftsCards ? '|kind:qa' : ''}`;
+    const demand = `${sweepDemandKey(appliedFormatMatch, askDemandFields)}${courseDraftsCards ? '|kind:qa' : ''}`;
     let courseUnitPieces: Promise<readonly string[]> | null = null;
     const evidencePieces = async (candidate: ConceptRecord): Promise<readonly string[]> => {
       courseUnitPieces ??= unitEvidencePieces(units, courseCode, coursesFolder);
@@ -1174,7 +1265,7 @@ export async function runGenerationSweep(
       });
     }
 
-    for (const candidate of rotated) {
+    for (const candidate of visitOrder) {
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
       if (!candidate.courses.includes(courseCode)) continue;
       if (held.has(candidate.key)) continue;
@@ -1203,13 +1294,27 @@ export async function runGenerationSweep(
       // Component 2.2's routing consultation (`ol-tz7v` / `[WIRE-7]`),
       // opt-in — see the module doc. Costs a classify call (only when a
       // classifier is actually configured; `classifyForRouting` short-
-      // circuits to unclassified otherwise) plus one shared inventory walk,
-      // never a `quiz.generate.v1` send: a candidate this routes away from
-      // is cheaper to discover here than as a refusal.
+      // circuits to unclassified otherwise) plus one shared inventory walk.
+      // `[D-549]`: it never stops the ask below. The format chose the kind
+      // (`courseDraftsCards`); the label is kept for the further calls, and
+      // the observation records the deficit of the group this call spends on.
       if (routing !== undefined) {
+        // `[D-553]`: routing reads the course's reading set from the same keyword index and
+        // frontmatter host drafting scopes with (`draftingScope`). A deps object without an index
+        // (a test double) leaves routing on the course folder alone.
+        const draftingIndex = deps.draftDeps.retrieve?.keywordIndex;
+        const routingReadingSet: RoutingReadingSet | undefined =
+          draftingIndex === undefined
+            ? undefined
+            : {
+                keywordIndex: draftingIndex,
+                ...(deps.draftDeps.frontmatterHost !== undefined
+                  ? { frontmatterHost: deps.draftDeps.frontmatterHost }
+                  : {}),
+              };
         // A throw while routing this one candidate costs this candidate only: it routes as
-        // unclassified ("never guessed", routing.ts) and the sweep moves on. Nothing about the
-        // candidate or the error is logged (D-005); it is counted in `skippedRouting` below.
+        // unclassified ("never guessed", routing.ts) and is still asked. Nothing about the
+        // candidate or the error is logged (D-005).
         let classification: KnowledgeKindClassification;
         try {
           classification = await classifyForRouting(
@@ -1217,27 +1322,27 @@ export async function runGenerationSweep(
             deps.vault,
             candidate,
             derivedUnitSupplier,
+            coursesFolder,
+            routingReadingSet,
           );
         } catch {
           classification = { status: 'unclassified', confidence: undefined, method: 'model' };
         }
         const inventory = (await getInventory()).get(candidate.key) ?? EMPTY_INVENTORY;
         const decision = decideConceptRouting(classification, inventory);
-        const deficit = quizDeficit(decision);
+        knowledgeKindLabels.record(courseCode, candidate.key, decision.classification);
+        const deficit = groupDeficit(decision, courseDraftsCards ? 'retrieval' : 'quiz');
         // `[MOM-8.1 / BD-1]`: the label only, never `candidate.name`/`.key`
         // (INV-3) — `checkRoutingReachesSelection`'s own doc states the same
-        // constraint from the reading end.
+        // constraint from the reading end. `generated` is always true since
+        // `[D-549]`: every consulted candidate is asked.
         routingObservations.push({
           consulted: true,
           kind:
             decision.classification.status === 'classified' ? decision.classification.kind : null,
           deficit,
-          generated: deficit !== 0,
+          generated: true,
         });
-        if (deficit === 0) {
-          skippedRouting += 1;
-          continue;
-        }
       } else {
         // Routing bypassed for this candidate — the sweep is about to spend
         // its generative capability without consulting component 2.2 at all.
@@ -1265,13 +1370,13 @@ export async function runGenerationSweep(
         // `deps.formatMatch`'s doc. Every other course omits both, so
         // `quiz.generate.v1` sees exactly the request it saw before this
         // bead (`ol-0r92.35`).
-        ...(courseFormatMatch === undefined
+        ...(appliedFormatMatch === undefined
           ? {}
           : {
               purpose: 'readiness' as const,
-              ...(courseFormatMatch.registerHint === undefined
+              ...(appliedFormatMatch.registerHint === undefined
                 ? {}
-                : { registerHint: courseFormatMatch.registerHint }),
+                : { registerHint: appliedFormatMatch.registerHint }),
             }),
       };
       // The one place the two kinds differ: which generator is asked and how its reply is read.

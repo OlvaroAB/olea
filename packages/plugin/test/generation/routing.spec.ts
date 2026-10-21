@@ -14,6 +14,7 @@ import type {
   ConceptInstrumentInventory,
   DerivedTextUnit,
   KnowledgeKindClassifierPort,
+  PersistedKeywordIndex,
 } from 'olea-core';
 import { extractConcepts } from 'olea-core';
 import { describe, expect, it } from 'vitest';
@@ -23,6 +24,10 @@ import {
   classifyForRouting,
   createDerivedUnitSupplier,
   decideConceptRouting,
+  followOnKindOrder,
+  groupDeficit,
+  KnowledgeKindLabels,
+  knowledgeKindLabelsFor,
   MAX_ROUTING_UNIT_CHARS,
   MAX_ROUTING_UNITS_PER_IDENTITY,
   quizDeficit,
@@ -209,6 +214,90 @@ describe('buildKnowledgeKindSourceMaterial: only markdown is read as text (`ol-e
     );
     expect(none).toEqual([]);
     expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+  });
+
+  describe('the reading set drafting uses (`[D-553]`, `[D-544]`, F1.3 `[D-248]`)', () => {
+    const indexOf = (docs: Record<string, string>): PersistedKeywordIndex => ({
+      version: 1,
+      documents: Object.entries(docs).map(([path, text]) => ({
+        path,
+        courses: [],
+        contentHash: 'h',
+        blocks: [{ blockIndex: 0, kind: 'paragraph', text }],
+      })),
+    });
+    const files = {
+      '01 Courses/C1/lecture.md': 'See [[Linked note]] for more.',
+      'Notes/Linked note.md': 'Entropy is the measure of disorder.',
+      '01 Courses/C2/other.md': 'Entropy in another course entirely. See [[Elsewhere]].',
+      'Notes/Elsewhere.md': 'Entropy elsewhere.',
+      'Notes/Unlinked.md': 'Entropy unlinked.',
+    };
+    const concept = { name: 'Entropy', sourcePaths: ['01 Courses/C1/exam.pdf'], courses: ['C1'] };
+
+    it('a note linked once from a course note, outside the course folder, supplies the passage', async () => {
+      const vault = new RecordingVault(files);
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        undefined,
+        { keywordIndex: indexOf(files) },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['Notes/Linked note.md']);
+      expect(vault.reads).not.toContain('01 Courses/C2/other.md');
+      expect(vault.reads).not.toContain('Notes/Elsewhere.md');
+      expect(vault.reads).not.toContain('Notes/Unlinked.md');
+    });
+
+    it('a link made only by frontmatter joins the set when the host supplies it', async () => {
+      const docs = {
+        '01 Courses/C1/lecture.md': 'Body with no links.',
+        'Notes/Fm.md': 'Entropy via frontmatter.',
+      };
+      const vault = new RecordingVault(docs);
+      const host = {
+        frontmatterFor: (path: string) =>
+          path === '01 Courses/C1/lecture.md' ? { topic: '[[Fm]]' } : undefined,
+      };
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        undefined,
+        { keywordIndex: indexOf(docs), frontmatterHost: host },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual(['Notes/Fm.md']);
+    });
+
+    it('a non-default courses folder is honoured', async () => {
+      const docs = {
+        'Papers/C1/lecture.md': 'Entropy here. See [[Side]].',
+        'Notes/Side.md': 'Entropy side.',
+        '01 Courses/C1/old.md': 'Entropy in the default folder.',
+      };
+      const vault = new RecordingVault(docs);
+      const passages = await buildKnowledgeKindSourceMaterial(
+        vault,
+        concept,
+        async () => [],
+        'Papers',
+        { keywordIndex: indexOf(docs) },
+      );
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual([
+        'Papers/C1/lecture.md',
+        'Notes/Side.md',
+      ]);
+    });
+
+    it("with no index, today's course-folder behaviour", async () => {
+      const vault = new RecordingVault(files);
+      const passages = await buildKnowledgeKindSourceMaterial(vault, concept, async () => []);
+      expect(passages.map((p) => p.anchor.sourcePath)).toEqual([]);
+      const named = new RecordingVault({ '01 Courses/C1/lecture.md': 'Entropy here.' });
+      const folder = await buildKnowledgeKindSourceMaterial(named, concept, async () => []);
+      expect(folder.map((p) => p.anchor.sourcePath)).toEqual(['01 Courses/C1/lecture.md']);
+    });
   });
 
   it('a PDF-only concept with no extracted unit naming it, or an unreadable unit source, gets no input', async () => {
@@ -442,16 +531,17 @@ describe('buildConceptInstrumentInventory', () => {
 describe('decideConceptRouting / quizDeficit', () => {
   const EMPTY: ConceptInstrumentInventory = { retrieval: 0, quiz: 0, explainBack: 0 };
 
-  it('unclassified routes to the retrieval baseline: quiz is never warranted', () => {
+  it('unclassified routes to the retrieval baseline: the quiz group reads no share (a reading, never a gate, since [D-549])', () => {
     const decision = decideConceptRouting(
       { status: 'unclassified', confidence: undefined, method: 'model' },
       EMPTY,
     );
     expect(decision.mix).toEqual({ retrieval: 'floor', quiz: 'none', explainBack: 'none' });
     expect(quizDeficit(decision)).toBe(0);
+    expect(groupDeficit(decision, 'retrieval')).toBe(1);
   });
 
-  it('a classified `category` against an empty inventory warrants quiz drafting', () => {
+  it('a classified `category` against an empty inventory reads a quiz deficit', () => {
     const decision = decideConceptRouting(
       { status: 'classified', kind: 'category', confidence: 0.9, method: 'model' },
       EMPTY,
@@ -465,5 +555,80 @@ describe('decideConceptRouting / quizDeficit', () => {
       { retrieval: 0, quiz: 1, explainBack: 0 },
     );
     expect(quizDeficit(decision)).toBe(0);
+    expect(groupDeficit(decision, 'retrieval')).toBe(3);
+  });
+});
+
+describe('followOnKindOrder: the kind of knowledge orders the next kinds (`[D-549]`, ol-egov.141.89.105.8)', () => {
+  const LISTED = ['qa', 'cloze', 'mcq'] as const;
+  const EMPTY: ConceptInstrumentInventory = { retrieval: 0, quiz: 0, explainBack: 0 };
+
+  it('a fact puts recall first, a category multiple choice first, against an empty inventory', () => {
+    expect(followOnKindOrder('fact', EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder('category', EMPTY, LISTED)).toEqual(['mcq', 'qa', 'cloze']);
+  });
+
+  it('equal deficits keep the preferred order: a principle (both drafted groups at the floor) and her observed order', () => {
+    expect(followOnKindOrder('principle', EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder('principle', EMPTY, ['mcq', 'qa', 'cloze'])).toEqual([
+      'mcq',
+      'qa',
+      'cloze',
+    ]);
+  });
+
+  it('reads deficits against what the concept holds, so a met share yields to the next group', () => {
+    // A fact holding three recall items has met its recall share (dominant, three steps).
+    expect(followOnKindOrder('fact', { retrieval: 3, quiz: 0, explainBack: 0 }, LISTED)).toEqual([
+      'mcq',
+      'qa',
+      'cloze',
+    ]);
+    // A category holding two multiple-choice items has met its quiz share (weighted, two steps).
+    expect(
+      followOnKindOrder('category', { retrieval: 0, quiz: 2, explainBack: 0 }, LISTED),
+    ).toEqual(['qa', 'cloze', 'mcq']);
+  });
+
+  it('the unclassified reading orders recall first and never removes a kind', () => {
+    expect(followOnKindOrder(null, EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder(null, EMPTY, ['mcq', 'cloze', 'qa'])).toEqual(['cloze', 'qa', 'mcq']);
+    for (const kind of ['fact', 'category', 'principle', null] as const) {
+      expect([...followOnKindOrder(kind, EMPTY, LISTED)].sort()).toEqual(['cloze', 'mcq', 'qa']);
+    }
+  });
+});
+
+describe('KnowledgeKindLabels: the label kept for the further calls (`[D-549]`)', () => {
+  const classified = (kind: 'fact' | 'category' | 'principle') =>
+    ({ status: 'classified', kind, confidence: 0.9, method: 'model' }) as const;
+  const unclassified = { status: 'unclassified', confidence: undefined, method: 'model' } as const;
+
+  it('keys by course and concept, reads null when nothing is held, and lets a real label replace another', () => {
+    const labels = new KnowledgeKindLabels();
+    expect(labels.kindFor('COURSE-A', 'k1')).toBeNull();
+    expect(labels.has('COURSE-A', 'k1')).toBe(false);
+    labels.record('COURSE-A', 'k1', classified('fact'));
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('fact');
+    expect(labels.kindFor('COURSE-B', 'k1')).toBeNull();
+    labels.record('COURSE-A', 'k1', classified('principle'));
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('principle');
+  });
+
+  it('an unclassified reading is held only where no label is, and never erases one', () => {
+    const labels = new KnowledgeKindLabels();
+    labels.record('COURSE-A', 'k1', unclassified);
+    expect(labels.has('COURSE-A', 'k1')).toBe(true);
+    expect(labels.kindFor('COURSE-A', 'k1')).toBeNull();
+    labels.record('COURSE-A', 'k1', classified('category'));
+    labels.record('COURSE-A', 'k1', unclassified);
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('category');
+  });
+
+  it('the default labels are one per vault object', () => {
+    const a = new MemoryVaultSource();
+    const b = new MemoryVaultSource();
+    expect(knowledgeKindLabelsFor(a)).toBe(knowledgeKindLabelsFor(a));
+    expect(knowledgeKindLabelsFor(a)).not.toBe(knowledgeKindLabelsFor(b));
   });
 });

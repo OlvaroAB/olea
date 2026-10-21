@@ -17,11 +17,13 @@
  */
 
 import type { ConceptRecord, GenerationJobPayload } from 'olea-core';
+import { hashText } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createDraftAcceptPort } from '../../src/generation/accept.js';
 import {
   createVaultDraftCacheStore,
   type DraftCacheStore,
+  deriveDraftId,
 } from '../../src/generation/cache-store.js';
 import type { DraftCardsResult } from '../../src/generation/draft-cards.js';
 import {
@@ -403,6 +405,86 @@ describe('the job runner never targets her authored note (INV-6, ol-egov.141.89.
       expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
     });
   }
+});
+
+describe('the job runner never replaces another kind’s draft and never drafts beside a home note (ol-egov.141.89.105.26)', () => {
+  const base = (vault: MemoryVaultSource, cache: DraftCacheStore) => ({
+    vault,
+    cache,
+    draftDeps: () => ({}) as never,
+    listConceptsForCourse: async () => [concept('Working memory')],
+    draftForConcept: async () => groundedResponse('Working memory'),
+    draftCardForConcept: async () => groundedCards('What is working memory?'),
+    now: () => new Date('2026-09-25T10:00:00-04:00'),
+  });
+
+  it('a second-kind draft is cached beside the sweep’s first, and a retried job keeps one id', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    const sweepId = await deriveDraftId('COGS214', 'Working memory', 0);
+    // The sweep's cached draft: the same drafter, under the sweep's own kind-blind id.
+    await runGenerationDraftJob(
+      { ...base(vault, cache), generateDraftId: (c, n, q) => deriveDraftId(c, n, q) },
+      payload({ instrumentKind: 'mcq' }),
+    );
+    expect((await cache.listPending()).map((r) => r.draftId)).toEqual([sweepId]);
+
+    const run = () => runGenerationDraftJob(base(vault, cache), payload({ instrumentKind: 'qa' }));
+    expect(await run()).toEqual({ ok: true });
+    const afterFirst = await cache.listPending();
+    expect(afterFirst).toHaveLength(2);
+    expect(afterFirst.map((r) => r.draftId)).toContain(sweepId);
+    expect(afterFirst.find((r) => r.draftId === sweepId)?.instrumentType).toBeUndefined();
+    const qaIds = afterFirst.filter((r) => r.instrumentType === 'qa').map((r) => r.draftId);
+    expect(qaIds).toHaveLength(1);
+
+    expect(await run()).toEqual({ ok: true });
+    const afterRetry = await cache.listPending();
+    expect(afterRetry).toHaveLength(2);
+    expect(afterRetry.filter((r) => r.instrumentType === 'qa').map((r) => r.draftId)).toEqual(
+      qaIds,
+    );
+    expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
+  });
+
+  it('the sweep’s id for a first draft is unchanged', async () => {
+    expect(await deriveDraftId('COGS214', 'Working memory', 0)).toBe(
+      await hashText(JSON.stringify(['COGS214', 'Working memory', 0])),
+    );
+  });
+
+  it('a concept whose first source path is a home note drafts into that home note, no doubled name', async () => {
+    const vault = new MemoryVaultSource({ [COURSE_NOTE_PATH]: COURSE_NOTE });
+    const cache = createVaultDraftCacheStore(vault);
+    await runGenerationDraftJob(base(vault, cache), payload());
+    const home = await vault.read(HOME_NOTE_PATH);
+    expect(isOleaHomeNote(home)).toBe(true);
+
+    // Her note listed after the home note: her note is chosen, so the same home note is reused.
+    const both = {
+      ...base(vault, cache),
+      listConceptsForCourse: async () => [
+        { ...concept('Working memory'), sourcePaths: [HOME_NOTE_PATH, COURSE_NOTE_PATH] },
+      ],
+    };
+    expect(await runGenerationDraftJob(both, payload({ instrumentKind: 'qa' }))).toEqual({
+      ok: true,
+    });
+    // Only home notes remain: the home note itself is the target.
+    const only = {
+      ...base(vault, cache),
+      listConceptsForCourse: async () => [
+        { ...concept('Working memory'), sourcePaths: [HOME_NOTE_PATH] },
+      ],
+    };
+    expect(await runGenerationDraftJob(only, payload({ instrumentKind: 'qa' }))).toEqual({
+      ok: true,
+    });
+    const targets = new Set((await cache.listPending()).map((r) => r.sourcePath));
+    expect([...targets]).toEqual([HOME_NOTE_PATH]);
+    expect(vault.exists('01 Courses/COGS214/Week 2 (Olea) (Olea).md')).resolves.toBe(false);
+    expect(await vault.read(COURSE_NOTE_PATH)).toBe(COURSE_NOTE);
+  });
 });
 
 describe('createGenerationDraftRunner', () => {

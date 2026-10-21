@@ -16,9 +16,11 @@
  *
  * The `describe('routing consultation …')` block at the bottom is `ol-tz7v`
  * / `[WIRE-7]`'s own suite: component 2.2's routing, opted into via
- * `deps.routing`, gating this sweep's one generation capability (quiz
- * drafting) against a real classification and a real per-concept instrument
- * inventory. Every test above this block never supplies `routing`, and every
+ * `deps.routing`, read against a real classification and a real per-concept
+ * instrument inventory; since `[D-549]` it gates nothing (every undrafted
+ * candidate is asked), and its tests pin the label and the observation it
+ * records (`pipeline.routing-orders.ol-egov.141.89.105.8.spec.ts` holds the
+ * ruling's own suite). Every test above this block never supplies `routing`, and every
  * `toEqual` above carries `skippedRouting: 0` for exactly that reason —
  * proving the new field is inert, not just present, when routing is not
  * asked for.
@@ -629,7 +631,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
   // (`wiring.ts`) hands the sweep by calling the real stamped extraction.
   const conceptKey = 'concept-key1:working-memory-fixture';
 
-  it('classifier unavailable (`classifier: null`) routes to the retrieval baseline and skips quiz drafting', async () => {
+  it('classifier unavailable (`classifier: null`) routes as unclassified, never guessed, and the first call is still made (`[D-549]`)', async () => {
     const vault = new MemoryVaultSource();
     const cache = createVaultDraftCacheStore(vault);
 
@@ -646,21 +648,22 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       routing: { classifier: null },
     });
 
-    expect(calls).toBe(0);
+    expect(calls).toBe(1);
     expect(report).toEqual({
-      attempted: 0,
-      drafted: 0,
+      attempted: 1,
+      drafted: 1,
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
       skippedRefused: 0,
-      skippedRouting: 1,
-      routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: false }],
+      skippedRouting: 0,
+      // The unclassified mix gives quiz no share, so the deficit reads 0; under [D-549] that gates nothing.
+      routingObservations: [{ consulted: true, kind: null, deficit: 0, generated: true }],
       courseKinds: [
         { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
       ],
     });
-    expect(await cache.list()).toEqual([]);
+    expect((await cache.list()).map((record) => record.conceptIds)).toEqual([[conceptKey]]);
   });
 
   it('a classified concept whose mix warrants quiz drafts normally, against a real (empty) inventory', async () => {
@@ -711,7 +714,7 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
     });
   });
 
-  it("one candidate's routing failure costs only that candidate; the other is still drafted (`ol-egov.141.89.3.56`)", async () => {
+  it("one candidate's routing failure costs only that candidate's label: both are still asked (`ol-egov.141.89.3.56`, `[D-549]`)", async () => {
     // `exists` throws for the first candidate's source: a failure that escapes the classifier
     // port's own handling, so only the sweep's per-candidate guard can contain it.
     class ThrowingExistsVault extends MemoryVaultSource {
@@ -760,15 +763,16 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       routing: { classifier },
     });
     expect(classifyCalls).toBe(1);
-    expect(drafted).toHaveLength(1);
-    expect(report.attempted).toBe(1);
-    expect(report.drafted).toBe(1);
-    expect(report.skippedRouting).toBe(1);
+    expect(drafted).toEqual(['Alpha', 'Beta']);
+    expect(report.attempted).toBe(2);
+    expect(report.drafted).toBe(2);
+    expect(report.skippedRouting).toBe(0);
     expect(report.routingObservations).toHaveLength(2);
     expect(report.routingObservations.filter((o) => o.kind === null)).toHaveLength(1);
+    expect(report.routingObservations.every((o) => o.generated)).toBe(true);
   });
 
-  it('a PDF-sourced concept with no extracted unit naming it routes as unclassified and is skipped, with no PDF text read and no classifier call (`[D-547]`)', async () => {
+  it('a PDF-sourced concept with no extracted unit naming it routes as unclassified with no classifier call, and still gets its first call (`[D-547]`, `[D-549]`)', async () => {
     class RecordingVault extends MemoryVaultSource {
       readonly reads: string[] = [];
       override async read(path: string): Promise<string> {
@@ -801,13 +805,17 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       draftForConcept: async () => groundedResponse('Alpha'),
       routing: { classifier },
     });
+    // Nothing to read, so no classifier call: no PDF text can reach the classifier.
     expect(classifyCalls).toBe(0);
-    expect(report.attempted).toBe(0);
-    expect(report.skippedRouting).toBe(1);
-    expect(vault.reads.filter((r) => r.endsWith('.pdf'))).toEqual([]);
+    expect(report.attempted).toBe(1);
+    expect(report.drafted).toBe(1);
+    expect(report.skippedRouting).toBe(0);
+    expect(report.routingObservations).toEqual([
+      { consulted: true, kind: null, deficit: 0, generated: true },
+    ]);
   });
 
-  it('a concept whose real inventory already meets the routed quiz target is skipped without a drafting call', async () => {
+  it('a concept whose real inventory already meets the routed quiz target still gets its first call (`[D-549]`)', async () => {
     const vault = new MemoryVaultSource({
       [CONCEPT_NOTE]: [
         frontmatter('Working memory'),
@@ -851,16 +859,16 @@ describe('routing consultation (`ol-tz7v` / `[WIRE-7]`, opt-in via `deps.routing
       routing: { classifier },
     });
 
-    expect(draftCalls).toBe(0);
+    expect(draftCalls).toBe(1);
     expect(report).toEqual({
-      attempted: 0,
-      drafted: 0,
+      attempted: 1,
+      drafted: 1,
       refused: 0,
       refusals: [],
       skippedDuplicate: 0,
       skippedRefused: 0,
-      skippedRouting: 1,
-      routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: false }],
+      skippedRouting: 0,
+      routingObservations: [{ consulted: true, kind: 'fact', deficit: 0, generated: true }],
       courseKinds: [
         { courseCode: 'COGS214', kind: 'mcq', asked: null, reason: 'card-supplier-absent' },
       ],
@@ -1192,7 +1200,7 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
     expect(demandRoutingCounterFor(cache)).toBe(demandRoutingCounterFor(cache));
   });
 
-  it('a concept the routing consultation skips is never asked, so it is not counted', async () => {
+  it('an unclassified concept is asked, so it is counted once (`[D-549]`: routing passes nothing over)', async () => {
     const vault = new MemoryVaultSource();
     const cache = createVaultDraftCacheStore(vault);
     const counter = new DemandRoutingCounter();
@@ -1207,8 +1215,8 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
       demandCounter: counter,
     });
 
-    expect(report.skippedRouting).toBe(1);
-    expect(counter.counts()).toEqual([]);
+    expect(report.skippedRouting).toBe(0);
+    expect(counter.counts()).toEqual([{ conceptKey: 'key-1', reason: 'served', count: 1 }]);
   });
 
   it('the refusal memory key moves with the intent: a changed demand must read as changed', () => {

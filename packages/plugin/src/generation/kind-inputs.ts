@@ -5,7 +5,8 @@
  * **The mapping, as ruled.** F4.8 maps her assessment `type` to a declared format class
  * (`olea-core`'s `formatClassOf`, the table's one home, which `buildFormatMatch` also reads through
  * `assessmentFormatOf`).
- * Each class asks for one first kind ({@link FIRST_KIND_BY_FORMAT_CLASS}):
+ * Each class asks for one first kind ({@link FIRST_KIND_BY_FORMAT_CLASS}, whose one home is
+ * `olea-core`'s `assessment/first-kind.ts`, which the session composer also reads):
  *  - recall-style asks for multiple choice (F4.8: "MCQ drilling matches a recall-style paper");
  *  - written and practical ask for a question-and-answer card. F4.8 names structured argument
  *    and ordered-process questions for them, which v0.9 does not have; `[D-550]` (a) rules the
@@ -50,7 +51,6 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import type {
-  AssessmentFormatClass,
   AssessmentRecord,
   CalendarDay,
   PrimaryKindInput,
@@ -63,27 +63,13 @@ import {
   observedInstrumentTypeOrder,
   readReviewLogHistory,
 } from 'olea-core';
+import {
+  FIRST_KIND_BY_FORMAT_CLASS,
+  firstKindForFormatClass,
+} from 'olea-core/src/assessment/first-kind.js';
 import { nearestUpcomingAssessment } from './format-match.js';
 
-/**
- * F4.8 as amended by `[D-550]`: the first kind each declared format class asks for. Declared, not
- * fitted. Non-persisted, Class B: a structured-argument or ordered-process instrument replacing
- * `'qa'` for written or practical is a later change here, behind its own decision.
- */
-export const FIRST_KIND_BY_FORMAT_CLASS: Readonly<
-  Record<AssessmentFormatClass, SchedulableInstrumentType>
-> = Object.freeze({
-  'recall-style': 'mcq',
-  written: 'qa',
-  practical: 'qa',
-});
-
-/** The first kind `formatClass` asks for — {@link FIRST_KIND_BY_FORMAT_CLASS}. */
-export function firstKindForFormatClass(
-  formatClass: AssessmentFormatClass,
-): SchedulableInstrumentType {
-  return FIRST_KIND_BY_FORMAT_CLASS[formatClass];
-}
+export { FIRST_KIND_BY_FORMAT_CLASS, firstKindForFormatClass };
 
 /** The three lookups one reading produces; every one is synchronous and never throws. */
 export interface KindInputs {

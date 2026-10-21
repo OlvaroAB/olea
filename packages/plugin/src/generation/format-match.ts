@@ -36,6 +36,14 @@
  *    P5-T01) and each question/sub-part's own opening sentence — heading and
  *    `(a)`/`(i)` markers stripped — becomes a `sentenceShapes` exemplar.
  *
+ * **Written and practical courses (`ol-egov.141.89.105.24`, `[D-550]`).** The same hint is
+ * produced for a course whose nearest assessment resolves to `'written'` or `'practical'`: the
+ * question-and-answer card drafted as that course's first kind takes the assessment's register.
+ * Wording is quoted verbatim from the course's own registered sources, never another course's;
+ * a wording example is never answer support (`[D-552]`), because the hint carries phrasing only
+ * and grounding stays the drafting call's own gate. Registered PDF extracts are
+ * `ol-egov.141.89.105.15`'s, not here.
+ *
  * **Markdown sources only** (`Source.format === null`), the same restriction
  * `corpusRelationSignals.ts`'s own `assessment-cooccurrence` signal and
  * `segment-past-paper.ts`'s own module doc both state: a PDF past paper needs
@@ -80,12 +88,14 @@ import type {
 import {
   assessmentFormatOf,
   calendarDayFromLocalDate,
+  formatClassOf,
   groupMarkdownPastPaper,
   isCalendarDay,
   parseDocument,
   registerSources,
   segmentPastPaper,
 } from 'olea-core';
+import { firstKindForFormatClass } from 'olea-core/src/assessment/first-kind.js';
 import type { FormatMatchDecision } from './pipeline.js';
 
 export type { FormatMatchDecision };
@@ -279,11 +289,20 @@ export async function buildFormatMatch(
   if (courses.size === 0) return (courseCode) => decisions.get(courseCode);
 
   const today = calendarDayFromLocalDate(deps.now ? deps.now() : new Date());
-  const matchedCourses: string[] = [];
+  const matchedCourses: { course: string; matchedKind: 'mcq' | 'qa' }[] = [];
   for (const course of courses) {
     const nearest = nearestUpcomingAssessment(course, deps.assessments, today);
-    if (nearest !== undefined && assessmentFormatOf(nearest.type) === 'recall-style') {
-      matchedCourses.push(course);
+    // F4.8 / `[D-550]` / `[D-188]`: every declared class (recall-style, written, practical;
+    // an unrecognised `type` falls to written, `[D-246]`) is matched, so the card a written or
+    // practical course gets as its first kind takes that assessment's register, as a recall-style
+    // course's quiz does. The register reaches only the instrument drafted for that course
+    // (F4.8 "Scope of the match"); nothing here chooses the kind. A course with no readable
+    // upcoming assessment (above) is the one that stays unmatched.
+    if (nearest !== undefined && assessmentFormatOf(nearest.type) !== undefined) {
+      // The kind this class matches, through core's one table; the pipeline applies the register
+      // to a request drafting that kind only.
+      const kind = firstKindForFormatClass(formatClassOf(nearest.type));
+      matchedCourses.push({ course, matchedKind: kind === 'qa' ? 'qa' : 'mcq' });
     }
   }
   if (matchedCourses.length === 0) return (courseCode) => decisions.get(courseCode);
@@ -293,7 +312,7 @@ export async function buildFormatMatch(
     deps.sourcesFolder !== undefined ? { sourcesFolder: deps.sourcesFolder } : {},
   );
 
-  for (const course of matchedCourses) {
+  for (const { course, matchedKind } of matchedCourses) {
     const objectivesSources = report.sources.filter(
       (source) =>
         source.course === course && source.role === 'objectives' && source.format === null,
@@ -319,6 +338,7 @@ export async function buildFormatMatch(
     }
 
     decisions.set(course, {
+      matchedKind,
       registerHint: deriveRegisterHint(objectivesPassages, pastPaperQuestions),
     });
   }

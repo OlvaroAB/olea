@@ -104,7 +104,7 @@ import type { DraftCacheStore } from './cache-store.js';
 import { deriveDraftId } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
-import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
+import { ensureHomeNoteForConcept, hashSourceRevision, isOleaHomeNote } from './home-note.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -147,7 +147,7 @@ export interface GenerationDraftJobDeps {
     deps: DraftCardsDeps,
     request: DraftCardsRequest,
   ) => Promise<DraftCardsResult>;
-  /** Defaults to `deriveDraftId` (deterministic, `(courseCode, conceptName, sequence)` — `cache-store.ts`). */
+  /** Defaults to `deriveDraftId` with a `queue:<kind>` tag (deterministic, disjoint from the sweep's ids — `cache-store.ts`). */
   readonly generateDraftId?: (
     courseCode: string,
     conceptName: string,
@@ -260,8 +260,8 @@ export async function runGenerationDraftJob(
   }
 
   const concept = concepts.find((c) => c.key === payload.conceptKey);
-  const sourcePath = concept?.sourcePaths[0];
-  if (concept === undefined || sourcePath === undefined) {
+  const firstSourcePath = concept?.sourcePaths[0];
+  if (concept === undefined || firstSourcePath === undefined) {
     // Not found (renamed, or the key derivation moved — see this module's
     // doc on `ConceptRecord.key`'s disclosed instability) or resolved with
     // no note to draft into. Non-retryable: a later drain of the SAME
@@ -296,7 +296,24 @@ export async function runGenerationDraftJob(
   // would take the item at accept. Resolved only now a draft is actually about to be cached, as the
   // sweep does. `null`: a file that is not Olea's already sits at that path, so nothing is safe to
   // write into; cache nothing, as the sweep skips, and say so.
-  const homeNote = await ensureHomeNoteForConcept(deps.vault, sourcePath, payload.conceptName);
+  // The sweep drafts beside HER source note; once it has made a home note, a concept's first
+  // source path can be that home note itself. Skip Olea's home notes when choosing her source, and
+  // when only home notes remain draft into the first of them directly, never a home note of a
+  // home note (`ol-egov.141.89.105.26`).
+  let sourcePath: string | undefined;
+  for (const candidate of concept.sourcePaths) {
+    const isHome = (await deps.vault.exists(candidate))
+      ? isOleaHomeNote(await deps.vault.read(candidate))
+      : false;
+    if (!isHome) {
+      sourcePath = candidate;
+      break;
+    }
+  }
+  const homeNote =
+    sourcePath === undefined
+      ? firstSourcePath
+      : await ensureHomeNoteForConcept(deps.vault, sourcePath, payload.conceptName);
   if (homeNote === null) {
     return {
       ok: false,
@@ -305,7 +322,14 @@ export async function runGenerationDraftJob(
     };
   }
 
-  const generateDraftId = deps.generateDraftId ?? deriveDraftId;
+  // Kind-qualified (D-381, `ol-egov.141.89.105.26`): `deriveDraftId`'s 3-argument id is the
+  // sweep's, kind-blind, so a further-call draft of another kind would replace the sweep's cached
+  // draft. The 4-argument form with a `queue:<kind>` tag is a disjoint id space, and stays
+  // deterministic so a retried job rewrites its own record rather than adding a duplicate.
+  const generateDraftId =
+    deps.generateDraftId ??
+    ((course: string, name: string, seq: number) =>
+      deriveDraftId(course, name, seq, `queue:${payload.instrumentKind}`));
   const now = deps.now ?? (() => new Date());
   // `ol-0r92.87`'s stale-input guard, the same snapshot-at-draft-time
   // `pipeline.ts` takes — see that module's own doc.

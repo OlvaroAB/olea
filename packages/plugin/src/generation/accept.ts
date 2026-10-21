@@ -89,7 +89,7 @@
 
 import type { InstrumentType } from 'olea-contracts';
 import type { VaultSource } from 'olea-core';
-import { appendVerdictRecord } from 'olea-core';
+import { appendVerdictRecord, scoredConceptId } from 'olea-core';
 import { isoWithLocalOffset } from '../review/ports.js';
 import type { DraftCacheStore } from './cache-store.js';
 import type { MaterializeDemandInput } from './demand-target.js';
@@ -137,6 +137,17 @@ function materializeDemandOf(record: DraftRecord): MaterializeDemandInput | unde
       promptVersion: record.provenance.promptVersion,
     },
   };
+}
+
+/**
+ * `[D-558]` (`ol-egov.141.89.9.99`): the concept the draft was drafted for, which both materialisers
+ * record beside the item when it lands in Olea's home note. Every draft builder (`pipeline.ts`,
+ * `review/heading-offer.ts`, `revision-job-runner.ts`) stamps exactly one concept key, so this is
+ * that key; read through the shared scored-concept rule rather than by index.
+ */
+function draftedForOf(record: DraftRecord): { readonly draftedForConceptKey?: string } {
+  const key = scoredConceptId(record.conceptIds);
+  return key === undefined ? {} : { draftedForConceptKey: key };
 }
 
 /**
@@ -189,6 +200,8 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
       // production call that writes the target record (`materialize-mcq.ts`), only when there is
       // one — see `materializeDemandOf`.
       ...(demand === undefined ? {} : { demand }),
+      // `[D-558]`: the concept the item is recorded as drafted for — see `draftedForOf`.
+      ...draftedForOf(record),
     },
     {
       deviceId: deps.deviceId,
@@ -244,6 +257,8 @@ const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
       // `[D-437]` (`ol-egov.141.89.2.30`): see `materializeMcqDraft`'s identical forward above;
       // the card materialiser (`materialize-card.ts`) writes the record, and reads it free recall.
       ...(demand === undefined ? {} : { demand }),
+      // `[D-558]`: see `materializeMcqDraft`'s identical forward above.
+      ...draftedForOf(record),
     },
     {
       // `materializeAcceptedCardDraft` only actually requires `deviceId`

@@ -68,6 +68,18 @@
  * degrades toward the cards-for-everything null's *emphasis*, not toward its
  * *exclusions* — depth stays reachable, only slower to prioritise.
  *
+ * ## What routing decides, and what it never does (`[D-549]`)
+ *
+ * The format chooses a concept's first instrument; this module's mix and the
+ * per-group deficits from `instrumentMixGaps` order the follow-on practice
+ * (which kind to ask for next, from the largest deficit down). They never
+ * decide whether a first call is made: a concept whose deficit reads zero, or
+ * whose classification is unclassified, is still asked, and an unsupported
+ * drafting request is refused with its stated reason rather than skipped
+ * silently. A cached draft of any status counts as a built kind when the
+ * inventory is read. Whether the selection path honours this is what
+ * `../checks/routing-consumption.ts` checks.
+ *
  * ## Deferred, not decided (recorded so a later reader does not assume this settled it)
  *
  * `docs/research/GLOSSARY.md`'s KLI Application leaves one question open and

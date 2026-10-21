@@ -57,7 +57,13 @@ import type {
   SchedulableInstrumentType,
   VaultSource,
 } from 'olea-core';
-import { DEFAULT_COURSES_FOLDER, hashText, readMintedConcepts } from 'olea-core';
+import {
+  createFsrsScheduler,
+  DEFAULT_COURSES_FOLDER,
+  hashText,
+  readMintedConcepts,
+  type Scheduler,
+} from 'olea-core';
 import { extractConceptsFromVault } from '../concept/wiring.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DraftAcceptPort } from './accept.js';
@@ -66,6 +72,7 @@ import { createVaultDraftCacheStore, type DraftCacheStore } from './cache-store.
 import { buildKindInputs, type KindInputs } from './kind-inputs.js';
 import type { FormatMatchDecision } from './pipeline.js';
 import { type GenerationSweepReport, runGenerationSweep } from './pipeline.js';
+import { createGenerationPrioritySource } from './priority-source.js';
 import type { GenerationRoutingDeps } from './routing.js';
 import type { DraftRecord } from './types.js';
 
@@ -81,6 +88,12 @@ export interface GenerationWiringDeps {
    * unchanged from before this bead.
    */
   readonly now?: () => Date;
+  /**
+   * `ol-egov.141.89.105.28`: the `Scheduler` the sweep's drain-order reading folds her review log
+   * through (`priority-source.ts`). Omitted, the wiring builds `createFsrsScheduler()` itself: the
+   * same pure computation `main.ts` composes, so no caller has to pass one for the order to apply.
+   */
+  readonly scheduler?: Scheduler;
 }
 
 /**
@@ -272,6 +285,13 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
     ...(deps.now !== undefined ? { now: deps.now } : {}),
   });
   const listConceptsForCourse = listConceptsForCourseFactory(deps.vault, coursesFolder);
+  // `ol-egov.141.89.105.28` ([D-368]): the drain-order reading reads the vault (her review log) and
+  // the scheduler only; no network, no spend. Refreshed before every sweep, never across sweeps.
+  const prioritySource = createGenerationPrioritySource({
+    vault: deps.vault,
+    scheduler: deps.scheduler ?? createFsrsScheduler(),
+    ...(deps.now !== undefined ? { now: deps.now } : {}),
+  });
 
   return {
     cache,
@@ -288,6 +308,13 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
     async sweep(units, draftDeps, routing, formatMatch, sourceRevisions, firstKind) {
       if (draftDeps === null) return null;
       if (units.length === 0) return null;
+      // A failed read leaves the source on its last snapshot (or null before any), and the sweep
+      // keeps its rotation for any concept the source cannot answer: never blocks drafting.
+      try {
+        await prioritySource.refresh();
+      } catch {
+        // fall through to the existing order
+      }
       return runGenerationSweep(units, {
         vault: deps.vault,
         cache,
@@ -298,6 +325,7 @@ export function buildGenerationWiring(deps: GenerationWiringDeps): GenerationWir
         ...(formatMatch !== undefined ? { formatMatch } : {}),
         ...(sourceRevisions !== undefined ? { sourceRevisions } : {}),
         ...(deps.now !== undefined ? { now: deps.now } : {}),
+        drainOrderFor: prioritySource.priority,
         // `ol-egov.141.89.105.7`: the card drafter is handed the same deps value the quiz path uses.
         ...(firstKind !== undefined ? { kindInputsFor: firstKind.kindInputsFor } : {}),
         ...(firstKind?.draftCards === true ? { cardDraftDeps: draftDeps } : {}),

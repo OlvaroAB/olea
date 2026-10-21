@@ -1017,11 +1017,30 @@ describe('assessment-format matching (F4.8)', () => {
     expect(session.items.map((i) => i.formatMatch)).toEqual(['preferred-format', 'other-format']);
   });
 
-  it('an unrecognised assessment type falls to written — no instrument preference, reorders nothing', () => {
+  it('a practical course prefers the card too ([D-550]); a recall-style course is unchanged (MCQ first)', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'practical' }]);
+    const run = (type: string) =>
+      buildStudySession({
+        rows,
+        instruments: buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]),
+        budgetMinutes: 20,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        assessments: [assessment('02 Assignments/x.md', { type })],
+      });
+    const lab = run('Lab');
+    expect(lab.formatPreference).toBe('practical');
+    expect(lab.items.map((i) => i.instrumentId)).toEqual(['a-qa', 'a-mcq']);
+    expect(lab.items[0]?.formatMatch).toBe('preferred-format');
+    const quiz = run('Quiz');
+    expect(quiz.formatPreference).toBe('recall-style');
+    expect(quiz.items.map((i) => i.instrumentId)).toEqual(['a-mcq', 'a-qa']);
+  });
+
+  it('an unrecognised assessment type falls to written — which prefers the card ([D-550]), so the card is chosen first', () => {
     // `[D-246]` / `[VOC-7]`: a word the declared table does not name falls to
     // `'written'`, never to `'unknown'` — `'unknown'` is reserved for "no
-    // assessment at all". `'written'` still prefers no instrument here (same
-    // as `'unknown'` always has), so the fill is untouched either way.
+    // assessment at all". `'written'` prefers the card (`[D-550]`).
     const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'written' }]);
     const index = buildConceptInstrumentIndex([qa('a-qa', ['A']), mcq('a-mcq', ['A'])]);
 
@@ -1035,9 +1054,20 @@ describe('assessment-format matching (F4.8)', () => {
     });
 
     expect(session.formatPreference).toBe('written');
-    // Vault order, untouched.
     expect(session.items.map((i) => i.instrumentId)).toEqual(['a-qa', 'a-mcq']);
-    expect(session.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
+    expect(session.items.map((i) => i.formatMatch)).toEqual(['preferred-format', 'other-format']);
+
+    // The same concept with the vault listing the MCQ first: the card still wins the slot.
+    const flipped = buildStudySession({
+      rows,
+      instruments: buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]),
+      budgetMinutes: 20,
+      durations: flatDurations(60),
+      asOf: AS_OF,
+      assessments: [assessment('02 Assignments/quiz-2.md', { type: 'Seminar' })],
+    });
+    expect(flipped.items.map((i) => i.instrumentId)).toEqual(['a-qa', 'a-mcq']);
+    expect(flipped.items[0]?.formatMatch).toBe('preferred-format');
   });
 
   it('the preference follows the NEAREST assessment, not the highest-ranked row', () => {
@@ -1124,11 +1154,11 @@ describe('the format preference is resolved per course, not once for the whole s
     expect(byCourse.get('ALPHA')?.instrumentId).toBe('a-mcq');
     expect(byCourse.get('ALPHA')?.formatMatch).toBe('preferred-format');
 
-    // BRAVO's own nearest assessment is written: no preference, so vault
-    // order (Q&A first) wins — NOT the MCQ that ALPHA's sooner quiz would
+    // BRAVO's own nearest assessment is written: it prefers the card
+    // (`[D-550]`), so Q&A wins — NOT the MCQ that ALPHA's sooner quiz would
     // wrongly hand it under the pre-fix, session-wide preference.
     expect(byCourse.get('BRAVO')?.instrumentId).toBe('b-qa');
-    expect(byCourse.get('BRAVO')?.formatMatch).toBe('no-preference');
+    expect(byCourse.get('BRAVO')?.formatMatch).toBe('preferred-format');
 
     // The session-LEVEL field is untouched by this fix: it still names the
     // soonest assessment across the whole session (ALPHA's quiz) — a
@@ -1179,7 +1209,7 @@ describe('the format preference is resolved per course, not once for the whole s
     expect(byCourse.get('ALPHA')?.instrumentId).toBe('a-mcq');
     expect(byCourse.get('ALPHA')?.formatMatch).toBe('preferred-format');
     expect(byCourse.get('BRAVO')?.instrumentId).toBe('b-qa');
-    expect(byCourse.get('BRAVO')?.formatMatch).toBe('no-preference');
+    expect(byCourse.get('BRAVO')?.formatMatch).toBe('preferred-format');
 
     // Session-level field now follows BRAVO's sooner essay — still a
     // different question from either course's own instrument selection.

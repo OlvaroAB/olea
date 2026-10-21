@@ -64,6 +64,34 @@
  * sits in the queue, undrained into a real call, for exactly as long as
  * that gate holds — the same zero-spend state the arrival-triggered primary
  * call (this bead's sibling code) is already in.
+ *
+ * ## The order of the next kinds follows the kind of knowledge (`[D-549]`, `ol-egov.141.89.105.8`)
+ *
+ * David's ruling (2026-10-20, option (a)): the assessment format chooses a concept's first
+ * instrument, and the knowledge classification guides the practice that follows. So "the other
+ * kind" a trigger names is no longer one fixed order for every concept (her observed order, then
+ * question-and-answer, cloze, multiple choice). It is `followOnKindOrder` (`generation/routing.ts`):
+ * the concept's routed mix, its group deficits against what it already holds (its materialised
+ * instruments here plus its pending drafts), highest first, with that fixed order kept only to break
+ * ties. A fact asks for recall before multiple choice until its recall share is met, a category asks
+ * for multiple choice; explain-back is never a further call (F2.14) and keeps its own offers. The
+ * order never removes a kind, so an unknown classification, read as the unclassified mix, never
+ * blocks a further call.
+ *
+ * The label is the one the sweep's routing consultation read when it asked the concept, kept in
+ * process (`KnowledgeKindLabels`, read through `knowledgeKindLabelsFor(deps.vault)` unless
+ * `knowledgeKindFor` is supplied). This module makes no classifier call: a concept with no label
+ * held (never asked this session, or no classifier) reads as unclassified, never guessed.
+ *
+ * **A cached draft is a built kind** (`docs/dev/intelligence-build/instrument-primary-call-owner.md`
+ * section 6 item d). `olea-core`'s `OtherKindInput` already says built means "queued or drafted";
+ * before this, only materialised instruments counted, so the format-ask trigger asked again for the
+ * kind of a concept whose draft was still pending (a second route to a first call), and the other
+ * triggers named a kind the composition's guard then dropped. Every cached draft of the concept in
+ * this course, of any status, now counts its kind as built (a rejected draft too: the call was
+ * made, and asking for that kind again is the repeated-rejection trigger's, inactive under D-269).
+ * Only pending drafts add to the deficit counts: an accepted one is already a materialised
+ * instrument, and a rejected one is no instrument at all.
  */
 
 import type { StudyPlanCourse } from 'olea-contracts';
@@ -78,6 +106,7 @@ import {
   enumerateVaultInstruments,
   evaluateGenerationTriggers,
   type JobEnqueuer,
+  type KnowledgeKind,
   loadCachedStudyPlan,
   type OtherKindInput,
   observedInstrumentTypeOrder,
@@ -89,6 +118,13 @@ import {
   type StudyPlanStore,
   type VaultSource,
 } from 'olea-core';
+import { createVaultDraftCacheStore, type DraftCacheStore } from '../generation/cache-store.js';
+import {
+  followOnKindOrder,
+  knowledgeKindLabelsFor,
+  routingGroupOf,
+} from '../generation/routing.js';
+import type { DraftRecord } from '../generation/types.js';
 import { courseCodesForLandedUnits, enqueueTriggeredGenerationCall } from './generation-queue.js';
 
 /**
@@ -104,7 +140,8 @@ export const REPEATED_REJECTION_THRESHOLD_INACTIVE = Number.POSITIVE_INFINITY;
  * declared listed order (`'qa'` first) for any kind never yet observed.
  * Declared, not derived — it only decides WHICH remaining kind a further
  * call offers next, never WHETHER one fires, so it carries none of D-269's
- * Class C weight.
+ * Class C weight. Since `[D-549]` it is the tie-break under the concept's own
+ * order (`followOnKindOrder`, module doc), no longer the order itself.
  */
 function preferredOrderFor(
   recordedPreference: readonly SchedulableInstrumentType[],
@@ -129,6 +166,28 @@ export interface FurtherGenerationTriggerDeps {
   readonly formatMatchFor?: (courseCode: string) => SchedulableInstrumentType | undefined;
   /** Injected for determinism under test; production passes `() => new Date()`. */
   readonly now?: () => Date;
+  /**
+   * `[D-549]`: the knowledge kind to order this concept's next kinds by, `null` for the unclassified
+   * reading. Absent, the label the sweep's routing consultation kept for the concept this session
+   * (`knowledgeKindLabelsFor(deps.vault)`, `generation/routing.ts`); a concept with none reads `null`.
+   */
+  readonly knowledgeKindFor?: (
+    courseCode: string,
+    conceptKey: string,
+  ) => KnowledgeKind | null | Promise<KnowledgeKind | null>;
+  /**
+   * Where the concept's cached drafts are read from (module doc, "A cached draft is a built kind").
+   * Absent, the vault's own draft cache (`createVaultDraftCacheStore(deps.vault)`), the files the
+   * sweep and the job runner write. Read once per course; a read that fails counts no draft.
+   */
+  readonly draftCache?: Pick<DraftCacheStore, 'list'>;
+}
+
+/** The kinds a further call can name: explain-back is never written ahead (F2.14). */
+const SCHEDULABLE_KINDS: readonly SchedulableInstrumentType[] = ['qa', 'cloze', 'mcq'];
+
+function isSchedulableKind(kind: string): kind is SchedulableInstrumentType {
+  return (SCHEDULABLE_KINDS as readonly string[]).includes(kind);
 }
 
 /**
@@ -140,8 +199,9 @@ export interface FurtherGenerationTriggerDeps {
  * FSRS replay (deck-served-out-or-lapsed, and the format-ask trigger's D7.1
  * half — see `review-log/generation-signals.ts`'s module doc for why the
  * observed order is vault-wide rather than course-scoped), and this
- * course's own vault-instrument enumeration (which kinds are already
- * built, per concept).
+ * course's own vault-instrument enumeration and its cached drafts (which
+ * kinds are already built, per concept, and what it holds for `[D-549]`'s
+ * order), plus each concept's kept knowledge-kind label.
  *
  * Never throws — an enqueue failure for one concept is logged and skipped,
  * matching `enqueuePrimaryGenerationCallsForLandedUnits`'s own posture.
@@ -177,6 +237,20 @@ export async function enqueueFurtherGenerationCallsForCourse(
   });
   const instrumentIndex = buildConceptInstrumentIndex(instrumentRecords);
 
+  // `[D-549]` item d: this course's cached drafts, any status, read once (module doc).
+  let courseDrafts: readonly DraftRecord[];
+  try {
+    courseDrafts = (
+      await (deps.draftCache ?? createVaultDraftCacheStore(deps.vault)).list()
+    ).filter((draft) => draft.courseCode === courseCode);
+  } catch {
+    courseDrafts = [];
+  }
+  const labels = knowledgeKindLabelsFor(deps.vault);
+  const knowledgeKindFor =
+    deps.knowledgeKindFor ??
+    ((course: string, conceptKey: string) => labels.kindFor(course, conceptKey));
+
   for (const concept of concepts) {
     if (!concept.courses.includes(courseCode)) continue;
     try {
@@ -186,8 +260,32 @@ export async function enqueueFurtherGenerationCallsForCourse(
       // (`entry.conceptKey`), despite that field's own doc still describing
       // it as "the verbatim display name" (stale; not this bead's to fix).
       const deck = instrumentIndex.instrumentsFor(concept.key);
-      const builtKinds = [...new Set(deck.map((record) => record.instrumentType))];
-      const other: OtherKindInput = { builtKinds, preferredOrder };
+      const drafts = courseDrafts.filter((draft) => draft.conceptIds.includes(concept.key));
+      // An absent `DraftRecord.instrumentType` means multiple choice (`createHasDraftOfKind`'s reading).
+      const draftedKinds = drafts
+        .map((draft) => draft.instrumentType ?? 'mcq')
+        .filter(isSchedulableKind);
+      const builtKinds = [
+        ...new Set([...deck.map((record) => record.instrumentType), ...draftedKinds]),
+      ];
+      // What the concept holds, by routing group: its materialised instruments and its pending drafts.
+      const held = { retrieval: 0, quiz: 0, explainBack: 0 };
+      const holdings = [
+        ...deck.map((record) => record.instrumentType),
+        ...drafts
+          .filter((draft) => draft.status === 'pending')
+          .map((draft) => draft.instrumentType ?? 'mcq'),
+      ];
+      for (const kind of holdings) {
+        const group = routingGroupOf(kind);
+        if (group !== undefined) held[group] += 1;
+      }
+      const order = followOnKindOrder(
+        await knowledgeKindFor(courseCode, concept.key),
+        held,
+        preferredOrder,
+      );
+      const other: OtherKindInput = { builtKinds, preferredOrder: order };
 
       const deckWithStates = deck.map((record) => ({
         instrumentType: record.instrumentType,
