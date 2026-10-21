@@ -209,6 +209,11 @@ import {
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+import {
+  hasTranscriptExtension,
+  namedTranscriptPart,
+  readTranscriptVersion,
+} from '../ingestion/materiality/transcript-grain.js';
 import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,
@@ -623,6 +628,9 @@ async function sourceContentHashOf(
  * while it is still the file's byte hash now (never a stale one). No citation at all when the
  * predecessor had none or cited its own note (the self-referential fallback): accept then mints
  * its own, as before.
+ *
+ * A lecture transcript ({@link transcriptSuccessorCitation}) cites the version its passage was read
+ * from and, under `[D-567]`, the part that passage names in it.
  */
 async function successorCitationOf(
   vault: VaultSource,
@@ -639,6 +647,14 @@ async function successorCitationOf(
       ...(predecessor.page !== undefined ? { page: predecessor.page } : {}),
       ...(predecessor.section !== undefined ? { section: predecessor.section } : {}),
     };
+    const transcript = await transcriptSuccessorCitation(
+      vault,
+      predecessor,
+      base,
+      passage,
+      payloadSourceRevision,
+    );
+    if (transcript !== undefined) return transcript;
     if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
       return passage.trim().length === 0
         ? base
@@ -662,6 +678,50 @@ async function successorCitationOf(
   } catch {
     return undefined; // never throws: no citation is today's behaviour
   }
+}
+
+/**
+ * `ol-egov.141.89.5.104` ([D-567], [D-508]): the successor's citation when the predecessor cites a
+ * lecture transcript (a `.txt`/`.vtt`/`.srt` file, or Markdown that declares itself one);
+ * `undefined` for any other source. The successor is drafted from the passage the change left (the
+ * job's `newPassageText`), read from the transcript version whose bytes hash the job carries
+ * (`payloadSourceRevision`, set by the citation pass). It cites that version, so it is seeded and
+ * presented on first sighting, and names the part that passage names in it by the same rule a new
+ * question gets (`namedTranscriptPart`): a part only when the passage stands once inside one part,
+ * otherwise no part, and the whole transcript is protected.
+ *
+ * The version is recorded only as the file's bytes hash now. When the file has changed again since
+ * the passage was read, the job's hash is recorded as it is (never the newer one, which the
+ * successor was not drafted from) and no part is named: the successor is then withheld at first
+ * sighting, as any question on a transcript that changed after drafting is. A job queued by an
+ * earlier build carries no hash; the predecessor's is then kept only while it still equals the
+ * bytes. A transcript that is gone or cannot be read records no version.
+ */
+async function transcriptSuccessorCitation(
+  vault: VaultSource,
+  predecessor: InstrumentCitation,
+  base: InstrumentCitation,
+  passage: string,
+  payloadSourceRevision: string | undefined,
+): Promise<InstrumentCitation | undefined> {
+  const path = predecessor.sourcePath;
+  const markdown = path.toLowerCase().endsWith('.md');
+  if (!markdown && !hasTranscriptExtension(path)) return undefined;
+  const read = await readTranscriptVersion(vault, path);
+  // An undeclared Markdown file is her note; a Markdown file that is gone cannot be told apart and
+  // keeps the note handling, as the citation pass does.
+  if (markdown && read.kind !== 'read') return undefined;
+  if (read.kind !== 'read') return base;
+  const now = read.version.bytesHash;
+  const revision = payloadSourceRevision ?? predecessor.sourceRevision;
+  if (revision === undefined) return base;
+  if (revision !== now) {
+    return payloadSourceRevision === undefined ? base : { ...base, sourceRevision: revision };
+  }
+  const named = await namedTranscriptPart(read.version.parts, passage);
+  return named === undefined
+    ? { ...base, sourceRevision: now }
+    : { ...base, page: named.page, passageDigest: named.passageDigest, sourceRevision: now };
 }
 
 /** Retry an empty or unparseable draft until the bound, then fail with a reason the queue records. */

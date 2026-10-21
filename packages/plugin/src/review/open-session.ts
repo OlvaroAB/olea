@@ -252,6 +252,7 @@ import {
   HIDDEN_PATH_SEGMENT,
 } from '../ingestion/materiality/citation-revision-wiring.js';
 import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
+import { transcriptAnchorCheck } from '../ingestion/materiality/transcript-grain.js';
 import { createStampOnFirstSightPort } from '../instrument-stamping/port.js';
 import { writeBackSilentRepair } from '../instrument-stamping/repair-write-back.js';
 import { createVaultMisconceptionStore } from '../misconception/store.js';
@@ -1724,11 +1725,19 @@ export function sourceCheckAtPresentation(
         ) {
           return 'check-failed';
         }
-        if (
-          currentPassage !== undefined &&
-          !(await citedPassageUnchanged(instrumentId, anchor, currentPassage))
-        ) {
-          return 'check-failed';
+        if (currentPassage !== undefined) {
+          // `ol-egov.141.89.5.97` ([D-567], [D-543]): a lecture-transcript anchor is read at its own
+          // grain, as the citation pass reads it: its part's passage, or the whole transcript when
+          // the citation names no part. That reading decides; changed bytes alone never withhold.
+          const transcript = await transcriptAnchorAtPresentation(
+            instrumentId,
+            anchor,
+            currentPassage,
+          );
+          if (transcript !== undefined) return transcript ? 'clear' : 'check-failed';
+          if (!(await citedPassageUnchanged(instrumentId, anchor, currentPassage))) {
+            return 'check-failed';
+          }
         }
       }
     }
@@ -1742,13 +1751,40 @@ export function sourceCheckAtPresentation(
 }
 
 /**
+ * `ol-egov.141.89.5.97` ([D-567], [D-543]): the presentation-time reading of a lecture-transcript
+ * anchor (`transcript-grain.ts`, `transcriptAnchorCheck`): `undefined` when the anchor is not one
+ * (the other checks apply), otherwise whether its part's passage, or the whole transcript for a
+ * citation that names no part, still reads as the anchor holds it. A failure to read is `false`.
+ */
+async function transcriptAnchorAtPresentation(
+  instrumentId: string,
+  anchor: {
+    readonly text: string;
+    readonly sourcePath: VaultPath;
+    readonly passageDigest?: string | undefined;
+  },
+  reader: CurrentPassageReader,
+): Promise<boolean | undefined> {
+  try {
+    const record = reader.recordOf(instrumentId);
+    if (record === undefined) return undefined;
+    return await transcriptAnchorCheck(reader.vault, record, anchor);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * `ol-egov.141.89.5.73` ([D-515]): whether a question built on a non-markdown source (anything
  * but a `.md` file that is not the question's own note) still has that file's bytes. Reads the
  * citation sidecar's `sourceRevision` and hashes the current bytes the way the writer did
  * (`hashContent` over `readBinary`). A missing revision, an unreadable sidecar, a missing or
  * unreadable file, or a different hash is `false`: the caller withholds with the existing
  * could-not-check outcome. A markdown source, or a record with no source, is `true` (not this
- * check's). Reads only, never writes.
+ * check's), except a Markdown citation that records a version (`ol-egov.141.89.5.97`: only a
+ * declared-Markdown transcript's does), which is checked against it the same way. Reached for a
+ * transcript only before the citation pass has anchored it: its first sighting is then presented
+ * exactly when the file is the version it was drafted from. Reads only, never writes.
  */
 async function nonMarkdownSourceUnchanged(
   instrumentId: string,
@@ -1758,8 +1794,10 @@ async function nonMarkdownSourceUnchanged(
     const record = reader.recordOf(instrumentId);
     const sourcePath = record?.sourceProvenance?.sourcePath;
     if (record === undefined || sourcePath === undefined) return true;
-    if (sourcePath === record.notePath || sourcePath.toLowerCase().endsWith('.md')) return true;
+    if (sourcePath === record.notePath) return true;
+    const markdown = sourcePath.toLowerCase().endsWith('.md');
     const citation = await readInstrumentCitation(reader.vault, instrumentId);
+    if (markdown && citation?.sourceRevision === undefined) return true;
     return await bytesMatchRevision(reader.vault, sourcePath, citation?.sourceRevision);
   } catch {
     return false;
@@ -1784,7 +1822,9 @@ async function bytesMatchRevision(
  * own `DraftRecord.sourceCitation` (a draft has no sidecar yet). Drafts are indexed once per
  * session open (the records are already in hand); each presentation still reads the file afresh.
  * A draft with no citation, a markdown source, or the draft's own note reads `'clear'`; an
- * unknown draft id reads `'clear'` (it is not a draft this session holds).
+ * unknown draft id reads `'clear'` (it is not a draft this session holds). A Markdown citation
+ * that records a version (`ol-egov.141.89.5.97`: a declared-Markdown transcript's) is checked
+ * against it, as a plain-text transcript's is.
  */
 export function draftSourceCheckAtPresentation(
   vault: VaultSource,
@@ -1797,7 +1837,7 @@ export function draftSourceCheckAtPresentation(
     if (draft === undefined || citation === undefined) return 'clear';
     if (
       citation.sourcePath === draft.sourcePath ||
-      citation.sourcePath.toLowerCase().endsWith('.md')
+      (citation.sourcePath.toLowerCase().endsWith('.md') && citation.sourceRevision === undefined)
     ) {
       return 'clear';
     }

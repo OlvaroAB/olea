@@ -15,6 +15,7 @@ import {
   transcriptAnchorStandsUnchanged,
 } from '../../../src/ingestion/materiality/transcript-grain.js';
 import {
+  bytesHashOf,
   citeTranscriptPart,
   cue,
   type Harness,
@@ -310,7 +311,15 @@ describe('a declared-Markdown transcript is followed at part grain; an undeclare
     const vault = new MemoryVault();
     vault.files.set(MD, transcriptOf(LECTURE));
     vault.files.set(HOME, homeNote('Invented lecture topic', ['q-md']));
-    await citeTranscriptPart(vault, 'q-md', MD, 4);
+    vault.files.set(
+      '.olea/citations/q-md.json',
+      sidecar({
+        instrumentId: 'q-md',
+        sourcePath: MD,
+        page: 4,
+        sourceRevision: await bytesHashOf(transcriptOf(LECTURE)),
+      }),
+    );
     const h = harness({ transcriptPartGrain: true });
     await h.pass(vault);
     // The whole note is the anchor, as for any note of hers without a passage digest.
@@ -318,7 +327,7 @@ describe('a declared-Markdown transcript is followed at part grain; an undeclare
   });
 });
 
-describe('with part grain off (production today), a transcript citation keeps its current handling', () => {
+describe('with part grain off (tests only since ol-egov.141.89.5.97), a transcript citation keeps the bytes handling', () => {
   it('a plain-text transcript still takes the bytes path', async () => {
     const vault = await lectureVault();
     const h = harness({ transcriptPartGrain: false });

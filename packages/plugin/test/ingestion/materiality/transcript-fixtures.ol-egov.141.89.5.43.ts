@@ -7,6 +7,7 @@ import {
   appendReviewLogRecord,
   appendSuspendRecord,
   citationStorePath,
+  digestPassage,
   type EnqueueInput,
   hashContent,
   type ListOptions,
@@ -20,6 +21,7 @@ import {
 import { vi } from 'vitest';
 import { ObsidianCitationHashStore } from '../../../src/ingestion/materiality/citation-hash-store.js';
 import { CitationRevisionTrigger } from '../../../src/ingestion/materiality/citation-revision-wiring.js';
+import { readTranscriptVersion } from '../../../src/ingestion/materiality/transcript-grain.js';
 import { resolveCitationPendingRevalidation } from '../../../src/session-builder/provider.js';
 
 /** Text files and binaries; `readBinary` of a text file is its UTF-8 bytes, as on disk. */
@@ -100,17 +102,23 @@ export function homeNote(topic: string, ids: readonly string[]): string {
   return ['---', `topic: [${topic}]`, `course: ${COURSE}`, '---', '', ...blocks].join('\n');
 }
 
-/** A citation sidecar as generation writes it: path, part number at drafting, and the version's bytes hash. */
+/**
+ * A citation sidecar as generation writes it: path, part number at drafting, the version's bytes
+ * hash and, when the citation names its part (`[D-567]`), the digest of that part's spoken text.
+ * With no digest the citation names no part and the whole transcript is its grain.
+ */
 export function sidecar(args: {
   readonly instrumentId: string;
   readonly sourcePath: VaultPath;
   readonly page: number;
   readonly sourceRevision?: string;
+  readonly passageDigest?: string;
 }): string {
   return `${JSON.stringify({
     instrumentId: args.instrumentId,
     sourcePath: args.sourcePath,
     page: args.page,
+    ...(args.passageDigest !== undefined ? { passageDigest: args.passageDigest } : {}),
     ...(args.sourceRevision !== undefined ? { sourceRevision: args.sourceRevision } : {}),
     schemaVersion: 2,
   })}\n`;
@@ -120,7 +128,11 @@ export async function bytesHashOf(text: string): Promise<string> {
   return hashContent(new TextEncoder().encode(text));
 }
 
-/** Writes the sidecar for `instrumentId`, recording the transcript's current bytes as the drafted version. */
+/**
+ * Writes the sidecar for `instrumentId` as generation writes it for a question drafted from part
+ * `page` alone (`ol-egov.141.89.5.97`, `[D-567]`): the transcript's current bytes as the drafted
+ * version, and the part named by the digest of its spoken text.
+ */
 export async function citeTranscriptPart(
   vault: MemoryVault,
   instrumentId: string,
@@ -129,9 +141,37 @@ export async function citeTranscriptPart(
 ): Promise<void> {
   const text = vault.files.get(sourcePath);
   if (text === undefined) throw new Error(`no transcript at ${sourcePath}`);
+  const read = await readTranscriptVersion(vault, sourcePath);
+  if (read.kind !== 'read') throw new Error(`${sourcePath} does not read as a transcript`);
+  const part = read.version.parts.find((candidate) => candidate.ordinal === page);
+  if (part === undefined) throw new Error(`no part ${page} in ${sourcePath}`);
   vault.files.set(
     citationStorePath(instrumentId),
-    sidecar({ instrumentId, sourcePath, page, sourceRevision: await bytesHashOf(text) }),
+    sidecar({
+      instrumentId,
+      sourcePath,
+      page,
+      sourceRevision: await bytesHashOf(text),
+      passageDigest: await digestPassage(part.spoken),
+    }),
+  );
+}
+
+/**
+ * Writes the sidecar for a question drafted from several passages of the transcript
+ * (`ol-egov.141.89.5.97`, `[D-567]`): the current bytes as the drafted version and no part named,
+ * so the whole transcript is protected.
+ */
+export async function citeWholeTranscript(
+  vault: MemoryVault,
+  instrumentId: string,
+  sourcePath: VaultPath,
+): Promise<void> {
+  const text = vault.files.get(sourcePath);
+  if (text === undefined) throw new Error(`no transcript at ${sourcePath}`);
+  vault.files.set(
+    citationStorePath(instrumentId),
+    sidecar({ instrumentId, sourcePath, page: 1, sourceRevision: await bytesHashOf(text) }),
   );
 }
 
