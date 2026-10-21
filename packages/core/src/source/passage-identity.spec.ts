@@ -443,4 +443,53 @@ describe('sealing a citation at authoring', () => {
     const missingWithDigest = { sourcePath: 'Nowhere.md', passageDigest: await digestPassage('X') };
     expect((await sealCitationPassage(vault, missingWithDigest, HOME)).outcome).toBe('dropped');
   });
+
+  // ol-egov.141.89.5.106 ([D-567]): a declared lecture transcript keeps the part digest generation
+  // named; an ordinary note is sealed exactly as above. Invented text ("course A").
+  describe('a declared Markdown transcript (ol-egov.141.89.5.106)', () => {
+    const TRANSCRIPT = 'Course A/Lecture 1/transcript.md';
+    const PART =
+      'First invented sentence of the part.\n\nSecond invented paragraph of the same part.';
+    const declared = (role: string): string =>
+      `---\nrole: ${role}\n---\n\n${PART}\n\nA later part, about something else entirely.\n`;
+
+    it('leaves a part digest as drafted, though no single note passage has that text', async () => {
+      const vault = new OneFileVault({ [TRANSCRIPT]: declared('lecture transcript') });
+      const citation = {
+        sourcePath: TRANSCRIPT,
+        page: 1,
+        passageDigest: await digestPassage(PART),
+      };
+      expect(await sealCitationPassage(vault, citation, HOME)).toEqual({
+        citation,
+        outcome: 'kept',
+      });
+    });
+
+    it('mints nothing for a declared transcript whose citation names no part', async () => {
+      const vault = new OneFileVault({
+        [TRANSCRIPT]: `---\nrole: transcript\n---\n\nOne invented paragraph only.\n`,
+      });
+      const citation = { sourcePath: TRANSCRIPT, page: 1 };
+      expect(await sealCitationPassage(vault, citation, HOME)).toEqual({
+        citation,
+        outcome: 'not-applicable',
+      });
+    });
+
+    it('seals an ordinary Markdown note exactly as before: the same digest is dropped, a sole passage is minted', async () => {
+      const vault = new OneFileVault({ [TRANSCRIPT]: declared('lecture notes') });
+      const drafted = { sourcePath: TRANSCRIPT, page: 1, passageDigest: await digestPassage(PART) };
+      const dropped = await sealCitationPassage(vault, drafted, HOME);
+      expect(dropped.outcome).toBe('dropped');
+      expect(dropped.citation.passageDigest).toBeUndefined();
+
+      const single = new OneFileVault({
+        [TRANSCRIPT]: '---\nrole: notes\n---\n\nOne paragraph.\n',
+      });
+      const minted = await sealCitationPassage(single, { sourcePath: TRANSCRIPT, page: 1 }, HOME);
+      expect(minted.outcome).toBe('minted');
+      expect(minted.citation.passageDigest).toBe(await digestPassage('One paragraph.'));
+    });
+  });
 });

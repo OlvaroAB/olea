@@ -56,6 +56,7 @@
  */
 
 import { RELOCATION_NEAR_MATCH_FLOOR } from '../concept/revision/relocate.js';
+import { resolveTranscriptFormat } from '../extract/transcript.js';
 import { hashText } from '../ingestion/hash.js';
 import type { InstrumentCitation } from '../instrument/citation-store.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
@@ -405,7 +406,8 @@ export const PASSAGE_RESEMBLANCE_FLOOR = RELOCATION_NEAR_MATCH_FLOOR;
  *  - `not-applicable`: the cited source is not a separate markdown note in the vault (a PDF, the
  *    instrument's own note, an unreadable file), so there is nothing to segment and the citation is
  *    returned exactly as it came;
- *  - `kept`: a digest the caller supplied resolves to exactly one passage of the source;
+ *  - `kept`: a digest the caller supplied resolves to exactly one passage of the source, or the
+ *    source is a declared lecture transcript, whose part digest is left as drafted;
  *  - `minted`: none was supplied and the source has exactly one body passage, so the digest is that
  *    passage's;
  *  - `dropped`: a digest was supplied but does not resolve to exactly one passage now (ambiguous,
@@ -455,6 +457,19 @@ export async function sealCitationPassage(
     text = await vault.read(source);
   } catch {
     return { citation, outcome: 'not-applicable' };
+  }
+
+  // `ol-egov.141.89.5.106` ([D-567]): a declared lecture transcript (recognised as the reader does,
+  // `resolveTranscriptFormat`) is not a note. Its citation names a transcript PART, a digest of
+  // that part's spoken text, which this note segmentation cannot find (a part is usually several
+  // paragraphs), so the digest stays as drafted; none is minted for it either. Generation already
+  // decided whether a part is named (`pipeline.ts` `withTranscriptPart`), and the transcript
+  // seeding reads a digest naming no part as the whole transcript.
+  if (resolveTranscriptFormat(source, text).kind === 'transcript') {
+    return {
+      citation,
+      outcome: citation.passageDigest === undefined ? 'not-applicable' : 'kept',
+    };
   }
 
   if (citation.passageDigest !== undefined) {

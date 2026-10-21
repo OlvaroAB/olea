@@ -84,7 +84,9 @@ export interface ExtractedUnitSink {
    * `sourceRevisions` (`ol-egov.141.89.5.73`, [D-515]): `sourcePath -> SHA-256 hex of the exact
    * bytes that source's units were extracted from`, one entry per extracted non-markdown source
    * (standalone, or embedded in a note), computed from the single read extraction already makes.
-   * Absent from callers that do not extract a file (transcripts); never persisted.
+   * A transcript landing passes the bytes hash of the transcript file under its path too
+   * (`ol-egov.141.89.5.97`, client 85351b21), so a citation can record the version it was drafted
+   * from. Absent from callers that read no file; never persisted.
    */
   receive(
     units: readonly ExtractedUnit[],
