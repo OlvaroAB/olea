@@ -11,6 +11,7 @@
  */
 import type { AssessmentRecord, QuestionBlock, TextPaperQuestionGrouping } from 'olea-core';
 import { segmentPastPaper } from 'olea-core';
+import { nearestAssessmentAhead } from 'olea-core/src/assessment/nearest-ahead.js';
 import { describe, expect, it } from 'vitest';
 import {
   buildFormatMatch,
@@ -113,6 +114,26 @@ describe('passagesFromMarkdown', () => {
 
   it('returns no passages for a body with no content after frontmatter', () => {
     expect(passagesFromMarkdown('---\nrole: objectives\n---\n\n')).toEqual([]);
+  });
+});
+
+describe("nearestUpcomingAssessment shares core's one reading (ol-egov.141.89.105.15)", () => {
+  it('answers identically to nearestAssessmentAhead over due today, passed yesterday, none ahead, two ahead', () => {
+    const today = '2026-09-02';
+    const tables: readonly (readonly AssessmentRecord[])[] = [
+      [assessment({ path: 'today.md', due: today })],
+      [assessment({ path: 'past.md', due: '2026-09-01' })],
+      [],
+      [
+        assessment({ path: 'essay.md', type: 'Essay', due: '2026-09-30' }),
+        assessment({ path: 'quiz.md', type: 'Quiz', due: '2026-09-10' }),
+      ],
+    ];
+    for (const records of tables) {
+      expect(nearestUpcomingAssessment('COGS214', records, today)).toBe(
+        nearestAssessmentAhead(records, 'COGS214', today)?.record,
+      );
+    }
   });
 });
 

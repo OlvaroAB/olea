@@ -17,11 +17,15 @@
  * let one ingestion event spend a large, unpredictable share of the day's
  * generative budget before anything else — a session build, an explain-back
  * grading call — gets a turn. Bounding the sweep converts an unpredictable
- * burst into a small, repeatable unit of work: the next sweep (the same
- * `INGESTION_TICK_INTERVAL_MS` cadence `main.ts` already runs) picks up
+ * burst into a small, repeatable unit of work: the next sweep picks up
  * where this one stopped, because an undrafted concept is simply revisited
  * next time (`pipeline.ts`'s dedupe check only skips concepts that already
- * have a cache record). F3.7 rules out ever *skipping* a concept for being
+ * have a cache record). **A sweep runs only when material lands** (an ingested
+ * unit batch or a materially changed authored note, both through `main.ts`'s
+ * `onUnitsLanded`, which the arrival watch also feeds); the 30-second
+ * `INGESTION_TICK_INTERVAL_MS` tick runs no sweep. So a course's concepts
+ * beyond this cap wait for that course's next landing, not for the next tick.
+ * F3.7 rules out ever *skipping* a concept for being
  * low-priority; this constant only orders *when* it gets its turn, which is
  * exactly what F3.7 asks mastery/yield to decide upstream of this — this
  * pipeline does not do that ordering itself yet (see `pipeline.ts`'s module

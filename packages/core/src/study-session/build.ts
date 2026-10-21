@@ -196,6 +196,7 @@
  */
 
 import { firstKindForFormatClass } from '../assessment/first-kind.js';
+import { nearestAssessmentAhead } from '../assessment/nearest-ahead.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSizeBand } from '../concept/size.js';
 import { daysBetween } from '../dates.js';
@@ -853,22 +854,11 @@ function nextAssessmentOf(
   for (const record of assessments ?? []) byPath.set(record.path, record);
   const courses = new Set(rows.map((row) => row.course));
 
-  let soonest: AssessmentRecord | null = null;
-  let soonestDays = Number.POSITIVE_INFINITY;
-  for (const record of assessments ?? []) {
-    if (record.course === undefined || !courses.has(record.course)) continue;
-    const days = daysUntilDue(asOf, record.due);
-    if (days === null || days < 0) continue;
-    const closer =
-      days < soonestDays ||
-      // Deterministic tiebreak on the same day, so two assessments due together
-      // do not depend on the order the Base was read in.
-      (days === soonestDays && soonest !== null && record.path < soonest.path);
-    if (soonest === null || closer) {
-      soonest = record;
-      soonestDays = days;
-    }
-  }
+  // The shared reading (`../assessment/nearest-ahead.ts`, `ol-egov.141.89.105.15`): soonest
+  // not-yet-passed, a same-day tie by path. The no-future fallback below stays here.
+  const ahead = nearestAssessmentAhead(assessments ?? [], courses, asOf);
+  const soonest = ahead?.record ?? null;
+  const soonestDays = ahead?.daysUntil ?? 0;
 
   if (soonest !== null) {
     return {

@@ -11,10 +11,12 @@
  */
 
 import { describe, expect, it } from 'vitest';
+import { nearestAssessmentAhead } from '../assessment/nearest-ahead.js';
 import type { AssessmentRecord } from '../assessment/types.js';
 import type { ConceptSize } from '../concept/size.js';
 import type { GapClass, GapRow } from '../gap/build.js';
 import type { AssessmentFormat } from '../gap/readiness.js';
+import { assessmentFormatOf } from '../gap/readiness.js';
 import { createFsrsScheduler } from '../scheduler/fsrs-scheduler.js';
 import {
   DEDUPE_DEFERRAL_INTERVAL_MULTIPLIER,
@@ -1015,6 +1017,42 @@ describe('assessment-format matching (F4.8)', () => {
     expect(session.formatPreference).toBe('recall-style');
     expect(session.items.map((i) => i.instrumentId)).toEqual(['a-mcq', 'a-qa']);
     expect(session.items.map((i) => i.formatMatch)).toEqual(['preferred-format', 'other-format']);
+  });
+
+  it('reads the nearest assessment through the shared function (ol-egov.141.89.105.15): due today counts, passed yesterday does not, none ahead falls to the top row, two ahead take the sooner', () => {
+    const rows = rankedRows([{ conceptName: 'A', gapScore: 9, assessmentFormat: 'written' }]);
+    const run = (assessments: readonly AssessmentRecord[]) =>
+      buildStudySession({
+        rows,
+        instruments: buildConceptInstrumentIndex([mcq('a-mcq', ['A']), qa('a-qa', ['A'])]),
+        budgetMinutes: 20,
+        durations: flatDurations(60),
+        asOf: AS_OF,
+        assessments,
+      });
+    const cases: readonly (readonly [string, readonly AssessmentRecord[]])[] = [
+      ['due today', [assessment('x/today.md', { type: 'Quiz', due: AS_OF })]],
+      ['passed yesterday', [assessment('x/past.md', { type: 'Quiz', due: '2026-09-13' })]],
+      ['none ahead', []],
+      [
+        'two ahead, different classes',
+        [
+          assessment('x/essay.md', { type: 'Essay', due: '2026-09-30' }),
+          assessment('x/quiz.md', { type: 'Quiz', due: '2026-09-20' }),
+        ],
+      ],
+    ];
+    for (const [, assessments] of cases) {
+      const shared = nearestAssessmentAhead(assessments, new Set(['CRS101']), AS_OF);
+      const session = run(assessments);
+      if (shared === null) {
+        expect(session.nextAssessment?.daysUntil ?? null).toBeNull();
+      } else {
+        expect(session.nextAssessment?.assessmentPath).toBe(shared.record.path);
+        expect(session.nextAssessment?.daysUntil).toBe(shared.daysUntil);
+        expect(session.formatPreference).toBe(assessmentFormatOf(shared.record.type));
+      }
+    }
   });
 
   it('a practical course prefers the card too ([D-550]); a recall-style course is unchanged (MCQ first)', () => {
