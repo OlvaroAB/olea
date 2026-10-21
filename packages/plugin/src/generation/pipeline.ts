@@ -46,9 +46,10 @@
  * problem, out of scope) — a course-wide "what's still undrafted" sweep,
  * re-run every tick, converges on the same set eventually and is a correct,
  * if coarse-grained, reading of F3.3's "when material lands" for a first
- * build. F3.7's mastery/yield ORDERING is not implemented here either — see
- * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` doc for why a small cap bounds
- * that gap's cost rather than needing to close it in this bead.
+ * build. F3.7's mastery/yield ORDERING reaches the sweep through the optional
+ * `deps.drainOrderFor` (`[D-368]`: need, then expected yield, the rotation as the
+ * tie-break); with it absent the order is the rotation, and the small cap in
+ * `constants.ts`'s `MAX_CONCEPTS_PER_SWEEP` bounds the cost of that gap.
  *
  * **A refused concept gets no cache entry, by construction (F4.5's
  * grounded-by-construction argument).** `draftQuizCardsForConcept` already
@@ -210,6 +211,7 @@
 import type {
   ConceptRecord,
   ExtractedUnit,
+  GenerationJobPayload,
   GroundingRefusalReason,
   InstrumentCitation,
   KnowledgeKindClassification,
@@ -234,6 +236,7 @@ import {
 // intent for this sweep and no other path; `packages/core/src/routing/demand-ask-callers.spec.ts`
 // pins its callers by source text), so this one import stays a deliberate deep one.
 import { SWEEP_RECALL_ASK } from 'olea-core/src/routing/demand-ask.js';
+import type { GenerationPrioritySignal } from '../ingestion/wiring.js';
 import { describeRefusal, type RefusalCopy } from '../retrieval/draft-cards-copy.js';
 import type {
   DraftQuizCardsDeps,
@@ -329,6 +332,16 @@ export interface GenerationPipelineDeps {
    * today. There is no quota, no per-concept kind and no cloze generator here (`[D-439]`).
    */
   readonly kindInputsFor?: (courseCode: string) => PrimaryKindInput;
+  /**
+   * `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): the drain-order reading the sweep orders a course's
+   * candidates by when it spends the per-sweep cap, the same reading the queue drains by
+   * (`createGenerationPrioritySource(...).priority`, current need then expected yield). Higher need
+   * is asked first, then higher expected yield, and a full tie keeps the rotation below. It
+   * orders and never selects: every undrafted concept is still asked up to the cap (`[D-549]`).
+   * Optional; absent, or answering `null` for any candidate of a course (no reading composed yet),
+   * the course keeps the rotation exactly as before. No composition root supplies it today.
+   */
+  readonly drainOrderFor?: (payload: GenerationJobPayload) => GenerationPrioritySignal | null;
   /** What `cards.generate.v1` drafting needs — the card-shaped sibling of `draftDeps`. See `kindInputsFor`. */
   readonly cardDraftDeps?: DraftCardsDeps;
   /** Defaults to the real `draftCardsForConcept`; injected so a test needs no Worker. */
@@ -997,6 +1010,38 @@ async function digestOfPath(vault: VaultSource, path: string): Promise<string> {
 }
 
 /**
+ * `[D-368]`'s order over a course's already-rotated candidates: higher `need` first, then higher
+ * `expectedYield`, equal readings keeping their given (rotation) order. Returns the input
+ * unchanged when no reading is composed or any candidate has none.
+ */
+function drainOrdered(
+  rotated: readonly ConceptRecord[],
+  drainOrderFor: ((payload: GenerationJobPayload) => GenerationPrioritySignal | null) | undefined,
+  courseCode: string,
+  instrumentKind: 'mcq' | 'qa',
+): readonly ConceptRecord[] {
+  if (drainOrderFor === undefined) return rotated;
+  const keyed: { candidate: ConceptRecord; signal: GenerationPrioritySignal }[] = [];
+  for (const candidate of rotated) {
+    const signal = drainOrderFor({
+      kind: 'generation',
+      courseCode,
+      conceptKey: candidate.key,
+      conceptName: candidate.name,
+      instrumentKind,
+      trigger: 'arrival',
+    });
+    if (signal === null) return rotated;
+    keyed.push({ candidate, signal });
+  }
+  return keyed
+    .sort(
+      (a, b) => b.signal.need - a.signal.need || b.signal.expectedYield - a.signal.expectedYield,
+    )
+    .map((entry) => entry.candidate);
+}
+
+/**
  * Runs one sweep over the units one ingestion job just produced (or, when a
  * caller wants a course-wide catch-up, any batch of previously-accumulated
  * units — see `wiring.ts`). Never throws: a drafting call's own failure
@@ -1116,6 +1161,16 @@ export async function runGenerationSweep(
         courseDraftsCards,
       ),
     );
+    // `[D-368]` / F3.7 (`ol-egov.141.89.105.21`): with a drain-order reading composed, the cap goes
+    // to the higher current need first, then the higher expected yield; the rotation above is the
+    // tie-break (a stable sort over it). Without one, or if any candidate has no reading, the
+    // rotation stands untouched.
+    const visitOrder = drainOrdered(
+      rotated,
+      deps.drainOrderFor,
+      courseCode,
+      courseDraftsCards ? 'qa' : 'mcq',
+    );
     // F4.8 "Scope of the match": the register is the matched instrument's alone. A written course
     // still drafting multiple choice (no card supplier, or the kind not composed) asks as if
     // unmatched, so its quiz carries neither `purpose` nor `registerHint`.
@@ -1210,7 +1265,7 @@ export async function runGenerationSweep(
       });
     }
 
-    for (const candidate of rotated) {
+    for (const candidate of visitOrder) {
       if (attempted >= MAX_CONCEPTS_PER_SWEEP) break;
       if (!candidate.courses.includes(courseCode)) continue;
       if (held.has(candidate.key)) continue;
