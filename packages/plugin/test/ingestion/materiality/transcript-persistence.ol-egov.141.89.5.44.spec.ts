@@ -311,12 +311,16 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
   // reading record keeps no part text or digest (`core/src/ingestion/unit-manifest/records.ts`, the
   // `enumerated` record holds `pages` only), and the previous bytes are gone, so nothing persisted
   // can say which new part equals which old one.
-  async function correctedAfterReading(restart: boolean) {
-    const vault = await lectureVault();
+  async function correctedAfterReading(
+    restart: boolean,
+    before: readonly string[] = LECTURE,
+    after: readonly string[] = corrected(),
+  ) {
+    const vault = await lectureVault(before);
     const first = await ingestionSession(new FakeDataHost(), vault, DAY_ONE);
     await first.manifests.manifestsFor([T]);
     await first.manifests.recordConceptExtraction([T]);
-    vault.files.set(T, transcriptOf(corrected()));
+    vault.files.set(T, transcriptOf(after));
     let store = first.manifests;
     if (restart) {
       store = (await ingestionSession(new FakeDataHost(), vault, DAY_TWO)).manifests;
@@ -327,7 +331,7 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
     return manifest?.entries.map((entry) => [entry.page, entry.conceptExtractionState]);
   }
 
-  it.fails('C4 [not built: the carry rule, unit-manifest-store.ts:349-419] within one session, unchanged parts keep their concept-extraction state', async () => {
+  it('C4, the carry rule: within one session, unchanged parts keep their concept-extraction state and the changed part is read again', async () => {
     expect(await correctedAfterReading(false)).toEqual([
       [1, 'complete'],
       [2, 'complete'],
@@ -338,13 +342,44 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
     ]);
   });
 
-  it.fails('C4 [needs a persisted change: no part identity in the reading record] across a restart, unchanged parts keep their concept-extraction state', async () => {
+  it('C4, across a restart: nothing persisted maps old parts to new, so every part is read again (a reversible default, no persisted part-digest list)', async () => {
     expect(await correctedAfterReading(true)).toEqual([
+      [1, 'not-started'],
+      [2, 'not-started'],
+      [3, 'not-started'],
+      [4, 'not-started'],
+      [5, 'not-started'],
+      [6, 'not-started'],
+    ]);
+  });
+
+  it("C4, parts are matched by their text and never by their number: a part that moved keeps its state, and the changed part does not inherit its neighbour's", async () => {
+    const group = (p: number): string[] => [...partCues(p)];
+    const changed = group(2).map((c, i) =>
+      i === 0 ? c.replace(inventedWord(3 * 40 + 3 + 17), inventedWord(4000)) : c,
+    );
+    const after = [...group(1), ...group(3), ...changed, ...group(4), ...group(5), ...group(6)];
+    expect(await correctedAfterReading(false, LECTURE, after)).toEqual([
       [1, 'complete'],
       [2, 'complete'],
-      [3, 'complete'],
-      [4, 'not-started'],
+      [3, 'not-started'],
+      [4, 'complete'],
       [5, 'complete'],
+      [6, 'complete'],
+    ]);
+  });
+
+  it('C4, two parts with the same text in the previous version: neither is carried, both are read again', async () => {
+    const group = (p: number): string[] => [...partCues(p)];
+    const before = [...group(1), ...group(2), ...group(3), ...group(4), ...group(2), ...group(6)];
+    const after = [...before];
+    after[0] = after[0]?.replace(inventedWord(0 * 40 + 3 + 17), inventedWord(4000)) as string;
+    expect(await correctedAfterReading(false, before, after)).toEqual([
+      [1, 'not-started'],
+      [2, 'not-started'],
+      [3, 'complete'],
+      [4, 'complete'],
+      [5, 'not-started'],
       [6, 'complete'],
     ]);
   });
