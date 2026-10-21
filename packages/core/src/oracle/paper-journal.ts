@@ -25,10 +25,17 @@
  * of partial paper there is. A paper with holes because the service was down does not exist.
  *
  * **What the journal stores, and what it does not.** Slot outcomes as they land, the slot plan (ids,
- * concept, task, dependencies), the fingerprint and its digest, and the length the plan was made at
- * (`PaperJournalExtent`, `[D-548]`). It stores no `sourceChunks` and no copy of her material: the
- * resumed request recomposes the blueprint at that length (deterministic for a matching
- * fingerprint) and this journal supplies only what already landed. Landed items are the generated
+ * concept, task, dependencies), the fingerprint and its digest, the length the plan was made at
+ * (`PaperJournalExtent`, `[D-548]`), and, for a paper written in its structured form, the structure
+ * the plan was made on (`PaperJournalRecord.structure`, `[D-560]`, journal version 2: "an
+ * unfinished paper always resumes on its own structure, even if her past-paper reading changes").
+ * A journal without one (every version-1 journal, and a flat paper's) reads as flat and resumes
+ * flat; a recorded structure that is not the shape it claims, or that its own plan disagrees with,
+ * is refused (`isPaperJournalRecord`). The structure holds the paper's own labels and the held
+ * stimulus a group was given by source and chunk index, never a passage's text. It stores no
+ * `sourceChunks` and no copy of her material: the resumed request recomposes the blueprint at that
+ * length (deterministic for a matching fingerprint) and this journal supplies only what already
+ * landed. Landed items are the generated
  * items the finished paper would hold anyway. One JSON file per journal, under the paper store's own
  * folder (`.olea/papers/journals/`), so the F7.4 export and full delete already carry it, and it is
  * never read as a paper (`isPaperRecord` refuses it: no `compositionAccount`, no `items`).
@@ -72,6 +79,7 @@ import {
 import {
   classifyPaperCompletion,
   comparePaperReuseFingerprints,
+  isRecordedPaperStructuredShape,
   paperBlueprintDigest,
 } from './paper-structure.js';
 import type {
@@ -89,8 +97,15 @@ export const PAPER_JOURNAL_FOLDER: VaultPath = `${PAPER_STORE_FOLDER}/journals`;
 /** Marks every id minted here — greppable, distinct from `OPAQUE_PAPER_ID_PREFIX`. */
 export const OPAQUE_PAPER_JOURNAL_ID_PREFIX = 'paper-journal-key1';
 
-/** Bumped only on a breaking change to `PaperJournalRecord`. */
+/** Bumped only on a breaking change to `PaperJournalRecord`. A journal without a recorded structure carries it. */
 export const PAPER_JOURNAL_SCHEMA_VERSION = 1;
+
+/**
+ * `[D-560]`: the version a journal carries when it records the structure its plan was made on.
+ * Additive over version 1, as `./paper-store.ts`'s structured record is over its own: a flat
+ * journal keeps version 1 and reads exactly as before.
+ */
+export const PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION = 2;
 
 /**
  * DECLARED, never fitted: a slot is retried once when the service is unavailable (`[D-430]` part 3:
@@ -163,6 +178,13 @@ export interface PaperJournalRecord {
   readonly plan: readonly PaperJournalPlanSlot[];
   /** `[D-548]`: the length the plan was made at. Absent on a journal opened before it was recorded (see `PaperJournalExtent`). */
   readonly extent?: PaperJournalExtent;
+  /**
+   * `[D-560]`: the structure the plan was made on, for a paper written in its structured form
+   * (journal version 2). Its parts are the plan's slots and the parts its plan-time empty slots
+   * name; each plan slot's dependencies are its part's stated ones. Absent: a flat paper (every
+   * version-1 journal reads so), which resumes flat.
+   */
+  readonly structure?: PaperStructuredShape;
   /** Keyed by slot id; a slot with no entry has not been attempted. */
   readonly outcomes: Readonly<Record<string, PaperJournalSlotOutcome>>;
   readonly status: PaperJournalStatus;
@@ -187,6 +209,7 @@ export type PaperJournalEvent =
       readonly blueprintDigest: string;
       readonly plan: readonly PaperJournalPlanSlot[];
       readonly extent?: PaperJournalExtent;
+      readonly structure?: PaperStructuredShape;
     })
   | (JournalEventCommon & {
       readonly kind: 'slot-landed';
@@ -239,9 +262,13 @@ export function applyPaperJournalEvent(
       blueprintDigest: event.blueprintDigest,
       plan: event.plan,
       ...(event.extent !== undefined ? { extent: event.extent } : {}),
+      ...(event.structure !== undefined ? { structure: event.structure } : {}),
       outcomes: {},
       status: 'open',
-      schemaVersion: PAPER_JOURNAL_SCHEMA_VERSION,
+      schemaVersion:
+        event.structure !== undefined
+          ? PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION
+          : PAPER_JOURNAL_SCHEMA_VERSION,
     };
   }
   if (existing === undefined || existing.status !== 'open') return existing;
@@ -312,7 +339,33 @@ function isPaperJournalExtent(value: unknown): value is PaperJournalExtent {
   );
 }
 
-/** Runtime validation, shallow like `isPaperRecord`. Refuses a paper record: a journal has a `plan` and `outcomes`, a paper has `items`. */
+/**
+ * `[D-560]`: a recorded structure agrees with its own plan — every plan slot is one of its parts,
+ * listing exactly the dependencies that part states (none for an unknown one). The plan's other
+ * fields are the version-1 journal's own and are read as before.
+ */
+function planAgreesWithStructure(
+  plan: readonly unknown[],
+  structure: PaperStructuredShape,
+): boolean {
+  const partBySlot = new Map(structure.parts.map((part) => [part.slotId, part] as const));
+  return plan.every((entry) => {
+    if (typeof entry !== 'object' || entry === null) return false;
+    const slot = entry as Record<string, unknown>;
+    const part = typeof slot.slotId === 'string' ? partBySlot.get(slot.slotId) : undefined;
+    if (part === undefined || !Array.isArray(slot.dependsOnSlotIds)) return false;
+    const stated = part.dependsOn.status === 'stated' ? part.dependsOn.onSlotIds : [];
+    return canonicalJson(slot.dependsOnSlotIds) === canonicalJson(stated);
+  });
+}
+
+/**
+ * Runtime validation, shallow like `isPaperRecord` for the version-1 fields. Refuses a paper record:
+ * a journal has a `plan` and `outcomes`, a paper has `items`. **A recorded structure is checked in
+ * full** (`[D-560]`): version 2 must carry one, a structure is carried only at version 2, and it must
+ * be the shape it claims (`isRecordedPaperStructuredShape`) and agree with the journal's plan.
+ * Anything else is refused, so a journal is never resumed on a structure this build cannot read.
+ */
 export function isPaperJournalRecord(value: unknown): value is PaperJournalRecord {
   if (typeof value !== 'object' || value === null) return false;
   const v = value as Record<string, unknown>;
@@ -330,7 +383,12 @@ export function isPaperJournalRecord(value: unknown): value is PaperJournalRecor
     return false;
   if (v.status !== 'open' && v.status !== 'completed' && v.status !== 'discarded') return false;
   if (typeof v.schemaVersion !== 'number') return false;
-  return true;
+  if (v.structure === undefined) return v.schemaVersion !== PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION;
+  return (
+    v.schemaVersion === PAPER_JOURNAL_STRUCTURED_SCHEMA_VERSION &&
+    isRecordedPaperStructuredShape(v.structure) &&
+    planAgreesWithStructure(v.plan, v.structure)
+  );
 }
 
 /** Every valid journal under `.olea/papers/journals/`. A corrupt or unreadable file is skipped, never thrown on. */
@@ -432,6 +490,14 @@ export interface OpenPaperJournalInput {
    * composition again at the recorded one before it calls (`PaperJournalExtent`).
    */
   readonly extent?: PaperJournalExtent;
+  /**
+   * `[D-560]`: the structure `plan` was made on, recorded on a journal this call opens (version 2).
+   * An open journal is resumed only when its recorded structure is this one, or both are absent: a
+   * different structure under a matching fingerprint is named a structure change, as a different
+   * plan is. A caller that wants an unfinished paper kept on its own structure plans the
+   * composition again on the recorded one before it calls.
+   */
+  readonly structure?: PaperStructuredShape;
 }
 
 export type PaperJournalOpenDecision = 'fresh' | 'resumed' | 'discarded-and-fresh';
@@ -467,7 +533,8 @@ export async function openPaperJournal(
 ): Promise<PaperJournalOpenResult> {
   assertDependencyOrder(input.plan);
   const blueprintDigest = await paperBlueprintDigest(input.fingerprint);
-  const planText = canonicalJson(input.plan);
+  // The plan and its structure (`[D-560]`; none for a flat paper) are compared as one.
+  const planText = canonicalJson({ plan: input.plan, structure: input.structure ?? null });
 
   const openForCourse = (await listPaperJournals(vault))
     .map((entry) => entry.record)
@@ -478,7 +545,8 @@ export async function openPaperJournal(
   let resumed: PaperJournalRecord | undefined;
   for (const record of openForCourse) {
     const comparison = comparePaperReuseFingerprints(record.fingerprint, input.fingerprint);
-    const samePlan = canonicalJson(record.plan) === planText;
+    const samePlan =
+      canonicalJson({ plan: record.plan, structure: record.structure ?? null }) === planText;
     if (resumed === undefined && comparison.compatible && samePlan) {
       resumed = record;
       continue;
@@ -518,6 +586,7 @@ export async function openPaperJournal(
     blueprintDigest,
     plan: input.plan,
     ...(input.extent !== undefined ? { extent: input.extent } : {}),
+    ...(input.structure !== undefined ? { structure: input.structure } : {}),
   });
   if (opened === undefined)
     throw new Error('openPaperJournal: an opened event produced no journal');
@@ -791,6 +860,7 @@ export interface FinalizePaperFromJournalInput {
   readonly compositionAccount: PaperCompositionAccount;
   /** The empty slots the blueprint itself decided before any call (rank exclusion, unserved demand, no held source, no held stimulus): recomputed by the resumed request, identical for a matching fingerprint. */
   readonly planTimeEmptySlots: readonly PaperEmptySlot[];
+  /** The paper's structure. Omitted: the structure the journal recorded (`[D-560]`), or none for a flat journal. */
   readonly structure?: PaperStructuredShape;
 }
 
@@ -849,6 +919,7 @@ export async function finalizePaperFromJournal(
     }
   }
   const emptySlots = [...input.planTimeEmptySlots, ...journalEmpties];
+  const structure = input.structure ?? journal.structure;
 
   const create: CreatePaperInput = {
     course: journal.course,
@@ -858,7 +929,7 @@ export async function finalizePaperFromJournal(
     emptySlots,
     completion: classifyPaperCompletion(emptySlots),
     journalId,
-    ...(input.structure !== undefined ? { structure: input.structure } : {}),
+    ...(structure !== undefined ? { structure } : {}),
   };
   const paper = await createPaper(vault, create, options);
   journal = await appendJournalEvent(vault, journal, {

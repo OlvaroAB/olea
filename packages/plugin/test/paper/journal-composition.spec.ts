@@ -19,6 +19,7 @@
  * port. Synthetic ids and concept names only (INV-3).
  */
 
+import { AUTHORING_EARLIER_PART_MAX_CHARS } from 'olea-contracts';
 import {
   type BuildPaperBlueprintInput,
   buildPaperBlueprint,
@@ -30,17 +31,23 @@ import {
   type PaperBlueprint,
   type PaperItemGenerationRequest,
   type PaperRecoveredStructure,
+  type PaperStructureTemplate,
+  type WorkerTaskRequest,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
-import type {
-  PaperItemPortOutcome,
-  PaperSlotOutcomePort,
+import {
+  createWorkerPaperSlotOutcomePort,
+  type PaperItemPortOutcome,
+  type PaperSlotOutcomePort,
 } from '../../src/oracle/paper-item-port.js';
 import { buildBlueprintInputForCourse } from '../../src/paper/assemble.js';
+import { INCOMPLETE_PAPER_SENTENCE, omittedPartLine } from '../../src/paper/copy.js';
 import {
   composePaperThroughJournal,
   type PaperCompositionScope,
+  type PaperStimulusLookup,
 } from '../../src/paper/journal-composition.js';
+import { buildReadyStateFromRecord } from '../../src/paper/provider.js';
 import { memoryVault } from '../review/memory-vault.js';
 
 const COURSE = 'COURSEA';
@@ -772,5 +779,719 @@ describe('an unfinished paper resumes on the plan it started with ([D-548])', ()
       (entry) => entry.record.status === 'discarded',
     );
     expect(discarded.map((entry) => entry.record.discard?.changed)).toEqual([['authoringSpec']]);
+  });
+});
+
+/**
+ * `ol-egov.141.89.7.93` (`[D-559]`, `[D-560]`, `[D-561]`, `[D-562]`, David 2026-10-21): the paper
+ * written in its structured form from her stored reading. Scenarios: features/F4-oracle.md, under
+ * "F4.11 — The structured, resumable practice paper", tagged `@auto:plugin/paper/journal-composition.spec`.
+ * Course A and course B are synthetic. Course A's stored reading: question 1 with parts 1(a) and
+ * 1(b), 1(b) building on 1(a); question 2 on a shared table, parts 2(a) and 2(b). Its sections plan
+ * four questions, so the paper takes all four parts.
+ */
+describe('the practice paper is written in its structured form from her stored reading ([D-559])', () => {
+  const TEMPLATE: PaperStructureTemplate = {
+    groups: [
+      {
+        id: 'q1',
+        kind: 'parent-question',
+        label: 'Question 1',
+        memberLabels: ['1(a)', '1(b)'],
+        anchor: { unitIndex: 1 },
+        stimulus: { status: 'none' },
+      },
+      {
+        id: 'q2',
+        kind: 'shared-stimulus',
+        label: 'Use the table',
+        memberLabels: ['2(a)', '2(b)'],
+        anchor: { unitIndex: 4 },
+        stimulus: { status: 'identified', form: 'table', anchor: { unitIndex: 4 } },
+      },
+    ],
+    parts: [
+      {
+        id: 'p1a',
+        label: '1(a)',
+        groupId: 'q1',
+        questionForm: 'short answer',
+        marks: { status: 'stated', value: 2 },
+        dependsOn: { status: 'unknown' },
+      },
+      {
+        id: 'p1b',
+        label: '1(b)',
+        groupId: 'q1',
+        questionForm: 'short answer',
+        marks: { status: 'unknown' },
+        dependsOn: { status: 'stated', onPartIds: ['p1a'] },
+      },
+      {
+        id: 'p2a',
+        label: '2(a)',
+        groupId: 'q2',
+        questionForm: 'short answer',
+        marks: { status: 'stated', value: 3 },
+        dependsOn: { status: 'unknown' },
+      },
+      {
+        id: 'p2b',
+        label: '2(b)',
+        groupId: 'q2',
+        questionForm: 'short answer',
+        marks: { status: 'stated', value: 3 },
+        dependsOn: { status: 'unknown' },
+      },
+    ],
+    totalMarks: { status: 'unknown' },
+    timeAllowance: { status: 'unknown' },
+  };
+
+  /** The same paper read again from another sitting: no dependencies, other labels. */
+  const OTHER_TEMPLATE: PaperStructureTemplate = {
+    ...TEMPLATE,
+    groups: TEMPLATE.groups.map((g) => ({ ...g, label: `${g.label}, another sitting` })),
+    parts: TEMPLATE.parts.map((p) => ({ ...p, dependsOn: { status: 'unknown' as const } })),
+  };
+
+  const readingOf = (
+    template: PaperStructureTemplate | undefined,
+    itemCount = 4,
+  ): PaperRecoveredStructure => ({
+    sittingCount: 1,
+    currentCount: 0,
+    historicalCount: 0,
+    sittings: [
+      {
+        regime: 'unknown',
+        sections: [{ label: 'A', questionForm: 'x', itemCount, marks: { status: 'unknown' } }],
+      },
+    ],
+    ...(template !== undefined ? { template } : {}),
+  });
+
+  async function inputOf(
+    structure: PaperRecoveredStructure | null,
+    options: { readonly definitionOf?: (index: number) => string } = {},
+  ): Promise<{ input: BuildPaperBlueprintInput; scope: PaperCompositionScope }> {
+    const concepts = Array.from({ length: 7 }, (_, index) =>
+      concept(index, options.definitionOf?.(index)),
+    );
+    const input = await buildBlueprintInputForCourse(
+      memoryVault(),
+      concepts,
+      [{ course: COURSE, type: 'exam', due: '2026-09-22' }],
+      COURSE,
+      AS_OF,
+      [],
+      structure,
+    );
+    return { input, scope: { eligibleConceptKeys: concepts.map((c) => c.key), outcomes: [] } };
+  }
+
+  /** The provider's call (`provider.ts`): the blueprint, its length, the same composition at another length, and the reading's template. */
+  function composeAsProvider(
+    vault: ReturnType<typeof memoryVault>,
+    composition: { input: BuildPaperBlueprintInput; scope: PaperCompositionScope },
+    port: PaperSlotOutcomePort,
+    stimulusLookup?: PaperStimulusLookup,
+  ) {
+    const { input, scope } = composition;
+    return composePaperThroughJournal({
+      vault,
+      blueprint: buildPaperBlueprint(input),
+      scope,
+      port,
+      options: freshOptions(),
+      extent: {
+        slotCount: extentSlotCountTarget(input.steering?.extent, input.structure),
+        planAt: (slotCount) => buildPaperBlueprint({ ...input, slotCount }),
+      },
+      template: input.structure?.template ?? null,
+      ...(stimulusLookup !== undefined ? { stimulusLookup } : {}),
+    });
+  }
+
+  /** A quiz item whose question and answer name its concept, so a dependent part's context is checkable. */
+  const quizGenerated = (request: PaperItemGenerationRequest): PaperItemPortOutcome => ({
+    status: 'generated',
+    taskId: request.taskId,
+    promptVersion: 'v1',
+    response: {
+      ok: true,
+      stamp: { promptVersion: 'v1' },
+      result: {
+        questions: [
+          {
+            stem: `A question on ${request.conceptName}`,
+            correctAnswer: `An answer on ${request.conceptName}`,
+            distractors: ['x', 'y', 'z'],
+            feedback: 'f',
+          },
+        ],
+      },
+    },
+  });
+
+  it('her stored reading’s groups and parts shape her paper: the plan records each part in its group with the dependencies the reading states, written in dependency order', async () => {
+    const vault = memoryVault();
+    const scripted = scriptedPort(quizGenerated);
+    const result = await composeAsProvider(
+      vault,
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+    );
+
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    const journal = (await listPaperJournals(vault))[0]?.record;
+    expect(journal?.schemaVersion).toBe(2);
+    // [D-561] (Class B, ol-egov.141.89.7.93): 1(b) builds on 1(a), so it is written on Topic A;
+    // the parts that state no dependency take Topics A to C in ranking order.
+    expect(
+      journal?.plan.map((slot) => [slot.slotId, slot.conceptName, slot.dependsOnSlotIds]),
+    ).toEqual([
+      ['slot-0', 'Topic A', []],
+      ['slot-3', 'Topic A', ['slot-0']],
+      ['slot-1', 'Topic B', []],
+      ['slot-2', 'Topic C', []],
+    ]);
+    expect(journal?.structure?.parts.map((p) => [p.slotId, p.groupId, p.label])).toEqual([
+      ['slot-0', 'q1', '1(a)'],
+      ['slot-3', 'q1', '1(b)'],
+      ['slot-1', 'q2', '2(a)'],
+      ['slot-2', 'q2', '2(b)'],
+    ]);
+    // A dependency the reading does not state adds no order and passes nothing along.
+    expect(journal?.structure?.parts[2]?.dependsOn).toEqual({ status: 'unknown' });
+    expect(scripted.calls.map((call) => call.conceptName)).toEqual([
+      'Topic A',
+      'Topic A',
+      'Topic B',
+      'Topic C',
+    ]);
+    // The item of 1(b) carries Topic A's concept and held source, as its request did.
+    const dependent = result.record.items.find((item) => item.slotId === 'slot-3');
+    expect([dependent?.conceptName, dependent?.heldSourceId]).toEqual([
+      'Topic A',
+      result.record.items.find((item) => item.slotId === 'slot-0')?.heldSourceId,
+    ]);
+    expect(scripted.calls[1]?.sourceChunks).toEqual(scripted.calls[0]?.sourceChunks);
+    expect(result.record.structure).toEqual(journal?.structure);
+    expect(result.record.schemaVersion).toBe(2);
+    expect(result.record.completion).toEqual({ status: 'complete' });
+    // The blueprint's three set aside by rank, then Topic D, whose place 1(b) took: named, never dropped.
+    expect(result.record.emptySlots.map((slot) => [slot.conceptName, slot.reasonCode])).toEqual([
+      ['Topic E', 'rank-excluded'],
+      ['Topic F', 'rank-excluded'],
+      ['Topic G', 'rank-excluded'],
+      ['Topic D', 'rank-excluded'],
+    ]);
+    expect(buildReadyStateFromRecord(COURSE, result.record).incompleteStatement).toBeNull();
+  });
+
+  it('a part built on a part that could not be written is never requested, and the paper lists both with their ruled reasons', async () => {
+    const scripted = scriptedPort((request) =>
+      request.conceptName === 'Topic A'
+        ? { status: 'refused', reason: 'empty-result' }
+        : quizGenerated(request),
+    );
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    expect(scripted.calls.map((call) => call.conceptName)).toEqual([
+      'Topic A',
+      'Topic B',
+      'Topic C',
+    ]);
+    const state = buildReadyStateFromRecord(COURSE, result.record);
+    expect(state.incompleteStatement?.sentence).toBe(INCOMPLETE_PAPER_SENTENCE);
+    expect(INCOMPLETE_PAPER_SENTENCE).toBe(
+      'This paper is incomplete. Some planned questions could not be written.',
+    );
+    // [D-561]: 1(b) is about 1(a)'s concept, so both are listed under Topic A.
+    expect(state.incompleteStatement?.omittedParts.map(omittedPartLine)).toEqual([
+      "Topic A — Olea couldn't write a question on this that stays within your material.",
+      'Topic A — This part builds on an earlier part that could not be written.',
+    ]);
+    expect(result.record.emptySlots.find((slot) => slot.slotId === 'slot-3')).toMatchObject({
+      reasonCode: 'depends-on-empty-part',
+      causedBySlotId: 'slot-0',
+    });
+  });
+
+  it('a group needing a table that none of her material supplies: none of its parts is requested, each is listed no-held-stimulus unless it had a reason of its own', async () => {
+    const asked: string[] = [];
+    const noneHeld: PaperStimulusLookup = async (request) => {
+      asked.push(`${request.groupId}:${request.need.form}:${request.conceptKeys.join(',')}`);
+      return { status: 'none-held' };
+    };
+    // Only topics A and B are held, so Topic C (2(b)) has no held source of its own: it keeps that reason.
+    const scripted = scriptedPort(quizGenerated);
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE), {
+        definitionOf: (index) => (index >= 2 ? '' : `note ${index}`),
+      }),
+      scripted.port,
+      noneHeld,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    // The lookup is asked once, for the concepts the group's parts are written on.
+    expect(asked).toEqual(['q2:table:concept-1,concept-2']);
+    // 1(a), and 1(b) written on 1(a)'s concept ([D-561]).
+    expect(scripted.calls.map((call) => call.conceptName)).toEqual(['Topic A', 'Topic A']);
+    const reasons = Object.fromEntries(
+      result.record.emptySlots
+        .filter((slot) => slot.reasonCode !== 'rank-excluded')
+        .map((slot) => [slot.slotId, slot.reasonCode]),
+    );
+    expect(reasons).toEqual({ 'slot-1': 'no-held-stimulus', 'slot-2': 'no-held-source' });
+    expect(
+      buildReadyStateFromRecord(COURSE, result.record).incompleteStatement?.omittedParts.map(
+        (part) => part.reasonCode,
+      ),
+    ).toEqual(['no-held-stimulus', 'no-held-source']);
+  });
+
+  it('a group whose stimulus Olea has not looked for is never given that reason: it is written without shared material, by default and when the lookup fails', async () => {
+    for (const lookup of [
+      undefined,
+      (async () => {
+        throw new Error('the lookup broke');
+      }) as PaperStimulusLookup,
+    ]) {
+      const scripted = scriptedPort(quizGenerated);
+      const result = await composeAsProvider(
+        memoryVault(),
+        await inputOf(readingOf(TEMPLATE)),
+        scripted.port,
+        lookup,
+      );
+      expect(result.kind === 'finished' && result.record.completion).toEqual({
+        status: 'complete',
+      });
+      expect(scripted.calls).toHaveLength(4);
+      for (const call of scripted.calls) expect('sharedPassage' in call).toBe(false);
+      expect(
+        result.kind === 'finished' &&
+          result.record.emptySlots.some((slot) => slot.reasonCode === 'no-held-stimulus'),
+      ).toBe(false);
+    }
+  });
+
+  it('a group that shares material is requested with the one passage the lookup found, recorded by source and chunk, never its text', async () => {
+    const vault = memoryVault();
+    const held: PaperStimulusLookup = async () => ({
+      status: 'held',
+      stimulus: { form: 'table', sourceId: '01 Courses/COURSEA/Topic 2.md', chunkIndex: 0 },
+      text: 'a synthetic table of values',
+    });
+    const scripted = scriptedPort(quizGenerated);
+    const result = await composeAsProvider(
+      vault,
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+      held,
+    );
+    expect(result.kind).toBe('finished');
+    expect(scripted.calls.map((call) => call.sharedPassage)).toEqual([
+      undefined,
+      undefined,
+      { form: 'table', text: 'a synthetic table of values' },
+      { form: 'table', text: 'a synthetic table of values' },
+    ]);
+    const group = result.kind === 'finished' ? result.record.structure?.groups[1] : undefined;
+    expect(group?.heldStimulus).toEqual({
+      form: 'table',
+      sourceId: '01 Courses/COURSEA/Topic 2.md',
+      chunkIndex: 0,
+    });
+    const journalText = JSON.stringify((await listPaperJournals(vault))[0]?.record);
+    expect(journalText).not.toContain('a synthetic table of values');
+  });
+
+  // ol-egov.141.89.7.93: the wiring step. Synthetic notes and paths only.
+  it('each part of a group given a passage has the passage’s chunk among its own grounding chunks: added when missing, never twice', async () => {
+    // The passage is Topic B's own note, so 2(a) (Topic B) already holds it and 2(b) (Topic C) does not.
+    const passageText = 'her own note on topic 1';
+    const held: PaperStimulusLookup = async () => ({
+      status: 'held',
+      stimulus: { form: 'table', sourceId: '01 Courses/COURSEA/Topic 1.md', chunkIndex: 0 },
+      text: passageText,
+    });
+    const scripted = scriptedPort(quizGenerated);
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+      held,
+    );
+    expect(result.kind).toBe('finished');
+    expect(scripted.calls.map((call) => [call.conceptName, call.sourceChunks])).toEqual([
+      ['Topic A', ['her own note on topic 0']],
+      ['Topic A', ['her own note on topic 0']],
+      ['Topic B', [passageText]],
+      ['Topic C', ['her own note on topic 2', passageText]],
+    ]);
+    for (const call of scripted.calls) {
+      if (call.sharedPassage !== undefined) {
+        expect(call.sourceChunks).toContain(call.sharedPassage.text);
+      }
+    }
+  });
+
+  it('a held passage the contract would refuse is not recorded: the group is written without it, never as none held', async () => {
+    const held: PaperStimulusLookup = async () => ({
+      status: 'held',
+      stimulus: { form: 'table', sourceId: '01 Courses/COURSEA/Topic 1.md', chunkIndex: 0 },
+      text: 't'.repeat(6001),
+    });
+    const scripted = scriptedPort(quizGenerated);
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+      held,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    expect(scripted.calls).toHaveLength(4);
+    for (const call of scripted.calls) expect('sharedPassage' in call).toBe(false);
+    expect(result.record.structure?.groups.every((g) => g.heldStimulus === null)).toBe(true);
+    expect(result.record.completion).toEqual({ status: 'complete' });
+    expect(result.passages).toEqual([]);
+  });
+
+  it('the finished result hands the face each held passage by group, never stored; a flat paper hands none', async () => {
+    const vault = memoryVault();
+    const held: PaperStimulusLookup = async () => ({
+      status: 'held',
+      stimulus: { form: 'table', sourceId: '01 Courses/COURSEA/Topic 1.md', chunkIndex: 0 },
+      text: 'a synthetic table of values',
+    });
+    const result = await composeAsProvider(
+      vault,
+      await inputOf(readingOf(TEMPLATE)),
+      scriptedPort(quizGenerated).port,
+      held,
+    );
+    expect(result.kind === 'finished' && result.passages).toEqual([
+      { groupId: 'q2', text: 'a synthetic table of values' },
+    ]);
+    if (result.kind !== 'finished') return;
+    expect(
+      buildReadyStateFromRecord(COURSE, result.record, { passages: result.passages }).passages,
+    ).toEqual([
+      {
+        groupId: 'q2',
+        text: 'a synthetic table of values',
+        sourceId: '01 Courses/COURSEA/Topic 1.md',
+        slotIds: ['slot-1', 'slot-2'],
+      },
+    ]);
+    const stored = JSON.stringify((await listPaperRecords(vault)).map((entry) => entry.record));
+    expect(stored).not.toContain('a synthetic table of values');
+
+    const flat = await composeAsProvider(
+      memoryVault(),
+      await inputOf(null),
+      scriptedPort(quizGenerated).port,
+      held,
+    );
+    expect(flat.kind === 'finished' && flat.passages).toEqual([]);
+  });
+
+  it('a dependent part whose earlier part has no readable question is never written standalone: it ends generator-refused, and is never requested', async () => {
+    const blankStem = (request: PaperItemGenerationRequest): PaperItemPortOutcome => {
+      const made = quizGenerated(request);
+      if (made.status !== 'generated' || request.earlierParts !== undefined) return made;
+      return request.conceptName === 'Topic A'
+        ? {
+            ...made,
+            response: {
+              ok: true,
+              stamp: { promptVersion: 'v1' },
+              result: {
+                questions: [{ stem: '  ', correctAnswer: 'a', distractors: [], feedback: '' }],
+              },
+            },
+          }
+        : made;
+    };
+    const scripted = scriptedPort(blankStem);
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE)),
+      scripted.port,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    // 1(a), 2(a), 2(b): 1(b) is never requested, with or without its earlier part.
+    expect(scripted.calls.map((call) => call.conceptName)).toEqual([
+      'Topic A',
+      'Topic B',
+      'Topic C',
+    ]);
+    expect(result.record.emptySlots.find((slot) => slot.slotId === 'slot-3')).toMatchObject({
+      reasonCode: 'generator-refused',
+      reason: 'generator refused: earlier-part-unreadable',
+    });
+  });
+
+  it('an earlier part over the contract’s limits: the dependent part is never sent and ends generator-refused, never owed (Class B)', async () => {
+    const sent: WorkerTaskRequest[] = [];
+    const worker = createWorkerPaperSlotOutcomePort({
+      transport: {
+        send: async (request) => {
+          sent.push(request);
+          return {
+            ok: true,
+            stamp: { promptVersion: 'v1' },
+            result: {
+              questions: [
+                {
+                  stem: 'x'.repeat(AUTHORING_EARLIER_PART_MAX_CHARS + 1),
+                  correctAnswer: 'An answer',
+                  distractors: ['x', 'y', 'z'],
+                  feedback: 'f',
+                },
+              ],
+            },
+          };
+        },
+      },
+    });
+    const vault = memoryVault();
+    const result = await composeAsProvider(vault, await inputOf(readingOf(TEMPLATE)), worker);
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    // 1(a), 2(a) and 2(b) are sent; 1(b) never is, and nothing is owed or retried.
+    expect(sent).toHaveLength(3);
+    for (const request of sent) expect('earlierParts' in (request.payload as object)).toBe(false);
+    const dependent = result.record.emptySlots.find((slot) => slot.slotId === 'slot-3');
+    expect(dependent).toMatchObject({
+      conceptName: 'Topic A',
+      reasonCode: 'generator-refused',
+      reason: 'generator refused: earlier-parts-invalid',
+    });
+    expect(result.record.completion).toEqual({ status: 'qualified-partial', gaps: ['source'] });
+    expect(
+      buildReadyStateFromRecord(COURSE, result.record).incompleteStatement?.omittedParts.map(
+        omittedPartLine,
+      ),
+    ).toEqual([
+      "Topic A — Olea couldn't write a question on this that stays within your material.",
+    ]);
+    expect((await listPaperJournals(vault)).map((entry) => entry.record.status)).toEqual([
+      'completed',
+    ]);
+  });
+
+  it('a dependent part is requested with the earlier part’s question and answer, and a part with no stated dependency carries none; only the dependent part’s payload carries them', async () => {
+    const sent: WorkerTaskRequest[] = [];
+    const worker = createWorkerPaperSlotOutcomePort({
+      transport: {
+        send: async (request) => {
+          sent.push(request);
+          return {
+            ok: true,
+            stamp: { promptVersion: 'v1' },
+            result: {
+              questions: [
+                {
+                  stem: `A question on ${(request.payload as { conceptName: string }).conceptName}`,
+                  correctAnswer: 'An answer',
+                  distractors: ['x', 'y', 'z'],
+                  feedback: 'f',
+                },
+              ],
+            },
+          };
+        },
+      },
+    });
+    const requests: PaperItemGenerationRequest[] = [];
+    const result = await composeAsProvider(
+      memoryVault(),
+      await inputOf(readingOf(TEMPLATE)),
+      async (request) => {
+        requests.push(request);
+        return worker(request);
+      },
+    );
+    expect(result.kind).toBe('finished');
+    expect(requests.map((request) => request.earlierParts)).toEqual([
+      undefined,
+      [{ question: 'A question on Topic A', answer: 'An answer' }],
+      undefined,
+      undefined,
+    ]);
+    for (const request of [requests[0], requests[2], requests[3]]) {
+      expect(request !== undefined && 'earlierParts' in request).toBe(false);
+    }
+    // The contract field (`ol-egov.141.89.7.97`) carries the dependent part's earlier part; every
+    // other payload is today's exactly, the same four keys.
+    expect(sent).toHaveLength(4);
+    expect((sent[1]?.payload as { earlierParts?: unknown } | undefined)?.earlierParts).toEqual([
+      { question: 'A question on Topic A', answer: 'An answer' },
+    ]);
+    expect(Object.keys(sent[1]?.payload as object).sort()).toEqual([
+      'conceptName',
+      'courseCode',
+      'earlierParts',
+      'purpose',
+      'sourceChunks',
+    ]);
+    for (const request of [sent[0], sent[2], sent[3]]) {
+      expect(Object.keys(request?.payload as object).sort()).toEqual([
+        'conceptName',
+        'courseCode',
+        'purpose',
+        'sourceChunks',
+      ]);
+    }
+  });
+
+  it('a reading without groups or parts composes as today: no reading, and a reading with sections only, are both the flat paper', async () => {
+    for (const structure of [null, readingOf(undefined)]) {
+      const vault = memoryVault();
+      const composition = await inputOf(structure);
+      const scripted = scriptedPort((request) => generated(request));
+      const result = await composeAsProvider(vault, composition, scripted.port);
+      const flat = buildPaperBlueprint(composition.input);
+      expect(scripted.calls).toEqual(
+        flat.slots.map((slot) => ({
+          taskId: slot.taskId,
+          courseCode: COURSE,
+          conceptName: slot.conceptName,
+          sourceChunks: slot.sourceChunks,
+          purpose: 'readiness',
+        })),
+      );
+      const journal = (await listPaperJournals(vault))[0]?.record;
+      expect(journal?.schemaVersion).toBe(1);
+      expect(journal).not.toHaveProperty('structure');
+      expect(journal?.plan.every((slot) => slot.dependsOnSlotIds.length === 0)).toBe(true);
+      expect(result.kind === 'finished' && result.record).not.toHaveProperty('structure');
+      expect(result.kind === 'finished' && result.record.emptySlots).toEqual(flat.emptySlots);
+    }
+  });
+
+  it('an unfinished flat paper resumes on its flat plan once a reading with groups and parts is stored: nothing discarded, nothing redrafted, no changed-material sentence; the next new paper is structured', async () => {
+    const vault = memoryVault();
+    const down = scriptedPort((request) =>
+      ['Topic D', 'Topic E', 'Topic F', 'Topic G'].includes(request.conceptName)
+        ? OUTAGE
+        : generated(request),
+    );
+    const started = await composeAsProvider(vault, await inputOf(null), down.port);
+    expect(started).toMatchObject({ kind: 'unfinished', plannedSlotCount: 6, owedSlotCount: 3 });
+
+    const withParts = await inputOf(readingOf(TEMPLATE));
+    const up = scriptedPort((request) => generated(request));
+    const resumed = await composeAsProvider(vault, withParts, up.port);
+    expect(resumed.kind).toBe('finished');
+    if (resumed.kind !== 'finished') return;
+    expect(resumed.resume).toBe('resumed');
+    expect(resumed.materialChanged).toBe(false);
+    expect(up.calls.map((call) => call.conceptName)).toEqual(['Topic D', 'Topic E', 'Topic F']);
+    expect(resumed.record.items).toHaveLength(6);
+    expect(resumed.record).not.toHaveProperty('structure');
+    expect((await listPaperJournals(vault)).map((entry) => entry.record.status)).toEqual([
+      'completed',
+    ]);
+
+    const next = await composeAsProvider(vault, withParts, scriptedPort(quizGenerated).port);
+    expect(next.kind === 'finished' && next.resume).toBe('fresh');
+    expect(next.kind === 'finished' && next.record.structure?.parts).toHaveLength(4);
+  });
+
+  it('an unfinished structured paper resumes on the structure its journal recorded after her reading changes; the next new paper is composed on the new reading', async () => {
+    const vault = memoryVault();
+    const down = scriptedPort((request) =>
+      request.conceptName === 'Topic B' ? OUTAGE : quizGenerated(request),
+    );
+    const started = await composeAsProvider(vault, await inputOf(readingOf(TEMPLATE)), down.port);
+    expect(started).toMatchObject({ kind: 'unfinished', plannedSlotCount: 4, owedSlotCount: 2 });
+
+    const changed = await inputOf(readingOf(OTHER_TEMPLATE));
+    const up = scriptedPort(quizGenerated);
+    const resumed = await composeAsProvider(vault, changed, up.port);
+    expect(resumed.kind).toBe('finished');
+    if (resumed.kind !== 'finished') return;
+    expect(resumed.resume).toBe('resumed');
+    expect(resumed.materialChanged).toBe(false);
+    expect(up.calls.map((call) => call.conceptName)).toEqual(['Topic B', 'Topic C']);
+    expect(resumed.record.structure?.groups.map((g) => g.label)).toEqual([
+      'Question 1',
+      'Use the table',
+    ]);
+    expect(resumed.record.structure?.parts[1]?.dependsOn).toEqual({
+      status: 'stated',
+      onSlotIds: ['slot-0'],
+    });
+
+    const next = await composeAsProvider(vault, changed, scriptedPort(quizGenerated).port);
+    expect(next.kind === 'finished' && next.resume).toBe('fresh');
+    expect(next.kind === 'finished' && next.record.structure?.groups.map((g) => g.label)).toEqual([
+      'Question 1, another sitting',
+      'Use the table, another sitting',
+    ]);
+  });
+
+  it('a structured paper set aside for an edit of hers is discarded naming its sources only, with the changed-material sentence, and the fresh paper takes the reading as it is', async () => {
+    const vault = memoryVault();
+    const down = scriptedPort((request) =>
+      request.conceptName === 'Topic C' ? OUTAGE : quizGenerated(request),
+    );
+    await composeAsProvider(vault, await inputOf(readingOf(TEMPLATE)), down.port);
+    const result = await composeAsProvider(
+      vault,
+      await inputOf(readingOf(OTHER_TEMPLATE), {
+        definitionOf: (index) => `her REVISED note on topic ${index}`,
+      }),
+      scriptedPort(quizGenerated).port,
+    );
+    expect(result.kind).toBe('finished');
+    if (result.kind !== 'finished') return;
+    expect(result.resume).toBe('discarded-and-fresh');
+    expect(result.materialChanged).toBe(true);
+    const discarded = (await listPaperJournals(vault)).filter(
+      (entry) => entry.record.status === 'discarded',
+    );
+    expect(discarded.map((entry) => entry.record.discard)).toEqual([
+      { reason: 'reuse-incompatible', changed: ['sourceVersions'] },
+    ]);
+    expect(result.record.structure?.groups[0]?.label).toBe('Question 1, another sitting');
+  });
+
+  it('a template no whole question of which fits the paper composes the flat paper', async () => {
+    const oneQuestion: PaperStructureTemplate = {
+      ...TEMPLATE,
+      groups: [TEMPLATE.groups[0] as PaperStructureTemplate['groups'][number]],
+      parts: TEMPLATE.parts
+        .slice(0, 2)
+        .concat(
+          TEMPLATE.parts
+            .slice(0, 2)
+            .map((p) => ({ ...p, id: `${p.id}-more`, dependsOn: { status: 'unknown' as const } })),
+        ),
+    };
+    const vault = memoryVault();
+    // One question of four parts, on a paper whose sections plan three.
+    const result = await composeAsProvider(
+      vault,
+      await inputOf(readingOf(oneQuestion, 3)),
+      scriptedPort((request) => generated(request)).port,
+    );
+    expect(result.kind === 'finished' && result.record).not.toHaveProperty('structure');
+    expect(result.kind === 'finished' && result.record.items).toHaveLength(3);
   });
 });

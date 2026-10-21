@@ -162,3 +162,35 @@ describe('PaperView — justHandedOff is cleared whenever a fresh ready state re
     expect(clearIndex).toBeGreaterThan(requestIndex);
   });
 });
+
+// ol-egov.141.89.7.93 ([D-562]): a group's held passage sits above its parts with no word of
+// Olea's. The rendered shape is pinned through the mounted view in
+// `face-passage.ol-egov.141.89.7.93.spec.ts`; this pins the source: no new string reaches her.
+describe('PaperView.renderPassage — her text and its source’s path, and no label or sentence', () => {
+  const RENDER_PASSAGE_BODY = sliceMethod(
+    SOURCE,
+    'private renderPassage(',
+    'private renderHandoffControl(',
+  );
+
+  it('draws only the passage’s own text and its source’s path', () => {
+    expect(RENDER_PASSAGE_BODY).toContain('text: passage.text');
+    expect(RENDER_PASSAGE_BODY).toMatch(/text:\s*passage\.sourceId/);
+    const texts = RENDER_PASSAGE_BODY.match(/text:\s*[^,}\s]+/g) ?? [];
+    expect(texts.map((t) => t.replace(/\s+/g, ' '))).toEqual([
+      'text: passage.text',
+      'text: passage.sourceId',
+    ]);
+    // No string literal of any kind carries text in it.
+    expect(RENDER_PASSAGE_BODY).not.toMatch(/text:\s*['"`]/);
+  });
+
+  it('is drawn inside the per-item loop, before the item’s own row', () => {
+    const loopStart = RENDER_READY_BODY.indexOf('for (const item of state.items)');
+    const passageCall = RENDER_READY_BODY.indexOf('this.renderPassage(list, passage);');
+    const rowIndex = RENDER_READY_BODY.indexOf("const row = list.createEl('li');");
+    expect(loopStart).toBeGreaterThan(-1);
+    expect(passageCall).toBeGreaterThan(loopStart);
+    expect(rowIndex).toBeGreaterThan(passageCall);
+  });
+});

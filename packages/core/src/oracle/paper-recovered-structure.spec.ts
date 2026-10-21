@@ -5,6 +5,7 @@ import { extentSlotCountTarget } from './paper-blueprint.js';
 import {
   type PastPaperStoredReading,
   paperRecoveredStructureFromReadings,
+  paperStructureTemplateOf,
   pastPaperReadingCounts,
 } from './paper-recovered-structure.js';
 
@@ -166,5 +167,158 @@ describe('section marks a past paper does not state stay unknown [D-431]', () =>
       { status: 'unknown' },
       { status: 'stated', value: 10 },
     ]);
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-559]): "her stored reading's groups and parts shape her paper", tagged
+// `@auto:core/oracle/paper-recovered-structure.spec`. Course A is synthetic: one parent question
+// with two parts, the second building on the first, and a shared-table group of one part.
+function structuredReading(overrides: Partial<ScopePaperStructure> = {}): ScopePaperStructure {
+  return {
+    ...paperReading([3]),
+    groups: [
+      {
+        id: 'q1',
+        kind: 'parent-question',
+        label: 'Question 1',
+        memberLabels: ['1(a)', '1(b)'],
+        anchor: { unitIndex: 1 },
+        stimulus: { status: 'none' },
+      },
+      {
+        id: 'q2',
+        kind: 'shared-stimulus',
+        label: 'Use the table',
+        memberLabels: ['2'],
+        anchor: { unitIndex: 4 },
+        stimulus: { status: 'identified', form: 'table', anchor: { unitIndex: 4 } },
+      },
+    ],
+    parts: [
+      {
+        id: 'p1a',
+        label: '1(a)',
+        groupId: 'q1',
+        instructionAnchor: { unitIndex: 2 },
+        questionForm: 'short answer',
+        marks: { status: 'stated', value: 2 },
+        dependsOn: { status: 'unknown' },
+      },
+      {
+        id: 'p1b',
+        label: '1(b)',
+        groupId: 'q1',
+        instructionAnchor: { unitIndex: 3 },
+        questionForm: 'short answer',
+        marks: { status: 'unknown' },
+        dependsOn: { status: 'stated', onPartIds: ['p1a'] },
+      },
+      {
+        id: 'p2',
+        label: '2',
+        groupId: 'q2',
+        instructionAnchor: { unitIndex: 5 },
+        questionForm: 'calculation',
+        marks: { status: 'stated', value: 4 },
+        dependsOn: { status: 'unknown' },
+      },
+    ],
+    totalMarks: { status: 'stated', value: 9 },
+    ...overrides,
+  };
+}
+
+describe('her stored reading’s groups and parts are the template a structured paper is shaped on [D-559]', () => {
+  it('carries the groups and parts with their dependencies as the reading states them, unknown marks and dependencies unknown, and none of the anchors of the parts', () => {
+    const structure = paperRecoveredStructureFromReadings([stored(structuredReading())]);
+    const template = structure?.template;
+    expect(template?.groups.map((g) => [g.id, g.kind])).toEqual([
+      ['q1', 'parent-question'],
+      ['q2', 'shared-stimulus'],
+    ]);
+    expect(template?.parts).toEqual([
+      {
+        id: 'p1a',
+        label: '1(a)',
+        groupId: 'q1',
+        questionForm: 'short answer',
+        marks: { status: 'stated', value: 2 },
+        dependsOn: { status: 'unknown' },
+      },
+      {
+        id: 'p1b',
+        label: '1(b)',
+        groupId: 'q1',
+        questionForm: 'short answer',
+        marks: { status: 'unknown' },
+        dependsOn: { status: 'stated', onPartIds: ['p1a'] },
+      },
+      {
+        id: 'p2',
+        label: '2',
+        groupId: 'q2',
+        questionForm: 'calculation',
+        marks: { status: 'stated', value: 4 },
+        dependsOn: { status: 'unknown' },
+      },
+    ]);
+    expect(template?.totalMarks).toEqual({ status: 'stated', value: 9 });
+    // The length is still the sections' own: the template does not change it.
+    expect(extentSlotCountTarget('standard', structure)).toBe(3);
+  });
+
+  it('takes the first counted reading, in the caller’s order, that carries both groups and parts', () => {
+    const second = structuredReading({ totalMarks: { status: 'stated', value: 50 } });
+    const structure = paperRecoveredStructureFromReadings([
+      stored(paperReading([2])),
+      stored(structuredReading(), { status: 'unknown', otherRevisionsRecorded: false }),
+      stored(second),
+      stored(structuredReading()),
+    ]);
+    expect(structure?.sittingCount).toBe(3);
+    expect(structure?.template?.totalMarks).toEqual({ status: 'stated', value: 50 });
+  });
+
+  it('a reading with sections only, groups without parts, or parts without groups gives no template, and the structure is the length alone, as before', () => {
+    const { groups, parts, ...sectionsOnly } = structuredReading();
+    for (const reading of [
+      sectionsOnly,
+      { ...sectionsOnly, groups },
+      { ...sectionsOnly, parts },
+      { ...sectionsOnly, groups: [], parts },
+    ] as ScopePaperStructure[]) {
+      const structure = paperRecoveredStructureFromReadings([stored(reading)]);
+      expect(structure?.sittingCount).toBe(1);
+      expect(structure).not.toHaveProperty('template');
+    }
+  });
+
+  it('a template whose groups or parts are not well formed is not handed out, never repaired', () => {
+    const base = structuredReading();
+    const broken: ScopePaperStructure[] = [
+      {
+        ...base,
+        parts: [{ ...(base.parts?.[0] as object), id: '' }],
+      } as unknown as ScopePaperStructure,
+      {
+        ...base,
+        parts: [{ ...(base.parts?.[0] as object), marks: { status: 'stated', value: -1 } }],
+      } as unknown as ScopePaperStructure,
+      {
+        ...base,
+        groups: [{ ...(base.groups?.[0] as object), kind: 'appendix' }],
+      } as unknown as ScopePaperStructure,
+      {
+        ...base,
+        groups: [{ ...(base.groups?.[1] as object), stimulus: { status: 'maybe' } }],
+      } as unknown as ScopePaperStructure,
+      { ...base, parts: [base.parts?.[0], base.parts?.[0]] } as ScopePaperStructure,
+      {
+        ...base,
+        parts: [{ ...(base.parts?.[1] as object), dependsOn: { status: 'stated' } }],
+      } as unknown as ScopePaperStructure,
+    ];
+    for (const reading of broken) expect(paperStructureTemplateOf(reading)).toBeNull();
+    expect(paperStructureTemplateOf(base)).not.toBeNull();
   });
 });

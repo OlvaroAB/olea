@@ -15,6 +15,7 @@ import {
   matchesEmphasis,
   normalisePaperRecoveredStructure,
   PAPER_GENERATOR_DECLARED_DEMANDS,
+  paperBlueprintCandidateSlotIds,
   significantDemands,
   slotWeightForPurpose,
   validatePaperRecoveredStructure,
@@ -1231,5 +1232,50 @@ describe('[D-548] — unknown section marks, and the length a paper in progress 
     expect(() => buildPaperBlueprint({ ...input, structure: null, slotCount: Number.NaN })).toThrow(
       /finite/,
     );
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-559]): a structured paper's parts take the blueprint's candidates in
+// ranking order, so the order is read back from the candidate ids. Synthetic keys only.
+describe('paperBlueprintCandidateSlotIds [D-559]', () => {
+  it('lists every candidate in ranking order, filled or empty for its own reason, and never a rank-excluded concept', () => {
+    const held = [{ kind: 'notes' as const, sourceId: 'n', chunks: ['x'] }];
+    const blueprint = buildPaperBlueprint({
+      course: 'COURSEA',
+      asOf: '2026-10-21',
+      concepts: [
+        concept({ conceptKey: 'a', heldSources: held }),
+        concept({ conceptKey: 'b' }),
+        concept({ conceptKey: 'c', heldSources: held }),
+        concept({ conceptKey: 'd', heldSources: held }),
+      ],
+      assessments: [],
+      structure: null,
+      alpha: 0.5,
+      slotCount: 3,
+      formatClassOf: recallFormatClassOf,
+    });
+    expect(blueprint.slots.map((slot) => slot.slotId)).toEqual(['slot-0', 'slot-1', 'slot-2']);
+    expect(paperBlueprintCandidateSlotIds(blueprint)).toEqual(['slot-0', 'slot-1', 'slot-2']);
+    const withGap = buildPaperBlueprint({
+      course: 'COURSEA',
+      asOf: '2026-10-21',
+      concepts: [concept({ conceptKey: 'a', heldSources: held }), concept({ conceptKey: 'b' })],
+      assessments: [],
+      structure: null,
+      alpha: 0.5,
+      slotCount: 2,
+      formatClassOf: recallFormatClassOf,
+    });
+    expect(withGap.emptySlots.map((e) => [e.slotId, e.reasonCode])).toEqual([
+      ['slot-1', 'no-held-source'],
+    ]);
+    expect(paperBlueprintCandidateSlotIds(withGap)).toEqual(['slot-0', 'slot-1']);
+    expect(
+      paperBlueprintCandidateSlotIds({
+        ...blueprint,
+        slots: [...blueprint.slots].reverse(),
+      }),
+    ).toEqual(['slot-0', 'slot-1', 'slot-2']);
   });
 });

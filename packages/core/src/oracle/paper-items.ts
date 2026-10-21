@@ -67,6 +67,37 @@ export interface PaperItemGenerationRequest {
    * with no basis: the request then carries no such key at all and is today's request.
    */
   readonly intendedDemand?: PaperDemand;
+  /**
+   * `[D-561]` (`ol-egov.141.89.7.93`): for a part that states a dependency, the earlier parts it
+   * builds on, in paper order — each one's question and, when written, its answer, read off the
+   * landed item (`paperItemEarlierPart`). Present ONLY for a part with a stated dependency whose
+   * earlier parts landed; any other request carries no such key, and a dependent part is never
+   * requested without it (the plugin's composition refuses the part instead). Olea's own questions
+   * in transit (D-005), never logged. On the wire as the contract's `earlierParts`
+   * (`olea-contracts`' `authoringEarlierPartsField`, `ol-egov.141.89.7.97`): the plugin's port
+   * checks it against that schema and never sends one the Worker would refuse.
+   */
+  readonly earlierParts?: readonly PaperEarlierPart[];
+  /**
+   * `[D-562]` (`ol-egov.141.89.7.93`): for a part in a group that shares material, that group's one
+   * passage from her held material, as text. Present ONLY when the composition's stimulus lookup
+   * found one (a figure never travels: its content is not text). On the wire as the contract's
+   * `sharedPassage` (`authoringSharedPassageField`), checked the same way. The passage's chunk is
+   * also among the request's `sourceChunks`, so a question built on it is grounded in it.
+   */
+  readonly sharedPassage?: PaperSharedPassage;
+}
+
+/** One earlier part a dependent part builds on (`[D-561]`): the contract fragment's shape (`olea-contracts`' paper-context fragment, `ol-egov.141.89.7.97`), restated. */
+export interface PaperEarlierPart {
+  readonly question: string;
+  readonly answer?: string;
+}
+
+/** A group's shared passage (`[D-562]`): its form, never a figure, and its text. */
+export interface PaperSharedPassage {
+  readonly form: 'scenario' | 'extract' | 'table' | 'data-set';
+  readonly text: string;
 }
 
 /** `'refused'` covers both a port that could not even attempt the call and a generator's own INV-5 refusal — this module treats both identically (F4.10: neither is filled with anything invented). `reason` is a short, structural string (D-005: no content). */
@@ -166,6 +197,38 @@ export async function fillPaperBlueprintSlots(
 
 function isStringArray(value: unknown): value is readonly string[] {
   return Array.isArray(value) && value.every((v) => typeof v === 'string');
+}
+
+const notBlank = (value: unknown): value is string =>
+  typeof value === 'string' && value.trim().length > 0;
+
+/**
+ * `[D-561]`: the question a landed paper item asks, and its answer, as an earlier part a dependent
+ * part builds on — or `undefined` when the stored body carries no readable question. The item's
+ * question is its FIRST artefact, the one a hand-off enters (`paperItemMcqCandidate`, index 0): a
+ * `quiz.generate.v1` question's `stem` and `correctAnswer`, a `cards.generate.v1` card's `front`
+ * and `back`. An answer that is not text is left out; a question that is blank is no question.
+ * Pure; reads the body the port stored verbatim (`PaperGeneratedItem.response`).
+ */
+export function paperItemEarlierPart(item: PaperGeneratedItem): PaperEarlierPart | undefined {
+  const body = item.response;
+  const result =
+    typeof body === 'object' && body !== null
+      ? (body as Record<string, unknown>).result
+      : undefined;
+  if (typeof result !== 'object' || result === null) return undefined;
+  const list = (result as Record<string, unknown>)[
+    item.taskId === 'quiz.generate.v1' ? 'questions' : 'cards'
+  ];
+  const first: unknown = Array.isArray(list) ? list[0] : undefined;
+  if (typeof first !== 'object' || first === null) return undefined;
+  const artefact = first as Record<string, unknown>;
+  const [question, answer] =
+    item.taskId === 'quiz.generate.v1'
+      ? [artefact.stem, artefact.correctAnswer]
+      : [artefact.front, artefact.back];
+  if (!notBlank(question)) return undefined;
+  return notBlank(answer) ? { question, answer } : { question };
 }
 
 /**

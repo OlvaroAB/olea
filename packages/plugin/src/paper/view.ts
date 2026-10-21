@@ -23,6 +23,12 @@
  * she opens it"). `renderReady` always draws `state.partialStatement` first, before any item —
  * never after, never conditionally reordered.
  *
+ * **A group's held passage sits above its parts (`[D-562]`, `ol-egov.141.89.7.93`).** Before the
+ * first item of a group the paper holds a passage for (`./provider.ts`'s `facePassagesBeforeItems`),
+ * `renderPassage` draws her text exactly as held and, under it, its source's path in a list, the way
+ * the partial banner lists its pointer paths. It adds no word of Olea's: no label, no heading, no
+ * sentence.
+ *
  * **The per-item hand-off control (`ol-0r92.135`, F4.11 ruling 1, `[D-252]`/`[D-367]`/`[D-391]`/
  * `[D-407]`) is the one exception to "no test file for this module."** `renderHandoffControl` and
  * `handOffItem` below carry real branching logic — which of three fixed strings to show, and
@@ -49,9 +55,10 @@ import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
 import type {
   PracticePaperCourseState,
   PracticePaperFaceItem,
+  PracticePaperFacePassage,
   PracticePaperViewDeps,
 } from './provider.js';
-import { unfinishedPaperNotice } from './provider.js';
+import { facePassagesBeforeItems, unfinishedPaperNotice } from './provider.js';
 
 export { VIEW_TYPE_OLEA_PAPER };
 
@@ -254,7 +261,12 @@ export class PaperView extends ItemView {
     }
 
     const list = root.createEl('ul', { cls: 'olea-paper-items' });
+    // `[D-562]`: a group's held passage, above the first of its parts.
+    const passagesBefore = facePassagesBeforeItems(state);
     for (const item of state.items) {
+      for (const passage of passagesBefore.get(item.slotId) ?? []) {
+        this.renderPassage(list, passage);
+      }
       const row = list.createEl('li');
       row.createEl('strong', { text: item.conceptName });
       row.createEl('span', { text: ` — ${item.groundingLabel}` });
@@ -270,6 +282,18 @@ export class PaperView extends ItemView {
         emptyList.createEl('li', { text: slot.conceptName });
       }
     }
+  }
+
+  /**
+   * `[D-562]`: one group's held passage — her text exactly as held, then its source's path, listed
+   * as the partial banner lists its pointer paths. Nothing else: no label or sentence of Olea's.
+   */
+  private renderPassage(list: HTMLElement, passage: PracticePaperFacePassage): void {
+    const block = list.createEl('li', { cls: 'olea-paper-passage' });
+    block.createEl('p', { cls: 'olea-paper-passage-text', text: passage.text });
+    block.createEl('ul', { cls: 'olea-paper-passage-source' }).createEl('li', {
+      text: passage.sourceId,
+    });
   }
 
   /**

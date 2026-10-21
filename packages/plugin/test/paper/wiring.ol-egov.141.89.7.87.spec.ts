@@ -57,3 +57,26 @@ describe('buildPracticePaperProvider — the past-paper reader', () => {
     expect(captured[0] !== undefined && 'readPastPaperStructure' in captured[0]).toBe(false);
   });
 });
+
+// ol-egov.141.89.7.93 ([D-562]): the shared-passage lookup is composed from the vault alone, so
+// `main.ts`'s existing call needs nothing new.
+describe('buildPracticePaperProvider — the papers a shared passage is never taken from', () => {
+  beforeEach(() => {
+    captured.length = 0;
+  });
+
+  it('always hands the provider the registered past papers, read from her review log by default', async () => {
+    const { memoryVault } = await import('../review/memory-vault.js');
+    buildPracticePaperProvider({ ...base, vault: memoryVault() });
+    const read = captured[0]?.readRegisteredPastPaperPaths;
+    expect(typeof read).toBe('function');
+    // A vault with no review log registers nothing.
+    expect(await read?.()).toEqual([]);
+  });
+
+  it('passes a supplied reader through unchanged', () => {
+    const readRegisteredPastPaperPaths = async () => ['03 Research/COURSEA Paper 1.pdf'];
+    buildPracticePaperProvider({ ...base, readRegisteredPastPaperPaths });
+    expect(captured[0]?.readRegisteredPastPaperPaths).toBe(readRegisteredPastPaperPaths);
+  });
+});

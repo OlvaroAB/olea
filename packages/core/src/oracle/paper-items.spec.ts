@@ -4,7 +4,11 @@ import type {
   PaperItemGenerationRequest,
   PaperItemGenerationResult,
 } from './paper-items.js';
-import { fillPaperBlueprintSlots } from './paper-items.js';
+import {
+  fillPaperBlueprintSlots,
+  type PaperGeneratedItem,
+  paperItemEarlierPart,
+} from './paper-items.js';
 import type { PaperBlueprint, PaperBlueprintSlot, PaperEmptySlot } from './paper-types.js';
 
 // Scenarios: olea-service/features/F4-oracle.md — "F4.11 — Practice paper product scope", the
@@ -155,5 +159,61 @@ describe('fillPaperBlueprintSlots', () => {
         purpose: 'readiness',
       });
     }
+  });
+});
+
+// ol-egov.141.89.7.93 ([D-561]): "a dependent part is requested with the earlier part's question".
+// The earlier part's question is read off its landed item. Synthetic text only.
+describe('paperItemEarlierPart [D-561]', () => {
+  const landed = (taskId: PaperGeneratedItem['taskId'], result: unknown): PaperGeneratedItem => ({
+    slotId: 'slot-0',
+    conceptKey: 'k0',
+    conceptName: 'Topic A',
+    taskId,
+    promptVersion: 'v1',
+    intendedDemand: 'recall-a-fact',
+    groundingTier: 'T2',
+    groundingLabel: 'covered-by-her-material',
+    heldSourceKind: 'notes',
+    heldSourceId: 'n0',
+    response: { ok: true, stamp: { promptVersion: 'v1' }, result },
+  });
+
+  it('reads the first question and its answer, the one a hand-off enters, for either generator', () => {
+    expect(
+      paperItemEarlierPart(
+        landed('quiz.generate.v1', {
+          questions: [
+            { stem: 'First stem?', correctAnswer: 'First answer', distractors: [], feedback: '' },
+            { stem: 'Second stem?', correctAnswer: 'Second answer', distractors: [], feedback: '' },
+          ],
+        }),
+      ),
+    ).toEqual({ question: 'First stem?', answer: 'First answer' });
+    expect(
+      paperItemEarlierPart(
+        landed('cards.generate.v1', { cards: [{ front: 'Front?', back: 'Back' }] }),
+      ),
+    ).toEqual({ question: 'Front?', answer: 'Back' });
+  });
+
+  it('leaves out an answer that is not text, and reads no question at all from a body without one', () => {
+    expect(
+      paperItemEarlierPart(
+        landed('cards.generate.v1', { cards: [{ front: 'Front?', back: '  ' }] }),
+      ),
+    ).toEqual({ question: 'Front?' });
+    for (const result of [
+      {},
+      { cards: [] },
+      { cards: [{ front: '' }] },
+      { questions: [{}] },
+      null,
+    ]) {
+      expect(paperItemEarlierPart(landed('cards.generate.v1', result))).toBeUndefined();
+    }
+    expect(
+      paperItemEarlierPart(landed('quiz.generate.v1', { cards: [{ front: 'q' }] })),
+    ).toBeUndefined();
   });
 });

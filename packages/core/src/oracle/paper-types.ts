@@ -170,6 +170,49 @@ export interface PaperRecoveredStructure {
   readonly currentCount: number;
   readonly historicalCount: number;
   readonly sittings: readonly PaperRecoveredSitting[];
+  /**
+   * `[D-559]` (`ol-egov.141.89.7.93`): the groups and parts of the one counted reading the
+   * structured paper is shaped on, absent when no counted reading carries both
+   * (`./paper-recovered-structure.ts` says which reading is chosen). `./paper-blueprint.ts` never
+   * reads it: the flat blueprint's length still comes from `sittings`. In memory only; nothing
+   * persists this object.
+   */
+  readonly template?: PaperStructureTemplate;
+}
+
+/**
+ * One part of a stored past-paper reading, as the structured paper is shaped on it (`[D-559]`).
+ * Field for field the stored reading's own part (`../outcome/scope-reading-types.ts`'s
+ * `ScopeStructurePart`) without its instruction anchor, which the paper never needs; restated so
+ * this module does not import the scope-reading store's types.
+ */
+export interface PaperTemplatePart {
+  /** The reader's own handle, unique within the reading, never derived from the part's text. */
+  readonly id: string;
+  /** How the paper numbers the part, local content, never logged (D-005). */
+  readonly label: string;
+  /** The innermost group the part sits in (`PaperQuestionGroup.id` of the same reading). */
+  readonly groupId: string;
+  readonly questionForm: string;
+  readonly marks: PaperMarks;
+  /** By the reading's own part ids. Unknown is never independent (scp.md 2.2). */
+  readonly dependsOn:
+    | { readonly status: 'stated'; readonly onPartIds: readonly string[] }
+    | { readonly status: 'unknown' };
+}
+
+/**
+ * The groups and parts of ONE stored past-paper reading (`[D-559]`), in the reading's printed
+ * order: what `./paper-structure.ts`'s `buildStructuredPaperShape` shapes a paper on. Membership is
+ * the reading's own links (each part's `groupId`, each group's `parentGroupId`); `memberLabels` is
+ * printed numbering and is read only for how many alternatives a choice group offers. No demand is
+ * carried: see `./paper-recovered-structure.ts` for why a part's demand is not read into the paper.
+ */
+export interface PaperStructureTemplate {
+  readonly groups: readonly PaperQuestionGroup<unknown>[];
+  readonly parts: readonly PaperTemplatePart[];
+  readonly totalMarks: PaperMarks;
+  readonly timeAllowance: PaperTimeAllowance;
 }
 
 /**
@@ -617,7 +660,17 @@ export interface PaperStructuredGroup {
   /** Present on a choice group only. */
   readonly choice?: PaperChoicePattern;
   readonly stimulusNeed: PaperGroupStimulusNeed;
-  /** The stimulus this composition chose; `null` when none is held. A group whose need is `'needed'` and whose held stimulus is `null` is a named empty group. */
+  /**
+   * The stimulus this composition chose; `null` when none is held. A group whose need is `'needed'`
+   * and whose held stimulus is `null` is one of two things, told apart by the paper's own slots
+   * (`[D-562]`, `ol-egov.141.89.7.93`): a named empty group when the composition looked in her held
+   * material and found nothing (its parts are `no-held-stimulus` empty slots), or a group written
+   * without shared material when the composition did not look (its parts are written or empty for
+   * reasons of their own, never `no-held-stimulus`). The production composition looks through
+   * the plugin's held-material lookup (`packages/plugin/src/paper/stimulus-lookup.ts`, over this
+   * package's `lookUpPaperGroupStimulus`), and records a held stimulus only when its passage can
+   * travel to the question writer.
+   */
   readonly heldStimulus: PaperHeldStimulus | null;
 }
 
@@ -633,6 +686,13 @@ export interface PaperStructuredSection {
 /**
  * Which readings the template came from — the composition account says so (scp.md 2.6, Class B):
  * historical papers enter only when no current or transitional reading exists.
+ *
+ * **While no regime is recorded** (`ol-egov.141.89.7.93`): no production fact records a past
+ * paper's regime, so every stored reading's regime is unknown and the regime filter is not applied
+ * (every registered paper counts, as `packages/plugin/src/scope-reading/declared-demands.ts`
+ * already reads them). A shape built from such a reading states `'current-or-transitional'`: it was
+ * taken by the ordinary rule, not the historical fallback. It is not a claim that the paper's regime
+ * was read. Class B, flagged on the bead; a value for "regime unknown" is a persisted-enum change.
  */
 export type PaperStructureBasis = 'current-or-transitional' | 'historical-fallback' | 'none-read';
 

@@ -612,6 +612,24 @@ export interface BuildPaperBlueprintInput {
   readonly formatClassOf: (type: string) => PaperFormatClass;
 }
 
+const CANDIDATE_SLOT_ID = /^slot-(\d+)$/;
+
+/**
+ * `[D-559]` (`ol-egov.141.89.7.93`): the ids of the blueprint's candidates, in ranking order — every
+ * concept the slot cap admitted, filled or not (a `no-held-source` or `demand-unsupported` empty
+ * slot is a candidate too; a `rank-excluded` one is not). `buildPaperBlueprint` names the candidate
+ * at rank `index` `slot-${index}`, so the order is read from that id; anything else is not a
+ * candidate. A structured paper's parts take these ids in printed order (`./paper-structure.ts`).
+ */
+export function paperBlueprintCandidateSlotIds(blueprint: PaperBlueprint): readonly string[] {
+  const ranked: { readonly slotId: string; readonly index: number }[] = [];
+  for (const { slotId } of [...blueprint.slots, ...blueprint.emptySlots]) {
+    const match = CANDIDATE_SLOT_ID.exec(slotId);
+    if (match?.[1] !== undefined) ranked.push({ slotId, index: Number(match[1]) });
+  }
+  return ranked.sort((a, b) => a.index - b.index).map((entry) => entry.slotId);
+}
+
 /** Assembles the blueprint. See the module doc for ruling 3's steering and the blinding responsibility this function does not itself enforce. */
 export function buildPaperBlueprint(input: BuildPaperBlueprintInput): PaperBlueprint {
   validatePaperScope(input.concepts);

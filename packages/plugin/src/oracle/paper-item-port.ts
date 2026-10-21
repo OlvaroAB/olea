@@ -38,6 +38,19 @@
  * file only assembles the envelope `WorkerTaskTransport.send` posts to `/v1/task`; the prompt text
  * lives entirely in the private repo's prompt files, never here.
  *
+ * **The paper context travels only as the Worker would accept it (`[D-561]`, `[D-562]`,
+ * `ol-egov.141.89.7.93`).** A request's `earlierParts` (a dependent part's earlier parts) and
+ * `sharedPassage` (a group's passage from her held material) are added to the payload only when the
+ * request has them, so a request with neither sends today's payload exactly. Each is checked first
+ * against the contract's own schema (`olea-contracts`' `authoringEarlierPartsField` and
+ * `authoringSharedPassageField`, the definitions the Worker parses with). The Worker answers a
+ * field over its limits with `invalid-request`, which this port reads as an outage
+ * (`classifyPaperSlotWorkerResult`), and an outage is retried and kept owed: a request that would
+ * always be refused would leave its slot owed for good. So a request whose context fails the schema
+ * is never sent: it ends `refused` (`'earlier-parts-invalid'` or `'shared-passage-invalid'`), which
+ * the journal records as `generator-refused`, the honest "Olea could not write this part". The
+ * fields are sent as the schema read them, never trimmed or cut.
+ *
  * **The envelope this port reads, and the three outcomes it reports apart (`ol-egov.141.89.7.29`,
  * `[D-430]`, `[D-438]`).** `WorkerTaskTransport.send`'s own contract (`workerProvider.ts`) is "return
  * the parsed JSON body whatever the status code... throw only when there is genuinely no body." The
@@ -74,7 +87,11 @@
  * as a transport failure always has and is never recorded as an item or as an empty slot.
  */
 
-import { CONTRACT_VERSION } from 'olea-contracts';
+import {
+  authoringEarlierPartsField,
+  authoringSharedPassageField,
+  CONTRACT_VERSION,
+} from 'olea-contracts';
 import type {
   PaperGeneratorTaskId,
   PaperItemGenerationPort,
@@ -137,32 +154,62 @@ function artefactCount(body: unknown, taskId: PaperGeneratorTaskId): number | nu
   return Array.isArray(list) ? list.length : null;
 }
 
+/** A payload ready to send, or why the request is never sent (a structural reason, D-005). */
+type WorkerPayload =
+  | { readonly ok: true; readonly payload: unknown }
+  | { readonly ok: false; readonly reason: 'earlier-parts-invalid' | 'shared-passage-invalid' };
+
 /**
  * Builds the `/v1/task` payload `cards.generate.v1`/`quiz.generate.v1` expect — field-for-field
  * the same shape `draft-quiz-cards.ts`'s `QuizGenerateRequestPayload` restates for its own call,
  * minus `personalization`/`registerHint` (F3.8/`[D-188]`'s per-concept context, out of scope for
  * this bead's own `owns` — a follow-on may thread it through once a caller has both this port and
- * that context in hand at the same call site).
+ * that context in hand at the same call site). `earlierParts` and `sharedPassage` are added only
+ * when present and only as the contract's schema reads them (module doc); otherwise the payload is
+ * today's exactly.
  */
-function toWorkerPayload(request: PaperItemGenerationRequest): unknown {
+function toWorkerPayload(request: PaperItemGenerationRequest): WorkerPayload {
+  let earlierParts: unknown;
+  if (request.earlierParts !== undefined) {
+    const parsed = authoringEarlierPartsField.safeParse(request.earlierParts);
+    if (!parsed.success || parsed.data === undefined) {
+      return { ok: false, reason: 'earlier-parts-invalid' };
+    }
+    earlierParts = parsed.data;
+  }
+  let sharedPassage: unknown;
+  if (request.sharedPassage !== undefined) {
+    const parsed = authoringSharedPassageField.safeParse(request.sharedPassage);
+    if (!parsed.success || parsed.data === undefined) {
+      return { ok: false, reason: 'shared-passage-invalid' };
+    }
+    sharedPassage = parsed.data;
+  }
   return {
-    courseCode: request.courseCode,
-    conceptName: request.conceptName,
-    sourceChunks: [...request.sourceChunks],
-    purpose: request.purpose,
-    // `[D-437]` W1: only a demand read from her papers travels; otherwise today's payload exactly.
-    ...(request.intendedDemand !== undefined ? { intendedDemand: request.intendedDemand } : {}),
+    ok: true,
+    payload: {
+      courseCode: request.courseCode,
+      conceptName: request.conceptName,
+      sourceChunks: [...request.sourceChunks],
+      purpose: request.purpose,
+      // `[D-437]` W1: only a demand read from her papers travels; otherwise today's payload exactly.
+      ...(request.intendedDemand !== undefined ? { intendedDemand: request.intendedDemand } : {}),
+      // `[D-561]`, `[D-562]`: only a dependent part's earlier parts, only a group's passage.
+      ...(earlierParts !== undefined ? { earlierParts } : {}),
+      ...(sharedPassage !== undefined ? { sharedPassage } : {}),
+    },
   };
 }
 
 function sendSlotRequest(
   deps: WorkerPaperItemGenerationPortDeps,
   request: PaperItemGenerationRequest,
+  payload: unknown,
 ): Promise<unknown> {
   return deps.transport.send({
     contractVersion: CONTRACT_VERSION,
     taskId: request.taskId,
-    payload: toWorkerPayload(request),
+    payload,
   });
 }
 
@@ -186,9 +233,12 @@ export function createWorkerPaperSlotOutcomePort(
   deps: WorkerPaperItemGenerationPortDeps,
 ): PaperSlotOutcomePort {
   return async function workerPaperSlotOutcomePort(request) {
+    const built = toWorkerPayload(request);
+    // Never sent: the Worker would refuse it every time (module doc).
+    if (!built.ok) return { status: 'refused', reason: built.reason };
     let body: unknown;
     try {
-      body = await sendSlotRequest(deps, request);
+      body = await sendSlotRequest(deps, request, built.payload);
     } catch {
       // A transport that throws had no body to read: an outage. The error's own text is dropped
       // (D-005: a failure message can carry a URL or a body fragment).
@@ -211,7 +261,9 @@ export function createWorkerPaperItemGenerationPort(
   return async function workerPaperItemGenerationPort(
     request: PaperItemGenerationRequest,
   ): Promise<PaperItemGenerationResult> {
-    const outcome = readSlotOutcome(await sendSlotRequest(deps, request), request);
+    const built = toWorkerPayload(request);
+    if (!built.ok) return { status: 'refused', reason: built.reason };
+    const outcome = readSlotOutcome(await sendSlotRequest(deps, request, built.payload), request);
     if (outcome.status === 'unavailable')
       throw new PaperItemServiceUnavailableError(outcome.reason);
     return outcome;
