@@ -39,7 +39,9 @@
 import type { App, TFile } from 'obsidian';
 import {
   courseFromPath,
+  DEFAULT_SOURCES_FOLDER,
   readReviewLogHistory,
+  registerSources,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -91,16 +93,25 @@ export interface BuildPracticePaperProviderDeps {
 
 /**
  * `[D-562]`: every document whose latest registration is as a past paper, of any course, read from
- * her review log the way `./provider.ts`'s past-paper reader reads it (`registeredPastPapersFrom`).
- * Paths only; nothing is logged (D-005).
+ * her review log the way `./provider.ts`'s past-paper reader reads it (`registeredPastPapersFrom`),
+ * plus every source `registerSources` reads as `role: past-paper` from its frontmatter, of any
+ * course and any format. A Markdown past paper is never registered through the log, and since
+ * `ol-egov.141.89.7.60` its grouping can shape a structured paper, so it must be kept out of the
+ * shared-passage lookup too. Paths only; nothing is logged (D-005).
  */
 export function registeredPastPaperPathsForVault(
   vault: VaultSource,
+  sourcesFolder: VaultPath = DEFAULT_SOURCES_FOLDER,
 ): () => Promise<readonly VaultPath[]> {
-  return async () =>
-    registeredPastPapersFrom((await readReviewLogHistory(vault)).entries).map(
+  return async () => {
+    const logged = registeredPastPapersFrom((await readReviewLogHistory(vault)).entries).map(
       (paper) => paper.path,
     );
+    const declared = (await registerSources(vault, { sourcesFolder })).sources
+      .filter((source) => source.role === 'past-paper')
+      .map((source) => source.path);
+    return [...new Set([...logged, ...declared])];
+  };
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc for exactly what `main.ts` supplies and why each piece is injected rather than built here. */
