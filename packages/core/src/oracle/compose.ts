@@ -139,6 +139,7 @@ import { suspendedInstrumentIds } from '../review-log/suspension.js';
 import { findComparableObservationDisagreements } from '../review-log/tiebreak.js';
 import { hasDifferentEligibleOrdinaryInstrument } from '../routing/instrument-eligibility.js';
 import type { Scheduler } from '../scheduler/types.js';
+import { scoredConceptOf } from '../session/scored-concept.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import type { ConceptInstrumentEligibilityFact } from './rank.js';
 import { rankOracle } from './rank.js';
@@ -725,6 +726,8 @@ export async function composeOracleRanking(
     retrievability,
     validity,
   );
+  // `[D-554]`: the bounded wrong-answer lift's input, from the same validity projection.
+  const lastWrongAnswerDay = resolveLastWrongAnswerDays(reviewLog, conceptKeys, validity);
   const tiebreakEligible = resolveTiebreakEligibleConcepts(
     reviewLog,
     asOf,
@@ -765,6 +768,7 @@ export async function composeOracleRanking(
     ...(options !== undefined ? { options } : {}),
     ...(conceptInstrumentEligibility !== undefined ? { conceptInstrumentEligibility } : {}),
     ...(courseConcepts.size > 0 ? { courseConcepts } : {}),
+    ...(lastWrongAnswerDay.size > 0 ? { lastWrongAnswerDay } : {}),
   });
 
   return {
@@ -1007,4 +1011,46 @@ function resolveRetrievabilityScores(
     }
   }
   return scores;
+}
+
+/**
+ * `[D-554]` (`ol-egov.141.89.10.126`) — the producer of `rankOracle`'s `lastWrongAnswerDay`: for
+ * each of `conceptKeys`, the calendar day of its most recent VALID answer, when that answer was
+ * wrong (rating `'again'`). Valid means a completed review (a rating present, so a set-aside or
+ * a non-attempt never counts), on an instrument not proven invalid, and not a review a corrected
+ * contest proved wrong. A later correct answer ends the lift: only the most recent answer is read.
+ * Only the answer's scored concept is read (`[D-419]`). The day is the timestamp's own calendar
+ * date as written; no clock is read.
+ */
+export function resolveLastWrongAnswerDays(
+  reviewLog: readonly ReviewLogEntry[],
+  conceptKeys: readonly string[],
+  validity: InstrumentValidityProjection,
+): ReadonlyMap<string, string> {
+  const wanted = new Set(conceptKeys);
+  const latest = new Map<
+    string,
+    { readonly at: number; readonly wrong: boolean; readonly day: string }
+  >();
+  for (const entry of reviewLog) {
+    if (entry.kind !== 'review' || entry.rating === null) continue;
+    if (validity.provenInvalid.has(entry.instrumentId)) continue;
+    if (validity.correctedEvidence.has(entry.eventId)) continue;
+    const at = Date.parse(entry.timestamp);
+    if (Number.isNaN(at)) continue;
+    // The answer credits its scored concept only (`[D-419]`): a context concept it merely names
+    // gets no lift.
+    const conceptKey = scoredConceptOf(entry);
+    if (conceptKey === undefined || !wanted.has(conceptKey)) continue;
+    const seen = latest.get(conceptKey);
+    if (seen !== undefined && seen.at > at) continue;
+    latest.set(conceptKey, {
+      at,
+      wrong: entry.rating === 'again',
+      day: entry.timestamp.slice(0, 10),
+    });
+  }
+  const out = new Map<string, string>();
+  for (const [conceptKey, last] of latest) if (last.wrong) out.set(conceptKey, last.day);
+  return out;
 }
