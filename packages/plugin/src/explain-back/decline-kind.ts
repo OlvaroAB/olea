@@ -18,7 +18,8 @@
  */
 
 import {
-  EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+  EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+  EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
   EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
 } from './copy.js';
 
@@ -35,9 +36,14 @@ export function declineKindOf(reason: string | null | undefined): ExplainBackDec
   return 'non-attempt';
 }
 
-/** The one message for a decline of this kind; both genuine-attempt kinds share one string. */
+/** The message for a decline of this kind; each genuine-attempt kind has its own. */
 export function declineMessageFor(kind: ExplainBackDeclineKind): string {
-  return kind === 'non-attempt'
-    ? EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE
-    : EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE;
+  switch (kind) {
+    case 'insufficient-material':
+      return EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE;
+    case 'defective-question':
+      return EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE;
+    default:
+      return EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE;
+  }
 }

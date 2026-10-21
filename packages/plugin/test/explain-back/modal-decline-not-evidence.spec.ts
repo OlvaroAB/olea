@@ -12,7 +12,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { SealedAttemptSupport } from '../../src/explain-back/attempt-sequence.js';
 import {
-  EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+  EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+  EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
   EXPLAIN_BACK_DISCARD_LABEL,
   EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
 } from '../../src/explain-back/copy.js';
@@ -54,12 +55,12 @@ const CASES: readonly {
   {
     kind: 'insufficient-material',
     reason: 'insufficient-material: the notes do not cover it',
-    message: EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+    message: EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
   },
   {
     kind: 'defective-question',
     reason: 'defective-question: it contradicts itself',
-    message: EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+    message: EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
   },
 ];
 

@@ -7,7 +7,8 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+  EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+  EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
   EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
 } from '../../src/explain-back/copy.js';
 import { declineKindOf, declineMessageFor } from '../../src/explain-back/decline-kind.js';
@@ -51,22 +52,50 @@ describe('declineMessageFor', () => {
     expect(declineMessageFor('non-attempt')).toBe(EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE);
   });
 
-  it('shows the one genuine-attempt message for both genuine-attempt kinds', () => {
+  it("shows David's exact string for each genuine-attempt kind", () => {
     expect(declineMessageFor('insufficient-material')).toBe(
-      EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+      "Olea couldn't find enough in your notes to check this answer, so nothing was graded.",
     );
     expect(declineMessageFor('defective-question')).toBe(
-      EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE,
+      "This question couldn't be answered as asked, so nothing was graded. That's down to the question, not your answer.",
     );
-    expect(EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE).not.toBe(
+    expect(declineMessageFor('insufficient-material')).toBe(
+      EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
+    );
+    expect(declineMessageFor('defective-question')).toBe(
+      EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+    );
+    const all = [
+      EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
+      EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
+      EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+    ];
+    expect(new Set(all).size).toBe(3);
+  });
+
+  it('an unknown kind at runtime still shows the non-attempt message', () => {
+    expect(declineMessageFor('something-else' as never)).toBe(
       EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
     );
+    expect(declineMessageFor(declineKindOf('unrecognised: x'))).toBe(
+      EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE,
+    );
+    expect(declineMessageFor(declineKindOf(undefined))).toBe(EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE);
   });
 
   it('says nothing was graded and never implies she did not really try', () => {
-    expect(EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE).toMatch(/nothing was graded/i);
-    expect(EXPLAIN_BACK_DECLINED_GENUINE_ATTEMPT_MESSAGE).not.toMatch(
-      /real attempt|really try|didn't try|did not try|non-attempt/i,
+    for (const m of [
+      EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE,
+      EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE,
+    ]) {
+      expect(m).toMatch(/nothing was graded/i);
+      expect(m).not.toMatch(/real attempt|really try|didn't try|did not try|non-attempt/i);
+    }
+  });
+
+  it('the material message never says her notes lack it', () => {
+    expect(EXPLAIN_BACK_DECLINED_INSUFFICIENT_MATERIAL_MESSAGE).not.toMatch(
+      /don't (have|cover|contain)|lack|missing|not in your notes/i,
     );
   });
 });
