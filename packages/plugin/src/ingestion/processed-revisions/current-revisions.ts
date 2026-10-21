@@ -27,6 +27,16 @@
  *    if pages are still unread. A source the reading could not enumerate is unreadable, fingerprinted
  *    from its own bytes; a source nothing has read yet (the unknown reading, digest `unverified`) is
  *    pending, fingerprinted the same way; with no source reading supplied every source is pending.
+ *  - **Plain-text lecture transcripts** (`.txt` under the courses folder; D-465, PERSISTENCE.md 1.1
+ *    row 10, `ol-egov.141.89.5.100`): recognised as the arrival watch recognises them
+ *    (`resolveTranscriptFormat`, `ingestion/arrival-watch.ts`), so a file the watch would not queue
+ *    as a transcript is not listed. The fingerprint is the `hashContent` of its bytes, the hash its
+ *    `'transcript'` job is keyed by. The state is what that job's outcome would be for these bytes,
+ *    because a transcript's recorded state is its job's outcome (`./feed.ts`, `jobRan`): the same
+ *    reader on the same bytes, read if it yields parts, unreadable if it cannot be read or yields
+ *    none (`[D-426]`; the job fails both). Its reading record's part states are not used: they say
+ *    which parts a concept read consumed, not whether the file could be read. A declared-Markdown
+ *    transcript is a `.md` file and is listed with the notes, as before.
  *
  * ## Only whole listings
  *
@@ -48,6 +58,9 @@ import {
   parseFrontmatter,
   readList,
   readRecordOf,
+  readTranscriptText,
+  resolveTranscriptFormat,
+  type TranscriptReadResult,
   type UnitManifest,
   type VaultPath,
   type VaultSource,
@@ -76,6 +89,20 @@ export function isHidden(path: VaultPath): boolean {
 
 export function isMarkdown(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+/** Plain text: the transcript candidate that is not Markdown, as the arrival watch has it. */
+function isPlainText(path: VaultPath): boolean {
+  return path.toLowerCase().endsWith('.txt');
+}
+
+/**
+ * A plain-text transcript's processing state: what its `'transcript'` job's outcome would be for
+ * these bytes (`core/src/ingestion/transcript-job.ts`): read when the reader yields parts,
+ * unreadable when it cannot read the text or yields none (`empty-document`).
+ */
+function stateOfTranscriptReading(result: TranscriptReadResult): ProcessingState {
+  return result.ok && result.outcome === 'extracted' ? 'read' : 'unreadable';
 }
 
 /**
@@ -177,6 +204,23 @@ export async function listCurrentRevisions(
       courses: [course],
       fingerprint: await hashContent(await deps.vault.readBinary(path)),
       state: manifests !== undefined && manifest === undefined ? 'unreadable' : 'pending',
+    });
+  }
+
+  // Plain-text lecture transcripts (see the module doc): a file the arrival watch would queue as a
+  // transcript, in a course, with the state its job would settle in.
+  for (const path of paths) {
+    if (!isPlainText(path) || formatFromExtension(path) !== null) continue;
+    const course = courseFromPath(path, coursesFolder);
+    if (course === undefined) continue;
+    const text = await deps.vault.read(path);
+    const resolved = resolveTranscriptFormat(path, text);
+    if (resolved.kind !== 'transcript') continue;
+    out.push({
+      path,
+      courses: [course],
+      fingerprint: await hashContent(await deps.vault.readBinary(path)),
+      state: stateOfTranscriptReading(readTranscriptText(text, resolved.format)),
     });
   }
   return out;

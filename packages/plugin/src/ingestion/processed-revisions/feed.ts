@@ -24,8 +24,15 @@
  *    is recorded `pending`, keyed by the hash the job is keyed by. The day is the day it was queued.
  *  - **A lecture transcript** (D-465, `ol-egov.141.89.8.55`) is queued under its own `'transcript'`
  *    job kind and is recorded like an embedded source: `pending` when queued, then `read` when its
- *    job is done or `unreadable` when it failed, keyed by the job's content hash. It has no unit
- *    manifest, so the job's own outcome is the state.
+ *    job is done or `unreadable` when it failed, keyed by the job's content hash. Its reading
+ *    record's part states say which parts a concept read consumed, not whether the file could be
+ *    read, so the job's own outcome is the state. The rebuild lists a plain-text transcript with the
+ *    state that job would settle in (`./current-revisions.ts`, `ol-egov.141.89.5.100`).
+ *  - **A rename Olea saw** ({@link ProcessedRevisionFeed.renamed}; PERSISTENCE.md 2.2 L2 and 1.1
+ *    row 10, `ol-egov.141.89.5.100`): the file's row moves to its new path with its version and day
+ *    (`./store.ts`, `applyRenamed`). Not a processing moment: a move is not new material, records no
+ *    day, and is never announced. A rename Olea did not see is a delete and a create: the new path
+ *    is found by the next rebuild with an unknown day.
  *  - **An embedded source's job settles** ({@link ProcessedRevisionFeed.jobRan}): the source
  *    reading's fold of that source's manifest becomes the state (`read`, or `unreadable` when a page
  *    failed, was not legible, or **the source yielded nothing**, `[D-426]`; still `pending` while
@@ -103,7 +110,9 @@ import type { ObsidianProcessedRevisionStore, ProcessedRevisionInput } from './s
 export type ProcessedArrival = ProcessedRevisionInput;
 
 export interface ProcessedRevisionFeedDeps {
-  readonly store: Pick<ObsidianProcessedRevisionStore, 'load' | 'recordProcessed' | 'rebuild'>;
+  /** A store without `recordRenamed` (a test double) moves nothing on a rename. */
+  readonly store: Pick<ObsidianProcessedRevisionStore, 'load' | 'recordProcessed' | 'rebuild'> &
+    Partial<Pick<ObsidianProcessedRevisionStore, 'recordRenamed'>>;
   readonly vault: VaultSource;
   /** The source reading's reader boundary (`grove/unit-manifest-store.ts`'s `manifestsFor`). */
   readonly manifestsFor: (
@@ -128,6 +137,11 @@ export interface ProcessedRevisionFeed {
   observeEnqueues(inner: JobEnqueuer): JobEnqueuer;
   /** One `engine.tick()` result, with the queue as it stands right after it. */
   jobRan(tick: TickResult, jobs: readonly PersistedJob[]): Promise<void>;
+  /**
+   * A rename Olea saw (a vault `rename` event, `oldPath` to `path`): moves the file's row to the new
+   * path with its version and day, counted for the new path's courses. Records no day.
+   */
+  renamed(oldPath: VaultPath, newPath: VaultPath): Promise<void>;
   /**
    * Tells `listener` each time a file version becomes readable and is new to the record (see the
    * module doc). Not awaited; a throw or a rejection is swallowed. Returns what unsubscribes it.
@@ -252,6 +266,26 @@ export function createProcessedRevisionFeed(
   const courseOfSource = (path: VaultPath): string | undefined =>
     isHidden(path) ? undefined : courseFromPath(path, coursesFolder);
 
+  /**
+   * The courses a file counts for at `path`, by the rebuild's own derivation
+   * (`listCurrentRevisions`): a note's from its text, any other file's from its folder. So a row a
+   * rename moved and the same file found by the next rebuild count for the same courses.
+   */
+  const coursesAt = async (path: VaultPath): Promise<readonly string[]> => {
+    if (isHidden(path)) return [];
+    if (!isMarkdown(path)) {
+      const course = courseOfSource(path);
+      return course === undefined ? [] : [course];
+    }
+    const note = await processedNoteRevision(
+      path,
+      await deps.vault.read(path),
+      'read',
+      coursesFolder,
+    );
+    return note?.courses ?? [];
+  };
+
   const noteProcessed = (path: VaultPath, currentText: string): Promise<void> => {
     if (!isMarkdown(path) || isHidden(path)) return Promise.resolve();
     return serial(async () =>
@@ -286,6 +320,16 @@ export function createProcessedRevisionFeed(
     },
 
     noteProcessed,
+
+    renamed(oldPath, newPath) {
+      if (deps.store.recordRenamed === undefined || oldPath === newPath) return Promise.resolve();
+      return serial(async () => {
+        if (!(await gate)) return;
+        const courses = await coursesAt(newPath);
+        if (courses.length === 0) return;
+        await deps.store.recordRenamed?.(oldPath, newPath, courses);
+      });
+    },
 
     subscribe(listener) {
       listeners.add(listener);
@@ -338,9 +382,10 @@ export function createProcessedRevisionFeed(
       if (job === undefined || target === null || course === undefined) return Promise.resolve();
       const jobHash = job.contentHash;
 
-      // D-465 (`ol-egov.141.89.8.55`): a transcript has no unit manifest (the manifest enumerates
-      // paged documents), so its state is the job's own outcome, keyed by the hash the job is keyed
-      // by: `done` is `read`, `failed` is `unreadable`. A deferred tick never reaches here.
+      // D-465 (`ol-egov.141.89.8.55`): a transcript's state is the job's own outcome (its reading
+      // record's part states say what a concept read consumed, not whether it could be read), keyed
+      // by the hash the job is keyed by: `done` is `read`, `failed` is `unreadable`. A deferred tick
+      // never reaches here.
       if (target.kind === 'transcript') {
         return serial(() =>
           record({

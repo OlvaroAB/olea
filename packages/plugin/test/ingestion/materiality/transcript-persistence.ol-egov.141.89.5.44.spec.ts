@@ -17,6 +17,7 @@
 // behaviour lands, and is then flipped to a plain `it`. Every transcript is synthetic (invented
 // words, "course A"); nothing comes from a real vault.
 import {
+  type CalendarDay,
   findUnreadableFiles,
   hashContent,
   indexDocument,
@@ -24,12 +25,19 @@ import {
   type VaultPath,
 } from 'olea-core';
 import { describe, expect, it } from 'vitest';
+import { createVaultUnitManifestStore } from '../../../src/grove/unit-manifest-store.js';
 import {
   type ResolvedLinksPort,
   readLectureBundles,
   teachingEventResolverFrom,
 } from '../../../src/ingestion/lecture-links.js';
 import { readTranscriptVersion } from '../../../src/ingestion/materiality/transcript-grain.js';
+import { listCurrentRevisions } from '../../../src/ingestion/processed-revisions/current-revisions.js';
+import { createProcessedRevisionFeed } from '../../../src/ingestion/processed-revisions/feed.js';
+import {
+  applyRenamed,
+  ObsidianProcessedRevisionStore,
+} from '../../../src/ingestion/processed-revisions/store.js';
 import {
   bytesHashOf,
   citeTranscriptPart,
@@ -50,6 +58,7 @@ import {
 import {
   type CitationSession,
   citationSession,
+  DEVICE,
   ingestionSession,
   keyText,
   manifestLogText,
@@ -117,6 +126,42 @@ async function expectEditOutcome(
   expect(historyAdded(history, vault)).toEqual(expected.suspended);
   expect(s.actions.onRelocationProposed).not.toHaveBeenCalled();
   expect(vault.files.get(T)).toBe(transcriptAfterEdit);
+}
+
+/**
+ * An ingestion session opened on a vault that does not yet hold `path`, which is then put back: the
+ * file arrives while Olea runs, so it is processed with a known day. A file already there when a
+ * session starts is found by the start's rebuild with an unknown day ([D-426]; PERSISTENCE.md 2.9).
+ */
+async function sessionBeforeArrival(
+  host: FakeDataHost,
+  vault: MemoryVault,
+  now: Date,
+  path: VaultPath,
+): Promise<Awaited<ReturnType<typeof ingestionSession>>> {
+  const text = vault.files.get(path);
+  if (text === undefined) throw new Error(`not found: ${path}`);
+  vault.files.delete(path);
+  const session = await ingestionSession(host, vault, now);
+  vault.files.set(path, text);
+  return session;
+}
+
+/**
+ * A running session's processed-revision record and feed, composed as `main.ts` composes them and
+ * started (its rebuild has run), for a rename the session sees. The restart fixtures' ingestion
+ * session keeps its feed to itself; this is the same record over the same saved state.
+ */
+async function runningFeed(host: FakeDataHost, vault: MemoryVault, now: Date) {
+  const manifests = createVaultUnitManifestStore({ vault, deviceId: DEVICE, now: () => now });
+  await manifests.load();
+  const feed = createProcessedRevisionFeed({
+    store: new ObsidianProcessedRevisionStore(host, () => now),
+    vault,
+    manifestsFor: (paths) => manifests.manifestsFor(paths),
+  });
+  await feed.start();
+  return feed;
 }
 
 /** Her links as Obsidian resolves them: `[[name]]` in a Markdown file, to a file in its folder. */
@@ -352,22 +397,33 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
   });
 
   // PERSISTENCE.md 1.1 row 10 and 2.1: an observed rename moves the processed-revision row and
-  // keeps its day. Not built: nothing in `ingestion/processed-revisions/` handles a rename, and the
-  // trigger's `onSourceRenamed` moves anchors only. A code gap: the row's shape is unchanged.
-  it.fails('C5 [not built: no rename handling in processed-revisions/] a rename seen while running moves the processed-revision row and keeps its day', async () => {
+  // keeps its day (`ol-egov.141.89.5.100`: the feed's `renamed`, the store's `applyRenamed`). The
+  // transcript arrives while the first session runs, so its day is known; the next session sees the
+  // rename while it runs; the one after meets the file at its new path, as the same row.
+  it('C5, a rename seen while running moves the processed-revision row and keeps its day', async () => {
     const vault = await lectureVault();
     const host = new FakeDataHost();
-    const first = await ingestionSession(host, vault, DAY_ONE);
+    const first = await sessionBeforeArrival(host, vault, DAY_ONE, T);
     await first.arrive([T], 1);
     await first.drain();
     const row = (await first.revisionsNow()).revisions[T];
-    expect(row?.state).toBe('read');
+    expect(row).toMatchObject({ state: 'read', firstProcessedDay: '2026-10-02' });
+
+    const running = restartedHost(host);
+    const feed = await runningFeed(running, vault, DAY_TWO);
     const moved = '01 Courses/COURSEA/Transcripts/lecture three.txt';
     vault.move(T, moved);
-    const second = await ingestionSession(restartedHost(host), vault, DAY_TWO);
-    await second.arrive([moved], 1);
-    await second.drain();
-    expect((await second.revisionsNow()).revisions[moved]).toEqual(row);
+    await feed.renamed(T, moved);
+    await feed.idle();
+
+    const third = await ingestionSession(restartedHost(running), vault, DAY_THREE);
+    await third.arrive([moved], 1);
+    await third.drain();
+    expect(third.enqueues).toEqual([{ status: 'duplicate', existingStatus: 'done' }]);
+    const revisions = (await third.revisionsNow()).revisions;
+    expect(revisions[moved]).toEqual(row);
+    expect(revisions[T]).toBeUndefined();
+    expect(vault.files.get(moved)).toBe(transcriptOf(LECTURE));
   });
 
   it('C5, a rename while Olea was closed: a delete and a create, so the instruments are withheld and the new path is read as a new file', async () => {
@@ -398,27 +454,35 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
     expect(manifest?.entries).toHaveLength(6);
   });
 
-  // PERSISTENCE.md 1.1 row 10: "An unobserved rename makes a new row, so the file reads as newly
-  // processed." Not so for the same bytes: the queue dedups by bytes and ignores the path, so the
-  // new path's enqueue is a duplicate, and the feed records only an admitted enqueue
-  // (`processed-revisions/feed.ts`, `observeEnqueues`, lines 297-322); the start's rebuild lists no
-  // `.txt` (`current-revisions.ts`, `listCurrentRevisions`, lines 153-157). A code gap: no field is
-  // needed.
-  it.fails('C5 [not built: feed.ts:297-322 records only an admitted enqueue] a rename while closed gives the new path a processed-revision row', async () => {
+  // PERSISTENCE.md 1.1 row 10: "An unobserved rename makes a new row", and 2.9: "The rebuild gives
+  // a file with no row an unknown day." The same bytes at the new path enqueue as a duplicate (the
+  // queue dedups by bytes and ignores the path), so the row comes from the start's rebuild, which
+  // lists plain-text transcripts (`current-revisions.ts`, `ol-egov.141.89.5.100`): a new row, read,
+  // with an unknown day bounded by the day it was found, never the day of the start ([D-426]). The
+  // old path's row is kept, as for any file no longer found: equal bytes are never lineage (2.2).
+  it('C5, a rename while closed gives the new path a processed-revision row of its own: found by the start, read, its day unknown', async () => {
     const vault = await lectureVault();
     const host = new FakeDataHost();
     const first = await ingestionSession(host, vault, DAY_ONE);
     await first.arrive([T], 1);
     await first.drain();
+    const row = (await first.revisionsNow()).revisions[T];
+    expect(row?.state).toBe('read');
     const moved = '01 Courses/COURSEA/Transcripts/transcript.txt';
     vault.move(T, moved);
     const second = await ingestionSession(restartedHost(host), vault, DAY_TWO);
     await second.arrive([moved], 1);
     await second.drain();
-    expect((await second.revisionsNow()).revisions[moved]).toMatchObject({
+    expect(second.enqueues).toEqual([{ status: 'duplicate', existingStatus: 'done' }]);
+    const revisions = (await second.revisionsNow()).revisions;
+    expect(revisions[moved]).toEqual({
+      fingerprint: row?.fingerprint,
+      courses: ['COURSEA'],
       state: 'read',
-      firstProcessedDay: '2026-10-03',
+      firstProcessedDay: null,
+      noLaterThan: '2026-10-03',
     });
+    expect(revisions[T]).toEqual(row);
   });
 
   it('C6, a re-export over the same file (lineage by edit in place), re-cut: relocated by text, no judge', async () => {
@@ -829,6 +893,53 @@ describe('A: the demonstrations [D-465] requires, across a restart', () => {
   });
 });
 
+describe('C5, the processed-revision edges (ol-egov.141.89.5.100)', () => {
+  it('the rebuild lists a plain-text transcript in a course, as the arrival watch recognises it, and no other text file', async () => {
+    const vault = await lectureVault();
+    vault.files.set('01 Courses/COURSEA/Lecture 4/empty.txt', '  \n');
+    vault.files.set('Inbox/loose transcript.txt', transcriptOf(LECTURE));
+    vault.files.set('01 Courses/COURSEA/.hidden/transcript.txt', transcriptOf(LECTURE));
+    const listed = await listCurrentRevisions({ vault });
+    const texts = listed.filter((found) => found.path.endsWith('.txt'));
+    expect(texts).toEqual([
+      {
+        path: '01 Courses/COURSEA/Lecture 3/transcript.txt',
+        courses: ['COURSEA'],
+        fingerprint: await bytesHashOf(transcriptOf(LECTURE)),
+        state: 'read',
+      },
+      {
+        path: '01 Courses/COURSEA/Lecture 4/empty.txt',
+        courses: ['COURSEA'],
+        fingerprint: await bytesHashOf('  \n'),
+        state: 'unreadable',
+      },
+    ]);
+  });
+
+  it('a rename moves nothing onto another file’s row, out of every course, or from a path with no row', () => {
+    const row = {
+      fingerprint: 'h-one',
+      courses: ['COURSEA'],
+      state: 'read' as const,
+      firstProcessedDay: '2026-10-02' as CalendarDay,
+    };
+    const other = { ...row, fingerprint: 'h-two', firstProcessedDay: '2026-10-03' as CalendarDay };
+    const held = {
+      version: 2 as const,
+      rebuiltOn: '2026-10-02' as CalendarDay,
+      revisions: { [T]: row, 'elsewhere.txt': other },
+    };
+    expect(applyRenamed(held, T, 'elsewhere.txt', ['COURSEA'])).toBe(held);
+    expect(applyRenamed(held, T, 'Inbox/transcript.txt', [])).toBe(held);
+    expect(applyRenamed(held, 'nothing here.txt', 'moved.txt', ['COURSEA'])).toBe(held);
+    expect(applyRenamed(held, T, 'moved.txt', ['COURSEB']).revisions).toEqual({
+      'elsewhere.txt': other,
+      'moved.txt': { ...row, courses: ['COURSEB'] },
+    });
+  });
+});
+
 describe('B6, the plugin half: a byte-identical copy at a second path', () => {
   it('the second job is a duplicate, yet the second path has its own reading record and index document, and no lineage', async () => {
     const copy = '01 Courses/COURSEA/Lecture 3 copy/transcript.txt';
@@ -870,7 +981,8 @@ describe('E1, the plugin half: a new reader version, with the part rule unchange
   it('the transcript is re-read once; the reading record writes nothing; anchors, sidecars, and the processed-revision fingerprint and day are unchanged', async () => {
     const vault = await lectureVault();
     const host = new FakeDataHost();
-    const first = await ingestionSession(host, vault, DAY_ONE);
+    // The transcript arrives while Olea runs, so its day is known (`sessionBeforeArrival`).
+    const first = await sessionBeforeArrival(host, vault, DAY_ONE, T);
     await first.arrive([T], 1);
     await first.drain();
     await first.manifests.manifestsFor([T]);
