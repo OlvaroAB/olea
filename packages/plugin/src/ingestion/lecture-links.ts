@@ -19,12 +19,14 @@
 
 import {
   associateLectures,
+  hashContent,
   isTranscriptRole,
   type LectureBundle,
   type LectureFileKind,
   type LinkedFile,
   type TeachingEventResolver,
   type VaultPath,
+  type VaultSource,
 } from 'olea-core';
 
 /** The vault's resolved links, as one read. A port: Obsidian's metadata cache is the implementation. */
@@ -71,12 +73,52 @@ export function readLectureBundles(port: ResolvedLinksPort): LectureBundle[] {
 }
 
 /**
+ * Byte-identical transcript copies (`ol-egov.141.89.5.101`, D-565). Reads every transcript-kind
+ * file's bytes and groups equal bytes, whatever the names or folders. Only groups of two or more
+ * are returned, as path -> group id (a hash of the bytes, computed here in memory). Nothing is
+ * stored or written; a file that differs in any byte is never grouped, and identical passages
+ * inside otherwise different files are never compared. Called fresh on every read.
+ */
+export async function readTranscriptCopyGroups(
+  port: ResolvedLinksPort,
+  vault: Pick<VaultSource, 'list' | 'readBinary'>,
+): Promise<ReadonlyMap<VaultPath, string>> {
+  const paths = await vault.list({ extensions: ['txt', 'md'] });
+  const byHash = new Map<string, VaultPath[]>();
+  for (const path of paths) {
+    if (lectureKindOf(path, port.frontmatterFor(path)) !== 'transcript') continue;
+    let hash: string;
+    try {
+      hash = await hashContent(await vault.readBinary(path));
+    } catch {
+      continue; // unreadable now: it stays its own event, as before
+    }
+    const group = byHash.get(hash);
+    if (group === undefined) byHash.set(hash, [path]);
+    else group.push(path);
+  }
+  const out = new Map<VaultPath, string>();
+  for (const [hash, group] of byHash) {
+    if (group.length < 2) continue;
+    for (const path of group) out.set(path, hash);
+  }
+  return out;
+}
+
+/**
  * The repetition guard's lookup (`ol-egov.141.89.3.43`, D-465): a path's teaching event is its
  * lecture bundle, so the slides, the transcript and the note that linked them are ONE event in
  * concept size. A bundle is named by its first member; a path in no bundle has no event. Pure.
+ *
+ * `copyGroups` (`ol-egov.141.89.5.101`, D-565, from `readTranscriptCopyGroups`): byte-identical
+ * transcripts are one event. A copy already in a bundle keeps that bundle's event; an unbundled
+ * copy joins the event of the first (sorted) bundled member of its group, else all of them share
+ * one `copy:` event. Two bundled copies in different bundles stay in their own bundles (her links
+ * are never merged here). A re-cut or corrected export differs in bytes and needs her links.
  */
 export function teachingEventResolverFrom(
   bundles: readonly LectureBundle[],
+  copyGroups?: ReadonlyMap<VaultPath, string>,
 ): TeachingEventResolver {
   const eventOf = new Map<VaultPath, string>();
   for (const bundle of bundles) {
@@ -84,6 +126,21 @@ export function teachingEventResolverFrom(
     if (id === undefined) continue;
     for (const path of [...bundle.members, ...bundle.via]) {
       if (!eventOf.has(path)) eventOf.set(path, id);
+    }
+  }
+  if (copyGroups !== undefined && copyGroups.size > 0) {
+    const groups = new Map<string, VaultPath[]>();
+    for (const [path, hash] of copyGroups) {
+      const g = groups.get(hash);
+      if (g === undefined) groups.set(hash, [path]);
+      else g.push(path);
+    }
+    for (const [hash, members] of groups) {
+      const sorted = [...members].sort();
+      const bundled = sorted.find((p) => eventOf.has(p));
+      const shared = bundled !== undefined ? eventOf.get(bundled) : `copy:${hash}`;
+      if (shared === undefined) continue;
+      for (const path of sorted) if (!eventOf.has(path)) eventOf.set(path, shared);
     }
   }
   return (path) => eventOf.get(path);
