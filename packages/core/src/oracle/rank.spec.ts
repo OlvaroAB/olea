@@ -2897,7 +2897,7 @@ describe('rankOracle — the bounded wrong-answer lift to need ([D-554], ol-egov
     for (const w of [1, 2.5]) {
       const input = pairInput({
         ...wrongOn(ASOF),
-        options: { blendWeights: { relevance: 1, need: w, proximity: 1 } },
+        options: { blendWeights: { relevance: 1, need: w } },
       });
       const gain = get(input, 'wrong').priorityScore - get(input, 'right').priorityScore;
       expect(gain).toBeGreaterThan(0);
@@ -2941,7 +2941,7 @@ describe('rankOracle — the bounded wrong-answer lift to need ([D-554], ol-egov
   });
 
   it('unknown need is not lifted (already ordered at the maximum)', () => {
-    const input = pairInput({ ...wrongOn(ASOF), retrievability: undefined });
+    const { retrievability: _noRecall, ...input } = pairInput(wrongOn(ASOF));
     expect(get(input, 'wrong').factors.needOrderingInput).toBe(1);
     expect('wrongAnswerLift' in get(input, 'wrong').factors).toBe(false);
   });
