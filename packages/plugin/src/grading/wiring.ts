@@ -73,8 +73,9 @@
  * (`ExplainWhyPort`/`requestExplainWhy`, `review/explainWhy.ts` /
  * `review/session.ts`) — the same grounded explanation the on-demand tap
  * shows, not a Feynman-mode input. `gradeExplainBackAttempt` immediately
- * below still has no caller anywhere in this package, and that gap is not
- * closed by this update.
+ * below still had no caller anywhere in this package when this update was
+ * written, and that gap was not closed by it. (Since closed: `main.ts`'s
+ * explain-back composition calls it; see `ol-egov.141.89.6.95`.)
  *
  * ===========================================================================
  * `ol-g3a0.1` UPDATE: A SECOND, INDEPENDENT REASON THIS RETURNS `null`
@@ -88,7 +89,7 @@
  * file's module doc for the full story, including why a KV flag and not a
  * new endpoint, and why the write side is a tested setter rather than a
  * real producer today. `gradeExplainBackAttempt`'s "no caller anywhere in
- * this package" gap, above, is UNCHANGED by this update: this wiring makes
+ * this package" gap, above (since closed), was UNCHANGED by this update: this wiring makes
  * the kill-switch itself provably effective (`ol-g3a0.1`'s acceptance
  * criterion), and inherits, rather than closes, the pre-existing reachability
  * gap on the function it greys — closing that is `ol-tka5`/`ol-548w`'s job,
