@@ -75,6 +75,7 @@ import type {
 } from 'olea-core';
 import {
   classifyKnowledgeKind,
+  DEFAULT_COURSES_FOLDER,
   EMPTY_INVENTORY,
   enumerateVaultInstruments,
   extractTier3Evidence,
@@ -87,6 +88,7 @@ import {
   routeKnowledgeKindClassification,
 } from 'olea-core';
 import { PROVISIONAL_CONFIDENCE_FLOOR } from './constants.js';
+import { isOleaHomeNote } from './home-note.js';
 import { stripOleaFrontmatter } from './strip-olea-frontmatter.js';
 
 /**
@@ -139,8 +141,12 @@ export interface ConceptRoutingDecision {
  */
 export async function buildKnowledgeKindSourceMaterial(
   vault: VaultSource,
-  concept: Pick<ConceptRecord, 'sourcePaths' | 'boundNotePath'> & { readonly name?: string },
+  concept: Pick<ConceptRecord, 'sourcePaths' | 'boundNotePath'> & {
+    readonly name?: string;
+    readonly courses?: readonly (string | undefined)[];
+  },
   derivedUnits?: DerivedUnitSupplier,
+  coursesFolder: VaultPath = DEFAULT_COURSES_FOLDER,
 ): Promise<readonly KnowledgeKindSourcePassage[]> {
   const passages: KnowledgeKindSourcePassage[] = [];
   const orderedPaths: readonly VaultPath[] =
@@ -170,16 +176,22 @@ export async function buildKnowledgeKindSourceMaterial(
       },
     });
   }
-  // `[D-547]`: an identity introduced ONLY by non-markdown sources (a PDF, a deck) has no note to
-  // read, so its input is the extracted units of those same documents that name it.
+  // `[D-547]`, ruled over by `[D-553]`: an identity introduced ONLY by non-markdown sources (a PDF,
+  // a deck: its assessment wording) has no note to read. Its input is, first, the passage of its
+  // own course's reading set that names it; only when that course has none, the extracted units of
+  // those same documents that name it. Under `[D-544]` the reading set is that course's alone.
   if (
     passages.length === 0 &&
-    derivedUnits !== undefined &&
     concept.name !== undefined &&
     orderedPaths.length > 0 &&
     !orderedPaths.some((p) => p.toLowerCase().endsWith('.md'))
   ) {
-    passages.push(...(await namingUnitPassages(derivedUnits, concept.name, orderedPaths)));
+    passages.push(
+      ...(await readingSetPassages(vault, concept.name, concept.courses ?? [], coursesFolder)),
+    );
+    if (passages.length === 0 && derivedUnits !== undefined) {
+      passages.push(...(await namingUnitPassages(derivedUnits, concept.name, orderedPaths)));
+    }
   }
   return passages;
 }
@@ -216,6 +228,65 @@ export function createDerivedUnitSupplier(vault: VaultSource): DerivedUnitSuppli
     })();
     return pending;
   };
+}
+
+/**
+ * `[D-553]` (`ol-egov.141.89.3.58`, under `[D-544]`): the blocks of a course's own reading set that
+ * name a concept known only from assessment wording. The reading set is the markdown notes under
+ * that course's folder (`courseFromPath`'s rule): never another course's, never a concept known
+ * for no course, never Olea's own home notes (generated practice is not her reading). One passage
+ * per blank-line-separated block that names the concept (the same word-boundary rule as the unit
+ * input, `findMentionedTermsAfter`), anchored to its own note and character range, bounded by the
+ * same declared limits. A note that cannot be listed or read contributes nothing.
+ */
+async function readingSetPassages(
+  vault: VaultSource,
+  name: string,
+  courses: readonly (string | undefined)[],
+  coursesFolder: VaultPath,
+): Promise<KnowledgeKindSourcePassage[]> {
+  const passages: KnowledgeKindSourcePassage[] = [];
+  const courseCodes = [
+    ...new Set(courses.filter((c): c is string => c !== undefined && c !== '')),
+  ].sort();
+  for (const course of courseCodes) {
+    const root = `${coursesFolder}/${course}/`;
+    let paths: readonly VaultPath[];
+    try {
+      paths = await vault.list({ under: `${coursesFolder}/${course}`, extensions: ['md'] });
+    } catch {
+      continue;
+    }
+    for (const path of paths) {
+      if (passages.length >= MAX_ROUTING_UNITS_PER_IDENTITY) return passages;
+      if (!path.startsWith(root) || !path.toLowerCase().endsWith('.md')) continue;
+      let raw: string;
+      try {
+        raw = await vault.read(path);
+      } catch {
+        continue;
+      }
+      if (isOleaHomeNote(raw)) continue;
+      const text = stripOleaFrontmatter(raw);
+      let offset = 0;
+      for (const block of text.split(/\n[ \t]*\n/)) {
+        const start = text.indexOf(block, offset);
+        offset = start + block.length;
+        if (block.trim().length === 0) continue;
+        if (findMentionedTermsAfter(block, [name], 0).length === 0) continue;
+        const bounded = block.slice(0, MAX_ROUTING_UNIT_CHARS);
+        passages.push({
+          text: bounded,
+          anchor: {
+            sourcePath: path,
+            location: { page: 1, charRange: { start, end: start + bounded.length } },
+          },
+        });
+        if (passages.length >= MAX_ROUTING_UNITS_PER_IDENTITY) return passages;
+      }
+    }
+  }
+  return passages;
 }
 
 async function namingUnitPassages(
@@ -263,6 +334,7 @@ export async function classifyForRouting(
   vault: VaultSource,
   concept: ConceptRecord,
   derivedUnits: DerivedUnitSupplier = createDerivedUnitSupplier(vault),
+  coursesFolder: VaultPath = DEFAULT_COURSES_FOLDER,
 ): Promise<KnowledgeKindClassification> {
   const UNCLASSIFIED: KnowledgeKindClassification = {
     status: 'unclassified',
@@ -271,7 +343,12 @@ export async function classifyForRouting(
   };
   if (routing.classifier === null) return UNCLASSIFIED;
 
-  const sourceMaterial = await buildKnowledgeKindSourceMaterial(vault, concept, derivedUnits);
+  const sourceMaterial = await buildKnowledgeKindSourceMaterial(
+    vault,
+    concept,
+    derivedUnits,
+    coursesFolder,
+  );
   const result = await classifyKnowledgeKind(
     routing.classifier,
     { conceptName: concept.name, sourceMaterial },
