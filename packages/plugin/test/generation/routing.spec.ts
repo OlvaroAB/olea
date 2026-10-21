@@ -23,6 +23,10 @@ import {
   classifyForRouting,
   createDerivedUnitSupplier,
   decideConceptRouting,
+  followOnKindOrder,
+  groupDeficit,
+  KnowledgeKindLabels,
+  knowledgeKindLabelsFor,
   MAX_ROUTING_UNIT_CHARS,
   MAX_ROUTING_UNITS_PER_IDENTITY,
   quizDeficit,
@@ -442,16 +446,17 @@ describe('buildConceptInstrumentInventory', () => {
 describe('decideConceptRouting / quizDeficit', () => {
   const EMPTY: ConceptInstrumentInventory = { retrieval: 0, quiz: 0, explainBack: 0 };
 
-  it('unclassified routes to the retrieval baseline: quiz is never warranted', () => {
+  it('unclassified routes to the retrieval baseline: the quiz group reads no share (a reading, never a gate, since [D-549])', () => {
     const decision = decideConceptRouting(
       { status: 'unclassified', confidence: undefined, method: 'model' },
       EMPTY,
     );
     expect(decision.mix).toEqual({ retrieval: 'floor', quiz: 'none', explainBack: 'none' });
     expect(quizDeficit(decision)).toBe(0);
+    expect(groupDeficit(decision, 'retrieval')).toBe(1);
   });
 
-  it('a classified `category` against an empty inventory warrants quiz drafting', () => {
+  it('a classified `category` against an empty inventory reads a quiz deficit', () => {
     const decision = decideConceptRouting(
       { status: 'classified', kind: 'category', confidence: 0.9, method: 'model' },
       EMPTY,
@@ -465,5 +470,80 @@ describe('decideConceptRouting / quizDeficit', () => {
       { retrieval: 0, quiz: 1, explainBack: 0 },
     );
     expect(quizDeficit(decision)).toBe(0);
+    expect(groupDeficit(decision, 'retrieval')).toBe(3);
+  });
+});
+
+describe('followOnKindOrder: the kind of knowledge orders the next kinds (`[D-549]`, ol-egov.141.89.105.8)', () => {
+  const LISTED = ['qa', 'cloze', 'mcq'] as const;
+  const EMPTY: ConceptInstrumentInventory = { retrieval: 0, quiz: 0, explainBack: 0 };
+
+  it('a fact puts recall first, a category multiple choice first, against an empty inventory', () => {
+    expect(followOnKindOrder('fact', EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder('category', EMPTY, LISTED)).toEqual(['mcq', 'qa', 'cloze']);
+  });
+
+  it('equal deficits keep the preferred order: a principle (both drafted groups at the floor) and her observed order', () => {
+    expect(followOnKindOrder('principle', EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder('principle', EMPTY, ['mcq', 'qa', 'cloze'])).toEqual([
+      'mcq',
+      'qa',
+      'cloze',
+    ]);
+  });
+
+  it('reads deficits against what the concept holds, so a met share yields to the next group', () => {
+    // A fact holding three recall items has met its recall share (dominant, three steps).
+    expect(followOnKindOrder('fact', { retrieval: 3, quiz: 0, explainBack: 0 }, LISTED)).toEqual([
+      'mcq',
+      'qa',
+      'cloze',
+    ]);
+    // A category holding two multiple-choice items has met its quiz share (weighted, two steps).
+    expect(
+      followOnKindOrder('category', { retrieval: 0, quiz: 2, explainBack: 0 }, LISTED),
+    ).toEqual(['qa', 'cloze', 'mcq']);
+  });
+
+  it('the unclassified reading orders recall first and never removes a kind', () => {
+    expect(followOnKindOrder(null, EMPTY, LISTED)).toEqual(['qa', 'cloze', 'mcq']);
+    expect(followOnKindOrder(null, EMPTY, ['mcq', 'cloze', 'qa'])).toEqual(['cloze', 'qa', 'mcq']);
+    for (const kind of ['fact', 'category', 'principle', null] as const) {
+      expect([...followOnKindOrder(kind, EMPTY, LISTED)].sort()).toEqual(['cloze', 'mcq', 'qa']);
+    }
+  });
+});
+
+describe('KnowledgeKindLabels: the label kept for the further calls (`[D-549]`)', () => {
+  const classified = (kind: 'fact' | 'category' | 'principle') =>
+    ({ status: 'classified', kind, confidence: 0.9, method: 'model' }) as const;
+  const unclassified = { status: 'unclassified', confidence: undefined, method: 'model' } as const;
+
+  it('keys by course and concept, reads null when nothing is held, and lets a real label replace another', () => {
+    const labels = new KnowledgeKindLabels();
+    expect(labels.kindFor('COURSE-A', 'k1')).toBeNull();
+    expect(labels.has('COURSE-A', 'k1')).toBe(false);
+    labels.record('COURSE-A', 'k1', classified('fact'));
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('fact');
+    expect(labels.kindFor('COURSE-B', 'k1')).toBeNull();
+    labels.record('COURSE-A', 'k1', classified('principle'));
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('principle');
+  });
+
+  it('an unclassified reading is held only where no label is, and never erases one', () => {
+    const labels = new KnowledgeKindLabels();
+    labels.record('COURSE-A', 'k1', unclassified);
+    expect(labels.has('COURSE-A', 'k1')).toBe(true);
+    expect(labels.kindFor('COURSE-A', 'k1')).toBeNull();
+    labels.record('COURSE-A', 'k1', classified('category'));
+    labels.record('COURSE-A', 'k1', unclassified);
+    expect(labels.kindFor('COURSE-A', 'k1')).toBe('category');
+  });
+
+  it('the default labels are one per vault object', () => {
+    const a = new MemoryVaultSource();
+    const b = new MemoryVaultSource();
+    expect(knowledgeKindLabelsFor(a)).toBe(knowledgeKindLabelsFor(a));
+    expect(knowledgeKindLabelsFor(a)).not.toBe(knowledgeKindLabelsFor(b));
   });
 });
