@@ -145,17 +145,21 @@ describe('the states show what they advertise', () => {
     expect(firstForItsConcept).toBeDefined();
   });
 
-  it('a mid-semester day with no imminent quiz expresses no format preference', async () => {
+  it('a mid-semester day with no imminent quiz prefers the card, as the written class does', async () => {
     const scenario = await buildSessionScenario('session-short-20', vault);
     const model = sessionModel(scenario);
-    // `[D-246]`/VOC-7 (`abb6d75`): `formatPreference` now resolves to
-    // `unknown` ONLY when there is no next assessment at all; an assessment
-    // whose type the declared-class word table does not recognise falls to
-    // `'written'` rather than `unknown` (`format-class.ts`'s own default).
-    // `typesMatching('written')` still resolves to `[]`, so every item is
-    // still `no-preference` below — the label changed, the matching did not.
+    // `[D-246]`/VOC-7 (`abb6d75`): `formatPreference` resolves to `unknown`
+    // ONLY when there is no next assessment at all; an assessment whose type
+    // the declared-class word table does not recognise falls to `'written'`
+    // (`format-class.ts`'s own default). F4.8 as amended by `[D-550]`: a
+    // written assessment's first kind is a question-and-answer card, so the
+    // composer prefers a concept's card and nothing else (`ol-egov.141.89.105.25`).
     expect(model.formatPreference).toBe('written');
-    expect(model.items.every((i) => i.formatMatch === 'no-preference')).toBe(true);
+    expect(
+      model.items.every(
+        (i) => i.formatMatch === (i.instrumentType === 'qa' ? 'preferred-format' : 'no-preference'),
+      ),
+    ).toBe(true);
   });
 
   it('the tight state is where the budget actually bites, and it names what it dropped', async () => {
