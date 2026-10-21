@@ -61,6 +61,12 @@ export interface PaperItemGenerationRequest {
   readonly conceptName: string;
   readonly sourceChunks: readonly string[];
   readonly purpose: 'readiness';
+  /**
+   * `[D-437]` W1 — the slot's demand, present ONLY when the blueprint's demand was READ from her
+   * papers (`intendedDemandBasis === 'read'`). Absent for the recall default and for a blueprint
+   * with no basis: the request then carries no such key at all and is today's request.
+   */
+  readonly intendedDemand?: PaperDemand;
 }
 
 /** `'refused'` covers both a port that could not even attempt the call and a generator's own INV-5 refusal — this module treats both identically (F4.10: neither is filled with anything invented). `reason` is a short, structural string (D-005: no content). */
@@ -124,6 +130,7 @@ export async function fillPaperBlueprintSlots(
       conceptName: slot.conceptName,
       sourceChunks: slot.sourceChunks,
       purpose: 'readiness',
+      ...(blueprint.intendedDemandBasis === 'read' ? { intendedDemand: slot.intendedDemand } : {}),
     });
 
     if (result.status === 'refused') {

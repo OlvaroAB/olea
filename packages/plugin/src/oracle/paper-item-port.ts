@@ -150,6 +150,8 @@ function toWorkerPayload(request: PaperItemGenerationRequest): unknown {
     conceptName: request.conceptName,
     sourceChunks: [...request.sourceChunks],
     purpose: request.purpose,
+    // `[D-437]` W1: only a demand read from her papers travels; otherwise today's payload exactly.
+    ...(request.intendedDemand !== undefined ? { intendedDemand: request.intendedDemand } : {}),
   };
 }
 

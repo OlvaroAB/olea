@@ -100,6 +100,21 @@ export {
   authoringRequestedAsk,
   authoringRequestedAskField,
 } from './authoring-demand.js';
+// The paper-context wire fragment on `quiz.generate.v1` / `cards.generate.v1` — `[D-561]` (the
+// earlier part's question) and `[D-562]` (a group's shared passage), `ol-egov.141.89.7.97`. Request
+// fields only, both optional; see the module's own header.
+export {
+  AUTHORING_EARLIER_PART_MAX_CHARS,
+  AUTHORING_EARLIER_PARTS_LIMIT,
+  AUTHORING_SHARED_PASSAGE_FORMS,
+  AUTHORING_SHARED_PASSAGE_MAX_CHARS,
+  type AuthoringEarlierPart,
+  type AuthoringSharedPassage,
+  authoringEarlierPart,
+  authoringEarlierPartsField,
+  authoringSharedPassage,
+  authoringSharedPassageField,
+} from './authoring-paper-context.js';
 // `explain-back.judge.v1`'s optional learning-target bundle and its
 // response-envelope acknowledgement — `[D-277 / TARGET-1]` (`ol-egov.141.87`),
 // landed by TARGET-2 (`ol-0r92.92`). See the module's own header for why this

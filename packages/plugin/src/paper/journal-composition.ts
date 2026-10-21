@@ -241,6 +241,10 @@ function slotGeneratorOver(
       conceptName: planned.conceptName,
       sourceChunks: planned.sourceChunks,
       purpose: 'readiness',
+      // `[D-437]` W1: the slot's demand travels only when it was read from her papers.
+      ...(blueprint.intendedDemandBasis === 'read'
+        ? { intendedDemand: planned.intendedDemand }
+        : {}),
     });
     if (outcome.status === 'generated') {
       return { status: 'generated', item: itemFrom(planned, outcome) };
