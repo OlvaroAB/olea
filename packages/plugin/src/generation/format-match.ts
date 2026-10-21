@@ -247,7 +247,10 @@ export interface FormatMatchDeps {
   /**
    * Receives the question groups (sections, choices, shared stimuli, parent questions) read from
    * each markdown past paper this sweep segments, beside the splitter (`ol-egov.141.89.7.21`).
-   * In memory only: nothing here stores them — where they live waits on `[D-429]`. Omit to skip.
+   * In memory only: nothing here stores them. Omit to skip. `main.ts` supplies none: the
+   * grouping's production consumer is the practice paper, which groups a past paper's own text at
+   * request time while its structure reading is pending (`../paper/past-paper-grouping.ts`,
+   * `[D-559]`, `ol-egov.141.89.7.60`), so a sweep never holds groups for it.
    */
   readonly onPaperGroups?: (sourcePath: VaultPath, grouping: TextPaperQuestionGrouping) => void;
 }
@@ -314,7 +317,8 @@ export async function buildFormatMatch(
       const content = await deps.vault.read(source.path);
       const segmentation = segmentPastPaper(source.path, content);
       pastPaperQuestions.push(...segmentation.questions);
-      // The production caller of `groupMarkdownPastPaper` (`ol-egov.141.89.7.21`).
+      // Only when a caller asks (`ol-egov.141.89.7.21`); production asks nothing here (the
+      // `onPaperGroups` doc above).
       deps.onPaperGroups?.(source.path, groupMarkdownPastPaper(segmentation, content));
     }
 

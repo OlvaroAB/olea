@@ -39,7 +39,6 @@
 import type { App, TFile } from 'obsidian';
 import {
   courseFromPath,
-  type PaperRecoveredStructure,
   readReviewLogHistory,
   type VaultPath,
   type VaultSource,
@@ -49,7 +48,11 @@ import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { registeredPastPapersFrom } from '../scope-reading/declared-demands.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { buildPracticePaperGenerationPort, type ObsidianDataHost } from './generation-port.js';
-import { createLocalPracticePaperProvider, type PracticePaperViewDeps } from './provider.js';
+import {
+  createLocalPracticePaperProvider,
+  type PastPaperStructureReader,
+  type PracticePaperViewDeps,
+} from './provider.js';
 
 /** The course `file` sits under, by `courseFromPath`'s folder rule (F1.3) — `undefined` outside the courses folder, matching every other consumer of that function in this repo. */
 export function courseForActiveFile(file: TFile, coursesFolder?: string): string | undefined {
@@ -73,8 +76,10 @@ export interface BuildPracticePaperProviderDeps {
   /**
    * `[D-548]` (`ol-egov.141.89.7.87`): the course's past-paper structure, from her stored readings
    * (`pastPaperStructureReaderForVault`, supplied by `main.ts`). Omitted: the declared standard extent.
+   * Passed through as given, so its `[D-559]` fallback while a reading is pending
+   * (`pendingPaperTemplate`, `ol-egov.141.89.7.60`) reaches the provider with it.
    */
-  readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+  readonly readPastPaperStructure?: PastPaperStructureReader;
   /**
    * `[D-562]` (`ol-egov.141.89.7.93`): the vault paths of the documents registered now as past
    * papers, of any course, which a group's shared passage is never taken from. Omitted: read from
