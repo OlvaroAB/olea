@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import type { PaperItemGenerationPort, PaperItemGenerationResult } from './paper-items.js';
+import type {
+  PaperItemGenerationPort,
+  PaperItemGenerationRequest,
+  PaperItemGenerationResult,
+} from './paper-items.js';
 import { fillPaperBlueprintSlots } from './paper-items.js';
 import type { PaperBlueprint, PaperBlueprintSlot, PaperEmptySlot } from './paper-types.js';
 
@@ -120,5 +124,36 @@ describe('fillPaperBlueprintSlots', () => {
     const result = await fillPaperBlueprintSlots(bp, mixed);
     expect(result.items.map((i) => i.conceptKey)).toEqual(['a']);
     expect(result.emptySlots.map((s) => s.conceptKey)).toEqual(['b']);
+  });
+
+  it('carries a slot demand as intendedDemand only when the blueprint read it from her papers ([D-437] W1)', async () => {
+    const seen: PaperItemGenerationRequest[] = [];
+    const recording: PaperItemGenerationPort = async (request) => {
+      seen.push(request);
+      return alwaysGenerates(request);
+    };
+    const slots = [slot({ slotId: 'slot-0', intendedDemand: 'calculate' })];
+
+    await fillPaperBlueprintSlots(blueprint({ slots, intendedDemandBasis: 'read' }), recording);
+    expect(seen[0]?.intendedDemand).toBe('calculate');
+
+    seen.length = 0;
+    for (const basis of ['default-no-reading', undefined] as const) {
+      await fillPaperBlueprintSlots(
+        blueprint({ slots, ...(basis !== undefined ? { intendedDemandBasis: basis } : {}) }),
+        recording,
+      );
+    }
+    expect(seen).toHaveLength(2);
+    for (const request of seen) {
+      expect('intendedDemand' in request).toBe(false);
+      expect(request).toEqual({
+        taskId: 'quiz.generate.v1',
+        courseCode: 'COURSEA',
+        conceptName: 'slot-0',
+        sourceChunks: ['grounding text'],
+        purpose: 'readiness',
+      });
+    }
   });
 });

@@ -173,6 +173,31 @@ describe('a finished journal makes the same paper the flat path made', () => {
     );
   });
 
+  it('the journal path sends a slot demand only when the blueprint read it from her papers ([D-437] W1)', async () => {
+    const { blueprint, scope } = await blueprintOf(2);
+    const readBlueprint: PaperBlueprint = {
+      ...blueprint,
+      intendedDemandBasis: 'read',
+      slots: blueprint.slots.map((slot) => ({ ...slot, intendedDemand: 'recall-a-fact' as const })),
+    };
+    const read = scriptedPort((request) => generated(request));
+    await compose(memoryVault(), readBlueprint, scope, read.port);
+    expect(read.calls.map((call) => call.intendedDemand)).toEqual([
+      'recall-a-fact',
+      'recall-a-fact',
+    ]);
+
+    const defaulted = scriptedPort((request) => generated(request));
+    await compose(
+      memoryVault(),
+      { ...blueprint, intendedDemandBasis: 'default-no-reading' },
+      scope,
+      defaulted.port,
+    );
+    expect(defaulted.calls).toHaveLength(2);
+    for (const call of defaulted.calls) expect('intendedDemand' in call).toBe(false);
+  });
+
   it('a paper with no slot to draft still finishes, keeping the blueprint own empty slots', async () => {
     const { blueprint, scope } = await blueprintOf(0);
     const scripted = scriptedPort((request) => generated(request));
