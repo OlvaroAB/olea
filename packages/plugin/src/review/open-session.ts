@@ -380,6 +380,14 @@ export interface OpenReviewSessionInput {
    */
   readonly draftCache?: DraftCacheStore;
   /**
+   * `ol-egov.141.89.5.108` ([D-508]): told of each rewritten question's successor draft the session
+   * sets aside because the transcript or file it cites no longer has the version it was drafted
+   * from, so the revision job drafts it again against the source as it stands (`main.ts` composes
+   * the ingestion wiring's `redraftSetAsideSuccessor`). The draft is set aside either way; a
+   * failure here never changes that. Omitted: set aside, nothing more, as before.
+   */
+  readonly redraftSetAsideSuccessor?: (draft: DraftRecord) => Promise<void>;
+  /**
    * `part-of` edges available at composition time (C7.9; `ol-v7r5.7`) —
    * forwarded straight to `buildReviewSession`'s `relations` input, which
    * runs `session/build.ts`'s containment co-presence filter over them.
@@ -1102,7 +1110,12 @@ export async function openReviewSession(
             ),
           }),
       // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
-      checkDraftSourceAtPresentation: draftSourceCheckAtPresentation(input.vault, pendingDrafts),
+      // `ol-egov.141.89.5.108`: a successor so set aside goes back to the revision job.
+      checkDraftSourceAtPresentation: draftSourceCheckAtPresentation(
+        input.vault,
+        pendingDrafts,
+        input.redraftSetAsideSuccessor,
+      ),
       // Always wired, unconditionally — unlike the caller-supplied ports
       // above, this is computed HERE (see `liveSchedulingObservations`
       // above) rather than threaded in through `ReviewSessionPorts`, so
@@ -1827,10 +1840,17 @@ async function bytesMatchRevision(
  * unknown draft id reads `'clear'` (it is not a draft this session holds). A Markdown citation
  * that records a version (`ol-egov.141.89.5.97`: a declared-Markdown transcript's) is checked
  * against it, as a plain-text transcript's is.
+ *
+ * `ol-egov.141.89.5.108` ([D-508]): a rewritten question's successor (`predecessorInstrumentId`)
+ * set aside here is handed to `redraftSetAside` before the outcome is returned, so the revision job
+ * drafts it again against the source as it stands (`revision-job-runner.ts`,
+ * `redraftSetAsideSuccessor`, which decides whether anything is queued and bounds it). The draft is
+ * set aside whatever that does, and a failure in it is swallowed.
  */
 export function draftSourceCheckAtPresentation(
   vault: VaultSource,
   drafts: readonly DraftRecord[],
+  redraftSetAside?: (draft: DraftRecord) => Promise<void>,
 ): (draftId: string) => Promise<'clear' | 'check-failed'> {
   const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
   return async (draftId) => {
@@ -1843,9 +1863,17 @@ export function draftSourceCheckAtPresentation(
     ) {
       return 'clear';
     }
-    return (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision))
-      ? 'clear'
-      : 'check-failed';
+    if (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision)) {
+      return 'clear';
+    }
+    if (redraftSetAside !== undefined && draft.predecessorInstrumentId !== undefined) {
+      try {
+        await redraftSetAside(draft);
+      } catch {
+        // The set-aside stands; the next presentation asks again.
+      }
+    }
+    return 'check-failed';
   };
 }
 

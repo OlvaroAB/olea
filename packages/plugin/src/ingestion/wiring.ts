@@ -144,7 +144,9 @@ import type { DraftCacheStore } from '../generation/cache-store.js';
 import {
   type CitedSourceNow,
   createRevisionAwareJobRunner,
+  redraftSetAsideSuccessor,
 } from '../generation/revision-job-runner.js';
+import type { DraftRecord } from '../generation/types.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DocumentReadingBasis } from '../scope-reading/basis.js';
 import { runScopeReadingDrivers, SCOPE_READING_DRIVERS_ENABLED } from '../scope-reading/drivers.js';
@@ -648,6 +650,13 @@ export interface IngestionWiring {
    * `deps.generation` is. Never throws.
    */
   readonly afterLanding?: (units: readonly ExtractedUnit[]) => Promise<void>;
+  /**
+   * `ol-egov.141.89.5.108` ([D-508]): `redraftSetAsideSuccessor` (`revision-job-runner.ts`) over
+   * this engine and the same vault, cache and `citedSourceNow` the revision runner drafts with, so a
+   * successor draft set aside for a source that moved on goes back to that runner. Present only when
+   * `deps.revision` is.
+   */
+  readonly redraftSetAsideSuccessor?: (draft: DraftRecord) => Promise<void>;
 }
 
 /** Accumulates into `pendingSink` unchanged, then best-effort notifies `onUnitsLanded` — see this module's doc. Passes core's `sourcePath -> byte hash` map through ([D-515]). */
@@ -1257,11 +1266,31 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
     priority: (a, b) => compareGenerationPriority(a, b, deps.generation?.priority),
   });
   enqueuer.bind(engine);
+  const revision = deps.revision;
   return {
     engine,
     sink,
     ...(extractOptions ? { extractOptions } : {}),
     ...(afterLanding ? { afterLanding } : {}),
+    // `ol-egov.141.89.5.108`: the same vault, cache and `citedSourceNow` as the runner above.
+    ...(revision
+      ? {
+          redraftSetAsideSuccessor: async (draft: DraftRecord) => {
+            await redraftSetAsideSuccessor(
+              {
+                vault: deps.vault,
+                cache: revision.cache,
+                jobs: () => engine.list(),
+                enqueue: (input) => engine.enqueue(input),
+                ...(revision.citedSourceNow !== undefined
+                  ? { citedSourceNow: revision.citedSourceNow }
+                  : {}),
+              },
+              draft,
+            );
+          },
+        }
+      : {}),
   };
 }
 

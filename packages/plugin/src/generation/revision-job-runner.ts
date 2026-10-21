@@ -71,12 +71,39 @@
  *    (`CitationRevisionTrigger.landedSourceText`, the text the pass's own rewrite reads). Until it
  *    lands the job waits (`retryable`, drafting nothing), at most
  *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason.
- *  - A Markdown note is drafted and cited exactly as before.
+ *  - An ordinary Markdown note (`ol-egov.141.89.5.110`, `[D-446]`, `[D-543]`) is read as it stands
+ *    too. A question that named a passage is drafted from the job's passage while it still stands
+ *    word for word in the note, else from the passage the citation pass's ladder finds for it in
+ *    that note, else from the whole note; a question protected at whole-note grain, from the whole
+ *    note as it stands. The citation names that passage only when it stands once in the note, so a
+ *    whole-note passage names none and the whole note is protected. Before this, a note changed
+ *    again was drafted from the older passage and then baselined at the newer note as a whole, so
+ *    the second change was never checked ({@link notePassageNow}).
  *
  * Reading once, before drafting, is the bound: the job drafts once, from what it read, and records
  * that version. A change made while the draft is being written is not chased. What the citation
  * pass knows arrives through `deps.citedSourceNow` (memory and plugin data, never a network call);
  * no field, key or format is added to the job, the draft or the citation.
+ *
+ * ## ...and drafted again when its source moves on before she answers it (`ol-egov.141.89.5.108`, `[D-508]`)
+ *
+ * A successor drafted from a transcript or a non-markdown file records the version it was drafted
+ * from, and the session sets the draft aside at presentation once the file no longer has it
+ * (`review/open-session.ts`, `draftSourceCheckAtPresentation`): changed again, or renamed. The
+ * predecessor stays suspended, so without more the question was gone. {@link
+ * redraftSetAsideSuccessor} is called for such a draft when it is set aside, and sends the
+ * predecessor back to this runner: it queues the predecessor's own revision job again (the payload
+ * the rewrite queued, unchanged), and the job settles its passage and citation against the source as
+ * it stands, exactly as above. Nothing new is drafted while a job for the predecessor is still
+ * waiting to run, when a pending successor already cites the source as it stands, once she has
+ * resolved any successor of it, or when the predecessor no longer stands suspended (`[D-536]`).
+ *
+ * The bound: one job per predecessor and source version (the queue's own content-hash idempotency,
+ * keyed on the predecessor, the path and the version), each job drafting once, and at most
+ * {@link REVISION_JOBS_PER_PREDECESSOR_MAX} jobs per predecessor in all, so a source that keeps
+ * changing stops being drafted again at that cap and its draft stays set aside as before. The job
+ * reuses the queue's existing fields (its content hash is a SHA-256 hex, as every job's is); nothing
+ * is added to the job, the draft or the citation.
  *
  * ## An empty or unparseable draft is retried, then fails loudly (`ol-egov.141.89.5.75`)
  *
@@ -216,7 +243,10 @@ import {
   type AuthoringDemandFields,
   askFromInstrumentReading,
   authoringDemandFields,
+  CURRENT_PASSAGE_RULE,
   type DemandRoutingCounter,
+  type EnqueueInput,
+  type EnqueueResult,
   enumerateVaultInstruments,
   hashContent,
   type InstrumentCitation,
@@ -224,20 +254,30 @@ import {
   type JobRunner,
   type JobRunnerView,
   type JobRunOutcome,
+  locatePassageByText,
   MAX_ATTEMPTS,
   PAPER_DEMANDS,
+  PASSAGE_RULES,
   type PaperDemand,
+  type PersistedJob,
+  parseCardsWithInvalid,
+  parseMcqBlocks,
+  parsePassageDigest,
   projectInstrumentValidity,
   type QuestionBindingBlock,
   readInstrumentCitation,
   readInstrumentDemand,
   readReviewLogHistory,
   routeDemandAsk,
+  suspendedInstrumentIds,
   type VaultInstrumentRecord,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
+import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { resolveAnchoredPassage } from '../ingestion/materiality/passage-grain.js';
 import {
   hasTranscriptExtension,
   namedTranscriptPart,
@@ -306,6 +346,16 @@ export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
  * reads a hash and memory only; it makes no drafting call.
  */
 export const REVISION_SOURCE_TEXT_MAX_ATTEMPTS = MAX_ATTEMPTS;
+
+/**
+ * `ol-egov.141.89.5.108`: how many revision jobs one predecessor may have in the queue in all (the
+ * rewrite that drafted its first successor included) before a successor set aside for a source that
+ * moved on is no longer drafted again (module doc, "drafted again when its source moves on"). A
+ * declared constant, not fitted: the queue's own attempt cap, the number that already bounds a
+ * successor's wait for changed text, so a source that keeps changing costs at most that many
+ * drafting jobs over the question's life, whatever happens to the file. Each job drafts once.
+ */
+export const REVISION_JOBS_PER_PREDECESSOR_MAX = MAX_ATTEMPTS;
 
 /**
  * `ol-egov.141.89.5.107`: what the citation pass knows about a rewritten question's cited source
@@ -741,19 +791,81 @@ async function successorSourceOf(
     );
     if (transcript !== undefined) return transcript;
     if (predecessor.sourcePath.toLowerCase().endsWith('.md')) {
+      // `ol-egov.141.89.5.110`: the note as it stands, when it changed again before drafting.
+      const now = await notePassageNow(deps.vault, predecessor, passage);
       return {
         kind: 'ready',
-        passage,
+        passage: now,
         citation:
-          passage.trim().length === 0
+          now.trim().length === 0
             ? base
-            : await withGroundingPassage(deps.vault, base, ownNotePath, [passage]),
+            : await withGroundingPassage(deps.vault, base, ownNotePath, [now]),
       };
     }
     return await binarySuccessorSource(deps, payload, predecessor, base);
   } catch {
     return { kind: 'ready', passage, citation: undefined };
   }
+}
+
+/**
+ * `ol-egov.141.89.5.110` ([D-446], [D-543], [D-508]): the passage to draft a successor from when its
+ * predecessor cites an ordinary Markdown note, read from the note as it stands when the job runs
+ * (its material: the text minus question blocks, as the presentation check reads it). The citation
+ * is then made from that passage by the shared rule (`withGroundingPassage`), so it names a passage
+ * only when that passage stands once in the note; otherwise the whole note is its grain.
+ *
+ *  - A question that named a passage: the job's own passage while it still stands word for word in
+ *    the note (drafted and cited as before); otherwise the note changed again before drafting, and
+ *    the passage is the one the citation pass's own ladder finds for it in this note alone
+ *    (`resolveAnchoredPassage`: a formatting-only change, or the one edited region resembling it),
+ *    else the whole note.
+ *  - A question protected at whole-note grain: the whole note as it stands, when it reads
+ *    differently from the job's beyond formatting.
+ *
+ * A note that cannot be read keeps the job's passage, as before. Never another note: a passage
+ * moved elsewhere is the citation pass's to heal, not this job's to follow.
+ */
+async function notePassageNow(
+  vault: VaultSource,
+  predecessor: InstrumentCitation,
+  passage: string,
+): Promise<string> {
+  const cited = predecessor.sourcePath;
+  let material: string;
+  try {
+    const source = await vault.read(cited);
+    material = stripInstrumentSpans(source, [
+      ...parseCardsWithInvalid(source).cards.map((card) => card.span),
+      ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
+    ]);
+  } catch {
+    return passage;
+  }
+  const digest = predecessor.passageDigest;
+  if (digest === undefined) {
+    return canonicalizeForMateriality(material) === canonicalizeForMateriality(passage)
+      ? passage
+      : material;
+  }
+  const parsed = parsePassageDigest(digest);
+  const rule =
+    (parsed === null
+      ? undefined
+      : PASSAGE_RULES.find((candidate) => candidate.version === parsed.version)) ??
+    CURRENT_PASSAGE_RULE;
+  if (locatePassageByText(rule.segment(material), rule.normalise(passage)).status !== 'absent') {
+    return passage;
+  }
+  const found = await resolveAnchoredPassage(
+    { text: passage, passageDigest: digest, anchorPath: cited, citedPath: cited },
+    {
+      exists: async (path) => path === cited,
+      material: async () => material,
+      markdownPaths: async () => [],
+    },
+  );
+  return found.kind === 'present' ? found.text : material;
 }
 
 /**
@@ -1122,6 +1234,145 @@ export async function runInstrumentRevisionJob(
   // predecessor's own suspension (handled entirely by
   // `citation-revision-wiring.ts`, outside this file) is unaffected.
   return { ok: true };
+}
+
+/**
+ * `ol-egov.141.89.5.108`: what {@link redraftSetAsideSuccessor} did with a set-aside draft. Only
+ * `'queued'` changes anything; the rest name why nothing was queued. Returned for its callers and
+ * tests; nothing is recorded or logged.
+ */
+export type SetAsideRedraft =
+  | 'queued'
+  /** Not a rewritten question's successor citing a separate transcript or file. */
+  | 'not-a-successor'
+  /** The source cannot be read where it stands (gone, renamed unseen, no longer a transcript, unreadable): nothing to draft against. */
+  | 'source-unread'
+  /** The source stands where and as the draft cites it, so it was set aside for something else. */
+  | 'source-unchanged'
+  /** No revision job for the predecessor is on record in this queue, so its passage is not known here. */
+  | 'no-job'
+  /** A job for the predecessor is still waiting to run; it drafts against the source as it stands when it runs. */
+  | 'job-waiting'
+  /** The predecessor has had {@link REVISION_JOBS_PER_PREDECESSOR_MAX} jobs. */
+  | 'bound-reached'
+  /** She has resolved a successor of the predecessor, or the predecessor no longer stands suspended. */
+  | 'settled'
+  /** A pending successor of the predecessor already cites the source as it stands. */
+  | 'drafted-for-source-now'
+  /** The queue already holds the job for this predecessor, path and version. */
+  | 'duplicate';
+
+/** `ol-egov.141.89.5.108`: what {@link redraftSetAsideSuccessor} reads and where it queues. */
+export interface SetAsideRedraftDeps {
+  readonly vault: VaultSource;
+  /** The cache the runner drafts into: every draft naming the predecessor is read. */
+  readonly cache: DraftCacheStore;
+  /** Every job the queue holds, whatever its status (`IngestionQueueEngine.list`); done jobs are kept there. */
+  readonly jobs: () => readonly PersistedJob[];
+  readonly enqueue: (input: EnqueueInput) => Promise<EnqueueResult>;
+  /** As the runner's own: where a transcript's anchor stands now. */
+  readonly citedSourceNow?: CitedSourceNow;
+}
+
+/**
+ * `ol-egov.141.89.5.108` ([D-508]): sends a rewritten question's successor draft, set aside because
+ * the transcript or file it cites no longer has the version it was drafted from, back to this runner
+ * (module doc, "drafted again when its source moves on"). Queues the predecessor's revision job
+ * again with the payload the rewrite queued, under a content hash naming the predecessor and the
+ * source as it stands, so the queue holds one such job per version; the job then drafts against the
+ * source as it stands when it runs ({@link successorSourceOf}). Reads only, apart from that one
+ * enqueue. The caller ignores the result and keeps the draft set aside either way.
+ */
+export async function redraftSetAsideSuccessor(
+  deps: SetAsideRedraftDeps,
+  draft: DraftRecord,
+): Promise<SetAsideRedraft> {
+  const predecessorId = draft.predecessorInstrumentId;
+  const citation = draft.sourceCitation;
+  if (
+    predecessorId === undefined ||
+    citation === undefined ||
+    citation.sourcePath === draft.sourcePath
+  ) {
+    return 'not-a-successor';
+  }
+  const now = await citedSourceStanding(deps, predecessorId, citation.sourcePath, draft.sourcePath);
+  if (now === undefined) return 'source-unread';
+  if (now.path === citation.sourcePath && now.version === citation.sourceRevision) {
+    return 'source-unchanged';
+  }
+
+  const jobs = deps
+    .jobs()
+    .filter(
+      (job) =>
+        isInstrumentRevisionJobPayload(job.payload) &&
+        job.payload.predecessorInstrumentId === predecessorId,
+    );
+  const [rewrite] = jobs;
+  if (rewrite === undefined || !isInstrumentRevisionJobPayload(rewrite.payload)) return 'no-job';
+  if (jobs.some((job) => job.status !== 'done' && job.status !== 'failed')) return 'job-waiting';
+  if (jobs.length >= REVISION_JOBS_PER_PREDECESSOR_MAX) return 'bound-reached';
+
+  const successors = (await deps.cache.list()).filter(
+    (record) => record.predecessorInstrumentId === predecessorId,
+  );
+  if (successors.some((record) => record.status !== 'pending')) return 'settled';
+  if (
+    successors.some(
+      (record) =>
+        record.sourceCitation?.sourcePath === now.path &&
+        record.sourceCitation.sourceRevision === now.version,
+    )
+  ) {
+    return 'drafted-for-source-now';
+  }
+  // `[D-536]`: a predecessor she unsuspended (or restored) gets no further successor.
+  const { entries } = await readReviewLogHistory(deps.vault);
+  if (!suspendedInstrumentIds(entries).has(predecessorId)) return 'settled';
+
+  const payload: InstrumentRevisionJobPayload = {
+    kind: 'instrument-revision',
+    predecessorInstrumentId: predecessorId,
+    newPassageText: rewrite.payload.newPassageText,
+    ...(rewrite.payload.sourceRevision !== undefined
+      ? { sourceRevision: rewrite.payload.sourceRevision }
+      : {}),
+  };
+  const result = await deps.enqueue({
+    contentHash: await hashContent(
+      new TextEncoder().encode(
+        `instrument-revision again\n${predecessorId}\n${now.path}\n${now.version}`,
+      ),
+    ),
+    label: rewrite.label,
+    payload,
+  });
+  return result.status === 'queued' ? 'queued' : 'duplicate';
+}
+
+/**
+ * Where a successor's cited source stands now and its version there, read the way the runner will
+ * read it ({@link transcriptSuccessorSource}, {@link binarySuccessorSource}): a lecture transcript
+ * (a `.txt`/`.vtt`/`.srt` file, or Markdown that declares itself one) at the path its predecessor's
+ * anchor holds (moved only by a rename Olea saw), else the path cited, versioned only when it reads
+ * as a transcript; any other file at the path cited, by its bytes hash. `undefined` when it cannot
+ * be read there.
+ */
+async function citedSourceStanding(
+  deps: SetAsideRedraftDeps,
+  predecessorId: string,
+  cited: VaultPath,
+  ownNotePath: VaultPath,
+): Promise<{ readonly path: VaultPath; readonly version: string } | undefined> {
+  if (cited.toLowerCase().endsWith('.md') || hasTranscriptExtension(cited)) {
+    const anchored = await deps.citedSourceNow?.anchoredPath(predecessorId);
+    const path = anchored !== undefined && anchored !== ownNotePath ? anchored : cited;
+    const read = await readTranscriptVersion(deps.vault, path);
+    return read.kind === 'read' ? { path, version: read.version.bytesHash } : undefined;
+  }
+  const version = await bytesHashNow(deps.vault, cited);
+  return version === undefined ? undefined : { path: cited, version };
 }
 
 /**
