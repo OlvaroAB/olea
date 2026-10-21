@@ -449,10 +449,16 @@ const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
  * never exceed its stated range, and it moves no relevance or proximity term, so one course's
  * rows cannot be moved above another's by more than `weights.need` times this share.
  *
- * **Provisional, to be calibrated by the five-course rerun.** Sweep for the rerun: 0.05 to 0.5.
- * Revisit when the rerun has measured, with other inputs matched, how often a valid wrong answer
- * keeps more priority than a correct one, and how often the lifted concept is re-served too
- * early (the spacing check); then David ratifies the measured point (`[D-554]`).
+ * **Provisional and NOT yet calibrated.** The five-course rerun could not calibrate it: one
+ * answering session never gives a concept an earlier unaided success followed by a later valid
+ * wrong answer, so the lift's effect was zero by construction (every grid point identical), and
+ * a pending draft card's first answer recorded no independent support until `[D-517]` (a) was
+ * fixed (`ol-egov.141.89.9.102`). The grid is next read over a two-session learner (correct on
+ * the first session, wrong on a later day; `ol-egov.141.89.10.131`), sweep 0.05 to 0.5. Revisit
+ * when a review log holds a counted unaided success on a recall card followed by a valid wrong
+ * answer on a later day: how often that wrong answer keeps more priority than a correct one, and
+ * how often the lifted concept is re-served too early (the spacing check). A written
+ * pre-commitment comes first (`[D-194]`); then David ratifies the measured point (`[D-554]`).
  */
 export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
 
@@ -463,7 +469,8 @@ export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
  * wrong answer is a reason to come back to the concept within about a week, the span in which a
  * missed item is most likely to still be recoverable by one more attempt; past it, the ordinary
  * recall estimate (which the lift does not replace) carries the concept. A pin, not a fit.
- * Provisional; rerun sweep 3 to 14 days; same revisit condition as the share above.
+ * Provisional and not yet calibrated (the five-course rerun could not, see the share above);
+ * sweep 3 to 14 days over the two-session learner; same revisit condition as the share above.
  */
 export const DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS = 7;
 
