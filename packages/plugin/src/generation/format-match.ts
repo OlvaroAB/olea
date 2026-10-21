@@ -90,12 +90,12 @@ import {
   calendarDayFromLocalDate,
   formatClassOf,
   groupMarkdownPastPaper,
-  isCalendarDay,
   parseDocument,
   registerSources,
   segmentPastPaper,
 } from 'olea-core';
 import { firstKindForFormatClass } from 'olea-core/src/assessment/first-kind.js';
+import { nearestAssessmentAhead } from 'olea-core/src/assessment/nearest-ahead.js';
 import type { FormatMatchDecision } from './pipeline.js';
 
 export type { FormatMatchDecision };
@@ -216,10 +216,10 @@ export function deriveRegisterHint(
 /**
  * The soonest assessment for `course` whose `due` is a readable calendar day
  * on or after `today` — F4.7's "an assessment whose date has passed exerts
- * no ... weight" read for format matching instead of countdown, mirroring
- * `study-session/build.ts`'s own (module-private) `nextAssessmentOf`
- * tie-break: soonest `due`, then the lexically-smaller `path` so two
- * assessments due the same day never depend on read order. `undefined` when
+ * no ... weight" read for format matching instead of countdown, answered by
+ * core's `assessment/nearest-ahead.ts`, the one home the session composer's
+ * `nextAssessmentOf` shares: soonest `due`, then the lexically-smaller `path`
+ * so two assessments due the same day never depend on read order. `undefined` when
  * the course has no assessment record with a readable future date — never a
  * guess at which one she meets next.
  */
@@ -228,22 +228,7 @@ export function nearestUpcomingAssessment(
   assessments: readonly AssessmentRecord[],
   today: CalendarDay,
 ): AssessmentRecord | undefined {
-  let best: AssessmentRecord | undefined;
-  let bestDue: CalendarDay | undefined;
-  for (const record of assessments) {
-    if (record.course !== course) continue;
-    const due = record.due;
-    if (due === undefined || !isCalendarDay(due) || due < today) continue;
-    const closer =
-      bestDue === undefined ||
-      due < bestDue ||
-      (due === bestDue && best !== undefined && record.path < best.path);
-    if (closer) {
-      best = record;
-      bestDue = due;
-    }
-  }
-  return best;
+  return nearestAssessmentAhead(assessments, course, today)?.record;
 }
 
 export interface FormatMatchDeps {
