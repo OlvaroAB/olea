@@ -337,6 +337,11 @@ function requeueStaleInFlight(jobs: readonly PersistedJob[]): {
   return { jobs: changed ? next : jobs, changed };
 }
 
+/** `ol-egov.141.89.5.111`: one job's key in `IngestionQueueEngine.notAttemptedWaits`, the same identity {@link sameStoredJob} uses. */
+function notAttemptedKey(job: StoredJob): string {
+  return `${job.contentHash}\n${job.workflowVersion ?? ''}`;
+}
+
 /** Drops the `deferReason`/`resumeNotBefore` keys entirely (never sets them to `undefined` — `exactOptionalPropertyTypes`). */
 function clearDefer(job: StoredJob): StoredJob {
   const { deferReason: _deferReason, resumeNotBefore: _resumeNotBefore, ...rest } = job;
@@ -360,6 +365,13 @@ export class IngestionQueueEngine {
   /** Session-level pacing gate — no job starts before this instant while headroom is `'low'`. */
   private pacingUntil: number | null = null;
   private paused = false;
+  /**
+   * `ol-egov.141.89.5.111`: how many `notAttempted` outcomes in a row each job has had this
+   * session, keyed by {@link notAttemptedKey}. It sizes that job's next backoff
+   * (`recordOutcome`), so a long outage is polled at the same widening spacing a counted retry
+   * gets, without spending an attempt. Memory only: a restart starts the spacing afresh.
+   */
+  private readonly notAttemptedWaits = new Map<string, number>();
 
   private constructor(
     deps: EngineDeps,
@@ -700,6 +712,31 @@ export class IngestionQueueEngine {
         ),
       };
     }
+
+    // `ol-egov.141.89.5.111` (`JobRunOutcome`'s `notAttempted`): the call this job exists for could
+    // not be made (no Worker configured, or the Worker unreachable), so the attempt `tick()` counted
+    // before running is given back and the job waits, deferred exactly as a retryable outcome is.
+    // It never reaches the attempt cap through an outage, however long, and resumes on the first
+    // tick after its backoff once the call can be made: the boundary document's offline rule (the
+    // client work queue drains on reconnection, `docs/Olea_architecture_boundary.md` §1, service
+    // repo). The backoff widens with each such wait in a row, as a counted retry's does, so a long
+    // outage is polled at most once per `MAX_BACKOFF_MS` (jittered) and never crowds out other jobs.
+    const waitKey = notAttemptedKey(job);
+    if (!outcome.ok && outcome.retryable && outcome.notAttempted === true) {
+      const waits = (this.notAttemptedWaits.get(waitKey) ?? 0) + 1;
+      this.notAttemptedWaits.set(waitKey, waits);
+      this.replace({
+        ...job,
+        attempts: Math.max(0, job.attempts - 1),
+        status: 'deferred',
+        deferReason: 'transient-error',
+        resumeNotBefore: now + backoffDelayMs(waits, this.random),
+      });
+      this.applyHeadroom(outcome.budgetHeadroom, now);
+      await this.persist();
+      return { kind: 'ran', contentHash: job.contentHash, outcome: 'deferred' };
+    }
+    this.notAttemptedWaits.delete(waitKey);
 
     if (outcome.ok) {
       this.replace({ ...job, status: 'done', doneAt: now });
