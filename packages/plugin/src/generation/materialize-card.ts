@@ -216,6 +216,14 @@
  * unspecified; a draft with no demand writes nothing and adds no `demand` member to the result.
  * **One of the two production callers of the target-record writer T7
  * (`target-store-callers.spec.ts`) allows**; the other is `materialize-mcq.ts`.
+ *
+ * ## The drafted-for record (`[D-558]`, `ol-egov.141.89.9.99`)
+ *
+ * The same section `materialize-mcq.ts`'s module doc states, for a card: when
+ * `input.draftedForConceptKey` is supplied and the note is one of Olea's home notes, the note's
+ * `olea-drafted-for` map gains one line naming the card's block id and that concept
+ * (`home-note.ts`'s `recordDraftedForConcept`), in the same write that inserts the card. A note
+ * she wrote is never given it (INV-6), and the block id is derived exactly as before.
  */
 
 import {
@@ -247,7 +255,7 @@ import {
   type MaterializedDemand,
   planInstrumentDemand,
 } from './demand-target.js';
-import { sourceRevisionMatches } from './home-note.js';
+import { recordDraftedForConcept, sourceRevisionMatches } from './home-note.js';
 import { assertCitedSourceUnchanged, StaleSourceRevisionError } from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
 
@@ -297,6 +305,11 @@ export interface MaterializeAcceptedCardDraftInput {
    * module's own section. `undefined` writes no record and adds no `demand` member to the result.
    */
   readonly demand?: MaterializeDemandInput;
+  /**
+   * `[D-558]` (`ol-egov.141.89.9.99`): the key of the concept this draft was drafted for — see
+   * `materialize-mcq.ts`'s identical field. `undefined` records nothing.
+   */
+  readonly draftedForConceptKey?: string;
 }
 
 export interface MaterializeAcceptedCardDraftResult {
@@ -509,7 +522,11 @@ export async function materializeAcceptedCardDraft(
     }
   }
 
-  await vault.write(input.sourcePath, stamped.content);
+  // `[D-558]`: the drafted-for record, in the same write — see the module doc's own section.
+  await vault.write(
+    input.sourcePath,
+    recordDraftedForConcept(stamped.content, stamped.blockId, input.draftedForConceptKey),
+  );
 
   if (input.predecessorInstrumentId !== undefined) {
     // `[D-366]`: the succession event, reused unmodified from `olea-core` —
