@@ -6110,3 +6110,9 @@ body.theme-light .olea-retrospective-root {
   gap: 2px;
   margin-left: auto;
 }
+
+/* ---- The practice paper: a group's shared passage (ol-egov.141.89.7.93, [D-562]) ---- */
+/* Her chunk is one text node; keep its line breaks so a table or data set stays readable. */
+.olea-paper-passage-text {
+  white-space: pre-wrap;
+}
