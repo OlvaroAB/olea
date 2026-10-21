@@ -223,6 +223,44 @@
  * "was this dispatch actually attempted while reachable" concept, matching
  * this bead's scope (the plugin staying running; a restart mid-outage is
  * `[D-427]`'s separate, open question, not this one).
+ *
+ * ===========================================================================
+ * `[D-473]` — A HOLD THIS BUILD DOES NOT RESOLVE IS LEFT EXACTLY AS IT IS
+ * (`ol-egov.141.89.5.43`)
+ * ===========================================================================
+ * `[D-467]` withholds an instrument whose slide claim a lecturer's correction invalidates, though
+ * its cited file is unchanged, and `[D-473]` stores that as a reason on this anchor: "unknown
+ * reasons must preserve the hold." Carrying the reason through the pass's own advance writes
+ * (`carriedPending`) was not enough: every NEW fact this pass raises (a passage gone missing, a
+ * binary source's bytes, a difference sent to the judge) replaced it, and the next pass then lifted
+ * the replacement, so the instrument was served again with its grounding still unreconciled. An
+ * anchor whose pending reason is not one this build raises for a source change itself
+ * ({@link isReasonThisBuildResolves}) is therefore skipped by the pass altogether: no read, no
+ * judge call, no write, no suspension, no successor. Only a build that knows the reason resolves it.
+ *
+ * ===========================================================================
+ * `ol-egov.141.89.5.43` — LECTURE TRANSCRIPTS AT PART GRAIN (OFF UNTIL WIRED)
+ * ===========================================================================
+ * With `deps.transcriptPartGrain`, an instrument whose citation names a lecture transcript (a
+ * `.txt`/`.vtt`/`.srt` file, or Markdown that declares itself one) is followed at PART grain
+ * (`transcript-grain.ts`; PERSISTENCE.md 2.2, 2.5, 2.6, 2.9): the anchor holds the cited passage's
+ * spoken text, seeded only from the version the citation was drafted from, and every pass looks
+ * for that text in the transcript at the anchor's path. Found once and unchanged: valid, no judge.
+ * One changed region: that region alone goes to the judge against the old passage (`[D-293]`), and
+ * the existing rewrite path applies. Twice, or two resembling regions: `passage-ambiguous`. Gone:
+ * `passage-missing`. Both withhold before the next presentation and are never guessed. No other
+ * file is ever searched: continuity across paths comes only from {@link CitationRevisionTrigger.
+ * onSourceRenamed}, a rename Olea saw. A lecture link, a shared stem or folder, a part label, and
+ * equal text elsewhere are never lineage. The binary-bytes path (`[D-515]`/`[D-518]`) is skipped
+ * for these instruments: its rewrite reads the cited page by its number, which is a label, not
+ * identity, once the file has changed.
+ *
+ * Omitted (production today), these instruments keep the handling above unchanged. It stays off
+ * until the session's presentation-time check reads transcript anchors at the same grain and does
+ * not withhold them on changed bytes alone (`review/open-session.ts`), the citation records the
+ * transcript version it was drafted from (no transcript citation carries `sourceRevision` today,
+ * so every first sighting would be withheld), and the host calls `onSourceRenamed`. See this
+ * bead's hand-back.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -269,6 +307,13 @@ import {
   type PassageResolution,
   resolveAnchoredPassage,
 } from './passage-grain.js';
+import {
+  hasTranscriptExtension,
+  readTranscriptVersion,
+  resolveTranscriptPassage,
+  seedFromCitedPart,
+  type TranscriptRead,
+} from './transcript-grain.js';
 import type { MaterialityJudge } from './types.js';
 
 /** `RevisionJudgePort` is `{previousText, currentText}` only; `MaterialityJudge` also requires `path`, unused inside `WorkerMaterialityJudge.judge` (see that file's own doc: "`path` never leaves this method"). Adapts explicitly rather than relying on TS's method-bivariance to paper over the shape gap. */
@@ -462,6 +507,18 @@ export interface CitationRevisionTriggerDeps {
    * per (source, bytes) per session; a failure is logged and the hold stands. Omitted: never asks.
    */
   readonly requestSourceReextraction?: (sourcePath: string) => Promise<void>;
+  /**
+   * `ol-egov.141.89.5.43`: follow lecture-transcript citations at part grain (this module's doc,
+   * "LECTURE TRANSCRIPTS AT PART GRAIN"). Omitted or false: today's handling, unchanged. Turning it
+   * on before the presentation-time check reads the same grain would withhold every
+   * transcript-grounded question at presentation.
+   */
+  readonly transcriptPartGrain?: boolean;
+}
+
+/** One pass's reads of transcript files, each read at most once per pass. */
+interface TranscriptReads {
+  read(path: VaultPath): Promise<TranscriptRead>;
 }
 
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
@@ -475,6 +532,30 @@ function citesBinarySource(record: VaultInstrumentRecord): boolean {
   return (
     sourcePath !== undefined && sourcePath !== record.notePath && !isMarkdownVaultPath(sourcePath)
   );
+}
+
+/**
+ * `ol-egov.141.89.5.43`: the path to read a transcript-grounded instrument's transcript from — the
+ * logical source's current path, which is where the anchor last saw the passage once it holds one
+ * (a rename Olea saw moves it), else the path the citation names — or `undefined` when the
+ * instrument does not cite a transcript. `.txt`/`.vtt`/`.srt` are transcripts by their path;
+ * Markdown only when the file at that path declares itself one (an undeclared `.md` is her note).
+ * A Markdown path whose file is gone cannot be told apart, and keeps the ordinary handling (the
+ * presentation-time check withholds it, the file being unreadable).
+ */
+async function transcriptCitationPath(
+  record: VaultInstrumentRecord,
+  previous: CitationAnchorRecord | undefined,
+  transcripts: TranscriptReads,
+): Promise<VaultPath | undefined> {
+  const cited = record.sourceProvenance?.sourcePath;
+  if (cited === undefined || cited === record.notePath) return undefined;
+  const current =
+    previous !== undefined && previous.sourcePath !== record.notePath ? previous.sourcePath : cited;
+  if (hasTranscriptExtension(cited)) return current;
+  if (!isMarkdownVaultPath(cited)) return undefined;
+  const read = await transcripts.read(current);
+  return read.kind === 'read' || read.kind === 'unreadable' ? current : undefined;
 }
 
 /**
@@ -599,10 +680,14 @@ export interface SourceLandingResult {
   readonly heldNoText: number;
 }
 
-/** Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read to every write that advances the anchor. */
+/**
+ * Where a passage-grain anchor's passage now stands, and under which rule — threaded from the read
+ * to every write that advances the anchor. A transcript passage (`ol-egov.141.89.5.43`) has no
+ * rule: it is found by its text and its anchor carries no digest.
+ */
 interface PassageContext {
   readonly sourcePath: VaultPath;
-  readonly rule: PassageRule;
+  readonly rule?: PassageRule;
 }
 
 /** The three withholding reasons this build knows, and so may clear on finding the passage again. */
@@ -612,6 +697,17 @@ function isKnownPassageReason(reason: string | undefined): reason is PendingReas
     reason === 'passage-ambiguous' ||
     reason === 'passage-rule-unsupported'
   );
+}
+
+/**
+ * `[D-473]` (`ol-egov.141.89.5.43`): the pending reasons this build raises for a source change and
+ * may therefore resolve itself — none (a difference awaiting the judge), the three passage reasons,
+ * and the changed bytes of a non-markdown source. Any other reason (one a newer build wrote, such
+ * as the withholding `[D-467]` requires for a lecturer's correction) is a hold the pass leaves
+ * exactly as it is: see this module's `[D-473]` doc section.
+ */
+function isReasonThisBuildResolves(reason: string | undefined): boolean {
+  return reason === undefined || isKnownPassageReason(reason) || reason === SOURCE_REVISION_REASON;
 }
 
 /**
@@ -639,7 +735,9 @@ async function passageFields(
   passage: PassageContext | undefined,
   text: string,
 ): Promise<Pick<CitationAnchorRecord, 'passageDigest'>> {
-  return passage === undefined ? {} : { passageDigest: await digestPassage(text, passage.rule) };
+  return passage?.rule === undefined
+    ? {}
+    : { passageDigest: await digestPassage(text, passage.rule) };
 }
 
 export class CitationRevisionTrigger {
@@ -762,6 +860,21 @@ export class CitationRevisionTrigger {
       },
     };
 
+    // `ol-egov.141.89.5.43`: each transcript file read at most once per pass, and only when part
+    // grain is on.
+    const transcriptGrain = this.deps.transcriptPartGrain === true;
+    const transcriptReadCache = new Map<VaultPath, Promise<TranscriptRead>>();
+    const transcripts: TranscriptReads = {
+      read: (path) => {
+        let read = transcriptReadCache.get(path);
+        if (read === undefined) {
+          read = readTranscriptVersion(vault, path);
+          transcriptReadCache.set(path, read);
+        }
+        return read;
+      },
+    };
+
     const currentByInstrumentId = new Map(
       trackedRecords.map((record) => [record.instrumentId, record] as const),
     );
@@ -824,6 +937,15 @@ export class CitationRevisionTrigger {
       ) {
         continue;
       }
+      // `[D-473]` (`ol-egov.141.89.5.43`): a hold for a reason this build does not raise itself is
+      // left exactly as it is — no read, no judge call, no write — so no fact this pass raises can
+      // replace it and no later pass can lift the replacement. See this module's `[D-473]` section.
+      if (
+        previous.pendingRevalidation !== undefined &&
+        !isReasonThisBuildResolves(previous.pendingRevalidation.reason)
+      ) {
+        continue;
+      }
       // `[D-366]`: an id that WAS tracked but, under the current rule, no
       // longer is — e.g. a rule change since it was last baselined, since
       // `sourceProvenance` is write-once and cannot itself change underneath
@@ -841,10 +963,17 @@ export class CitationRevisionTrigger {
       }
 
       const currentRecord = currentByInstrumentId.get(instrumentId);
+      // `ol-egov.141.89.5.43`: a transcript-grounded instrument is followed at part grain, by its
+      // passage's text, when that grain is on; the bytes path below never sees it.
+      const transcriptPath =
+        transcriptGrain && currentRecord !== undefined
+          ? await transcriptCitationPath(currentRecord, previous, transcripts)
+          : undefined;
       // `ol-egov.141.89.5.73` ([D-515]): a non-markdown source is never diffed as text, so its
       // bytes are compared with the sidecar's `sourceRevision` instead, and the question is
       // withheld here, before any judge call is awaited ([D-514] b).
       if (
+        transcriptPath === undefined &&
         currentRecord !== undefined &&
         (await this.withholdIfSourceBytesChanged(vault, currentRecord, report))
       ) {
@@ -857,7 +986,24 @@ export class CitationRevisionTrigger {
       // everything but whitespace and line breaks (`via: 'exact'`, a [D-446] normalised match).
       let reformattedByLadder = false;
       try {
-        if (currentRecord !== undefined && previous.passageDigest !== undefined) {
+        if (transcriptPath !== undefined && currentRecord !== undefined) {
+          // `ol-egov.141.89.5.43`: unchanged, withheld or (re-)seeded is settled there; a passage
+          // found unchanged, or one changed region, continues into the compare-and-judge below.
+          const located = await this.locateTranscriptPassage(
+            vault,
+            instrumentId,
+            previous,
+            currentRecord,
+            transcriptPath,
+            transcripts,
+            passageNotes,
+            actions,
+            report,
+          );
+          if (located === undefined) continue;
+          current = { kind: 'found-at-anchor', text: located };
+          passage = { sourcePath: previous.sourcePath };
+        } else if (currentRecord !== undefined && previous.passageDigest !== undefined) {
           // Passage grain: ask WHERE the anchored passage stands now, by the shared rule. Only a
           // passage found in place (unchanged, reformatted, or edited-and-unmistakable) continues
           // into the ordinary compare-and-judge below; a moved, missing or ambiguous passage is
@@ -1152,6 +1298,24 @@ export class CitationRevisionTrigger {
       // suspend it again every pass).
       if (suspendedIds.has(instrumentId)) continue;
       try {
+        // `ol-egov.141.89.5.43`: a transcript-grounded instrument is seeded at its cited part, and
+        // only from the version its citation was drafted from (PERSISTENCE 2.9); never by the
+        // bytes path below.
+        const transcriptPath = transcriptGrain
+          ? await transcriptCitationPath(record, undefined, transcripts)
+          : undefined;
+        if (transcriptPath !== undefined) {
+          await this.seedTranscriptAnchor(
+            vault,
+            instrumentId,
+            record,
+            transcriptPath,
+            transcripts,
+            report,
+            undefined,
+          );
+          continue;
+        }
         const path = citedPassagePath(record);
         // `[D-446]`: an instrument whose citation carries a passage digest that resolves to exactly
         // one passage is baselined AT that passage. Anything less (no digest, an ambiguous or absent
@@ -1391,6 +1555,143 @@ export class CitationRevisionTrigger {
     return false;
   }
 
+  /**
+   * `ol-egov.141.89.5.43` (module doc, "LECTURE TRANSCRIPTS AT PART GRAIN"): where a
+   * transcript-grounded instrument's cited passage stands now. Returns the text to carry into the
+   * compare-and-judge (the anchor's own text when the passage stands unchanged, so the pass reads
+   * `unchanged`; the one changed region otherwise), or `undefined` when settled here:
+   *  - an anchor that does not yet hold a transcript passage (first seen before part grain applied,
+   *    so it holds the home note; or withheld at first sighting, so it holds no text) is seeded
+   *    again by the first-sighting rule;
+   *  - a transcript that is gone, or no longer reads as one, withholds as `passage-missing`;
+   *  - the passage standing twice, or two resembling regions, withholds as `passage-ambiguous`.
+   * Only the anchor's own path is read: no other file is searched.
+   */
+  private async locateTranscriptPassage(
+    vault: VaultSource,
+    instrumentId: string,
+    previous: CitationAnchorRecord,
+    currentRecord: VaultInstrumentRecord,
+    transcriptPath: VaultPath,
+    transcripts: TranscriptReads,
+    notes: PassageNotes,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<string | undefined> {
+    if (previous.sourcePath === currentRecord.notePath || previous.text === '') {
+      await this.seedTranscriptAnchor(
+        vault,
+        instrumentId,
+        currentRecord,
+        transcriptPath,
+        transcripts,
+        report,
+        previous,
+      );
+      return undefined;
+    }
+    const read = await transcripts.read(previous.sourcePath);
+    const resolution =
+      read.kind === 'read'
+        ? resolveTranscriptPassage(previous.text, read.version.words)
+        : ({ kind: 'unresolved', reason: 'missing' } as const);
+    if (resolution.kind === 'unresolved') {
+      await this.applyPassageResolution(
+        instrumentId,
+        previous,
+        currentRecord,
+        { kind: 'unresolved', reason: resolution.reason },
+        notes,
+        actions,
+        report,
+      );
+      return undefined;
+    }
+    return resolution.kind === 'present' ? previous.text : resolution.text;
+  }
+
+  /**
+   * `ol-egov.141.89.5.43` (PERSISTENCE 2.9): seeds a transcript anchor from the citation's part
+   * number, only in the version the citation was drafted from and only when that part's text stands
+   * once. Otherwise the anchor holds no text and the question is withheld with the reason, keyed to
+   * the bytes observed, so a later pass that finds the drafted version again seeds it. A seeded
+   * anchor replaces whatever the record held (a home-note anchor from before part grain applied, and
+   * its hold): the cited part is then exactly as drafted.
+   */
+  private async seedTranscriptAnchor(
+    vault: VaultSource,
+    instrumentId: string,
+    record: VaultInstrumentRecord,
+    transcriptPath: VaultPath,
+    transcripts: TranscriptReads,
+    report: MutableTickReport,
+    previous: CitationAnchorRecord | undefined,
+  ): Promise<void> {
+    try {
+      const citation = await readInstrumentCitation(vault, instrumentId);
+      const read = await transcripts.read(transcriptPath);
+      const seed = seedFromCitedPart(read.kind === 'read' ? read.version : undefined, citation);
+      if (seed.kind === 'seeded') {
+        await this.deps.store.save(instrumentId, {
+          sourcePath: transcriptPath,
+          text: seed.text,
+          conceptIds: record.conceptIds,
+        });
+        report.newlyBaselined += 1;
+        return;
+      }
+      report.passageSeedUnresolved += 1;
+      if (
+        previous === undefined ||
+        previous.text !== '' ||
+        previous.sourcePath !== transcriptPath
+      ) {
+        await this.deps.store.save(instrumentId, {
+          sourcePath: transcriptPath,
+          text: '',
+          conceptIds: record.conceptIds,
+        });
+      }
+      await this.deps.store.setPendingRevalidation(
+        instrumentId,
+        await hashText(`${seed.reason}\n${seed.observed}`),
+        this.deps.clock.now(),
+        seed.reason,
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision transcript seed failed', error);
+    }
+  }
+
+  /**
+   * `ol-egov.141.89.5.43` (PERSISTENCE 2.2, lineage L2): a rename Olea saw while running is
+   * lineage, so every anchor that last saw its passage at `oldPath` follows it to `newPath`, its
+   * pending fact (any reason) kept as it was. Only when transcript part grain is on and the file at
+   * `newPath` reads as a transcript; a markdown note has its own relocation ladder. A rename Olea
+   * did not see (made while it was closed, or on another device) arrives as a delete and a create:
+   * nothing calls this, the anchor finds its path gone and the question is withheld. Returns how many
+   * anchors moved. No production caller yet: the host's vault `rename` event would call it.
+   */
+  async onSourceRenamed(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
+    if (this.deps.transcriptPartGrain !== true || oldPath === newPath) return 0;
+    if ((await readTranscriptVersion(vault, newPath)).kind !== 'read') return 0;
+    let moved = 0;
+    try {
+      for (const [instrumentId, anchor] of await this.deps.store.loadAll()) {
+        if (anchor.sourcePath !== oldPath) continue;
+        await this.deps.store.save(instrumentId, { ...anchor, sourcePath: newPath });
+        moved += 1;
+      }
+    } catch (error) {
+      console.error('Olea: citation-revision transcript rename write failed', error);
+    }
+    return moved;
+  }
+
   private async storeHas(instrumentId: string): Promise<boolean> {
     return (await this.deps.store.loadAll()).has(instrumentId);
   }
@@ -1566,6 +1867,16 @@ export class CitationRevisionTrigger {
       if (suspendedIds.has(instrumentId) && !this.confirmedRewrites.has(instrumentId)) continue;
       try {
         const citation = await readInstrumentCitation(vault, instrumentId);
+        // `ol-egov.141.89.5.43`: with transcript part grain on, a transcript citation is never
+        // rewritten from "the page with its number": once the file changed, that number names a
+        // different passage. The part-grain pass follows it by its text instead.
+        if (
+          this.deps.transcriptPartGrain === true &&
+          citation !== undefined &&
+          hasTranscriptExtension(citation.sourcePath)
+        ) {
+          continue;
+        }
         const landed =
           citation === undefined ? undefined : this.landedSources.current(citation.sourcePath);
         if (citation === undefined || landed === undefined) continue;
@@ -1646,7 +1957,7 @@ export class CitationRevisionTrigger {
         if (
           passage !== undefined &&
           (isKnownPassageReason(previous.pendingRevalidation?.reason) ||
-            digestVersionOf(previous) !== passage.rule.version) &&
+            (passage.rule !== undefined && digestVersionOf(previous) !== passage.rule.version)) &&
           currentRecord !== undefined &&
           current.kind === 'found-at-anchor'
         ) {
@@ -1957,6 +2268,8 @@ export interface CitationRevisionWiringDeps {
   readonly requestSourceReextraction?: (sourcePath: string) => Promise<void>;
   /** See `CitationRevisionTriggerDeps.passageRules`'s own doc. */
   readonly passageRules?: readonly PassageRule[];
+  /** See `CitationRevisionTriggerDeps.transcriptPartGrain`'s own doc. */
+  readonly transcriptPartGrain?: boolean;
 }
 
 export function buildCitationRevisionWiring(
