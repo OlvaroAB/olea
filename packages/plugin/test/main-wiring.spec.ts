@@ -825,6 +825,16 @@ describe('the first-read readout has a real per-folder concept feed (ol-9c0k, [D
     );
   });
 
+  // `ol-egov.141.89.105.33`: a concept only this read mints is drafted in the same arrival.
+  it("holds a not-yet-read folder's landed units before the sweep and re-sweeps them after the read, through the serialised sweep", () => {
+    expect(main).toMatch(
+      /this\.readMintResweep\.hold\(this\.tickedCourseFolders, units, sourceRevisions\);\s*await this\.sweepSerially\(units, sourceRevisions\);/,
+    );
+    expect(main).toMatch(
+      /beforeRead\.set\(folder, await this\.readMintResweep\.before\(folder\)\);[\s\S]*?await this\.readMintResweep\.resweep\(folder, beforeRead\.get\(folder\) \?\? null\);/,
+    );
+  });
+
   it('the whole-vault batch read at ingestion-session close is unchanged — the per-folder call is additional, not a replacement', () => {
     expect(main).toMatch(
       /if \(!ingestionSessionJustClosed\(previous, current\)\) return;[\s\S]*?const pass = await readConceptsAndRelations\(/,

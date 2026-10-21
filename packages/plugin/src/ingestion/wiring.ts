@@ -1740,3 +1740,96 @@ async function reconcileResolvedOutcomes(
 
   return { outcomes: reconciledOutcomes, paperStructure, reconciliation };
 }
+
+/**
+ * `ol-egov.141.89.105.33`: F3.3 / `[D-238]` say one primary call per concept on arrival, and a
+ * concept only the per-folder concept read mints (`main.ts`'s `readLandedConceptsForFinishedFolders`)
+ * does not exist when the arrival sweep runs inside the tick, so it waited for the course's next
+ * landing. This holds the units a not-yet-read folder lands, and once that folder's read finishes
+ * re-runs the SAME sweep over them, but only when the read minted a candidate key the earlier sweep
+ * did not see (otherwise it does nothing, so a retryable refusal is never asked twice in one arrival).
+ *
+ * Everything else is the sweep's own: its per-sweep cap, first-call owner, routing, refusal memory
+ * and cache dedup (a drafted concept is never called again). Holding is bounded: a folder is held
+ * only until its first read finishes, then released for good (its later landings sweep with the
+ * minted keys in place). No Worker call is made here and none blocks a tick: the caller runs
+ * {@link ReadMintResweep.resweep} after the fire-and-forget read.
+ */
+export class ReadMintResweep {
+  private readonly held = new Map<
+    string,
+    { readonly units: ExtractedUnit[]; readonly revisions: Map<string, string> }
+  >();
+  private readonly released = new Set<string>();
+
+  constructor(
+    private readonly deps: {
+      /** Candidate keys (`course + key`) the sweep would try over `units`' courses. Reads the vault only. */
+      readonly candidateKeys: (units: readonly ExtractedUnit[]) => Promise<ReadonlySet<string>>;
+      /** The arrival sweep over `units`; never throws. */
+      readonly sweep: (
+        units: readonly ExtractedUnit[],
+        sourceRevisions?: ReadonlyMap<string, string>,
+      ) => Promise<void>;
+    },
+  ) {}
+
+  /** Retains `units` for each of `folders` (not yet read) whose subtree they sit in. */
+  hold(
+    folders: readonly string[],
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): void {
+    for (const folder of folders) {
+      if (this.released.has(folder)) continue;
+      const prefix = `${folder.replace(/\/+$/, '')}/`;
+      const mine = units.filter((unit) =>
+        (unit.provenance.embeddedIn?.notePath ?? unit.provenance.sourcePath).startsWith(prefix),
+      );
+      if (mine.length === 0) continue;
+      const entry = this.held.get(folder) ?? { units: [], revisions: new Map<string, string>() };
+      entry.units.push(...mine);
+      for (const unit of mine) {
+        const revision = sourceRevisions?.get(unit.provenance.sourcePath);
+        if (revision !== undefined) entry.revisions.set(unit.provenance.sourcePath, revision);
+      }
+      this.held.set(folder, entry);
+    }
+  }
+
+  /** Taken before the folder's read: the keys already visible. `null` when nothing is held or the reading failed. */
+  async before(folder: string): Promise<ReadonlySet<string> | null> {
+    const entry = this.held.get(folder);
+    if (entry === undefined) return null;
+    try {
+      return await this.deps.candidateKeys(entry.units);
+    } catch {
+      return new Set();
+    }
+  }
+
+  /**
+   * After the folder's read (whatever its outcome): releases the folder and, if the read minted a
+   * key the earlier sweep could not see, re-runs the sweep over the held units. Never throws.
+   */
+  async resweep(folder: string, before: ReadonlySet<string> | null): Promise<void> {
+    const entry = this.held.get(folder);
+    this.held.delete(folder);
+    this.released.add(folder);
+    if (entry === undefined || before === null) return;
+    try {
+      const after = await this.deps.candidateKeys(entry.units);
+      let minted = false;
+      for (const key of after) {
+        if (!before.has(key)) {
+          minted = true;
+          break;
+        }
+      }
+      if (!minted) return;
+      await this.deps.sweep(entry.units, entry.revisions);
+    } catch (error) {
+      console.error('Olea: re-sweep after the folder read failed (ingestion unaffected)', error);
+    }
+  }
+}

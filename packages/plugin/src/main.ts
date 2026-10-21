@@ -218,6 +218,7 @@ import {
   type FirstReadFolderView,
   firstReadFoldersJustFinished,
   type IngestionWiring,
+  ReadMintResweep,
   summarizeFirstReadByFolder,
 } from './ingestion/wiring.js';
 import { ObsidianKeywordIndexStore } from './keyword-index/store.js';
@@ -885,6 +886,17 @@ export default class OleaPlugin extends Plugin {
    * own fallback), never a fabricated placeholder.
    */
   private landedConceptsByFolder = new Map<VaultPath, readonly string[]>();
+  /**
+   * `ol-egov.141.89.105.33`: a concept only the per-folder read mints is drafted in the same
+   * arrival, not at the course's next landing. Holds a not-yet-read folder's landed units and
+   * re-runs the arrival sweep over them once that read finishes (`ReadMintResweep`'s doc).
+   */
+  private readonly readMintResweep = new ReadMintResweep({
+    candidateKeys: (units) => this.generationCandidateKeys(units),
+    sweep: (units, sourceRevisions) => this.sweepSerially(units, sourceRevisions),
+  });
+  /** Serialises arrival sweeps so the post-read re-sweep never overlaps a tick's own (no concept is called twice). */
+  private generationSweepTail: Promise<void> = Promise.resolve();
 
   /**
    * The most recent pass's folded relation set (`ol-2zfj.12`) — both stages'
@@ -3045,7 +3057,9 @@ export default class OleaPlugin extends Plugin {
    * waiting for the next ingestion tick's own refresh.
    */
   private async readLandedConceptsForFinishedFolders(folders: readonly VaultPath[]): Promise<void> {
+    const beforeRead = new Map<VaultPath, ReadonlySet<string> | null>();
     for (const folder of folders) {
+      beforeRead.set(folder, await this.readMintResweep.before(folder));
       try {
         const result = await this.readConceptsFromVault({ under: folder });
         if (result !== null && result.outcome === 'read') {
@@ -3062,6 +3076,11 @@ export default class OleaPlugin extends Plugin {
       }
     }
     void refreshOpenTodayViews(this.app.workspace, VIEW_TYPE_OLEA_HOME);
+    // `ol-egov.141.89.105.33`: after every read in this batch, so a slow sweep never delays another
+    // folder's read or the Home refresh above. Fire-and-forget for the tick, as this method is.
+    for (const folder of folders) {
+      await this.readMintResweep.resweep(folder, beforeRead.get(folder) ?? null);
+    }
   }
 
   /**
@@ -3734,6 +3753,49 @@ export default class OleaPlugin extends Plugin {
         console.error('Olea: citation-revision source rewrite on landed units failed', error);
       }
     }
+    if (this.generation === null) return;
+    // `ol-egov.141.89.105.33`: a folder whose first read has not finished keeps its landed units, so
+    // the sweep can run once more when the read has minted a concept the sweep could not see.
+    this.readMintResweep.hold(this.tickedCourseFolders, units, sourceRevisions);
+    await this.sweepSerially(units, sourceRevisions);
+  }
+
+  /** One arrival sweep after any earlier one has finished; never throws. */
+  private sweepSerially(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
+    const run = this.generationSweepTail.then(() => this.sweepLandedUnits(units, sourceRevisions));
+    this.generationSweepTail = run;
+    return run;
+  }
+
+  /** The candidate keys (`course` + key) the sweep would try for `units`' courses. Reads the vault only. */
+  private async generationCandidateKeys(
+    units: readonly ExtractedUnit[],
+  ): Promise<ReadonlySet<string>> {
+    const keys = new Set<string>();
+    if (this.generation === null) return keys;
+    const courses = new Set<string>();
+    for (const unit of units) {
+      const course = courseFromPath(
+        unit.provenance.embeddedIn?.notePath ?? unit.provenance.sourcePath,
+        DEFAULT_COURSES_FOLDER,
+      );
+      if (course !== undefined) courses.add(course);
+    }
+    for (const course of courses) {
+      for (const concept of await this.generation.listConceptsForCourse(course)) {
+        keys.add(`${course}\u0000${concept.key}`);
+      }
+    }
+    return keys;
+  }
+
+  private async sweepLandedUnits(
+    units: readonly ExtractedUnit[],
+    sourceRevisions?: ReadonlyMap<string, string>,
+  ): Promise<void> {
     if (this.generation === null) return;
     try {
       const formatMatch = await this.buildFormatMatchProducer();
