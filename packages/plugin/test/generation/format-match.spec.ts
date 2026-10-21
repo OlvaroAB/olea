@@ -9,7 +9,7 @@
  * written or practical course gets the same (`ol-egov.141.89.105.24`, `[D-550]`); a
  * course with none upcoming gets no format match at all.
  */
-import type { AssessmentRecord, QuestionBlock, TextPaperQuestionGrouping } from 'olea-core';
+import type { AssessmentRecord, QuestionBlock } from 'olea-core';
 import { segmentPastPaper } from 'olea-core';
 import { nearestAssessmentAhead } from 'olea-core/src/assessment/nearest-ahead.js';
 import { describe, expect, it } from 'vitest';
@@ -230,20 +230,6 @@ describe('buildFormatMatch', () => {
       true,
     );
     expect(decision?.registerHint?.sentenceShapes).toContain('Define chunking in your own words.');
-  });
-
-  it("hands each markdown past paper's question groups to onPaperGroups, beside the splitter", async () => {
-    const vault = vaultWith({});
-    const seen: Array<[string, TextPaperQuestionGrouping]> = [];
-    await buildFormatMatch({
-      vault,
-      assessments: [assessment({ type: 'Quiz', due: '2026-09-10' })],
-      now: NOW,
-      onPaperGroups: (path, grouping) => seen.push([path, grouping]),
-    });
-    expect(seen).toHaveLength(1);
-    expect(seen[0]?.[0]).toBe('03 Research/COGS214 Past Paper.md');
-    expect(seen[0]?.[1].placements.length).toBeGreaterThan(0);
   });
 
   it.each([

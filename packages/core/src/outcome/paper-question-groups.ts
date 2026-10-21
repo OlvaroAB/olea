@@ -74,12 +74,11 @@
  * found in development evidence is a change to the extraction prompt or to a rule here, made
  * openly, not a quiet widening of a cutoff.
  *
- * **Reachability.** `groupMarkdownPastPaper` has its production caller in
- * `packages/plugin/src/generation/format-match.ts` (`buildFormatMatch`, beside `segmentPastPaper`),
- * carried in memory through `onPaperGroups`. It is not stored: the stored structure reading is the
- * Worker's (`[D-429]`, `./scope-reading-store.ts`), and this pass is its corroboration and its
- * fallback while a reading is pending (scp.md 2.2). The extracted-text sibling
- * (`groupPlainTextPastPaper`) has no caller yet.
+ * **Reachability.** `groupMarkdownPastPaper`'s production caller is the practice paper's request-time
+ * grouping (`packages/plugin/src/paper/past-paper-grouping.ts`, `[D-559]`). It is not stored: the
+ * stored structure reading is the Worker's (`[D-429]`, `./scope-reading-store.ts`), and this pass is
+ * its corroboration and its fallback while a reading is pending (scp.md 2.2). The extracted-text
+ * sibling (`groupPlainTextPastPaper`) has no caller yet.
  */
 
 import type { CharRange, ExtractionResult } from '../extract/types.js';
