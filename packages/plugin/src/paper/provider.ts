@@ -40,6 +40,15 @@
  * her text and its source's path, never stored). The ruled sentences for a partial paper are the
  * view's, unchanged.
  *
+ * **While a past paper's structure reading is pending, its local grouping shapes the paper
+ * (`[D-559]`, `ol-egov.141.89.7.60`).** When no counted reading gives a template, `requestPaper`
+ * asks the same reader's `pendingPaperTemplate` (production: {@link pastPaperStructureReaderForVault})
+ * for the template of the course's first past paper whose reading is pending, from the local
+ * grouping of its text (`./past-paper-grouping.ts`, whose module doc states which papers count as
+ * pending and the mapping rule). Readings come first: once a paper's reading exists, its grouping
+ * is not consulted. Nothing new is stored: the grouping is recomputed per request, and its
+ * unresolved list is never read or shown. The paper's length is the readings' alone (`[D-548]`).
+ *
  * **F1.2's fallback now reaches this provider (`ol-egov.141.8.10`).** `loadCourseState` no longer
  * exits to `'assignments-not-configured'` on a blank/unreadable Base alone — it reads through
  * `resolveAssessments` first and only reports that state when NEITHER a real Base NOR any manual
@@ -65,6 +74,7 @@ import {
   type PaperRecord,
   type PaperRecoveredStructure,
   type PaperScopeConcept,
+  type PaperStructureTemplate,
   type PastPaperStoredReading,
   paperDaysUntilDue,
   paperGroupsNeedingStimulus,
@@ -103,6 +113,12 @@ import {
   type PaperFacePassageText,
   type PaperStimulusLookup,
 } from './journal-composition.js';
+import {
+  createPendingPaperTemplateReader,
+  groupPastPaperText,
+  markdownPastPapersOf,
+  type PastPaperExtract,
+} from './past-paper-grouping.js';
 import { createHeldMaterialStimulusLookup } from './stimulus-lookup.js';
 import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
 
@@ -218,6 +234,20 @@ export type PracticePaperCourseState =
   | { readonly kind: 'assignments-not-configured' }
   | PracticePaperReadyState;
 
+/**
+ * `[D-548]`'s reader of the course's past-paper structure, and, when it carries one,
+ * `pendingPaperTemplate`: `[D-559]`'s fallback while a past paper's reading is pending
+ * (`ol-egov.141.89.7.60`, `./past-paper-grouping.ts`). The two travel together because they read
+ * the same registrations, store and manifests, and the fallback is asked only when the readings give
+ * no template. A plain function is a reader without the fallback.
+ */
+export type PastPaperStructureReader = ((
+  course: string,
+) => Promise<PaperRecoveredStructure | null>) & {
+  /** The local grouping's template for the course's first past paper whose reading is pending, or `null`. */
+  readonly pendingPaperTemplate?: (course: string) => Promise<PaperStructureTemplate | null>;
+};
+
 export interface CreateLocalPracticePaperProviderDeps {
   readonly vault: VaultSource;
   readonly settingsStore: { load(): Promise<PersistedStudyPlanConfig> };
@@ -233,9 +263,11 @@ export interface CreateLocalPracticePaperProviderDeps {
    * structure, or `null` when no reading counts. Production:
    * {@link pastPaperStructureReaderForVault}. Omitted, or a read that throws: none, so the paper
    * keeps the declared standard extent (an unfinished paper keeps its own length either way,
-   * `./journal-composition.ts`).
+   * `./journal-composition.ts`). Its `pendingPaperTemplate`, when present, is asked only when no
+   * counted reading gives a template (`[D-559]`, `ol-egov.141.89.7.60`); a fallback that throws
+   * gives none, and the paper is composed flat.
    */
-  readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+  readonly readPastPaperStructure?: PastPaperStructureReader;
   /**
    * `[D-562]` (`ol-egov.141.89.7.93`): the shared-material lookup a structured paper's groups are
    * asked of, overriding the production one below (tests). Omitted, with
@@ -333,6 +365,10 @@ export interface VaultPastPaperStructureDeps {
   readonly coursesFolder?: VaultPath;
   /** Injectable for tests; production reads `readReviewLogHistory(vault)`, as the writer does. */
   readonly reviewLog?: () => Promise<readonly ReviewLogEntry[]>;
+  /** `[D-559]`: where Markdown past papers are found (`registerSources`'s folder). Omitted: its default. */
+  readonly sourcesFolder?: VaultPath;
+  /** `[D-559]`: how a non-Markdown past paper's text is extracted. Injectable for tests; production: `extractFromVault`. */
+  readonly extract?: PastPaperExtract;
 }
 
 /**
@@ -341,20 +377,30 @@ export interface VaultPastPaperStructureDeps {
  * exactly as `../scope-reading/declared-demands.ts`'s `declaredDemandsReaderForVault` composes
  * them. The store is opened at each read, so a device id it refuses fails that read, which the
  * provider reads as no reading.
+ *
+ * `[D-559]` (`ol-egov.141.89.7.60`): it carries `pendingPaperTemplate` over the same seams, plus her
+ * Markdown past papers and each paper's own text (`./past-paper-grouping.ts`), so `main.ts`'s
+ * existing call reaches the fallback with nothing new passed.
  */
 export function pastPaperStructureReaderForVault(
   deps: VaultPastPaperStructureDeps,
-): (course: string) => Promise<PaperRecoveredStructure | null> {
+): PastPaperStructureReader {
   const reviewLog =
     deps.reviewLog ?? (async () => (await readReviewLogHistory(deps.vault)).entries);
-  return createPastPaperStructureReader({
+  const seams = {
     loadScopeReadings: () =>
       createScopeReadingPersistence({ vault: deps.vault, deviceId: deps.deviceId }).load(),
     registeredPastPapers: async () =>
       registeredPastPapersFrom(await reviewLog(), deps.coursesFolder),
-    currentRevisions: async (paths) =>
+    currentRevisions: async (paths: readonly VaultPath[]) =>
       currentRevisionsFromManifests(await deps.manifestsFor(paths)),
+  };
+  const pendingPaperTemplate = createPendingPaperTemplateReader({
+    ...seams,
+    markdownPastPapers: (course) => markdownPastPapersOf(deps.vault, course, deps.sourcesFolder),
+    groupPaper: (path) => groupPastPaperText(deps.vault, path, deps.extract),
   });
+  return Object.assign(createPastPaperStructureReader(seams), { pendingPaperTemplate });
 }
 
 /** The course's past-paper structure, or `null` with no reader or a read that throws: the declared extent then stands (`[D-548]`). */
@@ -365,6 +411,23 @@ async function readPastPaperStructureFor(
   if (deps.readPastPaperStructure === undefined) return null;
   try {
     return await deps.readPastPaperStructure(course);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `[D-559]` (`ol-egov.141.89.7.60`): the local grouping's template while a past paper's reading is
+ * pending, or `null` with no fallback on the reader or a read that throws (the flat paper stands).
+ */
+async function pendingPaperTemplateFor(
+  deps: CreateLocalPracticePaperProviderDeps,
+  course: string,
+): Promise<PaperStructureTemplate | null> {
+  const read = deps.readPastPaperStructure?.pendingPaperTemplate;
+  if (read === undefined) return null;
+  try {
+    return await read(course);
   } catch {
     return null;
   }
@@ -661,6 +724,9 @@ async function composeRequestedPaper(
     structure,
   );
   const blueprint = buildPaperBlueprint(input);
+  // `[D-559]`: a counted reading's groups and parts first; only when none gives them, the local
+  // grouping of a past paper whose reading is pending (`ol-egov.141.89.7.60`); neither, flat.
+  const template = structure?.template ?? (await pendingPaperTemplateFor(deps, course));
   const stimulusLookup =
     deps.stimulusLookup ?? heldMaterialLookupFor(deps, input.concepts, records);
 
@@ -682,8 +748,9 @@ async function composeRequestedPaper(
         conceptKeys: outcome.conceptKeys,
       })),
     },
-    // `[D-559]`: her stored reading's groups and parts shape the paper; none, the flat paper.
-    template: structure?.template ?? null,
+    // `[D-559]`: her stored reading's groups and parts, else the pending paper's grouping, shape
+    // the paper; none, the flat paper.
+    template,
     // `[D-562]`: a group that shares material takes one passage from her held material.
     ...(stimulusLookup !== undefined ? { stimulusLookup } : {}),
     port,

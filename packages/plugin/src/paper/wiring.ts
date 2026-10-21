@@ -39,8 +39,9 @@
 import type { App, TFile } from 'obsidian';
 import {
   courseFromPath,
-  type PaperRecoveredStructure,
+  DEFAULT_SOURCES_FOLDER,
   readReviewLogHistory,
+  registerSources,
   type VaultPath,
   type VaultSource,
   type WorkerTaskTransport,
@@ -49,7 +50,11 @@ import type { PersistedStudyPlanConfig } from '../plan/settings-store.js';
 import { registeredPastPapersFrom } from '../scope-reading/declared-demands.js';
 import type { WorkerConfig } from '../worker/transport.js';
 import { buildPracticePaperGenerationPort, type ObsidianDataHost } from './generation-port.js';
-import { createLocalPracticePaperProvider, type PracticePaperViewDeps } from './provider.js';
+import {
+  createLocalPracticePaperProvider,
+  type PastPaperStructureReader,
+  type PracticePaperViewDeps,
+} from './provider.js';
 
 /** The course `file` sits under, by `courseFromPath`'s folder rule (F1.3) — `undefined` outside the courses folder, matching every other consumer of that function in this repo. */
 export function courseForActiveFile(file: TFile, coursesFolder?: string): string | undefined {
@@ -73,8 +78,10 @@ export interface BuildPracticePaperProviderDeps {
   /**
    * `[D-548]` (`ol-egov.141.89.7.87`): the course's past-paper structure, from her stored readings
    * (`pastPaperStructureReaderForVault`, supplied by `main.ts`). Omitted: the declared standard extent.
+   * Passed through as given, so its `[D-559]` fallback while a reading is pending
+   * (`pendingPaperTemplate`, `ol-egov.141.89.7.60`) reaches the provider with it.
    */
-  readonly readPastPaperStructure?: (course: string) => Promise<PaperRecoveredStructure | null>;
+  readonly readPastPaperStructure?: PastPaperStructureReader;
   /**
    * `[D-562]` (`ol-egov.141.89.7.93`): the vault paths of the documents registered now as past
    * papers, of any course, which a group's shared passage is never taken from. Omitted: read from
@@ -86,16 +93,25 @@ export interface BuildPracticePaperProviderDeps {
 
 /**
  * `[D-562]`: every document whose latest registration is as a past paper, of any course, read from
- * her review log the way `./provider.ts`'s past-paper reader reads it (`registeredPastPapersFrom`).
- * Paths only; nothing is logged (D-005).
+ * her review log the way `./provider.ts`'s past-paper reader reads it (`registeredPastPapersFrom`),
+ * plus every source `registerSources` reads as `role: past-paper` from its frontmatter, of any
+ * course and any format. A Markdown past paper is never registered through the log, and since
+ * `ol-egov.141.89.7.60` its grouping can shape a structured paper, so it must be kept out of the
+ * shared-passage lookup too. Paths only; nothing is logged (D-005).
  */
 export function registeredPastPaperPathsForVault(
   vault: VaultSource,
+  sourcesFolder: VaultPath = DEFAULT_SOURCES_FOLDER,
 ): () => Promise<readonly VaultPath[]> {
-  return async () =>
-    registeredPastPapersFrom((await readReviewLogHistory(vault)).entries).map(
+  return async () => {
+    const logged = registeredPastPapersFrom((await readReviewLogHistory(vault)).entries).map(
       (paper) => paper.path,
     );
+    const declared = (await registerSources(vault, { sourcesFolder })).sources
+      .filter((source) => source.role === 'past-paper')
+      .map((source) => source.path);
+    return [...new Set([...logged, ...declared])];
+  };
 }
 
 /** The production `PracticePaperViewDeps` — see the module doc for exactly what `main.ts` supplies and why each piece is injected rather than built here. */
