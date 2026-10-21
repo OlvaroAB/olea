@@ -266,7 +266,10 @@
  * are never lineage. The binary-bytes path (`[D-515]`/`[D-518]`) is skipped for these
  * instruments: its rewrite reads the cited page by its number, which is a label, not identity,
  * once the file has changed. A rewrite's successor job carries the version its passage was read
- * from (`ol-egov.141.89.5.104`), so the successor is seeded and presented in turn.
+ * from (`ol-egov.141.89.5.104`), so the successor is seeded and presented in turn. The rewritten
+ * question's anchor is kept, so a rename seen before its successor is drafted moves it too, and the
+ * runner drafts the successor where the transcript, or a changed file's landed text, stands then
+ * (`ol-egov.141.89.5.107`, {@link citedSourceNowFrom}).
  *
  * Omitted (tests only), these instruments keep the bytes handling above.
  */
@@ -302,6 +305,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import type { CitedSourceNow } from '../../generation/revision-job-runner.js';
 import { canonicalizeForMateriality } from './canonical.js';
 import type {
   CitationAnchorRecord,
@@ -1756,6 +1760,39 @@ export class CitationRevisionTrigger {
     return moved;
   }
 
+  /**
+   * `ol-egov.141.89.5.107`: where this pass last saw `instrumentId`'s cited passage (its anchor's
+   * path), or `undefined` when the store holds no anchor for it or cannot be read. A rewritten
+   * question keeps its anchor (`[D-522]`) and a rename Olea saw moves a transcript anchor
+   * ({@link onSourceRenamed}), so for a lecture transcript this is where the file stands when the
+   * question's successor is drafted (`revision-job-runner.ts`). Reads only.
+   */
+  async anchoredSourcePath(instrumentId: string): Promise<VaultPath | undefined> {
+    try {
+      return (await this.deps.store.loadAll()).get(instrumentId)?.sourcePath;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /**
+   * `ol-egov.141.89.5.107` ([D-518]): the text this session extracted from `path` when its bytes
+   * hashed to `bytesHash` (the landed text {@link rewriteHeldFromLandedSources} drafts from):
+   * `page`'s, or every landed page's when `page` is `undefined`, trimmed. `undefined` when none is
+   * held for those bytes: not landed yet, forgotten by a restart, or a page with no text. Reads
+   * memory only and asks for no extraction.
+   */
+  landedSourceText(
+    path: VaultPath,
+    bytesHash: string,
+    page: number | undefined,
+  ): string | undefined {
+    const landed = this.landedSources.current(path);
+    if (landed === undefined || landed.hash !== bytesHash) return undefined;
+    const text = (page === undefined ? landed.wholeText() : landed.pageText(page)).trim();
+    return text.length === 0 ? undefined : text;
+  }
+
   private async storeHas(instrumentId: string): Promise<boolean> {
     return (await this.deps.store.loadAll()).has(instrumentId);
   }
@@ -2342,4 +2379,18 @@ export function buildCitationRevisionWiring(
   deps: CitationRevisionWiringDeps,
 ): CitationRevisionTrigger {
   return new CitationRevisionTrigger(deps);
+}
+
+/**
+ * `ol-egov.141.89.5.107`: the revision job runner's view of what this pass knows about a rewritten
+ * question's cited source (`CitedSourceNow`, `revision-job-runner.ts`): where its anchor stands and
+ * the text landed for a file's bytes. Reads whichever trigger `trigger()` returns when a job runs,
+ * since `main.ts` builds the runner before the trigger; with none, it knows nothing (no anchor, no
+ * landed text), and the runner keeps its behaviour without a citation pass.
+ */
+export function citedSourceNowFrom(trigger: () => CitationRevisionTrigger | null): CitedSourceNow {
+  return {
+    anchoredPath: async (instrumentId) => trigger()?.anchoredSourcePath(instrumentId),
+    landedText: async (path, bytesHash, page) => trigger()?.landedSourceText(path, bytesHash, page),
+  };
 }

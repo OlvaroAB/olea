@@ -141,7 +141,10 @@ import {
 import { retireOutcomesOnRevision } from '../../../core/src/outcome/store.js';
 import { type QueueStatusCounts, summarizeQueueStatusCounts } from '../commands/diagnostics.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
-import { createRevisionAwareJobRunner } from '../generation/revision-job-runner.js';
+import {
+  type CitedSourceNow,
+  createRevisionAwareJobRunner,
+} from '../generation/revision-job-runner.js';
 import type { DraftQuizCardsDeps } from '../retrieval/draft-quiz-cards.js';
 import type { DocumentReadingBasis } from '../scope-reading/basis.js';
 import { runScopeReadingDrivers, SCOPE_READING_DRIVERS_ENABLED } from '../scope-reading/drivers.js';
@@ -207,6 +210,12 @@ export interface IngestionWiringDeps {
      * Omitted defaults to that module's own `deps.now ?? (() => new Date())`.
      */
     readonly now?: () => Date;
+    /**
+     * `ol-egov.141.89.5.107`: forwarded to `RevisionJobRunnerDeps.citedSourceNow`, so a successor
+     * is drafted where its cited source stands when the job runs. Omitted: the runner's behaviour
+     * without a citation pass.
+     */
+    readonly citedSourceNow?: CitedSourceNow;
   };
   /**
    * Best-effort notification that a drained job accumulated `units` into the
@@ -1202,6 +1211,9 @@ export async function buildIngestionRunner(deps: IngestionWiringDeps): Promise<I
         draftDeps: deps.revision.draftDeps,
         fallback: runner,
         ...(deps.revision.now !== undefined ? { now: deps.revision.now } : {}),
+        ...(deps.revision.citedSourceNow !== undefined
+          ? { citedSourceNow: deps.revision.citedSourceNow }
+          : {}),
       })
     : runner;
   // `deps.generation`'s execution half: recognises a drained `'generation'`

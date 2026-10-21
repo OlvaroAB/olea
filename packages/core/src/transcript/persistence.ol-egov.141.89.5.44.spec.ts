@@ -169,7 +169,10 @@ describe('E3 and E4: the passage rules', () => {
   it('E3 as built: no transcript passage rule exists, so a plain-text transcript citation is sealed with no digest at all', async () => {
     // PERSISTENCE.md 2.5 designed a transcript rule appended to this registry. The build
     // (ol-egov.141.89.5.43) identifies a cited transcript passage by its anchor's text instead, so
-    // no transcript digest is minted, and a retired rule cannot strand one.
+    // this note rule mints no transcript digest and the seal leaves a plain-text transcript's
+    // citation as it came. A part digest that generation names for a transcript part
+    // (ol-egov.141.89.5.97, [D-567]) is minted by the plugin's part naming, not by a rule here, and
+    // the seal keeps it as drafted for a declared Markdown transcript (ol-egov.141.89.5.106).
     const vault = new MemoryVault({ [PLAIN]: LONG_PLAIN });
     const citation = { sourcePath: PLAIN, page: 3 };
     const sealed = await sealCitationPassage(vault, citation, 'Course A/Lecture 3/transcript.md');
