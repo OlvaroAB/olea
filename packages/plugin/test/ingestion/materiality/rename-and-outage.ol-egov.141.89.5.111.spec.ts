@@ -3,8 +3,9 @@
 //
 // 1. A renamed PDF or other binary source was never followed: its questions stayed withheld, while a
 //    renamed lecture transcript was followed through `onSourceRenamed` (`main.ts`'s vault rename
-//    handler calls it, as these tests do). Now a rename Olea saw moves the question's citation to
-//    the file's new path; an unseen move still withholds.
+//    handler calls it, as these tests do). A fix that moved the question's citation to the file's new
+//    path was written and is HELD for David's ruling (it changes a citation record's write-once
+//    rule, Class C), so the follow tests are pinned again as `it.fails`; an unseen move withholds.
 // 2. A missing Worker or a transport failure counted against the queue's attempts on a revision job,
 //    and an unreachable Worker read as a refusal, so an outage failed the job and left the old
 //    question suspended with nothing replacing it. Now an outage leaves the job waiting, uncounted,
@@ -12,7 +13,7 @@
 //    on the queue by the citation pass itself and drained by `buildIngestionRunner`, the runner chain
 //    `main.ts` drains.
 //
-// The pinned tests were flipped to plain `it` with the fix. Every course, lecture, file and sentence
+// The outage tests are plain `it`; the held rename tests are `it.fails`. Every course, lecture, file and sentence
 // here is invented.
 import {
   citationStorePath,
@@ -153,22 +154,14 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     expect(h.judge.judge).not.toHaveBeenCalled();
   });
 
-  it("a renamed PDF: onSourceRenamed moves the question's citation to the new path, every other field as written", async () => {
+  it('a renamed PDF: onSourceRenamed moves nothing (it follows transcripts only), and its citation stays as written', async () => {
     const { vault, h } = await pdfSeeded();
-    const before = JSON.parse(vault.files.get(citationStorePath('q-pdf')) as string);
-    expect(await renamePdfAsSeen(vault, h)).toBe(1);
-    const after = JSON.parse(vault.files.get(citationStorePath('q-pdf')) as string);
-    expect(after).toEqual({ ...before, sourcePath: PDF_RENAMED });
-    expect(await readInstrumentCitation(vault, 'q-pdf')).toEqual({
-      sourcePath: PDF_RENAMED,
-      page: 2,
-      sourceRevision: await hashContent(PDF_BYTES),
-    });
-    // The anchor holds the question's own note, as before: only the citation names the file.
-    expect((await h.store.loadAll()).get('q-pdf')?.sourcePath).toBe(PDF_HOME);
+    const before = vault.files.get(citationStorePath('q-pdf'));
+    expect(await renamePdfAsSeen(vault, h)).toBe(0);
+    expect(vault.files.get(citationStorePath('q-pdf'))).toBe(before);
   });
 
-  it('a PDF renamed while Olea runs, bytes unchanged, is still served at the new path after the next pass', async () => {
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] a PDF renamed while Olea runs, bytes unchanged, is still served at the new path after the next pass', async () => {
     const { vault, h } = await pdfSeeded();
     await renamePdfAsSeen(vault, h);
     await h.pass(vault);
@@ -177,7 +170,7 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     expect(h.judge.judge).not.toHaveBeenCalled();
   });
 
-  it('once the renamed file is extracted at its new path, its question is served again', async () => {
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] once the renamed file is extracted at its new path, its question is served again', async () => {
     const { vault, h } = await pdfSeeded();
     await renamePdfAsSeen(vault, h);
     await h.pass(vault);
@@ -187,7 +180,7 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     expect(await presentedAs(h, vault, 'q-pdf')).toBe('clear');
   });
 
-  it('a hold raised before the rename was seen (the pass read the old path first) lifts once the citation follows', async () => {
+  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] a hold raised before the rename was seen (the pass read the old path first) lifts once the citation follows', async () => {
     const { vault, h } = await pdfSeeded();
     vault.binaries.delete(PDF);
     vault.binaries.set(PDF_RENAMED, PDF_BYTES);
@@ -242,7 +235,7 @@ describe('claim 1: a rename Olea saw (ol-egov.141.89.5.111)', () => {
     );
   });
 
-  it("the file's extracted text moves with it, so a successor waiting for that text finds it at the new path", async () => {
+  it.fails("[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] the file's extracted text moves with it, so a successor waiting for that text finds it at the new path", async () => {
     const { vault, h } = await pdfSeeded();
     const units: ExtractedUnit[] = [
       {

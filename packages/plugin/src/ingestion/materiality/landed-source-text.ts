@@ -110,18 +110,6 @@ export class LandedSourceText {
     return this.byPath.size;
   }
 
-  /**
-   * `ol-egov.141.89.5.111`: a rename Olea saw moves the file's landed text, every version of it, to
-   * its new path, since the bytes it was extracted from are the same file's. Text already held under
-   * the new path is kept and the moved text dropped. Nothing held under the old path: a no-op.
-   */
-  rename(from: string, to: string): void {
-    const file = this.byPath.get(from);
-    if (file === undefined || from === to) return;
-    this.byPath.delete(from);
-    if (!this.byPath.has(to)) this.byPath.set(to, file);
-  }
-
   /** The file's current version, or `undefined` when none of its text has landed. */
   current(path: string): LandedVersion | undefined {
     const file = this.byPath.get(path);
