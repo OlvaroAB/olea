@@ -20,7 +20,8 @@ const COURSE_A = 'ZZZ100';
 const COURSE_D = 'AAA100';
 const SOURCE = `01 Courses/${COURSE_A}/Lecture.pdf`;
 const HER_NOTES: Readonly<Record<string, string>> = {
-  [`01 Courses/${COURSE_D}/d-note.md`]: '---\ntopic:\n  - Shared idea\n---\n\nSee [[Shared idea]].\n',
+  [`01 Courses/${COURSE_D}/d-note.md`]:
+    '---\ntopic:\n  - Shared idea\n---\n\nSee [[Shared idea]].\n',
   [`01 Courses/${COURSE_A}/a-note.md`]:
     '---\ntopic:\n  - Shared idea\n  - Only-A idea\n---\n\nSee [[Shared idea]].\n',
   '05 Zettelkasten/Shared idea.md': 'A note she wrote.\n',
@@ -32,7 +33,8 @@ describe('[D-558] accept records the drafted-for concept, both kinds', () => {
     const { concepts } = await enumerateVaultInstruments(vault);
     const shared = concepts.find((c) => c.name === 'Shared idea')?.key;
     const onlyA = concepts.find((c) => c.name === 'Only-A idea')?.key;
-    if (shared === undefined || onlyA === undefined) throw new Error('test setup: concepts missing');
+    if (shared === undefined || onlyA === undefined)
+      throw new Error('test setup: concepts missing');
     const cache = createVaultDraftCacheStore(vault);
     const base = {
       status: 'pending' as const,
@@ -112,7 +114,12 @@ describe('[D-558] accept records the drafted-for concept, both kinds', () => {
       conceptIds: ['concept-key1:k'],
       sourcePath: notePath,
       createdAt: '2026-10-20T09:00:00Z',
-      question: { stem: 'Q?', correctAnswer: 'r', distractors: ['a', 'b', 'c', 'd'], feedback: 'f' },
+      question: {
+        stem: 'Q?',
+        correctAnswer: 'r',
+        distractors: ['a', 'b', 'c', 'd'],
+        feedback: 'f',
+      },
       provenance: { taskId: 'quiz.generate.v1', promptVersion: '1.0.0', modelId: 'm' },
       firstServedAt: null,
     });
