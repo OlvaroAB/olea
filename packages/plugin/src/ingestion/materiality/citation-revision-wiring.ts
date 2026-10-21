@@ -688,6 +688,29 @@ export interface SourceLandingResult {
 interface PassageContext {
   readonly sourcePath: VaultPath;
   readonly rule?: PassageRule;
+  /**
+   * `ol-egov.141.89.5.104` ([D-567], [D-508]): a transcript passage only, the bytes hash of the
+   * version this pass read it from. A successor drafted from it carries this on its job
+   * (`InstrumentRevisionJobPayload.sourceRevision`, an existing field), so its citation records the
+   * version it was drafted from and it is presented, not withheld at first sighting. Memory only.
+   */
+  readonly sourceRevision?: string;
+}
+
+/**
+ * The successor's job for a rewrite: as `evaluateCitedPassageRevision` built it, except that a
+ * transcript passage's version travels with it (`PassageContext.sourceRevision`).
+ */
+function successorInputFor(
+  event: RevisionEvent,
+  currentText: string,
+  passage: PassageContext | undefined,
+  built?: EnqueueInput,
+): EnqueueInput {
+  if (passage?.sourceRevision !== undefined) {
+    return buildSuccessorRevisionEnqueueInput(event, currentText, passage.sourceRevision);
+  }
+  return built ?? buildSuccessorRevisionEnqueueInput(event, currentText);
 }
 
 /** The three withholding reasons this build knows, and so may clear on finding the passage again. */
@@ -1002,7 +1025,11 @@ export class CitationRevisionTrigger {
           );
           if (located === undefined) continue;
           current = { kind: 'found-at-anchor', text: located };
-          passage = { sourcePath: previous.sourcePath };
+          const version = await transcripts.read(previous.sourcePath);
+          passage = {
+            sourcePath: previous.sourcePath,
+            ...(version.kind === 'read' ? { sourceRevision: version.version.bytesHash } : {}),
+          };
         } else if (currentRecord !== undefined && previous.passageDigest !== undefined) {
           // Passage grain: ask WHERE the anchored passage stands now, by the shared rule. Only a
           // passage found in place (unchanged, reformatted, or edited-and-unmistakable) continues
@@ -2039,7 +2066,7 @@ export class CitationRevisionTrigger {
           currentRecord?.conceptIds ?? previous.conceptIds,
           outcome.event.newContentHash,
           outcome.event.instrumentId,
-          buildSuccessorRevisionEnqueueInput(outcome.event, current.text),
+          successorInputFor(outcome.event, current.text, passage),
           actions,
           report,
         );
@@ -2052,7 +2079,9 @@ export class CitationRevisionTrigger {
           currentRecord?.conceptIds ?? previous.conceptIds,
           outcome.event.newContentHash,
           outcome.predecessorInstrumentId,
-          outcome.successorEnqueueInput,
+          current.kind === 'found-at-anchor'
+            ? successorInputFor(outcome.event, current.text, passage, outcome.successorEnqueueInput)
+            : outcome.successorEnqueueInput,
           actions,
           report,
         );

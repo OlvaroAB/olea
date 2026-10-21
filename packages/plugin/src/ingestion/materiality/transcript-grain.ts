@@ -51,6 +51,7 @@
  */
 
 import {
+  digestPassage,
   hashContent,
   PASSAGE_RESEMBLANCE_FLOOR,
   readTranscriptText,
@@ -292,6 +293,57 @@ export function resolveTranscriptPassage(
     return { kind: 'unresolved', reason: 'ambiguous' };
   }
   return { kind: 'changed', text: words.slice(extent.start, extent.end).join(' ') };
+}
+
+/**
+ * `[D-567]` (functional scope C5.3, "Which part"): the part one passage names in one transcript
+ * version. A citation names a part only when its question was drafted from a single passage that
+ * names it, so this answers only when the passage's words stand exactly once in the version's
+ * spoken text and that one occurrence lies inside a single part. Anything else (no words, absent,
+ * standing twice, or running across a part boundary) is `undefined`: the citation then names no
+ * part and the whole transcript is protected, as a note is under `[D-543]`.
+ *
+ * The part is recorded as the citation's `page` (the part ordinal, a label in this version only)
+ * and `passageDigest`: the digest of the part's spoken text, under the passage rule's own
+ * whitespace-only normalisation, which is exactly the text a part-grain anchor is seeded with.
+ * Its presence is what says a part is named; its absence is the whole-transcript grain, the same
+ * representation `[D-543]` reads for a note (a citation with no passage digest). No field is added.
+ */
+export async function namedTranscriptPart(
+  parts: readonly { readonly ordinal: number; readonly spoken: string }[],
+  passage: string,
+): Promise<{ readonly page: number; readonly passageDigest: string } | undefined> {
+  const wanted = wordsOf(passage);
+  if (wanted.length === 0) return undefined;
+  const bounds: {
+    readonly ordinal: number;
+    readonly spoken: string;
+    readonly start: number;
+    readonly end: number;
+  }[] = [];
+  const words: string[] = [];
+  for (const part of parts) {
+    const own = wordsOf(part.spoken);
+    bounds.push({
+      ordinal: part.ordinal,
+      spoken: part.spoken,
+      start: words.length,
+      end: words.length + own.length,
+    });
+    words.push(...own);
+  }
+  let at = -1;
+  for (let i = 0; i + wanted.length <= words.length; i += 1) {
+    let j = 0;
+    while (j < wanted.length && words[i + j] === wanted[j]) j += 1;
+    if (j < wanted.length) continue;
+    if (at !== -1) return undefined; // stands twice: which one it was drafted from cannot be told
+    at = i;
+  }
+  if (at === -1) return undefined;
+  const holder = bounds.find((bound) => bound.start <= at && at + wanted.length <= bound.end);
+  if (holder === undefined) return undefined; // runs across a part boundary: no single part
+  return { page: holder.ordinal, passageDigest: await digestPassage(holder.spoken) };
 }
 
 export type TranscriptSeed =
