@@ -444,22 +444,28 @@ const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
  * outrank a concept whose need is a quarter of the range higher (so a wrong answer alone never
  * outranks real, much larger need or sooner-due evidence), and not so small that a typical gap
  * between two concepts' need readings swallows it. A quarter sits inside that band; it is a pin,
- * not a fit, and the band is wide (see the sweep range below). The lift is added to the need
+ * not a fit, and the band is wide. The lift is added to the need
  * ordering input whatever the need basis (a multiple-choice-only concept's unknown need is
  * ordered at 1, and the lift is added to that), not held at the need term's maximum
  * (`ol-egov.141.89.10.128`), and it moves no relevance or proximity term, so one course's
  * rows cannot be moved above another's by more than `weights.need` times this share.
  *
- * **Provisional and NOT yet calibrated.** The five-course rerun could not calibrate it: one
- * answering session never gives a concept an earlier unaided success followed by a later valid
- * wrong answer, so the lift's effect was zero by construction (every grid point identical), and
- * a pending draft card's first answer recorded no independent support until `[D-517]` (a) was
- * fixed (`ol-egov.141.89.9.102`). The grid is next read over a two-session learner (correct on
- * the first session, wrong on a later day; `ol-egov.141.89.10.131`), sweep 0.05 to 0.5. Revisit
- * when a review log holds a counted unaided success on a recall card followed by a valid wrong
- * answer on a later day: how often that wrong answer keeps more priority than a correct one, and
- * how often the lifted concept is re-served too early (the spacing check). A written
- * pre-commitment comes first (`[D-194]`); then David ratifies the measured point (`[D-554]`).
+ * **Provisional cap 0.25, window 7 days** (David, 2026-10-21, recorded on `[D-554]`). Paired
+ * ranking effect verified; tested settings were indistinguishable on this learner. Multi-day
+ * serving behaviour remains untested. Over a two-session learner (right on the first session,
+ * wrong on a later day; `ol-egov.141.89.10.131`), every wrongly answered concept ranked above its
+ * right-answer twin at every cap from 0.05 to 0.5 and every window from 3 to 14 days, and no other
+ * concept, course share or focus moved. Its wrong answers all fell on one day, so no setting
+ * changed what was served, and that run says nothing about the size or the duration. The
+ * outstanding check is a bounded scripted multi-day learner on which the lift can change what is
+ * served, read for spacing and course shares (`ol-egov.141.89.10.132`). Her review log informs
+ * later tuning; it is not the first meaningful test.
+ *
+ * **Revisit.** Moving an eligible instrument ahead is the intended effect. A spacing-constraint
+ * violation is a defect, acted on at its first occurrence. An unwanted recurrence within the
+ * permitted schedule, on 2 or more of the first 5 occasions (a concept answered right, then wrong
+ * on a later day), is a provisional trigger to propose a smaller cap or a shorter window
+ * (`[D-194]`). The constants move only by a decision bead.
  */
 export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
 
@@ -468,10 +474,10 @@ export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
  * calendar days: it falls in a straight line from its full size on the day of the wrong answer to
  * nothing at this many days, and is exactly zero from then on. **Plain-English defense of 7:** a
  * wrong answer is a reason to come back to the concept within about a week, the span in which a
- * missed item is most likely to still be recoverable by one more attempt; past it, the ordinary
+ * missed concept is most likely to still be recoverable by one more attempt; past it, the ordinary
  * recall estimate (which the lift does not replace) carries the concept. A pin, not a fit.
- * Provisional and not yet calibrated (the five-course rerun could not, see the share above);
- * sweep 3 to 14 days over the two-session learner; same revisit condition as the share above.
+ * Provisional, with the same status, outstanding check and revisit condition as the share above:
+ * windows from 3 to 14 days were indistinguishable on the two-session learner.
  */
 export const DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS = 7;
 
