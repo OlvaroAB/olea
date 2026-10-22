@@ -11,6 +11,8 @@
  * here** — see `wiring.ts`'s module doc for why, and what remains.
  */
 
+import type { ModelStamp, PersistedStageProducer } from 'olea-core';
+
 /** Raw and canonicalised content hashes for one observed version of a file's text. */
 export interface MaterialityHashes {
   readonly rawHash: string;
@@ -53,6 +55,16 @@ export interface MaterialityRecord {
    * a revision for the first time (see `wiring.ts`'s own `isLegacyRecord`).
    */
   readonly revision?: number;
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): who settled this record's current baseline — the judge
+   * (the model arm, with the D7.3 stamp its answer carried, or `null`) or a code rule with its
+   * version (`verdict-provenance.ts`). Written by every write that settles the baseline; carried
+   * unchanged, or left absent, by every write that keeps it (`carriedSettledBy`). Absent on every
+   * record written before this field: read it only through `olea-core`'s `readStoredProducer`,
+   * which reads that as unknown and a value it cannot read as unrecognised (kept as it was). The
+   * hash store's validator ignores it, and nothing branches on it.
+   */
+  readonly settledBy?: PersistedStageProducer;
 }
 
 /** Persistence port for `MaterialityRecord`s, one per vault path — mirrors `QueueStore`'s shape and reasoning (`olea-core`). */
@@ -78,6 +90,13 @@ export interface MaterialityJudgeVerdict {
   readonly material: boolean;
   /** Content-free (INV-3) — never her wording, only a short structural reason for logging/debugging. */
   readonly reason?: string | undefined;
+  /**
+   * `[D-598]`: the D7.3 stamp the Worker's response carried, when the judge attaches one
+   * (`WorkerMaterialityJudge` does; see `workerJudge.ts`). Mirrors `olea-core`'s
+   * `RevisionJudgeVerdict.stamp`, so the cited-passage adapter passes it through. Read
+   * defensively wherever it is used (`readModelStamp`): a judge that attaches none reads `null`.
+   */
+  readonly stamp?: ModelStamp | null | undefined;
 }
 
 export interface MaterialityJudge {

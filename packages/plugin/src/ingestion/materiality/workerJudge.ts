@@ -69,7 +69,7 @@
  * `stamp` is `null` exactly when the response carried none — never invented.
  */
 
-import type { ModelStamp, WorkerTaskTransport } from 'olea-core';
+import { type ModelStamp, readModelStamp, type WorkerTaskTransport } from 'olea-core';
 import type { MaterialityJudge, MaterialityJudgeInput, MaterialityJudgeVerdict } from './types.js';
 
 /** `TASK_IDS.MATERIALITY_JUDGE`, mirrored — see the module doc for why it is not imported. */
@@ -135,14 +135,9 @@ export class WorkerMaterialityJudge implements MaterialityJudge {
  * never invented to fill the field.
  */
 function readStamp(response: Record<string, unknown>): ModelStamp | null {
-  const stamp = response['stamp'];
-  if (typeof stamp !== 'object' || stamp === null) return null;
-  const s = stamp as Record<string, unknown>;
-  const promptVersion = s['promptVersion'];
-  const modelId = s['modelId'];
-  if (typeof promptVersion !== 'string' || promptVersion.length === 0) return null;
-  if (typeof modelId !== 'string' || modelId.length === 0) return null;
-  return { promptVersion, modelId };
+  // `[D-598]`: the one shared defensive reader (`olea-core`'s `readModelStamp`), the same rule
+  // `wiring.ts` and the cited-passage path read a verdict's stamp with.
+  return readModelStamp(response['stamp']);
 }
 
 function readVerdict(body: unknown): StampedMaterialityJudgeVerdict {

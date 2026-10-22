@@ -188,6 +188,101 @@ export function toArtifactProvenance(provenance: StageProvenance): ArtifactProve
 }
 
 const SEATS: ReadonlySet<string> = new Set<StageSeat>(['candidate', 'fallback']);
+
+/**
+ * `[D-598]` (`ol-egov.141.89.5.135`): the producer a stored source-change
+ * verdict keeps beside it, so a record can later say whether the judge or a
+ * code rule settled it, and under which version.
+ *
+ * - `model`: `StageProducer`'s model arm, field for field. `stamp` is the
+ *   D7.3 stamp exactly as the response carried it, or `null` when it carried
+ *   none (or carried an unreadable one); it is never filled in.
+ * - `code`: a deterministic rule, by a stable kebab-case id, and the version
+ *   of that rule's behaviour. Each version's behaviour is frozen by tests
+ *   where the rule lives; a changed behaviour is a new version, never the
+ *   same number reused.
+ *
+ * Never content (D-005): ids, versions and the stamp only. Not a verdict: a
+ * stored producer says who decided, never what was decided.
+ */
+export type PersistedStageProducer =
+  | Extract<StageProducer, { readonly kind: 'model' }>
+  | {
+      readonly kind: 'code';
+      readonly rule: string;
+      readonly ruleVersion: number;
+    };
+
+/**
+ * How a stored producer value reads back:
+ * - `known`: a well-formed `PersistedStageProducer`;
+ * - `unknown`: no value at all, which is every record written before
+ *   `[D-598]`. Never guessed from the record's dates or from deployments;
+ * - `unrecognised`: a value is present but this build cannot read it (a
+ *   newer build's shape, or damage). The caller keeps it verbatim on any
+ *   write that carries it, and it never drops the record it sits on.
+ */
+export type StoredProducerReading =
+  | { readonly state: 'known'; readonly producer: PersistedStageProducer }
+  | { readonly state: 'unknown' }
+  | { readonly state: 'unrecognised' };
+
+/**
+ * The D7.3 stamp in `value`, read defensively: a fresh `{ promptVersion,
+ * modelId }` when both are non-empty strings, otherwise `null` (absent,
+ * malformed, or a judge that never attaches one). Never invented.
+ */
+export function readModelStamp(value: unknown): ModelStamp | null {
+  if (!isRecord(value)) return null;
+  if (!isNonEmptyString(value.promptVersion) || !isNonEmptyString(value.modelId)) return null;
+  return { promptVersion: value.promptVersion, modelId: value.modelId };
+}
+
+/** A code rule's id: lower-case words joined by single hyphens. */
+const RULE_ID = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
+/**
+ * The persisted form of `producer` when it is a model producer: its model arm
+ * copied field for field. `null` for a code producer, which carries no
+ * version and so cannot be stored as one without guessing it.
+ */
+export function persistedModelProducer(producer: StageProducer): PersistedStageProducer | null {
+  if (producer.kind !== 'model') return null;
+  return { kind: 'model', seat: producer.seat, taskId: producer.taskId, stamp: producer.stamp };
+}
+
+/**
+ * Reads a stored producer value (see {@link StoredProducerReading}). Strict
+ * about the shape it knows: a model value needs a known seat, a non-empty
+ * task id and a `stamp` that is `null` or a readable stamp; a code value
+ * needs a kebab-case rule id and a whole version of at least 1. Anything
+ * else present is `unrecognised`, never coerced. Keys this build does not
+ * know are ignored, and the producer returned holds only the known fields.
+ */
+export function readStoredProducer(value: unknown): StoredProducerReading {
+  if (value === undefined) return { state: 'unknown' };
+  const unrecognised: StoredProducerReading = { state: 'unrecognised' };
+  if (!isRecord(value)) return unrecognised;
+  if (value.kind === 'code') {
+    const { rule, ruleVersion } = value;
+    if (typeof rule !== 'string' || !RULE_ID.test(rule)) return unrecognised;
+    if (typeof ruleVersion !== 'number' || !Number.isInteger(ruleVersion) || ruleVersion < 1) {
+      return unrecognised;
+    }
+    return { state: 'known', producer: { kind: 'code', rule, ruleVersion } };
+  }
+  if (value.kind !== 'model') return unrecognised;
+  const { seat, taskId } = value;
+  if (typeof seat !== 'string' || !SEATS.has(seat)) return unrecognised;
+  if (!isNonEmptyString(taskId)) return unrecognised;
+  if (!('stamp' in value)) return unrecognised;
+  const stamp = value.stamp === null ? null : readModelStamp(value.stamp);
+  if (value.stamp !== null && stamp === null) return unrecognised;
+  return {
+    state: 'known',
+    producer: { kind: 'model', seat: seat as StageSeat, taskId, stamp },
+  };
+}
 const ESCALATION_REASONS: ReadonlySet<string> = new Set<StageEscalationReason>([
   'undecided',
   'below-confidence-bar',

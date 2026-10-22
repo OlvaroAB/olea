@@ -125,7 +125,9 @@ import {
   decisionFromRevisionJudge,
   extractChangedRegions,
   type MaterialityDecision,
-  type ModelStamp,
+  type PersistedStageProducer,
+  persistedModelProducer,
+  readModelStamp,
 } from 'olea-core';
 import { canonicalizeForMateriality } from './canonical.js';
 import type { MaterialityConstants } from './constants.js';
@@ -148,6 +150,7 @@ import type {
   MaterialityRecord,
   MaterialityVerdictEvent,
 } from './types.js';
+import { carriedSettledBy, codeRule } from './verdict-provenance.js';
 import { MATERIALITY_JUDGE_TASK_ID } from './workerJudge.js';
 
 export type MaterialityEvaluationResult =
@@ -181,8 +184,9 @@ export type MaterialityEvaluationResult =
        * (`stage-contract/adapters/revision-judge.ts`'s
        * `decisionFromRevisionJudge`), carrying the Worker's D7.3 stamp
        * (`workerJudge.ts`'s `StampedMaterialityJudgeVerdict`) into the
-       * adapted decision's provenance — see `readMaterialityJudgeStamp`'s
-       * doc below for why it is read defensively rather than assumed.
+       * adapted decision's provenance, read defensively rather than
+       * assumed (`olea-core`'s `readModelStamp`, `[D-598]`: `null` for a
+       * judge that attaches none or a malformed value).
        */
       readonly decision: MaterialityDecision;
     };
@@ -249,24 +253,6 @@ type ReconcileStep =
 /** A content-free label for a caught error (D-005: an error message may name a path). */
 function failureClass(error: unknown): string {
   return error instanceof Error ? error.name : typeof error;
-}
-
-/**
- * Reads `.stamp` off a `MaterialityJudge`'s verdict. The declared
- * `MaterialityJudgeVerdict` (`./types.ts`) has no `stamp` field, but the
- * production judge (`WorkerMaterialityJudge`, `./workerJudge.ts`) returns a
- * strict superset with one attached — see that file's own "THE D7.3 STAMP"
- * doc. Read here the same defensive way every other Worker-response stamp
- * reader in this plugin does: `null` for a judge that never attaches one (a
- * test stub) or a malformed value, never invented (D-005).
- */
-function readMaterialityJudgeStamp(verdict: MaterialityJudgeVerdict): ModelStamp | null {
-  const stamp = (verdict as { readonly stamp?: unknown }).stamp;
-  if (typeof stamp !== 'object' || stamp === null) return null;
-  const s = stamp as Record<string, unknown>;
-  if (typeof s.promptVersion !== 'string' || s.promptVersion.length === 0) return null;
-  if (typeof s.modelId !== 'string' || s.modelId.length === 0) return null;
-  return { promptVersion: s.promptVersion, modelId: s.modelId };
 }
 
 /** One path's deferred below-floor edit — see `pendingSmallEdit`'s own field doc for why this caches text at all. */
@@ -620,6 +606,8 @@ export class MaterialityTrigger {
         if (this.inFlight.has(path)) {
           this.revisions.set(path, (this.revisions.get(path) ?? 0) + 1);
         }
+        // `[D-598]`: back at the baseline's own bytes, so the baseline stands as settled, and so
+        // does whoever settled it: carried unchanged.
         await this.settleFreeExit(
           path,
           current,
@@ -628,6 +616,7 @@ export class MaterialityTrigger {
           now,
           record,
           persistedRevision,
+          'carry',
         );
       }
       return { kind: 'resolved', result: outcome };
@@ -768,6 +757,8 @@ export class MaterialityTrigger {
         lastChangedAt: now,
         lastVerdictAt: record?.lastVerdictAt ?? null,
         revision: persistedRevision,
+        // `[D-598]`: the baseline is kept, so whoever settled it is kept.
+        ...carriedSettledBy(record),
       });
       return { kind: 'resolved', result: outcome };
     }
@@ -785,6 +776,7 @@ export class MaterialityTrigger {
         now,
         record,
         persistedRevision,
+        codeRule('formatting-only'),
       );
       return { kind: 'resolved', result: outcome };
     }
@@ -801,6 +793,7 @@ export class MaterialityTrigger {
         lastChangedAt: now,
         lastVerdictAt: record?.lastVerdictAt ?? null,
         revision: persistedRevision,
+        settledBy: codeRule('no-groundable-content'),
       });
       return { kind: 'resolved', result: outcome };
     }
@@ -824,6 +817,8 @@ export class MaterialityTrigger {
         lastVerdictAt: record?.lastVerdictAt ?? null,
         // [D-311]: deferred again, not decided -- the revision is unchanged.
         revision: persistedRevision,
+        // `[D-598]`: the baseline is kept, so whoever settled it is kept.
+        ...carriedSettledBy(record),
       });
       return { kind: 'resolved', result: outcome };
     }
@@ -1119,6 +1114,7 @@ export class MaterialityTrigger {
         lastChangedAt: now,
         lastVerdictAt: record.lastVerdictAt,
         revision: persistedRevision,
+        settledBy: codeRule('formatting-only'),
       });
       this.lastProcessedText.set(path, currentText);
       await this.clearPending(path);
@@ -1272,7 +1268,9 @@ export class MaterialityTrigger {
       {
         seat: 'candidate',
         taskId: MATERIALITY_JUDGE_TASK_ID,
-        stamp: readMaterialityJudgeStamp(judged),
+        // `[D-598]`: read defensively (`olea-core`'s `readModelStamp`): `null` for a judge that
+        // never attaches one (a test stub) or a malformed value, never invented (D-005).
+        stamp: readModelStamp(judged.stamp),
         evidenceDigests: [],
       },
     );
@@ -1326,6 +1324,8 @@ export class MaterialityTrigger {
     // record's `lastChangedAt` is this call's own (nothing else touched the
     // path since it was loaded), so the merge is a no-op.
     const mergedLastChangedAt = Math.max(lastChangedAt, recordAfterJudge?.lastChangedAt ?? 0);
+    // `[D-598]`: the judge settled this baseline; its producer is the decision's own, built above.
+    const settledBy = persistedModelProducer(decision.provenance.producer);
     await this.deps.store.save({
       path,
       hashes: current,
@@ -1333,6 +1333,7 @@ export class MaterialityTrigger {
       lastChangedAt: mergedLastChangedAt,
       lastVerdictAt: now,
       revision: persistedRevision + 1,
+      ...(settledBy !== null ? { settledBy } : {}),
     });
     // Defect 2 (ol-egov.141.89.5.7): this text is now the baseline every
     // later call on this path should chain from, whatever the verdict was.
@@ -1374,6 +1375,8 @@ export class MaterialityTrigger {
     now: number,
     record: MaterialityRecord | null,
     persistedRevision: number,
+    /** `[D-598]`: the code rule that settled this exit, or `'carry'` when the baseline's bytes stand. */
+    settledBy: PersistedStageProducer | 'carry',
   ): Promise<void> {
     await this.deps.store.save({
       path,
@@ -1383,6 +1386,7 @@ export class MaterialityTrigger {
       lastVerdictAt: record?.lastVerdictAt ?? null,
       // [D-311]: no judge call dispatched, so the revision is unchanged.
       revision: persistedRevision,
+      ...(settledBy === 'carry' ? carriedSettledBy(record) : { settledBy }),
     });
     this.pendingSmallEdit.delete(path);
     this.pendingDebounced.delete(path);

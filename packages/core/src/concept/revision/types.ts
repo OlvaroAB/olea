@@ -38,6 +38,7 @@
 
 import type { Provenance } from '../../extract/types.js';
 import type { EnqueueInput } from '../../ingestion/types.js';
+import type { ModelStamp } from '../../stage-contract/provenance.js';
 
 /** Mirrors `MaterialityJudgeInput` (plugin) field-for-field — see this file's module doc. */
 export interface RevisionJudgeInput {
@@ -49,6 +50,13 @@ export interface RevisionJudgeInput {
 export interface RevisionJudgeVerdict {
   readonly material: boolean;
   readonly reason?: string | undefined;
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): the D7.3 stamp the Worker's response carried, when the
+   * judge attaches one (the plugin's `WorkerMaterialityJudge` does). Read defensively by
+   * `evaluateCitedPassageRevision` (`readModelStamp`), so a judge that attaches none, or an
+   * unreadable one, yields `null` on the outcome rather than an invented stamp.
+   */
+  readonly stamp?: ModelStamp | null | undefined;
 }
 
 /**
@@ -226,6 +234,10 @@ export interface CitedPassageInput {
  *   `successorEnqueueInput` is a ready `EnqueueInput` for the existing
  *   ingestion queue to draft the successor — nothing here writes it to any
  *   confirmation queue or vault file.
+ *
+ * `[D-598]` (`ol-egov.141.89.5.135`): both judged arms carry `judgeStamp`, the D7.3 stamp the
+ * judge's answer carried (`RevisionJudgeVerdict.stamp`, read defensively), or `null` when it
+ * carried none. Required, so no judged outcome can be built without saying which.
  */
 export type CitedPassageRevisionOutcome =
   | { readonly kind: 'unchanged' }
@@ -233,12 +245,17 @@ export type CitedPassageRevisionOutcome =
   | { readonly kind: 'relocation-proposed'; readonly candidate: RelocationCandidate }
   | { readonly kind: 'stranded' }
   | { readonly kind: 'judge-unavailable'; readonly sourceContentHash: string }
-  | { readonly kind: 'refreshed'; readonly event: RevisionEvent }
+  | {
+      readonly kind: 'refreshed';
+      readonly event: RevisionEvent;
+      readonly judgeStamp: ModelStamp | null;
+    }
   | {
       readonly kind: 'revised';
       readonly event: RevisionEvent;
       readonly predecessorInstrumentId: string;
       readonly successorEnqueueInput: EnqueueInput;
+      readonly judgeStamp: ModelStamp | null;
     };
 
 /**
