@@ -21,6 +21,7 @@
  * emits such a phrase — the ratified noun throughout is "practice paper" alone.
  */
 
+import type { PaperMarks, PaperStructuredShape } from 'olea-core';
 import type { PaperDemand } from './demand.js';
 
 /** F4.11's own words for the one affordance this feature offers — never "the exam oracle" (`[D-157]`). */
@@ -219,4 +220,180 @@ export function omittedPartLine(part: OmittedPaperPart): string {
     ? OMITTED_PART_REASONS[part.reasonCode]
     : undefined;
   return reason === undefined ? part.conceptName : `${part.conceptName} — ${reason}`;
+}
+
+// ---------------------------------------------------------------------------------------------
+// The paper's face prints its structure (F4.11 as amended by `[D-586]`, `ol-egov.141.89.7.4.1`)
+// ---------------------------------------------------------------------------------------------
+
+/**
+ * Every word Olea adds to the structured face, in ONE block, so the wording David settles is one
+ * edit. The vocabulary registry has no entry for a marks allocation, and lists "mark" in other senses
+ * (a growth-stage mark, section 31's "exclude the mark" for an attempt), so these are the most neutral
+ * candidates, NOT settled wording. Section headings, question numbers and part numbers are the stored
+ * paper's own strings and add no word of Olea's.
+ *
+ * - `marksAllocation`: a bracketed number with no word, so an allocation cannot read as "marks she
+ *   got". Alternatives held for David: "(4 marks)" (reads as a score beside an answer area),
+ *   "worth 4 marks".
+ * - `WHOLE_PAPER_LABEL`: the label before the paper's whole allocation. "Total" is avoided: the
+ *   registry forbids "a total" in the attempt-record sense (sections 'never a total', 'running total').
+ */
+export const PAPER_FACE_WORDING = Object.freeze({
+  marksAllocation: (value: number): string => `[${value}]`,
+  WHOLE_PAPER_LABEL: 'Whole paper',
+});
+
+/** A stated allocation as the face prints it; unknown (or an unusable number) is `null`: omitted, never 0, never estimated (`[D-431]`, `[D-586]`). */
+export function paperMarksText(marks: PaperMarks): string | null {
+  if (marks.status !== 'stated') return null;
+  if (!Number.isFinite(marks.value) || marks.value < 0) return null;
+  return PAPER_FACE_WORDING.marksAllocation(marks.value);
+}
+
+/** One part (a slot) on the structured face. `number` is the stored part label verbatim, `null` when the stored part carries none. */
+export interface FacePartOutline {
+  readonly slotId: string;
+  readonly number: string | null;
+  readonly marks: string | null;
+}
+
+/** One top-level question. `number` is derived only from the stored part labels (see {@link buildPaperFaceOutline}), else `null`. */
+export interface FaceQuestionOutline {
+  readonly number: string | null;
+  readonly parts: readonly FacePartOutline[];
+}
+
+export interface FaceSectionOutline {
+  /** The stored section's own label; `null` for parts the stored paper places in no section. */
+  readonly heading: string | null;
+  readonly marks: string | null;
+  readonly questions: readonly FaceQuestionOutline[];
+}
+
+/** `flat`: today's face, one list. `structured`: sections, questions, parts, with the whole paper's allocation. */
+export type PaperFaceOutline =
+  | { readonly kind: 'flat' }
+  | {
+      readonly kind: 'structured';
+      readonly wholePaperMarks: string | null;
+      readonly sections: readonly FaceSectionOutline[];
+      /** Items the stored structure has no part for: listed after the sections, with no heading or number. */
+      readonly unplacedSlotIds: readonly string[];
+    };
+
+/**
+ * What the face prints from the stored paper's structure (`PaperRecord.structure`), over the items
+ * the paper actually carries (`itemSlotIds`, printed order).
+ *
+ * Derived, and from what:
+ * - **Sections**: the stored `sections`, in stored order; a section with no item under it prints
+ *   nothing. A part's section is its group's `sectionId`, else its nearest ancestor group's.
+ * - **Part numbers**: the stored `label` of the part, verbatim (the paper's own numbering).
+ * - **Top-level question**: the outermost `parent-question` group above the part; a part with none is
+ *   a question by itself. A question gets a number only when every one of its parts' labels begins
+ *   with the same token (the text before the first "(" or "."), at least one label goes beyond that
+ *   token, and the token is non-empty: that token is the number. Otherwise no question number is
+ *   printed. No ordinal is ever counted up here.
+ * - **Allocations**: only `stated` marks (parts, sections, whole paper). A question's allocation is
+ *   not stored, so it is not summed.
+ *
+ * A paper with no structure, no sections, or none of whose items match a stored part is `flat`: it
+ * prints as before.
+ */
+export function buildPaperFaceOutline(
+  structure: PaperStructuredShape | undefined,
+  itemSlotIds: readonly string[],
+): PaperFaceOutline {
+  if (structure === undefined || structure.sections.length === 0) return { kind: 'flat' };
+  const wanted = new Set(itemSlotIds);
+  const groupById = new Map(structure.groups.map((g) => [g.groupId, g] as const));
+
+  const ancestry = (groupId: string): string[] => {
+    const chain: string[] = [];
+    const seen = new Set<string>();
+    let cursor: string | undefined = groupId;
+    while (cursor !== undefined && !seen.has(cursor)) {
+      seen.add(cursor);
+      chain.push(cursor);
+      cursor = groupById.get(cursor)?.parentGroupId;
+    }
+    return chain;
+  };
+  const sectionOf = (groupId: string): string | null => {
+    for (const id of ancestry(groupId)) {
+      const sectionId = groupById.get(id)?.sectionId;
+      if (sectionId !== undefined && sectionId !== null) return sectionId;
+    }
+    return null;
+  };
+  const questionKeyOf = (slotId: string, groupId: string): string => {
+    const outermost = ancestry(groupId)
+      .filter((id) => groupById.get(id)?.kind === 'parent-question')
+      .pop();
+    return outermost === undefined ? `part:${slotId}` : `group:${outermost}`;
+  };
+
+  const placed = new Set<string>();
+  // section key -> question key -> parts, all in first-seen (printed) order.
+  const bySection = new Map<
+    string | null,
+    Map<string, { slotId: string; label: string; marks: PaperMarks }[]>
+  >();
+  for (const part of structure.parts) {
+    if (!wanted.has(part.slotId) || placed.has(part.slotId)) continue;
+    placed.add(part.slotId);
+    const sectionKey = sectionOf(part.groupId);
+    const questions = bySection.get(sectionKey) ?? new Map();
+    const key = questionKeyOf(part.slotId, part.groupId);
+    const parts = questions.get(key) ?? [];
+    parts.push({ slotId: part.slotId, label: part.label.trim(), marks: part.marks });
+    questions.set(key, parts);
+    bySection.set(sectionKey, questions);
+  }
+  if (placed.size === 0) return { kind: 'flat' };
+
+  const questionNumber = (parts: readonly { label: string }[]): string | null => {
+    const tokens = parts.map((p) => p.label.split(/[(.]/, 1)[0]?.trim() ?? '');
+    const first = tokens[0];
+    if (first === undefined || first === '' || tokens.some((t) => t !== first)) return null;
+    return parts.some((p) => p.label !== first) ? first : null;
+  };
+  const toQuestions = (
+    questions: ReadonlyMap<string, { slotId: string; label: string; marks: PaperMarks }[]>,
+  ): FaceQuestionOutline[] =>
+    [...questions.values()].map((parts) => ({
+      number: questionNumber(parts),
+      parts: parts.map((p) => ({
+        slotId: p.slotId,
+        number: p.label === '' ? null : p.label,
+        marks: paperMarksText(p.marks),
+      })),
+    }));
+
+  const sections: FaceSectionOutline[] = [];
+  for (const section of structure.sections) {
+    const questions = bySection.get(section.sectionId);
+    if (questions === undefined) continue;
+    sections.push({
+      heading: section.label,
+      marks: paperMarksText(section.marks),
+      questions: toQuestions(questions),
+    });
+  }
+  // Parts in no stored section, or in one the stored section list does not hold, follow with no heading.
+  const knownSections = new Set(structure.sections.map((s) => s.sectionId));
+  const loose = new Map<string, { slotId: string; label: string; marks: PaperMarks }[]>();
+  for (const [sectionKey, questions] of bySection) {
+    if (sectionKey !== null && knownSections.has(sectionKey)) continue;
+    for (const [key, parts] of questions) loose.set(`${sectionKey ?? ''}|${key}`, parts);
+  }
+  if (loose.size > 0) sections.push({ heading: null, marks: null, questions: toQuestions(loose) });
+
+  return {
+    kind: 'structured',
+    wholePaperMarks: paperMarksText(structure.totalMarks),
+    sections,
+    unplacedSlotIds: itemSlotIds.filter((id) => !placed.has(id)),
+  };
 }
