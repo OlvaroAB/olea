@@ -17,7 +17,40 @@
 
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { describe, expect, it } from 'vitest';
+import type { PaperStructuredShape } from 'olea-core';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import type { PracticePaperCourseState } from '../../src/paper/provider.js';
+
+// `obsidian` has no runtime outside a host: a minimal stand-in lets the DOM layer be mounted for the
+// `[D-586]` face tests below. The source-text tests above and below never import the view.
+vi.mock('obsidian', () => {
+  class El {
+    text = '';
+    cls = '';
+    readonly children: El[] = [];
+    constructor(readonly tag: string) {}
+    createEl(tag: string, options?: { text?: string; cls?: string }): El {
+      const child = new El(tag);
+      child.text = options?.text ?? '';
+      child.cls = options?.cls ?? '';
+      this.children.push(child);
+      return child;
+    }
+    createDiv(options?: { cls?: string }): El {
+      return this.createEl('div', options);
+    }
+    addClass(): void {}
+    empty(): void {
+      this.children.length = 0;
+    }
+    addEventListener(): void {}
+  }
+  class ItemView {
+    contentEl = new El('div');
+    constructor(readonly leaf: unknown) {}
+  }
+  return { ItemView };
+});
 
 const RAW_SOURCE = readFileSync(resolve(__dirname, '../../src/paper/view.ts'), 'utf8');
 /** Comments stripped — a doc paragraph describing a rule must not satisfy an assertion about it. */
@@ -192,5 +225,148 @@ describe('PaperView.renderPassage — her text and its source’s path, and no l
     expect(loopStart).toBeGreaterThan(-1);
     expect(passageCall).toBeGreaterThan(loopStart);
     expect(rowIndex).toBeGreaterThan(passageCall);
+  });
+});
+
+// ---- `[D-586]` (F4.11): the face prints the stored paper's structure. Synthetic, coined content only.
+
+interface MountedEl {
+  readonly tag: string;
+  readonly text: string;
+  readonly cls: string;
+  readonly children: MountedEl[];
+}
+
+/** The tree as plain lines: indentation by depth, `tag.cls "text"`. Comparable and readable. */
+function serialise(el: MountedEl, depth = 0): string[] {
+  const head = `${'  '.repeat(depth)}${el.tag}${el.cls === '' ? '' : `.${el.cls}`}${el.text === '' ? '' : ` ${JSON.stringify(el.text)}`}`;
+  return [head, ...el.children.flatMap((c) => serialise(c, depth + 1))];
+}
+
+const stated = (value: number) => ({ status: 'stated', value }) as const;
+const UNKNOWN = { status: 'unknown' } as const;
+const SG = { stimulusNeed: { status: 'not-needed' }, heldStimulus: null } as const;
+const SP = {
+  questionForm: 'short answer',
+  dependsOn: { status: 'unknown' },
+  demand: { status: 'not-read' },
+} as const;
+
+const SECTIONED = {
+  formatVersion: 'paper-structure-v1',
+  structureBasis: 'current-or-transitional',
+  structureSlotCount: 3,
+  sections: [
+    { sectionId: 'sA', label: 'Section Glorb', marks: stated(20), groupIds: ['g1'] },
+    { sectionId: 'sB', label: 'Section Quill', marks: UNKNOWN, groupIds: ['g2'] },
+  ],
+  groups: [
+    {
+      groupId: 'g1',
+      kind: 'parent-question',
+      sectionId: 'sA',
+      label: 'x',
+      slotIds: ['p1', 'p2'],
+      ...SG,
+    },
+    { groupId: 'g2', kind: 'parent-question', sectionId: 'sB', label: 'y', slotIds: ['p3'], ...SG },
+  ],
+  parts: [
+    { slotId: 'p1', groupId: 'g1', label: '1(a)', marks: stated(4), ...SP },
+    { slotId: 'p2', groupId: 'g1', label: '1(b)', marks: stated(6), ...SP },
+    { slotId: 'p3', groupId: 'g2', label: '2', marks: UNKNOWN, ...SP },
+  ],
+  totalMarks: stated(40),
+  timeAllowance: { status: 'unknown' },
+} as unknown as PaperStructuredShape;
+
+function readyState(structure: PaperStructuredShape | undefined): PracticePaperCourseState {
+  const item = (slotId: string, conceptName: string) => ({
+    slotId,
+    conceptName,
+    intendedDemand: 'recall-a-fact',
+    groundingLabel: 'your notes cover this',
+    response: null,
+  });
+  return {
+    kind: 'ready',
+    course: 'Course Zarp',
+    record: { id: 'paper-1', handoffs: [], ...(structure === undefined ? {} : { structure }) },
+    partial: false,
+    partialStatement: null,
+    incompleteStatement: null,
+    items: [item('p1', 'Blorn'), item('p2', 'Skrit'), item('p3', 'Vemmel')],
+    emptySlots: [],
+    materialChanged: false,
+    passages: [],
+  } as unknown as PracticePaperCourseState;
+}
+
+// The first import loads the whole view module graph, which is slow under a full parallel run.
+beforeAll(async () => {
+  await import('../../src/paper/view.js');
+}, 60_000);
+
+async function mount(state: PracticePaperCourseState): Promise<string[]> {
+  const { PaperView } = await import('../../src/paper/view.js');
+  const view = new PaperView({} as never, { load: async () => state } as never, 'Course Zarp');
+  await view.refresh();
+  return serialise((view as unknown as { contentEl: MountedEl }).contentEl);
+}
+
+describe('PaperView — the sectioned face (F4.11, [D-586])', () => {
+  it('prints section headings, question and part numbers, and every stated allocation', async () => {
+    const lines = (await mount(readyState(SECTIONED))).join('\n');
+    expect(lines).toContain('p.olea-paper-whole-allocation "Whole paper [40]"');
+    expect(lines).toContain('h3 "Section Glorb"');
+    expect(lines).toContain('span.olea-paper-allocation " [20]"');
+    expect(lines).toContain('h3 "Section Quill"');
+    expect(lines).toContain('li.olea-paper-question');
+    expect(lines).toContain('strong "1"');
+    expect(lines).toContain('span.olea-paper-part-number "1(a) "');
+    expect(lines).toContain('span.olea-paper-part-number "1(b) "');
+    expect(lines).toContain('span.olea-paper-allocation " [4]"');
+    expect(lines).toContain('span.olea-paper-allocation " [6]"');
+    expect(lines.indexOf('Section Glorb')).toBeLessThan(lines.indexOf('Section Quill'));
+  });
+
+  it('draws nothing for an allocation read as unknown: no zero, no estimate, no empty bracket', async () => {
+    const lines = await mount(readyState(SECTIONED));
+    const quill = lines.slice(lines.findIndex((l) => l.includes('Section Quill')));
+    // The section's own marks are unknown: its heading has no allocation child.
+    expect(quill[1]).not.toContain('olea-paper-allocation');
+    // Part "2" has unknown marks: its row (up to the next row) carries no allocation.
+    const row = quill.slice(quill.findIndex((l) => l.includes('"2 "')));
+    expect(row.join('\n')).not.toContain('olea-paper-allocation');
+    expect(lines.join('\n')).not.toContain('[0]');
+  });
+
+  it('the structured face adds no hand-off control: every item row keeps exactly one', async () => {
+    const lines = await mount(readyState(SECTIONED));
+    expect(lines.filter((l) => l.includes('button "Add to review"'))).toHaveLength(3);
+  });
+});
+
+describe('PaperView — a paper with no recovered sections prints as before ([D-586])', () => {
+  // The expected tree is what `renderReady` produced before this change: one list, one row per
+  // item, `strong` name then `span` label then the hand-off button; nothing else.
+  const TODAY = [
+    'div',
+    '  h2 "Practice paper: Course Zarp"',
+    '  ul.olea-paper-items',
+    ...['Blorn', 'Skrit', 'Vemmel'].flatMap((name) => [
+      '    li',
+      `      strong ${JSON.stringify(name)}`,
+      '      span " — your notes cover this"',
+      '      button "Add to review"',
+    ]),
+  ];
+
+  it('with no stored structure', async () => {
+    expect(await mount(readyState(undefined))).toEqual(TODAY);
+  });
+
+  it('with a stored structure that holds no sections', async () => {
+    expect(await mount(readyState({ ...SECTIONED, sections: [] }))).toEqual(TODAY);
   });
 });

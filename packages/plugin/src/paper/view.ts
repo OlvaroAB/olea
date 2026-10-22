@@ -45,10 +45,13 @@ import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import {
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
+  buildPaperFaceOutline,
   buildUndatedAssessmentCopy,
   COMPOSITION_FAILED_SENTENCE,
+  type FacePartOutline,
   MATERIAL_CHANGED_SENTENCE,
   omittedPartLine,
+  PAPER_FACE_WORDING,
   PRACTICE_PAPER_AI_UNAVAILABLE_COPY,
 } from './copy.js';
 import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
@@ -260,17 +263,18 @@ export class PaperView extends ItemView {
       }
     }
 
-    const list = root.createEl('ul', { cls: 'olea-paper-items' });
-    // `[D-562]`: a group's held passage, above the first of its parts.
+    // `[D-586]` (F4.11): the stored paper's sections, numbering and allocations, where it holds them.
+    // `flat` is today's single list, unchanged.
+    const outline = buildPaperFaceOutline(
+      state.record.structure,
+      state.items.map((item) => item.slotId),
+    );
     const passagesBefore = facePassagesBeforeItems(state);
-    for (const item of state.items) {
-      for (const passage of passagesBefore.get(item.slotId) ?? []) {
-        this.renderPassage(list, passage);
-      }
-      const row = list.createEl('li');
-      row.createEl('strong', { text: item.conceptName });
-      row.createEl('span', { text: ` — ${item.groundingLabel}` });
-      this.renderHandoffControl(row, state, item);
+    if (outline.kind === 'flat') {
+      const list = root.createEl('ul', { cls: 'olea-paper-items' });
+      for (const item of state.items) this.renderItemRow(list, state, item, passagesBefore);
+    } else {
+      this.renderStructured(root, state, outline, passagesBefore);
     }
 
     // A partial paper's omitted parts are its statement above (`[D-457]`), so they are not listed
@@ -280,6 +284,78 @@ export class PaperView extends ItemView {
       const emptyList = root.createEl('ul', { cls: 'olea-paper-empty-slots' });
       for (const slot of state.emptySlots) {
         emptyList.createEl('li', { text: slot.conceptName });
+      }
+    }
+  }
+
+  /** One item's row — the same row on the flat and the structured face; `numbering` and `marks` are only given on the latter. */
+  private renderItemRow(
+    list: HTMLElement,
+    state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
+    item: PracticePaperFaceItem,
+    passagesBefore: ReadonlyMap<string, readonly PracticePaperFacePassage[]>,
+    part?: FacePartOutline,
+  ): void {
+    // `[D-562]`: a group's held passage, above the first of its parts.
+    for (const passage of passagesBefore.get(item.slotId) ?? []) {
+      this.renderPassage(list, passage);
+    }
+    const row = list.createEl('li');
+    if (part?.number != null)
+      row.createEl('span', { cls: 'olea-paper-part-number', text: `${part.number} ` });
+    row.createEl('strong', { text: item.conceptName });
+    row.createEl('span', { text: ` — ${item.groundingLabel}` });
+    if (part?.marks != null) {
+      row.createEl('span', { cls: 'olea-paper-allocation', text: ` ${part.marks}` });
+    }
+    this.renderHandoffControl(row, state, item);
+  }
+
+  /**
+   * `[D-586]`: sections as headings, each top-level question numbered where the stored paper supports
+   * a number, each part under its stored number, every stated allocation beside what it covers.
+   * An unknown allocation arrives as `null` and draws nothing.
+   */
+  private renderStructured(
+    root: HTMLElement,
+    state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
+    outline: Extract<ReturnType<typeof buildPaperFaceOutline>, { readonly kind: 'structured' }>,
+    passagesBefore: ReadonlyMap<string, readonly PracticePaperFacePassage[]>,
+  ): void {
+    const itemBySlot = new Map(state.items.map((item) => [item.slotId, item] as const));
+    if (outline.wholePaperMarks !== null) {
+      root.createEl('p', {
+        cls: 'olea-paper-whole-allocation',
+        text: `${PAPER_FACE_WORDING.WHOLE_PAPER_LABEL} ${outline.wholePaperMarks}`,
+      });
+    }
+    for (const section of outline.sections) {
+      const block = root.createDiv({ cls: 'olea-paper-section' });
+      if (section.heading !== null) {
+        const heading = block.createEl('h3', { text: section.heading });
+        if (section.marks !== null) {
+          heading.createEl('span', { cls: 'olea-paper-allocation', text: ` ${section.marks}` });
+        }
+      }
+      const list = block.createEl('ul', { cls: 'olea-paper-items' });
+      for (const question of section.questions) {
+        let target = list;
+        if (question.number !== null) {
+          const header = list.createEl('li', { cls: 'olea-paper-question' });
+          header.createEl('strong', { text: question.number });
+          target = header.createEl('ul', { cls: 'olea-paper-items' });
+        }
+        for (const part of question.parts) {
+          const item = itemBySlot.get(part.slotId);
+          if (item !== undefined) this.renderItemRow(target, state, item, passagesBefore, part);
+        }
+      }
+    }
+    if (outline.unplacedSlotIds.length > 0) {
+      const list = root.createEl('ul', { cls: 'olea-paper-items' });
+      for (const slotId of outline.unplacedSlotIds) {
+        const item = itemBySlot.get(slotId);
+        if (item !== undefined) this.renderItemRow(list, state, item, passagesBefore);
       }
     }
   }
