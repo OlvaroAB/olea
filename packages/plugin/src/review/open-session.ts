@@ -219,8 +219,6 @@ import {
   hashContent,
   listFolder,
   matchDeletedInstrumentIds,
-  parseCardsWithInvalid,
-  parseMcqBlocks,
   projectInstrumentValidity,
   queueItemsFromComposedSession,
   REVIEW_LOG_EXTENSION,
@@ -246,7 +244,7 @@ import {
 } from '../grading/wiring.js';
 import { canonicalizeForMateriality } from '../ingestion/materiality/canonical.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
-import { stripInstrumentSpans } from '../ingestion/materiality/citation-material.js';
+import { stripQuestionBlocks } from '../ingestion/materiality/citation-material.js';
 import {
   citedPassagePath,
   HIDDEN_PATH_SEGMENT,
@@ -1913,12 +1911,8 @@ async function citedPassageUnchanged(
     const citedPath = citedPassagePath(record);
     const { vault } = reader;
     const material = async (path: VaultPath): Promise<string> => {
-      const source = await vault.read(path);
-      const spans = [
-        ...parseCardsWithInvalid(source).cards.map((card) => card.span),
-        ...parseMcqBlocks(source).instruments.map((mcq) => mcq.span),
-      ];
-      return stripInstrumentSpans(source, spans);
+      // `ol-egov.141.89.5.114`: the citation pass's own strip (one rule, so the two cannot drift).
+      return stripQuestionBlocks(await vault.read(path));
     };
     if (anchor.passageDigest === undefined) {
       const current = await material(citedPath);

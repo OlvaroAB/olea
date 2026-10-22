@@ -29,7 +29,7 @@ import { createVaultUnitManifestStore } from '../../../src/grove/unit-manifest-s
 import {
   type ResolvedLinksPort,
   readLectureBundles,
-  readTranscriptCopyGroups,
+  readTextCopyGroups,
   teachingEventResolverFrom,
 } from '../../../src/ingestion/lecture-links.js';
 import { readTranscriptVersion } from '../../../src/ingestion/materiality/transcript-grain.js';
@@ -584,14 +584,14 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
   // kept file and its re-export change neither a concept's size nor its allocation (PROPOSAL.md 4.5:
   // duplicated content never raises extent). Built under ol-egov.141.89.5.101 (D-565): byte-identical
   // transcripts are one teaching event, grouped in memory from their bytes (`lecture-links.ts`,
-  // `readTranscriptCopyGroups`); a corrected or re-cut export still needs her links.
+  // `readTextCopyGroups`); a corrected or re-cut export still needs her links.
   it('C6 the kept file and its byte-identical re-export leave the concept size reading where it was', async () => {
     const reExport = '01 Courses/COURSEA/Lecture 3/transcript v2.txt';
     const vault = await lectureVault();
     vault.files.set(reExport, transcriptOf(LECTURE));
     const teachingEventOf = teachingEventResolverFrom(
       readLectureBundles(linksPort(vault)),
-      await readTranscriptCopyGroups(linksPort(vault), vault),
+      await readTextCopyGroups(vault),
     );
     const note = {
       sourcePath: '01 Courses/COURSEA/notes/an idea.md',
@@ -616,7 +616,7 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
     expect(after).toEqual(before);
   });
 
-  it('C7, the cited text now stands twice: withheld as ambiguous, nothing judged; found once again, the hold lifts after a further restart', async () => {
+  it('C7, the cited text now stands twice: withheld as ambiguous, nothing judged, then rewritten from the current version ([D-578]); the old text coming back does not restore it', async () => {
     const { vault, host } = await firstSession();
     const history = historyOf(vault);
     const edited = transcriptOf([...LECTURE, ...partCues(4)]);
@@ -627,14 +627,16 @@ describe('C: the edit cases, each made while Olea was closed and met by the next
     await expectEditOutcome(s, vault, history, edited, {
       judgeCalls: 0,
       withheld: ['q-four'],
-      suspended: [],
+      suspended: ['q-four'],
     });
+    expect(s.actions.enqueue).toHaveBeenCalledTimes(1);
 
     vault.files.set(T, transcriptOf(LECTURE));
     const third = nextSession(s.host, 3_000);
     await third.pass(vault);
-    expect(await third.withheld(IDS)).toEqual(new Set());
+    expect(await third.withheld(IDS)).toEqual(new Set(['q-four']));
     expect(third.judge.judge).not.toHaveBeenCalled();
+    expect(third.actions.enqueue).not.toHaveBeenCalled();
   });
 
   it('C9, the file goes back to earlier bytes: the earlier reading record is live again with its readings, and no job is added', async () => {

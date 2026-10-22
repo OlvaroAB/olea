@@ -301,6 +301,7 @@ import {
   type RevisionJudgeVerdict,
   readInstrumentCitation,
   readReviewLogHistory,
+  renameCitationSourcePath,
   suspendedInstrumentIds,
   type VaultInstrumentRecord,
   type VaultPath,
@@ -326,6 +327,7 @@ import {
   resolveTranscriptPassage,
   seedFromCitation,
   type TranscriptRead,
+  type TranscriptVersion,
   wholeTranscriptText,
 } from './transcript-grain.js';
 import type { MaterialityJudge } from './types.js';
@@ -538,6 +540,15 @@ interface TranscriptReads {
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
 function isMarkdownVaultPath(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+/**
+ * `ol-egov.141.89.5.111`: whether `path` names a file a citation follows through a rename by its
+ * citation (a PDF, slide deck or document): not Markdown, and not a lecture transcript, whose
+ * questions are followed by their anchor instead (`CitationRevisionTrigger.onSourceRenamed`).
+ */
+function isCitedFilePath(path: VaultPath): boolean {
+  return !isMarkdownVaultPath(path) && !hasTranscriptExtension(path);
 }
 
 /** `[D-515]`: true when the instrument's citation names a non-markdown file other than its own note. */
@@ -1440,6 +1451,8 @@ export class CitationRevisionTrigger {
    *    (`passage-missing`, `passage-ambiguous`, `passage-rule-unsupported`) — protective, and
    *    never a claim that a material change was established (row 45). No baseline is adopted, no
    *    judge is called, nothing is suspended or regenerated.
+   * Returns the hash the withholding fact is keyed to (undefined when nothing was withheld or the
+   * write failed), so a caller that goes on to rewrite the question can guard on that same fact.
    */
   private async applyPassageResolution(
     instrumentId: string,
@@ -1449,7 +1462,7 @@ export class CitationRevisionTrigger {
     notes: PassageNotes,
     actions: CitationRevisionActions,
     report: MutableTickReport,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (resolution.kind === 'relocated') {
       report.relocated += 1;
       try {
@@ -1463,7 +1476,7 @@ export class CitationRevisionTrigger {
       } catch (error) {
         console.error('Olea: citation-revision passage relocation-heal write failed', error);
       }
-      return;
+      return undefined;
     }
 
     let reason: PendingReason;
@@ -1497,14 +1510,17 @@ export class CitationRevisionTrigger {
       } catch {
         observed = '';
       }
+      const sinceContentHash = await hashText(`${reason}\n${observed}`);
       await this.deps.store.setPendingRevalidation(
         instrumentId,
-        await hashText(`${reason}\n${observed}`),
+        sinceContentHash,
         this.deps.clock.now(),
         reason,
       );
+      return sinceContentHash;
     } catch (error) {
       console.error('Olea: citation-revision passage withhold write failed', error);
+      return undefined;
     }
   }
 
@@ -1662,7 +1678,7 @@ export class CitationRevisionTrigger {
         ? resolveTranscriptPassage(previous.text, read.version.words)
         : ({ kind: 'unresolved', reason: 'missing' } as const);
     if (resolution.kind === 'unresolved') {
-      await this.applyPassageResolution(
+      const heldBy = await this.applyPassageResolution(
         instrumentId,
         previous,
         currentRecord,
@@ -1671,9 +1687,67 @@ export class CitationRevisionTrigger {
         actions,
         report,
       );
+      // `ol-egov.141.89.5.119` ([D-578], C5.3 Relocation): a part that cannot be relocated in a
+      // version that reads (no candidate, or more than one) is not held indefinitely. Withheld
+      // above, the question goes down the whole-transcript route: a successor is drafted from the
+      // current version and the old question is suspended. No materiality read is asked: nothing
+      // of the cited part is known to judge, and no answer could certify the old question.
+      if (read.kind === 'read' && heldBy !== undefined) {
+        await this.rewriteUnrelocatablePart(
+          instrumentId,
+          previous,
+          currentRecord,
+          read.version,
+          heldBy,
+          actions,
+          report,
+        );
+      }
       return undefined;
     }
     return resolution.kind === 'present' ? previous.text : resolution.text;
+  }
+
+  /**
+   * `ol-egov.141.89.5.119` ([D-578]): the rewrite of a part-named transcript question whose part
+   * cannot be relocated. The successor is drafted from the transcript as it reads now (all its
+   * spoken words, the grain of a whole-transcript question, `[D-567]`), carrying that version's
+   * bytes hash so it is presented in turn (`ol-egov.141.89.5.104`); the predecessor is then
+   * suspended, guarded on the hold just recorded. Enqueue first, so an orphan cannot arise
+   * ({@link suspendAndEnqueueSuccessor}); a failure leaves the hold standing and the next pass
+   * repeats it (a duplicate enqueue is reported as such, not an error). Uses only what the
+   * existing anchor and hold already carry: no new persisted field.
+   */
+  private async rewriteUnrelocatablePart(
+    instrumentId: string,
+    previous: CitationAnchorRecord,
+    currentRecord: VaultInstrumentRecord,
+    version: TranscriptVersion,
+    heldBy: string,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<void> {
+    try {
+      const event: RevisionEvent = {
+        instrumentId,
+        at: this.deps.clock.now(),
+        oldContentHash: await hashText(previous.text),
+        // Per question, so two questions on one transcript are never collapsed by the queue's own idempotency.
+        newContentHash: await hashText(`${version.bytesHash}\n${instrumentId}`),
+        change: 'transcript-part-not-relocated',
+      };
+      await this.suspendAndEnqueueSuccessor(
+        instrumentId,
+        currentRecord.conceptIds,
+        heldBy,
+        instrumentId,
+        buildSuccessorRevisionEnqueueInput(event, wholeTranscriptText(version), version.bytesHash),
+        actions,
+        report,
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision unrelocatable-part rewrite failed', error);
+    }
   }
 
   /**
@@ -1743,14 +1817,27 @@ export class CitationRevisionTrigger {
    * `newPath` reads as a transcript; a markdown note has its own relocation ladder. A rename Olea
    * did not see (made while it was closed, or on another device) arrives as a delete and a create:
    * nothing calls this, the anchor finds its path gone and the question is withheld. Returns how many
-   * anchors moved. Its production caller is `main.ts`'s vault rename handler (`ol-egov.141.89.5.97`).
+   * anchors and citations moved. Its production caller is `main.ts`'s vault rename handler
+   * (`ol-egov.141.89.5.97`).
+   *
+   * `ol-egov.141.89.5.111` ([D-576]; C5.3: a rename is lineage): a non-markdown source that is not a
+   * transcript (a PDF, slide deck or document) is followed the same way. Its questions are anchored
+   * at their own note and name the file only in their citation, so it is the citation record's path
+   * that moves, through the citation store's own path-only call ({@link moveCitedFile}); the text
+   * this session extracted from the file moves with it. Followed only when both paths are such files
+   * and the file stands at `newPath`; a file that becomes a note or a transcript by its new name is
+   * not the same kind of source, and its questions are withheld as before.
    */
   async onSourceRenamed(
     vault: VaultSource,
     oldPath: VaultPath,
     newPath: VaultPath,
   ): Promise<number> {
-    if (this.deps.transcriptPartGrain !== true || oldPath === newPath) return 0;
+    if (oldPath === newPath) return 0;
+    if (isCitedFilePath(oldPath) && isCitedFilePath(newPath)) {
+      return (await vault.exists(newPath)) ? this.moveCitedFile(vault, oldPath, newPath) : 0;
+    }
+    if (this.deps.transcriptPartGrain !== true) return 0;
     if ((await readTranscriptVersion(vault, newPath)).kind !== 'read') return 0;
     let moved = 0;
     try {
@@ -1762,6 +1849,37 @@ export class CitationRevisionTrigger {
     } catch (error) {
       console.error('Olea: citation-revision transcript rename write failed', error);
     }
+    return moved;
+  }
+
+  /**
+   * `ol-egov.141.89.5.111` ([D-576]): a rename Olea saw of a file checked by its bytes. Every
+   * question whose citation names `oldPath`, anchored or not yet, has that citation's path changed
+   * to `newPath` by `renameCitationSourcePath` (path only; the store refuses any record that does not
+   * still name `oldPath`), and the text this session extracted from the file is kept under its new
+   * path. Returns how many citations moved; a failure is logged and leaves the rest as they were.
+   */
+  private async moveCitedFile(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
+    let moved = 0;
+    try {
+      const { records } = await enumerateVaultInstruments(vault);
+      for (const record of records) {
+        if (!citesBinarySource(record) || record.sourceProvenance?.sourcePath !== oldPath) continue;
+        if (await renameCitationSourcePath(vault, record.instrumentId, oldPath, newPath)) {
+          moved += 1;
+        }
+      }
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision file rename write failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
+    this.landedSources.rename(oldPath, newPath);
     return moved;
   }
 

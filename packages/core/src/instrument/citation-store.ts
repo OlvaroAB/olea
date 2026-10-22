@@ -59,11 +59,16 @@
  * ===========================================================================
  * A citation is fixed at the moment an instrument is materialized into the vault (`[D-181]`'s own
  * words: "the source passage location the generation pipeline already has at draft time") and
- * never legitimately changes afterwards — there is no re-citation event, no rename to reconcile
- * (unlike `key-store.ts`'s anchor, which drifts when she renames a bound note).
- * `writeInstrumentCitation` therefore refuses to overwrite an existing record for the same
- * instrument id, matching `content-store.ts`'s immutability discipline rather than `key-store.ts`'s
- * upsert-on-drift one.
+ * never legitimately changes afterwards — there is no re-citation event (unlike `key-store.ts`'s
+ * anchor, which drifts when she renames a bound note). `writeInstrumentCitation` therefore refuses
+ * to overwrite an existing record for the same instrument id, matching `content-store.ts`'s
+ * immutability discipline rather than `key-store.ts`'s upsert-on-drift one.
+ *
+ * **The one exception (`[D-576]`, `ol-egov.141.89.5.111`).** A rename Olea saw of a PDF-type source
+ * (C5.3 Continuity: a rename is lineage) may update that source's `sourcePath` on its citation
+ * records, through {@link renameCitationSourcePath} and nowhere else: path only, every other field
+ * kept exactly as written, and refused unless the record still names the path being renamed from.
+ * The path stays write-once for every other cause, and no record-shape change comes with it.
  */
 
 import type { VaultPath, VaultSource } from '../vault/types.js';
@@ -245,6 +250,42 @@ export async function writeInstrumentCitation(
     schemaVersion: CITATION_RECORD_SCHEMA_VERSION,
   };
   await vault.write(path, serialize(record));
+}
+
+/**
+ * `[D-576]`: moves one instrument's citation from `fromPath` to `toPath` for a rename of the cited
+ * source that Olea saw — the one change this store makes to a record after it is written. Only
+ * `sourcePath` changes; every other field (page, section, passage digest, source revision, anything
+ * a newer build wrote) is kept as written, and the file is serialized as
+ * {@link writeInstrumentCitation} writes it. Returns `true` when the record was updated, and `false`
+ * with the vault untouched when there is no readable record for this instrument, it does not name
+ * `fromPath`, or `fromPath` equals `toPath` — the guard that keeps the path write-once for any cause
+ * but a rename of the very source the record cites. Never throws on a missing or corrupt file.
+ */
+export async function renameCitationSourcePath(
+  vault: VaultSource,
+  instrumentId: string,
+  fromPath: VaultPath,
+  toPath: VaultPath,
+): Promise<boolean> {
+  if (instrumentId.length === 0 || toPath.length === 0 || fromPath === toPath) return false;
+  const path = citationStorePath(instrumentId);
+  if (!(await vault.exists(path))) return false;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(await vault.read(path));
+  } catch {
+    return false;
+  }
+  if (
+    !isCitationRecord(parsed) ||
+    parsed.instrumentId !== instrumentId ||
+    parsed.sourcePath !== fromPath
+  ) {
+    return false;
+  }
+  await vault.write(path, serialize({ ...parsed, sourcePath: toPath }));
+  return true;
 }
 
 /**

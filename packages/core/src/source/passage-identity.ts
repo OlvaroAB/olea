@@ -399,6 +399,31 @@ export function passageRecall(oldNormalised: string, candidateNormalised: string
 /** The floor below which a segment is not read as resembling an old passage at all: `[D-093]`'s own declared near-match floor. */
 export const PASSAGE_RESEMBLANCE_FLOOR = RELOCATION_NEAR_MATCH_FLOOR;
 
+/**
+ * The resemblance floor for a cited lecture-transcript part: 0.55, declared (plain English, never
+ * fitted), provisional, `[D-578]`. Note passages keep {@link PASSAGE_RESEMBLANCE_FLOOR} (one third,
+ * `[D-093]`). On real transcripts a third of a part's distinct words is nearly always found in some
+ * window elsewhere in the same transcript, so at one third almost every single edit left the part
+ * unresolved; 0.55 sits inside the measured separation band and the flat part of the sweep.
+ * Revisit when real second versions of a transcript exist, or at the first wrong match (a part
+ * relocated to a place that is not its own); until then it does not move.
+ */
+export const TRANSCRIPT_RESEMBLANCE_FLOOR = 0.55;
+
+/**
+ * How far apart, in passage lengths, two runs of resembling windows of a lecture transcript may be
+ * and still count as one region: consecutive runs whose window starts (the last window of one to
+ * the first of the next) are fewer than this many passage lengths apart are one region. Declared
+ * (plain English, never fitted), provisional, `[D-579]`; transcripts only (note passages keep the
+ * run rule as it was). At the 0.55 floor a part edited in place crosses the floor in several runs
+ * at its own place, which the run rule read as ambiguous; this reads them as one, and the
+ * localised check after it is unchanged. Measured plateau: the counts are identical for 1, 1.5, 2
+ * and 3 passage lengths, and the largest gap observed between runs at a part's own place was 0.67
+ * of a passage. Revisit at the floor's own events: real second versions of a transcript exist, or
+ * the first wrong match. The floor and this rule change together or not at all.
+ */
+export const TRANSCRIPT_RUN_MERGE_GAP_PASSAGES = 2;
+
 // ---- authoring: seal a citation ---------------------------------------------------------------
 
 /**
