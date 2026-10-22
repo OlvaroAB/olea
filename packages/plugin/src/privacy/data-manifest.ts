@@ -176,12 +176,14 @@ export const SETTINGS_KEY_MANIFEST: readonly SettingsKeyEntry[] = [
   {
     key: MATERIALITY_HASH_STORAGE_KEY,
     classification: 'content-derived',
-    holds: 'content hashes of her notes, for change detection',
+    holds:
+      'content hashes of her notes, for change detection, each with who settled that version (settledBy: a model stage or code rule id and its version, `[D-598]`)',
   },
   {
     key: CITATION_ANCHOR_STORAGE_KEY,
     classification: 'content-derived',
-    holds: 'citation revision anchors and pending revalidations per instrument',
+    holds:
+      'citation revision anchors and pending revalidations per instrument, with who settled each anchor (settledBy) and who raised and decided each pending fact (raisedBy, decidedBy): a model stage or code rule id and its version, `[D-598]`',
   },
   {
     key: PROCESSED_REVISION_STORAGE_KEY,
