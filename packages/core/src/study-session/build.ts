@@ -643,9 +643,8 @@ export interface BuildStudySessionInput {
   readonly schedulerStates?: ReadonlyMap<string, SchedulerState>;
   /**
    * `[D-583]` (`ol-egov.141.89.10.137`): the instruments whose last review falls on this session's
-   * own calendar day. The fill takes none of them while another instrument can be served; they
-   * are offered only after every other pass, from whatever session budget is then left. Omitted
-   * means none is held back, exactly the behaviour before the rule. `buildComposedStudySession`
+   * own calendar day, held back from the fill. The caller supplies it only while another instrument
+   * can be served; omitted means none is held back, exactly the behaviour before the rule. `buildComposedStudySession`
    * always supplies it, derived from its own `replay`; it is never a caller input there.
    */
   readonly answeredTodayInstrumentIds?: ReadonlySet<string>;
@@ -1125,19 +1124,15 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
       input.arrivalDays?.get(row.conceptKey) ?? null,
       asOfInstant,
     );
-    // `[D-583]`: instruments answered today wait behind every other pass — see the fallback below.
+    // `[D-583]`: an instrument answered today is not served again today. The caller passes the set
+    // only while another instrument can be served; otherwise it is omitted and nothing is held back.
     const answeredToday = input.answeredTodayInstrumentIds;
-    const servableNow =
-      answeredToday === undefined
-        ? records
-        : records.filter((record) => !answeredToday.has(record.instrumentId));
     return {
       row,
-      records: servableNow,
-      deferredToday:
+      records:
         answeredToday === undefined
-          ? []
-          : records.filter((record) => answeredToday.has(record.instrumentId)),
+          ? records
+          : records.filter((record) => !answeredToday.has(record.instrumentId)),
       /** `[SESS-8.9]` — ids `orderedForFormat` placed ahead of format preference with a real competitor to beat. See {@link StudySessionItem.dedupeReason}. */
       recallOverrodePreferenceIds,
       /** This row's own course's format preference (`ol-v7r5.42`) — what {@link orderedForFormat} above actually used, and what {@link formatMatchOf} below must use too, so an item's `formatMatch` never disagrees with the order it was actually selected in. */
@@ -1334,17 +1329,6 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
     }
   }
   runFill(null, true);
-
-  // `[D-583]`: the instruments answered today, now that every other instrument has had its pass.
-  // The walk continues where each row stopped; `runFill` stops at once if the session target is
-  // already reached, so they are served only when nothing else could take the room.
-  if (queues.some((queue) => queue.deferredToday.length > 0)) {
-    for (const queue of queues) {
-      queue.records = [...queue.records, ...queue.deferredToday];
-      queue.deferredToday = [];
-    }
-    runFill(null, true);
-  }
 
   // F2.18 (`ol-egov.132.10` [SESS-10]): selection above is finished and
   // unchanged from here — every item, its course, and the set served are

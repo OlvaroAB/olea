@@ -158,9 +158,9 @@ describe('[D-583] an instrument answered today is not served again that day whil
     expect(session.model.items.every((i) => !['t1', 't2'].includes(i.instrumentId))).toBe(true);
   });
 
-  it('is served last, from what budget is left, when the session has room after everything else', () => {
-    const session = buildComposedStudySession({ ...world(9), budgetMinutes: 4 });
-    expect(ids(session)).toEqual(['o1', 'o2', 't1', 't2']);
+  it('stays out even when the session has room to spare, because the others are eligible', () => {
+    const session = buildComposedStudySession({ ...world(9), budgetMinutes: 10 });
+    expect(ids(session)).toEqual(['o1', 'o2']);
   });
 
   it('is served as before, with no new field, when nothing else could be served', () => {
@@ -194,7 +194,7 @@ describe('[D-583] an instrument answered today is not served again that day whil
     expect(ids(session)).toEqual(['t1', 't2']);
   });
 
-  it('a concept with one instrument answered today and one not serves the other', () => {
+  it('a concept with one instrument answered today and one not serves only the other', () => {
     const session = buildComposedStudySession({
       rows: [row('Mixed', 9, 1), row('Other1', 5, 2)],
       instruments: buildConceptInstrumentIndex([
@@ -229,5 +229,7 @@ describe('[D-583] an instrument answered today is not served again that day whil
     expect(ids(previous)).toEqual(['o1']);
     const extended = extendComposedStudySession({ ...input, budgetMinutes: 2 }, previous);
     expect(extended.map((i) => i.instrumentId)).toEqual(['o1', 'o2']);
+    const wider = extendComposedStudySession({ ...input, budgetMinutes: 10 }, previous);
+    expect(wider.map((i) => i.instrumentId)).toEqual(['o1', 'o2']);
   });
 });

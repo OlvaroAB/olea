@@ -603,6 +603,22 @@ export function answeredTodayInstrumentIds(
 }
 
 /**
+ * `[D-583]`: what the fill is told to hold back: `answeredToday` when some instrument of the
+ * composed rows was not answered today (something else to serve), else an empty set: nothing is held back and the
+ * answered-today instruments are served as they were before the rule.
+ */
+function answeredTodayHeldBack(
+  orderedRows: readonly GapRow[],
+  instruments: ConceptInstrumentIndex,
+  answeredToday: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const somethingElse = orderedRows.some((row) =>
+    instruments.instrumentsFor(row.conceptKey).some((r) => !answeredToday.has(r.instrumentId)),
+  );
+  return somethingElse ? answeredToday : new Set<string>();
+}
+
+/**
  * The cheapest of a concept's instruments — the estimate used for
  * cross-course budget accounting (never the real fill, which
  * `buildStudySession` still does per-instrument, exactly, including its own
@@ -2527,15 +2543,14 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   });
 
   // `[D-583]`: a concept whose every instrument was answered today is not selected while any other
-  // concept is; it is held in `deferred` and offered only after the rest, from what budget is left
-  // (see the tail below). When EVERY concept is such a one, nothing else could be served and the
-  // selection runs over all of them exactly as it did before the rule.
+  // concept has an instrument that was not. When no instrument is left that was not answered today,
+  // nothing else could be served and the selection runs over all of them exactly as it did before
+  // the rule.
   const answeredToday = answeredTodayInstrumentIds(replay, asOf);
-  const sameDayOnly = (c: ClassifiedRow): boolean => {
+  const sameDayRows = classified.filter((c) => {
     const records = instruments.instrumentsFor(c.row.conceptKey);
     return records.length > 0 && records.every((r) => answeredToday.has(r.instrumentId));
-  };
-  const sameDayRows = classified.filter(sameDayOnly);
+  });
   // "Anything else eligible" means a concept with an instrument not answered today. A concept with
   // no instrument at all cannot be served, so it never counts as something else.
   const somethingElseServable = classified.some((c) =>
@@ -2544,7 +2559,6 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   const selectable = somethingElseServable
     ? classified.filter((c) => !sameDayRows.includes(c))
     : classified;
-  const deferred: readonly ClassifiedRow[] = somethingElseServable ? sameDayRows : [];
   const allCourses = [...new Set(classified.map((c) => c.row.course))];
 
   const byCourse = groupByCourse(selectable);
@@ -2636,33 +2650,14 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     chosenKeys = chosenKeySet;
   }
 
-  // `[D-583]` tail: concepts held back above come last, only while the session budget has room
-  // after everything else, and only in a course the session already serves (the focus course under
-  // a focus policy). Nothing else could be served for them to wait behind, so this is today's
-  // behaviour for that residue; it adds no field, copy or surface.
-  const tail: ClassifiedRow[] = [];
-  if (deferred.length > 0) {
-    let spentSoFar = chosen.reduce((n, c) => n + c.cost, 0);
-    for (const c of [...deferred].sort(overdueFirst)) {
-      if (focusResult !== undefined && c.row.course !== focusResult.dominantCourse) continue;
-      if (spentSoFar + c.cost > budgetSeconds) continue;
-      tail.push(c);
-      spentSoFar += c.cost;
-    }
-    chosenKeys = new Set([...chosenKeys, ...tail.map((c) => c.row.conceptKey)]);
-  }
-
-  const orderedBlocks = [
-    ...blockByCoursePresentation(
-      chosen,
-      relatedConceptKeys,
-      assessmentContext,
-      arrivalDays,
-      asOf,
-      prerequisiteConceptKeys,
-    ),
-    ...tail,
-  ];
+  const orderedBlocks = blockByCoursePresentation(
+    chosen,
+    relatedConceptKeys,
+    assessmentContext,
+    arrivalDays,
+    asOf,
+    prerequisiteConceptKeys,
+  );
   const orderedRows = orderedBlocks.map((c) => c.row);
   const overflow = buildOverflow(classified, chosenKeys);
   // Keyed over the CHOSEN set only (`orderedBlocks`, same rows as
@@ -3069,8 +3064,12 @@ export function buildComposedStudySession(
     // second scheduler.
     schedulerStates: schedulerStatesOf(input.replay),
     // `[D-583]`: the instruments answered on this composition's own day, derived from the same
-    // `replay`; the fill serves them only after everything else — see `buildStudySession`.
-    answeredTodayInstrumentIds: answeredTodayInstrumentIds(input.replay, input.asOf),
+    // `replay`; the fill takes none while another instrument can be served — see `buildStudySession`.
+    answeredTodayInstrumentIds: answeredTodayHeldBack(
+      composed.orderedRows,
+      input.instruments,
+      answeredTodayInstrumentIds(input.replay, input.asOf),
+    ),
     // [SESS-9] (`ol-2zfj.77`): the seconds the selection above was capped by,
     // handed to the fill so C5.5's "fills each course's seconds from that
     // course's own ranking" is true of the instruments served and not only of
