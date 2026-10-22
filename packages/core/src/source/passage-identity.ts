@@ -399,6 +399,17 @@ export function passageRecall(oldNormalised: string, candidateNormalised: string
 /** The floor below which a segment is not read as resembling an old passage at all: `[D-093]`'s own declared near-match floor. */
 export const PASSAGE_RESEMBLANCE_FLOOR = RELOCATION_NEAR_MATCH_FLOOR;
 
+/**
+ * The resemblance floor for a cited lecture-transcript part: 0.55, declared (plain English, never
+ * fitted), provisional, `[D-578]`. Note passages keep {@link PASSAGE_RESEMBLANCE_FLOOR} (one third,
+ * `[D-093]`). On real transcripts a third of a part's distinct words is nearly always found in some
+ * window elsewhere in the same transcript, so at one third almost every single edit left the part
+ * unresolved; 0.55 sits inside the measured separation band and the flat part of the sweep.
+ * Revisit when real second versions of a transcript exist, or at the first wrong match (a part
+ * relocated to a place that is not its own); until then it does not move.
+ */
+export const TRANSCRIPT_RESEMBLANCE_FLOOR = 0.55;
+
 // ---- authoring: seal a citation ---------------------------------------------------------------
 
 /**

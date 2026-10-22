@@ -3054,6 +3054,7 @@ export {
   sealCitationPassage,
   segmentPassages,
   soleBlockPassage,
+  TRANSCRIPT_RESEMBLANCE_FLOOR,
 } from './source/passage-identity.js';
 export {
   DEFAULT_SOURCES_FOLDER,

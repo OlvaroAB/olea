@@ -233,7 +233,7 @@ describe('a displayed part label is never identity', () => {
 });
 
 describe('an ambiguous correspondence is withheld, never guessed', () => {
-  it('the cited text now stands twice: withheld before the next presentation, nothing judged', async () => {
+  it('the cited text now stands twice: withheld before the next presentation, nothing judged, then rewritten from the current version ([D-578])', async () => {
     const { vault, h } = await seeded();
     vault.files.set(TRANSCRIPT, transcriptOf([...LECTURE, ...partCues(4)]));
     await h.pass(vault);
@@ -242,31 +242,34 @@ describe('an ambiguous correspondence is withheld, never guessed', () => {
       'passage-ambiguous',
     );
     expect(await h.withheld(IDS)).toEqual(new Set(['q-four']));
-    expect(h.actions.suspend).not.toHaveBeenCalled();
+    expect(h.actions.suspend.mock.calls.map((call) => call[0])).toEqual(['q-four']);
+    expect(h.actions.enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it('an edited passage that two regions resemble (a recap reuses its words): withheld, nothing judged', async () => {
+  it('an edited passage that two regions resemble (the lecturer repeats the part with another correction): withheld, nothing judged, rewritten', async () => {
     const { vault, h } = await seeded();
     const cues = [...LECTURE];
     cues[10] = (cues[10] as string).replace(inventedWord(10 * 40 + 3 + 17), inventedWord(4001));
-    // The lecturer recaps the first cue of part 4 at the end.
-    vault.files.set(TRANSCRIPT, transcriptOf([...cues, cue(96), partCues(4)[0] as string]));
+    const repeat = [...partCues(4)];
+    repeat[1] = (repeat[1] as string).replace(inventedWord(10 * 40 + 9 + 17), inventedWord(4003));
+    vault.files.set(TRANSCRIPT, transcriptOf([...cues, ...repeat]));
     await h.pass(vault);
     expect(h.judge.judge).not.toHaveBeenCalled();
     expect((await h.store.loadAll()).get('q-four')?.pendingRevalidation?.reason).toBe(
       'passage-ambiguous',
     );
     expect(await h.withheld(IDS)).toEqual(new Set(['q-four']));
+    expect(h.actions.enqueue).toHaveBeenCalledTimes(1);
   });
 
-  it('a passage found again unchanged lifts its own hold', async () => {
+  it('a passage found again unchanged after the rewrite does not lift the hold ([D-578]): the old question is never presented again', async () => {
     const { vault, h } = await seeded();
     vault.files.set(TRANSCRIPT, transcriptOf([...LECTURE, ...partCues(4)]));
     await h.pass(vault);
     expect(await h.withheld(['q-four'])).toEqual(new Set(['q-four']));
     vault.files.set(TRANSCRIPT, transcriptOf(LECTURE));
     await h.pass(vault);
-    expect(await h.withheld(['q-four'])).toEqual(new Set());
+    expect(await h.withheld(['q-four'])).toEqual(new Set(['q-four']));
   });
 });
 
@@ -362,11 +365,12 @@ describe('the reader the presentation-time check would share', () => {
 
   it('a passage that resembles every window only through the glue of speech is ambiguous, never matched', () => {
     // One short cue: half its distinct words are glue words, so every window of an unrelated
-    // lecture clears the one-third floor, as one stream-long region. Not localised: withheld.
+    // lecture clears the old one-third floor, as one stream-long region. At the transcript floor
+    // (0.55, [D-578]) none does: there is no candidate, and the question is rewritten.
     const words = spoken(LECTURE).split(' ');
     expect(resolveTranscriptPassage(spoken([cue(98)]), words)).toEqual({
       kind: 'unresolved',
-      reason: 'ambiguous',
+      reason: 'missing',
     });
     // Nothing shared at all: missing.
     expect(resolveTranscriptPassage('zzz yyy xxx www', words)).toEqual({
@@ -375,17 +379,15 @@ describe('the reader the presentation-time check would share', () => {
     });
   });
 
-  it('the floor’s cost: an edited passage mostly made of words the whole stream shares is withheld, not judged', () => {
-    // Synthetic sweep (one word changed): a one-cue passage, 49% of whose distinct words recur
-    // throughout the lecture, is withheld; two cues (32%) and more are judged as their one region.
-    // More withholding, never a wrong match (PERSISTENCE.md 2.5); a different floor for
-    // transcripts would be a threshold change, through a decision.
+  it('a one-cue passage with one corrected word is judged as its one region at the transcript floor ([D-578])', () => {
+    // 49% of a one-cue passage's distinct words recur throughout the lecture: at one third every
+    // window resembled it and it was withheld; at 0.55 only its own place does.
     const cues = [...LECTURE];
     cues[7] = (cues[7] as string).replace(inventedWord(7 * 40 + 5 + 17), inventedWord(4004));
     const stream = spoken(cues).split(' ');
     expect(resolveTranscriptPassage(spoken([LECTURE[7] as string]), stream)).toEqual({
-      kind: 'unresolved',
-      reason: 'ambiguous',
+      kind: 'changed',
+      text: spoken([cues[7] as string]),
     });
     expect(resolveTranscriptPassage(spoken(LECTURE.slice(6, 8)), stream)).toEqual({
       kind: 'changed',

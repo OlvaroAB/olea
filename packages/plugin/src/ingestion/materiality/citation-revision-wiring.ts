@@ -326,6 +326,7 @@ import {
   resolveTranscriptPassage,
   seedFromCitation,
   type TranscriptRead,
+  type TranscriptVersion,
   wholeTranscriptText,
 } from './transcript-grain.js';
 import type { MaterialityJudge } from './types.js';
@@ -1440,6 +1441,8 @@ export class CitationRevisionTrigger {
    *    (`passage-missing`, `passage-ambiguous`, `passage-rule-unsupported`) — protective, and
    *    never a claim that a material change was established (row 45). No baseline is adopted, no
    *    judge is called, nothing is suspended or regenerated.
+   * Returns the hash the withholding fact is keyed to (undefined when nothing was withheld or the
+   * write failed), so a caller that goes on to rewrite the question can guard on that same fact.
    */
   private async applyPassageResolution(
     instrumentId: string,
@@ -1449,7 +1452,7 @@ export class CitationRevisionTrigger {
     notes: PassageNotes,
     actions: CitationRevisionActions,
     report: MutableTickReport,
-  ): Promise<void> {
+  ): Promise<string | undefined> {
     if (resolution.kind === 'relocated') {
       report.relocated += 1;
       try {
@@ -1463,7 +1466,7 @@ export class CitationRevisionTrigger {
       } catch (error) {
         console.error('Olea: citation-revision passage relocation-heal write failed', error);
       }
-      return;
+      return undefined;
     }
 
     let reason: PendingReason;
@@ -1497,14 +1500,17 @@ export class CitationRevisionTrigger {
       } catch {
         observed = '';
       }
+      const sinceContentHash = await hashText(`${reason}\n${observed}`);
       await this.deps.store.setPendingRevalidation(
         instrumentId,
-        await hashText(`${reason}\n${observed}`),
+        sinceContentHash,
         this.deps.clock.now(),
         reason,
       );
+      return sinceContentHash;
     } catch (error) {
       console.error('Olea: citation-revision passage withhold write failed', error);
+      return undefined;
     }
   }
 
@@ -1662,7 +1668,7 @@ export class CitationRevisionTrigger {
         ? resolveTranscriptPassage(previous.text, read.version.words)
         : ({ kind: 'unresolved', reason: 'missing' } as const);
     if (resolution.kind === 'unresolved') {
-      await this.applyPassageResolution(
+      const heldBy = await this.applyPassageResolution(
         instrumentId,
         previous,
         currentRecord,
@@ -1671,9 +1677,67 @@ export class CitationRevisionTrigger {
         actions,
         report,
       );
+      // `ol-egov.141.89.5.119` ([D-578], C5.3 Relocation): a part that cannot be relocated in a
+      // version that reads (no candidate, or more than one) is not held indefinitely. Withheld
+      // above, the question goes down the whole-transcript route: a successor is drafted from the
+      // current version and the old question is suspended. No materiality read is asked: nothing
+      // of the cited part is known to judge, and no answer could certify the old question.
+      if (read.kind === 'read' && heldBy !== undefined) {
+        await this.rewriteUnrelocatablePart(
+          instrumentId,
+          previous,
+          currentRecord,
+          read.version,
+          heldBy,
+          actions,
+          report,
+        );
+      }
       return undefined;
     }
     return resolution.kind === 'present' ? previous.text : resolution.text;
+  }
+
+  /**
+   * `ol-egov.141.89.5.119` ([D-578]): the rewrite of a part-named transcript question whose part
+   * cannot be relocated. The successor is drafted from the transcript as it reads now (all its
+   * spoken words, the grain of a whole-transcript question, `[D-567]`), carrying that version's
+   * bytes hash so it is presented in turn (`ol-egov.141.89.5.104`); the predecessor is then
+   * suspended, guarded on the hold just recorded. Enqueue first, so an orphan cannot arise
+   * ({@link suspendAndEnqueueSuccessor}); a failure leaves the hold standing and the next pass
+   * repeats it (a duplicate enqueue is reported as such, not an error). Uses only what the
+   * existing anchor and hold already carry: no new persisted field.
+   */
+  private async rewriteUnrelocatablePart(
+    instrumentId: string,
+    previous: CitationAnchorRecord,
+    currentRecord: VaultInstrumentRecord,
+    version: TranscriptVersion,
+    heldBy: string,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<void> {
+    try {
+      const event: RevisionEvent = {
+        instrumentId,
+        at: this.deps.clock.now(),
+        oldContentHash: await hashText(previous.text),
+        // Per question, so two questions on one transcript are never collapsed by the queue's own idempotency.
+        newContentHash: await hashText(`${version.bytesHash}\n${instrumentId}`),
+        change: 'transcript-part-not-relocated',
+      };
+      await this.suspendAndEnqueueSuccessor(
+        instrumentId,
+        currentRecord.conceptIds,
+        heldBy,
+        instrumentId,
+        buildSuccessorRevisionEnqueueInput(event, wholeTranscriptText(version), version.bytesHash),
+        actions,
+        report,
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision unrelocatable-part rewrite failed', error);
+    }
   }
 
   /**
