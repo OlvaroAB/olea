@@ -307,6 +307,7 @@ import {
   type VaultPath,
   type VaultSource,
 } from 'olea-core';
+import { createVaultDraftCacheStore } from '../../generation/cache-store.js';
 import type { CitedSourceNow } from '../../generation/revision-job-runner.js';
 import { canonicalizeForMateriality } from './canonical.js';
 import type {
@@ -1880,6 +1881,38 @@ export class CitationRevisionTrigger {
       );
     }
     this.landedSources.rename(oldPath, newPath);
+    return moved + (await this.movePendingDrafts(vault, oldPath, newPath));
+  }
+
+  /**
+   * `ol-egov.141.89.5.122` ([D-576]): a pending first draft that cites the renamed file has no
+   * citation record yet, so {@link moveCitedFile}'s store call cannot reach it, and accepting it
+   * later would write the old path. Its own cited source path (`sourceCitation.sourcePath`) is
+   * changed to `newPath` through the draft cache's existing `put`, nothing else on the record
+   * touched; a draft that is not `pending` (accepted, edited or rejected) is left as it was. No new
+   * field, no new record shape. Returns how many drafts moved; a failure is logged and leaves the
+   * rest as they were.
+   */
+  private async movePendingDrafts(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
+    let moved = 0;
+    try {
+      const cache = createVaultDraftCacheStore(vault);
+      for (const draft of await cache.listPending()) {
+        const citation = draft.sourceCitation;
+        if (citation === undefined || citation.sourcePath !== oldPath) continue;
+        await cache.put({ ...draft, sourceCitation: { ...citation, sourcePath: newPath } });
+        moved += 1;
+      }
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision draft rename write failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
     return moved;
   }
 
