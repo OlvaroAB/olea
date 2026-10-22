@@ -1954,7 +1954,7 @@ export class CitationRevisionTrigger {
    * asked by a rewritten question's successor job that waits for that file's landed text
    * (`revision-job-runner.ts`), whose suspended predecessor this pass skips. The same request under
    * the same rule as this pass's own ({@link requestReextractionOnce}): once per file and bytes per
-   * session, shared with this pass, and never when text for those bytes has landed. Never throws.
+   * run of Olea, shared with this pass, and never when text for those bytes has landed. Never throws.
    */
   async requestSourceText(path: VaultPath, bytesHash: string): Promise<void> {
     await this.requestReextractionOnce(path, bytesHash);

@@ -71,7 +71,7 @@
  *    (`CitationRevisionTrigger.landedSourceText`, the text the pass's own rewrite reads). Until it
  *    lands the job waits (`retryable`, drafting nothing), at most
  *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason. While it
- *    waits it asks once for the file's catch-up extraction (below, `ol-egov.141.89.5.109`).
+ *    waits it asks once per run of Olea for the file's catch-up extraction (below, `ol-egov.141.89.5.109`).
  *  - An ordinary Markdown note (`ol-egov.141.89.5.110`, `[D-446]`, `[D-543]`) is read as it stands
  *    too. A question that named a passage is drafted from the job's passage while it still stands
  *    word for word in the note, else from the passage the citation pass's ladder finds for it in
@@ -88,21 +88,21 @@
  *
  * ## ...asking once for the catch-up extraction when the changed file's text has not landed (`ol-egov.141.89.5.109`, `[D-518]`, `[D-440]`)
  *
- * The landed text is memory only, and the changed file's own extraction may never deliver it this
- * session: a restart forgot it, or the arrival watch debounced the save and nothing retries a
+ * The landed text is memory only, and the changed file's own extraction may never deliver it during
+ * this run of Olea: a restart forgot it, or the arrival watch debounced the save and nothing retries a
  * debounced arrival. The suspended predecessor is skipped by the citation pass, so the pass does not
  * ask for it either, and the job used to wait out its attempts for nothing. A waiting attempt now
  * asks for the catch-up extraction the pass already asks for a held question
  * (`CitedSourceNow.requestText`, `ol-egov.141.89.5.84`): the same request, enqueued by the same host
  * function, landing through the same route, under the spend rules of the extraction it queues.
  *
- * The bound ({@link askForSourceTextOnce}): at most one request per predecessor per session,
+ * The bound ({@link askForSourceTextOnce}): at most one request per predecessor per run of Olea,
  * whatever bytes the file has on later attempts, so never one per attempt; none on the last
  * attempt, since no attempt is left to use the text; none when no Worker is configured (the job
  * waits uncounted before it reads its source); and each request still passes the pass's own rule,
- * once per file and bytes per session and never when text for those bytes has landed, so the pass
- * and every waiting job together ask at most once per file and bytes per session. A restart may ask
- * again, once, because the text a request brought is forgotten with it; the job's attempts, which
+ * once per file and bytes per run of Olea and never when text for those bytes has landed, so the pass
+ * and every waiting job together ask at most once per file and bytes per run of Olea. This is a bound
+ * per run, not a durable once-only guarantee: a restart may ask again, once, because the text a request brought is forgotten with it; the job's attempts, which
  * the queue keeps across restarts, bound that too. Nothing is persisted. If the text still does not
  * land, the job ends at {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} with the same reason as before.
  *
@@ -391,7 +391,7 @@ export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
  * retries any job (its backoff spans about an hour, enough for the changed file's own extraction to
  * land) and ends with its own reason one attempt before the queue would park it. A waiting attempt
  * reads a hash and memory only; it makes no drafting call. `ol-egov.141.89.5.109`: one waiting
- * attempt per session, never the last, also asks for the file's catch-up extraction.
+ * attempt per run of Olea, never the last, also asks for the file's catch-up extraction.
  */
 export const REVISION_SOURCE_TEXT_MAX_ATTEMPTS = MAX_ATTEMPTS;
 
@@ -431,7 +431,7 @@ export interface CitedSourceNow {
   /**
    * `ol-egov.141.89.5.109` ([D-518]): asks for the catch-up extraction of `path`, the one a question
    * held for a changed file already asks for (`ol-egov.141.89.5.84`), under that route's rule: at
-   * most once per file and bytes per session, shared with the citation pass, and not when text for
+   * most once per file and bytes per run of Olea, shared with the citation pass, and not when text for
    * `bytesHash` has landed. Never throws; what it asks for lands through the ordinary landing route,
    * where {@link landedText} reads it.
    */
@@ -478,8 +478,8 @@ const sourceTextAsksByCache = new WeakMap<DraftCacheStore, Set<string>>();
 
 /**
  * `ol-egov.141.89.5.109`: the predecessors whose successor job has asked for the catch-up
- * extraction of its cited file this session (module doc, "...asking once for the catch-up
- * extraction"). One set per draft cache instance, so per plugin session in production, as {@link
+ * extraction of its cited file this run of Olea (module doc, "...asking once for the catch-up
+ * extraction"). One set per draft cache instance, so per run of Olea in production, as {@link
  * heldJudgeAnswersFor} is. Memory only: what the request brings (landed text) is memory only too,
  * so a restart forgets both together.
  */
@@ -1177,9 +1177,9 @@ async function bytesHashNow(vault: VaultSource, path: VaultPath): Promise<string
 
 /**
  * `ol-egov.141.89.5.109` ([D-518], [D-440]): while a successor waits for its changed file's text,
- * asks once for the catch-up extraction of that file (module doc, "...asking once for the catch-up
+ * asks once per run of Olea for the catch-up extraction of that file (module doc, "...asking once for the catch-up
  * extraction"). Asks nothing on the last attempt, since no attempt is left to use the text, nor
- * when this predecessor's job already asked this session, whatever bytes it waited for then. The
+ * when this predecessor's job already asked in this run of Olea, whatever bytes it waited for then. The
  * request itself goes through the citation pass's own once-per-file-and-bytes rule. A request that
  * fails is logged by error name only, and the job waits as before.
  */
@@ -1352,7 +1352,7 @@ export async function runInstrumentRevisionJob(
   // `ol-egov.141.89.5.107`: the passage to draft from and the citation to record, read from the
   // cited source as it stands, once, before any drafting call or demand ask (module doc, "against
   // its source as it stands"). A changed file whose new text has not landed waits, bounded, and
-  // asks once for its catch-up extraction (`ol-egov.141.89.5.109`). A cloze predecessor drafts
+  // asks once per run of Olea for its catch-up extraction (`ol-egov.141.89.5.109`). A cloze predecessor drafts
   // nothing (below), so nothing is read for it.
   const source: SuccessorSource =
     target.instrumentType === 'cloze'

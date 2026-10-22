@@ -1,6 +1,6 @@
 // `ol-egov.141.89.5.109` ([D-508], [D-518], [D-440]): a rewritten question's successor, cited to a
 // PDF-type source that changed again after its page was read, waits for that page's text as
-// extracted from the bytes now. When that text has not landed, the job now asks once for the
+// extracted from the bytes now. When that text has not landed, the job now asks once per run of Olea for the
 // catch-up extraction the held-question route already uses (`ol-egov.141.89.5.84`), and drafts once
 // the text lands; if it never lands, the job ends exactly as before. Driven through the production
 // pieces: the real queue (`IngestionQueueEngine`, its own attempt counting and backoff, persisted
@@ -420,8 +420,8 @@ async function reachesHer(world: World, run: OleaRun, record: DraftRecord): Prom
   expect(presented).toBe('clear');
 }
 
-describe('a successor waiting for a changed PDF-type source asks once for its catch-up extraction (ol-egov.141.89.5.109)', () => {
-  it("the changed page's text has not landed: the job asks once for the catch-up extraction, and drafts once the text lands", async () => {
+describe('a successor waiting for a changed PDF-type source asks once per run of Olea for its catch-up extraction (ol-egov.141.89.5.109)', () => {
+  it("the changed page's text has not landed: the job asks once per run of Olea for the catch-up extraction, and drafts once the text lands", async () => {
     const world = await newWorld();
     const run = await rewritten(world);
     world.vault.binaries.set(PDF, bytesOf('v2'));
@@ -658,5 +658,78 @@ describe('a successor waiting for a changed PDF-type source asks once for its ca
     expect(world.requests).toEqual([]);
     expect(world.drafter.draftForConcept).not.toHaveBeenCalled();
     expect(await broken.cache.listPending()).toEqual([]);
+  });
+
+  it('only the current version feeds the rewrite: text for the bytes it asked for lands after the file changed again, and the job drafts nothing from it and keeps waiting', async () => {
+    const world = await newWorld();
+    const run = await rewritten(world);
+    world.vault.binaries.set(PDF, bytesOf('v2'));
+    const v2 = await hashOf('v2');
+
+    // It asks for v2's text; before the queue runs that extraction the file changes to v3.
+    expect(await nextAttempt(run, { drain: false })).toMatchObject({
+      status: 'deferred',
+      attempts: 1,
+    });
+    world.vault.binaries.set(PDF, bytesOf('v3'));
+    await runEligible(run);
+    // The text for v2 did land, but it is no longer the file's text.
+    expect(world.extracted).toEqual([{ run: 1, contentHash: v2 }]);
+    expect(run.trigger.landedSourceText(PDF, v2, 2)).toBe(pageText('v2', 2));
+
+    for (let attempt = 2; attempt <= 4; attempt += 1) {
+      expect(await nextAttempt(run)).toMatchObject({ status: 'deferred', attempts: attempt });
+    }
+    expect(world.drafter.draftForConcept).not.toHaveBeenCalled();
+    expect(await run.cache.listPending()).toEqual([]);
+    // The one request per run is spent: v3 is not asked for again, so the job simply keeps waiting.
+    expect(world.requests).toEqual([{ run: 1, path: PDF }]);
+    await oldQuestionStaysOut(world, run);
+  });
+
+  it('withholding is preserved: the old question stays suspended and withheld while the successor waits, after it asks, and until the successor is drafted', async () => {
+    const world = await newWorld();
+    const run = await rewritten(world);
+    world.vault.binaries.set(PDF, bytesOf('v2'));
+
+    // Before any attempt, then waiting and asking (the extraction queued but not yet run).
+    await oldQuestionStaysOut(world, run);
+    expect(await nextAttempt(run, { drain: false })).toMatchObject({ status: 'deferred' });
+    expect(world.requests).toHaveLength(1);
+    await oldQuestionStaysOut(world, run);
+    expect(await run.cache.listPending()).toEqual([]);
+
+    // The extraction runs and lands; the old question is still out until the successor is drafted.
+    await runEligible(run);
+    await oldQuestionStaysOut(world, run);
+    expect(await nextAttempt(run)).toMatchObject({ status: 'done' });
+    expect(await run.cache.listPending()).toHaveLength(1);
+    await oldQuestionStaysOut(world, run);
+  });
+
+  it('rewrite confirmation is preserved: the successor drafted after the text lands is a pending draft, not an accepted question, until she confirms it', async () => {
+    const world = await newWorld();
+    const run = await rewritten(world);
+    world.vault.binaries.set(PDF, bytesOf('v2'));
+
+    expect(await nextAttempt(run, { drain: false })).toMatchObject({ status: 'deferred' });
+    await runEligible(run);
+    expect(await nextAttempt(run)).toMatchObject({ status: 'done' });
+
+    const [record, ...rest] = await run.cache.listPending();
+    expect(rest).toEqual([]);
+    expect(record?.status).toBe('pending');
+    // Nothing is an instrument yet: the draft is not served, and the old question is still out.
+    const { records } = await enumerateVaultInstruments(world.vault, {
+      concepts: { stampConceptKeys: true },
+    });
+    expect(records.map((r) => r.instrumentId)).not.toContain(record?.draftId);
+    expect(records.map((r) => r.instrumentId)).toEqual(
+      records.map((r) => r.instrumentId).filter((id) => id === 'q-slide'),
+    );
+    await oldQuestionStaysOut(world, run);
+    // Her confirmation (acceptance) is the only way it becomes an instrument.
+    if (record === undefined) throw new Error('no successor');
+    await reachesHer(world, run, record);
   });
 });
