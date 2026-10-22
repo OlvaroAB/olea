@@ -177,6 +177,16 @@ export interface ComposeRetrievabilityInput {
    * reading for a caller with no store.
    */
   readonly passageChanges?: readonly PassageChangeFact[];
+  /**
+   * `[D-500]`/`[D-347]` (the reader floor, `ol-egov.141.89.104.33`): the instruments a readable
+   * hold holds (the plugin hold reader's `evidenceWithdrawn`). Each listed instrument's evidence is
+   * left out of readiness, so out of the ranking's need term too, exactly as an unrevalidated
+   * passage's is (`AttainmentOptions.heldEvidence`). Never read by the mastery join: the displayed
+   * stage keeps it. Omitted or empty reads as none held, today's reading. The hold reader's
+   * `evidenceUnknown` is not taken here: how the ranking orders a concept whose readiness could
+   * not be made is not ruled.
+   */
+  readonly heldEvidence?: ReadonlySet<string>;
 }
 
 export interface ComposeOracleRankingInput extends BuildConceptAssessmentEdgesOptions {
@@ -990,7 +1000,7 @@ function resolveRetrievabilityScores(
   validity: InstrumentValidityProjection,
 ): ReadonlyMap<string, number> | undefined {
   if (retrievabilityInput === undefined) return undefined;
-  const { scheduler, now, passageChanges } = retrievabilityInput;
+  const { scheduler, now, passageChanges, heldEvidence } = retrievabilityInput;
   // `[D-347]` as ruled (`ol-egov.141.89.9.94`): a sound review she withheld keeps counting in
   // readiness, because "a personal withdrawal or replacement does not automatically invalidate a
   // sound review" (the attainment matching rule, section 7, judgement J1); `validity` removes the
@@ -999,10 +1009,12 @@ function resolveRetrievabilityScores(
   // view's need, recognition credit and demand rule pass the same policy
   // (`plugin/src/gap/provider.ts`'s `RULED_CURRENT_READING`). A changed, unrevalidated passage
   // is excluded when the caller passes the pending-revalidation store's facts (`[D-522]`,
-  // `ol-egov.141.89.9.98`): `passageChanges`.
+  // `ol-egov.141.89.9.98`): `passageChanges`. An instrument a readable hold holds is excluded the
+  // same way when the caller passes the hold reader's held set (`[D-500]`): `heldEvidence`.
   const readings = readAllConceptReadiness(reviewLog, conceptKeys, scheduler, now, validity, {
     withheldEvidence: 'count',
     ...(passageChanges !== undefined ? { passageChanges } : {}),
+    ...(heldEvidence !== undefined ? { heldEvidence } : {}),
   });
   const scores = new Map<string, number>();
   for (const [conceptKey, reading] of readings) {

@@ -241,6 +241,7 @@ import type {
   SittingStalenessInput,
   SittingStalenessReason,
   SittingState,
+  VaultInstrumentRecord,
   VaultPath,
   VaultSource,
   WindowDeficitEntry,
@@ -296,6 +297,7 @@ import {
 // resolver from `resolveCitationFreshness` above, never a shared one.
 import { rankedConceptKeys } from '../gap/provider.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import type { HoldWithholding } from '../ingestion/materiality/hold-record-reader.js';
 import {
   hasAssessmentSource,
   type ObsidianDataHost,
@@ -470,6 +472,41 @@ export interface CreateLocalSessionBuilderProviderDeps {
    * "unknown never withholds on its own", unchanged.
    */
   readonly citationHashStore?: CitationHashStore;
+  /**
+   * `[D-500]`/`[D-539]` (the reader floor, `ol-egov.141.89.104.33`): the hold reader's result
+   * (`resolveHoldWithholding`) over the instruments this composition enumerated and the review log
+   * it read. Its `notPresented` (held, or a hold check that could not be made) leaves the
+   * instruments the fill is offered (`withoutNotPresented`), so neither is served and neither is
+   * recorded as a changed cited passage; its `evidenceWithdrawn` leaves the ranking's readiness
+   * and need as an unrevalidated passage does. Its `evidenceUnknown` is not read here: how the
+   * ranking orders a concept whose readiness could not be made is not ruled. Omitted: today's composition. A reader that throws
+   * fails the composition (`buildFresh` reports it unavailable). **No production caller yet**: the
+   * hold store's location is unruled (`ol-egov.141.89.104.6`).
+   */
+  readonly readHoldWithholding?: (scope: {
+    readonly records: readonly VaultInstrumentRecord[];
+    readonly entries: readonly ReviewLogEntry[];
+  }) => Promise<HoldWithholding>;
+}
+
+/**
+ * `[D-500]`/`[D-539]` (`ol-egov.141.89.104.33`): `index` less every instrument the hold reader keeps
+ * from presentation (`readHoldWithholding`), the way `study-session/compose.ts` withholds a changed
+ * cited passage from the fill: `concepts` and `recordCount` still describe what went in. No hold
+ * result, or nothing kept back: `index` itself.
+ */
+function withoutNotPresented(
+  index: ConceptInstrumentIndex,
+  holds: HoldWithholding | undefined,
+): ConceptInstrumentIndex {
+  if (holds === undefined || holds.notPresented.size === 0) return index;
+  const { notPresented } = holds;
+  return {
+    concepts: index.concepts,
+    recordCount: index.recordCount,
+    instrumentsFor: (conceptId) =>
+      index.instrumentsFor(conceptId).filter((record) => !notPresented.has(record.instrumentId)),
+  };
 }
 
 /** `buildMaterialPresence`'s second argument — a tally of instruments per note. Identical to `gap/provider.ts`'s, because it is the same question. */
@@ -1080,6 +1117,8 @@ export async function composeStudySessionForRequest(
   // A store that cannot be read leaves out every instrument that could carry a fact: those
   // readings are unknown, never silently credited (`passageChangesForReadings`).
   const passageChanges = passageChangesForReadings(passageRead, enumeration.records, entries, now);
+  // `[D-500]`/`[D-539]` (`ol-egov.141.89.104.33`): see `readHoldWithholding`.
+  const holds = await deps.readHoldWithholding?.({ records: enumeration.records, entries });
   // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
   // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
   const disputes = await disputesFromFiles(deps.vault, files);
@@ -1129,6 +1168,7 @@ export async function composeStudySessionForRequest(
       scheduler: deps.scheduler,
       now,
       ...(passageChanges !== undefined ? { passageChanges } : {}),
+      ...(holds !== undefined ? { heldEvidence: holds.evidenceWithdrawn } : {}),
     },
     // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered component 3.3
     // weights when `deps.readRankWeights` resolved one —
@@ -1213,7 +1253,10 @@ export async function composeStudySessionForRequest(
   const servableRecords = enumeration.records.filter(
     (record) => !suspended.has(record.instrumentId) && !provenInvalid.has(record.instrumentId),
   );
-  const conceptInstrumentIndex = buildConceptInstrumentIndex(servableRecords);
+  const conceptInstrumentIndex = withoutNotPresented(
+    buildConceptInstrumentIndex(servableRecords),
+    holds,
+  );
 
   // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`'s own follow-up): resolve citation
   // freshness for every instrument reachable from today's candidate concepts — `gapRows`, the
@@ -1340,7 +1383,7 @@ export async function composeStudySessionForRequest(
     arrivalDays,
     relatedConceptKeys,
     assessmentContext,
-    instruments: buildConceptInstrumentIndex(servableRecords),
+    instruments: withoutNotPresented(buildConceptInstrumentIndex(servableRecords), holds),
     // `ol-egov.141.89.10.33` (`[D-292]`, `ol-2zfj.154`): resolved above, scoped to today's
     // candidate concepts — see that resolution's own comment.
     citationFreshness,
