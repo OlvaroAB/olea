@@ -37,6 +37,7 @@
 
 import { hashText } from '../../ingestion/hash.js';
 import type { Clock } from '../../ingestion/types.js';
+import { readModelStamp } from '../../stage-contract/provenance.js';
 import { buildSuccessorRevisionEnqueueInput } from './enqueue.js';
 import { classifyRelocation } from './relocate.js';
 import type {
@@ -96,9 +97,12 @@ export async function evaluateCitedPassageRevision(
     newContentHash,
     change: verdict.reason ?? NO_REASON_GIVEN,
   };
+  // `[D-598]`: the judge's D7.3 stamp travels with the judged outcome (it used to be dropped
+  // here), read defensively: `null` when the answer carried none or an unreadable one.
+  const judgeStamp = readModelStamp(verdict.stamp);
 
   if (!verdict.material) {
-    return { kind: 'refreshed', event };
+    return { kind: 'refreshed', event, judgeStamp };
   }
 
   return {
@@ -106,5 +110,6 @@ export async function evaluateCitedPassageRevision(
     event,
     predecessorInstrumentId: input.instrumentId,
     successorEnqueueInput: buildSuccessorRevisionEnqueueInput(event, currentText),
+    judgeStamp,
   };
 }

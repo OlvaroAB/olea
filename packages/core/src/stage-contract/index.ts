@@ -122,6 +122,7 @@ export {
 } from './decision.js';
 export type {
   ModelStamp,
+  PersistedStageProducer,
   StageEscalation,
   StageEscalationReason,
   StageProducer,
@@ -130,11 +131,15 @@ export type {
   StageSeat,
   StageUnavailable,
   StageUnavailableCause,
+  StoredProducerReading,
 } from './provenance.js';
 export {
   codeProvenance,
   failedCallProvenance,
   modelProvenance,
+  persistedModelProducer,
+  readModelStamp,
+  readStoredProducer,
   STAGE_UNAVAILABLE_CAUSES,
   stageProvenanceProblems,
   toArtifactProvenance,

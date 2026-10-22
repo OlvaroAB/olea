@@ -101,6 +101,10 @@ export function rearmSpentRetry(
     dispatchedAt: pending.dispatchedAt ?? pending.retriedAt,
     // `[D-473]` (`ol-egov.141.89.5.52`): the withholding reason, known or not, is carried through.
     ...(pending.reason !== undefined ? { reason: pending.reason } : {}),
+    // `[D-598]` (`ol-egov.141.89.5.135`): whoever raised and decided this difference is carried
+    // through verbatim (an unreadable value included); a fact that had none gains none.
+    ...(pending.raisedBy !== undefined ? { raisedBy: pending.raisedBy } : {}),
+    ...(pending.decidedBy !== undefined ? { decidedBy: pending.decidedBy } : {}),
   };
 }
 

@@ -233,6 +233,9 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     // `ol-egov.141.89.9.98` the rewrite made a third, resolving write (the anchor's removal); a
     // failure armed on call #4 now finds nothing to fail, because the rewrite keeps the entry and
     // its fact as the exclusion of the old question's evidence ([D-522], [D-536]).
+    // `ol-egov.141.89.5.135` ([D-598]): call #4 is now the write that records who decided the
+    // rewrite (`decidedBy`, beside the decision). The failure armed on it shows that write changes
+    // nothing: the rewrite proceeds exactly as before, and the field reads unknown.
     const host = new FlakyDataHost(new Set([4]));
     const store = new ObsidianCitationHashStore(host);
     const judge: RevisionJudgePort = { judge: vi.fn(async () => ({ material: false })) }; // same claim -> 'refreshed'
@@ -247,12 +250,14 @@ describe('[ILB-CHG-4](c) pending-revalidation write, real store + real trigger: 
     expect(secondTick.refreshed).toBe(1);
     expect(act.enqueue).toHaveBeenCalledOnce();
     expect(act.suspend).toHaveBeenCalledOnce();
-    expect(host.saveDataCallCount).toBe(3); // dispatch (#2) and set (#3); no resolving write
+    // dispatch (#2), set (#3), and [D-598]'s decidedBy (#4, failed here); no resolving write
+    expect(host.saveDataCallCount).toBe(4);
 
     // Never split: the pending fact and the OLD text stand together in the one record, so the
     // changed text is never a certifying baseline and the old evidence stays excluded.
     const after = await store.loadAll();
     expect(after.get(MCQ_ID)?.pendingRevalidation?.sinceContentHash).toBeDefined();
+    expect(after.get(MCQ_ID)?.pendingRevalidation?.decidedBy).toBeUndefined();
     expect(after.get(MCQ_ID)?.text).toContain('humid climates');
     expect(after.size).toBe(1);
     expect(secondTick.staleResultDiscarded).toBe(0);

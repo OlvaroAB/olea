@@ -12,6 +12,8 @@ import { reviewLogPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { ContestRegradeQueueStore } from '../../src/contest-regrade/queue-store.js';
 import { DEVICE_ID_STORAGE_KEY } from '../../src/device/device-id.js';
+import { CITATION_ANCHOR_STORAGE_KEY } from '../../src/ingestion/materiality/citation-hash-store.js';
+import { MATERIALITY_HASH_STORAGE_KEY } from '../../src/ingestion/materiality/hash-store.js';
 import { ObsidianQueueStore } from '../../src/ingestion/queue-store.js';
 import { CACHE_DATA_JSON_KEYS } from '../../src/privacy/cache-purge.js';
 import {
@@ -81,6 +83,17 @@ describe('the settings manifest (ol-egov.141.8.11, D-393)', () => {
   it('classifies each of the five cache-purge keys as content-derived, so the purge never clears a kept key', () => {
     for (const key of CACHE_DATA_JSON_KEYS) {
       expect(settingsKeyEntry(key)?.classification).toBe('content-derived');
+    }
+  });
+
+  it('lists who decided each source-change verdict on the two stores that keep it, as content-derived (ol-egov.141.89.5.135, D-598)', () => {
+    const hashes = settingsKeyEntry(MATERIALITY_HASH_STORAGE_KEY);
+    expect(hashes?.classification).toBe('content-derived');
+    expect(hashes?.holds).toContain('settledBy');
+    const anchors = settingsKeyEntry(CITATION_ANCHOR_STORAGE_KEY);
+    expect(anchors?.classification).toBe('content-derived');
+    for (const field of ['settledBy', 'raisedBy', 'decidedBy']) {
+      expect(anchors?.holds).toContain(field);
     }
   });
 });

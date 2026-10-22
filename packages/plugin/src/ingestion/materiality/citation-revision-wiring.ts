@@ -281,6 +281,7 @@ import {
   type CitedPassageRevisionOutcome,
   type Clock,
   type CurrentPassageState,
+  decisionFromCitedPassageRevision,
   digestPassage,
   type EnqueueInput,
   type ExtractedUnit,
@@ -292,7 +293,9 @@ import {
   PASSAGE_RULES,
   type PassageRule,
   type PendingRevalidationRecorder,
+  type PersistedStageProducer,
   parsePassageDigest,
+  persistedModelProducer,
   projectInstrumentValidity,
   type RelocationCandidate,
   type RevisionEvent,
@@ -332,8 +335,10 @@ import {
   wholeTranscriptText,
 } from './transcript-grain.js';
 import type { MaterialityJudge } from './types.js';
+import { codeRule, errorName } from './verdict-provenance.js';
+import { MATERIALITY_JUDGE_TASK_ID } from './workerJudge.js';
 
-/** `RevisionJudgePort` is `{previousText, currentText}` only; `MaterialityJudge` also requires `path`, unused inside `WorkerMaterialityJudge.judge` (see that file's own doc: "`path` never leaves this method"). Adapts explicitly rather than relying on TS's method-bivariance to paper over the shape gap. */
+/** `RevisionJudgePort` is `{previousText, currentText}` only; `MaterialityJudge` also requires `path`, unused inside `WorkerMaterialityJudge.judge` (see that file's own doc: "`path` never leaves this method"). Adapts explicitly rather than relying on TS's method-bivariance to paper over the shape gap. The judge's verdict is passed through as it came, its D7.3 `stamp` included (`[D-598]`: `MaterialityJudgeVerdict.stamp` mirrors `RevisionJudgeVerdict.stamp`), so core's cited-passage outcome can carry it. */
 export function adaptMaterialityJudgeAsRevisionJudge(
   judge: MaterialityJudge | null,
 ): RevisionJudgePort | null {
@@ -471,6 +476,8 @@ interface ConfirmedRewrite {
   readonly conceptIds: readonly string[];
   readonly predecessorInstrumentId: string;
   readonly successorEnqueueInput: EnqueueInput;
+  /** `[D-598]`: who decided this rewrite, written again on a retry only if the first write did not land. */
+  readonly decidedBy: PersistedStageProducer | null;
   attempts: number;
   gaveUp: boolean;
 }
@@ -856,6 +863,9 @@ export class CitationRevisionTrigger {
           instrumentId,
           sourceContentHash,
           this.deps.clock.now(),
+          undefined,
+          // `[D-598]`: the hold for a real difference is raised by the hash comparison.
+          codeRule('cited-text-differs'),
         ),
     };
 
@@ -1172,10 +1182,23 @@ export class CitationRevisionTrigger {
           canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text))
       ) {
         report.formattingOnly += 1;
+        // `[D-598]`: the narrowest of the three exit rules above that settles it. A whitespace-only
+        // match by the passage ladder is the reformat; otherwise equal canonical text is
+        // formatting-only; only an anchor that needed the current strip to read the same is the
+        // restrip. (Order matters: an already-stripped anchor always passes the restrip test too,
+        // so testing it first would name the restrip for every formatting-only edit.)
+        const settledBy = codeRule(
+          reformattedByLadder
+            ? 'passage-reformatted'
+            : canonicalizeForMateriality(current.text) === canonicalizeForMateriality(previous.text)
+              ? 'formatting-only'
+              : 'question-blocks-restripped',
+        );
         try {
           await this.deps.store.save(instrumentId, {
             sourcePath: passage?.sourcePath ?? citedPassagePath(currentRecord),
             text: current.text,
+            settledBy,
             // [D-351]: a formatting-only edit is not a resolution — carry
             // over whatever pending-revalidation fact was already recorded
             // (from an earlier, still-unresolved real difference) rather
@@ -1210,6 +1233,7 @@ export class CitationRevisionTrigger {
               confirmed.successorEnqueueInput,
               actions,
               report,
+              confirmed.decidedBy,
             );
           }
           continue;
@@ -1274,6 +1298,8 @@ export class CitationRevisionTrigger {
               newContentHash,
               this.deps.clock.now(),
               priorForThisDifference?.dispatchedAt !== undefined,
+              // `[D-598]`: stored only when this dispatch is the one that raises the fact.
+              codeRule('cited-text-differs'),
             );
           }
         }
@@ -1403,12 +1429,14 @@ export class CitationRevisionTrigger {
             text: '',
             passageDigest: seeded.digest,
             conceptIds: record.conceptIds,
+            settledBy: codeRule('first-sighting'),
           });
           await this.deps.store.setPendingRevalidation(
             instrumentId,
             await hashText(`${seeded.withheld}\n${await materialFor(path)}`),
             this.deps.clock.now(),
             seeded.withheld,
+            codeRule('passage-seed-unresolved'),
           );
           continue;
         }
@@ -1418,6 +1446,7 @@ export class CitationRevisionTrigger {
             text: seeded.text,
             passageDigest: seeded.digest,
             conceptIds: record.conceptIds,
+            settledBy: codeRule('first-sighting'),
           });
           report.newlyBaselined += 1;
           continue;
@@ -1427,6 +1456,7 @@ export class CitationRevisionTrigger {
           sourcePath: path,
           text,
           conceptIds: record.conceptIds,
+          settledBy: codeRule('first-sighting'),
         });
         report.newlyBaselined += 1;
       } catch (error) {
@@ -1473,6 +1503,7 @@ export class CitationRevisionTrigger {
           passageDigest: await digestPassage(resolution.text, resolution.rule),
           ...carriedPending(previous),
           conceptIds: currentRecord.conceptIds,
+          settledBy: codeRule('passage-relocated'),
         });
       } catch (error) {
         console.error('Olea: citation-revision passage relocation-heal write failed', error);
@@ -1517,6 +1548,7 @@ export class CitationRevisionTrigger {
         sinceContentHash,
         this.deps.clock.now(),
         reason,
+        codeRule('passage-unresolved'),
       );
       return sinceContentHash;
     } catch (error) {
@@ -1562,6 +1594,7 @@ export class CitationRevisionTrigger {
           text: own.segment.text,
           passageDigest: digest,
           conceptIds: currentRecord.conceptIds,
+          settledBy: codeRule('first-sighting'),
         });
         report.newlyBaselined += 1;
         return true;
@@ -1745,6 +1778,7 @@ export class CitationRevisionTrigger {
         buildSuccessorRevisionEnqueueInput(event, wholeTranscriptText(version), version.bytesHash),
         actions,
         report,
+        codeRule('transcript-part-unrelocatable'),
       );
     } catch (error) {
       console.error('Olea: citation-revision unrelocatable-part rewrite failed', error);
@@ -1784,6 +1818,7 @@ export class CitationRevisionTrigger {
           text: seed.text,
           ...(seed.passageDigest !== undefined ? { passageDigest: seed.passageDigest } : {}),
           conceptIds: record.conceptIds,
+          settledBy: codeRule('first-sighting'),
         });
         report.newlyBaselined += 1;
         return;
@@ -1798,6 +1833,7 @@ export class CitationRevisionTrigger {
           sourcePath: transcriptPath,
           text: '',
           conceptIds: record.conceptIds,
+          settledBy: codeRule('first-sighting'),
         });
       }
       await this.deps.store.setPendingRevalidation(
@@ -1805,6 +1841,7 @@ export class CitationRevisionTrigger {
         await hashText(`${seed.reason}\n${seed.observed}`),
         this.deps.clock.now(),
         seed.reason,
+        codeRule('transcript-seed-unresolved'),
       );
     } catch (error) {
       console.error('Olea: citation-revision transcript seed failed', error);
@@ -2007,6 +2044,7 @@ export class CitationRevisionTrigger {
         await hashText(`${SOURCE_REVISION_REASON}\n${observed}`),
         this.deps.clock.now(),
         SOURCE_REVISION_REASON,
+        codeRule('source-bytes-changed'),
       );
     } catch (error) {
       console.error('Olea: citation-revision source-bytes withhold write failed', error);
@@ -2187,6 +2225,7 @@ export class CitationRevisionTrigger {
           buildSuccessorRevisionEnqueueInput(event, text, landed.hash),
           actions,
           report,
+          codeRule('landed-source-rewrite'),
         );
         if (
           report.successorEnqueueFailed + report.staleResultDiscarded === before &&
@@ -2237,6 +2276,7 @@ export class CitationRevisionTrigger {
               // `[D-473]`: an unrecognised reason's hold survives the re-seat.
               ...carriedPending(previous),
               ...(await passageFields(passage, current.text)),
+              settledBy: codeRule('passage-found-again'),
             });
           } catch (error) {
             console.error('Olea: citation-revision passage-resolved clear write failed', error);
@@ -2283,6 +2323,7 @@ export class CitationRevisionTrigger {
               ? { pendingRevalidation: previous.pendingRevalidation }
               : {}),
             conceptIds: previous.conceptIds,
+            settledBy: codeRule('relocated-exact'),
           });
         } catch (error) {
           console.error('Olea: citation-revision relocation-heal write failed', error);
@@ -2310,6 +2351,7 @@ export class CitationRevisionTrigger {
           successorInputFor(outcome.event, current.text, passage),
           actions,
           report,
+          judgeDecidedBy(outcome),
         );
         return;
       }
@@ -2325,6 +2367,7 @@ export class CitationRevisionTrigger {
             : outcome.successorEnqueueInput,
           actions,
           report,
+          judgeDecidedBy(outcome),
         );
         return;
       }
@@ -2369,6 +2412,8 @@ export class CitationRevisionTrigger {
     successorEnqueueInput: EnqueueInput,
     actions: CitationRevisionActions,
     report: MutableTickReport,
+    /** `[D-598]`: who decided this rewrite; `null` writes nothing (the field then reads unknown). */
+    decidedBy: PersistedStageProducer | null,
   ): Promise<void> {
     try {
       const pendingStillCurrent = await this.deps.store.isPendingRevalidationCurrent(
@@ -2395,6 +2440,9 @@ export class CitationRevisionTrigger {
       ) {
         return;
       }
+      // `[D-598]`: who decided the rewrite is written beside the decision, before the steps that
+      // carry it out. Never changes what follows: see `recordRewriteDecision`.
+      await this.recordRewriteDecision(instrumentId, judgedContentHash, decidedBy);
       await actions.enqueue(successorEnqueueInput);
       await actions.suspend(predecessorInstrumentId, conceptIds);
       // The entry and its pending fact stay ([D-522], [D-536]): see this method's doc. A failure
@@ -2408,6 +2456,7 @@ export class CitationRevisionTrigger {
         conceptIds,
         predecessorInstrumentId,
         successorEnqueueInput,
+        decidedBy,
         attempts: 0,
         gaveUp: false,
       };
@@ -2428,6 +2477,46 @@ export class CitationRevisionTrigger {
       );
     }
   }
+
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): records who decided a rewrite on the pending fact it
+   * resolves, through the store's compare-and-set (`CitationHashStore.recordDecision`): only while
+   * the fact still names `judgedContentHash`, and only the first value for that difference. A
+   * provenance write never changes behaviour: a store without the method, or a write that fails,
+   * leaves the field unknown, is logged by error name only (D-005), and the rewrite proceeds
+   * exactly as it would without it.
+   */
+  private async recordRewriteDecision(
+    instrumentId: string,
+    judgedContentHash: string,
+    decidedBy: PersistedStageProducer | null,
+  ): Promise<void> {
+    if (decidedBy === null) return;
+    try {
+      await this.deps.store.recordDecision?.(instrumentId, judgedContentHash, decidedBy);
+    } catch (error) {
+      console.error(
+        `Olea: citation-revision could not record who decided a rewrite; the rewrite proceeds (${errorName(error)})`,
+      );
+    }
+  }
+}
+
+/**
+ * `[D-598]`: the judge's producer for a judged cited-passage outcome, read through `olea-core`'s
+ * Decision adapter (`decisionFromCitedPassageRevision`) with the stamp the judge's answer carried
+ * (`judgeStamp`, `null` when none), in the same seat and task the file-level judge is stamped with.
+ */
+function judgeDecidedBy(
+  outcome: Extract<CitedPassageRevisionOutcome, { kind: 'refreshed' | 'revised' }>,
+): PersistedStageProducer | null {
+  const decision = decisionFromCitedPassageRevision(outcome, {
+    seat: 'candidate',
+    taskId: MATERIALITY_JUDGE_TASK_ID,
+    stamp: outcome.judgeStamp,
+    evidenceDigests: [],
+  });
+  return decision === null ? null : persistedModelProducer(decision.provenance.producer);
 }
 
 /**

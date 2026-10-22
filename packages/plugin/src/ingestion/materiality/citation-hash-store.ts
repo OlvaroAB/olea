@@ -61,7 +61,7 @@
  * way; only which file the caller reads before saving here has changed.
  */
 
-import type { VaultPath } from 'olea-core';
+import type { PersistedStageProducer, VaultPath } from 'olea-core';
 import { rearmSpentRetry } from '../../registry/deferred-recheck-retry.js';
 import { hasReadModifyWrite } from '../../retrieval/serializing-data-host.js';
 
@@ -159,6 +159,24 @@ export interface PendingRevalidation {
    * never enters the judge's dispatch budget, and it is never read as a confirmed change.
    */
   readonly reason?: PendingReason | UnrecognisedPendingReason;
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): the code rule that raised this hold, with its version
+   * (`verdict-provenance.ts`). Set only when a fact is raised for a new difference; a write about
+   * the same difference keeps the first value. Absent on every fact raised before this field, which
+   * reads unknown. Read it only through `olea-core`'s `readStoredProducer`; a value it cannot read
+   * is kept as it was. Never gates anything: the validator ignores it, and no hold is dropped or
+   * kept because of it.
+   */
+  readonly raisedBy?: PersistedStageProducer;
+  /**
+   * `[D-598]`: who decided this difference's rewrite — the judge (the model arm with the stamp its
+   * answer carried) or a code rule (the landed-source rewrite, the unplaceable transcript part).
+   * Written once, beside the rewrite decision, through {@link CitationHashStore.recordDecision},
+   * and only while the fact still names the difference that was decided: the first value for a
+   * difference stands, and a late answer for an older version writes none. Same reading rules as
+   * {@link raisedBy}.
+   */
+  readonly decidedBy?: PersistedStageProducer;
 }
 
 /** See {@link PendingRevalidation.reason}. */
@@ -216,6 +234,16 @@ export interface CitationAnchorRecord {
    * citation sidecar, and no note text beyond what `text` already held is stored.
    */
   readonly passageDigest?: string;
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): the code rule that settled this anchor's current text, with
+   * its version (`verdict-provenance.ts`): a first sighting, a formatting-only or reformatted
+   * passage, a relocation heal, a passage found again. Written by every write that settles the
+   * anchor; carried unchanged by every write that keeps it (a rename, a hold raised or lifted).
+   * Absent on every anchor written before this field, which reads unknown. Read it only through
+   * `olea-core`'s `readStoredProducer`; a value it cannot read is kept as it was, and the validator
+   * ignores it.
+   */
+  readonly settledBy?: PersistedStageProducer;
 }
 
 export interface CitationHashStore {
@@ -241,6 +269,8 @@ export interface CitationHashStore {
     sourceContentHash: string,
     since: number,
     reason?: PendingReason,
+    /** `[D-598]`: the rule raising the fact, stored only when the fact is new for this difference. */
+    raisedBy?: PersistedStageProducer,
   ): Promise<void>;
   /**
    * `[D-351]`: true when this instrument's PERSISTED `pendingRevalidation`
@@ -283,6 +313,11 @@ export interface CitationHashStore {
     sourceContentHash: string,
     dispatchedAt: number,
     retry: boolean,
+    /**
+     * `[D-598]`: the rule raising the fact, stored only when this call creates it (no fact yet, or
+     * one for a different difference); a fact for the same difference keeps its own values.
+     */
+    raisedBy?: PersistedStageProducer,
   ): Promise<void>;
   /**
    * `[D-420]`: the store-side half of `DeferredRecheckRearmPort`
@@ -298,6 +333,20 @@ export interface CitationHashStore {
    * differs, or the retry is not yet spent.
    */
   grantExplicitRetry?(instrumentId: string, expectedSourceContentHash: string): Promise<boolean>;
+  /**
+   * `[D-598]` (`ol-egov.141.89.5.135`): records who decided the rewrite of `instrumentId`'s pending
+   * difference — a compare-and-set on the PERSISTED fact: written only while the fact still names
+   * `expectedSourceContentHash` and carries no `decidedBy` yet (the first value for a difference
+   * stands; a late answer for an older version writes none). `true` when written, `false` (nothing
+   * written) otherwise. Optional, with the same additive posture as `grantExplicitRetry`: a store
+   * that lacks it records nothing, and the field reads unknown. The production store implements it.
+   * Its caller logs a failure by error name and proceeds exactly as it would without it.
+   */
+  recordDecision?(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+    decidedBy: PersistedStageProducer,
+  ): Promise<boolean>;
 }
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob — distinct from `MATERIALITY_HASH_STORAGE_KEY`, same blob, same read-modify-write discipline. */
@@ -446,6 +495,7 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     sourceContentHash: string,
     since: number,
     reason?: PendingReason,
+    raisedBy?: PersistedStageProducer,
   ): Promise<void> {
     const merge = (existing: unknown): Record<string, unknown> => {
       const blob: Record<string, unknown> =
@@ -482,6 +532,8 @@ export class ObsidianCitationHashStore implements CitationHashStore {
               sinceContentHash: sourceContentHash,
               since,
               ...(reason !== undefined ? { reason } : {}),
+              // `[D-598]`: a new difference's fact names the rule that raised it.
+              ...(raisedBy !== undefined ? { raisedBy } : {}),
             };
       table[instrumentId] = { ...currentEntry, pendingRevalidation };
       blob[CITATION_ANCHOR_STORAGE_KEY] = table;
@@ -509,6 +561,7 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     sourceContentHash: string,
     dispatchedAt: number,
     retry: boolean,
+    raisedBy?: PersistedStageProducer,
   ): Promise<void> {
     const merge = (existing: unknown): Record<string, unknown> => {
       const blob: Record<string, unknown> =
@@ -545,6 +598,20 @@ export class ObsidianCitationHashStore implements CitationHashStore {
             ? { retriedAt: dispatchedAt }
             : carriedRetriedAt !== undefined
               ? { retriedAt: carriedRetriedAt }
+              : {}),
+          // `[D-598]`: the same difference keeps whoever raised and decided it, verbatim; a new
+          // difference is raised by `raisedBy` and decided by no one yet.
+          ...(forSameDifference
+            ? {
+                ...(existingPending.raisedBy !== undefined
+                  ? { raisedBy: existingPending.raisedBy }
+                  : {}),
+                ...(existingPending.decidedBy !== undefined
+                  ? { decidedBy: existingPending.decidedBy }
+                  : {}),
+              }
+            : raisedBy !== undefined
+              ? { raisedBy }
               : {}),
         },
       };
@@ -598,6 +665,47 @@ export class ObsidianCitationHashStore implements CitationHashStore {
     const existing = await this.host.loadData();
     await this.host.saveData(merge(existing));
     return granted;
+  }
+
+  /**
+   * `[D-598]`. Read-modify-write against the freshest persisted record, same reason
+   * `save`/`grantExplicitRetry` give. See the interface doc: written only while the fact still
+   * names `expectedSourceContentHash` and has no `decidedBy`; everything else on the record is kept.
+   */
+  async recordDecision(
+    instrumentId: string,
+    expectedSourceContentHash: string,
+    decidedBy: PersistedStageProducer,
+  ): Promise<boolean> {
+    let written = false;
+    const merge = (existing: unknown): Record<string, unknown> => {
+      const blob: Record<string, unknown> =
+        typeof existing === 'object' && existing !== null
+          ? { ...(existing as Record<string, unknown>) }
+          : {};
+      const existingTable = blob[CITATION_ANCHOR_STORAGE_KEY];
+      const table: Record<string, unknown> =
+        typeof existingTable === 'object' && existingTable !== null
+          ? { ...(existingTable as Record<string, unknown>) }
+          : {};
+      const currentEntry = table[instrumentId];
+      if (!isCitationAnchorRecord(currentEntry)) return blob;
+      const pending = currentEntry.pendingRevalidation;
+      if (pending?.sinceContentHash !== expectedSourceContentHash) return blob;
+      if (pending.decidedBy !== undefined) return blob;
+      table[instrumentId] = { ...currentEntry, pendingRevalidation: { ...pending, decidedBy } };
+      blob[CITATION_ANCHOR_STORAGE_KEY] = table;
+      written = true;
+      return blob;
+    };
+    if (hasReadModifyWrite(this.host)) {
+      await this.host.readModifyWrite(merge);
+      return written;
+    }
+    const existing = await this.host.loadData();
+    const merged = merge(existing);
+    if (written) await this.host.saveData(merged);
+    return written;
   }
 
   /**
