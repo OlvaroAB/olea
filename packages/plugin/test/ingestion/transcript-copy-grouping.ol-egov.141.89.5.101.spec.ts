@@ -10,7 +10,7 @@ import { describe, expect, it } from 'vitest';
 import {
   type ResolvedLinksPort,
   readLectureBundles,
-  readTranscriptCopyGroups,
+  readTextCopyGroups,
   teachingEventResolverFrom,
 } from '../../src/ingestion/lecture-links.js';
 import { MemoryVault } from './materiality/transcript-fixtures.ol-egov.141.89.5.43.js';
@@ -35,10 +35,7 @@ const part = (sourcePath: string, n = 1): Provenance => ({
 });
 
 async function resolverFor(vault: MemoryVault, port: ResolvedLinksPort = noLinks) {
-  return teachingEventResolverFrom(
-    readLectureBundles(port),
-    await readTranscriptCopyGroups(port, vault),
-  );
+  return teachingEventResolverFrom(readLectureBundles(port), await readTextCopyGroups(vault));
 }
 
 describe('byte-identical transcript copies, ol-egov.141.89.5.101', () => {

@@ -73,25 +73,24 @@ export function readLectureBundles(port: ResolvedLinksPort): LectureBundle[] {
 }
 
 /**
- * Byte-identical transcript copies (`ol-egov.141.89.5.101`, D-565). Reads every transcript-kind
- * file's bytes and groups equal bytes, whatever the names or folders. Only groups of two or more
- * are returned, as path -> group id (a hash of the bytes, computed here in memory). Nothing is
- * stored or written; a file that differs in any byte is never grouped, and identical passages
- * inside otherwise different files are never compared. Called fresh on every read.
+ * Groups equal bytes among `paths` (`ol-egov.141.89.5.101` D-565, generalised by
+ * `ol-egov.141.89.5.120` D-577): reads each path's bytes, hashes them in memory (SHA-256, the
+ * function ingestion idempotency uses) and returns only groups of two or more, as path -> group id.
+ * Names and folders are never read; a file that differs in any byte is never grouped; identical
+ * passages inside otherwise different files are never compared. An unreadable file is left out (it
+ * stays its own source, as before). Nothing is stored or written.
  */
-export async function readTranscriptCopyGroups(
-  port: ResolvedLinksPort,
-  vault: Pick<VaultSource, 'list' | 'readBinary'>,
+async function groupByBytes(
+  vault: Pick<VaultSource, 'readBinary'>,
+  paths: readonly VaultPath[],
 ): Promise<ReadonlyMap<VaultPath, string>> {
-  const paths = await vault.list({ extensions: ['txt', 'md'] });
   const byHash = new Map<string, VaultPath[]>();
   for (const path of paths) {
-    if (lectureKindOf(path, port.frontmatterFor(path)) !== 'transcript') continue;
     let hash: string;
     try {
       hash = await hashContent(await vault.readBinary(path));
     } catch {
-      continue; // unreadable now: it stays its own event, as before
+      continue; // unreadable now: it stays its own source, as before
     }
     const group = byHash.get(hash);
     if (group === undefined) byHash.set(hash, [path]);
@@ -106,12 +105,29 @@ export async function readTranscriptCopyGroups(
 }
 
 /**
+ * Byte-identical copies of any text source (`ol-egov.141.89.5.101` D-565 for transcripts,
+ * generalised by `ol-egov.141.89.5.120` D-577): every `.txt` and `.md` file (her notes and the transcripts alike) is read,
+ * hashed and grouped,
+ * so a copy of a note counts once wherever a rule reads how many sources support a concept. PDFs,
+ * decks and other binary files are not read here: the concept read and the tier-3 evidence already
+ * hash them and extract each distinct content once (`ol-n0yc`). Cost: one `readBinary` per `.md` or
+ * `.txt` file per call, where the transcript-only grouping before it read only the transcripts. Called fresh on
+ * every read; nothing is stored.
+ */
+export async function readTextCopyGroups(
+  vault: Pick<VaultSource, 'list' | 'readBinary'>,
+): Promise<ReadonlyMap<VaultPath, string>> {
+  return groupByBytes(vault, await vault.list({ extensions: ['txt', 'md'] }));
+}
+
+/**
  * The repetition guard's lookup (`ol-egov.141.89.3.43`, D-465): a path's teaching event is its
  * lecture bundle, so the slides, the transcript and the note that linked them are ONE event in
  * concept size. A bundle is named by its first member; a path in no bundle has no event. Pure.
  *
- * `copyGroups` (`ol-egov.141.89.5.101`, D-565, from `readTranscriptCopyGroups`): byte-identical
- * transcripts are one event. A copy already in a bundle keeps that bundle's event; an unbundled
+ * `copyGroups` (`ol-egov.141.89.5.101`, D-565, from `readTextCopyGroups`, which began as the transcript-only
+ * `readTranscriptCopyGroups` and covers any text source since `ol-egov.141.89.5.120`, D-577): byte-identical transcripts are
+ * one event, and the resolver's `copyGroupOf` names the group of any copied file. A copy already in a bundle keeps that bundle's event; an unbundled
  * copy joins the event of the first (sorted) bundled member of its group, else all of them share
  * one `copy:` event. Two bundled copies in different bundles stay in their own bundles (her links
  * are never merged here). A re-cut or corrected export differs in bytes and needs her links.
@@ -143,5 +159,9 @@ export function teachingEventResolverFrom(
       for (const path of sorted) if (!eventOf.has(path)) eventOf.set(path, shared);
     }
   }
-  return (path) => eventOf.get(path);
+  const resolver: TeachingEventResolver = (path) => eventOf.get(path);
+  // `ol-egov.141.89.5.120` (D-577): the byte-identical group itself, for the rules that count a
+  // copy of any source once (concept size reads it for notes as well as transcripts).
+  if (copyGroups === undefined || copyGroups.size === 0) return resolver;
+  return Object.assign(resolver, { copyGroupOf: (path: VaultPath) => copyGroups.get(path) });
 }

@@ -16,7 +16,7 @@ import { segmentPastPaper } from '../source/segment-past-paper.js';
 import { segmentPlainTextPastPaper } from '../source/segment-past-paper-plaintext.js';
 import type { Source } from '../source/types.js';
 import { extractTier3Evidence } from '../tier3-evidence/build.js';
-import type { ConceptCitation } from '../tier3-evidence/types.js';
+import type { ConceptCitation, SourceCoverage } from '../tier3-evidence/types.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
 import { attributeBasisSources, NO_BASIS_GATE, resolveBasisSwitches } from './basis-switch.js';
 import type {
@@ -596,20 +596,31 @@ function groupCitationsByCourseAndConcept(
   return byCourse;
 }
 
-/** Distinct registered source paths per course, for one `SourceRole` — the confidence denominator for that role's basis. Built from `sourcesReport.sources` (already de-duplicated by `ol-n0yc`'s content-hash rule upstream in `registerSources`), never from the citations themselves, so a concept with zero citations in an otherwise-cited course still has a correct (if unused) denominator. */
+/**
+ * Distinct registered sources per course, for one `SourceRole` — the confidence denominator for that
+ * role's basis. Built from `extractTier3Evidence`'s `sourceCoverage` rows, which are keyed by
+ * CONTENT (`ol-n0yc`; Markdown too since `ol-egov.141.89.5.120`, [D-577]): a source filed at two
+ * paths is one row with its other path on `duplicateSourcePaths` and the copies' courses unioned, so
+ * a byte-identical copy neither raises nor lowers a confidence. Never built from the citations
+ * themselves, so a concept with zero citations in an otherwise-cited course still has a correct (if
+ * unused) denominator.
+ */
 function sourcePathsByCourseForRole(
-  sources: readonly Source[],
+  coverage: readonly SourceCoverage[],
   role: 'past-paper' | 'objectives',
 ): ReadonlyMap<string, ReadonlySet<VaultPath>> {
   const byCourse = new Map<string, Set<VaultPath>>();
-  for (const source of sources) {
-    if (source.role !== role || source.course === undefined) continue;
-    let set = byCourse.get(source.course);
-    if (set === undefined) {
-      set = new Set();
-      byCourse.set(source.course, set);
+  for (const row of coverage) {
+    if (row.role !== role) continue;
+    for (const course of row.courses) {
+      if (course === undefined) continue;
+      let set = byCourse.get(course);
+      if (set === undefined) {
+        set = new Set();
+        byCourse.set(course, set);
+      }
+      set.add(row.sourcePath);
     }
-    set.add(source.path);
   }
   return byCourse;
 }
@@ -677,14 +688,8 @@ export async function buildConceptAssessmentEdges(
   // past-paper denominator or citation set — see `./types.js`'s module doc.
   const objectivesCitations = tier3.citations.filter((c) => c.kind === 'objectives');
 
-  const pastPaperSourcesByCourse = sourcePathsByCourseForRole(
-    tier3.sourcesReport.sources,
-    'past-paper',
-  );
-  const objectivesSourcesByCourse = sourcePathsByCourseForRole(
-    tier3.sourcesReport.sources,
-    'objectives',
-  );
+  const pastPaperSourcesByCourse = sourcePathsByCourseForRole(tier3.sourceCoverage, 'past-paper');
+  const objectivesSourcesByCourse = sourcePathsByCourseForRole(tier3.sourceCoverage, 'objectives');
 
   const pastPaperByCourse = groupCitationsByCourseAndConcept(pastPaperCitations);
   const objectivesByCourse = groupCitationsByCourseAndConcept(objectivesCitations);

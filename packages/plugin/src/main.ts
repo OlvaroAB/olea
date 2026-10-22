@@ -156,7 +156,7 @@ import {
 import { obsidianDeviceCapability } from './ingestion/device-capability.js';
 import {
   readLectureBundles,
-  readTranscriptCopyGroups,
+  readTextCopyGroups,
   teachingEventResolverFrom,
 } from './ingestion/lecture-links.js';
 import { lectureTermsLookup } from './ingestion/lecture-terms.js';
@@ -3277,11 +3277,12 @@ export default class OleaPlugin extends Plugin {
       const records = await misconceptionStore.load();
       const embeddingCache = this.retrieval?.embeddingCache;
       // `ol-egov.141.89.5.101` (D-565): byte-identical transcript copies are one event too,
+      // `ol-egov.141.89.5.120` (D-577): and a byte-identical copy of any text source counts once,
       // grouped in memory from the bytes on every pass; nothing is stored.
       const linksPort = createObsidianResolvedLinksPort(this.app.metadataCache);
       const teachingEventOf = teachingEventResolverFrom(
         readLectureBundles(linksPort),
-        await readTranscriptCopyGroups(linksPort, vault),
+        await readTextCopyGroups(vault),
       );
       const pass = await readConceptsAndRelations(
         this.concept,

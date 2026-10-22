@@ -187,7 +187,26 @@ export interface ReadConceptExtentInput {
  * teaching event"). A lecture's slides, transcript and her note are ONE teaching event, never
  * independent corroboration; the same event restated is not more material. Pure: no I/O.
  */
-export type TeachingEventResolver = (path: VaultPath) => string | undefined;
+export interface TeachingEventResolver {
+  (path: VaultPath): string | undefined;
+  /**
+   * `ol-egov.141.89.5.120` ([D-577]): the id of the byte-identical group a path belongs to, or
+   * `undefined` for a file with no copy. Absent when the caller groups no copies. In memory only,
+   * never stored: copies of any source (a note, a Markdown paper) count once, each keeping its own
+   * path and citations.
+   */
+  readonly copyGroupOf?: (path: VaultPath) => string | undefined;
+}
+
+/** A location as a key, whatever order its fields were built in. */
+function stableLocationKey(value: unknown): string {
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
+  if (Array.isArray(value)) return `[${value.map(stableLocationKey).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, v]) => v !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${stableLocationKey(v)}`).join(',')}}`;
+}
 
 /**
  * How many distinct passages ground a concept, with the repetition guard applied.
@@ -210,18 +229,24 @@ export function countPassagesByTeachingEvent(
   let ordinary = 0;
   const ordinaryEvents = new Set<string>();
   const transcriptEvents = new Set<string>();
+  // `ol-egov.141.89.5.120` ([D-577]): a passage of a file with byte-identical copies is the same
+  // passage in each copy (same place in the same bytes), so the copies' passages count once. A
+  // passage elsewhere in the file, or in a file that merely shares a paragraph, counts on its own.
+  const copiedPassages = new Set<string>();
   for (const passage of passages) {
     const event = teachingEventOf?.(passage.sourcePath);
     if (passage.location.transcriptPart !== undefined) {
       transcriptEvents.add(event ?? `path:${passage.sourcePath}`);
     } else {
-      ordinary += 1;
+      const group = teachingEventOf?.copyGroupOf?.(passage.sourcePath);
+      if (group === undefined) ordinary += 1;
+      else copiedPassages.add(`${group}\u0000${stableLocationKey(passage.location)}`);
       if (event !== undefined) ordinaryEvents.add(event);
     }
   }
   let extra = 0;
   for (const event of transcriptEvents) if (!ordinaryEvents.has(event)) extra += 1;
-  return ordinary + extra;
+  return ordinary + copiedPassages.size + extra;
 }
 
 /**
@@ -234,9 +259,15 @@ export function readConceptExtent(concept: ReadConceptExtentInput): ConceptMater
   const passages = [...(concept.anchor !== undefined ? [concept.anchor] : []), ...concept.alsoIn];
   const passageCount = countPassagesByTeachingEvent(passages, concept.teachingEventOf);
   // A transcript is course material, not a note of hers (D-465): it never adds to `noteCount`.
-  const notePaths = new Set<VaultPath>(concept.sourcePaths);
+  // `ol-egov.141.89.5.120` ([D-577]): byte-identical copies of a note are one note.
+  const notePaths = new Set<string>();
+  const addNote = (path: VaultPath): void => {
+    const group = concept.teachingEventOf?.copyGroupOf?.(path);
+    notePaths.add(group === undefined ? path : `copy:${group}`);
+  };
+  for (const path of concept.sourcePaths) addNote(path);
   for (const passage of passages) {
-    if (passage.location.transcriptPart === undefined) notePaths.add(passage.sourcePath);
+    if (passage.location.transcriptPart === undefined) addNote(passage.sourcePath);
   }
   return {
     noteCount: notePaths.size,

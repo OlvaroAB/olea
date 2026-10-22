@@ -837,6 +837,52 @@ function buildPastPaperClusters(
   return clusters;
 }
 
+/** One distinct Markdown source content: the citing source, its other paths, and every course among the copies. */
+interface MarkdownSourceGroup {
+  readonly source: Source;
+  readonly duplicateSourcePaths: readonly VaultPath[];
+  readonly courses: readonly (string | undefined)[];
+}
+
+/**
+ * `ol-egov.141.89.5.120` ([D-577]): groups registered Markdown sources by the SHA-256 of their bytes
+ * (`../ingestion/hash.js`, the function `collectDerivedSources` uses), the first path in code-unit
+ * order citing. Identity is the bytes alone: a name or folder is never read, and two different
+ * sources that share a passage stay two. An unreadable file is its own group, as before.
+ */
+async function collapseMarkdownCopies(
+  vault: VaultSource,
+  sources: readonly Source[],
+): Promise<readonly MarkdownSourceGroup[]> {
+  const byContent = new Map<string, Source[]>();
+  const sorted = [...sources].sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  for (const source of sorted) {
+    let id: string;
+    try {
+      id = await hashContent(await vault.readBinary(source.path));
+    } catch {
+      id = `unreadable:${source.path}`;
+    }
+    const group = byContent.get(id);
+    if (group === undefined) byContent.set(id, [source]);
+    else group.push(source);
+  }
+  const out: MarkdownSourceGroup[] = [];
+  for (const group of byContent.values()) {
+    const [citing] = group;
+    if (citing === undefined) continue;
+    const courses = [...new Set(group.map((s) => s.course))].sort((a, b) =>
+      a === b ? 0 : a === undefined ? 1 : b === undefined ? -1 : a < b ? -1 : 1,
+    );
+    out.push({
+      source: citing,
+      duplicateSourcePaths: group.slice(1).map((s) => s.path),
+      courses,
+    });
+  }
+  return out;
+}
+
 export async function extractTier3Evidence(
   vault: VaultSource,
   options: ExtractTier3EvidenceOptions = {},
@@ -864,13 +910,28 @@ export async function extractTier3Evidence(
   // `segmentPlainTextPastPaper`) — see `collectDerivedSources` and
   // `binaryPastPaperCitations` — so this markdown-only loop is not the whole
   // past-paper story.
-  const markdownSources = sourcesReport.sources.filter((s) => s.format === null);
+  // `ol-egov.141.89.5.120` ([D-577]): byte-identical Markdown sources are one source, as the derived
+  // route below already makes them (`ol-n0yc`). The first path in code-unit order cites; the others
+  // ride along on `duplicateSourcePaths` and their courses are unioned in. Hashed in memory from the
+  // bytes, names ignored; nothing is stored. Cost: one extra `readBinary` per registered Markdown
+  // source per pass (the registrar and the readers already read each as text).
+  const markdownSources = await collapseMarkdownCopies(
+    vault,
+    sourcesReport.sources.filter((s) => s.format === null),
+  );
   const citationLists: (readonly ConceptCitation[])[] = [];
-  for (const source of markdownSources) {
-    if (source.role === 'past-paper') {
-      citationLists.push(await pastPaperCitations(vault, source.path, source.course, vocabulary));
-    } else if (source.role === 'objectives') {
-      citationLists.push(await objectivesCitations(vault, source.path, source.course, vocabulary));
+  for (const group of markdownSources) {
+    const { source, duplicateSourcePaths } = group;
+    const tag = (list: readonly ConceptCitation[]): readonly ConceptCitation[] =>
+      duplicateSourcePaths.length === 0
+        ? list
+        : list.map((citation) => ({ ...citation, duplicateSourcePaths }));
+    for (const course of group.courses) {
+      if (source.role === 'past-paper') {
+        citationLists.push(tag(await pastPaperCitations(vault, source.path, course, vocabulary)));
+      } else if (source.role === 'objectives') {
+        citationLists.push(tag(await objectivesCitations(vault, source.path, course, vocabulary)));
+      }
     }
   }
 
@@ -907,13 +968,13 @@ export async function extractTier3Evidence(
   }
 
   const sourceCoverage: SourceCoverage[] = [
-    ...markdownSources.map((source) => ({
+    ...markdownSources.map(({ source, duplicateSourcePaths, courses }) => ({
       sourcePath: source.path,
       kinds: [source.kind],
       role: source.role,
       format: source.format,
-      duplicateSourcePaths: [],
-      courses: [source.course],
+      duplicateSourcePaths,
+      courses,
       // No extractor ran, so there is no extractor verdict to report. `null`
       // says that, where a borrowed `'extracted'` would claim a check that
       // never happened.
