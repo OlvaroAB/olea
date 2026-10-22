@@ -77,7 +77,7 @@ import {
   DEFAULT_WITHHELD_EVIDENCE_POLICY,
   excludedFromCurrent,
   type PassageChangeFact,
-  unresolvedPassageInstrumentIds,
+  unresolvedSupportInstrumentIds,
   type WithheldEvidencePolicy,
 } from '../mastery/attainment.js';
 import { HOLDING_CUT } from '../mastery/rollup.js';
@@ -112,6 +112,12 @@ export interface DemandsMetInput {
   readonly withheldEvidence?: WithheldEvidencePolicy;
   /** `[D-347]`'s split: changed cited passages and where each stands in revalidation. Absent reads as none changed. */
   readonly passageChanges?: readonly PassageChangeFact[];
+  /**
+   * `[D-500]`/`[D-347]` (`ol-egov.141.89.104.33`): the instruments a readable hold holds
+   * (`AttainmentOptions.heldEvidence`). A review on one never shows a demand met now, as for a
+   * changed passage not yet revalidated. Absent or empty reads as none held.
+   */
+  readonly heldEvidence?: ReadonlySet<string>;
 }
 
 export interface DemandsMetReading {
@@ -151,7 +157,7 @@ function readOneConcept(
 ): DemandsMetReading {
   const policy = input.withheldEvidence ?? DEFAULT_WITHHELD_EVIDENCE_POLICY;
   const cut = input.holdingCut ?? HOLDING_CUT;
-  const unresolvedPassage = unresolvedPassageInstrumentIds(input.passageChanges, input.now);
+  const unresolvedPassage = unresolvedSupportInstrumentIds(input, input.now);
   const met = new Set<PaperDemand>();
 
   const currentByInstrument = new Map<string, boolean>();

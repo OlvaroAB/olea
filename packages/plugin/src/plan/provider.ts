@@ -50,6 +50,7 @@
  * module doc).
  */
 
+import type { ReviewLogEntry } from 'olea-contracts';
 import type {
   CourseAvoidanceSteeringAnswer,
   DisputeLogRecord,
@@ -57,6 +58,7 @@ import type {
   Scheduler,
   StudyPlanProvider,
   StudyPlanStore,
+  VaultInstrumentRecord,
   VaultPath,
   VaultSource,
 } from 'olea-core';
@@ -86,6 +88,7 @@ import {
 import type { CourseAvoidanceRecord } from '../home/avoidance.js';
 import { ObsidianHomeAvoidanceStore } from '../home/avoidance.js';
 import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import type { HoldWithholding } from '../ingestion/materiality/hold-record-reader.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { PlanPolicyRequest, PlanPolicyResult } from './plan-policy-provider.js';
 import { type ObsidianDataHost, ObsidianStudyPlanSettingsStore } from './settings-store.js';
@@ -252,6 +255,23 @@ export interface CreateLocalStudyPlanProviderDeps {
    * could carry a fact (unknown, never credited).
    */
   readonly citationHashStore?: CitationHashStore;
+  /**
+   * `[D-500]`/`[D-347]` (the reader floor, `ol-egov.141.89.104.33`): the instruments a readable
+   * hold record holds (the hold reader's `resolveHoldWithholding(...).evidenceWithdrawn`), over
+   * the instruments this refresh enumerated and the review log it read. Each one's evidence is
+   * left out of the ranking's readiness and need, as an unrevalidated passage's is; the stage the
+   * plan carries keeps it. An empty set, or omitting this, keeps today's plan. A reader that
+   * throws fails the refresh, which keeps the cached plan (see the module doc).
+   *
+   * Only the readings take it: whether a held instrument also counts toward `[D-404]`'s
+   * eligibility veto here (`otherIneligibleInstrumentIds`, still omitted for a changed passage)
+   * is not ruled. **No production caller yet**: the hold store's location is unruled
+   * (`ol-egov.141.89.104.6`).
+   */
+  readonly readHoldEvidenceWithdrawn?: (scope: {
+    readonly records: readonly VaultInstrumentRecord[];
+    readonly entries: readonly ReviewLogEntry[];
+  }) => Promise<HoldWithholding['evidenceWithdrawn']>;
 }
 
 /**
@@ -360,6 +380,12 @@ export function createLocalStudyPlanProvider(
         entries,
         now,
       );
+      // `[D-500]` (`ol-egov.141.89.104.33`): the evidence a readable hold withholds, over the same
+      // instruments; left out of readiness like an unrevalidated passage.
+      const heldEvidence =
+        deps.readHoldEvidenceWithdrawn === undefined
+          ? undefined
+          : await deps.readHoldEvidenceWithdrawn({ records: enumeration.records, entries });
       const concepts = enumeration.concepts;
       // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
       // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
@@ -402,11 +428,13 @@ export function createLocalStudyPlanProvider(
         // undefined-vs-defined distinction reach `resolvePlanPolicyCourseInputs`
         // below, not just `rankOracle`'s own blend.
         // `[D-522]` (`ol-egov.141.89.9.98`): a cited passage changed and not yet revalidated
-        // leaves that instrument's evidence out of readiness and need, as on the gap view.
+        // leaves that instrument's evidence out of readiness and need, as on the gap view, and so
+        // does an instrument a readable hold holds (`[D-500]`, `ol-egov.141.89.104.33`).
         retrievability: {
           scheduler,
           now,
           ...(passageChanges !== undefined ? { passageChanges } : {}),
+          ...(heldEvidence !== undefined ? { heldEvidence } : {}),
         },
         ...(options !== undefined ? { options } : {}),
         // `[D-404]`: the suspension fold over `entries` happens inside

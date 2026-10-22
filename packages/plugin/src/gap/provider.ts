@@ -93,6 +93,16 @@ recognition credit or demand rule would read any of it has those readings not ma
 exactly as before. **No production caller passes it yet**: the hold store has no ruled location
 (`ol-egov.141.89.104.6`). No words are added for the state; `./view.ts` names where they attach.
 
+## Evidence a readable hold withholds (`ol-egov.141.89.104.33`, `[D-500]`, `[D-347]`)
+
+`deps.readHoldEvidenceWithdrawn` hands in the instruments a readable hold record holds (the hold
+reader's `evidenceWithdrawn`). Held means not usable as support, and on the reader floor a hold
+establishes no withdrawal, so `[D-347]` as ruled leaves that evidence out of the ranking's
+readiness and need, this view's need, the recognition credit and the demand rule, exactly as it
+leaves out a changed passage not yet revalidated; the stage the row displays keeps it. Held
+evidence never sets a concept aside as unavailable. **No production caller passes it yet**, for the
+same reason.
+
 ## Unavailable, for two different reasons, one state
  *
  * `GapViewState` (`./view.ts`) is `{kind:'model', model} | {kind:'unavailable'}`
@@ -147,13 +157,13 @@ import {
   reviewLogPath,
   scoredConceptId,
   unmetDemandsByConcept,
-  unresolvedPassageInstrumentIds,
 } from 'olea-core';
 // Deep import: these readers are not barrelled in `olea-core`'s index (outside this bead's `owns`).
 import {
   readAllConceptReadinessOrUnavailable,
   readAllCurrentRecognitionOrUnavailable,
   readNeedOrUnavailable,
+  unresolvedSupportInstrumentIds,
 } from 'olea-core/src/mastery/attainment.js';
 import {
   passageChangesForReadings,
@@ -282,6 +292,23 @@ export interface CreateLocalGapProviderDeps {
     readonly records: readonly VaultInstrumentRecord[];
     readonly entries: readonly ReviewLogEntry[];
   }) => Promise<HoldWithholding['evidenceUnknown']>;
+  /**
+   * `[D-500]`/`[D-347]` (the reader floor, `ol-egov.141.89.104.33`): the instruments a readable
+   * hold record holds, as the hold reader reports them (`resolveHoldWithholding(...)
+   * .evidenceWithdrawn`), over the same scope {@link readHoldEvidenceUnknown} is handed.
+   *
+   * An exclusion, the same one an unrevalidated passage gets: each listed instrument's evidence is
+   * left out of the ranking's readiness and need, this view's need, the recognition credit and the
+   * demand rule (`olea-core`'s `AttainmentOptions.heldEvidence`); the displayed stage keeps it, and
+   * it never sets a concept aside as unavailable. An empty set, or omitting this, keeps today's
+   * readings. A reader that throws fails the load into the view's existing unavailable state.
+   *
+   * **No production caller yet**: the hold store's location is unruled (`ol-egov.141.89.104.6`).
+   */
+  readonly readHoldEvidenceWithdrawn?: (scope: {
+    readonly records: readonly VaultInstrumentRecord[];
+    readonly entries: readonly ReviewLogEntry[];
+  }) => Promise<HoldWithholding['evidenceWithdrawn']>;
 }
 
 /**
@@ -419,17 +446,25 @@ const RULED_CURRENT_READING = { withheldEvidence: 'count' } as const;
 
 /**
  * {@link RULED_CURRENT_READING}, plus the changed, unrevalidated passages when the store was read
- * (`[D-522]`): every current reading this view supplies takes the same options, so need, the
- * credit, the demand rule and the ranking's readiness never apply two evidence rules to one
- * concept (`[D-371]`).
+ * (`[D-522]`) and the instruments a readable hold holds when the hold reader was asked (`[D-500]`,
+ * `ol-egov.141.89.104.33`): every current reading this view supplies takes the same options, so
+ * need, the credit, the demand rule and the ranking's readiness never apply two evidence rules to
+ * one concept (`[D-371]`).
  */
-function currentReadingOptions(passageChanges: readonly PassageChangeFact[] | undefined): {
+function currentReadingOptions(
+  passageChanges: readonly PassageChangeFact[] | undefined,
+  heldEvidence?: ReadonlySet<string>,
+): {
   readonly withheldEvidence: 'count';
   readonly passageChanges?: readonly PassageChangeFact[];
+  readonly heldEvidence?: ReadonlySet<string>;
 } {
-  return passageChanges === undefined
-    ? RULED_CURRENT_READING
-    : { ...RULED_CURRENT_READING, passageChanges };
+  if (passageChanges === undefined && heldEvidence === undefined) return RULED_CURRENT_READING;
+  return {
+    ...RULED_CURRENT_READING,
+    ...(passageChanges !== undefined ? { passageChanges } : {}),
+    ...(heldEvidence !== undefined ? { heldEvidence } : {}),
+  };
 }
 
 /**
@@ -451,6 +486,7 @@ async function unmetDemandsFor(input: {
   readonly now: Date;
   readonly passageChanges: readonly PassageChangeFact[] | undefined;
   readonly evidenceUnknown: ReadonlySet<string> | undefined;
+  readonly heldEvidence?: ReadonlySet<string> | undefined;
 }): Promise<{
   readonly unmetDemands: ReadonlyMap<string, readonly PaperDemand[]>;
   readonly unavailable: ReadonlySet<string>;
@@ -474,7 +510,7 @@ async function unmetDemandsFor(input: {
     validity: input.validity,
     scheduler: input.scheduler,
     now: input.now,
-    ...currentReadingOptions(input.passageChanges),
+    ...currentReadingOptions(input.passageChanges, input.heldEvidence),
   });
   return {
     unmetDemands,
@@ -486,6 +522,7 @@ async function unmetDemandsFor(input: {
       input.now,
       input.passageChanges,
       input.evidenceUnknown,
+      input.heldEvidence,
     ),
   };
 }
@@ -505,10 +542,12 @@ function demandRuleUnavailable(
   now: Date,
   passageChanges: readonly PassageChangeFact[] | undefined,
   evidenceUnknown: ReadonlySet<string> | undefined,
+  heldEvidence?: ReadonlySet<string>,
 ): ReadonlySet<string> {
   const unavailable = new Set<string>();
   if (evidenceUnknown === undefined || evidenceUnknown.size === 0) return unavailable;
-  const unresolvedPassage = unresolvedPassageInstrumentIds(passageChanges, now);
+  // Evidence excluded on purpose (an unrevalidated passage, or a readable hold) stays excluded.
+  const unresolvedPassage = unresolvedSupportInstrumentIds({ passageChanges, heldEvidence }, now);
   for (const entry of entries) {
     if (entry.kind !== 'review' || !evidenceUnknown.has(entry.instrumentId)) continue;
     const scored = scoredConceptId(entry.conceptIds);
@@ -560,6 +599,7 @@ function needByConcept(
   now: Date,
   validity: InstrumentValidityProjection,
   passageChanges: readonly PassageChangeFact[] | undefined,
+  heldEvidence?: ReadonlySet<string>,
 ): ReadonlyMap<string, NeedReading> {
   const readiness = readAllConceptReadiness(
     entries,
@@ -567,7 +607,7 @@ function needByConcept(
     scheduler,
     now,
     validity,
-    currentReadingOptions(passageChanges),
+    currentReadingOptions(passageChanges, heldEvidence),
   );
   const need = new Map<string, NeedReading>();
   for (const [conceptKey, reading] of readiness) need.set(conceptKey, readNeed(reading));
@@ -588,6 +628,7 @@ function currentRecognitionByConcept(
   now: Date,
   validity: InstrumentValidityProjection,
   passageChanges: readonly PassageChangeFact[] | undefined,
+  heldEvidence?: ReadonlySet<string>,
 ): ReadonlyMap<string, boolean> {
   return readAllCurrentRecognition(
     entries,
@@ -595,7 +636,7 @@ function currentRecognitionByConcept(
     scheduler,
     now,
     validity,
-    currentReadingOptions(passageChanges),
+    currentReadingOptions(passageChanges, heldEvidence),
   );
 }
 
@@ -615,15 +656,25 @@ function currentReadingsFor(input: {
   readonly validity: InstrumentValidityProjection;
   readonly passageChanges: readonly PassageChangeFact[] | undefined;
   readonly evidenceUnknown: ReadonlySet<string> | undefined;
+  readonly heldEvidence?: ReadonlySet<string> | undefined;
 }): {
   readonly need: ReadonlyMap<string, NeedReading>;
   readonly currentRecognition: ReadonlyMap<string, boolean>;
   readonly unavailable: ReadonlySet<string>;
 } {
   const { entries, conceptKeys, scheduler, now, validity, passageChanges, evidenceUnknown } = input;
+  const { heldEvidence } = input;
   if (evidenceUnknown === undefined || evidenceUnknown.size === 0) {
     return {
-      need: needByConcept(entries, conceptKeys, scheduler, now, validity, passageChanges),
+      need: needByConcept(
+        entries,
+        conceptKeys,
+        scheduler,
+        now,
+        validity,
+        passageChanges,
+        heldEvidence,
+      ),
       currentRecognition: currentRecognitionByConcept(
         entries,
         conceptKeys,
@@ -631,11 +682,12 @@ function currentReadingsFor(input: {
         now,
         validity,
         passageChanges,
+        heldEvidence,
       ),
       unavailable: new Set(),
     };
   }
-  const options = currentReadingOptions(passageChanges);
+  const options = currentReadingOptions(passageChanges, heldEvidence);
   const readiness = readAllConceptReadinessOrUnavailable(
     entries,
     conceptKeys,
@@ -738,6 +790,12 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           deps.readHoldEvidenceUnknown === undefined
             ? undefined
             : await deps.readHoldEvidenceUnknown({ records: enumeration.records, entries });
+        // `[D-500]` (`ol-egov.141.89.104.33`): the evidence a readable hold withholds, over the same
+        // instruments; excluded like an unrevalidated passage. See `readHoldEvidenceWithdrawn`.
+        const heldEvidence =
+          deps.readHoldEvidenceWithdrawn === undefined
+            ? undefined
+            : await deps.readHoldEvidenceWithdrawn({ records: enumeration.records, entries });
         // `disputesFromFiles` re-reads the same `files` the walk above already reported (see its
         // own doc) — a second, unavoidable pass, since `readReviewLogHistory` does not surface disputes.
         const disputes = await disputesFromFiles(deps.vault, files);
@@ -768,11 +826,13 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           // `session-builder/provider.ts` already pass, so this view's
           // ranking reads her real recall state rather than the neutral
           // default — see `scheduler`'s own doc on `CreateLocalGapProviderDeps`.
-          // `[D-522]`: the same changed passages leave the ranking's readiness and need too.
+          // `[D-522]`: the same changed passages leave the ranking's readiness and need too, and
+          // so does the evidence a readable hold withholds (`[D-500]`).
           retrievability: {
             scheduler,
             now,
             ...(passageChanges !== undefined ? { passageChanges } : {}),
+            ...(heldEvidence !== undefined ? { heldEvidence } : {}),
           },
           // `[D-110]` (`ol-v7r5.55` [IL-D7]): thread the delivered
           // component 3.3 weights when `deps.readRankWeights` resolved one
@@ -802,6 +862,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           now,
           passageChanges,
           evidenceUnknown,
+          heldEvidence,
         });
 
         // `[D-348]` (`ol-egov.141.89.9.93`): need with its basis for every ranked concept, so an
@@ -822,6 +883,7 @@ export function createLocalGapProvider(deps: CreateLocalGapProviderDeps): GapVie
           validity,
           passageChanges,
           evidenceUnknown,
+          heldEvidence,
         });
         const { need, currentRecognition } = current;
         // Only concepts the view has rows for: a demand asked of an unranked concept lists nothing.

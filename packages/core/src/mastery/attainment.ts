@@ -69,7 +69,9 @@
  * `ol-egov.141.89.104.56`) is neither excluded nor counted: a current reading
  * that would read it is not made, and says so ({@link UnavailableCurrentReading},
  * through the `…OrUnavailable` readers at the end of this module). The readers
- * that take no such input are unchanged.
+ * that take no such input are unchanged. **Evidence a readable hold withholds**
+ * (`[D-500]`; `ol-egov.141.89.104.33`) is excluded from every current reading
+ * like a changed passage not yet revalidated (`AttainmentOptions.heldEvidence`).
  */
 
 import type {
@@ -196,6 +198,22 @@ export interface AttainmentOptions
    * read it. Absent reads as no passage changed: today's behaviour.
    */
   readonly passageChanges?: readonly PassageChangeFact[];
+  /**
+   * **Evidence a readable hold withholds (`[D-500]`, `[D-539]`; the reader floor,
+   * `ol-egov.141.89.104.33`).** The instruments a readable hold record holds: the plugin hold
+   * reader's `evidenceWithdrawn` (`plugin/src/ingestion/materiality/hold-record-reader.ts`).
+   * Held means not usable as support (the knowledge-graph validation freeze, section 1); on the
+   * reader floor a hold establishes no withdrawal, so the support is unresolved, which `[D-347]`
+   * as ruled excludes. When given, each listed instrument is excluded from vitality, readiness,
+   * need and the recognition credit (and from a demand met now, `../gap/demand.ts`) under every
+   * {@link WithheldEvidencePolicy}, exactly as a changed passage not yet revalidated is
+   * ({@link passageChanges}), and a held successor carries no predecessor (J3). The displayed
+   * stage and the award never read it (`[D-338]`: a withholding that proves nothing invalid keeps
+   * its evidence there). It is never the hold reader's `evidenceUnknown`, which is no exclusion
+   * (the `…OrUnavailable` readers below). Absent or empty: today's behaviour. It names no new
+   * arithmetic, so the arithmetic version is unchanged.
+   */
+  readonly heldEvidence?: ReadonlySet<string>;
   /**
    * **Replaced card (judgement J3; the ruling of 2026-09-30,
    * `ol-egov.141.89.9.87`).** What vitality and readiness do with a retired
@@ -729,6 +747,25 @@ export function unresolvedPassageInstrumentIds(
   return unresolved;
 }
 
+/**
+ * The instruments whose support is unresolved as of `now`, the set every current reading excludes
+ * under every policy (`[D-347]`): a changed passage not yet revalidated
+ * ({@link unresolvedPassageInstrumentIds}) and an instrument a readable hold holds
+ * ({@link AttainmentOptions.heldEvidence}). With no held input, exactly
+ * {@link unresolvedPassageInstrumentIds}.
+ */
+export function unresolvedSupportInstrumentIds(
+  input: {
+    readonly passageChanges?: readonly PassageChangeFact[] | undefined;
+    readonly heldEvidence?: ReadonlySet<string> | undefined;
+  },
+  now: Date,
+): ReadonlySet<string> {
+  const unresolvedPassage = unresolvedPassageInstrumentIds(input.passageChanges, now);
+  if (input.heldEvidence === undefined || input.heldEvidence.size === 0) return unresolvedPassage;
+  return new Set([...unresolvedPassage, ...input.heldEvidence]);
+}
+
 // ---------------------------------------------------------------------------
 // A replaced card (J3)
 // ---------------------------------------------------------------------------
@@ -950,7 +987,7 @@ export function readAllEligibleConceptVitality(
 ): ReadonlyMap<string, EligibleVitalityReading> {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
-  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
+  const unresolvedPassage = unresolvedSupportInstrumentIds(options, now);
   const carried = carriedFor(entries, validity, options, unresolvedPassage);
   const replayed = replaySchedulerStates(
     withoutCorrectedEvidence(entries, validity.correctedEvidence),
@@ -1042,7 +1079,7 @@ function readinessFold(
 ) {
   const policy = withheldPolicyOf(options);
   const arithmeticVersion = versionOf(options, scheduler.configuration?.version);
-  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
+  const unresolvedPassage = unresolvedSupportInstrumentIds(options, now);
   const carried = carriedFor(entries, validity, options, unresolvedPassage);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed = replaySchedulerStates(standing, scheduler);
@@ -1229,7 +1266,7 @@ function recognitionFold(
   // Read only for an unavailable reading, so the credit alone validates exactly what it did before.
   const arithmeticVersion = (): string => versionOf(options, scheduler.configuration?.version);
   const cut = options.holdingCut ?? HOLDING_CUT;
-  const unresolvedPassage = unresolvedPassageInstrumentIds(options.passageChanges, now);
+  const unresolvedPassage = unresolvedSupportInstrumentIds(options, now);
   const standing = withoutCorrectedEvidence(entries, validity.correctedEvidence);
   const replayed: ReplayResult = replaySchedulerStates(standing, scheduler);
   const latest = latestRatedReviewByInstrument(standing);
