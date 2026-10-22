@@ -628,8 +628,9 @@ function instrumentsLabel(row: GapRow): string {
  * been asked — with no fitted number in it at all.
  *
  * **The `[D-348]` branch (registry §22).** `GapRow.need` already carries a
- * basis when the caller supplies one (`gap/build.ts`'s `BuildGapViewInput.need`
- * — no production caller does yet, see that field's own doc). "Recall here
+ * basis when the caller supplies one (`gap/build.ts`'s `BuildGapViewInput.need`;
+ * the production caller is `gap/provider.ts`, which passes it to `buildGapView`
+ * from its `needByConcept`). "Recall here
  * hasn't caught up" is a measured-shortfall claim, which is exactly what §22
  * forbids saying about a row whose need basis is `'unknown'`: no eligible
  * evidence exists at all, so there is nothing to say has or hasn't caught up
