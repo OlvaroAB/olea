@@ -70,7 +70,8 @@
  *    page's text as extracted from the bytes now, once this session holds it
  *    (`CitationRevisionTrigger.landedSourceText`, the text the pass's own rewrite reads). Until it
  *    lands the job waits (`retryable`, drafting nothing), at most
- *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason.
+ *    {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} attempts, then ends with a recorded reason. While it
+ *    waits it asks once for the file's catch-up extraction (below, `ol-egov.141.89.5.109`).
  *  - An ordinary Markdown note (`ol-egov.141.89.5.110`, `[D-446]`, `[D-543]`) is read as it stands
  *    too. A question that named a passage is drafted from the job's passage while it still stands
  *    word for word in the note, else from the passage the citation pass's ladder finds for it in
@@ -84,6 +85,26 @@
  * that version. A change made while the draft is being written is not chased. What the citation
  * pass knows arrives through `deps.citedSourceNow` (memory and plugin data, never a network call);
  * no field, key or format is added to the job, the draft or the citation.
+ *
+ * ## ...asking once for the catch-up extraction when the changed file's text has not landed (`ol-egov.141.89.5.109`, `[D-518]`, `[D-440]`)
+ *
+ * The landed text is memory only, and the changed file's own extraction may never deliver it this
+ * session: a restart forgot it, or the arrival watch debounced the save and nothing retries a
+ * debounced arrival. The suspended predecessor is skipped by the citation pass, so the pass does not
+ * ask for it either, and the job used to wait out its attempts for nothing. A waiting attempt now
+ * asks for the catch-up extraction the pass already asks for a held question
+ * (`CitedSourceNow.requestText`, `ol-egov.141.89.5.84`): the same request, enqueued by the same host
+ * function, landing through the same route, under the spend rules of the extraction it queues.
+ *
+ * The bound ({@link askForSourceTextOnce}): at most one request per predecessor per session,
+ * whatever bytes the file has on later attempts, so never one per attempt; none on the last
+ * attempt, since no attempt is left to use the text; none when no Worker is configured (the job
+ * waits uncounted before it reads its source); and each request still passes the pass's own rule,
+ * once per file and bytes per session and never when text for those bytes has landed, so the pass
+ * and every waiting job together ask at most once per file and bytes per session. A restart may ask
+ * again, once, because the text a request brought is forgotten with it; the job's attempts, which
+ * the queue keeps across restarts, bound that too. Nothing is persisted. If the text still does not
+ * land, the job ends at {@link REVISION_SOURCE_TEXT_MAX_ATTEMPTS} with the same reason as before.
  *
  * ## ...and drafted again when its source moves on before she answers it (`ol-egov.141.89.5.108`, `[D-508]`)
  *
@@ -369,7 +390,8 @@ export const REVISION_EMPTY_DRAFT_MAX_ATTEMPTS = 3;
  * declared constant, not fitted: the queue's own attempt cap, so the job waits as long as the queue
  * retries any job (its backoff spans about an hour, enough for the changed file's own extraction to
  * land) and ends with its own reason one attempt before the queue would park it. A waiting attempt
- * reads a hash and memory only; it makes no drafting call.
+ * reads a hash and memory only; it makes no drafting call. `ol-egov.141.89.5.109`: one waiting
+ * attempt per session, never the last, also asks for the file's catch-up extraction.
  */
 export const REVISION_SOURCE_TEXT_MAX_ATTEMPTS = MAX_ATTEMPTS;
 
@@ -387,7 +409,8 @@ export const REVISION_JOBS_PER_PREDECESSOR_MAX = MAX_ATTEMPTS;
  * `ol-egov.141.89.5.107`: what the citation pass knows about a rewritten question's cited source
  * that the vault alone does not say, read when the successor is drafted (module doc, "against its
  * source as it stands"). Production builds it from the plugin's one `CitationRevisionTrigger`
- * (`citedSourceNowFrom`, composed in `main.ts`). Both reads are memory or plugin data.
+ * (`citedSourceNowFrom`, composed in `main.ts`). Both reads are memory or plugin data; the one
+ * request (`ol-egov.141.89.5.109`) goes to the pass's own catch-up extraction.
  */
 export interface CitedSourceNow {
   /**
@@ -405,6 +428,14 @@ export interface CitedSourceNow {
     bytesHash: string,
     page: number | undefined,
   ) => Promise<string | undefined>;
+  /**
+   * `ol-egov.141.89.5.109` ([D-518]): asks for the catch-up extraction of `path`, the one a question
+   * held for a changed file already asks for (`ol-egov.141.89.5.84`), under that route's rule: at
+   * most once per file and bytes per session, shared with the citation pass, and not when text for
+   * `bytesHash` has landed. Never throws; what it asks for lands through the ordinary landing route,
+   * where {@link landedText} reads it.
+   */
+  readonly requestText: (path: VaultPath, bytesHash: string) => Promise<void>;
 }
 
 const GENERATION_TASK_IDS: ReadonlySet<string> = new Set(['quiz.generate.v1', 'cards.generate.v1']);
@@ -441,6 +472,24 @@ function heldJudgeAnswersFor(cache: DraftCacheStore): Map<string, HeldJudgeAnswe
     heldJudgeAnswersByCache.set(cache, held);
   }
   return held;
+}
+
+const sourceTextAsksByCache = new WeakMap<DraftCacheStore, Set<string>>();
+
+/**
+ * `ol-egov.141.89.5.109`: the predecessors whose successor job has asked for the catch-up
+ * extraction of its cited file this session (module doc, "...asking once for the catch-up
+ * extraction"). One set per draft cache instance, so per plugin session in production, as {@link
+ * heldJudgeAnswersFor} is. Memory only: what the request brings (landed text) is memory only too,
+ * so a restart forgets both together.
+ */
+function sourceTextAsksFor(cache: DraftCacheStore): Set<string> {
+  let asked = sourceTextAsksByCache.get(cache);
+  if (asked === undefined) {
+    asked = new Set();
+    sourceTextAsksByCache.set(cache, asked);
+  }
+  return asked;
 }
 
 async function judgeRequestKey(request: WorkerTaskRequest): Promise<string> {
@@ -868,8 +917,11 @@ type SuccessorSource =
       readonly passage: string;
       readonly citation: InstrumentCitation | undefined;
     }
-  /** A non-markdown source changed again after its page was read, and its new text has not landed. */
-  | { readonly kind: 'waiting' };
+  /**
+   * A non-markdown source changed again after its page was read, and its new text has not landed:
+   * the file (`path`, where the predecessor's citation names it) and its bytes now.
+   */
+  | { readonly kind: 'waiting'; readonly path: VaultPath; readonly bytesHash: string };
 
 /**
  * `ol-egov.141.89.5.79` ([D-508]): the successor's source citation. The sweep builds one from a
@@ -1080,7 +1132,9 @@ function transcriptPassageNow(
  *    with the job's passage, as a fresh question's citation would record it.
  *  - The file changed again since: the successor is drafted from the cited page's text as extracted
  *    from the bytes now, once this session holds it (`deps.citedSourceNow.landedText`), and records
- *    those bytes. Until then the job waits (`'waiting'`); the changed file's own extraction lands it.
+ *    those bytes. Until then the job waits (`'waiting'`, naming the file and its bytes now); the
+ *    changed file's own extraction lands it, or the catch-up extraction the job asks for
+ *    (`ol-egov.141.89.5.109`).
  *  - A job queued by an earlier build carries no hash: the predecessor's is kept only while it is
  *    still the file's bytes hash, never a stale one.
  */
@@ -1108,7 +1162,7 @@ async function binarySuccessorSource(
   }
   const text = await deps.citedSourceNow.landedText(predecessor.sourcePath, now, predecessor.page);
   return text === undefined
-    ? { kind: 'waiting' }
+    ? { kind: 'waiting', path: predecessor.sourcePath, bytesHash: now }
     : { kind: 'ready', passage: text, citation: { ...base, sourceRevision: now } };
 }
 
@@ -1118,6 +1172,35 @@ async function bytesHashNow(vault: VaultSource, path: VaultPath): Promise<string
     return (await vault.exists(path)) ? await hashContent(await vault.readBinary(path)) : undefined;
   } catch {
     return undefined;
+  }
+}
+
+/**
+ * `ol-egov.141.89.5.109` ([D-518], [D-440]): while a successor waits for its changed file's text,
+ * asks once for the catch-up extraction of that file (module doc, "...asking once for the catch-up
+ * extraction"). Asks nothing on the last attempt, since no attempt is left to use the text, nor
+ * when this predecessor's job already asked this session, whatever bytes it waited for then. The
+ * request itself goes through the citation pass's own once-per-file-and-bytes rule. A request that
+ * fails is logged by error name only, and the job waits as before.
+ */
+async function askForSourceTextOnce(
+  deps: RevisionJobRunnerDeps,
+  payload: InstrumentRevisionJobPayload,
+  waiting: { readonly path: VaultPath; readonly bytesHash: string },
+  attempts: number,
+): Promise<void> {
+  const port = deps.citedSourceNow;
+  if (port === undefined || attempts >= REVISION_SOURCE_TEXT_MAX_ATTEMPTS) return;
+  const asked = sourceTextAsksFor(deps.cache);
+  if (asked.has(payload.predecessorInstrumentId)) return;
+  asked.add(payload.predecessorInstrumentId);
+  try {
+    await port.requestText(waiting.path, waiting.bytesHash);
+  } catch (error) {
+    console.error(
+      'Olea: instrument-revision catch-up extraction request failed',
+      error instanceof Error ? error.name : 'unknown',
+    );
   }
 }
 
@@ -1268,13 +1351,17 @@ export async function runInstrumentRevisionJob(
 
   // `ol-egov.141.89.5.107`: the passage to draft from and the citation to record, read from the
   // cited source as it stands, once, before any drafting call or demand ask (module doc, "against
-  // its source as it stands"). A changed file whose new text has not landed waits, bounded. A cloze
-  // predecessor drafts nothing (below), so nothing is read for it.
+  // its source as it stands"). A changed file whose new text has not landed waits, bounded, and
+  // asks once for its catch-up extraction (`ol-egov.141.89.5.109`). A cloze predecessor drafts
+  // nothing (below), so nothing is read for it.
   const source: SuccessorSource =
     target.instrumentType === 'cloze'
       ? { kind: 'ready', passage: payload.newPassageText, citation: undefined }
       : await successorSourceOf(deps, payload, target.sourcePath);
-  if (source.kind === 'waiting') return sourceTextWaitOutcome(payload, attempts);
+  if (source.kind === 'waiting') {
+    await askForSourceTextOnce(deps, payload, source, attempts);
+    return sourceTextWaitOutcome(payload, attempts);
+  }
 
   if (target.instrumentType === 'qa') {
     // `ol-egov.141.89.5.92` ([D-508], [D-541]): defaults to the real `draftCardsForConcept`, as the

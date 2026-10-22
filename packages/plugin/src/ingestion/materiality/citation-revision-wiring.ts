@@ -1949,6 +1949,17 @@ export class CitationRevisionTrigger {
     return text.length === 0 ? undefined : text;
   }
 
+  /**
+   * `ol-egov.141.89.5.109` ([D-518]): the catch-up extraction of `path` for the bytes `bytesHash`,
+   * asked by a rewritten question's successor job that waits for that file's landed text
+   * (`revision-job-runner.ts`), whose suspended predecessor this pass skips. The same request under
+   * the same rule as this pass's own ({@link requestReextractionOnce}): once per file and bytes per
+   * session, shared with this pass, and never when text for those bytes has landed. Never throws.
+   */
+  async requestSourceText(path: VaultPath, bytesHash: string): Promise<void> {
+    await this.requestReextractionOnce(path, bytesHash);
+  }
+
   private async storeHas(instrumentId: string): Promise<boolean> {
     return (await this.deps.store.loadAll()).has(instrumentId);
   }
@@ -2540,13 +2551,15 @@ export function buildCitationRevisionWiring(
 /**
  * `ol-egov.141.89.5.107`: the revision job runner's view of what this pass knows about a rewritten
  * question's cited source (`CitedSourceNow`, `revision-job-runner.ts`): where its anchor stands and
- * the text landed for a file's bytes. Reads whichever trigger `trigger()` returns when a job runs,
- * since `main.ts` builds the runner before the trigger; with none, it knows nothing (no anchor, no
- * landed text), and the runner keeps its behaviour without a citation pass.
+ * the text landed for a file's bytes, and (`ol-egov.141.89.5.109`) its catch-up extraction request.
+ * Reads whichever trigger `trigger()` returns when a job runs, since `main.ts` builds the runner
+ * before the trigger; with none, it knows nothing (no anchor, no landed text) and asks for nothing,
+ * and the runner keeps its behaviour without a citation pass.
  */
 export function citedSourceNowFrom(trigger: () => CitationRevisionTrigger | null): CitedSourceNow {
   return {
     anchoredPath: async (instrumentId) => trigger()?.anchoredSourcePath(instrumentId),
     landedText: async (path, bytesHash, page) => trigger()?.landedSourceText(path, bytesHash, page),
+    requestText: async (path, bytesHash) => trigger()?.requestSourceText(path, bytesHash),
   };
 }
