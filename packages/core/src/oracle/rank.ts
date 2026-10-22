@@ -450,16 +450,23 @@ const DECLARED_FALLBACK_UNKNOWN_RELEVANCE = 0.125;
  * (`ol-egov.141.89.10.128`), and it moves no relevance or proximity term, so one course's
  * rows cannot be moved above another's by more than `weights.need` times this share.
  *
- * **Provisional cap 0.25, window 7 days** (David, 2026-10-21, recorded on `[D-554]`). Paired
- * ranking effect verified; tested settings were indistinguishable on this learner. Multi-day
- * serving behaviour remains untested. Over a two-session learner (right on the first session,
- * wrong on a later day; `ol-egov.141.89.10.131`), every wrongly answered concept ranked above its
- * right-answer twin at every cap from 0.05 to 0.5 and every window from 3 to 14 days, and no other
- * concept, course share or focus moved. Its wrong answers all fell on one day, so no setting
- * changed what was served, and that run says nothing about the size or the duration. The
- * outstanding check is a bounded scripted multi-day learner on which the lift can change what is
- * served, read for spacing and course shares (`ol-egov.141.89.10.132`). Her review log informs
- * later tuning; it is not the first meaningful test.
+ * **Provisional cap 0.25, window 7 days** (David, 2026-10-21, recorded on `[D-554]`). Not
+ * calibrated: the size and the duration are pins, not fits.
+ * - Over a two-session learner (right on the first session, wrong on a later day;
+ *   `ol-egov.141.89.10.131`), every wrongly answered concept ranked above its right-answer twin at
+ *   every cap from 0.05 to 0.5 and every window from 3 to 14 days. No other concept, course share or
+ *   focus moved.
+ * - Over a scripted multi-day learner (`ol-egov.141.89.10.132`), the lift reorders what is served
+ *   in the intended direction: due instruments of wrongly answered concepts move ahead. It does so
+ *   identically at every cap from 0.05 to 0.5, because that world's competing scores tie, so the
+ *   size is not visible. Its duration acts as declared: the reordering ends where the answer's age
+ *   reaches the window. It moved no focus or course share.
+ * - In that harness the session budget never fills, so only the order served could change, never
+ *   which instruments are served.
+ * - The same-day re-presentation it reordered is the composer's own, now a violation under
+ *   `[D-583]` and the composer's to fix.
+ *
+ * Her review log informs later tuning.
  *
  * **Revisit.** Moving an eligible instrument ahead is the intended effect. A spacing-constraint
  * violation is a defect, acted on at its first occurrence. An unwanted recurrence within the
@@ -476,8 +483,10 @@ export const DECLARED_WRONG_ANSWER_LIFT_MAX_NEED_SHARE = 0.25;
  * wrong answer is a reason to come back to the concept within about a week, the span in which a
  * missed concept is most likely to still be recoverable by one more attempt; past it, the ordinary
  * recall estimate (which the lift does not replace) carries the concept. A pin, not a fit.
- * Provisional, with the same status, outstanding check and revisit condition as the share above:
- * windows from 3 to 14 days were indistinguishable on the two-session learner.
+ * Provisional, with the same status and revisit condition as the share above. The windows from 3
+ * to 14 days were indistinguishable on the two-session learner. On the multi-day learner
+ * (`ol-egov.141.89.10.132`) each ended its reordering where the answer's age reached it: four days
+ * on, only windows of 5 days or more still reorder, and seven days on, only 10 and 14 do.
  */
 export const DECLARED_WRONG_ANSWER_LIFT_WINDOW_DAYS = 7;
 
