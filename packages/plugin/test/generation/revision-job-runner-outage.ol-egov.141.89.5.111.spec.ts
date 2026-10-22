@@ -325,7 +325,7 @@ function slideUnit(page: number, text: string): ExtractedUnit {
 }
 
 describe('a successor drafted from a PDF renamed after drafting, as Olea saw (ol-egov.141.89.5.111)', () => {
-  it('is set aside, drafted again citing the new path, and reaches her', async () => {
+  it('follows the rename, citing the new path, and reaches her', async () => {
     const vault = new MemoryVault();
     vault.files.set(PDF_HOME, homeNote('Invented slide topic', ['q-slide']));
     vault.binaries.set(PDF, bytes('v0'));
@@ -426,22 +426,22 @@ describe('a successor drafted from a PDF renamed after drafting, as Olea saw (ol
     if (first === undefined) throw new Error('no successor');
     expect(first.sourceCitation?.sourcePath).toBe(PDF);
 
-    // Renamed as Olea saw, bytes unchanged: the draft cites the old path and is set aside once.
+    // Renamed as Olea saw, bytes unchanged: the pending draft follows the rename (path only,
+    // `ol-egov.141.89.5.122`, [D-576]), so it is served as it stands and nothing is set aside.
     vault.binaries.delete(PDF);
     vault.binaries.set(PDF_RENAMED, bytes('v1'));
     await h.trigger.onSourceRenamed(vault, PDF, PDF_RENAMED);
-    expect(await present()).toEqual(new Map([[first.draftId, 'check-failed']]));
-    expect(redrafts).toEqual(['queued']);
+    expect(await present()).toEqual(new Map([[first.draftId, 'clear']]));
+    expect(redrafts).toEqual([]);
     await drain();
 
-    const second = (await cache.listPending()).find((d) => d.draftId !== first.draftId);
-    if (second?.question === undefined) throw new Error('no second successor');
+    const second = await cache.get(first.draftId);
+    if (second?.question === undefined) throw new Error('no successor question');
     expect(second.sourceCitation).toEqual({
       sourcePath: PDF_RENAMED,
       page: 2,
       sourceRevision: await bytesHashOf('invented slide bytes, v1'),
     });
-    expect((await present()).get(second.draftId)).toBe('clear');
 
     // Accepted, seeded with no hold, and presented; the old question stays withheld.
     const { instrumentId } = await materializeAcceptedDraft(vault, {
