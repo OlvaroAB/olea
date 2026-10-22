@@ -2455,10 +2455,13 @@ export default class OleaPlugin extends Plugin {
       transcriptPartGrain: true,
     });
     // `ol-egov.141.89.5.97` (PERSISTENCE.md 2.2 L2; `ol-egov.141.89.5.100`): a rename Olea sees is
-    // lineage. One handler moves both records that follow a file by its path: the citation anchors
-    // that last saw a transcript passage at the old path, and the file's processed-revision row with
-    // its version and day. A rename made while Obsidian was closed arrives as a delete and a create,
-    // and nothing is moved: its transcript questions are withheld, and the file has an unknown day.
+    // lineage. One handler moves everything that follows a file by its path: the citation anchors
+    // that last saw a transcript passage at the old path; for a PDF-type source (a PDF, slide deck
+    // or document) the source path on its questions' citation records, path only, through the
+    // citation store ([D-576], `ol-egov.141.89.5.111`), with the text extracted from it this session;
+    // and the file's processed-revision row with its version and day. A rename made while Obsidian
+    // was closed arrives as a delete and a create, and nothing is moved: its questions are withheld,
+    // and the file has an unknown day.
     this.register(
       vault.watch((event) => {
         if (event.kind !== 'rename' || event.oldPath === undefined) return;

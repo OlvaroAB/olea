@@ -159,6 +159,25 @@ describe('a whole-note question whose cited note holds a question block bound to
   });
 });
 
+// `ol-egov.141.89.5.114`: the presentation check uses the shared strip, so the two sides cannot drift.
+describe('the presentation check and the citation pass read one strip (ol-egov.141.89.5.114)', () => {
+  it('an anchor holding exactly the shared strip of the note reads clear at presentation', async () => {
+    const { vault, h } = await seeded();
+    const anchor = (await h.store.loadAll()).get('q-whole');
+    if (anchor === undefined) throw new Error('no anchor');
+    await h.store.save('q-whole', { ...anchor, text: stripQuestionBlocks(citedNote(PROSE)) });
+    expect(await presentedAs(h, vault, 'q-whole')).toBe('clear');
+  });
+
+  it('an anchor holding the note with its blocks left in does not read clear: the check strips them too', async () => {
+    const { vault, h } = await seeded();
+    const anchor = (await h.store.loadAll()).get('q-whole');
+    if (anchor === undefined) throw new Error('no anchor');
+    await h.store.save('q-whole', { ...anchor, text: citedNote(PROSE) });
+    expect(await presentedAs(h, vault, 'q-whole')).not.toBe('clear');
+  });
+});
+
 describe('stripQuestionBlocks', () => {
   it('removes every card and multiple-choice block it parses, bound or not, and nothing else', () => {
     const stripped = stripQuestionBlocks(citedNote(PROSE));
