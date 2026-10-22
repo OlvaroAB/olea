@@ -174,8 +174,9 @@ async function enqueueArrival(
  * version plus a suffix carrying the session's load time, so it is unique per session and a `done`
  * job for the same bytes (whose landed text a restart forgot) cannot swallow it; only the engine's
  * dedup reads that field. And it carries no `lastChangedAt`: the bytes are settled, so the enqueue
- * debounce does not apply. Skipped when a queued or in-flight job already holds those bytes under
- * any version, so a landing already on its way is not duplicated. Never throws.
+ * debounce does not apply. Skipped when a job for those bytes is still non-terminal (queued,
+ * in-flight or deferred, under any version), so a landing already on its way is not duplicated; only
+ * a `done` or `failed` job leaves the bytes free to be asked for again. Never throws.
  */
 export async function requestSourceCatchUpExtraction(deps: {
   readonly vault: VaultSource;
@@ -196,7 +197,7 @@ export async function requestSourceCatchUpExtraction(deps: {
       .some(
         (job) =>
           job.contentHash === contentHash &&
-          (job.status === 'queued' || job.status === 'in-flight'),
+          (job.status === 'queued' || job.status === 'in-flight' || job.status === 'deferred'),
       );
     if (pending) return;
     await deps.engine.enqueue({

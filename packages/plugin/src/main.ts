@@ -2433,7 +2433,7 @@ export default class OleaPlugin extends Plugin {
       isOnline: () => navigator.onLine,
       // `ol-egov.141.89.5.84` ([D-518]): a withheld question whose cited file has no extracted text
       // in memory (a restart, or a change made while Obsidian was closed) asks for one catch-up
-      // extraction of that file, once per (file, bytes) per session — `requestSourceCatchUpExtraction`'s
+      // extraction of that file, once per (file, bytes) per run of Olea — `requestSourceCatchUpExtraction`'s
       // doc. Its landing reaches `onSourceUnitsLanded` through the same route an arrival's does.
       requestSourceReextraction: async (sourcePath) => {
         const ingestion = this.ingestion;

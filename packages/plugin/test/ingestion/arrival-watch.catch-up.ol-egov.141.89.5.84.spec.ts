@@ -150,6 +150,50 @@ describe('requestSourceCatchUpExtraction', () => {
     expect(enqueued).toEqual([]);
   });
 
+  it.each(['transient-error', 'budget-exhausted'])(
+    'skips while a deferred job (%s) for the same bytes exists: it will still run',
+    async (deferReason) => {
+      const hash = await hashContent(bytes);
+      const enqueued: unknown[] = [];
+      const engine = {
+        list: () => [{ contentHash: hash, status: 'deferred', deferReason }] as never,
+        enqueue: async (input: unknown) => {
+          enqueued.push(input);
+          return { status: 'queued' as const };
+        },
+      };
+      await requestSourceCatchUpExtraction({
+        vault: new MemoryVault(),
+        engine,
+        sourcePath: PDF,
+        sessionStamp: 5000,
+      });
+      expect(enqueued).toEqual([]);
+    },
+  );
+
+  it.each(['done', 'failed'])(
+    'still enqueues once when the only job for the same bytes is %s',
+    async (status) => {
+      const hash = await hashContent(bytes);
+      const enqueued: unknown[] = [];
+      const engine = {
+        list: () => [{ contentHash: hash, status }] as never,
+        enqueue: async (input: unknown) => {
+          enqueued.push(input);
+          return { status: 'queued' as const };
+        },
+      };
+      await requestSourceCatchUpExtraction({
+        vault: new MemoryVault(),
+        engine,
+        sourcePath: PDF,
+        sessionStamp: 5000,
+      });
+      expect(enqueued).toHaveLength(1);
+    },
+  );
+
   it('the default arrival enqueue still dedups on a done job', async () => {
     const engine = await engineWithDoneJob();
     const unsubscribe = buildIngestionArrivalWatch({
