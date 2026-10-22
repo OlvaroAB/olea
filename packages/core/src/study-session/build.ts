@@ -642,6 +642,13 @@ export interface BuildStudySessionInput {
    */
   readonly schedulerStates?: ReadonlyMap<string, SchedulerState>;
   /**
+   * `[D-583]` (`ol-egov.141.89.10.137`): the instruments whose last review falls on this session's
+   * own calendar day, held back from the fill. The caller supplies it only while another instrument
+   * can be served; omitted means none is held back, exactly the behaviour before the rule. `buildComposedStudySession`
+   * always supplies it, derived from its own `replay`; it is never a caller input there.
+   */
+  readonly answeredTodayInstrumentIds?: ReadonlySet<string>;
+  /**
    * ARRIVE-1's arrival day per `conceptKey` — the day a concept's material
    * arrived. Read here only by `[D-240]` item 2's never-reviewed branch (the
    * wait a card never yet asked is measured from; see
@@ -1117,9 +1124,15 @@ export function buildStudySession(input: BuildStudySessionInput): StudySessionMo
       input.arrivalDays?.get(row.conceptKey) ?? null,
       asOfInstant,
     );
+    // `[D-583]`: an instrument answered today is not served again today. The caller passes the set
+    // only while another instrument can be served; otherwise it is omitted and nothing is held back.
+    const answeredToday = input.answeredTodayInstrumentIds;
     return {
       row,
-      records,
+      records:
+        answeredToday === undefined
+          ? records
+          : records.filter((record) => !answeredToday.has(record.instrumentId)),
       /** `[SESS-8.9]` — ids `orderedForFormat` placed ahead of format preference with a real competitor to beat. See {@link StudySessionItem.dedupeReason}. */
       recallOverrodePreferenceIds,
       /** This row's own course's format preference (`ol-v7r5.42`) — what {@link orderedForFormat} above actually used, and what {@link formatMatchOf} below must use too, so an item's `formatMatch` never disagrees with the order it was actually selected in. */

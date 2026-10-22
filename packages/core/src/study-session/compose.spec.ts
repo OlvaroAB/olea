@@ -687,7 +687,9 @@ describe('composeSessionRows', () => {
       qa('a1', ['A-elective']),
       qa('b1', ['B-unmet']),
     ]);
-    const theReplay = replay({ a1: { lastReviewedDay: AS_OF, dueDay: '2099-01-01' } });
+    // The day before, not AS_OF: `[D-583]` keeps an instrument answered on AS_OF out of a session
+    // while another (here B-unmet) is eligible, and this test is about class precedence, not that.
+    const theReplay = replay({ a1: { lastReviewedDay: '2026-09-13', dueDay: '2099-01-01' } });
     const result = composeSessionRows({
       rows: theRows,
       instruments,
@@ -1795,9 +1797,10 @@ describe('buildComposedStudySession', () => {
       qa('n1', ['NeverSeen']),
       qa('e1', ['Elective']),
     ]);
-    // Reviewed today, at a mastery stage whose ladder rung has not elapsed —
+    // Reviewed the day before AS_OF (`[D-583]` keeps one answered on AS_OF out of the session while
+    // NeverSeen is eligible), at a mastery stage whose ladder rung has not elapsed —
     // 'elective', not 'baseline-due'.
-    const theReplay = replay({ e1: { lastReviewedDay: AS_OF, dueDay: '2099-01-01' } });
+    const theReplay = replay({ e1: { lastReviewedDay: '2026-09-13', dueDay: '2099-01-01' } });
     const composed = buildComposedStudySession({
       rows: theRows,
       instruments,

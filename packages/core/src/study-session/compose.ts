@@ -582,6 +582,43 @@ function obligationSignalsFor(
 }
 
 /**
+ * `[D-583]` (`ol-egov.141.89.10.137`, David, 2026-10-22): the ids of every instrument whose last
+ * review falls on the composition's own calendar day `asOf`, by the product's calendar-day reading
+ * (`daysBetweenCalendarDays`, core `daysBetween`). The one fact the rule reads, taken from the same
+ * `replay` the obligation classes are; an instrument never reviewed is absent from `replay` and so
+ * from this set. Exported for {@link buildComposedStudySession}, which hands it to the fill.
+ */
+export function answeredTodayInstrumentIds(
+  replay: ReplayResult,
+  asOf: CalendarDay,
+): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const [instrumentId, replayed] of replay.states) {
+    const reviewedDay = calendarDayOfTimestamp(replayed.lastReviewedAt);
+    if (reviewedDay !== null && daysBetweenCalendarDays(reviewedDay, asOf) === 0) {
+      ids.add(instrumentId);
+    }
+  }
+  return ids;
+}
+
+/**
+ * `[D-583]`: what the fill is told to hold back: `answeredToday` when some instrument of the
+ * composed rows was not answered today (something else to serve), else an empty set: nothing is held back and the
+ * answered-today instruments are served as they were before the rule.
+ */
+function answeredTodayHeldBack(
+  orderedRows: readonly GapRow[],
+  instruments: ConceptInstrumentIndex,
+  answeredToday: ReadonlySet<string>,
+): ReadonlySet<string> {
+  const somethingElse = orderedRows.some((row) =>
+    instruments.instrumentsFor(row.conceptKey).some((r) => !answeredToday.has(r.instrumentId)),
+  );
+  return somethingElse ? answeredToday : new Set<string>();
+}
+
+/**
  * The cheapest of a concept's instruments — the estimate used for
  * cross-course budget accounting (never the real fill, which
  * `buildStudySession` still does per-instrument, exactly, including its own
@@ -2505,7 +2542,26 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     };
   });
 
-  const byCourse = groupByCourse(classified);
+  // `[D-583]`: a concept whose every instrument was answered today is not selected while any other
+  // concept has an instrument that was not. When no instrument is left that was not answered today,
+  // nothing else could be served and the selection runs over all of them exactly as it did before
+  // the rule.
+  const answeredToday = answeredTodayInstrumentIds(replay, asOf);
+  const sameDayRows = classified.filter((c) => {
+    const records = instruments.instrumentsFor(c.row.conceptKey);
+    return records.length > 0 && records.every((r) => answeredToday.has(r.instrumentId));
+  });
+  // "Anything else eligible" means a concept with an instrument not answered today. A concept with
+  // no instrument at all cannot be served, so it never counts as something else.
+  const somethingElseServable = classified.some((c) =>
+    instruments.instrumentsFor(c.row.conceptKey).some((r) => !answeredToday.has(r.instrumentId)),
+  );
+  const selectable = somethingElseServable
+    ? classified.filter((c) => !sameDayRows.includes(c))
+    : classified;
+  const allCourses = [...new Set(classified.map((c) => c.row.course))];
+
+  const byCourse = groupByCourse(selectable);
   const courses = [...byCourse.keys()];
 
   // `[D-244]` (`[FOCUS-3]`, `ol-egov.137.2`): `focusPolicy !== 'every-course'`
@@ -2582,7 +2638,7 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
     }
     // Pass 2: whatever a course's own budget could not absorb, in the same
     // order, against whatever of the session budget remains.
-    for (const c of classified
+    for (const c of selectable
       .filter((c) => !chosenKeySet.has(c.row.conceptKey))
       .sort(overdueFirst)) {
       if (spent + c.cost > budgetSeconds) continue;
@@ -2648,11 +2704,11 @@ export function composeSessionRows(input: ComposeSessionRowsInput): ComposeSessi
   // the facts the selection above already decided (`focusResult`, `chosenKeys`, `classified`,
   // `containment`); nothing here feeds back into `orderedRows`.
   const sessionCourses: ReadonlySet<string> =
-    focusResult !== undefined ? new Set([focusResult.dominantCourse]) : new Set(courses);
+    focusResult !== undefined ? new Set([focusResult.dominantCourse]) : new Set(allCourses);
   const setAsideCourses: SetAsideCourse[] =
     focusResult === undefined
       ? []
-      : [...courses]
+      : [...allCourses]
           .filter((course) => course !== focusResult.dominantCourse)
           .sort()
           .map((courseId) => ({ courseId, reason: 'another-course-chosen' }));
@@ -2729,7 +2785,12 @@ export interface BuildComposedStudySessionInput
   // the selection above never used.
   extends Omit<
     BuildStudySessionInput,
-    'order' | 'rows' | 'obligationClasses' | 'schedulerStates' | 'courseBudgetSeconds'
+    | 'order'
+    | 'rows'
+    | 'obligationClasses'
+    | 'schedulerStates'
+    | 'courseBudgetSeconds'
+    | 'answeredTodayInstrumentIds'
   > {
   readonly rows: readonly GapRow[];
   /** `replaySchedulerStates(entries, scheduler)` — see `ComposeSessionRowsInput.replay`. */
@@ -3002,6 +3063,13 @@ export function buildComposedStudySession(
     // fill's serving rule reads — never a second read of the log, and never a
     // second scheduler.
     schedulerStates: schedulerStatesOf(input.replay),
+    // `[D-583]`: the instruments answered on this composition's own day, derived from the same
+    // `replay`; the fill takes none while another instrument can be served — see `buildStudySession`.
+    answeredTodayInstrumentIds: answeredTodayHeldBack(
+      composed.orderedRows,
+      input.instruments,
+      answeredTodayInstrumentIds(input.replay, input.asOf),
+    ),
     // [SESS-9] (`ol-2zfj.77`): the seconds the selection above was capped by,
     // handed to the fill so C5.5's "fills each course's seconds from that
     // course's own ranking" is true of the instruments served and not only of
