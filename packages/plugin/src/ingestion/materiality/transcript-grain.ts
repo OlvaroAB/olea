@@ -27,7 +27,9 @@
  *  2. RESEMBLING: windows of the stream as long as the passage are scored by the share of the
  *     passage's distinct words each keeps (the same measure as core's `passageRecall`, lower-cased
  *     and split on spaces). Runs of windows at or above the declared floor
- *     (`TRANSCRIPT_RESEMBLANCE_FLOOR`, 0.55, `[D-578]`) are candidate regions. Exactly one region,
+ *     (`TRANSCRIPT_RESEMBLANCE_FLOOR`, 0.55, `[D-578]`) are runs; consecutive runs fewer than
+ *     `TRANSCRIPT_RUN_MERGE_GAP_PASSAGES` (two, `[D-579]`) passage lengths apart are one region,
+ *     and regions are the candidates. Exactly one region,
  *     localised: `changed`, and its text is what the materiality judge reads against the old
  *     passage (`[D-293]`: the changed region, never the whole transcript). Two or more: `ambiguous`.
  *     None: `missing`. LOCALISED means every resembling window of the region overlaps the one
@@ -59,6 +61,7 @@ import {
   readTranscriptText,
   resolveTranscriptFormat,
   TRANSCRIPT_RESEMBLANCE_FLOOR,
+  TRANSCRIPT_RUN_MERGE_GAP_PASSAGES,
   type TranscriptFormat,
   type VaultPath,
   type VaultSource,
@@ -198,7 +201,28 @@ function resemblingRegions(passage: readonly string[], words: readonly string[])
     }
   }
   if (runStart !== -1) regions.push({ start: runStart, end: last + width });
-  return regions;
+  return mergeNearbyRuns(regions, width);
+}
+
+/**
+ * `[D-579]`: consecutive runs fewer than `TRANSCRIPT_RUN_MERGE_GAP_PASSAGES` passage lengths apart
+ * (last window start of one to first window start of the next) are one region. The localised check
+ * still applies to the merged region, which is what keeps a far run from being absorbed silently.
+ */
+function mergeNearbyRuns(runs: readonly Region[], width: number): Region[] {
+  const merged: Region[] = [];
+  for (const run of runs) {
+    const previous = merged[merged.length - 1];
+    if (
+      previous !== undefined &&
+      run.start - (previous.end - width) < TRANSCRIPT_RUN_MERGE_GAP_PASSAGES * width
+    ) {
+      merged[merged.length - 1] = { start: previous.start, end: run.end };
+    } else {
+      merged.push(run);
+    }
+  }
+  return merged;
 }
 
 const MATCH = 2;

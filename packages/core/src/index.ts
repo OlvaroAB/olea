@@ -3056,6 +3056,7 @@ export {
   segmentPassages,
   soleBlockPassage,
   TRANSCRIPT_RESEMBLANCE_FLOOR,
+  TRANSCRIPT_RUN_MERGE_GAP_PASSAGES,
 } from './source/passage-identity.js';
 export {
   DEFAULT_SOURCES_FOLDER,
