@@ -382,8 +382,9 @@ export interface BuildGapViewInput {
    * `readNeed`, over the per-concept readiness reading; `ol-egov.141.89.9.4`).
    * **Omitted means today's row.** Supplied, the row's `gapScore` becomes
    * relevance × need × credit (see `GapRow.gapScore`), and a concept missing
-   * from the map reads need unknown at the declared value. No production
-   * caller supplies it yet (`ol-egov.141.89.9.5`).
+   * from the map reads need unknown at the declared value. The production
+   * caller supplies it: `plugin/src/gap/provider.ts` passes it to
+   * `buildGapView`, built by its `needByConcept` (`ol-egov.141.89.9.93`).
    */
   readonly need?: ReadonlyMap<string, NeedReading>;
   /**
