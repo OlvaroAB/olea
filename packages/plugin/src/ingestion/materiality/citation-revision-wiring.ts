@@ -301,6 +301,7 @@ import {
   type RevisionJudgeVerdict,
   readInstrumentCitation,
   readReviewLogHistory,
+  renameCitationSourcePath,
   suspendedInstrumentIds,
   type VaultInstrumentRecord,
   type VaultPath,
@@ -539,6 +540,15 @@ interface TranscriptReads {
 /** Same rule `process-now.ts`'s own private `isMarkdownPath` uses; duplicated rather than imported since that module doesn't export it and this one has no other reason to depend on `ingestion/process-now.ts`. */
 function isMarkdownVaultPath(path: VaultPath): boolean {
   return path.toLowerCase().endsWith('.md');
+}
+
+/**
+ * `ol-egov.141.89.5.111`: whether `path` names a file a citation follows through a rename by its
+ * citation (a PDF, slide deck or document): not Markdown, and not a lecture transcript, whose
+ * questions are followed by their anchor instead (`CitationRevisionTrigger.onSourceRenamed`).
+ */
+function isCitedFilePath(path: VaultPath): boolean {
+  return !isMarkdownVaultPath(path) && !hasTranscriptExtension(path);
 }
 
 /** `[D-515]`: true when the instrument's citation names a non-markdown file other than its own note. */
@@ -1807,14 +1817,27 @@ export class CitationRevisionTrigger {
    * `newPath` reads as a transcript; a markdown note has its own relocation ladder. A rename Olea
    * did not see (made while it was closed, or on another device) arrives as a delete and a create:
    * nothing calls this, the anchor finds its path gone and the question is withheld. Returns how many
-   * anchors moved. Its production caller is `main.ts`'s vault rename handler (`ol-egov.141.89.5.97`).
+   * anchors and citations moved. Its production caller is `main.ts`'s vault rename handler
+   * (`ol-egov.141.89.5.97`).
+   *
+   * `ol-egov.141.89.5.111` ([D-576]; C5.3: a rename is lineage): a non-markdown source that is not a
+   * transcript (a PDF, slide deck or document) is followed the same way. Its questions are anchored
+   * at their own note and name the file only in their citation, so it is the citation record's path
+   * that moves, through the citation store's own path-only call ({@link moveCitedFile}); the text
+   * this session extracted from the file moves with it. Followed only when both paths are such files
+   * and the file stands at `newPath`; a file that becomes a note or a transcript by its new name is
+   * not the same kind of source, and its questions are withheld as before.
    */
   async onSourceRenamed(
     vault: VaultSource,
     oldPath: VaultPath,
     newPath: VaultPath,
   ): Promise<number> {
-    if (this.deps.transcriptPartGrain !== true || oldPath === newPath) return 0;
+    if (oldPath === newPath) return 0;
+    if (isCitedFilePath(oldPath) && isCitedFilePath(newPath)) {
+      return (await vault.exists(newPath)) ? this.moveCitedFile(vault, oldPath, newPath) : 0;
+    }
+    if (this.deps.transcriptPartGrain !== true) return 0;
     if ((await readTranscriptVersion(vault, newPath)).kind !== 'read') return 0;
     let moved = 0;
     try {
@@ -1826,6 +1849,37 @@ export class CitationRevisionTrigger {
     } catch (error) {
       console.error('Olea: citation-revision transcript rename write failed', error);
     }
+    return moved;
+  }
+
+  /**
+   * `ol-egov.141.89.5.111` ([D-576]): a rename Olea saw of a file checked by its bytes. Every
+   * question whose citation names `oldPath`, anchored or not yet, has that citation's path changed
+   * to `newPath` by `renameCitationSourcePath` (path only; the store refuses any record that does not
+   * still name `oldPath`), and the text this session extracted from the file is kept under its new
+   * path. Returns how many citations moved; a failure is logged and leaves the rest as they were.
+   */
+  private async moveCitedFile(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
+    let moved = 0;
+    try {
+      const { records } = await enumerateVaultInstruments(vault);
+      for (const record of records) {
+        if (!citesBinarySource(record) || record.sourceProvenance?.sourcePath !== oldPath) continue;
+        if (await renameCitationSourcePath(vault, record.instrumentId, oldPath, newPath)) {
+          moved += 1;
+        }
+      }
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision file rename write failed',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
+    this.landedSources.rename(oldPath, newPath);
     return moved;
   }
 

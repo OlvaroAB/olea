@@ -325,7 +325,7 @@ function slideUnit(page: number, text: string): ExtractedUnit {
 }
 
 describe('a successor drafted from a PDF renamed after drafting, as Olea saw (ol-egov.141.89.5.111)', () => {
-  it.fails('[defect ol-egov.141.89.5.111: held for David, a renamed PDF is not followed] is set aside, drafted again citing the new path, and reaches her', async () => {
+  it('is set aside, drafted again citing the new path, and reaches her', async () => {
     const vault = new MemoryVault();
     vault.files.set(PDF_HOME, homeNote('Invented slide topic', ['q-slide']));
     vault.binaries.set(PDF, bytes('v0'));

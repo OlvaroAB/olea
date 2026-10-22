@@ -1193,6 +1193,7 @@ export {
   classifyCitationFreshness,
   isCitationRecord,
   readInstrumentCitation,
+  renameCitationSourcePath,
   writeInstrumentCitation,
 } from './instrument/citation-store.js';
 // `[IL-D8]`/`[D-292]`/`[D-351]` (`ol-2zfj.147`) — a passage citation's current-validity read: a

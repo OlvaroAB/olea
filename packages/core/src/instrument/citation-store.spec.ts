@@ -9,6 +9,7 @@ import {
   classifyCitationFreshness,
   isCitationRecord,
   readInstrumentCitation,
+  renameCitationSourcePath,
   writeInstrumentCitation,
 } from './citation-store.js';
 
@@ -90,6 +91,79 @@ describe('citation-store', () => {
 
     const result = await readInstrumentCitation(vault, 'dup');
     expect(result).toEqual({ sourcePath: 'Sources/A.pdf', page: 1 });
+  });
+
+  describe('[D-576] renameCitationSourcePath: a rename Olea saw moves the path, nothing else', () => {
+    it('changes only sourcePath: every other byte of the record is as it was', async () => {
+      const vault = new FolderSource(tempRoot);
+      await writeInstrumentCitation(vault, 'ren-1', {
+        sourcePath: 'Sources/Old name.pdf',
+        page: 3,
+        section: 'Invented section',
+        passageDigest: 'digest-abc',
+        sourceRevision: 'rev-123',
+      });
+      const before = await vault.read(citationStorePath('ren-1'));
+
+      expect(
+        await renameCitationSourcePath(
+          vault,
+          'ren-1',
+          'Sources/Old name.pdf',
+          'Sources/New name.pdf',
+        ),
+      ).toBe(true);
+
+      const after = await vault.read(citationStorePath('ren-1'));
+      expect(after).toBe(before.replace('Sources/Old name.pdf', 'Sources/New name.pdf'));
+      expect(await readInstrumentCitation(vault, 'ren-1')).toEqual({
+        sourcePath: 'Sources/New name.pdf',
+        page: 3,
+        section: 'Invented section',
+        passageDigest: 'digest-abc',
+        sourceRevision: 'rev-123',
+      });
+      expect(JSON.parse(after).schemaVersion).toBe(JSON.parse(before).schemaVersion);
+    });
+
+    it('refuses, leaving the file untouched, when the record does not name the path renamed from', async () => {
+      const vault = new FolderSource(tempRoot);
+      await writeInstrumentCitation(vault, 'ren-2', { sourcePath: 'Sources/A.pdf', page: 1 });
+      const before = await vault.read(citationStorePath('ren-2'));
+
+      expect(
+        await renameCitationSourcePath(vault, 'ren-2', 'Sources/Other.pdf', 'Sources/B.pdf'),
+      ).toBe(false);
+      expect(await renameCitationSourcePath(vault, 'ren-2', 'Sources/A.pdf', 'Sources/A.pdf')).toBe(
+        false,
+      );
+      expect(
+        await renameCitationSourcePath(vault, 'no-such-id', 'Sources/A.pdf', 'Sources/B.pdf'),
+      ).toBe(false);
+      expect(await vault.read(citationStorePath('ren-2'))).toBe(before);
+    });
+
+    it('refuses a corrupt record without throwing', async () => {
+      const vault = new FolderSource(tempRoot);
+      await vault.write(citationStorePath('ren-bad'), '{ not json');
+      expect(
+        await renameCitationSourcePath(vault, 'ren-bad', 'Sources/A.pdf', 'Sources/B.pdf'),
+      ).toBe(false);
+      expect(await vault.read(citationStorePath('ren-bad'))).toBe('{ not json');
+    });
+
+    it('write-once still holds for everything else: a second write is refused, also after a rename', async () => {
+      const vault = new FolderSource(tempRoot);
+      await writeInstrumentCitation(vault, 'ren-3', { sourcePath: 'Sources/A.pdf', page: 1 });
+      await renameCitationSourcePath(vault, 'ren-3', 'Sources/A.pdf', 'Sources/B.pdf');
+      await expect(
+        writeInstrumentCitation(vault, 'ren-3', { sourcePath: 'Sources/C.pdf', page: 9 }),
+      ).rejects.toThrow(/refusing to overwrite an immutable record/);
+      expect(await readInstrumentCitation(vault, 'ren-3')).toEqual({
+        sourcePath: 'Sources/B.pdf',
+        page: 1,
+      });
+    });
   });
 
   it('encodes the instrument id into the file name, injectively', () => {
