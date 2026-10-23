@@ -156,6 +156,8 @@ export type DraftCardsResult =
   | {
       readonly status: 'drafted';
       readonly request: CardsGenerateRequestPayload;
+      /** `ol-egov.141.89.2.39`: see `DraftQuizCardsResult.chunkPaths`. Kept on her device, never sent. */
+      readonly chunkPaths?: readonly string[];
       /** The Worker's raw `/v1/task` response body. Never persisted here (D-005); see the module doc. */
       readonly response: unknown;
     };
@@ -245,5 +247,10 @@ export async function draftCardsForConcept(
     payload,
   });
 
-  return { status: 'drafted', request: payload, response };
+  return {
+    status: 'drafted',
+    request: payload,
+    response,
+    chunkPaths: grounding.chunks.map((chunk) => chunk.path),
+  };
 }

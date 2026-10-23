@@ -87,6 +87,44 @@ export function citedGroundingChunk(
   return text;
 }
 
+/**
+ * `ol-egov.141.89.2.39`: the citation an item should carry when it can name the one chunk it was
+ * drafted from and that chunk came from another note. F3.3's clearing row names "which reading or
+ * lecture the draft was drawn from", and C5.3 protects only "the recorded source note" (`[D-543]`):
+ * protection keyed to a note the item was not drafted from "would leave its real source unchecked"
+ * (`[D-567]`'s own words for a transcript part).
+ *
+ * The named chunk is the request's sole chunk, or the one distinct chunk `groundedIn` names (the
+ * rule of {@link citedGroundingChunk}); its positions must also name one distinct path. The citation
+ * is re-pointed only when that path is a markdown note, the chunk is not a supplied transcript
+ * passage (`isTranscriptChunk`), and the path is not the note `citation` already names. The new
+ * citation names that note alone: no page, section or revision, as a markdown note's citation
+ * carries none, and no digest until {@link withGroundingPassage} names one. Otherwise `citation`,
+ * unchanged: a citation that already names a passage, several chunks or paths, none, a position the
+ * request did not carry, or no `chunkPaths` (a result built before they existed). Never the
+ * top-ranked chunk of several.
+ */
+export function citationForNamedChunk(
+  citation: InstrumentCitation,
+  sourceChunks: readonly string[],
+  chunkPaths: readonly string[] | undefined,
+  groundedIn: readonly number[] | undefined,
+  isTranscriptChunk: (position: number) => boolean,
+): InstrumentCitation {
+  if (citation.passageDigest !== undefined) return citation;
+  if (chunkPaths === undefined || chunkPaths.length !== sourceChunks.length) return citation;
+  const positions =
+    sourceChunks.length === 1 ? [0] : readAuthoringGroundedIn(groundedIn, sourceChunks.length);
+  if (positions === undefined || positions.length === 0) return citation;
+  if (new Set(positions.map((position) => sourceChunks[position])).size !== 1) return citation;
+  const paths = new Set(positions.map((position) => chunkPaths[position]));
+  if (paths.size !== 1) return citation;
+  if (positions.some(isTranscriptChunk)) return citation;
+  const [path] = paths;
+  if (path === undefined || !isMarkdownPath(path) || path === citation.sourcePath) return citation;
+  return { sourcePath: path };
+}
+
 function isMarkdownPath(path: string): boolean {
   return path.toLowerCase().endsWith('.md');
 }

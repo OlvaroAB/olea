@@ -324,6 +324,12 @@ export type DraftQuizCardsResult =
   | {
       readonly status: 'drafted';
       readonly request: QuizGenerateRequestPayload;
+      /**
+       * `ol-egov.141.89.2.39`: each chunk's own path, aligned with `request.sourceChunks`. Kept on her
+       * device and never sent (D-005: the request carries chunk text only); read by the sweep to name
+       * the note an item's one chunk came from. Absent from a result built before it existed.
+       */
+      readonly chunkPaths?: readonly string[];
       /** The Worker's raw `/v1/task` response body, whatever it was — success or a well-formed `ErrorResponse` (see `WorkerTaskTransport`'s own contract). Never persisted here (D-005); a caller that wants to act on it narrows/validates it itself. */
       readonly response: unknown;
     };
@@ -485,5 +491,10 @@ export async function draftQuizCardsForConcept(
     payload,
   });
 
-  return { status: 'drafted', request: payload, response };
+  return {
+    status: 'drafted',
+    request: payload,
+    response,
+    chunkPaths: grounding.chunks.map((chunk) => chunk.path),
+  };
 }

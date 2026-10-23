@@ -274,6 +274,7 @@ import {
 } from './draft-demand.js';
 import {
   CITED_CHUNK_DIGEST_ENABLED,
+  citationForNamedChunk,
   citedGroundingChunk,
   soleGroundingChunk,
   withGroundingPassage,
@@ -1539,14 +1540,18 @@ export async function runGenerationSweep(
                 result.request.sourceChunks,
               );
       // Read parallel to `questions` (each question is its own record, so each is resolved on its
-      // own citation); `undefined` when citations are not trusted, so nothing below reads them.
-      const groundedIn = citedChunkDigest
-        ? extractDraftedGroundedIn(
-            result.response,
-            courseDraftsCards ? 'cards' : 'questions',
-            result.request.sourceChunks.length,
-          )
-        : undefined;
+      // own citation). `ol-egov.141.89.2.39`: the kept citation always names the note an item's one
+      // chunk came from (`citationForNamedChunk`); it is trusted for a passage digest only while
+      // `citedChunkDigest` holds, so `groundedIn` is `undefined` otherwise and no digest reads it.
+      const keptCitations = extractDraftedGroundedIn(
+        result.response,
+        courseDraftsCards ? 'cards' : 'questions',
+        result.request.sourceChunks.length,
+      );
+      const groundedIn = citedChunkDigest ? keptCitations : undefined;
+      const sourceChunkOrigins = result.request.sourceChunkOrigins;
+      const isTranscriptChunk = (position: number): boolean =>
+        sourceChunkOrigins?.[position] !== undefined && sourceChunkOrigins[position] !== null;
 
       // `ol-0r92.87`: the snapshot the drafted questions were actually
       // grounded against — see the module doc's own section. Read once per
@@ -1586,23 +1591,43 @@ export async function runGenerationSweep(
         // `sourceCitation` unchanged when it already names a passage (the sole-chunk case), when
         // the question cites no single chunk, or when that chunk is not exactly one passage of the
         // cited note.
-        const questionCitation =
-          sourceCitation === undefined || groundedIn?.[questionIndex] === undefined
+        // `ol-egov.141.89.2.39`: the note this question's one named chunk came from, when that is
+        // another markdown note; then any digest is named in that note, by the usual rule.
+        const namedCitation =
+          sourceCitation === undefined || transcriptCited
             ? sourceCitation
-            : transcriptCited
-              ? await withTranscriptPart(
-                  sourceCitation,
-                  units,
-                  result.request.sourceChunks,
-                  groundedIn[questionIndex],
-                )
-              : await withGroundingPassage(
-                  deps.vault,
-                  sourceCitation,
-                  notePath,
-                  result.request.sourceChunks,
-                  groundedIn[questionIndex],
-                );
+            : citationForNamedChunk(
+                sourceCitation,
+                result.request.sourceChunks,
+                result.chunkPaths,
+                keptCitations?.[questionIndex],
+                isTranscriptChunk,
+              );
+        const questionCitation =
+          namedCitation !== sourceCitation && namedCitation !== undefined
+            ? await withGroundingPassage(
+                deps.vault,
+                namedCitation,
+                notePath,
+                result.request.sourceChunks,
+                groundedIn?.[questionIndex],
+              )
+            : sourceCitation === undefined || groundedIn?.[questionIndex] === undefined
+              ? sourceCitation
+              : transcriptCited
+                ? await withTranscriptPart(
+                    sourceCitation,
+                    units,
+                    result.request.sourceChunks,
+                    groundedIn[questionIndex],
+                  )
+                : await withGroundingPassage(
+                    deps.vault,
+                    sourceCitation,
+                    notePath,
+                    result.request.sourceChunks,
+                    groundedIn[questionIndex],
+                  );
         const record: DraftRecord = {
           draftId,
           status: 'pending',

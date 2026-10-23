@@ -350,6 +350,26 @@ describe('draftQuizCardsForConcept — above the upper bar the request still rea
     expect(payload.sourceChunks).toContain(TARGET_TEXT);
   });
 
+  it('ol-egov.141.89.2.39: the drafted result carries each chunk path aligned with sourceChunks, and the request sent carries no path (D-005)', async () => {
+    const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
+    const transport = fakeTransport({ judge: judgeVerdict(true) });
+    const deps: DraftQuizCardsDeps = {
+      retrieve: await makeRetrieveDeps(keywordIndex, provider),
+      transport,
+    };
+
+    const result = await draftQuizCardsForConcept(deps, REQUEST);
+
+    expect(result.status).toBe('drafted');
+    if (result.status !== 'drafted') return;
+    expect(result.chunkPaths).toBeDefined();
+    expect(result.chunkPaths).toHaveLength(result.request.sourceChunks.length);
+    for (const path of result.chunkPaths ?? []) expect(typeof path).toBe('string');
+    const sent = JSON.stringify(quizCallOf(transport)?.payload);
+    for (const path of result.chunkPaths ?? []) expect(sent).not.toContain(path);
+    expect(Object.keys(result.request)).not.toContain('chunkPaths');
+  });
+
   it('an unsupported verdict above the upper bar refuses as judge-rejected BEFORE any generative call: one send, never two', async () => {
     const { keywordIndex, provider } = buildFixture(ABOVE_BAND_COSINE);
     const transport = fakeTransport({
