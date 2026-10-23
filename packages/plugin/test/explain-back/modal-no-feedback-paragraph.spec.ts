@@ -1,17 +1,41 @@
 /**
- * `ol-egov.141.89.6.98` (David, 2026-10-20): no separate feedback paragraph.
- * The graded phase's findings region and misconception region ARE the
- * feedback; the Worker's free-text `feedback` (the `[D-318]` experiment seam)
- * still arrives but is never shown, and no "The passage says:" prefix is
- * written anywhere she reads. `ExplainBackModal` cannot be imported under
- * Vitest (see `modal-unable-to-assess.spec.ts`), so the assertions read the
- * source text with comments stripped.
+ * `ol-egov.141.89.6.98` (David, 2026-10-20), as the v0.9 view has it (`[D-603]`, F5.3 as amended;
+ * `ol-egov.141.89.6.129`): after an answer the view shows no findings region, no misconception
+ * region and no free-text feedback paragraph — it shows her explanation, the passages and the
+ * reflection prompts. And no "The passage says:" prefix is written anywhere she reads.
+ *
+ * Scenarios: `features/F5-explain-it-back.md` (olea-service), "F5.3 / [D-318], [D-603] — no
+ * separate feedback paragraph; in v0.9 no findings or misconception region either": the first
+ * scenario (rewritten in place) and the third (as written).
+ *
+ * The first block renders the real view (`./practice-view-harness.ts`, `obsidian` mocked) and
+ * checks the comment-stripped source; the second reads every plugin and core source file.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { EXPLAIN_BACK_SUBMIT_LABEL } from '../../src/explain-back/copy.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  submit,
+  type ViewInternals,
+} from './practice-view-harness.js';
+
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const pluginSrc = fileURLToPath(new URL('../../src/', import.meta.url));
 const coreSrc = fileURLToPath(new URL('../../../core/src/', import.meta.url));
@@ -21,14 +45,6 @@ function stripComments(text: string): string {
 }
 
 const modal = stripComments(readFileSync(`${pluginSrc}explain-back/modal.ts`, 'utf8'));
-
-function bodyBetween(startMarker: string, endMarker: string): string {
-  const start = modal.indexOf(startMarker);
-  expect(start).toBeGreaterThan(-1);
-  const end = modal.indexOf(endMarker, start);
-  expect(end).toBeGreaterThan(start);
-  return modal.slice(start, end);
-}
 
 function sourceFiles(dir: string): string[] {
   const out: string[] = [];
@@ -40,31 +56,51 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-describe('the graded phase shows no free-text feedback paragraph', () => {
-  const body = bodyBetween('private renderGradedPhase(', 'private renderUnableToAssessPhase(');
+describe('after an answer, the view shows no findings region, no misconception region and no feedback paragraph', () => {
+  it('the passages phase draws none of them', async () => {
+    const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+    const view = new ExplainBackModal(
+      {} as never,
+      {
+        retrieveSourceBlocks: retrieveFor,
+        generateInstrumentId: () => 'attempt-1',
+        now: () => NOW,
+      },
+      { kind: 'instrument', instrument: INSTRUMENT },
+    ) as unknown as ViewInternals;
+    view.onOpen();
+    await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+    submit(view.contentEl, 'An answer.', EXPLAIN_BACK_SUBMIT_LABEL);
+    await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
 
-  it('never reads the Worker free-text field and creates no feedback paragraph', () => {
-    expect(body).not.toMatch(/grading\.feedback/);
-    expect(body).not.toContain('olea-explain-back-feedback');
+    const classes = view.contentEl.allClasses();
+    for (const cls of [
+      'olea-explain-back-region',
+      'olea-explain-back-region-omission',
+      'olea-explain-back-region-confusion',
+      'olea-explain-back-region-covered',
+      'olea-explain-back-region-head',
+      'olea-explain-back-feedback',
+    ]) {
+      expect(classes).not.toContain(cls);
+    }
+    const texts = view.contentEl.texts().join('\n');
+    expect(texts).not.toContain("What your notes cover that this didn't");
+    expect(texts).not.toContain('Worth a closer look');
   });
 
-  it('still renders the findings regions and the misconception region with each correction', () => {
-    expect(body).toMatch(/this\.renderGradedRegions\(\s*root,\s*prompt,\s*grading\s*\)/);
-    expect(body).toContain('EXPLAIN_BACK_MISCONCEPTION_HEADING');
-    expect(body).toMatch(/text:\s*candidate\.correction/);
-  });
-
-  it('the accepted-phase encouragement never carries the free text either', () => {
-    const copy = stripComments(readFileSync(`${pluginSrc}review/copy.ts`, 'utf8'));
-    const start = copy.indexOf('export function explainBackFullDepthEncouragement');
-    expect(start).toBeGreaterThan(-1);
-    const fn = copy.slice(start, copy.indexOf('\n}\n', start));
-    expect(fn).not.toMatch(/\.feedback/);
+  it('the view reads no grading at all: no feedback field, no findings, no misconception candidates', () => {
+    expect(modal).not.toMatch(/\.feedback\b/);
+    expect(modal).not.toMatch(/missedPoints|citedIssues|misconceptionCandidates/);
+    expect(modal).not.toMatch(/renderGradedRegions|renderRegion\b|ExplainBackRegionKind/);
+    expect(modal).not.toMatch(
+      /EXPLAIN_BACK_MISCONCEPTION_HEADING|EXPLAIN_BACK_MISSED_HEADING|olea-explain-back-feedback/,
+    );
   });
 });
 
 describe('the "The passage says:" prefix is written nowhere she reads', () => {
-  it('appears in no plugin or core source string', () => {
+  it('appears in no plugin or core source string', { timeout: 60_000 }, () => {
     const offenders = [...sourceFiles(pluginSrc), ...sourceFiles(coreSrc)].filter((f) =>
       /the passage says\s*:/i.test(stripComments(readFileSync(f, 'utf8'))),
     );

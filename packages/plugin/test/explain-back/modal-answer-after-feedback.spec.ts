@@ -9,6 +9,13 @@
  * cannot load under Vitest, so the rule lives in the pure
  * `attempt-sequence.ts` and is tested directly, and the view's wiring of it is
  * asserted against the view's source with comments stripped.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** nothing is graded, so the view seals no graded
+ * rung and keeps no graded sequence; the rule tests below stay, for when grading returns. The
+ * view-wiring tests are rewritten to what the practice view does instead: "Try again" adds the
+ * attempt she left to the view's own list, never erasing it, and each later answer's practice
+ * explanation names the passages shown after it (D7.1, `[D-614]`); the writer, not the view,
+ * works out the support shown.
  */
 
 import { readFileSync } from 'node:fs';
@@ -74,9 +81,11 @@ describe('an answer accepted after she read the feedback records the guided rung
     expect(sealAttemptSupport(sequence, UNAIDED).supportLevelShown).toBe('guided');
   });
 
-  it('the view reads the sealed rung at accept and forwards it to the writer, never re-resolving it there', () => {
-    expect(modal).toMatch(/const supportLevelShown = support\.supportLevelShown;/);
-    expect(modal).not.toMatch(/supportLevelShownForExplainBack\(/);
+  it('v0.9: the view seals no graded rung; the practice explanation’s writer reads the support shown', () => {
+    expect(modal).not.toMatch(
+      /sealAttemptSupport\(|supportLevelShown =|supportLevelShownForExplainBack\(/,
+    );
+    expect(modal).toMatch(/await record\(\s*await practiceExplanationInput\(\{/);
   });
 });
 
@@ -91,21 +100,18 @@ describe('the rung is sealed when she submits, not when she accepts', () => {
     expect(sealAttemptSupport(EMPTY_ATTEMPT_SEQUENCE, null).supportLevelShown).toBeUndefined();
   });
 
-  it('the view seals the support in submitAnswer, before any grading is requested, and carries it on the grading and graded phases', () => {
+  it('v0.9: submit mints the attempt’s own id and requests nothing; there is no grading phase to carry a rung', () => {
     const submit = modal.slice(
       modal.indexOf('private async submitAnswer('),
-      modal.indexOf('private acceptGrading('),
+      modal.indexOf('private async recordFeedbackShownBeforeDisplay('),
     );
-    expect(submit).toMatch(
-      /const support = sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\);[\s\S]*?phase: 'grading'[\s\S]*?support \}[\s\S]*?runGradingAttempt\(/,
-    );
-    expect(submit).toMatch(/phase: 'graded',[\s\S]{0,200}?support,/);
+    expect(submit).toMatch(/const attemptId = this\.deps\.generateInstrumentId\(\);/);
+    expect(submit).not.toMatch(/runGradingAttempt|this\.deps\.grade|support/);
+    expect(modal).not.toMatch(/phase: 'grading'|phase: 'graded'/);
   });
 
-  it('the Accept button forwards the support sealed for THIS attempt', () => {
-    expect(modal).toMatch(
-      /this\.acceptGrading\(\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*answerEdits,\s*support,?\s*\)/,
-    );
+  it('v0.9: no Accept button exists to forward a sealed support', () => {
+    expect(modal).not.toMatch(/acceptGrading|EXPLAIN_BACK_ACCEPT_LABEL/);
   });
 });
 
@@ -161,36 +167,29 @@ describe('Try again adds to the attempt sequence and never erases it', () => {
     expect(Object.keys(entry?.outcome ?? {}).sort()).toEqual(['kind', 'verdict']);
   });
 
-  it('the view appends the set-aside attempt before the pending grading goes through its discard boundary', () => {
-    const discard = modal.slice(
-      modal.indexOf('private discardGrading('),
-      modal.indexOf('private skipPrompt('),
+  it('v0.9: "Try again" adds the attempt she left to the view’s list, by appending, after its practice explanation is asked for', () => {
+    const tryAgain = modal.slice(
+      modal.indexOf('private tryAgain('),
+      modal.indexOf('private async recordPracticeExplanationIfPossible('),
     );
-    expect(discard).toMatch(
-      /this\.attemptSequence = appendSetAsideAttempt\(this\.attemptSequence, \{[\s\S]*?attemptId,[\s\S]*?support,\s*\}\);[\s\S]*?discardExplainBackGrading\(pending\);/,
+    expect(tryAgain).toMatch(
+      /void this\.recordPracticeExplanationIfPossible\(prompt, answer, attemptId, durationMs\);[\s\S]*?this\.attemptsLeftByTryAgain = \[\.\.\.this\.attemptsLeftByTryAgain, attemptId\];/,
     );
+    expect(modal).not.toMatch(/appendSetAsideAttempt|discardExplainBackGrading|attemptSequence/);
   });
 
-  it('only discardGrading grows the sequence, and only a new question resets it', () => {
-    expect(modal.match(/appendSetAsideAttempt\(/g)).toHaveLength(1);
-    const resets = modal.match(/this\.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;/g) ?? [];
-    expect(resets).toHaveLength(2);
-    for (const site of [
-      'private async resolveInstrumentPrompt(',
-      'private async resolveTopicPrompt(',
-    ]) {
-      const start = modal.indexOf(site);
-      const body = modal.slice(start, modal.indexOf('\n  }\n', start));
-      expect(body).toContain('this.attemptSequence = EMPTY_ATTEMPT_SEQUENCE;');
-    }
+  it('v0.9: only "Try again" grows the list, and only a new question resets it', () => {
+    expect(modal.match(/this\.attemptsLeftByTryAgain = \[\.\.\./g)).toHaveLength(1);
+    expect(modal.match(/this\.attemptsLeftByTryAgain = \[\];/g)).toHaveLength(1);
+    const enter = modal.slice(
+      modal.indexOf('private enterNewQuestion('),
+      modal.indexOf('private async submitAnswer('),
+    );
+    expect(enter).toContain('this.attemptsLeftByTryAgain = [];');
   });
 
-  it('both Try again buttons, graded and could-not-assess, pass the attempt id, its duration and its sealed support', () => {
-    expect(
-      modal.match(
-        /this\.discardGrading\(prompt, answer, pending, durationMs, attemptId, support\)/g,
-      ),
-    ).toHaveLength(2);
+  it('v0.9: the "Try again" button passes the attempt id and its duration', () => {
+    expect(modal.match(/this\.tryAgain\(prompt, answer, attemptId, durationMs\)/g)).toHaveLength(1);
   });
 });
 
@@ -219,13 +218,8 @@ describe('an answer the check could not assess is kept but gives no feedback', (
 });
 
 describe('resubmitting after the check failed is the same attempt, not one after feedback', () => {
-  it('the refusal retry resubmits through submitAnswer and never touches the sequence', () => {
-    const refusal = modal.slice(
-      modal.indexOf('private renderCouldNotCheckRefusal('),
-      modal.indexOf('private renderAcceptedPhase('),
-    );
-    expect(refusal).toMatch(/this\.submitAnswer\(prompt, answer\)/);
-    expect(refusal).not.toMatch(/attemptSequence|discardGrading/);
+  it('v0.9: no check runs, so there is no check-failed refusal and no retry to resubmit from', () => {
+    expect(modal).not.toMatch(/renderCouldNotCheckRefusal|check-failed/);
   });
 
   it('with the sequence unchanged, the resubmission seals the same rung the failed submission did', () => {

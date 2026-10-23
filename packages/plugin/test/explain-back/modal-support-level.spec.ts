@@ -14,11 +14,18 @@
  * offers no hint and keeps no source open beside her, so `'independent'` is
  * the true reading — not a default, and the constant that says so sits next
  * to the render method whose behaviour it describes.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** no review is written, so the view resolves no
+ * rung; the practice explanation's writer records the support shown before each answer (D7.1,
+ * `[D-614]`: `'independent'` when no passage had been shown, `'guided'` when one had). What stays
+ * the view's to guarantee is the fact that makes `'independent'` true: nothing is open beside her
+ * while she writes. That is checked by rendering the real answering phase
+ * (`./practice-view-harness.ts`, `obsidian` mocked); the resolver's rules stay, tested below.
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 // `ADMITTED_SUPPORT_LEVELS` is `[D-281]`'s own list and lives in
 // `olea-core`'s `mastery/rollup.ts`, which another lane owns; it is not
 // re-exported from that package's index, so it is read here by deep path
@@ -26,6 +33,25 @@ import { describe, expect, it } from 'vitest';
 // assertions exist to catch.
 import { ADMITTED_SUPPORT_LEVELS } from '../../../core/src/mastery/rollup.js';
 import { supportLevelShownForExplainBack } from '../../src/explain-back/solo-review.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  SUBJECT_PASSAGES,
+  type ViewInternals,
+} from './practice-view-harness.js';
+
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -48,23 +74,31 @@ describe('an attempt made with no help on screen records the independent level, 
     expect(ADMITTED_SUPPORT_LEVELS).toContain('independent');
   });
 
-  it('the modal declares what its answering phase actually shows, and both affordances are absent', () => {
-    expect(modal).toMatch(
-      /EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN[\s\S]{0,200}?hintOffered: false,[\s\S]{0,120}?sourceShownWhileAnswering: false,/,
-    );
+  it('the answering phase shows her no passage and no hint: the prompt’s passages exist, and none is on screen', async () => {
+    const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+    const view = new ExplainBackModal(
+      {} as never,
+      {
+        retrieveSourceBlocks: retrieveFor,
+        generateInstrumentId: () => 'attempt-1',
+        now: () => NOW,
+      },
+      { kind: 'instrument', instrument: INSTRUMENT },
+    ) as unknown as ViewInternals;
+    view.onOpen();
+    await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+    const texts = view.contentEl.texts();
+    for (const passage of SUBJECT_PASSAGES) expect(texts).not.toContain(passage.block.text);
+    expect(view.contentEl.withClass('olea-explain-back-item')).toEqual([]);
+    expect(texts.join(' ')).not.toMatch(/hint/i);
   });
 
-  it('the resolved level rides to the writer on the same call the depth grade does, keyed on the same attempt', () => {
-    // `[D-416]` (`ol-egov.141.89.6.63`): the level is now sealed at submit from
-    // the answering phase's constant AND the attempt sequence, then carried to
-    // accept — see `modal-answer-after-feedback.spec.ts` for the after-feedback half.
-    expect(modal).toMatch(
-      /sealAttemptSupport\(\s*this\.attemptSequence,\s*EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN,\s*this\.priorAttemptState,?\s*\)/,
-    );
-    expect(modal).toMatch(/const supportLevelShown = support\.supportLevelShown;/);
-    expect(modal).toMatch(
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,400}?attemptId,[\s\S]{0,400}?\.\.\.\(supportLevelShown !== undefined \? \{ supportLevelShown \} : \{\}\),/,
-    );
+  it('v0.9: the view resolves no rung itself; the practice explanation’s writer records what was shown', () => {
+    // The class body: the dormant review write's parameter type still declares the field.
+    const view = modal.slice(modal.indexOf('export class ExplainBackModal'));
+    expect(view).not.toMatch(/supportLevelShown|sealAttemptSupport/);
+    expect(modal).not.toMatch(/EXPLAIN_BACK_ANSWERING_SUPPORT_SHOWN/);
+    expect(modal).toMatch(/await practiceExplanationInput\(\{/);
   });
 });
 

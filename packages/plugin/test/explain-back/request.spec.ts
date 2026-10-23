@@ -518,6 +518,24 @@ describe('resolveExplainBackRelationEdge (rel.md section 1, "Explain-back partne
       expect(partner?.edge).toEqual(keyedEdge());
     });
 
+    it('[D-611]: the partner also names the subject by its current wording, for the relation reflection prompt', () => {
+      const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
+      const renamed = {
+        relations: () => relations,
+        conceptRecords: () => [
+          conceptRecord('a renamed cough', COUGH_KEY),
+          conceptRecord(BRONCHITIS, BRONCHITIS_KEY),
+        ],
+      };
+
+      expect(resolveExplainBackCausesPartner(depsFor(relations), BRONCHITIS_KEY)?.subjectName).toBe(
+        BRONCHITIS,
+      );
+      expect(resolveExplainBackCausesPartner(renamed, COUGH_KEY)?.subjectName).toBe(
+        'a renamed cough',
+      );
+    });
+
     it('a subject on the cause side has the effect as its neighbour, never itself', () => {
       const relations = relationSetOf([relationSetEntry(keyedEdge(), 'current')]);
 

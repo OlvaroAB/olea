@@ -1,41 +1,36 @@
 /**
- * `ol-0r92.94` [DOS-C1]: `ExplainBackModal`'s in-flight-memo guard against a
- * double-click accept — source-level assertions, not a behavioural test, for
- * the same reason `modal-duration.spec.ts` and `modal-refusal.spec.ts` give:
- * `modal.ts` extends Obsidian's `Modal`, and `obsidian`'s `package.json`
- * `main` is `""`, so it cannot be instantiated under Vitest at all. Comments
- * are stripped before matching so a doc paragraph describing the guard can't
- * satisfy an assertion that the guard actually exists in the code.
+ * `ol-0r92.94` [DOS-C1] and `[D-482]`, as the v0.9 view has them (`[D-603]`,
+ * `ol-egov.141.89.6.129`):
+ * - `submitAnswer` mints a fresh `attemptId` via `this.deps.generateInstrumentId()` on every
+ *   genuine submit, and every state it moves to carries it; "Done" and "Try again" never mint one.
+ * - A second click on "Done" or "Try again" for the same answer is not a second practice write:
+ *   the view remembers the attempts it has asked the writer for (the writer is idempotent on the
+ *   attempt id as well, which covers a reopen or a reload).
+ * - A late settle never overwrites a newer attempt: `runGradingAttempt`'s guard (dormant with
+ *   grading, tested below as the function it is) and, in v0.9, the view's own guard on the marker
+ *   write before the passages appear.
  *
- * What this locks in:
- * - `submitAnswer` mints a fresh `attemptId` via `this.deps.generateInstrumentId()`
- *   on every call (every genuine submit), never once per modal instance and
- *   never derived from `prompt.originInstrumentId`.
- * - `acceptGrading` checks an in-flight `Map` keyed on `attemptId` before
- *   doing any real work, and stores the in-flight `Promise` before
- *   returning it — the same "store the Promise itself, not just its
- *   resolved value" shape `grading/wiring.ts`'s own
- *   `acceptedObservationsByAttempt` uses, so a second concurrent call for
- *   the SAME attempt shares one execution rather than starting a second
- *   `recordSoloGradeAndReview`/`acceptWithObservation` run.
+ * Source-level checks run on the comment-stripped text; the behavioural ones render the real view
+ * into `./practice-view-harness.ts`'s stand-in (`obsidian` mocked).
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it, vi } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
 import { runGradingAttempt } from '../../src/explain-back/grading-attempt.js';
+import { NOW, retrieveFor } from './practice-view-harness.js';
 
-// The modal extends Obsidian's `Modal` (unresolvable under Vitest), so the behavioural test below
-// supplies a bare `Modal` base and stands in for the two modules that need a real Obsidian.
-vi.mock('obsidian', () => ({
-  Modal: class {
-    contentEl = {};
-    titleEl = {};
-    constructor(readonly app: unknown) {}
-  },
-}));
-vi.mock('../../src/registry/obsidian-ports.js', () => ({ openRegistryEntryFor: () => {} }));
-vi.mock('../../src/sprig/render-sprig.js', () => ({ renderSprig: () => {} }));
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -56,63 +51,43 @@ function bodyBetween(startMarker: string, endMarker: string): string {
   return modal.slice(start, end);
 }
 
-describe('ExplainBackModal — ol-0r92.94 [DOS-C1]: attemptId minted at submit, never at accept', () => {
+describe('ExplainBackModal — ol-0r92.94 [DOS-C1]: attemptId minted at submit, never when she leaves the answer', () => {
   it('submitAnswer mints attemptId via deps.generateInstrumentId() and carries it into every ModalState transition it makes', () => {
-    const submitAnswerBody = bodyBetween('private async submitAnswer(', 'private acceptGrading(');
+    const submitAnswerBody = bodyBetween(
+      'private async submitAnswer(',
+      'private async recordFeedbackShownBeforeDisplay(',
+    );
     expect(submitAnswerBody).toMatch(/const attemptId = this\.deps\.generateInstrumentId\(\);/);
-    // Every state transition submitAnswer makes after minting carries it.
     expect(submitAnswerBody).toMatch(
-      /phase: 'grading',\s*prompt,\s*answer,\s*durationMs,\s*attemptId/,
+      /phase: 'revealing',\s*prompt,\s*answer,\s*attemptId,\s*durationMs/,
     );
     expect(submitAnswerBody).toMatch(
-      /phase: 'refused',\s*prompt,\s*answer,\s*reason: outcome\.kind === 'unavailable' \? 'unavailable' : outcome\.reason,\s*durationMs,\s*attemptId/,
-    );
-    expect(submitAnswerBody).toMatch(
-      /phase: 'graded',\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId/,
+      /phase: 'passages',\s*prompt,\s*answer,\s*attemptId,\s*durationMs/,
     );
   });
 
-  it('acceptGrading never mints its own id — attemptId only ever arrives as a parameter', () => {
-    const acceptGradingBody = bodyBetween('private acceptGrading(', 'private discardGrading(');
-    expect(acceptGradingBody).not.toMatch(/generateInstrumentId/);
+  it('"Done" and "Try again" never mint their own id — attemptId only ever arrives as a parameter', () => {
+    const leaving = bodyBetween('private finishPractice(', 'private skipPrompt(');
+    expect(leaving).not.toMatch(/generateInstrumentId/);
   });
 });
 
-describe('ExplainBackModal — ol-0r92.94 [DOS-C1]: in-flight memo keyed on attemptId', () => {
-  it('declares one Map instance field for the in-flight guard', () => {
-    expect(modal).toMatch(
-      /private readonly acceptInFlightByAttempt = new Map<string, Promise<void>>\(\);/,
-    );
+describe('ExplainBackModal — one practice write per answer, however often she clicks', () => {
+  it('declares one Set of the attempts already asked for', () => {
+    expect(modal).toMatch(/private readonly practiceRecorded = new Set<string>\(\);/);
   });
 
-  it('acceptGrading checks the map before doing any work, and stores the in-flight Promise (not a resolved value) before returning it', () => {
-    const acceptGradingBody = bodyBetween(
-      'private acceptGrading(',
-      'private async computeAcceptGrading(',
+  it('checks and marks the attempt before the first await, so a second click finds it', () => {
+    const body = bodyBetween(
+      'private async recordPracticeExplanationIfPossible(',
+      'private skipPrompt(',
     );
-    expect(acceptGradingBody).toMatch(
-      /const inFlight = this\.acceptInFlightByAttempt\.get\(attemptId\);/,
-    );
-    expect(acceptGradingBody).toMatch(/if \(inFlight\) return inFlight;/);
-    expect(acceptGradingBody).toMatch(/const promise = this\.computeAcceptGrading\([^)]*\);/);
-    expect(acceptGradingBody).toMatch(
-      /this\.acceptInFlightByAttempt\.set\(attemptId,\s*promise\);/,
-    );
-  });
-
-  it('the real work (acceptWithObservation, recordSoloGradeAndReview) lives in computeAcceptGrading, not in the memoizing wrapper', () => {
-    const acceptGradingBody = bodyBetween(
-      'private acceptGrading(',
-      'private async computeAcceptGrading(',
-    );
-    expect(acceptGradingBody).not.toMatch(/acceptWithObservation/);
-    expect(acceptGradingBody).not.toMatch(/recordSoloGradeAndReview/);
-    const computeBody = bodyBetween(
-      'private async computeAcceptGrading(',
-      'private discardGrading(',
-    );
-    expect(computeBody).toMatch(/this\.deps\.acceptWithObservation\(/);
-    expect(computeBody).toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+    const check = body.indexOf('if (this.practiceRecorded.has(attemptId)) return;');
+    const mark = body.indexOf('this.practiceRecorded.add(attemptId);');
+    const firstAwait = body.indexOf('await ');
+    expect(check).toBeGreaterThan(-1);
+    expect(mark).toBeGreaterThan(check);
+    expect(firstAwait).toBeGreaterThan(mark);
   });
 });
 
@@ -168,45 +143,46 @@ describe('runGradingAttempt: the attempt guard', () => {
   });
 
   // @auto:plugin/explain-back/modal-idempotency.spec
-  it('removing the guard turns the late-response check red: submitAnswer returns on superseded and reads the live attempt id', () => {
-    // The behavioural test above fails for any runGradingAttempt that ignores isCurrent();
-    // this half pins that the modal supplies the guard and honours its answer.
-    const submitAnswerBody = bodyBetween('private async submitAnswer(', 'private acceptGrading(');
-    expect(submitAnswerBody).toMatch(
-      /isCurrent:\s*\(\)\s*=>\s*this\.state\.phase === 'grading' && this\.state\.attemptId === attemptId/,
+  it('removing the guard turns the late-response check red: submitAnswer reads the live attempt id after its await', () => {
+    // The behavioural test below fails for a submitAnswer that ignores which attempt is live; this
+    // half pins the v0.9 guard: after the marker write settles, the passages are drawn only if
+    // this attempt is still the one on screen and the view is still open.
+    const submitAnswerBody = bodyBetween(
+      'private async submitAnswer(',
+      'private async recordFeedbackShownBeforeDisplay(',
     );
-    expect(submitAnswerBody).toMatch(/if \(outcome\.kind === 'superseded'\) return;/);
+    expect(submitAnswerBody).toMatch(
+      /if \(this\.closed \|\| this\.state\.phase !== 'revealing' \|\| this\.state\.attemptId !== attemptId\) \{\s*return;\s*\}/,
+    );
+    expect(modal).not.toMatch(/runGradingAttempt/);
   });
 });
 
 describe("ExplainBackModal: the modal's own late-response guard", () => {
   // @auto:plugin/explain-back/modal-idempotency.spec
-  it("through the modal's own submit path, a first grading call that settles after a second attempt began is ignored", async () => {
+  it("through the modal's own submit path, a first marker write that settles after a second attempt began draws nothing", async () => {
     const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
-    const released: Array<(value: never) => void> = [];
-    const grade = vi.fn(
+    const released: Array<() => void> = [];
+    const recordFeedbackShown = vi.fn(
       () =>
-        new Promise<never>((resolve) => {
+        new Promise<void>((resolve) => {
           released.push(resolve);
         }),
     );
-    const noteShown = vi.fn();
-    const acceptWithObservation = vi.fn();
-    const recordSoloGradeAndReview = vi.fn();
+    const grade = vi.fn();
     const ids = ['attempt-1', 'attempt-2'];
-    const modal = new ExplainBackModal(
+    const view = new ExplainBackModal(
       {} as never,
       {
         grade,
-        acceptWithObservation,
-        recordSoloGradeAndReview,
+        retrieveSourceBlocks: retrieveFor,
+        recordFeedbackShown,
         generateInstrumentId: () => ids.shift() ?? 'extra',
-        feedbackExposureLedger: { noteShown },
-      } as never,
+        now: () => NOW,
+      },
       { kind: 'freeform' },
     );
-    // The modal's observable surface here is its phase state and its render calls.
-    const internals = modal as unknown as {
+    const internals = view as unknown as {
       state: { phase: string; attemptId?: string };
       render: () => void;
       submitAnswer: (prompt: unknown, answer: string) => Promise<void>;
@@ -214,37 +190,35 @@ describe("ExplainBackModal: the modal's own late-response guard", () => {
     const render = vi.fn();
     internals.render = render;
     const prompt = {
-      context: { ...GRADE_INPUT },
+      question: 'Why does X happen?',
       subjectConceptId: null,
       originInstrumentId: 'instrument-1',
+      passages: [],
+      shape: { kind: 'concept' },
       conceptIds: [],
-      sourceBlocks: [],
+      courseCode: null,
+      noteTitle: null,
     };
 
     const first = internals.submitAnswer(prompt, 'first answer');
-    expect(internals.state).toMatchObject({ phase: 'grading', attemptId: 'attempt-1' });
+    expect(internals.state).toMatchObject({ phase: 'revealing', attemptId: 'attempt-1' });
     const second = internals.submitAnswer(prompt, 'second answer'); // a newer attempt began
-    expect(internals.state).toMatchObject({ phase: 'grading', attemptId: 'attempt-2' });
-    expect(grade).toHaveBeenCalledTimes(2);
+    expect(internals.state).toMatchObject({ phase: 'revealing', attemptId: 'attempt-2' });
+    await vi.waitFor(() => expect(recordFeedbackShown).toHaveBeenCalledTimes(2));
     const rendersBeforeLate = render.mock.calls.length;
 
-    // The first call settles late, with a gradable verdict.
-    const graded = { grading: { outcome: 'graded', verdict: 'correct' } } as never;
-    released[0]?.(graded);
+    // The first marker write settles late.
+    released[0]?.();
     await first;
 
-    // Ignored: the live attempt's state is untouched, nothing was drawn, shown or written for it.
-    expect(internals.state).toMatchObject({ phase: 'grading', attemptId: 'attempt-2' });
+    // Ignored: the live attempt's state is untouched and nothing was drawn for the first.
+    expect(internals.state).toMatchObject({ phase: 'revealing', attemptId: 'attempt-2' });
     expect(render).toHaveBeenCalledTimes(rendersBeforeLate);
-    expect(noteShown).not.toHaveBeenCalled();
-    expect(acceptWithObservation).not.toHaveBeenCalled();
-    expect(recordSoloGradeAndReview).not.toHaveBeenCalled();
 
-    // The live attempt still settles normally.
-    released[1]?.(graded);
+    // The live attempt still settles normally, and nothing was ever sent to a grader.
+    released[1]?.();
     await second;
-    expect(internals.state).toMatchObject({ phase: 'graded', attemptId: 'attempt-2' });
-    expect(noteShown).toHaveBeenCalledTimes(1);
-    expect(noteShown).toHaveBeenCalledWith('instrument-1', 'attempt-2');
+    expect(internals.state).toMatchObject({ phase: 'passages', attemptId: 'attempt-2' });
+    expect(grade).not.toHaveBeenCalled();
   });
 });

@@ -461,12 +461,11 @@ describe('the modal hands the neighbour key to the write (ol-egov.141.89.6.75)',
     expect(body).toMatch(/named = \{\s*neighbourConceptId,/);
   });
 
-  it('the accepted-attempt call to recordSoloGradeAndReview carries prompt.neighbourConceptId beside the material', () => {
-    const start = modal.indexOf('this.deps.recordSoloGradeAndReview({');
-    expect(start).toBeGreaterThan(-1);
-    const end = modal.indexOf('});', start);
-    const call = modal.slice(start, end);
-    expect(call).toMatch(/neighbourConceptId/);
-    expect(call).toMatch(/prompt\.neighbourConceptId/);
+  // `[D-603]` (`ol-egov.141.89.6.129`): in v0.9 no accepted attempt is written, so the view makes no
+  // call to hand the key to; the lookup above still names the partner by key, and the write
+  // keeps its own tests in this file, for when grading returns (the F5 heading note).
+  it('v0.9: the view makes no accepted-attempt call, so no scheduling observation can be recorded from it', () => {
+    expect(modal).not.toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+    expect(modal).not.toMatch(/prompt\.neighbourConceptId/);
   });
 });

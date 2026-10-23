@@ -1,26 +1,53 @@
 /**
- * `ExplainBackModal`'s `durationMs` wiring (`ol-yj0k`) — source-level
- * assertions, not a behavioural test: `modal.ts` extends Obsidian's `Modal`,
- * and `obsidian`'s `package.json` `main` is `""`, so it cannot be loaded
- * under Vitest at all (the same documented constraint `main-wiring.spec.ts`
- * already works around for `main.ts`). That test's own technique is the only
- * instrument available here too — assert against the source text, with
- * comments stripped so a doc paragraph describing the wiring can't satisfy
- * an assertion about the wiring actually existing.
+ * `ExplainBackModal`'s timing (`ol-yj0k`) and what the v0.9 view says after an answer
+ * (`[D-603]`, F5.3 as amended; `ol-egov.141.89.6.129`).
  *
- * What this guards: `docs/dev/proposals/behavioural-signals-capture.md` §3
- * named `solo-review.ts:198`'s hardcoded `durationMs: null` as zero-schema
- * wiring debt — QA/cloze/MCQ already had a working presented-to-rated clock
- * (`review/session.ts:664,673-675`) and explain-back didn't. `solo-review
- * .spec.ts` covers that the value, once supplied, is relayed into the
- * persisted record; it cannot cover where the value comes from, because the
- * two moments being timed (a prompt becoming visible, an answer being
- * submitted) are UI state transitions that only exist in `modal.ts`.
+ * - `durationMs` is the view's own measurement, from the prompt's presentation to her submit,
+ *   carried onto the practice explanation she leaves by "Done" or "Try again" (D7.1, `[D-614]`);
+ *   "Try again" restarts the clock for the next answer.
+ * - After an answer, and after "Done", nothing reads how far she reached: no depth heading, no
+ *   outcome line, no first-full-depth sentence, and no depth reading asked for or recorded.
+ * - The misconception digest, which the view loaded only to send to the judge (`ol-2zfj.75`), is
+ *   no longer loaded: nothing is sent.
+ *
+ * Scenarios: `features/F5-explain-it-back.md` (olea-service): "F5.3 / [D-603] — the view states
+ * no depth line" (the two `modal-duration.spec` scenarios), "F5 — the explain-back review-log
+ * write carries a real durationMs" and its "Try again restarts the clock", the dormant
+ * "F5.6 (continued) — the judge digest has a real production caller", and the dormant
+ * "a transient check-failed retry does not restart the clock".
+ *
+ * Behavioural through the real view (`./practice-view-harness.ts`, `obsidian` mocked), with
+ * source-level checks (comments stripped) where the claim is about what the file can reach.
  */
 
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import {
+  EXPLAIN_BACK_DISCARD_LABEL,
+  EXPLAIN_BACK_DONE_LABEL,
+  EXPLAIN_BACK_SUBMIT_LABEL,
+} from '../../src/explain-back/copy.js';
+import type { ViewPracticeExplanationInput } from '../../src/explain-back/practice-record.js';
+import {
+  INSTRUMENT,
+  NOW,
+  retrieveFor,
+  submit,
+  type ViewInternals,
+} from './practice-view-harness.js';
+
+vi.mock('obsidian', async () => (await import('./practice-view-harness.js')).fakeObsidian());
+vi.mock('../../src/sprig/render-sprig.js', async () => {
+  const { FakeEl } = await import('./practice-view-harness.js');
+  return { renderSprig: () => new FakeEl('svg') };
+});
+
+// The first import of the view (and `olea-core` behind it) can outlast a test's own timeout on a
+// loaded machine; it is made once, here, so each test times only its own work.
+beforeAll(async () => {
+  await import('../../src/explain-back/modal.js');
+}, 120_000);
 
 const srcDir = fileURLToPath(new URL('../../src/', import.meta.url));
 
@@ -33,24 +60,66 @@ function codeOf(relativePath: string): string {
 
 const modal = codeOf('explain-back/modal.ts');
 
+/** A view on a clock the test moves by hand. */
+async function openView() {
+  const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
+  let at = NOW.getTime();
+  const ids = ['attempt-1', 'attempt-2'];
+  const practice = vi.fn(async (_input: ViewPracticeExplanationInput) => ({
+    written: false as const,
+    record: {} as never,
+  }));
+  const loadMisconceptionDigest = vi.fn(async () => []);
+  const recordSoloGradeAndReview = vi.fn(async () => undefined);
+  const view = new ExplainBackModal(
+    {} as never,
+    {
+      retrieveSourceBlocks: retrieveFor,
+      generateInstrumentId: () => ids.shift() ?? 'extra',
+      now: () => new Date(at),
+      recordPracticeExplanation: practice,
+      loadMisconceptionDigest,
+      recordSoloGradeAndReview,
+      getMasteryState: () => 'sprout',
+    },
+    { kind: 'instrument', instrument: INSTRUMENT },
+  ) as unknown as ViewInternals;
+  const drawn: string[] = [];
+  const classes: string[] = [];
+  const render = view.render.bind(view);
+  view.render = () => {
+    render();
+    drawn.push(...view.contentEl.texts());
+    classes.push(...view.contentEl.allClasses());
+  };
+  view.onOpen();
+  await vi.waitFor(() => expect(view.state.phase).toBe('answering'));
+  return {
+    view,
+    practice,
+    loadMisconceptionDigest,
+    recordSoloGradeAndReview,
+    drawn,
+    classes,
+    advance: (ms: number) => {
+      at += ms;
+    },
+  };
+}
+
+async function answer(view: ViewInternals, text: string): Promise<void> {
+  submit(view.contentEl, text, EXPLAIN_BACK_SUBMIT_LABEL);
+  await vi.waitFor(() => expect(view.state.phase).toBe('passages'));
+}
+
+const DEPTH_LINES = /You explained this|first time this concept has been explained|full depth/;
+
 describe('ExplainBackModal times an attempt through its own injected clock, never Date.now() at a measurement site', () => {
   it('reads the current time only via this.now(), and falls back to `new Date` in exactly one place — the constructor default for an unwired deps.now', () => {
     const dateConstructions = modal.match(/new Date\(\)/g) ?? [];
-    // The ONLY bare `new Date()` allowed in this file is the constructor's
-    // fallback for an optional, not-yet-wired `deps.now` — see the class
-    // field doc on `now`. Every timing read elsewhere must go through
-    // `this.now()`.
     expect(dateConstructions).toHaveLength(1);
     expect(modal).toMatch(/this\.now = deps\.now \?\? \(\(\) => new Date\(\)\);/);
     expect(modal).not.toMatch(/Date\.now\(\)/);
-  });
-
-  it('stamps presentedAtMs, through this.now(), every time a prompt enters the answering phase', () => {
-    // Initial resolution from an instrument-seeded prompt, a topic-seeded
-    // prompt, and re-entry after discarding a grading to retry — three call
-    // sites, three fresh presentations.
-    const stamps = modal.match(/this\.presentedAtMs = this\.now\(\)\.getTime\(\);/g) ?? [];
-    expect(stamps).toHaveLength(3);
   });
 
   it('computes durationMs at submission from presentedAtMs, guarded against a clock running backwards', () => {
@@ -58,99 +127,77 @@ describe('ExplainBackModal times an attempt through its own injected clock, neve
       /this\.presentedAtMs !== null \? Math\.max\(0, this\.now\(\)\.getTime\(\) - this\.presentedAtMs\) : null/,
     );
   });
+});
 
-  it('carries the computed durationMs through to the recordSoloGradeAndReview call, never re-deriving or dropping it', () => {
-    expect(modal).toMatch(
-      // The tail window widened from 50 to 300 (`ol-l7ew` [DOS-C5a]'s support
-      // level) and then to 800 (`ol-egov.141.89.6.50`'s sourceMaterial/
-      // relationExpected, appended after answerEdits) and then to 1300
-      // (`ol-egov.141.89.6.75`'s neighbourConceptId, spread after relationExpected)
-      // characters across this call's growth: the assertion is still "durationMs
-      // is inside the call object", not "durationMs is the last field in it".
-      /await this\.deps\.recordSoloGradeAndReview\(\{[\s\S]{0,300}?durationMs,[\s\S]{0,1300}?\}\);/,
-    );
+describe('a submitted answer’s timing is captured and persisted on its practice explanation', () => {
+  it('durationMs is the milliseconds from the prompt’s presentation to that submit, never null', async () => {
+    const { view, practice, advance } = await openView();
+    advance(42_000);
+    await answer(view, 'An answer.');
+    advance(90_000); // reading the passages is not part of the answer's time
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    await vi.waitFor(() => expect(practice).toHaveBeenCalledTimes(1));
+    expect(practice.mock.calls[0]?.[0].durationMs).toBe(42_000);
   });
 });
 
-/**
- * `[D-217]` (`ol-0r92.48`, F5.3) — the same "source is the only instrument"
- * constraint as above applies to this heading's timing: the graded phase and
- * the accepted phase are both DOM the real `Modal` renders, and `obsidian`
- * cannot load under Vitest (this file's own header). What CAN be checked
- * structurally: `renderGradedPhase` never calls the depth heading function
- * (no verdict-shaped placeholder while depth is unknown), `renderAcceptedPhase`
- * is the only call site, and it renders conditionally on an actual level
- * rather than unconditionally. `copy.spec.ts` covers the heading's own
- * wording; this only covers WHERE it is (and isn't) called from.
- */
-describe('ExplainBackModal renders the [D-217] depth heading only once a level is known, never on the graded phase', () => {
-  it('renderGradedPhase never calls explainBackDepthHeading — no verdict-shaped placeholder while depth is still ungraded', () => {
-    const gradedPhaseStart = modal.indexOf('private renderGradedPhase(');
-    const acceptedPhaseStart = modal.indexOf('private renderAcceptedPhase(');
-    expect(gradedPhaseStart).toBeGreaterThan(-1);
-    expect(acceptedPhaseStart).toBeGreaterThan(gradedPhaseStart);
-    const gradedPhaseBody = modal.slice(gradedPhaseStart, acceptedPhaseStart);
-    expect(gradedPhaseBody).not.toMatch(/explainBackDepthHeading/);
-    expect(gradedPhaseBody).not.toMatch(/olea-explain-back-outcome/);
-  });
-
-  it('renderAcceptedPhase is the one call site, and only renders the heading when a soloLevel actually came back', () => {
-    const acceptedPhaseStart = modal.indexOf('private renderAcceptedPhase(');
-    expect(acceptedPhaseStart).toBeGreaterThan(-1);
-    const acceptedPhaseBody = modal.slice(acceptedPhaseStart, acceptedPhaseStart + 800);
-    expect(acceptedPhaseBody).toMatch(/if \(soloLevel !== null\) \{/);
-    expect(acceptedPhaseBody).toMatch(/text: explainBackDepthHeading\(soloLevel\),/);
-    const callSites = modal.match(/explainBackDepthHeading\(/g) ?? [];
-    expect(callSites).toHaveLength(1);
-  });
-
-  it('acceptGrading reads whatever recordSoloGradeAndReview reports and carries it into the accepted phase state, never fabricating a level', () => {
-    expect(modal).toMatch(/const depthOutcome = await this\.deps\.recordSoloGradeAndReview\(/);
-    expect(modal).toMatch(/if \(depthOutcome\) soloLevel = depthOutcome;/);
-    expect(modal).toMatch(/phase: 'accepted', message, soloLevel \};/);
+describe('"Try again" restarts the clock for the next answer', () => {
+  it('the second answer is timed from the answering view reappearing, not the original presentation', async () => {
+    const { view, practice, advance } = await openView();
+    advance(30_000);
+    await answer(view, 'A first answer.');
+    advance(20_000);
+    view.contentEl.button(EXPLAIN_BACK_DISCARD_LABEL).click();
+    advance(15_000);
+    await answer(view, 'A revised answer.');
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    await vi.waitFor(() => expect(practice).toHaveBeenCalledTimes(2));
+    expect(practice.mock.calls.map(([input]) => input.durationMs)).toEqual([30_000, 15_000]);
   });
 });
 
-/**
- * `ol-2zfj.75` (C7.9/F5.6): the same "source is the only instrument"
- * constraint as above — `resolveInstrumentPrompt` must actually call the
- * injected `loadMisconceptionDigest` dep and thread its result into
- * `buildExplainBackPromptContextFromInstrument`, not just declare the dep on
- * the interface. `store.spec.ts`/`digest.spec.ts` (olea-core) cover the pure
- * digest computation; this covers that this view actually asks for one.
- */
-describe('ExplainBackModal loads a real misconception digest for an instrument-seeded prompt', () => {
-  it("resolveInstrumentPrompt calls deps.loadMisconceptionDigest with the instrument's own conceptIds when supplied", () => {
-    const resolveStart = modal.indexOf('private async resolveInstrumentPrompt(');
-    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
-    expect(resolveStart).toBeGreaterThan(-1);
-    expect(resolveTopicStart).toBeGreaterThan(resolveStart);
-    const body = modal.slice(resolveStart, resolveTopicStart);
-    expect(body).toMatch(
-      /instrument\.conceptIds\.length > 0 && this\.deps\.loadMisconceptionDigest\s*\?\s*await this\.deps\.loadMisconceptionDigest\(instrument\.conceptIds\)\s*:\s*\[\]/,
-    );
+describe('after an answer, the view shows no heading that reads how far she reached (F5.3, [D-603])', () => {
+  it('no depth heading and no outcome line renders, and nothing stands in place of one', async () => {
+    const { view, drawn, classes } = await openView();
+    await answer(view, 'An answer.');
+    expect(drawn.join('\n')).not.toMatch(DEPTH_LINES);
+    expect(classes).not.toContain('olea-explain-back-outcome');
+    expect(classes).not.toContain('olea-explain-back-encouragement');
+    expect(modal).not.toMatch(/explainBackDepthHeading|olea-explain-back-outcome/);
+  });
+});
+
+describe('"Done" ends the practice with nothing said about depth', () => {
+  it('no depth heading, no first-full-depth sentence and no line about how she did, at any point', async () => {
+    const { view, drawn, classes, recordSoloGradeAndReview } = await openView();
+    await answer(view, 'An answer.');
+    const linesBeforeDone = drawn.length;
+    view.contentEl.button(EXPLAIN_BACK_DONE_LABEL).click();
+    expect(drawn.length).toBe(linesBeforeDone); // "Done" closes; nothing further is drawn
+    expect(drawn.join('\n')).not.toMatch(DEPTH_LINES);
+    expect(classes).not.toContain('olea-explain-back-encouragement');
+    // No depth reading is asked for or recorded.
+    expect(recordSoloGradeAndReview).not.toHaveBeenCalled();
+    expect(modal).not.toMatch(/recordSoloGradeAndReview\(/);
+    expect(modal).not.toMatch(/explainBackFullDepthEncouragement|isConfirmedFirstFullDepth/);
+  });
+});
+
+describe('the judge digest is no longer loaded: nothing is sent to a judge in v0.9 ([D-603])', () => {
+  it('resolving an instrument-seeded prompt does not ask for a misconception digest', async () => {
+    const { view, loadMisconceptionDigest } = await openView();
+    await answer(view, 'An answer.');
+    expect(loadMisconceptionDigest).not.toHaveBeenCalled();
+    expect(modal).not.toMatch(/this\.deps\.loadMisconceptionDigest/);
   });
 
-  it('threads the resolved digest into buildExplainBackPromptContextFromInstrument, not the pre-existing default', () => {
-    const resolveStart = modal.indexOf('private async resolveInstrumentPrompt(');
-    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
-    const body = modal.slice(resolveStart, resolveTopicStart);
-    // `ol-egov.141.89.6.33`: the judge's own source blocks are
-    // `gradingSourceBlocks` (threaded through `resolveGradingSourceBlocks`),
-    // not the plain `sourceBlocks` retrieval — see that function's own doc
-    // for why `ResolvedPrompt.sourceBlocks` (a few lines further down, used
-    // for citation lookup and the accept-time staleness comparison) stays
-    // the plain retrieval unchanged.
-    expect(body).toMatch(
-      /buildExplainBackPromptContextFromInstrument\(\s*instrument,\s*gradingSourceBlocks,\s*misconceptionDigest,\s*permittedConceptIdsFor\(subjectConceptId, resolvedGrading\.neighbourConceptId\),?\s*\);/,
-    );
+  it('the dependency stays declared, optional and dormant, so the composition root is unchanged', () => {
+    expect(modal).toMatch(/readonly loadMisconceptionDigest\?: \(/);
   });
+});
 
-  it('resolveTopicPrompt does not read loadMisconceptionDigest — a topic prompt has no known subjectConceptId to key one by', () => {
-    const resolveTopicStart = modal.indexOf('private async resolveTopicPrompt(');
-    const nextMethodStart = modal.indexOf('private ', resolveTopicStart + 1);
-    expect(resolveTopicStart).toBeGreaterThan(-1);
-    const body = modal.slice(resolveTopicStart, nextMethodStart);
-    expect(body).not.toMatch(/loadMisconceptionDigest/);
+describe('no check runs, so no check-failed retry exists to restart or keep a clock', () => {
+  it('the view has no could-not-check refusal and no retry control', () => {
+    expect(modal).not.toMatch(/check-failed|EXPLAIN_BACK_CHECK_FAILED_REFUSAL|refusal-retry/);
   });
 });

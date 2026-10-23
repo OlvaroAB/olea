@@ -19,6 +19,10 @@
  * wired, regardless of whether `result` was `'stale'` or `null`. This locks
  * in that the depth write only runs once `result` is confirmed
  * `{status: 'accepted'}`.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** nothing is accepted, so the gate has nothing to
+ * guard in the view; the rule stays in `../grading/wiring.ts` for when grading returns. The
+ * assertions below pin that the view reaches no accept or depth write at all.
  */
 
 import { readFileSync } from 'node:fs';
@@ -44,24 +48,18 @@ function bodyBetween(startMarker: string, endMarker: string): string {
   return modal.slice(start, end);
 }
 
-describe('ExplainBackModal — ol-egov.141.89.6.15: a stale accept writes no depth review event', () => {
-  it('gates the recordSoloGradeAndReview call on the correctness accept result being status "accepted"', () => {
-    const computeBody = bodyBetween(
-      'private async computeAcceptGrading(',
-      'private discardGrading(',
-    );
-    const resultIndex = computeBody.indexOf(
-      'const result = await this.deps.acceptWithObservation(pending, context);',
-    );
-    expect(resultIndex).toBeGreaterThanOrEqual(0);
-    const recordIndex = computeBody.indexOf('this.deps.recordSoloGradeAndReview(');
-    expect(recordIndex).toBeGreaterThan(resultIndex);
+describe('ExplainBackModal (v0.9) — no accept exists, so no stale accept can write anything', () => {
+  it('the view calls neither the correctness accept nor the depth write', () => {
+    expect(modal).not.toMatch(/this\.deps\.acceptWithObservation\(/);
+    expect(modal).not.toMatch(/this\.deps\.recordSoloGradeAndReview\(/);
+  });
 
-    // The span between resolving `result` and actually calling the depth
-    // write must contain a guard checking result is a non-null accepted
-    // outcome — never an unconditional `if (this.deps.recordSoloGradeAndReview)`
-    // alone.
-    const guardSpan = computeBody.slice(resultIndex, recordIndex);
-    expect(guardSpan).toMatch(/result\s*!==\s*null\s*&&\s*result\.status\s*===\s*'accepted'/);
+  it('leaving an answer writes only its practice explanation, through the one practice write', () => {
+    const leaving = bodyBetween(
+      'private finishPractice(',
+      'private async recordPracticeExplanationIfPossible(',
+    );
+    expect(leaving).not.toMatch(/this\.deps\.(?!recordPracticeExplanation)\w+\(/);
+    expect(modal.match(/const record = this\.deps\.recordPracticeExplanation;/g)).toHaveLength(1);
   });
 });

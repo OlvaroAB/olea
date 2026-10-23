@@ -7,6 +7,11 @@
  * already use for anything that lives inside `ExplainBackModal`, which
  * cannot be imported under Vitest (`obsidian`'s `package.json` `main` is
  * `""`).
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** nothing is graded, so "never reaches the grader"
+ * now reads "reaches no grader and no passage": a skip shows nothing, and the one path to the
+ * passages is `submitAnswer`, which a skip never reaches (F5.2: the passages follow an answer,
+ * never a skip).
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,7 +39,7 @@ function bodyBetween(startMarker: string, endMarker: string): string {
 
 describe('the named skip action exists and is distinct from the empty-submit guard', () => {
   it("renderAnsweringPhase wires a second button, labelled EXPLAIN_BACK_SKIP_LABEL, to skipPrompt — not to the submit guard's click handler", () => {
-    const body = bodyBetween('private renderAnsweringPhase(', 'private renderGradedPhase(');
+    const body = bodyBetween('private renderAnsweringPhase(', 'private renderExplanation(');
     expect(body).toMatch(/text: EXPLAIN_BACK_SKIP_LABEL/);
     expect(body).toMatch(
       /skip\.addEventListener\(\s*'click',\s*\(\)\s*=>\s*this\.skipPrompt\(prompt\)\s*\)/,
@@ -47,11 +52,14 @@ describe('the named skip action exists and is distinct from the empty-submit gua
     expect(body).not.toMatch(/this\.submitAnswer\(/);
   });
 
-  it('deps.grade is called from exactly one place in this file (submitAnswer), which skipPrompt never reaches', () => {
-    const calls = modal.match(/this\.deps\.grade\(/g) ?? [];
-    expect(calls).toHaveLength(1);
-    const submitAnswerBody = bodyBetween('private async submitAnswer(', 'private acceptGrading(');
-    expect(submitAnswerBody).toMatch(/this\.deps\.grade\(/);
+  it('deps.grade is called from nowhere in v0.9, and the passages are reached only through submitAnswer, which skipPrompt never reaches', () => {
+    expect(modal).not.toMatch(/this\.deps\.grade\(/);
+    expect(modal.match(/this\.state = \{ phase: 'passages'/g)).toHaveLength(1);
+    const submitAnswerBody = bodyBetween(
+      'private async submitAnswer(',
+      'private async recordFeedbackShownBeforeDisplay(',
+    );
+    expect(submitAnswerBody).toMatch(/this\.state = \{ phase: 'passages'/);
   });
 
   it('skipPrompt is a separate method from the empty-submit guard, called from a separate button', () => {
@@ -59,7 +67,7 @@ describe('the named skip action exists and is distinct from the empty-submit gua
     expect(modal).toMatch(/if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;/);
     // Two distinct click handlers in renderAnsweringPhase: the submit
     // button's guard-then-submit, and the skip button's direct skipPrompt.
-    const body = bodyBetween('private renderAnsweringPhase(', 'private renderGradedPhase(');
+    const body = bodyBetween('private renderAnsweringPhase(', 'private renderExplanation(');
     const clickHandlers = body.match(/addEventListener\(\s*'click'/g) ?? [];
     expect(clickHandlers.length).toBeGreaterThanOrEqual(2);
   });
@@ -125,9 +133,9 @@ describe('a skip closes the prompt with no result line ([D-305])', () => {
     expect(body).not.toMatch(/createDiv\(/);
   });
 
-  it("renderAcceptedPhase and renderSkippedPhase share one Done button implementation, never two separately-typed 'Done' strings", () => {
-    const doneStrings = modal.match(/text:\s*'Done'/g) ?? [];
-    expect(doneStrings).toHaveLength(1);
+  it("every Done button reads registry §39's one constant, never a separately-typed 'Done' string", () => {
+    expect(modal).not.toMatch(/text:\s*'Done'/);
+    expect(modal.match(/text: EXPLAIN_BACK_DONE_LABEL/g)).toHaveLength(2);
     expect(modal).toMatch(/private renderDoneButton\(root: HTMLElement\): void \{/);
   });
 
@@ -147,13 +155,12 @@ describe('non-attempt conceptIds: the full instrument list for an instrument pro
     expect(body).toMatch(/conceptIds: instrument\.conceptIds,/);
   });
 
-  it('both ResolvedPrompt constructions in resolveTopicPrompt share the same computed conceptIds — `[D-322]` (`ol-egov.141.89.6.4`) narrowed the old "always []" to "[] unless the topic matched one concept uniquely"', () => {
-    const body = bodyBetween('private async resolveTopicPrompt(', 'private async submitAnswer(');
+  it('resolveTopicPrompt’s one ResolvedPrompt (refused or answered) reads the computed conceptIds — `[D-322]` (`ol-egov.141.89.6.4`) narrowed the old "always []" to "[] unless the topic matched one concept uniquely"', () => {
+    const body = bodyBetween('private async resolveTopicPrompt(', 'private enterNewQuestion(');
     const sharedConceptIds = body.match(/conceptIds,/g) ?? [];
-    // Once per ResolvedPrompt construction (the refused/insufficient-notes early return, and the
-    // ordinary answering-phase prompt) — both reading the SAME computed `conceptIds` local, never
-    // a literal `[]` reintroduced at either site.
-    expect(sharedConceptIds).toHaveLength(2);
+    // One construction, used by the insufficient-notes refusal and the answering phase alike,
+    // reading the computed `conceptIds` local, never a literal `[]`.
+    expect(sharedConceptIds).toHaveLength(1);
     expect(body).not.toMatch(/conceptIds: \[\],/);
     expect(body).toMatch(
       /const conceptIds = topicMatch\.kind === 'unique' \? \[topicMatch\.conceptId\] : \[\];/,
@@ -163,7 +170,7 @@ describe('non-attempt conceptIds: the full instrument list for an instrument pro
 
 describe('the empty-submit guard is unchanged by this bead, and still distinct from the skip action', () => {
   it('the guard line is untouched: a blank submit still returns before submitAnswer, still calls neither deps.grade nor skipPrompt', () => {
-    const body = bodyBetween('private renderAnsweringPhase(', 'private renderGradedPhase(');
+    const body = bodyBetween('private renderAnsweringPhase(', 'private renderExplanation(');
     expect(body).toMatch(
       /if \(isBlankExplainBackAnswer\(textarea\.value\)\) return;\s*void this\.submitAnswer\(prompt, textarea\.value\);/,
     );
