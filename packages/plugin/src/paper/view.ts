@@ -43,6 +43,7 @@
 
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import {
+  ASSESSMENT_PASSED_SENTENCE,
   buildLockedCopy,
   buildNoAssessmentAheadCopy,
   buildPaperFaceOutline,
@@ -56,6 +57,7 @@ import {
 } from './copy.js';
 import { VIEW_TYPE_OLEA_PAPER } from './ids.js';
 import type {
+  OfferedAssessment,
   PracticePaperCourseState,
   PracticePaperFaceItem,
   PracticePaperFacePassage,
@@ -101,6 +103,12 @@ export class PaperView extends ItemView {
    * that happens to collide across two different `PaperRecord`s.
    */
   private readonly justHandedOff = new Set<string>();
+  /**
+   * `[D-622]`: the assessment the request on screen was offered for, from the last
+   * `unlocked-not-pulled` state rendered. Kept while "ask again" re-offers the same request, and
+   * handed back with it so the provider can tell that assessment has passed.
+   */
+  private offeredFor: OfferedAssessment | undefined;
 
   constructor(leaf: WorkspaceLeaf, deps: PracticePaperViewDeps, initialCourse?: string) {
     super(leaf);
@@ -147,10 +155,15 @@ export class PaperView extends ItemView {
     this.render(state);
   }
 
-  private render(state: PracticePaperCourseState): void {
+  /** `notice`, when given, is shown above the state: `[D-622]`'s passed sentence, over the course's current state. */
+  private render(state: PracticePaperCourseState, notice?: string): void {
     const root = this.contentEl;
     root.empty();
+    this.offeredFor = undefined;
     root.createEl('h2', { text: this.getDisplayText() });
+    if (notice !== undefined) {
+      root.createEl('p', { cls: 'olea-paper-assessment-passed', text: notice });
+    }
 
     if (state.kind === 'assignments-not-configured') {
       root.createEl('p', {
@@ -184,6 +197,7 @@ export class PaperView extends ItemView {
       return;
     }
     if (state.kind === 'unlocked-not-pulled') {
+      this.offeredFor = state.offeredFor;
       this.renderRequestButton(root, state.course);
       return;
     }
@@ -204,7 +218,7 @@ export class PaperView extends ItemView {
     root.createEl('p', { text: 'Composing your practice paper…' });
     let result: Awaited<ReturnType<PracticePaperViewDeps['requestPaper']>>;
     try {
-      result = await this.deps.requestPaper(course);
+      result = await this.deps.requestPaper(course, this.offeredFor);
     } catch (error) {
       // `[D-457]`/`[D-532]`: an unfinished paper reads its ruled sentence (outage, or Olea updated)
       // and the same request she already used is offered again ("Ask again"). Any other failure has
@@ -222,8 +236,9 @@ export class PaperView extends ItemView {
       return;
     }
     this.justHandedOff.clear();
-    if (result.kind === 'ai-unavailable') {
-      this.render(result);
+    if (result.kind === 'assessment-passed') {
+      // `[D-622]`: the view refreshes to the course's current state, never keeping the stale offer.
+      this.render(result.current, ASSESSMENT_PASSED_SENTENCE);
       return;
     }
     this.render(result);
