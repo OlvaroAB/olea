@@ -5,7 +5,7 @@
  * convention of sweeping a TEMPLATED function's output across representative
  * fixtures, since `allGroveStrings()` alone cannot enumerate one.
  */
-import type { GroveCourseSummary, VaultPath } from 'olea-core';
+import { type GroveCourseSummary, MASTERY_DISPLAY, type VaultPath } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
   allGroveStrings,
@@ -21,7 +21,6 @@ import {
   grovePapersLabel,
   groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
-  groveStageMeaning,
   groveStateLabel,
   groveSummaryLine,
 } from '../../src/grove/copy.js';
@@ -186,14 +185,13 @@ describe('grove copy — vocabulary registry §6 discipline', () => {
     expect(groveStateLabel('ground')).toBe('ground');
   });
 
-  it('the legend gives tree the stage table words, never a second phrasing (F2.11, [D-612])', () => {
-    expect(groveStageMeaning('tree')).toBe(
-      "Explained in your own words and checked against your material. Explanation checking isn't available yet.",
-    );
-    expect(groveStageMeaning('seed')).toBe('Not practised yet.');
-    expect(groveStageMeaning('sprout')).toBe('Practised. Recall is not holding yet.');
-    expect(groveStageMeaning('sapling')).toBe('Recalled reliably across spaced attempts.');
-    expect(allGroveStrings().join('\n')).not.toContain('not only recognised');
+  it('the legend names the stages by label and carries no meaning of its own, so tree has no second phrasing (F2.11, [D-612])', () => {
+    const grove = allGroveStrings().join('\n');
+    for (const s of ['seed', 'sprout', 'sapling', 'tree'] as const) {
+      expect(grove).toContain(MASTERY_DISPLAY[s].label);
+      expect(grove).not.toContain(MASTERY_DISPLAY[s].meaning);
+    }
+    expect(grove).not.toContain('not only recognised');
   });
 });
 

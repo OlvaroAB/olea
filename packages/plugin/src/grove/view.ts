@@ -135,7 +135,6 @@ import {
   grovePapersLabel,
   groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
-  groveStageMeaning,
   groveStateLabel,
   groveSummaryLine,
   groveUnreadableReasonLabel,
@@ -703,10 +702,7 @@ export class GroveView extends ItemView {
   private renderLegend(parent: HTMLElement): void {
     const el = parent.createDiv({ cls: 'olea-grove-legend' });
     for (const state of LEGEND_STAGES) {
-      const item = el.createDiv({
-        cls: 'olea-grove-legend-item',
-        attr: { title: groveStageMeaning(state) },
-      });
+      const item = el.createDiv({ cls: 'olea-grove-legend-item' });
       item.appendChild(renderSprig({ state, size: 14, container: item }));
       item.createSpan({ text: groveStateLabel(state) });
     }

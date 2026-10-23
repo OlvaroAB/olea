@@ -246,11 +246,6 @@ export function groveStateLabel(state: GroveDeclaredState): string {
   return state === 'ground' ? GROUND_LABEL : MASTERY_DISPLAY[state].label;
 }
 
-/** The legend's line for a growth stage — `MASTERY_DISPLAY`'s meaning verbatim (F2.11, `[D-612]`), never a second phrasing. */
-export function groveStageMeaning(state: Exclude<GroveDeclaredState, 'ground'>): string {
-  return MASTERY_DISPLAY[state].meaning;
-}
-
 /**
  * F8.3's own sanctioned shape for a `'declared'` course's summary — the
  * count and the denominator's source, side by side, **never their
@@ -416,7 +411,6 @@ export function allGroveStrings(): readonly string[] {
     GROVE_LEGEND_MATERIAL_GAP_NOTE,
     GROVE_LEGEND_PAPERS_NOTE,
     ...(['seed', 'sprout', 'sapling', 'tree'] as const).map((s) => MASTERY_DISPLAY[s].label),
-    ...(['seed', 'sprout', 'sapling', 'tree'] as const).map(groveStageMeaning),
     ...(['no-reader-for-format', 'image-only-no-text', 'not-linked'] as const).map(
       groveUnreadableReasonLabel,
     ),
