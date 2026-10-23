@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { EmbeddingCacheEngine } from './embeddingCache.js';
+import {
+  EmbeddingCacheEngine,
+  MAX_ANSWERED_FAILURES,
+  MAX_ESTIMATED_TOKENS_PER_REQUEST,
+} from './embeddingCache.js';
 import { decodeQuantisedVector, encodeQuantisedVector, quantiseVector } from './quantise.js';
 import type {
   EmbeddingCacheStore,
@@ -9,6 +13,7 @@ import type {
   PersistedEmbeddingCache,
   RetrievalChunk,
 } from './types.js';
+import { WorkerEmbeddingError } from './workerProvider.js';
 
 class MemoryEmbeddingCacheStore implements EmbeddingCacheStore {
   private saved: PersistedEmbeddingCache | null = null;
@@ -359,5 +364,156 @@ describe('EmbeddingCacheEngine.toPersisted', () => {
       model: 'model-a',
     });
     expect(engine.toPersisted().version).toBe(2);
+  });
+});
+
+/** Provider that fails according to `failWith(request)` (return an error to throw) and otherwise embeds like the fake. */
+class ScriptedProvider implements EmbeddingProvider {
+  readonly requests: EmbedRequest[] = [];
+  failWith: (request: EmbedRequest) => Error | null = () => null;
+
+  async embed(request: EmbedRequest): Promise<EmbedResult> {
+    this.requests.push(request);
+    const error = this.failWith(request);
+    if (error) throw error;
+    return { vectors: request.texts.map((text) => [text.length, 1, 0]) };
+  }
+}
+
+const estimate = (texts: readonly string[]): number =>
+  texts.reduce((sum, text) => sum + Math.ceil(text.length / 3), 0);
+
+function manyChunks(count: number, length: number): RetrievalChunk[] {
+  return Array.from({ length: count }, (_, i) =>
+    chunk('a.md', i, `h${i}`, `${String(i).padStart(4, '0')}`.padEnd(length, 'x')),
+  );
+}
+
+async function makeEngine(
+  provider: EmbeddingProvider,
+  extra: { batchSize?: number; maxEstimatedTokensPerRequest?: number } = {},
+) {
+  const store = new MemoryEmbeddingCacheStore();
+  const engine = await EmbeddingCacheEngine.create({ store, provider, model: 'model-a', ...extra });
+  return { store, engine };
+}
+
+describe('EmbeddingCacheEngine request size bound (ol-egov.141.89.1.103)', () => {
+  it('declares the bound at 10,000 estimated tokens', () => {
+    expect(MAX_ESTIMATED_TOKENS_PER_REQUEST).toBe(10_000);
+  });
+
+  it('splits missing chunks that exceed the token bound into several requests, each within it', async () => {
+    const provider = new ScriptedProvider();
+    const { engine } = await makeEngine(provider);
+    // 32 chunks of 3,000 characters = 1,000 estimated tokens each = 32,000 in all.
+    await engine.ensureEmbeddings(manyChunks(32, 3000));
+    expect(provider.requests.length).toBeGreaterThan(1);
+    for (const request of provider.requests) {
+      expect(estimate(request.texts)).toBeLessThanOrEqual(MAX_ESTIMATED_TOKENS_PER_REQUEST);
+    }
+    expect(provider.requests.reduce((n, r) => n + r.texts.length, 0)).toBe(32);
+    expect(engine.snapshot().size).toBe(32);
+  });
+
+  it('still caps a request at 32 chunks when the chunks are small', async () => {
+    const provider = new ScriptedProvider();
+    const { engine } = await makeEngine(provider);
+    await engine.ensureEmbeddings(manyChunks(70, 10));
+    expect(provider.requests.map((r) => r.texts.length)).toEqual([32, 32, 6]);
+  });
+
+  it('sends a single chunk larger than the bound on its own, unsplit', async () => {
+    const provider = new ScriptedProvider();
+    const { engine } = await makeEngine(provider, { maxEstimatedTokensPerRequest: 10 });
+    const big = 'y'.repeat(300);
+    await engine.ensureEmbeddings([
+      chunk('a.md', 0, 'h0', 'ab'),
+      chunk('a.md', 1, 'h1', big),
+      chunk('a.md', 2, 'h2', 'cd'),
+    ]);
+    expect(provider.requests.map((r) => r.texts)).toEqual([['ab'], [big], ['cd']]);
+    expect(engine.snapshot().size).toBe(3);
+  });
+});
+
+describe('EmbeddingCacheEngine bounded re-send across drains (ol-egov.141.89.1.103)', () => {
+  const refuse = () => new WorkerEmbeddingError('refused', 'invalid-request');
+
+  it('re-sends a request the provider keeps refusing a bounded number of times, halving it after the first failure', async () => {
+    const provider = new ScriptedProvider();
+    provider.failWith = () => refuse();
+    const { engine } = await makeEngine(provider);
+    const chunks = manyChunks(8, 10);
+
+    for (let drain = 0; drain < 200; drain++) await engine.ensureEmbeddings(chunks);
+
+    // 8 -> 4 -> 2 -> 1, then three attempts per chunk: far fewer than 200.
+    expect(provider.requests.length).toBeLessThanOrEqual(3 + 8 * MAX_ANSWERED_FAILURES + 8);
+    expect(provider.requests.length).toBeLessThan(200);
+    expect(provider.requests.slice(0, 4).map((r) => r.texts.length)).toEqual([8, 4, 2, 1]);
+    expect(engine.heldBackCount).toBe(8);
+
+    const before = provider.requests.length;
+    await engine.ensureEmbeddings(chunks);
+    expect(provider.requests.length).toBe(before);
+  });
+
+  it('does not hold back the good chunks that shared a request with a refused one', async () => {
+    const provider = new ScriptedProvider();
+    provider.failWith = (r) => (r.texts.includes('POISON') ? refuse() : null);
+    const { engine } = await makeEngine(provider);
+    const chunks = [...manyChunks(7, 10), chunk('a.md', 99, 'hp', 'POISON')];
+    for (let drain = 0; drain < 50; drain++) await engine.ensureEmbeddings(chunks);
+    expect(engine.snapshot().size).toBe(7);
+    expect(engine.codesFor('hp')).toBeUndefined();
+    expect(engine.heldBackCount).toBe(1);
+  });
+
+  it.each([
+    ['a transport failure', () => new Error('network down')],
+    ['a timeout', () => new Error('timed out')],
+    ['unauthenticated', () => new WorkerEmbeddingError('x', 'unauthenticated')],
+    ['update-required', () => new WorkerEmbeddingError('x', 'update-required')],
+    ['quota-exceeded', () => new WorkerEmbeddingError('x', 'quota-exceeded')],
+    ['an error with no code', () => new WorkerEmbeddingError('x')],
+  ])(
+    'never holds anything back for %s, and the chunks embed once the provider recovers',
+    async (_name, make) => {
+      const provider = new ScriptedProvider();
+      let down = true;
+      provider.failWith = () => (down ? make() : null);
+      const { engine } = await makeEngine(provider);
+      const chunks = manyChunks(5, 10);
+
+      for (let drain = 0; drain < 30; drain++) await engine.ensureEmbeddings(chunks);
+      expect(engine.heldBackCount).toBe(0);
+      // Stopped after the first failure each drain, and every request is the full, unhalved one.
+      expect(provider.requests.every((r) => r.texts.length === 5)).toBe(true);
+
+      down = false;
+      await engine.ensureEmbeddings(chunks);
+      expect(engine.snapshot().size).toBe(5);
+    },
+  );
+
+  it('resets held-back state on clear() and on a new engine', async () => {
+    const provider = new ScriptedProvider();
+    provider.failWith = () => refuse();
+    const { engine, store } = await makeEngine(provider);
+    const chunks = manyChunks(1, 10);
+    for (let drain = 0; drain < 10; drain++) await engine.ensureEmbeddings(chunks);
+    expect(engine.heldBackCount).toBe(1);
+    expect(provider.requests).toHaveLength(MAX_ANSWERED_FAILURES);
+
+    await engine.clear();
+    expect(engine.heldBackCount).toBe(0);
+    await engine.ensureEmbeddings(chunks);
+    expect(provider.requests).toHaveLength(MAX_ANSWERED_FAILURES + 1);
+
+    const fresh = await EmbeddingCacheEngine.create({ store, provider, model: 'model-a' });
+    expect(fresh.heldBackCount).toBe(0);
+    await fresh.ensureEmbeddings(chunks);
+    expect(provider.requests).toHaveLength(MAX_ANSWERED_FAILURES + 2);
   });
 });
