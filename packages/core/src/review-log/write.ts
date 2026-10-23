@@ -34,6 +34,8 @@ import {
   type DisputeLogRecord,
   disputeLogRecord,
   type ExplainBackOfferLogRecord,
+  type ExplainBackOfferTrigger,
+  type ExplainBackPromptShape,
   explainBackOfferLogRecord,
   type MisconceptionObservedLogRecord,
   misconceptionObservedLogRecord,
@@ -53,11 +55,20 @@ import {
   type VerdictLogRecord,
   verdictLogRecord,
 } from 'olea-contracts';
+import { readReviewLogHistory } from '../session/history.js';
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
+import { writeContentRecord } from './content-store.js';
 import type { DisputeLogRecordInput } from './contest-record.js';
+import { parseReviewLog } from './parse.js';
 import { REVIEW_LOG_FOLDER, reviewLogPath } from './path.js';
+import {
+  type PassagesShownInView,
+  type PracticeExplanationLogRecord,
+  practiceExplanationForAttempt,
+  practiceExplanationSupportShown,
+} from './practice-explanation.js';
 import { readReviewLogFile } from './read.js';
 
 export type { DisputeLogRecordInput } from './contest-record.js';
@@ -405,17 +416,38 @@ async function appendEntryLine(
   entry: ReviewLogEntry,
   deviceId: string,
 ): Promise<VaultPath> {
+  return (await appendEntryLineUnlessPresent(vault, entry, deviceId, () => undefined)).path;
+}
+
+/**
+ * {@link appendEntryLine}'s one implementation, with one addition for a writer
+ * that is idempotent on something other than `eventId` (the practice
+ * explanation, on its attempt, `[D-614]`): `findExisting` reads the day file's
+ * current text inside the same queued task, and when it finds an existing
+ * record nothing is appended and that record is returned. Every other writer
+ * passes a `findExisting` that finds nothing without parsing the text, so its
+ * append is exactly the one documented above.
+ */
+async function appendEntryLineUnlessPresent<T>(
+  vault: VaultSource,
+  entry: ReviewLogEntry,
+  deviceId: string,
+  findExisting: (dayFileText: string) => T | undefined,
+): Promise<{ readonly path: VaultPath; readonly existing: T | undefined }> {
   const path = reviewLogPath(localDateOf(entry.timestamp), deviceId);
   const line = `${JSON.stringify(entry)}\n`;
 
-  await withPathQueue(path, async () => {
-    const existing = (await vault.exists(path)) ? await vault.read(path) : '';
-    const needsSeparator = existing.length > 0 && !existing.endsWith('\n');
-    const prefix = needsSeparator ? `${existing}\n` : existing;
+  const existing = await withPathQueue(path, async () => {
+    const text = (await vault.exists(path)) ? await vault.read(path) : '';
+    const found = findExisting(text);
+    if (found !== undefined) return found;
+    const needsSeparator = text.length > 0 && !text.endsWith('\n');
+    const prefix = needsSeparator ? `${text}\n` : text;
     await vault.write(path, prefix + line);
+    return undefined;
   });
 
-  return path;
+  return { path, existing };
 }
 
 /**
@@ -1138,4 +1170,269 @@ export async function appendExplainBackFeedbackShownRecord(
   const path = await appendEntryLine(vault, record, options.deviceId);
 
   return { record, path };
+}
+
+/**
+ * Every practice-explanation field the caller supplies to the record-level
+ * writer (`[D-614]`); the writer stamps `schemaVersion`, `kind` and `eventId`.
+ * The keys a grade would arrive under are typed as absent by the contract, so
+ * none can be passed.
+ */
+export type PracticeExplanationLogRecordInput = Omit<
+  PracticeExplanationLogRecord,
+  'schemaVersion' | 'eventId' | 'kind'
+>;
+
+export interface AppendPracticeExplanationOptions extends AppendReviewLogOptions {
+  /**
+   * Files to read beside the folder listing when looking for a record of the
+   * same attempt, for a host whose listing cannot see `.olea/reviews/`
+   * (`../session/history.ts`'s `additionalPaths`). This device's file for the
+   * record's own day is always read.
+   */
+  readonly additionalPaths?: readonly VaultPath[];
+}
+
+/**
+ * What a practice-explanation write did. `written: false` is the idempotent
+ * case: her log already holds a record for this attempt, returned as it was
+ * written, and nothing was appended.
+ */
+export type AppendPracticeExplanationResult =
+  | {
+      readonly written: true;
+      /** The full, validated record actually written (schemaVersion and eventId included). */
+      readonly record: PracticeExplanationLogRecord;
+      /** The vault path it was appended to. */
+      readonly path: VaultPath;
+    }
+  | {
+      readonly written: false;
+      /** The record her log already held for this attempt. */
+      readonly record: PracticeExplanationLogRecord;
+    };
+
+/** A copy without `undefined`-valued keys, so an absent optional field stays a true absence. */
+function withoutUndefined(fields: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(fields).filter(([, value]) => value !== undefined));
+}
+
+/**
+ * Stamps and validates one practice explanation against the current union,
+ * then narrows on its `kind`, so a record accepted here is by construction one
+ * `./parse.ts` returns as this kind. Throws before any byte is written.
+ */
+function validatePracticeExplanation(
+  input: PracticeExplanationLogRecordInput,
+  eventId: string,
+): PracticeExplanationLogRecord {
+  const candidate: unknown = {
+    schemaVersion: REVIEW_LOG_SCHEMA_VERSION,
+    kind: 'practice-explanation',
+    eventId,
+    ...withoutUndefined({ ...input }),
+  };
+  const parsed = reviewLogEntry.safeParse(candidate);
+  if (!parsed.success) {
+    throw new Error(
+      `appendPracticeExplanationRecord: record failed schema validation: ${parsed.error.message}`,
+    );
+  }
+  const record = parsed.data;
+  if (record.kind !== 'practice-explanation') {
+    // Unreachable: `kind` is set above and the input type has no place for one.
+    throw new Error(
+      `appendPracticeExplanationRecord: record failed schema validation: kind ${JSON.stringify(record.kind)} is not a practice-explanation`,
+    );
+  }
+  return record;
+}
+
+/**
+ * The append itself, idempotent on the attempt: inside the day file's queue
+ * the file is read again and, if it already holds a practice explanation for
+ * the same `attemptId` (two writes racing on one install), nothing is
+ * appended. Otherwise it is the shared append path, unchanged
+ * ({@link appendEntryLineUnlessPresent}).
+ */
+async function appendPracticeExplanationLine(
+  vault: VaultSource,
+  record: PracticeExplanationLogRecord,
+  deviceId: string,
+): Promise<AppendPracticeExplanationResult> {
+  const { path, existing } = await appendEntryLineUnlessPresent(vault, record, deviceId, (text) =>
+    practiceExplanationForAttempt(parseReviewLog(text).records, record.attemptId),
+  );
+  return existing === undefined
+    ? { written: true, record, path }
+    : { written: false, record: existing };
+}
+
+/**
+ * Validates, stamps, and append-only-writes one **practice explanation**
+ * (D7.1, `[D-603]`, `[D-614]`), **once per attempt**: when her log already
+ * holds a practice explanation with the same `attemptId`, on any device's
+ * file, nothing is written and that record is returned (`written: false`).
+ * That is what makes reopening or reloading the view write no second entry.
+ *
+ * The record-level sibling of `appendExplainBackSetAsideRecord`, for a caller
+ * that already holds the support shown and a `contentRef`. The view's own
+ * call is {@link recordPracticeExplanation}, which works both out (the
+ * support from her log as well as the view, the `contentRef` by writing her
+ * text to the content store) and then appends through the same path.
+ *
+ * **What calling this does not do.** It writes no review, no rating and no
+ * grade, and no fold that reports what she knows reads the record (F5.5,
+ * knowledge model §3). It takes no answer or passage text (D-005).
+ */
+export async function appendPracticeExplanationRecord(
+  vault: VaultSource,
+  input: PracticeExplanationLogRecordInput,
+  options: AppendPracticeExplanationOptions,
+): Promise<AppendPracticeExplanationResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+  const record = validatePracticeExplanation(input, generateEventId());
+  const ownPath = reviewLogPath(localDateOf(record.timestamp), options.deviceId);
+  const history = await readReviewLogHistory(vault, {
+    additionalPaths: [ownPath, ...(options.additionalPaths ?? [])],
+  });
+  const existing = practiceExplanationForAttempt(history.entries, record.attemptId);
+  if (existing !== undefined) return { written: false, record: existing };
+  return appendPracticeExplanationLine(vault, record, options.deviceId);
+}
+
+/**
+ * What the explain-back view knows when she leaves one saved answer by
+ * "Done" or "Try again" (D7.1, `[D-614]`): the attempt, the prompt, the offer
+ * behind it, the timing, her text, the local check's flag, and the passages
+ * the view itself showed after each of its earlier attempts at this prompt.
+ */
+export interface RecordPracticeExplanationInput {
+  /** ISO-8601 with offset: the moment she left the answer (the record's date). */
+  readonly timestamp: string;
+  /** The question: the id the view's `[D-460]` markers for this prompt carry. */
+  readonly instrumentId: string;
+  /** This answer's attempt id, minted when she submitted it. The write is idempotent on it. */
+  readonly attemptId: string;
+  /** The concept she explained first; a relation prompt's neighbour may follow. Non-empty. */
+  readonly conceptIds: readonly string[];
+  readonly promptShape: ExplainBackPromptShape;
+  /** The trigger the offer behind the prompt was made under. */
+  readonly trigger: ExplainBackOfferTrigger;
+  /** The `explain-back-offered` record's `eventId`, only when a real offer stands behind the prompt (`[D-369]`). */
+  readonly offerEventId?: string | undefined;
+  /** Presented-to-submitted milliseconds, `null` when nothing timed it. */
+  readonly durationMs: number | null;
+  /** Her text as she saved it. Written to the `[D-077]` content store only, never to the log. */
+  readonly answer: string;
+  /** `true` when the declared local check flagged the answer (F5.7, `[D-304]`). */
+  readonly localCheckFlagged?: boolean | undefined;
+  /** The passages this view showed after each of its earlier attempts at this prompt, by digest; `[]` for a first attempt. */
+  readonly passagesShownInView: readonly PassagesShownInView[];
+}
+
+export interface RecordPracticeExplanationOptions extends AppendPracticeExplanationOptions {
+  /** Content id generator, injectable for deterministic tests. Defaults to the content store's own `<deviceId>.<uuid>` form. */
+  readonly generateContentId?: () => string;
+}
+
+export type RecordPracticeExplanationResult =
+  | {
+      readonly written: true;
+      readonly record: PracticeExplanationLogRecord;
+      readonly path: VaultPath;
+      /** The content-store id her text was written under: the record's `contentRef`. */
+      readonly contentId: string;
+    }
+  | {
+      readonly written: false;
+      /** The record her log already held for this attempt; nothing was written. */
+      readonly record: PracticeExplanationLogRecord;
+    };
+
+/**
+ * Records one saved practice explanation (D7.1, `[D-614]`): the call the
+ * explain-back view makes once per answer, when she leaves it by "Done" or by
+ * "Try again".
+ *
+ * 1. **Reads her whole log once** (`../session/history.ts`), this device's
+ *    file for the day always included.
+ * 2. **Idempotent on the attempt.** A practice explanation for `attemptId`
+ *    already in the log means this answer was recorded before (the view was
+ *    reopened, or the app reloaded and the write was made again): nothing is
+ *    written, not even her text, and that record is returned.
+ * 3. **The support shown, from the log and the view**
+ *    (`./practice-explanation.ts`'s `practiceExplanationSupportShown`): the
+ *    passages the view showed after its earlier attempts, by digest, and any
+ *    earlier attempt at the same prompt her log marks as shown, in any
+ *    session — named when it can be, the coarser fact when it cannot.
+ * 4. **Validates the whole record before a byte is written**, then writes her
+ *    text to the content store (`./content-store.ts`, write-once) and appends
+ *    the record pointing at it. A record is never written pointing at text
+ *    that was not stored. Should a second write for the same attempt land on
+ *    this install between the read in step 1 and the append (two calls
+ *    racing), the append finds it and writes nothing; the text stored in step
+ *    4 is then referenced by nothing, which the content store tolerates (it
+ *    keeps no index and is only ever read by reference).
+ *
+ * Rejects when the record fails validation (nothing written), when the
+ * content store refuses, or when the vault write fails; the caller decides
+ * what the view does then.
+ *
+ * **Reachability.** No production caller yet: the explain-back view's Done
+ * and Try again (`packages/plugin/src/explain-back/`) are wired to it by
+ * `ol-egov.141.89.6.129`.
+ */
+export async function recordPracticeExplanation(
+  vault: VaultSource,
+  input: RecordPracticeExplanationInput,
+  options: RecordPracticeExplanationOptions,
+): Promise<RecordPracticeExplanationResult> {
+  const generateEventId = options.generateEventId ?? defaultGenerateEventId;
+  const ownPath = reviewLogPath(localDateOf(input.timestamp), options.deviceId);
+  const history = await readReviewLogHistory(vault, {
+    additionalPaths: [ownPath, ...(options.additionalPaths ?? [])],
+  });
+  const existing = practiceExplanationForAttempt(history.entries, input.attemptId);
+  if (existing !== undefined) return { written: false, record: existing };
+
+  const support = practiceExplanationSupportShown({
+    history,
+    instrumentId: input.instrumentId,
+    attemptId: input.attemptId,
+    leftAt: input.timestamp,
+    passagesShownInView: input.passagesShownInView,
+  });
+  const contentId =
+    options.generateContentId?.() ?? `${options.deviceId}.${globalThis.crypto.randomUUID()}`;
+  const record = validatePracticeExplanation(
+    {
+      timestamp: input.timestamp,
+      instrumentId: input.instrumentId,
+      attemptId: input.attemptId,
+      conceptIds: [...input.conceptIds],
+      promptShape: input.promptShape,
+      trigger: input.trigger,
+      ...(input.offerEventId !== undefined ? { offerEventId: input.offerEventId } : {}),
+      durationMs: input.durationMs,
+      ...(support.supportLevelShown !== undefined
+        ? { supportLevelShown: support.supportLevelShown }
+        : {}),
+      ...(support.passageFingerprints !== undefined
+        ? { passageFingerprints: [...support.passageFingerprints] }
+        : {}),
+      contentRef: contentId,
+      ...(input.localCheckFlagged === true ? { localCheckFlagged: true as const } : {}),
+    },
+    generateEventId(),
+  );
+
+  // No grader ran, so there is no feedback to keep: the content record's required field is empty.
+  await writeContentRecord(
+    vault,
+    { studentAnswer: input.answer, feedback: '' },
+    { deviceId: options.deviceId, generateContentId: () => contentId },
+  );
+  const appended = await appendPracticeExplanationLine(vault, record, options.deviceId);
+  return appended.written ? { ...appended, contentId } : appended;
 }

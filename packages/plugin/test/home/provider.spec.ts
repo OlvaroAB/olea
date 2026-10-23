@@ -856,6 +856,77 @@ describe('createLocalHomeProvider — course activity counts a review for its sc
   });
 });
 
+// D7.1 / `[D-614]` (`ol-egov.141.89.6.128`): a genuine practice explanation is study activity, so
+// it is activity for the course of the concept it explained, as a review is; an answer the local
+// check flagged, and a non-attempt, are not. Scenario: `features/F5-explain-it-back.md`
+// (olea-service), "every reading of when she studied counts a genuine practice explanation".
+describe('createLocalHomeProvider — course activity counts a genuine practice explanation ([D-614])', () => {
+  function practiceLine(
+    conceptKey: string,
+    timestamp: string,
+    eventId: string,
+    flagged = false,
+  ): string {
+    return JSON.stringify({
+      schemaVersion: 6,
+      kind: 'practice-explanation',
+      eventId,
+      timestamp,
+      instrumentId: `explain-back:${eventId}`,
+      attemptId: `attempt-${eventId}`,
+      conceptIds: [conceptKey],
+      promptShape: 'concept',
+      trigger: 'on-demand',
+      durationMs: 60000,
+      supportLevelShown: 'independent',
+      contentRef: `device.content-${eventId}`,
+      ...(flagged ? { localCheckFlagged: true } : {}),
+    });
+  }
+
+  async function questionAfter(lines: (vault: ReturnType<typeof fixtureVault>) => Promise<string>) {
+    const vault = twoCourseVault();
+    await vault.write(reviewLogPath('2026-09-01', DEVICE), `${await lines(vault)}\n`);
+    const state = dashboard(
+      await provider(vault, hostWithBasePath(BASE_PATH)).load(DEFAULT_REQUEST),
+    );
+    return state.avoidanceQuestion?.course;
+  }
+
+  it('a practice explanation alone is activity for its course, exactly as a review there would be', async () => {
+    expect(
+      await questionAfter(async (vault) =>
+        practiceLine(await conceptKey(vault, 'Widget0'), '2026-09-01T09:00:00Z', 'p1'),
+      ),
+    ).toBe('TESTC202');
+    expect(
+      await questionAfter(async (vault) =>
+        practiceLine(await conceptKey(vault, 'Gadget0'), '2026-09-01T09:00:00Z', 'p1'),
+      ),
+    ).toBe('TESTC101');
+  });
+
+  it('an answer the local check flagged, or a non-attempt, is no activity anywhere: nothing to point elsewhere at', async () => {
+    expect(
+      await questionAfter(async (vault) =>
+        practiceLine(await conceptKey(vault, 'Widget0'), '2026-09-01T09:00:00Z', 'p1', true),
+      ),
+    ).toBeUndefined();
+    expect(
+      await questionAfter(async (vault) =>
+        JSON.stringify({
+          schemaVersion: 6,
+          kind: 'non-attempt',
+          eventId: 'na1',
+          timestamp: '2026-09-01T09:00:00Z',
+          conceptIds: [await conceptKey(vault, 'Widget0')],
+          trigger: 'on-demand',
+        }),
+      ),
+    ).toBeUndefined();
+  });
+});
+
 // `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): `home/view.ts`'s own module doc named
 // this as the missing DATA path — `provider.ts`'s `load()` had no read of `session/holder.ts`'s
 // shared `StudySessionHolder` at all, so `HomeViewState.activeSession` was always `undefined`.

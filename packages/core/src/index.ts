@@ -2667,6 +2667,24 @@ export { mergeReviewLogRecords } from './review-log/merge.js';
 export type { InvalidReviewLogLine, ParseReviewLogResult } from './review-log/parse.js';
 export { parseReviewLog } from './review-log/parse.js';
 export { isValidDeviceId, REVIEW_LOG_FOLDER, reviewLogPath } from './review-log/path.js';
+// D7.1 / `[D-614]`: the practice explanation read back, and the one rule for what counts as
+// study activity (a review, or a genuine practice explanation; never evidence) — see
+// review-log/practice-explanation.ts.
+export type {
+  PassagesShownInView,
+  PracticeExplanationLogRecord,
+  PracticeSupportHistory,
+  PracticeSupportShown,
+  StudyActivityEntry,
+} from './review-log/practice-explanation.js';
+export {
+  isGenuinePracticeExplanation,
+  isPracticeExplanation,
+  isStudyActivity,
+  practiceExplanationForAttempt,
+  practiceExplanationSupportShown,
+  studiedConceptOf,
+} from './review-log/practice-explanation.js';
 export { readReviewLogFile } from './review-log/read.js';
 // F2.6's durable half (D-020): the suspended set is a projection folded from
 // the review log, never stored — see review-log/suspension.ts.
@@ -2686,6 +2704,8 @@ export type {
   AppendMisconceptionObservedLogResult,
   AppendMisconceptionObservedOptions,
   AppendNonAttemptLogResult,
+  AppendPracticeExplanationOptions,
+  AppendPracticeExplanationResult,
   AppendRetrospectiveOfferLogResult,
   AppendReviewLogOptions,
   AppendReviewLogResult,
@@ -2698,6 +2718,10 @@ export type {
   ExplainBackSetAsideLogRecordInput,
   MisconceptionObservedLogRecordInput,
   NonAttemptLogRecordInput,
+  PracticeExplanationLogRecordInput,
+  RecordPracticeExplanationInput,
+  RecordPracticeExplanationOptions,
+  RecordPracticeExplanationResult,
   RetrospectiveOfferLogRecordInput,
   ReviewLogRecordInput,
   SourceRegisteredLogRecordInput,
@@ -2712,12 +2736,14 @@ export {
   appendExplainBackSetAsideRecord,
   appendMisconceptionObservedRecord,
   appendNonAttemptRecord,
+  appendPracticeExplanationRecord,
   appendRetrospectiveOfferRecord,
   appendReviewLogRecord,
   appendSourceRegisteredRecord,
   appendSuccessionRecord,
   appendSuspendRecord,
   appendVerdictRecord,
+  recordPracticeExplanation,
 } from './review-log/write.js';
 // The sweep's recall constant in the same module is deliberately NOT exported here (row 38: it is
 // authoring intent for the ordinary generation sweep and no other path, and

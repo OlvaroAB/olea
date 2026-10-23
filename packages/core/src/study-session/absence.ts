@@ -17,13 +17,16 @@
  *
  * ## Which entries count as "a review"
  *
- * Only `kind: 'review'` entries — the same line `today/streak.ts`'s
- * `studyDays` already draws, for the same reason its own doc states: a
- * suspend/unsuspend event is a decision about her deck, not a study session,
- * and counting one would let tidying up reset the absence clock the way it
- * would let it extend a streak. `retrospective-offered`/`-opened`/
- * `-dismissed` and `succession`/`dispute`/`verdict` records are, likewise,
- * not her reviewing something.
+ * Every `kind: 'review'` entry, and every genuine practice explanation (D7.1,
+ * `[D-614]`: study activity, never evidence, counted "wherever Olea reads
+ * that she studied, including whether she returns unprompted") — the shared
+ * rule `../review-log/practice-explanation.ts`'s `isStudyActivity`, the same
+ * line `today/streak.ts`'s `studyDays` draws. A suspend/unsuspend event is a
+ * decision about her deck, not a study session, and counting one would let
+ * tidying up reset the absence clock the way it would let it extend a streak.
+ * `retrospective-offered`/`-opened`/`-dismissed`, `succession`/`dispute`/
+ * `verdict` records, a non-attempt and an answer the declared local check
+ * flagged are, likewise, not her studying something.
  *
  * ## Never reviewed at all is not an absence
  *
@@ -52,9 +55,11 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import { daysBetween } from '../dates.js';
+import { isStudyActivity } from '../review-log/practice-explanation.js';
 
 /**
- * The most recent instant a `kind: 'review'` entry's `timestamp` names, or
+ * The most recent instant a study-activity entry's `timestamp` names (a
+ * review, or a genuine practice explanation — see this module's doc), or
  * `null` when `entries` holds none. A record whose `timestamp` does not parse
  * is skipped rather than thrown on — the same per-line tolerance
  * `today/streak.ts`'s `studyDays` and `review-log/parse.ts` already hold, so
@@ -63,7 +68,7 @@ import { daysBetween } from '../dates.js';
 function mostRecentReviewInstant(entries: readonly ReviewLogEntry[]): Date | null {
   let latest: Date | null = null;
   for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
+    if (!isStudyActivity(entry)) continue;
     const parsed = new Date(entry.timestamp);
     if (Number.isNaN(parsed.getTime())) continue;
     if (latest === null || parsed.getTime() > latest.getTime()) latest = parsed;
