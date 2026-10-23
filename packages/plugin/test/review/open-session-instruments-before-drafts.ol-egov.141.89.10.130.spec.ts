@@ -100,8 +100,14 @@ async function composedFor(v: ReturnType<typeof vault2>): Promise<ComposedStudyS
   } as never;
 }
 
+// Each draft's card differs: `[D-627]` (`ol-3ux7.5.57.98`) serves exact duplicate content once.
 function draft(n: number): DraftRecord {
-  return { ...CARD_DRAFT, draftId: `card-draft-${String(n).padStart(3, '0')}` };
+  const id = String(n).padStart(3, '0');
+  return {
+    ...CARD_DRAFT,
+    draftId: `card-draft-${id}`,
+    card: { front: `Synthetic front ${id}?`, back: 'Synthetic back.' },
+  };
 }
 
 async function open(v: ReturnType<typeof vault2>, drafts: number, chosen: boolean) {

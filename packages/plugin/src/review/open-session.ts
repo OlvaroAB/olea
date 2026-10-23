@@ -262,6 +262,7 @@ import {
 import type { StudySessionHolder } from '../session/holder.js';
 import { localToday, SCHEDULING_HISTORY_PROBE_DAYS } from '../today/data-source.js';
 import type { GradeContestPort } from './contest.js';
+import { type DuplicateContentSetAside, setAsideDuplicateContent } from './duplicate-content.js';
 import {
   type DuplicationConfirmationEntryInput,
   proposeDuplicationConfirmations,
@@ -620,6 +621,12 @@ export type OpenReviewSessionOutcome =
        * may ignore it. Every instrument this walk observed, whatever its duplication/repair fate.
        */
       readonly instrumentEnumeration: readonly EnumeratedInstrument[];
+      /**
+       * `[D-627]` (`ol-3ux7.5.57.98`): each queue item withheld because an earlier item has the
+       * same content, with the reason and both copies' ids and concept ids. In memory only, never
+       * persisted; empty when nothing repeated. See `./duplicate-content.ts`.
+       */
+      readonly duplicateContentSetAside: readonly DuplicateContentSetAside[];
     }
   | { readonly ok: false; readonly error: unknown };
 
@@ -1023,12 +1030,20 @@ export async function openReviewSession(
     // draft, read fresh, AFTER the instruments the session builder chose
     // (`[D-568]`, `ol-egov.141.89.10.130`; before it they went first with no
     // limit, so 403 drafts sat ahead of the due instruments). Drafts keep their
-    // own order and are all kept (no new cap); see `OpenReviewSessionInput.draftCache`'s
+    // own order and are all kept (no new cap) except an exact repeat ([D-627],
+    // below); see `OpenReviewSessionInput.draftCache`'s
     // doc. `[]` when no cache is wired, so this never removes or reorders
     // anything `composeQueue`/`executeStudyPlan` decided.
     const pendingDrafts = input.draftCache ? await input.draftCache.listPending() : [];
     const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
-    const queue = [...scheduled, ...draftItems];
+    // `[D-627]` (`ol-3ux7.5.57.98`): exact duplicate content is served once, the first occurrence
+    // kept, so a due instrument wins over a pending draft. Nothing is merged or written; see
+    // `./duplicate-content.ts`. `scheduledQueue` below is the kept part of `scheduled`: the
+    // guard is stable as a queue grows, so it is the prefix of `queue`, and `extend`'s diff
+    // base keeps counting the same items.
+    const deduplicated = setAsideDuplicateContent([...scheduled, ...draftItems]);
+    const queue = deduplicated.queue;
+    const scheduledKept = setAsideDuplicateContent(scheduled).queue;
 
     const session = new ReviewSession({
       queue,
@@ -1230,9 +1245,10 @@ export async function openReviewSession(
       ok: true,
       session,
       itemCount: queue.length,
-      scheduledQueue: scheduled,
+      scheduledQueue: scheduledKept,
       deferredCount: executed.deferred.length,
       instrumentEnumeration,
+      duplicateContentSetAside: deduplicated.setAside,
     };
   } catch (error) {
     return { ok: false, error };
