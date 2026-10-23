@@ -99,6 +99,7 @@ import {
   registeredPastPapersFrom,
 } from '../scope-reading/declared-demands.js';
 import { createScopeReadingPersistence } from '../scope-reading/persistence.js';
+import { localToday } from '../today/data-source.js';
 import { buildBlueprintInputForCourse } from './assemble.js';
 import type { IncompletePaperStatement, PartialPaperStatement } from './copy.js';
 import {
@@ -445,8 +446,12 @@ export function topicsNeededToUnlock(topicCount: number, gateShare: number): num
   return topicCount;
 }
 
+/**
+ * ol-egov.141.89.7.109: today on the device's own calendar, the date F4.7's session builder counts
+ * with (`session-builder/provider.ts`, `localToday`), never the UTC date of the instant.
+ */
 function isoToday(now: Date): string {
-  return now.toISOString().slice(0, 10);
+  return localToday(now);
 }
 
 /**
@@ -666,11 +671,7 @@ export interface PracticePaperViewDeps {
   /** Loads the CURRENT state for `course` — locked/unlocked/absent, never a composed paper (that only happens on `requestPaper`, F4.11 ruling 5: "she pulls it"). */
   readonly load: (course: string) => Promise<PracticePaperCourseState>;
   /** Composes and persists a fresh paper for `course`. Never called unless `load` already returned `unlocked-not-pulled` — the view's own job, not this provider's, mirroring every other command-gated affordance in this plugin. */
-  readonly requestPaper: (
-    course: string,
-  ) => Promise<
-    PracticePaperReadyState | { readonly kind: 'ai-unavailable'; readonly course: string }
-  >;
+  readonly requestPaper: (course: string) => Promise<RequestedPaper>;
   /**
    * Hands ONE item to ordinary review (F4.11 ruling 1, `[D-252]`) — never the whole paper; the
    * view's per-item control is the only caller, and it is never asked to hand off more than one
@@ -687,9 +688,13 @@ export interface PracticePaperViewDeps {
   ) => Promise<PaperHandoffResult>;
 }
 
-type RequestedPaper =
+/**
+ * What one request returns: the paper, or the state the rule gives at the moment of the request
+ * when it no longer fires (ol-egov.141.89.7.110), which the view renders as `load`'s would.
+ */
+export type RequestedPaper =
   | PracticePaperReadyState
-  | { readonly kind: 'ai-unavailable'; readonly course: string };
+  | Exclude<PracticePaperCourseState, { readonly kind: 'unlocked-not-pulled' }>;
 
 /**
  * One `requestPaper`: the blueprint from the live vault, then the paper composed through the
@@ -791,6 +796,22 @@ function heldMaterialLookupFor(
   });
 }
 
+/**
+ * ol-egov.141.89.7.110: the unlock rule is evaluated again at the moment of the request, the same
+ * evaluation `load` makes. A view left open past the due date, or an "ask again" after an unfinished
+ * paper, no longer composes once the rule has closed: the current state comes back instead.
+ */
+async function recheckThenCompose(
+  deps: CreateLocalPracticePaperProviderDeps,
+  course: string,
+): Promise<RequestedPaper> {
+  // F7.8's grey-out reads no vault at all (provider.spec.ts), so it is decided before the rule is.
+  if ((await deps.generationPort()) === null) return { kind: 'ai-unavailable', course };
+  const current = await loadCourseState(deps, course);
+  if (current.kind !== 'unlocked-not-pulled') return current;
+  return composeRequestedPaper(deps, course);
+}
+
 /** The production `PracticePaperViewDeps` — see the module doc. */
 export function createLocalPracticePaperProvider(
   deps: CreateLocalPracticePaperProviderDeps,
@@ -806,7 +827,7 @@ export function createLocalPracticePaperProvider(
       // press, after a finished paper, composes a fresh one (F4.11 ruling 5).
       const running = inFlight.get(course);
       if (running !== undefined) return running;
-      const request = composeRequestedPaper(deps, course).finally(() => {
+      const request = recheckThenCompose(deps, course).finally(() => {
         inFlight.delete(course);
       });
       inFlight.set(course, request);
