@@ -223,6 +223,12 @@ export const SCHEDULING_OBSERVATION_OFFER_ACCEPT_LABEL = 'Explain it back';
 // distinguishable in both directions — "an error-refusal states the true,
 // transient reason, never the insufficient-notes message" (C4.7).
 //
+// **v0.9 (`[D-603]`):** the explain-back view is ungraded practice. It calls no
+// grader, never renders `EXPLAIN_BACK_CHECK_FAILED_REFUSAL`, and renders
+// `explainBackInsufficientNotesRefusal` only for a free-form topic with nothing
+// to explain against, whose grading wording waits on `[D-629]`. The update
+// below describes the graded path, dormant in v0.9.
+//
 // **UPDATE ([STY-0h] / `ol-l5og.18.8`): a production caller now renders both
 // strings, and the paragraph below is stale against it.** `ExplainBackModal`
 // (`../explain-back/modal.ts`) IS the Feynman-mode destination this
