@@ -328,6 +328,8 @@ export {
   type ContextPassage,
   contextPassage,
   contextPassagesField,
+  type FlaggedClaim,
+  flaggedClaim,
   isKnownTaskId,
   isValidRemainingAllowanceUsd,
   type KnownTaskId,

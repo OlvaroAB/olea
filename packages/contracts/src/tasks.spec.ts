@@ -54,6 +54,7 @@ describe('the closed task-id catalogue', () => {
       'retrieval.embed.v1',
       'retrieval.rerank.v1',
       'sections.summarize.v1',
+      'slide-correction.judge.v1',
       'vision.extract.v1',
       'vision.extract.v2',
     ]);
@@ -161,7 +162,10 @@ describe('the closed task-id catalogue', () => {
     // more W6 judgment: a verdict over one belief and an answer that already
     // exists (demonstrates, silent, reasserts or unclear), run on the decision
     // model rather than a Workers AI slot. See its own doc comment in `tasks.ts`.
-    expect(ALL_TASK_IDS).toHaveLength(26);
+    //
+    // `slide-correction.judge.v1` (`[D-625]`, `ol-zjke`) is one more W6 judgment: a verdict over a
+    // transcript sentence and the linked deck's instruments, no generation. See its doc comment.
+    expect(ALL_TASK_IDS).toHaveLength(27);
   });
 
   it('follows <domain>.<verb>.v<N> without exception', () => {
@@ -255,6 +259,52 @@ describe('sourceChunkOrigins (per-passage transcript origin)', () => {
         sourceChunkOrigins: [{ ...origin, speakerName: 'x' }],
       }).success,
     ).toBe(false);
+  });
+
+  describe('flaggedClaims ([D-624])', () => {
+    const base = {
+      kind: 'transcript',
+      speakerRole: 'lecturer',
+      flags: ['inaudible', 'visual-reference'],
+    } as const;
+    const claim = (start: number, end: number, flags: string[] = ['inaudible']) => ({
+      start,
+      end,
+      flags,
+    });
+    const ok = (entry: unknown, chunk = 'x'.repeat(100)) =>
+      request.safeParse({ sourceChunks: [chunk], sourceChunkOrigins: [entry] }).success;
+
+    it('is valid with and without the field', () => {
+      expect(ok(base)).toBe(true);
+      expect(
+        ok({ ...base, flaggedClaims: [claim(0, 10), claim(10, 20, ['visual-reference'])] }),
+      ).toBe(true);
+    });
+
+    it('rejects overlapping, out-of-order, start >= end and empty flags', () => {
+      expect(ok({ ...base, flaggedClaims: [claim(0, 10), claim(9, 20)] })).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [claim(20, 30), claim(0, 10)] })).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [claim(5, 5)] })).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [claim(6, 5)] })).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [claim(0, 5, [])] })).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [] })).toBe(false);
+    });
+
+    it("rejects a kind not in the entry's flags, and flaggedClaims without flags", () => {
+      expect(ok({ ...base, flaggedClaims: [claim(0, 5, ['term-discrepancy'])] })).toBe(false);
+      const { flags: _flags, ...noFlags } = base;
+      expect(ok({ ...noFlags, flaggedClaims: [claim(0, 5)] })).toBe(false);
+    });
+
+    it('rejects an unknown key inside a claim', () => {
+      expect(ok({ ...base, flaggedClaims: [{ ...claim(0, 5), text: 'x' }] })).toBe(false);
+    });
+
+    it('request level: a claim past the passage end is rejected, one ending exactly at it is accepted', () => {
+      expect(ok({ ...base, flaggedClaims: [claim(0, 11)] }, 'a'.repeat(10))).toBe(false);
+      expect(ok({ ...base, flaggedClaims: [claim(0, 10)] }, 'a'.repeat(10))).toBe(true);
+    });
   });
 
   it('names the seven source-reading tasks, none of which is a task without sourceChunks', () => {

@@ -1923,7 +1923,12 @@ describe('createLocalGapProvider — a changed cited passage not yet revalidated
   });
 
   it('REGRESSION (fails pre-fix): evidence on a card whose cited passage changed and is not revalidated leaves need unknown, worded as unknown, whatever reason the fact records', async () => {
-    for (const reason of [undefined, 'passage-missing', 'source-revision-changed'] as const) {
+    for (const reason of [
+      undefined,
+      'passage-missing',
+      'source-revision-changed',
+      'lecturer-correction',
+    ] as const) {
       const { vault, key } = await widgetWorld((k) => review(k, CARD, 'qa', 'r1'));
       const store = new ObsidianCitationHashStore(new JsonDataHost());
       await track(store, CARD, key, reason === undefined ? {} : { reason });
