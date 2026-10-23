@@ -206,6 +206,7 @@ import {
   type RegistrySuspectSection,
   type RegistrySuspectSectionInstrumentEvidence,
   readConceptKeyCanonicalIndex,
+  readContentRecord,
   readReviewLogFile,
   readReviewLogHistory,
   renameConcept as renameConceptOverride,
@@ -261,8 +262,7 @@ import type { RegistryViewDeps, RegistryViewState, RegistryWithheldItem } from '
  * mastery surface that would show a stage beside its vitality as still
  * unbuilt when it was written. This provider is one of that surface's
  * readers now. It used to declare its own independent `0.8` fallback here,
- * same as four sibling readers (`ol-owyn`); all five now default to
- * `HOLDING_CUT`, `olea-core`'s one exported declaration of `[D-115]`'s
+ * same as four sibling readers (`ol-owyn`); all five now default to `HOLDING_CUT`, `olea-core`'s one exported declaration of `[D-115]`'s
  * ratified 0.90, instead of each carrying an un-ratified guess.
  */
 
@@ -1188,6 +1188,15 @@ export function createLocalRegistryProvider(
       await deps.editPort.edit(instrument);
     },
 
+    /**
+     * F8.4b (`[D-614]`): her saved practice explanation, read through `[D-077]`'s content store on
+     * expansion only. A missing, unreadable or malformed record is `null` (the store's own
+     * defined outcome), never an error.
+     */
+    async readPracticeExplanationText(contentRef: string): Promise<string | null> {
+      const result = await readContentRecord(deps.vault, contentRef);
+      return result.status === 'found' ? result.record.studentAnswer : null;
+    },
     async openSourceLocation(location: RegistrySourceLocation): Promise<void> {
       await openSourceLocationPort.open(location);
     },

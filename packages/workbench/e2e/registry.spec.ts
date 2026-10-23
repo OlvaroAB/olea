@@ -35,9 +35,11 @@
  *   - the honest empty state
  *
  * F8.4b (`[D-175]`) and F4.2a (`[D-176]`), added this tranche (`ol-z6x2` [WB-2]):
- *   - an instrument's explain-back history: two attempts oldest-first, the current one
- *     marked "under re-review" while `[D-095]`-quarantined; a sibling instrument with no
- *     history renders no section at all
+ *   - an instrument's explain-back history (`[D-603]`, `[D-614]`): two graded attempts and
+ *     one saved practice explanation, three dated rows oldest-first, none showing a depth
+ *     phrase; the current graded one marked "under re-review" while `[D-095]`-quarantined;
+ *     the practice row's text only on expansion; a sibling instrument with no history
+ *     renders no section at all
  *   - the standing note-offer: an eligible tier-2 concept shows both verbs; a tier-1
  *     concept with the same instrument/review/ranking evidence never shows it; accept
  *     calls through to `RegistryViewDeps.acceptNoteOffer`, decline removes it locally
@@ -226,7 +228,7 @@ test('registry: no "Delete" AFFORDANCE (button/action) appears anywhere on this 
 // F8.4b (`[D-175]`) — per-instrument explain-back history.
 // ---------------------------------------------------------------------------
 
-test('registry-explain-back-history: an instrument with two graded attempts shows both, oldest first, the current one marked under re-review', async ({
+test('registry-explain-back-history: graded attempts and a saved practice explanation list as dated rows, oldest first, none showing a depth phrase, the current graded one marked under re-review', async ({
   page,
 }) => {
   await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
@@ -235,16 +237,40 @@ test('registry-explain-back-history: an instrument with two graded attempts show
     '[data-olea-instrument-id="qa:syn:concept-key:brivane:2"]',
   );
   const historyRows = withHistory.locator('.olea-registry-explain-back-history li');
-  await expect(historyRows).toHaveCount(2);
+  await expect(historyRows).toHaveCount(3);
 
-  // Oldest first: the earlier, shallower attempt is never marked contested.
-  await expect(historyRows.nth(0)).toContainText('with one point made');
+  // Oldest first, each a date alone; the earlier graded attempt is never marked contested.
+  await expect(historyRows.nth(0)).toHaveText(/^\d{1,2} Jan 2027$/);
+  await expect(historyRows.nth(1)).toHaveText(/^\d{1,2} Jan 2027$/);
   await expect(historyRows.nth(0)).not.toContainText('under re-review');
 
-  // The later, current attempt is presently `[D-095]`-quarantined.
-  await expect(historyRows.nth(1)).toContainText('with the points tied together');
-  await expect(historyRows.nth(1)).toContainText('under re-review');
+  // The later, current graded attempt is presently `[D-095]`-quarantined.
+  await expect(historyRows.nth(2)).toHaveText(/^\d{1,2} Jan 2027 \(under re-review\)$/);
   await expect(withHistory.locator('.olea-registry-explain-back-contested')).toHaveCount(1);
+
+  // `[D-603]`: no row anywhere carries a depth phrase or a level name.
+  const history = withHistory.locator('.olea-registry-explain-back-history');
+  await expect(history).not.toContainText(
+    /at surface level|one point made|several points|tied together|full depth|structural|relational|extended-abstract/i,
+  );
+});
+
+test('registry-explain-back-history: her practice explanation shows its text only once the row is expanded', async ({
+  page,
+}) => {
+  await gotoState(page, 'registry', 'registry-explain-back-history', 'obsidian-dark');
+  await open(rows(page).filter({ hasText: 'syn:concept:brivane' }));
+  const withHistory = frame(page).locator(
+    '[data-olea-instrument-id="qa:syn:concept-key:brivane:2"]',
+  );
+  const practiceRow = withHistory.locator('.olea-registry-explain-back-history li details');
+  await expect(practiceRow).toHaveCount(1);
+  await expect(practiceRow.locator('.olea-registry-explain-back-text')).toHaveText('');
+
+  await practiceRow.locator('summary').click();
+  await expect(practiceRow.locator('.olea-registry-explain-back-text')).toHaveText(
+    'Synthetic practice words, as she wrote them.',
+  );
 });
 
 test('registry-explain-back-history: an instrument that has never been explained back shows no history section at all', async ({

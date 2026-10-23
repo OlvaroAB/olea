@@ -27,6 +27,7 @@ import {
   type RegistrySourceLocation,
   type RetrievabilityInput,
   type RetrievabilityOutput,
+  recordPracticeExplanation,
   type Scheduler,
 } from 'olea-core';
 // `[D-402]` binding condition 3 (`ol-egov.141.89.3.19`) — imported by source path, not
@@ -847,9 +848,9 @@ describe('createLocalRegistryProvider — explain-back history wiring (F8.4b, [D
     const historied = afterGrade.concepts[0]?.instruments[0];
     expect(historied?.explainBackHistory).toEqual([
       {
+        kind: 'graded',
         eventId: 'event-1',
         timestamp: record.timestamp,
-        soloLevel: 'relational',
         contested: false,
       },
     ]);
@@ -877,12 +878,54 @@ describe('createLocalRegistryProvider — explain-back history wiring (F8.4b, [D
     const contested = afterDispute.concepts[0]?.instruments[0];
     expect(contested?.explainBackHistory).toEqual([
       {
+        kind: 'graded',
         eventId: 'event-1',
         timestamp: record.timestamp,
-        soloLevel: 'relational',
         contested: true,
       },
     ]);
+  });
+
+  // F8.4b in v0.9 (`[D-614]`, `@auto:plugin/registry/provider.spec`): a saved practice explanation
+  // is a row on its instrument after a real load, and its text is read through the content store.
+  it('lists a saved practice explanation as a row after a real load, and reads her text through the content store only when asked', async () => {
+    const vault = fixtureVault();
+    const provider = makeProvider(vault, new FakeDataHost(), new FakeEditPort());
+    const before = await modelFrom(await provider.load());
+    const instrument = before.concepts[0]?.instruments[0];
+    if (instrument === undefined) throw new Error('missing instrument');
+
+    await recordPracticeExplanation(
+      vault,
+      {
+        timestamp: '2026-01-20T09:00:00-04:00',
+        instrumentId: instrument.instrumentId,
+        attemptId: 'attempt-1',
+        conceptIds: [...instrument.conceptIds],
+        promptShape: 'concept',
+        trigger: 'on-demand',
+        durationMs: null,
+        answer: 'synthetic words of hers',
+        passagesShownInView: [],
+      },
+      { deviceId: DEVICE, generateEventId: () => 'pe-1', generateContentId: () => `${DEVICE}.c1` },
+    );
+
+    const after = await modelFrom(await provider.load());
+    const rows = after.concepts[0]?.instruments[0]?.explainBackHistory;
+    expect(rows).toEqual([
+      {
+        kind: 'practice',
+        eventId: 'pe-1',
+        timestamp: '2026-01-20T09:00:00-04:00',
+        contested: false,
+        contentRef: `${DEVICE}.c1`,
+      },
+    ]);
+    expect(await provider.readPracticeExplanationText?.(`${DEVICE}.c1`)).toBe(
+      'synthetic words of hers',
+    );
+    expect(await provider.readPracticeExplanationText?.(`${DEVICE}.absent`)).toBeNull();
   });
 });
 

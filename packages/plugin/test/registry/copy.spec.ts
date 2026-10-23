@@ -1,4 +1,3 @@
-import type { SoloLevel } from 'olea-contracts';
 import type { RegistryInstrumentSummary } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import {
@@ -74,14 +73,6 @@ function instrument(
   };
 }
 
-const ALL_SOLO_LEVELS: readonly SoloLevel[] = [
-  'prestructural',
-  'unistructural',
-  'multistructural',
-  'relational',
-  'extended-abstract',
-];
-
 /** Every exported string constant/function's output this module owns, gathered once so the vocabulary sweep below is exhaustive rather than a hand-picked sample. */
 function everyStringThisModuleCanProduce(): readonly string[] {
   return [
@@ -104,18 +95,24 @@ function everyStringThisModuleCanProduce(): readonly string[] {
     masteryStatedLine('sapling', { value: 'holding', weakest: null, instrumentsRead: 0 }),
     EXPLAIN_BACK_HISTORY_HEADING,
     EXPLAIN_BACK_HISTORY_CONTESTED_MARKER,
-    ...ALL_SOLO_LEVELS.map((level) => explainBackDepthPhrase(level)),
     explainBackHistoryRowLine({
+      kind: 'graded',
       eventId: 'r-eb-1',
       timestamp: '2026-01-10T09:00:00-04:00',
-      soloLevel: 'relational',
       contested: false,
     }),
     explainBackHistoryRowLine({
+      kind: 'graded',
       eventId: 'r-eb-2',
       timestamp: '2026-01-20T09:00:00-04:00',
-      soloLevel: 'prestructural',
       contested: true,
+    }),
+    explainBackHistoryRowLine({
+      kind: 'practice',
+      eventId: 'pe-1',
+      timestamp: '2026-01-22T09:00:00-04:00',
+      contested: false,
+      contentRef: 'desktop.content-1',
     }),
     NOTE_OFFER_LINE,
     NOTE_OFFER_ACCEPT_ACTION,
@@ -277,61 +274,106 @@ describe('explainBackLine', () => {
   });
 });
 
-// Scenario: olea-service/features/F8-concepts-scope.md — "F8.4b — The
-// explain-back history surface", tagged `@auto:plugin/registry/copy.spec`.
-describe('explainBackDepthPhrase (F8.4b, GLOSSARY SOLO rule 5)', () => {
-  it('never prints the raw SOLO enum name for any level', () => {
-    for (const level of ALL_SOLO_LEVELS) {
-      expect(explainBackDepthPhrase(level).toLowerCase()).not.toBe(level);
-      expect(explainBackDepthPhrase(level).toLowerCase()).not.toContain(level);
-    }
-  });
-
-  it('never prints a number, for any level', () => {
-    for (const level of ALL_SOLO_LEVELS) {
-      expect(explainBackDepthPhrase(level)).not.toMatch(/\d/);
-    }
-  });
-
-  it('the top level matches the vocabulary registry\'s own V5 worked example verbatim ("explained at full depth")', () => {
-    expect(explainBackDepthPhrase('extended-abstract')).toBe('at full depth');
-  });
-
-  it('every level produces a distinct phrase — no two SOLO levels collapse to the same reported reading', () => {
-    const phrases = ALL_SOLO_LEVELS.map((level) => explainBackDepthPhrase(level));
-    expect(new Set(phrases).size).toBe(ALL_SOLO_LEVELS.length);
-  });
-});
-
-describe('explainBackHistoryRowLine (F8.4b)', () => {
-  it('states the depth phrase and the date, with no contested marker on an uncontested row', () => {
+// Scenarios: olea-service/features/F8-concepts-scope.md — "F8.4b — The explain-back history
+// surface" and "F8.4b in v0.9" ([D-603], [D-614]), tagged `@auto:plugin/registry/copy.spec`.
+// Registry section 10.5 as applied: a date, with the [D-095] contested marker appended where
+// live, and no depth phrase.
+describe('explainBackHistoryRowLine (F8.4b, [D-603])', () => {
+  it('is the date alone on an uncontested graded row — no depth phrase, no level name, no number but the date', () => {
     const line = explainBackHistoryRowLine({
+      kind: 'graded',
       eventId: 'r-eb-1',
       timestamp: '2026-01-10T09:00:00-04:00',
-      soloLevel: 'relational',
       contested: false,
     });
-    expect(line).toBe('Explained with the points tied together on 10 Jan 2026.');
+    expect(line).toBe('10 Jan 2026');
   });
 
   it('appends the [D-095] contested marker, naming the re-review state, when this row is contested', () => {
     const line = explainBackHistoryRowLine({
+      kind: 'graded',
       eventId: 'r-eb-1',
       timestamp: '2026-01-10T09:00:00-04:00',
-      soloLevel: 'relational',
       contested: true,
     });
-    expect(line).toBe('Explained with the points tied together on 10 Jan 2026. (under re-review)');
+    expect(line).toBe('10 Jan 2026 (under re-review)');
   });
 
-  it('never carries the answer text, the grader feedback, or a raw number/percentage — only the depth phrase and the date', () => {
+  it('a practice explanation row is the date alone, with no reading and no marker', () => {
     const line = explainBackHistoryRowLine({
-      eventId: 'r-eb-1',
+      kind: 'practice',
+      eventId: 'pe-1',
       timestamp: '2026-01-10T09:00:00-04:00',
-      soloLevel: 'prestructural',
       contested: false,
+      contentRef: 'desktop.content-1',
     });
-    expect(line).not.toMatch(/\d%|\bscore\b/i);
+    expect(line).toBe('10 Jan 2026');
+  });
+
+  it('never carries her text, the grader feedback, a depth phrase, a level name, a total or a streak', () => {
+    const lines = [
+      explainBackHistoryRowLine({
+        kind: 'graded',
+        eventId: 'r-eb-1',
+        timestamp: '2026-01-10T09:00:00-04:00',
+        contested: true,
+      }),
+      explainBackHistoryRowLine({
+        kind: 'practice',
+        eventId: 'pe-1',
+        timestamp: '2026-01-10T09:00:00-04:00',
+        contested: false,
+        contentRef: 'desktop.content-1',
+      }),
+    ];
+    for (const line of lines) {
+      expect(line).not.toMatch(
+        /explained|depth|surface level|points|prestructural|unistructural|multistructural|relational|extended-abstract|\d%|score|total|streak/i,
+      );
+    }
+  });
+
+  it('no depth phrase, for any level, appears in a graded or practice row line', () => {
+    const levels = [
+      'prestructural',
+      'unistructural',
+      'multistructural',
+      'relational',
+      'extended-abstract',
+    ] as const;
+    const lines = [
+      explainBackHistoryRowLine({
+        kind: 'graded',
+        eventId: 'r-eb-1',
+        timestamp: '2026-01-10T09:00:00-04:00',
+        contested: true,
+      }),
+      explainBackHistoryRowLine({
+        kind: 'practice',
+        eventId: 'pe-1',
+        timestamp: '2026-01-10T09:00:00-04:00',
+        contested: false,
+        contentRef: 'desktop.content-1',
+      }),
+    ];
+    for (const level of levels) {
+      for (const line of lines) expect(line).not.toContain(explainBackDepthPhrase(level));
+    }
+  });
+});
+
+describe('the concept-grain explain-back line carries no depth reading (F8.4b in v0.9)', () => {
+  it('states the attempt count as it always did, and nothing about depth', () => {
+    const line = explainBackLine({ attempted: true, attemptCount: 3 }) ?? '';
+    expect(line).toBe('Explained back 3 times.');
+    expect(line).not.toMatch(/depth|level|points|surface|relational|structural/i);
+  });
+});
+
+describe('the registry copy for explain-back history reads as section 10.5 applies it', () => {
+  it('the heading is "Explain-back history" and the marker is "under re-review"', () => {
+    expect(EXPLAIN_BACK_HISTORY_HEADING).toBe('Explain-back history');
+    expect(EXPLAIN_BACK_HISTORY_CONTESTED_MARKER).toBe('under re-review');
   });
 });
 

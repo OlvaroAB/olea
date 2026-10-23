@@ -2643,11 +2643,13 @@ export { safeParseDisputeLogRecord } from './review-log/contest-record.js';
 export type {
   ExplainBackHistoryEntry,
   GradedExplainBackReview,
+  PracticeExplanationHistoryEntry,
 } from './review-log/explain-back-history.js';
 export {
   explainBackGradeEvents,
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
+  practiceExplanationHistoryByInstrument,
 } from './review-log/explain-back-history.js';
 // `[D-460]`: the explain-back feedback exposure marker, read back — a
 // projection folded from the review log, never stored; see
