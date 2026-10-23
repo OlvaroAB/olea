@@ -68,7 +68,13 @@ describe('the term check in a production request (ol-egov.141.89.8.59)', () => {
     expect(transport.sent[0]?.payload).toEqual({
       sourceChunks: ['The neighbor threshold rule fires here.'],
       sourceChunkOrigins: [
-        { kind: 'transcript', speakerRole: 'unknown', flags: ['term-discrepancy'] },
+        {
+          kind: 'transcript',
+          speakerRole: 'unknown',
+          flags: ['term-discrepancy'],
+          // ol-b769 (D-624): the one sentence is the flagged claim, declared by span and kind.
+          flaggedClaims: [{ start: 0, end: 39, flags: ['term-discrepancy'] }],
+        },
       ],
     });
   });
