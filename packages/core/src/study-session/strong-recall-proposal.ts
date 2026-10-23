@@ -141,6 +141,19 @@ export interface StrongRecallProposalInput {
    */
   readonly misconceptionSinceLastGradedExplainBack?: boolean;
   /**
+   * `[D-613]` (b): present when a genuine completed practice explanation of
+   * this concept is on record (`isGenuinePracticeExplanation`, D7.1,
+   * `[D-614]`) — absent for a concept never explained, for a non-attempt (no
+   * entry exists) and for an answer the declared local check flagged
+   * (F5.7), none of which suppresses the offer. Carries the one number the
+   * condition then reads: how many distinct days of successful scored recall
+   * fall AFTER that completion, folded by the caller with the same fold and
+   * the same day rule `evidence.successfulScoredDays` uses. When present,
+   * `evidence.successfulScoredDays` (the whole log) is not read for the
+   * threshold: recall before the completion never counts.
+   */
+  readonly completedPracticeExplanation?: { readonly successfulScoredDaysSince: number };
+  /**
    * The spacing gate the mastery fold was run with, when a caller passed a
    * non-default `MasteryRollupOptions.minSpacedRetrievalDays`. The margin
    * above is added to *this*, so the two numbers cannot drift apart.
@@ -188,7 +201,8 @@ export type NoProposalReason =
   | 'recall-not-holding'
   | 'recognition-only'
   | 'recall-not-yet-strong'
-  | 'depth-evidence-present';
+  | 'depth-evidence-present'
+  | 'practice-explanation-completed';
 
 export interface StrongRecallNoProposal {
   readonly shouldPropose: false;
@@ -275,20 +289,26 @@ function spellDayCount(days: number): string {
  * 4. **Strong, not merely spaced** — `successfulScoredDays` at or past the
  *    spacing gate plus {@link STRONG_RECALL_MARGIN_DAYS}. See that constant's
  *    plain-English defence.
- * 5. **Depth evidence absent** — the depth gate uncleared *and* no graded
- *    explain-back on record. Both, deliberately: a graded explain-back that
- *    fell short of `relational` is depth evidence that exists and did not
- *    clear, which is a different situation from never having been asked, and
- *    F2.21's trigger is about the second.
+ * 5. **No completed practice explanation since the recall** (`[D-613]` (b),
+ *    F2.21 as amended). In v0.9 nothing is graded, so no verdict, depth grade
+ *    or graded-explain-back count is read here (`evidence.depthGateCleared` and
+ *    `evidence.gradedExplainBackCount` are ignored, so the decision is identical
+ *    with or without one). What suppresses the offer is
+ *    {@link StrongRecallProposalInput.completedPracticeExplanation}: while it is
+ *    present only the recall days counted from the completion are tested
+ *    against condition 4's threshold, with no new constant.
  *
- * **The reopening branch** (F2.21): a fresh misconception on a concept
+ * **The reopening branch** (F2.21), **dormant in v0.9** (`[D-603]`): it needs a
+ * concept at `tree`, which none reaches without a graded explanation, and no
+ * caller supplies the misconception fact now, so it never fires; the code stays
+ * for the graded path's return. A fresh misconception on a concept
  * already at `tree` reopens eligibility, and the stage does not fall —
  * `computeConceptMastery` is a high-water mark and this module never writes,
  * so F2.11's monotonic guarantee is untouched by construction.
  *
  * **A concept whose whole extent is a single definition gets no special
  * case** (F2.21, `[D-080]`): nothing here reads concept size, so a
- * definition-only concept is evaluated on exactly these five conditions like
+ * definition-only concept is evaluated on exactly these conditions like
  * any other.
  */
 export function evaluateStrongRecallProposal(
@@ -300,8 +320,11 @@ export function evaluateStrongRecallProposal(
   const minSpacedRetrievalDays = input.minSpacedRetrievalDays ?? MIN_SPACED_RETRIEVAL_DAYS;
   const strongRecallDays = minSpacedRetrievalDays + STRONG_RECALL_MARGIN_DAYS;
   const { evidence } = input;
-
-  const depthEvidencePresent = evidence.depthGateCleared || evidence.gradedExplainBackCount > 0;
+  // `[D-613]` (b): after a completed practice explanation only the recall since
+  // counts; otherwise the whole log's days, as before. Nothing graded is read.
+  const completed = input.completedPracticeExplanation;
+  const recallDays =
+    completed === undefined ? evidence.successfulScoredDays : completed.successfulScoredDaysSince;
 
   // F2.21's reopening branch: a fresh misconception on a top-stage concept is
   // the strongest version of the same signal, and outranks the depth evidence
@@ -329,14 +352,16 @@ export function evaluateStrongRecallProposal(
   }
   if (input.vitality !== 'holding') return { shouldPropose: false, because: 'recall-not-holding' };
   if (evidence.recognitionOnly) return { shouldPropose: false, because: 'recognition-only' };
-  if (evidence.successfulScoredDays < strongRecallDays) {
-    return { shouldPropose: false, because: 'recall-not-yet-strong' };
+  if (recallDays < strongRecallDays) {
+    return {
+      shouldPropose: false,
+      because: completed === undefined ? 'recall-not-yet-strong' : 'practice-explanation-completed',
+    };
   }
-  if (depthEvidencePresent) return { shouldPropose: false, because: 'depth-evidence-present' };
 
   const reason: StrongRecallReason = {
     kind: 'strong-recall',
-    successfulScoredDays: evidence.successfulScoredDays,
+    successfulScoredDays: recallDays,
     strongRecallDays,
   };
   return {

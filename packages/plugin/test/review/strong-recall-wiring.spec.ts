@@ -6,14 +6,18 @@
  * already-computed evidence slice. This file covers the join the plugin owns:
  * that the four facts handed to that decision are folded from the log, that
  * only the asked-for concept is folded, that the scheduler replay happens
- * once, and that F2.21's reopening branch is supplied from the log's own
- * `misconception-observed` records rather than invented.
+ * once, that a completed practice explanation read from the same log
+ * suppresses the offer until recall on later days (`[D-613]` (b)), and that
+ * the reopening branch is never supplied in v0.9.
  *
- * Feature: F2.21 wiring — features/F2-review.md (olea-service), "the reader
- * folds one concept, not the vault" and "the reopening branch is supplied
- * from the log's own misconception-observed records".
+ * Feature: F2.21 wiring and F2.21 / [D-613] — features/F2-review.md
+ * (olea-service).
  */
-import type { DisputeLogRecord, ReviewLogEntry } from 'olea-contracts';
+import {
+  type DisputeLogRecord,
+  explainBackOfferTrigger,
+  type ReviewLogEntry,
+} from 'olea-contracts';
 import { createFsrsScheduler, projectInstrumentValidity, type Scheduler } from 'olea-core';
 import { describe, expect, it, vi } from 'vitest';
 import { createStrongRecallProposalReader } from '../../src/review/strong-recall-wiring.js';
@@ -57,6 +61,30 @@ function review(overrides: {
           explainBackGrade: { ...overrides.explainBackGrade, correctness: 'correct' },
         }
       : {}),
+  } as ReviewLogEntry;
+}
+
+function practice(overrides: {
+  readonly eventId: string;
+  readonly timestamp: string;
+  readonly conceptId: string;
+  readonly alsoNames?: readonly string[];
+  readonly flagged?: true;
+}): ReviewLogEntry {
+  return {
+    schemaVersion: 6,
+    kind: 'practice-explanation',
+    eventId: overrides.eventId,
+    timestamp: overrides.timestamp,
+    instrumentId: `explain-back:${overrides.conceptId}`,
+    attemptId: `attempt-${overrides.eventId}`,
+    conceptIds: [overrides.conceptId, ...(overrides.alsoNames ?? [])],
+    promptShape: 'concept',
+    trigger: 'on-demand',
+    durationMs: 60000,
+    supportLevelShown: 'independent',
+    contentRef: `device-a.content-${overrides.eventId}`,
+    ...(overrides.flagged === true ? { localCheckFlagged: true } : {}),
   } as ReviewLogEntry;
 }
 
@@ -196,22 +224,15 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     expect(decision.conceptId).toBe('concept-also');
   });
 
-  it('a misconception recorded AFTER the last graded explain-back reopens eligibility on a top-stage concept', () => {
-    const entries: ReviewLogEntry[] = [
-      ...strongRecallLog('concept-tree'),
-      review({
-        eventId: 'eb-1',
-        timestamp: '2026-08-19T10:00:00+00:00',
-        conceptIds: ['concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-1',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
-      }),
-      misconception({
-        eventId: 'm-1',
+  // `[D-613]` (b), as David changed it (`ol-egov.141.89.6.131`): F2.21 as amended. The offer is
+  // suppressed by a completed practice explanation read from the log she already folds.
+  it('a completed practice explanation of the concept just graded raises no offer on the reveal screen', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
         timestamp: '2026-08-20T08:30:00+00:00',
-        conceptIds: ['concept-tree'],
+        conceptId: 'concept-strong',
       }),
     ];
     const read = createStrongRecallProposalReader({
@@ -220,71 +241,19 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
       now: NOW,
     });
 
-    const decision = read({ conceptIds: ['concept-tree'] });
-
-    expect(decision.shouldPropose).toBe(true);
-    if (!decision.shouldPropose) return;
-    expect(decision.reason.kind).toBe('reopened-by-misconception');
-  });
-
-  it('a misconception recorded BEFORE the last graded explain-back reopens nothing — the stage already accounts for it', () => {
-    const entries: ReviewLogEntry[] = [
-      ...strongRecallLog('concept-tree'),
-      misconception({
-        eventId: 'm-1',
-        timestamp: '2026-08-18T08:30:00+00:00',
-        conceptIds: ['concept-tree'],
-      }),
-      review({
-        eventId: 'eb-1',
-        timestamp: '2026-08-19T10:00:00+00:00',
-        conceptIds: ['concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-1',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
-      }),
-    ];
-    const read = createStrongRecallProposalReader({
-      entries,
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-    });
-
-    expect(read({ conceptIds: ['concept-tree'] })).toEqual({
+    expect(read({ conceptIds: ['concept-strong'] })).toEqual({
       shouldPropose: false,
-      because: 'depth-evidence-present',
+      because: 'practice-explanation-completed',
     });
   });
 
-  // `ol-egov.141.89.9.76` (`[D-419]`, `[D-423]`): a graded explain-back is the last explanation OF
-  // the one concept it scored — the first id of its own record. A record that names the concept
-  // only as context is not an explanation of it, so it never moves "fresh" past a misconception.
-  it('a graded explain-back that names the concept only as context is not its last explanation', () => {
-    const entries: ReviewLogEntry[] = [
-      ...strongRecallLog('concept-tree'),
-      review({
-        eventId: 'eb-1',
-        timestamp: '2026-08-19T10:00:00+00:00',
-        conceptIds: ['concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-1',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
-      }),
-      misconception({
-        eventId: 'm-1',
-        timestamp: '2026-08-19T12:00:00+00:00',
-        conceptIds: ['concept-tree'],
-      }),
-      review({
-        eventId: 'eb-2',
-        timestamp: '2026-08-19T14:00:00+00:00',
-        conceptIds: ['concept-other', 'concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-2',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
+  it('a practice explanation of another concept does not suppress this one', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-20T08:30:00+00:00',
+        conceptId: 'concept-elsewhere',
       }),
     ];
     const read = createStrongRecallProposalReader({
@@ -293,38 +262,264 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
       now: NOW,
     });
 
-    const decision = read({ conceptIds: ['concept-tree'] });
-
-    expect(decision.shouldPropose).toBe(true);
-    if (!decision.shouldPropose) return;
-    expect(decision.reason.kind).toBe('reopened-by-misconception');
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(true);
   });
 
-  it('a misconception on another concept never reopens this one', () => {
-    const entries: ReviewLogEntry[] = [
-      ...strongRecallLog('concept-tree'),
-      review({
-        eventId: 'eb-1',
+  it('a practice entry that names the concept only as context does not suppress it (D-423: index 0 is the concept explained)', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-20T08:30:00+00:00',
+        conceptId: 'concept-elsewhere',
+        alsoNames: ['concept-strong'],
+      }),
+    ];
+    const read = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(true);
+  });
+
+  it('an answer the local check flagged does not suppress the offer', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-20T08:30:00+00:00',
+        conceptId: 'concept-strong',
+        flagged: true,
+      }),
+    ];
+    const read = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(true);
+  });
+
+  it('a non-attempt, which writes no practice entry, does not suppress the offer', () => {
+    const nonAttempt = {
+      schemaVersion: 6,
+      kind: 'non-attempt',
+      eventId: 'na-1',
+      timestamp: '2026-08-20T08:30:00+00:00',
+      instrumentId: 'explain-back:concept-strong',
+      conceptIds: ['concept-strong'],
+    } as unknown as ReviewLogEntry;
+    const read = createStrongRecallProposalReader({
+      entries: [...strongRecallLog('concept-strong'), nonAttempt],
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(true);
+  });
+
+  it('recall before a completion never counts: the same four days, then a completion, propose nothing', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-20T09:00:00+00:00',
+        conceptId: 'concept-strong',
+      }),
+    ];
+    const read = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(false);
+  });
+
+  it('recall on later days meets the same threshold again, counted from the completion alone', () => {
+    // Completion on day one; recall on days two to five is four spaced days after it, the
+    // spacing gate (3) plus the margin (1). Days before the completion add nothing.
+    const instrumentId = 'inst-concept-strong';
+    const recallOn = (days: readonly string[]) =>
+      days.map((day, index) =>
+        review({
+          eventId: `late-${index}`,
+          timestamp: `${day}T08:00:00+00:00`,
+          conceptIds: ['concept-strong'],
+          instrumentId,
+        }),
+      );
+    const before = ['2026-08-10', '2026-08-11', '2026-08-12', '2026-08-13'];
+    const completion = practice({
+      eventId: 'p-1',
+      timestamp: '2026-08-14T10:00:00+00:00',
+      conceptId: 'concept-strong',
+    });
+    const decide = (after: readonly string[]) =>
+      createStrongRecallProposalReader({
+        entries: [
+          ...recallOn(before),
+          completion,
+          ...recallOn(after).map((e, i) => ({ ...e, eventId: `after-${i}` })),
+        ],
+        scheduler: createFsrsScheduler(),
+        now: NOW,
+      })({ conceptIds: ['concept-strong'] });
+
+    // Three days after: the spacing gate, not yet the margin.
+    expect(decide(['2026-08-15', '2026-08-16', '2026-08-17']).shouldPropose).toBe(false);
+    // The completion's own day is not a spaced day after it.
+    expect(decide(['2026-08-14', '2026-08-16', '2026-08-17']).shouldPropose).toBe(false);
+    const again = decide(['2026-08-15', '2026-08-16', '2026-08-17', '2026-08-18']);
+    expect(again.shouldPropose).toBe(true);
+    if (!again.shouldPropose) return;
+    expect(again.reason.successfulScoredDays).toBe(4);
+    expect(again.trigger).toBe('strong-recall-proposal');
+  });
+
+  it('the latest completion is the one counted from', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-16T09:00:00+00:00',
+        conceptId: 'concept-strong',
+      }),
+      practice({
+        eventId: 'p-2',
+        timestamp: '2026-08-19T09:00:00+00:00',
+        conceptId: 'concept-strong',
+      }),
+    ];
+    const read = createStrongRecallProposalReader({
+      entries,
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    });
+
+    expect(read({ conceptIds: ['concept-strong'] }).shouldPropose).toBe(false);
+  });
+
+  it('the reopening branch is never supplied in v0.9, whatever the misconception-observed records say', () => {
+    // A misconception after a completion, and no concept at the top stage (none can be in v0.9):
+    // nothing is proposed on the reopening branch, and the offer's own reason kind is never it.
+    const completed = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
         timestamp: '2026-08-19T10:00:00+00:00',
-        conceptIds: ['concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-1',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
+        conceptId: 'concept-strong',
       }),
       misconception({
         eventId: 'm-1',
         timestamp: '2026-08-20T08:30:00+00:00',
-        conceptIds: ['concept-elsewhere'],
+        conceptIds: ['concept-strong'],
       }),
     ];
-    const read = createStrongRecallProposalReader({
+    const read = (entries: readonly ReviewLogEntry[]) =>
+      createStrongRecallProposalReader({
+        entries,
+        scheduler: createFsrsScheduler(),
+        now: NOW,
+      })({ conceptIds: ['concept-strong'] });
+
+    expect(read(completed).shouldPropose).toBe(false);
+    // With no completion the offer is the ordinary one: a misconception changes nothing.
+    const plain = read([
+      ...strongRecallLog('concept-strong'),
+      misconception({
+        eventId: 'm-2',
+        timestamp: '2026-08-20T08:30:00+00:00',
+        conceptIds: ['concept-strong'],
+      }),
+    ]);
+    expect(plain.shouldPropose).toBe(true);
+    if (!plain.shouldPropose) return;
+    expect(plain.reason.kind).toBe('strong-recall');
+  });
+
+  it('a practice entry is read, never written: the entries are not mutated and the trigger stays strong-recall-proposal', () => {
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      practice({
+        eventId: 'p-1',
+        timestamp: '2026-08-10T09:00:00+00:00',
+        conceptId: 'concept-strong',
+      }),
+    ];
+    const snapshot = JSON.stringify(entries);
+    const decision = createStrongRecallProposalReader({
       entries,
       scheduler: createFsrsScheduler(),
       now: NOW,
-    });
+    })({ conceptIds: ['concept-strong'] });
 
-    expect(read({ conceptIds: ['concept-tree'] }).shouldPropose).toBe(false);
+    expect(JSON.stringify(entries)).toBe(snapshot);
+    expect(decision.shouldPropose).toBe(true);
+    if (!decision.shouldPropose) return;
+    expect(decision.trigger).toBe('strong-recall-proposal');
+    expect(Object.keys(decision).sort()).toEqual([
+      'conceptId',
+      'promptText',
+      'reason',
+      'shouldPropose',
+      'trigger',
+    ]);
+  });
+
+  it("the offer's copy names no stage and no check and promises no advancement (F2.21, registry sections 9 and 39)", () => {
+    const decision = createStrongRecallProposalReader({
+      entries: strongRecallLog('concept-strong'),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    })({ conceptIds: ['concept-strong'] });
+    if (!decision.shouldPropose) throw new Error('expected an offer');
+    const words = decision.promptText.toLowerCase();
+    for (const forbidden of [
+      'seed',
+      'sprout',
+      'sapling',
+      'tree',
+      'stage',
+      'vitality',
+      'holding',
+      'check',
+      'grade',
+      'graded',
+      'score',
+      'level',
+      'depth',
+      'unlock',
+      'advance',
+      'progress',
+      'earn',
+      'reach',
+      'next',
+      'durable',
+      'permanent',
+      'will ',
+    ]) {
+      expect(words).not.toContain(forbidden);
+    }
+  });
+
+  it('the offer log trigger enum is unchanged: the proposal logs under the existing strong-recall-proposal value', () => {
+    expect(explainBackOfferTrigger.options).toEqual([
+      'repeated-failure',
+      'strong-recall-proposal',
+      'on-demand',
+      'scheduling-observation',
+    ]);
+    const decision = createStrongRecallProposalReader({
+      entries: strongRecallLog('concept-strong'),
+      scheduler: createFsrsScheduler(),
+      now: NOW,
+    })({ conceptIds: ['concept-strong'] });
+    if (!decision.shouldPropose) throw new Error('expected an offer');
+    expect(explainBackOfferTrigger.options).toContain(decision.trigger);
   });
 
   it('an empty log proposes nothing, and an empty concept list is not an error', () => {
@@ -376,65 +571,33 @@ describe('createStrongRecallProposalReader — F2.21’s trigger over a real log
     expect(decision).not.toHaveProperty('dueAt');
   });
 
-  it("`[D-281]` item 4 (ol-a07q, ol-v7r5.69): a `rejected` verdict against the sole qualifying explain-back drops the concept out of `tree` — the reopening branch above (state === 'tree') no longer fires, and a fresh misconception is answered as `stage-below-sapling` instead of `reopened-by-misconception`", () => {
-    // One qualifying explain-back is enough to reach `tree` alone (no other
-    // recall-tier reviews needed) — the same minimal shape
-    // `registry/build.invalid-instruments.spec.ts` (olea-core) uses to prove
-    // the identical fold directly.
-    const entries: ReviewLogEntry[] = [
-      review({
-        eventId: 'eb-1',
-        timestamp: '2026-08-19T10:00:00+00:00',
-        conceptIds: ['concept-tree'],
-        instrumentType: 'explain-back',
-        instrumentId: 'inst-eb-1',
-        rating: null,
-        explainBackGrade: { soloLevel: 'relational' },
-      }),
-      misconception({
-        eventId: 'm-1',
-        timestamp: '2026-08-20T08:30:00+00:00',
-        conceptIds: ['concept-tree'],
-      }),
+  it("`[D-281]` item 4: a defect suspension still removes the instrument's recall from the fold, so nothing is offered until it is lifted", () => {
+    const suspend = (kind: 'suspend' | 'unsuspend', eventId: string, timestamp: string) =>
+      ({
+        schemaVersion: 6,
+        kind,
+        eventId,
+        timestamp,
+        instrumentId: 'inst-concept-strong',
+        conceptIds: ['concept-strong'],
+        ...(kind === 'suspend' ? { reason: 'defect' } : {}),
+      }) as ReviewLogEntry;
+    const entries = [
+      ...strongRecallLog('concept-strong'),
+      suspend('suspend', 'suspend-1', '2026-08-20T08:30:00+00:00'),
     ];
+    const read = (log: readonly ReviewLogEntry[]) =>
+      createStrongRecallProposalReader({
+        entries: log,
+        scheduler: createFsrsScheduler(),
+        now: NOW,
+      })({ conceptIds: ['concept-strong'] });
 
-    const withoutRejection = createStrongRecallProposalReader({
-      entries,
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-    });
-    const decisionWithout = withoutRejection({ conceptIds: ['concept-tree'] });
-    expect(decisionWithout.shouldPropose).toBe(true);
-    if (!decisionWithout.shouldPropose) throw new Error('expected the reopening branch to fire');
-    expect(decisionWithout.reason.kind).toBe('reopened-by-misconception');
-
-    // A real refusal, not a mere suspend — the proven-invalid signal D-281
-    // item 4 and ol-v7r5.69's close reason both require.
-    const rejectedVerdict: ReviewLogEntry = {
-      schemaVersion: 6,
-      kind: 'verdict',
-      eventId: 'verdict-1',
-      timestamp: '2026-08-19T10:30:00+00:00',
-      instrumentId: 'inst-eb-1',
-      instrumentType: 'explain-back',
-      conceptIds: ['concept-tree'],
-      verdict: 'rejected',
-      artifactProvenance: { taskId: 'task-1', promptVersion: 'v1', modelId: 'model-1' },
-    } as ReviewLogEntry;
-
-    const withRejection = createStrongRecallProposalReader({
-      entries: [...entries, rejectedVerdict],
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-    });
-    const decisionWith = withRejection({ conceptIds: ['concept-tree'] });
-
-    // The exact regression this bead fixes: before the fix,
-    // `createStrongRecallProposalReader` called `computeAllConceptMastery`
-    // with no `invalidInstrumentIds` at all, so a rejected verdict never
-    // reached the fold, the concept stayed at `tree`, and the reopening
-    // branch (which requires `state === 'tree'`) still fired.
-    expect(decisionWith).toEqual({ shouldPropose: false, because: 'stage-below-sapling' });
+    expect(read(entries).shouldPropose).toBe(false);
+    expect(
+      read([...entries, suspend('unsuspend', 'unsuspend-1', '2026-08-20T08:45:00+00:00')])
+        .shouldPropose,
+    ).toBe(true);
   });
 });
 
@@ -546,58 +709,6 @@ function correctedContest(
 }
 
 describe('createStrongRecallProposalReader — the ruled validity scope (ol-egov.141.89.9.68)', () => {
-  const explainBack = (eventId: string, timestamp: string) =>
-    review({
-      eventId,
-      timestamp,
-      conceptIds: ['concept-tree'],
-      instrumentType: 'explain-back',
-      instrumentId: 'inst-eb-1',
-      rating: null,
-      explainBackGrade: { soloLevel: 'relational' },
-    });
-  const freshMisconception = misconception({
-    eventId: 'm-1',
-    timestamp: '2026-08-20T08:30:00+00:00',
-    conceptIds: ['concept-tree'],
-  });
-  const contest = correctedContest(
-    'inst-eb-1',
-    'concept-tree',
-    '2026-08-19T11:00:00+00:00',
-    '2026-08-19T12:00:00+00:00',
-  );
-
-  function decide(entries: readonly ReviewLogEntry[], disputes: readonly DisputeLogRecord[] = []) {
-    return createStrongRecallProposalReader({
-      entries,
-      scheduler: createFsrsScheduler(),
-      now: NOW,
-      validity: projectInstrumentValidity(entries, disputes),
-    })({ conceptIds: ['concept-tree'] });
-  }
-
-  it('a corrected contest on the sole qualifying explain-back withholds the top stage it earned', () => {
-    const entries = [explainBack('eb-1', '2026-08-19T10:00:00+00:00'), freshMisconception];
-    expect(decide(entries).shouldPropose).toBe(true);
-    expect(decide(entries, contest)).toEqual({
-      shouldPropose: false,
-      because: 'stage-below-sapling',
-    });
-  });
-
-  it('a corrected contest no longer drops the instrument’s other reviews: an earlier sound explain-back still holds the top stage', () => {
-    const entries = [
-      explainBack('eb-0', '2026-08-10T10:00:00+00:00'),
-      explainBack('eb-1', '2026-08-19T10:00:00+00:00'),
-      freshMisconception,
-    ];
-    const decision = decide(entries, contest);
-    expect(decision.shouldPropose).toBe(true);
-    if (!decision.shouldPropose) return;
-    expect(decision.reason.kind).toBe('reopened-by-misconception');
-  });
-
   it('vitality replays without a corrected review: a faded instrument whose only review was proven wrong no longer sets the weakest reading', () => {
     const strong = strongRecallLog('concept-mixed');
     const faded = review({
@@ -628,29 +739,6 @@ describe('createStrongRecallProposalReader — the ruled validity scope (ol-egov
     expect(decision.shouldPropose).toBe(true);
     if (!decision.shouldPropose) return;
     expect(decision.reason.kind).toBe('strong-recall');
-  });
-
-  it('a suspension recorded as a defect invalidates the instrument until a later unsuspend', () => {
-    const suspension = (kind: 'suspend' | 'unsuspend', eventId: string, timestamp: string) =>
-      ({
-        schemaVersion: 6,
-        kind,
-        eventId,
-        timestamp,
-        instrumentId: 'inst-eb-1',
-        conceptIds: ['concept-tree'],
-        ...(kind === 'suspend' ? { reason: 'defect' } : {}),
-      }) as ReviewLogEntry;
-    const entries = [
-      explainBack('eb-1', '2026-08-19T10:00:00+00:00'),
-      suspension('suspend', 'suspend-1', '2026-08-19T10:30:00+00:00'),
-      freshMisconception,
-    ];
-    expect(decide(entries)).toEqual({ shouldPropose: false, because: 'stage-below-sapling' });
-    expect(
-      decide([...entries, suspension('unsuspend', 'unsuspend-1', '2026-08-19T11:30:00+00:00')])
-        .shouldPropose,
-    ).toBe(true);
   });
 });
 
