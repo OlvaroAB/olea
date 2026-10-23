@@ -21,6 +21,7 @@ import {
   grovePapersLabel,
   groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
+  groveStageMeaning,
   groveStateLabel,
   groveSummaryLine,
 } from '../../src/grove/copy.js';
@@ -183,6 +184,16 @@ describe('grove copy — vocabulary registry §6 discipline', () => {
     expect(groveStateLabel('sapling')).toBe('sapling');
     expect(groveStateLabel('tree')).toBe('tree');
     expect(groveStateLabel('ground')).toBe('ground');
+  });
+
+  it('the legend gives tree the stage table words, never a second phrasing (F2.11, [D-612])', () => {
+    expect(groveStageMeaning('tree')).toBe(
+      "Explained in your own words and checked against your material. Explanation checking isn't available yet.",
+    );
+    expect(groveStageMeaning('seed')).toBe('Not practised yet.');
+    expect(groveStageMeaning('sprout')).toBe('Practised. Recall is not holding yet.');
+    expect(groveStageMeaning('sapling')).toBe('Recalled reliably across spaced attempts.');
+    expect(allGroveStrings().join('\n')).not.toContain('not only recognised');
   });
 });
 
