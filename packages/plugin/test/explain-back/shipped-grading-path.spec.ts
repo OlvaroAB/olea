@@ -12,6 +12,10 @@
  *    stores a correctness-only record with no depth field;
  *  - the app's composition reaches both calls (source-level, comments stripped, the technique every
  *    sibling spec uses for `main.ts` and `modal.ts`, which cannot be imported under Vitest).
+ *
+ * **Dormant in v0.9 (`[D-603]`).** The explain-back view is ungraded practice and calls neither: no
+ * grading request leaves it (`./practice-no-grading.spec.ts`). This file still pins the graded path
+ * as built, and the composition `main.ts` still constructs, so it is intact if grading returns.
  */
 
 import { readFileSync } from 'node:fs';
@@ -287,7 +291,7 @@ describe('(c) the stored review record carries the correctness stamp and the dep
   }
 });
 
-describe('the app composition reaches both grading calls', () => {
+describe('the app composition still constructs both grading calls (dormant in v0.9: the practice view calls neither)', () => {
   const main = codeOf('main.ts');
   const soloReview = codeOf('explain-back/solo-review.ts');
 

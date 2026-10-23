@@ -125,8 +125,8 @@ export function explainBackLine(summary: RegistryConceptEntry['explainBack']): s
 
 /**
  * **No history row or concept line calls this any more** (`[D-603]`: no depth reading on any row).
- * It stays exported only because the explain-back modal's own heading
- * (`../explain-back/copy.ts`, another lane's file) still imports it; delete it with that import.
+ * It stays exported only because `test/registry/copy.spec.ts` uses it to assert that no row or
+ * concept line carries any depth phrase; nothing in the view imports it in v0.9.
  *
  * F8.4b's SOLO-depth reading, in the reporting voice (GLOSSARY SOLO rule 5:
  * the raw level name and a number are both forbidden to her; rule 1: grade
