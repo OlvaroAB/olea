@@ -151,6 +151,16 @@ import { evaluatePracticePaperUnlockForCourse } from './unlock.js';
  */
 const PRACTICE_PAPER_HANDOFF_FOLDER = 'Practice paper hand-offs';
 
+/**
+ * `[D-622]` (ol-egov.141.89.7.110): the nearest unpassed assessment when the unlock rule fired,
+ * the one a request is offered for. `path` is its assignments-table record; `due` is the date it
+ * had then, kept for a record that has since left the table.
+ */
+export interface OfferedAssessment {
+  readonly path: string;
+  readonly due: string;
+}
+
 /** One face-ready item — the labels the view renders alongside her response, never the blueprint's internal weight/rank fields she has no reason to see. */
 export interface PracticePaperFaceItem {
   readonly slotId: string;
@@ -228,7 +238,12 @@ export type PracticePaperCourseState =
       readonly windowDays: number;
     }
   /** Unlocked, not yet pulled — she has not yet invoked the one affordance. */
-  | { readonly kind: 'unlocked-not-pulled'; readonly course: string }
+  | {
+      readonly kind: 'unlocked-not-pulled';
+      readonly course: string;
+      /** `[D-622]`: the assessment the rule fired for, which the view hands back with the request. */
+      readonly offeredFor?: OfferedAssessment;
+    }
   /** F7.8's grey-out: unlocked, but no Worker configured to generate items with. */
   | { readonly kind: 'ai-unavailable'; readonly course: string }
   /** The assignments Base itself is not configured — same precondition every other course-scoped screen in this plugin already gates on. */
@@ -464,6 +479,20 @@ async function loadCourseState(
   deps: CreateLocalPracticePaperProviderDeps,
   course: string,
 ): Promise<PracticePaperCourseState> {
+  return (await readCourseUnlock(deps, course)).state;
+}
+
+/** `loadCourseState`'s reading, with the course's assessment records and the day it counted from. */
+interface CourseUnlockReading {
+  readonly state: PracticePaperCourseState;
+  readonly courseAssessments: readonly AssessmentRecord[];
+  readonly asOf: string;
+}
+
+async function readCourseUnlock(
+  deps: CreateLocalPracticePaperProviderDeps,
+  course: string,
+): Promise<CourseUnlockReading> {
   const config = await deps.settingsStore.load();
 
   const [assessmentsRead, enumeration, outcomeRecords] = await Promise.all([
@@ -476,12 +505,17 @@ async function loadCourseState(
   // F1.2: "not configured" now means neither a real Base NOR any manual entry produced anything
   // to work from — `resolveAssessments`'s own `source: 'manual'` with zero records is exactly
   // that state (a blank OR unreadable Base, and she has typed nothing by hand either).
+  const asOf = isoToday(deps.now());
   if (assessmentsRead.source === 'manual' && records.length === 0) {
-    return { kind: 'assignments-not-configured' };
+    return { state: { kind: 'assignments-not-configured' }, courseAssessments: [], asOf };
   }
 
   const courseAssessments = records.filter((record) => record.course === course);
-  const asOf = isoToday(deps.now());
+  const state = (s: PracticePaperCourseState): CourseUnlockReading => ({
+    state: s,
+    courseAssessments,
+    asOf,
+  });
 
   const courseConceptKeys = enumeration.concepts
     .filter((concept) => concept.courses.includes(course))
@@ -504,10 +538,10 @@ async function loadCourseState(
     const undatedAssessment = courseAssessments.some(
       (record) => record.due === undefined || paperDaysUntilDue(asOf, record.due) === null,
     );
-    return { kind: 'no-assessment-ahead', course, undatedAssessment };
+    return state({ kind: 'no-assessment-ahead', course, undatedAssessment });
   }
   if (!unlock.fires) {
-    return {
+    return state({
       kind: 'locked',
       course,
       daysUntilNearest: unlock.daysUntilNearest ?? 0,
@@ -525,9 +559,31 @@ async function loadCourseState(
         conceptCoverageKnown: coverage.conceptCoverageKnown === true,
         attachedConceptCount: coverage.attachedConceptCount,
       },
-    };
+    });
   }
-  return { kind: 'unlocked-not-pulled', course };
+  const nearest = unlock.nearestAssessment;
+  const offered = courseAssessments.find(
+    (record) => record.due === nearest.due && record.type === nearest.type,
+  );
+  return state({
+    kind: 'unlocked-not-pulled',
+    course,
+    ...(offered === undefined ? {} : { offeredFor: { path: offered.path, due: nearest.due } }),
+  });
+}
+
+/**
+ * `[D-622]`: whether the assessment a request was offered for has passed, on the day the rule now
+ * counts from. Its record's current date decides, so an assessment moved later has not passed; a
+ * record gone from the table keeps the date she was offered.
+ */
+function offeredAssessmentHasPassed(
+  reading: CourseUnlockReading,
+  offeredFor: OfferedAssessment,
+): boolean {
+  const record = reading.courseAssessments.find((r) => r.path === offeredFor.path);
+  const days = paperDaysUntilDue(reading.asOf, record?.due ?? offeredFor.due);
+  return days !== null && days < 0;
 }
 
 /**
@@ -670,8 +726,11 @@ export function unfinishedPaperNotice(error: unknown): string | null {
 export interface PracticePaperViewDeps {
   /** Loads the CURRENT state for `course` — locked/unlocked/absent, never a composed paper (that only happens on `requestPaper`, F4.11 ruling 5: "she pulls it"). */
   readonly load: (course: string) => Promise<PracticePaperCourseState>;
-  /** Composes and persists a fresh paper for `course`. The view offers it only when `load` returned `unlocked-not-pulled`, and the request evaluates the unlock rule again before composing (ol-egov.141.89.7.110): when the rule no longer fires, the current state comes back and nothing is composed. */
-  readonly requestPaper: (course: string) => Promise<RequestedPaper>;
+  /** Composes and persists a fresh paper for `course`. The view offers it only when `load` returned `unlocked-not-pulled`, and every request, "ask again" included, evaluates the unlock rule again before composing (ol-egov.141.89.7.110, `[D-622]`): when the assessment it was offered for (`offeredFor`, from that state) has passed, or the rule no longer fires, nothing is composed and the current state comes back. */
+  readonly requestPaper: (
+    course: string,
+    offeredFor?: OfferedAssessment,
+  ) => Promise<RequestedPaper>;
   /**
    * Hands ONE item to ordinary review (F4.11 ruling 1, `[D-252]`) — never the whole paper; the
    * view's per-item control is the only caller, and it is never asked to hand off more than one
@@ -689,11 +748,18 @@ export interface PracticePaperViewDeps {
 }
 
 /**
- * What one request returns: the paper, or the state the rule gives at the moment of the request
- * when it no longer fires (ol-egov.141.89.7.110), which the view renders as `load`'s would.
+ * What one request returns: the paper; or, when the assessment it was offered for has passed, that
+ * fact with the course's current state (`[D-622]`: the view says so and shows the current state,
+ * never the stale offer); or the state the rule gives at the moment of the request when it no
+ * longer fires (ol-egov.141.89.7.110), which the view renders as `load`'s would.
  */
 export type RequestedPaper =
   | PracticePaperReadyState
+  | {
+      readonly kind: 'assessment-passed';
+      readonly course: string;
+      readonly current: PracticePaperCourseState;
+    }
   | Exclude<PracticePaperCourseState, { readonly kind: 'unlocked-not-pulled' }>;
 
 /**
@@ -797,18 +863,24 @@ function heldMaterialLookupFor(
 }
 
 /**
- * ol-egov.141.89.7.110: the unlock rule is evaluated again at the moment of the request, the same
- * evaluation `load` makes. A view left open past the due date, or an "ask again" after an unfinished
- * paper, no longer composes once the rule has closed: the current state comes back instead.
+ * ol-egov.141.89.7.110, `[D-622]`: the unlock rule is evaluated again at the moment of every
+ * request, "ask again" included, the same evaluation `load` makes. A view left open past the due
+ * date, or an "ask again" after an unfinished paper, no longer composes once the assessment it was
+ * offered for has passed (even when a later one now unlocks a paper of its own) or the rule has
+ * closed: the current state comes back instead.
  */
 async function recheckThenCompose(
   deps: CreateLocalPracticePaperProviderDeps,
   course: string,
+  offeredFor: OfferedAssessment | undefined,
 ): Promise<RequestedPaper> {
   // F7.8's grey-out reads no vault at all (provider.spec.ts), so it is decided before the rule is.
   if ((await deps.generationPort()) === null) return { kind: 'ai-unavailable', course };
-  const current = await loadCourseState(deps, course);
-  if (current.kind !== 'unlocked-not-pulled') return current;
+  const reading = await readCourseUnlock(deps, course);
+  if (offeredFor !== undefined && offeredAssessmentHasPassed(reading, offeredFor)) {
+    return { kind: 'assessment-passed', course, current: reading.state };
+  }
+  if (reading.state.kind !== 'unlocked-not-pulled') return reading.state;
   return composeRequestedPaper(deps, course);
 }
 
@@ -820,14 +892,14 @@ export function createLocalPracticePaperProvider(
   return {
     load: (course) => loadCourseState(deps, course),
 
-    requestPaper(course) {
+    requestPaper(course, offeredFor) {
       // One composition per course at a time: a second press while the first is composing shares
       // its work (the journal is single-writer, and two runs over one journal would spend twice
       // and race each other's whole-file rewrites). Cleared when the request settles, so the next
       // press, after a finished paper, composes a fresh one (F4.11 ruling 5).
       const running = inFlight.get(course);
       if (running !== undefined) return running;
-      const request = recheckThenCompose(deps, course).finally(() => {
+      const request = recheckThenCompose(deps, course, offeredFor).finally(() => {
         inFlight.delete(course);
       });
       inFlight.set(course, request);
