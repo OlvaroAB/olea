@@ -670,7 +670,7 @@ export function unfinishedPaperNotice(error: unknown): string | null {
 export interface PracticePaperViewDeps {
   /** Loads the CURRENT state for `course` — locked/unlocked/absent, never a composed paper (that only happens on `requestPaper`, F4.11 ruling 5: "she pulls it"). */
   readonly load: (course: string) => Promise<PracticePaperCourseState>;
-  /** Composes and persists a fresh paper for `course`. Never called unless `load` already returned `unlocked-not-pulled` — the view's own job, not this provider's, mirroring every other command-gated affordance in this plugin. */
+  /** Composes and persists a fresh paper for `course`. The view offers it only when `load` returned `unlocked-not-pulled`, and the request evaluates the unlock rule again before composing (ol-egov.141.89.7.110): when the rule no longer fires, the current state comes back and nothing is composed. */
   readonly requestPaper: (course: string) => Promise<RequestedPaper>;
   /**
    * Hands ONE item to ordinary review (F4.11 ruling 1, `[D-252]`) — never the whole paper; the
