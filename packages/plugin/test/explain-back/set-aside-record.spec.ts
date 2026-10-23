@@ -385,39 +385,30 @@ describe('the accepted retry names the attempt it follows', () => {
   });
 });
 
-describe('the view writes the set-aside attempt and forwards the link', () => {
-  const discard = modal.slice(
-    modal.indexOf('private discardGrading('),
-    modal.indexOf('private async recordSetAsideAttemptIfPossible('),
-  );
-  const writer = modal.slice(
-    modal.indexOf('private async recordSetAsideAttemptIfPossible('),
-    modal.indexOf('private skipPrompt('),
-  );
-
-  it('Try again writes the entry it just appended, before the pending grading is discarded', () => {
-    expect(discard).toMatch(
-      /this\.attemptSequence = appendSetAsideAttempt\([\s\S]*?const setAside = this\.attemptSequence\[this\.attemptSequence\.length - 1\];[\s\S]*?void this\.recordSetAsideAttemptIfPossible\(prompt, pending, setAside, durationMs\);[\s\S]*?discardExplainBackGrading\(pending\);/,
+/**
+ * `[D-603]` (`ol-egov.141.89.6.129`): in v0.9 "Try again" sets aside no graded attempt, so the view
+ * writes no set-aside record and no review names the attempt it followed. The writers above stay,
+ * for when grading returns (the F5 heading note). What "Try again" writes instead is the practice
+ * explanation of the answer she leaves (D7.1, `[D-614]`), whose later siblings name the passages
+ * shown after it — checked in `practice-view.spec.ts` and `practice-no-grading.spec.ts`.
+ */
+describe('v0.9: the view writes no set-aside attempt and forwards no link', () => {
+  it('"Try again" calls no set-aside writer: its one write is the practice explanation', () => {
+    const tryAgain = modal.slice(
+      modal.indexOf('private tryAgain('),
+      modal.indexOf('private async recordPracticeExplanationIfPossible('),
+    );
+    expect(tryAgain).toMatch(/void this\.recordPracticeExplanationIfPossible\(/);
+    expect(modal).not.toMatch(
+      /recordSetAsideAttempt\(|recordSetAsideAttemptIfPossible|setAsideRecordInput/,
     );
   });
 
-  it('the write is best-effort: an unwired dep writes nothing, a failure is caught and never thrown', () => {
-    expect(writer).toMatch(/if \(!this\.deps\.recordSetAsideAttempt\) return;/);
-    expect(writer).toMatch(/if \(input === null\) return;/);
-    expect(writer).toMatch(
-      /try \{\s*await this\.deps\.recordSetAsideAttempt\(input\);\s*\} catch \(error\) \{\s*console\.error\(/,
-    );
+  it('no review is written, so no followsAttemptId is forwarded', () => {
+    expect(modal).not.toMatch(/followsAttemptId:/);
   });
 
-  it('the write is built from the prompt’s instrument and subject concept, never from her answer', () => {
-    expect(writer).toMatch(/instrumentId: prompt\.originInstrumentId,/);
-    expect(writer).toMatch(/subjectConceptId: prompt\.subjectConceptId,/);
-    expect(writer).not.toMatch(/answer/);
-  });
-
-  it('Accept forwards the link sealed at submit, only when there is one', () => {
-    expect(modal).toMatch(
-      /\.\.\.\(support\.followsAttemptId !== null\s*\?\s*\{ followsAttemptId: support\.followsAttemptId \}\s*: \{\}\)/,
-    );
+  it('the set-aside writer stays declared, optional and dormant, so the composition root is unchanged', () => {
+    expect(modal).toMatch(/readonly recordSetAsideAttempt\?: \(/);
   });
 });

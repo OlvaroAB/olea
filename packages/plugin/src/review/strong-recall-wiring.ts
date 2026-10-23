@@ -4,10 +4,10 @@
  * `olea-core`'s `evaluateStrongRecallProposal`
  * (`packages/core/src/study-session/strong-recall-proposal.ts`) is the pure
  * decision: given one concept's growth stage, its evidence record, its
- * vitality reading and whether a misconception has surfaced since its last
- * graded explain-back, should Olea propose an explain-back, and what does the
- * offer say. It reads no log and computes no rollup — a caller passes those
- * four facts in. **This module is that caller**, and it is the only thing
+ * vitality reading and, under `[D-613]` (b), the recall days since a completed
+ * practice explanation of it, should Olea propose an explain-back, and what
+ * does the offer say. It reads no log and computes no rollup — a caller passes those
+ * facts in. **This module is that caller**, and it is the only thing
  * between the decision and `ReviewSession`.
  *
  * ## The seam, and the clause line that picks it
@@ -57,8 +57,7 @@
  * `evaluateSchedulingObservationRouting` already reads
  * (`open-session.ts`'s `liveSchedulingObservations`), and it is correct
  * rather than merely convenient here: F2.21's predicate is about recall
- * accumulated *across spaced attempts* — days, not this answer — and its
- * reopening branch is about a misconception a *prior* review recorded. A
+ * accumulated *across spaced attempts* — days, not this answer. A
  * concept that crosses the strong-recall line on today's last review is
  * proposed at the next session, which costs nothing: declining changes
  * nothing and neither does waiting (F2.14a).
@@ -82,14 +81,16 @@ import type {
   StrongRecallProposalDecision,
 } from 'olea-core';
 import {
+  calendarDayOfTimestamp,
   computeAllConceptMastery,
   conceptVitalityInstruments,
-  creditsConcept,
   evaluateStrongRecallProposal,
   HOLDING_CUT,
+  isGenuinePracticeExplanation,
   projectInstrumentValidity,
   readVitality,
   replaySchedulerStates,
+  studiedConceptOf,
 } from 'olea-core';
 import { withoutCorrectedEvidence } from 'olea-core/src/mastery/validity.js';
 
@@ -133,54 +134,46 @@ export interface StrongRecallProposalReaderInput {
 }
 
 /**
- * True when a `misconception-observed` record for this concept is more recent
- * than its last **graded** explain-back — F2.21's *"a fresh misconception
- * surfacing on a concept already at the top stage … reopens eligibility"*.
- *
- * "Fresh" is relative to the last graded explain-back rather than to a
- * window: the concept reached `tree` *because* of that explain-back, so a
- * misconception recorded before it is already accounted for in the stage,
- * and only one recorded after it is new information. A concept with no graded
- * explain-back at all cannot be at `tree`, so the `null` case below never
- * reaches the reopening branch in practice; it is written to be honest rather
- * than to be reachable.
- *
- * Timestamps are ISO-8601 **with offset**, so they are compared as instants
- * (`Date.parse`) and never as strings — two devices in different offsets
- * would otherwise order wrongly. An unparseable timestamp is skipped rather
- * than treated as epoch zero.
+ * `[D-613]` (b): the latest genuine completed practice explanation of
+ * `conceptId` on the log, as the calendar day it was left on, or `null` when
+ * there is none. A record counts when `isGenuinePracticeExplanation` says so
+ * (so a flagged answer does not) and the concept it explained
+ * (`studiedConceptOf`, index 0) is this one. A non-attempt writes no such
+ * entry, so it cannot appear here. Timestamps are ISO-8601 with offset,
+ * compared as instants; an unparseable one is skipped.
  */
-function misconceptionSinceLastGradedExplainBack(
+function latestCompletedPracticeExplanationDay(
   entries: readonly ReviewLogEntry[],
   conceptId: string,
-): boolean {
-  let lastGradedExplainBackAt: number | null = null;
-  let latestMisconceptionAt: number | null = null;
-
+): string | null {
+  let latest: { readonly instant: number; readonly day: string } | null = null;
   for (const entry of entries) {
-    if (entry.kind === 'review') {
-      if (entry.instrumentType !== 'explain-back') continue;
-      if (entry.explainBackGrade === undefined) continue;
-      // `[D-423]`: an explanation is the last explanation of the one concept it scored — its
-      // first id — not of a concept it names only as context.
-      if (!creditsConcept(entry, conceptId)) continue;
-      const at = Date.parse(entry.timestamp);
-      if (!Number.isFinite(at)) continue;
-      if (lastGradedExplainBackAt === null || at > lastGradedExplainBackAt) {
-        lastGradedExplainBackAt = at;
-      }
-      continue;
-    }
-    if (entry.kind !== 'misconception-observed') continue;
-    if (!entry.conceptIds.includes(conceptId)) continue;
-    const at = Date.parse(entry.timestamp);
-    if (!Number.isFinite(at)) continue;
-    if (latestMisconceptionAt === null || at > latestMisconceptionAt) latestMisconceptionAt = at;
+    if (!isGenuinePracticeExplanation(entry)) continue;
+    if (studiedConceptOf(entry) !== conceptId) continue;
+    const instant = Date.parse(entry.timestamp);
+    const day = calendarDayOfTimestamp(entry.timestamp);
+    if (!Number.isFinite(instant) || day === null) continue;
+    if (latest === null || instant > latest.instant) latest = { instant, day };
   }
+  return latest === null ? null : latest.day;
+}
 
-  if (latestMisconceptionAt === null) return false;
-  if (lastGradedExplainBackAt === null) return true;
-  return latestMisconceptionAt > lastGradedExplainBackAt;
+/**
+ * The log with every review that fell on or before `completionDay` dropped, so
+ * a fold over it counts only recall on later days (`[D-613]` (b): recall before
+ * a completion never counts, and the completion's own day is not a spaced day
+ * after it). Every other record kind stays, so validity and correction records
+ * still resolve exactly as they do in the whole-log fold.
+ */
+function entriesAfterDay(
+  entries: readonly ReviewLogEntry[],
+  completionDay: string,
+): readonly ReviewLogEntry[] {
+  return entries.filter((entry) => {
+    if (entry.kind !== 'review') return true;
+    const day = calendarDayOfTimestamp(entry.timestamp);
+    return day !== null && day > completionDay;
+  });
 }
 
 /**
@@ -192,7 +185,7 @@ function misconceptionSinceLastGradedExplainBack(
  * make, and reading only the first would change which explain-back offers she is
  * shown, which no ruling covers — filed as an Open question on
  * `ol-egov.141.89.9.76`, today's behaviour kept. The credit reads below (each
- * concept's own mastery, and its last graded explanation) are scored-concept only.
+ * concept's own mastery, and its last completed practice explanation) are scored-concept only.
  * When none proposes, the decision returned is the first concept's — an
  * honest `shouldPropose: false` carrying `because`, which is what
  * `NoProposalReason` exists for, rather than a bare `undefined` a caller
@@ -242,6 +235,18 @@ export function createStrongRecallProposalReader(
     const validInstruments = conceptVitalityInstruments(deps.entries, conceptId, replayed).filter(
       (instrument) => !standing.provenInvalid.has(instrument.instrumentId),
     );
+    const completionDay = latestCompletedPracticeExplanationDay(deps.entries, conceptId);
+    // The same fold, the same validity options, over the days after the
+    // completion alone — the one number the decision reads under `[D-613]` (b).
+    const successfulScoredDaysSince =
+      completionDay === null || mastery === undefined
+        ? undefined
+        : (computeAllConceptMastery(entriesAfterDay(deps.entries, completionDay), [conceptId], {
+            invalidInstrumentIds: [...standing.provenInvalid.keys()],
+            correctedEventIds: [...standing.correctedEvidence.keys()],
+          }).get(conceptId)?.evidence.successfulScoredDays ?? 0);
+    // The misconception-on-top-stage reopening fact is never supplied in v0.9
+    // (`[D-603]`): the branch it feeds is dormant in the decision.
     const decision: StrongRecallProposalDecision =
       mastery === undefined
         ? { shouldPropose: false, because: 'stage-below-sapling' }
@@ -255,10 +260,9 @@ export function createStrongRecallProposalReader(
               now: deps.now,
               holdingCut,
             }).value,
-            misconceptionSinceLastGradedExplainBack: misconceptionSinceLastGradedExplainBack(
-              deps.entries,
-              conceptId,
-            ),
+            ...(successfulScoredDaysSince === undefined
+              ? {}
+              : { completedPracticeExplanation: { successfulScoredDaysSince } }),
           });
 
     memo.set(conceptId, decision);

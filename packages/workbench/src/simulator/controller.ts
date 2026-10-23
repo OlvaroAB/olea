@@ -102,7 +102,7 @@ import {
   OLEA_COMMAND_REGISTRY_OPEN,
 } from '../../../plugin/src/commands/ids.js';
 import {
-  EXPLAIN_BACK_ACCEPT_LABEL,
+  EXPLAIN_BACK_DONE_LABEL,
   EXPLAIN_BACK_SUBMIT_LABEL,
   EXPLAIN_BACK_TOPIC_CONTINUE_LABEL,
 } from '../../../plugin/src/explain-back/copy.js';
@@ -920,26 +920,21 @@ export interface SimulatorWalkDriver {
   forceNextVaultReadFailure(): void;
 }
 
-/** {@link driverExplain}'s result — deliberately narrower than `ExplainBackModal`'s own three refusal reasons (`unavailable`/`check-failed`/`insufficient-notes`, `modal.ts`'s `ModalState`): all three read as `'unavailable'` here, with `reason` carrying whichever refusal sentence the modal actually rendered. */
+/** {@link driverExplain}'s result — deliberately narrower than `ExplainBackModal`'s own refusal reasons: every refusal reads as `'unavailable'` here, with `reason` carrying whichever refusal sentence the modal actually rendered. */
 export interface ExplainDriverOutcome {
   /**
-   * Never surfaced by `PendingExplainBackGrading`/`GroundedGrading`
-   * (`olea-core`'s `gradingPipeline.ts`) up to the modal, so this is always
-   * `undefined` today — kept in the shape for a caller that wants to log
-   * one once the pipeline threads a real id through, never fabricated here.
+   * Never surfaced up to the modal, so this is always `undefined` today —
+   * kept in the shape for a caller that wants to log one, never fabricated here.
    */
   readonly taskId?: string;
   /**
-   * `'graded'`: she reached "Keep this" and `renderAcceptedPhase` drew the
-   * SOLO depth heading (`modal.ts:576`, `.olea-explain-back-outcome`) — a
-   * level came back from `recordSoloGradeAndReview`. `'degraded'`: she still
-   * reached and clicked "Keep this", but no depth heading rendered — the
-   * correctness accept went through with no SOLO level (the common case in
-   * production today, per that dep's own doc). `'unavailable'`: the command
-   * itself was not invokable, or the modal refused at either the topic or
-   * the answer step.
+   * `'practised'`: she answered, the practice view showed the passages and
+   * the reflection prompts, and "Done" was chosen (`[D-603]`: nothing is
+   * graded, so there is no verdict to read back). `'unavailable'`: the
+   * command itself was not invokable, or the modal refused at either the
+   * topic or the answer step.
    */
-  readonly outcome: 'graded' | 'degraded' | 'unavailable';
+  readonly outcome: 'practised' | 'unavailable';
   /** The refusal paragraph's own text (`.olea-explain-back-refusal`), or a wiring-failure reason — never fabricated. */
   readonly reason?: string;
 }
@@ -1068,18 +1063,14 @@ export function defaultExplainTopic(mounted: MountedPlugin<OleaPlugin>): string 
  *    `insufficient-notes` refusal (`modal.ts:279-296`) — both are real
  *    outcomes of the SAME vault-backed retrieval her own click triggers.
  * 4. On the answer box: sets `text` into `.olea-explain-back-answer` and
- *    clicks `"${EXPLAIN_BACK_SUBMIT_LABEL}"`, calling `submitAnswer`
- *    (`modal.ts:318`) — the real grading round trip
- *    (`deps.grade`/`gradeExplainBackAttempt`, `main.ts:2234`).
- * 5. On a graded verdict (`renderGradedPhase`, `modal.ts:476-544`): clicks
- *    `"${EXPLAIN_BACK_ACCEPT_LABEL}"`, calling `acceptGrading`
- *    (`modal.ts:351`) — the real accept/observe/SOLO-depth chain
- *    (`acceptExplainBackGradingWithObservation`, `recordSoloGradeAndReview`).
- * 6. Reads the outcome off `renderAcceptedPhase`'s own rendering
- *    (`modal.ts:566-586`) and clicks "Done" to close — the same close her
- *    own click would make.
+ *    clicks `"${EXPLAIN_BACK_SUBMIT_LABEL}"`, calling `submitAnswer`.
+ * 5. Waits for the practice view (`renderPassagesPhase`, `modal.ts`): her
+ *    explanation, the passages, the reflection prompts and the end controls.
+ *    Nothing is graded and no Worker call follows (`[D-603]`).
+ * 6. Clicks `"${EXPLAIN_BACK_DONE_LABEL}"`, which writes the practice
+ *    explanation and closes — the same close her own click would make.
  *
- * Every refusal along the way (command unavailable, topic refusal, grading
+ * Every refusal along the way (command unavailable, topic refusal, answer
  * refusal) short-circuits into `{ outcome: 'unavailable', reason }` rather
  * than continuing to click through a state that was never reached.
  */
@@ -1154,40 +1145,23 @@ export async function driverExplain(
   );
   if (afterSubmit === null) {
     throw new Error(
-      '__oleaSimulatorDriver.explain(): timed out waiting for a grading verdict or a refusal ' +
-        '(explain-back/modal.ts submitAnswer, ~L318).',
+      '__oleaSimulatorDriver.explain(): timed out waiting for the practice view or a refusal ' +
+        '(explain-back/modal.ts submitAnswer, renderPassagesPhase).',
     );
   }
   if (afterSubmit.matches('.olea-explain-back-refusal')) {
     return { outcome: 'unavailable', reason: afterSubmit.textContent ?? undefined };
   }
 
-  const acceptButton = findButtonByLabel(afterSubmit, EXPLAIN_BACK_ACCEPT_LABEL);
-  if (acceptButton === null) {
-    throw new Error(
-      '__oleaSimulatorDriver.explain(): the graded phase rendered with no accept button ' +
-        '(explain-back/modal.ts renderGradedPhase, ~L536).',
-    );
-  }
-  acceptButton.click();
-
-  // `'Done'` is `renderAcceptedPhase`'s own inline literal (`modal.ts:584`),
-  // not one of `./copy.ts`'s exported labels — matched by text for the same
-  // reason `EXPLAIN_BACK_ACCEPT_LABEL` etc. are imported rather than
-  // retyped: never invent a string the modal itself does not render.
-  const doneButton = await pollForDriver(
-    () => findButtonByLabel(root, 'Done'),
-    DRIVER_POLL_TIMEOUT_MS,
-  );
+  const doneButton = findButtonByLabel(afterSubmit, EXPLAIN_BACK_DONE_LABEL);
   if (doneButton === null) {
     throw new Error(
-      '__oleaSimulatorDriver.explain(): timed out waiting for the accepted phase\'s "Done" ' +
-        'button (explain-back/modal.ts renderAcceptedPhase, ~L566).',
+      '__oleaSimulatorDriver.explain(): the practice view rendered with no "Done" button ' +
+        '(explain-back/modal.ts renderPassagesPhase).',
     );
   }
-  const outcome = root.querySelector('.olea-explain-back-outcome') !== null ? 'graded' : 'degraded';
   doneButton.click();
-  return { outcome };
+  return { outcome: 'practised' };
 }
 
 /**

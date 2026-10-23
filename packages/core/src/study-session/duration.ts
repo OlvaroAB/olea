@@ -77,6 +77,16 @@
  * (F2.21) never reaches this module at all — it produces no review, so it
  * has no `durationMs` and nothing to price.
  *
+ * **In v0.9 the median reads her practice explanations** (F2.14a as amended,
+ * D7.1, `[D-614]`). No explain-back is graded in v0.9, so none is a review
+ * (F5.5, `[D-603]`); each answer she saves is a `practice-explanation` record
+ * carrying the same presented-to-submitted `durationMs`, and those durations
+ * join the explain-back samples through the identical mechanism. Every saved
+ * answer's duration is read, a flagged one included: F2.14a prices how long
+ * an explain-back takes her, and the flag (F5.7) only decides study activity.
+ * The median, not the mean, is what keeps a short flagged answer from moving
+ * the estimate on its own.
+ *
  * **INV-1 / §7.1.** Pure. No `obsidian`, no I/O, no clock; the history is an
  * argument, never a read.
  */
@@ -271,7 +281,9 @@ function buildEstimate(
 /**
  * Build the duration model from a review-log history.
  *
- * Only `kind: 'review'` records contribute. A suspend or unsuspend record
+ * Only `kind: 'review'` records contribute, plus `practice-explanation`
+ * records to the explain-back estimate (F2.14a, `[D-614]`; see this module's
+ * doc). A suspend or unsuspend record
  * carries no `durationMs` **by schema** (`suspendLogRecordV2`'s own comment:
  * "a suspend is not a review"), and reading its absence as a zero-second
  * review is exactly the collapse the log's shape exists to prevent.
@@ -301,6 +313,11 @@ export function estimateInstrumentDurations(
   const explainBackSamples: number[] = [];
 
   for (const entry of history) {
+    // F2.14a in v0.9 (`[D-614]`): a saved practice explanation is an explain-back sample.
+    if (entry.kind === 'practice-explanation') {
+      if (entry.durationMs !== null) explainBackSamples.push(entry.durationMs);
+      continue;
+    }
     if (entry.kind !== 'review') continue;
     if (entry.durationMs === null) continue;
     if (entry.instrumentType === 'explain-back') {

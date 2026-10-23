@@ -107,6 +107,7 @@ import { ensureDeviceId } from './device/device-id.js';
 import { createRecordFeedbackShown } from './explain-back/feedback-exposure.js';
 import { ExplainBackModal, type ExplainBackSeed } from './explain-back/modal.js';
 import { buildExplainBackObservationContext } from './explain-back/observation.js';
+import { createRecordPracticeExplanation } from './explain-back/practice-record.js';
 import {
   type ExplainBackRelationPartner,
   type ExplainBackSourceBlock,
@@ -5222,6 +5223,20 @@ export default class OleaPlugin extends Plugin {
           ? {
               recordNonAttempt: (params: { conceptIds: readonly string[]; timestamp: string }) =>
                 this.recordExplainBackNonAttempt(nonAttemptTrigger, nonAttemptOfferEventId, params),
+            }
+          : {}),
+        // D7.1, `[D-614]` (`ol-egov.141.89.6.129`): the practice explanation the v0.9 view writes
+        // when she leaves an answer by "Done" or "Try again", under the same resolved trigger and
+        // offer reference a non-attempt carries (the view has no way to know either). Unwired, as
+        // `recordNonAttempt` is, when no trigger was resolved.
+        ...(nonAttemptTrigger !== undefined
+          ? {
+              recordPracticeExplanation: createRecordPracticeExplanation({
+                vault,
+                deviceId: () => ensureDeviceId(this),
+                trigger: nonAttemptTrigger,
+                offerEventId: nonAttemptOfferEventId,
+              }),
             }
           : {}),
         ...(onClosed ? { onClosed } : {}),

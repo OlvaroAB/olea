@@ -2,13 +2,21 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { readReviewLogHistory } from '../session/history.js';
 import { FolderSource } from '../vault/folder-source.js';
 import {
   explainBackGradeEvents,
   explainBackGradeHistoryByInstrument,
   latestExplainBackGradeByInstrument,
+  practiceExplanationHistoryByInstrument,
 } from './explain-back-history.js';
-import { appendReviewLogRecord, type ReviewLogRecordInput } from './write.js';
+import {
+  appendNonAttemptRecord,
+  appendReviewLogRecord,
+  type RecordPracticeExplanationInput,
+  type ReviewLogRecordInput,
+  recordPracticeExplanation,
+} from './write.js';
 
 const PROVENANCE = {
   taskId: 'explain-back.solo.v1',
@@ -126,7 +134,6 @@ describe('explainBackGradeHistoryByInstrument (F5 scenario: the per-instrument v
     expect(entries?.[0]).toMatchObject({
       eventId: 'only',
       instrumentId: 'explain-back:imbrication:1',
-      soloLevel: 'unistructural',
       contentRef: 'content:only',
       revisionOf: null,
       superseded: false,
@@ -185,11 +192,6 @@ describe('explainBackGradeHistoryByInstrument (F5 scenario: the per-instrument v
     const entries = history.get('explain-back:imbrication:1');
     expect(entries?.map((e) => e.eventId)).toEqual(['attempt-1', 'attempt-2', 'attempt-3']);
     expect(entries?.map((e) => e.superseded)).toEqual([true, true, false]);
-    expect(entries?.map((e) => e.soloLevel)).toEqual([
-      'prestructural',
-      'multistructural',
-      'relational',
-    ]);
   });
 
   it('keeps two instruments’ histories separate', async () => {
@@ -323,7 +325,131 @@ describe('latestExplainBackGradeByInstrument', () => {
     const map = latestExplainBackGradeByInstrument([first.record, latest.record]);
     const entry = map.get('explain-back:imbrication:1');
     expect(entry?.eventId).toBe('latest');
-    expect(entry?.soloLevel).toBe('extended-abstract');
+    expect(entry && 'soloLevel' in entry).toBe(false);
     expect(entry?.superseded).toBe(false);
+  });
+});
+
+// Scenarios: `features/F8-concepts-scope.md`, "F8.4b in v0.9" ([D-603], [D-614]), tagged
+// `@auto:core/review-log/explain-back-history.spec`. Real writers on a real folder; ids and text
+// are structural placeholders (INV-3).
+describe('F8.4b in v0.9: no depth reading on any row, her practice explanations listed', () => {
+  let tempRoot: string;
+  let counter = 0;
+
+  beforeEach(async () => {
+    tempRoot = await mkdtemp(join(tmpdir(), 'olea-eb-practice-history-'));
+    counter = 0;
+  });
+
+  afterEach(async () => {
+    await rm(tempRoot, { recursive: true, force: true });
+  });
+
+  const QUESTION = 'explain-back:concept-a';
+
+  function answerInput(
+    over: Partial<RecordPracticeExplanationInput> = {},
+  ): RecordPracticeExplanationInput {
+    return {
+      timestamp: '2026-10-21T10:15:00-04:00',
+      instrumentId: QUESTION,
+      attemptId: 'attempt-1',
+      conceptIds: ['concept-a'],
+      promptShape: 'concept',
+      trigger: 'repeated-failure',
+      durationMs: 60000,
+      answer: 'synthetic answer',
+      passagesShownInView: [],
+      ...over,
+    };
+  }
+
+  async function save(over: Partial<RecordPracticeExplanationInput> = {}) {
+    const vault = new FolderSource(tempRoot);
+    return recordPracticeExplanation(vault, answerInput(over), {
+      deviceId: 'desktop',
+      generateEventId: () => `pe-event-${++counter}`,
+      generateContentId: () => `desktop.pe-content-${counter}`,
+    });
+  }
+
+  async function entries() {
+    return (await readReviewLogHistory(new FolderSource(tempRoot))).entries;
+  }
+
+  it('no row carries a SOLO level, a depth, a grade or a number, graded attempts included', async () => {
+    const vault = new FolderSource(tempRoot);
+    await appendReviewLogRecord(
+      vault,
+      explainBackInput({
+        explainBackGrade: {
+          soloLevel: 'relational',
+          contentRef: 'content:graded',
+          revisionOf: null,
+          artifactProvenance: PROVENANCE,
+        },
+      }),
+      { deviceId: 'desktop', generateEventId: () => 'graded-1' },
+    );
+    await save();
+    const log = await entries();
+
+    const graded = explainBackGradeHistoryByInstrument(log).get('explain-back:imbrication:1');
+    expect(graded?.[0] && Object.keys(graded[0])).not.toContain('soloLevel');
+    const practice = practiceExplanationHistoryByInstrument(log).get(QUESTION);
+    expect(practice?.[0] && Object.keys(practice[0]).sort()).toEqual([
+      'conceptIds',
+      'contentRef',
+      'eventId',
+      'instrumentId',
+      'timestamp',
+    ]);
+  });
+
+  it('lists every saved practice explanation, one row each, oldest first however the log arrives', async () => {
+    await save({ attemptId: 'a-3', timestamp: '2026-10-23T09:00:00-04:00' });
+    await save({ attemptId: 'a-1', timestamp: '2026-10-21T09:00:00-04:00' });
+    await save({ attemptId: 'a-2', timestamp: '2026-10-22T09:00:00-04:00' });
+    const log = await entries();
+    const forward = practiceExplanationHistoryByInstrument(log).get(QUESTION);
+    const reversed = practiceExplanationHistoryByInstrument([...log].reverse()).get(QUESTION);
+    expect(forward?.map((row) => row.timestamp.slice(0, 10))).toEqual([
+      '2026-10-21',
+      '2026-10-22',
+      '2026-10-23',
+    ]);
+    expect(reversed).toEqual(forward);
+  });
+
+  it('reading the same log again and again never adds a row', async () => {
+    await save();
+    const log = await entries();
+    for (let reopen = 0; reopen < 3; reopen += 1) {
+      expect(practiceExplanationHistoryByInstrument(log).get(QUESTION)).toHaveLength(1);
+    }
+    // The same line seen on two devices is one saved explanation.
+    expect(practiceExplanationHistoryByInstrument([...log, ...log]).get(QUESTION)).toHaveLength(1);
+  });
+
+  it('an answer the local check flagged is still her saved text, so it is listed', async () => {
+    await save({ localCheckFlagged: true });
+    const rows = practiceExplanationHistoryByInstrument(await entries()).get(QUESTION);
+    expect(rows).toHaveLength(1);
+  });
+
+  it('a skipped prompt and a prompt closed without an answer have no row', async () => {
+    const vault = new FolderSource(tempRoot);
+    for (const [index, trigger] of (['on-demand', 'repeated-failure'] as const).entries()) {
+      await appendNonAttemptRecord(
+        vault,
+        { timestamp: '2026-10-21T09:00:00-04:00', conceptIds: ['concept-a'], trigger },
+        { deviceId: 'desktop', generateEventId: () => `na-${index}` },
+      );
+    }
+    const log = await entries();
+    expect(log.some((entry) => entry.kind === 'non-attempt')).toBe(true);
+    expect(practiceExplanationHistoryByInstrument(log).size).toBe(0);
+    expect(explainBackGradeHistoryByInstrument(log).size).toBe(0);
   });
 });

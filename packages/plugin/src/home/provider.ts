@@ -93,9 +93,10 @@ import type {
 } from 'olea-core';
 import {
   calendarDaysEndingOn,
+  isStudyActivity,
   readReviewLogHistory,
   reviewLogPath,
-  scoredConceptOf,
+  studiedConceptOf,
 } from 'olea-core';
 import { createLocalGroveProvider } from '../grove/provider.js';
 import type { GroveCourseSection } from '../grove/view.js';
@@ -365,13 +366,6 @@ async function buildCourseRows(
   return rows;
 }
 
-/** Narrows a union member to review-kind lines — same shape `../retrospective/offer-events.ts#isRetrospectiveOfferEntry` uses for its own kind. */
-function isReviewEntry(
-  entry: ReviewLogEntry,
-): entry is Extract<ReviewLogEntry, { readonly kind: 'review' }> {
-  return entry.kind === 'review';
-}
-
 /**
  * `[D-382]`/`[D-331]` (`ol-egov.141.89.10.64`, F2.22): the shared holder's active session,
  * described from its own frozen composition snapshot — see `./view.ts`'s `HomeActiveSession`
@@ -424,12 +418,14 @@ async function findCourseAvoidanceQuestion(
     const { entries } = await readReviewLogHistory(deps.vault, { additionalPaths });
 
     const reviewedAtMsByConceptKey = new Map<string, number>();
-    for (const entry of entries.filter(isReviewEntry)) {
+    // D7.1 (`[D-614]`): study activity is a review or a genuine practice explanation, one rule
+    // (`olea-core`'s `isStudyActivity`); a flagged answer and a non-attempt are not activity.
+    for (const entry of entries.filter(isStudyActivity)) {
       const at = Date.parse(entry.timestamp);
       if (Number.isNaN(at)) continue;
       // `[D-423]`: a review is activity for the one concept it scored, never for a concept (and so
-      // a course) it only names as context.
-      const conceptId = scoredConceptOf(entry);
+      // a course) it only names as context; a practice explanation, for the concept it explained.
+      const conceptId = studiedConceptOf(entry);
       if (conceptId === undefined) continue;
       const existing = reviewedAtMsByConceptKey.get(conceptId);
       if (existing === undefined || at > existing) reviewedAtMsByConceptKey.set(conceptId, at);

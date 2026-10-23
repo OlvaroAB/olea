@@ -378,6 +378,13 @@ export interface RegistryViewDeps {
   readonly editInstrument: (instrument: RegistryInstrumentSummary) => Promise<void>;
   /** `[D-171]`'s click-through half — opens a source location at its known grain. */
   readonly openSourceLocation: (location: RegistrySourceLocation) => Promise<void>;
+  /**
+   * F8.4b's expansion of a practice explanation row (`[D-614]`): her saved text, resolved through
+   * `[D-077]`'s content store by the row's `contentRef`. Called only when she expands a row, never
+   * for a collapsed one; `null` when the store holds nothing for it. Optional so a host with no
+   * content store needs no stub (the row then expands to nothing).
+   */
+  readonly readPracticeExplanationText?: (contentRef: string) => Promise<string | null>;
   /** F8.4a's `[D-176]` accept half — creates the new Zettelkasten note the offer promised. */
   readonly acceptNoteOffer: (entry: RegistryConceptEntry) => Promise<void>;
   /** `[D-183]`'s accept half — adopts the candidate wording, demoting the frozen current one to an alias via the existing rename mechanism (`./provider.ts`'s `acceptRenameProposal`). */
@@ -1284,14 +1291,7 @@ export class RegistryView extends ItemView {
     root: HTMLElement,
     history: RegistryInstrumentSummary['explainBackHistory'],
   ): void {
-    if (history.length === 0) return;
-    const section = root.createDiv({ cls: 'olea-registry-explain-back-history' });
-    section.createEl('h5', { text: EXPLAIN_BACK_HISTORY_HEADING });
-    const list = section.createEl('ul');
-    for (const row of history) {
-      const item = list.createEl('li', { text: explainBackHistoryRowLine(row) });
-      if (row.contested) item.addClass('olea-registry-explain-back-contested');
-    }
+    renderExplainBackHistorySection(root, history, this.deps.readPracticeExplanationText);
   }
 
   private renderActions(root: HTMLElement, entry: RegistryConceptEntry): void {
@@ -1438,5 +1438,48 @@ export class RegistryView extends ItemView {
     });
 
     this.renderExplainBackHistory(item, instrument.explainBackHistory);
+  }
+}
+
+/**
+ * F8.4b's explain-back history list for one instrument (`[D-175]`, `[D-614]`): a dated row each,
+ * the rows' order exactly the projection's. A graded row is its line alone. A practice
+ * explanation row is a disclosure: collapsed it is the date line and never touches the content
+ * store; her text is read through `[D-077]`'s content store only when she expands it, once.
+ * Exported so it can be driven without a host.
+ */
+export function renderExplainBackHistorySection(
+  root: HTMLElement,
+  history: RegistryInstrumentSummary['explainBackHistory'],
+  readText: ((contentRef: string) => Promise<string | null>) | undefined,
+): void {
+  if (history.length === 0) return;
+  const section = root.createDiv({ cls: 'olea-registry-explain-back-history' });
+  section.createEl('h5', { text: EXPLAIN_BACK_HISTORY_HEADING });
+  const list = section.createEl('ul');
+  for (const row of history) {
+    const line = explainBackHistoryRowLine(row);
+    if (row.kind === 'graded') {
+      const item = list.createEl('li', { text: line });
+      if (row.contested) item.addClass('olea-registry-explain-back-contested');
+      continue;
+    }
+    const item = list.createEl('li');
+    const details = item.createEl('details');
+    details.createEl('summary', { text: line });
+    const body = details.createDiv({ cls: 'olea-registry-explain-back-text' });
+    let resolved = false;
+    details.addEventListener('toggle', () => {
+      if (!details.open || resolved || readText === undefined) return;
+      resolved = true;
+      void readText(row.contentRef).then(
+        (text) => {
+          if (text !== null) body.setText(text);
+        },
+        () => {
+          resolved = false;
+        },
+      );
+    });
   }
 }

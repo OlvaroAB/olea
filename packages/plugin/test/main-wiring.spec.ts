@@ -176,12 +176,16 @@ describe('every port the session needs is the real one', () => {
     // set-aside-attempt event), and `[D-460]`'s `openExplainBackModal` deps
     // (`recordFeedbackShown`) awaits it an eleventh time to thread the same
     // id into `createRecordFeedbackShown`'s own vault write (the feedback
-    // exposure marker, written before a graded result renders) —
+    // exposure marker, written before a graded result renders), and
+    // `[D-614]`'s `openExplainBackModal` deps (`recordPracticeExplanation`,
+    // `ol-egov.141.89.6.129`) awaits it a twelfth time to thread the same id
+    // into `createRecordPracticeExplanation`'s own vault write (the practice
+    // explanation she leaves by "Done" or "Try again") —
     // there is no `this.deviceId` cache to reuse instead in any of the
-    // eleven. The count below tracks known call sites rather than asserting
+    // twelve. The count below tracks known call sites rather than asserting
     // "exactly once", so a future accidental duplicate still has to be a
     // deliberate edit to this test.
-    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(11);
+    expect(main.match(/ensureDeviceId\(/g)).toHaveLength(12);
   });
 });
 

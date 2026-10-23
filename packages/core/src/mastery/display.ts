@@ -82,10 +82,13 @@ export const MASTERY_DISPLAY: Readonly<Record<MasteryState, MasteryDisplay>> = {
     // MCQ items are answered correctly. Producing or explaining the thing is
     // the evidence that distinguishes `tree` from `sapling`, and the wording
     // says so rather than leaving the difference to be inferred from a leaf.
+    // `[D-612]`: while no explanation is graded (v0.9), the meaning says so in a
+    // second sentence — registry section 1's words, character for character.
     label: 'tree',
     leaves: 3,
     fruit: true,
-    meaning: 'Explained back in your own words, not only recognised.',
+    meaning:
+      "Explained in your own words and checked against your material. Explanation checking isn't available yet.",
   },
 };
 

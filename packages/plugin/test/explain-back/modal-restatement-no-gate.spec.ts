@@ -31,6 +31,11 @@
  * clause naming a placement, the safe direction is to keep the copy off, so
  * this test also pins that absence — never inventing a placement no
  * document names.
+ *
+ * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** nothing is graded, so the answer reaches no grader
+ * at all; the absence of a gate now reads: a non-blank "Show the passages" always shows the
+ * passages, with no overlap or restatement check in front of them, and the passages phase shows
+ * no "own words" line.
  */
 
 import { readFileSync } from 'node:fs';
@@ -51,37 +56,28 @@ const modal = codeOf('explain-back/modal.ts');
 const reviewCopy = codeOf('review/copy.ts');
 
 describe('ExplainBackModal — no restatement gate exists (D-279 supersedes D-089 s.6/D-138)', () => {
-  it('submitAnswer calls deps.grade unconditionally for any non-blank answer — no overlap/restatement check gates it', () => {
+  it('submitAnswer shows the passages for any non-blank answer — no overlap/restatement check gates them', () => {
     const start = modal.indexOf('private async submitAnswer(');
-    const end = modal.indexOf('private acceptGrading(');
+    const end = modal.indexOf('private async recordFeedbackShownBeforeDisplay(');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
-    expect(body).toMatch(/this\.deps\.grade\(/);
-    // Nothing on the path from a typed answer to deps.grade reads an
-    // overlap/restatement measurement to decide whether to call it.
+    expect(body).toMatch(/this\.state = \{ phase: 'passages'/);
+    expect(body).not.toMatch(/this\.deps\.grade\(/);
+    // Nothing on the path from a typed answer to the passages reads an overlap/restatement measurement.
     expect(body).not.toMatch(/restat/i);
     expect(body).not.toMatch(/overlap/i);
   });
 
-  it('ModalState has no restatement-intercept-shaped phase — every phase is one of the eight D-279-compatible states', () => {
+  it('ModalState has no restatement-intercept-shaped phase — every phase is one of the seven v0.9 states', () => {
     const start = modal.indexOf('type ModalState =');
-    const end = modal.indexOf('const SVG_NS');
+    const end = modal.indexOf('export class ExplainBackModal');
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = modal.slice(start, end);
     const phases = [...body.matchAll(/phase:\s*'([a-z]+)'/g)].map((m) => m[1]);
     expect(new Set(phases)).toEqual(
-      new Set([
-        'topic',
-        'loading',
-        'answering',
-        'grading',
-        'graded',
-        'refused',
-        'accepted',
-        'skipped',
-      ]),
+      new Set(['topic', 'loading', 'answering', 'revealing', 'passages', 'refused', 'skipped']),
     );
     expect(body).not.toMatch(/restat/i);
     expect(body).not.toMatch(/overlap/i);
@@ -101,22 +97,14 @@ describe('ExplainBackModal — no restatement gate exists (D-279 supersedes D-08
     expect(modalWithComments).not.toMatch(/prove you understand/i);
   });
 
-  it('no result-phase render method shows an "in your own words" / restatement string — the optional copy is off, not placed without a clause', () => {
-    // renderGradedPhase and renderAcceptedPhase are the two result-facing
-    // render methods (the "graded" detail screen and the post-accept
-    // screen). Neither D-089 s.6 nor F5.3 names when the optional copy
-    // should show, so it is kept off entirely (the safe direction) rather
-    // than placed on a guess.
-    const gradedStart = modal.indexOf('private renderGradedPhase(');
-    const gradedEnd = modal.indexOf('private renderGradedRegions(');
-    const acceptedStart = modal.indexOf('private renderAcceptedPhase(');
-    const acceptedEnd = modal.indexOf('private renderSkippedPhase(');
-    expect(gradedStart).toBeGreaterThan(-1);
-    expect(acceptedStart).toBeGreaterThan(-1);
-    const gradedBody = modal.slice(gradedStart, gradedEnd);
-    const acceptedBody = modal.slice(acceptedStart, acceptedEnd);
-    expect(gradedBody).not.toMatch(/own words/i);
-    expect(acceptedBody).not.toMatch(/own words/i);
+  it('the one phase shown after an answer shows no "in your own words" / restatement string — the optional copy is off, not placed without a clause', () => {
+    // renderPassagesPhase is the one phase after an answer in v0.9. Neither D-089 s.6 nor F5.3
+    // names when the optional copy should show, so it stays off (the safe direction).
+    const start = modal.indexOf('private renderPassagesPhase(');
+    const end = modal.indexOf('private renderRefusedPhase(');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    expect(modal.slice(start, end)).not.toMatch(/own words/i);
   });
 });
 

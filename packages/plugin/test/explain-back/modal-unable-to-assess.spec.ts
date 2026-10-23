@@ -1,13 +1,14 @@
 /**
- * `[D-321]` / `ol-0r92.130`: `ExplainBackModal` must handle the judge's
- * `unable-to-assess` outcome (`GroundedGrading`'s `outcome:
- * 'unable-to-assess'` branch, `olea-core`) — no grade shown, no verdict
- * badge, nothing written, misconception/mastery never run off it, and no
- * referral to item validation. Checked against the source text with
- * comments stripped, the same technique `skip-wiring.spec.ts` and
- * `modal-restatement-no-gate.spec.ts` already use for anything inside
- * `ExplainBackModal`, which cannot be imported under Vitest (`obsidian`'s
- * `package.json` `main` is `""`).
+ * `[D-321]` / `ol-0r92.130`: the judge's `unable-to-assess` outcome — no grade shown, no verdict
+ * badge, nothing written, misconception/mastery never run off it, and no referral to item
+ * validation. As v0.9 has it (`[D-603]`, `ol-egov.141.89.6.129`) no answer is sent to the judge,
+ * so the view never receives the outcome at all: it has no unable-to-assess phase, renders no
+ * decline message, and reaches no write a grading could lead to. The outcome's own handling stays
+ * where it lives — `./decline-kind.ts` (`decline-kind.spec.ts`) and `olea-core`'s grading pipeline
+ * — for when grading returns (the F5 heading note).
+ *
+ * Checked against the source text with comments stripped: `ExplainBackModal` extends Obsidian's
+ * `Modal`. `practice-view.spec.ts` renders the view itself.
  */
 
 import { readFileSync } from 'node:fs';
@@ -25,73 +26,20 @@ function codeOf(relativePath: string): string {
 
 const modal = codeOf('explain-back/modal.ts');
 
-function bodyBetween(startMarker: string, endMarker: string): string {
-  const start = modal.indexOf(startMarker);
-  expect(start).toBeGreaterThan(-1);
-  const end = modal.indexOf(endMarker, start);
-  expect(end).toBeGreaterThan(start);
-  return modal.slice(start, end);
-}
-
-describe('renderGradedPhase — branches on the unable-to-assess outcome before touching any graded-only field', () => {
-  it('checks grading.outcome and delegates to renderUnableToAssessPhase, returning before the graded regions', () => {
-    const body = bodyBetween('private renderGradedPhase(', 'private renderUnableToAssessPhase(');
-    const guardIndex = body.search(/grading\.outcome\s*===\s*'unable-to-assess'/);
-    expect(guardIndex).toBeGreaterThan(-1);
-    expect(body).toMatch(
-      /this\.renderUnableToAssessPhase\(\s*root,\s*prompt,\s*answer,\s*pending,\s*durationMs,\s*attemptId,\s*support,?\s*\)/,
-    );
-    // The guard's own `return;` must precede the graded regions and the
-    // Accept button — never fall through to render graded-only content.
-    const returnIndex = body.indexOf('return;', guardIndex);
-    const acceptButtonIndex = body.indexOf('EXPLAIN_BACK_ACCEPT_LABEL');
-    expect(returnIndex).toBeGreaterThan(guardIndex);
-    expect(returnIndex).toBeLessThan(acceptButtonIndex);
+describe('v0.9: the view never receives an unable-to-assess outcome', () => {
+  it('no phase, render method or branch for it', () => {
+    expect(modal).not.toMatch(/unable-to-assess|renderUnableToAssessPhase|renderGradedPhase/);
   });
-});
 
-describe('renderUnableToAssessPhase — no grade, no verdict badge, no Accept button, nothing written', () => {
-  const body = bodyBetween('private renderUnableToAssessPhase(', 'private renderGradedRegions(');
-
-  it('renders the placeholder message and only the Try again (discard) action', () => {
-    // `[D-564]` (c): the message is chosen by the decline kind (`../../src/explain-back/decline-kind.ts`).
-    expect(body).toMatch(/declineMessageFor\(\s*declineKindOf\(/);
-    expect(body).toMatch(/EXPLAIN_BACK_DISCARD_LABEL/);
-    expect(body).toMatch(
-      /this\.discardGrading\(prompt, answer, pending, durationMs, attemptId, support\)/,
+  it('no decline message is chosen or rendered by the view', () => {
+    expect(modal).not.toMatch(
+      /declineMessageFor|declineKindOf|EXPLAIN_BACK_UNABLE_TO_ASSESS_MESSAGE/,
     );
   });
 
-  it('never renders an Accept button, a verdict, feedback text or any grading-content region', () => {
-    expect(body).not.toMatch(/EXPLAIN_BACK_ACCEPT_LABEL/);
-    expect(body).not.toMatch(/this\.acceptGrading\(/);
-    expect(body).not.toMatch(/grading\.feedback/);
-    expect(body).not.toMatch(/grading\.missedPoints/);
-    expect(body).not.toMatch(/grading\.citedIssues/);
-    expect(body).not.toMatch(/grading\.misconceptionCandidates/);
-    expect(body).not.toMatch(/renderGradedRegions/);
-  });
-
-  it('calls nothing that could write to her log, run misconception matching, run mastery, or refer the instrument to validation', () => {
-    expect(body).not.toMatch(/acceptWithObservation/);
-    expect(body).not.toMatch(/recordSoloGradeAndReview/);
-    expect(body).not.toMatch(/appendReviewLogRecord/);
-    expect(body).not.toMatch(/validation/i);
-    expect(body).not.toMatch(/referr?al/i);
-  });
-});
-
-describe('acceptGrading / computeAcceptGrading — unreachable from the unable-to-assess branch', () => {
-  it('the Accept button (the only caller of acceptGrading) is created exclusively inside the graded branch of renderGradedPhase, after the unable-to-assess early return', () => {
-    const gradedPhaseBody = bodyBetween(
-      'private renderGradedPhase(',
-      'private renderUnableToAssessPhase(',
-    );
-    // Exactly one Accept-button wiring site in this whole file, and it lives
-    // in renderGradedPhase's graded tail (which the unable-to-assess branch
-    // above provably returns before reaching).
-    const acceptCalls = modal.match(/void this\.acceptGrading\(/g) ?? [];
-    expect(acceptCalls).toHaveLength(1);
-    expect(gradedPhaseBody).toMatch(/void this\.acceptGrading\(/);
+  it('nothing that could write a review, run misconception matching or mastery, or refer the instrument to validation', () => {
+    expect(modal).not.toMatch(/acceptWithObservation\(|recordSoloGradeAndReview\(/);
+    expect(modal).not.toMatch(/appendReviewLogRecord/);
+    expect(modal).not.toMatch(/referr?al/i);
   });
 });

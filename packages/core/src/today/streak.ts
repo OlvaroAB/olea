@@ -42,11 +42,15 @@
  * F6.1 permits, not less.
  *
  * **What counts as studying.** Any `kind: 'review'` entry, including
- * explain-back (which carries no rating — F2.16/F5). Suspension events do not:
- * deciding to stop studying something is not studying. See `studyDays`.
+ * explain-back (which carries no rating — F2.16/F5), and any genuine practice
+ * explanation (D7.1, `[D-614]`: study activity, never evidence). Suspension
+ * events do not: deciding to stop studying something is not studying. Nor
+ * does a non-attempt, or an answer the declared local check flagged. See
+ * `studyDays`.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
+import { isStudyActivity } from '../review-log/practice-explanation.js';
 import {
   type CalendarDay,
   calendarDayOfTimestamp,
@@ -58,7 +62,7 @@ import {
 /** One cell of the week strip. A fact and two positions — never a verdict. */
 export interface StreakDay {
   readonly day: CalendarDay;
-  /** At least one review event fell on this day. */
+  /** At least one review event, or one genuine practice explanation (`[D-614]`), fell on this day. */
   readonly studied: boolean;
   /** This is the day the panel is being drawn on. */
   readonly isToday: boolean;
@@ -103,7 +107,10 @@ export interface ComputeStreakOptions {
 export const DEFAULT_WEEK_LENGTH = 7;
 
 /**
- * The set of local calendar days that hold at least one review.
+ * The set of local calendar days that hold at least one review or one genuine
+ * practice explanation — the shared study-activity rule
+ * (`../review-log/practice-explanation.ts`'s `isStudyActivity`, D7.1,
+ * `[D-614]`).
  *
  * Suspend/unsuspend entries are excluded on purpose: F2.6's events record that
  * she took something *out* of rotation, which is a decision about her deck and
@@ -118,7 +125,7 @@ export const DEFAULT_WEEK_LENGTH = 7;
 export function studyDays(entries: readonly ReviewLogEntry[]): ReadonlySet<CalendarDay> {
   const days = new Set<CalendarDay>();
   for (const entry of entries) {
-    if (entry.kind !== 'review') continue;
+    if (!isStudyActivity(entry)) continue;
     const day = calendarDayOfTimestamp(entry.timestamp);
     if (day !== null) days.add(day);
   }
