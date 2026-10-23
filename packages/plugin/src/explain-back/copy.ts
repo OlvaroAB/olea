@@ -90,14 +90,6 @@ export const EXPLAIN_BACK_DONE_LABEL = 'Done';
 export const EXPLAIN_BACK_DISCARD_LABEL = 'Try again';
 
 /**
- * **Not rendered by the v0.9 view** (`[D-603]`): no control keeps, accepts or checks a result.
- * Kept exported only because `packages/workbench/src/simulator/controller.ts` (outside
- * `ol-egov.141.89.6.129`'s files) imports it for its scripted explain driver; it goes with that
- * driver's update.
- */
-export const EXPLAIN_BACK_ACCEPT_LABEL = 'Keep this';
-
-/**
  * `[D-321]` / `ol-0r92.130`: pass one could not tell whether this was a
  * genuine attempt at all — a defined non-verdict. **Dormant in v0.9**
  * (`[D-603]`): no answer is graded, so the view never shows it; it is
