@@ -96,6 +96,7 @@ interface Opened {
   readonly root: FakeEl;
   readonly practice: ReturnType<typeof vi.fn>;
   readonly marker: ReturnType<typeof vi.fn>;
+  readonly nonAttempt: ReturnType<typeof vi.fn>;
   readonly retrieve: ReturnType<typeof vi.fn>;
   /** Every text and class each render drew, in order, so a path is checked as she saw it. */
   readonly drawn: { texts: string[]; classes: string[]; phases: string[] };
@@ -120,6 +121,7 @@ async function openView(
     contentId: 'content-1',
   }));
   const marker = vi.fn(options.marker ?? (async () => {}));
+  const nonAttempt = vi.fn(async () => {});
   const retrieve = vi.fn(async (query: string) => options.passages ?? (await retrieveFor(query)));
   const modal = new ExplainBackModal(
     {} as never,
@@ -132,6 +134,7 @@ async function openView(
       },
       recordFeedbackShown: marker,
       recordPracticeExplanation: practice,
+      recordNonAttempt: nonAttempt,
       ...(seed === 'relation'
         ? {
             resolveCausesPartner: (subject: string) =>
@@ -163,7 +166,7 @@ async function openView(
     modal.contentEl.button('Continue').click();
   }
   await vi.waitFor(() => expect(modal.state.phase).toBe('answering'));
-  return { modal, root: modal.contentEl, practice, marker, retrieve, drawn };
+  return { modal, root: modal.contentEl, practice, marker, nonAttempt, retrieve, drawn };
 }
 
 async function answer(opened: Opened, text: string): Promise<void> {
@@ -398,6 +401,20 @@ describe('nothing is shown after a skip', () => {
     expect(opened.drawn.phases.length).toBe(drawnBefore);
     expect(opened.marker).not.toHaveBeenCalled();
     expect(opened.practice).not.toHaveBeenCalled();
+    expect(opened.nonAttempt).toHaveBeenCalledTimes(1);
+  });
+
+  it('after "Try again", closing the next answer box or skipping it records no non-attempt: the prompt produced an explanation (F5.7, D7.1)', async () => {
+    for (const leave of ['close', 'skip'] as const) {
+      const opened = await openView();
+      await answer(opened, 'My first answer.');
+      opened.root.button(EXPLAIN_BACK_DISCARD_LABEL).click();
+      expect(opened.modal.state.phase).toBe('answering');
+      if (leave === 'close') opened.modal.onClose();
+      else opened.root.button(EXPLAIN_BACK_SKIP_LABEL).click();
+      await vi.waitFor(() => expect(opened.practice).toHaveBeenCalledTimes(1));
+      expect(opened.nonAttempt).not.toHaveBeenCalled();
+    }
   });
 });
 

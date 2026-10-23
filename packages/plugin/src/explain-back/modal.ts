@@ -972,6 +972,9 @@ export class ExplainBackModal extends Modal {
    */
   private async recordNonAttemptIfPossible(prompt: ResolvedPrompt): Promise<void> {
     if (!this.deps.recordNonAttempt || !canRecordNonAttempt(prompt.conceptIds)) return;
+    // F5.7, D7.1: once she has left an answer by "Try again", this prompt produced an
+    // explanation, so leaving the next answer box unanswered is not a non-attempt of it.
+    if (this.attemptsLeftByTryAgain.length > 0) return;
     try {
       await this.deps.recordNonAttempt({
         conceptIds: prompt.conceptIds,
