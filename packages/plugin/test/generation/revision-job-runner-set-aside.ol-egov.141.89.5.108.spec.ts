@@ -643,7 +643,8 @@ describe('production composition (ol-egov.141.89.5.108)', () => {
   it("open-session.ts passes it to the drafts' presentation check", () => {
     const session = source('../../src/review/open-session.ts');
     expect(session.replace(/\s+/g, ' ')).toContain(
-      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, )',
+      // `ol-zjke.2` added the citation store after it (a draft held for a correction is set aside too).
+      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, input.citationHashStore, )',
     );
   });
 });

@@ -35,8 +35,21 @@
  * nothing thrown. The report is counts only; nothing here logs text, a path or an id (D-005), and
  * the request carries no path, id or name.
  *
- * Not covered, each a follow-up: a pending draft not yet presented, a new draft resting on the
- * corrected claim after the transcript arrives, and reconciling the grounding so the hold can end.
+ * A PENDING DRAFT (`ol-zjke.2`; decision sheet v87 row 4, option (a)). A draft not yet accepted
+ * whose citation names a linked deck is a candidate too, judged in the same batches by the same
+ * decision path: its cited page's passage and its own drafted prompt and answer. A draft the
+ * judgement places on the corrected claim, or cannot place, is held under its draft hold key
+ * (`materiality/citation-hash-store.ts`'s `draftHoldKey`): the same record shape, the same
+ * `lecturer-correction` fact, written in one write, so it is never an anchor without its hold. A
+ * draft placed `no` (another claim of the same slide) is untouched. The open session, bulk review
+ * and acceptance read that key; acceptance carries the hold to the instrument before the instrument
+ * exists (`../generation/accept.ts`). A draft accepted while this route ran is held as the
+ * instrument it became: the draft is read again before and after its key is written, and
+ * acceptance reads the key again after its own write, so whichever runs second sees the other.
+ * The drafts are the vault's own draft cache unless the caller hands one in.
+ *
+ * Not covered, each a follow-up: a new draft resting on the corrected claim after the transcript
+ * arrives, and reconciling the grounding so the hold can end.
  */
 
 import { CONTRACT_VERSION, TASK_IDS } from 'olea-contracts';
@@ -59,11 +72,15 @@ import {
   type VaultSource,
   type WorkerTaskTransport,
 } from 'olea-core';
+import { createVaultDraftCacheStore, type DraftCacheStore } from '../generation/cache-store.js';
+import type { DraftRecord } from '../generation/types.js';
 import { lectureKindOf } from './lecture-links.js';
-import type {
-  CitationAnchorRecord,
-  CitationHashStore,
-  PendingReason,
+import {
+  type CitationAnchorRecord,
+  type CitationHashStore,
+  draftHoldKey,
+  type PendingReason,
+  type PendingRevalidation,
 } from './materiality/citation-hash-store.js';
 import { stripQuestionBlocks } from './materiality/citation-material.js';
 import { citedPassagePath } from './materiality/citation-revision-wiring.js';
@@ -300,6 +317,34 @@ export function instrumentItemText(record: VaultInstrumentRecord): string {
   return `Question: ${record.mcq.stem}\nAnswer: ${record.mcq.answer}`;
 }
 
+/**
+ * `ol-zjke.2`: a pending draft's own drafted prompt and answer, in the same form
+ * {@link instrumentItemText} gives an instrument. `undefined` for a draft with no drafted content
+ * of its kind (nothing to judge it by).
+ */
+export function draftItemText(draft: DraftRecord): string | undefined {
+  if (draft.instrumentType === 'qa') {
+    return draft.card === undefined
+      ? undefined
+      : `Question: ${draft.card.front}\nAnswer: ${draft.card.back}`;
+  }
+  return draft.question === undefined
+    ? undefined
+    : `Question: ${draft.question.stem}\nAnswer: ${draft.question.correctAnswer}`;
+}
+
+/**
+ * `ol-zjke.2`: the note a draft's hold anchor records, by the rule `citedPassagePath` applies to
+ * the instrument the draft becomes: a distinct Markdown source it cites, else its own note.
+ */
+function draftCitedPassagePath(draft: DraftRecord): VaultPath {
+  const cited = draft.sourceCitation?.sourcePath;
+  if (cited !== undefined && cited !== draft.sourcePath && cited.toLowerCase().endsWith('.md')) {
+    return cited;
+  }
+  return draft.sourcePath;
+}
+
 export interface SlideCorrectionRouteDeps {
   readonly vault: VaultSource;
   /** The same store the citation pass, the session builder and the presentation check read. */
@@ -317,6 +362,12 @@ export interface SlideCorrectionRouteDeps {
    * snapshot first could otherwise write a fact of its own over the hold). Default: runs them as is.
    */
   readonly exclusive?: (writes: () => Promise<void>) => Promise<void>;
+  /**
+   * `ol-zjke.2`: the pending drafts to judge with the instruments, and each read again when its
+   * hold is written. Default: the vault's own draft cache (`createVaultDraftCacheStore`), the same
+   * files the open session and bulk review list.
+   */
+  readonly drafts?: Pick<DraftCacheStore, 'listPending' | 'get'>;
 }
 
 /** What one run did, as counts only (D-005). */
@@ -338,6 +389,11 @@ export interface SlideCorrectionReport {
   heldYes: number;
   /** Instruments withheld because a judgement could not place them (counted apart). */
   heldUnclear: number;
+  /**
+   * `ol-zjke.2`: of `heldYes` and `heldUnclear`, the pending drafts held (under their draft hold
+   * key, or as the instrument a draft accepted meanwhile became).
+   */
+  draftsHeld: number;
   /** Candidates on a linked deck whose cited slide has no text available: not sent, not held. */
   candidatesWithoutPassage: number;
   /** Judge calls that failed or answered unusably: nothing held from them. */
@@ -361,6 +417,7 @@ function blankReport(): SlideCorrectionReport {
     noLinkedDeck: 0,
     heldYes: 0,
     heldUnclear: 0,
+    draftsHeld: 0,
     candidatesWithoutPassage: 0,
     callsFailed: 0,
     judgeUnavailable: 0,
@@ -380,28 +437,42 @@ export function slideCorrectionFinished(report: SlideCorrectionReport): boolean 
   );
 }
 
+/**
+ * What a candidate is: an active instrument, or (`ol-zjke.2`) a pending draft not yet an instrument.
+ */
+type Subject =
+  | { readonly kind: 'instrument'; readonly record: VaultInstrumentRecord }
+  | { readonly kind: 'draft'; readonly draft: DraftRecord };
+
 interface Candidate {
-  readonly record: VaultInstrumentRecord;
+  /** The anchor key its hold is written under: the instrument id, or the draft's hold key. */
+  readonly key: string;
+  readonly subject: Subject;
   readonly slidePassage: string;
   readonly item: string;
 }
 
 interface Hold {
-  readonly record: VaultInstrumentRecord;
+  readonly subject: Subject;
   readonly placement: 'yes' | 'unclear';
   /** The correction this hold is keyed to (`PendingRevalidation.sinceContentHash`). */
-  readonly key: string;
+  readonly correction: string;
   readonly raisedBy: PersistedStageProducer;
 }
 
-/** The active instruments citing one of `decks`, each with its cited slide's text. */
+/**
+ * The active instruments and (`ol-zjke.2`) the pending drafts citing one of `decks`, each with its
+ * cited slide's text.
+ */
 async function candidatesOn(
   deps: SlideCorrectionRouteDeps,
+  drafts: Pick<DraftCacheStore, 'listPending'>,
   decks: ReadonlySet<VaultPath>,
   report: SlideCorrectionReport,
 ): Promise<readonly Candidate[] | undefined> {
   let inactive: Set<string>;
   let records: readonly VaultInstrumentRecord[];
+  let pendingDrafts: readonly DraftRecord[];
   try {
     // The same fold the citation pass and the presentation path read: a suspended or proven-invalid
     // instrument is not a candidate. An unreadable log is never taken for "none suspended".
@@ -413,6 +484,8 @@ async function candidatesOn(
     records = (
       await enumerateVaultInstruments(deps.vault, { concepts: { stampConceptKeys: true } })
     ).records;
+    // `ol-zjke.2`: an unreadable draft cache is never taken for "no drafts": nothing is judged.
+    pendingDrafts = await drafts.listPending();
   } catch (error) {
     report.readFailed += 1;
     console.error('Olea: slide-correction could not read the vault', errorName(error));
@@ -428,7 +501,33 @@ async function candidatesOn(
       report.candidatesWithoutPassage += 1;
       continue;
     }
-    candidates.push({ record, slidePassage, item: instrumentItemText(record) });
+    candidates.push({
+      key: record.instrumentId,
+      subject: { kind: 'instrument', record },
+      slidePassage,
+      item: instrumentItemText(record),
+    });
+  }
+  // `ol-zjke.2`: a pending draft citing a linked deck, judged by its cited page and its own text.
+  for (const draft of pendingDrafts) {
+    const cited = draft.sourceCitation;
+    if (cited === undefined || !decks.has(cited.sourcePath)) continue;
+    const item = draftItemText(draft);
+    if (item === undefined) continue;
+    const slidePassage =
+      cited.page === undefined
+        ? undefined
+        : deps.slidePassage(cited.sourcePath, cited.page)?.trim();
+    if (slidePassage === undefined || slidePassage.length === 0) {
+      report.candidatesWithoutPassage += 1;
+      continue;
+    }
+    candidates.push({
+      key: draftHoldKey(draft.draftId),
+      subject: { kind: 'draft', draft },
+      slidePassage,
+      item,
+    });
   }
   return candidates;
 }
@@ -439,9 +538,82 @@ function batches<T>(items: readonly T[], size: number): T[][] {
   return out;
 }
 
+/** The pending fact a new hold anchor is written with: what `setPendingRevalidation` would set. */
+function pendingFactOf(hold: Hold, since: number): PendingRevalidation {
+  return {
+    sinceContentHash: hold.correction,
+    since,
+    reason: LECTURER_CORRECTION_REASON,
+    raisedBy: hold.raisedBy,
+  };
+}
+
+/**
+ * `ol-zjke.2`: the hold on `key` for a draft's anchor (its draft hold key, or the instrument a draft
+ * became): a new anchor written WITH its fact in one write (the first-sighting baseline of the note
+ * the draft cites, by `citedPassagePath`'s rule), so it is never an anchor without its hold; an
+ * existing anchor gets the fact the way an instrument's does.
+ */
+async function holdDraftAnchor(
+  deps: SlideCorrectionRouteDeps,
+  key: string,
+  draft: DraftRecord,
+  hold: Hold,
+): Promise<void> {
+  if ((await deps.store.loadAll()).has(key)) {
+    await deps.store.setPendingRevalidation(
+      key,
+      hold.correction,
+      deps.clock.now(),
+      LECTURER_CORRECTION_REASON,
+      hold.raisedBy,
+    );
+    return;
+  }
+  const path = draftCitedPassagePath(draft);
+  await deps.store.save(key, {
+    sourcePath: path,
+    text: stripQuestionBlocks(await deps.vault.read(path)),
+    conceptIds: draft.conceptIds,
+    settledBy: codeRule('first-sighting'),
+    pendingRevalidation: pendingFactOf(hold, deps.clock.now()),
+  });
+}
+
+/**
+ * `ol-zjke.2`: holds one pending draft, and returns the key the hold must show under: the draft's
+ * hold key, or the instrument the draft became if it was accepted while this route ran (read again
+ * before and after the key is written; `../generation/accept.ts` reads the key again after its own
+ * write, so whichever of the two runs second sees the other). `undefined`: the draft is gone or was
+ * rejected, so there is nothing to hold.
+ */
+async function holdDraft(
+  deps: SlideCorrectionRouteDeps,
+  drafts: Pick<DraftCacheStore, 'get'>,
+  key: string,
+  draft: DraftRecord,
+  hold: Hold,
+): Promise<string | undefined> {
+  const before = await drafts.get(draft.draftId);
+  if (before === null) return undefined;
+  if (before.status !== 'pending') {
+    if (before.instrumentId === undefined) return undefined;
+    await holdDraftAnchor(deps, before.instrumentId, before, hold);
+    return before.instrumentId;
+  }
+  await holdDraftAnchor(deps, key, before, hold);
+  const after = await drafts.get(draft.draftId);
+  if (after !== null && after.status !== 'pending' && after.instrumentId !== undefined) {
+    await holdDraftAnchor(deps, after.instrumentId, after, hold);
+    return after.instrumentId;
+  }
+  return key;
+}
+
 /** Writes each hold, then reads the store back: a hold counts only once the store shows it. */
 async function writeHolds(
   deps: SlideCorrectionRouteDeps,
+  drafts: Pick<DraftCacheStore, 'get'>,
   holds: ReadonlyMap<string, Hold>,
   report: SlideCorrectionReport,
 ): Promise<void> {
@@ -453,47 +625,56 @@ async function writeHolds(
     console.error('Olea: slide-correction could not read the citation store', errorName(error));
     return;
   }
-  for (const [instrumentId, hold] of holds) {
+  /** The key each hold must show under once written; a draft gone or rejected meanwhile has none. */
+  const shown = new Map<string, Hold>();
+  for (const [key, hold] of holds) {
+    const subject = hold.subject;
+    let target: string | undefined = key;
     try {
-      if (!anchors.has(instrumentId)) {
-        // Drafted since the last citation pass: the anchor that pass's first sighting would write
-        // (whole-note grain; a deck citation carries no passage digest), so the fact has a record.
-        const path = citedPassagePath(hold.record);
-        await deps.store.save(instrumentId, {
-          sourcePath: path,
-          text: stripQuestionBlocks(await deps.vault.read(path)),
-          conceptIds: hold.record.conceptIds,
-          settledBy: codeRule('first-sighting'),
-        });
-        report.anchorsCreated += 1;
+      if (subject.kind === 'draft') {
+        target = await holdDraft(deps, drafts, key, subject.draft, hold);
+      } else {
+        if (!anchors.has(key)) {
+          // Drafted since the last citation pass: the anchor that pass's first sighting would write
+          // (whole-note grain; a deck citation carries no passage digest), so the fact has a record.
+          const path = citedPassagePath(subject.record);
+          await deps.store.save(key, {
+            sourcePath: path,
+            text: stripQuestionBlocks(await deps.vault.read(path)),
+            conceptIds: subject.record.conceptIds,
+            settledBy: codeRule('first-sighting'),
+          });
+          report.anchorsCreated += 1;
+        }
+        await deps.store.setPendingRevalidation(
+          key,
+          hold.correction,
+          deps.clock.now(),
+          LECTURER_CORRECTION_REASON,
+          hold.raisedBy,
+        );
       }
-      await deps.store.setPendingRevalidation(
-        instrumentId,
-        hold.key,
-        deps.clock.now(),
-        LECTURER_CORRECTION_REASON,
-        hold.raisedBy,
-      );
     } catch (error) {
       console.error('Olea: slide-correction hold write failed', errorName(error));
     }
+    if (target !== undefined) shown.set(target, hold);
   }
   let after: ReadonlyMap<string, CitationAnchorRecord>;
   try {
     after = await deps.store.loadAll();
   } catch (error) {
-    report.holdWritesFailed += holds.size;
+    report.holdWritesFailed += shown.size;
     console.error('Olea: slide-correction could not read the holds back', errorName(error));
     return;
   }
-  for (const [instrumentId, hold] of holds) {
-    if (after.get(instrumentId)?.pendingRevalidation?.reason !== LECTURER_CORRECTION_REASON) {
+  for (const [key, hold] of shown) {
+    if (after.get(key)?.pendingRevalidation?.reason !== LECTURER_CORRECTION_REASON) {
       report.holdWritesFailed += 1;
-    } else if (hold.placement === 'yes') {
-      report.heldYes += 1;
-    } else {
-      report.heldUnclear += 1;
+      continue;
     }
+    if (hold.placement === 'yes') report.heldYes += 1;
+    else report.heldUnclear += 1;
+    if (hold.subject.kind === 'draft') report.draftsHeld += 1;
   }
 }
 
@@ -532,7 +713,8 @@ export async function applySlideCorrections(
     return report;
   }
 
-  const candidates = await candidatesOn(deps, decks, report);
+  const drafts = deps.drafts ?? createVaultDraftCacheStore(deps.vault);
+  const candidates = await candidatesOn(deps, drafts, decks, report);
   if (candidates === undefined) return report;
   if (candidates.length === 0) {
     report.unresolved = sites.length;
@@ -580,10 +762,10 @@ export async function applySlideCorrections(
       batch.forEach((candidate, index) => {
         const placement = judgement.placements[index] ?? 'unclear';
         if (placement === 'no') return;
-        const id = candidate.record.instrumentId;
+        const id = candidate.key;
         // Placed on the corrected claim by any judgement wins over "could not place".
         if (holds.get(id)?.placement === 'yes') return;
-        holds.set(id, { record: candidate.record, placement, key, raisedBy });
+        holds.set(id, { subject: candidate.subject, placement, correction: key, raisedBy });
       });
     }
     if (correction) report.judgedCorrection += 1;
@@ -593,7 +775,7 @@ export async function applySlideCorrections(
   if (holds.size > 0) {
     const exclusive = deps.exclusive ?? ((writes: () => Promise<void>) => writes());
     try {
-      await exclusive(() => writeHolds(deps, holds, report));
+      await exclusive(() => writeHolds(deps, drafts, holds, report));
     } catch (error) {
       report.holdWritesFailed += holds.size;
       console.error('Olea: slide-correction hold writes failed', errorName(error));
@@ -609,6 +791,7 @@ function log(report: SlideCorrectionReport): void {
     `Olea: slide-correction route: ${report.cues} cue(s), ${report.calls} call(s), ` +
       `${report.judgedCorrection} judged a correction, ${report.unresolved} unresolved, ` +
       `${report.heldYes} held on the corrected claim, ${report.heldUnclear} held unplaced, ` +
+      `${report.draftsHeld} of them pending draft(s), ` +
       `${report.candidatesWithoutPassage} without a slide passage, ${report.callsFailed} failed call(s)`,
   );
 }

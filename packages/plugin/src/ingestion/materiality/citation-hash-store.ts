@@ -59,6 +59,17 @@
  * non-markdown source (a bare PDF/PPTX/DOCX/image this store cannot diff as
  * text) — this file's own shape (`sourcePath` + `text`) is unchanged either
  * way; only which file the caller reads before saving here has changed.
+ *
+ * **Two key kinds, `ol-zjke.2` (decision sheet v87 row 4, option (a); `[D-473]`, `[D-625]`).** A
+ * key is an instrument id, or a draft hold key ({@link draftHoldKey}): the hold on a pending draft,
+ * not yet an instrument, whose slide claim an attributable, clear lecturer correction invalidates.
+ * The record and its pending fact are the same shape and the same `lecturer-correction` reason as
+ * an instrument's hold; no field or reason value is new. {@link anchorKeyKind} is the one
+ * classifier: every reader that iterates the table asks it before treating a key as an
+ * instrument, and every reader that looks a key up by instrument id can never meet a draft key
+ * (the proof is on {@link DRAFT_HOLD_KEY_PREFIX}). Conversion into an instrument carries the hold
+ * to the instrument id before the instrument exists in her vault ({@link carryDraftHold}), and
+ * only then is the draft key released ({@link releaseDraftHold}).
  */
 
 import type { PersistedStageProducer, VaultPath } from 'olea-core';
@@ -362,6 +373,47 @@ export interface CitationHashStore {
 
 /** The top-level key this store owns inside the plugin's single `data.json` blob — distinct from `MATERIALITY_HASH_STORAGE_KEY`, same blob, same read-modify-write discipline. */
 export const CITATION_ANCHOR_STORAGE_KEY = 'citationRevisionAnchors';
+
+/**
+ * `ol-zjke.2` (decision sheet v87 row 4, option (a)): what a draft hold key starts with. The line
+ * break is the whole proof that no instrument id is ever read as a draft key, or equals one:
+ *  - an explicit multiple-choice `id:` is one line of a fenced block (`olea-core`'s `mcq-format.ts`
+ *    splits the block on `\n` and trims each value), so it never holds a line break;
+ *  - a stamped cloze id is one line of the note's frontmatter map (`frontmatter/map.ts` splits on
+ *    `\r?\n` and trims), so it never holds one either;
+ *  - every other instrument id is minted by `provisionalInstrumentId` (`session/instrument-id.ts`)
+ *    and begins `prov1:`, which this prefix does not;
+ *  - the ids Olea mints for its own items (`mcq-…`, a card's block id, `explain-back:…`) reach the
+ *    table only as one of the three above, read back from her vault.
+ * So an instrument id never begins with this prefix, and a draft key, which always does, is never
+ * an instrument id. Draft ids themselves (a SHA-256 hex digest or a random UUID) carry no line
+ * break, so the draft id is recovered exactly.
+ */
+export const DRAFT_HOLD_KEY_PREFIX = 'draft-hold\n';
+
+/** Which kind of thing an anchor key names (see {@link DRAFT_HOLD_KEY_PREFIX}). */
+export type AnchorKeyKind = 'instrument' | 'draft';
+
+/** The one constructor of a draft hold key. A draft id is never empty (`isDraftRecord`). */
+export function draftHoldKey(draftId: string): string {
+  if (draftId.length === 0) throw new Error('draftHoldKey: a draft id is never empty');
+  return `${DRAFT_HOLD_KEY_PREFIX}${draftId}`;
+}
+
+/**
+ * The one classifier: `'draft'` for every key that begins with {@link DRAFT_HOLD_KEY_PREFIX}
+ * (which no instrument id does), `'instrument'` for every other key.
+ */
+export function anchorKeyKind(key: string): AnchorKeyKind {
+  return key.startsWith(DRAFT_HOLD_KEY_PREFIX) ? 'draft' : 'instrument';
+}
+
+/** The draft id a draft hold key names; `undefined` for an instrument key (or a draft key naming none). */
+export function draftIdOfHoldKey(key: string): string | undefined {
+  if (anchorKeyKind(key) !== 'draft') return undefined;
+  const draftId = key.slice(DRAFT_HOLD_KEY_PREFIX.length);
+  return draftId.length > 0 ? draftId : undefined;
+}
 
 function isPendingRevalidation(value: unknown): value is PendingRevalidation {
   if (typeof value !== 'object' || value === null) return false;
@@ -734,4 +786,94 @@ export class ObsidianCitationHashStore implements CitationHashStore {
       all.get(instrumentId)?.pendingRevalidation?.sinceContentHash === expectedSourceContentHash
     );
   }
+}
+
+/**
+ * `ol-zjke.2`: of `draftIds`, those whose draft hold key carries a pending fact the store confirms
+ * current right now, whatever its reason (as an instrument's anchor withholds whatever its reason).
+ * The same two reads the instrument resolvers make (`session-builder/provider.ts`'s
+ * `resolveCitationPendingRevalidation`), keyed by {@link draftHoldKey}. A store that cannot be read
+ * throws, so a caller never takes an unread store for "nothing held".
+ */
+export async function readHeldDraftIds(
+  store: CitationHashStore,
+  draftIds: readonly string[],
+): Promise<ReadonlySet<string>> {
+  const anchors = await store.loadAll();
+  const held = new Set<string>();
+  for (const draftId of draftIds) {
+    if (draftId.length === 0) continue;
+    const key = draftHoldKey(draftId);
+    const pending = anchors.get(key)?.pendingRevalidation;
+    if (pending === undefined) continue;
+    if (await store.isPendingRevalidationCurrent(key, pending.sinceContentHash)) held.add(draftId);
+  }
+  return held;
+}
+
+/** `ol-zjke.2`: the draft's hold record when the draft is held now, else `undefined`. Throws when the store cannot be read. */
+export async function readDraftHold(
+  store: CitationHashStore,
+  draftId: string,
+): Promise<CitationAnchorRecord | undefined> {
+  const key = draftHoldKey(draftId);
+  const record = (await store.loadAll()).get(key);
+  const pending = record?.pendingRevalidation;
+  if (record === undefined || pending === undefined) return undefined;
+  return (await store.isPendingRevalidationCurrent(key, pending.sinceContentHash))
+    ? record
+    : undefined;
+}
+
+/** A draft's hold did not land on the instrument it is converted into; nothing more may be written for it. */
+export class DraftHoldCarryError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DraftHoldCarryError';
+  }
+}
+
+/**
+ * `ol-zjke.2` (sheet v87 row 4: "conversion into a finished question must preserve the hold
+ * without an unprotected interval"): writes a held draft's hold onto `instrumentId`, then reads the
+ * store back. Called with the instrument id BEFORE anything of the instrument is written to her
+ * vault (`generation/accept.ts`, through the materialisers' `beforeWrite`), so the instrument never
+ * exists without its hold. The record is the draft's own: its anchor text, concept ids and the very
+ * pending fact (the same correction, reason and `raisedBy`). An instrument key that already holds a
+ * pending fact (a retried conversion, or a later hold) is kept as it is: held either way, and a
+ * later write never lifts a hold; one with an anchor and no fact keeps its own baseline and gains
+ * the draft's fact. Throws {@link DraftHoldCarryError} when the hold cannot be read
+ * back, and lets a failed write throw, so the caller writes nothing of the instrument.
+ */
+export async function carryDraftHold(
+  store: CitationHashStore,
+  hold: CitationAnchorRecord,
+  instrumentId: string,
+): Promise<void> {
+  if (anchorKeyKind(instrumentId) !== 'instrument') {
+    throw new DraftHoldCarryError('carryDraftHold: the target is not an instrument key');
+  }
+  if (hold.pendingRevalidation === undefined) {
+    throw new DraftHoldCarryError('carryDraftHold: the draft record carries no hold');
+  }
+  const existing = (await store.loadAll()).get(instrumentId);
+  if (existing === undefined) {
+    await store.save(instrumentId, hold);
+  } else if (existing.pendingRevalidation === undefined) {
+    // An anchor of its own already (its first sighting): keep its baseline, add the draft's fact.
+    await store.save(instrumentId, { ...existing, pendingRevalidation: hold.pendingRevalidation });
+  }
+  if ((await store.loadAll()).get(instrumentId)?.pendingRevalidation === undefined) {
+    throw new DraftHoldCarryError('carryDraftHold: the hold did not land on the instrument');
+  }
+}
+
+/**
+ * `ol-zjke.2`: removes a draft's hold key, once the draft is no longer pending. Never touches an
+ * instrument key, so it never lifts the hold of the instrument the draft became. A key left behind
+ * (a failed removal, a restart before it) is read by nothing: every reader consults a draft key only
+ * for a draft still pending, and every iterating reader skips the draft kind.
+ */
+export async function releaseDraftHold(store: CitationHashStore, draftId: string): Promise<void> {
+  await store.remove(draftHoldKey(draftId));
 }
