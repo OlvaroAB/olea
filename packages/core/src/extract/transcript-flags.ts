@@ -230,17 +230,250 @@ export function reconcileSlideAndSpeech(judgement: {
     : 'unresolved';
 }
 
-const CORRECTION_CUE =
-  /\b(?:correction|mistake|error|typo|wrong|incorrect|misprint)\b[^.!?\n]*\b(?:slide|slides|deck)\b|\b(?:slide|slides|deck)\b[^.!?\n]*\b(?:mistake|error|typo|wrong|incorrect|misprint)\b/i;
+// The cue gate (ol-zjke.1, D-625): a cheap deterministic screen that decides which sentences of a
+// part go to the model that judges whether the lecturer is correcting what a slide, deck, handout
+// or screen says. A sentence it skips is never judged, so it favours recall over call volume and
+// leaves precision to the judge. Word lists cover English and Swedish.
+
+// Unicode-aware word edges (Swedish letters are word characters).
+const CUE_W = (alt: string) => new RegExp(`(?<![\\p{L}\\p{N}])(?:${alt})(?![\\p{L}\\p{N}])`, 'iu');
+
+// Things a lecturer points at (course material and where it is shown).
+const CUE_MEDIUM = CUE_W(
+  [
+    'slides?',
+    'decks?',
+    'handouts?',
+    'screens?',
+    'whiteboard',
+    'blackboard',
+    'board',
+    'powerpoint',
+    'ppt',
+    'presentation',
+    'notes',
+    'lecture notes',
+    'page',
+    'sheet',
+    'worksheet',
+    'textbook',
+    'book',
+    'table',
+    'figure',
+    'equation',
+    'formula',
+    'diagram',
+    'graph',
+    'chart',
+    'axis',
+    'caption',
+    'up there',
+    'up here',
+    'on here',
+    'says here',
+    'it says',
+    'that says',
+    'this says',
+    'reads',
+    'written',
+    'wrote',
+    'printed',
+    'typed',
+    'listed',
+    'shown',
+    'shows',
+    'displayed',
+    'bild',
+    'bilden',
+    'bilder',
+    'bilderna',
+    'sliden',
+    'slidesen',
+    'skärmen',
+    'tavlan',
+    'presentationen',
+    'utdelningen',
+    'kompendiet',
+    'boken',
+    'tabellen',
+    'formeln',
+    'figuren',
+    'diagrammet',
+    'där uppe',
+    'står det',
+    'det står',
+  ].join('|'),
+);
+
+// Explicit error / discrepancy words.
+const CUE_MISTAKE = CUE_W(
+  [
+    'mistakes?',
+    'mistaken',
+    'errors?',
+    'typos?',
+    'misprints?',
+    'wrong',
+    'incorrect(?:ly)?',
+    'inaccurate',
+    'false',
+    'off',
+    'miswrote',
+    'mistyped',
+    'misspoke',
+    'misspelled',
+    'incorrectly',
+    'confusing',
+    'misleading',
+    'bug',
+    'outdated',
+    'fel',
+    'felaktig(?:t|a)?',
+    'felskrivning',
+    'skrivfel',
+    'tryckfel',
+    'felsagt',
+    'missade',
+    'stämmer inte',
+    'inte rätt',
+    'är fel',
+    'blev fel',
+    'föråldrad(?:e|t)?',
+  ].join('|'),
+);
+
+// Correction idioms that are corrections even with no medium named.
+const CUE_STRONG: readonly RegExp[] = [
+  /\b(?:it|that|this|which|they|these|those|there|he|she)\s*(?:'s|is|are|was|were)?\s*(?:really\s+|actually\s+|supposed\s+to|meant\s+to)\s*(?:be|say|read|have\s+been)\b/iu,
+  /\b(?:should|ought\s+to|shoulda|should've|should\s+have)\s+(?:be|read|say|have\s+been|said|been|go)\b/iu,
+  /\bshould\s+(?:actually\s+)?(?:be|read|say)\b/iu,
+  /\b(?:ignore|disregard|forget|skip|never\s+mind|scratch|strike|cross|erase|delete|remove)\s+(?:that|this|it|what|the|those|these|everything|out)\b/iu,
+  /\bcross(?:ed|ing)?\s+(?:that|this|it|them|those)?\s*out\b/iu,
+  /\b(?:strike|scratch)\s+that\b/iu,
+  /\b(?:let\s+me|i'?ll|i\s+need\s+to|i\s+have\s+to|i\s+must|i'?d\s+like\s+to|going\s+to|gonna|want\s+to|just)\s+(?:quickly\s+)?(?:correct|fix|amend|change|rectify|update|revise|redo)\b/iu,
+  /\b(?:correction|correcting|corrected|rectif(?:y|ied)|retract|retraction|erratum)\b/iu,
+  /\bi\s+(?:mis[a-z]+|got\s+(?:that|it|this)\s+wrong|made\s+(?:a|an)\s+\w+|messed\s+up|screwed\s+up|goofed|slipped|misremembered|said\s+(?:it\s+)?wrong|wrote\s+(?:it\s+)?wrong|typed\s+(?:it\s+)?wrong|put\s+(?:it\s+)?wrong)\b/iu,
+  /\b(?:my\s+bad|my\s+mistake|my\s+error|my\s+apologies|apologies|sorry\s+about\s+that|oops|whoops|woops)\b/iu,
+  /\bi\s+meant\b|\bwhat\s+i\s+meant\b|\bwhat\s+i\s+should\s+have\b|\bi\s+should\s+have\s+(?:said|written|put|typed)\b/iu,
+  /\b(?:is|are|was|were)\s+(?:not\s+)?(?:actually|in\s+fact|really)\s+(?:the\s+)?(?:wrong|incorrect|a\s+typo|a\s+mistake|an\s+error)\b/iu,
+  /\b(?:that|this|it|which)\s*(?:'s|is|was)\s+(?:not\s+(?:right|correct|true|quite\s+right)|wrong|incorrect|a\s+(?:typo|mistake|misprint)|an\s+error|off)\b/iu,
+  /\b(?:the\s+)?(?:right|correct)\s+(?:answer|value|number|figure|formula|term|word|one|version|way|name|date|unit|sign)\s+(?:is|would\s+be|should\s+be)\b/iu,
+  /\b(?:is|are|be|read|says?)\s+(?:actually|really)\s+(?:the\s+)?\S/iu,
+  /\bnot\s+[^,.;]{1,40}?[,;]?\s+(?:but|rather|instead)\s+\S/iu,
+  /\binstead\s+of\s+(?:what|that|this|the)\b/iu,
+  /\b(?:replace|swap|change)\s+(?:that|this|it|the|\w+)\s+(?:with|to|by)\b/iu,
+  /\bwhere\s+it\s+(?:says|reads|has)\b/iu,
+  /\bwhat\s+(?:it|that|this|the\s+\w+)\s+(?:says|said|reads|shows)\s+(?:there|here|is|isn't|is\s+not)\b/iu,
+  /\b(?:doesn't|does\s+not|don't|do\s+not|isn't|is\s+not|wasn't|aren't|not)\s+(?:quite\s+)?(?:match|add\s+up|agree|apply|hold|true|right|correct)\b/iu,
+  /\bnot\s+(?:quite\s+)?(?:what|how)\s+(?:i|it|we)\b/iu,
+  // Swedish
+  /(?<![\p{L}\p{N}])(?:ska|borde|bör|skulle)\s+(?:egentligen\s+|alltså\s+|istället\s+)?(?:vara|stå|heta|läsa|ha\s+varit|stått)(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])(?:ignorera|bortse|glöm|stryk|stryka|sudda|stryker|struken|radera|hoppa\s+över)(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])(?:rätta|rättar|rättelse|korrigera|korrigerar|korrigering|justera|ändra|ändrar)(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])jag\s+(?:skrev|sa|sade|sagt|skrivit|råkade|tänkte|menade|slarvade|missade|hade\s+fel|har\s+fel|hade\s+skrivit)\s*(?:fel|att|bara|tokigt)?(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])(?:förlåt|ursäkta|hoppsan|oj\s+då|min\s+miss|mitt\s+fel|det\s+här\s+är\s+fel|det\s+är\s+fel)(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])inte\s+[^,.;]{1,40}?[,;]?\s+(?:utan|snarare)\s+\S/iu,
+  /(?<![\p{L}\p{N}])det\s+(?:stämmer|stämde)\s+(?:inte|ej)(?![\p{L}\p{N}])/iu,
+  /(?<![\p{L}\p{N}])(?:det\s+)?rätta\s+(?:svaret|värdet|talet|ordet)(?![\p{L}\p{N}])/iu,
+];
+
+// Weak cues that count only together with a named medium or a number.
+const CUE_WEAK_DISCREPANCY = CUE_W(
+  [
+    'but',
+    'however',
+    'actually',
+    'in fact',
+    'really',
+    'instead',
+    'rather',
+    'no',
+    'nope',
+    'not',
+    "isn't",
+    'differs?',
+    'different',
+    "doesn't",
+    "don't",
+    'update[ds]?',
+    'old',
+    'previous',
+    'earlier',
+    'version',
+    'men',
+    'egentligen',
+    'faktiskt',
+    'istället',
+    'snarare',
+    'utan',
+    'nej',
+    'inte',
+    'annorlunda',
+    'gammal',
+  ].join('|'),
+);
+
+const CUE_NUMERAL =
+  /\d|\b(?:one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|hundred|thousand|half|percent|ett|två|tre|fyra|fem|sex|sju|åtta|nio|tio|tjugo)\b/iu;
+
+// A sentence that merely points at what the material says, expecting a fix next.
+const CUE_POINTER = CUE_W(
+  'says?|said|reads?|written|wrote|printed|typed|listed|shows?|has|have|put|states?|gives?|står|stod|skrivit|skrev|visar|säger|sa',
+);
+
+// A sentence that opens like a fix for a pointer in the sentence before it.
+const CUE_FIX_OPENER =
+  /^\W*(?:no|nope|but|actually|well|sorry|so|rather|in\s+fact|it|that|this|the\s+(?:right|correct|real)|should|nej|men|egentligen|det|den|ska|alltså|istället)\b/iu;
+
+function cueSignals(t: string) {
+  const medium = CUE_MEDIUM.test(t);
+  const mistake = CUE_MISTAKE.test(t);
+  const strong = CUE_STRONG.some((r) => r.test(t));
+  const weak = CUE_WEAK_DISCREPANCY.test(t);
+  const num = CUE_NUMERAL.test(t);
+  const pointer = medium && CUE_POINTER.test(t);
+  const own =
+    strong ||
+    (medium && mistake) ||
+    (medium && weak && num) ||
+    (mistake && num) ||
+    (pointer && weak);
+  return { medium, mistake, strong, weak, num, pointer, own };
+}
 
 /**
- * Claims that look like the lecturer correcting a slide: a CUE for the model to judge, never a
- * verdict. Whether the correction is attributable and clear is not decided here.
+ * Claims that may be the lecturer correcting a slide: a CUE for the model to judge, never a
+ * verdict. Whether the correction is attributable and clear is not decided here. A sentence
+ * passes on a correction idiom alone, on a named medium with a mistake or discrepancy word, or
+ * as the neighbour of such a sentence when the fix is spread over two.
  */
 export function slideCorrectionCues(
   text: string,
 ): readonly { start: number; end: number; text: string }[] {
-  return claimSpans(text)
-    .map(({ start, end }) => ({ start, end, text: text.slice(start, end) }))
-    .filter((c) => CORRECTION_CUE.test(c.text));
+  const spans = claimSpans(text);
+  const info = spans.map((s) => cueSignals(text.slice(s.start, s.end)));
+  const pass: boolean[] = new Array(spans.length).fill(false);
+  for (let i = 0; i < spans.length; i++) {
+    const here = info[i] as ReturnType<typeof cueSignals>;
+    const prev = info[i - 1];
+    const next = info[i + 1];
+    const nextSpan = spans[i + 1];
+    if (here.own) pass[i] = true;
+    // Two-sentence correction: a pointer or a bare mistake claim hands the fix to the next sentence.
+    if ((here.medium || here.mistake || here.strong) && next && nextSpan) {
+      const nextText = text.slice(nextSpan.start, nextSpan.end);
+      const numericFix = here.pointer && CUE_NUMERAL.test(nextText);
+      if (CUE_FIX_OPENER.test(nextText) || next.weak || numericFix) pass[i + 1] = true;
+    }
+    // Reverse: the fix comes first and the pointer after.
+    if (here.pointer && prev && (prev.strong || prev.weak)) {
+      pass[i - 1] = true;
+      if (prev.strong) pass[i] = true;
+    }
+    // A bare mistake claim with no medium points at the sentence before it.
+    if (here.strong && !here.medium && here.mistake && prev?.medium) pass[i - 1] = true;
+  }
+  return spans
+    .filter((_, i) => pass[i])
+    .map(({ start, end }) => ({ start, end, text: text.slice(start, end) }));
 }
