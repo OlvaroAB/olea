@@ -23,6 +23,7 @@ import {
   createVaultSuspendPort,
 } from '../../src/review/ports.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
+import { currentInputNotes } from '../generation/input-notes-fixture.js';
 import { memoryVault } from './memory-vault.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -121,7 +122,10 @@ async function open(
   chosen: boolean,
 ): Promise<Opened> {
   const cache = createVaultDraftCacheStore(v);
-  for (const record of drafts) await cache.put(record);
+  // `ol-egov.141.89.2.39` ([D-628]): each draft records the note it was drawn from, as one drafted
+  // today does; unchanged here, so it is presented.
+  const inputNotes = await currentInputNotes(v, 'Courses/TEST101/Week two.md');
+  for (const record of drafts) await cache.put({ ...record, inputNotes });
   const holder = createStudySessionHolder();
   const session = await composedFor(v);
   if (!chosen) (session.model as unknown as { items: unknown[] }).items = [];

@@ -49,10 +49,27 @@ import {
   type DeclaredMadeBy,
   type SourceMarkerOrigin,
   sourceMarkerOrigin,
+  sourceMarkerText,
 } from './bulk-review-copy.js';
 import type { DraftCacheStore } from './cache-store.js';
 import { basenameWithoutExtension } from './review-adapter.js';
 import type { DraftQuestion, DraftRecord } from './types.js';
+
+/**
+ * `[D-626]`/`[D-628]` (functional scope F3.3, "The origin named is the note the draft was actually
+ * drawn from"; vocabulary registry §34): what a clearing row shows as where a draft came from.
+ *  - `line`: a draft drawn from one note — the source line naming that note (`sourceMarkerText`, in
+ *    the register its kind and her declaration give). A draft recorded before input notes were keeps
+ *    the line its citation gave.
+ *  - `sources`: a draft drawn from several notes — the "Sources" label, expanding to one link per
+ *    note with the note's title. No one of them is shown as the sole source.
+ */
+export type BulkReviewOrigin =
+  | { readonly kind: 'line'; readonly text: string }
+  | {
+      readonly kind: 'sources';
+      readonly notes: readonly { readonly path: string; readonly title: string }[];
+    };
 
 /**
  * The slice of `review/ports.ts`'s `EditPort` this controller actually
@@ -104,6 +121,11 @@ export interface BulkReviewItemViewModel {
    * its back (shown beneath the front, with no "correct" mark) and `distractors` is empty.
    */
   readonly itemType: 'mcq' | 'qa';
+  /**
+   * `[D-628]`: this draft's own origin, present only when the drafts of its group do not all share
+   * one (the group's `origin` is then absent), so no draft is shown a note it was not drawn from.
+   */
+  readonly origin?: BulkReviewOrigin;
 }
 
 export interface BulkReviewGroupViewModel {
@@ -132,6 +154,12 @@ export interface BulkReviewGroupViewModel {
    * she wrote.
    */
   readonly sourceMarkerNoteTitle: string;
+  /**
+   * `[D-628]` (`ol-egov.141.89.2.39`): the origin every draft in this group shares, shown once for
+   * the group — the source line for one note, the "Sources" list for several. Absent when the
+   * drafts' origins differ; each item then carries its own (`BulkReviewItemViewModel.origin`).
+   */
+  readonly origin?: BulkReviewOrigin;
   readonly items: readonly BulkReviewItemViewModel[];
 }
 
@@ -209,27 +237,27 @@ export function buildBulkReviewGroups(
     const first = sorted[0];
     if (first === undefined) continue; // unreachable — bySourcePath never holds an empty list
     const noteTitle = basenameWithoutExtension(sourcePath);
-    // `[D-214]` / `ol-ymew`: origin is derived from the group's oldest
-    // item's citation, the same "first" convention `courseCode` above
-    // already uses for a per-group aggregate — see `sourceMarkerOrigin`'s
-    // own doc for why this is a construction-guaranteed signal, not a
-    // filename guess.
-    const citationPath = first.sourceCitation?.sourcePath;
-    const origin = sourceMarkerOrigin(
-      citationPath,
-      citationPath === undefined ? undefined : madeByFor?.(citationPath),
-    );
-    const sourceMarkerNoteTitle =
-      origin !== 'reading' && first.sourceCitation !== undefined
-        ? basenameWithoutExtension(first.sourceCitation.sourcePath)
-        : noteTitle;
+    // `[D-214]` / `ol-ymew`: the register and title of the group's oldest item's source line, the
+    // same "first" convention `courseCode` above already uses for a per-group aggregate — see
+    // `sourceMarkerOrigin`'s own doc for why this is a construction-guaranteed signal, not a
+    // filename guess. `[D-626]`: for a draft drawn from one note, that note.
+    const marker = sourceMarkerOf(first, noteTitle, madeByFor);
+    // `[D-628]`: each draft's origin; shown once for the group when every draft shares it, and per
+    // draft otherwise.
+    const origins = sorted.map((record) => draftOrigin(record, noteTitle, madeByFor));
+    const shared = origins.every((origin) => originKey(origin) === originKey(origins[0]));
     groups.push({
       sourcePath,
       noteTitle,
       courseCode: first.courseCode,
-      sourceMarkerOrigin: origin,
-      sourceMarkerNoteTitle,
-      items: sorted.map(toItemViewModel),
+      sourceMarkerOrigin: marker.origin,
+      sourceMarkerNoteTitle: marker.noteTitle,
+      ...(shared && origins[0] !== undefined ? { origin: origins[0] } : {}),
+      items: sorted.map((record, index) => {
+        const item = toItemViewModel(record);
+        const origin = origins[index];
+        return shared || origin === undefined ? item : { ...item, origin };
+      }),
     });
   }
 
@@ -242,6 +270,64 @@ export function buildBulkReviewGroups(
 }
 
 /**
+ * The register and title of one draft's source line (`[D-214]`, `[D-216]`, `[D-489]`). A draft drawn
+ * from one note names that note (`[D-626]`); otherwise its citation decides, as it always did: a
+ * note's own title for the two note registers, and the group's note title for a reading.
+ */
+function sourceMarkerOf(
+  record: DraftRecord,
+  groupNoteTitle: string,
+  madeByFor: BulkReviewMadeByLookup | undefined,
+): { readonly origin: SourceMarkerOrigin; readonly noteTitle: string } {
+  const only = record.inputNotes?.length === 1 ? record.inputNotes[0] : undefined;
+  if (only !== undefined) {
+    return {
+      origin: sourceMarkerOrigin(only.path, madeByFor?.(only.path)),
+      noteTitle: basenameWithoutExtension(only.path),
+    };
+  }
+  const citationPath = record.sourceCitation?.sourcePath;
+  const origin = sourceMarkerOrigin(
+    citationPath,
+    citationPath === undefined ? undefined : madeByFor?.(citationPath),
+  );
+  return {
+    origin,
+    noteTitle:
+      origin !== 'reading' && citationPath !== undefined
+        ? basenameWithoutExtension(citationPath)
+        : groupNoteTitle,
+  };
+}
+
+/**
+ * `[D-626]`/`[D-628]`: one draft's origin — the "Sources" list when it was drawn from several notes
+ * (in the order they were recorded, which is retrieval order), otherwise its source line.
+ */
+function draftOrigin(
+  record: DraftRecord,
+  groupNoteTitle: string,
+  madeByFor: BulkReviewMadeByLookup | undefined,
+): BulkReviewOrigin {
+  const notes = record.inputNotes;
+  if (notes !== undefined && notes.length > 1) {
+    return {
+      kind: 'sources',
+      notes: notes.map((note) => ({ path: note.path, title: basenameWithoutExtension(note.path) })),
+    };
+  }
+  const marker = sourceMarkerOf(record, groupNoteTitle, madeByFor);
+  return { kind: 'line', text: sourceMarkerText(marker.noteTitle, marker.origin) };
+}
+
+/** Two origins are one when they show the same line, or list the same notes (in any order). */
+function originKey(origin: BulkReviewOrigin | undefined): string {
+  if (origin === undefined) return '';
+  if (origin.kind === 'line') return `line\u0000${origin.text}`;
+  return `sources\u0000${[...origin.notes.map((note) => note.path)].sort().join('\u0000')}`;
+}
+
+/**
  * Her `made-by` declaration for a note path (core's `parseMadeBy` over cached frontmatter), or
  * `undefined` when undeclared or invalid. `[D-489]`: only `'me'` lets the source line say she wrote it.
  */
@@ -250,6 +336,14 @@ export type BulkReviewMadeByLookup = (notePath: string) => DeclaredMadeBy | unde
 export interface BulkReviewControllerDeps {
   /** Omitted, every note she keeps reads "From your notes" (no declaration known). */
   readonly madeByFor?: BulkReviewMadeByLookup;
+  /**
+   * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): whether a pending draft may be shown — every note it
+   * was drawn from still reads as it did when drafted (`input-notes.ts`'s `draftInputNotesHold`,
+   * which reads a draft recorded before input notes were as not established). A draft it refuses is
+   * withheld from the list, as it is from a review session. Omitted (a test, the workbench), every
+   * pending draft is listed; accepting one still goes through the same guard (`accept.ts`).
+   */
+  readonly holds?: (record: DraftRecord) => Promise<boolean>;
   readonly cache: DraftCacheStore;
   readonly acceptPort: DraftAcceptPort;
   readonly editPort: BulkReviewEditPort;
@@ -272,7 +366,22 @@ export class BulkReviewController {
    * when the tab first opened.
    */
   async load(): Promise<void> {
-    this.records = [...(await this.deps.cache.listPending())];
+    const pending = await this.deps.cache.listPending();
+    const holds = this.deps.holds;
+    if (holds === undefined) {
+      this.records = [...pending];
+      return;
+    }
+    const shown = await Promise.all(
+      pending.map(async (record) => {
+        try {
+          return await holds(record);
+        } catch {
+          return false;
+        }
+      }),
+    );
+    this.records = pending.filter((_, index) => shown[index] === true);
   }
 
   getViewModel(): BulkReviewViewModel {

@@ -344,6 +344,7 @@ import { draftCardsForConcept } from './draft-cards.js';
 import type { DraftedDemandCarry } from './draft-demand.js';
 import { withGroundingPassage } from './grounding-passage.js';
 import { hashSourceRevision } from './home-note.js';
+import { type InputNote, inputNoteFingerprint, mergeInputNotes } from './input-notes.js';
 import {
   demandRoutingCounterFor,
   draftDemandForQuestion,
@@ -755,12 +756,22 @@ type SuccessorDraftOutcome<TContent> =
   | { readonly kind: 'refused'; readonly reason: GroundingRefusalReason }
   /** Unparseable or empty reply: retried under `REVISION_EMPTY_DRAFT_MAX_ATTEMPTS`, then a recorded failure. */
   | { readonly kind: 'empty-draft' }
+  /** `[D-628]`: a note that supplied a retrieved chunk was edited since it was last indexed; nothing was sent. */
+  | { readonly kind: 'input-changed' }
   | {
       readonly kind: 'drafted';
       readonly contents: readonly TContent[];
       readonly provenance: DraftProvenance;
       /** `[D-437]`: what the request carried and the response returned about demand, split per item by position. */
       readonly demand: DraftedDemandCarry;
+      /**
+       * `[D-628]` (`ol-egov.141.89.2.39`): the retrieved chunks the request carried before the
+       * passage was put first (`withPassageTransport`), and the notes they came from.
+       */
+      readonly drawnFrom: {
+        readonly sourceChunks: readonly string[];
+        readonly inputNotes?: readonly InputNote[];
+      };
     };
 
 /**
@@ -832,6 +843,7 @@ async function draftMcqSuccessor(
     // owns not pretending one is the other.
     return { kind: 'refused', reason: result.reason };
   }
+  if (result.status === 'input-changed') return { kind: 'input-changed' };
 
   const questions = extractDraftedQuestions(result.response);
   const provenance = extractDraftedProvenance(result.response);
@@ -845,7 +857,59 @@ async function draftMcqSuccessor(
     contents: questions,
     provenance,
     demand: draftedDemandCarryOf(result.request, result.response),
+    drawnFrom: drawnFromOf(result),
   };
+}
+
+/** `[D-628]`: the part of a drafted result a successor's input notes and citation are read from. */
+function drawnFromOf(result: {
+  readonly request: { readonly sourceChunks: readonly string[] };
+  readonly inputNotes?: readonly InputNote[];
+}): Extract<SuccessorDraftOutcome<unknown>, { kind: 'drafted' }>['drawnFrom'] {
+  return {
+    sourceChunks: result.request.sourceChunks,
+    ...(result.inputNotes === undefined ? {} : { inputNotes: result.inputNotes }),
+  };
+}
+
+/**
+ * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): a successor's input notes and the citation it keeps.
+ * Its request carries the passage it is rewritten from (put first by `withPassageTransport`, unless
+ * a retrieved chunk already reads the same) and the retrieved chunks, so its input notes are the
+ * passage's note (fingerprinted as it stands, `passageNote`) and every note a retrieved chunk came
+ * from. A passage digest is kept only when the request supplied exactly one chunk and that one
+ * note is the one the citation names (C5.3: the single-passage case); any other successor is
+ * protected at whole-note grain by every input note, so a digest the citation was given is dropped.
+ * With no input notes reported (a drafting call made without the vault), nothing is recorded and
+ * the citation is returned as it came.
+ */
+function successorProvenance(
+  drawnFrom: Extract<SuccessorDraftOutcome<unknown>, { kind: 'drafted' }>['drawnFrom'],
+  passage: string,
+  passageNote: InputNote | undefined,
+  citation: InstrumentCitation | undefined,
+): { readonly inputNotes?: readonly InputNote[]; readonly citation?: InstrumentCitation } {
+  if (drawnFrom.inputNotes === undefined) {
+    return citation === undefined ? {} : { citation };
+  }
+  const sent = stripOleaFrontmatter(passage);
+  const passageSent = sent.trim().length > 0 && !drawnFrom.sourceChunks.includes(sent);
+  const inputNotes = mergeInputNotes(
+    passageSent && passageNote !== undefined ? [passageNote] : [],
+    drawnFrom.inputNotes,
+  );
+  const suppliedChunks = drawnFrom.sourceChunks.length + (passageSent ? 1 : 0);
+  const singlePassage =
+    suppliedChunks === 1 &&
+    inputNotes.length === 1 &&
+    citation !== undefined &&
+    inputNotes[0]?.path === citation.sourcePath;
+  let kept = citation;
+  if (citation?.passageDigest !== undefined && !singlePassage) {
+    const { passageDigest: _dropped, ...rest } = citation;
+    kept = rest;
+  }
+  return { inputNotes, ...(kept === undefined ? {} : { citation: kept }) };
 }
 
 /**
@@ -877,6 +941,7 @@ async function draftQaSuccessor(
   if (result.status === 'refused') {
     return { kind: 'refused', reason: result.reason };
   }
+  if (result.status === 'input-changed') return { kind: 'input-changed' };
 
   const cards = extractDraftedCards(result.response);
   const provenance = extractDraftedCardsProvenance(result.response);
@@ -889,6 +954,7 @@ async function draftQaSuccessor(
     contents: cards,
     provenance,
     demand: extractDraftedCardDemand(result.request, result.response),
+    drawnFrom: drawnFromOf(result),
   };
 }
 
@@ -1268,6 +1334,9 @@ function undraftedOutcome(
   switch (drafted.kind) {
     case 'thrown':
       return unreachable ? NOT_ATTEMPTED : { ok: false, retryable: true };
+    case 'input-changed':
+      // `[D-628]`: nothing was sent; the job waits uncounted until the index has caught up.
+      return NOT_ATTEMPTED;
     case 'empty-draft':
       return emptyDraftOutcome(payload, attempts);
     case 'refused':
@@ -1362,6 +1431,15 @@ export async function runInstrumentRevisionJob(
     await askForSourceTextOnce(deps, payload, source, attempts);
     return sourceTextWaitOutcome(payload, attempts);
   }
+  // `[D-628]`: the note the passage is read from, fingerprinted as it stands before drafting (the
+  // passage was just read from it): the predecessor's cited source, or its own note when it cited
+  // none apart from it.
+  const passagePath = source.citation?.sourcePath ?? target.sourcePath;
+  const passageFingerprint = await inputNoteFingerprint(deps.vault, passagePath);
+  const passageNote: InputNote | undefined =
+    passageFingerprint === undefined
+      ? undefined
+      : { path: passagePath, contentHash: passageFingerprint };
 
   if (target.instrumentType === 'qa') {
     // `ol-egov.141.89.5.92` ([D-508], [D-541]): defaults to the real `draftCardsForConcept`, as the
@@ -1397,7 +1475,15 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
-    const sourceCitation = source.citation;
+    // `[D-626]`/`[D-628]`: the successor's input notes, and the citation it keeps.
+    const provenanceOf = successorProvenance(
+      drafted.drawnFrom,
+      source.passage,
+      passageNote,
+      source.citation,
+    );
+    const sourceCitation = provenanceOf.citation;
+    const inputNotes = provenanceOf.inputNotes;
     let cachedCount = 0;
     for (const [index, card] of drafted.contents.entries()) {
       // `[D-437]`: an item declaring a different demand than the one asked is an invalid draft:
@@ -1417,6 +1503,7 @@ export async function runInstrumentRevisionJob(
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
         ...(sourceCitation === undefined ? {} : { sourceCitation }),
+        ...(inputNotes === undefined || inputNotes.length === 0 ? {} : { inputNotes }),
         card,
         provenance: drafted.provenance,
         firstServedAt: null,
@@ -1467,7 +1554,15 @@ export async function runInstrumentRevisionJob(
 
     const createdAt = now().toISOString();
     const sourceContentHash = await sourceContentHashOf(deps.vault, target.sourcePath);
-    const sourceCitation = source.citation;
+    // `[D-626]`/`[D-628]`: the successor's input notes, and the citation it keeps.
+    const provenanceOf = successorProvenance(
+      drafted.drawnFrom,
+      source.passage,
+      passageNote,
+      source.citation,
+    );
+    const sourceCitation = provenanceOf.citation;
+    const inputNotes = provenanceOf.inputNotes;
     let cachedCount = 0;
     for (const [index, question] of drafted.contents.entries()) {
       // `[D-437]`: see the cards loop above.
@@ -1486,6 +1581,7 @@ export async function runInstrumentRevisionJob(
         createdAt,
         ...(sourceContentHash === undefined ? {} : { sourceContentHash }),
         ...(sourceCitation === undefined ? {} : { sourceCitation }),
+        ...(inputNotes === undefined || inputNotes.length === 0 ? {} : { inputNotes }),
         question,
         provenance: drafted.provenance,
         firstServedAt: null,

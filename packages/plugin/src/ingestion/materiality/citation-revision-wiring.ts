@@ -273,6 +273,24 @@
  * (`ol-egov.141.89.5.107`, {@link citedSourceNowFrom}).
  *
  * Omitted (tests only), these instruments keep the bytes handling above.
+ *
+ * ===========================================================================
+ * `[D-626]`/`[D-628]` — EVERY NOTE A DRAFTED ITEM WAS DRAWN FROM (`ol-egov.141.89.2.39`)
+ * ===========================================================================
+ * A drafted item's citation record lists its input notes, each with the fingerprint of the material
+ * supplied when it was drafted (`generation/input-notes.ts`). The anchor above follows one note (the
+ * cited note, or the home note for a binary source); every OTHER input note is read here on every
+ * pass and compared by fingerprint. A change to any of them past the code's free exits (a
+ * formatting-only edit and a question block added leave the fingerprint equal), or a note gone, is
+ * routed as a change to the cited note is at whole-note grain (C5.3): the question is withheld (a
+ * pending fact, rule `input-note-changed`) and rewritten from its cited note as it stands (the same
+ * enqueue-then-suspend {@link CitationRevisionTrigger.suspendAndEnqueueSuccessor}, decided by rule
+ * `input-note-rewrite`). There is no judge call: the anchor holds no old text for those notes, and
+ * C5.3 rewrites a change past the free exits whatever the read answers. At first sighting every
+ * input note is compared, the cited one included, so a change made between drafting and the first
+ * pass is never adopted as the baseline. An item Olea drafted through a draft record before input
+ * notes were recorded (its provenance read from the draft cache) is routed the same way, under rule
+ * `input-notes-unrecorded`: no such record can show the material it rests on.
  */
 
 import type { ReviewLogEntry } from 'olea-contracts';
@@ -303,6 +321,7 @@ import {
   type RevisionJudgePort,
   type RevisionJudgeVerdict,
   readInstrumentCitation,
+  readInstrumentCitationRecord,
   readReviewLogHistory,
   renameCitationSourcePath,
   suspendedInstrumentIds,
@@ -311,6 +330,7 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { createVaultDraftCacheStore } from '../../generation/cache-store.js';
+import { changedInputNotes, inputNoteFingerprint } from '../../generation/input-notes.js';
 import type { CitedSourceNow } from '../../generation/revision-job-runner.js';
 import { canonicalizeForMateriality } from './canonical.js';
 import type {
@@ -454,6 +474,12 @@ export interface CitationRevisionTickReport {
    * withheld with {@link SOURCE_REVISION_REASON}.
    */
   readonly sourceBytesChanged: number;
+  /**
+   * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): a drafted question routed to the rewrite because a
+   * note it was drawn from (other than the one its anchor already follows) changed past the code's
+   * free exits, or because it was drafted through a draft record before input notes were recorded.
+   */
+  readonly inputNotesRouted: number;
 }
 
 /**
@@ -681,6 +707,7 @@ interface MutableTickReport {
   passageSeedUnresolved: number;
   successorEnqueueFailed: number;
   sourceBytesChanged: number;
+  inputNotesRouted: number;
 }
 
 /** A zeroed report. */
@@ -704,6 +731,7 @@ function blankTickReport(): MutableTickReport {
     passageSeedUnresolved: 0,
     successorEnqueueFailed: 0,
     sourceBytesChanged: 0,
+    inputNotesRouted: 0,
   };
 }
 
@@ -980,6 +1008,38 @@ export class CitationRevisionTrigger {
       rejectedInstrumentIds = new Set();
     }
 
+    // `[D-628]` (`ol-egov.141.89.2.39`): the kept items Olea drafted through a draft record, by
+    // provenance (an accepted or edited record names the instrument it became). A cache that cannot
+    // be read leaves this empty: no item is then routed for lacking input notes, and the session's
+    // own presentation check still reads the cache before showing one.
+    let draftedInstrumentIds: ReadonlySet<string> = new Set();
+    try {
+      draftedInstrumentIds = new Set(
+        (await createVaultDraftCacheStore(vault).list()).flatMap((record) =>
+          (record.status === 'accepted' || record.status === 'edited') &&
+          record.instrumentId !== undefined
+            ? [record.instrumentId]
+            : [],
+        ),
+      );
+    } catch (error) {
+      console.error(
+        'Olea: citation-revision could not read the draft cache',
+        error instanceof Error ? error.name : 'unknown',
+      );
+    }
+
+    // `[D-628]`: each input note's fingerprint read at most once per pass, however many items share it.
+    const fingerprints = new Map<VaultPath, Promise<string | undefined>>();
+    const fingerprintOf = (path: VaultPath): Promise<string | undefined> => {
+      let fingerprint = fingerprints.get(path);
+      if (fingerprint === undefined) {
+        fingerprint = inputNoteFingerprint(vault, path);
+        fingerprints.set(path, fingerprint);
+      }
+      return fingerprint;
+    };
+
     const judgeCalls: Array<() => Promise<void>> = [];
     for (const [instrumentId, previous] of stored) {
       // `ol-egov.141.89.2.14`: a standing rejection wins over every other check this loop makes
@@ -1026,6 +1086,23 @@ export class CitationRevisionTrigger {
       }
 
       const currentRecord = currentByInstrumentId.get(instrumentId);
+      // `[D-626]`/`[D-628]`: every input note the anchor does not already follow, before anything
+      // else reads the item — see this module's section.
+      if (
+        currentRecord !== undefined &&
+        (await this.routeIfInputNotesChanged(
+          vault,
+          currentRecord,
+          previous,
+          draftedInstrumentIds,
+          materialFor,
+          fingerprintOf,
+          actions,
+          report,
+        ))
+      ) {
+        continue;
+      }
       // `ol-egov.141.89.5.43`: a transcript-grounded instrument is followed at part grain, by its
       // passage's text, when that grain is on; the bytes path below never sees it.
       const transcriptPath =
@@ -1393,6 +1470,22 @@ export class CitationRevisionTrigger {
       // as one rewritten before `ol-egov.141.89.9.98` kept the record, would re-raise a hold and
       // suspend it again every pass).
       if (suspendedIds.has(instrumentId)) continue;
+      // `[D-626]`/`[D-628]`: at first sighting every input note is compared, the cited one included,
+      // so a change made since drafting is routed rather than adopted as the baseline.
+      if (
+        await this.routeIfInputNotesChanged(
+          vault,
+          record,
+          undefined,
+          draftedInstrumentIds,
+          materialFor,
+          fingerprintOf,
+          actions,
+          report,
+        )
+      ) {
+        continue;
+      }
       try {
         // `ol-egov.141.89.5.43`: a transcript-grounded instrument is seeded at its cited part, and
         // only from the version its citation was drafted from (PERSISTENCE 2.9); never by the
@@ -1469,6 +1562,107 @@ export class CitationRevisionTrigger {
     }
 
     return report;
+  }
+
+  /**
+   * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): routes one drafted question whose input notes no
+   * longer support it — see this module's section. `previous` is its anchor, or `undefined` at first
+   * sighting. With an anchor, the notes it already follows (its own path, the cited note, the cited
+   * source) are left to it; at first sighting every input note is compared. Returns `true` when the
+   * question was routed (the caller then leaves it for this pass), `false` when nothing applies.
+   *
+   * Routed means: an anchor is saved for it if it has none (its cited note's material as it stands,
+   * first-sighting rule) so the hold has a record to attach to; the hold is raised (rule
+   * `input-note-changed`, or `input-notes-unrecorded` for an item drafted before input notes were),
+   * keyed to the changed notes and the cited material; and the rewrite is enqueued, then the question
+   * suspended, through the shared {@link suspendAndEnqueueSuccessor}, its successor drafted from the
+   * cited note as it stands. A failure is logged and the question stays withheld by its hold.
+   */
+  private async routeIfInputNotesChanged(
+    vault: VaultSource,
+    record: VaultInstrumentRecord,
+    previous: CitationAnchorRecord | undefined,
+    draftedInstrumentIds: ReadonlySet<string>,
+    materialFor: (path: VaultPath) => Promise<string>,
+    fingerprintOf: (path: VaultPath) => Promise<string | undefined>,
+    actions: CitationRevisionActions,
+    report: MutableTickReport,
+  ): Promise<boolean> {
+    const instrumentId = record.instrumentId;
+    let rule: 'input-note-changed' | 'input-notes-unrecorded';
+    let changedKey: string;
+    try {
+      const citation = await readInstrumentCitationRecord(vault, instrumentId);
+      const notes = citation?.inputNotes;
+      if (notes === undefined) {
+        if (!draftedInstrumentIds.has(instrumentId)) return false;
+        rule = 'input-notes-unrecorded';
+        changedKey = 'unrecorded';
+      } else {
+        const followed = new Set<string>();
+        if (previous !== undefined) {
+          followed.add(previous.sourcePath);
+          followed.add(citedPassagePath(record));
+          const cited = record.sourceProvenance?.sourcePath;
+          if (cited !== undefined) followed.add(cited);
+        }
+        const changed = await changedInputNotes(vault, notes, followed, fingerprintOf);
+        if (changed.length === 0) return false;
+        rule = 'input-note-changed';
+        changedKey = changed.map((note) => note.path).join('\n');
+      }
+    } catch (error) {
+      console.error('Olea: citation-revision input-note read failed', errorName(error));
+      return false;
+    }
+
+    report.inputNotesRouted += 1;
+    try {
+      const citedPath = citedPassagePath(record);
+      let text = '';
+      try {
+        text = await materialFor(citedPath);
+      } catch {
+        // The cited note cannot be read: the question is still withheld, and its successor is
+        // drafted from whatever the rewrite job finds there.
+      }
+      if (previous === undefined) {
+        await this.deps.store.save(instrumentId, {
+          sourcePath: citedPath,
+          text,
+          conceptIds: record.conceptIds,
+          settledBy: codeRule('first-sighting'),
+        });
+      }
+      const judgedContentHash = await hashText(`${rule}\n${changedKey}\n${text}`);
+      await this.deps.store.setPendingRevalidation(
+        instrumentId,
+        judgedContentHash,
+        this.deps.clock.now(),
+        undefined,
+        codeRule(rule),
+      );
+      const event: RevisionEvent = {
+        instrumentId,
+        at: this.deps.clock.now(),
+        oldContentHash: await hashText(previous?.text ?? ''),
+        newContentHash: judgedContentHash,
+        change: rule,
+      };
+      await this.suspendAndEnqueueSuccessor(
+        instrumentId,
+        record.conceptIds,
+        judgedContentHash,
+        instrumentId,
+        buildSuccessorRevisionEnqueueInput(event, text),
+        actions,
+        report,
+        codeRule('input-note-rewrite'),
+      );
+    } catch (error) {
+      console.error('Olea: citation-revision input-note route failed', errorName(error));
+    }
+    return true;
   }
 
   /**
@@ -1865,6 +2059,10 @@ export class CitationRevisionTrigger {
    * this session extracted from the file moves with it. Followed only when both paths are such files
    * and the file stands at `newPath`; a file that becomes a note or a transcript by its new name is
    * not the same kind of source, and its questions are withheld as before.
+   *
+   * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): whatever the file's kind, every drafted question
+   * and pending draft whose input notes name `oldPath` follows it too ({@link moveInputNotes}), so a
+   * rename alone never withholds an item drawn from that note.
    */
   async onSourceRenamed(
     vault: VaultSource,
@@ -1872,6 +2070,78 @@ export class CitationRevisionTrigger {
     newPath: VaultPath,
   ): Promise<number> {
     if (oldPath === newPath) return 0;
+    const moved = await this.followRenameByKind(vault, oldPath, newPath);
+    return moved + (await this.moveInputNotes(vault, oldPath, newPath));
+  }
+
+  /**
+   * `[D-626]`/`[D-628]`, `[D-576]` (`ol-egov.141.89.2.39`): a rename Olea saw of a note some drafted
+   * item was drawn from. Each citation record whose input notes name `oldPath` has that entry, and
+   * its cited path if that is `oldPath` too, moved to `newPath` through the citation store's path-only
+   * call (`renameCitationSourcePath`, fingerprints and every other field kept), and its anchor follows
+   * when it last saw the note at `oldPath`. Each pending draft whose input notes name it has the same
+   * done through the draft cache's `put` (input-note paths, and its cited path when that is
+   * `oldPath`; nothing else on the record touched). Nothing is read from the note itself: the
+   * fingerprint describes its content, which a rename does not change. A rename that changes the
+   * file's kind (by its extension) is not followed, as `[D-576]` rules for a cited file. Returns how
+   * many records moved; a failure is logged and leaves the rest as they were.
+   */
+  private async moveInputNotes(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
+    // `[D-576]`: a file that becomes another kind of source by its new name (a slide deck renamed
+    // to a note, a note to a transcript) is not the same source, and is not followed.
+    if (
+      isMarkdownVaultPath(oldPath) !== isMarkdownVaultPath(newPath) ||
+      hasTranscriptExtension(oldPath) !== hasTranscriptExtension(newPath)
+    ) {
+      return 0;
+    }
+    let moved = 0;
+    try {
+      const { records } = await enumerateVaultInstruments(vault);
+      const anchors = await this.deps.store.loadAll();
+      for (const record of records) {
+        const citation = await readInstrumentCitationRecord(vault, record.instrumentId);
+        if (citation?.inputNotes?.some((note) => note.path === oldPath) !== true) continue;
+        if (!(await renameCitationSourcePath(vault, record.instrumentId, oldPath, newPath)))
+          continue;
+        moved += 1;
+        const anchor = anchors.get(record.instrumentId);
+        if (anchor !== undefined && anchor.sourcePath === oldPath) {
+          await this.deps.store.save(record.instrumentId, { ...anchor, sourcePath: newPath });
+        }
+      }
+      const cache = createVaultDraftCacheStore(vault);
+      for (const draft of await cache.listPending()) {
+        const notes = draft.inputNotes;
+        if (notes?.some((note) => note.path === oldPath) !== true) continue;
+        const citation = draft.sourceCitation;
+        await cache.put({
+          ...draft,
+          inputNotes: notes.map((note) =>
+            note.path === oldPath ? { ...note, path: newPath } : note,
+          ),
+          ...(citation !== undefined && citation.sourcePath === oldPath
+            ? { sourceCitation: { ...citation, sourcePath: newPath } }
+            : {}),
+        });
+        moved += 1;
+      }
+    } catch (error) {
+      console.error('Olea: citation-revision input-note rename write failed', errorName(error));
+    }
+    return moved;
+  }
+
+  /** `onSourceRenamed`'s moves by the file's kind, as they stood before `[D-628]` — see its doc. */
+  private async followRenameByKind(
+    vault: VaultSource,
+    oldPath: VaultPath,
+    newPath: VaultPath,
+  ): Promise<number> {
     if (isCitedFilePath(oldPath) && isCitedFilePath(newPath)) {
       return (await vault.exists(newPath)) ? this.moveCitedFile(vault, oldPath, newPath) : 0;
     }

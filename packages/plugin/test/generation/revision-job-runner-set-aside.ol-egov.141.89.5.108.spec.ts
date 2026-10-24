@@ -13,7 +13,6 @@ import { fileURLToPath } from 'node:url';
 import {
   appendSuspendRecord,
   citationStorePath,
-  digestPassage,
   type EnqueueInput,
   type ExtractedUnit,
   enumerateVaultInstruments,
@@ -132,6 +131,8 @@ function recordingDrafter(questions = 1) {
       } as unknown as WorkerTaskRequest);
       return {
         status: 'drafted',
+        // `ol-egov.141.89.2.39` ([D-628]): the retrieved chunks here are fabricated text from no note.
+        inputNotes: [],
         request: { courseCode: request.courseCode, conceptName: request.conceptName, sourceChunks },
         response: reply,
       };
@@ -335,10 +336,11 @@ describe('a transcript changed or renamed after the successor was drafted (ol-eg
     expect(w.drafter.draftForConcept).toHaveBeenCalledTimes(2);
     expect(w.drafter.draftedFrom().at(-1)).toBe(spoken(now.slice(9, 12)));
     expect(second.predecessorInstrumentId).toBe('q-four');
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(second.sourceCitation).toEqual({
       sourcePath: TRANSCRIPT,
       page: 4,
-      passageDigest: await digestPassage(spoken(now.slice(9, 12))),
       sourceRevision: await bytesHashOf(transcriptOf(now)),
     });
     await reachesHer(w, second);
@@ -367,31 +369,35 @@ describe('a transcript changed or renamed after the successor was drafted (ol-eg
     await w.drain();
     const second = await newest(w, first);
     expect(w.drafter.draftedFrom().at(-1)).toBe(spoken(now.slice(9, 12)));
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(second.sourceCitation).toEqual({
       sourcePath: MARKDOWN,
       page: 4,
-      passageDigest: await digestPassage(spoken(now.slice(9, 12))),
       sourceRevision: await bytesHashOf(declared(now)),
     });
     await reachesHer(w, second);
   });
 
-  it('plain text, renamed (a rename Olea saw): drafted again citing the path it was renamed to, and it reaches her', async () => {
+  it('plain text, renamed (a rename Olea saw): the pending successor follows the rename and reaches her, nothing drafted again', async () => {
+    // `ol-egov.141.89.2.39` ([D-626], [D-628], [D-576]): the transcript is one of the successor's
+    // input notes, so a rename Olea saw moves the draft's input note and the citation naming it; the
+    // rename alone no longer sets it aside, and nothing is queued.
     const { w, cues, first } = await draftedSuccessor(TRANSCRIPT, transcriptOf);
     w.vault.move(TRANSCRIPT, MOVED);
     expect(await w.h.trigger.onSourceRenamed(w.vault, TRANSCRIPT, MOVED)).toBeGreaterThan(0);
 
-    expect(await w.present()).toEqual(new Map([[first.draftId, 'check-failed']]));
-    expect(w.redrafts).toEqual(['queued']);
-    await w.drain();
-    const second = await newest(w, first);
-    expect(second.sourceCitation).toEqual({
+    expect(await w.present()).toEqual(new Map([[first.draftId, 'clear']]));
+    expect(w.redrafts).toEqual([]);
+    const moved = await w.cache.get(first.draftId);
+    expect(moved?.sourceCitation).toEqual({
       sourcePath: MOVED,
       page: 4,
-      passageDigest: await digestPassage(spoken(cues.slice(9, 12))),
       sourceRevision: await bytesHashOf(transcriptOf(cues)),
     });
-    const successor = await reachesHer(w, second);
+    expect(moved?.inputNotes?.map((note) => note.path)).toEqual([MOVED]);
+    if (moved === null) throw new Error('the successor went missing');
+    const successor = await reachesHer(w, moved);
     expect((await w.h.store.loadAll()).get(successor)?.sourcePath).toBe(MOVED);
   });
 });

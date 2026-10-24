@@ -942,7 +942,19 @@ describe('the bulk-review triage view is registered and reachable (F3.3, ol-jie3
   // this is the source-level proof the 4th arg now reaches a real provider.
   it("passes lastGenerationRefusals as the getRefusals provider, register row 1.8a's last reachability hop", () => {
     expect(main).toMatch(
-      /\(conceptKey\) => void openRegistryEntryFor\(this\.app, \{ conceptKey \}\),\s*\(\) => this\.lastGenerationRefusals,\s*\),/,
+      /\(conceptKey\) => void openRegistryEntryFor\(this\.app, \{ conceptKey \}\),\s*\(\) => this\.lastGenerationRefusals,\s*\(notePath\) =>/,
+    );
+  });
+
+  // `ol-egov.141.89.2.39` ([D-628]): the 5th, optional `openSourceNote` param — each title in a
+  // draft's "Sources" list opens its note through the registry's own `[D-171]` open-source hand-off,
+  // and the list withholds a draft whose input notes no longer hold.
+  it('passes the [D-171] open-source hand-off as openSourceNote, and the input-note check as holds', () => {
+    expect(main).toMatch(
+      /\(\) => this\.lastGenerationRefusals,\s*\(notePath\) =>\s*void createObsidianOpenSourceLocationPort\(this\.app\)\.open\(\{ sourcePath: notePath \}\),\s*\),/,
+    );
+    expect(main).toMatch(
+      /holds: \(record\) =>\s*draftInputNotesHold\(vault, record\.sourceCitation, record\.inputNotes\),/,
     );
   });
 });

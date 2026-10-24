@@ -26,6 +26,7 @@ import { deriveKindInputs } from '../../src/generation/kind-inputs.js';
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { currentInputNotes } from './input-notes-fixture.js';
 
 const A = 'TESTA101';
 const NOTE_ONE = `01 Courses/${A}/Week 1.md`;
@@ -121,6 +122,8 @@ describe('[D-551] a change of first kind keeps every existing instrument and its
       [NOTE_TWO]: '# Week 2\n\nmore of her prose\n',
     });
     const cache = createVaultDraftCacheStore(vault);
+    const notesFor = (name: string) =>
+      currentInputNotes(vault, name === 'Beta' ? NOTE_TWO : NOTE_ONE);
     let candidates = [concept('Alpha', NOTE_ONE), concept('Gamma', NOTE_ONE)];
     const cardAsks: string[] = [];
     const quizAsks: string[] = [];
@@ -141,11 +144,19 @@ describe('[D-551] a change of first kind keeps every existing instrument and its
         cardDraftDeps: {} as DraftCardsDeps,
         draftCardForConcept: async (_d, request) => {
           cardAsks.push(request.conceptName);
-          return cardResult(request.conceptName);
+          // `ol-egov.141.89.2.39` ([D-628]): the notes the call drew from, as a production call reports.
+          return {
+            ...cardResult(request.conceptName),
+            inputNotes: await notesFor(request.conceptName),
+          };
         },
         draftForConcept: async (_d, request) => {
           quizAsks.push(request.conceptName);
-          return quizResult(request.conceptName);
+          // `ol-egov.141.89.2.39` ([D-628]): the notes the call drew from, as a production call reports.
+          return {
+            ...quizResult(request.conceptName),
+            inputNotes: await notesFor(request.conceptName),
+          };
         },
       });
 
@@ -236,6 +247,7 @@ describe('[D-551] a change of first kind keeps every existing instrument and its
   it('back the other way: multiple choice drafted under a recall-style nearest stays when a written one comes next', async () => {
     const vault = new MemoryVaultSource({ [NOTE_ONE]: '# Week 1\n\nher prose\n' });
     const cache = createVaultDraftCacheStore(vault);
+    const notesFor = (_name: string) => currentInputNotes(vault, NOTE_ONE);
     const assessments = [
       { ...ASSESSMENTS[1], due: '2026-01-15' },
       { ...ASSESSMENTS[0], due: '2026-02-15' },
@@ -253,11 +265,19 @@ describe('[D-551] a change of first kind keeps every existing instrument and its
         cardDraftDeps: {} as DraftCardsDeps,
         draftCardForConcept: async (_d, request) => {
           asks.push(`qa:${request.conceptName}`);
-          return cardResult(request.conceptName);
+          // `ol-egov.141.89.2.39` ([D-628]): the notes the call drew from, as a production call reports.
+          return {
+            ...cardResult(request.conceptName),
+            inputNotes: await notesFor(request.conceptName),
+          };
         },
         draftForConcept: async (_d, request) => {
           asks.push(`mcq:${request.conceptName}`);
-          return quizResult(request.conceptName);
+          // `ol-egov.141.89.2.39` ([D-628]): the notes the call drew from, as a production call reports.
+          return {
+            ...quizResult(request.conceptName),
+            inputNotes: await notesFor(request.conceptName),
+          };
         },
       });
 

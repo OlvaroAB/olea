@@ -12,7 +12,6 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import {
   citationStorePath,
-  digestPassage,
   type EnqueueInput,
   type ExtractedUnit,
   enumerateVaultInstruments,
@@ -150,6 +149,8 @@ function recordingDrafter() {
       } as unknown as WorkerTaskRequest);
       return {
         status: 'drafted',
+        // `ol-egov.141.89.2.39` ([D-628]): the retrieved chunks here are fabricated text from no note.
+        inputNotes: [],
         request: { courseCode: request.courseCode, conceptName: request.conceptName, sourceChunks },
         response,
       };
@@ -232,7 +233,7 @@ async function reachesHer(vault: MemoryVault, h: Harness, record: DraftRecord, h
 }
 
 describe('a plain-text transcript changed again before the successor was drafted (ol-egov.141.89.5.107)', () => {
-  it('changed elsewhere: drafted from its passage, citing the version that stands now and the part it names there; it reaches her', async () => {
+  it('changed elsewhere: drafted from its passage, citing the version that stands now (no part named since [D-626]); it reaches her', async () => {
     const { vault, h } = await seeded(TRANSCRIPT, transcriptOf);
     const { cues, payload } = await rewritten(vault, h, TRANSCRIPT, transcriptOf);
     const now = [...cues, cue(93)];
@@ -241,10 +242,11 @@ describe('a plain-text transcript changed again before the successor was drafted
     const { outcome, record, drafter } = await runJob(vault, payload);
     expect(outcome).toEqual({ ok: true });
     expect(drafter.draftedFrom()).toBe(spoken(cues.slice(9, 12)));
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(record?.sourceCitation).toEqual({
       sourcePath: TRANSCRIPT,
       page: 4,
-      passageDigest: await digestPassage(spoken(now.slice(9, 12))),
       sourceRevision: await bytesHashOf(transcriptOf(now)),
     });
     if (record === undefined) throw new Error('no successor');
@@ -260,10 +262,11 @@ describe('a plain-text transcript changed again before the successor was drafted
 
     const { record, drafter } = await runJob(vault, payload);
     expect(drafter.draftedFrom()).toBe(spoken(now.slice(9, 12)));
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(record?.sourceCitation).toEqual({
       sourcePath: TRANSCRIPT,
       page: 4,
-      passageDigest: await digestPassage(spoken(now.slice(9, 12))),
       sourceRevision: await bytesHashOf(transcriptOf(now)),
     });
     if (record === undefined) throw new Error('no successor');
@@ -299,10 +302,11 @@ describe('a rename Olea saw before the successor was drafted (ol-egov.141.89.5.1
       citedSourceNow: citedSourceNowFrom(() => h.trigger),
     });
     expect(drafter.draftedFrom()).toBe(spoken(cues.slice(9, 12)));
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(record?.sourceCitation).toEqual({
       sourcePath: MOVED,
       page: 4,
-      passageDigest: await digestPassage(spoken(cues.slice(9, 12))),
       sourceRevision: payload.sourceRevision,
     });
     if (record === undefined) throw new Error('no successor');
@@ -323,9 +327,8 @@ describe('a rename Olea saw before the successor was drafted (ol-egov.141.89.5.1
     });
     expect(record?.sourceCitation?.sourcePath).toBe(MOVED);
     expect(record?.sourceCitation?.sourceRevision).toBe(await bytesHashOf(transcriptOf(now)));
-    expect(record?.sourceCitation?.passageDigest).toBe(
-      await digestPassage(spoken(now.slice(9, 12))),
-    );
+    // `ol-egov.141.89.2.39` ([D-626]): several chunks supplied, so no passage digest.
+    expect(record?.sourceCitation?.passageDigest).toBeUndefined();
     if (record === undefined) throw new Error('no successor');
     await reachesHer(vault, h, record);
   });
@@ -340,10 +343,11 @@ describe('a declared-Markdown transcript (ol-egov.141.89.5.107)', () => {
 
     const { record, drafter } = await runJob(vault, payload);
     expect(drafter.draftedFrom()).toBe(spoken(cues.slice(9, 12)));
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and every input note protects it at whole grain.
     expect(record?.sourceCitation).toEqual({
       sourcePath: MARKDOWN,
       page: 4,
-      passageDigest: await digestPassage(spoken(now.slice(9, 12))),
       sourceRevision: await bytesHashOf(declared(now)),
     });
     if (record === undefined) throw new Error('no successor');

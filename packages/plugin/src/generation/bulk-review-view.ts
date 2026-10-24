@@ -43,6 +43,16 @@
  * existing one-step affordance (`[D-171]`), same as everywhere else it
  * appears.
  *
+ * **The origin names the note the draft was drawn from (`[D-626]`, `[D-628]`,
+ * `ol-egov.141.89.2.39`).** A draft drawn from one note shows the source line
+ * naming that note; one drawn from several shows the "Sources" label
+ * (`BULK_REVIEW_SOURCES_LABEL`, vocabulary registry §34) on a disclosure that
+ * lists each note's title, each a link that opens the note through the same
+ * `[D-171]` open-source hand-off the registry uses (`openSourceNote`, wired by
+ * `main.ts`; absent, the titles are plain text). No one note is shown as the
+ * draft's sole source. A group whose drafts share an origin shows it once, above
+ * its rows; when they differ, each row shows its own.
+ *
  * **Keyboard bindings landed (`[D-216]` / `ol-egov.105`).** Move down the
  * list (`↓`), keep (`K`), fix (`F`) and bin (`B`) are real bindings now,
  * resolved by `bulk-review-keymap.ts`'s `resolveBulkReviewKey` against
@@ -98,14 +108,14 @@
 import { ItemView, type WorkspaceLeaf } from 'obsidian';
 import { refusalStateModifier } from '../retrieval/draft-cards-copy.js';
 import { REGISTRY_ENTRY_ACTION } from '../review/copy.js';
-import type { BulkReviewController } from './bulk-review.js';
+import type { BulkReviewController, BulkReviewOrigin } from './bulk-review.js';
 import {
   BULK_REVIEW_COMPLETION_HEADING,
   BULK_REVIEW_DECK_REASSURANCE,
   BULK_REVIEW_EMPTY_TEXT,
+  BULK_REVIEW_SOURCES_LABEL,
   bulkReviewCompletionTally,
   bulkReviewItemTypeLabel,
-  sourceMarkerText,
 } from './bulk-review-copy.js';
 import { BULK_REVIEW_HINTS, resolveBulkReviewKey } from './bulk-review-keymap.js';
 import type { GenerationRefusalNotice } from './pipeline.js';
@@ -167,6 +177,12 @@ export class BulkReviewView extends ItemView {
    * `BulkReviewRefusalsProvider`'s own doc.
    */
   private readonly getRefusals: BulkReviewRefusalsProvider | undefined;
+  /**
+   * `[D-628]`: opens one note a draft was drawn from, through the `[D-171]` open-source hand-off
+   * (`main.ts` wires `createObsidianOpenSourceLocationPort`). Optional; absent, a "Sources" list
+   * shows its titles as plain text — the same grey-out-via-omission posture as `openSource`.
+   */
+  private readonly openSourceNote: ((notePath: string) => void) | undefined;
   private controller: BulkReviewController | null = null;
   /**
    * `[STY-6]`: the settled tier's own backing list — one entry per draft she
@@ -198,7 +214,7 @@ export class BulkReviewView extends ItemView {
    */
   private readonly documents = new Map<
     string,
-    { courseCode: string; noteTitle: string; sourceMarker: string }
+    { courseCode: string; noteTitle: string; origin: BulkReviewOrigin | undefined }
   >();
 
   constructor(
@@ -206,11 +222,13 @@ export class BulkReviewView extends ItemView {
     getController: BulkReviewControllerProvider,
     openSource?: (conceptKey: string) => void,
     getRefusals?: BulkReviewRefusalsProvider,
+    openSourceNote?: (notePath: string) => void,
   ) {
     super(leaf);
     this.getController = getController;
     this.openSource = openSource;
     this.getRefusals = getRefusals;
+    this.openSourceNote = openSourceNote;
     // A triage list isn't a file to navigate back/forward through, same
     // reasoning `review/view.ts` gives for its own tab.
     this.navigation = false;
@@ -493,11 +511,9 @@ export class BulkReviewView extends ItemView {
       this.documents.set(group.sourcePath, {
         courseCode: group.courseCode,
         noteTitle: group.noteTitle,
-        // `[D-214]` / `ol-ymew`: the source marker's own title and register
-        // are the group's, not `noteTitle` above — see
-        // `BulkReviewGroupViewModel`'s own doc for why the two diverge for
-        // an authored-note origin.
-        sourceMarker: sourceMarkerText(group.sourceMarkerNoteTitle, group.sourceMarkerOrigin),
+        // `[D-628]`: the origin every draft in the group shares, shown once; absent when the
+        // drafts' origins differ, each row then showing its own (`BulkReviewGroupViewModel.origin`).
+        origin: group.origin,
       });
     }
 
@@ -513,9 +529,41 @@ export class BulkReviewView extends ItemView {
         sourcePath,
         document.courseCode,
         document.noteTitle,
-        document.sourceMarker,
+        document.origin,
         items,
       );
+    }
+  }
+
+  /**
+   * `[D-626]`/`[D-628]`: one origin — the source line for a draft drawn from one note, or the
+   * "Sources" disclosure listing every note a draft was drawn from, each title a link that opens
+   * that note (`openSourceNote`) when wired. Names, never vouches (`[D-216]` clause 5).
+   */
+  private renderOrigin(container: HTMLElement, origin: BulkReviewOrigin): void {
+    if (origin.kind === 'line') {
+      container.createSpan({ cls: 'olea-bulk-review-origin-line', text: origin.text });
+      return;
+    }
+    const details = container.createEl('details', { cls: 'olea-bulk-review-sources' });
+    details.createEl('summary', { text: BULK_REVIEW_SOURCES_LABEL });
+    const list = details.createEl('ul', { cls: 'olea-bulk-review-sources-list' });
+    const open = this.openSourceNote;
+    for (const note of origin.notes) {
+      const entry = list.createEl('li');
+      if (open === undefined) {
+        entry.createSpan({ text: note.title });
+        continue;
+      }
+      const link = entry.createEl('a', {
+        cls: 'olea-bulk-review-source-link',
+        text: note.title,
+        attr: { href: '#' },
+      });
+      this.registerDomEvent(link, 'click', (event) => {
+        event.preventDefault();
+        open(note.path);
+      });
     }
   }
 
@@ -665,7 +713,7 @@ export class BulkReviewView extends ItemView {
     sourcePath: string,
     courseCode: string,
     noteTitle: string,
-    sourceMarker: string,
+    groupOrigin: BulkReviewOrigin | undefined,
     items: readonly {
       readonly draftId: string;
       readonly stem: string;
@@ -674,6 +722,7 @@ export class BulkReviewView extends ItemView {
       readonly correctAnswer: string;
       readonly distractors: readonly string[];
       readonly itemType: 'mcq' | 'qa';
+      readonly origin?: BulkReviewOrigin;
     }[],
   ): void {
     // A document with nothing left pending is no longer a GROUP of drafts
@@ -740,6 +789,11 @@ export class BulkReviewView extends ItemView {
 
     this.renderSettled(section, sourcePath);
 
+    // `[D-628]`: an origin every draft here shares is named once, above the rows it covers.
+    if (groupOrigin !== undefined && items.length > 0) {
+      this.renderOrigin(section.createDiv({ cls: 'olea-bulk-review-group-source' }), groupOrigin);
+    }
+
     const list = section.createDiv({ cls: 'olea-bulk-review-items' });
     for (const item of items) {
       // `[D-216]`: `tabindex="0"` and the draft-id attribute make this row
@@ -792,11 +846,19 @@ export class BulkReviewView extends ItemView {
       // `[D-216]` clause 2: the row's floor is a named origin in ordinary
       // words, always visible — rendered regardless of whether the
       // click-through below is wired. Clause 5: this text names the origin,
-      // it never claims the draft is supported by it. `[D-214]` / `ol-ymew`:
-      // `sourceMarker` already carries the right register (reading vs. a
-      // note she wrote), computed once per group in `render()` above.
-      const source = content.createDiv({ cls: 'olea-bulk-review-item-source' });
-      source.createSpan({ text: sourceMarker });
+      // it never claims the draft is supported by it. `[D-628]`: shown here
+      // only when it is this draft's own (its group's drafts differ); a
+      // shared origin is named once for the group, above its rows.
+      const openSource = this.openSource;
+      const conceptKey = item.conceptIds[0];
+      const hasPeek = openSource !== undefined && conceptKey !== undefined;
+      // Nothing of this row's own to show where it came from (the group names it) and no peek:
+      // no source line at all for the row.
+      const source =
+        item.origin === undefined && !hasPeek
+          ? null
+          : content.createDiv({ cls: 'olea-bulk-review-item-source' });
+      if (source !== null && item.origin !== undefined) this.renderOrigin(source, item.origin);
       // `[D-216]` clause 3/4: the passage stays one step away, opened on
       // request through the SAME affordance `review/view.ts` renders for an
       // ordinary instrument (`REGISTRY_ENTRY_ACTION`, imported not
@@ -805,9 +867,7 @@ export class BulkReviewView extends ItemView {
       // posture that affordance already holds elsewhere (this class's own
       // module doc). Targeted by the concept's own key: a still-pending
       // draft has no `instrumentId` yet.
-      const openSource = this.openSource;
-      const conceptKey = item.conceptIds[0];
-      if (openSource && conceptKey !== undefined) {
+      if (openSource && conceptKey !== undefined && source !== null) {
         const peekBtn = source.createEl('button', {
           cls: 'olea-bulk-review-item-source-peek',
           text: REGISTRY_ENTRY_ACTION,

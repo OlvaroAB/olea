@@ -119,6 +119,8 @@ function recordingDrafter() {
       } as unknown as WorkerTaskRequest);
       return {
         status: 'drafted',
+        // `ol-egov.141.89.2.39` ([D-628]): the retrieved chunks here are fabricated text from no note.
+        inputNotes: [],
         request: { courseCode: request.courseCode, conceptName: request.conceptName, sourceChunks },
         response,
       };

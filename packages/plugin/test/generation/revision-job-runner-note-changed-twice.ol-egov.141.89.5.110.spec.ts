@@ -123,6 +123,8 @@ function recordingDrafter() {
       } as unknown as WorkerTaskRequest);
       return {
         status: 'drafted',
+        // `ol-egov.141.89.2.39` ([D-628]): the retrieved chunks here are fabricated text from no note.
+        inputNotes: [],
         request: { courseCode: request.courseCode, conceptName: request.conceptName, sourceChunks },
         response,
       };
@@ -228,18 +230,20 @@ async function seededAt(vault: MemoryVault, h: Harness, record: DraftRecord): Pr
 }
 
 describe('a note changed again before its successor was drafted (ol-egov.141.89.5.110)', () => {
-  it('the cited passage changed again: drafted from the passage as it reads now, cited and checked at that passage', async () => {
+  it('the cited passage changed again: drafted from the passage as it reads now, protected at the whole note since [D-626]', async () => {
     const { vault, h, payload } = await rewritten('passage');
-    vault.files.set(SOURCE, note([OPENING, CITED_TWICE, CLOSING]));
+    const now = note([OPENING, CITED_TWICE, CLOSING]);
+    vault.files.set(SOURCE, now);
 
     const { record, draftedFrom } = await runJob(vault, h, payload);
     expect(draftedFrom).toBe(CITED_TWICE);
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and is baselined, and protected, at the whole note.
     expect(record.sourceCitation).toEqual({
       sourcePath: SOURCE,
       page: 1,
-      passageDigest: await digestPassage(CITED_TWICE),
     });
-    expect(await seededAt(vault, h, record)).toBe(CITED_TWICE);
+    expect(await seededAt(vault, h, record)).toBe(now);
   });
 
   it('the cited passage cannot be named any more: drafted from the whole note as it stands, protected whole', async () => {
@@ -289,17 +293,19 @@ describe('a note changed again before its successor was drafted (ol-egov.141.89.
     expect(await seededAt(vault, h, record)).toBe(now);
   });
 
-  it('the note changed again elsewhere: drafted from the passage the rewrite read, cited at it, as before', async () => {
+  it('the note changed again elsewhere: drafted from the passage the rewrite read, protected at the whole note since [D-626]', async () => {
     const { vault, h, payload } = await rewritten('passage');
-    vault.files.set(SOURCE, note([OPENING, CITED_ONCE, CLOSING_EDITED]));
+    const now = note([OPENING, CITED_ONCE, CLOSING_EDITED]);
+    vault.files.set(SOURCE, now);
 
     const { record, draftedFrom } = await runJob(vault, h, payload);
     expect(draftedFrom).toBe(CITED_ONCE);
+    // `ol-egov.141.89.2.39` ([D-626]): its request carries retrieved chunks besides the passage, so the
+    // successor keeps no passage digest and is baselined, and protected, at the whole note.
     expect(record.sourceCitation).toEqual({
       sourcePath: SOURCE,
       page: 1,
-      passageDigest: await digestPassage(CITED_ONCE),
     });
-    expect(await seededAt(vault, h, record)).toBe(CITED_ONCE);
+    expect(await seededAt(vault, h, record)).toBe(now);
   });
 });

@@ -233,6 +233,14 @@ const DEDUPE_PROBE_SEQUENCE = 0;
 export interface FindByKeyVersionExpectation {
   readonly sourceContentHash?: string;
   readonly promptVersion?: string;
+  /**
+   * `[D-628]` (`ol-egov.141.89.2.39`): when `true`, a still-`pending` record with no `inputNotes` is
+   * stale — a draft recorded before input notes were, which no record can show to be supported
+   * (`DraftRecord.inputNotes`' own doc), so the sweep drafts it again exactly as it does after a
+   * hash mismatch. An accepted, edited or rejected record is never stale on this ground: a kept item
+   * is protected by its own presentation check and rewrite route, and a rejected one stays rejected.
+   */
+  readonly requireInputNotes?: boolean;
 }
 
 /** True when `record` is fresh against `expected` — see `FindByKeyVersionExpectation`'s doc. `expected` itself omitted means "version-blind," always fresh. */
@@ -250,6 +258,13 @@ function matchesVersionExpectation(
   if (
     expected.promptVersion !== undefined &&
     record.provenance.promptVersion !== expected.promptVersion
+  ) {
+    return false;
+  }
+  if (
+    expected.requireInputNotes === true &&
+    record.status === 'pending' &&
+    record.inputNotes === undefined
   ) {
     return false;
   }
@@ -357,7 +372,7 @@ export async function purgeDraftCache(
 }
 
 export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore {
-  return {
+  const store: DraftCacheStore = {
     async get(draftId) {
       const path = draftPath(draftId);
       if (!(await vault.exists(path))) return null;
@@ -413,10 +428,13 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
           probed.courseCode === courseCode &&
           probed.conceptName === conceptName
         ) {
-          // D-381: a version-stale probe hit is "no blocking record," not a
-          // miss to fall through past — the record itself is left untouched
-          // (see `matchesVersionExpectation`'s doc).
-          return matchesVersionExpectation(probed, expected) ? probed : null;
+          // D-381: a version-stale probe hit blocks nothing, and the record itself is left
+          // untouched (see `matchesVersionExpectation`'s doc). `ol-egov.141.89.2.39`: a fresh
+          // record drafted in its place sits at another id (`deriveDraftId`'s 4-argument form),
+          // which only the index names, so the index is still read for one before answering
+          // "nothing blocks" — otherwise the redraft would be drafted again at every sweep.
+          if (matchesVersionExpectation(probed, expected)) return probed;
+          return freshIndexedRecord(probeId);
         }
       }
 
@@ -424,14 +442,19 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
       // `revision-job-runner.ts`) that does not derive its id from the key —
       // the index-only path this module's doc already discloses the bound
       // of.
-      const index = await readIndex(vault);
-      const entry = index.entries.find(
-        (e) => e.courseCode === courseCode && e.conceptName === conceptName,
-      );
-      if (entry === undefined) return null;
-      const found = await this.get(entry.draftId);
-      if (found === null) return null;
-      return matchesVersionExpectation(found, expected) ? found : null;
+      return freshIndexedRecord(undefined);
+
+      /** The first record the index names for this key (other than `skip`) that is fresh against `expected`, or `null`. */
+      async function freshIndexedRecord(skip: string | undefined): Promise<DraftRecord | null> {
+        const index = await readIndex(vault);
+        for (const entry of index.entries) {
+          if (entry.courseCode !== courseCode || entry.conceptName !== conceptName) continue;
+          if (entry.draftId === skip) continue;
+          const found = await store.get(entry.draftId);
+          if (found !== null && matchesVersionExpectation(found, expected)) return found;
+        }
+        return null;
+      }
     },
 
     async listPending() {
@@ -439,4 +462,5 @@ export function createVaultDraftCacheStore(vault: VaultSource): DraftCacheStore 
       return all.filter((r) => r.status === 'pending');
     },
   };
+  return store;
 }

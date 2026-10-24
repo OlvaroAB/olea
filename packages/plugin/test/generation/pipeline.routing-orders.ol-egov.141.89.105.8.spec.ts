@@ -25,6 +25,7 @@ import { enqueueFurtherGenerationCallsForCourse } from '../../src/ingestion/furt
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE = 'COURSE-A';
 const LECTURE = `01 Courses/${COURSE}/Lecture 1.md`;
@@ -46,6 +47,7 @@ function concept(name: string, sourcePaths: readonly string[] = [CONCEPT_NOTE]):
 
 const quizResult = (name: string): DraftQuizCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: COURSE, conceptName: name, sourceChunks: ['chunk'] },
   response: {
     ok: true,
@@ -58,6 +60,7 @@ const quizResult = (name: string): DraftQuizCardsResult => ({
 
 const cardResult = (name: string): DraftCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: COURSE, conceptName: name, sourceChunks: ['chunk'] },
   response: {
     ok: true,

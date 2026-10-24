@@ -484,6 +484,8 @@ async function openSession(
         embeddingProvider: retrieval.embeddingProvider,
       },
       transport: retrieval.transport,
+      // `ol-egov.141.89.2.39` ([D-628]): as `main.ts`'s `draftQuizCardsDeps` supplies it.
+      vault,
     };
   };
 

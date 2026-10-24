@@ -27,8 +27,19 @@
  */
 
 import type { DeclaredMadeBy } from 'olea-core';
+import { SOURCE_LOCATIONS_HEADING } from '../registry/copy.js';
 
 export type { DeclaredMadeBy };
+
+/**
+ * `[D-628]` (functional scope F3.3; vocabulary registry §34, "A draft drawn from several notes"):
+ * the always-visible label of a clearing row's origin when the draft was drawn from several notes.
+ * Expanded, it lists one link per note, each showing the note's title, and no note in it is shown as
+ * the sole source. The registry gives it as the plain label it already gives an item's sources on
+ * screen (§10.1), so it is that constant, imported rather than restated. (A reversible default,
+ * flagged for David's review on `ol-egov.141.89.2.39`.)
+ */
+export const BULK_REVIEW_SOURCES_LABEL = SOURCE_LOCATIONS_HEADING;
 
 /**
  * A clearing row's source marker has three registers: `'reading'` (`[D-216]`, something ingested:

@@ -155,15 +155,26 @@
  * `materialize-mcq.ts` already treats every other optional field on
  * `DraftRecord` as.
  *
- * **`sourceCitation.passageDigest` (`[D-446]` option (a), `ol-egov.141.89.2.5`).** The citation
- * this sweep builds names the source and page only. A passage digest is added at draft time
- * (`grounding-passage.ts`) exactly where the passage the drafted items rest on can be named
- * without guessing: the request supplied ONE chunk, and that chunk stands as exactly one passage
- * of the cited markdown note (the shared rule, `olea-core`'s `citePassage`). With several chunks
- * (the usual case) nothing in the response says which one an item used, so no digest is written
- * and the item keeps whole-note grain (or the accept-time seal's single-passage mint) — the
- * top-ranked chunk is never taken. Naming it for those drafts needs the response to cite its
- * chunk: a wire change, filed as a bead.
+ * **`sourceCitation.passageDigest` (`[D-446]` option (a), `ol-egov.141.89.2.5`; narrowed by
+ * `[D-626]`).** The citation this sweep builds names the source and page only. A passage digest is
+ * added at draft time (`grounding-passage.ts`) only where the request supplied ONE chunk and that
+ * chunk stands as exactly one passage of the cited markdown note (the shared rule, `olea-core`'s
+ * `citePassage`). With several chunks no digest is written, whatever the response cites and
+ * whatever `CITED_CHUNK_DIGEST_ENABLED` says (`[D-626]`: a model naming one passage never narrows
+ * the protection), and the item is protected at whole-note grain by every note it was drawn from.
+ *
+ * **The notes a draft was drawn from, and the note it cites (`[D-626]`, `[D-628]`,
+ * `ol-egov.141.89.2.39`).** The drafting call reports the notes its request's chunks came from, each
+ * with the fingerprint of the material supplied (`DraftQuizCardsResult.inputNotes`, taken only after
+ * every one of them was found to be the note as it stands: otherwise the call sends nothing and
+ * reports `input-changed`, and this sweep caches nothing for that concept and asks again next
+ * sweep). Every record cached carries that list (`DraftRecord.inputNotes`). When it holds one note,
+ * the citation names that note, built as a citation of it always is (`citationFromUnit` for a landed
+ * unit of it, the transcript-part route for a transcript; a note no unit of this sweep came from is
+ * cited as an authored note, a binary by its page and bytes revision, a transcript as a whole), so
+ * the concept's own note is never named unless it supplied the chunks. When it holds several, the
+ * citation keeps the value it always had (the landed unit's), for internal readers only: every
+ * surface that shows a draft's origin reads the list instead (F3.3, `[D-628]`).
  *
  * **A lecture transcript's citation (`ol-egov.141.89.5.97`, `[D-567]`, `[D-518]`).** A unit that
  * is a transcript part (the queue's `transcriptPart` marker) is cited with the bytes hash of the
@@ -255,6 +266,7 @@ import type {
   DraftQuizCardsDeps,
   DraftQuizCardsRequest,
   DraftQuizCardsResult,
+  SuppliedChunkLocation,
 } from '../retrieval/draft-quiz-cards.js';
 import { draftQuizCardsForConcept } from '../retrieval/draft-quiz-cards.js';
 import type { DraftCacheStore } from './cache-store.js';
@@ -272,18 +284,12 @@ import {
   draftedDemandFactsOf,
   extractDraftedDemand,
 } from './draft-demand.js';
-import {
-  CITED_CHUNK_DIGEST_ENABLED,
-  citationForNamedChunk,
-  citedGroundingChunk,
-  soleGroundingChunk,
-  withGroundingPassage,
-} from './grounding-passage.js';
+import { soleGroundingChunk, withGroundingPassage } from './grounding-passage.js';
 import { ensureHomeNoteForConcept, hashSourceRevision } from './home-note.js';
+import { citationOfInputNote, type InputNote } from './input-notes.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
-  extractDraftedGroundedIn,
   extractDraftedProvenance,
   extractDraftedQuestions,
 } from './response.js';
@@ -417,10 +423,11 @@ export interface GenerationPipelineDeps {
    */
   readonly demandCounter?: DemandRoutingCounter;
   /**
-   * `[D-446]` (`ol-egov.141.89.2.29`): whether a question's `groundedIn` citation may name the
-   * passage its draft rests on (see `grounding-passage.ts`). Absent, `CITED_CHUNK_DIGEST_ENABLED`
-   * decides, which is `false` until the wrong-citation rate is measured; the composition root
-   * (`wiring.ts`) does not set it. A test sets it to exercise the cited path.
+   * `[D-446]` (`ol-egov.141.89.2.29`): once, whether a question's `groundedIn` citation may name the
+   * passage its draft rests on. **No effect since `[D-626]`** (`ol-egov.141.89.2.39`): a passage
+   * digest is recorded only when the request supplied exactly one chunk that is exactly one passage
+   * of its note, whatever the response cites and whatever this says. Kept so callers still compile;
+   * retiring it together with `CITED_CHUNK_DIGEST_ENABLED` is a follow-up.
    */
   readonly citedChunkDigest?: boolean;
 }
@@ -1010,10 +1017,9 @@ function isTranscriptUnit(unit: ExtractedUnit): boolean {
 /**
  * `ol-egov.141.89.5.97` (`[D-567]`, C5.3 "Which part"): `citation`, a transcript citation built by
  * {@link citationFromUnit}, naming the part its question was drafted from when that can be named
- * without guessing, and otherwise naming none. The chunk is found the way `withGroundingPassage`
- * finds a note's (`[D-446]` option (a)): the request's one chunk, or, when the caller passes one,
- * the item's own `groundedIn` naming exactly one chunk. The part is the one that chunk stands in,
- * once, among `units` of the cited transcript (the parts of the version the citation's
+ * without guessing, and otherwise naming none. The chunk is the request's one chunk (`[D-446]`
+ * option (a); since `[D-626]` never an item's own `groundedIn`). The part is the one that chunk
+ * stands in, once, among `units` of the cited transcript (the parts of the version the citation's
  * `sourceRevision` names): `page` becomes its ordinal and `passageDigest` the digest of its spoken
  * text (`namedTranscriptPart`). Several chunks, a chunk from elsewhere, one standing twice or
  * across a part boundary: no passage digest, and the whole transcript is protected (`[D-543]`'s
@@ -1023,10 +1029,9 @@ async function withTranscriptPart(
   citation: InstrumentCitation,
   units: readonly ExtractedUnit[],
   sourceChunks: readonly string[],
-  groundedIn?: readonly number[],
 ): Promise<InstrumentCitation> {
   if (citation.passageDigest !== undefined) return citation;
-  const chunk = soleGroundingChunk(sourceChunks) ?? citedGroundingChunk(sourceChunks, groundedIn);
+  const chunk = soleGroundingChunk(sourceChunks);
   if (chunk === undefined) return citation;
   const parts = units
     .filter((unit) => unit.provenance.sourcePath === citation.sourcePath && isTranscriptUnit(unit))
@@ -1036,6 +1041,66 @@ async function withTranscriptPart(
   return named === undefined
     ? citation
     : { ...citation, page: named.page, passageDigest: named.passageDigest };
+}
+
+/**
+ * `ol-egov.141.89.2.39` (`[D-626]`): the citation a landed unit gives, with the passage it rests on
+ * named only by the sole-chunk rule — a transcript part by {@link withTranscriptPart}, a note's
+ * passage by `withGroundingPassage`. Today's citation for the sweep's own unit.
+ */
+async function citationOfUnit(
+  vault: VaultSource,
+  unit: ExtractedUnit,
+  units: readonly ExtractedUnit[],
+  sourceRevisions: ReadonlyMap<string, string> | undefined,
+  notePath: string,
+  sourceChunks: readonly string[],
+): Promise<InstrumentCitation> {
+  const base = citationFromUnit(unit, sourceRevisions, notePath);
+  return isTranscriptUnit(unit)
+    ? withTranscriptPart(base, units, sourceChunks)
+    : withGroundingPassage(vault, base, notePath, sourceChunks);
+}
+
+/**
+ * `ol-egov.141.89.2.39` (`[D-626]`, `[D-628]`): the citation every record of one drafting call
+ * carries. One input note: that note, built by {@link citationOfUnit} when a unit of this sweep
+ * came from it (the sweep's own unit first), else by `citationOfInputNote` (`./input-notes.ts`).
+ * Several input notes, or none reported: the sweep's own unit's citation, as it always was (no
+ * passage digest can arise: several notes means several chunks, and the sole-chunk rule names
+ * nothing then).
+ */
+async function sweepDraftCitation(
+  vault: VaultSource,
+  sourceUnit: ExtractedUnit | undefined,
+  units: readonly ExtractedUnit[],
+  sourceRevisions: ReadonlyMap<string, string> | undefined,
+  notePath: string,
+  result: {
+    readonly request: {
+      readonly sourceChunks: readonly string[];
+      readonly sourceChunkOrigins?: readonly unknown[];
+    };
+    readonly chunkPaths?: readonly string[];
+    readonly chunkLocations?: readonly SuppliedChunkLocation[];
+    readonly inputNotes?: readonly InputNote[];
+  },
+): Promise<InstrumentCitation | undefined> {
+  const { sourceChunks } = result.request;
+  const only = result.inputNotes?.length === 1 ? result.inputNotes[0] : undefined;
+  if (only !== undefined) {
+    const unit =
+      sourceUnit?.provenance.sourcePath === only.path
+        ? sourceUnit
+        : units.find((candidate) => candidate.provenance.sourcePath === only.path);
+    if (unit !== undefined) {
+      return citationOfUnit(vault, unit, units, sourceRevisions, notePath, sourceChunks);
+    }
+    return citationOfInputNote(vault, only, notePath, result);
+  }
+  return sourceUnit === undefined
+    ? undefined
+    : citationOfUnit(vault, sourceUnit, units, sourceRevisions, notePath, sourceChunks);
 }
 
 /**
@@ -1135,7 +1200,6 @@ export async function runGenerationSweep(
   const knowledgeKindLabels = deps.knowledgeKindLabels ?? knowledgeKindLabelsFor(deps.vault);
   const formatMatch = deps.formatMatch;
   const memory = deps.refusalMemory ?? refusalMemoryFor(deps.cache);
-  const citedChunkDigest = deps.citedChunkDigest ?? CITED_CHUNK_DIGEST_ENABLED;
   const sweepOrdinal = memory.beginSweep();
   // `[D-437]` row 38: the sweep's explicit recall intent, routed like any other ask. Routed once:
   // the constant and the generator are both fixed for the whole sweep.
@@ -1273,10 +1337,15 @@ export async function runGenerationSweep(
       courseNotePath !== undefined && (await deps.vault.exists(courseNotePath))
         ? await hashText(await deps.vault.read(courseNotePath))
         : undefined;
-    const courseVersionExpectation =
-      courseSourceContentHash === undefined
-        ? undefined
-        : { sourceContentHash: courseSourceContentHash };
+    // `[D-628]` (`ol-egov.141.89.2.39`): a pending draft recorded before input notes were is stale
+    // whatever the note's digest says (`FindByKeyVersionExpectation.requireInputNotes`), so the sweep
+    // drafts it again.
+    const courseVersionExpectation = {
+      requireInputNotes: true,
+      ...(courseSourceContentHash === undefined
+        ? {}
+        : { sourceContentHash: courseSourceContentHash }),
+    } as const;
 
     // `ol-egov.141.89.2.17`: what this ask would be made on, as opaque digests — the
     // material that landed for this course this sweep, the embedding note, and the
@@ -1344,10 +1413,7 @@ export async function runGenerationSweep(
       // `deriveDraftId`'s own doc for why, and INV-2/D-381: an existing
       // draft record (accepted or not) is never silently overwritten by a
       // fresh one landing on the same deterministic path.
-      const staleRecordExists =
-        courseVersionExpectation === undefined
-          ? false
-          : (await deps.cache.findByKey(courseCode, candidate.name)) !== null;
+      const staleRecordExists = (await deps.cache.findByKey(courseCode, candidate.name)) !== null;
 
       // Component 2.2's routing consultation (`ol-tz7v` / `[WIRE-7]`),
       // opt-in — see the module doc. Costs a classify call (only when a
@@ -1469,6 +1535,14 @@ export async function runGenerationSweep(
         continue;
       }
 
+      if (result.status === 'input-changed') {
+        // `[D-628]`: a note that supplied a chunk was edited since it was last indexed, so nothing
+        // was sent and nothing is cached. Not a refusal and not held: once the index has the note's
+        // current text, the next sweep drafts it as usual.
+        memory.recordOutcome(courseCode, candidate.key, null, demand, pieces);
+        continue;
+      }
+
       // A draft came back, so the judge was consulted (or not needed) and nothing is held for this concept.
       memory.recordOutcome(courseCode, candidate.key, null, demand, pieces);
       memory.noteJudgeAnswered();
@@ -1514,44 +1588,18 @@ export async function runGenerationSweep(
           (unit) => unit.provenance.embeddedIn?.notePath === embeddingNotePath,
         );
       }
-      // `[D-446]` option (a) (`ol-egov.141.89.2.5`): the passage digest, recorded only where the
-      // passage this draft rests on can be named without guessing — see `grounding-passage.ts`.
-      // Here, for every question: the request supplying exactly one chunk. Per question below
-      // (`ol-egov.141.89.2.29`): the response citing exactly one chunk for that question, while
-      // `citedChunkDigest` holds (off until measured). Otherwise no digest: the accept-time seal
-      // then mints one only for a source with a single body passage, and everything else keeps
-      // whole-note grain.
-      // `ol-egov.141.89.5.97` (`[D-567]`): a transcript part is named by the same chunk rule, among
-      // the transcript's own parts, never by the note rule.
-      const transcriptCited = sourceUnit !== undefined && isTranscriptUnit(sourceUnit);
-      const sourceCitation =
-        sourceUnit === undefined
-          ? undefined
-          : transcriptCited
-            ? await withTranscriptPart(
-                citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
-                units,
-                result.request.sourceChunks,
-              )
-            : await withGroundingPassage(
-                deps.vault,
-                citationFromUnit(sourceUnit, deps.sourceRevisions, notePath),
-                notePath,
-                result.request.sourceChunks,
-              );
-      // Read parallel to `questions` (each question is its own record, so each is resolved on its
-      // own citation). `ol-egov.141.89.2.39`: the kept citation always names the note an item's one
-      // chunk came from (`citationForNamedChunk`); it is trusted for a passage digest only while
-      // `citedChunkDigest` holds, so `groundedIn` is `undefined` otherwise and no digest reads it.
-      const keptCitations = extractDraftedGroundedIn(
-        result.response,
-        courseDraftsCards ? 'cards' : 'questions',
-        result.request.sourceChunks.length,
+      // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): the notes this request was drawn from, and the
+      // citation every record of it carries — see the module doc. A passage digest arises only by
+      // the sole-chunk rule (`[D-446]` option (a)), never from a question's own `groundedIn`.
+      const inputNotes = result.inputNotes;
+      const sourceCitation = await sweepDraftCitation(
+        deps.vault,
+        sourceUnit,
+        units,
+        deps.sourceRevisions,
+        notePath,
+        result,
       );
-      const groundedIn = citedChunkDigest ? keptCitations : undefined;
-      const sourceChunkOrigins = result.request.sourceChunkOrigins;
-      const isTranscriptChunk = (position: number): boolean =>
-        sourceChunkOrigins?.[position] !== undefined && sourceChunkOrigins[position] !== null;
 
       // `ol-0r92.87`: the snapshot the drafted questions were actually
       // grounded against — see the module doc's own section. Read once per
@@ -1564,6 +1612,9 @@ export async function runGenerationSweep(
         : undefined;
 
       const createdAt = now().toISOString();
+      const redoKey =
+        courseSourceContentHash ??
+        `input-notes:${await hashText(JSON.stringify(inputNotes ?? null))}`;
       let sequence = 0;
       let refusedForDemand = 0;
       for (const [questionIndex, question] of questions.entries()) {
@@ -1584,50 +1635,12 @@ export async function runGenerationSweep(
         // `deriveDraftId`'s D-381 4-argument form directly — a disjoint id
         // space by construction (`deriveDraftId`'s own doc) — so this write
         // can never land on the path the stale record already occupies.
+        // `ol-egov.141.89.2.39`: a stale record with no note digest to key the redo by (a bare drop
+        // whose pending draft predates input notes) is keyed by the new draft's input notes instead,
+        // so the redo never lands on the stale record's path.
         const draftId = staleRecordExists
-          ? await deriveDraftId(courseCode, candidate.name, sequence, courseSourceContentHash)
+          ? await deriveDraftId(courseCode, candidate.name, sequence, redoKey)
           : await generateDraftId(courseCode, candidate.name, sequence);
-        // `[D-446]` (`ol-egov.141.89.2.29`): this question's own citation, when trusted. Returns
-        // `sourceCitation` unchanged when it already names a passage (the sole-chunk case), when
-        // the question cites no single chunk, or when that chunk is not exactly one passage of the
-        // cited note.
-        // `ol-egov.141.89.2.39`: the note this question's one named chunk came from, when that is
-        // another markdown note; then any digest is named in that note, by the usual rule.
-        const namedCitation =
-          sourceCitation === undefined || transcriptCited
-            ? sourceCitation
-            : citationForNamedChunk(
-                sourceCitation,
-                result.request.sourceChunks,
-                result.chunkPaths,
-                keptCitations?.[questionIndex],
-                isTranscriptChunk,
-              );
-        const questionCitation =
-          namedCitation !== sourceCitation && namedCitation !== undefined
-            ? await withGroundingPassage(
-                deps.vault,
-                namedCitation,
-                notePath,
-                result.request.sourceChunks,
-                groundedIn?.[questionIndex],
-              )
-            : sourceCitation === undefined || groundedIn?.[questionIndex] === undefined
-              ? sourceCitation
-              : transcriptCited
-                ? await withTranscriptPart(
-                    sourceCitation,
-                    units,
-                    result.request.sourceChunks,
-                    groundedIn[questionIndex],
-                  )
-                : await withGroundingPassage(
-                    deps.vault,
-                    sourceCitation,
-                    notePath,
-                    result.request.sourceChunks,
-                    groundedIn[questionIndex],
-                  );
         const record: DraftRecord = {
           draftId,
           status: 'pending',
@@ -1637,7 +1650,9 @@ export async function runGenerationSweep(
           // — see `types.ts`'s doc on `DraftRecord.conceptIds`.
           conceptIds: [candidate.key],
           sourcePath: notePath,
-          ...(questionCitation !== undefined ? { sourceCitation: questionCitation } : {}),
+          ...(sourceCitation !== undefined ? { sourceCitation } : {}),
+          // `[D-628]`: every note the request was drawn from, with the fingerprint of what it supplied.
+          ...(inputNotes !== undefined && inputNotes.length > 0 ? { inputNotes } : {}),
           ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
           createdAt,
           // One of the two, never both (`DraftRecord.card`'s doc). A card draft names its kind

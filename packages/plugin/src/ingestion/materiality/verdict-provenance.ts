@@ -56,11 +56,19 @@ import type { PersistedStageProducer } from 'olea-core';
  *    drafted from.
  *  - `source-bytes-changed`: a cited non-markdown file's bytes differ from the recorded revision,
  *    or cannot be checked.
+ *  - `input-note-changed` (`[D-626]`, `[D-628]`): a note a drafted item was drawn from no longer
+ *    reads as its recorded fingerprint says (a content change past the code's free exits, or the
+ *    note is gone or unreadable).
+ *  - `input-notes-unrecorded` (`[D-628]`): an item drafted through a draft record was recorded
+ *    before its input notes were, so its support cannot be established.
  * Deciding a rewrite:
  *  - `landed-source-rewrite`: re-extracted text for the very bytes a hold was raised for has
  *    landed, so the question is rewritten from it (`[D-518]`).
  *  - `transcript-part-unrelocatable`: a part-named transcript question whose part cannot be
  *    relocated in a version that reads is rewritten at whole grain (`[D-578]`).
+ *  - `input-note-rewrite` (`[D-626]`, `[D-628]`): a hold raised by `input-note-changed` or
+ *    `input-notes-unrecorded` is rewritten from the cited note as it stands, at whole-note grain,
+ *    as a change to its cited note is.
  * A rewrite the judge decided is the model arm (task `materiality.judge.v1`), not a rule here.
  */
 export const VERDICT_CODE_RULES = {
@@ -79,6 +87,9 @@ export const VERDICT_CODE_RULES = {
   'source-bytes-changed': 1,
   'landed-source-rewrite': 1,
   'transcript-part-unrelocatable': 1,
+  'input-note-changed': 1,
+  'input-notes-unrecorded': 1,
+  'input-note-rewrite': 1,
 } as const satisfies Readonly<Record<string, number>>;
 
 export type VerdictCodeRule = keyof typeof VERDICT_CODE_RULES;

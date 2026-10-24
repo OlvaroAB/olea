@@ -368,6 +368,11 @@ describe('draftQuizCardsForConcept — above the upper bar the request still rea
     const sent = JSON.stringify(quizCallOf(transport)?.payload);
     for (const path of result.chunkPaths ?? []) expect(sent).not.toContain(path);
     expect(Object.keys(result.request)).not.toContain('chunkPaths');
+    // `[D-628]`: the chunks' locations (and, with the vault supplied, the input notes' paths and
+    // fingerprints) stay on the result too, never in the request.
+    expect(result.chunkLocations).toHaveLength(result.request.sourceChunks.length);
+    expect(Object.keys(result.request)).not.toContain('chunkLocations');
+    expect(Object.keys(result.request)).not.toContain('inputNotes');
   });
 
   it('an unsupported verdict above the upper bar refuses as judge-rejected BEFORE any generative call: one send, never two', async () => {

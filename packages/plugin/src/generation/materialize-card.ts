@@ -242,7 +242,6 @@ import {
   parseFrontmatter,
   provisionalInstrumentId,
   readScalar,
-  sealCitationPassage,
   stampQaCardBlockId,
   type VaultPath,
   type VaultSource,
@@ -256,7 +255,13 @@ import {
   planInstrumentDemand,
 } from './demand-target.js';
 import { recordDraftedForConcept, sourceRevisionMatches } from './home-note.js';
-import { assertCitedSourceUnchanged, StaleSourceRevisionError } from './materialize-mcq.js';
+import type { InputNote } from './input-notes.js';
+import {
+  acceptedCitation,
+  assertCitedSourceUnchanged,
+  assertInputNotesUnchanged,
+  StaleSourceRevisionError,
+} from './materialize-mcq.js';
 import type { DraftCardContent } from './types.js';
 
 export { StaleSourceRevisionError };
@@ -288,6 +293,8 @@ export interface MaterializeAcceptedCardDraftInput {
    * field. `undefined` skips the check entirely.
    */
   readonly expectedSourceContentHash?: string;
+  /** `[D-628]`: see `MaterializeAcceptedDraftInput.inputNotes` (`materialize-mcq.ts`) — the same guard and the same write. */
+  readonly inputNotes?: readonly InputNote[];
   /**
    * `[D-366]`: the id of the instrument this successor supersedes, when this
    * draft was materializing a Q&A revision's successor rather than an
@@ -393,6 +400,12 @@ export async function materializeAcceptedCardDraft(
     input.sourcePath,
     'materializeAcceptedCardDraft',
   );
+  await assertInputNotesUnchanged(
+    vault,
+    input.sourceCitation,
+    input.inputNotes,
+    'materializeAcceptedCardDraft',
+  );
 
   if (input.card.front.trim() === '' || input.card.back.trim() === '') {
     throw new Error('materializeAcceptedCardDraft: a card needs both a front and a back');
@@ -495,8 +508,14 @@ export async function materializeAcceptedCardDraft(
   };
   if (!(await vault.exists(citationStorePath(instrumentId)))) {
     // `[D-446]` option (a): see `materialize-mcq.ts`'s identical call.
-    const { citation } = await sealCitationPassage(vault, proposedCitation, input.sourcePath);
-    await writeInstrumentCitation(vault, instrumentId, citation);
+    // `[D-626]`/`[D-628]`: see `materialize-mcq.ts`'s identical write.
+    const citation = await acceptedCitation(
+      vault,
+      proposedCitation,
+      input.sourcePath,
+      input.inputNotes,
+    );
+    await writeInstrumentCitation(vault, instrumentId, citation, input.inputNotes);
   }
 
   // `[D-437]`: judge the draft's demand and, for one the request asked, the server acknowledged and

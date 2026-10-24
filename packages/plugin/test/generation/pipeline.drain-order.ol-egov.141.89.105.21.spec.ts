@@ -10,6 +10,7 @@ import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js'
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE = 'COURSE-A';
 const NOTE = `01 Courses/${COURSE}/Concepts.md`;
@@ -33,6 +34,7 @@ const concept = (name: string): ConceptRecord => ({
 
 const quizResult = (name: string): DraftQuizCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: COURSE, conceptName: name, sourceChunks: ['chunk'] },
   response: {
     ok: true,

@@ -196,6 +196,8 @@ const materializeMcqDraft: DraftMaterializeFn = (vault, record, deps) => {
       ...(record.sourceContentHash !== undefined
         ? { expectedSourceContentHash: record.sourceContentHash }
         : {}),
+      // `[D-628]`: every note the draft was drawn from — checked, then written into the citation.
+      ...(record.inputNotes !== undefined ? { inputNotes: record.inputNotes } : {}),
       // `[D-437]` (`ol-egov.141.89.2.30`): the demand the draft carried, forwarded to the ONE
       // production call that writes the target record (`materialize-mcq.ts`), only when there is
       // one — see `materializeDemandOf`.
@@ -248,6 +250,8 @@ const materializeQaCardDraft: DraftMaterializeFn = (vault, record, deps) => {
       ...(record.sourceContentHash !== undefined
         ? { expectedSourceContentHash: record.sourceContentHash }
         : {}),
+      // `[D-628]`: see `materializeMcqDraft`'s identical forward above.
+      ...(record.inputNotes !== undefined ? { inputNotes: record.inputNotes } : {}),
       // `ol-v7r5.98`: forwarded only when this draft was produced by the
       // `'instrument-revision'` job kind — `undefined` for every ordinary
       // sweep draft, matching `materializeMcqDraft`'s identical branch above.

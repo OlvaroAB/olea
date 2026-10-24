@@ -22,6 +22,15 @@
  * one test pins that the shipped default mints nothing from a citation. An older Worker's response
  * (no `groundedIn`) gives records byte-identical to before, pinned by a hash captured from the code
  * before the change.
+ *
+ * **`[D-626]` supersedes the cited path (`ol-egov.141.89.2.39`).** "A model naming one passage never
+ * narrows the protection": a passage digest is recorded only when the request supplied exactly one
+ * chunk that is exactly one passage of its note, whatever the response cites and whatever the
+ * switch says. The two tests that pinned a digest minted from a citation with the switch on now pin
+ * the opposite (no digest), and the service repo's two `[D-446]` scenarios they implemented ("one
+ * distinct cited chunk in a multi-passage note gives that passage's digest"; and that digest
+ * surviving accept) are superseded by the F3.3 / C5.3 input-notes scenario "only a genuinely
+ * single-passage request keeps passage grain"; retiring them there is the hub's (reported).
  */
 import type { ConceptRecord, ExtractedUnit } from 'olea-core';
 import { digestPassage, locatePassageByDigest, readInstrumentCitation } from 'olea-core';
@@ -382,7 +391,7 @@ describe('runGenerationSweep mints the digest of the cited chunk, when citations
     expect(pending[0]?.sourceCitation).toEqual({ sourcePath: SOURCE, page: 1 });
   });
 
-  it('one distinct cited chunk in a multi-passage note gives that passage, resolved per question', async () => {
+  it('[D-626]: one distinct cited chunk of several gives no digest, even with the switch on', async () => {
     const { pending } = await sweep(
       { [SOURCE]: MULTI_PASSAGE_NOTE },
       [authoredUnit(SOURCE)],
@@ -390,15 +399,11 @@ describe('runGenerationSweep mints the digest of the cited chunk, when citations
       trusted,
     );
     expect(pending.map((record) => record.sourceCitation?.passageDigest)).toEqual([
-      await digestPassage(PARAGRAPH_B),
-      await digestPassage(PARAGRAPH_C),
-      await digestPassage(PARAGRAPH_A),
+      undefined,
+      undefined,
+      undefined,
     ]);
-    expect(pending[0]?.sourceCitation).toEqual({
-      sourcePath: SOURCE,
-      page: 1,
-      passageDigest: await digestPassage(PARAGRAPH_B),
-    });
+    expect(pending[0]?.sourceCitation).toEqual({ sourcePath: SOURCE, page: 1 });
   });
 
   it('two distinct cited chunks give no digest (ambiguous, left unresolved)', async () => {
@@ -459,7 +464,7 @@ describe('runGenerationSweep mints the digest of the cited chunk, when citations
     }
   });
 
-  it('the digest a citation names survives accept, and the reader finds the passage again', async () => {
+  it('[D-626]: a citation naming one chunk of several leaves the kept item at whole-note grain', async () => {
     const { vault, pending } = await sweep(
       { [SOURCE]: MULTI_PASSAGE_NOTE },
       [authoredUnit(SOURCE)],
@@ -475,10 +480,7 @@ describe('runGenerationSweep mints the digest of the cited chunk, when citations
       ...(record.sourceCitation !== undefined ? { sourceCitation: record.sourceCitation } : {}),
     });
     const citation = await readInstrumentCitation(vault, instrumentId);
-    expect(citation?.passageDigest).toBe(await digestPassage(PARAGRAPH_C));
-    expect(
-      (await locatePassageByDigest(MULTI_PASSAGE_NOTE, citation?.passageDigest ?? '')).status,
-    ).toBe('unique');
+    expect(citation?.passageDigest).toBeUndefined();
   });
 });
 

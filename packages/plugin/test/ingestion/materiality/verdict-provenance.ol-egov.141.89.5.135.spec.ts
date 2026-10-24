@@ -1661,7 +1661,8 @@ describe('provenance changes nothing she sees or does', () => {
 describe('the rule table', () => {
   it('every rule starts at version 1, and each stored producer reads back as itself', () => {
     const ids = Object.keys(VERDICT_CODE_RULES) as (keyof typeof VERDICT_CODE_RULES)[];
-    expect(ids).toHaveLength(15);
+    // `ol-egov.141.89.2.39` ([D-626], [D-628]): three rules for a drafted item's input notes.
+    expect(ids).toHaveLength(18);
     for (const id of ids) {
       expect(VERDICT_CODE_RULES[id]).toBe(1);
       expect(codeRule(id)).toEqual(rule(id));

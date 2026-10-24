@@ -20,8 +20,10 @@
 
 import type { InstrumentType } from 'olea-contracts';
 import {
+  type CitationInputNote,
   type InstrumentCitation,
   type InstrumentTargetOrigin,
+  isCitationInputNoteList,
   PAPER_DEMANDS,
   type PaperDemand,
 } from 'olea-core';
@@ -193,6 +195,22 @@ export interface DraftRecord {
    * that write entirely when this is absent.
    */
   readonly sourceCitation?: InstrumentCitation;
+  /**
+   * `[D-628]` (`ol-egov.141.89.2.39`): every note this draft's request was drawn from, one entry per
+   * distinct note, each with the fingerprint of the material supplied from it
+   * (`./input-notes.ts`). Recorded by every writer of a new draft; carried into the citation record
+   * when she keeps it (schema version 3). Each protects the draft: a change to any of them that gets
+   * past the code's free exits withholds it before presentation and refuses its acceptance
+   * (functional scope C5.3, `[D-626]`). When there is one, `sourceCitation` names that note; when
+   * there are several, `sourceCitation` keeps the value it always had for internal readers and no
+   * surface shows it as the draft's sole source (F3.3, `[D-628]`).
+   *
+   * **Absent: a draft recorded before input notes were.** No such record says how many chunks its
+   * request supplied, so none can establish the single-passage case: it is withheld wherever it
+   * would be shown (the session's presentation check, the clearing list), and the sweep drafts it
+   * again beside it (`cache-store.ts`'s `findByKey`, `requireInputNotes`). Never present and empty.
+   */
+  readonly inputNotes?: readonly CitationInputNote[];
   /**
    * `ol-0r92.87`'s stale-input guard: the SHA-256 hex hash (`hashText`,
    * `olea-core`) `pipeline.ts` took of `sourcePath`'s note content at the
@@ -368,6 +386,9 @@ export function isDraftRecord(value: unknown): value is DraftRecord {
   }
   if (v.sourceCitation !== undefined && !isInstrumentCitationShape(v.sourceCitation)) return false;
   if (v.sourceContentHash !== undefined && typeof v.sourceContentHash !== 'string') return false;
+  // `[D-628]`: absent is a draft from before input notes were recorded; present, a well-formed list
+  // (the citation store's own guard, so the two records accept exactly the same lists).
+  if (v.inputNotes !== undefined && !isCitationInputNoteList(v.inputNotes)) return false;
   if (v.demand !== undefined && !isDraftDemandCarriage(v.demand)) return false;
   return true;
 }

@@ -21,6 +21,7 @@ import {
   draftSourceCheckAtPresentation,
   sourceCheckAtPresentation,
 } from '../../src/review/open-session.js';
+import { currentInputNotes } from '../generation/input-notes-fixture.js';
 
 class MemoryVault implements VaultSource {
   readonly files = new Map<string, string>();
@@ -188,9 +189,19 @@ describe('a pending draft on a non-markdown source is checked against its own ci
   async function draftSetup(citation: DraftRecord['sourceCitation'], sourcePath = 'Zettel/N.md') {
     const vault = new MemoryVault();
     vault.binaries.set(PDF, BYTES);
-    const record = { draftId: 'd1', sourcePath, sourceCitation: citation } as DraftRecord;
+    // `ol-egov.141.89.2.39` ([D-628]): a draft drafted today records the notes it was drawn from;
+    // this one's stands unchanged throughout, so only the citation check below decides.
+    vault.files.set(INPUT_NOTE, '# Input\n\nSynthetic material.\n');
+    const inputNotes = await currentInputNotes(vault, INPUT_NOTE);
+    const record = {
+      draftId: 'd1',
+      sourcePath,
+      sourceCitation: citation,
+      inputNotes,
+    } as DraftRecord;
     return { vault, check: draftSourceCheckAtPresentation(vault, [record]) };
   }
+  const INPUT_NOTE = 'Zettel/Input.md';
   const cite = (sourceRevision?: string) => ({
     sourcePath: PDF,
     page: 1,

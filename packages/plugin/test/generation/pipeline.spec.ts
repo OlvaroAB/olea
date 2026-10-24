@@ -56,6 +56,7 @@ import {
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 /** The permanent concept key (`[D-357]`) the vault's own stamped extraction resolves for `name`. */
 async function permanentKey(vault: MemoryVaultSource, name: string): Promise<string> {
@@ -94,8 +95,21 @@ function standaloneUnit(sourcePath: string): ExtractedUnit {
   };
 }
 
-const groundedResponse = (stem: string): DraftQuizCardsResult => ({
+/**
+ * `inputNotes` (`ol-egov.141.89.2.39`, [D-628]): what a production drafting call reports. Left out
+ * by default (the draft then reads as one recorded before input notes were, which the next sweep
+ * drafts again); a test that sweeps twice over a cached draft passes {@link SYNTHETIC_INPUT_NOTES}.
+ */
+const groundedResponse = (
+  stem: string,
+  inputNotes?: DraftQuizCardsResult extends infer R
+    ? R extends { readonly inputNotes?: infer N }
+      ? N
+      : never
+    : never,
+): DraftQuizCardsResult => ({
   status: 'drafted',
+  ...(inputNotes === undefined ? {} : { inputNotes }),
   request: { courseCode: 'COGS214', conceptName: stem, sourceChunks: ['chunk'] },
   response: {
     ok: true,
@@ -532,7 +546,7 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
       cache,
       draftDeps: {} as never,
       listConceptsForCourse: async () => [concept('Working memory', 'concept-key-1')],
-      draftForConcept: async () => groundedResponse('Working memory'),
+      draftForConcept: async () => groundedResponse('Working memory', SYNTHETIC_INPUT_NOTES),
     });
     const firstWrite = vault.raw(HOME_NOTE_PATH);
 
@@ -544,7 +558,8 @@ describe("a bare drop with no embedding note — Olea's own home note (`[D-179]`
         concept('Working memory', 'concept-key-1'),
         concept('Long-term potentiation', 'concept-key-2'),
       ],
-      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+      draftForConcept: async (_deps, request) =>
+        groundedResponse(request.conceptName, SYNTHETIC_INPUT_NOTES),
     });
 
     // Still exactly one file at that path — the second sweep reused it.
@@ -1154,7 +1169,8 @@ describe('the sweep carries explicit recall intent as authoring intent only (row
       cache,
       draftDeps: {} as never,
       listConceptsForCourse: async () => [concept('Cached concept', 'key-cached')],
-      draftForConcept: async (_deps, request) => groundedResponse(request.conceptName),
+      draftForConcept: async (_deps, request) =>
+        groundedResponse(request.conceptName, SYNTHETIC_INPUT_NOTES),
       demandCounter: new DemandRoutingCounter(),
     });
 

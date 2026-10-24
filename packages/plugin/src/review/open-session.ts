@@ -225,6 +225,7 @@ import {
   REVIEW_LOG_FOLDER,
   readDistractorProvenance,
   readInstrumentCitation,
+  readInstrumentCitationRecord,
   readReviewLogFile,
   readReviewLogHistory,
   replayedStateOf,
@@ -236,6 +237,7 @@ import {
 } from 'olea-core';
 import type { DraftAcceptPort } from '../generation/accept.js';
 import type { DraftCacheStore } from '../generation/cache-store.js';
+import { draftInputNotesHold } from '../generation/input-notes.js';
 import { toDraftReviewQueueItem } from '../generation/review-adapter.js';
 import type { DraftRecord } from '../generation/types.js';
 import {
@@ -1034,7 +1036,20 @@ export async function openReviewSession(
     // below); see `OpenReviewSessionInput.draftCache`'s
     // doc. `[]` when no cache is wired, so this never removes or reorders
     // anything `composeQueue`/`executeStudyPlan` decided.
-    const pendingDrafts = input.draftCache ? await input.draftCache.listPending() : [];
+    const allDrafts = input.draftCache ? await input.draftCache.list() : [];
+    const pendingDrafts = allDrafts.filter((record) => record.status === 'pending');
+    // `[D-628]` (`ol-egov.141.89.2.39`): the kept items Olea drafted through a draft record — their
+    // provenance, read from the draft cache (an accepted or edited record names the instrument it
+    // became). Only these are protected as drafted items with no input notes recorded; her own
+    // question blocks and a practice paper's items have no draft record and are untouched.
+    const draftedInstrumentIds: ReadonlySet<string> = new Set(
+      allDrafts.flatMap((record) =>
+        (record.status === 'accepted' || record.status === 'edited') &&
+        record.instrumentId !== undefined
+          ? [record.instrumentId]
+          : [],
+      ),
+    );
     const draftItems = pendingDrafts.map((record) => toDraftReviewQueueItem(record, input.random));
     // `[D-627]` (`ol-3ux7.5.57.98`): exact duplicate content is served once, the first occurrence
     // kept, so a due instrument wins over a pending draft. Nothing is merged or written; see
@@ -1095,6 +1110,7 @@ export async function openReviewSession(
       // `[D-455]`/`[D-456]` (`ol-egov.141.89.5.45`; suspension read added by `ol-egov.141.89.5.59`): the presentation-time changed-source check,
       // read fresh from the same store, so a check that went unanswered mid-sitting sets the
       // question aside as could-not-check. Absent store: every item shows, as before.
+      // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): and every note a drafted item was drawn from.
       ...(input.citationHashStore
         ? {
             checkSourceAtPresentation: sourceCheckAtPresentation(
@@ -1107,6 +1123,7 @@ export async function openReviewSession(
                     (record) => record.instrumentId === instrumentId,
                   ),
               },
+              { vault: input.vault, draftedInstrumentIds },
             ),
           }
         : {
@@ -1120,6 +1137,7 @@ export async function openReviewSession(
                     (record) => record.instrumentId === instrumentId,
                   ),
               },
+              { vault: input.vault, draftedInstrumentIds },
             ),
           }),
       // `ol-egov.141.89.5.73` ([D-515]): a pending draft on a non-markdown source, against its own citation.
@@ -1739,6 +1757,7 @@ export function sourceCheckAtPresentation(
   store: CitationHashStore | undefined,
   readSuspended?: () => Promise<ReadonlySet<string>>,
   currentPassage?: CurrentPassageReader,
+  inputNotes?: InputNotesAtPresentation,
 ): (instrumentId: string) => Promise<'clear' | 'check-failed' | 'suspended'> {
   return async (instrumentId) => {
     if (readSuspended !== undefined && (await readSuspended()).has(instrumentId)) {
@@ -1770,6 +1789,14 @@ export function sourceCheckAtPresentation(
         }
       }
     }
+    // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note a drafted item was drawn from, read
+    // afresh and compared by fingerprint, whether or not a store is supplied.
+    if (
+      inputNotes !== undefined &&
+      !(await inputNotesHoldAtPresentation(instrumentId, inputNotes))
+    ) {
+      return 'check-failed';
+    }
     // `ol-egov.141.89.5.73` ([D-515]): last, after every check above, and whether or not a store
     // is supplied. Nothing is cached: one sidecar read and one file read per presentation.
     if (currentPassage === undefined) return 'clear';
@@ -1777,6 +1804,40 @@ export function sourceCheckAtPresentation(
       ? 'clear'
       : 'check-failed';
   };
+}
+
+/**
+ * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): what the presentation check needs to protect a kept
+ * item by every note it was drafted from. `draftedInstrumentIds` is provenance, read from the draft
+ * cache (the kept items Olea drafted through a draft record), never inferred from an absent list.
+ */
+export interface InputNotesAtPresentation {
+  readonly vault: VaultSource;
+  readonly draftedInstrumentIds: ReadonlySet<string>;
+}
+
+/**
+ * `[D-626]`/`[D-628]` (functional scope C5.3): whether a kept item's input notes all still read as
+ * they did when it was drafted. Its citation record's input notes are each read afresh and compared
+ * by fingerprint (`draftInputNotesHold`), so a change to any of them past the code's free exits
+ * withholds it, at whole-note grain, as a change to its cited note does; the single-passage case
+ * keeps passage grain for its note. A missing note, or a record that cannot be read, withholds.
+ * An item recorded before input notes were (no list on its record) is withheld only when it was
+ * drafted through a draft record (`draftedInstrumentIds`); any other item (her own question block,
+ * a practice paper's item) has nothing here to check and is clear. Reads only.
+ */
+async function inputNotesHoldAtPresentation(
+  instrumentId: string,
+  reader: InputNotesAtPresentation,
+): Promise<boolean> {
+  try {
+    const record = await readInstrumentCitationRecord(reader.vault, instrumentId);
+    const notes = record?.inputNotes;
+    if (notes === undefined) return !reader.draftedInstrumentIds.has(instrumentId);
+    return await draftInputNotesHold(reader.vault, record, notes);
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -1867,10 +1928,27 @@ export function draftSourceCheckAtPresentation(
   redraftSetAside?: (draft: DraftRecord) => Promise<void>,
 ): (draftId: string) => Promise<'clear' | 'check-failed'> {
   const byId = new Map(drafts.map((draft) => [draft.draftId, draft]));
+  const setAside = async (draft: DraftRecord): Promise<'check-failed'> => {
+    if (redraftSetAside !== undefined && draft.predecessorInstrumentId !== undefined) {
+      try {
+        await redraftSetAside(draft);
+      } catch {
+        // The set-aside stands; the next presentation asks again.
+      }
+    }
+    return 'check-failed';
+  };
   return async (draftId) => {
     const draft = byId.get(draftId);
-    const citation = draft?.sourceCitation;
-    if (draft === undefined || citation === undefined) return 'clear';
+    if (draft === undefined) return 'clear';
+    // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the draft was drawn from must read as
+    // it did when drafted (passage grain for the single-passage case). A draft recorded before input
+    // notes were cannot show it and is withheld; the sweep drafts it again (`cache-store.ts`).
+    if (!(await draftInputNotesHold(vault, draft.sourceCitation, draft.inputNotes))) {
+      return setAside(draft);
+    }
+    const citation = draft.sourceCitation;
+    if (citation === undefined) return 'clear';
     if (
       citation.sourcePath === draft.sourcePath ||
       (citation.sourcePath.toLowerCase().endsWith('.md') && citation.sourceRevision === undefined)
@@ -1880,14 +1958,7 @@ export function draftSourceCheckAtPresentation(
     if (await bytesMatchRevision(vault, citation.sourcePath, citation.sourceRevision)) {
       return 'clear';
     }
-    if (redraftSetAside !== undefined && draft.predecessorInstrumentId !== undefined) {
-      try {
-        await redraftSetAside(draft);
-      } catch {
-        // The set-aside stands; the next presentation asks again.
-      }
-    }
-    return 'check-failed';
+    return setAside(draft);
   };
 }
 

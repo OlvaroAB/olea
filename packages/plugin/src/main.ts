@@ -129,6 +129,7 @@ import { createBulkReviewController } from './generation/bulk-review.js';
 import { BulkReviewView, VIEW_TYPE_OLEA_BULK_REVIEW } from './generation/bulk-review-view.js';
 import { buildFormatMatch, type FormatMatchDecision } from './generation/format-match.js';
 import { isOleaHomeNote } from './generation/home-note.js';
+import { draftInputNotesHold } from './generation/input-notes.js';
 import type { GenerationRefusalNotice } from './generation/pipeline.js';
 import { buildGenerationWiring, type GenerationWiring } from './generation/wiring.js';
 import {
@@ -1786,6 +1787,10 @@ export default class OleaPlugin extends Plugin {
               cache: generationWiring.cache,
               acceptPort: generationWiring.acceptPort,
               editPort: createObsidianEditPort(this.app),
+              // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): a draft whose input notes no longer read
+              // as drafted (or that predates them) is withheld from the list, as from a session.
+              holds: (record) =>
+                draftInputNotesHold(vault, record.sourceCitation, record.inputNotes),
             }),
           // `[D-216]`/`ol-mbh6`: the clearing row's source peek, mirroring
           // `ReviewView`'s own `instrumentId`-keyed call to the identical
@@ -1799,6 +1804,10 @@ export default class OleaPlugin extends Plugin {
           // `BulkReviewView.renderRefusals`), so a sweep that lands while this
           // view is open is reflected on the next render without a rebuild.
           () => this.lastGenerationRefusals,
+          // `[D-628]` (`ol-egov.141.89.2.39`): each title in a draft's "Sources" list opens that note
+          // through the same `[D-171]` open-source hand-off the registry's source locations use.
+          (notePath) =>
+            void createObsidianOpenSourceLocationPort(this.app).open({ sourcePath: notePath }),
         ),
     );
 
@@ -3696,6 +3705,10 @@ export default class OleaPlugin extends Plugin {
         registryOverrides: this.registryOverridesCache,
       },
       transport,
+      // `[D-628]` (`ol-egov.141.89.2.39`): the vault the index snapshot above was built from, so each
+      // note supplying a chunk is checked current before a drafting request is sent and its
+      // fingerprint is recorded on the draft (`draft-quiz-cards.ts`, `inputNotesOfSuppliedChunks`).
+      vault: this.vaultSource,
       // `ol-egov.141.89.8.56` (D-465): the same cached-frontmatter source the classify hook reads,
       // so a Markdown file declaring a transcript role reaches `sourceChunkOrigins`.
       frontmatterHost: this.sourceOriginFrontmatterHost(),

@@ -59,6 +59,7 @@ import {
   type VaultSource,
 } from 'olea-core';
 import { DRAFT_CACHE_FOLDER } from '../../../plugin/src/generation/cache-store.js';
+import { markdownFingerprint } from '../../../plugin/src/generation/input-notes.js';
 import type { DraftRecord } from '../../../plugin/src/generation/types.js';
 
 /** Mirrors `packages/core/src/concept/zettelkasten.ts`'s `DEFAULT_ZETTELKASTEN_FOLDER` — not re-exported from `olea-core`'s package root, so restated here rather than reached into that file's internals. */
@@ -141,6 +142,7 @@ function buildSeedDraftRecord(
   candidate: DraftSeedCandidate,
   index: number,
   createdAtIso: string,
+  sourceFingerprint: string,
 ): DraftRecord {
   const conceptKey = provisionalConceptKey({
     name: candidate.conceptName,
@@ -153,6 +155,10 @@ function buildSeedDraftRecord(
     conceptName: candidate.conceptName,
     conceptIds: [conceptKey],
     sourcePath: candidate.sourcePath,
+    // `ol-egov.141.89.2.39` ([D-628]): the one note it is said to come from, with that note's
+    // fingerprint as it stands at seeding, as a draft drafted today records it. Without it the
+    // draft would read as one recorded before input notes were, and be withheld.
+    inputNotes: [{ path: candidate.sourcePath, contentHash: sourceFingerprint }],
     createdAt: createdAtIso,
     question: {
       stem: `Which statement best describes ${candidate.conceptName}?`,
@@ -187,9 +193,11 @@ export async function seedSimulatorDrafts(
   if (candidates.length === 0) return 0;
 
   const createdAtIso = now().toISOString();
-  const records = candidates.map((candidate, index) =>
-    buildSeedDraftRecord(candidate, index, createdAtIso),
-  );
+  const records: DraftRecord[] = [];
+  for (const [index, candidate] of candidates.entries()) {
+    const fingerprint = await markdownFingerprint(await vault.read(candidate.sourcePath));
+    records.push(buildSeedDraftRecord(candidate, index, createdAtIso, fingerprint));
+  }
 
   for (const record of records) {
     await vault.write(

@@ -105,6 +105,7 @@ import { deriveDraftId } from './cache-store.js';
 import type { DraftCardsDeps, DraftCardsRequest, DraftCardsResult } from './draft-cards.js';
 import { draftCardsForConcept } from './draft-cards.js';
 import { ensureHomeNoteForConcept, hashSourceRevision, isOleaHomeNote } from './home-note.js';
+import { citationOfInputNote, type InputNote } from './input-notes.js';
 import {
   extractDraftedCards,
   extractDraftedCardsProvenance,
@@ -168,14 +169,24 @@ function defaultListConceptsForCourse(
 interface DraftedContent {
   readonly contents: readonly (DraftQuestion | DraftCardContent)[];
   readonly provenance: DraftProvenance;
+  /**
+   * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): what the drafting call reported about where its
+   * chunks came from — the notes, with their fingerprints, and the request's chunk alignment the
+   * citation of a one-note draft is built from (`citationOfInputNote`).
+   */
+  readonly drawnFrom: Extract<DraftQuizCardsResult | DraftCardsResult, { status: 'drafted' }>;
 }
 
-/** `'mcq'`: `quiz.generate.v1`. `'retry'` is a transport throw; `null` is nothing to cache. */
+/**
+ * `'mcq'`: `quiz.generate.v1`. `'retry'` is a transport throw; `'input-changed'` is a note that
+ * supplied a chunk edited since it was last indexed (`[D-628]`: nothing sent); `null` is nothing to
+ * cache.
+ */
 async function draftMcqContent(
   deps: GenerationDraftJobDeps,
   draftDeps: DraftQuizCardsDeps,
   payload: GenerationJobPayload,
-): Promise<DraftedContent | 'retry' | null> {
+): Promise<DraftedContent | 'retry' | 'input-changed' | null> {
   const draftForConcept = deps.draftForConcept ?? draftQuizCardsForConcept;
   let result: DraftQuizCardsResult;
   try {
@@ -187,19 +198,20 @@ async function draftMcqContent(
     return 'retry';
   }
   if (result.status === 'refused') return null;
+  if (result.status === 'input-changed') return 'input-changed';
 
   const questions = extractDraftedQuestions(result.response);
   const provenance = extractDraftedProvenance(result.response);
   if (questions === null || provenance === null || questions.length === 0) return null;
-  return { contents: questions, provenance };
+  return { contents: questions, provenance, drawnFrom: result };
 }
 
-/** `'qa'`: `cards.generate.v1`, the same three outcomes as {@link draftMcqContent}. */
+/** `'qa'`: `cards.generate.v1`, the same four outcomes as {@link draftMcqContent}. */
 async function draftQaContent(
   deps: GenerationDraftJobDeps,
   draftDeps: DraftCardsDeps,
   payload: GenerationJobPayload,
-): Promise<DraftedContent | 'retry' | null> {
+): Promise<DraftedContent | 'retry' | 'input-changed' | null> {
   const draftCardForConcept = deps.draftCardForConcept ?? draftCardsForConcept;
   let result: DraftCardsResult;
   try {
@@ -211,11 +223,12 @@ async function draftQaContent(
     return 'retry';
   }
   if (result.status === 'refused') return null;
+  if (result.status === 'input-changed') return 'input-changed';
 
   const cards = extractDraftedCards(result.response);
   const provenance = extractDraftedCardsProvenance(result.response);
   if (cards === null || provenance === null || cards.length === 0) return null;
-  return { contents: cards, provenance };
+  return { contents: cards, provenance, drawnFrom: result };
 }
 
 /**
@@ -283,6 +296,9 @@ export async function runGenerationDraftJob(
       ? await draftQaContent(deps, draftDeps, payload)
       : await draftMcqContent(deps, draftDeps, payload);
   if (drafted === 'retry') return { ok: false, retryable: true };
+  // `[D-628]`: a note that supplied a chunk was edited since it was last indexed, so nothing was
+  // sent. The job waits without counting the attempt, and drafts once the index has caught up.
+  if (drafted === 'input-changed') return { ok: false, retryable: true, notAttempted: true };
   // A grounded refusal (F4.5's grounded-by-construction argument, `pipeline.ts`'s own doc) is not
   // an error, and neither is an unparseable or empty reply (the posture `revision-job-runner.ts`
   // takes): nothing to cache. D-238's "one call... ever" for the primary kind means a refusal
@@ -336,6 +352,15 @@ export async function runGenerationDraftJob(
   const sourceContentHash = (await deps.vault.exists(homeNote))
     ? await hashSourceRevision(await deps.vault.read(homeNote))
     : undefined;
+  // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from; a draft drawn
+  // from one note cites that note (this runner cited nothing before). Several notes: no citation, as
+  // before, and the origin a surface shows is read from the list.
+  const inputNotes: readonly InputNote[] | undefined = drafted.drawnFrom.inputNotes;
+  const onlyNote = inputNotes?.length === 1 ? inputNotes[0] : undefined;
+  const sourceCitation =
+    onlyNote === undefined
+      ? undefined
+      : await citationOfInputNote(deps.vault, onlyNote, homeNote, drafted.drawnFrom);
 
   const createdAt = now().toISOString();
   let sequence = 0;
@@ -347,6 +372,8 @@ export async function runGenerationDraftJob(
       conceptName: payload.conceptName,
       conceptIds: [payload.conceptKey],
       sourcePath: homeNote,
+      ...(sourceCitation !== undefined ? { sourceCitation } : {}),
+      ...(inputNotes !== undefined && inputNotes.length > 0 ? { inputNotes } : {}),
       ...(sourceContentHash !== undefined ? { sourceContentHash } : {}),
       createdAt,
       ...(payload.instrumentKind === 'qa'

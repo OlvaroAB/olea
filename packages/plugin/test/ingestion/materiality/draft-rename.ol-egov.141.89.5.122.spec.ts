@@ -26,6 +26,8 @@ function pendingDraft(draftId: string, citedPath: string, revision: string): Dra
     conceptIds: ['concept-key-1'],
     sourcePath: PDF_HOME,
     sourceCitation: { sourcePath: citedPath, page: 2, sourceRevision: revision },
+    // `ol-egov.141.89.2.39` ([D-628]): drawn from the slides alone, whose fingerprint is their bytes.
+    inputNotes: [{ path: citedPath, contentHash: revision }],
     createdAt: '2026-10-22T09:00:00-07:00',
     question: {
       stem: 'Which invented statement about the kalomi rule holds?',
@@ -78,9 +80,12 @@ describe('a pending draft citing a PDF-type source (ol-egov.141.89.5.122)', () =
     vault.binaries.set(PDF_RENAMED, PDF_BYTES);
     await h.trigger.onSourceRenamed(vault, PDF, PDF_RENAMED);
     const after = await cache.get('draft-1');
+    // `ol-egov.141.89.2.39` ([D-628]): the input note naming the slides moves with them, its
+    // fingerprint kept; nothing else changes.
     expect(after).toEqual({
       ...before,
       sourceCitation: { ...before?.sourceCitation, sourcePath: PDF_RENAMED },
+      inputNotes: before?.inputNotes?.map((note) => ({ ...note, path: PDF_RENAMED })),
     });
   });
 

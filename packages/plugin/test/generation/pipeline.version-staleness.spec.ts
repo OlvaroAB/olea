@@ -20,6 +20,7 @@ import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js'
 import { runGenerationSweep } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE_FOLDER_NOTE = '01 Courses/COGS214/Week 2.md';
 
@@ -40,6 +41,7 @@ function embeddedUnit(notePath: string): ExtractedUnit {
 
 const groundedResponse = (stem: string): DraftQuizCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: 'COGS214', conceptName: stem, sourceChunks: ['chunk'] },
   response: {
     ok: true,

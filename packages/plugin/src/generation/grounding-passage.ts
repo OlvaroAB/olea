@@ -56,6 +56,12 @@ import { citePassage } from 'olea-core';
  * missing one only leaves the instrument at whole-note grain. Flipping this is a measured-baseline
  * decision, not a code change made in passing. The sole-chunk rule does not depend on it.
  *
+ * **Superseded for drafted items by `[D-626]`** (`ol-egov.141.89.2.39`): "a model naming one passage
+ * never narrows the protection" — a passage digest is recorded only when the request supplied
+ * exactly one chunk that is exactly one passage of its note, whatever this says, so the sweep no
+ * longer reads a question's own citation at all. The constant is left in place; retiring it (and
+ * `GenerationPipelineDeps.citedChunkDigest`) is a follow-up.
+ *
  * @provenance declared
  */
 export const CITED_CHUNK_DIGEST_ENABLED = false;
@@ -85,44 +91,6 @@ export function citedGroundingChunk(
   if (texts.size !== 1) return undefined;
   const [text] = texts;
   return text;
-}
-
-/**
- * `ol-egov.141.89.2.39`: the citation an item should carry when it can name the one chunk it was
- * drafted from and that chunk came from another note. F3.3's clearing row names "which reading or
- * lecture the draft was drawn from", and C5.3 protects only "the recorded source note" (`[D-543]`):
- * protection keyed to a note the item was not drafted from "would leave its real source unchecked"
- * (`[D-567]`'s own words for a transcript part).
- *
- * The named chunk is the request's sole chunk, or the one distinct chunk `groundedIn` names (the
- * rule of {@link citedGroundingChunk}); its positions must also name one distinct path. The citation
- * is re-pointed only when that path is a markdown note, the chunk is not a supplied transcript
- * passage (`isTranscriptChunk`), and the path is not the note `citation` already names. The new
- * citation names that note alone: no page, section or revision, as a markdown note's citation
- * carries none, and no digest until {@link withGroundingPassage} names one. Otherwise `citation`,
- * unchanged: a citation that already names a passage, several chunks or paths, none, a position the
- * request did not carry, or no `chunkPaths` (a result built before they existed). Never the
- * top-ranked chunk of several.
- */
-export function citationForNamedChunk(
-  citation: InstrumentCitation,
-  sourceChunks: readonly string[],
-  chunkPaths: readonly string[] | undefined,
-  groundedIn: readonly number[] | undefined,
-  isTranscriptChunk: (position: number) => boolean,
-): InstrumentCitation {
-  if (citation.passageDigest !== undefined) return citation;
-  if (chunkPaths === undefined || chunkPaths.length !== sourceChunks.length) return citation;
-  const positions =
-    sourceChunks.length === 1 ? [0] : readAuthoringGroundedIn(groundedIn, sourceChunks.length);
-  if (positions === undefined || positions.length === 0) return citation;
-  if (new Set(positions.map((position) => sourceChunks[position])).size !== 1) return citation;
-  const paths = new Set(positions.map((position) => chunkPaths[position]));
-  if (paths.size !== 1) return citation;
-  if (positions.some(isTranscriptChunk)) return citation;
-  const [path] = paths;
-  if (path === undefined || !isMarkdownPath(path) || path === citation.sourcePath) return citation;
-  return { sourcePath: path };
 }
 
 function isMarkdownPath(path: string): boolean {
