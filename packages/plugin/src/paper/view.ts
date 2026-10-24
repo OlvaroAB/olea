@@ -90,6 +90,12 @@ export const PAPER_HANDOFF_CONFIRMATION = 'Added to your ordinary review, from a
  */
 export const PAPER_HANDOFF_ALREADY_DONE =
   'Already added to your ordinary review, from a practice paper.';
+/**
+ * Sheet v87 row 5's stopgap (David, 2026-10-24, `ol-egov.141.89.7.114`; verbatim in
+ * `docs/direction/20261024_decision_sheet_responses_v87.md`, olea-service): shown in a flashcard
+ * item's row in place of the control, until a flashcard can be added to her review.
+ */
+export const PAPER_HANDOFF_FLASHCARD_NOT_YET = 'This flashcard can’t be added to your review yet.';
 
 export class PaperView extends ItemView {
   private readonly deps: PracticePaperViewDeps;
@@ -410,6 +416,16 @@ export class PaperView extends ItemView {
       return;
     }
 
+    // The stopgap: a flashcard item cannot be added yet, so its row says so in the ruled words
+    // instead of offering a control that would fail.
+    if (state.record.items.find((i) => i.slotId === item.slotId)?.taskId === 'cards.generate.v1') {
+      row.createEl('p', {
+        cls: 'olea-paper-handoff-unavailable',
+        text: PAPER_HANDOFF_FLASHCARD_NOT_YET,
+      });
+      return;
+    }
+
     const button = row.createEl('button', { text: PAPER_HANDOFF_BUTTON_LABEL });
     button.addEventListener('click', () => {
       void this.handOffItem(state, item, button);
@@ -431,12 +447,19 @@ export class PaperView extends ItemView {
     button: HTMLButtonElement,
   ): Promise<void> {
     button.disabled = true;
-    const result = await this.deps.handOffItem(
-      state.course,
-      state.record.id,
-      item.slotId,
-      item.conceptName,
-    );
+    let result: Awaited<ReturnType<PracticePaperViewDeps['handOffItem']>>;
+    try {
+      result = await this.deps.handOffItem(
+        state.course,
+        state.record.id,
+        item.slotId,
+        item.conceptName,
+      );
+    } catch (error) {
+      // A failed hand-off leaves the control usable again, and the failure still surfaces.
+      button.disabled = false;
+      throw error;
+    }
     this.justHandedOff.add(item.slotId);
     // Only `record` changes on a hand-off — `items`/`partialStatement`/`emptySlots` were fixed at
     // generation time (`buildReadyStateFromRecord`'s own doc: "never recomposes") and stay valid.

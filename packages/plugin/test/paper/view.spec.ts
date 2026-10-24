@@ -87,6 +87,12 @@ describe('PaperView — the three ratified strings (David, 2026-09-27; docs/desi
     expect(SOURCE).toContain("'Already added to your ordinary review, from a practice paper.';");
   });
 
+  it('exports sheet v87 row 5’s stopgap sentence verbatim (David, 2026-10-24)', () => {
+    expect(SOURCE).toContain(
+      "export const PAPER_HANDOFF_FLASHCARD_NOT_YET = 'This flashcard can’t be added to your review yet.';",
+    );
+  });
+
   it('every sentence that states the record’s context uses the ratified phrase verbatim', () => {
     // The registry ratifies the exact string "from a practice paper" (never a paraphrase) —
     // every occurrence in the confirmation/already-added strings must carry it byte-for-byte.
@@ -114,9 +120,10 @@ describe('PaperView.renderHandoffControl — one item, one control, never the wh
   });
 
   it('renders no button at all once the slot is already handed off — a static line instead', () => {
-    const [beforeReturn, afterReturn] = RENDER_HANDOFF_CONTROL_BODY.split('return;\n    }');
-    expect(beforeReturn).toBeDefined();
-    expect(afterReturn).toBeDefined();
+    const cut = RENDER_HANDOFF_CONTROL_BODY.indexOf('return;\n    }');
+    expect(cut).toBeGreaterThan(-1);
+    const beforeReturn = RENDER_HANDOFF_CONTROL_BODY.slice(0, cut);
+    const afterReturn = RENDER_HANDOFF_CONTROL_BODY.slice(cut);
     // The already-handed-off branch (before the early return) creates a <p>, never a <button>.
     expect(beforeReturn).toContain("row.createEl('p'");
     expect(beforeReturn).not.toContain("createEl('button'");
@@ -164,6 +171,12 @@ describe('PaperView.handOffItem — calls olea-core’s handOffPaperItem (via de
     expect(HAND_OFF_ITEM_BODY).toMatch(
       /this\.deps\.handOffItem\(\s*state\.course,\s*state\.record\.id,\s*item\.slotId,\s*item\.conceptName,?\s*\)/,
     );
+  });
+
+  it('a failed hand-off makes the control usable again and still surfaces the failure', () => {
+    const catchBody = HAND_OFF_ITEM_BODY.slice(HAND_OFF_ITEM_BODY.indexOf('} catch (error) {'));
+    expect(catchBody).toContain('button.disabled = false;');
+    expect(catchBody).toContain('throw error;');
   });
 
   it('marks the slot as just-handed-off and re-renders from the returned record, never by re-loading the course', () => {
@@ -291,7 +304,12 @@ function readyState(structure: PaperStructuredShape | undefined): PracticePaperC
   return {
     kind: 'ready',
     course: 'Course Zarp',
-    record: { id: 'paper-1', handoffs: [], ...(structure === undefined ? {} : { structure }) },
+    record: {
+      id: 'paper-1',
+      handoffs: [],
+      items: [],
+      ...(structure === undefined ? {} : { structure }),
+    },
     partial: false,
     partialStatement: null,
     incompleteStatement: null,
@@ -368,5 +386,28 @@ describe('PaperView — a paper with no recovered sections prints as before ([D-
 
   it('with a stored structure that holds no sections', async () => {
     expect(await mount(readyState({ ...SECTIONED, sections: [] }))).toEqual(TODAY);
+  });
+});
+
+describe('PaperView — a flashcard item’s row (sheet v87 row 5, ol-egov.141.89.7.114)', () => {
+  it('the stopgap: a flashcard item says it cannot be added yet, and is offered no control', async () => {
+    const base = readyState(undefined) as unknown as { record: Record<string, unknown> };
+    const state = {
+      ...base,
+      record: {
+        ...base.record,
+        items: [
+          { slotId: 'p1', taskId: 'quiz.generate.v1' },
+          { slotId: 'p2', taskId: 'cards.generate.v1' },
+          { slotId: 'p3', taskId: 'quiz.generate.v1' },
+        ],
+      },
+    } as unknown as PracticePaperCourseState;
+    const lines = await mount(state);
+    expect(lines.filter((l) => l.includes('button "Add to review"'))).toHaveLength(2);
+    const skrit = lines.slice(lines.findIndex((l) => l.includes('"Skrit"')));
+    expect(skrit[2]).toBe(
+      '      p.olea-paper-handoff-unavailable "This flashcard can’t be added to your review yet."',
+    );
   });
 });
