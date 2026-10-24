@@ -1794,13 +1794,13 @@ export default class OleaPlugin extends Plugin {
                 parseMadeBy(this.app.metadataCache.getCache(notePath)?.frontmatter?.['made-by']),
               cache: generationWiring.cache,
               acceptPort: generationWiring.acceptPort,
-              editPort: createObsidianEditPort(this.app),
               // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): a draft whose input notes no longer read
               // as drafted (or that predates them) is withheld from the list, as from a session.
               holds: (record) =>
                 draftInputNotesHold(vault, record.sourceCitation, record.inputNotes, (path) =>
                   this.renamedPathOf(path),
                 ),
+              editPort: createObsidianEditPort(this.app),
               // `ol-zjke.2`: a draft held for a lecturer's correction is not listed.
               ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
             }),

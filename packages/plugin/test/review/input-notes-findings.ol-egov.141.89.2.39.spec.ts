@@ -730,7 +730,7 @@ describe('F: a rename Olea saw is followed by the pass and by an open session', 
     });
     await cache.put(record);
     // The session's own copy of its drafts is taken at open, as `openReviewSession` takes it.
-    const check = draftSourceCheckAtPresentation(vault, [record], undefined, { cache });
+    const check = draftSourceCheckAtPresentation(vault, [record], undefined, undefined, { cache });
     expect(await check(record.draftId)).toBe('clear');
 
     vault.move(NOTE_B, NOTE_B2);
