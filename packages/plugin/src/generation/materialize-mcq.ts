@@ -453,6 +453,12 @@ export interface MaterializeAcceptedDraftDeps {
   readonly now?: () => Date;
   /** Injectable for deterministic tests; defaults to `crypto.randomUUID()`, same as `appendSuccessionRecord` itself. */
   readonly generateEventId?: () => string;
+  /**
+   * `ol-zjke.2` (decision sheet v87 row 4): called with the derived instrument id before anything of
+   * the instrument is written (sidecars, target record, the note), so a held draft's hold lands on
+   * the instrument first (`accept.ts`). A throw propagates and nothing is written.
+   */
+  readonly beforeWrite?: (instrumentId: string) => Promise<void>;
 }
 
 export interface MaterializeAcceptedDraftResult {
@@ -581,6 +587,8 @@ export async function materializeAcceptedDraft(
   // id a prior, interrupted attempt already minted and sidecar-wrote, never a fresh one.
   const derivedId = await deriveInstrumentId(input);
   const stamped = stampMcqId(content, inserted.span, { generateId: () => derivedId });
+  // `ol-zjke.2`: before the first write below.
+  await deps.beforeWrite?.(stamped.id);
 
   // `[D-181]`: the sidecar, never text written into her notes — see the
   // module doc's own section. `ol-v7r5.106`, Class B: never skipped any

@@ -64,6 +64,22 @@ describe('buildRetrospectiveNoteContent', () => {
     expect(content).not.toMatch(/%|\bpercent\b|\bwell done\b|\bgood job\b/i);
   });
 
+  it('a v0.9 reading carrying its counts puts no explanation-level sentence and no zero for it in the kept note ([D-632])', () => {
+    const content = buildRetrospectiveNoteContent(
+      reading({
+        beforeAssessment: {
+          kind: 'counts',
+          practised: 1,
+          scopeSize: 2,
+          explained: null,
+          basis: 'assessment-stated',
+        },
+      }),
+      '2026-09-02T10:00:00.000Z',
+    );
+    expect(content).not.toMatch(/explanation-level|by then/i);
+  });
+
   it('never claims to know how the assessment went', () => {
     const content = buildRetrospectiveNoteContent(reading(), '2026-09-02T10:00:00.000Z');
     expect(content).toMatch(/never saw the assessment/i);

@@ -116,6 +116,7 @@ import {
   retrieveExplainBackSourceBlocks,
 } from './explain-back/request.js';
 import { resolveIntroducingPassageFromVault } from './explain-back/resolve-introducing-passage.js';
+import { explainBackSearchConfigured } from './explain-back/search-available.js';
 import {
   createReadLoggedAttemptState,
   createRecordSetAsideAttempt,
@@ -1144,7 +1145,14 @@ export default class OleaPlugin extends Plugin {
     // where re-reading `this.generation` inside a lazily-invoked
     // `registerView` callback would need a redundant null check for
     // something that is, in fact, built unconditionally right here.
-    const generationWiring = buildGenerationWiring({ vault, deviceId, now: this.now });
+    // `ol-zjke.2`: acceptance reads a held draft's hold from, and carries it to the new instrument
+    // in, the same citation store the slide-correction route writes (built later in `onload`).
+    const generationWiring = buildGenerationWiring({
+      vault,
+      deviceId,
+      now: this.now,
+      draftHolds: () => this.citationHashStore,
+    });
     this.generation = generationWiring;
 
     // F2.10's accept/dismiss verb pair (`[D-170]`/`[GEN-2]`, `ol-0r92.27`) —
@@ -1793,6 +1801,8 @@ export default class OleaPlugin extends Plugin {
                 draftInputNotesHold(vault, record.sourceCitation, record.inputNotes, (path) =>
                   this.renamedPathOf(path),
                 ),
+              // `ol-zjke.2`: a draft held for a lecturer's correction is not listed.
+              ...(this.citationHashStore ? { citationHashStore: this.citationHashStore } : {}),
             }),
           // `[D-216]`/`ol-mbh6`: the clearing row's source peek, mirroring
           // `ReviewView`'s own `instrumentId`-keyed call to the identical
@@ -4809,6 +4819,7 @@ export default class OleaPlugin extends Plugin {
    */
   private async composeExplainBackSourceBlocks(
     query: string,
+    courseCode?: string | null,
   ): Promise<readonly ExplainBackSourceBlock[]> {
     const embeddingCache = this.retrieval?.embeddingCache;
     const embeddingProvider = this.retrieval?.embeddingProvider;
@@ -4836,9 +4847,28 @@ export default class OleaPlugin extends Plugin {
         // `ol-egov.141.89.6.74`: the live concept records, for the same completeness
         // (`retrieveExplainBackSourceBlocks` never reads it) and the same thunk reason.
         conceptRecords: () => this.conceptRecords,
+        // `[D-633]`: the course reading set's frontmatter links, the same host drafting gets.
+        frontmatterHost: this.sourceOriginFrontmatterHost(),
       },
       query,
+      // `[D-633]`: the instrument's course; `undefined` for a free-form topic (no instrument).
+      courseCode,
     );
+  }
+
+  /**
+   * `[D-629]`: whether a passage search can run at all. `false` without a Worker (no embedding
+   * provider or cache, which `retrieval/wiring.ts` leaves `null` until a token is pasted, F7.8) or
+   * before the keyword index exists; the practice view then says it is unavailable instead of
+   * reporting a search that found nothing. The same three conditions
+   * `composeExplainBackSourceBlocks` above returns `[]` on.
+   */
+  private explainBackSearchAvailable(): boolean {
+    return explainBackSearchConfigured({
+      embeddingCache: this.retrieval?.embeddingCache,
+      embeddingProvider: this.retrieval?.embeddingProvider,
+      keywordIndex: this.keywordIndex,
+    });
   }
 
   /**
@@ -5208,7 +5238,13 @@ export default class OleaPlugin extends Plugin {
         grade: (input) => this.gradeExplainBackAttempt(input),
         acceptWithObservation: (pending, context) =>
           this.acceptExplainBackGradingWithObservation(pending, context),
-        retrieveSourceBlocks: (query) => this.composeExplainBackSourceBlocks(query),
+        retrieveSourceBlocks: (query, courseCode) =>
+          this.composeExplainBackSourceBlocks(query, courseCode),
+        // `[D-629]`: with no Worker configured the view says it is unavailable, never
+        // that a search found nothing.
+        searchAvailable: () => this.explainBackSearchAvailable(),
+        // `[D-633]`: the transcript protections on a shown passage read the same host drafting does.
+        sourceOriginHost: this.sourceOriginFrontmatterHost(),
         // `ol-egov.141.89.6.33`: the resolved-neighbour half —
         // `resolveGradingSourceBlocks` (`explain-back/modal.ts`) calls this
         // to find a live 'causes' partner for the subject before threading

@@ -649,8 +649,9 @@ describe('production composition (ol-egov.141.89.5.108)', () => {
   it("open-session.ts passes it to the drafts' presentation check", () => {
     const session = source('../../src/review/open-session.ts');
     expect(session.replace(/\s+/g, ' ')).toContain(
-      // `ol-egov.141.89.2.39` (finding F): then what it reads each draft afresh through.
-      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, {',
+      // `ol-egov.141.89.2.39` (finding F): `ol-zjke.2`'s citation store (a draft held for a correction is set aside
+      // too), then what it reads each draft afresh through.
+      'checkDraftSourceAtPresentation: draftSourceCheckAtPresentation( input.vault, pendingDrafts, input.redraftSetAsideSuccessor, input.citationHashStore, { ...(input.draftCache ? { cache: input.draftCache } : {}), pathNow }, )',
     );
   });
 });

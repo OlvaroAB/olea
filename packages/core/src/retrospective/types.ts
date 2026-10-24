@@ -176,8 +176,12 @@ export type RetrospectiveBeforeAssessment =
       readonly practised: number;
       /** {m}: concepts in scope (for the evidenced basis, those evidenced before the day). */
       readonly scopeSize: number;
-      /** {k}: of the practised ones, those whose stage from that evidence alone was explained (`tree`). */
-      readonly explained: number;
+      /**
+       * {k}: of the practised ones, those whose stage from that evidence alone was explained (`tree`).
+       * `null` is unavailable, never zero (`[D-632]`): in v0.9 no explanation is graded (`[D-603]`), so
+       * the assembly always carries `null` and the renderer leaves F8.8's second sentence out.
+       */
+      readonly explained: number | null;
       readonly basis: RetrospectiveScopeOrigin;
     }
   | { readonly kind: 'unavailable'; readonly reason: 'scope' | 'history' };

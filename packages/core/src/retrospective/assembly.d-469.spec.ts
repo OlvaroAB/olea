@@ -108,7 +108,7 @@ function input(
 }
 
 describe('the cutoff: both counts read evidence recorded before the start of the date', () => {
-  it('counts practice and an explained stage reached before the date', () => {
+  it('counts practice reached before the date, with the explanation-level count unavailable ([D-632])', () => {
     const line = buildRetrospective(
       input([
         review('k-a', '2026-07-01T10:00:00+00:00', 'e1'),
@@ -119,7 +119,7 @@ describe('the cutoff: both counts read evidence recorded before the start of the
       kind: 'counts',
       practised: 2,
       scopeSize: 3,
-      explained: 1,
+      explained: null,
       basis: 'assessment-stated',
     });
   });
@@ -137,7 +137,7 @@ describe('the cutoff: both counts read evidence recorded before the start of the
       kind: 'counts',
       practised: 1,
       scopeSize: 3,
-      explained: 0,
+      explained: null,
       basis: 'assessment-stated',
     });
   });
@@ -146,7 +146,7 @@ describe('the cutoff: both counts read evidence recorded before the start of the
     const dayBefore = buildRetrospective(
       input([explainBack('k-a', '2026-07-13T23:59:59+10:00', 'e1')]),
     ).beforeAssessment;
-    expect(dayBefore).toMatchObject({ kind: 'counts', practised: 1, explained: 1 });
+    expect(dayBefore).toMatchObject({ kind: 'counts', practised: 1, explained: null });
 
     const onTheDay = buildRetrospective(
       input([
@@ -156,7 +156,35 @@ describe('the cutoff: both counts read evidence recorded before the start of the
       ]),
     ).beforeAssessment;
     // Her local day is the offset timestamp's own day: 14 July at +10:00 is on the day, not before it.
-    expect(onTheDay).toMatchObject({ kind: 'counts', practised: 1, explained: 0 });
+    expect(onTheDay).toMatchObject({ kind: 'counts', practised: 1, explained: null });
+  });
+});
+
+describe('the explanation-level count is unavailable in v0.9, never zero ([D-632])', () => {
+  it('whatever the log holds, the count is null: not 0, not a count of explanation practice', () => {
+    const logs = [
+      [review('k-a', '2026-07-01T10:00:00+00:00', 'e1')],
+      [
+        review('k-a', '2026-07-01T10:00:00+00:00', 'e1'),
+        explainBack('k-a', '2026-07-02T10:00:00+00:00', 'e2'),
+        explainBack('k-b', '2026-07-03T10:00:00+00:00', 'e3'),
+      ],
+    ];
+    for (const entries of logs) {
+      const line = buildRetrospective(input(entries)).beforeAssessment;
+      expect(line).toMatchObject({ kind: 'counts', explained: null });
+      expect(line).not.toMatchObject({ explained: 0 });
+    }
+  });
+
+  it('{n} and {m} are unchanged by it', () => {
+    const line = buildRetrospective(
+      input([
+        review('k-a', '2026-07-01T10:00:00+00:00', 'e1'),
+        explainBack('k-b', '2026-07-02T10:00:00+00:00', 'e2'),
+      ]),
+    ).beforeAssessment;
+    expect(line).toMatchObject({ practised: 2, scopeSize: 3 });
   });
 });
 

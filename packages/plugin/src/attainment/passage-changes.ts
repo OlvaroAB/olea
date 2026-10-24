@@ -22,6 +22,12 @@
  * successor removes neither (`[D-536]`): the exclusion ends only when a resolving write clears the
  * fact, which is a successful revalidation.
  *
+ * **Live instruments only** (`ol-zjke.2`, decision sheet v87 row 4): the store also holds the hold
+ * on a pending draft not yet an instrument, under a draft hold key. A draft has no evidence to
+ * exclude and is never an instrument, so its key is skipped by the store's one classifier
+ * (`anchorKeyKind`); once the draft becomes an instrument its hold is carried to the instrument id,
+ * which reads here like any other fact.
+ *
  * **A store that cannot be read is uncertainty, never credit** (the 2026-10-06 sheet's correction
  * to the reversible choices). {@link readPendingPassageChanges} reports it as `unreadable`, and
  * {@link passageChangesForReadings} then leaves out the evidence of every instrument that could
@@ -34,7 +40,10 @@
 
 import type { ReviewLogEntry } from 'olea-contracts';
 import type { PassageChangeFact, VaultInstrumentRecord } from 'olea-core';
-import type { CitationHashStore } from '../ingestion/materiality/citation-hash-store.js';
+import {
+  anchorKeyKind,
+  type CitationHashStore,
+} from '../ingestion/materiality/citation-hash-store.js';
 import { isTrackedForRevision } from '../ingestion/materiality/citation-revision-wiring.js';
 
 /** What the store gave: its facts, or that it could not be read. */
@@ -65,6 +74,8 @@ export async function readPendingPassageChanges(
   const nowMs = now.getTime();
   const changes: PassageChangeFact[] = [];
   for (const instrumentId of [...anchors.keys()].sort()) {
+    // `ol-zjke.2`: a draft hold key names no instrument; no reading may take it for one.
+    if (anchorKeyKind(instrumentId) !== 'instrument') continue;
     const pending = anchors.get(instrumentId)?.pendingRevalidation;
     if (pending === undefined) continue;
     const seenMs = Number.isFinite(pending.since) ? Math.min(pending.since, nowMs) : nowMs;

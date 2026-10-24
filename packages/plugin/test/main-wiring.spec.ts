@@ -2021,9 +2021,26 @@ describe('[D-351]/[D-330] (ol-egov.141.89.5.19): the pending-revalidation store 
   // view's `createLocalGapProvider` and the study plan's `createLocalStudyPlanProvider`, each of
   // which reads the store's persisted facts to leave a changed, unrevalidated passage's evidence
   // out of its current readings. Pinned at their own sites below; five plus two is seven.
-  it('the four compose call sites (three direct, one via Home), the review-tab open/extend site, the gap view and the study plan receive it — exactly seven occurrences of the plain one-line spread', () => {
+  // `ol-zjke.2` (decision sheet v87 row 4) adds one more: bulk review's `createBulkReviewController`,
+  // which reads a pending draft's hold so a draft held for a lecturer's correction is not listed.
+  // Pinned at its own site below; seven plus one is eight.
+  it('the four compose call sites (three direct, one via Home), the review-tab open/extend site, the gap view, the study plan and bulk review receive it — exactly eight occurrences of the plain one-line spread', () => {
     const occurrences = main.match(new RegExp(citationSpread, 'g')) ?? [];
-    expect(occurrences.length).toBe(7);
+    expect(occurrences.length).toBe(8);
+  });
+
+  it('ol-zjke.2: the accept port reads a held draft from the same store, through buildGenerationWiring', () => {
+    expect(main).toMatch(
+      /buildGenerationWiring\(\{\s*vault,\s*deviceId,\s*now: this\.now,\s*draftHolds: \(\) => this\.citationHashStore,\s*\}\)/,
+    );
+  });
+
+  it("ol-zjke.2: bulk review's createBulkReviewController construction receives the store", () => {
+    expect(main).toMatch(
+      new RegExp(
+        `createBulkReviewController\\(\\{[\\s\\S]{0,800}?editPort: createObsidianEditPort\\(this\\.app\\),[\\s\\S]{0,200}?${citationSpread},\\s*\\}\\),`,
+      ),
+    );
   });
 
   it("[D-522] (ol-egov.141.89.9.98): the gap view's createLocalGapProvider construction receives the store", () => {

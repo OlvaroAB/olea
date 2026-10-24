@@ -92,14 +92,15 @@ describe('v0.9: the one retrieval is made when the question is resolved, with th
       'private async resolveInstrumentPrompt(',
       'private async resolveTopicPrompt(',
     );
-    expect(body).toMatch(/const query = questionQuery\(instrument\);/);
-    expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(query\);/);
-    expect(body).not.toMatch(/retrieveSourceBlocks\([^)]*question/);
+    expect(body).toMatch(
+      /await this\.deps\.retrieveSourceBlocks\(\s*questionQuery\(instrument\),\s*instrument\.courseCode,?\s*\)/,
+    );
+    expect(body).not.toMatch(/retrieveSourceBlocks\([^)]*\bquestion\b/);
   });
 
   it('resolveTopicPrompt retrieves with the bare topic, never the "In your own words" question built from it', () => {
     const body = bodyBetween('private async resolveTopicPrompt(', 'private enterNewQuestion(');
-    expect(body).toMatch(/const sourceBlocks = await this\.deps\.retrieveSourceBlocks\(topic\);/);
+    expect(body).toMatch(/await this\.deps\.retrieveSourceBlocks\(topic\)/);
   });
 
   it('nothing after submit retrieves: the only retrieval calls are in the two resolvers and the lookup they share', () => {

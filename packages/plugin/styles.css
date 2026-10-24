@@ -4852,6 +4852,55 @@ button.olea-review-mcq-option:hover {
   gap: 6px;
 }
 
+/* `[D-631]` (F8.1): each stage's meaning shows on hover, on keyboard focus and on tap (`is-open`). */
+.olea-grove-legend-stage {
+  position: relative;
+}
+
+.olea-grove-legend-stage-trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  font: inherit;
+  color: inherit;
+  cursor: help;
+}
+
+.olea-grove-legend-meaning {
+  display: none;
+  position: absolute;
+  z-index: 2;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  min-width: 180px;
+  max-width: 260px;
+  padding: 6px 8px;
+  border: 1px solid var(--olea-host-line-hover);
+  border-radius: 6px;
+  background: var(--olea-host-elev);
+  color: var(--olea-host-text);
+  font-size: 11.5px;
+  line-height: 1.4;
+}
+
+.olea-grove-legend-stage:hover .olea-grove-legend-meaning,
+.olea-grove-legend-stage:has(.olea-grove-legend-stage-trigger:focus-visible)
+  .olea-grove-legend-meaning,
+.olea-grove-legend-stage.is-open .olea-grove-legend-meaning {
+  display: block;
+}
+
+.olea-grove-legend-qualification {
+  flex-basis: 100%;
+  color: var(--olea-host-muted);
+}
+
 .olea-grove-legend-swatch {
   width: 15px;
   height: 11px;

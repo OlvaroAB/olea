@@ -135,8 +135,10 @@ import {
   grovePapersLabel,
   groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
+  groveStageMeaning,
   groveStateLabel,
   groveSummaryLine,
+  groveTreeQualification,
   groveUnreadableReasonLabel,
   groveWithheldReasonLabel,
   OPEN_RETROSPECTIVE_ACTION,
@@ -702,9 +704,28 @@ export class GroveView extends ItemView {
   private renderLegend(parent: HTMLElement): void {
     const el = parent.createDiv({ cls: 'olea-grove-legend' });
     for (const state of LEGEND_STAGES) {
-      const item = el.createDiv({ cls: 'olea-grove-legend-item' });
-      item.appendChild(renderSprig({ state, size: 14, container: item }));
-      item.createSpan({ text: groveStateLabel(state) });
+      // `[D-631]` (F8.1): the meaning is reachable by hover and keyboard focus (styles.css) and by
+      // tap/click (`is-open`, toggled here), since a touch device has no hover.
+      const item = el.createDiv({ cls: 'olea-grove-legend-item olea-grove-legend-stage' });
+      const trigger = item.createEl('button', { cls: 'olea-grove-legend-stage-trigger' });
+      const meaningId = `olea-grove-legend-meaning-${state}`;
+      trigger.setAttribute('type', 'button');
+      trigger.setAttribute('aria-describedby', meaningId);
+      trigger.setAttribute('aria-expanded', 'false');
+      trigger.appendChild(renderSprig({ state, size: 14, container: trigger }));
+      trigger.createSpan({ text: groveStateLabel(state) });
+      const meaning = item.createSpan({
+        cls: 'olea-grove-legend-meaning',
+        text: groveStageMeaning(state),
+      });
+      meaning.setAttribute('id', meaningId);
+      meaning.setAttribute('role', 'tooltip');
+      let open = false;
+      trigger.addEventListener('click', () => {
+        open = !open;
+        item.toggleClass('is-open', open);
+        trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      });
     }
     const groundItem = el.createDiv({ cls: 'olea-grove-legend-item' });
     groundItem.createDiv({ cls: 'olea-grove-legend-swatch olea-grove-legend-swatch-ground' });
@@ -716,6 +737,8 @@ export class GroveView extends ItemView {
     gapItem.createSpan({ text: GROVE_LEGEND_MATERIAL_GAP_NOTE });
     const papersItem = el.createDiv({ cls: 'olea-grove-legend-item' });
     papersItem.createSpan({ text: GROVE_LEGEND_PAPERS_NOTE });
+    // `[D-631]`: the v0.9 qualification is in the legend itself, visible with no interaction.
+    el.createDiv({ cls: 'olea-grove-legend-qualification', text: groveTreeQualification() });
   }
 
   /**

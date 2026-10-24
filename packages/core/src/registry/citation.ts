@@ -24,6 +24,8 @@
  * Pure, no `obsidian` import (INV-1) — unit-tested under Vitest.
  */
 
+import type { SourceLocation } from '../extract/types.js';
+import type { VaultPath } from '../vault/types.js';
 import type { RegistrySourceLocation } from './types.js';
 
 /** The note's filename, without folders or extension. */
@@ -82,4 +84,35 @@ export function formatSourceCitation(
   if (opts?.grainOnly) return grain ?? '';
   const name = noteNameFromPath(location.sourcePath);
   return grain ? `${name} (${grain})` : name;
+}
+
+/**
+ * The citation formatter's input for a retrieved chunk (`[D-633]`): the index block's own grain,
+ * never a fabricated one. A transcript part (`part`, D-465) is located by part, or by time when
+ * its location supplies one, and is never given a page (D-466); a block of a binary source carries
+ * its page (the slide number for a deck) and section; any other chunk is the bare path, so its
+ * label is the note's name. Feeds {@link formatSourceCitation}, the one formatter every surface uses.
+ */
+export function chunkSourceLocation(chunk: {
+  readonly path: string;
+  readonly part?: number | undefined;
+  readonly location?: SourceLocation | undefined;
+}): RegistrySourceLocation {
+  const sourcePath = chunk.path as VaultPath;
+  const { part, location } = chunk;
+  if (part !== undefined || location?.transcriptPart !== undefined) {
+    const ordinal = part ?? location?.page ?? 1;
+    const startSeconds = location?.transcriptPart?.startSeconds;
+    return {
+      sourcePath,
+      transcriptPart:
+        startSeconds === undefined ? { part: ordinal } : { part: ordinal, startSeconds },
+    };
+  }
+  if (location !== undefined) {
+    return location.section === undefined
+      ? { sourcePath, page: location.page }
+      : { sourcePath, page: location.page, section: location.section };
+  }
+  return { sourcePath };
 }

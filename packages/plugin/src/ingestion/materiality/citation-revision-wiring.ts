@@ -352,10 +352,11 @@ import type { CitedSourceNow } from '../../generation/revision-job-runner.js';
 import { stripOleaFrontmatterWrites } from '../../generation/strip-olea-frontmatter.js';
 import type { DraftRecord } from '../../generation/types.js';
 import { canonicalizeForMateriality } from './canonical.js';
-import type {
-  CitationAnchorRecord,
-  CitationHashStore,
-  PendingReason,
+import {
+  anchorKeyKind,
+  type CitationAnchorRecord,
+  type CitationHashStore,
+  type PendingReason,
 } from './citation-hash-store.js';
 import { stripQuestionBlocks } from './citation-material.js';
 import { LandedSourceText } from './landed-source-text.js';
@@ -1052,7 +1053,9 @@ export class CitationRevisionTrigger {
       trackedRecords.map((record) => [record.instrumentId, record] as const),
     );
     const stored = await this.deps.store.loadAll();
-    report.tracked = stored.size;
+    // `ol-zjke.2`: a pending draft's hold key is not a tracked instrument, and this pass never reads,
+    // judges, writes or removes it (the store's one classifier, `anchorKeyKind`).
+    report.tracked = [...stored.keys()].filter((key) => anchorKeyKind(key) === 'instrument').length;
 
     // `ol-egov.141.89.2.14` (C5.3 as amended by `[D-396]`): an instrument standing REJECTED is
     // skipped before any judge call or write this pass touches — the same shared fold every
@@ -1124,6 +1127,7 @@ export class CitationRevisionTrigger {
 
     const judgeCalls: Array<() => Promise<void>> = [];
     for (const [instrumentId, previous] of stored) {
+      if (anchorKeyKind(instrumentId) !== 'instrument') continue;
       // `ol-egov.141.89.2.14`: a standing rejection wins over every other check this loop makes
       // — no current-passage read, no judge dispatch, no store write, no suspend, no enqueue.
       // Left tracked as-is: once she restores it, the ordinary revision check resumes from the
@@ -2513,6 +2517,8 @@ export class CitationRevisionTrigger {
       const cited = new Set<string>();
       if (sourceRevisions.size > 0) {
         for (const instrumentId of (await this.deps.store.loadAll()).keys()) {
+          // `ol-zjke.2`: a draft hold key names no instrument, so it has no citation sidecar.
+          if (anchorKeyKind(instrumentId) !== 'instrument') continue;
           const citation = await readInstrumentCitation(vault, instrumentId);
           if (citation !== undefined) cited.add(citation.sourcePath);
         }
@@ -2571,6 +2577,8 @@ export class CitationRevisionTrigger {
       return result;
     }
     for (const [instrumentId, anchor] of stored) {
+      // `ol-zjke.2`: a draft hold key is never an instrument to suspend or rewrite.
+      if (anchorKeyKind(instrumentId) !== 'instrument') continue;
       const pending = anchor.pendingRevalidation;
       if (pending?.reason !== SOURCE_REVISION_REASON) continue;
       // `ol-egov.141.89.5.81`: a suspended instrument is never rewritten again.

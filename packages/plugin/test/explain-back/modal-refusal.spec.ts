@@ -22,8 +22,7 @@
  *
  * **v0.9 (`[D-603]`, `ol-egov.141.89.6.129`):** no judgment is requested at all, so there is
  * nothing to refuse and nothing to accept: the view reaches neither write dep from anywhere, and
- * the only refusal it can show is the free-form topic's insufficient-notes one, before any
- * answer. The view-level blocks below are rewritten to that; `runGradingAttempt`'s own rules
+ * it shows no refusal at all (`[D-629]`: the free-form topic's insufficient-notes one is gone). The view-level blocks below are rewritten to that; `runGradingAttempt`'s own rules
  * stay, tested as the function they are, for when grading returns (the F5 heading note).
  */
 
@@ -51,25 +50,15 @@ describe('ExplainBackModal (v0.9) — no judgment is requested, so none is refus
     expect(modal).not.toMatch(/acceptGrading/);
   });
 
-  it('the only refusal is the free-form topic’s insufficient-notes one, reached before any answer', () => {
-    expect(modal.match(/phase: 'refused', prompt \}/g)).toHaveLength(1);
+  it('the view has no refusal phase at all: a free-form topic is never refused before it is answered ([D-629])', () => {
+    expect(modal).not.toMatch(/'refused'|renderRefusedPhase|explainBackInsufficientNotesRefusal/);
+    expect(modal).not.toMatch(/'unavailable'|'check-failed'/);
     const topic = modal.slice(
       modal.indexOf('private async resolveTopicPrompt('),
-      modal.indexOf('private enterNewQuestion('),
+      modal.indexOf('private searchState('),
     );
-    expect(topic).toMatch(
-      /if \(context\.referenceAnswer\.trim\(\) === ''\) \{[\s\S]*?phase: 'refused', prompt \}/,
-    );
-    expect(modal).not.toMatch(/'unavailable'|'check-failed'/);
-  });
-
-  it('renderRefusedPhase reaches no write and no grader', () => {
-    const refusedPhaseBody = modal.slice(
-      modal.indexOf('private renderRefusedPhase('),
-      modal.indexOf('private renderFoundList('),
-    );
-    expect(refusedPhaseBody.length).toBeGreaterThan(0);
-    expect(refusedPhaseBody).not.toMatch(/this\.deps\./);
+    expect(topic).not.toMatch(/referenceAnswer/);
+    expect(topic).toMatch(/this\.enterNewQuestion\(prompt\);/);
   });
 });
 

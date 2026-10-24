@@ -31,7 +31,7 @@
  *
  * **The per-item hand-off control (`ol-0r92.135`, F4.11 ruling 1, `[D-252]`/`[D-367]`/`[D-391]`/
  * `[D-407]`) is the one exception to "no test file for this module."** `renderHandoffControl` and
- * `handOffItem` below carry real branching logic — which of three fixed strings to show, and
+ * `handOffItem` below carry real branching logic — which of four fixed strings to show, and
  * whether pressing the button does anything — that is worth pinning even though it cannot be
  * mounted (`view.spec.ts`, the same source-text-assertion technique
  * `review/view-button-activation.spec.ts` already uses for the identical `obsidian`-cannot-load
@@ -90,6 +90,13 @@ export const PAPER_HANDOFF_CONFIRMATION = 'Added to your ordinary review, from a
  */
 export const PAPER_HANDOFF_ALREADY_DONE =
   'Already added to your ordinary review, from a practice paper.';
+/**
+ * Sheet v87 row 5 (David, 2026-10-24, `ol-egov.141.89.7.114`; verbatim in
+ * `docs/direction/20261024_decision_sheet_responses_v87.md`, olea-service): shown in the row of an
+ * item whose hand-off failed, once flashcards can be added. The control stays beside it, usable
+ * again, since a failed add leaves nothing behind to undo.
+ */
+export const PAPER_HANDOFF_FAILED = 'This item couldn’t be added to your review. Please try again.';
 
 export class PaperView extends ItemView {
   private readonly deps: PracticePaperViewDeps;
@@ -103,6 +110,8 @@ export class PaperView extends ItemView {
    * that happens to collide across two different `PaperRecord`s.
    */
   private readonly justHandedOff = new Set<string>();
+  /** `slotId`s whose row already shows `PAPER_HANDOFF_FAILED` in the current render. */
+  private readonly failedHandoffs = new Set<string>();
   /**
    * `[D-622]`: the assessment the request on screen was offered for, from the last
    * `unlocked-not-pulled` state rendered. Kept while "ask again" re-offers the same request, and
@@ -160,6 +169,7 @@ export class PaperView extends ItemView {
     const root = this.contentEl;
     root.empty();
     this.offeredFor = undefined;
+    this.failedHandoffs.clear();
     root.createEl('h2', { text: this.getDisplayText() });
     if (notice !== undefined) {
       root.createEl('p', { cls: 'olea-paper-assessment-passed', text: notice });
@@ -410,9 +420,10 @@ export class PaperView extends ItemView {
       return;
     }
 
+    // A quiz item and a flashcard item are offered the same control (sheet v87 row 5).
     const button = row.createEl('button', { text: PAPER_HANDOFF_BUTTON_LABEL });
     button.addEventListener('click', () => {
-      void this.handOffItem(state, item, button);
+      void this.handOffItem(state, item, button, row);
     });
   }
 
@@ -429,14 +440,28 @@ export class PaperView extends ItemView {
     state: Extract<PracticePaperCourseState, { readonly kind: 'ready' }>,
     item: PracticePaperFaceItem,
     button: HTMLButtonElement,
+    row: HTMLElement,
   ): Promise<void> {
     button.disabled = true;
-    const result = await this.deps.handOffItem(
-      state.course,
-      state.record.id,
-      item.slotId,
-      item.conceptName,
-    );
+    let result: Awaited<ReturnType<PracticePaperViewDeps['handOffItem']>>;
+    try {
+      result = await this.deps.handOffItem(
+        state.course,
+        state.record.id,
+        item.slotId,
+        item.conceptName,
+      );
+    } catch (error) {
+      // Sheet v87 row 5: the row says the add failed and the control is usable again; a failed add
+      // took back what it wrote, so pressing again is a first hand-off. One line however many
+      // times it fails, and no other row changes. The failure still surfaces.
+      if (!this.failedHandoffs.has(item.slotId)) {
+        this.failedHandoffs.add(item.slotId);
+        row.createEl('p', { cls: 'olea-paper-handoff-failed', text: PAPER_HANDOFF_FAILED });
+      }
+      button.disabled = false;
+      throw error;
+    }
     this.justHandedOff.add(item.slotId);
     // Only `record` changes on a hand-off — `items`/`partialStatement`/`emptySlots` were fixed at
     // generation time (`buildReadyStateFromRecord`'s own doc: "never recomposes") and stay valid.

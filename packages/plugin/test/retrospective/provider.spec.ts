@@ -729,7 +729,7 @@ describe('createLocalRetrospectiveProvider — what she had practised by the dat
       kind: 'counts',
       practised: 1,
       scopeSize: 3,
-      explained: 0,
+      explained: null,
       basis: 'assessment-stated',
     });
   });

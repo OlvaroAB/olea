@@ -23,7 +23,7 @@
  * Scenarios asserted (F5.1, F5.2, F5.3, F5.4, `[D-603]`, `[D-611]`):
  *   - a fresh, free-form prompt moves from the topic phase to the answering phase
  *   - an answer shows the passages and the reflection prompts, and no findings
- *   - the `[D-171]` "See in registry" affordance is not on the practice view (no cited findings)
+ *   - the "See in registry" link to her explain-back history is on the view after she submits (sheet v87 row 6)
  *   - "Try again" returns to answering with her typed answer intact
  *   - "Done" says nothing about how she did
  *   - submitting shows the passages at once, with no check to wait on or fail
@@ -114,23 +114,23 @@ test('explain-back-graded-feedback: an answer shows the passages and the reflect
   await expect(panel(page).getByText(NOTICE, { exact: true })).toBeVisible();
   // No answer field for any reflection prompt.
   await expect(panel(page).locator('textarea, input')).toHaveCount(0);
-  await expect(panel(page).getByRole('button')).toHaveText([DONE, TRY_AGAIN]);
+  await expect(panel(page).getByRole('button')).toHaveText([DONE, TRY_AGAIN, 'See in registry']);
   await expectNothingThatGrades(page);
   // The canned grader's own text never appears: nothing was asked of it.
   await expect(panel(page)).not.toContainText('effect on half-life is missing');
 });
 
-// `[D-171]`'s affordance rendered only after cited findings. In v0.9 there are none, so it does not
-// render on the practice view; where F8.4b's affordance sits on that view is an open question.
-test('explain-back-graded-feedback: the D-171 "See in registry" affordance is not on the practice view', async ({
+// Sheet v87 row 6: F8.4b's one affordance to her explain-back history is on the practice view once
+// she has submitted, and not before.
+test('explain-back-graded-feedback: the "See in registry" link to her history follows an answer', async ({
   page,
 }) => {
   await gotoExplainBack(page, 'explain-back-graded-feedback');
 
+  await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
   await answerAndShowPassages(page, 'The alpha mechanism does something.');
 
-  await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(0);
-  await expect(page.locator('[data-wb-inspector]')).not.toContainText('Registry hand-off recorded');
+  await expect(panel(page).getByRole('button', { name: 'See in registry' })).toHaveCount(1);
 });
 
 test('explain-back-graded-feedback: "Try again" returns to answering with her typed answer intact', async ({
