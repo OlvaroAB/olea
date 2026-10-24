@@ -101,6 +101,13 @@ export interface TranscriptVersion {
   readonly parts: readonly { readonly ordinal: number; readonly spoken: string }[];
   /** The spoken-text stream: every part's words, in order. */
   readonly words: readonly string[];
+  /**
+   * `ol-egov.141.89.2.39` (finding I): the file's text as read for this version, its parts cut from
+   * it, so a reader that must fingerprint the material it drafts from (a declared-Markdown
+   * transcript's input-note fingerprint, `revision-job-runner.ts`) takes it from this same read.
+   * Memory only, never persisted or sent.
+   */
+  readonly text?: string;
 }
 
 export type TranscriptRead =
@@ -130,7 +137,10 @@ export async function readTranscriptVersion(
       spoken: spokenText(part.text),
     }));
     const words = parts.flatMap((part) => wordsOf(part.spoken));
-    return { kind: 'read', version: { path, format: resolution.format, bytesHash, parts, words } };
+    return {
+      kind: 'read',
+      version: { path, format: resolution.format, bytesHash, parts, words, text },
+    };
   } catch {
     return { kind: 'unreadable' };
   }

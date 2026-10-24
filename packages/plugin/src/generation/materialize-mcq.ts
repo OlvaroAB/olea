@@ -285,6 +285,7 @@ import {
   planInstrumentDemand,
 } from './demand-target.js';
 import { recordDraftedForConcept, sourceRevisionMatches } from './home-note.js';
+import { draftInputNotesHold, type InputNote } from './input-notes.js';
 import type { DraftQuestion } from './types.js';
 
 export interface MaterializeAcceptedDraftInput {
@@ -323,6 +324,14 @@ export interface MaterializeAcceptedDraftInput {
    * verbatim by `accept.ts`. `undefined` skips the check entirely.
    */
   readonly expectedSourceContentHash?: string;
+  /**
+   * `[D-628]` (`ol-egov.141.89.2.39`): every note the draft was drawn from, with its fingerprint
+   * (`DraftRecord.inputNotes`), forwarded by `accept.ts`. Each must read as it did when drafted, or
+   * acceptance is refused with `StaleSourceRevisionError` before anything is written
+   * ({@link assertInputNotesUnchanged}); the list is then written into the citation record (schema
+   * version 3). `undefined` checks and writes nothing (a caller with no draft behind it).
+   */
+  readonly inputNotes?: readonly InputNote[];
   /**
    * `[D-437]` (`ol-egov.141.89.2.26`): the demand this draft's request carried and the response
    * returned (`DraftRecord.demand`, `generation/types.ts`) with the generator stamp
@@ -377,6 +386,43 @@ export async function assertCitedSourceUnchanged(
       `${caller}: ${citation.sourcePath} changed since this draft was cached (or cannot be read) — refusing to accept against a source that was never reviewed ([D-515])`,
     );
   }
+}
+
+/**
+ * `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): the accept-time guard for a draft's input notes.
+ * Refuses with `StaleSourceRevisionError` (grain `'note'`) unless every input note reads as it did
+ * when the draft was drafted (`draftInputNotesHold`: fingerprints, with passage grain for the
+ * single-passage case). `inputNotes` undefined checks nothing. Called before anything is written.
+ */
+export async function assertInputNotesUnchanged(
+  vault: VaultSource,
+  citation: InstrumentCitation | undefined,
+  inputNotes: readonly InputNote[] | undefined,
+  caller: string,
+): Promise<void> {
+  if (inputNotes === undefined) return;
+  if (!(await draftInputNotesHold(vault, citation, inputNotes))) {
+    throw new StaleSourceRevisionError(
+      `${caller}: a note this draft was drawn from changed since it was cached (or cannot be read) — refusing to accept against material that was never reviewed ([D-626])`,
+    );
+  }
+}
+
+/**
+ * `[D-626]` (`ol-egov.141.89.2.39`): the citation to write for an accepted draft. The accept-time
+ * seal (`sealCitationPassage`) keeps or drops a digest the draft carried, and mints one for a note
+ * with a single body passage. For a draft with input notes it never mints: C5.3 records a passage
+ * digest only for a request that supplied exactly one chunk that is exactly one passage of its note,
+ * which the drafting writer already decided (a digest it carried is still kept or dropped).
+ */
+export async function acceptedCitation(
+  vault: VaultSource,
+  proposed: InstrumentCitation,
+  ownNotePath: VaultPath,
+  inputNotes: readonly InputNote[] | undefined,
+): Promise<InstrumentCitation> {
+  if (inputNotes !== undefined && proposed.passageDigest === undefined) return proposed;
+  return (await sealCitationPassage(vault, proposed, ownNotePath)).citation;
 }
 
 export class StaleSourceRevisionError extends Error {
@@ -496,6 +542,12 @@ export async function materializeAcceptedDraft(
     input.sourcePath,
     'materializeAcceptedDraft',
   );
+  await assertInputNotesUnchanged(
+    vault,
+    input.sourceCitation,
+    input.inputNotes,
+    'materializeAcceptedDraft',
+  );
 
   const fields = acceptGeneratedMcq(
     {
@@ -558,8 +610,15 @@ export async function materializeAcceptedDraft(
     // pass can find this passage again wherever it moves. A digest the draft carried that does not
     // resolve to exactly one passage now is dropped, never written; a source note with one body
     // passage gets that passage's digest; anything else keeps the whole-note grain.
-    const { citation } = await sealCitationPassage(vault, proposedCitation, input.sourcePath);
-    await writeInstrumentCitation(vault, stamped.id, citation);
+    // `[D-626]`: never minted for a draft with input notes (`acceptedCitation`). `[D-628]`: the input
+    // notes go into the record with it.
+    const citation = await acceptedCitation(
+      vault,
+      proposedCitation,
+      input.sourcePath,
+      input.inputNotes,
+    );
+    await writeInstrumentCitation(vault, stamped.id, citation, input.inputNotes);
   }
 
   // `[D-220 / DIST-3]`: the distractor-provenance sidecar — see the module doc's own section.

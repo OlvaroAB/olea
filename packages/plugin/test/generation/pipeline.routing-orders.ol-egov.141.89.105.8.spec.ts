@@ -25,6 +25,7 @@ import { enqueueFurtherGenerationCallsForCourse } from '../../src/ingestion/furt
 import { describeRefusal } from '../../src/retrieval/draft-cards-copy.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE = 'COURSE-A';
 const LECTURE = `01 Courses/${COURSE}/Lecture 1.md`;
@@ -46,6 +47,7 @@ function concept(name: string, sourcePaths: readonly string[] = [CONCEPT_NOTE]):
 
 const quizResult = (name: string): DraftQuizCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: COURSE, conceptName: name, sourceChunks: ['chunk'] },
   response: {
     ok: true,
@@ -58,6 +60,7 @@ const quizResult = (name: string): DraftQuizCardsResult => ({
 
 const cardResult = (name: string): DraftCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: COURSE, conceptName: name, sourceChunks: ['chunk'] },
   response: {
     ok: true,
@@ -88,6 +91,7 @@ const MCQ: PrimaryKindInput = { formatMatch: 'mcq', recordedPreference: [] };
 describe('[D-549]: routing never passes a concept over in the sweep (ol-egov.141.89.105.8)', () => {
   it('three concepts that route unclassified are all asked within the cap: one drafted, two refused with their stated reasons, and the refusal memory holds or re-asks each by its kind', async () => {
     const vault = new MemoryVaultSource({
+      ...SYNTHETIC_INPUT_FILES,
       [LECTURE]: '# Lecture 1\n',
       [CONCEPT_NOTE]: '---\ncourse: COURSE-A\n---\n\nSome prose of hers.\n',
       [PDF]: '%PDF-1.7',

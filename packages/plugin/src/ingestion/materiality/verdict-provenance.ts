@@ -36,8 +36,13 @@ import type { PersistedStageProducer } from 'olea-core';
  *  - `question-blocks-restripped`: a whole-note anchor saved before every question block was
  *    stripped holds the same material once stripped by the current rule, where equal canonical
  *    text alone does not settle it.
+ *  - `olea-frontmatter-writes` (`[D-626]`, `ol-egov.141.89.2.39`): a whole cited note reads as its
+ *    anchor once the frontmatter Olea writes itself is left out of both (a first-sight stamp, a home
+ *    note's `topic:` growth or drafted-for record; `strip-olea-frontmatter.ts`'s
+ *    `stripOleaFrontmatterWrites`, the input-note fingerprint's own strip), where
+ *    the rules above do not settle it.
  * Where more than one anchor exit holds, the narrowest names it: the reformat, then
- * formatting-only, then the restrip.
+ * formatting-only, then the restrip, then Olea's own frontmatter writes.
  *  - `passage-relocated`: a passage-grain anchor's passage stands, exactly, in another note, and the
  *    anchor is healed there.
  *  - `relocated-exact`: a whole-note anchor's material stands, whitespace-normalised, in another
@@ -56,11 +61,19 @@ import type { PersistedStageProducer } from 'olea-core';
  *    drafted from.
  *  - `source-bytes-changed`: a cited non-markdown file's bytes differ from the recorded revision,
  *    or cannot be checked.
+ *  - `input-note-changed` (`[D-626]`, `[D-628]`): a note a drafted item was drawn from no longer
+ *    reads as its recorded fingerprint says (a content change past the code's free exits, or the
+ *    note is gone or unreadable).
+ *  - `input-notes-unrecorded` (`[D-628]`): an item drafted through a draft record was recorded
+ *    before its input notes were, so its support cannot be established.
  * Deciding a rewrite:
  *  - `landed-source-rewrite`: re-extracted text for the very bytes a hold was raised for has
  *    landed, so the question is rewritten from it (`[D-518]`).
  *  - `transcript-part-unrelocatable`: a part-named transcript question whose part cannot be
  *    relocated in a version that reads is rewritten at whole grain (`[D-578]`).
+ *  - `input-note-rewrite` (`[D-626]`, `[D-628]`): a hold raised by `input-note-changed` or
+ *    `input-notes-unrecorded` is rewritten from the cited note as it stands, at whole-note grain,
+ *    as a change to its cited note is.
  * A rewrite the judge decided is the model arm (task `materiality.judge.v1`), not a rule here.
  */
 export const VERDICT_CODE_RULES = {
@@ -68,6 +81,7 @@ export const VERDICT_CODE_RULES = {
   'no-groundable-content': 1,
   'passage-reformatted': 1,
   'question-blocks-restripped': 1,
+  'olea-frontmatter-writes': 1,
   'passage-relocated': 1,
   'relocated-exact': 1,
   'passage-found-again': 1,
@@ -79,6 +93,9 @@ export const VERDICT_CODE_RULES = {
   'source-bytes-changed': 1,
   'landed-source-rewrite': 1,
   'transcript-part-unrelocatable': 1,
+  'input-note-changed': 1,
+  'input-notes-unrecorded': 1,
+  'input-note-rewrite': 1,
 } as const satisfies Readonly<Record<string, number>>;
 
 export type VerdictCodeRule = keyof typeof VERDICT_CODE_RULES;

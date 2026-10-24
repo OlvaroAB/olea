@@ -56,6 +56,12 @@ import { citePassage } from 'olea-core';
  * missing one only leaves the instrument at whole-note grain. Flipping this is a measured-baseline
  * decision, not a code change made in passing. The sole-chunk rule does not depend on it.
  *
+ * **Superseded for drafted items by `[D-626]`** (`ol-egov.141.89.2.39`): "a model naming one passage
+ * never narrows the protection" — a passage digest is recorded only when the request supplied
+ * exactly one chunk that is exactly one passage of its note, whatever this says, so the sweep no
+ * longer reads a question's own citation at all. The constant is left in place; retiring it (and
+ * `GenerationPipelineDeps.citedChunkDigest`) is a follow-up.
+ *
  * @provenance declared
  */
 export const CITED_CHUNK_DIGEST_ENABLED = false;

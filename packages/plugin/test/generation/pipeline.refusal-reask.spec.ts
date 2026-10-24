@@ -18,7 +18,7 @@
  * Content-free: concept names here are synthetic placeholders (INV-3).
  */
 import type { ConceptRecord, ExtractedUnit, GroundingRefusalReason } from 'olea-core';
-import { DEFAULT_COURSES_FOLDER, EmbeddingCacheEngine } from 'olea-core';
+import { DEFAULT_COURSES_FOLDER, EmbeddingCacheEngine, hashText } from 'olea-core';
 import { describe, expect, it } from 'vitest';
 import { createVaultDraftCacheStore } from '../../src/generation/cache-store.js';
 import { MAX_CONCEPTS_PER_SWEEP } from '../../src/generation/constants.js';
@@ -36,6 +36,7 @@ import type {
   DraftQuizCardsResult,
 } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const COURSE_NOTE = '01 Courses/COGS214/Week 2.md';
 
@@ -56,6 +57,7 @@ function unit(text = 'lecture text v1'): ExtractedUnit {
 
 const drafted = (stem: string): DraftQuizCardsResult => ({
   status: 'drafted',
+  inputNotes: SYNTHETIC_INPUT_NOTES,
   request: { courseCode: 'COGS214', conceptName: stem, sourceChunks: ['chunk'] },
   response: {
     ok: true,
@@ -88,7 +90,10 @@ function harness(
   defaultConcepts: readonly ConceptRecord[],
   defaultAnswer: (name: string, ordinal: number) => DraftQuizCardsResult,
 ): Harness {
-  const vault = new MemoryVaultSource({ [COURSE_NOTE]: '# Week 2\nnote text v1' });
+  const vault = new MemoryVaultSource({
+    ...SYNTHETIC_INPUT_FILES,
+    [COURSE_NOTE]: '# Week 2\nnote text v1',
+  });
   const cache = createVaultDraftCacheStore(vault);
   const asked: string[] = [];
   const perName = new Map<string, number>();
@@ -487,7 +492,15 @@ describe('through buildGenerationWiring and the real drafting path (the producti
     return v;
   };
 
-  async function draftDepsWith(judge: () => unknown): Promise<{
+  /**
+   * `vault` (`ol-egov.141.89.2.39`, [D-628]): when given, every indexed fixture document is written
+   * into it with its real content hash, and the drafting deps carry it, as production's do, so each
+   * note that supplies a chunk is checked current and the draft records its input notes.
+   */
+  async function draftDepsWith(
+    judge: () => unknown,
+    vault?: MemoryVaultSource,
+  ): Promise<{
     readonly deps: DraftQuizCardsDeps;
     readonly judgeCalls: () => number;
   }> {
@@ -517,6 +530,13 @@ describe('through buildGenerationWiring and the real drafting path (the producti
         contentHash: 'unused',
         blocks: [{ blockIndex: 0, kind: 'paragraph', text }],
       });
+    }
+    if (vault !== undefined) {
+      for (const doc of docs) {
+        const text = (doc.blocks[0] as { text: string }).text;
+        await vault.write(doc.path, text);
+        doc.contentHash = await hashText(text);
+      }
     }
     const provider = {
       embed: async (request: { texts: readonly string[] }) => ({
@@ -561,6 +581,7 @@ describe('through buildGenerationWiring and the real drafting path (the producti
           embeddingProvider: provider as never,
         },
         transport: transport as never,
+        ...(vault === undefined ? {} : { vault }),
       },
       judgeCalls: () => judgeCalls,
     };
@@ -601,7 +622,7 @@ describe('through buildGenerationWiring and the real drafting path (the producti
   it('a supported verdict drafts, and a later landing does not ask again (the cache dedupes)', async () => {
     const vault = new MemoryVaultSource({ [NOTE]: NOTE_TEXT });
     const wiring = buildGenerationWiring({ vault, deviceId: 'device-a' });
-    const { deps, judgeCalls } = await draftDepsWith(verdict(true));
+    const { deps, judgeCalls } = await draftDepsWith(verdict(true), vault);
 
     const first = await wiring.sweep([unit()], deps);
     const second = await wiring.sweep([unit()], deps);
@@ -609,5 +630,8 @@ describe('through buildGenerationWiring and the real drafting path (the producti
     expect(first).toMatchObject({ attempted: 1, drafted: 1 });
     expect(second).toMatchObject({ attempted: 0, skippedDuplicate: 1, skippedRefused: 0 });
     expect(judgeCalls()).toBe(1);
+    // `[D-628]`: the draft records the notes its request was drawn from.
+    const [cached] = await wiring.cache.listPending();
+    expect(cached?.inputNotes?.map((note) => note.path)).toContain('course/lecture.md');
   });
 });

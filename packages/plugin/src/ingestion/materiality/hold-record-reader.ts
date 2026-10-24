@@ -610,6 +610,35 @@ export function citedPassagesOf(
 }
 
 /**
+ * `[D-626]` (`ol-egov.141.89.2.39`; functional scope C5.3: "A hold on any of a drafted item's input
+ * notes holds it the same way"): the passages one drafted instrument cites for {@link checkHolds} —
+ * its citation sidecar and anchor as {@link citedPassagesOf} gives them, and each note its drafting
+ * request was drawn from (the citation record's `inputNotes`, schema version 3) as a passage with no
+ * digest, so a hold on any passage of any input note holds the instrument, matched by that note's
+ * path, erring toward withholding. A record with no input notes adds nothing.
+ */
+export function instrumentCitedPassages(
+  citation:
+    | (CitedPassage & { readonly inputNotes?: readonly { readonly path: string }[] })
+    | undefined,
+  anchor?: CitedPassage,
+): readonly CitedPassage[] {
+  const sidecar =
+    citation === undefined
+      ? undefined
+      : {
+          sourcePath: citation.sourcePath,
+          ...(citation.passageDigest !== undefined
+            ? { passageDigest: citation.passageDigest }
+            : {}),
+        };
+  return [
+    ...citedPassagesOf(sidecar, anchor),
+    ...(citation?.inputNotes ?? []).map((note) => ({ sourcePath: note.path })),
+  ];
+}
+
+/**
  * What the hold check does to a set of instruments, split by the use a consumer makes of it, so
  * presentation and the knowledge reading cannot be fed the same set by mistake.
  */

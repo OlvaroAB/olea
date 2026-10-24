@@ -115,7 +115,8 @@ import {
   type VaultPath,
 } from 'olea-core';
 import type { DraftCacheStore } from '../generation/cache-store.js';
-import { deriveDraftId } from '../generation/cache-store.js';
+import { deriveDraftId, unusedDraftId } from '../generation/cache-store.js';
+import { citationOfInputNote, internalCitationNote } from '../generation/input-notes.js';
 import {
   demandRoutingCounterFor,
   draftDemandForQuestion,
@@ -206,6 +207,15 @@ export type HeadingOfferAcceptOutcome = HeadingOfferDemandCarried &
     | {
         /** The Worker responded but not with a shape `extractDraftedQuestions`/`extractDraftedProvenance` can use — nothing cached, matching `pipeline.ts`'s own "unparseable — revisited next sweep" posture (there is no next sweep here, but nothing is silently lost: she can re-trigger the offer). */
         readonly kind: 'unparseable';
+      }
+    | {
+        /**
+         * `[D-628]` (`ol-egov.141.89.2.39`): a note that supplied a chunk was edited since it was last
+         * indexed, so no drafting request was sent and nothing was cached; she can re-trigger the
+         * offer once the index has caught up. Not rendered (the banner resolves either way, as for
+         * every other outcome), so it adds no words.
+         */
+        readonly kind: 'input-changed';
       }
   );
 
@@ -317,6 +327,7 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
           ...carried,
         };
       }
+      if (result.status === 'input-changed') return { kind: 'input-changed', ...carried };
 
       const questions = extractDraftedQuestions(result.response);
       const provenance = extractDraftedProvenance(result.response);
@@ -326,6 +337,18 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
 
       // `[D-437]`: what the request carried and the response returned about demand, split per question.
       const demandCarry = draftedDemandCarryOf(result.request, result.response);
+      // `[D-626]`/`[D-628]` (`ol-egov.141.89.2.39`): every note the request was drawn from, and the
+      // note the draft cites (this path cited nothing before). One note: that note. Several (findings
+      // C, J): one of them, as the sweep chooses (`internalCitationNote`: the note she is reading
+      // when it supplied a chunk, else the one that supplied the most), built as that note is cited,
+      // so the kept item carries a page and the citation pass tracks it; internal only, since the
+      // origin a surface shows is read from the list.
+      const inputNotes = result.inputNotes;
+      const citedNote = internalCitationNote(inputNotes, result.chunkPaths, context.sourcePath);
+      const sourceCitation =
+        citedNote === undefined || draftDeps.vault === undefined
+          ? undefined
+          : await citationOfInputNote(draftDeps.vault, citedNote, context.sourcePath, result);
 
       const createdAt = now().toISOString();
       const draftIds: string[] = [];
@@ -338,7 +361,17 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
           draftDemandRefusalCounterFor(deps.cache).record(context.concept.key);
           continue;
         }
-        const draftId = await deriveDraftId(context.courseCode, context.concept.name, sequence);
+        // `ol-egov.141.89.2.39` (finding H; D-381, INV-2): this id space is the sweep's own first
+        // drafts', so the id is checked and stepped past any record already there (a sweep draft,
+        // pending or kept, or an earlier offer's), never `put()` over it.
+        const draftId = await unusedDraftId(
+          deps.cache,
+          await deriveDraftId(context.courseCode, context.concept.name, sequence),
+          context.courseCode,
+          context.concept.name,
+          sequence,
+          `heading-offer:${createdAt}`,
+        );
         const record: DraftRecord = {
           draftId,
           status: 'pending',
@@ -346,6 +379,8 @@ export function createHeadingOfferPort(deps: HeadingOfferPortDeps): HeadingOffer
           conceptName: context.concept.name,
           conceptIds: [context.concept.key],
           sourcePath: context.sourcePath,
+          ...(sourceCitation !== undefined ? { sourceCitation } : {}),
+          ...(inputNotes !== undefined && inputNotes.length > 0 ? { inputNotes } : {}),
           createdAt,
           question,
           provenance,

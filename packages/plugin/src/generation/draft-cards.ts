@@ -55,6 +55,7 @@ import type {
   ClassifiedPassage,
   PassageAuthorship,
   PassageCurationAuthority,
+  VaultSource,
   VoiceExemplars,
   WorkerTaskTransport,
 } from 'olea-core';
@@ -69,7 +70,12 @@ import {
   type RetrieveOptions,
   retrieve,
 } from 'olea-core';
-import type { GenerationPurpose, RegisterHint } from '../retrieval/draft-quiz-cards.js';
+import {
+  type GenerationPurpose,
+  type RegisterHint,
+  type SuppliedChunkLocation,
+  suppliedChunkLocation,
+} from '../retrieval/draft-quiz-cards.js';
 import { draftingScope } from '../retrieval/drafting-scope.js';
 import { WorkerGroundingJudge } from '../retrieval/workerGroundingJudge.js';
 import {
@@ -77,6 +83,7 @@ import {
   type SourceOriginFrontmatterHost,
   sourceChunkOriginsFragment,
 } from '../source-origin.js';
+import { type InputNote, inputNotesOfSuppliedChunks } from './input-notes.js';
 
 /**
  * `cards.generate.v1`'s request shape, restated locally rather than imported
@@ -154,8 +161,18 @@ export type DraftCardsResult =
       readonly reason: GroundingRefusalReason;
     }
   | {
+      /** `[D-628]`: see `DraftQuizCardsResult`'s `input-changed` arm — no request sent, nothing to cache. */
+      readonly status: 'input-changed';
+    }
+  | {
       readonly status: 'drafted';
       readonly request: CardsGenerateRequestPayload;
+      /** `ol-egov.141.89.2.39`: see `DraftQuizCardsResult.chunkPaths`. Kept on her device, never sent. */
+      readonly chunkPaths?: readonly string[];
+      /** `ol-egov.141.89.2.39`: see `DraftQuizCardsResult.chunkLocations`. Kept on her device, never sent. */
+      readonly chunkLocations?: readonly SuppliedChunkLocation[];
+      /** `[D-628]`: see `DraftQuizCardsResult.inputNotes`. */
+      readonly inputNotes?: readonly InputNote[];
       /** The Worker's raw `/v1/task` response body. Never persisted here (D-005); see the module doc. */
       readonly response: unknown;
     };
@@ -167,6 +184,8 @@ export interface DraftCardsDeps {
   readonly transport: WorkerTaskTransport;
   /** `ol-egov.141.89.8.56` — see `DraftQuizCardsDeps.frontmatterHost`. */
   readonly frontmatterHost?: SourceOriginFrontmatterHost;
+  /** `[D-628]` — see `DraftQuizCardsDeps.vault`. */
+  readonly vault?: VaultSource;
   /** `[D-101]`'s passage classification — see `DraftQuizCardsDeps.classifyPassage`'s own doc. */
   readonly classifyPassage?: (chunk: { readonly path: string; readonly text: string }) =>
     | {
@@ -215,6 +234,19 @@ export async function draftCardsForConcept(
     return { status: 'refused', reason: grounding.reason };
   }
 
+  // `[D-628]`: every note that supplied a chunk must be the note as it stands — see
+  // `draftQuizCardsForConcept`'s module doc. Checked only when the caller supplied the vault.
+  let inputNotes: readonly InputNote[] | undefined;
+  if (deps.vault !== undefined) {
+    const supplied = await inputNotesOfSuppliedChunks(
+      deps.vault,
+      deps.retrieve.keywordIndex,
+      grounding.chunks.map((chunk) => chunk.path),
+    );
+    if (supplied.kind === 'changed') return { status: 'input-changed' };
+    inputNotes = supplied.inputNotes;
+  }
+
   const classifiedPassages: ClassifiedPassage[] = grounding.chunks.map((chunk) => {
     const classified = deps.classifyPassage?.(chunk);
     return {
@@ -245,5 +277,14 @@ export async function draftCardsForConcept(
     payload,
   });
 
-  return { status: 'drafted', request: payload, response };
+  return {
+    status: 'drafted',
+    request: payload,
+    response,
+    chunkPaths: grounding.chunks.map((chunk) => chunk.path),
+    chunkLocations: grounding.chunks.map((chunk) =>
+      suppliedChunkLocation(deps.retrieve.keywordIndex, chunk),
+    ),
+    ...(inputNotes === undefined ? {} : { inputNotes }),
+  };
 }

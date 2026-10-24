@@ -38,6 +38,7 @@ import { readPendingPassageChanges } from '../../src/attainment/passage-changes.
 import { createDraftAcceptPort, type DraftAcceptPort } from '../../src/generation/accept.js';
 import { createBulkReviewController } from '../../src/generation/bulk-review.js';
 import { createVaultDraftCacheStore, deriveDraftId } from '../../src/generation/cache-store.js';
+import type { InputNote } from '../../src/generation/input-notes.js';
 import type { DraftRecord } from '../../src/generation/types.js';
 import { readLectureBundles } from '../../src/ingestion/lecture-links.js';
 import {
@@ -76,6 +77,7 @@ import {
 } from '../../src/review/ports.js';
 import { createStudySessionHolder } from '../../src/session/holder.js';
 import { resolveCitationPendingRevalidation } from '../../src/session-builder/provider.js';
+import { currentInputNotes } from '../generation/input-notes-fixture.js';
 import { FakeDataHost } from './materiality/transcript-fixtures.ol-egov.141.89.5.43.js';
 
 const DEVICE = 'olea-testdevice1';
@@ -209,6 +211,7 @@ function mcqDraft(
   marker: string,
   page: number,
   sourceRevision: string,
+  inputNotes: readonly InputNote[],
 ): DraftRecord {
   return {
     draftId,
@@ -227,6 +230,7 @@ function mcqDraft(
     },
     provenance: { taskId: 'quiz.generate.v1', promptVersion: '1.0.0', modelId: 'test-model' },
     firstServedAt: null,
+    inputNotes,
   };
 }
 
@@ -249,17 +253,20 @@ async function world(): Promise<World> {
   vault.files.set(DECK_HOME, HOME_NOTE);
   vault.binaries.set(DECK, deckBytes);
   const revision = await hashContent(deckBytes);
+  const inputNotes = await currentInputNotes(vault, DECK_HOME);
   const claim = mcqDraft(
     await deriveDraftId(COURSE, 'Invented concept', 0),
     'd-claim',
     2,
     revision,
+    inputNotes,
   );
   const other = mcqDraft(
     await deriveDraftId(COURSE, 'Invented concept', 1),
     'd-other',
     3,
     revision,
+    inputNotes,
   );
   const seedCache = createVaultDraftCacheStore(vault);
   await seedCache.put(claim);

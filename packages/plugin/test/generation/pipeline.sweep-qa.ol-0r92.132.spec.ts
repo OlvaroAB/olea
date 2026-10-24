@@ -22,6 +22,7 @@ import {
 } from '../../src/generation/pipeline.js';
 import type { DraftQuizCardsResult } from '../../src/retrieval/draft-quiz-cards.js';
 import { MemoryVaultSource } from './fakes.js';
+import { SYNTHETIC_INPUT_FILES, SYNTHETIC_INPUT_NOTES } from './input-notes-fixture.js';
 
 const NOTE = '01 Courses/COGS214/Week 2.md';
 const NOTE_TEXT = '# Week 2\n\nher prose\n';
@@ -94,7 +95,7 @@ function setup(options: {
   readonly cardOutcome?: (name: string) => DraftCardsResult;
   readonly formatMatch?: FormatMatchDecision;
 }) {
-  const vault = new MemoryVaultSource({ [NOTE]: NOTE_TEXT });
+  const vault = new MemoryVaultSource({ ...SYNTHETIC_INPUT_FILES, [NOTE]: NOTE_TEXT });
   const cache = createVaultDraftCacheStore(vault);
   const quizAsks: Record<string, unknown>[] = [];
   const cardAsks: Record<string, unknown>[] = [];
@@ -177,7 +178,12 @@ describe('sweep Q&A cards: only where the format-routing chooses Q&A (ol-0r92.13
   });
 
   it('a card draft is deduped like a quiz draft: a second sweep asks nothing', async () => {
-    const { cardAsks, run } = setup({ kind: QA });
+    // `ol-egov.141.89.2.39` ([D-628]): the card's drafting call reports its input notes, as a
+    // production one does; a draft with none would be drafted again as one recorded before them.
+    const { cardAsks, run } = setup({
+      kind: QA,
+      cardOutcome: (name) => ({ ...cardResult(name), inputNotes: SYNTHETIC_INPUT_NOTES }),
+    });
     await run();
     const second = await run();
     expect(second).toMatchObject({ attempted: 0, skippedDuplicate: 1 });

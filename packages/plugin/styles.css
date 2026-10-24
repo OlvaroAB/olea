@@ -3505,6 +3505,27 @@ button.olea-review-mcq-option:hover {
   background: var(--olea-host-cite-wash);
 }
 
+/* `[D-628]`: an origin a group's drafts share, named once above its rows, and the "Sources"
+   disclosure of a draft drawn from several notes, each note's title a link to it. */
+.olea-bulk-review-group-source {
+  margin: 0 0 8px;
+  font: 400 11.5px / 1.4 var(--olea-host-ui-font);
+  color: var(--olea-host-muted);
+}
+
+.olea-bulk-review-sources > summary {
+  cursor: pointer;
+}
+
+.olea-bulk-review-sources-list {
+  margin: 4px 0 0;
+  padding-left: 18px;
+}
+
+.olea-bulk-review-source-link {
+  color: var(--olea-host-cite);
+}
+
 /* ---- Actions — accept / edit / reject, equal weight (F3.3) ---- */
 
 .olea-bulk-review-item-actions {

@@ -37,6 +37,7 @@ import {
   draftSourceCheckAtPresentation,
   sourceCheckAtPresentation,
 } from '../../../src/review/open-session.js';
+import { currentInputNotes } from '../../generation/input-notes-fixture.js';
 import {
   COURSE,
   type Composition,
@@ -99,7 +100,12 @@ async function sweepDraft(
     cache,
     draftDeps: {} as never,
     listConceptsForCourse: async () => [concept],
-    draftForConcept: async () => draftReply(conceptName) as never,
+    // `ol-egov.141.89.2.39` ([D-628]): the call reports the note it drew from, as a production one does.
+    draftForConcept: async () =>
+      ({
+        ...draftReply(conceptName),
+        inputNotes: await currentInputNotes(run.vault, DOC),
+      }) as never,
     now: () => NOW,
     ...(landing?.revisions !== undefined ? { sourceRevisions: landing.revisions } : {}),
   });
@@ -125,7 +131,8 @@ async function successorDraft(run: Composition, predecessor: string): Promise<Dr
         ({
           transport: { send: async () => draftReply('successor').response },
         }) as unknown as DraftQuizCardsDeps,
-      draftForConcept: async () => draftReply('successor') as never,
+      // `[D-628]`: retrieval here is a double, so no note beyond the rewritten passage's own.
+      draftForConcept: async () => ({ ...draftReply('successor'), inputNotes: [] }) as never,
       now: () => NOW,
     },
     input.payload as never,

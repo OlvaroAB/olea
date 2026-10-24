@@ -140,6 +140,17 @@
  * retrieves within `request.courseCode`'s reading set (`./drafting-scope.ts`), so another course's
  * notes never satisfy this course's grounding, and a course whose own material is thin gets the
  * stated refusal rather than a draft grounded elsewhere.
+ *
+ * **The notes a request is drawn from (`[D-626]`, `[D-628]`, `ol-egov.141.89.2.39`).** With
+ * `deps.vault` supplied (every production caller), each note that supplied a chunk is read before
+ * the generative request is sent and compared with the content the keyword index recorded for it
+ * (`../generation/input-notes.ts`, `inputNotesOfSuppliedChunks`). A note edited since it was last
+ * indexed means the chunks are not the note as it stands: the request is not sent and the result is
+ * `input-changed` (nothing to cache; the caller tries again later). Otherwise the drafted result
+ * carries `inputNotes`, one per distinct note with the fingerprint of the material supplied, which
+ * the caller records on each draft. The sufficiency judge is consulted inside `retrieve()`, before
+ * the chunks' notes are known here, so this check comes after it and before the drafting request.
+ * Paths and fingerprints never enter the request (D-005).
  */
 
 import {
@@ -152,6 +163,8 @@ import type {
   ClassifiedPassage,
   PassageAuthorship,
   PassageCurationAuthority,
+  PersistedKeywordIndex,
+  VaultSource,
   VoiceExemplars,
   WorkerTaskTransport,
 } from 'olea-core';
@@ -166,6 +179,7 @@ import {
   type RetrieveOptions,
   retrieve,
 } from 'olea-core';
+import { type InputNote, inputNotesOfSuppliedChunks } from '../generation/input-notes.js';
 import {
   type SourceChunkOrigins,
   type SourceOriginFrontmatterHost,
@@ -173,6 +187,37 @@ import {
 } from '../source-origin.js';
 import { draftingScope } from './drafting-scope.js';
 import { WorkerGroundingJudge } from './workerGroundingJudge.js';
+
+/**
+ * `ol-egov.141.89.2.39`: where one supplied chunk sits in its note, aligned with the request's
+ * `sourceChunks` and kept on her device (never sent): a binary chunk's page and section
+ * (`RetrievalChunk.location`), a transcript chunk's part ordinal (`RetrievalChunk.part`). Empty for a
+ * chunk of an ordinary note. Read by the sweep to build the citation of a draft drawn from one note.
+ */
+export interface SuppliedChunkLocation {
+  readonly page?: number;
+  readonly section?: string;
+  readonly part?: number;
+}
+
+/**
+ * The location of one grounded chunk, read from the same index snapshot retrieval cut it from
+ * (`IndexedBlock.location`/`.part` for its `path` and `blockIndex`) — see
+ * {@link SuppliedChunkLocation}. A block the snapshot does not hold gives an empty location.
+ */
+export function suppliedChunkLocation(
+  index: PersistedKeywordIndex,
+  chunk: { readonly path: string; readonly blockIndex: number },
+): SuppliedChunkLocation {
+  const block = index.documents
+    .find((document) => document.path === chunk.path)
+    ?.blocks.find((candidate) => candidate.blockIndex === chunk.blockIndex);
+  return {
+    ...(block?.location !== undefined ? { page: block.location.page } : {}),
+    ...(block?.location?.section !== undefined ? { section: block.location.section } : {}),
+    ...(block?.part !== undefined ? { part: block.part } : {}),
+  };
+}
 
 /**
  * `[D-188]` / `ol-0r92.35`'s purpose, restated locally for the same reason
@@ -322,8 +367,31 @@ export type DraftQuizCardsResult =
       readonly reason: GroundingRefusalReason;
     }
   | {
+      /**
+       * `[D-628]`: a note that supplied a chunk was edited since it was last indexed (or is gone),
+       * so the chunks are not the note as it stands — see the module doc. No drafting request was
+       * sent and nothing is to be cached; not a refusal, and never worded as one. A later attempt
+       * drafts as usual once the index has caught up.
+       */
+      readonly status: 'input-changed';
+    }
+  | {
       readonly status: 'drafted';
       readonly request: QuizGenerateRequestPayload;
+      /**
+       * `ol-egov.141.89.2.39`: each chunk's own path, aligned with `request.sourceChunks`. Kept on her
+       * device and never sent (D-005: the request carries chunk text only). Absent from a result
+       * built before it existed.
+       */
+      readonly chunkPaths?: readonly string[];
+      /** `ol-egov.141.89.2.39`: each chunk's location, aligned with `request.sourceChunks` — see {@link SuppliedChunkLocation}. Kept on her device, never sent. */
+      readonly chunkLocations?: readonly SuppliedChunkLocation[];
+      /**
+       * `[D-628]`: the notes the request was drawn from, one per distinct chunk path in retrieval
+       * order, each with the fingerprint of the material supplied — see the module doc. Present
+       * exactly when `deps.vault` was supplied; a caller records it on every draft it caches.
+       */
+      readonly inputNotes?: readonly InputNote[];
       /** The Worker's raw `/v1/task` response body, whatever it was — success or a well-formed `ErrorResponse` (see `WorkerTaskTransport`'s own contract). Never persisted here (D-005); a caller that wants to act on it narrows/validates it itself. */
       readonly response: unknown;
     };
@@ -343,6 +411,13 @@ export interface DraftQuizCardsDeps {
    */
   /** `ol-egov.141.89.8.56`: cached frontmatter, so a `.md` that declares a transcript role is recognised as one. Absent: only `.txt`, `.vtt` and `.srt` are. */
   readonly frontmatterHost?: SourceOriginFrontmatterHost;
+  /**
+   * `[D-628]` (`ol-egov.141.89.2.39`): the vault the keyword index was built from. Supplied, every
+   * note that supplies a chunk is checked current against the index before the drafting request is
+   * sent, and the result carries its `inputNotes` (the module doc). Omitted (a test double), no check
+   * is made and the result carries none.
+   */
+  readonly vault?: VaultSource;
   readonly classifyPassage?: (chunk: { readonly path: string; readonly text: string }) =>
     | {
         readonly authorship: PassageAuthorship;
@@ -444,6 +519,19 @@ export async function draftQuizCardsForConcept(
     return { status: 'refused', reason: grounding.reason };
   }
 
+  // `[D-628]`: every note that supplied a chunk must be the note as it stands, before anything is
+  // drafted from it — see the module doc. Checked only when the caller supplied the vault.
+  let inputNotes: readonly InputNote[] | undefined;
+  if (deps.vault !== undefined) {
+    const supplied = await inputNotesOfSuppliedChunks(
+      deps.vault,
+      deps.retrieve.keywordIndex,
+      grounding.chunks.map((chunk) => chunk.path),
+    );
+    if (supplied.kind === 'changed') return { status: 'input-changed' };
+    inputNotes = supplied.inputNotes;
+  }
+
   // F3.8 (`[D-101]`) — see the module doc's PERSONALIZATION CONTEXT section.
   // `deps.classifyPassage` degrades to `'unknown'`/`'unknown'` for every
   // chunk when absent, which is today's honest default: `[D-101]`'s
@@ -485,5 +573,14 @@ export async function draftQuizCardsForConcept(
     payload,
   });
 
-  return { status: 'drafted', request: payload, response };
+  return {
+    status: 'drafted',
+    request: payload,
+    response,
+    chunkPaths: grounding.chunks.map((chunk) => chunk.path),
+    chunkLocations: grounding.chunks.map((chunk) =>
+      suppliedChunkLocation(deps.retrieve.keywordIndex, chunk),
+    ),
+    ...(inputNotes === undefined ? {} : { inputNotes }),
+  };
 }
