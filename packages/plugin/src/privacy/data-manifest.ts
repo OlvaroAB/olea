@@ -183,7 +183,7 @@ export const SETTINGS_KEY_MANIFEST: readonly SettingsKeyEntry[] = [
     key: CITATION_ANCHOR_STORAGE_KEY,
     classification: 'content-derived',
     holds:
-      'citation revision anchors and pending revalidations per instrument, with who settled each anchor (settledBy) and who raised and decided each pending fact (raisedBy, decidedBy): a model stage or code rule id and its version, `[D-598]`',
+      'citation revision anchors and pending revalidations per instrument, and lecturer-correction holds on drafts not yet shown to her (keyed by draft, `ol-zjke.2`), with who settled each anchor (settledBy) and who raised and decided each pending fact (raisedBy, decidedBy): a model stage or code rule id and its version, `[D-598]`',
   },
   {
     key: PROCESSED_REVISION_STORAGE_KEY,
