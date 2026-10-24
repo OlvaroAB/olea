@@ -80,9 +80,12 @@ import {
   resolveRelatedConceptKeys,
   retrieve,
   type SourceBlockRef,
+  type SourceLocation,
   servedRelations,
 } from 'olea-core';
+import { draftingScope } from '../retrieval/drafting-scope.js';
 import type { ClozeCard, McqItem, QaCard, ReviewInstrument } from '../review/types.js';
+import type { SourceOriginFrontmatterHost } from '../source-origin.js';
 import { ANCHORED_CONTEXT_BUDGET, composeAnchoredSourceBlocks } from './anchor-context.js';
 
 /** One retrieved passage, kept alongside the `{path, blockIndex}` it was minted from — needed later to resolve a graded citation back to a real `SourceCitation` (`./observation.ts`). */
@@ -90,7 +93,24 @@ export interface ExplainBackSourceBlock {
   readonly block: SourceBlockRef;
   readonly path: string;
   readonly blockIndex: number;
+  /**
+   * `[D-633]`: the index block's own grain, carried from retrieval so the passage's label can show
+   * a part, time, page or section (`chunkSourceLocation`). Absent on a plain note and on a passage
+   * resolved from the vault (`./resolve-introducing-passage.ts`).
+   */
+  readonly part?: number;
+  readonly location?: SourceLocation;
+  /**
+   * `[D-633]`: where this passage was found, kept when the same block is found more than once and
+   * shown once. `link` marks a block that is also one of the relation's own passages (the edge's
+   * provenance), the context that matters to her reading of it. Absent for a block found once by a
+   * concept search, and for a free-form topic.
+   */
+  readonly foundAs?: readonly ExplainBackPassageRole[];
 }
+
+/** How a passage was found for a relation prompt (F5.2a): the subject's, the link's own, the neighbour's. */
+export type ExplainBackPassageRole = 'subject' | 'link' | 'neighbour';
 
 export interface ExplainBackRetrievalDeps {
   readonly retrieve: RetrieveDeps;
@@ -120,6 +140,12 @@ export interface ExplainBackRetrievalDeps {
    * that carries its own `fromKey`/`toKey` still resolves, a key-less one does not.
    */
   readonly conceptRecords?: () => readonly ConceptRecord[] | null;
+  /**
+   * `[D-633]`: the host's cached frontmatter, for the course reading set's frontmatter links
+   * (`../retrieval/drafting-scope.ts`), the same host drafting is given. Absent, those links are
+   * missed, which can only narrow a course's reading set.
+   */
+  readonly frontmatterHost?: SourceOriginFrontmatterHost;
 }
 
 /** The two live reads the causes-partner lookup needs; see {@link ExplainBackRetrievalDeps}. */
@@ -157,13 +183,27 @@ export interface ExplainBackRelationPartner {
 export async function retrieveExplainBackSourceBlocks(
   deps: ExplainBackRetrievalDeps,
   query: string,
+  courseCode?: string | null,
 ): Promise<readonly ExplainBackSourceBlock[]> {
-  const result = await retrieve(deps.retrieve, query);
+  // `[D-633]`: a prompt on an instrument reads that instrument's course reading set, the
+  // eligibility drafting applies (`[D-544]`, explicitly shared sources included); a free-form
+  // topic has no instrument, so no course, and reads the whole index as before. The only inputs
+  // are the query, the course and the index: nothing she wrote can reach this call.
+  const course = courseCode?.trim();
+  const result = await retrieve(
+    deps.retrieve,
+    query,
+    course
+      ? { scope: draftingScope(deps.retrieve.keywordIndex, course, deps.frontmatterHost) }
+      : undefined,
+  );
   if (result.status !== 'grounded') return [];
   return result.chunks.map((chunk, index) => ({
     block: { blockId: `${chunk.path}#${chunk.blockIndex}#${index}`, text: chunk.text },
     path: chunk.path,
     blockIndex: chunk.blockIndex,
+    ...(chunk.part !== undefined ? { part: chunk.part } : {}),
+    ...(chunk.location !== undefined ? { location: chunk.location } : {}),
   }));
 }
 

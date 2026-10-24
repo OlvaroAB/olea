@@ -21,8 +21,10 @@ import {
   grovePapersLabel,
   groveReadCompletenessLine,
   groveScopeCorrectionReceiptLine,
+  groveStageMeaning,
   groveStateLabel,
   groveSummaryLine,
+  groveTreeQualification,
 } from '../../src/grove/copy.js';
 
 const SUMMARIES: readonly GroveCourseSummary[] = [
@@ -185,12 +187,14 @@ describe('grove copy — vocabulary registry §6 discipline', () => {
     expect(groveStateLabel('ground')).toBe('ground');
   });
 
-  it('the legend names the stages by label and carries no meaning of its own, so tree has no second phrasing (F2.11, [D-612])', () => {
+  it('the legend gives each stage the stage table’s meaning, never a second phrasing (F8.1, [D-631], [D-612])', () => {
     const grove = allGroveStrings().join('\n');
     for (const s of ['seed', 'sprout', 'sapling', 'tree'] as const) {
       expect(grove).toContain(MASTERY_DISPLAY[s].label);
-      expect(grove).not.toContain(MASTERY_DISPLAY[s].meaning);
+      expect(groveStageMeaning(s)).toBe(MASTERY_DISPLAY[s].meaning);
+      expect(grove).toContain(MASTERY_DISPLAY[s].meaning);
     }
+    expect(groveTreeQualification()).toBe("Explanation checking isn't available yet.");
     expect(grove).not.toContain('not only recognised');
   });
 });

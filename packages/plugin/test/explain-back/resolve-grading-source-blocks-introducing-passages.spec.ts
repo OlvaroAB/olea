@@ -210,8 +210,11 @@ describe("resolveGradingSourceBlocks: wires resolveEdgeIntroducingPassages in (s
     expect(b).toMatch(
       /const alreadyPresentBlockIds = new Set\(\s*\[\.\.\.sourceBlocks, \.\.\.neighbourBlocks\]\.map\(\(entry\) => entry\.block\.blockId\),\s*\);/,
     );
+    // \`[D-633]\`: the helper is called with no blocks marked present; the blocks already retrieved
+    // are then filtered out of what is sent (the same result), and kept as link context.
+    expect(b).toMatch(/await resolveEdgeIntroducingPassages\(deps, edge, new Set\(\)\)/);
     expect(b).toMatch(
-      /introducingBlocks = await resolveEdgeIntroducingPassages\(deps, edge, alreadyPresentBlockIds\);/,
+      /introducingBlocks = linkBlocks\.filter\(\s*\(entry\) => !alreadyPresentBlockIds\.has\(entry\.block\.blockId\),?\s*\);/,
     );
   });
 

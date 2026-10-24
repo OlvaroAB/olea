@@ -89,11 +89,14 @@ type BeforeAssessment = NonNullable<RetrospectiveReading['beforeAssessment']>;
  */
 export function practiceByDateLine(line: BeforeAssessment): string {
   if (line.kind === 'counts') {
-    return (
+    const practised =
       `Before the assessment date, you had practised ${line.practised} of the ${line.scopeSize} ` +
-      'concepts linked to this assessment in Olea. By then, your recorded practice showed ' +
-      `explanation-level evidence for ${line.explained} of those concepts.`
-    );
+      'concepts linked to this assessment in Olea.';
+    // `[D-632]`: while the explanation-level count is unavailable (`null`, always in v0.9) the second
+    // sentence is left out and the first stands alone; no practice count takes its place.
+    return line.explained === null
+      ? practised
+      : `${practised} By then, your recorded practice showed explanation-level evidence for ${line.explained} of those concepts.`;
   }
   return line.reason === 'scope'
     ? 'Olea cannot say what you had practised by the assessment date: no stated scope is recorded for this assessment.'

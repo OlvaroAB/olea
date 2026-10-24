@@ -97,13 +97,19 @@ export function findExplainBackState(
 
 const COURSE = 'syn:course:vantrel';
 
-function sourceBlock(id: string, text: string): ExplainBackSourceBlock {
-  return { block: { blockId: id, text }, path: `01 Courses/${COURSE}/Week 2.md`, blockIndex: 0 };
+// A passage is identified by its source and position (`[D-633]`: one found twice is shown once), so
+// each fixture block has its own position.
+function sourceBlock(id: string, text: string, blockIndex: number): ExplainBackSourceBlock {
+  return { block: { blockId: id, text }, path: `01 Courses/${COURSE}/Week 2.md`, blockIndex };
 }
 
 const FIXTURE_SOURCE_BLOCKS: readonly ExplainBackSourceBlock[] = [
-  sourceBlock('syn-block-1', 'The alpha mechanism regulates the synthetic rate constant.'),
-  sourceBlock('syn-block-2', 'A higher synthetic rate constant shortens the reaction half-life.'),
+  sourceBlock('syn-block-1', 'The alpha mechanism regulates the synthetic rate constant.', 0),
+  sourceBlock(
+    'syn-block-2',
+    'A higher synthetic rate constant shortens the reaction half-life.',
+    1,
+  ),
 ];
 
 const FIXTURE_INSTRUMENT: ReviewInstrument = {

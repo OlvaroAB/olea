@@ -246,6 +246,20 @@ export function groveStateLabel(state: GroveDeclaredState): string {
   return state === 'ground' ? GROUND_LABEL : MASTERY_DISPLAY[state].label;
 }
 
+/** The legend's line for a growth stage — `MASTERY_DISPLAY`'s meaning verbatim (F8.1, `[D-631]`), never a second phrasing. */
+export function groveStageMeaning(state: Exclude<GroveDeclaredState, 'ground'>): string {
+  return MASTERY_DISPLAY[state].meaning;
+}
+
+/**
+ * The top stage's v0.9 qualification, shown in the legend itself without interaction (F8.1, `[D-631]`).
+ * Read from the stage table, as the last sentence of tree's meaning, so the words stay core's.
+ */
+export function groveTreeQualification(): string {
+  const sentences = MASTERY_DISPLAY.tree.meaning.match(/[^.]+\./g) ?? [];
+  return sentences[sentences.length - 1]?.trim() ?? '';
+}
+
 /**
  * F8.3's own sanctioned shape for a `'declared'` course's summary — the
  * count and the denominator's source, side by side, **never their
@@ -411,6 +425,8 @@ export function allGroveStrings(): readonly string[] {
     GROVE_LEGEND_MATERIAL_GAP_NOTE,
     GROVE_LEGEND_PAPERS_NOTE,
     ...(['seed', 'sprout', 'sapling', 'tree'] as const).map((s) => MASTERY_DISPLAY[s].label),
+    ...(['seed', 'sprout', 'sapling', 'tree'] as const).map(groveStageMeaning),
+    groveTreeQualification(),
     ...(['no-reader-for-format', 'image-only-no-text', 'not-linked'] as const).map(
       groveUnreadableReasonLabel,
     ),

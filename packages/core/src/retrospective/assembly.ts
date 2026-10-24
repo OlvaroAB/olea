@@ -26,7 +26,7 @@
  *
  * **Drawn once, by clause (`[D-469]`, F8.8 "What she had practised by the date").**
  * `summariseBeforeAssessment` turns the per-concept assembly into the one line's counts: {n}
- * practised, {m} in scope, {k} explained. Both counts read the same filtered log, one boundary.
+ * practised, {m} in scope, {k} explained (unavailable in v0.9, `[D-632]`). Both counts read the same filtered log, one boundary.
  * Where the scope is empty or the history is unavailable it returns the limitation, never a zero.
  * **The line is drawn only on a stated scope.** An evidenced scope (no stated scope) is built from
  * what she practised, so {n} would equal {m} by construction and the line would read as full
@@ -85,7 +85,8 @@ export function assembleBeforeAssessment(input: {
 /**
  * F8.8's counts, from `assembleBeforeAssessment`'s output (`[D-469]`).
  *
- * - {k} counts explained (`tree`) among the practised concepts only, so it never exceeds {n}.
+ * - {k} is unavailable in v0.9 (`explained: null`, `[D-632]`): no explanation is graded (`[D-603]`), so
+ *   it is never counted and never drawn as a zero.
  * - `historyAvailable: false` is the limitation, whatever the counts would be.
  * - An evidenced scope never yields counts: `'scope'` unavailable, whatever she practised.
  * - An empty scope is `'scope'` unavailable. No practice before the date among the scope is
@@ -107,7 +108,8 @@ export function summariseBeforeAssessment(input: {
     kind: 'counts',
     practised: practised.length,
     scopeSize: members.length,
-    explained: practised.filter((entry) => entry.demonstrated === 'tree').length,
+    // `[D-632]`: no explanation is graded in v0.9, so the count is unavailable, not 0.
+    explained: null,
     basis: input.scopeOrigin,
   };
 }

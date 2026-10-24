@@ -53,6 +53,15 @@ export const EXPLAIN_BACK_PRACTICE_NOTICE = 'This is practice: nothing here is g
 /** Registry §39, the heading over the passages (kept from the graded view). */
 export const EXPLAIN_BACK_PASSAGES_HEADING = 'From your notes';
 
+/**
+ * Registry §39 (`[D-629]`), shown in place of the passages and the reflection prompts when a
+ * completed search found nothing, for a prompt on an instrument and a free-form topic alike. It
+ * reports the search's result and never claims her notes lack the material. A search that could not
+ * run says the view is unavailable (`../review/copy.ts`'s `EXPLAIN_WHY_UNAVAILABLE`), never this.
+ */
+export const EXPLAIN_BACK_NO_PASSAGES_FOUND =
+  "Olea hasn't found passages to show alongside your explanation.";
+
 /** Registry §39, the first reflection prompt, for every prompt shape. */
 export const EXPLAIN_BACK_REFLECTION_READ_ALONGSIDE = 'Read these alongside what you wrote.';
 
@@ -119,9 +128,9 @@ export const EXPLAIN_BACK_DECLINED_DEFECTIVE_QUESTION_MESSAGE =
 
 /**
  * `[D-171]`'s one-step affordance, worded for this surface (F8.4), which F8.4b (`[D-175]`) reuses
- * for the instrument's explain-back history. **Not rendered by the v0.9 view**: it rendered only
- * after cited findings, and in v0.9 there are none (F5.3). Where F8.4b's affordance sits on the
- * practice view is an open question with the hub; the wording is kept here for it.
+ * for the instrument's explain-back history. **Rendered by the v0.9 view after she submits**, also
+ * when no passages were found (sheet v87 row 6): it leads to the registry entry, where F8.4b lists
+ * her practice explanations, and following it saves her explanation first (`[D-630]`).
  */
 export const EXPLAIN_BACK_REGISTRY_ENTRY_ACTION = 'See in registry';
 
@@ -135,24 +144,14 @@ export const EXPLAIN_BACK_REGISTRY_ENTRY_ACTION = 'See in registry';
 export const EXPLAIN_BACK_SESSION_ENTRY_LABEL = 'Explain something back';
 
 // ---------------------------------------------------------------------------
-// [STY-0h] (`ol-l5og.18.8`) — the insufficient-notes refusal, drawn the way
-// `docs/design/pass5-refusal-trends-shell/ui_kits/olea-plugin/Pass5Refusal.jsx`
-// (`olea-service`) draws it (C4.7, `[D-089]`). `./modal.ts`'s
-// `renderRefusedPhase` renders the FACT sentence from `../review/copy.ts`'s
-// `explainBackInsufficientNotesRefusal` and reads this eyebrow plus the
-// found-list caption to draw the edge and evidence cues around it. In v0.9 it
-// is reached only when a free-form topic finds nothing to explain against,
-// before any answer, exactly as before `[D-603]`; the could-not-check family
-// went with the grading call that produced it.
+// [STY-0h] (`ol-l5og.18.8`) — the insufficient-notes refusal's eyebrow and found-list caption.
+// **Dormant in v0.9** (`[D-629]`): the view no longer renders the refusal (its wording promised
+// grading); a completed search that finds nothing shows `EXPLAIN_BACK_NO_PASSAGES_FOUND` instead.
+// Kept for the graded path when it returns (F5 heading note).
 // ---------------------------------------------------------------------------
 
-/** `reason: 'insufficient-notes'` — retrieval ran and came back too thin. */
+/** `reason: 'insufficient-notes'` — retrieval ran and came back too thin. Dormant in v0.9. */
 export const EXPLAIN_BACK_NOTHING_MATCHED_EYEBROW = 'Nothing matched · what your notes returned';
 
-/**
- * The found-list caption (C4.7's permitted content: which notes, at what
- * position — never a summary claim about the vault beyond them). Shown only
- * when retrieval returned something; an empty list renders no found-list at
- * all rather than an empty one.
- */
+/** The found-list caption (C4.7). Dormant in v0.9. */
 export const EXPLAIN_BACK_FOUND_LIST_CAPTION = 'What your notes returned';

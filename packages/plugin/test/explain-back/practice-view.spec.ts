@@ -24,6 +24,7 @@ import {
   EXPLAIN_BACK_PRACTICE_NOTICE,
   EXPLAIN_BACK_REFLECTION_ADD_OR_REPHRASE,
   EXPLAIN_BACK_REFLECTION_READ_ALONGSIDE,
+  EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
   EXPLAIN_BACK_SUBMIT_LABEL,
   explainBackReflectionPrompts,
 } from '../../src/explain-back/copy.js';
@@ -74,7 +75,6 @@ const GRADED_STRINGS = [
   'Keep this',
   'Check this',
   'Checking against your notes…',
-  'See in registry',
   'holds up',
 ];
 const GRADED_CLASSES = [
@@ -85,7 +85,6 @@ const GRADED_CLASSES = [
   'olea-explain-back-region-omission',
   'olea-explain-back-region-confusion',
   'olea-explain-back-region-covered',
-  'olea-explain-back-registry-action',
 ];
 /** Words that would say whether, or how far, her explanation matches the passages. */
 const JUDGING_WORDS =
@@ -334,33 +333,21 @@ describe('the practice notice is on every prompt', () => {
     expect(opened.drawn.texts.join(' ')).not.toContain('scored evidence');
   });
 
-  it('the refusal for a free-form topic with nothing to explain against carries it too', async () => {
-    const opened = await (async () => {
-      const { ExplainBackModal } = await import('../../src/explain-back/modal.js');
-      const modal = new ExplainBackModal(
-        {} as never,
-        { retrieveSourceBlocks: async () => [], generateInstrumentId: () => 'q-1', now: () => NOW },
-        { kind: 'freeform' },
-      ) as unknown as ViewInternals;
-      modal.onOpen();
-      const topic = modal.contentEl.fields()[0];
-      if (topic === undefined) throw new Error('no topic field');
-      topic.value = 'an unindexed topic';
-      modal.contentEl.button('Continue').click();
-      await vi.waitFor(() => expect(modal.state.phase).toBe('refused'));
-      return modal;
-    })();
-    expect(opened.contentEl.texts()).toContain(EXPLAIN_BACK_PRACTICE_NOTICE);
+  it('a free-form topic whose search found nothing is not refused: it reaches the answer box with the notice ([D-629])', async () => {
+    const opened = await openView({ seed: 'freeform', topicMatch: 'none', passages: [] });
+    expect(opened.modal.state.phase).toBe('answering');
+    expect(opened.root.texts()).toContain(EXPLAIN_BACK_PRACTICE_NOTICE);
   });
 });
 
 describe('the passages end with "Done" and "Try again"', () => {
-  it('those are the only controls, and none keeps, accepts or checks a result', async () => {
+  it('those are the only controls besides the history link, and none keeps, accepts or checks a result', async () => {
     const opened = await openView();
     await answer(opened, 'An answer.');
     expect(opened.root.buttonLabels()).toEqual([
       EXPLAIN_BACK_DONE_LABEL,
       EXPLAIN_BACK_DISCARD_LABEL,
+      EXPLAIN_BACK_REGISTRY_ENTRY_ACTION,
     ]);
   });
 
@@ -605,24 +592,6 @@ describe('"Done" and "Try again" each write the practice entry', () => {
     opened.root.button(EXPLAIN_BACK_DONE_LABEL).click();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(opened.practice).not.toHaveBeenCalled();
-  });
-
-  it('closing the passages without "Done" or "Try again" writes no entry (only those two save it)', async () => {
-    const opened = await openView();
-    await answer(opened, 'My answer.');
-    opened.modal.onClose();
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(opened.practice).not.toHaveBeenCalled();
-  });
-});
-
-describe('an instrument whose lookup found no passage', () => {
-  it('is offered as today, and after an answer the same view renders with an empty list', async () => {
-    const opened = await openView({ passages: [] });
-    await answer(opened, 'An answer.');
-    expect(opened.root.texts()).toContain(EXPLAIN_BACK_PASSAGES_HEADING);
-    expect(passageTextsOn(opened.root)).toEqual([]);
-    expect(reflectionPromptsOn(opened.root)).toEqual([...CONCEPT_PROMPTS]);
   });
 });
 

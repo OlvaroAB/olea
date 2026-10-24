@@ -79,17 +79,10 @@ test(`@auto-web:simulator/journeys/explain-back ${WORLD}/${PERSONA} — explain 
   await captureJourneyStep(page, JOURNEY, WEEK, 'topic');
   await modal.getByRole('button', { name: CONTINUE_LABEL, exact: true }).click();
 
-  // Either the answer box (the topic resolved against her notes) or the insufficient-notes
-  // refusal (nothing to explain against) — both real states of the same local lookup; a refusal
-  // short-circuits to the same step names. Not reached against the current fixture corpus.
+  // The answer box, whatever the lookup found: a topic with nothing found is no longer refused
+  // ([D-629]); the view says so after her answer.
   const answerBox = modal.locator('.olea-explain-back-answer');
-  const refusal = modal.locator('.olea-explain-back-refusal');
-  await expect(answerBox.or(refusal).first()).toBeVisible({ timeout: 30_000 });
-  if ((await refusal.count()) > 0) {
-    await captureJourneyStep(page, JOURNEY, WEEK, 'answering');
-    await captureJourneyStep(page, JOURNEY, WEEK, 'passages');
-    return;
-  }
+  await expect(answerBox).toBeVisible({ timeout: 30_000 });
 
   await expect(modal.getByText(NOTICE, { exact: true })).toBeVisible();
   await answerBox.fill(INVENTED_ANSWER);
