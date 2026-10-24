@@ -29,7 +29,8 @@
  *   check bolted onto a wider capability. **The hand-off also enters the item as a real
  *   instrument** (`[D-407]`, `[D-391]`): one quiz block, written into the note the caller names,
  *   carrying the paper and slot on its own `paper-origin:` field so the link survives the paper
- *   file's removal. **It never writes into her review log** (`[D-367]`'s clarification): the
+ *   file's removal; or, for a flashcard item, one Q&A card with the paper and slot in its side
+ *   record (`../instrument/paper-origin-store.ts`, sheet v87 row 5). **It never writes into her review log** (`[D-367]`'s clarification): the
  *   review record that carries `origin: 'practice-paper'` is written later, by the ordinary review
  *   path, for the first review after the act — reading the block's field, not this sidecar.
  *   **When the paper READ the slot's demand, the hand-off also writes the instrument's target
@@ -48,20 +49,37 @@
  * exists to drive it (named here rather than silently assumed).
  */
 
+import { applyDocumentEdits } from '../block/edit.js';
 import { parseDocument } from '../block/parse.js';
+import { parseFrontmatter } from '../frontmatter/parse.js';
+import { readScalar } from '../frontmatter/read.js';
 import { hashText } from '../ingestion/hash.js';
+import { MULTI_LINE_SEPARATOR, parseCards, stampQaCardBlockId } from '../instrument/card-format.js';
 import { insertMcqBlock, parseMcqBlocks, stampMcqPaperOrigin } from '../instrument/mcq-format.js';
 import { acceptGeneratedMcq } from '../instrument/mcq-generated.js';
+import {
+  readInstrumentPaperOrigin,
+  removeInstrumentPaperOrigin,
+  writeInstrumentPaperOrigin,
+} from '../instrument/paper-origin-store.js';
 import {
   instrumentTargetStorePath,
   questionBindingOf,
   writeInstrumentTarget,
 } from '../instrument/target-store.js';
+import type { QaCardInstrument } from '../instrument/types.js';
+import { provisionalInstrumentId } from '../session/instrument-id.js';
+import { OLEA_UID_KEY } from '../uid/stamp.js';
 import { listFolder } from '../vault/list-folder.js';
 import { withPathQueue } from '../vault/path-queue.js';
 import { readStoreRecord } from '../vault/store-record.js';
 import type { VaultPath, VaultSource } from '../vault/types.js';
-import { type PaperGeneratedItem, paperItemMcqCandidate } from './paper-items.js';
+import {
+  type PaperGeneratedItem,
+  type PaperItemCard,
+  paperItemCardCandidate,
+  paperItemMcqCandidate,
+} from './paper-items.js';
 import {
   PAPER_STRUCTURE_FORMAT_VERSION,
   type PaperBlueprint,
@@ -531,10 +549,11 @@ export async function recordPaperResponse(
 
 /**
  * Where a handed-off item is entered, and which of its questions is the item. Both are the
- * caller's (the paper view's per-item hand-off control, not built yet): the note is hers to
- * choose, since the act is her consent to the write (INV-6), and the service returns several
- * questions per slot, so which one the paper presents as the item is the view's to say
- * (`./paper-items.ts`'s `paperItemMcqCandidate`).
+ * caller's (the paper view's per-item hand-off control): the note is hers to choose, since the act
+ * is her consent to the write (INV-6), and the service returns several questions (or cards) per
+ * slot, so which one the paper presents as the item is the view's to say
+ * (`./paper-items.ts`'s `paperItemMcqCandidate`, `paperItemCardCandidate`). For a flashcard item
+ * `questionIndex` names the card.
  */
 export interface PaperHandoffTarget {
   readonly notePath: VaultPath;
@@ -543,11 +562,15 @@ export interface PaperHandoffTarget {
 
 export interface PaperHandoffResult {
   readonly record: PaperRecord;
-  /** The entered instrument's id — always `paperItemInstrumentId(paperId, slotId)`. */
+  /**
+   * The entered instrument's id: for a quiz item always `paperItemInstrumentId(paperId, slotId)`;
+   * for a flashcard item the id a vault walk derives for the card at its stamped block id
+   * (`paperItemCardBlockId(paperId, slotId)`) in the target note.
+   */
   readonly instrumentId: string;
   /**
-   * `true` when this call wrote the quiz block (or repaired a missing `paper-origin:` on it);
-   * `false` on a repeat of an earlier hand-off, which writes nothing to any note.
+   * `true` when this call wrote the quiz block or card (or repaired a missing `paper-origin:` on a
+   * quiz block); `false` on a repeat of an earlier hand-off, which writes nothing to any note.
    */
   readonly instrumentWritten: boolean;
 }
@@ -563,6 +586,280 @@ export interface PaperHandoffResult {
 export async function paperItemInstrumentId(paperId: string, slotId: string): Promise<string> {
   const digest = await hashText(JSON.stringify({ kind: 'paper-handoff', paperId, slotId }));
   return `mcq-${digest.slice(0, 16)}`;
+}
+
+/** `stampQaCardBlockId`'s own block-id alphabet (`../instrument/card-format.ts`). */
+const CARD_BLOCK_ID_ALPHABET = 'abcdefghijklmnopqrstuvwxyz0123456789';
+
+/**
+ * The block id a handed-off flashcard is stamped with, derived from the paper id and the slot id
+ * alone — the card's half of `[D-391]` binding condition 1. A Q&A card carries no explicit id: a
+ * vault walk derives its instrument id from the note and this block id (`provisionalInstrumentId`,
+ * rule 4), so paper and slot find the card through this id, and the card finds its paper and slot
+ * through its side record (`../instrument/paper-origin-store.ts`). Deterministic, so a repeated or
+ * interrupted hand-off finds the card it already entered rather than entering a second; six
+ * characters of the card alphabet, the shape `materialize-card.ts`'s `deriveCardBlockId` gives, with
+ * a distinct `kind` in the hashed input.
+ */
+export async function paperItemCardBlockId(paperId: string, slotId: string): Promise<string> {
+  const digest = await hashText(JSON.stringify({ kind: 'paper-handoff-card', paperId, slotId }));
+  let id = '';
+  for (let i = 0; i < 6; i++) {
+    const byte = Number.parseInt(digest.slice(i * 2, i * 2 + 2), 16);
+    id += CARD_BLOCK_ID_ALPHABET[byte % CARD_BLOCK_ID_ALPHABET.length];
+  }
+  return id;
+}
+
+/** A note's `olea-uid`, read the way a vault walk reads it (`materialize-card.ts`'s `noteUidOf`). */
+function noteUidOf(source: string): string | null {
+  const first = parseDocument(source).blocks[0];
+  if (first?.kind !== 'frontmatter') return null;
+  const uid = readScalar(parseFrontmatter(first.inner), OLEA_UID_KEY).scalar;
+  return uid === '' ? null : uid;
+}
+
+/**
+ * The instrument id a vault walk derives for the card stamped `blockId` in this note: the same
+ * exported `provisionalInstrumentId` the walk calls, with ordinal 1, since the derived block id
+ * anchors this card alone (`materialize-card.ts`'s "THE IDENTITY DERIVATION").
+ */
+function paperCardInstrumentId(notePath: VaultPath, source: string, blockId: string): string {
+  return provisionalInstrumentId({
+    noteUid: noteUidOf(source),
+    notePath,
+    blockId,
+    heading: null,
+    ordinal: 1,
+    explicitId: null,
+    instrumentType: 'qa',
+  });
+}
+
+/**
+ * The note with one Q&A card for `card` inserted at the top of its content (after a leading
+ * frontmatter block, so the note's concept binding survives) and stamped `blockId`, and the card as
+ * it parses back. The placement and the multi-line form are `materialize-card.ts`'s, so the card
+ * reads exactly as a generated card accepted from a draft. Pure: it writes nothing, and throws when
+ * the text would not read back as the same card (a front or back holding a line the card format
+ * reads as structure), so such an item is refused before anything is written.
+ */
+function insertPaperCard(
+  source: string,
+  card: PaperItemCard,
+  blockId: string,
+): { readonly content: string; readonly entered: QaCardInstrument } {
+  const front = card.front.trim();
+  const back = card.back.trim();
+  const doc = parseDocument(source);
+  const firstBlock = doc.blocks[0];
+  const anchor = firstBlock?.kind === 'frontmatter' ? firstBlock : null;
+  const terminator = source.includes('\r\n') ? '\r\n' : '\n';
+  const cardText = `${front}${terminator}${MULTI_LINE_SEPARATOR}${terminator}${back}${terminator}`;
+  const next = anchor === null ? doc.blocks[0] : doc.blocks[1];
+  const followsBlank = next?.kind === 'blank';
+  const insertAt = anchor === null ? 0 : followsBlank && next ? next.end : anchor.end;
+  const endsWithNewline = insertAt === 0 || source.slice(0, insertAt).endsWith('\n');
+  const lead =
+    insertAt === 0
+      ? ''
+      : endsWithNewline
+        ? followsBlank
+          ? ''
+          : terminator
+        : `${terminator}${terminator}`;
+  const trail = insertAt < source.length ? terminator : '';
+  const inserted = applyDocumentEdits(doc, [
+    { kind: 'insert', at: insertAt, text: `${lead}${cardText}${trail}` },
+  ]);
+  const span = inserted.spans[0];
+  const found =
+    span === undefined
+      ? undefined
+      : parseCards(inserted.content).find(
+          (c) => c.type === 'qa' && c.span.start >= span.start && c.span.end <= span.end,
+        );
+  const stamped =
+    found === undefined
+      ? undefined
+      : stampQaCardBlockId(inserted.content, found.span, { generateBlockId: () => blockId });
+  const entered =
+    stamped === undefined
+      ? undefined
+      : parseCards(stamped.content).find(
+          (c): c is QaCardInstrument => c.type === 'qa' && c.blockId === blockId,
+        );
+  if (
+    stamped === undefined ||
+    entered === undefined ||
+    entered.front !== front ||
+    entered.back !== back
+  ) {
+    throw new Error(
+      'handOffPaperItem: the flashcard would not read back as the same card in the note; nothing was written',
+    );
+  }
+  return { content: stamped.content, entered };
+}
+
+/** What entering one item wrote, and how to take that back if the paper's own write then fails. */
+interface EnteredPaperItem {
+  readonly instrumentId: string;
+  readonly instrumentWritten: boolean;
+  readonly rollback?: () => Promise<void>;
+}
+
+/**
+ * Enters a quiz item as one quiz block carrying `paper-origin:` — `handOffPaperItem`'s steps 2 to 4
+ * for a `quiz.generate.v1` item, unchanged by the card branch beside it.
+ */
+async function enterPaperQuizBlock(
+  vault: VaultSource,
+  record: PaperRecord,
+  item: PaperGeneratedItem,
+  paperId: string,
+  target: PaperHandoffTarget,
+  now: () => string,
+): Promise<EnteredPaperItem> {
+  const slotId = item.slotId;
+  const candidate = paperItemMcqCandidate(item, target.questionIndex);
+  const origin = { paperId, slotId };
+  const instrumentId = await paperItemInstrumentId(paperId, slotId);
+
+  const source = await vault.read(target.notePath);
+  const already = parseMcqBlocks(source).instruments.find((i) => i.id === instrumentId);
+  if (already !== undefined) {
+    const stamped = stampMcqPaperOrigin(source, already.span, origin);
+    if (!stamped.changed) return { instrumentId, instrumentWritten: false };
+    await vault.write(target.notePath, stamped.content);
+    return { instrumentId, instrumentWritten: true };
+  }
+  if (record.handoffs.some((h) => h.slotId === slotId)) {
+    return { instrumentId, instrumentWritten: false };
+  }
+  const firstBlock = parseDocument(source).blocks[0];
+  const { content } = insertMcqBlock({
+    source,
+    afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
+    fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
+  });
+  const declaredDemand = handedOffItemDemand(record, item);
+  if (declaredDemand !== undefined) {
+    const entered = parseMcqBlocks(content).instruments.find((i) => i.id === instrumentId);
+    const targetPath = instrumentTargetStorePath(instrumentId);
+    if (entered !== undefined && !(await vault.exists(targetPath))) {
+      await writeInstrumentTarget(vault, {
+        instrumentId,
+        declaredDemand,
+        origin: 'paper-handoff',
+        questionBinding: await questionBindingOf(entered),
+        authoredAt: now(),
+        generator: { taskId: item.taskId, promptVersion: item.promptVersion },
+      });
+    }
+  }
+  await vault.write(target.notePath, content);
+  return { instrumentId, instrumentWritten: true };
+}
+
+/**
+ * Enters a flashcard item as one Q&A card, its paper and slot in the side record (sheet v87 row 5,
+ * `ol-egov.141.89.7.114`) — `handOffPaperItem`'s steps 2 to 4 for a `cards.generate.v1` item.
+ * See `handOffPaperItem`'s doc for the order and for what a failed attempt takes back.
+ */
+async function enterPaperCard(
+  vault: VaultSource,
+  record: PaperRecord,
+  item: PaperGeneratedItem,
+  paperId: string,
+  target: PaperHandoffTarget,
+  now: () => string,
+): Promise<EnteredPaperItem> {
+  const slotId = item.slotId;
+  const card = paperItemCardCandidate(item, target.questionIndex);
+  const origin = { paperId, slotId };
+  const blockId = await paperItemCardBlockId(paperId, slotId);
+
+  const source = await vault.read(target.notePath);
+  const instrumentId = paperCardInstrumentId(target.notePath, source, blockId);
+  const already = parseCards(source).find(
+    (c): c is QaCardInstrument => c.type === 'qa' && c.blockId === blockId,
+  );
+  if (already !== undefined) {
+    // An earlier call entered this card. Its side record is written before the note, so it is
+    // there unless something removed it; a card at this block id with neither its record nor this
+    // item's text is not this item's, and is refused rather than claimed.
+    const recorded = await readInstrumentPaperOrigin(vault, instrumentId);
+    if (recorded !== undefined && (recorded.paperId !== paperId || recorded.slotId !== slotId)) {
+      throw new Error(
+        "handOffPaperItem: a card at this item's block id names another paper or slot; nothing was written",
+      );
+    }
+    if (recorded === undefined) {
+      if (already.front !== card.front.trim() || already.back !== card.back.trim()) {
+        throw new Error(
+          "handOffPaperItem: a card at this item's block id is not this item's card; nothing was written",
+        );
+      }
+      await writeInstrumentPaperOrigin(vault, instrumentId, origin);
+    }
+    return { instrumentId, instrumentWritten: false };
+  }
+  if (record.handoffs.some((h) => h.slotId === slotId)) {
+    // Handed off before, and the card is no longer in this note: she may have moved or removed it,
+    // which a repeated press must not undo.
+    return { instrumentId, instrumentWritten: false };
+  }
+
+  // Everything that can refuse is decided before the first write: the card's text, and whether a
+  // failed attempt could take its side record back out.
+  const { content, entered } = insertPaperCard(source, card, blockId);
+  if (vault.delete === undefined) {
+    throw new Error(
+      'handOffPaperItem: this vault cannot delete files, so a failed flashcard hand-off could not take its origin record back; nothing was written',
+    );
+  }
+  const declaredDemand = handedOffItemDemand(record, item);
+  const targetPath = instrumentTargetStorePath(instrumentId);
+  let targetWritten = false;
+  let noteTouched = false;
+
+  const rollback = async (): Promise<void> => {
+    // Best effort, and never in place of the failure that called it: a step that cannot be taken
+    // back is left for the retry, which converges (steps 2 and 3).
+    try {
+      if (noteTouched && (await vault.read(target.notePath)) === content) {
+        await vault.write(target.notePath, source);
+      }
+    } catch {}
+    try {
+      if (targetWritten) await vault.delete?.(targetPath);
+    } catch {}
+    try {
+      await removeInstrumentPaperOrigin(vault, instrumentId, origin);
+    } catch {}
+  };
+
+  try {
+    await writeInstrumentPaperOrigin(vault, instrumentId, origin);
+    if (declaredDemand !== undefined && !(await vault.exists(targetPath))) {
+      await writeInstrumentTarget(vault, {
+        instrumentId,
+        declaredDemand,
+        origin: 'paper-handoff',
+        questionBinding: await questionBindingOf(entered),
+        authoredAt: now(),
+        generator: { taskId: item.taskId, promptVersion: item.promptVersion },
+      });
+      targetWritten = true;
+    }
+    noteTouched = true;
+    await vault.write(target.notePath, content);
+  } catch (error) {
+    await rollback();
+    throw error;
+  }
+  return { instrumentId, instrumentWritten: true, rollback };
 }
 
 /**
@@ -604,29 +901,44 @@ function handedOffItemDemand(
 
 /**
  * Hands ONE item to ordinary review — never the whole paper (module doc) — and enters it as a real
- * instrument carrying its paper and slot (`[D-407]`).
+ * instrument carrying its paper and slot (`[D-407]`). A quiz item enters as one quiz block with the
+ * origin on its own `paper-origin:` field; a flashcard item (`cards.generate.v1`) enters as one Q&A
+ * card with the origin in its side record (`../instrument/paper-origin-store.ts`; sheet v87 row 5,
+ * `ol-egov.141.89.7.114`), since a card's plain-text format has no field line to carry it.
  *
  * In order, and each step idempotent (`[D-391]` binding condition 2: a double press or a retry
  * after restart yields one hand-off and one instrument):
  *
- * 1. The item's question is read and validated before anything is written (a `cards.generate.v1`
- *    item is refused: a Q&A card line has no field to carry the origin).
- * 2. If `target.notePath` already holds a block with the derived id, the instrument was written by
- *    an earlier call; its `paper-origin:` is stamped if somehow missing (`stampMcqPaperOrigin`,
- *    read-then-mint), otherwise the note is left byte-identical.
+ * 1. The item's question (or card) is read and validated before anything is written. For a card,
+ *    the note as it would be written is built in memory first, and an item whose text would not
+ *    read back as the same card is refused here, as is a vault that cannot delete (step 4's
+ *    take-back needs it).
+ * 2. If `target.notePath` already holds the item's instrument (a quiz block with the derived id, or
+ *    a card stamped with the derived block id), an earlier call wrote it. A quiz block's
+ *    `paper-origin:` is stamped if somehow missing (`stampMcqPaperOrigin`, read-then-mint); a card's
+ *    side record is restored if somehow missing; otherwise the note is left byte-identical.
  * 3. Else, if the paper already records this slot as handed off, nothing is written to any note:
  *    the instrument exists (step 4 always precedes step 5) and she may have moved or removed it
  *    since, which a repeated press must not undo.
- * 4. Else the quiz block is inserted — after the note's frontmatter when it opens with one, the
- *    same placement `materialize-mcq.ts` uses so the note's concept binding survives — carrying
- *    `id:` and `paper-origin:` in one write, every other byte of the note untouched. When the paper
- *    read this item's demand (`handedOffItemDemand`), its target record (`[D-437]`, origin
- *    `paper-handoff`) is written first, once, bound to the block as inserted, behind an exists
- *    guard so a retry that an interrupted attempt already reached leaves it untouched.
+ * 4. Else the instrument is inserted after the note's frontmatter when it opens with one (the
+ *    placement `materialize-mcq.ts` and `materialize-card.ts` use, so the note's concept binding
+ *    survives), every other byte of the note untouched. A quiz block carries `id:` and
+ *    `paper-origin:` in one write. A card's side record is written first, then the note. When the
+ *    paper read this item's demand (`handedOffItemDemand`), its target record (`[D-437]`, origin
+ *    `paper-handoff`) is written before the note, once, bound to the instrument as inserted, behind
+ *    an exists guard so a retry that an interrupted attempt already reached leaves it untouched.
  * 5. Finally the paper's own hand-off event is recorded (a repeat changes nothing).
  *
  * The note is written before the paper record, so a recorded hand-off always has its instrument.
  * No review-log record is written here (`[D-367]`).
+ *
+ * **A failed flashcard hand-off takes back what it wrote** (the ruling: "a failed add leaves
+ * neither a stray card nor an orphan origin record"). When a write in step 4 or 5 throws, the card
+ * is taken out of the note again (only while the note still holds exactly what this call wrote),
+ * and the side record and any target record this call wrote are removed; then the failure is
+ * thrown. An attempt stopped outright (a crash) cannot take anything back, and a retry converges
+ * through steps 2 and 3 instead. A quiz item's hand-off keeps its earlier behaviour: an interrupted
+ * attempt leaves its block for the retry to find.
  *
  * **The target record is written on step 4 only, never on a repeat.** A repeat (step 2 or 3) finds
  * the instrument already entered, or the hand-off already recorded, and writes no record: an item
@@ -647,44 +959,11 @@ export async function handOffPaperItem(
     assertKnownSlot(record, slotId, 'handOffPaperItem');
     const item = record.items.find((i) => i.slotId === slotId);
     if (item === undefined) throw new Error('handOffPaperItem: internal error, slot vanished');
-    const candidate = paperItemMcqCandidate(item, target.questionIndex);
-    const origin = { paperId, slotId };
-    const instrumentId = await paperItemInstrumentId(paperId, slotId);
-
-    const source = await vault.read(target.notePath);
-    const already = parseMcqBlocks(source).instruments.find((i) => i.id === instrumentId);
-    let instrumentWritten = false;
-    if (already !== undefined) {
-      const stamped = stampMcqPaperOrigin(source, already.span, origin);
-      if (stamped.changed) {
-        await vault.write(target.notePath, stamped.content);
-        instrumentWritten = true;
-      }
-    } else if (!record.handoffs.some((h) => h.slotId === slotId)) {
-      const firstBlock = parseDocument(source).blocks[0];
-      const { content } = insertMcqBlock({
-        source,
-        afterBlockIndex: firstBlock?.kind === 'frontmatter' ? 0 : -1,
-        fields: { ...acceptGeneratedMcq(candidate, instrumentId), paperOrigin: origin },
-      });
-      const declaredDemand = handedOffItemDemand(record, item);
-      if (declaredDemand !== undefined) {
-        const entered = parseMcqBlocks(content).instruments.find((i) => i.id === instrumentId);
-        const targetPath = instrumentTargetStorePath(instrumentId);
-        if (entered !== undefined && !(await vault.exists(targetPath))) {
-          await writeInstrumentTarget(vault, {
-            instrumentId,
-            declaredDemand,
-            origin: 'paper-handoff',
-            questionBinding: await questionBindingOf(entered),
-            authoredAt: now(),
-            generator: { taskId: item.taskId, promptVersion: item.promptVersion },
-          });
-        }
-      }
-      await vault.write(target.notePath, content);
-      instrumentWritten = true;
-    }
+    const entered =
+      item.taskId === 'cards.generate.v1'
+        ? await enterPaperCard(vault, record, item, paperId, target, now)
+        : await enterPaperQuizBlock(vault, record, item, paperId, target, now);
+    const { instrumentId, instrumentWritten } = entered;
 
     const event: PaperItemHandedOffEvent = {
       kind: 'item-handed-off',
@@ -698,9 +977,49 @@ export async function handOffPaperItem(
     if (updated === undefined || updated === record) {
       return { record, instrumentId, instrumentWritten };
     }
-    await vault.write(path, serialize(updated));
+    try {
+      await vault.write(path, serialize(updated));
+    } catch (error) {
+      await entered.rollback?.();
+      throw error;
+    }
     return { record: updated, instrumentId, instrumentWritten };
   });
+}
+
+/**
+ * Throws exactly the refusals `handOffPaperItem`'s step 1 would throw for this item, and writes
+ * nothing: an unknown paper or slot, a question or card that cannot be read at `questionIndex`, a
+ * card whose text would not read back as the same card, and (for a card) a vault that cannot
+ * delete. A caller that writes something of its own before the hand-off (the plugin's home note)
+ * calls this first, so a refused item leaves nothing behind (`ol-egov.141.89.7.114`).
+ */
+export async function checkPaperItemHandoff(
+  vault: VaultSource,
+  paperId: string,
+  slotId: string,
+  questionIndex: number,
+): Promise<void> {
+  const hit = (await listPaperRecords(vault)).find(({ record }) => record.id === paperId);
+  if (hit === undefined) {
+    throw new Error(
+      `handOffPaperItem: no existing PaperRecord for id "${paperId}" — never mints one.`,
+    );
+  }
+  assertKnownSlot(hit.record, slotId, 'handOffPaperItem');
+  const item = hit.record.items.find((i) => i.slotId === slotId);
+  if (item === undefined) throw new Error('handOffPaperItem: internal error, slot vanished');
+  if (item.taskId !== 'cards.generate.v1') {
+    paperItemMcqCandidate(item, questionIndex);
+    return;
+  }
+  const card = paperItemCardCandidate(item, questionIndex);
+  insertPaperCard('', card, await paperItemCardBlockId(paperId, slotId));
+  if (vault.delete === undefined) {
+    throw new Error(
+      'handOffPaperItem: this vault cannot delete files, so a failed flashcard hand-off could not take its origin record back; nothing was written',
+    );
+  }
 }
 
 /** Records a free-response item's explain-yourself depth reading — ruling 2, never a mark. */

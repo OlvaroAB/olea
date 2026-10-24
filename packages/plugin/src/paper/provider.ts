@@ -61,6 +61,7 @@ import type { ReviewLogEntry } from 'olea-contracts';
 import {
   type AssessmentRecord,
   buildPaperBlueprint,
+  checkPaperItemHandoff,
   documentStateView,
   enumerateVaultInstruments,
   extentSlotCountTarget,
@@ -907,6 +908,10 @@ export function createLocalPracticePaperProvider(
     },
 
     async handOffItem(course, paperId, slotId, conceptName) {
+      // Every refusal the hand-off would make for this item is made first, before the home note is
+      // written or grown, so a refused item leaves no stray note (ol-egov.141.89.7.114). A quiz
+      // item and a flashcard item both enter here; see `handOffPaperItem` for each.
+      await checkPaperItemHandoff(deps.vault, paperId, slotId, 0);
       // Synthetic, extension-less "source path": never a real document, just a stable per-course
       // key `homeNotePathForSource` turns into one reused note (`PRACTICE_PAPER_HANDOFF_FOLDER`'s
       // doc). `ensureHomeNoteForConcept` grows the note's `topic:` to include `conceptName`
@@ -925,7 +930,8 @@ export function createLocalPracticePaperProvider(
       }
       // Ruling: the paper view is "the item's" own reader (`paper-items.ts`'s
       // `paperItemMcqCandidate` doc) — see `ol-0r92.135`'s copy-pass notes for why index 0, always,
-      // is the only choice consistent with an id that carries no index information.
+      // is the only choice consistent with an id that carries no index information. A flashcard
+      // item's card is its first card on the same reasoning.
       const result = await handOffPaperItem(deps.vault, paperId, slotId, {
         notePath,
         questionIndex: 0,

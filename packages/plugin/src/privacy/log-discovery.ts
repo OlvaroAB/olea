@@ -66,6 +66,7 @@ import {
   misconceptionLogPath,
   OUTCOME_CONCEPT_NEAR_MATCH_FOLDER,
   OUTCOME_STORE_FOLDER,
+  PAPER_ORIGIN_STORE_FOLDER,
   PAPER_STORE_FOLDER,
   PROBE_PRESENTATION_STORE_FOLDER,
   RELATION_CACHE_FOLDER,
@@ -145,6 +146,10 @@ export const OLEA_LAYER_FOLDERS: readonly OleaLayerFolder[] = [
   { folder: CITATION_STORE_FOLDER, role: 'record' },
   { folder: DISTRACTOR_PROVENANCE_STORE_FOLDER, role: 'record' },
   { folder: PAPER_STORE_FOLDER, role: 'record' },
+  // `[D-407]` for a flashcard (`ol-egov.141.89.7.114`, sheet v87 row 5): a handed-off card's paper
+  // and slot, one write-once file per card named by instrument id (two opaque ids, never her
+  // wording). Exported as the text on disk and removed by the full delete, like the citations.
+  { folder: PAPER_ORIGIN_STORE_FOLDER, role: 'record' },
   { folder: DUPLICATION_CONFIRMATION_FOLDER, role: 'record' },
   { folder: RETROSPECTIVE_NOTES_FOLDER, role: 'record' },
   { folder: MANUAL_ASSESSMENT_STORE_FOLDER, role: 'record' },
