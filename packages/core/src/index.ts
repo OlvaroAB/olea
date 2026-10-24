@@ -2402,6 +2402,7 @@ export type {
 } from './queue/types.js';
 export { buildRegistryModel } from './registry/build.js';
 export {
+  chunkSourceLocation,
   formatSourceCitation,
   formatTranscriptTime,
   passageGrainLabel,

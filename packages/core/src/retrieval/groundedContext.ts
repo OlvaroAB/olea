@@ -67,6 +67,7 @@
  * conflating them spends trust on a transient (`[D-089]` §5).
  */
 
+import type { SourceLocation } from '../extract/types.js';
 import type { VaultPath } from '../vault/types.js';
 import {
   type CompositeGroundingSignals,
@@ -82,6 +83,10 @@ export interface GroundedChunk {
   readonly blockIndex: number;
   /** Transient — assembled fresh from the current index on every call, never persisted by this function or expected to be persisted by its caller (plan §7.1, D-005). */
   readonly text: string;
+  /** D-465, carried from the index block (`[D-633]`): the 1-based transcript part ordinal, present only on a transcript part. Lets a caller label the passage by part. */
+  readonly part?: number;
+  /** Carried from the index block (`[D-633]`): a binary source's page (the slide number for a deck), char range and section. Present only on a block of a binary source. */
+  readonly location?: SourceLocation;
 }
 
 /**
@@ -374,9 +379,13 @@ export function assembleGroundedContext(
 }
 
 function toGroundedChunks(hits: readonly HybridHit[], topK: number): readonly GroundedChunk[] {
-  return hits
-    .slice(0, topK)
-    .map((hit) => ({ path: hit.path, blockIndex: hit.blockIndex, text: hit.text }));
+  return hits.slice(0, topK).map((hit) => ({
+    path: hit.path,
+    blockIndex: hit.blockIndex,
+    text: hit.text,
+    ...(hit.part !== undefined ? { part: hit.part } : {}),
+    ...(hit.location !== undefined ? { location: hit.location } : {}),
+  }));
 }
 
 // ---------------------------------------------------------------------------

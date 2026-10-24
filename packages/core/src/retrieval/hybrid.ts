@@ -40,6 +40,7 @@
  * `semantic` — a property of the call, not of any individual chunk.
  */
 
+import type { SourceLocation } from '../extract/types.js';
 import type { SearchHit } from '../keyword-index/query.js';
 import type { VaultPath } from '../vault/types.js';
 import { topKByCosine } from './cosine.js';
@@ -98,6 +99,10 @@ export interface HybridHit {
    * degraded silently" (`ol-egov.141.89.1.4`).
    */
   readonly semantic: 'used' | 'unavailable';
+  /** D-465, carried from the chunk: the 1-based transcript part ordinal. Present only on a transcript part (`[D-633]`: the practice view's label). */
+  readonly part?: number;
+  /** Carried from the chunk: a binary source's page (the slide number for a deck), char range and section. Present only on a block of a binary source (`[D-633]`). */
+  readonly location?: SourceLocation;
   /** `true` only when `options.rerank` was supplied AND its call threw — see this file's doc. `false` when no rerank was requested, or when it was requested and succeeded (whether or not it returned a score for this particular hit). */
   readonly rerankFailed: boolean;
 }
@@ -213,6 +218,8 @@ export async function hybridRetrieve(params: HybridRetrieveParams): Promise<read
       matchedBy,
       semantic,
       rerankFailed: false,
+      ...(chunk.part !== undefined ? { part: chunk.part } : {}),
+      ...(chunk.location !== undefined ? { location: chunk.location } : {}),
     });
   }
 
