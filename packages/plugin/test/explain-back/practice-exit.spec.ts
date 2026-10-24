@@ -74,10 +74,13 @@ describe('any exit after a submitted explanation saves it exactly once', () => {
     const opened = await openView();
     await answer(opened, 'First.');
     opened.root.button(EXPLAIN_BACK_DISCARD_LABEL).click();
+    // "Try again" saves before it returns to the answer box; wait for that, not a fixed delay.
+    await vi.waitFor(() => expect(opened.modal.state.phase).toBe('answering'));
     await answer(opened, 'Second.');
     opened.modal.onClose();
-    await settle();
-    expect(opened.saved().map((input) => input.attemptId)).toEqual(['attempt-1', 'attempt-2']);
+    await vi.waitFor(() =>
+      expect(opened.saved().map((input) => input.attemptId)).toEqual(['attempt-1', 'attempt-2']),
+    );
   });
 
   it('a close during the exposure-marker write ends with exactly one save, and the passages never render', async () => {
