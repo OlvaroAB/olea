@@ -31,12 +31,12 @@ import {
   fillPaperBlueprintSlots,
   listPaperJournals,
   listPaperRecords,
+  PAPER_ORIGIN_STORE_FOLDER,
   type PaperCompositionAccount,
   type PaperGeneratedItem,
   type PaperItemGenerationPort,
   type PaperItemGenerationRequest,
   type PaperRecord,
-  PAPER_ORIGIN_STORE_FOLDER,
   readInstrumentCitation,
   readInstrumentPaperOrigin,
   resolveOutcome,
@@ -542,7 +542,9 @@ describe('createLocalPracticePaperProvider — handOffItem()', () => {
       taskId: 'cards.generate.v1',
       response: {
         result: {
-          cards: [{ front: 'What does the Krebs cycle produce?', back: 'ATP.', subject: 'Krebs cycle' }],
+          cards: [
+            { front: 'What does the Krebs cycle produce?', back: 'ATP.', subject: 'Krebs cycle' },
+          ],
         },
       },
       ...overrides,

@@ -146,7 +146,9 @@ describe('PaperView.renderHandoffControl — one item, one control, never the wh
     expect(RENDER_HANDOFF_CONTROL_BODY).toMatch(
       /createEl\('button',\s*\{\s*text:\s*PAPER_HANDOFF_BUTTON_LABEL\s*\}\)/,
     );
-    expect(RENDER_HANDOFF_CONTROL_BODY).toContain('void this.handOffItem(state, item, button, row);');
+    expect(RENDER_HANDOFF_CONTROL_BODY).toContain(
+      'void this.handOffItem(state, item, button, row);',
+    );
     // No branch on the item's kind: a flashcard item is offered the same control (sheet v87 row 5).
     expect(RENDER_HANDOFF_CONTROL_BODY).not.toContain('cards.generate.v1');
   });
